@@ -18,7 +18,7 @@ When a grant gives a role with principal:manage-tokens on a principal, the serve
 
 ### Requirement: Widened edge is flagged
 
-When the reach of a target grows beyond the reach that the granter approved, the server SHALL keep the change and flag the edge in the access-review export until a covering person acknowledges or revokes it.
+When the reach of a target grows beyond the reach that the granter approved, the server SHALL keep the change and flag the edge until a covering person acknowledges or revokes it.
 
 #### Scenario: Growth keeps the edge
 - **WHEN** a grant to the target adds an action that the granter did not approve

@@ -1,6 +1,8 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Add failing API tests for the generic locked-section reason and the same answer for unseen and nonexistent objects. Check: `go test ./internal/api/... -run TestConsoleLockedReason -count=1` fails on main, passes after the fix.
+- [ ] 1.2 Add failing tests for 403 grant.forbidden surface and 401 token.expired surface. Check: `go test ./internal/api/... -run TestConsoleDeniedAndExpired -count=1` fails on main, passes after the fix.
+- [ ] 1.3 Add failing tests for export row fields with Never value and export audit entry. Check: `go test ./internal/api/... -run TestConsoleExportRows -count=1` fails on main, passes after the fix.
 
 ## 2. Wiring and checks
 

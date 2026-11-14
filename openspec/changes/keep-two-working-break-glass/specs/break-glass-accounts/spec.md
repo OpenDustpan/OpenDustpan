@@ -29,16 +29,12 @@ If a grant revoke, a credential change, a passkey removal, an expiry change, a p
 - **THEN** the server answers 409 and keeps the passkey
 
 #### Scenario: Policy block below the floor is refused
-- **WHEN** a policy block or a sweep in the same transaction blocks an account and the count would fall below two
+- **WHEN** a policy block blocks an account and the count would fall below two
 - **THEN** the server answers 409 and keeps the account unblocked
 
 #### Scenario: Expiry change below the floor is refused
 - **WHEN** an expiry change puts an account in the past and the count would fall below two
 - **THEN** the server answers 409 and keeps the old expiry
-
-#### Scenario: Removal of the last credential of an enabled account is refused
-- **WHEN** a credential change removes the last working credential of an enabled account and the count would fall below two
-- **THEN** the server answers 409 and keeps the credential
 
 #### Scenario: A change that does not lower the count passes
 - **WHEN** the installation holds one working path and a change leaves the count the same
@@ -55,14 +51,6 @@ If a concurrent write holds the lock on the break-glass set past the lock timeou
 #### Scenario: Lock timeout
 - **WHEN** the lock wait passes the timeout
 - **THEN** the server answers 409 with break-glass.busy, stores no change and allows a safe retry
-
-#### Scenario: Restore and guarded change in parallel
-- **WHEN** a restore and a guarded change run at the same time
-- **THEN** the locks follow one order, no deadlock occurs and one of them waits or gets break-glass.busy
-
-#### Scenario: Setup finish retried after busy
-- **WHEN** a setup finish gets break-glass.busy and the client retries it
-- **THEN** the retry runs once and the setup state holds no half-written change
 
 #### Scenario: Sign-in during a lock wait
 - **WHEN** a break-glass sign-in runs while a guarded change waits for the lock
@@ -94,7 +82,7 @@ If a guarded change of a break-glass account comes without a fresh authenticatio
 
 #### Scenario: Person with no factor
 - **WHEN** a person with no enrolled factor starts a rotation
-- **THEN** the server answers 403 with mfa.fresh-step-required and the text names the page that enrolls a factor
+- **THEN** the server answers 403 and the text names the page that enrolls a factor
 
 ### Requirement: atomic-rotation
 
@@ -120,10 +108,6 @@ When first setup finishes, the server SHALL refuse completion until two break-gl
 - **WHEN** first setup finishes with two accounts that each hold a hardware key
 - **THEN** the server completes the setup
 
-#### Scenario: Two setup finishes in parallel
-- **WHEN** two setup finishes run at the same time
-- **THEN** one completes and the other gets the same answer as a retry, with no duplicate account
-
 #### Scenario: Upgrade reports missing accounts
 - **WHEN** an existing installation holds fewer than two working accounts
-- **THEN** the API reports the missing count and an administrator adds accounts without a new setup
+- **THEN** the list route reports the missing count and an administrator adds accounts without a new setup

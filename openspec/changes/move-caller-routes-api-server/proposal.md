@@ -27,10 +27,12 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Move GET /api/server/caller/access to GET /api/dustpan/v1/me/access
-- Move GET /api/server/caller/grants to GET /api/dustpan/v1/me/grants
-- Move token list, create, delete, and rotate to /api/dustpan/v1/me/tokens with pageSize, pageToken, and nextPageToken paging
-- Require Idempotency-Key on each mutating token route with replay without secret and conflict on key reuse
+- GET /api/dustpan/v1/me/access for caller access
+- GET /api/dustpan/v1/me/grants for caller grants
+- GET /api/dustpan/v1/me/tokens with pageSize, pageToken, and nextPageToken paging
+- POST /api/dustpan/v1/me/tokens for token create with Idempotency-Key
+- DELETE /api/dustpan/v1/me/tokens/{id} for token delete with Idempotency-Key
+- POST /api/dustpan/v1/me/tokens/{id}/rotate for token rotate with Idempotency-Key
 - Stop serving the old /api/server/caller paths with no alias and no redirect
 - Update API description, e2e coverage rows, docs, and console paths
 
@@ -64,16 +66,6 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "Inside a major version, a change is additive only: a new route, a new optional request field, a new answer field, a new optional query parameter or a new error code (ADR 182)."
 - Quote: "A request takes `pageSize` and `pageToken`."
 - Effect: The move places six caller routes under /api/dustpan/v1/me with no alias and no redirect. Paths hold no word server. Each mutating token route takes Idempotency-Key. Each route declares its authorization action with its object. The new v1 routes use the standard paging names from the start. Old query names end with the old paths.
-- Conflict: none.
-
-**ADR 276: Every error answer has a code and its arguments** (owner-tagged: decision 1, 3).
-
-- Decisions that apply: 1 (current), 3 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
-- Quote: "Every error answer has a code (owner). Each 4xx and 5xx answer of each HTTP adapter has a stable machine code."
-- Quote: "The arguments, from the start (owner). An answer carries the values that its text names, as arguments."
-- Effect: Each 4xx answer on new and old caller paths carries a stable catalog code. Each answer that names a value carries that value as a declared argument of its code.
 - Conflict: none.
 
 ## Adversarial second pass

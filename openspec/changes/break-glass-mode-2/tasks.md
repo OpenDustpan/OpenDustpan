@@ -18,7 +18,7 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Add e2e step for mode 2 install: turn breakGlassReview.enabled on and check its effective value, then valid request gives one session and one review, bad signature and replay give no session. Check: `make e2e E2E_FOCUS=BreakGlassMode2` passes against real binary over TLS with offline-signed request, replay, and bad signature cases.
+- [ ] 3.1 Add e2e step for mode 2 install: turn breakglass.review-enabled on and check its effective value, then valid request gives one session and one review, bad signature and replay give no session. Check: `make e2e E2E_FOCUS=BreakGlassMode2` passes against real binary over TLS with offline-signed request, replay, and bad signature cases.
 - [ ] 3.2 Add console step for the issued session from the user path. Check: Browser check signs in to the console with the issued one-time admin session and completes recovery.
 - [ ] 3.3 Write docs page for mode 2 setup and recovery in the same pull request. Check: Docs page commands run as written for first-boot mode choice, review opt-in, offline signing, and recovery.
 - [ ] 3.4 Run usability check and fix error text. Check: Operator completes recovery from the docs page alone; each error names the one command that helps.

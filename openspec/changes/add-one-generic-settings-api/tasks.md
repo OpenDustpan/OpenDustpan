@@ -3,7 +3,7 @@
 - [ ] 1.1 Write failing tests for GET on both scopes, and a namespace-authorization refusal test. Check: TestSettingsGetEffectiveSourceLockedRevision and TestNamespaceSettingsRefuseWithoutAction
 - [ ] 1.2 Write failing tests for PATCH atomic, null, unknown key, file-only key, locked key, invalid value, stale revision and audit failure. Check: TestSettingsPatchRefusals, TestSettingsPatchAtomic and TestSettingsPatchAuditFailure
 - [ ] 1.3 Write failing tests for the fresh step, including a mixed patch, and for idempotency replay, missing key and replay during the first request. Check: TestSettingsPatchFreshStep, TestSettingsPatchMixedDirections and TestSettingsPatchIdempotency
-- [ ] 1.4 Write failing tests for the session limit: default cap, new records only, bad stored value, host reset option, valid fresh step with invalid value, stale revision on the limit key, reload audit with source change, and a creation during a PATCH. Check: TestTempAdminSessionLimit, TestHostResetSessionLimit and TestSettingsReloadMovesRevision
+- [ ] 1.4 Write failing tests for the session limit: default cap, token policy cap, new records only, bad stored value, host reset option, valid fresh step with invalid value, stale revision on the limit key, reload audit with source change, and a creation during a PATCH. Check: TestTempAdminSessionLimit, TestHostResetSessionLimit and TestSettingsReloadMovesRevision
 
 ## 2. Definition of done
 

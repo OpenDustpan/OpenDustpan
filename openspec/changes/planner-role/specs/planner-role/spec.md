@@ -60,10 +60,6 @@ When grants give different roles on different objects, the server SHALL evaluate
 - **WHEN** A principal holds the planner role on one collection and a write role on another collection of the same namespace.
 - **THEN** The server allows writes on the writer object and refuses writes with 403 on the planner-only object.
 
-#### Scenario: namespace principal cannot cross namespaces
-- **WHEN** A principal of a namespace with identity.principalHome set to namespace holds the planner role inside that namespace and calls a unit of another namespace.
-- **THEN** The server refuses reads and writes with 403 outside the home namespace.
-
 ### Requirement: planner-revocation
 
 When a planner grant or group membership ends, the server SHALL refuse the next request that needs it with 403.
@@ -71,14 +67,6 @@ When a planner grant or group membership ends, the server SHALL refuse the next 
 #### Scenario: grant removed during plan
 - **WHEN** The planner grant or group membership of a principal ends during a plan or read.
 - **THEN** The next read or plan request fails with 403.
-
-#### Scenario: partial revocation keeps planner through other group
-- **WHEN** One planner group membership of a principal ends while another planner grant or membership still covers the object.
-- **THEN** The server still allows masked reads and still refuses writes and reveal.
-
-#### Scenario: in-flight plan job after revocation
-- **WHEN** The planner grant ends after the planner started a plan and before the next call.
-- **THEN** The started plan job runs on and the next API call of the principal fails with 403.
 
 ### Requirement: planner-changeorder-author
 

@@ -72,10 +72,6 @@ If the directory reports the user disabled, the bind fails or the directory is u
 - **WHEN** the directory reports the user disabled
 - **THEN** the sign-in is refused and an audit entry is written
 
-#### Scenario: Disabled between search and bind
-- **WHEN** the user is disabled after the search and before the bind
-- **THEN** the sign-in is refused
-
 #### Scenario: Empty password
 - **WHEN** the password is empty
 - **THEN** the sign-in is refused before any bind
@@ -103,10 +99,6 @@ When an LDAP sign-in returns groups, the server SHALL apply them through the one
 #### Scenario: Protected
 - **WHEN** a claim names a protected group
 - **THEN** the server skips the add and writes an audit entry
-
-#### Scenario: Unknown group
-- **WHEN** a claim names a group that does not exist locally
-- **THEN** the server skips it and writes an audit entry
 
 ### Requirement: Count removals
 
@@ -152,14 +144,6 @@ When a site administrator with the sign-in management action calls the rebind ro
 - **WHEN** the rebind route is called with a reason and a valid URL
 - **THEN** the next start with the new URL succeeds
 
-#### Scenario: Active sessions
-- **WHEN** a person holds a session from the provider at the rebind
-- **THEN** the session no longer works
-
 #### Scenario: Audit content
 - **WHEN** the rebind succeeds
 - **THEN** the audit entry holds the caller, the reason, the old URL and the new URL
-
-#### Scenario: Lost record rebind
-- **WHEN** the rebind follows a lost record
-- **THEN** the server checks the new URL with the egress and TLS rules and records the audit entry

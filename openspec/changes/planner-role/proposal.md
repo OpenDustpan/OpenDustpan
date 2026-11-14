@@ -22,10 +22,8 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- The guide for the planner role exists. Proof: docs/guides/planner-role.md
-- The built-in planner role is declared in the access package. Proof: pkg/access/roles.go:25: RolePlanner = "planner"
-- The access test helper creates a planner principal for reach checks. Proof: pkg/access/accesstest/reach.go:285: mustCreatePerson(t, rs, "prn-planner", "planner")
-- The context pack names e2e/e2e_masked_test.go under the Secret value keyword. Proof: e2e/e2e_masked_test.go
+- A planner-role guide exists. Proof: docs/guides/planner-role.md
+- An e2e test file covers masked state reads. Proof: e2e/e2e_masked_test.go
 
 ## What Changes
 
@@ -36,7 +34,7 @@ Evidence for the claims above:
 
 Out of scope:
 
-- Plan-only runner job execution started with unit:run-plan, step 3 of milestone 5; enforcement of the protected-branch secret gate ships there, and the server refuses planner plan-job start until then.
+- Plan-only runner job execution started with unit:run-plan; enforcement of the protected-branch secret gate ships in milestone 5, and the server refuses planner plan-job start until then.
 - Token life cycle, expiry email and SMTP settings.
 - SCIM, MFA and other sign-in methods.
 
@@ -64,8 +62,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "A built-in `planner` role. `planner` is a data role. It holds each action of `viewer`, and `unit:run-plan` and `job:read-plans` (ADR 103 decision 8)."
 - Quote: "A plan job that a planner starts gets the secrets of the unit only when its commit is on a protected branch (ADR 213 decision 2)."
 - Quote: "ADR 197 decision 3 also gives it `changeorder:author`, because it has `unit:run-plan`."
-- Quote: "A planner who runs `tofu plan` or `pulumi preview` on a workstation reads state with the state actions that the role give"
-- Effect: The change builds the planner role as decided: viewer actions plus unit:run-plan, job:read-plans and changeorder:author, with no apply, no destroy, no approve and no secret reveal. The protected-branch gate for planner-started plan jobs is stated as a requirement and the server path stays closed until milestone 5 enforces it.
+- Effect: Builds planner exactly as decided: viewer actions plus unit:run-plan, job:read-plans and changeorder:author, with no apply, no destroy, no approve and no secret reveal. States the protected-branch gate for planner plan-job secrets and keeps server plan-job start closed until milestone 5 enforces it.
 - Conflict: none.
 
 **ADR 52: Groups, roles, grants and the access-review export** (not owner-tagged).
@@ -77,22 +74,22 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "A role is a set of tool-neutral actions (ADR 13, ADR 17). A principal can do an action on an object when a grant on that object, or on an object that holds it, gives a role with that action."
 - Quote: "A broad built-in role set. The built-in roles follow the role sets of other products. When a choice is close, the set includes the extra role."
 - Quote: "Custom roles. An administrator can make a role as a set of actions. A custom role works like a built-in role in a grant."
-- Effect: Grants of the planner role use the normal grant shape and tree evaluation. Revocation on the next request follows the same rule. Custom roles remain possible under decision 7.
+- Effect: Planner grants use the normal grant shape and tree evaluation. Revocation takes effect on the next request. Custom roles stay possible as sets of actions.
 - Conflict: none.
 
 ## Adversarial second pass
 
 A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
 
-- R1.1 (adr conflict): specs/planner-role/spec.md and tasks.md 2.1: ADR 212 decision 1 says planner also gets changeorder:author because it holds unit:run-plan (ADR 197 decision 3). The change omits changeorder:author from the planner action set, so the role is not built as decided. Resolution: answered: Planner action set now holds changeorder:author per ADR 212 decision 1 and ADR 197 decision 3; design, specs and tasks cover it.
-- R1.2 (adr conflict): proposal.md ADR check: ADR 212 decision 1 says a plan job started by a planner gets unit secrets only when its commit is on a protected branch (ADR 213 decision 2). The change does not handle this path, so secrets can reach plan jobs without that check. Resolution: answered: Design and out_of_scope state that planner-started plan jobs get unit secrets only on a protected branch; job start itself stays in milestone 5.
-- R1.3 (open question): specs/planner-role/spec.md: the spec does not say whether masked state is returned to a workstation tofu plan or pulumi preview, or what the secret deny means for a local plan that needs values. ADR 212 decision 1 names this caveat for workstations. Resolution: answered: Added workstation requirement: local plan and preview read masked state through the same state actions; reveal stays 403.
+- R1.1 (adr conflict): specs/planner-role/spec.md and tasks.md 2.1: ADR 212 decision 1 says planner also gets changeorder:author because it holds unit:run-plan (ADR 197 decision 3). The change omits changeorder:author from the planner action set, so the role is not built as decided. Resolution: answered: Planner action set now holds changeorder:author per ADR 212 decision 1; design, specs and tasks cover it.
+- R1.2 (adr conflict): proposal.md ADR check: ADR 212 decision 1 says a plan job started by a planner gets unit secrets only when its commit is on a protected branch (ADR 213 decision 2). The change does not handle this path, so secrets can reach plan jobs without that check. Resolution: answered: Design and specs state the protected-branch gate for planner plan-job secrets and close server plan-job start until milestone 5.
+- R1.3 (open question): specs/planner-role/spec.md: the spec does not say whether masked state is returned to a workstation tofu plan or pulumi preview, or what the secret deny means for a local plan that needs values. ADR 212 decision 1 names this caveat for workstations. Resolution: open question: Added workstation requirement for masked local plan and preview; open question keeps the display choice for plans that need secret values.
 - R1.4 (failure mode): specs/planner-role/spec.md: the 403 error code for pulumi up and tofu apply is given as either workspace.locked or unit.forbidden. The spec must fix one code per path before the docs page and the error table can be built. Resolution: answered: Fixed one code per path: unit.forbidden for writes, secret.forbidden for reveal.
-- R1.5 (missing scenario): specs/planner-role/spec.md: no scenario covers a principal holding planner on one object and a write role on another object of the same tree. The grant union rule is not stated, so the planner-write-refused requirement is ambiguous. Resolution: answered: Added grant-union requirement and scenario for planner on one object plus a write role on another.
-- R1.6 (missing scenario): specs/planner-role/spec.md: no scenario for a planner whose role is removed, or whose group membership ends, during a plan or read. Grant evaluation through group changes is not specified. Resolution: answered: Added revocation requirement and scenario: removal takes effect on next request.
+- R1.5 (missing scenario): specs/planner-role/spec.md: no scenario covers a principal holding planner on one object and a write role on another object of the same tree. The grant union rule is not stated, so the planner-write-refused requirement is ambiguous. Resolution: answered: Added requirement planner-grant-union with scenario 'planner on one object and writer on another' for planner on one object plus a write role on another.
+- R1.6 (missing scenario): specs/planner-role/spec.md: no scenario for a planner whose role is removed, or whose group membership ends, during a plan or read. Grant evaluation through group changes is not specified. Resolution: answered: Added requirement planner-revocation with scenario 'grant removed during plan': removal takes effect on the next request with 403.
 - R1.7 (failure mode): tasks.md 1.2 and design layer table: hostile tests cover only four endpoints. Other write routes (namespace, collection, settings, sign-in, token creation, non-plan runner jobs) have no required action check or test. Resolution: answered: Expanded handler layer and tasks to cover settings, token, membership and non-plan job routes with hostile tests.
 - R1.8 (wrong claim): proposal.md: the command opendustpan auth reach --unit is cited as the help command, but no input shows that this command exists. The evidence covers only the test helper and the role constant. Resolution: answered: Removed the unproven reach command; errors now cite opendustpan --help.
-- R1.9 (missing scenario): specs/planner-role/spec.md: the audit entry for a refused secret reveal does not name the principal, role and object, which the audit rule of project.md requires. The scenario says only that an entry is written. Resolution: answered: Secret-refusal scenario now names principal, role, object and time in the audit entry.
+- R1.9 (missing scenario): specs/planner-role/spec.md: the audit entry for a refused secret reveal does not name the principal, role and object, which the audit rule of project.md requires. The scenario says only that an entry is written. Resolution: answered: Added scenario 'planner secret reveal refused' under planner-secret-refused that names principal, planner role, object and time in the audit entry.
 - R1.10 (scope): tasks.md 2.3: the e2e planner scenario is required on SQLite and PostgreSQL, but the roadmap step names no dialects. The store adapter enforcement layer in design.md has no matching task. Resolution: answered: Removed dialect promise; added store-adapter enforcement task.
 - R2.1 (adr conflict): specs/planner-role/spec.md planner-changeorder-author: ADR 212 decision 1 says planner gets changeorder:author, yet the spec grants it only on the author step and does not state that a planner-started plan job gets unit secrets only on a protected branch; the protected-branch rule of ADR 212 decision 1 is absent from the spec and tasks, so the cited secret gate is unverified. Resolution: answered: Added planner-plan-job-secrets requirement for the protected-branch gate and a task that enforces it with the milestone 5 job start.
 - R2.2 (wrong claim): proposal.md ADR check cites ADR 212 decision 1 as current and says 'Conflict: none', but ADR 212 decision 1 is quoted from a text that is truncated in the decision input; the quoted workstation caveat (ADR 212 decision 1) is not fully supported, so the claim that masked local plan is the decided behavior is unproven. Resolution: answered: ADR check now quotes the workstation caveat exactly as given in the pack and marks its truncation in the open question; no unproven claim remains.
@@ -121,7 +118,7 @@ Each question below has a provisional answer by the PM decision rule (a benchmar
 
 1. When a planner runs tofu plan or pulumi preview on a workstation and the plan needs a secret value, does the local run show masked placeholders or fail?
    - Options: Local plan shows masked placeholders and continues; Local plan fails where a secret value is required.
-   - Provisional decision (owner review 14 Nov): The server refuses each decrypt with 403 secret.forbidden. The CLI shows its own result, and a local run that needs plain text fails. The docs name the plan-only job of milestone 5 as the path.
+   - Provisional decision (owner review 14 Nov): The server refuses each decrypt with 403 secret.forbidden. A local run that needs plain text fails. The docs name the plan-only job of milestone 5 as the path.
    - Reason: The server cannot make the tool CLI show placeholders. A secret read that answers anything other than a refusal fails open. Benchmark: AWS: a role without kms:Decrypt gets AccessDenied, and the tool that needs the plain text stops.
    - Persona impact: The planner can still read masked state. A plan that needs secrets fails with a clear error that names the plan-only job. Escape hatch: A plan-only runner job (milestone 5 step 3), or a grant with secret read from an administrator.
    - Owner-tagged ADRs involved: ADR 212 (their words do not change).
@@ -137,7 +134,7 @@ Questions considered and answered:
 - Does the planner role get any write or secret action? No. ADR 212 decision 1 keeps planner as viewer plus unit:run-plan, job:read-plans and changeorder:author. It holds no apply, no destroy, no approve and no secret reveal.
 - Does this change define the plan-only runner job? No. The roadmap step moves plan-only job start to milestone 5. This change states the protected-branch secret gate and closes the server plan-job start for planners until that gate ships.
 - Does the planner role need a new grant shape? No. ADR 52 decisions 3 and 5 answer it: a grant names holder, role and object, and evaluation walks the object tree with union of grants.
-- Can an administrator copy the planner role into a custom role with secret actions? Yes. ADR 52 decision 7 permits an administrator to make a custom role as a set of actions. A copy of planner with added secret actions is a distinct custom role, not the built-in planner role. Whether such a custom role bypasses the protected-branch gate is an open question.
-- Does masked read cover state written before the change? Masked state for every state version, including versions written before this change and state files read through the OpenTofu HTTP backend. The reveal check applies at read time, not at write time.
+- Can an administrator copy the planner role into a custom role with secret actions? Yes. ADR 52 decision 7 permits an administrator to make a custom role as a set of actions. A copy of planner with added secret actions is a distinct custom role, not the built-in planner role.
+- Does masked read cover state written before the change? Masked state for every state version, including versions written before this change. The reveal check applies at read time, not at write time.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

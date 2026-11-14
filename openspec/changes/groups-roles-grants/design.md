@@ -1,11 +1,11 @@
 ## Context
 
-Groups, roles and grants are stored grants checked at the point of use with no cached allow. Principals and groups live in the home that the installation setting identity.principalHome sets. The change adds no new grant shape and no new role. It shares one reach function with check-reach-when-grant-membership and shares one refusal code list with planner-role.
+Groups, roles and grants are stored grants checked at the point of use with no cached allow. Principals and groups live in the home that the installation setting identity.principalHome sets. The change adds no new grant shape and no new role. This change ships the shared unexported reach function and the refusal codes unit.forbidden and secret.forbidden for reuse by later changes.
 
 ## Decisions
 
 1. **Check stored grants on each request.** Reuse the stored grant check at the service for each tool route, so revocation and membership change take effect on the next request with no cached allow.
-2. **One shared reach function.** Evaluate every grant, membership and act-as cover through one unexported reach function, so this change and check-reach-when-grant-membership cannot diverge.
+2. **One shared reach function.** Evaluate every grant, membership and act-as cover through one unexported reach function shipped here, so later changes reuse it and cannot diverge.
 3. **Export reads stored grants.** Build the access-review export as a read over stored grants with holder, role, object, creator, time, last use with Never, and history end time, in snapshot and history modes under its own read-access action.
 
 ## Structure

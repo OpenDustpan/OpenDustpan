@@ -12,6 +12,10 @@ When a caller with a fresh authentication and a reach that covers the reach of t
 - **WHEN** two callers change trust on one group at once
 - **THEN** both changes are audited and the last committed change is the stored value
 
+#### Scenario: Write group
+- **WHEN** a covered caller with a fresh step sets trust on a group with installation-wide write access
+- **THEN** the group is trusted and an audit entry is written
+
 ### Requirement: Refusal without a fresh step
 
 If the caller has no fresh authentication, then the server SHALL refuse the trust change with 403.
@@ -21,7 +25,7 @@ If the caller has no fresh authentication, then the server SHALL refuse the trus
 - **THEN** the server answers 403 mfa.fresh-step-required
 
 #### Scenario: No factor
-- **WHEN** a person with no enrolled factor sets trust
+- **WHEN** a person of the OAuth or trusted-header method with no enrolled factor sets trust
 - **THEN** the server answers 403 mfa.fresh-step-required and names the factor path
 
 ### Requirement: Uncovered reach

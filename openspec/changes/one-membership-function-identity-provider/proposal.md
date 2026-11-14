@@ -14,8 +14,8 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| SCIM add of a user to a protected or closed group is refused. | SCIM 400 with code idp.protected-group and the message names the group and the check command. | `curl /api/dustpan/v1/scim/Users/{id}` |
-| Group claim at sign-in names a protected or closed group. | Sign-in succeeds with no new membership and the audit entry names the refused group and the check command. | `opendustpan audit list --principal <subject>` |
+| SCIM add of a user to a protected or closed group is refused. | SCIM answers a SCIM error with code idp.protected-group that names the group and the refusing rule; the audit entry names `opendustpan audit-chain`. | `opendustpan audit-chain` |
+| Group claim at sign-in names a protected or closed group. | Sign-in succeeds with no new membership and the audit entry names the refused group and `opendustpan audit-chain`. | `opendustpan audit-chain` |
 | Change to identity provider, claim mapping, or account matching without server:manage-sign-in or without a fresh step inside the one window is refused. | 403 with code authz.forbidden or mfa.fresh-step-required and the message names `GET /api/dustpan/v1/capabilities`. | `curl /api/dustpan/v1/capabilities` |
 
 Evidence for the claims above:
@@ -40,8 +40,12 @@ Out of scope:
 
 Depends on:
 
-- `fresh-authentication-window-0-turns` (order of the milestone review)
+- guide-implies-protected-groups-refuse
+- fresh-authentication-window-0-turns
+- check-reach-when-grant-membership
 - `guide-implies-protected-groups-refuse` (order of the milestone review)
+- `fresh-authentication-window-0-turns` (order of the milestone review)
+- `check-reach-when-grant-membership` (order of the milestone review)
 
 ## Usability
 
@@ -74,7 +78,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 301 extends decision 1; ADR 320 extends decision 1; ADR 339 extends decision 6; ADR 354 extends. Chain to the end: ADR 301, ADR 320, ADR 339, ADR 354, ADR 332.
 - Current rule: this ADR, with ADR 301, 320, 339, 354.
 - Quote: "One window everywhere (owner)."
-- Effect: Each route that this change covers for a trusted identity provider, claim mapping, or account matching rule change needs a fresh authentication inside the one window, using the shortest effective window, in addition to server:manage-sign-in.
+- Effect: Each route that this change covers for a trusted identity provider, claim mapping, or account matching change needs a fresh authentication inside the one window, using the shortest effective window, in addition to server:manage-sign-in.
 - Conflict: none.
 
 **ADR 320: One sign-in path for every sign-in method** (owner-tagged: decision 14).
@@ -126,7 +130,7 @@ A model of another provider than the drafter listed the open questions, failure 
 - R1.4 (missing scenario): No scenario covers a change to an identifying attribute of a protected member or the suspension of decision 20, although tasks 2.3 and issue #632 require e2e steps for them; spec, tasks and proposal disagree on scope. Resolution: answered: Suspension and identifying-attribute changes moved explicitly to their own changes; e2e tasks in this change cover only refused adds and token expiry so spec, tasks, and scope agree.
 - R1.5 (failure mode): The spec does not say whether the refused-add check and the membership write run in one transaction for the port adapter; a concurrent group switch or protected-group change can race the check. Resolution: answered: Spec requires the refusal check and the membership plus audit writes in one transaction; tasks test a concurrent group-switch race.
 - R1.6 (failure mode): The spec does not say whether a change fails when the audit write fails; the audit entry is the only durable record, and the WARN line is lost on restart or rotation, so an unaudited change can proceed. Resolution: answered: Spec requires the change to fail when the audit write fails; design puts audit in the same transaction.
-- R1.7 (wrong claim): The proposal states 'Open questions: none' while the same file lists an open question with a provisional decision pending owner review on 14 Nov for the alert channel; the spec-ready gate is not met. Resolution: answered: Alert channel moved to considered with its answer; open_questions is now none so the spec-ready gate is met.
+- R1.7 (wrong claim): The proposal states 'Open questions: none' while the same file lists an open question with a provisional decision pending owner review on 14 Nov for the alert channel; the spec-ready gate is not met. Resolution: answered: This draft lists two open questions with deciders and recommendations, so the spec-ready gate is not claimed as met.
 - R1.8 (missing scenario): No scenario for a group value with no mapped group or an unknown group ID returned by the mapper, although ADR 320 decision 12 allows zero or more groups. Resolution: answered: Added a scenario for a group value with no mapped group and for an unknown group ID.
 - R1.9 (missing scenario): No scenario for a SCIM token that has already expired, or for a clock that moves backwards; only the nears-expiry case is specified. Resolution: answered: Added scenarios for an already-expired SCIM token and for a clock that moves backwards.
 - R1.10 (scope): Tasks 2.3 and 3.1 add the docs page, the usability check and e2e steps, while the out-of-scope list excludes the SCIM and claim adapters, so the server:manage-sign-in wiring and the one function have no caller in this change. Resolution: answered: Out-of-scope now names only the adapters and the other changes; this change still wires the routes that exist and the one function that later adapters must call.
@@ -152,6 +156,7 @@ A model of another provider than the drafter listed the open questions, failure 
 - R3.8 (open question): proposal.md Open questions reads none, but the durable alert channel is answered only provisionally; the provisional answer keeps a non-durable WARN line as the only alert after a restart, which ADR 70 decision 22 requires to be an alert and which the design Risks call not durable. Resolution: open question: Durable alert channel added as an open question with PM to decide.
 - R3.9 (scope): tasks.md 2.3 and 3.1 require a docs page and a usability check that are not in the change files, while the proposal lists the docs page as part of the user path; the change does not name the docs page file it will write. Resolution: answered: Tasks name the docs page file docs/guides/idp-membership-and-alerts.md and its usability check.
 - M.6 (consistency): The function accepts only the sources scim and claim, but manage-ldap-sign-in-providers writes source ldap. The fixed 900-second fresh check conflicts with the one window of ADR 227. The SCIM token route belongs to the scim change. Resolution: answered: One function now accepts scim, claim, and ldap; fresh check uses the one window with the shortest effective window instead of a fixed 900 seconds; SCIM token route wiring moved to the scim change with only the guard and 168-hour alert specified here; docs task updates the protected-groups guide sentence.
+- M2.8 (dependency): The guide change must land first. This change also uses the fresh check of the one window and the P21 protected-group rule of check-reach-when-grant-membership, but it has no dependencies. Resolution: answered: Added guide-implies-protected-groups-refuse, fresh-authentication-window-0-turns, and check-reach-when-grant-membership to depends_on; docs task updates the protected-groups guide sentence to the enforced rule.
 
 ## Open questions
 

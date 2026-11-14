@@ -10,7 +10,7 @@ When a site administrator with a fresh authentication turns full sync on, the se
 
 #### Scenario: Turn off
 - **WHEN** full sync is turned off
-- **THEN** groups that are not trusted refuse the add again and an audit entry is written
+- **THEN** groups that are not trusted refuse the add again, removals that were final stay final, and an audit entry is written
 
 ### Requirement: Full sync needs a fresh step
 
@@ -19,6 +19,10 @@ If the caller has no fresh authentication, then the server SHALL refuse the full
 #### Scenario: Stale step
 - **WHEN** a caller with a stale step changes full sync
 - **THEN** the server answers 403 mfa.fresh-step-required
+
+#### Scenario: No factor
+- **WHEN** a person of the OAuth or trusted-header method with no enrolled factor changes full sync
+- **THEN** the server answers 403 mfa.fresh-step-required and names the factor path
 
 ### Requirement: Break-glass exempt
 

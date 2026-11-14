@@ -16,6 +16,10 @@ If an assertion fails the audience, recipient, time or signature check, then the
 - **WHEN** the assertion names another audience
 - **THEN** the server gives 401 with one generic answer and writes an audit entry.
 
+#### Scenario: Expired assertion
+- **WHEN** the assertion is older than the maximum age
+- **THEN** the server gives 401 and opens no session.
+
 ### Requirement: No replay
 
 If a response uses a request ID or assertion ID that is consumed or expired, then the server SHALL refuse the sign-in.

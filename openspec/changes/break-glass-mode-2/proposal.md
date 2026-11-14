@@ -28,15 +28,24 @@ Evidence for the claims above:
 
 - First-boot recovery mode supports signed-request with pinned offline public key.
 - Recovery route accepts an offline-signed request, refuses bad signatures and replays, and issues one admin session.
-- Each successful mode 2 use writes an audit entry with mode time and source and opens a break-glass review only when the review opt-in is on; refusals write an audit entry and open no review.
+- Each successful mode 2 use writes an audit entry with mode time and source and opens a break-glass review only when breakglass.review-enabled is on; refusals write an audit entry and open no review.
 - Success bumps the session generation of the recovery administrator and ends its prior sessions; a valid signed request bypasses the refused-submit throttle.
-- E2e and docs turn breakGlassReview.enabled on and show its effective value before the mode 2 use; session lifetime uses the same settings key family as break-glass-sign-in-typed.
+- E2e and docs turn breakglass.review-enabled on and show its effective value before the mode 2 use; session lifetime uses breakglass.recovery-session-seconds with default 900 and range 60 to 900 through the generic settings API.
 
 Out of scope:
 
 - Mode 1 bootstrap token flow except refusal when mode is signed-request
 - Mode 3 restore from backup
 - Break-glass account daily use
+
+Depends on:
+
+- add-one-generic-settings-api
+- break-glass-sign-in-typed
+- fresh-authentication-window-0-turns
+- `add-one-generic-settings-api` (order of the milestone review)
+- `break-glass-sign-in-typed` (order of the milestone review)
+- `fresh-authentication-window-0-turns` (order of the milestone review)
 
 ## Usability
 
@@ -68,9 +77,9 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 149 extends decisions 12 and 15; ADR 210 changes; ADR 222 changes decision 9; ADR 227 changes decision 9; ADR 297 changes decisions 1, 3 and 9. Chain to the end: ADR 149, ADR 210, ADR 222, ADR 227, ADR 297, ADR 247, ADR 286, ADR 335, ADR 351, ADR 354, ADR 301, ADR 320, ADR 339, ADR 333, ADR 332.
 - Current rule: this ADR, with ADR 149, 210, 222, 227, 297.
 - Quote: "Two kinds of use."
-- Quote: "The opt-in of the installation. The installation setting `breakGlassReview.enabled` is off by default."
+- Quote: "The opt-in of the installation."
 - Quote: "A review opens at the use."
-- Effect: A successful mode 2 use opens a review only when breakGlassReview.enabled is on, with break-glass.used in the same transaction. Mode 2 needs a new use kind because decision 1 names only freeze-break and account-session, so the mapping needs an RFC.
+- Effect: A successful mode 2 use opens a review only when breakglass.review-enabled is on, with break-glass.used in the same transaction. Mode 2 needs a new use kind because decision 1 names only freeze-break and account-session, so the mapping needs an RFC.
 - Conflict: rfc_needed.
 
 **ADR 245: Host recovery: database access, recovery modes and break-glass controls** (not owner-tagged).
@@ -79,7 +88,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 295 changes decision 12. Chain to the end: ADR 295.
 - Current rule: this ADR, with ADR 295.
 - Quote: "The command respects the recovery mode (product manager)."
-- Quote: "The command refuses when the installation chose mode 3 of ADR 57"
+- Quote: "The recovery mode setting."
 - Effect: Follows the stored recovery-mode setting; mode 2 uses signed-request mode and mode 3 refuses recovery.
 - Conflict: none.
 
@@ -88,7 +97,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Decisions that apply: 1 (extended), 2 (current).
 - Changed by: ADR 301 extends decision 1; ADR 320 extends decision 1; ADR 339 extends decision 6; ADR 354 extends. Chain to the end: ADR 301, ADR 320, ADR 339, ADR 354, ADR 332.
 - Current rule: this ADR, with ADR 301, 320, 339, 354.
-- Quote: "A fresh authentication. A fresh authentication is a built-in MFA step (ADR 46) or a new authentication at the SSO identity provider (ADR 71)."
+- Quote: "A fresh authentication is a built-in MFA step (ADR 46)"
 - Quote: "One window everywhere (owner)."
 - Effect: The recovery session lifetime and any review verdict that needs a fresh step use the one fresh-authentication window.
 - Conflict: none.
@@ -107,7 +116,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Decisions that apply: 12 (current).
 - Changed by: ADR 301 extends decision 1; ADR 333 extends decision 4. Chain to the end: ADR 301, ADR 333.
 - Current rule: this ADR, with ADR 301, 333.
-- Quote: "One session generation for each person. Each principal has a session generation, a count that starts at 1. Each cookie carries the generation that the issue read. A cookie authenticates and refreshes only while its generation is the stored generation. The server adds 1 to it, in the same transaction"
+- Quote: "One session generation for each person."
 - Effect: Successful mode 2 recovery ends prior sessions of the recovery administrator by adding 1 to its session generation.
 - Conflict: none.
 
@@ -115,17 +124,17 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
 
-- R1.1 (adr conflict): The change opens a break-glass review on every mode 2 use, but ADR 142 decision 2 says the installation setting breakGlassReview.enabled is off by default and that when it is off no review opens. The spec and proposal do not state this opt-in. Quote: 'The opt-in of the installation. The installation setting breakGlassReview.enabled is off by default.' (proposal.md 'What Changes'; specs/break-glass-recovery/spec.md 'Valid signed request gives one admin session'). Resolution: answered: Requirement now opens a review only when breakGlassReview.enabled is on; design and tasks updated.
-- R1.2 (adr conflict): The design commits the session issue and the audit entry in one transaction but leaves out the review. ADR 142 decision 3 says the review notification break-glass.used is written in the same transaction as the use. Quote: 'each write the notification break-glass.used in their transaction'. Without this, a session can exist with no review record (design.md 'Layers', Store row). Resolution: answered: Design commits break-glass.used notice in the same transaction; requirement and task cover it.
-- R1.3 (missing scenario): The proposal error table requires 403 break-glass.wrong-mode for a recovery attempt on an installation not in signed-request mode, but the spec has no scenario for it. Tasks have no test for it either. Resolution: answered: Added wrong-mode requirement, scenario, and failing test task.
-- R1.4 (missing scenario): The spec has no scenario for an expired request, a request for another installation or audience, a request whose issued-at is in the future, or an oversize or malformed request ID. The design layers name these hostile cases, but no requirement or task covers them. Resolution: answered: Added expiry, audience, future issued-at, and malformed ID requirements, scenarios, and tests.
-- R1.5 (open question): The issued admin session has no stated lifetime, scope or freshness. ADR 227 decision 2 (owner) says one fresh-authentication window applies to each break-glass review and each fresh step. The change does not say whether the recovery session or the review verdict must be fresh, or how long the session lasts. Resolution: open question: Added open question on session lifetime, scope, and fresh-step rule per ADR 227.
-- R1.6 (failure mode): Two valid submissions of the same request ID that reach two nodes, or a restart during the consume, are not covered. The design relies on a compare-and-set, but the spec states no outcome for a concurrent or interrupted consume, and no test covers it. Resolution: answered: Added single-winner concurrent consume requirement, scenario, and test.
-- R1.7 (adr conflict): ADR 57 decision 5 requires that each break-glass use entry hold the mode, the time and the source. The spec scenario names only mode and source, so the time is missing from the required audit fields. Resolution: answered: Audit scenario now names mode, time, and source.
-- R1.8 (open question): The design asks for a tight expiry and a clock skew bound, but gives no values. The provisional answers name the expiry field but set no maximum lifetime and no skew tolerance, so an implementer cannot build the freshness check. Resolution: open question: Added open question with recommended maximum lifetime and skew bound.
-- R1.9 (adr conflict): The change opens a review on refused uses (bad signature, reuse). ADR 142 decision 1 defines a use only as a freeze-break job or an account-session. The proposal does not reconcile a review on a refusal with that definition. Resolution: answered: Refusals now write only an audit entry and open no review, per ADR 142 use definition.
-- R1.10 (scope): The task list has no task for the console sign-in step of the user path, although proposal step 3 requires that the issued session works in the console. Resolution: answered: Added console sign-in task for the issued session.
-- R1.11 (scope): The design Store layer requires a conformance test for a duplicate request ID and for a mode change after first boot, but tasks.md lists no store adapter test. Resolution: answered: Added store adapter conformance test task for duplicate ID and immutable mode.
+- R1.1 (adr conflict): The change opens a break-glass review on every mode 2 use, but ADR 142 decision 2 says the installation setting breakGlassReview.enabled is off by default and that when it is off no review opens. The spec and proposal do not state this opt-in. Quote: 'The opt-in of the installation. The installation setting breakGlassReview.enabled is off by default.' (proposal.md 'What Changes'; specs/break-glass-recovery/spec.md 'Valid signed request gives one admin session'). Resolution: answered: Requirement now opens a review only when breakglass.review-enabled is on; design and what_changes state the opt-in rule per ADR 142 decision 2.
+- R1.2 (adr conflict): The design commits the session issue and the audit entry in one transaction but leaves out the review. ADR 142 decision 3 says the review notification break-glass.used is written in the same transaction as the use. Quote: 'each write the notification break-glass.used in their transaction'. Without this, a session can exist with no review record (design.md 'Layers', Store row). Resolution: answered: Design and spec commit session issue, audit entry, and break-glass.used notice in the same transaction per ADR 142 decision 3.
+- R1.3 (missing scenario): The proposal error table requires 403 break-glass.wrong-mode for a recovery attempt on an installation not in signed-request mode, but the spec has no scenario for it. Tasks have no test for it either. Resolution: answered: Added wrong-mode requirement, scenario with 403 break-glass.wrong-mode, and failing test task.
+- R1.4 (missing scenario): The spec has no scenario for an expired request, a request for another installation or audience, a request whose issued-at is in the future, or an oversize or malformed request ID. The design layers name these hostile cases, but no requirement or task covers them. Resolution: answered: Added stale-request and misdirected-malformed requirements, scenarios for expiry, future issued-at, wrong audience or installation, and malformed ID, with failing tests.
+- R1.5 (open question): The issued admin session has no stated lifetime, scope or freshness. ADR 227 decision 2 (owner) says one fresh-authentication window applies to each break-glass review and each fresh step. The change does not say whether the recovery session or the review verdict must be fresh, or how long the session lasts. Resolution: open question: Added open question on session lifetime, scope, and fresh-step rule for the review verdict per ADR 227.
+- R1.6 (failure mode): Two valid submissions of the same request ID that reach two nodes, or a restart during the consume, are not covered. The design relies on a compare-and-set, but the spec states no outcome for a concurrent or interrupted consume, and no test covers it. Resolution: answered: Added concurrent-consume single-winner requirement, restart-safe scenario, and store compare-and-set test.
+- R1.7 (adr conflict): ADR 57 decision 5 requires that each break-glass use entry hold the mode, the time and the source. The spec scenario names only mode and source, so the time is missing from the required audit fields. Resolution: answered: Success scenario now names mode, time, and source in the audit entry per ADR 57 decision 5.
+- R1.8 (open question): The design asks for a tight expiry and a clock skew bound, but gives no values. The provisional answers name the expiry field but set no maximum lifetime and no skew tolerance, so an implementer cannot build the freshness check. Resolution: open question: Added open question with recommended maximum lifetime 15 minutes and skew bound 120 seconds.
+- R1.9 (adr conflict): The change opens a review on refused uses (bad signature, reuse). ADR 142 decision 1 defines a use only as a freeze-break job or an account-session. The proposal does not reconcile a review on a refusal with that definition. Resolution: answered: Refusals write only an audit entry and open no review, consistent with ADR 142 use definition; open question covers the new recovery-session use kind.
+- R1.10 (scope): The task list has no task for the console sign-in step of the user path, although proposal step 3 requires that the issued session works in the console. Resolution: answered: Added console sign-in task for the issued session in definition of done.
+- R1.11 (scope): The design Store layer requires a conformance test for a duplicate request ID and for a mode change after first boot, but tasks.md lists no store adapter test. Resolution: answered: Added store adapter conformance test task for duplicate request ID and immutable mode.
 - R2.1 (open question): The use of a mode 2 recovery is installation-scoped, but ADR 142 decision 14 requires each break-glass.Store write to carry the fence of its review namespace, and ADR 142 decision 1 defines a use only as a freeze-break job or an account-session. The change does not say which scope and which use kind the recovery review gets. Design.md Store layer and spec.md 'Valid signed request gives one admin session' leave this open. Resolution: open question: Added open question on review scope and use kind; adr_check notes the gap.
 - R2.2 (adr conflict): ADR 46 decision 6 says 'What MFA covers. Console sign-in, the creation of access tokens, and the reveal of a secret value.' The change issues a console admin session from a signed request with no MFA step and no decision that exempts mode 2. The change must either apply MFA to the recovery session or cite a decision that allows the bypass. Resolution: open question: Added ADR 46 to adr_check and an open question on the MFA step at issue for the recovery session.
 - R2.3 (failure mode): The refused-use path writes one audit entry for each wrong signature, unknown key and malformed request, and the HTTP layer names no rate limit or cap. Anyone who can reach the recovery route can grow the audit log without bound. No requirement covers throttling or a cap on refused-use entries. Resolution: answered: Added bounded refused-use requirement, hostile flood test, and rate-limit guard in design.
@@ -141,7 +150,9 @@ A model of another provider than the drafter listed the open questions, failure 
 - R3.5 (adr conflict): Provisional decision 5 maps the recovery use to the ADR 142 use kind account-session, which decision 1 defines as a break-glass account sign-in. A mode 2 recovery session is not that sign-in, so the mapping is not supported by the cited decision. Resolution: open question: Changed recommended review mapping to a new use kind recovery-session in installation scope; adr_check marks ADR 142 as rfc_needed.
 - R3.6 (missing scenario): No requirement says whether a successful recovery bumps the session generation of ADR 297 decision 12. Sessions stolen before the recovery may then survive it, and the spec does not say so. Resolution: answered: Added session-generation requirement that success bumps the recovery administrator generation and ends prior sessions, with a scenario and failing test.
 - R3.7 (failure mode): The design asks for a restart-safe single-use check, but no scenario covers a crash after the request ID is consumed and before the session is written, or the reverse. The single transaction in design decision 3 is asserted but not tested for partial failure. Resolution: answered: Design states atomic commit semantics for crash before and after commit; added restart-safe scenario and store test task.
-- M.17 (consistency): The change opens a break-glass review only when the review opt-in is on, but step 11 says the use opens a review (ADR 142). The session limit differs from the other break-glass session limits. Resolution: answered: Kept ADR 142 opt-in rule and fixed verification: design adds opt-in-on decision, e2e step turns breakGlassReview.enabled on and checks effective value before the use, and session lifetime now uses the same settings key family as break-glass-sign-in-typed.
+- M.17 (consistency): The change opens a break-glass review only when the review opt-in is on, but step 11 says the use opens a review (ADR 142). The session limit differs from the other break-glass session limits. Resolution: answered: Kept ADR 142 opt-in rule and fixed verification: design adds opt-in-on decision, e2e step turns breakglass.review-enabled on and checks effective value before the use, and session lifetime now uses breakglass.recovery-session-seconds from the shared family.
+- M2.4 (dependency): The change has no dependencies, but it reads breakGlassReview.enabled and a session lifetime from the key family of break-glass-sign-in-typed, and the review verdict needs a fresh step. Resolution: answered: Added depends_on on add-one-generic-settings-api, break-glass-sign-in-typed, and fresh-authentication-window-0-turns for the shared settings keys and the fresh-step rule.
+- M2.5 (consistency): The key breakGlassReview.enabled uses camelCase, but the settings API uses dotted kebab-case keys such as tempadmin.session-limit. The 15-minute recovery session also has no named key or default in the shared family. Resolution: answered: Renamed key to breakglass.review-enabled per dotted kebab-case convention and registered breakglass.recovery-session-seconds with default 900 and range 60 to 900 in design, specs, tasks, and what_changes.
 
 ## Open questions
 
@@ -152,8 +163,8 @@ A model of another provider than the drafter listed the open questions, failure 
    - Options: Keep used request IDs until request expiry plus 7 days, then purge; Keep used request IDs forever.
    - Recommended: Keep used request IDs until request expiry plus 7 days, then purge Reason: Bounded retention refuses replays during the risk window without boundless growth.
 3. What lifetime and scope does the issued admin session have, and does the review verdict need a fresh step? Decides: PM.
-   - Options: One admin session of 15 minutes for recovery only from the same settings key family as break-glass-sign-in-typed, review verdict needs a fresh step per the one window; One admin session of 60 minutes with full administrator scope.
-   - Recommended: One admin session of 15 minutes for recovery only from the same settings key family as break-glass-sign-in-typed, review verdict needs a fresh step per the one window Reason: A short recovery-only session from the shared family bounds the effect while the review still checks the use.
+   - Options: One admin session of 15 minutes for recovery only from breakglass.recovery-session-seconds, review verdict needs a fresh step per the one window; One admin session of 60 minutes with full administrator scope.
+   - Recommended: One admin session of 15 minutes for recovery only from breakglass.recovery-session-seconds, review verdict needs a fresh step per the one window Reason: A short recovery-only session from the shared family bounds the effect while the review still checks the use.
 4. What maximum request lifetime and clock skew bound does the freshness check use? Decides: PM.
    - Options: Maximum lifetime 15 minutes and skew tolerance 120 seconds; Maximum lifetime 60 minutes and skew tolerance 300 seconds.
    - Recommended: Maximum lifetime 15 minutes and skew tolerance 120 seconds Reason: A short lifetime with a small bound refuses replays without false refusals from normal skew.
@@ -164,21 +175,21 @@ A model of another provider than the drafter listed the open questions, failure 
    - Options: No MFA step at issue because no factor exists; session is short and recovery-only; Require an enrolled MFA factor at issue.
    - Recommended: No MFA step at issue because no factor exists; session is short and recovery-only Reason: No factor exists to check when every administrator lost access, so a short recovery-only session is the usable path.
 7. How does the pinned offline public key rotate after compromise? Decides: PM.
-   - Options: Pinned key rotates only through a signed rotation request from the current offline key; Pinned key rotates through a site administrator API with a fresh step.
-   - Recommended: The operator replaces the pinned key with a host command that needs host access and writes an audit entry. During a planned rotation, two pinned keys may be valid for a short overlap. A request signed with the old key must never rotate the key after a compromise. Reason: An attacker who holds a compromised key could use a signed rotation request to lock the operator out. Host access is a separate trust root.
+   - Options: Pinned key rotates only through a signed rotation request from the current offline key; Pinned key rotates through a host command that needs host access and writes an audit entry.
+   - Recommended: The operator replaces the pinned key with a host command that needs host access and writes an audit entry. Reason: Host access is a separate trust root from a signed rotation request.
 8. How does the issued admin session reach the console? Decides: PM.
    - Options: Deliver the session as the standard console sealed-cookie sign-in for one recovery administrator; Deliver the session as a one-time bearer token that the console exchanges once.
    - Recommended: Deliver the session as the standard console sealed-cookie sign-in for one recovery administrator Reason: One standard delivery keeps the console path and the generation check unchanged.
 9. May a second recovery session exist while one recovery session is live? Decides: PM.
    - Options: A second valid request while one recovery session is live ends the first session and issues a new one; A second valid request while one recovery session is live is refused until the first ends.
-   - Recommended: A second valid request ends the live recovery session (the session generation goes up) and gives a new one. Only one recovery session is live at a time, and both uses are audited and reviewed. Reason: This matches the rule of the change that success ends prior sessions. It does not lock out an operator who lost the first session.
+   - Recommended: A second valid request ends the live recovery session and gives a new one. Only one recovery session is live at a time, and both uses are audited and reviewed. Reason: This matches the rule that success ends prior sessions and does not lock out an operator who lost the first session.
 
 Not spec-ready: the change conflicts with ADR 142: an RFC comes first; the change conflicts with ADR 46: an RFC comes first.
 
 Questions considered and answered:
 
 - When is mode 2 selected? Yes. ADR 57 decision 2 says the operator sets the mode when the installation starts for the first time, and ADR 245 decision 6 holds it in the recovery-mode setting; first boot sets signed-request and later boots keep it.
-- Does a mode 2 use write audit and review records? Yes for success. ADR 57 decision 5 requires an audit entry with mode, time and source on every mode 2 use; ADR 142 decisions 2 and 3 open a review with break-glass.used in the same transaction only when breakGlassReview.enabled is on. Refusals write an audit entry and open no review.
+- Does a mode 2 use write audit and review records? Yes for success. ADR 57 decision 5 requires an audit entry with mode, time and source on every mode 2 use; ADR 142 decisions 2 and 3 open a review with break-glass.used in the same transaction only when breakglass.review-enabled is on. Refusals write an audit entry and open no review.
 - Do the ADRs fix signature scheme and replay handling? No. ADR 57 names a recovery request signed with an offline operator key and one admin session, but names no signature scheme, request fields, lifetimes, or replay store; left as open questions.
 - Does MFA apply to the recovery session at issue? No. ADR 46 decision 6 puts console sign-in in MFA scope, but no ADR exempts a recovery session when no factor exists; left as an open question that needs an RFC.
 - Which review scope and use kind does a mode 2 recovery get? No. ADR 142 decision 1 names only freeze-break and account-session uses, so an installation-scoped recovery needs a new use kind; left as an open question that needs an RFC.

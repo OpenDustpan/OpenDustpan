@@ -20,12 +20,36 @@ When OpenTofu makes a workspace, the server SHALL place the workspace in the col
 - **WHEN** OpenTofu makes a workspace whose cloud block project names an existing collection
 - **THEN** the new workspace exists in that collection
 
+### Requirement: Default at namespace create
+
+When an administrator makes a namespace, the server SHALL store a default collection and a catch-all placement rule in the create transaction.
+
+#### Scenario: Namespace gets the default
+- **WHEN** an administrator makes a namespace without the opt-out
+- **THEN** the namespace holds a default collection and a catch-all rule that names it, and the audit log holds an entry for each
+
+#### Scenario: Stack uses the default
+- **WHEN** the Pulumi CLI makes a stack that only the catch-all rule matches
+- **THEN** the stack exists in the default collection
+
+### Requirement: Opt-out of the default
+
+Where the namespace create request sets the opt-out, the server SHALL store neither a default collection nor a catch-all rule.
+
+#### Scenario: Namespace with the opt-out
+- **WHEN** an administrator makes a namespace with the opt-out
+- **THEN** the namespace holds no collection and no placement rule
+
+#### Scenario: Administrator deletes the default
+- **WHEN** an administrator deletes the catch-all rule of a namespace
+- **THEN** a new stack that no rule matches is refused
+
 ### Requirement: Refuse stack with no match
 
 If no placement rule matches a new Pulumi stack, then the server SHALL refuse the create and tell the caller to add a placement rule.
 
 #### Scenario: No rule matches
-- **WHEN** the Pulumi CLI makes a stack that no rule matches, or the rule list is empty after an administrator deleted the catch-all rule
+- **WHEN** the Pulumi CLI makes a stack that no rule matches, or the rule list is empty
 - **THEN** the server answers 422, names the namespace and the unit, names the placement-rules list command, and no stack exists
 
 ### Requirement: Refuse workspace with no collection

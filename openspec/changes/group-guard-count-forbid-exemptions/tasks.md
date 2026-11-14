@@ -10,7 +10,7 @@
 
 - [ ] 2.1 Apply the widening check on stable group ID in one fenced transaction with a constructor that parses saved forbid policies, together with the reach check of check-reach-when-grant-membership in that same transaction. Check: `go test -race ./pkg/access/... ./internal/accesssvc/... -count=1` passes.
 - [ ] 2.2 Add hostile parser tests for every Group reference form, including nested expressions. Check: `go test ./pkg/access -run TestGroupGuardHostileParser -count=1` passes, with one hostile input for each Group reference form and a mutation check that removal of the guard fails the test.
-- [ ] 2.3 Wire the guard into the membership routes with declared authorization actions and audit entries that name the limit ID. Check: `GET /api/dustpan/v1/access/reach?principal=<subject>` returns the same shape before and after the change.
+- [ ] 2.3 Wire the guard into the membership routes with declared authorization actions and audit entries that name the limit ID. Check: `GET /api/dustpan/v1/capabilities` returns the same shape before and after the change.
 - [ ] 2.4 Document the guard, the needed rights, the site admin refusal, and the break-glass exemption. Check: Docs page runs as written against a dev server over TLS.
 
 ## 3. Definition of done

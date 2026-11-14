@@ -7,21 +7,22 @@ Issue: #623, #627, #633.
 The user path this change must make work:
 
 1. **Docs page.** The site administrator opens the guide for break-glass accounts and reads the setup rule and the guard.
-2. **API.** The site administrator lists the break-glass accounts and adds accounts with a passkey or a hardware key. The console and the CLI use the same routes.
+2. **API.** The site administrator lists the break-glass accounts with the new read route and adds accounts with a passkey or a hardware key. The console and the CLI use the same routes.
 3. **API.** The site administrator tries a change that lowers the count of working paths below the floor and gets 409 with the count.
 4. **CLI.** The site administrator rotates a break-glass credential in one call. The new credential works before the old one stops.
 5. **Server start.** The operator restores a backup. A restore that leaves fewer than two working paths is refused before the swap.
+6. **E2e.** The shared e2e first setup makes two break-glass accounts, so each other e2e step still starts from a finished setup.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A revoke, credential change, passkey removal, expiry change, policy block or IP allowlist change leaves fewer than two working break-glass paths. | 409 with code break-glass.floor and text that names the live count. | `GET /api/dustpan/v1/break-glass-accounts` |
-| A disable, delete or sweep removes the last enabled break-glass account. | 409 with code break-glass.last-enabled. The audit log records the refused change. | `GET /api/dustpan/v1/break-glass-accounts` |
-| First-setup finish with fewer than two break-glass accounts. | 409 with code break-glass.setup-incomplete and the missing count. | `GET /api/dustpan/v1/setup` |
-| A restore leaves fewer than two working paths. | 409 with code break-glass.restore-refused before the swap. | `GET /api/dustpan/v1/backups` |
-| A concurrent write holds the lock on the break-glass set past the lock timeout. | 409 with code break-glass.busy. No change is written. A retry is safe. | `GET /api/dustpan/v1/break-glass-accounts` |
-| A guarded change comes without a fresh authentication. | 403 with code mfa.fresh-step-required. The text names the page that enrolls a factor. | `GET /api/dustpan/v1/break-glass-accounts` |
+| A revoke, credential change, passkey removal, expiry change, policy block or IP allowlist change leaves fewer than two working break-glass paths. | 409 with code break-glass.floor and text that names the live count. | `GET /api/dustpan/v1/break-glass/accounts` |
+| A disable, delete or sweep removes the last enabled break-glass account. | 409 with code break-glass.last-enabled. The audit log records the refused change. | `GET /api/dustpan/v1/break-glass/accounts` |
+| First-setup finish with fewer than two break-glass accounts. | 409 with code break-glass.setup-incomplete and the missing count. | `GET /api/dustpan/v1/break-glass/accounts` |
+| A restore leaves fewer than two working paths. | 409 with code break-glass.restore-refused before the swap. | `GET /api/dustpan/v1/break-glass/accounts` |
+| A concurrent write holds the lock on the break-glass set past the lock timeout. | 409 with code break-glass.busy. No change is written. A retry is safe. | `GET /api/dustpan/v1/break-glass/accounts` |
+| A guarded change comes without a fresh authentication. | 403 with code mfa.fresh-step-required. The text names the page that enrolls a factor. | `GET /api/dustpan/v1/break-glass/accounts` |
 
 Evidence for the claims above:
 
@@ -33,10 +34,13 @@ Evidence for the claims above:
 
 ## What Changes
 
+- New route GET /api/dustpan/v1/break-glass/accounts: lists the break-glass accounts, the live count of working paths and the missing count. It serves the first-setup report, the upgrade report and every error hint. Its action is server:read-break-glass and its object is @server.
+- New route POST /api/dustpan/v1/break-glass/accounts: adds a break-glass account with a passkey or a hardware key, for first setup and for upgrade.
 - A count of working break-glass accounts in pkg/principal with the four properties of ADR 70 decision 24: enabled, not expired, not blocked by a policy, not dependent on the identity provider. A second test, from decision 23, requires a passkey or a hardware key.
 - A guard in the write transaction of each covered change. Disable, delete and sweep refuse when no enabled account would stay. Every other covered change refuses when it lowers the count below two.
-- An atomic rotation route for a break-glass credential.
-- A first-setup gate on two break-glass accounts with a passkey or a hardware key, with an upgrade report and an add path.
+- New route POST /api/dustpan/v1/break-glass/accounts/{id}/rotate: atomic rotation of a break-glass credential.
+- A first-setup gate on two break-glass accounts with a passkey or a hardware key. The restore check reads the same count on staged data.
+- The shared e2e first-setup step makes two break-glass accounts.
 - A guide section for break-glass accounts only.
 
 Out of scope:
@@ -46,18 +50,21 @@ Out of scope:
 - Group trust switches and protected groups, and their guide text (change let-group-trust-identity-provider).
 - The setting for the restore of access tables (change add-setting-lets-server-restore).
 - Mode 2 recovery route (change break-glass-mode-2).
+- The change of the fresh-authentication window to 0 (change fresh-authentication-window-0-turns).
 
 Depends on:
 
 - add-setting-lets-server-restore
+- fresh-authentication-window-0-turns
 - `add-setting-lets-server-restore` (order of the milestone review)
+- `fresh-authentication-window-0-turns` (order of the milestone review)
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
-- A refused change still costs one round trip. The 409 text names the live count and the route that lists the accounts.
-- Setup with one account stops at finish. The setup status names the missing account and the passkey enrollment step.
+- A refused change costs one round trip. The 409 text names the live count and the route that lists the accounts.
+- Setup with one account stops at finish. The list route names the missing count and the passkey enrollment step.
 - A person with no factor gets a refusal that names the enrollment page.
 
 ## Owner decisions that apply
@@ -87,7 +94,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
 - Quote: "Delete and sweep (owner, 2026-10-20, accepted as written for now). Delete and sweep follow the same "not the last one" rule. This changes ADR 70 decisions 25 and 26. The sweep may disable or delete a break-glass principal."
-- Effect: Disable, delete and sweep use the rule that one enabled account must stay, with 409 in the write transaction. The floor of two is still checked after such a change and is reported in the answer as a warning with the live count. It is not a refusal. Each sweep action writes an audit record that names the sweep, the account and the reason.
+- Effect: Disable, delete and sweep use the rule that one enabled account must stay, with 409 in the write transaction. The answer carries the live count as a warning when it is below two. Each sweep action writes an audit record that names the sweep, the account and the reason.
 - Conflict: none.
 
 **ADR 216: Namespace administration and operator scope: where each installation action goes (owner)** (owner-tagged (all decisions)).
@@ -114,24 +121,24 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 301 extends decision 1; ADR 320 extends decision 1; ADR 339 extends decision 6; ADR 354 extends. Chain to the end: ADR 301, ADR 320, ADR 339, ADR 354, ADR 332.
 - Current rule: this ADR, with ADR 301, 320, 339, 354.
 - Quote: "One window everywhere (owner). The installation has one setting, `freshAuthSeconds`, with the default 900 (15 minutes)."
-- Effect: Rotation and the guarded changes of break-glass accounts use the one fresh-authentication window.
+- Effect: Rotation and the guarded changes of break-glass accounts use the one fresh-authentication window, including the rule of a window of 0.
 - Conflict: none.
 
 ## Adversarial second pass
 
 A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
 
-- R1.1 (owner decision conflict): proposal.md and spec guard-last-enabled: the owner decision P19 (Item 17) says every change other than disable, delete and sweep keeps the two-working-paths floor (ADR 70 d24), and first setup needs two. The spec and the proposal's error table apply only the last-enabled rule to all covered changes (revoke, IP allowlist, restore), so the two-path floor for those changes is dropped. Resolution: answered: The spec now has guard-last-enabled for disable, delete and sweep, and guard-floor for every other change, as the owner decision says.
-- R1.2 (adr conflict): ADR 70 decision 24 (not owner-tagged, current text) says the server refuses each change that leaves fewer than two working paths, a restore included. The spec guard-last-enabled and the proposal's ADR check cite only ADR 306 and do not state that ADR 70 d24 floor is kept for revoke, credential revoke, IP allowlist and restore changes. Resolution: answered: The ADR 70 check now states that decision 24 keeps the floor for the other changes.
-- R1.3 (missing scenario): No requirement or scenario covers a restore that leaves no enabled break-glass principal beyond a single line in the proposal table; the spec has no scenario for the restore refusal (break-glass.restore-refused), the staged-data check, or the restore order relative to the swap that design.md Risks requires. Resolution: answered: Requirement restore-guard and its scenario cover the restore, and a task tests it.
-- R1.4 (missing scenario): Design Layers table requires a hostile test that a stale fresh step gets 403, but the spec has no scenario for fresh-authentication failure on disable, rotation or setup, and no scenario for the rotation route's authorization action. Resolution: answered: Requirement fresh-step covers the stale step on rotation. The rotation route has its own action.
-- R1.5 (failure mode): Concurrent-write guard: design relies on row locks on the break-glass set, but no requirement covers the case where a second request for the last principal comes after the first commits, or the lock-timeout / deadlock path returns an error instead of 409. The failure answer for a lock conflict is not defined. Resolution: answered: Requirement guard-race defines the busy answer and the second request.
-- R1.6 (open question): Setup gate reads a stored setup record listing two principal IDs (design decision 3), but the spec and the proposal say the count comes from enrolled passkeys. Which source is authoritative, and what happens when a listed account is later disabled or its passkey removed after setup finishes, is not stated. Resolution: answered: The live count is the one source. No stored list exists. The guard refuses a passkey removal below the floor.
+- R1.1 (owner decision conflict): proposal.md and spec guard-last-enabled: the owner decision P19 (Item 17) says every change other than disable, delete and sweep keeps the two-working-paths floor (ADR 70 d24), and first setup needs two. The spec and the proposal's error table apply only the last-enabled rule to all covered changes (revoke, IP allowlist, restore), so the two-path floor for those changes is dropped. Resolution: answered: The spec has guard-last-enabled and guard-floor, as the owner decision says.
+- R1.2 (adr conflict): ADR 70 decision 24 (not owner-tagged, current text) says the server refuses each change that leaves fewer than two working paths, a restore included. The spec guard-last-enabled and the proposal's ADR check cite only ADR 306 and do not state that ADR 70 d24 floor is kept for revoke, credential revoke, IP allowlist and restore changes. Resolution: answered: The ADR 70 check states that decision 24 keeps the floor for the other changes.
+- R1.3 (missing scenario): No requirement or scenario covers a restore that leaves no enabled break-glass principal beyond a single line in the proposal table; the spec has no scenario for the restore refusal (break-glass.restore-refused), the staged-data check, or the restore order relative to the swap that design.md Risks requires. Resolution: answered: Requirement restore-guard covers the restore.
+- R1.4 (missing scenario): Design Layers table requires a hostile test that a stale fresh step gets 403, but the spec has no scenario for fresh-authentication failure on disable, rotation or setup, and no scenario for the rotation route's authorization action. Resolution: answered: Requirement fresh-step covers the stale step.
+- R1.5 (failure mode): Concurrent-write guard: design relies on row locks on the break-glass set, but no requirement covers the case where a second request for the last principal comes after the first commits, or the lock-timeout / deadlock path returns an error instead of 409. The failure answer for a lock conflict is not defined. Resolution: answered: Requirement guard-race defines the busy answer.
+- R1.6 (open question): Setup gate reads a stored setup record listing two principal IDs (design decision 3), but the spec and the proposal say the count comes from enrolled passkeys. Which source is authoritative, and what happens when a listed account is later disabled or its passkey removed after setup finishes, is not stated. Resolution: answered: The live rows are the one source.
 - R1.7 (failure mode): Rotation: the spec says the new credential signs in before the old stops, but no scenario covers a failed insert of the new credential (duplicate, store error) and confirms the old credential stays active. Resolution: answered: A scenario covers the failed insert.
-- R1.8 (wrong claim): The proposal says ADR 70 decision 23 and 24 require the guard counting only accounts with a passkey or hardware key; ADR 70 d24 as quoted counts an account with four properties (enabled, not expired, not policy-blocked, not IdP-dependent). The spec and tasks count only enabled accounts, dropping the expiry and policy properties. Resolution: answered: The count uses the four properties of ADR 70 decision 24 plus the passkey.
-- R1.9 (open question): Delete of a break-glass principal by the sweep writes an audit record (ADR 306 d6), but the spec has no scenario for the sweep path, the audit record content (sweep, account, reason), or the notification to other admins required by ADR 306 d3. Resolution: answered: A sweep scenario covers the audit record. Notification of the other admins is left to the disable path of the existing change.
-- R1.10 (scope): tasks.md 2.5 requires the security model guide to cover protected groups, trust, suspended and pinned memberships and reach; these belong to change check-reach-when-grant-membership and let-group-trust-identity-provider as listed in Out of scope, so the task misses its own item's scope while adding other items' work. Resolution: answered: The guide task now covers reach and break-glass only. Protected groups and trust stay out of scope.
-- R1.11 (failure mode): Restore of an old backup that drops the second account is handled only in design risks; no task or scenario tests the restore path or its refusal, so a restore could still bypass the guard unnoticed. Resolution: answered: A failing test and a requirement cover the restore path.
+- R1.8 (wrong claim): The proposal says ADR 70 decision 23 and 24 require the guard counting only accounts with a passkey or hardware key; ADR 70 d24 as quoted counts an account with four properties (enabled, not expired, not policy-blocked, not IdP-dependent). The spec and tasks count only enabled accounts, dropping the expiry and policy properties. Resolution: answered: The count uses the four properties plus the passkey.
+- R1.9 (open question): Delete of a break-glass principal by the sweep writes an audit record (ADR 306 d6), but the spec has no scenario for the sweep path, the audit record content (sweep, account, reason), or the notification to other admins required by ADR 306 d3. Resolution: answered: A sweep scenario covers the audit record.
+- R1.10 (scope): tasks.md 2.5 requires the security model guide to cover protected groups, trust, suspended and pinned memberships and reach; these belong to change check-reach-when-grant-membership and let-group-trust-identity-provider as listed in Out of scope, so the task misses its own item's scope while adding other items' work. Resolution: answered: The guide task covers break-glass only.
+- R1.11 (failure mode): Restore of an old backup that drops the second account is handled only in design risks; no task or scenario tests the restore path or its refusal, so a restore could still bypass the guard unnoticed. Resolution: answered: A task and a scenario test the restore path.
 - R2.1 (failure mode): The design says the count includes the passkey property and that a passkey removal is guarded, but no spec requirement or scenario covers passkey removal or credential change below the floor; guard-floor lists only revoke, credential change, expiry change and IP allowlist, so a passkey removal path is unguarded. File: openspec/changes/keep-two-working-break-glass/specs/break-glass-accounts/spec.md. Resolution: answered: guard-floor now lists a passkey removal, with a scenario, and a task tests it.
 - R2.2 (owner decision conflict): Owner decision P19 is marked Provisional and the change applies it as binding; the change also does not state that the provisional answer was reviewed. File: proposal.md, ADR check section. Resolution: answered: The considered section states that the provisional answer was reviewed and is built as the reading.
 - R2.3 (adr conflict): ADR 70 decision 24 says the server refuses each change that leaves fewer than two working paths, a restore included, but the guard-last-enabled spec and the sweep scenario apply a different rule; the change does not state how a disable that leaves exactly one working path (above zero enabled) is treated. File: specs/break-glass-accounts/spec.md. Resolution: answered: The ADR check and a scenario state that a disable that leaves one enabled account passes under ADR 306.
@@ -151,6 +158,7 @@ A model of another provider than the drafter listed the open questions, failure 
 - R3.7 (open question): The count is not defined for an account whose policy block is set by a sweep or a group change in the same transaction; the four properties of ADR 70 d24 are checked but the order of checks is not stated. Resolution: answered: The count reads final rows in a fixed order of checks, stated in design and considered.
 - R3.8 (scope): tasks.md 2.5 and the proposal disagree on the guide content: tasks cover reach and break-glass, while the proposal's What Changes lists only break-glass; reach text belongs to check-reach-when-grant-membership. Resolution: answered: The proposal and the tasks now cover the break-glass guide only. Reach text is out of scope.
 - R3.9 (failure mode): A break-glass sign-in with a hardware key during a lock timeout is not covered; the busy answer may leave a sign-in session half-written. Resolution: answered: A sign-in takes no guard lock. A scenario covers a sign-in during a lock wait.
+- M2.9 (gap): First setup now needs two break-glass accounts with a passkey or a hardware key, but the e2e first-setup fixture of every other step is not updated. The fresh-step requirement also needs the window rule. Resolution: answered: A task now updates the shared e2e first-setup step to make two accounts, and depends_on names fresh-authentication-window-0-turns. The check failures are fixed: each error command uses the new list route named in what_changes.
 
 ## Open questions
 
@@ -159,12 +167,12 @@ none
 Questions considered and answered:
 
 - Which threshold applies to which change? Owner decision, 13 Nov 2026 (queue P19), provisional and built as the reading: disable, delete and sweep stop at the last enabled account (ADR 306 d3, d6). Every other change keeps the floor of two working paths (ADR 70 d24). First setup needs two.
-- Does a disable that leaves one enabled account break ADR 70 decision 24? No. ADR 306 decision 3 changes decision 24 for disable, delete and sweep. The change passes and the answer carries the live count so the administrator sees that the floor is below two. A later floor change from another kind is then refused only if it lowers the count.
-- What counts as a working account, and where does the passkey property come from? ADR 70 decision 24 gives enabled, not expired, not blocked by a policy, not dependent on the identity provider. ADR 70 decision 23 and ADR 320 decision 23 give the passkey or hardware key. The count function applies both.
-- In which order does the count check the properties, and how does it treat a policy block set in the same transaction? The count runs after the change is applied in the same transaction, on the final rows. It checks enabled, then expired, then policy block, then identity provider dependence, then passkey. A policy block that a sweep or a group change sets in the transaction is seen, because the count reads the final rows. A policy-block change uses the floor.
-- What does a person with no enrolled factor do? ADR 301 decision 4 and ADR 227 decision 2 apply: the answer is 403 with mfa.fresh-step-required, and the text names the page that enrolls a passkey or TOTP. A break-glass account holds a passkey by decision 23, so it has a factor. Setup finish uses the one-time code and fresh step of the first administrator.
-- Which scope does the count use, and what about restore on the hosted service? ADR 216 decision 13: the namespace on the hosted service, the installation when self-hosted. A restore counts the accounts of each restored namespace in the staged data, and a namespace backup counts its own namespace only. Break-glass principals in another namespace do not count.
-- What happens after setup if a counted account loses its passkey? A passkey removal is a covered change that uses the floor, so it is refused when it lowers the count below two.
-- Does the guide cover protected groups and reach? No. The changes let-group-trust-identity-provider and check-reach-when-grant-membership own that text. Owner decision, 13 Nov 2026 (queue P21) is for the first of them. This guide covers break-glass only.
+- Does a disable that leaves one enabled account break ADR 70 decision 24? No. ADR 306 decision 3 changes decision 24 for disable, delete and sweep. The change passes and the answer carries the live count.
+- What counts as a working account? ADR 70 decision 24 gives enabled, not expired, not blocked by a policy, not dependent on the identity provider. ADR 70 decision 23 and ADR 320 decision 23 give the passkey or hardware key.
+- Which source is authoritative for the count? The live rows are the only source. No stored setup list exists.
+- What does a person with no enrolled factor do? ADR 301 decision 4 and ADR 227 decision 2 apply: 403 with mfa.fresh-step-required and a text that names the enrollment page.
+- Which scope does the count use? ADR 216 decision 13: the namespace on the hosted service, the installation when self-hosted.
+- Does the guide cover protected groups and reach? No. Other changes own that text. Owner decision, 13 Nov 2026 (queue P21) belongs to let-group-trust-identity-provider.
+- Does the stricter first setup break the e2e suites of other steps? It would, so a task updates the shared e2e first-setup fixture to make two accounts.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

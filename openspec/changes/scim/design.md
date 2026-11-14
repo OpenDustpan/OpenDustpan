@@ -5,7 +5,7 @@ SCIM is a provisioning adapter behind a port. It writes persons, groups, and mem
 ## Decisions
 
 1. **Service owns the writes.** One service owns SCIM writes. It creates or links the person by stable subject, creates groups by stable ID, and routes each membership write through the one membership function of one-membership-function-identity-provider in the same transaction. The SCIM adapter maps wire fields and does no store write.
-2. **Disable on delete.** Removal is disable first. SCIM DELETE disables the person, disables sessions and access tokens, and keeps the rows. When the revocation setting from the generic settings API is on, the same transaction revokes them instead. The guard of keep-two-working-break-glass refuses DELETE of the last enabled break-glass principal with 409 and no state change.
+2. **Disable on delete.** Removal is disable first. SCIM DELETE disables the person, disables sessions and access tokens, and keeps the rows. When the revocation setting from the generic settings API is on, the same transaction revokes them instead. The setting key is registered once through the generic settings API and shared with manage-ldap-sign-in-providers for LDAP removals. The guard of keep-two-working-break-glass refuses DELETE of the last enabled break-glass principal with 409 and no state change.
 
 ## Structure
 

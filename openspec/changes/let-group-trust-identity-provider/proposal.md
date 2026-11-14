@@ -15,20 +15,21 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Trust or full sync change without a fresh step | The server answers 403 with error code mfa.fresh-step-required and names the factor path. Do the fresh step, then repeat the call. | `curl -s $SERVER/api/dustpan/v1/me/freshness` |
+| Trust or full sync change without a fresh step | The server answers 403 with error code mfa.fresh-step-required and names the way to get a fresh step. Do the fresh step, then repeat the call. | `curl -s $SERVER/api/dustpan/v1/me/freshness` |
 | Trust change by a caller whose reach does not cover the group | The server answers 403 and names the missing reach. Ask a caller whose reach covers the group to set trust. | `curl -s -H "Authorization: Bearer $TOKEN" $SERVER/api/dustpan/v1/access/reach?principal=me` |
 
 Evidence for the claims above:
 
 - The group code lives in pkg/principal and internal/api/server. Proof: The pack paths pkg/principal/principal.go, pkg/principal/principaltest and internal/api/server exist.
 - The Freshness port exists. Proof: The pack rg of Freshness gives pkg/dustpan/dustpan.go:3270 and pkg/dustpan/auditchain.go:123.
+- Membership columns for suspension exist in the stored data. Proof: The pack rg of suspended_at gives pkg/backup/portable_tables.go:554 and pkg/store/sqlite/internal/db/queries.sql.go:100. This change adds only the trust rule to the membership function.
 
 ## What Changes
 
-- Group attribute trusted from the identity provider, with setter and time, default off. A declared route sets and clears it, with a fresh step and the reach cover check of the dependency. Concurrent changes on one group run in one write transaction, the last commit wins, and each is audited.
+- Group attribute trusted from the identity provider, with setter and time, default off. A declared route sets and clears it, with a fresh step and the reach cover check of the dependency. Changes on one group run in one write transaction, the last commit wins, and each is audited.
 - The membership function skips the protected-group refusal for a trusted group, and for every group when full sync is on.
 - Full sync setting, registered through the generic settings API of its dependency, with the action server:manage-sign-in on the installation, a fresh step and an audit entry.
-- Schema edits go into the baseline of each dialect in place and into the backup table list. This replaces the numbered migrations that the issues name, because no tag has shipped. A dev installation runs `opendustpan dev reset`.
+- Schema edits go into the baseline of each dialect in place and into the backup table list. This supersedes the numbered migrations that the issues name, because no tag has shipped. A dev installation runs `opendustpan dev reset`.
 
 Out of scope:
 
@@ -46,8 +47,8 @@ Depends on:
 - keep-two-working-break-glass
 - `check-reach-when-grant-membership` (order of the milestone review)
 - `one-membership-function-identity-provider` (order of the milestone review)
-- `keep-two-working-break-glass` (order of the milestone review)
 - `add-one-generic-settings-api` (order of the milestone review)
+- `keep-two-working-break-glass` (order of the milestone review)
 
 ## Usability
 
@@ -91,23 +92,32 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
 - Quote: "No factor, no fresh step (owner). A person of these methods who has enrolled no factor cannot do a step that needs a fresh authentication."
-- Effect: A person with no factor is refused with 403 mfa.fresh-step-required.
+- Effect: A person of the OAuth and trusted-header methods with no factor is refused with 403 mfa.fresh-step-required.
+- Conflict: none.
+
+**ADR 320: One sign-in path for every sign-in method** (not owner-tagged).
+
+- Decisions that apply: 16 (current).
+- Changed by: ADR 332 changes decision 12. Chain to the end: ADR 332.
+- Current rule: this ADR, with ADR 332.
+- Quote: "Each method asks for a fresh authentication in its own way (PM). The fresh step of ADR 227 decision 1 uses the parameter of each protocol:"
+- Effect: For SAML, CAS, OIDC and LDAP persons, the fresh step comes from the protocol of the method.
 - Conflict: none.
 
 ## Adversarial second pass
 
 A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
 
-- R1.1 (open question): proposal.md: the 'Open questions' section reads none, yet the full-sync issue (#619) and ADR 70 decision 17 leave open which setting layers may set full sync and how a fresh step works for SSO persons. The provisional answer does not settle the gate for a change that cannot be built without the owner's answer. Resolution: open question: Added as an open question for the owner.
-- R1.2 (open question): proposal.md: the period of the periodic admin access report (ADR 70 decision 29, issue #626 'Not decided here') is set provisionally to 90 days. The report spec cannot be built right without the owner's period. Resolution: open question: Kept as an open question for the PM.
-- R1.3 (owner decision conflict): Owner decision P21 says a group with installation-wide data write access is protected. The group-trust-idp spec lets a caller set trust on any protected group with no refusal or flag for such a group, and no scenario identifies which groups are protected under the sensitive-action list. Resolution: answered: Protected group requirement and scenario added from the owner decision.
-- R1.4 (adr conflict): ADR 227 decision 2 and ADR 301 decision 4 ('No factor, no fresh step'): the trust and full sync specs refuse only the no-fresh-step case; the no-enrolled-factor branch, with the 403 mfa.fresh-step-required refusal naming the factor path, has no scenario. Resolution: answered: No-factor scenario added.
-- R1.5 (failure mode): Full sync makes each removal final, but the spec does not say what happens to suspended memberships already present when full sync is turned on, nor to the 30-day timer of rows still suspended. A wrong directory delete removes access at once with no recovery path. Resolution: answered: Full sync ends suspended rows at once.
-- R1.6 (missing scenario): No scenario covers a restore after the 30-day window ended, or a restore of a membership whose removal became final under full sync. The restore spec only says the membership returns pinned. Resolution: answered: Late restore scenario added.
-- R1.7 (adr conflict): ADR 306 decision 3 and ADR 70 decision 24: a restore that leaves fewer than two working break-glass paths must be refused with 409; the restore of a suspended break-glass membership and this guard have no scenario. Resolution: answered: Break-glass guard scenario added.
-- R1.8 (failure mode): Concurrency is not covered: the 30-day expiry job racing a restore or pin of the same membership, and two trust changes at once. No write-transaction or fence rule is stated for these races beyond the design's general line. Resolution: answered: Race scenario and transaction rule added.
-- R1.9 (missing scenario): Acknowledgment has no scenario for empty notes, a stale report, or a reviewer without the report action (refusal). The report spec does not list refused adds from ADR 70 decision 14 with their refusal record. Resolution: answered: Refusal scenarios and refused adds added.
-- R1.10 (scope): Tasks 2.3 edits baselines in place and says update backup columns, but proposal 'What Changes' names no acknowledgment table or backup change. Issues #615, #619 and #626 still ask for a new numbered migration, and the change does not say they are superseded. Resolution: answered: Proposal says the baseline edit replaces the numbered migrations.
+- R1.1 (open question): proposal.md: the 'Open questions' section reads none, yet the full-sync issue (#619) and ADR 70 decision 17 leave open which setting layers may set full sync and how a fresh step works for SSO persons. The provisional answer does not settle the gate for a change that cannot be built without the owner's answer. Resolution: open question: The setting layers and the fresh step of SSO persons stay open questions for the owner.
+- R1.2 (open question): proposal.md: the period of the periodic admin access report (ADR 70 decision 29, issue #626 'Not decided here') is set provisionally to 90 days. The report spec cannot be built right without the owner's period. Resolution: answered: The report period belongs to the admin access report change, not to this one.
+- R1.3 (owner decision conflict): Owner decision P21 says a group with installation-wide data write access is protected. The group-trust-idp spec lets a caller set trust on any protected group with no refusal or flag for such a group, and no scenario identifies which groups are protected under the sensitive-action list. Resolution: answered: The protected-group rule belongs to the reach-check change. A scenario shows trust on a write group with the same checks.
+- R1.4 (adr conflict): ADR 227 decision 2 and ADR 301 decision 4 ('No factor, no fresh step'): the trust and full sync specs refuse only the no-fresh-step case; the no-enrolled-factor branch, with the 403 mfa.fresh-step-required refusal naming the factor path, has no scenario. Resolution: answered: No-factor scenarios added for trust and full sync.
+- R1.5 (failure mode): Full sync makes each removal final, but the spec does not say what happens to suspended memberships already present when full sync is turned on, nor to the 30-day timer of rows still suspended. A wrong directory delete removes access at once with no recovery path. Resolution: answered: Suspension is a separate change. This change only reads the full sync setting.
+- R1.6 (missing scenario): No scenario covers a restore after the 30-day window ended, or a restore of a membership whose removal became final under full sync. The restore spec only says the membership returns pinned. Resolution: answered: Restore belongs to the suspension change and is out of scope.
+- R1.7 (adr conflict): ADR 306 decision 3 and ADR 70 decision 24: a restore that leaves fewer than two working break-glass paths must be refused with 409; the restore of a suspended break-glass membership and this guard have no scenario. Resolution: answered: The break-glass guard belongs to the break-glass dependency. Full sync leaves break-glass accounts unchanged.
+- R1.8 (failure mode): Concurrency is not covered: the 30-day expiry job racing a restore or pin of the same membership, and two trust changes at once. No write-transaction or fence rule is stated for these races beyond the design's general line. Resolution: answered: Two-change scenario and the one write transaction rule cover trust races. The expiry job is out of scope.
+- R1.9 (missing scenario): Acknowledgment has no scenario for empty notes, a stale report, or a reviewer without the report action (refusal). The report spec does not list refused adds from ADR 70 decision 14 with their refusal record. Resolution: answered: Acknowledgment belongs to the admin access report change and is out of scope.
+- R1.10 (scope): Tasks 2.3 edits baselines in place and says update backup columns, but proposal 'What Changes' names no acknowledgment table or backup change. Issues #615, #619 and #626 still ask for a new numbered migration, and the change does not say they are superseded. Resolution: answered: What changes says the baseline edit supersedes the numbered migrations of the issues.
 - R2.1 (open question): proposal.md: the Open questions section reads none, yet the setting layers that may set full sync (issue #619 open point, ADR 70 decision 17) and the fresh step for SSO persons remain undecided by any ADR; a change that cannot be built without the owner answer must not pass the spec-ready gate. Resolution: open question: The setting layers stay an open question for the owner; the proposal does not read none.
 - R2.2 (open question): proposal.md and specs/admin-access-report/spec.md: the report period is provisionally 90 days, but ADR 70 decision 29 leaves the period open and the report spec cannot be built without it; the 90-day answer is a provisional guess, not a decision. Resolution: open question: The report period stays an open question for the PM with a recommended option.
 - R2.3 (owner decision conflict): specs/group-trust-idp/spec.md: the owner decision P21 makes a group with installation-wide data write access protected, but the spec does not say which groups are protected by that rule, and the Write group scenario only refuses an add of an untrusted group without linking the classification to the sensitive-action list of ADR 70 decision 13. Resolution: answered: The spec now names the rule: installation-wide write to state, and ties it to the sensitive action list. A narrow group scenario is added.
@@ -130,6 +140,7 @@ A model of another provider than the drafter listed the open questions, failure 
 - R3.10 (open question): proposal.md: the report period is provisionally 90 days from the last acknowledgment, but ADR 70 decision 29 leaves the period open and the answer sets the changes-since window the spec depends on. Resolution: open question: The report period stays an open question for the PM with a recommended option.
 - M.14 (duplicate): 'Installation-wide write is protected' repeats check-reach-when-grant-membership. The requirement name 'No fresh step' conflicts with the text that the route needs a fresh step. Resolution: answered: Protected-group requirement removed and left to check-reach-when-grant-membership. The refusal requirement is renamed.
 - M.15 (scope): Group trust, membership suspension with its expiry job, full sync and the admin access report are four features for one change. Resolution: answered: Suspension and the admin access report are out of scope. Full sync registers through add-one-generic-settings-api.
+- M2.15 (consistency): The answer to open question 1 asks for the OpenDustpan factor for SAML, OIDC, LDAP and CAS. This conflicts with mfa (an SSO sign-in has no added step) and with the SSO freshness sources of fresh-authentication-window-0-turns. Resolution: answered: The open question on the SSO fresh step is removed. SSO persons use the protocol parameter (max_age, ForceAuthn, renew) per ADR 320 decision 16. Only OAuth and trusted-header persons use a factor of OpenDustpan, per ADR 301.
 
 ## Open questions
 
@@ -143,17 +154,12 @@ Each question below has a provisional answer by the PM decision rule (a benchmar
    - Reason: A fresh step cannot apply to a flag or a file value, and no ADR names the allowed layers. Benchmark: AWS: sensitive directory settings change through the API with MFA.
    - Persona impact: Operator cannot turn full sync on from a flag. The site administrator makes one API change. Escape hatch: The operator uses host recovery if the API is out of reach.
    - Owner-tagged ADRs involved: ADR 227 (their words do not change).
-2. How does a person who signs in with SAML, OIDC, LDAP or CAS give the fresh MFA step?
-   - Options: Use the factor of OpenDustpan for every method; Use the fresh sign-in of the method.
-   - Provisional decision (owner review 14 Nov): Use the factor of OpenDustpan for every method.
-   - Reason: The step then does not depend on the identity provider. ADR 301 covers only two methods. Benchmark: Google: sensitive admin actions ask for a second factor that the account provider controls.
-   - Persona impact: A site administrator must enroll a factor first. Escape hatch: Host recovery makes a temporary administrator who can enroll a factor.
-   - Owner-tagged ADRs involved: ADR 227, ADR 301 (their words do not change).
 
 Questions considered and answered:
 
-- Is a group with installation-wide write access protected? Yes. Owner decision, 13 Nov 2026 (queue P21). The rule belongs to the reach-check change, not to this one.
+- Is a group with installation-wide write access protected? Yes. Owner decision, 13 Nov 2026 (queue P21). The rule belongs to the reach-check change, not to this one. A trusted group of this kind still passes only with the same checks.
 - How does a new installation take the schema change? The project rule says one baseline per dialect until the first tag, so no upgrade path exists.
 - Where does full sync end suspended rows? Suspension is a separate change. This change only makes the membership function read the full sync setting.
+- Where does the fresh step of an SSO person come from? From the protocol of the method: max_age, ForceAuthn and renew (ADR 320 decision 16). OAuth and trusted-header persons use a factor of OpenDustpan (ADR 301 decision 1).
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

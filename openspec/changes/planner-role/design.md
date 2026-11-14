@@ -5,7 +5,7 @@ The planner role is a data role in the existing access model. No new store table
 ## Decisions
 
 1. **Planner as role-table entry with secret deny.** Define planner in the built-in role table as viewer actions plus unit:run-plan, job:read-plans and changeorder:author, with no secret reveal action. Reuse grant evaluation, masked state read and the audit writer.
-2. **Protected-branch gate stated now, server start closed until milestone 5.** State the protected-branch gate for planner-started plan jobs now and refuse planner plan-job start on the server until milestone 5 enforces the gate. Local plan and preview on a workstation read masked state through the same state actions; the exact local-plan display when a value is secret is an open question.
+2. **Protected-branch gate stated now, server start closed until milestone 5.** State the protected-branch gate for planner-started plan jobs now and refuse planner plan-job start on the server until milestone 5 enforces the gate. Local plan and preview on a workstation read masked state through the same state actions.
 
 ## Structure
 
@@ -14,7 +14,7 @@ Built-in role table with unexported roleActionSet built only by NewRoleActionSet
 ## Risks
 
 - A handler declares a wrong action and lets a planner write.
-- A secret read path forgets the reveal check, including for old state versions and for secrets inside a state file the planner reads.
+- A secret read path forgets the reveal check, including for old state versions.
 
 ## Layers (defense in depth)
 

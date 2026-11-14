@@ -5,7 +5,7 @@
 
 ## 2. Implementation
 
-- [ ] 2.1 Add the store method for the admin reset and its audit entry, called by the existing reset route Check: store conformance test for the reset
+- [ ] 2.1 Add the store method for the admin reset and its audit entry Check: store conformance test for the reset
 - [ ] 2.2 Add the marker read to the API Check: route test and API call that returns the marker
 
 ## 3. Definition of done

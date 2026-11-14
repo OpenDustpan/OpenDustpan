@@ -12,6 +12,10 @@ When a principal with the read action reads the settings of a scope, the server 
 - **WHEN** a namespace administrator reads the settings of one namespace
 - **THEN** the same fields answer for that namespace only
 
+#### Scenario: Locked key shown
+- **WHEN** the static layer locks a key
+- **THEN** the read of each scope shows locked true and source static for that key
+
 #### Scenario: Refuse without action
 - **WHEN** a principal with no grant reads the namespace settings
 - **THEN** the server answers 403 and shows no key
@@ -88,9 +92,9 @@ If a patch carries a base revision that is not the current revision, then the se
 - **WHEN** a patch carries an old revision
 - **THEN** the server answers 412 with the current revision and changes nothing
 
-#### Scenario: Stale limit patch
-- **WHEN** a patch of tempadmin.session-limit carries an old revision
-- **THEN** the server answers 412 and the limit does not change
+#### Scenario: Patch during reload
+- **WHEN** a reload moves the revision after the client read it and the client patches with the old revision
+- **THEN** the server answers 412 and changes nothing
 
 ### Requirement: Idempotency key required
 

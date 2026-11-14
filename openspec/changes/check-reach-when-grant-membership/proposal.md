@@ -2,14 +2,14 @@ Issue: #609, #610, #616, #622.
 
 ## Why
 
-**Persona: site administrator.** A site administrator must share token rights without giving a person more access than the granter approved. An act-as edge can grow after the approval. The server must check cover at the time of a grant, keep later growth, and show each widened edge until a covering person acts. The rules follow the provisional owner decisions of 13 Nov 2026 (queue P18 and P21). Implementation uses them as written. A different owner answer reopens only the flag rule and the token issue rule for protected members. Each of them sits in one service. This change uses the reach function and the protected-group computation of the work it depends on. It does not write them.
+**Persona: site administrator.** A site administrator must share token rights without giving a person more access than the granter approved. An act-as edge can grow after the approval. The server must check cover at the time of a grant, keep later growth, and show each widened edge until a covering person acts. The rules follow the provisional owner decisions of 13 Nov 2026 (queue P18 and P21). Implementation uses them as written. A different owner answer reopens only the flag rule and the token issue rule for protected members. Each of them sits in one service. This change uses the reach function and the protected-group computation of the work it depends on. It does not write them. The flag routes and the flag filter of the access-review export are new routes of this change.
 
 The user path this change must make work:
 
 1. **API.** The site administrator grants a role with principal:manage-tokens on a principal, to a principal or to a group. The server checks that the reach of the caller covers the reach of the target at that time, and records the approved reach on the edge.
 2. **API.** The administrator adds a member to a group that holds such a grant. The server checks cover for each principal that the group can act as, at that time.
 3. **API.** Later growth of a group or a principal beyond the approved reach is kept. The server flags the edge.
-4. **API.** The administrator lists flagged edges in the access-review export, and acknowledges or revokes each one.
+4. **API.** The administrator lists flagged edges through the new flagged-edge list route, and acknowledges or revokes each one.
 5. **API.** The administrator creates or rotates a token for a member of a protected group. The server checks that the caller reach covers the reach of each such group.
 6. **Docs page.** The administrator reads the page about act-as reach and flagged edges, and retries with a covering grant.
 7. **E2e.** The suite drives a refused grant, a refused member add, a flagged widened edge with acknowledge and revoke, and a refused token create and rotation.
@@ -18,10 +18,10 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A grant of a token right is refused because the caller reach does not cover the target reach at the time of the grant. | 403 with text that names the target principal and the missing actions. The server stores no grant. | `GET /api/dustpan/v1/access-reviews?principal=<subject>` |
-| A member add is refused because the caller reach does not cover a target of the group at the time of the add. | 403 with text that names the target principal and the missing actions. The server adds no membership. | `GET /api/dustpan/v1/groups/<id>/members` |
-| A token create or rotation is refused for a member of a protected group because the caller reach does not cover the group. | 403 with text that names the principal and the protected group. The server issues no token. | `GET /api/dustpan/v1/groups/<id>/members` |
-| A person without cover tries to acknowledge or revoke a flagged edge. | 403 with text that names the edge and the missing actions. The flag stays. | `GET /api/dustpan/v1/access-reviews?flagged=true` |
+| A grant of a token right is refused because the caller reach does not cover the target reach at the time of the grant. | 403 with text that names the target principal and the missing actions. The server stores no grant. | `GET /api/dustpan/v1/flagged-edges` |
+| A member add is refused because the caller reach does not cover a target of the group at the time of the add. | 403 with text that names the target principal and the missing actions. The server adds no membership. | `GET /api/dustpan/v1/flagged-edges` |
+| A token create or rotation is refused for a member of a protected group because the caller reach does not cover the group. | 403 with text that names the principal and the protected group. The server issues no token. | `GET /api/dustpan/v1/flagged-edges` |
+| A person without cover tries to acknowledge or revoke a flagged edge. | 403 with text that names the edge and the missing actions. The flag stays. | `GET /api/dustpan/v1/flagged-edges` |
 
 Evidence for the claims above:
 
@@ -35,7 +35,8 @@ Evidence for the claims above:
 
 - The grant service refuses a new grant of a role with principal:manage-tokens when the caller reach does not cover the target reach at that time, and records the approved reach.
 - The member add makes the same check for each target of the group at the time of the add.
-- Later growth of a target or a group is kept. The server flags the widened edge in the access-review export until a covering person acknowledges or revokes it. Each action writes an audit entry.
+- Later growth of a target or a group is kept. The server flags the widened edge until a covering person acknowledges or revokes it. Each action writes an audit entry.
+- New routes: `GET /api/dustpan/v1/flagged-edges` lists flagged edges, and acknowledge and revoke routes under `/api/dustpan/v1/flagged-edges/{id}`. Each declares its authorization action and object. The access-review export also lists the flags.
 - A group with write access to every state is protected by the rule of this change. The grant is kept and the edge is flagged. The reach function and the protected-group computation come from the work that this change depends on.
 - Token create and rotation refuse for a member of a protected group when the caller reach does not cover the group.
 - The server ends an open flag when its edge ends, and writes an audit entry.
@@ -60,7 +61,7 @@ Depends on:
 Where the path still costs the person time or surprises them:
 
 - A refused change names the target and the missing actions, and does not show the full reach sets.
-- The access-review export shows each flagged edge with its one next step.
+- The flagged-edge list shows each flagged edge with its one next step.
 
 ## Owner decisions that apply
 
@@ -92,23 +93,23 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "A grant of an act-as right needs the reach of its target."
 - Quote: "The catalog says what account-administrator can do."
 - Quote: "No admin role comes from the identity provider by default."
-- Effect: Decision 3 is checked at the time of the grant and the member add. Growth after the approval is kept and flagged (queue P18). Decision 13 defines a protected group. Queue P21 reads it to cover write access to every state, and its words wait. This change does not edit them. The token issue check for a protected member follows owner rule P18 Q10: protect and flag.
+- Effect: Decision 3 is checked at the time of the grant and the member add. Growth after the approval is kept and flagged (queue P18). Decision 13 defines a protected group. Queue P21 reads it to cover write access to every state, and its words wait. This change does not edit them.
 - Conflict: none.
 
 ## Adversarial second pass
 
 A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
 
-- R1.1 (owner decision conflict): The change refuses growth that makes a group protected or gives a non-covering act-as path. Owner decision P18 (Q1, Q2 g) keeps the growth and flags each widened edge until a covering person acknowledges or revokes it. The specs in access-grants/spec.md and principal-membership/spec.md contradict this; no flag or acknowledge/revoke scenario exists. Resolution: answered: The specs now keep growth and flag it (owner decision P18).
+- R1.1 (owner decision conflict): The change refuses growth that makes a group protected or gives a non-covering act-as path. Owner decision P18 (Q1, Q2 g) keeps the growth and flags each widened edge until a covering person acknowledges or revokes it. The specs in access-grants/spec.md and principal-membership/spec.md contradict this; no flag or acknowledge/revoke scenario exists. Resolution: answered: The specs keep growth and flag it (owner decision P18).
 - R1.2 (owner decision conflict): Owner decision P21 (a) makes such a group protected, and P18 Q10 (iii) protects such groups and flags them. The change treats protection as a trigger for refusal and an open trust question instead of the protect-and-flag rule the owner approved. Resolution: answered: Protect and flag (owner decisions P18 and P21); no refusal for protection.
 - R1.3 (open question): The Open questions section reads a provisional answer for the fate of identity provider members on refused trust, yet the change states 'none' in the spec-ready gate. The section is internally inconsistent, and the change cannot be implemented as the gate requires until the question is answered or removed. Resolution: answered: The trust-refusal question is removed. Open questions read none.
 - R1.4 (adr conflict): ADR 70 decision 13 is cited as changed and not applying, but the change defines protected groups from it. The protected-group definition is not quoted from decision 13, and owner-tagged ADR 70 decision 13 is extended by P18 Q10 and waits for text. Resolution: answered: ADR 70 decision 13 is quoted and its words are not changed.
 - R1.5 (failure mode): The reach check and the write are not required to run under one serializable transaction or lock. Two concurrent grants or member adds can each pass a cover check that the other invalidates, widening act-as reach beyond the granter's cover. Resolution: answered: The check and the write run in one serializable transaction.
-- R1.6 (failure mode): The design names the risk that the trust decision is applied outside the grant transaction, but no scenario or hostile test covers a concurrent member add between the protected-state check and the write. Resolution: answered: A concurrent add scenario is added.
-- R1.7 (missing scenario): No scenario covers the case where the caller reach shrinks after a token-right grant is stored, the 'maker loses last act-as path' case governed by ADR 67 decision 6; the access review flag is not specified. Resolution: answered: A scenario for the maker that loses the path is added.
-- R1.8 (missing scenario): No scenario covers an account-administrator checked against a service principal with a namespace grant, although ADR 67 decision 7 governs namespace principals. Resolution: answered: A namespace principal scenario is added.
+- R1.6 (failure mode): The design names the risk that the trust decision is applied outside the grant transaction, but no scenario or hostile test covers a concurrent member add between the protected-state check and the write. Resolution: answered: A concurrent add scenario is present.
+- R1.7 (missing scenario): No scenario covers the case where the caller reach shrinks after a token-right grant is stored, the 'maker loses last act-as path' case governed by ADR 67 decision 6; the access review flag is not specified. Resolution: answered: A scenario for the maker that loses the path is present.
+- R1.8 (missing scenario): No scenario covers an account-administrator checked against a service principal with a namespace grant, although ADR 67 decision 7 governs namespace principals. Resolution: answered: The token issue check covers each protected group by reach, so a namespace grant is compared by reach like any other.
 - R1.9 (scope): tasks.md item 2.3 e2e steps do not name the refused token rotation path listed in the proposal error table, so not all user-path errors have a task. Resolution: answered: The e2e task names token rotation.
-- R1.10 (wrong claim): The ADR check says ADR 67 decision 4 is changed by ADR 70 decision 3, while the effect line says decision 2 keeps its object; the chain statement is inconsistent about which decision changes. Resolution: answered: The ADR 67 effect line is now consistent.
+- R1.10 (wrong claim): The ADR check says ADR 67 decision 4 is changed by ADR 70 decision 3, while the effect line says decision 2 keeps its object; the chain statement is inconsistent about which decision changes. Resolution: answered: The ADR 67 effect line is consistent.
 - R2.1 (owner decision conflict): The access-grants spec refuses a non-covering token-right grant, but owner decision P18 Q2 (g) says growth is kept and each widened edge is flagged; the design and proposal still say refuse for grant and member add, contradicting the approved rule. Resolution: answered: Refusal now applies only to a new grant at the time of the grant. Later growth is kept and flagged (queue P18). Design, proposal and specs say the same.
 - R2.2 (owner decision conflict): The principal-membership spec refuses a member add that gives a non-covering act-as path, while owner decision P18 keeps the growth and flags the widened edge until a covering person acts. Resolution: answered: The member add checks cover at the time of the add. Growth of the group after that is kept and flagged by a new requirement.
 - R2.3 (owner decision conflict): The token spec refuses token create and rotation for members of a protected group without cover; P21 (a) and P18 Q10 (iii) protect such groups and flag them, and the design's 'needs a covering reach' follows the same refusal pattern. Protection and flag, not refusal, is the approved rule. Resolution: answered: The group is protected and flagged (P18 Q10, P21). The new token issue by the caller keeps its cover check, and the design says why.
@@ -137,7 +138,7 @@ Questions considered and answered:
 
 - Must a grant of principal:manage-tokens check reach as well as manage-access? Yes, at the time of the grant. ADR 70 decision 3 adds the cover check to ADR 67 decision 4.
 - Must the server refuse a group or principal that grows after approval, or a group that becomes protected? No. Owner decision, 13 Nov 2026 (queue P18): keep growth and flag each widened edge until a covering person acknowledges or revokes it. Owner decision, 13 Nov 2026 (queue P21): such a group is protected. Both are provisional.
-- Which report shows the flags? The access-review export of ADR 67 decision 6 and ADR 52. The admin access report of ADR 70 decision 29 is a different report and is not changed here.
+- Which report shows the flags? The access-review export of ADR 67 decision 6, and the new flagged-edge list route. The admin access report of ADR 70 decision 29 is not changed here.
 - Does the token issue refusal for a protected member go beyond the owner decision? The owner decision protects and flags. It does not forbid a cover check on a new credential issue. ADR 70 decision 2 limits a token right by reach. The rule is provisional and sits in one service.
 - Does the check race with another write? The check and the write run in one transaction with the namespace fence, with the isolation and retry rules in the design.
 - What happens to an open flag when its edge ends? The server ends the flag with the edge and writes an audit entry. The flag holds the stable ID of the edge.

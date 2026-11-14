@@ -48,6 +48,14 @@ If a patch sets the session limit outside 1 minute to 24 hours, then the server 
 - **WHEN** a patch lowers the limit with no fresh step
 - **THEN** the limit changes
 
+#### Scenario: Stale limit patch
+- **WHEN** a patch of the limit carries an old revision
+- **THEN** the server answers 412 and the limit does not change
+
+#### Scenario: Null limit
+- **WHEN** a patch sets the limit to null
+- **THEN** the stored value is deleted and the effective value is 1 hour
+
 ### Requirement: Bad stored value
 
 If the stored session limit is outside the range, then the server SHALL refuse to create the temporary administrator.

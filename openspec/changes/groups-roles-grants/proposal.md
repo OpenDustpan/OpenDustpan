@@ -17,7 +17,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Write with writer on collection A to a unit of collection B | 403 with code unit.forbidden and no change; run the access-review export to see the grant | `GET /api/dustpan/v1/namespaces/{namespace}/access-review` |
+| Write with writer on collection A to a unit of collection B | 403 with code unit.forbidden and no change; run the access-review export to see the grant | `pulumi up` |
 | Viewer runs pulumi up or tofu apply | 403 with code unit.forbidden and no change; run stack export or state pull for a read | `pulumi stack export` |
 | Use of a token after its only grant ends | 403 with code grant.revoked on the next use of the same token; make a new grant and retry | `pulumi stack export` |
 | Caller without the export action asks for the access-review export | 403 with code access.export-forbidden and no export; ask an administrator for the export grant | `GET /api/dustpan/v1/namespaces/{namespace}/access-review` |
@@ -30,6 +30,7 @@ Evidence for the claims above:
 
 ## What Changes
 
+- Add new route GET /api/dustpan/v1/namespaces/{namespace}/access-review for the access-review snapshot and history export with its read-access action and audit entry
 - Enforce writer scope per collection for Pulumi and OpenTofu writes with 403 outside the granted collection
 - Enforce viewer read-only for stack export and state pull with 403 on up and apply
 - Apply grant and membership revocation on the next request with no cached allow
@@ -41,11 +42,6 @@ Out of scope:
 - Token life cycle and expiry email
 - SCIM provisioning
 - Placement of new units into collections
-
-Depends on:
-
-- check-reach-when-grant-membership
-- planner-role
 
 ## Usability
 
@@ -153,6 +149,7 @@ A model of another provider than the drafter listed the open questions, failure 
 - R3.8 (scope): tasks.md 3.1 cites e2e milestone 4 step, which the roadmap item in the input does not name; the acceptance check is not traceable to the roadmap item as the proposal claims. Resolution: answered: Definition-of-done wiring task now cites the roadmap step text of this item for traceability.
 - R3.9 (missing scenario): specs/groups-roles-grants/spec.md 'Revocation timing': no scenario covers a token used after its grant is restored or re-granted within the same second, nor a clock skew between the fenced transaction and the grant end time. Resolution: answered: Revocation timing now has a re-grant scenario decided by fenced transaction time, with no clock-skew allow.
 - M.9 (gap): No change covers the exit line 'milestones 1 to 3 pass with an access token of a non-admin principal'. 'Granter reach' overlaps the cover check of check-reach-when-grant-membership. 'Refusal codes' must match the codes of planner-role. Resolution: answered: Added non-admin baseline e2e requirement, shared reach function with check-reach-when-grant-membership in depends_on and design, and single refusal code list with unit.forbidden and secret.forbidden shared with planner-role.
+- M2.1 (dependency): This change depends on planner-role and check-reach-when-grant-membership, and both of those depend on this change. This makes two cycles. The planner role is out of scope here, and check-reach-when-grant-membership says that this change supplies the reach function. Resolution: answered: Removed planner-role and check-reach-when-grant-membership from depends_on to break both cycles; this change ships the reach function and the unit.forbidden and secret.forbidden codes for later reuse.
 
 ## Open questions
 
@@ -174,7 +171,7 @@ Questions considered and answered:
 - Which action guards the export and does it write audit entries? Its own action with an audit entry. ADR 52 decisions 13 and 15 answer it: the export route declares its read-access action and each export writes an audit entry.
 - Which principal home applies to the grant check? Installation home by default. ADR 67 decision 7 with ADR 215 decisions 9 and 10 answers it: principals and groups live in the installation or in one namespace per the principal-home setting, and a grant to a principal of a namespace names only that namespace or an object inside it.
 - Does a namespace export include grants on namespace principals and do later units inherit a collection grant? Yes. ADR 52 decision 10 answers it with the export covers every grant, so the export of a namespace includes grants held by principals of that namespace and grants on objects inside it. A collection grant reaches a unit made later in that collection by ADR 52 decision 5 hierarchy, with no extra grant.
-- How is the overlap with check-reach-when-grant-membership avoided? One function. The grant check and the act-as cover check use the same unexported reach function; check-reach-when-grant-membership owns the act-as edge cases and this change owns the collection scope, the viewer split, revocation timing and the export.
-- Which refusal codes apply so planner-role and this change agree? One list shared with planner-role: unit.forbidden for a refused unit action, secret.forbidden for a refused secret read, plus grant.revoked for use after revocation and access.export-forbidden for the export without its action.
+- How is the overlap with check-reach-when-grant-membership avoided? This change ships the shared unexported reach function and the refusal codes unit.forbidden and secret.forbidden. Later changes reuse the same function and codes; this change owns the collection scope, the viewer split, revocation timing and the export.
+- Which refusal codes apply so planner-role and this change agree? This change defines the refusal codes: unit.forbidden for a refused unit action, secret.forbidden for a refused secret read, plus grant.revoked for use after revocation and access.export-forbidden for the export without its action.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

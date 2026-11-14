@@ -6,10 +6,10 @@ Issue: #2950, #2951, #2969.
 
 The user path this change must make work:
 
-1. **Server start.** Operator sets the static LDAP provider with flags or DUSTPAN_LDAP_* variables and starts the server. A later start with a changed directory URL is refused, and the error names the rebind call.
+1. **Server start.** Operator sets the static LDAP provider with flags or DUSTPAN_LDAP_* variables and starts the server. A later start with a changed directory URL is refused, and the error names the rebind route.
 2. **API.** Site administrator creates, reads, updates and deletes stored LDAP providers with the sign-in management action. The provider names an environment variable or a file for the bind password.
 3. **CLI.** Person signs in with LDAP, gets a session, makes an access token and runs the real CLI with it. LDAP groups change principal groups under the protected-group rules.
-4. **Console.** The console reads the same provider API. This change adds no console page. The console change of this milestone shows the providers.
+4. **Console.** This change adds no console page. The console change of this milestone shows the providers.
 5. **Docs page.** Site administrator follows the LDAP provider guide to configure a provider and to rebind the static directory.
 6. **E2e.** E2E starts a real LDAP directory, manages a provider, signs in, checks group changes and audit entries, and restarts with a changed URL.
 
@@ -17,11 +17,11 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A caller without the sign-in management action calls the provider API. | 403 with the action that allows the change. | `GET /api/dustpan/v1/sign-in/providers` |
-| Create of a stored provider with the static provider ID. | 409 that names the reserved static ID. | `GET /api/dustpan/v1/sign-in/providers` |
+| A caller without the sign-in management action calls the provider API. | 403 with the action that allows the change. | `GET /api/dustpan/v1/settings` |
+| Create of a stored provider with the static provider ID. | 409 that names the reserved static ID. | `GET /api/dustpan/v1/settings` |
 | Create or update with an ldap:// URL while plain connections are off, or while the setting is missing or not valid. | 400 that names the address and the setting that allows plain connections. | `GET /api/dustpan/v1/settings` |
-| Create or update with a subject attribute other than entryUUID or objectGUID. | 400 that names the two allowed attributes. | `GET /api/dustpan/v1/sign-in/providers` |
-| Start with the static LDAP provider ID and another directory URL. | The server refuses to start. The error names the ID, the old URL, the new URL and the rebind call. | `POST /api/dustpan/v1/sign-in/providers/{provider}/rebind` |
+| Create or update with a subject attribute other than entryUUID or objectGUID. | 400 that names the two allowed attributes. | `GET /api/dustpan/v1/settings` |
+| Start with the static LDAP provider ID and another directory URL. | The server refuses to start. The error names the ID, the old URL, the new URL and the new rebind route. | `POST /api/dustpan/v1/sign-in/ldap-providers/{provider}/rebind` |
 
 Evidence for the claims above:
 
@@ -31,10 +31,11 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Stored LDAP provider create, read, update and delete routes with actions, validation and audit entries
+- New routes under /api/dustpan/v1/sign-in/ldap-providers to create, read, update and delete stored LDAP providers, with actions, validation and audit entries
+- New route POST /api/dustpan/v1/sign-in/ldap-providers/{provider}/rebind with its own action and a typed reason
 - Bind password of a stored provider by reference to an environment variable or a file, never returned and never logged
 - LDAP group claims applied at sign-in through the one membership function with source ldap, protected-group refusal, audit entries and removal counting
-- Static LDAP provider ID bound to its first directory URL, with a rebind route that has its own action and a typed reason
+- Static LDAP provider ID bound to its first directory URL at the first start
 - A change of the plain-connection setting re-checks stored providers at the next sign-in
 
 Out of scope:
@@ -106,24 +107,24 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR, with ADR 332.
 - Quote: "TLS (owner, ADR 292). `ldaps://` or StartTLS, with certificate checks and an optional CA bundle. A connection with no TLS follows ADR 292."
 - Quote: "The service account password (owner, ADR 63). It is a sensitive setting. It comes only from an environment variable or a `*_FILE` file (ADR 63 decision 4), and no log or audit entry shows it (decision 6)."
-- Effect: The stored provider names an environment variable or a file for the bind password, so decision 8 holds. The subject allowlist is narrower than decision 5. A narrower rule refuses more and does not contradict the decision.
+- Effect: The stored provider names an environment variable or a file for the bind password. The subject allowlist is narrower than decision 5 and refuses more, so it does not contradict it.
 - Conflict: none.
 
 ## Adversarial second pass
 
 A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
 
-- R1.1 (owner decision conflict): The spec and design let stored LDAP providers take any subject attribute, but the owner decision of 13 Nov 2026 (P20) requires LDAP subjects to be entryUUID or objectGUID only. The change must refuse other subject sources, and the proposal's Open questions 'none' is not valid while this is open. Resolution: answered: Subject limited to entryUUID or objectGUID.
-- R1.2 (adr conflict): ADR 321 decision 8 (owner, ADR 63) allows the bind password only from an environment variable or a *_FILE file. The change stores the bind password as a secret reference set through the stored-provider API, which the ADR does not allow. Resolution: open question: Owner question on the sealed secret set through the API.
-- R1.3 (adr conflict): ADR 292 decisions 1, 2 and 5 (owner) refuse LDAP without TLS except to loopback, allow plain only by an opt-in setting that is visible, and fail closed with a refusal that names the setting. The spec has no requirement or scenario for the TLS rule, the opt-in setting or the fail-closed refusal on stored providers. Resolution: answered: Plain-connection requirement and scenario added.
+- R1.1 (owner decision conflict): The spec and design let stored LDAP providers take any subject attribute, but the owner decision of 13 Nov 2026 (P20) requires LDAP subjects to be entryUUID or objectGUID only. The change must refuse other subject sources, and the proposal's Open questions 'none' is not valid while this is open. Resolution: answered: Subject limited to entryUUID or objectGUID, per the owner decision.
+- R1.2 (adr conflict): ADR 321 decision 8 (owner, ADR 63) allows the bind password only from an environment variable or a *_FILE file. The change stores the bind password as a secret reference set through the stored-provider API, which the ADR does not allow. Resolution: answered: The password is a reference to an environment variable or a file. No API-set password.
+- R1.3 (adr conflict): ADR 292 decisions 1, 2 and 5 (owner) refuse LDAP without TLS except to loopback, allow plain only by an opt-in setting that is visible, and fail closed with a refusal that names the setting. The spec has no requirement or scenario for the TLS rule, the opt-in setting or the fail-closed refusal on stored providers. Resolution: answered: Plain-connection requirements and scenarios present.
 - R1.4 (adr conflict): ADR 321 decision 5 says the subject is entryUUID by default, objectGUID for Active Directory, or an attribute the administrator names. The change allows any subject field, and the owner refusal of mutable sources is not applied to LDAP. Resolution: answered: Same as R1.1.
-- R1.5 (missing scenario): No scenario covers the rotation of the bind secret, though the docs path requires it. The spec and tasks do not say how a secret reference is replaced or how the old reference is revoked. Resolution: answered: Rotate requirement added.
+- R1.5 (missing scenario): No scenario covers the rotation of the bind secret, though the docs path requires it. The spec and tasks do not say how a secret reference is replaced or how the old reference is revoked. Resolution: answered: No stored secret exists. Rotation is a change of the variable or the file, so no API rotation is built.
 - R1.6 (missing scenario): No scenario covers a sign-in where the directory reports the user disabled, the bind fails, or the directory is unreachable. ADR 321 decisions 9 and 10 (limits and removal at each sign-in) are not reflected in the spec. Resolution: answered: Refuse unsafe sign-in requirement added.
-- R1.7 (open question): The static binding requirement does not say what happens on first start with no prior binding record, or when the binding store is lost. The rebind command named in the start error is not specified in the spec or tasks. Resolution: answered: First start scenario and rebind route added.
-- R1.8 (failure mode): Two stored providers can point at different directories with the same subjects, which design.md names as a risk. No requirement makes the subject unique per provider or per directory, so grants can be shared across directories. Resolution: answered: Subject is per provider ID and URL is unique.
-- R1.9 (missing scenario): No requirement covers the referral refusal, the empty-password refusal or the user-name boundary of ADR 321 decisions 3 and 4, although the layers table names a referral hostile test. Resolution: answered: Referral and empty password scenarios added.
-- R1.10 (failure mode): Concurrent create or update of stored providers with the same ID or URL is not covered; no requirement defines uniqueness or the write conflict answer. Resolution: answered: Duplicate URL and ID answer 409.
-- R1.11 (wrong claim): The proposal says Open questions: none, yet the rebind command, the secret rotation method, the subject source rule and the TLS opt-in are unanswered. The spec-ready gate requires an explicit list with owners. Resolution: open question: Open questions now lists the owner question.
+- R1.7 (open question): The static binding requirement does not say what happens on first start with no prior binding record, or when the binding store is lost. The rebind command named in the start error is not specified in the spec or tasks. Resolution: answered: First start, lost record and the new rebind route are specified.
+- R1.8 (failure mode): Two stored providers can point at different directories with the same subjects, which design.md names as a risk. No requirement makes the subject unique per provider or per directory, so grants can be shared across directories. Resolution: answered: The provider ID keys subjects and the URL is unique.
+- R1.9 (missing scenario): No requirement covers the referral refusal, the empty-password refusal or the user-name boundary of ADR 321 decisions 3 and 4, although the layers table names a referral hostile test. Resolution: answered: Referral, empty password and user-name scenarios added.
+- R1.10 (failure mode): Concurrent create or update of stored providers with the same ID or URL is not covered; no requirement defines uniqueness or the write conflict answer. Resolution: answered: Duplicate ID and URL answer 409.
+- R1.11 (wrong claim): The proposal says Open questions: none, yet the rebind command, the secret rotation method, the subject source rule and the TLS opt-in are unanswered. The spec-ready gate requires an explicit list with owners. Resolution: answered: No open question remains, because the owner decision and the ADRs answer each one.
 - R2.1 (adr conflict): ADR 321 decision 8 (owner, ADR 63) says the service account password comes only from an environment variable or a *_FILE file, and the change stores the bind password as a sealed secret set through the API. The change contradicts this owner-tagged decision and cannot be built until the owner decides. Resolution: open question: The change marks ADR 321 as owner_blocks and uses an environment variable or a file until the owner decides.
 - R2.2 (open question): The proposal lists 'Open questions' with an owner question on the sealed bind password, yet the design, tasks and spec already build the write-only password field and rotation route on it. The spec-ready gate must stay closed until the owner answers. Resolution: open question: The design and tasks no longer build the API-set password. The question stays open.
 - R2.3 (wrong claim): The ADR check says ADR 321 decision 5 allows an administrator-named subject attribute, and design.md decision 1 limits it to entryUUID or objectGUID. The owner decision P20 is marked 'Provisional' in the input, while the proposal quotes it as binding ('approved as written'). The change treats a provisional decision as binding without saying so. Resolution: answered: The change now says the decision is provisional and changes no ADR words.
@@ -150,13 +151,10 @@ none
 
 Questions considered and answered:
 
-- Which subject sources may a stored LDAP provider use? Only entryUUID and objectGUID. Owner decision, 13 Nov 2026 (queue P20). It is provisional, so the text of ADR 321 decision 5 is not changed here.
-- May the API set the bind password? No. ADR 321 decision 8 (owner) allows only an environment variable or a file. An API-set secret needs an owner decision and is out of scope.
-- Do LDAP group claims change memberships? Yes, only through the one membership function, with source ldap, protected-group refusal and audit entries (ADR 70 decisions 14 and 18). Removals are counted (ADR 70 decision 21). A claim for an unknown local group is skipped and audited.
-- Is the static binding recorded on first start? Yes. A missing record after a first start refuses the start and names the rebind call.
-- Can a rebind accept any directory? The rebind needs server:manage-sign-in (ADR 70 decision 11), a typed reason and a check of the new URL against egress and TLS rules. It writes an audit entry and revokes the sessions of the provider.
-- Do stored providers need a plain-connection rule? Yes. ADR 292 decisions 1, 2 and 5 apply. A change to off refuses sign-in at once. The record stays.
-- What if two providers share a directory? A unique index on the directory URL gives one 409.
-- What if the user is disabled between search and bind? The bind and a second disabled check both refuse the sign-in.
+- Which subject sources may a stored LDAP provider use? Only entryUUID and objectGUID. Owner decision, 13 Nov 2026 (queue P20). It is provisional, so no ADR words change here.
+- May the API set the bind password? No. ADR 321 decision 8 (owner) allows only an environment variable or a file.
+- Do LDAP group claims change memberships? Yes, only through the one membership function, with source ldap, protected-group refusal and audit entries (ADR 70 decisions 14 and 18). Removals are counted (ADR 70 decision 21).
+- Can a rebind accept any directory? No. It needs server:manage-sign-in (ADR 70 decision 11), a typed reason and a check of the new URL against egress and TLS rules. It writes an audit entry and revokes the sessions of the provider.
+- Do stored providers need a plain-connection rule? Yes. ADR 292 decisions 1, 2 and 5 apply. A change to off refuses sign-in at once.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

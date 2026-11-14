@@ -27,8 +27,11 @@ Evidence for the claims above:
 
 ## What Changes
 
-- REST API to enroll, list and remove TOTP and passkey factors for the caller
-- Step-up check that records a fresh second-factor step in the sealed access cookie of one sign-in
+- `GET /api/dustpan/v1/me/factors` lists enrolled factors for the caller
+- `POST /api/dustpan/v1/me/factors/totp/enroll` enrolls a TOTP factor with an enrollment code or a one-time email code
+- `POST /api/dustpan/v1/me/factors/passkeys/enroll` enrolls a passkey factor with an enrollment code or a one-time email code
+- `POST /api/dustpan/v1/me/factors/step-up` records a fresh second-factor step in one sign-in
+- `DELETE /api/dustpan/v1/me/factors/{id}` removes a TOTP or passkey factor for the caller
 - First enrollment only with an administrator enrollment code or a one-time email code
 
 Out of scope:

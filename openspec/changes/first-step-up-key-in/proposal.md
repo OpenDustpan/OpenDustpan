@@ -34,7 +34,7 @@ Out of scope:
 
 - Write a failing test for each scenario of the spec Check: go test of the bootstrap package fails on main
 - Write the store tests for the admin reset and the challenge use Check: go test of the store conformance suite fails on main
-- Add the store method for the admin reset and its audit entry, called by the existing reset route Check: store conformance test for the reset
+- Add the store method for the admin reset and its audit entry Check: store conformance test for the reset
 - Add the marker read to the API Check: route test and API call that returns the marker
 - Wire the host command with its authorization actions Check: route test and `opendustpan host step-up-bootstrap --help`
 - Add an e2e step against the real binary Check: `make e2e` passes
@@ -46,6 +46,7 @@ Depends on:
 - mfa
 - app-level-second-factor-totp
 - break-glass-mode-2
+- `mfa` (order of the milestone review)
 - `app-level-second-factor-totp` (order of the milestone review)
 - `break-glass-mode-2` (order of the milestone review)
 
@@ -65,11 +66,10 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 295 changes decision 12. Chain to the end: ADR 295.
 - Current rule: this ADR, with ADR 295.
 - Quote: "The command respects the recovery mode (product manager). The command refuses when the installation chose mode 3 of ADR 57 ("no break-glass"). The error names the mode and the setting to change."
-- Quote: "One transaction. The command makes the person, its site-administrator grant on the installation, its record and its token in one store transaction, with the four audit entries. A crash leaves all of them or none."
 - Quote: "The command needs a reason: `--reason`, or a line that the operator types at a prompt on a terminal."
 - Quote: "The command refuses any other value, so a typo never turns the command on."
 - Quote: "No hidden characters. The reason and the creator refuse control characters (Unicode Cc) and format characters (Unicode Cf), such as a direction override, so the text in the audit log shows what the operator typed."
-- Effect: The key, the marker and the audit entry go in one store transaction. The command runs in mode 1 and mode 2, refuses mode none, refuses an unknown off-switch value and hidden characters, and needs a reason.
+- Effect: The key, the marker and the audit entry go in one store transaction. The email follows the commit, because it is not a store write. The command runs in mode 1 and mode 2, refuses mode none, refuses an unknown off-switch value and hidden characters, and needs a reason.
 - Conflict: none.
 
 **ADR 339: The first administrator gets a one-time code from the bootstrap token** (owner-tagged (all decisions)).
@@ -83,7 +83,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 **ADR 295: Break-glass recovery mode 2 over the network** (owner-tagged (all decisions)).
 
-- Decisions that apply: 1 (current), 9 (current).
+- Decisions that apply: 9 (current).
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
 - Quote: "The controls of ADR 245 apply. A temporary administrator from this route keeps these controls of ADR 245."
@@ -104,16 +104,16 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
 
 - R1.1 (owner decision conflict): The owner decision of 13 Nov 2026 (P17) requires a one-time marker as in ADR 339 decision 7, but design.md and specs/step-up-bootstrap/spec.md define no marker, its storage, its read in the API, or how it is set and checked. The change follows the rejected route of no marker with a last-key guard. Resolution: answered: A stored one-time marker with an API read is in the design and spec.
-- R1.2 (owner decision conflict): The owner decision requires option A on the ADR 339 route with D in mode 2 and mode none closing the route. The spec never names which recovery modes allow the bootstrap, never cites ADR 339 or the marker, and never states that mode none refuses. Resolution: answered: Mode none refuses and the spec has a scenario.
-- R1.3 (adr conflict): ADR 245 decision 7 ("One transaction... with the four audit entries. A crash leaves all of them or none.") is applied to a host bootstrap that writes a key, an audit entry and an email. Email is a side effect that cannot sit in a store transaction. The change does not say how a failed send after the key is written is handled. Resolution: answered: The email follows the commit and a failed send is logged.
-- R1.4 (adr conflict): ADR 245 decision 14 says the host command applies no migration and refuses on a pending migration. The change never says whether bootstrap checks for a pending migration before it writes the key. Resolution: answered: The pending migration refusal is in the spec.
-- R1.5 (adr conflict): ADR 245 decision 17 bans control (Cc) and format (Cf) characters in the reason text. The change says the host boundary checks reason text but never states this rule, so the check it relies on is undefined. Resolution: answered: The reason text rule is in the spec.
-- R1.6 (missing scenario): The spec has no scenario for a sole administrator who holds a suspended key, nor for the recovery path that the proposal and tasks promise. A sole suspended key still locks out every administrator, and the risk is unanswered. Resolution: answered: The sole suspended key scenario is in the spec.
-- R1.7 (missing scenario): The spec has no scenario for two concurrent bootstraps, for an administrator who exists but holds no key, for a refused bootstrap in mode none, for a bad or missing reason, or for DUSTPAN_DISABLE_HOST_RECOVERY set. The design's hostile tests name these cases but the spec does not. Resolution: answered: Scenarios cover concurrency, mode none and a bad reason.
-- R1.8 (failure mode): A replayed key-add challenge and its single-use state across restarts are named as risks, but no requirement says how a replay is refused or how the consumed state survives a restart. Resolution: answered: The challenge once requirement covers a replay after restart.
-- R1.9 (scope): The issue #1329 minor items (AcceptStep lock ownership, key-add challenge consumption, admin challenges counted against the person limit, admin reset store method) appear in the proposal and tasks but have no requirement or scenario in the spec, so the change misses part of its own item. Resolution: answered: The minor items have requirements.
-- R1.10 (open question): The proposal states "Open questions: none" while the marker, the mode handling, the one-transaction and email question, and the sole-key recovery path are unanswered. The spec-ready gate must refuse this proposal. Resolution: answered: The questions are answered by the owner decision and the design.
-- R1.11 (wrong claim): The ADR check quotes ADR 245 decision 3 with its text cut off mid-word, so the quoted line is not a verifiable decision line. The ADR 46 claim that the bootstrap leaves sign-in MFA with the provider is not checked against decision 2 for a step-up key used for admin actions. Resolution: answered: Quotes now end at a full sentence and ADR 46 is checked.
+- R1.2 (owner decision conflict): The owner decision requires option A on the ADR 339 route with D in mode 2 and mode none closing the route. The spec never names which recovery modes allow the bootstrap, never cites ADR 339 or the marker, and never states that mode none refuses. Resolution: answered: The Recovery mode and Mode none requirements name the modes.
+- R1.3 (adr conflict): ADR 245 decision 7 ("One transaction... with the four audit entries. A crash leaves all of them or none.") is applied to a host bootstrap that writes a key, an audit entry and an email. Email is a side effect that cannot sit in a store transaction. The change does not say how a failed send after the key is written is handled. Resolution: answered: The email follows the commit, a failed send is logged and the audit entry records that the email is due.
+- R1.4 (adr conflict): ADR 245 decision 14 says the host command applies no migration and refuses on a pending migration. The change never says whether bootstrap checks for a pending migration before it writes the key. Resolution: answered: The Pending migration requirement refuses the bootstrap.
+- R1.5 (adr conflict): ADR 245 decision 17 bans control (Cc) and format (Cf) characters in the reason text. The change says the host boundary checks reason text but never states this rule, so the check it relies on is undefined. Resolution: answered: The Reason text requirement states the control and format character rule.
+- R1.6 (missing scenario): The spec has no scenario for a sole administrator who holds a suspended key, nor for the recovery path that the proposal and tasks promise. A sole suspended key still locks out every administrator, and the risk is unanswered. Resolution: answered: The Sole suspended key scenario of the Admin reset requirement covers the recovery path of a person whose only key is suspended.
+- R1.7 (missing scenario): The spec has no scenario for two concurrent bootstraps, for an administrator who exists but holds no key, for a refused bootstrap in mode none, for a bad or missing reason, or for DUSTPAN_DISABLE_HOST_RECOVERY set. The design's hostile tests name these cases but the spec does not. Resolution: answered: Scenarios Concurrent runs, Mode none, Direction override, Control character, No reason and Unknown value cover the failure modes.
+- R1.8 (failure mode): A replayed key-add challenge and its single-use state across restarts are named as risks, but no requirement says how a replay is refused or how the consumed state survives a restart. Resolution: answered: The Challenge once requirement covers replay after restart.
+- R1.9 (scope): The issue #1329 minor items (AcceptStep lock ownership, key-add challenge consumption, admin challenges counted against the person limit, admin reset store method) appear in the proposal and tasks but have no requirement or scenario in the spec, so the change misses part of its own item. Resolution: answered: Each minor item has a requirement.
+- R1.10 (open question): The proposal states "Open questions: none" while the marker, the mode handling, the one-transaction and email question, and the sole-key recovery path are unanswered. The spec-ready gate must refuse this proposal. Resolution: answered: The owner decision of 13 Nov 2026 answers the route, the marker and the modes.
+- R1.11 (wrong claim): The ADR check quotes ADR 245 decision 3 with its text cut off mid-word, so the quoted line is not a verifiable decision line. The ADR 46 claim that the bootstrap leaves sign-in MFA with the provider is not checked against decision 2 for a step-up key used for admin actions. Resolution: answered: The quotes are whole sentences and ADR 46 is checked against decision 2.
 - R2.1 (adr conflict): ADR 245 decision 7 requires the key, the record, the token and all four audit entries in one store transaction; the proposal and design also say the bootstrap writes the key and the marker in one transaction, but the spec never states that the audit entry and marker are in that transaction, so the one-transaction rule is not checked by any scenario (design.md Decisions 1-2, specs/step-up-bootstrap/spec.md). Resolution: answered: The One transaction requirement and its crash scenario cover key, marker and audit entry.
 - R2.2 (owner decision conflict): The owner decision of 13 Nov (P17) binds the marker to ADR 339 decision 7, but the ADR check cites ADR 339 only as 'Conflict: none' without stating how the bootstrap sets the marker and checks it in the store; the spec scenario 'Second run' does not name the marker or the ADR 339 route. Resolution: answered: The ADR check states the marker is set and checked in the store transaction; the Second run scenario names the marker.
 - R2.3 (failure mode): The spec gives no scenario for a bootstrap that succeeds in the store but whose process crashes before the commit or after it; the design says the email follows the commit, but no requirement says what a restart after a crash mid-bootstrap leaves behind (key without marker, or marker without key). Resolution: answered: The crash scenario shows a restart leaves all or none.
@@ -141,9 +141,7 @@ Questions considered and answered:
 
 - Which route and marker? Owner decision, 13 Nov 2026 (queue P17): the one-time marker of ADR 339 decision 7, with the host route in modes 1 and 2. Mode none closes the route.
 - How does an email fit in a transaction? ADR 245 decision 7 covers the store writes. The email follows the commit. The audit entry records the due email, so a crash before the send leaves a record.
-- What does a crash leave? All or none of key, marker and audit entry (ADR 245 decision 7).
 - Does the command migrate? No. It refuses and names the command that applies migrations (ADR 245 decision 14).
 - What is the recovery path of a sole suspended key? The admin reset clears the keys, and the person enrolls a new key. It uses the one admin reset route and action of the mfa change.
-- Does this change overlap the factor store and mode 2 work? Yes, so it names mfa, app-level-second-factor-totp and break-glass-mode-2 in depends_on and adds no second reset route.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

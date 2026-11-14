@@ -58,14 +58,14 @@ When an error answer names a value, the server SHALL carry that value as a decla
 
 ### Requirement: Caller token mutations take key
 
-When the caller sends POST, DELETE, or rotate under /api/dustpan/v1/me/tokens with Idempotency-Key, the server SHALL store the answer by principal, method, path, and key and replay it without a second change.
+When the caller sends POST /api/dustpan/v1/me/tokens with Idempotency-Key, the server SHALL store the answer by principal, method, path, and key and replay it without a second change.
 
 #### Scenario: Mutate with key
-- **WHEN** caller sends POST, DELETE, or rotate under /api/dustpan/v1/me/tokens with Idempotency-Key
+- **WHEN** caller sends POST /api/dustpan/v1/me/tokens with Idempotency-Key
 - **THEN** the server applies the change once and keys the stored answer by principal, method, path, and key
 
 #### Scenario: Replay same request
-- **WHEN** caller repeats the same mutating request with the same Idempotency-Key within retention and with a valid token
+- **WHEN** caller repeats POST /api/dustpan/v1/me/tokens with the same Idempotency-Key within retention and with a valid token
 - **THEN** the server returns the stored status with token metadata and no secret value and makes no second change
 
 #### Scenario: Concurrent same key
@@ -73,7 +73,7 @@ When the caller sends POST, DELETE, or rotate under /api/dustpan/v1/me/tokens wi
 - **THEN** the server applies the change once and the other request gets the stored answer
 
 #### Scenario: Replay after token ended
-- **WHEN** caller replays a rotate or self-delete with the same Idempotency-Key but the auth token is now ended
+- **WHEN** caller replays POST /api/dustpan/v1/me/tokens with the same Idempotency-Key but the auth token is now ended
 - **THEN** the server answers 401 with a stable catalog code and returns no stored answer
 
 #### Scenario: Recover lost create
@@ -85,19 +85,27 @@ When the caller sends POST, DELETE, or rotate under /api/dustpan/v1/me/tokens wi
 If the caller reuses an Idempotency-Key with a different body or on a different method or path, then the server SHALL answer conflict with a stable catalog code and change nothing.
 
 #### Scenario: Reuse key with different body
-- **WHEN** caller sends the same Idempotency-Key with a different body or on a different method or path
+- **WHEN** caller sends POST /api/dustpan/v1/me/tokens with the same Idempotency-Key and a different body
 - **THEN** the server answers conflict with a stable catalog code and changes nothing
 
-### Requirement: Caller token rotate atomic
+### Requirement: Caller token delete
 
-When the caller rotates an own token, the server SHALL issue the new token and end the old token in one atomic transaction.
+When the caller sends DELETE /api/dustpan/v1/me/tokens/{id} with Idempotency-Key, the server SHALL end the own token and replay the stored answer without a second change.
+
+#### Scenario: Delete own token
+- **WHEN** caller sends DELETE /api/dustpan/v1/me/tokens/{id} with Idempotency-Key for an own token
+- **THEN** the server ends the token in one transaction and stores the answer by principal, method, path, and key
+
+### Requirement: Caller token rotate
+
+When the caller sends POST /api/dustpan/v1/me/tokens/{id}/rotate with Idempotency-Key, the server SHALL issue the new token and end the old token in one atomic transaction.
 
 #### Scenario: Rotate own token
-- **WHEN** caller sends rotate on /api/dustpan/v1/me/tokens/{id} for an own token
+- **WHEN** caller sends POST /api/dustpan/v1/me/tokens/{id}/rotate with Idempotency-Key for an own token
 - **THEN** the server issues a new token value and ends the old token value in one transaction
 
 #### Scenario: Use old token during rotate
-- **WHEN** caller sends a request with the old token value while rotate is in flight
+- **WHEN** caller sends a request with the old token value while POST /api/dustpan/v1/me/tokens/{id}/rotate is in flight
 - **THEN** the server accepts at most one of the two values after the transaction commits
 
 ### Requirement: Old caller paths gone
@@ -105,5 +113,5 @@ When the caller rotates an own token, the server SHALL issue the new token and e
 The server SHALL stop serving /api/server/caller/access, /api/server/caller/grants, and /api/server/caller/tokens with no alias and no redirect.
 
 #### Scenario: Call each old path
-- **WHEN** caller sends GET, POST, DELETE, or rotate to any /api/server/caller path
+- **WHEN** caller sends GET /api/server/caller/access with a valid token
 - **THEN** the server answers 404 with a stable catalog code and names the matching /api/dustpan/v1/me path

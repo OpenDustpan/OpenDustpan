@@ -16,7 +16,7 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Restore with only server:restore while the setting is off | 403 server:restore-access required and the access tables stay unchanged; run the settings read to check the value. | `GET /api/dustpan/v1/settings` |
-| Setting change without a fresh authentication step | 403 mfa.fresh-step-required and the change did not save; do a fresh sign-in step then repeat the change. | `POST /api/dustpan/v1/me/fresh-step` |
+| Setting change without a fresh authentication step | 403 mfa.fresh-step-required and the change did not save; repeat the settings read to check the value after a fresh sign-in step. | `GET /api/dustpan/v1/settings` |
 | Setting change by a caller without the gated actions | 403 forbidden and the value stays unchanged; ask a site administrator with the restore-access grant to make the change. | `GET /api/dustpan/v1/settings` |
 
 Evidence for the claims above:
@@ -40,6 +40,7 @@ Out of scope:
 Depends on:
 
 - add-one-generic-settings-api
+- issue-553-default-restore
 - `add-one-generic-settings-api` (order of the milestone review)
 
 ## Usability
@@ -131,6 +132,7 @@ A model of another provider than the drafter listed the open questions, failure 
 - R3.6 (wrong claim): Tasks 1.2 and the issue put the setting in internal/cli/settings.go, while the design says the file holds only the stored definition; the proposal's evidence cites that file as where the setting is requested, which the issue supports but the proposal's API-only claim does not reconcile. Resolution: answered: Design states settings.go holds only the stored definition with no flag, env, or file layer; the change path is API only.
 - R3.7 (scope): Task 2.1 and the 'Widened state reported' requirement add an admin access report change that is not in the proposal's What Changes list, so the change does work beyond its stated scope. Resolution: answered: What Changes now lists the admin access report listing for the widened state.
 - M.18 (dependency): The change adds its own REST route for one installation setting, which duplicates the generic settings API. It needs issue #553, which is not in this milestone. Resolution: answered: Removed the separate route; the key is registered in the generic settings API with a locked API-only fresh-step write, depends_on names add-one-generic-settings-api, and issue #553 stays as the predecessor that must land first.
+- M2.16 (dependency): Issue #553 must land first, but it is not in this milestone and not in depends_on. Resolution: answered: depends_on now names issue-553-default-restore as a build predecessor and out_of_scope states it must land first; this change stays out of build order until it lands.
 
 ## Open questions
 

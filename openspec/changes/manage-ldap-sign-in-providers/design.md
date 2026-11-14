@@ -1,15 +1,14 @@
 ## Context
 
-The static provider reads flags and files. Stored providers live in the database and share the LDAP adapter, the group applier, and the egress and TLS guards. The bind password is a reference to an environment variable or a file.
+The static provider reads flags and files. Stored providers live in the database and share the LDAP adapter, the group applier, and the egress and TLS guards.
 
 ## Decisions
 
 1. **Stored provider record.** A record holds URL, base DN, filters, group settings, limits and a password reference. The subject attribute is entryUUID or objectGUID only (Owner decision, 13 Nov 2026, queue P20). The static ID is reserved. The stable provider ID keys subjects and grants.
-2. **TLS rule.** A plain URL to a non-loopback address is refused unless the plain-connection setting is on. A missing or not valid setting counts as off. Sign-in re-reads the setting.
-3. **Group claims path.** The adapter returns the flat group list. Memberships change only through the one membership function with source ldap. It skips unknown groups, counts removals and records the source kind.
+2. **TLS rule.** A plain URL to a non-loopback address is refused unless the plain-connection setting is on. A missing or not valid setting counts as off.
+3. **Group claims path.** Memberships change only through the one membership function with source ldap. It counts removals with the source kind.
 4. **Static binding.** The first start records ID and URL. A changed URL or a lost record refuses the start. The rebind route checks the new URL, needs a reason and its own action, revokes sessions and writes an audit entry.
 5. **Uniqueness.** A unique database index on the directory URL makes a concurrent write lose with 409.
-6. **Adapter limits.** The adapter keeps the user-name bounds, 10 second timeouts and the 1000-entry search cap.
 
 ## Structure
 
