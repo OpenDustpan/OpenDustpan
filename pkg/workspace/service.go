@@ -137,8 +137,10 @@ type DeletedStore interface {
 type StateStore interface {
 	// CreateStateVersion persists a new, pending sv, refusing with
 	// ErrTooManyPending when the workspace already holds maxPending
-	// pending versions. The count and the insert run in one fenced
-	// transaction, so concurrent declares over several services never
+	// pending versions. A sv whose status is not pending is refused with
+	// ErrStateNotPending: the create path writes pending versions only, so a
+	// finalized row never enters through it. The count and the insert run in
+	// one fenced transaction, so concurrent declares over several services never
 	// pass the cap together. A non-positive maxPending refuses every
 	// version. It returns ErrNotFound if sv.Workspace does not exist,
 	// namespace.ErrNotFound if the namespace does not exist, or
@@ -1369,6 +1371,9 @@ func (s *Service) Upload(
 	sv.Size = body.size
 	sv.Content = key
 	sv.Outputs = body.outputs.stored
+	// The bit is read from the streamed document, so Latest answers from the
+	// row and never streams the blob again.
+	sv.ClientEncrypted = NewClientEncrypted(body.encrypted)
 
 	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
 		err = fmt.Errorf("finalize state %s: %w", id, err)
@@ -1437,11 +1442,13 @@ func (s *Service) CheckJSONRenderingUpload(
 	return w.Ref.Namespace, nil
 }
 
-// uploadedBody is what a state upload stores: the size of its bytes, and the
-// outputs read from them as they streamed.
+// uploadedBody is what a state upload stores: the size of its bytes, the
+// outputs read from them as they streamed, and the client-encryption bit of
+// the document.
 type uploadedBody struct {
-	size    int64
-	outputs streamedOutputs
+	size      int64
+	outputs   streamedOutputs
+	encrypted bool
 }
 
 // DiscardJSONRendering accepts the JSON rendering the CLI uploads alongside
@@ -2161,6 +2168,14 @@ func (s *Service) copyState(
 		return StateVersion{}, err
 	}
 
+	// The restored version holds a copy of src's content, so it holds src's
+	// client-encryption bit. A source stored before the server kept the bit
+	// is streamed once to decide it.
+	encrypted, err := s.restoredClientEncrypted(ctx, w, src)
+	if err != nil {
+		return StateVersion{}, err
+	}
+
 	// The hex MD5 in NewState is display only; createPending stores the
 	// validated sum passed alongside it, which is src.MD5 here.
 	pending, err := s.createPending(ctx, w, NewState{
@@ -2216,6 +2231,7 @@ func (s *Service) copyState(
 	sv.FinalizedAt = s.clock()
 	sv.Size = size
 	sv.Content = key
+	sv.ClientEncrypted = encrypted
 
 	if err := s.finalizeRestore(ctx, sv, fence, expect); err != nil {
 		return StateVersion{}, s.refusedRestore(ctx, w, sv, fence, err)
@@ -2226,6 +2242,38 @@ func (s *Service) copyState(
 	sv.Outputs = outputs
 
 	return sv, nil
+}
+
+// restoredClientEncrypted returns the client-encryption bit of a version
+// restored from src: the bit of src, or the bit streamed from src's content
+// when src was stored before the server kept it. The streamed read is a
+// fallback only: a version stored after the change answers from its row.
+func (s *Service) restoredClientEncrypted(
+	ctx context.Context, w Workspace, src StateVersion,
+) (ClientEncrypted, error) {
+	if src.ClientEncrypted.Known() {
+		return src.ClientEncrypted, nil
+	}
+
+	content, err := s.Open(ctx, src)
+	if err != nil {
+		return ClientEncryptedUnknown, fmt.Errorf("restore %s from %s: %w", w.ID, src.ID, err)
+	}
+
+	meta, readErr := readStateMeta(content, nil)
+	closeErr := content.Close()
+
+	if readErr != nil {
+		return ClientEncryptedUnknown, fmt.Errorf(
+			"restore %s from %s: read the state marker: %w", w.ID, src.ID, readErr,
+		)
+	}
+
+	if closeErr != nil {
+		return ClientEncryptedUnknown, fmt.Errorf("restore %s from %s: %w", w.ID, src.ID, closeErr)
+	}
+
+	return NewClientEncrypted(meta.ClientEncrypted), nil
 }
 
 // finalizeRestore finalizes the restored version sv. With expect set, it also
@@ -2638,6 +2686,8 @@ func (s *Service) createPending(
 		SensitiveMarks:  nil,
 		FenceBy:         "",
 		Origin:          decl.origin,
+		// A pending version holds no bit yet: the finalize writes it.
+		ClientEncrypted: ClientEncryptedUnknown,
 	}
 
 	if err := s.states.CreateStateVersion(ctx, sv, fence, s.maxPending); err != nil {
@@ -2951,7 +3001,7 @@ func (s *Service) storeUploadBody(
 		return uploadedBody{}, errors.Join(err, s.deleteOnCleanup(ctx, w, key))
 	}
 
-	return uploadedBody{size: size, outputs: outputs}, nil
+	return uploadedBody{size: size, outputs: outputs, encrypted: meta.ClientEncrypted}, nil
 }
 
 // abandonStream ends a meta stream whose store failed. The stream's own result

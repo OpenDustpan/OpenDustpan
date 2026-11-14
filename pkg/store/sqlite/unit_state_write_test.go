@@ -507,6 +507,7 @@ func finalizeStateWriteExpecting(
 
 	sv.Status = workspace.StatusFinalized
 	sv.FinalizedAt = time.UnixMilli(unitStateWriteAtMs + 1000).UTC()
+	sv.ClientEncrypted = workspace.ClientEncryptedNo
 	sv.Content = blob.Key("namespaces/" + ns.ID.String() + "/tofu/" + sv.Workspace.String() + "/" +
 		sv.ID.String() + "/a1")
 	sv.Size = int64(len(stateWriteContent))

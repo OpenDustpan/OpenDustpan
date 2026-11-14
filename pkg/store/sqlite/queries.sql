@@ -816,7 +816,7 @@ INSERT INTO state_versions (
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE id = ?;
 
@@ -825,7 +825,7 @@ WHERE id = ?;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE workspace_id = ? AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -890,7 +890,7 @@ WHERE w.id = ?;
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE workspace_id = ? AND status = 'pending' AND upload_expires_at_ms < ?
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -921,11 +921,11 @@ WHERE id = ?;
 -- matches only the recorded content key, so a superseded attempt reports no
 -- change instead of finalizing over a newer one; a finalized version also
 -- matches no row, so a retry reports no change. It also sets the declared
--- serial, lineage, MD5 and outputs: a streamed write declares them only after
--- its content is read (ADR 49, decision 7), and its row holds placeholders
--- until then.
+-- serial, lineage, MD5 and outputs, and the client-encryption bit of the
+-- document: a streamed write declares them only after its content is read
+-- and its row holds placeholders until then.
 UPDATE state_versions
-SET serial = @serial, lineage = @lineage, md5 = @md5, outputs = @outputs, status = @status, finalized_at_ms = @finalized_at_ms, size = @size
+SET serial = @serial, lineage = @lineage, md5 = @md5, outputs = @outputs, status = @status, finalized_at_ms = @finalized_at_ms, size = @size, client_encrypted = @client_encrypted
 WHERE id = @id AND status = 'pending' AND content_key = @content_key;
 
 -- name: SetWorkspaceCurrent :exec
@@ -939,7 +939,7 @@ WHERE id = ?;
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job
+       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job, sv.client_encrypted
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = ?;

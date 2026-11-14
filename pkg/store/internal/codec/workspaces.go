@@ -44,7 +44,8 @@ type WorkspaceRow struct {
 // capability is a digest only. Unset times are 0 and a pending version keeps
 // an empty content key and size 0. RestoredFrom is empty unless the version
 // restores another one. SensitiveMarks holds the kept secret paths as JSON,
-// or nil when the version keeps none.
+// or nil when the version keeps none. ClientEncrypted is the client-encryption
+// bit: nil is the NULL column of a version stored before the server kept it.
 type StateVersionRow struct {
 	ID                string
 	WorkspaceID       string
@@ -64,6 +65,7 @@ type StateVersionRow struct {
 	FencedBy          string
 	UnlockedWrite     bool
 	SensitiveMarks    []byte
+	ClientEncrypted   *bool
 	CreatedAtMs       int64
 	FinalizedAtMs     int64
 	UploadExpiresAtMs int64
@@ -182,10 +184,72 @@ func ToStateVersionRow(sv workspace.StateVersion) StateVersionRow {
 		FencedBy:          sv.FenceBy,
 		UnlockedWrite:     sv.UnlockedWrite,
 		SensitiveMarks:    marks,
+		ClientEncrypted:   clientEncryptedColumn(sv.ClientEncrypted),
 		CreatedAtMs:       Millis(sv.CreatedAt),
 		FinalizedAtMs:     OptionalMillis(sv.FinalizedAt),
 		UploadExpiresAtMs: Millis(sv.UploadExpiresAt),
 	}
+}
+
+// clientEncryptedColumn maps the client-encryption bit of a state version to
+// its nullable column: an unknown bit binds as NULL, the column of a version
+// stored before the server kept the bit.
+func clientEncryptedColumn(bit workspace.ClientEncrypted) *bool {
+	switch bit {
+	case workspace.ClientEncryptedYes:
+		encrypted := true
+
+		return &encrypted
+	case workspace.ClientEncryptedNo:
+		encrypted := false
+
+		return &encrypted
+	case workspace.ClientEncryptedUnknown:
+		return nil
+	}
+
+	return nil
+}
+
+// clientEncryptedBit maps the nullable client-encryption column to the bit:
+// NULL is the unknown bit of a version stored before the server kept it.
+func clientEncryptedBit(column *bool) workspace.ClientEncrypted {
+	if column == nil {
+		return workspace.ClientEncryptedUnknown
+	}
+
+	return workspace.NewClientEncrypted(*column)
+}
+
+// FinalizeStateVersionRow converts a state version into the row of its
+// finalize. It rejects a version whose client-encryption bit is unknown: every
+// version that finalizes holds the bit from the document that made it, so the
+// row never finalizes without one. CreateStateVersion uses
+// PendingStateVersionRow instead, because a pending version has no bit yet.
+func FinalizeStateVersionRow(sv workspace.StateVersion) (StateVersionRow, error) {
+	if !sv.ClientEncrypted.Known() {
+		return StateVersionRow{}, fmt.Errorf(
+			"%w: state version %s", workspace.ErrStateBitUnknown, sv.ID,
+		)
+	}
+
+	return ToStateVersionRow(sv), nil
+}
+
+// PendingStateVersionRow converts a pending state version into the row of its
+// create. It rejects a version whose status is not pending: CreateStateVersion
+// stores pending versions only, and a version with another status must pass
+// FinalizeStateVersionRow, which requires the client-encryption bit. Without
+// this check a finalized version with no bit would enter through the create
+// path and no finalize would ever set its bit.
+func PendingStateVersionRow(sv workspace.StateVersion) (StateVersionRow, error) {
+	if sv.Status != workspace.StatusPending {
+		return StateVersionRow{}, fmt.Errorf(
+			"%w: state version %s is %s", workspace.ErrStateNotPending, sv.ID, sv.Status,
+		)
+	}
+
+	return ToStateVersionRow(sv), nil
 }
 
 // MarshalSensitiveMarks renders marks as JSON for the column, or nil when
@@ -228,9 +292,8 @@ func FromStateVersionRow(row StateVersionRow) (workspace.StateVersion, error) {
 		)
 	}
 
-	var sum [md5.Size]byte
-
-	copy(sum[:], row.MD5)
+	// The check above bounds the row to the MD5 size, so the conversion holds.
+	sum := [md5.Size]byte(row.MD5)
 
 	var upload token.Digest
 	if len(row.UploadDigest) != 0 {
@@ -290,6 +353,7 @@ func FromStateVersionRow(row StateVersionRow) (workspace.StateVersion, error) {
 		Sealed:          row.Sealed,
 		RestoredFrom:    workspace.StateVersionID(row.RestoredFrom),
 		FenceBy:         row.FencedBy, UnlockedWrite: row.UnlockedWrite,
-		SensitiveMarks: marks, Origin: identity.StateOrigin{Job: "", Commit: ""},
+		SensitiveMarks: marks, ClientEncrypted: clientEncryptedBit(row.ClientEncrypted),
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }

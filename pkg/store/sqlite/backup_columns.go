@@ -423,6 +423,7 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 				"fenced_by",
 				"unlocked_write",
 				"origin_job",
+				"client_encrypted",
 			},
 		},
 	}

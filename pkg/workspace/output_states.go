@@ -48,7 +48,7 @@ func (s *OutputStates) Latest(ctx context.Context, u identity.Object) (outputsha
 		return outputshare.State{}, fmt.Errorf("read the current state of %q: %w", u, err)
 	}
 
-	encrypted, err := s.svc.StateClientEncrypted(ctx, sv.ID)
+	encrypted, err := s.svc.ClientEncryptedOf(ctx, sv)
 	if err != nil {
 		return outputshare.State{}, fmt.Errorf("read the state marker of %q: %w", u, err)
 	}
@@ -85,7 +85,7 @@ func (s *OutputStates) Outputs(
 	// the client encrypted before it calls this port. This check stays so that
 	// a new caller never answers an empty list for such a state, which would
 	// read as a state with no output.
-	encrypted, err := s.svc.StateClientEncrypted(ctx, sv.ID)
+	encrypted, err := s.svc.ClientEncryptedOf(ctx, sv)
 	if err != nil {
 		return nil, fmt.Errorf("read the state marker of %q: %w", u, err)
 	}
