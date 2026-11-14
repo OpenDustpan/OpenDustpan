@@ -209,37 +209,28 @@ func setUnitCollection(ctx context.Context, q *db.Queries, m collection.Move, e 
 	return nil
 }
 
-// UnitCollection implements collection.Store.
+// UnitCollection implements collection.Store. It reads the unit and its
+// collection with one statement on the pool: one round trip, and one snapshot
+// without a transaction.
 func (s *Store) UnitCollection(ctx context.Context, unit collection.UnitRef) (collection.Ref, error) {
-	var name collection.Name
-
-	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
-		unitID, err := q.GetInventoryUnit(ctx, db.GetInventoryUnitParams{
-			Namespace: unit.Namespace.String(),
-			Tool:      unit.Tool,
-			Name:      unit.Name,
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return collection.ErrUnitNotFound
-		}
-
-		if err != nil {
-			return fmt.Errorf("select inventory unit: %w", err)
-		}
-
-		name, err = currentUnitCollection(ctx, q, unitID)
-
-		return err
+	row, err := s.queries.GetUnitCollectionByName(ctx, db.GetUnitCollectionByNameParams{
+		Namespace: unit.Namespace.String(),
+		Tool:      unit.Tool,
+		Name:      unit.Name,
 	})
-	if err != nil {
-		return collection.Ref{}, err
+	if errors.Is(err, pgx.ErrNoRows) {
+		return collection.Ref{}, collection.ErrUnitNotFound
 	}
 
-	if name == "" {
+	if err != nil {
+		return collection.Ref{}, fmt.Errorf("select unit collection: %w", err)
+	}
+
+	if !row.CollectionName.Valid || row.CollectionName.String == "" {
 		return collection.Ref{}, collection.ErrNoCollection
 	}
 
-	return collection.Ref{Namespace: unit.Namespace, Name: name}, nil
+	return collection.Ref{Namespace: unit.Namespace, Name: collection.Name(row.CollectionName.String)}, nil
 }
 
 // ListCollectionUnitIDs implements collection.Store. The collection and its

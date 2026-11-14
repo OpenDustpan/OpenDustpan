@@ -21,6 +21,9 @@ type target struct {
 	ns      namespace.Namespace
 	obj     identity.Object
 	ref     objectcontext.Ref
+	// lookupErr is the error of a failed lookup. resolveTarget keeps it in
+	// the target, and Authorize answers it after the address check.
+	lookupErr error
 }
 
 // resolveNamespace finds the namespace of the path. A name that is not valid
@@ -33,7 +36,7 @@ func (h *Handler) resolveNamespace(_ http.ResponseWriter, r *http.Request) (targ
 
 	return target{
 		ns: ns, obj: identity.NamespaceObject(ns.Name), ref: objectcontext.NamespaceRef(ns.Name),
-		unit: nil, deleted: nil,
+		unit: nil, deleted: nil, lookupErr: nil,
 	}, nil
 }
 
@@ -94,7 +97,7 @@ func (h *Handler) liveTarget(ns namespace.Namespace, e coreinventory.Entry) (tar
 		return target{}, err
 	}
 
-	return target{ns: ns, obj: obj, ref: ref, unit: &e, deleted: nil}, nil
+	return target{ns: ns, obj: obj, ref: ref, unit: &e, deleted: nil, lookupErr: nil}, nil
 }
 
 // deletedTargetByID returns the target of the soft-deleted unit unitID, or
@@ -126,7 +129,7 @@ func (h *Handler) goneTarget(ns namespace.Namespace, gone coreinventory.DeletedE
 		return target{}, err
 	}
 
-	return target{ns: ns, obj: obj, ref: ref, unit: nil, deleted: &gone}, nil
+	return target{ns: ns, obj: obj, ref: ref, unit: nil, deleted: &gone, lookupErr: nil}, nil
 }
 
 // unitObject returns the authorization object of a unit, with its stable ID.

@@ -62,8 +62,8 @@ func SettingDeclarations() []setting.Declaration {
 
 		out = append(out, setting.Declaration{
 			Key: s.File, Level: setting.LevelInstallation, Kind: kindOf(s.Kind), Default: defaultOf(s),
-			Secret: s.Sensitive, Database: false, Apply: setting.ApplyRestart, Check: nil, ReducesSecurity: nil,
-			Doc: docOf(s),
+			Secret: s.Sensitive, Database: false, StaticCredentialHost: s.StaticCredentialHost,
+			Apply: setting.ApplyRestart, Check: nil, ReducesSecurity: nil, Doc: docOf(s),
 		})
 	}
 
@@ -75,7 +75,7 @@ func SettingDeclarations() []setting.Declaration {
 func brandingPresetDeclaration() setting.Declaration {
 	return setting.Declaration{
 		Key: brandingPresetKey, Level: setting.LevelInstallation, Kind: setting.KindString, Default: "",
-		Secret: false, Database: true, Apply: setting.ApplyLive, ReducesSecurity: nil,
+		Secret: false, Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive, ReducesSecurity: nil,
 		Check: func(value string) error {
 			if value != "" && !brandingPresetPattern.MatchString(value) {
 				return brandingPresetError{}

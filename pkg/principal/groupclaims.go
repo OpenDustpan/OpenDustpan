@@ -15,8 +15,8 @@ import (
 // mappings of GroupMappingStore. The conformance suites RunGroupMapper and
 // RunGroupClaims in package principaltest check an implementation. The rules
 // for protected groups, for groups that a person closed to the identity
-// provider, for trusted groups and for full sync have no stored data yet, so
-// the cases of those rules stay skipped in RunGroupClaims, and the
+// provider, for trusted groups and for full sync are not applied yet, so the
+// cases of those rules stay skipped in RunGroupClaims, and the
 // implementations apply none of them.
 
 // ErrNoGroupMapping reports a source with no group mapping. The claims of

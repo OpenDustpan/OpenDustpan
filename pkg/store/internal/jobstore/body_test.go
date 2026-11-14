@@ -30,12 +30,14 @@ func fullJob(t *testing.T) job.Job {
 	binding := job.PlanBinding{Plan: "pln-1", DisplaySHA256: "aa", ApplySHA256: "bb", StateVersion: "sv-1"}
 
 	return job.Job{
-		ID: "job-1",
+		ID:          "job-1",
+		NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationApply, Purpose: "", Executor: job.ExecutorWriteBack,
 			Location: job.Location{
 				Connection: "gh", Repository: "acme/infra", Ref: "main", Directory: "net", Revision: "abc",
 			},
+			LocationSource: job.LocationSourceUnit,
 			Steps: []job.Step{{
 				Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"},
 				Env: map[string]string{"A": "b"}, Dir: "sub", Timeout: time.Minute, AllowFailure: true,
@@ -337,6 +339,67 @@ func TestBodyRefusesDamagedBodies(t *testing.T) {
 	}
 }
 
+// TestDamageReasonNamesTheKindOnly proves that the reason of a damaged row is
+// one fixed text for each kind of damage: it never echoes a value of the
+// stored body, which the error of the decode carries. A reason reaches a log
+// line and an API answer.
+func TestDamageReasonNamesTheKindOnly(t *testing.T) {
+	t.Parallel()
+
+	// A value that a body of another version of the server could hold. It
+	// must not reach a log or an API answer.
+	const stored = "top-secret-stored-value"
+
+	unit := `"unit":{"tool":"opentofu","namespace":"acme","name":"net","unitID":"u"}`
+
+	for name, tc := range map[string]struct {
+		body string
+		want string
+	}{
+		"not JSON": {`{"spec":`, "the body is not JSON"},
+		"a source that this version does not know": {
+			`{"spec":{` + unit + `},"source":"` + stored + `"}`,
+			"the body holds a value that this version does not know",
+		},
+		"an agent mode that this version does not know": {
+			`{"spec":{` + unit + `},"source":"api","agentMode":"` + stored + `"}`,
+			"the body holds a value that this version does not know",
+		},
+		"a verification that this version does not know": {
+			`{"spec":{` + unit + `},"source":"api","verification":"` + stored + `"}`,
+			"the body holds a value that this version does not know",
+		},
+		"a unit reference that this version does not know": {
+			`{"spec":{"unit":{"tool":"","namespace":"acme","name":"net","unitID":"u"}},"source":"api"}`,
+			"the body holds a unit reference that this version does not know",
+		},
+		"a trigger reference that is not valid": {
+			`{"spec":{` + unit + `},"source":"api","trigger":{"id":"","saver":""}}`,
+			"the body holds a trigger reference that is not valid",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var j job.Job
+
+			err := jobstore.DecodeJobBody(tc.body, &j)
+			if err == nil {
+				t.Fatalf("DecodeJobBody(%s) = nil, want an error", tc.body)
+			}
+
+			reason := jobstore.DamageReason(err)
+			if reason != tc.want {
+				t.Fatalf("DamageReason = %q, want %q", reason, tc.want)
+			}
+
+			if strings.Contains(reason, stored) {
+				t.Fatalf("the reason %q holds a value of the body", reason)
+			}
+		})
+	}
+}
+
 // TestRowMustAgreeWithItsBody proves that a row whose columns name another
 // namespace or another unit than its body is refused: each layer of the
 // fence and of the one-change rule reads a different copy of these values.
@@ -352,9 +415,9 @@ func TestRowMustAgreeWithItsBody(t *testing.T) {
 
 	row := func(ns, unit string) jobstore.Row {
 		return jobstore.Row{
-			ID: j.ID, Namespace: namespace.Name(ns), UnitID: unit, Seq: 1, State: j.State, Wait: j.Wait,
-			Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey, Version: j.Version, Body: body,
-			CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
+			ID: j.ID, Namespace: namespace.Name(ns), NamespaceID: j.NamespaceID, UnitID: unit, Seq: 1, State: j.State,
+			Wait: j.Wait, Phase: j.Current, Changes: false, Operation: "", Key: j.IdempotencyKey, Version: j.Version,
+			Body: body, CreatedMs: j.CreatedAt.UnixMilli(), UpdatedMs: j.UpdatedAt.UnixMilli(),
 			StateChangedMs: 0,
 		}
 	}

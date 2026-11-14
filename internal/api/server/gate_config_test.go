@@ -99,8 +99,14 @@ func newGateEnvWith(t *testing.T, authz identity.Authorizer, noEngine bool) gate
 	t.Helper()
 
 	e := newSignInEnvWith(t, signInEnvOptions{
-		autoCreate: true, noPolicyRoutes: false, noGateEngine: noEngine, stored: nil, authz: authz, hostile: nil,
-		namespaces: []namespace.Name{"acme", "beta"},
+		autoCreate:     true,
+		noPolicyRoutes: false,
+		noGateEngine:   noEngine,
+		stored:         nil,
+		authz:          authz,
+		hostile:        nil,
+		passwords:      nil,
+		namespaces:     []namespace.Name{"acme", "beta"},
 	})
 	sess := e.freshSignIn(t)
 
@@ -157,11 +163,19 @@ func createGateWorkspace(t *testing.T, st *sqlite.Store, id workspace.ID, name w
 	now := time.Now()
 
 	err = st.CreateWorkspace(t.Context(), workspace.Workspace{
-		NamespaceID: "", CreatedAt: now, UpdatedAt: now,
+		NamespaceID: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(), ID: id,
-		Ref:       workspace.Ref{Namespace: "acme", Name: name},
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		LastRelease: workspace.NoRelease(),
+		ID:          id,
+		Ref:         workspace.Ref{Namespace: "acme", Name: name},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Revision: 1,
+		Origin:   identity.StateOrigin{Job: "", Commit: ""},
 	}, ns.Fence())
 	if err != nil {
 		t.Fatalf("create workspace %s: %v", name, err)
@@ -204,6 +218,7 @@ func gateHandler(
 	t.Helper()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,

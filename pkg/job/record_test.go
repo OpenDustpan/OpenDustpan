@@ -39,6 +39,7 @@ func recordJob() *job.Job {
 
 	return &job.Job{
 		ID:             "job-1",
+		NamespaceID:    "",
 		State:          job.StateRunning,
 		Current:        0,
 		Wait:           job.WaitNone,
@@ -69,12 +70,13 @@ func recordJob() *job.Job {
 				Directory:  "",
 				Revision:   "",
 			},
-			Steps:     []job.Step{planStep(stepRun), apply},
-			Pool:      "",
-			Profile:   "",
-			Edits:     nil,
-			Delivery:  "",
-			Defaulted: nil,
+			LocationSource: "",
+			Steps:          []job.Step{planStep(stepRun), apply},
+			Pool:           "",
+			Profile:        "",
+			Edits:          nil,
+			Delivery:       "",
+			Defaulted:      nil,
 		},
 		Phases: []job.Phase{
 			emptyPhase(job.PhasePlan),

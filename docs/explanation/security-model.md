@@ -226,6 +226,33 @@ Each force-unlock writes one audit entry of the kind `change`. It holds the
 released lock holder, the lock time, the new state version and the reason,
 if the caller gave one.
 
+### State that the client encrypts
+
+OpenTofu can encrypt its state on the client before it sends it. The server
+then stores the state, but it cannot read it. This keeps the state secret from
+the server, and it costs you every check and view that needs the content of
+the state:
+
+- **No check of the content.** The server checks only the encryption envelope
+  and the plain `serial` and `lineage`. It cannot see a broken or truncated
+  state inside the envelope, so it stores that state as it is. Only the tool
+  that holds the key finds the fault, at the next run.
+- **Gates see no resources.** For a write or a restore of such a state,
+  `context.state.available` is `false`, and `state.resources` and
+  `state.removed` keep their zero values. A gate that reads them never
+  matches. The write goes on under the other gates, and the decision record
+  says `state is client-encrypted`.
+- **No outputs.** A read of the outputs answers 409, and other units cannot
+  read them through output sharing.
+- **Less history.** A diff of two versions answers 409 when either one is
+  encrypted. History and point-in-time views show the version with no
+  resources.
+- **A force-unlock writes no fence version** (see above).
+
+Use client encryption when the server must not hold the plain state. For the
+checks and views above, use the encryption that the server applies to every
+state version (see "OpenTofu state").
+
 ## The key-encryption key
 
 `serve` needs a key-encryption key before it opens the database. It takes

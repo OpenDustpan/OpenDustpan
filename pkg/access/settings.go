@@ -41,7 +41,8 @@ func SettingDeclarations() []setting.Declaration {
 		{
 			Key: SettingCollectionUnitCap, Level: setting.LevelInstallation, Kind: setting.KindInt,
 			Default: strconv.Itoa(DefaultCollectionUnitCap), Secret: false, Database: true,
-			Apply: setting.ApplyLive,
+			StaticCredentialHost: false,
+			Apply:                setting.ApplyLive,
 			Check: func(value string) error {
 				_, err := ParseCollectionUnitCap(value)
 

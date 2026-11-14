@@ -290,13 +290,13 @@ func (s *Store) UpdateStackTags(
 
 // RenameStack changes the stack name of oldRef, unless a fault fires first.
 func (s *Store) RenameStack(
-	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
+	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, e audit.Entry,
 ) error {
 	if err := s.before(ctx, "RenameStack"); err != nil {
 		return err
 	}
 
-	return s.inner.RenameStack(ctx, oldRef, newName, fence)
+	return s.inner.RenameStack(ctx, oldRef, newName, fence, e)
 }
 
 // CreateUpdate persists a new update, unless a fault fires first.

@@ -126,6 +126,41 @@ func (o *Objects[T]) List(ctx context.Context, scope gate.Scope) ([]T, error) {
 	return out, nil
 }
 
+// ListEveryScope implements gate.Objects.
+func (o *Objects[T]) ListEveryScope(ctx context.Context) ([]T, error) {
+	var out []T
+
+	err := o.run.Read(ctx, func(tx Tx) error {
+		rows, err := tx.ListEveryScope(ctx, o.codec.kind)
+		if err != nil {
+			return err
+		}
+
+		out = make([]T, 0, len(rows))
+
+		for _, row := range rows {
+			scope, perr := ParseScope(row.ScopeKey)
+			if perr != nil {
+				return perr
+			}
+
+			obj, derr := o.codec.decode(scope, row.Row)
+			if derr != nil {
+				return derr
+			}
+
+			out = append(out, obj)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
 // Put implements gate.Objects.
 func (o *Objects[T]) Put(
 	ctx context.Context, obj T, prev int64, fence namespace.Fence, e audit.Entry,

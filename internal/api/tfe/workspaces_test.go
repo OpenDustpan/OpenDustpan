@@ -718,7 +718,11 @@ func newPagingWorkspaces(t *testing.T) pagingWorkspaces {
 			ID:          workspace.ID(tc.id),
 			Ref:         workspace.Ref{Namespace: ns, Name: name},
 			Revision:    1,
-			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+			Overrides: namespace.Overrides{
+				Forced:   false,
+				Unlocked: false,
+			},
+			Origin: identity.StateOrigin{Job: "", Commit: ""},
 		})
 	}
 

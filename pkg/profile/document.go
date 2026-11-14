@@ -268,8 +268,8 @@ func RoutingChanges(before, after *Document) []string {
 		maps.Copy(tainted, reads)
 	}
 
-	// A value that exports.proxy reads goes to the job proxy, and a value
-	// that exports.files reads goes to a file of the launcher. A change of
+	// A value that an export reads goes to the job proxy, to a file, to an
+	// environment variable or to the configuration of a tool. A change of
 	// such a value changes where a secret goes.
 	for _, doc := range []*Document{b, a} {
 		for _, n := range routedExports(doc) {
@@ -527,10 +527,11 @@ func mapGet(n *yaml.Node, key string) *yaml.Node {
 }
 
 // routedExportKeys returns the keys of exports whose reads RoutingChanges
-// follows: exports.proxy sends a value to the job proxy, and exports.files
-// writes a value to a file.
+// follows. Each one hands a value to a run: exports.proxy to the job proxy,
+// exports.files to a file, exports.variables to an environment variable, and
+// exports.pulumi and exports.opentofu to the configuration of the tool.
 func routedExportKeys() []string {
-	return []string{exportProxy, exportFiles}
+	return []string{exportProxy, exportFiles, exportVariables, exportPulumi, exportOpenTofu}
 }
 
 // routedExports returns the nodes of the keys of routedExportKeys that d has.

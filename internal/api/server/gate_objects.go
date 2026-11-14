@@ -2,12 +2,15 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
+	"opendustpan.org/opendustpan/pkg/gate/cedargo"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -536,6 +539,24 @@ func (h *Handler) writeAccessLimit(
 		return
 	}
 
+	// A text that LimitGroupDirections refuses is not decided here: it goes
+	// to PutAccessLimit below, whose check refuses each such text too, with
+	// the membership rule or a diagnostic.
+	if groups, groupsErr := cedargo.LimitGroupDirections(in.Policy); groupsErr == nil && len(groups) > 0 {
+		if reachErr := h.limitGroupReach(ctx, p); reachErr != nil {
+			h.guard.Record(ctx, r, p, denials.Denial{
+				Action:       identity.ActionNamespaceManageGates,
+				Object:       obj,
+				Reason:       "access limit names a group that the author cannot manage",
+				ReasonWithin: nil,
+				Window:       0,
+			})
+			h.writeError(ctx, w, reachErr)
+
+			return
+		}
+	}
+
 	prev, err := h.expectedVersion(r, func() (int64, error) {
 		cur, getErr := h.gates.AccessLimit(ctx, scope, id)
 
@@ -558,6 +579,26 @@ func (h *Handler) writeAccessLimit(
 
 	w.Header().Set("ETag", etag(stored.Version))
 	h.writeJSON(ctx, w, http.StatusOK, accessLimitOf(stored))
+}
+
+// limitGroupReach checks that p may manage the groups of the installation,
+// which an access limit that names a group can freeze. It returns nil for the
+// bootstrap administrator and for a caller whom the access decision allows to
+// manage the groups of the installation.
+func (h *Handler) limitGroupReach(ctx context.Context, p identity.Principal) error {
+	if p.Admin {
+		return nil
+	}
+
+	err := h.authz.Authorize(ctx, p, identity.ActionServerManageGroups, identity.ServerObject())
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, identity.ErrDenied):
+		return gate.ErrLimitGroupReach
+	default:
+		return fmt.Errorf("%w: %w", gate.ErrLimitGroupReach, err)
+	}
 }
 
 // removeAccessLimit serves DELETE {scope}/access-limits/{id}. It answers 204.

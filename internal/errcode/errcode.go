@@ -7,6 +7,7 @@ import (
 	"errors"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -85,6 +86,10 @@ func Forbidden(err error) string {
 		return GateLimited
 	case errors.Is(err, gate.ErrRuleFailed):
 		return GateRuleFailed
+	case errors.Is(err, accesstoken.ErrReachExceeded):
+		// The token service wraps this refusal in identity.ErrDenied, so it
+		// comes before the missing permission.
+		return TokenReachExceeded
 	case errors.Is(err, identity.ErrDenied):
 		return AccessDenied
 	default:

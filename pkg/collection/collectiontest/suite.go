@@ -621,7 +621,7 @@ func testStackRename(t *testing.T, s Store) {
 		t.Fatalf("SetUnit: %v", err)
 	}
 
-	if err := s.RenameStack(t.Context(), st.Ref, "prod-2", ns.Fence()); err != nil {
+	if err := s.RenameStack(t.Context(), st.Ref, "prod-2", ns.Fence(), auditFor(ns.Fence())); err != nil {
 		t.Fatalf("RenameStack: %v", err)
 	}
 
@@ -976,7 +976,11 @@ func createUnit(t *testing.T, s Store, ns namespace.Namespace) collection.UnitRe
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         ref,
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {

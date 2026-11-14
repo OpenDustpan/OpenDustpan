@@ -3,6 +3,7 @@ package principal_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,14 +14,27 @@ import (
 // errRefused is what the fake guard answers for a refused record.
 var errRefused = errors.New("refused")
 
-// fakeGuard refuses the records in refuse and counts its checks.
-type fakeGuard struct {
-	refuse map[string]bool
-	checks *int
+// groupCheck is one check of the guard: the group, the name that a rename
+// gives it and the change.
+type groupCheck struct {
+	groupID string
+	newName string
+	change  principal.GroupChange
 }
 
-func (g fakeGuard) CheckGroupGrants(_ context.Context, _ identity.Principal, groupID string) error {
+// fakeGuard refuses the records in refuse, counts its checks and records each
+// group check.
+type fakeGuard struct {
+	refuse  map[string]bool
+	checks  *int
+	changes *[]groupCheck
+}
+
+func (g fakeGuard) CheckGroupGrants(
+	_ context.Context, _ identity.Principal, groupID, newName string, change principal.GroupChange,
+) error {
 	*g.checks++
+	*g.changes = append(*g.changes, groupCheck{groupID: groupID, newName: newName, change: change})
 
 	if g.refuse[groupID] {
 		return errRefused
@@ -39,20 +53,28 @@ func (g fakeGuard) CheckPrincipalGrants(_ context.Context, _ identity.Principal,
 	return nil
 }
 
+// fakeReach allows every membership add. The Guard tests wire it, so that a
+// Service without the access service lets the Guard decide.
+type fakeReach struct{}
+
+func (fakeReach) CheckGroupReach(context.Context, identity.Principal, string) error { return nil }
+
 // TestGuardChecksEveryChangeOfWhoHoldsGrants proves that a membership change,
-// a delete and an enable ask the Guard first, and that a refusal changes
-// nothing.
+// a rename, a delete and an enable ask the Guard first, and that a refusal
+// changes nothing.
 func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 	t.Parallel()
 
 	checks := 0
-	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks}
+	changes := []groupCheck{}
+	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks, changes: &changes}
 
 	svc, err := principal.NewService(
 		principal.Config{
 			TempAdmins: nil,
 			Store:      openStore(t),
 			Guard:      guard,
+			GroupReach: fakeReach{},
 			Namespaces: nil,
 			Tokens:     nil,
 			Now:        nil,
@@ -94,38 +116,74 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 	guard.refuse[g.ID] = true
 	guard.refuse[p.ID] = true
 
-	if _, err := svc.AddMember(ctx, e, caller, g.ID, p.ID); !errors.Is(err, errRefused) {
-		t.Fatalf("add member = %v, want the refusal of the guard", err)
+	_, addErr := svc.AddMember(ctx, e, caller, g.ID, p.ID)
+	refused(t, addErr, "add member")
+
+	removeErr := svc.RemoveMember(ctx, e, caller, g.ID, p.ID)
+	refused(t, removeErr, "remove member")
+
+	renamed := "ops-two"
+
+	_, renameErr := svc.UpdateGroup(ctx, e, caller, g.ID, principal.GroupUpdate{
+		Name: &renamed, Description: nil, ClosedToIdentityProvider: nil,
+	})
+	refused(t, renameErr, "rename group")
+
+	deleteErr := svc.DeleteGroup(ctx, e, caller, g.ID)
+	refused(t, deleteErr, "delete group")
+
+	enableErr := svc.EnablePrincipal(ctx, e, caller, p.ID)
+	refused(t, enableErr, "enable principal")
+
+	deletePrincipalErr := svc.DeletePrincipal(ctx, e, caller, p.ID)
+	refused(t, deletePrincipalErr, "delete principal")
+
+	got, err := svc.GetGroup(ctx, g.ID)
+	if err != nil || got.Name != "ops" {
+		t.Fatalf("group after the refused rename and delete = %+v, %v, want the name ops", got, err)
 	}
 
-	if err := svc.RemoveMember(ctx, e, caller, g.ID, p.ID); !errors.Is(err, errRefused) {
-		t.Fatalf("remove member = %v, want the refusal of the guard", err)
+	if checks != 6 {
+		t.Fatalf("guard checks = %d, want 6", checks)
 	}
 
-	if err := svc.DeleteGroup(ctx, e, caller, g.ID); !errors.Is(err, errRefused) {
-		t.Fatalf("delete group = %v, want the refusal of the guard", err)
-	}
-
-	if err := svc.EnablePrincipal(ctx, e, caller, p.ID); !errors.Is(err, errRefused) {
-		t.Fatalf("enable principal = %v, want the refusal of the guard", err)
-	}
-
-	if err := svc.DeletePrincipal(ctx, e, caller, p.ID); !errors.Is(err, errRefused) {
-		t.Fatalf("delete principal = %v, want the refusal of the guard", err)
-	}
-
-	if _, err := svc.GetGroup(ctx, g.ID); err != nil {
-		t.Fatalf("group after the refused delete: %v", err)
-	}
-
-	if checks != 5 {
-		t.Fatalf("guard checks = %d, want 5", checks)
-	}
+	checkGroupChanges(t, changes, []groupCheck{
+		{groupID: g.ID, newName: "", change: principal.GroupChangeAddMember},
+		{groupID: g.ID, newName: "", change: principal.GroupChangeRemoveMember},
+		{groupID: g.ID, newName: renamed, change: principal.GroupChangeRename},
+		{groupID: g.ID, newName: "", change: principal.GroupChangeDelete},
+	})
 
 	delete(guard.refuse, g.ID)
 
-	if _, err := svc.AddMember(ctx, e, caller, g.ID, p.ID); err != nil {
-		t.Fatalf("add member that the guard allows: %v", err)
+	_, addAllowedErr := svc.AddMember(ctx, e, caller, g.ID, p.ID)
+	if addAllowedErr != nil {
+		t.Fatalf("add member that the guard allows: %v", addAllowedErr)
+	}
+
+	g, err = svc.UpdateGroup(ctx, e, caller, g.ID, principal.GroupUpdate{
+		Name: &renamed, Description: nil, ClosedToIdentityProvider: nil,
+	})
+	if err != nil || g.Name != renamed {
+		t.Fatalf("rename group that the guard allows = %+v, %v, want the name %s", g, err, renamed)
+	}
+}
+
+// refused fails the test when err is not the refusal of the guard.
+func refused(t *testing.T, err error, what string) {
+	t.Helper()
+
+	if !errors.Is(err, errRefused) {
+		t.Fatalf("%s = %v, want the refusal of the guard", what, err)
+	}
+}
+
+// checkGroupChanges fails the test when the guard did not see the changes.
+func checkGroupChanges(t *testing.T, got, want []groupCheck) {
+	t.Helper()
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("group checks = %+v, want %+v", got, want)
 	}
 }
 
@@ -135,7 +193,8 @@ func TestGuardChecksDisable(t *testing.T) {
 	t.Parallel()
 
 	checks := 0
-	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks}
+	changes := []groupCheck{}
+	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks, changes: &changes}
 
 	svc, err := principal.NewService(
 		principal.Config{
@@ -144,6 +203,7 @@ func TestGuardChecksDisable(t *testing.T) {
 			Guard:      guard,
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        nil,
 			NewID:      nil,
 		},

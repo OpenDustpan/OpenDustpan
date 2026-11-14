@@ -37,6 +37,7 @@ var publicRoutes = map[string]string{
 	"GET /health/ready/{component}":                                    "readiness probe of one component",
 	"GET /api/server/sign-in/{provider}":                               "start of an identity provider sign-in",
 	"POST /api/dustpan/v1/sign-in/password":                            "the user name and the password in the body are the credential",
+	"POST /api/dustpan/v1/sign-in/providers/{provider}/password":       "the user name and the password in the body are the credential, checked at the directory of the provider",
 	"POST /api/dustpan/v1/sign-in/dev-code":                            "the one-time code of a dev installation is the credential",
 	"POST /api/dustpan/v1/sign-in/passkey/begin":                       "start of a passkey sign-in: the person has no session, and the options name no person",
 	"POST /api/dustpan/v1/sign-in/passkey/finish":                      "the signed response of the passkey in the body is the credential",

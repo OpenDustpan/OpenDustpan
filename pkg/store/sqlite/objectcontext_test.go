@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
@@ -61,7 +62,7 @@ func contextUnit(t *testing.T, s *sqlite.Store, u graph.Unit) {
 		ID:          workspace.ID(u.ID),
 		Ref:         workspace.Ref{Namespace: n.Name, Name: name},
 		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-		Revision:    1,
+		Revision:    1, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if err = s.CreateWorkspace(t.Context(), w, n.Fence()); err != nil {

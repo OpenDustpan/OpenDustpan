@@ -99,7 +99,7 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 
 		g := principal.Group{
 			CreatedAt: at(0), UpdatedAt: at(0), ID: id, Name: "team-" + id, Description: "",
-			Source: principal.SourceLocal, MemberCount: 0,
+			Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 		}
 		if err := s.CreateGroup(ctx, g, entry()); err != nil {
 			b.Fatalf("seed group: %v", err)
@@ -126,15 +126,20 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 	}
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: s, Callers: s, Collections: nil, Units: s, Principals: nil,
+		Store: s, Callers: s, Collections: nil, Units: s, Principals: s,
 	})
 	if err != nil {
 		b.Fatalf("authorizer: %v", err)
 	}
 
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: s, Directory: s, Namespaces: s, Authorizer: authz, Now: nil, NewID: nil, BootstrapAdmins: nil,
-		Settings: nil,
+		Store: s, Directory: s, Namespaces: s, Authorizer: authz,
+		Reach: access.ReachConfig{
+			Grants: s, Roles: s, Callers: s, Principals: s, Collections: nil, Units: s,
+		},
+		Now: nil, NewID: nil, BootstrapAdmins: nil,
+		Settings:    nil,
+		LimitGroups: nil,
 	})
 	if err != nil {
 		b.Fatalf("access service: %v", err)

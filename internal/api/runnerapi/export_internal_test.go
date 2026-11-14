@@ -6,10 +6,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
+
+// CheckAddress runs the address check of h on r for p.
+func CheckAddress(ctx context.Context, h *Handler, r *http.Request, p identity.Principal) error {
+	return h.checkAddress(ctx, r, p)
+}
 
 // ErrBadBody is the error of a body that is not the JSON object of its path.
 var ErrBadBody = errBadBody

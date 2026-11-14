@@ -25,7 +25,7 @@ func TestBothToolsSameServer(t *testing.T) {
 		t.Skipf("the combined suite needs Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -33,16 +33,16 @@ func TestBothToolsSameServer(t *testing.T) {
 	}
 
 	pulumiVersions := e2e.Pulumi().Versions()
-	tofuVersions := e2e.OpenTofu().Versions()
+	tofuVersion := e2e.OpenTofu().Single()
 
-	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+	if len(pulumiVersions) == 0 || tofuVersion == "" {
 		t.Fatal("each tool needs at least one version in its matrix")
 	}
 
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			runBothOnStore(t, fetcher, pulumiVersions, tofuVersions[0], db)
+			runBothOnStore(t, fetcher, pulumiVersions, tofuVersion, db)
 		})
 	}
 }
@@ -133,8 +133,8 @@ func checkServerMetrics(t *testing.T, env *e2e.Env) {
 	}
 }
 
-// checkServerComponents proves the component routes: GET /api/server/components
-// and GET /api/server/worker answer 200 with the admin token, which holds
+// checkServerComponents proves the component routes: GET /api/dustpan/v1/components
+// and GET /api/dustpan/v1/worker answer 200 with the admin token, which holds
 // server:observe, and 401 without a token.
 func checkServerComponents(t *testing.T, env *e2e.Env) {
 	t.Helper()
@@ -142,8 +142,8 @@ func checkServerComponents(t *testing.T, env *e2e.Env) {
 	ctx := t.Context()
 
 	for _, route := range []struct{ path, field string }{
-		{"/api/server/components", `"components"`},
-		{"/api/server/worker", `"stuck"`},
+		{"/api/dustpan/v1/components", `"components"`},
+		{"/api/dustpan/v1/worker", `"stuck"`},
 	} {
 		status, body, err := env.TFEStatusA(ctx, http.MethodGet, route.path, "")
 		if err != nil {

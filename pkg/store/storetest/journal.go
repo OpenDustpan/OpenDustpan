@@ -145,7 +145,12 @@ func testJournalRefusals(t *testing.T, f fixture) {
 		t.Fatalf("batch under another lease: err = %v, want ErrWrongUpdateState", err)
 	}
 
-	preview := f.run(t, f.ref, "p1", stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	preview := f.run(
+		t,
+		f.ref,
+		"p1",
+		stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
+	)
 	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, preview, 1, 1), f.fence); !errors.Is(
 		err, stack.ErrWrongUpdateState,
 	) {
@@ -1007,7 +1012,7 @@ func testJournalBuildRefusals(t *testing.T, f fixture) {
 		t,
 		f.other(t),
 		"p1",
-		stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 	)
 	if _, err := f.s.PutBuiltCheckpoint(t.Context(), f.checkpoint(t, preview, 0, "{}"), f.fence); !errors.Is(
 		err, stack.ErrWrongUpdateState,
@@ -1077,7 +1082,7 @@ func testJournalKeysFollowRename(t *testing.T, f fixture) {
 	// A rename waits until the update ends.
 	f.end(t, u, stack.StatusSucceeded)
 
-	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
+	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence, renameEntry(f.ref.Namespace, f.ref)); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
 

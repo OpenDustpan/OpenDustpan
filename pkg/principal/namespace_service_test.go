@@ -87,6 +87,7 @@ func TestCreateNamespacePrincipalRefusesNamespaceServicePrefix(t *testing.T) {
 		Guard:      principal.AdminOnlyGuard{},
 		Namespaces: st,
 		Tokens:     nil,
+		GroupReach: nil,
 		Now:        nil,
 		NewID:      nil,
 	})

@@ -348,6 +348,17 @@ func (a *recordingAudit) Append(_ context.Context, _ namespace.Fence, e audit.En
 	return e, nil
 }
 
+// AppendServer keeps an entry of the installation scope, so that a test counts
+// the refusals of a namespace that does not exist.
+func (a *recordingAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.entries = append(a.entries, e)
+
+	return e, nil
+}
+
 // TestStartWritesADenialForEachRefusal proves that every refusal of the start
 // writes an audit entry with a fixed reason, and never the text of the error.
 func TestStartWritesADenialForEachRefusal(t *testing.T) {

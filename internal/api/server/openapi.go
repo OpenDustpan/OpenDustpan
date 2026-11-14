@@ -20,7 +20,7 @@ func (h *Handler) openAPIRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: openAPIPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.openAPIDocument,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.openAPIDocument,
 		},
 	}
 }

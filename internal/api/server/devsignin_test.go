@@ -127,7 +127,10 @@ func (d devDeps) accessFor(t *testing.T, parts devParts) *access.Service {
 	case parts.grantFails:
 		svc, err := access.NewService(access.ServiceConfig{
 			Store: failingGrants{Store: d.st}, Directory: d.st, Namespaces: d.st, Authorizer: d.grants.Authorizer(),
-			Now: nil, NewID: nil, BootstrapAdmins: nil, Settings: nil,
+			Reach: access.ReachConfig{
+				Grants: d.st, Roles: d.st, Callers: d.st, Principals: d.st, Collections: nil, Units: d.st,
+			},
+			Now: nil, NewID: nil, BootstrapAdmins: nil, Settings: nil, LimitGroups: nil,
 		})
 		if err != nil {
 			t.Fatalf("failing access service: %v", err)
@@ -158,6 +161,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -191,13 +195,22 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 		Now:              nil,
 		AuditSinks:       nil,
 		SignIn: &apiserver.SignIn{
-			Service:      newTestSignInService(t, d.st, d.sessions, d.principals),
-			OnDevRefused: nil,
-			Sessions:     d.sessions, Limiter: d.limiter, Stored: nil, Admin: nil, Origins: []string{signInBase},
-			PasswordLimiter: nil,
-			Passkeys:        nil,
-			Providers:       nil, DevCode: handlerCode, DevAdmin: devAdmin,
-			PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
+			Service:             newTestSignInService(t, d.st, d.sessions, d.principals),
+			OnDevRefused:        nil,
+			Sessions:            d.sessions,
+			Limiter:             d.limiter,
+			Stored:              nil,
+			Admin:               nil,
+			PasswordProviders:   nil,
+			Origins:             []string{signInBase},
+			PasswordLimiter:     nil,
+			Passkeys:            nil,
+			Providers:           nil,
+			DevCode:             handlerCode,
+			DevAdmin:            devAdmin,
+			PasskeySignIn:       nil,
+			PasskeyBeginLimiter: nil,
+			PasskeyLimiter:      nil,
 		},
 		InstallationKind: parts.kind,
 		StateWriteGates:  parts.stateWrite,
