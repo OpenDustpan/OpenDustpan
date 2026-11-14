@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #1255.
@@ -99,7 +99,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: resolution PM.6 answers a missing scenario but adds no scenario: add the scenario and name it in the note.
+none
 
 Questions considered and answered:
 
