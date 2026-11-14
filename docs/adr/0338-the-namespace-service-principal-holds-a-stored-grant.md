@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-11-07. Decided by the project owner on 7 November 2026
 
+Changed by:
+
+- ADR 369 changes decision 3: the namespace service principal has no role in
+  a user automation.
+
 Changes:
 
 - Changes ADR 267 decision 14: the permission of the namespace service principal is a stored grant. It is not a rule in code.
