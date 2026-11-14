@@ -1,13 +1,15 @@
 ---
 rfc: 130
 title: Break-glass mode 2 over the network, its review and its authentication
-status: discussing
+status: accepted
+adr: 372
 created: 2026-11-14
 ---
 
 # RFC 130. Break-glass mode 2 over the network: its review and its authentication
 
-Status: discussing. This RFC holds the open points of the OpenSpec change
+Status: accepted ([ADR 372](../adr/0372-signed-request-recovery-its-review-its-authentication-and-the-names-of-the-recovery-modes.md)). The owner accepted the four points as
+recommended on 14 November 2026. This RFC holds the open points of the OpenSpec change
 `break-glass-mode-2`. That change is not spec-ready: "the change conflicts
 with ADR 142: an RFC comes first; the change conflicts with ADR 46: an RFC
 comes first." It does not edit an accepted ADR. An owner decision on it
@@ -374,4 +376,7 @@ path, so the owner decides all four.
 
 ## Outcome
 
-Empty until the RFC is accepted (link the ADR) or dropped (say why).
+Points 1 to 4 accepted by the owner on 14 November 2026, as recommended:
+[ADR 372](../adr/0372-signed-request-recovery-its-review-its-authentication-and-the-names-of-the-recovery-modes.md). ADR 372 also renames mode 1 to "bootstrap recovery" and mode 2 to
+"signed-request recovery", and decides the point of "Not decided here" on a
+fresh authentication.
