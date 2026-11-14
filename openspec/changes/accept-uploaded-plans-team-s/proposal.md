@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 7
 ---
 
 Issue: #915.
@@ -12,7 +12,7 @@ The user path this change must make work:
 
 1. **API.** Developer runs the plan in team CI and uploads plan-display and plan-apply parts through the API.
 2. **Console.** Developer opens the change order, sees the uploaded-plan mark, and requests approvals under the approval rules.
-3. **CLI.** Developer applies with the same plan hashes; the state write or update start passes the hash check.
+3. **CLI.** Developer applies through the local wrapper, which presents the plan hash when it opens the apply claim (ADR 378 decision 3); the claim opens only for the hash of the approved plan.
 4. **Docs page.** Developer reads the uploaded plans guide for the upload call and the refusal text.
 
 Errors the person may hit, and the one command that helps:
@@ -33,7 +33,7 @@ Evidence for the claims above:
 
 - New route to upload both plan parts for one unit that makes a marked change order.
 - Uploaded fields on the change-order read: the mark and both hashes.
-- Apply-time check of both plan hashes at the OpenTofu state write and the Pulumi update start.
+- Apply-time check of the plan hash when the apply opens its apply claim through the local wrapper (ADR 378 decision 3), and a stale plan after any state write since the upload (ADR 378 decision 2).
 - Docs page for uploaded plans.
 
 Out of scope:
@@ -116,29 +116,13 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 none
 
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
-
-1. What ADR text binds an uploaded plan to both part hashes and to a state version that the server sets at upload, and how is a state write between the CI plan and the upload detected?
-   - Options: New ADR for the uploaded hash binding with the server-set state version at upload; Reuse ADR 102 decision 7 without a new ADR.
-   - Provisional decision (owner review 14 Nov): New ADR for the uploaded hash binding with the server-set state version at upload
-   - Reason: An uploaded plan has no plan phase, so the version source needs an owner rule. Benchmark: AWS: change sets bind execution to a reviewed change set ID.
-   - Persona impact: Developer waits for the ADR; no workflow breaks because the route does not exist yet. Escape hatch: No upload route ships before the owner accepts the ADR.
-   - Owner-tagged ADRs involved: ADR 190 (their words do not change).
-2. How does the apply present the plan hashes on the OpenTofu state write and the Pulumi update start, and how does the server map the write to the approved unit plan?
-   - Options: Hash in existing metadata of the write; New hash fields on the tool APIs; Out-of-band link to the apply.
-   - Provisional decision (owner review 14 Nov): Hash in existing metadata of the write
-   - Reason: The tool APIs are contracts that the real CLI checks, and it cannot send an unknown field. Benchmark: Google: a signed artifact is verified by digest at deploy time.
-   - Persona impact: Developer uploads the same parts for both tools. Escape hatch: Ship the OpenTofu check first and hold the Pulumi check.
-3. Does self-approval apply to uploaded plans, and are destroy plans accepted?
-   - Options: Refuse self-approval and destroy uploads; Allow both with a second approver.
-   - Provisional decision (owner review 14 Nov): Refuse self-approval and destroy uploads
-   - Reason: The server did not run the plan, so trust is weaker. Benchmark: ISO 27001: segregation of duties.
-   - Persona impact: A developer who uploads needs a second person; the error says so. Escape hatch: Refuse until the PM decides.
-   - Owner-tagged ADRs involved: ADR 225 (their words do not change).
-
 Questions considered and answered:
 
-- Does the hash binding need a new ADR? Yes. The issue says it needs an ADR, and ADR 102 decision 7 covers runner plans only. It is an open question for the owner.
+- What ADR text binds an uploaded plan to both part hashes and to a state version, and how is a state write after the upload detected? ADR 378 decision 1: "An uploaded plan binds to both part hashes and to the state version at upload (owner, 2026-11-14)." ADR 378 decision 2: "A state write after the upload makes the plan stale (owner, 2026-11-14)." An apply of a stale plan fails with 409.
+- How does the apply present the plan hash? ADR 378 decision 3: "The apply presents the hash through its apply claim (owner, 2026-11-14)." The apply presents the hash when it opens its apply claim through the local wrapper, with the launcher token of ADR 369 decision 1. The hash is not in the tool request. The server refuses to open the claim when the hash is not the hash of the approved plan.
+- Does self-approval apply to uploaded plans, and are destroy plans accepted? ADR 378 decision 4: "No self-approval and no destroy plan for an upload (owner, 2026-11-14)." The person who uploaded a plan never approves it. The server refuses an uploaded destroy plan.
+- Does the hash binding need a new ADR? Yes. The issue says it needs an ADR, and ADR 102 decision 7 covers runner plans only. ADR 378 is that ADR.
+- Is the hash match a gate? No. ADR 222 decision 4 keeps plan checks as fixed controls.
 - Is the hash match a gate? No. ADR 222 decision 4 keeps plan checks as fixed controls.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

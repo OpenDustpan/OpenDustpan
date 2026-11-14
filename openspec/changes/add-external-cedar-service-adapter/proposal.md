@@ -1,12 +1,12 @@
 ---
-version: 6
+version: 7
 ---
 
 Issue: #1002.
 
 ## Why
 
-**Persona: operator.** An Operator installs and configures the server and wants to name an external Cedar service as the gate engine, so policy evaluation runs in one approved service while access limits stay on the linked adapter. The request and answer format, the save fallback and the access-limit split during an outage are open and wait for the owner.
+**Persona: operator.** An Operator installs and configures the server and wants to name an external Cedar service as the gate engine, so policy evaluation runs in one approved service while access limits stay on the linked adapter. The request and answer format, the save fallback and the access-limit split during an outage are decided by ADR 377 decisions 1 to 3.
 
 The user path this change must make work:
 
@@ -34,7 +34,7 @@ Evidence for the claims above:
 - Service adapter of gate.Engine with TLS, credential, ID echo and version check
 - Configuration for the external Cedar service address, CA and credential
 - Docs page in docs/reference/ for the configuration
-- Save check operation and CI validator job, after the owner decides the open questions
+- Save check operation and CI validator job with the official Rust cedar CLI image, as ADR 377 decisions 1 and 2 say
 
 Out of scope:
 
@@ -101,36 +101,13 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 none
 
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
-
-1. Which HTTP protocol does the external service speak?
-   - Options: An existing Cedar service API; A format that OpenDustpan defines.
-   - Provisional decision (owner review 14 Nov): Define a small, versioned OpenDustpan JSON over HTTPS format that carries the request ID, the policy-set version and the matched policy IDs. Document it in docs/reference.
-   - Reason: No standard Cedar service API carries these fields. An own format adds no dependency, and a small bridge can adapt any service. Benchmark: AWS: Verified Permissions has one documented, versioned IsAuthorized API.
-   - Persona impact: The operator runs any service that speaks the documented format. Escape hatch: The linked cedar-go adapter stays the default.
-   - Owner-tagged ADRs involved: ADR 224 (their words do not change).
-2. What are the evaluate operation and the check operation?
-   - Options: Two paths; One path with an operation field.
-   - Provisional decision (owner review 14 Nov): Two paths: evaluate and check.
-   - Reason: They keep evaluation and save validation separate and testable. Benchmark: AWS: Verified Permissions separates authorize and policy validation calls.
-   - Persona impact: The operator configures one endpoint. Escape hatch: The linked adapter stays the default.
-   - Owner-tagged ADRs involved: ADR 224 (their words do not change).
-3. Which container image runs the Rust validator in CI?
-   - Options: Image of the external Cedar service; Separate validator image.
-   - Provisional decision (owner review 14 Nov): The pinned image of the external Cedar service.
-   - Reason: It tests the code that installations call. Benchmark: Google: CI runs tests against the pinned artifact that ships.
-   - Persona impact: No operator impact. Escape hatch: CI runs the linked suite alone until the image is pinned.
-   - Owner-tagged ADRs involved: ADR 224 (their words do not change).
-4. What is the save fallback when the service does not answer the check operation? ADR 224 decision 8 (owner) answers it: "When the service does not answer, a save that switches a gate to `evaluate`, removes it or sets `onError: skip` goes on with the linked validator only, and the audit entry says so. Every other save fails with `gate.ErrUnavailable`." The change follows that text. This is security semantics, so no provisional answer applies.
-   - Decides: owner (only if the owner wants to change ADR 224 decision 8).
-5. Do access limits stay on the linked adapter during a service outage?
-   - Options: Access limits stay on the linked adapter; All checks fail closed.
-   - This is security semantics, so rule 88 allows no provisional answer.
-   - Decides: owner.
-   - Owner-tagged ADRs involved: ADR 222, ADR 224.
-
 Questions considered and answered:
 
+- Which HTTP protocol does the external service speak? A small, versioned JSON format over HTTPS that OpenDustpan defines. ADR 377 decision 1: "The external adapter speaks a small, versioned JSON format over HTTPS that OpenDustpan defines. The version is part of the path." The docs in docs/reference describe it.
+- What are the evaluate operation and the check operation? Two paths, `evaluate` and `check`. ADR 377 decision 1: "The format has two paths: `evaluate` ... `check` ..."
+- Which container image runs the Rust validator in CI? The pinned image of the official Rust cedar CLI. ADR 377 decision 2: "CI runs the `validate` command of the official Rust `cedar` CLI ... in an image that CI pins by digest."
+- What is the save fallback when the service does not answer the check operation? ADR 377 decision 3: the outage rules stay as ADR 224 decision 8 says: "When the service does not answer, a save that switches a gate to `evaluate`, removes it or sets `onError: skip` goes on with the linked validator only, and the audit entry says so. Every other save fails with `gate.ErrUnavailable`."
+- Do access limits stay on the linked adapter during a service outage? Yes. ADR 377 decision 3, quoting ADR 224 decision 9: "Access limits (ADR 223) always use the linked adapter, so an outage of the service never refuses every API call."
 - Is an external Cedar service allowed as a gate engine? Yes. ADR 224 decision 9, ADR 222 decision 7 and ADR 335 decision 7 allow it.
 - Must a gate save still check the gate locally? Yes. ADR 224 decision 8 requires the cedar-go parse and type check, so the save does not depend on the service for that check.
 - Does every engine fault give the same error? No. Protocol faults give ErrUnavailable. A Cedar diagnostic that passes intact follows ADR 224 decision 13.

@@ -1,13 +1,5 @@
 ## ADDED Requirements
 
-### Requirement: scim-gate
-
-While the owner has not cleared the SCIM timing, the server SHALL answer 404 on the SCIM prefix.
-
-#### Scenario: Not cleared
-- **WHEN** the owner has not cleared SCIM timing
-- **THEN** the SCIM prefix answers 404.
-
 ### Requirement: scim-auth
 
 If a SCIM request has no SCIM-scoped credential, then the server SHALL answer 401 and write no row.
