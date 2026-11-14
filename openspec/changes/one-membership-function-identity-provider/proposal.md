@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Issue: #614, #621, #632.
@@ -18,9 +18,9 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| SCIM add of a user to a protected or closed group is refused. | SCIM answers a SCIM error with code idp.protected-group that names the group and the refusing rule. | `curl /api/dustpan/v1/capabilities` |
+| SCIM add of a user to a protected or closed group is refused. | SCIM answers a SCIM error with code access.denied that names the group and the refusing rule. | `curl /api/dustpan/v1/capabilities` |
 | Group claim at sign-in names a protected or closed group. | Sign-in succeeds with no new membership. The audit entry names the refused group and the refusing rule. | `curl /api/dustpan/v1/capabilities` |
-| Change to identity provider, claim mapping, or account matching without server:manage-sign-in or without a fresh step inside the one window is refused. | 403 with code authz.forbidden or mfa.fresh-step-required. The no-factor message names the enrollment page and each way to enroll. | `curl /api/dustpan/v1/capabilities` |
+| Change to identity provider, claim mapping, or account matching without server:manage-sign-in or without a fresh step inside the one window is refused. | 403 with code access.denied or mfa.fresh-step-required. The no-factor message names the enrollment page and each way to enroll. | `curl /api/dustpan/v1/capabilities` |
 
 Evidence for the claims above:
 
