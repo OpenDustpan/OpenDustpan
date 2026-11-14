@@ -554,6 +554,7 @@ type ItemKey struct {
 	BlobVersion  int64
 	BlobSize     int64
 	BlobMd5      []byte
+	BlobAttempt  string
 }
 
 type Job struct {

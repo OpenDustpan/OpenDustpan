@@ -551,7 +551,12 @@ func seedBackupItemKeys(t *testing.T, s BackupStore, acme namespace.Namespace) {
 			Ref:        ref,
 			ID:         secret.NewItemKeyID(),
 			WrapperID:  "kek-1",
-			Blob:       secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}},
+			Blob: secret.ItemKeyBlobInfo{
+				Version: 1,
+				Size:    60,
+				MD5:     [16]byte{1, 2, 3},
+				Attempt: "abcdefghij0123456789",
+			},
 		}
 		if _, err = keys.CreateItemKey(t.Context(), k, acme.Fence()); err != nil {
 			t.Fatalf("create item key %d: %v", i, err)

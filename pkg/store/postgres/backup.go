@@ -1470,7 +1470,7 @@ func stagingBlobRefs(ctx context.Context, pool pgQuerier, staging string) ([]bac
 			" UNION ALL SELECT blob_key AS content_key, size AS size, "+
 			"md5 AS md5, FALSE AS sealed FROM "+stagingTable(staging, "update_journal")+
 			" UNION ALL SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || blob_version::text "+
-			"AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed FROM "+
+			"|| '-' || blob_attempt AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed FROM "+
 			stagingTable(staging, "item_keys")+" WHERE shredded_at_ms = 0"+
 			" ORDER BY content_key",
 	)

@@ -577,6 +577,8 @@ CREATE TABLE item_keys (
     blob_version bigint NOT NULL,
     blob_size bigint NOT NULL,
     blob_md5 bytea NOT NULL,
+    blob_attempt text NOT NULL,
+    CONSTRAINT item_keys_blob_attempt_check CHECK ((blob_attempt ~ '^[a-z0-9]{20}$'::text)),
     CONSTRAINT item_keys_blob_md5_check CHECK ((length(blob_md5) = 16)),
     CONSTRAINT item_keys_blob_size_check CHECK ((blob_size >= 1)),
     CONSTRAINT item_keys_blob_version_check CHECK ((blob_version >= 1)),

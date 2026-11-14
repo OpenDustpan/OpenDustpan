@@ -1136,7 +1136,8 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, []string, er
 		UNION ALL
 		SELECT blob_key AS content_key, size AS size, md5 AS md5, 0 AS sealed FROM update_journal
 		UNION ALL
-		SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || CAST(blob_version AS TEXT) AS content_key,
+		SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || CAST(blob_version AS TEXT)
+			|| '-' || blob_attempt AS content_key,
 			blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM item_keys WHERE shredded_at_ms = 0
 		ORDER BY content_key`
 

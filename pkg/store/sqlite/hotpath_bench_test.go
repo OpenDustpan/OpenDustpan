@@ -31,6 +31,10 @@ func (hotpathNoRefusals) RecordOutOfScope(context.Context, namespace.ID, string,
 	return nil
 }
 
+func (hotpathNoRefusals) RecordMismatch(context.Context, namespace.ID, string) error {
+	return nil
+}
+
 // openHotpathStore returns a fresh SQLite store in a temporary directory with
 // the namespace acme, and the fence of that namespace.
 func openHotpathStore(b *testing.B) (*sqlite.Store, namespace.Fence) {
@@ -144,7 +148,7 @@ func BenchmarkRecorderPutPlan(b *testing.B) {
 		}
 	})
 
-	itemBlobs, err := secret.NewItemKeyBlobs(blobs, hotpathNoRefusals{})
+	itemBlobs, err := secret.NewItemKeyBlobs(blobs, hotpathNoRefusals{}, hotpathNoRefusals{})
 	if err != nil {
 		b.Fatalf("item key blobs: %v", err)
 	}

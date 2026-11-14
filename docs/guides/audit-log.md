@@ -181,6 +181,17 @@ the unit in the blob directory, for example
 `state blob get refused: key outside the namespace`. The entry never holds the
 blob key that the call used.
 
+The server also writes one entry of the kind `security` and the outcome
+`denied` when it refuses an item key blob because its bytes do not match its
+record. The record keeps the size and the MD5 of the blob. Before the server
+uses the key, it compares the blob with these two values. A blob that does not
+match is not used, and the read fails. The blob store, or a person with write access
+to it, replaced or changed the object. The action is `blob:mismatch`. The
+entry is in the installation log (`@server`), the subject is `server`, and the
+object is the ID of the namespace. The reason is
+`item key blob get refused: the size or the MD5 of the blob does not match its record`.
+The entry never holds the blob key or the bytes of the blob.
+
 For a Pulumi blob, the directory of the unit is the directory of one stack:
 `namespaces/<namespace ID>/pulumi/<stack ID>/`. A key in the directory of
 another stack of the same namespace is a refusal too. The server checks this

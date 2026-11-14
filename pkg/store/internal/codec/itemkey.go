@@ -23,6 +23,7 @@ type ItemKeyRow struct {
 	BlobVersion  int64
 	BlobSize     int64
 	BlobMd5      []byte
+	BlobAttempt  string
 }
 
 // ToItemKeyRow converts a record into a row. ShreddedAtMs is 0 for a record
@@ -33,6 +34,7 @@ func ToItemKeyRow(k secret.ItemKey) ItemKeyRow {
 		Kind: string(k.Ref.Kind), Item: k.Ref.Item, WrapperID: k.WrapperID,
 		CreatedAtMs: Millis(k.CreatedAt), ShreddedAtMs: OptionalMillis(k.ShreddedAt),
 		BlobVersion: int64(k.Blob.Version), BlobSize: k.Blob.Size, BlobMd5: k.Blob.MD5[:],
+		BlobAttempt: k.Blob.Attempt,
 	}
 }
 
@@ -80,9 +82,9 @@ func FromItemKeyRow(r ItemKeyRow) (secret.ItemKey, error) {
 }
 
 // itemKeyBlobInfo reads and checks the blob columns of a row: a version in
-// 1 to secret.MaxItemKeyVersion, a size in 1 to secret.MaxWrappedItemKeyBytes
-// and an MD5 of 16 bytes. It returns an error that wraps
-// secret.ErrInvalidItemRef for a row that fails.
+// 1 to secret.MaxItemKeyVersion, a size in 1 to secret.MaxWrappedItemKeyBytes,
+// an MD5 of 16 bytes, and a valid attempt part. It returns an error that
+// wraps secret.ErrInvalidItemRef for a row that fails.
 func itemKeyBlobInfo(r ItemKeyRow) (secret.ItemKeyBlobInfo, error) {
 	if r.BlobVersion < 1 || r.BlobVersion > secret.MaxItemKeyVersion {
 		return secret.ItemKeyBlobInfo{}, fmt.Errorf("%w: item key %q has blob version %d",
@@ -103,7 +105,12 @@ func itemKeyBlobInfo(r ItemKeyRow) (secret.ItemKeyBlobInfo, error) {
 
 	copy(sum[:], r.BlobMd5)
 
-	return secret.ItemKeyBlobInfo{Version: int(r.BlobVersion), Size: r.BlobSize, MD5: sum}, nil
+	if !secret.ValidItemKeyAttempt(r.BlobAttempt) {
+		return secret.ItemKeyBlobInfo{}, fmt.Errorf("%w: item key %q has a blob attempt part that is not valid",
+			secret.ErrInvalidItemRef, r.ID)
+	}
+
+	return secret.ItemKeyBlobInfo{Version: int(r.BlobVersion), Size: r.BlobSize, MD5: sum, Attempt: r.BlobAttempt}, nil
 }
 
 // maxItemKeyPage bounds one page of ListItemKeys.

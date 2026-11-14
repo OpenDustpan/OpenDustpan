@@ -41,7 +41,9 @@ var (
 func (s *Store) CreateUpdate(
 	ctx context.Context, u stack.Update, key stack.UpdateKey, fence namespace.Fence,
 ) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	attempt := s.newAttempt(ctx)
+
+	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, u.Ref)
 		if err != nil {
 			return err
@@ -89,12 +91,14 @@ func (s *Store) CreateUpdate(
 
 		// The record of the item key commits with the update row: a failed
 		// key write rolls the update back.
-		if _, err := key.NewKey(ctx, itemKeyTx{q: q, fence: fence}, item, fence); err != nil {
+		if _, err := key.NewKey(ctx, itemKeyTx{q: q, fence: fence, attempt: attempt}, item, fence); err != nil {
 			return fmt.Errorf("item key of update %s: %w", u.ID, err)
 		}
 
-		return nil
+		return attempt.beforeCommit()
 	})
+
+	return attempt.attemptError(err)
 }
 
 // foreignKeyViolation is the SQLSTATE of a PostgreSQL foreign-key violation.

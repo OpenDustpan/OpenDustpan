@@ -20,6 +20,7 @@ func portableItemKeyTables() []PortableTable {
 				{Name: "blob_version", Kind: KindInteger},
 				{Name: "blob_size", Kind: KindInteger},
 				{Name: "blob_md5", Kind: KindBytes},
+				{Name: "blob_attempt", Kind: KindText},
 			},
 		},
 	}

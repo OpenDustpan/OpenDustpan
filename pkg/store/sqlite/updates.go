@@ -32,7 +32,14 @@ func (s *Store) CreateUpdate(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+	// The update can write an item key record, so the transaction has an
+	// attempt deadline.
+	parent := ctx
+
+	attempt, ctx, cancel := s.newAttempt(ctx)
+	defer cancel()
+
+	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, u.Ref)
 		if err != nil {
 			return err
@@ -81,12 +88,14 @@ func (s *Store) CreateUpdate(
 
 		// The record of the item key commits with the update row: a failed
 		// key write rolls the update back.
-		if _, err := key.NewKey(ctx, itemKeyTx{q: q, fence: fence}, item, fence); err != nil {
+		if _, err := key.NewKey(ctx, itemKeyTx{q: q, fence: fence, attempt: attempt}, item, fence); err != nil {
 			return fmt.Errorf("item key of update %s: %w", u.ID, err)
 		}
 
-		return nil
+		return attempt.beforeCommit()
 	})
+
+	return attempt.attemptError(parent, err)
 }
 
 // GetUpdate implements stack.UpdateStore.

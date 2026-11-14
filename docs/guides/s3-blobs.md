@@ -91,6 +91,26 @@ Delete of a missing key succeeds.
 One `PUT` holds 5 GiB at most.
 A larger object fails with an error that names the limit.
 
+## Item key blobs and clocks
+
+Each write of the key of a history item puts a blob under a new key, and the
+record of the key names that blob. A write that does not commit within 30
+minutes from the start of its transaction rolls back. The blob of a write
+that rolled back stays in the store until a cleanup deletes it.
+
+A cleanup counts a key blob that no record names as garbage only 1 hour after
+the blob store wrote it. The blob store gives this time, so the rule allows a
+difference of at most 15 minutes between the clock of the server and the
+clock of the blob store. Keep both clocks in step, for example with NTP.
+
+Each cleanup run measures the difference first. It writes an empty probe
+object, `item-keys/clock-probe-<20 letters and digits>`, in the directory of
+the namespace, reads the time that the blob store gives it, and deletes it.
+If the two clocks differ by more than 15 minutes, ahead or behind, or if a key
+blob has a time more than 15 minutes ahead of the server clock, the cleanup
+deletes no key blob of that namespace in that run. A probe that a failed
+delete left is deleted by a later run, 1 hour after it was written.
+
 ## Check the store
 
 The store check runs a set of tests on the store of your own installation and measures it.

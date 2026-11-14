@@ -22,7 +22,66 @@ var (
 	ErrShredded = errors.New("item key is shredded")
 	// ErrInvalidItemRef reports an item reference that fails validation.
 	ErrInvalidItemRef = errors.New("invalid item reference")
+	// ErrItemKeyBlobMismatch reports a wrapped item key blob whose size or
+	// MD5 is not the size or the MD5 that its record names. The store
+	// replaced the object, or someone changed it. The server does not unwrap
+	// such a blob.
+	ErrItemKeyBlobMismatch = errors.New("item key blob does not match its record")
+	// ErrItemKeyAttemptExpired reports an item key transaction that did not
+	// commit before its attempt deadline. The transaction rolls back, and its
+	// blob stays for the reaper.
+	ErrItemKeyAttemptExpired = errors.New("item key write passed its attempt deadline")
+	// ErrItemKeyBlobClockSkew reports that the clock of the blob store and
+	// the clock of the server differ by more than ItemKeyBlobClockSkew, ahead
+	// or behind. The reaper deletes nothing in that run.
+	ErrItemKeyBlobClockSkew = errors.New(
+		"the blob store clock differs from the server clock by more than the allowed skew",
+	)
 )
+
+// ItemKeyAttemptDeadline is the longest time from the start of an item key
+// transaction to its commit. The writer makes the blob key and puts the
+// wrapped key blob inside the transaction, so the time from the put to the
+// commit is shorter. A blob that no committed record names becomes garbage
+// only after ItemKeyBlobGracePeriod, which is longer than this deadline plus
+// ItemKeyBlobClockSkew, so the reaper never deletes the blob of a write that
+// can still commit.
+const ItemKeyAttemptDeadline = 30 * time.Minute
+
+// ItemKeyBlobClockSkew is the largest difference between the clock of the
+// server and the clock of the blob store that the reaper rule allows. The
+// reaper reads the age of a blob from the time of the store, so each run
+// measures the difference with a probe blob first, and a larger difference
+// in either direction fails the run.
+const ItemKeyBlobClockSkew = 15 * time.Minute
+
+// AttemptDeadline returns the attempt deadline of an item key transaction
+// that starts at start under ctx: the earlier of the deadline of ctx and
+// start plus ItemKeyAttemptDeadline.
+func AttemptDeadline(ctx context.Context, start time.Time) time.Time {
+	deadline := start.Add(ItemKeyAttemptDeadline)
+
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		return d
+	}
+
+	return deadline
+}
+
+// CheckAttemptDeadline returns ErrItemKeyAttemptExpired when now is not
+// before deadline. A store calls it after the function of an item key
+// transaction and before the commit.
+func CheckAttemptDeadline(deadline, now time.Time) error {
+	if !now.Before(deadline) {
+		return fmt.Errorf(
+			"%w: the commit is %s late",
+			ErrItemKeyAttemptExpired,
+			now.Sub(deadline).Round(time.Millisecond),
+		)
+	}
+
+	return nil
+}
 
 // ItemKind names what one item key seals. The kinds are the same for
 // every tool.
@@ -117,11 +176,18 @@ func ParseItemKeyID(s string) (ItemKeyID, error) {
 	return ItemKeyID(s), nil
 }
 
-// ItemKeyBlobInfo describes the wrapped key blob that a record names: its version,
-// and the size and MD5 of its bytes, so that a backup copies and checks it
-// like every other blob. The MD5 is a checksum for integrity only. The AEAD
-// tag of the wrapped key authenticates the bytes.
+// ItemKeyBlobInfo describes the wrapped key blob that a record names: its
+// version, the attempt part of its key, and the size and MD5 of its bytes, so
+// that a backup copies and checks it like every other blob, and a read checks
+// the bytes before it unwraps them. The MD5 is a checksum for integrity only.
+// The AEAD tag of the wrapped key authenticates the bytes.
+//
+// Attempt is the attempt part of the blob key. Each write of a wrapped key
+// makes a new attempt part, so two writes never share a key, and a store that
+// replaces an object on a second write never replaces a key that a record
+// names.
 type ItemKeyBlobInfo struct {
+	Attempt string
 	MD5     [16]byte
 	Size    int64
 	Version int
@@ -129,7 +195,7 @@ type ItemKeyBlobInfo struct {
 
 // ItemKey is the record of one item key, as SQL keeps it. The wrapped
 // key itself is not part of the record: it is the blob that ItemKeyBlobs.Key
-// names with Blob.Version. ShreddedAt is the zero time while the key exists.
+// names with Blob.Version and Blob.Attempt. ShreddedAt is the zero time while the key exists.
 type ItemKey struct {
 	CreatedAt  time.Time
 	ShreddedAt time.Time
@@ -213,6 +279,11 @@ type ItemKeyStore interface {
 	// It commits when fn returns nil and rolls back otherwise. It returns
 	// namespace.ErrFenced when the fence is stale. fn must not start another
 	// transaction of the store.
+	//
+	// The transaction has the deadline that AttemptDeadline gives for the
+	// start of the call. When the deadline passes before the commit, the
+	// transaction rolls back and InItemKeyTx returns
+	// ErrItemKeyAttemptExpired.
 	InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(ItemKeyTx) error) error
 }
 

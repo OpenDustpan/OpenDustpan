@@ -57,6 +57,8 @@ func (r jobRunner) Logger() *slog.Logger { return r.s.logger }
 // take the same row, so a lock that committed before is seen by the dispatch,
 // and a lock write that starts later waits for the dispatch.
 func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(jobstore.Tx) error) error {
+	attempt := r.s.newAttempt(ctx)
+
 	err := pgx.BeginFunc(ctx, r.s.txs, func(tx pgx.Tx) error {
 		if _, err := readWritable(ctx, tx, readStateSQL, nil, r.s.binaryVersion); err != nil {
 			return err
@@ -67,10 +69,16 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 			return err
 		}
 
-		return fn(&jobTx{tx: tx, q: q})
+		if err := fn(&jobTx{tx: tx, q: q, attempt: attempt}); err != nil {
+			return err
+		}
+
+		// An item key record that this transaction wrote names a blob that
+		// the reaper may delete after the deadline, so a late commit fails.
+		return attempt.beforeCommit()
 	})
 	if err != nil {
-		return fmt.Errorf("transaction: %w", err)
+		return fmt.Errorf("transaction: %w", attempt.attemptError(err))
 	}
 
 	return nil
@@ -79,7 +87,7 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 // Read implements jobstore.Runner.
 func (r jobRunner) Read(ctx context.Context, fn func(jobstore.Tx) error) error {
 	err := pgx.BeginTxFunc(ctx, r.s.txs, r.s.snapshotOptions(), func(tx pgx.Tx) error {
-		return fn(&jobTx{tx: tx, q: r.s.queries.WithTx(tx)})
+		return fn(&jobTx{tx: tx, q: r.s.queries.WithTx(tx), attempt: nil})
 	})
 	if err != nil {
 		return fmt.Errorf("snapshot transaction: %w", readConflict(err))
@@ -92,6 +100,9 @@ func (r jobRunner) Read(ctx context.Context, fn func(jobstore.Tx) error) error {
 type jobTx struct {
 	tx pgx.Tx
 	q  *db.Queries
+	// attempt is the attempt deadline of a write transaction, and nil in a
+	// read transaction, which writes no item key record.
+	attempt *itemKeyAttempt
 }
 
 var _ jobstore.Tx = (*jobTx)(nil)
@@ -559,7 +570,7 @@ func (t *jobTx) UpdatePlan(ctx context.Context, ns namespace.Name, r jobstore.Pl
 //
 //nolint:ireturn // The method of jobstore.Tx returns the interface.
 func (t *jobTx) ItemKeys(fence namespace.Fence) secret.ItemKeyTx {
-	return itemKeyTx{q: t.q, fence: fence}
+	return itemKeyTx{q: t.q, fence: fence, attempt: t.attempt}
 }
 
 // Plan implements jobstore.Tx.

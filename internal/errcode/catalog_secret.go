@@ -6,6 +6,15 @@ const (
 	// SecretConsoleSession is a console session on a route that encrypts or
 	// decrypts the secrets of a stack.
 	SecretConsoleSession = "secret.console-session"
+	// SecretItemKeyBlobClockSkew is a listing of item key blobs whose time is
+	// too far ahead of the clock of the server.
+	SecretItemKeyBlobClockSkew = "secret.item-key-blob-clock-skew"
+	// SecretItemKeyAttemptExpired is a write of an item key that did not
+	// commit before its attempt deadline.
+	SecretItemKeyAttemptExpired = "secret.item-key-attempt-expired"
+	// SecretItemKeyBlobMismatch is a wrapped item key blob whose size or MD5
+	// is not the size or the MD5 that its record names.
+	SecretItemKeyBlobMismatch = "secret.item-key-blob-mismatch"
 	// SecretKeyNotConfigured is a request that needs the encryption key of the
 	// installation when the operator has not configured one.
 	SecretKeyNotConfigured = "secret.key-not-configured"
@@ -22,6 +31,23 @@ func secretSpecs() []Spec {
 			Code:    SecretConsoleSession,
 			Meaning: "a console session cannot encrypt or decrypt secrets: the request needs an access token",
 			Args:    nil,
+		},
+		{
+			Code: SecretItemKeyBlobClockSkew,
+			Meaning: "the clock of the blob store is ahead of the clock of the server by more than the reaper allows, " +
+				"so the reaper deletes no key blob",
+			Args: nil,
+		},
+		{
+			Code:    SecretItemKeyAttemptExpired,
+			Meaning: "the write of the key of an item did not commit before its attempt deadline, so it rolled back",
+			Args:    nil,
+		},
+		{
+			Code: SecretItemKeyBlobMismatch,
+			Meaning: "the stored key of an item does not match its record: the blob store replaced or " +
+				"changed the object, so the server does not use the key",
+			Args: nil,
 		},
 		{
 			Code:    SecretKeyNotConfigured,

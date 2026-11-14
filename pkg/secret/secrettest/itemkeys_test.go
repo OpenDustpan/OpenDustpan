@@ -20,20 +20,28 @@ import (
 // cases state their rules before a SQL adapter implements the port.
 func TestItemKeySuite(t *testing.T) {
 	t.Parallel()
-	secrettest.RunItemKeys(t, func(*testing.T) secrettest.ItemKeyStore { return newMemItemKeys() })
+	// Real time: the case of a late commit proves that a real context deadline ends it.
+	secrettest.RunItemKeys(t, func(*testing.T) secrettest.ItemKeyStore { return newMemItemKeys(time.Now) })
 }
+
+// fixedNow is the clock of the suites that need no real time.
+func fixedNow() time.Time { return time.UnixMilli(1_700_000_000_000).UTC() }
 
 // memItemKeys keeps namespaces and item key records in memory.
 type memItemKeys struct {
 	namespaces map[namespace.Name]namespace.Namespace
 	keys       map[secret.ItemRef]secret.ItemKey
-	mu         sync.Mutex
+	// now is the clock of the attempt deadline. Real time only for the item key
+	// suite: its late commit case proves that a real context deadline ends it.
+	now func() time.Time
+	mu  sync.Mutex
 }
 
-func newMemItemKeys() *memItemKeys {
+func newMemItemKeys(now func() time.Time) *memItemKeys {
 	return &memItemKeys{
 		namespaces: map[namespace.Name]namespace.Namespace{},
 		keys:       map[secret.ItemRef]secret.ItemKey{},
+		now:        now,
 		mu:         sync.Mutex{},
 	}
 }
@@ -88,7 +96,7 @@ func (t memItemKeyTx) CreateItemKey(_ context.Context, k secret.ItemKey) (secret
 	}
 
 	if b := k.Blob; b.Version < 1 || b.Version > secret.MaxItemKeyVersion || b.Size < 1 ||
-		b.Size > secret.MaxWrappedItemKeyBytes {
+		b.Size > secret.MaxWrappedItemKeyBytes || !secret.ValidItemKeyAttempt(b.Attempt) {
 		return secret.ItemKey{}, secret.ErrInvalidItemRef
 	}
 
@@ -128,8 +136,11 @@ func (t memItemKeyTx) GetItemKey(_ context.Context, ref secret.ItemRef) (secret.
 }
 
 // InItemKeyTx runs fn on a copy of the records and keeps the copy only when fn
-// returns nil, so a failed function leaves no record.
-func (m *memItemKeys) InItemKeyTx(_ context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
+// returns nil before the attempt deadline, so a failed or late function leaves
+// no record.
+func (m *memItemKeys) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
+	deadline := secret.AttemptDeadline(ctx, m.now())
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -140,6 +151,12 @@ func (m *memItemKeys) InItemKeyTx(_ context.Context, fence namespace.Fence, fn f
 	before := maps.Clone(m.keys)
 
 	if err := fn(memItemKeyTx{m: m, fence: fence}); err != nil {
+		m.keys = before
+
+		return err
+	}
+
+	if err := secret.CheckAttemptDeadline(deadline, m.now()); err != nil {
 		m.keys = before
 
 		return err
@@ -276,6 +293,6 @@ func TestItemSealerSuite(t *testing.T) {
 
 		t.Cleanup(func() { _ = blobs.Close() }) //nolint:errcheck // Test cleanup.
 
-		return secrettest.NewSealerRig(t, newMemItemKeys(), blobs)
+		return secrettest.NewSealerRig(t, newMemItemKeys(fixedNow), blobs)
 	})
 }

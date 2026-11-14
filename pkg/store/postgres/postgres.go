@@ -34,6 +34,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
@@ -114,6 +115,13 @@ type Store struct {
 	// reads runs the short catalog reads of the backup and restore code with
 	// the bounds of the API paths.
 	reads guardedDB
+	// attemptDeadline gives the attempt deadline of a transaction that can
+	// write an item key record. It is secret.AttemptDeadline. An internal test
+	// sets a shorter one.
+	attemptDeadline func(ctx context.Context, start time.Time) time.Time
+	// now gives the current time of the item key attempt code. Tests
+	// replace it.
+	now func() time.Time
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -254,6 +262,8 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		guard:               nil,
 		marks:               newLongMarks(),
 		reads:               guardedDB{inner: nil, rt: roundTrip{deadline: 0, watch: nil, readOnlyTx: false}},
+		attemptDeadline:     secret.AttemptDeadline,
+		now:                 time.Now,
 	}
 
 	for _, opt := range opts {

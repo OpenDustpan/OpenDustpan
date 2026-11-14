@@ -214,7 +214,7 @@ func TestUpdateKeyRefFor(t *testing.T) {
 		return secret.ItemKey{
 			CreatedAt: time.Time{}, ShreddedAt: time.Time{},
 			Ref: secret.ItemRef{Scope: secret.Scope{Namespace: "", ID: ""}, Kind: "", Item: ""}, ID: "",
-			WrapperID: "", Blob: secret.ItemKeyBlobInfo{MD5: [16]byte{}, Size: 0, Version: 0},
+			WrapperID: "", Blob: secret.ItemKeyBlobInfo{MD5: [16]byte{}, Size: 0, Version: 0, Attempt: ""},
 		}, nil
 	})
 

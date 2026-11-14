@@ -253,3 +253,73 @@ func TestPlaceOf(t *testing.T) {
 
 // nilStore is a blob store for a view that the test never calls through.
 type nilStore struct{ blob.Store }
+
+func TestAuditRecordMismatch(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, time.October, 29, 12, 0, 0, 0, time.UTC)
+	store := &fakeServerStore{err: nil, entries: nil}
+
+	rec, err := scopeaudit.New(store, itemFamily(), func() time.Time { return at })
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	if recErr := rec.RecordMismatch(t.Context(), nsA, "get"); recErr != nil {
+		t.Fatalf("record mismatch: %v", recErr)
+	}
+
+	if len(store.entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(store.entries))
+	}
+
+	e := store.entries[0]
+	if validErr := e.Validate(); validErr != nil {
+		t.Errorf("entry is not valid: %v", validErr)
+	}
+
+	if e.Action != scopeaudit.ActionMismatch || e.Kind != audit.KindSecurity ||
+		e.Outcome != audit.OutcomeDenied || e.Namespace != audit.ServerScope || e.Object != string(nsA) ||
+		!e.At.Equal(at) || !strings.HasPrefix(e.Reason, "item key blob get refused") {
+		t.Errorf("entry = %+v", e)
+	}
+}
+
+func TestAuditRecordMismatchRefuses(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		storeErr error
+		wantErr  error
+		name     string
+		ns       namespace.ID
+		op       string
+	}{
+		{name: "a put", ns: nsA, op: "put", storeErr: nil, wantErr: scopeaudit.ErrInvalidRecord},
+		{name: "an unknown operation", ns: nsA, op: "get\nx", storeErr: nil, wantErr: scopeaudit.ErrInvalidRecord},
+		{name: "a bad namespace ID", ns: "../x", op: "get", storeErr: nil, wantErr: nil},
+		{name: "a failed append", ns: nsA, op: "get", storeErr: errAppendFailed, wantErr: errAppendFailed},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &fakeServerStore{err: tc.storeErr, entries: nil}
+
+			rec, err := scopeaudit.New(store, itemFamily(), nil)
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+
+			err = rec.RecordMismatch(t.Context(), tc.ns, tc.op)
+			if err == nil || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) {
+				t.Fatalf("record mismatch err = %v, want %v", err, tc.wantErr)
+			}
+
+			if len(store.entries) != 0 {
+				t.Errorf("entries = %d, want 0", len(store.entries))
+			}
+		})
+	}
+}
