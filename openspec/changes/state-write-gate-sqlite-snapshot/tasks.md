@@ -5,17 +5,17 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Add failing snapshot test with a concurrent commit during GetDeletedUnitFacts. Check: NEW test TestDeletedUnitFactsSnapshot in pkg/store/sqlite fails on main; scenario Concurrent commit during fact read
-- [ ] 1.2 Add failing test for a failed read-only transaction with no partial facts. Check: NEW test TestDeletedUnitFactsReadFailure fails on main; scenario Failed read transaction
-- [ ] 1.3 Add failing test for the select-plus-rollback first-error rule. Check: NEW test TestDeletedUnitFactsSelectAndRollbackFailure fails on main; scenario Select and rollback both fail
-- [ ] 1.4 Add failing test for the one fixed start-up log line. Check: NEW test TestNoGateServiceStartLog fails on main; scenarios Server starts with no gate service and Repeat start with no gate service
-- [ ] 1.5 Add failing test that start continues when the log write fails. Check: NEW test TestNoGateServiceLogWriteFailure fails on main; scenario Log write failure at start
-- [ ] 1.6 Add failing test for the explicit rollback branch. Check: NEW test TestFactReadRollbackBranch fails on main; scenario Rollback then close
+- [ ] 1.2 Add failing test for a failed read-only transaction with no partial facts in NEW file pkg/store/sqlite/deleted_unit_facts_snapshot_test.go. Check: NEW test TestDeletedUnitFactsReadFailure fails on main; scenario Failed read transaction
+- [ ] 1.3 Add failing test for the select-plus-rollback first-error rule in NEW file pkg/store/sqlite/deleted_unit_facts_snapshot_test.go. Check: NEW test TestDeletedUnitFactsSelectAndRollbackFailure fails on main; scenario Select and rollback both fail
+- [ ] 1.4 Add failing test for the one fixed start-up log line in NEW file internal/servertest/nogate_log_test.go. Check: BLOCKED by the missing route and credential kind that reads deleted-unit facts; NEW test TestNoGateServiceStartLog fails on main; scenarios Server starts with no gate service and Repeat start with no gate service
+- [ ] 1.5 Add failing test that start continues when the log write fails in NEW file internal/servertest/nogate_log_test.go. Check: BLOCKED by the missing route and credential kind that reads deleted-unit facts; NEW test TestNoGateServiceLogWriteFailure fails on main; scenario Log write failure at start
+- [ ] 1.6 Add failing test for the explicit rollback branch in NEW file pkg/store/sqlite/deleted_unit_facts_snapshot_test.go. Check: NEW test TestFactReadRollbackBranch fails on main; scenario Rollback then close
 
 ## 2. Fix
 
-- [ ] 2.1 Move GetDeletedUnitFacts reads into one read-only transaction with deferred close. Check: `go test ./pkg/store/sqlite/ -run TestDeletedUnitFactsSnapshot -count=1` passes
+- [ ] 2.1 Move GetDeletedUnitFacts reads into one read-only transaction with deferred close in pkg/store/sqlite/inventory.go:573 (GetDeletedUnitFacts). Check: `go test ./pkg/store/sqlite/ -run TestDeletedUnitFactsSnapshot -count=1` passes
 - [ ] 2.2 Remove the blank-assign rollback pattern on the touched path only. Check: `rg -n -F '_ = rollbackErr' pkg/store/sqlite` shows no hit in the touched function
-- [ ] 2.3 Add the one fixed start-up log line for an absent gate service. Check: TestNoGateServiceStartLog passes
+- [ ] 2.3 Add the one fixed start-up log line for an absent gate service in NEW file internal/servertest/nogate_log.go. Check: BLOCKED by the missing route and credential kind that reads deleted-unit facts; TestNoGateServiceStartLog passes
 
 ## 3. Side effects (computed from main)
 

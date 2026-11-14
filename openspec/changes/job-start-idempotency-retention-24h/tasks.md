@@ -4,13 +4,13 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write a test that a retry after a store reopen gets the stored answer. Check: go test ./pkg/idempotency -run TestRetryAfterReopenReplays
-- [ ] 1.2 Write a test that a record expires after 24 hours. Check: go test ./pkg/idempotency -run TestRecordExpiresAfter24h
+- [ ] 1.1 Write a test in `pkg/idempotency/idempotency_test.go` that a retry after a store reopen gets the stored answer. Check: go test ./pkg/idempotency -run TestRetryAfterReopenReplays
+- [ ] 1.2 Write a test in `pkg/idempotency/idempotency_test.go` that a record expires after 24 hours. Check: go test ./pkg/idempotency -run TestRecordExpiresAfter24h
 
 ## 2. Implementation
 
-- [ ] 2.1 Add the Retention type and its constructor. Check: go test ./pkg/idempotency
-- [ ] 2.2 Store the expiry in the codec and run the conformance suite. Check: go test ./pkg/store/... -timeout 60m
+- [ ] 2.1 Add the NEW Retention type and its NEW constructor in the NEW file `pkg/idempotency/retention.go`. Check: go test ./pkg/idempotency
+- [ ] 2.2 Store the expiry in the codec in the NEW file `pkg/store/internal/codec/idempotency.go` and run the conformance suite. Check: go test ./pkg/store/... -timeout 60m
 
 ## 3. Side effects (computed from main)
 

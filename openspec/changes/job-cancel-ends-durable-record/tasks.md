@@ -4,7 +4,7 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write the failing tests of the scenarios in the job conformance suite. Check: go test ./pkg/job/... fails on main
+- [ ] 1.1 Write the failing tests of the scenarios in the job conformance suite in NEW file `pkg/job/cancel_durable_test.go`. Check: go test ./pkg/job/... fails on main
 
 ## 2. Side effects (computed from main)
 

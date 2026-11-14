@@ -4,7 +4,7 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write the failing tests of the spec scenarios. Check: go test ./internal/metrics/... fails on main
+- [ ] 1.1 Write the failing tests of the spec scenarios in internal/metrics/poison_skip_test.go (NEW). Check: go test ./internal/metrics/... fails on main
 
 ## 2. Definition of done
 
