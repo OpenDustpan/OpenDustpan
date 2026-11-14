@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -397,6 +398,15 @@ func tgLocalSharedName(ctx context.Context, t *testing.T, cli e2e.Install, store
 		t.Fatalf("lock %s answers %d: %v %s", unit, status, err, body)
 	}
 
+	// A second lock call while the lock is held answers 409 with the
+	// workspace.locked code.
+	if status, body, err := env.TFEStatus(ctx, token, http.MethodPost, lockRoute(id), `{"data":{}}`); err != nil ||
+		status != http.StatusConflict {
+		t.Fatalf("second lock of %s answers %d, want 409: %v %s", unit, status, err, body)
+	} else if got := tgLocalErrorCode(t, body); got != "workspace.locked" {
+		t.Fatalf("second lock of %s error code = %q, want workspace.locked: %s", unit, got, body)
+	}
+
 	tgLocalRefusedSharedApply(ctx, t, env, runner)
 	tgLocalReleaseSharedLock(ctx, t, env, token, id)
 	runner.tofu(ctx, t, "shared-a", "apply", "-input=false", "-auto-approve", "-no-color")
@@ -423,8 +433,11 @@ func tgLocalRefusedSharedApply(ctx context.Context, t *testing.T, env *e2e.Env, 
 		t.Fatalf("second shared unit applies over a held lock, want a refusal:\n%s", res.Stdout)
 	}
 
-	if !strings.Contains(res.Stderr, "workspace.locked") && !strings.Contains(res.Stdout, "workspace.locked") {
-		t.Fatalf("second shared unit names no workspace.locked error:\n%s\n%s", res.Stdout, res.Stderr)
+	// The CLI prints the lock detail, not the machine code: go-tfe maps the
+	// 409 to its generic error. The recorded lock call below proves the
+	// workspace.locked code.
+	if out := res.Stdout + res.Stderr; !strings.Contains(out, "workspace already locked") {
+		t.Fatalf("second shared unit names no lock failure:\n%s\n%s", res.Stdout, res.Stderr)
 	}
 }
 
@@ -792,11 +805,19 @@ func tgLocalRunner(ctx context.Context, t *testing.T, env *e2e.Env, cli e2e.Inst
 	_ = ctx
 
 	path := filepath.Join(env.Home(), "tofurc-tg-local")
-	creds := "credentials " + fmt.Sprintf("%q", env.Host()) + " {\n"
-	creds += "  token = " + fmt.Sprintf("%q", token) + "\n}\n"
-	env.WriteFile(t, path, creds)
+	runner := tgLocalCLI{env: env, cli: cli, creds: path}
+	runner.useToken(t, token)
 
-	return tgLocalCLI{env: env, cli: cli, creds: path}
+	return runner
+}
+
+// useToken points the credentials file of the runner at token.
+func (c tgLocalCLI) useToken(t *testing.T, token string) {
+	t.Helper()
+
+	creds := "credentials " + fmt.Sprintf("%q", c.env.Host()) + " {\n"
+	creds += "  token = " + fmt.Sprintf("%q", token) + "\n}\n"
+	c.env.WriteFile(t, c.creds, creds)
 }
 
 // writeUnit writes one unit directory with a backend that names the
@@ -805,6 +826,9 @@ func (c tgLocalCLI) writeUnit(t *testing.T, dir, workspace string) {
 	t.Helper()
 
 	unitDir := filepath.Join(c.env.Home(), "tg-local-"+dir)
+	if err := os.MkdirAll(unitDir, 0o750); err != nil {
+		t.Fatalf("mkdir %s: %v", unitDir, err)
+	}
 	config := "terraform {\n  cloud {\n    hostname     = " + fmt.Sprintf("%q", c.env.Host()) + "\n" +
 		"    organization = " + fmt.Sprintf("%q", tgLocalNamespace) + "\n" +
 		"    workspaces {\n      name = " + fmt.Sprintf("%q", workspace) + "\n    }\n  }\n}\n\n" +
@@ -873,6 +897,22 @@ func tgLocalIssueUnitPerson(
 			`{"subject":"principal:` + principal.ID + `","role":"writer"}`, http.StatusCreated,
 		}, nil)
 	}
+
+	// Every tofu command reads the organization settings, so the namespace
+	// must exist for the run token before its first tofu run. The run holds
+	// a custom role with namespace:read only: no built-in role reads the
+	// namespace without reading every unit, and the ungranted unit must
+	// stay refused.
+	var role e2eRole
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles",
+		`{"name":"tg-local-runner","actions":["namespace:read"]}`, http.StatusCreated,
+	}, &role)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/" + tgLocalNamespace + "/grants",
+		`{"subject":"principal:` + principal.ID + `","role":"` + role.ID + `"}`, http.StatusCreated,
+	}, nil)
 
 	return env.PersonalToken(ctx, t, principal.ID, "tg-local-"+name).Secret
 }
