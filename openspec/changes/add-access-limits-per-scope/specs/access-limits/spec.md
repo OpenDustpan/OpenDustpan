@@ -94,7 +94,7 @@ When a live session of an enabled break-glass account calls an action with a mat
 
 ### Requirement: limit-list
 
-When a caller with the scope read action lists the access limits of one namespace, the server SHALL answer each stored limit of that namespace.
+When a caller with the scope read action lists the access limits of one namespace, the server SHALL answer each stored limit of that namespace in one answer with no paging, at most 64 limits for each scope (the cap `MaxAccessLimitsPerScope` that a save already enforces).
 
 #### Scenario: list scope limits
 - **WHEN** a holder of the scope read action lists the limits of one namespace that holds 3 limits

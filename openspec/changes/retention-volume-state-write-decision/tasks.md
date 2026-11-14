@@ -16,7 +16,7 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
+- [ ] 3.1 Confirm that no request flow changed, so the round-trip budgets stand: the change adds the port method PruneExpired with no route and no caller; the change that wires it keeps the budget task. Check: the round-trip tests in `internal/servertest/roundtrips_test.go` pass unchanged. Confirmed by: CI (the round-trip tests pass unchanged).
 
 ## 4. Definition of done
 
