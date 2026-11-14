@@ -402,8 +402,6 @@ func TestStartRefusesABadKey(t *testing.T) {
 		{"a control character", []string{"Idempotency-Key", "a\tb"}},
 		{"not ASCII", []string{"Idempotency-Key", "schlüssel"}},
 		{"two keys", []string{"Idempotency-Key", "a", "Idempotency-Key", "b"}},
-		{"the prefix of a drift check", []string{"Idempotency-Key", "drift-" + strings.Repeat("0", 32) + "-1"}},
-		{"the prefix of a drift check in upper case", []string{"Idempotency-Key", "DRIFT-x"}},
 	}
 
 	for _, tt := range tests {
@@ -421,6 +419,46 @@ func TestStartRefusesABadKey(t *testing.T) {
 
 			if starter.calls() != 0 {
 				t.Fatalf("the service saw %d requests, want none", starter.calls())
+			}
+		})
+	}
+}
+
+// TestStartRefusesAReservedKeyPrefix proves: a key with the prefix of the drift
+// checks of the server, in any case, starts no job, and a key with the prefix
+// inside or no prefix starts one.
+func TestStartRefusesAReservedKeyPrefix(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		key  string
+		want int
+	}{
+		{"lowercase prefix", "drift-unit-1-29000000", http.StatusBadRequest},
+		{"mixed case prefix", "Drift-unit-1", http.StatusBadRequest},
+		{"uppercase prefix", "DRIFT-x", http.StatusBadRequest},
+		{"prefix inside", "my-drift-1", http.StatusCreated},
+		{"plain key", "click-1", http.StatusCreated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			starter := newFakeStarter(t)
+			h := newStartHandler(t, newAuthorizer(readsNamespace()...), newFakeJobs(), starter, nil)
+
+			rec := post(t, h, testToken, goodBody, "Idempotency-Key", tc.key)
+			if rec.Code != tc.want {
+				t.Fatalf("start = %d %s, want %d", rec.Code, rec.Body.String(), tc.want)
+			}
+
+			wantCalls := 0
+			if tc.want == http.StatusCreated {
+				wantCalls = 1
+			}
+
+			if starter.calls() != wantCalls {
+				t.Errorf("starts = %d, want %d", starter.calls(), wantCalls)
 			}
 		})
 	}

@@ -487,6 +487,7 @@ var keepControlStatements = []string{
 	`DELETE FROM main.store_checks`,
 	`DELETE FROM main.name_locks`,
 	`DELETE FROM main.name_lock_key`,
+	`DELETE FROM main.used_tickets`,
 	`INSERT INTO main.durable_operations (` + durableOperationColumns + `) ` +
 		`SELECT ` + durableOperationColumns + ` FROM live.durable_operations`,
 	`INSERT INTO main.durable_steps (operation_id, name, seq, result, done_at_ms) ` +
@@ -520,6 +521,8 @@ var keepControlStatements = []string{
 		`SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report FROM live.store_checks`,
 	`INSERT INTO main.name_locks (` + nameLockColumns + `) SELECT ` + nameLockColumns + ` FROM live.name_locks`,
 	`INSERT INTO main.name_lock_key (id, key) SELECT id, key FROM live.name_lock_key`,
+	`INSERT INTO main.used_tickets (provider_id, ticket_digest, until_ms) ` +
+		`SELECT provider_id, ticket_digest, until_ms FROM live.used_tickets`,
 }
 
 // nameLockColumns lists every column of name_locks, for the copy of the

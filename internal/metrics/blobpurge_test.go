@@ -47,27 +47,76 @@ func gaugeValue(t *testing.T, out, name string) float64 {
 	return 0
 }
 
+// blobPurgeCase is one row of the blob purge gauge table.
+type blobPurgeCase struct {
+	name           string
+	pending        int64
+	oldestAge      time.Duration
+	readErr        error
+	wantPending    float64
+	wantAge        float64
+	wantReadErrors float64
+}
+
+// checkBlobPurgeGauges checks the two backlog gauges and the read error
+// counter of one case against the exposition text out.
+func checkBlobPurgeGauges(t *testing.T, out string, tt blobPurgeCase) {
+	t.Helper()
+
+	if got := gaugeValue(t, out, "dustpan_blob_purge_pending"); got != tt.wantPending {
+		t.Errorf("dustpan_blob_purge_pending = %v, want %v", got, tt.wantPending)
+	}
+
+	if got := gaugeValue(t, out, "dustpan_blob_purge_oldest_age_seconds"); got != tt.wantAge {
+		t.Errorf("dustpan_blob_purge_oldest_age_seconds = %v, want %v", got, tt.wantAge)
+	}
+
+	if tt.wantReadErrors > 0 {
+		if got := gaugeValue(t, out, "dustpan_blob_purge_read_errors_total"); got != tt.wantReadErrors {
+			t.Errorf("dustpan_blob_purge_read_errors_total = %v, want %v", got, tt.wantReadErrors)
+		}
+	}
+}
+
 func TestBlobPurgeBacklogGauges(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		pending     int64
-		oldestAge   time.Duration
-		readErr     error
-		wantPending float64
-		wantAge     float64
-	}{
-		{name: "no record", pending: 0, oldestAge: 0, readErr: nil, wantPending: 0, wantAge: 0},
-		{name: "one record", pending: 1, oldestAge: 90 * time.Second, readErr: nil, wantPending: 1, wantAge: 90},
-		{name: "three records", pending: 3, oldestAge: time.Hour, readErr: nil, wantPending: 3, wantAge: 3600},
+	tests := []blobPurgeCase{
 		{
-			name:        "failed read",
-			pending:     3,
-			oldestAge:   time.Hour,
-			readErr:     readFailureError{},
-			wantPending: 0,
-			wantAge:     0,
+			name:           "no record",
+			pending:        0,
+			oldestAge:      0,
+			readErr:        nil,
+			wantPending:    0,
+			wantAge:        0,
+			wantReadErrors: 0,
+		},
+		{
+			name:           "one record",
+			pending:        1,
+			oldestAge:      90 * time.Second,
+			readErr:        nil,
+			wantPending:    1,
+			wantAge:        90,
+			wantReadErrors: 0,
+		},
+		{
+			name:           "three records",
+			pending:        3,
+			oldestAge:      time.Hour,
+			readErr:        nil,
+			wantPending:    3,
+			wantAge:        3600,
+			wantReadErrors: 0,
+		},
+		{
+			name:           "failed read",
+			pending:        3,
+			oldestAge:      time.Hour,
+			readErr:        readFailureError{},
+			wantPending:    0,
+			wantAge:        0,
+			wantReadErrors: 1,
 		},
 	}
 
@@ -92,15 +141,48 @@ func TestBlobPurgeBacklogGauges(t *testing.T) {
 				t.Fatalf("write registry: %v", err)
 			}
 
-			out := buf.String()
-			if got := gaugeValue(t, out, "dustpan_blob_purge_pending"); got != tt.wantPending {
-				t.Errorf("dustpan_blob_purge_pending = %v, want %v", got, tt.wantPending)
-			}
-
-			if got := gaugeValue(t, out, "dustpan_blob_purge_oldest_age_seconds"); got != tt.wantAge {
-				t.Errorf("dustpan_blob_purge_oldest_age_seconds = %v, want %v", got, tt.wantAge)
-			}
+			checkBlobPurgeGauges(t, buf.String(), tt)
 		})
+	}
+}
+
+// TestBlobPurgeBacklogGaugesSlowRead proves that one read supplies both gauges
+// when the read takes longer than the cache lifetime: the lifetime of the
+// snapshot starts when the read completes.
+func TestBlobPurgeBacklogGaugesSlowRead(t *testing.T) {
+	t.Parallel()
+
+	now := testNow()
+	clock := func() time.Time { return now }
+
+	var reads atomic.Int64
+
+	read := func(context.Context) (int64, time.Time, error) {
+		reads.Add(1)
+		now = now.Add(3 * time.Second)
+
+		return 2, now.Add(-time.Minute), nil
+	}
+
+	reg := metrics.NewRegistry()
+	metrics.RegisterBlobPurgeBacklog(reg, read, clock)
+
+	var buf bytes.Buffer
+	if err := reg.Write(&buf); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	if got := reads.Load(); got != 1 {
+		t.Errorf("store reads for one scrape = %d, want 1", got)
+	}
+
+	out := buf.String()
+	if got := gaugeValue(t, out, "dustpan_blob_purge_pending"); got != 2 {
+		t.Errorf("dustpan_blob_purge_pending = %v, want 2", got)
+	}
+
+	if got := gaugeValue(t, out, "dustpan_blob_purge_oldest_age_seconds"); got != 60 {
+		t.Errorf("dustpan_blob_purge_oldest_age_seconds = %v, want 60", got)
 	}
 }
 

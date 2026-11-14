@@ -347,3 +347,50 @@ func TestUnlistedHandlerFieldFails(t *testing.T) {
 		t.Fatalf("problems = %v, want the concrete field of the embedded struct", got)
 	}
 }
+
+// sentinelHandler is a handler that a test can recognize after a setter
+// stores it in an adapter field.
+type sentinelHandler struct{ name string }
+
+func (*sentinelHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
+
+// TestEveryHandlerNameHasASetter proves that each name that allHandlers lists
+// has a setter in adapterHandlerSetter, and that the setter stores the handler
+// under that name. Without this, a name that the list has and the setters lack
+// would make WrappedRoute return the server unchanged.
+func TestEveryHandlerNameHasASetter(t *testing.T) {
+	t.Parallel()
+
+	var zero adapters
+
+	for _, h := range zero.allHandlers() {
+		t.Run(h.name, func(t *testing.T) {
+			t.Parallel()
+
+			var a adapters
+
+			sentinel := &sentinelHandler{name: h.name}
+
+			set := adapterHandlerSetter(&a, h.name)
+			if set == nil {
+				t.Fatalf("adapterHandlerSetter(%q) = nil, want a setter", h.name)
+			}
+
+			set(sentinel)
+
+			for _, got := range a.allHandlers() {
+				if got.name != h.name {
+					continue
+				}
+
+				if got.handler != http.Handler(sentinel) {
+					t.Fatalf("allHandlers() entry %q = %T, want the sentinel", h.name, got.handler)
+				}
+
+				return
+			}
+
+			t.Fatalf("allHandlers() lists no entry named %q", h.name)
+		})
+	}
+}

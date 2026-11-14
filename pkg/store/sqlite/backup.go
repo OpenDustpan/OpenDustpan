@@ -678,7 +678,9 @@ func (s *Store) reopenDatabase(ctx context.Context) error {
 // checkRestoreFile opens the staged file, checks its integrity, reads its
 // summary, and compares the schema version and the row counts with the
 // manifest. It returns the summary of what the swap will load.
-func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (backup.Summary, error) {
+func checkRestoreFile(
+	ctx context.Context, path string, want backup.Summary, restoreAt time.Time,
+) (backup.Summary, error) {
 	conn, err := openSnapshot(ctx, path)
 	if err != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", corrupt(err))
@@ -706,7 +708,7 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", idsErr)
 	}
 
-	if ownedErr := checkStagedOwnedRows(ctx, conn); ownedErr != nil {
+	if ownedErr := checkStagedOwnedRows(ctx, conn, restoreAt); ownedErr != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", ownedErr)
 	}
 

@@ -6,6 +6,11 @@ Changed by:
 
 - ADR 328 extends decision 1: modes 2 and 4 in milestone 5, modes 1 and 3
   in milestone 6.
+- ADR 359 extends decision 1: the mirror of approvals between the Git host and
+  the change order.
+- ADR 359 extends decision 15: the apply timing decides if an apply can run
+  before the merge.
+- ADR 359 extends decision 25: the checks and the table in the plan comment.
 
 Changes:
 

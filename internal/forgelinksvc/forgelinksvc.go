@@ -1,4 +1,6 @@
-package forgelink
+// Package forgelinksvc is the service of the links from Git host accounts to
+// principals. The ports and the domain types stay in package forgelink.
+package forgelinksvc
 
 import (
 	"context"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/forgelink"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -24,21 +27,12 @@ const (
 // tokenBytes is the number of random bytes of a link token.
 const tokenBytes = 32
 
-// People finds the principal records that the service needs.
-type People interface {
-	// GetPrincipalBySubject returns the principal that exists with the subject,
-	// or principal.ErrNotFound.
-	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
-	// GetPrincipal returns the principal with the ID id, or principal.ErrNotFound.
-	GetPrincipal(ctx context.Context, id string) (principal.Principal, error)
-}
-
 // Service starts, shows and accepts link requests, takes the proof of a Git
 // host account, lists and deletes links, and finds the principal of a linked
 // account. A caller that makes a link must be a person in a console session.
 type Service struct {
-	store  Store
-	people People
+	store  forgelink.Store
+	people forgelink.People
 	now    func() time.Time
 	random io.Reader
 	intake bool
@@ -46,7 +40,7 @@ type Service struct {
 
 // NewService returns a Service. now gives the time of a change, and nil means
 // time.Now. random gives the bytes of a token, and nil means crypto/rand.
-func NewService(store Store, people People, now func() time.Time, random io.Reader) *Service {
+func NewService(store forgelink.Store, people forgelink.People, now func() time.Time, random io.Reader) *Service {
 	if now == nil {
 		now = time.Now
 	}
@@ -74,49 +68,32 @@ func (s *Service) HasIntake() bool {
 	return s.intake
 }
 
-// Started is a link request that a person started. Token is the one-time token.
-// It is shown once and never stored.
-type Started struct {
-	Token   string
-	Request Request
-}
-
-// View is what the accept page shows: the request, and the link that the
-// account that proved itself has now. HasCurrent is false when the account has
-// no link. CurrentName is the display name of the principal of that link.
-type View struct {
-	Request     Request
-	Current     Link
-	HasCurrent  bool
-	CurrentName string
-}
-
 // Start starts a link request for the person that caller is. It returns
 // ErrNotPerson for a caller that is not a person in a console session, and for
 // a principal that is disabled or a break-glass account.
-func (s *Service) Start(ctx context.Context, caller identity.Principal) (Started, error) {
+func (s *Service) Start(ctx context.Context, caller identity.Principal) (forgelink.Started, error) {
 	person, err := s.person(ctx, caller)
 	if err != nil {
-		return Started{}, err
+		return forgelink.Started{}, err
 	}
 
 	raw := make([]byte, tokenBytes)
 	if _, readErr := io.ReadFull(s.random, raw); readErr != nil {
-		return Started{}, fmt.Errorf("make a link token: %w", readErr)
+		return forgelink.Started{}, fmt.Errorf("make a link token: %w", readErr)
 	}
 
 	token := base64.RawURLEncoding.EncodeToString(raw)
 
-	r, err := NewRequest(token, person.ID, s.now().UTC().Truncate(time.Millisecond))
+	r, err := forgelink.NewRequest(token, person.ID, s.now().UTC().Truncate(time.Millisecond))
 	if err != nil {
-		return Started{}, err
+		return forgelink.Started{}, err
 	}
 
 	if err := s.store.CreateRequest(ctx, r); err != nil {
-		return Started{}, fmt.Errorf("store the link request: %w", err)
+		return forgelink.Started{}, fmt.Errorf("store the link request: %w", err)
 	}
 
-	return Started{Token: token, Request: r}, nil
+	return forgelink.Started{Token: token, Request: r}, nil
 }
 
 // Prove records the proof p on the request of token. Only the code that
@@ -126,18 +103,21 @@ func (s *Service) Start(ctx context.Context, caller identity.Principal) (Started
 //
 // Defense in depth: the caller checked the signature, and the store checks the
 // proof and the request again. This method does not rely on either.
-func (s *Service) Prove(ctx context.Context, token string, p Proof) (Request, error) {
-	if !ValidToken(token) {
-		return Request{}, fmt.Errorf("%w: a link token has %d to %d characters", ErrNotFound, MinTokenLen, maxTokenLen)
+func (s *Service) Prove(ctx context.Context, token string, p forgelink.Proof) (forgelink.Request, error) {
+	if !forgelink.ValidToken(token) {
+		return forgelink.Request{}, fmt.Errorf("%w: a link token has %d to %d characters",
+			forgelink.ErrNotFound, forgelink.MinTokenLen, forgelink.MaxTokenLen)
 	}
 
 	if err := p.Validate(); err != nil {
-		return Request{}, err
+		return forgelink.Request{}, err
 	}
 
-	r, err := s.store.ProveRequest(ctx, HashToken(token), p, s.now().UTC().Truncate(time.Millisecond))
+	r, err := s.store.ProveRequest(
+		ctx, forgelink.HashToken(token), p, s.now().UTC().Truncate(time.Millisecond),
+	)
 	if err != nil {
-		return Request{}, fmt.Errorf("prove the link request: %w", err)
+		return forgelink.Request{}, fmt.Errorf("prove the link request: %w", err)
 	}
 
 	return r, nil
@@ -146,22 +126,22 @@ func (s *Service) Prove(ctx context.Context, token string, p Proof) (Request, er
 // Show returns the request of token for the page that asks the person to accept
 // it, with the link that the account has now. A request of another principal
 // is ErrNotFound: the page tells nobody else what a token holds.
-func (s *Service) Show(ctx context.Context, caller identity.Principal, token string) (View, error) {
+func (s *Service) Show(ctx context.Context, caller identity.Principal, token string) (forgelink.View, error) {
 	person, err := s.person(ctx, caller)
 	if err != nil {
-		return View{}, err
+		return forgelink.View{}, err
 	}
 
 	r, err := s.own(ctx, person, token)
 	if err != nil {
-		return View{}, err
+		return forgelink.View{}, err
 	}
 
 	if checkErr := r.Check(s.now()); checkErr != nil {
-		return View{}, checkErr
+		return forgelink.View{}, checkErr
 	}
 
-	var v View
+	var v forgelink.View
 
 	v.Request = r
 
@@ -172,10 +152,10 @@ func (s *Service) Show(ctx context.Context, caller identity.Principal, token str
 	current, err := s.store.LinkOf(ctx, r.Proved.Account)
 
 	switch {
-	case errors.Is(err, ErrNotFound):
+	case errors.Is(err, forgelink.ErrNotFound):
 		return v, nil
 	case err != nil:
-		return View{}, fmt.Errorf("read the link of the account: %w", err)
+		return forgelink.View{}, fmt.Errorf("read the link of the account: %w", err)
 	}
 
 	v.Current, v.HasCurrent = current, true
@@ -194,15 +174,15 @@ func (s *Service) Show(ctx context.Context, caller identity.Principal, token str
 // principal that lost a link, or empty.
 func (s *Service) Accept(
 	ctx context.Context, caller identity.Principal, token, previous string, e audit.Entry,
-) (Link, string, error) {
+) (forgelink.Link, string, error) {
 	person, err := s.person(ctx, caller)
 	if err != nil {
-		return Link{}, "", err
+		return forgelink.Link{}, "", err
 	}
 
 	r, err := s.own(ctx, person, token)
 	if err != nil {
-		return Link{}, "", err
+		return forgelink.Link{}, "", err
 	}
 
 	now := s.now().UTC().Truncate(time.Millisecond)
@@ -210,7 +190,7 @@ func (s *Service) Accept(
 	// The store applies the same rules in its transaction. This read lets the
 	// entry name the account, which only a proved request has.
 	if checkErr := r.CheckAccept(person.ID, now); checkErr != nil {
-		return Link{}, "", checkErr
+		return forgelink.Link{}, "", checkErr
 	}
 
 	e = s.entry(e, now, person.ID)
@@ -220,6 +200,7 @@ func (s *Service) Accept(
 		e.Changes,
 		audit.Change{Key: keyChange, Old: nil, New: "linked", Layer: "", TakesEffect: ""},
 		audit.Change{Key: keyPrincipal, Old: nil, New: person.ID, Layer: "", TakesEffect: ""},
+		audit.Change{Key: "forgeLink.deliveryId", Old: nil, New: r.Proved.DeliveryID, Layer: "", TakesEffect: ""},
 	)
 
 	if previous != "" {
@@ -229,19 +210,19 @@ func (s *Service) Accept(
 		)
 	}
 
-	accepted, err := s.store.AcceptRequest(ctx, Acceptance{
-		TokenSHA256: HashToken(token), Principal: person.ID, Previous: previous, At: now,
+	accepted, err := s.store.AcceptRequest(ctx, forgelink.Acceptance{
+		TokenSHA256: forgelink.HashToken(token), Principal: person.ID, Previous: previous, At: now,
 		Lost: lost,
 	}, e)
 	if err != nil {
-		return Link{}, "", fmt.Errorf("accept the link request: %w", err)
+		return forgelink.Link{}, "", fmt.Errorf("accept the link request: %w", err)
 	}
 
 	return accepted.Link, accepted.Replaced, nil
 }
 
 // List returns the links of the person that caller is.
-func (s *Service) List(ctx context.Context, caller identity.Principal) ([]Link, error) {
+func (s *Service) List(ctx context.Context, caller identity.Principal) ([]forgelink.Link, error) {
 	person, err := s.personRecord(ctx, caller)
 	if err != nil {
 		return nil, err
@@ -258,7 +239,9 @@ func (s *Service) List(ctx context.Context, caller identity.Principal) ([]Link, 
 // Delete deletes the link of the account a when it belongs to the person that
 // caller is. A link of another principal is ErrNotFound: a person learns nothing
 // about the links of others.
-func (s *Service) Delete(ctx context.Context, caller identity.Principal, a Account, e audit.Entry) error {
+func (s *Service) Delete(
+	ctx context.Context, caller identity.Principal, a forgelink.Account, e audit.Entry,
+) error {
 	person, err := s.person(ctx, caller)
 	if err != nil {
 		return err
@@ -270,7 +253,9 @@ func (s *Service) Delete(ctx context.Context, caller identity.Principal, a Accou
 // DeleteFor deletes the link of the account a when it belongs to the principal
 // principalID. The route that calls it checks server:manage-principals on that
 // principal. A link of another principal is ErrNotFound.
-func (s *Service) DeleteFor(ctx context.Context, principalID string, a Account, e audit.Entry) error {
+func (s *Service) DeleteFor(
+	ctx context.Context, principalID string, a forgelink.Account, e audit.Entry,
+) error {
 	return s.deleteOf(ctx, principalID, a, e)
 }
 
@@ -279,14 +264,14 @@ func (s *Service) DeleteFor(ctx context.Context, principalID string, a Account, 
 // no link and for a link of a principal that is disabled, deleted or a
 // break-glass account, and ErrInvalid for an account that fails Validate. The
 // fields of a match exactly.
-func (s *Service) Resolve(ctx context.Context, a Account) (principal.Principal, error) {
+func (s *Service) Resolve(ctx context.Context, a forgelink.Account) (principal.Principal, error) {
 	if err := a.Validate(); err != nil {
 		return principal.Principal{}, err
 	}
 
 	l, err := s.store.LinkOf(ctx, a)
-	if errors.Is(err, ErrNotFound) {
-		return principal.Principal{}, ErrNotLinked
+	if errors.Is(err, forgelink.ErrNotFound) {
+		return principal.Principal{}, forgelink.ErrNotLinked
 	}
 
 	if err != nil {
@@ -295,7 +280,7 @@ func (s *Service) Resolve(ctx context.Context, a Account) (principal.Principal, 
 
 	p, err := s.people.GetPrincipal(ctx, l.Principal)
 	if errors.Is(err, principal.ErrNotFound) {
-		return principal.Principal{}, ErrNotLinked
+		return principal.Principal{}, forgelink.ErrNotLinked
 	}
 
 	if err != nil {
@@ -306,14 +291,16 @@ func (s *Service) Resolve(ctx context.Context, a Account) (principal.Principal, 
 	// and this check stays so that a link of a principal that cannot act never
 	// runs a command.
 	if !p.DisabledAt.IsZero() || p.BreakGlass || p.Kind != principal.KindPerson {
-		return principal.Principal{}, ErrNotLinked
+		return principal.Principal{}, forgelink.ErrNotLinked
 	}
 
 	return p, nil
 }
 
 // deleteOf deletes the link of a if principalID holds it.
-func (s *Service) deleteOf(ctx context.Context, principalID string, a Account, e audit.Entry) error {
+func (s *Service) deleteOf(
+	ctx context.Context, principalID string, a forgelink.Account, e audit.Entry,
+) error {
 	if err := a.Validate(); err != nil {
 		return err
 	}
@@ -324,7 +311,7 @@ func (s *Service) deleteOf(ctx context.Context, principalID string, a Account, e
 	}
 
 	if current.Principal != principalID {
-		return ErrNotFound
+		return forgelink.ErrNotFound
 	}
 
 	e = s.entry(e, s.now().UTC().Truncate(time.Millisecond), principalID)
@@ -347,7 +334,9 @@ func (s *Service) deleteOf(ctx context.Context, principalID string, a Account, e
 // so the old holder finds the loss in its own entries. The entry also records
 // the intent to tell the old holder: the notification type for it does not exist
 // yet, so no notice goes out, and the entry is the only record of the loss.
-func (s *Service) lostEntry(base audit.Entry, now time.Time, r Request, previous string) audit.Entry {
+func (s *Service) lostEntry(
+	base audit.Entry, now time.Time, r forgelink.Request, previous string,
+) audit.Entry {
 	if previous == "" {
 		return base
 	}
@@ -385,7 +374,7 @@ func (*Service) entry(e audit.Entry, now time.Time, principalID string) audit.En
 
 // accountChanges records an account in an audit entry. The login is text for a
 // reader of the log: the log never relies on it.
-func accountChanges(a Account, login string) []audit.Change {
+func accountChanges(a forgelink.Account, login string) []audit.Change {
 	changes := []audit.Change{
 		{Key: "forgeLink.kind", Old: nil, New: string(a.Kind), Layer: "", TakesEffect: ""},
 		{Key: "forgeLink.host", Old: nil, New: a.Host, Layer: "", TakesEffect: ""},
@@ -405,18 +394,20 @@ func accountChanges(a Account, login string) []audit.Change {
 // own reads the request of token and returns it only when person started it.
 // Any other case is ErrNotFound, so the response does not tell a token that
 // exists from one that does not.
-func (s *Service) own(ctx context.Context, person principal.Principal, token string) (Request, error) {
-	if !ValidToken(token) {
-		return Request{}, ErrNotFound
+func (s *Service) own(
+	ctx context.Context, person principal.Principal, token string,
+) (forgelink.Request, error) {
+	if !forgelink.ValidToken(token) {
+		return forgelink.Request{}, forgelink.ErrNotFound
 	}
 
-	r, err := s.store.GetRequest(ctx, HashToken(token))
+	r, err := s.store.GetRequest(ctx, forgelink.HashToken(token))
 	if err != nil {
-		return Request{}, fmt.Errorf("read the link request: %w", err)
+		return forgelink.Request{}, fmt.Errorf("read the link request: %w", err)
 	}
 
 	if r.Principal != person.ID {
-		return Request{}, ErrNotFound
+		return forgelink.Request{}, forgelink.ErrNotFound
 	}
 
 	return r, nil
@@ -430,21 +421,23 @@ func (s *Service) own(ctx context.Context, person principal.Principal, token str
 // too. This check stays so that a new caller of the service cannot skip it.
 func (s *Service) person(ctx context.Context, caller identity.Principal) (principal.Principal, error) {
 	if caller.Credential != identity.CredentialSession {
-		return principal.Principal{}, ErrNotPerson
+		return principal.Principal{}, forgelink.ErrNotPerson
 	}
 
 	return s.personRecord(ctx, caller)
 }
 
 // personRecord returns the record of the person that caller acts as.
-func (s *Service) personRecord(ctx context.Context, caller identity.Principal) (principal.Principal, error) {
+func (s *Service) personRecord(
+	ctx context.Context, caller identity.Principal,
+) (principal.Principal, error) {
 	if !caller.ActsAsPerson() {
-		return principal.Principal{}, ErrNotPerson
+		return principal.Principal{}, forgelink.ErrNotPerson
 	}
 
 	p, err := s.people.GetPrincipalBySubject(ctx, caller.Subject)
 	if errors.Is(err, principal.ErrNotFound) {
-		return principal.Principal{}, ErrNotPerson
+		return principal.Principal{}, forgelink.ErrNotPerson
 	}
 
 	if err != nil {
@@ -452,7 +445,7 @@ func (s *Service) personRecord(ctx context.Context, caller identity.Principal) (
 	}
 
 	if p.Kind != principal.KindPerson || !p.DisabledAt.IsZero() || p.BreakGlass {
-		return principal.Principal{}, ErrNotPerson
+		return principal.Principal{}, forgelink.ErrNotPerson
 	}
 
 	return p, nil

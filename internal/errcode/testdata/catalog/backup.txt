@@ -1,1 +1,2 @@
 backup.corrupt backup:identifier
+backup.too-many-unverified count:quantity limit:quantity

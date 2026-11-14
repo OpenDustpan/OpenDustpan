@@ -38,6 +38,9 @@ type serverHandlerInputs struct {
 	store      namespace.Store
 	namespaces *namespace.Service
 	access     *access.Service
+	// reach reads the reach of a group for the protected flag of the group
+	// routes.
+	reach      access.ReachConfig
 	tokens     *accesstoken.Service
 	deleted    *deletedSweeper
 	stateWrite stategate.Effective
@@ -98,6 +101,7 @@ func newServerHandler(in serverHandlerInputs) (http.Handler, error) {
 		Journal:          journalReporterOf(in.store),
 		Principals:       in.principals,
 		Access:           in.access,
+		Reach:            in.reach,
 		Tokens:           in.tokens,
 		IPAllowlists:     in.extras.allow,
 		Gates:            gatesPort(in.gates),

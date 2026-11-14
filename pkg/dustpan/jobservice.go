@@ -954,7 +954,8 @@ func newArtifactSweeper(svc services, cfg *settings) (*job.ArtifactSweeper, bool
 
 	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
 		Jobs: cfg.jobStore, Names: ports.names, Blobs: blobs, Namespaces: jobNamespaces{namespaces: svc.namespaces},
-		Guard: ports.guard, Clock: ports.clock, Audit: ports.entries, Logger: log, Now: cfg.now,
+		Guard: ports.guard, Clock: ports.clock, Operations: cfg.durableStore, Audit: ports.entries, Logger: log,
+		Now: cfg.now,
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("job artifact sweep: %w", err)

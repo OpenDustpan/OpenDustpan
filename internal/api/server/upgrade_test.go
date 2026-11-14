@@ -157,6 +157,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -226,6 +227,7 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -289,6 +291,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -377,6 +380,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -448,6 +452,7 @@ func newJournalHandler(t *testing.T, journaled int64) testHandler {
 	t.Helper()
 
 	cfg := &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

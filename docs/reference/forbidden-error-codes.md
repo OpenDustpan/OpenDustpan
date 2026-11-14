@@ -9,7 +9,7 @@ its action from `errorCode` and never from the text of `message`.
 
 | `errorCode` | The cause | The `message` |
 | --- | --- | --- |
-| `access.denied` | The caller lacks a permission for the action on the object. | `forbidden` |
+| `access.denied` | The caller lacks a permission for the action on the object. | `forbidden: you need the action <action> on this <kind>`, or `forbidden` for a denial that names no action |
 | `access.no-action` | The route declares no permission for the object of the request, so the server refuses the request. A grant does not help. | `forbidden` |
 | `access.ip-not-allowed` | The client address is outside the IP allowlist of the namespace. | `forbidden` |
 | `gate.limited` | An access limit forbids the action on the object. | `forbidden` |
@@ -21,10 +21,14 @@ its action from `errorCode` and never from the text of `message`.
 A code never changes its meaning, and the server never removes it. The text of
 `message` can change, so a program must not match on it.
 
-The IP allowlist and a missing permission send the same `message`. Only
-`errorCode` tells them apart. A person who gets `access.ip-not-allowed` must
-send the request from an allowed address. A person who gets `access.denied`
-needs a grant.
+A denial that names the action and the kind of the object answers
+`forbidden: you need the action <action> on this <kind>` with
+`errorArgs.action` and `errorArgs.objectKind`. The kind is one of `server`,
+`caller`, `principal`, `unit`, `collection` and `namespace`. A denial that
+names no action still answers `forbidden` with no arguments, like a request
+from an address outside the allowlist. Only `errorCode` tells the two apart. A
+person who gets `access.ip-not-allowed` must send the request from an allowed
+address. A person who gets `access.denied` needs a grant.
 
 When a request has more than one cause, the code follows this order:
 `sign-in.refused` and `access.no-action`, then `session.other-site`,

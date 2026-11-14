@@ -249,6 +249,13 @@ var Settings = []*Setting{
 			"has at least 32 bits. The server always refuses loopback, link-local, cloud metadata, unspecified and "+
 			"multicast addresses, also inside a range. It checks this when a person sets an address and at each call.",
 	).WithFile("git-host-allowed-ranges"),
+	boolSetting(
+		"allow-plain-connections", "DUSTPAN_ALLOW_PLAIN_CONNECTIONS",
+		"allow LDAP and SMTP connections with no TLS, except to loopback (DUSTPAN_ALLOW_PLAIN_CONNECTIONS)",
+		"(none: off). Set `true` only in a trusted network. An LDAP bind or an SMTP login then sends its "+
+			"password with no encryption. The settings resource also holds it, and a value from a flag, a "+
+			"variable or this file locks it",
+	).WithFile("egress.allowPlainConnections"),
 	stringSetting(
 		"branding-preset", "DUSTPAN_BRANDING_PRESET", "",
 		"name of the branding preset of the installation, for example high-contrast (DUSTPAN_BRANDING_PRESET)",

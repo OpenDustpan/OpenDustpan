@@ -368,6 +368,18 @@ func millisOrZero(t time.Time) int64 {
 	return t.UnixMilli()
 }
 
+// nextUpdateAt returns the update time of a write to a job whose stored
+// update time is stored, at the clock time now. The store keeps Unix
+// milliseconds, so the result is at least one millisecond after stored. Two
+// writes in one millisecond of the clock still move the update time.
+func nextUpdateAt(now, stored time.Time) time.Time {
+	if now.UnixMilli() <= stored.UnixMilli() {
+		return time.UnixMilli(stored.UnixMilli() + 1).UTC()
+	}
+
+	return now
+}
+
 // checkNewJob returns job.ErrInvalid for a job that Create cannot store.
 //
 // Defense in depth: the service checks the same fields before it calls the

@@ -48,6 +48,7 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

@@ -58,6 +58,7 @@ func newStoreCheckFixture(t *testing.T, workers apiserver.WorkerSource, deny ...
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHost:          nil,

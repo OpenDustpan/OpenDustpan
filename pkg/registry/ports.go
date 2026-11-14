@@ -7,6 +7,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
+// MaxAddressPage is the largest limit of Store.Addresses.
+const MaxAddressPage = 1000
+
 // Store keeps the releases of the private registry. A SQL adapter serves it
 // from the database of the namespace. Every write carries the fence of the
 // namespace, and the store checks it in the transaction of the write. The
@@ -51,10 +54,15 @@ type Store interface {
 	// returns an empty list for an address with no release, and ErrInvalid for
 	// an address that fails validation.
 	List(ctx context.Context, addr Address) ([]Release, error)
-	// Addresses returns the addresses of kind in namespace ns that have at
-	// least one release, ordered by name and system. It returns ErrInvalid for
-	// a namespace or a kind that fails validation.
-	Addresses(ctx context.Context, ns namespace.Name, kind Kind) ([]Address, error)
+	// Addresses returns at most limit addresses of kind in namespace ns that
+	// have at least one release, ordered by name and system, and the cursor of
+	// the next page. The cursor after is the key of the last address of the
+	// page before, as AddressKey returns it, and it is empty for the first
+	// page; every returned address sorts after the cursor. The next cursor is
+	// the key of the last address of this page, and it is empty when this page
+	// is the last one. It returns ErrInvalid for a namespace, a kind, a cursor
+	// or a limit that fails validation.
+	Addresses(ctx context.Context, ns namespace.Name, kind Kind, after string, limit int) ([]Address, string, error)
 }
 
 // TrustedKey is a public signing key that a namespace trusts.

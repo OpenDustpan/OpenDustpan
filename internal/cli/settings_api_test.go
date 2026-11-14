@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
@@ -17,6 +18,12 @@ func TestSettingDeclarationsAreValidAndCoverTheFileKeys(t *testing.T) {
 	registry, err := setting.NewRegistry(decls)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	// Only the settings that the API can change have a database layer.
+	databaseKeys := map[string]bool{
+		"branding.preset":                      true,
+		plainconn.SettingAllowPlainConnections: true,
 	}
 
 	for _, s := range cli.ServeSettings() {
@@ -37,11 +44,38 @@ func TestSettingDeclarationsAreValidAndCoverTheFileKeys(t *testing.T) {
 			t.Fatalf("%s: a secret declaration shows a default", s.File)
 		}
 
-		// Only the settings that the API can change have a database layer.
-		if d.Database != (s.File == "branding.preset") {
+		if d.Database != databaseKeys[s.File] {
 			t.Fatalf("%s: database layer = %v", s.File, d.Database)
 		}
 	}
+}
+
+// TestAllowPlainConnectionsIsDeclaredAndLockedByTheStaticLayer proves the
+// serve setting: the declaration is a bool with the database layer, false by
+// default, and a value from the variable locks the key.
+func TestAllowPlainConnectionsIsDeclaredAndLockedByTheStaticLayer(t *testing.T) {
+	t.Parallel()
+
+	registry, err := setting.NewRegistry(cli.SettingDeclarations())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	d, ok := registry.Lookup(setting.LevelInstallation, plainconn.SettingAllowPlainConnections)
+	if !ok || d.Kind != setting.KindBool || d.Default != "false" || !d.Database || d.Apply != setting.ApplyLive {
+		t.Fatalf("declaration = %+v, %v; want a bool with the database layer, false by default", d, ok)
+	}
+
+	resolved, err := cli.Resolve(serveFlagSet(t), cli.ServeSettings(), mapLookup(map[string]string{
+		"DUSTPAN_ALLOW_PLAIN_CONNECTIONS": "false",
+	}), cli.ConfigFile{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	layer := cli.NewStaticLayer(resolved)
+	checkStatic(t, layer, plainconn.SettingAllowPlainConnections,
+		staticWant{setting.SourceEnv, "false", "DUSTPAN_ALLOW_PLAIN_CONNECTIONS"})
 }
 
 func TestBrandingPresetDeclaration(t *testing.T) {

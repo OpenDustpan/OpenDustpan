@@ -54,15 +54,16 @@ const defaultReturnPath = "/"
 
 // Errors of the sign-in routes.
 var (
-	errUnknownProvider = errors.New("unknown sign-in provider")
-	errProviderDown    = errors.New("identity provider is not available: try again later")
-	errReturnPath      = errors.New("return path is not a path of this server")
-	errSignInFailed    = errors.New("sign-in failed: start the sign-in again")
-	errSignInRefused   = errcode.Refusal(errcode.SignInRefused, "sign-in refused")
-	errNoSession       = errors.New("the request has no console session")
-	errCSRF            = sessionauth.ErrCSRF
-	errOtherSite       = sessionauth.ErrOtherSite
-	errFreshParam      = errors.New(`the query parameter fresh must be "1" or absent`)
+	errUnknownProvider        = errors.New("unknown sign-in provider")
+	errProviderDown           = errors.New("identity provider is not available: try again later")
+	errReturnPath             = errors.New("return path is not a path of this server")
+	errSignInFailed           = errors.New("sign-in failed: start the sign-in again")
+	errRemovalAlertUnrecorded = errors.New("the removal alert and its audit entry could not be written")
+	errSignInRefused          = errcode.Refusal(errcode.SignInRefused, "sign-in refused")
+	errNoSession              = errors.New("the request has no console session")
+	errCSRF                   = sessionauth.ErrCSRF
+	errOtherSite              = sessionauth.ErrOtherSite
+	errFreshParam             = errors.New(`the query parameter fresh must be "1" or absent`)
 )
 
 // SignInLimiter is the per-address limit of the sign-in routes. It has its
@@ -712,7 +713,11 @@ func classifySignIn(err error) (failure, bool) {
 		return fail(http.StatusBadRequest, errReturnPath.Error()), true
 	case errors.Is(err, errSignInFailed):
 		return fail(http.StatusBadRequest, errSignInFailed.Error()), true
-	case errors.Is(err, errNoSession):
+	case errors.Is(err, signinsvc.ErrRemovalAlertUnrecorded):
+		return failCoded(
+			http.StatusServiceUnavailable, errRemovalAlertUnrecorded.Error(), errcode.PrincipalRemovalAlertUnrecorded,
+		), true
+	case errors.Is(err, errNoSession), errors.Is(err, session.ErrEnded):
 		return fail(http.StatusNotFound, errNoSession.Error()), true
 	case errors.Is(err, errDevCode), errors.Is(err, errDevKind):
 		return fail(http.StatusForbidden, err.Error()), true
@@ -722,8 +727,6 @@ func classifySignIn(err error) (failure, bool) {
 		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, errReauthenticate):
 		return fail(http.StatusUnauthorized, err.Error()), true
-	case errors.Is(err, session.ErrEnded):
-		return fail(http.StatusNotFound, errNoSession.Error()), true
 	default:
 		return fail(0, ""), false
 	}

@@ -87,6 +87,28 @@ func TestErrorsHaveCodes(t *testing.T) {
 	}
 }
 
+// TestLimitUnavailableWithStoreOutage proves that a test limit whose counter
+// wraps the error of a store that does not answer gives 503
+// namespace.unavailable with Retry-After 5, not the code of the limit.
+func TestLimitUnavailableWithStoreOutage(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	notifications.WriteError(t.Context(), rec,
+		fmt.Errorf("test: %w: %w", sinks.ErrLimitUnavailable, namespace.ErrUnavailable))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want 5", got)
+	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusServiceUnavailable, rec.Body.Bytes(),
+		errcodetest.Want{Code: errcode.NamespaceUnavailable, Args: nil, RequestBody: nil})
+}
+
 // TestRequestErrorsHaveCodes proves that the refusals of a request body and
 // of a header answer 400 with their code of the catalog.
 func TestRequestErrorsHaveCodes(t *testing.T) {

@@ -186,6 +186,12 @@ type MemberStore interface {
 	// name as the key. It returns ErrNotFound when the principal does not
 	// exist.
 	ListGroupsOf(ctx context.Context, principalID string, q Query) ([]Group, int64, error)
+	// ListActiveGroupNamesOf returns the names of the groups in which the
+	// principal principalID has an active membership that is not removed, in
+	// groups that are not deleted, ordered by name without regard to case,
+	// each once. It returns ErrNotFound when the principal does not exist or
+	// was deleted.
+	ListActiveGroupNamesOf(ctx context.Context, principalID string) ([]string, error)
 }
 
 // Guard checks that a caller may change who holds a set of grants.

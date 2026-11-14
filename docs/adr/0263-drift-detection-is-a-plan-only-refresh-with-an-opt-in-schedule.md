@@ -5,6 +5,7 @@ Status: accepted · 2026-10-20. Records decisions 25.4 and 25.5 of the owner of 
 Changed by:
 
 - ADR 354 extends: triggers and drift schedules carry the delegation.
+- ADR 358 extends decision 7: automatic remediation (auto-dedrift) is opt-in, and a namespace can always opt out.
 .
 ## Context
 

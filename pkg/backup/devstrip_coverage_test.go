@@ -42,6 +42,7 @@ var devColumnDecisions = map[string]devDecision{
 	},
 	"grants.subject_id":                {strip: true, reason: "ID of the principal that holds the grant"},
 	"group_members.principal_id":       {strip: true, reason: "membership of a removed principal"},
+	"member_removals.members_before":   {strip: false, reason: "a count of members, not a principal"},
 	"sessions.principal_id":            {strip: true, reason: "session of a removed principal"},
 	"person_preferences.principal_id":  {strip: true, reason: "preferences of a removed principal"},
 	"access_tokens.principal_id":       {strip: true, reason: "token of a removed principal"},
