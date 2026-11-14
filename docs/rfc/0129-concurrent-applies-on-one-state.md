@@ -7,7 +7,9 @@ created: 2026-11-14
 
 # RFC 129. Concurrent applies on one state: the six open points of ADR 302
 
-Status: discussing. This is the RFC that ADR 302 decision 6 asks for. It
+Status: discussing. The owner accepted points 1 to 3 and 5 to 7 on 14
+November 2026 as recommended ([ADR 368](../adr/0368-concurrent-applies-apply-claims-server-serial-fences-and-the-closure-test.md)).
+Point 4 stays open. This is the RFC that ADR 302 decision 6 asks for. It
 touches ADR 26 decision 3, ADR 44 decisions 1 and 9, ADR 100 decision 20 and
 ADR 299 decision 19. It does not edit an accepted ADR. An owner decision on
 it gives a new ADR, and milestone 8 code starts only after that ADR (ADR 302
@@ -97,6 +99,8 @@ a short explanation. The points depend on each other in this order: 7, 4, 3,
 
 ### 1. The serial under an apply claim (change to ADR 26 decision 3)
 
+**Decided:** option A, by the owner on 14 November 2026 (ADR 368 decision 2).
+
 **Context.** ADR 26 decision 3: "A new state version needs the lock of the
 caller. It needs the same lineage as the current state. When no state
 exists, any lineage is valid. It needs a higher serial than the current
@@ -161,6 +165,8 @@ checks that each person's own pages go up, so an old copy cannot sneak in.
 
 ### 2. A parent pointer and an apply claim ID for each state version
 
+**Decided:** option A, by the owner on 14 November 2026 (ADR 368 decision 3).
+
 **Context.** A merged version comes from two inputs: the version that was
 current at the commit, and the base that the plan of the claim used. The
 history must show "merged with job X", and the server must find the base of
@@ -208,6 +214,8 @@ for a merged page, which old page its writer started from. The clerk glues a
 page only if the page it says it follows is still the last page.
 
 ### 3. A fence for each apply claim
+
+**Decided:** option A, by the owner on 14 November 2026 (ADR 368 decision 4).
 
 **Context.** ADR 44 decision 1: "In the transaction that releases the lock,
 `force-unlock` writes a new state version. Its content is the current state
@@ -267,6 +275,9 @@ working on, and someone must look before anyone else writes there.
 
 ### 4. One principal for each job on the TFE-compatible path
 
+**Open.** The owner did not take the recommendation on 14 November 2026,
+and will give the industry view of this point. The options stay as written.
+
 **Context.** ADR 44 decision 9: "The server makes no attempt to tell two
 clients with one token apart while one of them holds the lock. Distinct
 principals for each job (RFC 20) remain the advice of ADR 25." A
@@ -315,6 +326,8 @@ second badge.
 
 ### 5. The retry interval and the timeout of the local wrapper
 
+**Decided:** option A, by the owner on 14 November 2026 (ADR 368 decision 5).
+
 **Context.** ADR 302 decision 2: the wrapper "tries the claim again after the
 refusal until the blocking claim ends, or until a timeout." The values are
 open. A retry also needs a rule for a base that changed while it waited: the
@@ -361,6 +374,8 @@ all knock at once. After 30 minutes it gives up and says who was in the room.
 If the room changed while it waited, it makes a new plan and asks you again.
 
 ### 6. A closure test in place of "a replacement is never disjoint" (ADR 299)
+
+**Decided:** option C, by the owner on 14 November 2026 (ADR 368 decision 6).
 
 **Context.** ADR 299 decision 19 (owner, with PM details): "Plan conflicts in
 place of unit locks (owner). [...] "No conflict" holds only when the check
@@ -432,6 +447,8 @@ cannot see what rests on the brick, the wall stays closed.
 
 ### 7. The term "apply claim"
 
+**Decided:** option A, by the owner on 14 November 2026 (ADR 368 decision 1).
+
 **Context.** "Claim" has three meanings in `GLOSSARY.md` already (see "A word
 to fix first"). The glossary lists "Claim (alone)" under _Avoid_ for the
 job-ID claim.
@@ -476,7 +493,8 @@ so an address change never passes the closure test.
 
 ## Open questions
 
-None for the author. Each decision point above is a question for the owner.
+- Point 4: how the server tells the jobs apart on the TFE-compatible path, and
+  if that needs one principal for each job. The owner decides.
 
 ## Checklist
 
@@ -486,4 +504,6 @@ None for the author. Each decision point above is a question for the owner.
 
 ## Outcome
 
-Empty until the RFC is accepted (link the ADR) or dropped (say why).
+Points 1 to 3 and 5 to 7 accepted by the owner on 14 November 2026:
+[ADR 368](../adr/0368-concurrent-applies-apply-claims-server-serial-fences-and-the-closure-test.md).
+Point 4 is open.
