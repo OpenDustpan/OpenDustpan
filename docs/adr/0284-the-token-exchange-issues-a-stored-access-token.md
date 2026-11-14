@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-30. Decided by the project owner on 30 October 2026. Accepts [RFC 112](../rfc/0112-the-token-exchange-issues-a-stored-access-token.md). Amends ADR 54 (decision 3 and the first item of its consequences)
 
+Changed by:
+
+- ADR 371 changes decision 1: the kind `trust` becomes `jwt-exchange`, and
+  an mTLS exchange issues a stored token of the kind `mtls-exchange`.
+
 ## Context
 
 [ADR 54](0054-workload-identity-oidc-jwt-and-mtls.md) decides the workload

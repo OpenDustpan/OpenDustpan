@@ -1,6 +1,6 @@
 ## 1. Dependencies
 
-- [ ] 1.1 PR #2981 (`SignInFromBody`) and PR #2968 (the static provider and the route) are merged to `main`. Check: `git log main` holds both, and `make e2e -run TestLDAPSignIn` passes on `main`.
+- [x] 1.1 PR #2981 (`SignInFromBody`) and PR #2968 (the static provider and the route) are merged to `main`. Check: `git log main` holds both, and `make e2e -run TestLDAPSignIn` passes on `main`.
 
 ## 2. The lockout setting
 

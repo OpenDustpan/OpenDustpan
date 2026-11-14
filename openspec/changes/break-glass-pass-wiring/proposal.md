@@ -1,0 +1,88 @@
+---
+version: 3
+---
+
+## Why
+
+**Persona: site administrator.** A site administrator needs to let one named person write state when a gate is in error, with a record of who did it and why. The pkg/gate decision layer holds the pass logic. The pack shows no store, no audit writer, no grant check point, no route field and no proof kind for it. No ADR in the pack decides these shapes, so each one is an open question for the owner.
+
+The user path this change must make work:
+
+1. **API.** The administrator proves fresh authentication and asks for a break-glass pass for one unit with a reason. The server returns a pass that works once, for 15 minutes.
+2. **API.** The developer sends the pass on the Pulumi update-create request or on the TFE state-version request.
+3. **API.** The administrator reads the audit entry of the issue and of the use of the pass.
+4. **Docs page.** A docs page explains the pass, the 15-minute limit, the single use and the audit entry.
+5. **E2e.** BLOCKED by the owner decision on the route field and the proof kind: the e2e step against the real Pulumi CLI and OpenTofu cannot name its route field yet.
+
+Errors the person may hit, and the one command that helps:
+
+| Error | What the answer says | The command that helps |
+| --- | --- | --- |
+| The pass is expired, used, unknown or for another unit. | The server answers 403 with an error code that says the pass is not valid. It writes no state and writes an audit entry. | `GET /api/audit/entries` |
+| The caller holds no grant to issue a pass. | The server answers 403 and names the missing action. | `GET /api/server/caller/grants` |
+
+Evidence for the claims above:
+
+- The package pkg/gate exists. Proof: The pack lists the path pkg/gate with exists true.
+- Main has a TFE state write handler and Pulumi update-create routes. Proof: internal/api/tfe/state_write.go:253 (Handler.writeStateVersionCreate) and internal/api/pulumi/routes.go:310 (Handler.updateCreateRoutes).
+- Main has an audit placement function and a grant check. Proof: pkg/store/postgres/audit.go:283 (placeAuditEntry) and pkg/access/check.go:139 (Service.grantCheck).
+- No ADR decides the store, the route field or the proof kind. Proof: The pack lists no ADR for this item, and the roadmap step says no ADR decides these shapes.
+
+## What Changes
+
+- After the owner decides: add the store of the pass and its baseline place.
+- After the owner decides: write the audit entry of the issue and of the use of a pass.
+- After the owner decides: check a grant where a pass is issued.
+- After the owner decides: add the route field on the Pulumi update-create route and the TFE state-version routes.
+- After the owner decides: add the fresh-authentication proof kind.
+
+Out of scope:
+
+- The gate decision layer itself, which exists in pkg/gate.
+- Changing the words of any owner-tagged decision.
+
+Depends on:
+
+- break-glass-gates-in-error
+- `break-glass-gates-in-error` (the part before it in the split)
+
+## Usability
+
+Where the path still costs the person time or surprises them:
+
+- The administrator needs one fresh proof and one request.
+- Each error names the one command that helps.
+
+## What main already does
+
+Each fact names its file, line and function on main. The change specifies only the difference.
+
+- The TFE state write handler exists. (`internal/api/tfe/state_write.go:253 (Handler.writeStateVersionCreate)`)
+- The Pulumi update-create routes exist. (`internal/api/pulumi/routes.go:310 (Handler.updateCreateRoutes)`)
+- The grant check exists. (`pkg/access/check.go:139 (Service.grantCheck)`)
+- The audit placement function exists. (`pkg/store/postgres/audit.go:283 (placeAuditEntry)`)
+
+## ADR check
+
+Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+
+No ADR is touched.
+
+## Open questions
+
+none
+
+Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
+
+1. Which store place, route field and proof kind does the break-glass pass use?
+   - Options: A: a new table in the baseline of each dialect, a new request header for the pass, and the existing fresh-authentication proof; B: keep the pass in an existing table, send it in the request body; C: sign the pass without a store.
+   - Provisional decision (owner review 14 Nov): A: a new table in the baseline of each dialect, a new request header for the pass, and the existing fresh-authentication proof
+   - Reason: A table gives exact single use in one transaction with the audit entry. A header works with the real CLIs, which cannot change their bodies. Benchmark: AWS: the STS temporary credential of break-glass access is time limited and logged in CloudTrail.
+   - Persona impact: The administrator needs one fresh proof and one request. The developer sends one header. Escape hatch: An expired or used pass is refused. The administrator issues a new pass.
+
+Questions considered and answered:
+
+- Does an ADR decide the store, the route field or the proof kind? No ADR in the pack does. The roadmap step says so. These are open questions for the owner.
+- Where do single use and expiry get checked? In the store transaction, so that a race cannot use a pass twice. This holds for any store the owner chooses.
+
+Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

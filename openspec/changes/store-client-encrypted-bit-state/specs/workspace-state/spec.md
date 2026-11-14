@@ -1,0 +1,45 @@
+## ADDED Requirements
+
+### Requirement: store-encrypted-bit-at-finalize
+
+When an OpenTofu state version finalizes, including by forced write or restore, the server SHALL store the client-encrypted bit from the upload stream in the state version row.
+
+#### Scenario: finalize stores bit
+- **WHEN** an OpenTofu state upload finalizes
+- **THEN** the row holds the same bit as the uploaded document
+
+#### Scenario: forced write and restore
+- **WHEN** a forced write or a restore creates a state version
+- **THEN** the new row holds the bit from its stream
+
+### Requirement: latest-avoids-blob-read
+
+When a caller reads the latest state version whose stored bit is present, the server SHALL answer the bit without reading the state blob.
+
+#### Scenario: row read only
+- **WHEN** the latest row holds a present bit
+- **THEN** the answer uses the stored bit and performs no blob read
+
+### Requirement: legacy-null-bit-fallback
+
+When the latest state version row holds a null bit, the server SHALL determine the bit by streaming the state blob.
+
+#### Scenario: legacy row
+- **WHEN** the latest row holds a null bit
+- **THEN** the bit is correct and the row still holds null after the read
+
+### Requirement: refuse-both-keys
+
+If an uploaded state document holds both encrypted_data and version, then the server SHALL refuse the document as invalid state.
+
+#### Scenario: both keys refused
+- **WHEN** an uploaded document holds both keys
+- **THEN** the upload fails and no version is stored
+
+### Requirement: shred-redaction-precedence
+
+If the latest state item is shredded or redacted, then the server SHALL answer shredded or redacted before any outputs answer.
+
+#### Scenario: shredded with present bit
+- **WHEN** the latest item is shredded and its row holds a present bit
+- **THEN** the read answers shredded
