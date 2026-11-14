@@ -122,7 +122,8 @@ func gitHostOptions(tb testing.TB, st serverStore) []dustpan.Option {
 			dustpan.WithGitHostLoopbackForTests(),
 			// The scenario checks one connection many times in a second.
 			dustpan.WithGitHostCheckLimits(forge.CheckLimits{
-				PerConnection: time.Nanosecond, PerInstallation: e2eCheckBudget, Window: time.Minute,
+				PerConnection: time.Nanosecond, PerInstallation: e2eCheckBudget, PerApp: e2eCheckBudget,
+				Window: time.Minute,
 			}),
 			dustpan.WithGitHostRootCAs(fake.certPool()),
 		)

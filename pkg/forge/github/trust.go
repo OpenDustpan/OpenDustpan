@@ -90,6 +90,10 @@ func (f *gitHub) appLogin(ctx context.Context) (string, error) {
 		return "", err
 	}
 
+	if spendErr := f.spendApp(); spendErr != nil {
+		return "", spendErr
+	}
+
 	resp, err := f.do(ctx, http.MethodGet, "/app", jwt, nil)
 	if err != nil {
 		return "", err
