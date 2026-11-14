@@ -3,12 +3,17 @@ Issue: #2999.
 ## Problem
 
 A guide or a reference page can name a route that the built server does not
-serve. The blueprint pages are one case: `docs/guides/publish-a-blueprint.md`
-and `docs/reference/self-service-api.md` name six blueprint routes, and the
-binary answers each one with 404 and the code `server.route-not-found`. A test
-that reused the existing route test's server would not catch this, because that
-server enables the self-service module and the binary leaves it off. A reader
-follows the guide and gets a 404.
+serve. With the default flags, the binary answers 404 with the code
+`server.route-not-found` on more routes than the blueprint routes. The blueprint
+pages are one case: `docs/guides/publish-a-blueprint.md` and
+`docs/reference/self-service-api.md` name six blueprint routes. A run on main
+(M8, 14 Nov 2026) found 15 more documented routes that answer 404 with the
+default flags: 5 sign-in provider routes, 2 passkey sign-in routes,
+`GET /api/server/session`, `POST /api/server/sign-out`, and 6 passkey routes.
+They mount only when the server has a sign-in provider, the passkey service and
+a public URL. A test that reads only the server of the default flags would mark
+them all, and a test that skips them would not catch a page that names a route
+that no option mounts. A reader follows the guide and gets a 404.
 
 ## Evidence
 
@@ -74,19 +79,20 @@ follows the guide and gets a 404.
   - `checkDocRoutes` sends each extracted route to a handler with no credential
     and returns each `server.route-not-found` that the route does not mark, with
     its `path:line`.
-  - `TestDocsRoutesAreServed` builds the server from `serveFlags.serverOptions`
-    with the default flags, a fresh SQLite store, a static token authenticator
-    and a built-in wrapper. It calls `srv.Start`, runs `checkDocRoutes` on
-    `srv.Handler()`, and logs each marked route. It does not use the
-    `pkg/dustpan` test server, which enables the self-service module.
+  - `TestDocsRoutesAreServed` builds the server through the SDK,
+    `dustpan.NewServer` with a fresh SQLite store, not through the flags and
+    the environment of the binary (PM decision, 14 Nov 2026). It turns on each
+    optional feature through its option: the public URL, the LDAP provider
+    with a fake bind password from `internal/fakecred`, an OpenID Connect
+    provider on a test issuer when a route needs one, and the blueprint store.
+    It calls `Start`, runs `checkDocRoutes` on the handler, and logs each marked
+    route. No route behind an option is marked, and no route is skipped.
   - `TestExtractDocRoutes` is table-driven: one case for each form, one for a
     skipped `...` path and one for the marker.
   - `TestDocsRouteCheckFailsOnAnUnservedRoute` fails on a fake unserved route
     and passes on the same route with the marker.
-- `docs/reference/self-service-api.md`: add `(not available yet)` to the six
-  rows at `:18-23`.
-- `docs/guides/publish-a-blueprint.md`: add the sentence "The routes are not
-  available yet." after the introduction.
+- `docs/reference/self-service-api.md` and `docs/guides/publish-a-blueprint.md`:
+  the marker `(not available yet)` only on a route that no option mounts.
 - No Makefile change: `make check` runs `go test ./...` at `Makefile:214-215`.
 
 **OUT**
@@ -100,10 +106,11 @@ follows the guide and gets a 404.
 ## Check
 
 - Guard 1: an unmarked doc route that the binary does not serve fails the test.
-  Test: `TestDocsRoutesAreServed`. Mutation: remove `(not available yet)` from
-  `docs/reference/self-service-api.md:18`; the request for
+  Test: `TestDocsRoutesAreServed`. Mutation: remove `dustpan.WithSelfServiceBlueprints` from the
+  options of the test; the request for
   `GET /api/dustpan/v1/self-service/blueprints/zz` answers 404
-  `server.route-not-found`, and the test fails with that `path:line`.
+  `server.route-not-found`, and the test fails with that `path:line`. The same
+  holds for `dustpan.WithPublicURL` and the passkey and sign-in routes.
 - Guard 2: a marked route is skipped and listed. Test:
   `TestDocsRouteCheckFailsOnAnUnservedRoute`. Mutation: ignore the marker in
   `routeIsMarked`; the marked fake route fails.
@@ -113,7 +120,7 @@ follows the guide and gets a 404.
 
 ## Contract
 
-No new option: `dustpan.WithLDAPProvider(p dustpan.LDAPProvider) dustpan.Option` (pkg/dustpan/ldap.go:68) exists on main and carries the LDAP config, the bind password included (`LDAPProvider.BindPassword`, a `session.Password`). The environment read (`DUSTPAN_LDAP_BIND_PASSWORD`, cmd/opendustpan/signin.go) stays in cmd/opendustpan and passes the value to that option. The test uses the option directly (PM decision, 14 Nov 2026: no environment in tests).
+No new option. The test uses options that main has: `dustpan.WithPublicURL` (pkg/dustpan/dustpan.go:455), `dustpan.WithOIDCProvider` (pkg/dustpan/signin.go:50), `dustpan.WithSelfServiceBlueprints` (pkg/dustpan/selfservice.go:26), and `dustpan.WithLDAPProvider(p dustpan.LDAPProvider) dustpan.Option` (pkg/dustpan/ldap.go:68) exists on main and carries the LDAP config, the bind password included (`LDAPProvider.BindPassword`, a `session.Password`). The environment read (`DUSTPAN_LDAP_BIND_PASSWORD`, cmd/opendustpan/signin.go) stays in cmd/opendustpan and passes the value to that option. The test uses the option directly (PM decision, 14 Nov 2026: no environment in tests).
 
 ## ADR check
 
