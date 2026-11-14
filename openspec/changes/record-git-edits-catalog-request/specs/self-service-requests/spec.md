@@ -16,6 +16,22 @@ When a push delivery on the home ref carries a request file equal to the stored 
 - **WHEN** a push delivery on the home ref carries a request file equal to the stored request document
 - **THEN** the request shows in-sync with the commit id and time of the matching push
 
+### Requirement: Reject forged delivery
+
+When a push delivery carries a bad webhook signature, the server SHALL answer 401 and write no drift record.
+
+#### Scenario: Bad signature writes nothing
+- **WHEN** a push delivery carries a bad webhook signature
+- **THEN** the server answers 401 and writes no drift record
+
+### Requirement: Refuse oversize delivery
+
+When a push delivery is larger than the size cap, the server SHALL answer 413 and write no drift record.
+
+#### Scenario: Oversize delivery refused
+- **WHEN** a push delivery is larger than the size cap
+- **THEN** the server answers 413 and writes no drift record
+
 ### Requirement: Record invalid git file
 
 When a push delivery carries a request file that fails strict parse or path checks, the server SHALL record invalid-file status with the field error and answer 202.
@@ -37,24 +53,32 @@ When a push delivery deletes or renames the request file in git, the server SHAL
 When a push delivery targets a ref other than the home ref or names an unknown request or a path and document mismatch, the server SHALL write no drift record.
 
 #### Scenario: Feature branch ignored
-- **WHEN** a push delivery targets a ref other than the home ref or names a request with no stored document or a path and document mismatch
+- **WHEN** a push delivery targets a ref other than the home ref
 - **THEN** the server writes no drift record
+
+#### Scenario: Repository mismatch ignored
+- **WHEN** a push delivery names a repository other than the home repository of the request
+- **THEN** the server writes no drift record
+
+### Requirement: Order deliveries by commit
+
+When a delivery carries a commit that is an ancestor of the recorded commit, the server SHALL keep the recorded commit.
+
+#### Scenario: Stale commit ignored
+- **WHEN** a delivery carries a commit that is an ancestor of the recorded commit
+- **THEN** the drift record keeps the newer commit
 
 ### Requirement: Refuse write over drift
 
-When a write-back or apply starts while the request shows drifted, invalid-file, or file-removed, the server SHALL refuse the write with 409.
+When a write-back starts while the request shows drifted, invalid-file, or file-removed, the server SHALL refuse the write with 409.
 
 #### Scenario: Write-back over drift fails
-- **WHEN** a write-back or apply starts while the request shows drifted, invalid-file, or file-removed
+- **WHEN** a write-back starts while the request shows drifted, invalid-file, or file-removed
 - **THEN** the server answers 409 with code request.drifted and changes neither git nor the stored document
 
-### Requirement: Exit drift by match
-
-When an authorized principal submits a request document that equals the git bytes while drift shows, the server SHALL store the document and clear the drift to in-sync.
-
-#### Scenario: Submit that matches git clears drift
-- **WHEN** an authorized principal submits a request document that equals the git bytes while drift shows
-- **THEN** the server stores the submitted document and shows in-sync with the new evaluation time
+#### Scenario: Concurrent mark blocks write
+- **WHEN** a push marks drift after the write-back check and before its git write
+- **THEN** the write-back answers 409 and changes neither git nor the stored document
 
 ### Requirement: Repeated delivery
 
@@ -72,14 +96,6 @@ When the server starts, the server SHALL read the current file at the request pa
 - **WHEN** the server starts after a push that no webhook delivered
 - **THEN** the server reads the current file at the request path and updates the drift record
 
-### Requirement: Recover missed push by redelivery
-
-When the server receives a manual redelivery decided from effect state, the server SHALL read the current file at the request path and update the drift record.
-
-#### Scenario: Redelivery catches up
-- **WHEN** the server receives a manual redelivery for a request whose effect state is unknown
-- **THEN** the server reads the current file at the request path and updates the drift record
-
 ### Requirement: Read drift status
 
 While a request has a drift record, the server SHALL answer its status, commit id, changed fields, and time to a principal with self-service:read.
@@ -95,6 +111,14 @@ When a principal without self-service:read reads the drift of a request, the ser
 #### Scenario: Reader without rights denied
 - **WHEN** a principal without self-service:read reads the drift of a request
 - **THEN** the server denies the read and names the missing action
+
+### Requirement: Delete drifted request
+
+When an authorized principal deletes a request through the API while drift shows, the server SHALL remove the stored request and its drift record together.
+
+#### Scenario: API delete clears drift
+- **WHEN** an authorized principal deletes a request through the API while drift shows
+- **THEN** the stored request and its drift record are both removed
 
 ### Requirement: Audit drift mark and clear
 

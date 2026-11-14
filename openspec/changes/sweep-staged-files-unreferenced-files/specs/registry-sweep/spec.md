@@ -16,6 +16,10 @@ While the registry sweep is due, the server SHALL delete each staged file that i
 - **WHEN** a publish moves a staged file after the sweep lists it
 - **THEN** the sweep reads the moved flag and keeps the file
 
+#### Scenario: Staged key with no row
+- **WHEN** a staged key has no row and its listing age is above 24 hours
+- **THEN** the sweep deletes the key as an unknown key
+
 ### Requirement: Unreferenced content sweep
 
 While the registry sweep is due, the server SHALL delete each content blob older than 24 hours that no live release references, in every namespace.
@@ -23,6 +27,10 @@ While the registry sweep is due, the server SHALL delete each content blob older
 #### Scenario: Shared blob kept
 - **WHEN** one content hash has a live release reference and another hash has none
 - **THEN** the shared blob stays and the unreferenced blob is gone
+
+#### Scenario: Publish with no mark yet
+- **WHEN** a publish starts before the sweep writes a mark and commits a reference to the blob
+- **THEN** the sweep sees the reference and keeps the blob
 
 #### Scenario: Release written during the sweep
 - **WHEN** a publish references a blob that the sweep marked for delete
@@ -43,6 +51,10 @@ If a delete mark is older than 1 hour on the database clock, then the server SHA
 #### Scenario: Failed store delete
 - **WHEN** the store delete of a marked blob fails
 - **THEN** the mark stays until it expires and the next run tries the delete again
+
+#### Scenario: Failed mark removal
+- **WHEN** the store delete succeeds and the mark removal fails
+- **THEN** the mark expires after 1 hour and the next run removes it
 
 ### Requirement: Resume after takeover
 

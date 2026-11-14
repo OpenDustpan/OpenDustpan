@@ -1,26 +1,46 @@
 ## ADDED Requirements
 
+### Requirement: Pin source
+
+When the scanner runs, the server SHALL read fixed-version pins from unit settings and compare them with private registry releases only.
+
+#### Scenario: Fixed pin in settings scanned
+- **WHEN** unit settings hold a fixed provider or module version
+- **THEN** the server includes that pin in the scan.
+
+#### Scenario: Branch pin skipped
+- **WHEN** unit settings hold a branch name instead of a fixed version
+- **THEN** the server creates no change record.
+
+#### Scenario: Public release ignored
+- **WHEN** only a public upstream holds a newer version and the private registry holds none
+- **THEN** the server creates no change record for that release.
+
 ### Requirement: Scan schedule
 
-When the daily scan runs for a namespace, the server SHALL compare fixed-version pins of its units with registry releases.
+When the daily scan runs for a namespace, the server SHALL compare fixed-version pins of its units with private registry releases.
 
 #### Scenario: Daily scan finds stale pin
-- **WHEN** the daily scan runs and a unit pins a fixed version older than a registry release
-- **THEN** the server creates one change record for that unit, pin, and new version.
+- **WHEN** the daily scan runs and a fixed pin is older than a private registry release
+- **THEN** the server creates one change record for that unit stable ID, pin, and new version.
+
+#### Scenario: Overrun skips run
+- **WHEN** the prior daily scan for the namespace still runs
+- **THEN** the server skips the run and records the skip.
+
+### Requirement: Scan setting
+
+When a caller reads namespace settings, the server SHALL return the effective value of automatic upgrade pull requests.
 
 #### Scenario: Disabled setting skips scan
 - **WHEN** automatic upgrade pull requests are turned off for the namespace
 - **THEN** the server creates no change record.
 
-### Requirement: Show effective setting
-
-When a caller reads namespace settings, the server SHALL return the effective value of automatic upgrade pull requests.
-
 #### Scenario: Effective value visible
 - **WHEN** a caller reads the namespace settings
-- **THEN** the server returns the effective value of automatic upgrade pull requests for the namespace.
+- **THEN** the server returns the effective value of automatic upgrade pull requests.
 
-### Requirement: Select newest stable release
+### Requirement: Select newest stable
 
 When a pinned version is older than registry releases, the server SHALL select the newest stable release above the pinned version.
 
@@ -40,63 +60,51 @@ When a pinned version is older than registry releases, the server SHALL select t
 - **WHEN** a second newer release lands while a request for the first newer release stays open
 - **THEN** the server keeps the first open request and creates no second request.
 
-### Requirement: Open upgrade request
-
-When a unit pins a fixed version older than a registry release, the server SHALL open one upgrade pull request for that unit stable ID.
-
-#### Scenario: Stale pin opens request
-- **WHEN** a unit pins a fixed version older than a registry release
-- **THEN** the server opens one pull request on the forge that changes the pin to the newer version.
-
-#### Scenario: Duplicate pin refused
-- **WHEN** a pull request is already open for the same unit stable ID and pin
-- **THEN** the server refuses the second open with code version-pinned and names the open pull request.
-
-#### Scenario: Missing release refused
-- **WHEN** the selected release leaves the registry before open
-- **THEN** the server answers 404 with code not-found.
-
-### Requirement: Refuse concurrent duplicate open
+### Requirement: Open once
 
 When two opens carry the same unit stable ID, pin, and new version, the server SHALL keep one open upgrade request for that key.
+
+#### Scenario: Stale pin opens request
+- **WHEN** a unit pins a fixed version older than a private registry release
+- **THEN** the server opens one pull request on the forge that changes the pin to the newer version.
 
 #### Scenario: Concurrent scans open once
 - **WHEN** two scanner runs find the same unit stable ID, pin, and new version at the same time
 - **THEN** the server keeps one open upgrade request for that key.
 
-#### Scenario: Restart opens no duplicate
-- **WHEN** the scanner restarts while an upgrade request for the same unit stable ID, pin, and new version stays open
-- **THEN** the server keeps one open upgrade request for that key.
+### Requirement: Branch idempotency
 
-### Requirement: Survive partial failure
+When the writer opens a forge request, the server SHALL look up an open request by deterministic branch name before create.
 
-When the forge pull request opens and the plan start fails, the server SHALL keep the forge reference and retry only the plan start.
+#### Scenario: Crash after forge create stores reference
+- **WHEN** the process dies after forge create and the next scan finds the forge request by branch name
+- **THEN** the server stores the found reference without opening a second request.
 
-#### Scenario: Plan start fails after forge open
-- **WHEN** the forge pull request opens and the plan start fails
-- **THEN** the server keeps the forge reference and retries only the plan start on the next scan.
-
-### Requirement: Run plan for upgrade
+### Requirement: Run plan
 
 When an upgrade pull request opens, the server SHALL start one plan for the changed unit through the milestone 5 plan path.
 
-#### Scenario: Plan links to request
-- **WHEN** the forge pull request for a pin upgrade opens
-- **THEN** the server links the plan result to the upgrade pull request.
+#### Scenario: Plan starts for changed unit
+- **WHEN** an upgrade pull request opens
+- **THEN** the server starts one plan for the changed unit through the milestone 5 plan path.
 
 #### Scenario: Plan failure links to request
 - **WHEN** the plan for an upgrade pull request fails
-- **THEN** the server stores the failure and links it to the upgrade pull request.
-
-#### Scenario: Plan timeout links to request
-- **WHEN** the plan for an upgrade pull request times out
-- **THEN** the server stores the timeout and links it to the upgrade pull request.
+- **THEN** the server stores the failure and links it to the upgrade request.
 
 #### Scenario: Request closed before plan end
 - **WHEN** the pull request closes before the plan finishes
 - **THEN** the server stores the plan result without reopening the pull request.
 
-### Requirement: Record upgrade result
+### Requirement: Report plan status
+
+When the plan for an upgrade request finishes, the server SHALL post the plan result to the forge pull request.
+
+#### Scenario: Plan result posted to forge
+- **WHEN** the plan for an upgrade request finishes
+- **THEN** the server posts the plan result as a status check on the forge pull request.
+
+### Requirement: Record result
 
 The server SHALL store old version, new version, pull request reference, and plan result for each upgrade request.
 
@@ -104,27 +112,31 @@ The server SHALL store old version, new version, pull request reference, and pla
 - **WHEN** the server opens an upgrade pull request
 - **THEN** the server stores old version, new version, pull request reference, and plan result.
 
-### Requirement: Record actor and authorization
+### Requirement: Refuse without forge path
 
-When the server opens an upgrade pull request, the server SHALL record the namespace service principal, the forge credential reference, and the reason.
+When the forge path cannot open a request, the server SHALL store the refusal on the upgrade request and skip open.
 
-#### Scenario: Scanner records actor
-- **WHEN** the scanner opens an upgrade pull request
-- **THEN** the server stores the namespace service principal, the forge credential reference, and the reason.
+#### Scenario: No forge link stored
+- **WHEN** the unit has no forge link
+- **THEN** the server stores no-forgelink and skips open until a forge link exists.
 
-#### Scenario: Caller without grant refused
-- **WHEN** a caller without unit:manage on the unit stable ID calls the open route
-- **THEN** the server answers 403 with code forbidden.
+#### Scenario: Revoked credential stored
+- **WHEN** the forge credential is revoked or expired
+- **THEN** the server stores forge-credential-invalid and retries on the next scan.
 
-### Requirement: Record forge failure
+#### Scenario: Rate limit backs off
+- **WHEN** the forge answers rate limited
+- **THEN** the server stores forge-rate-limited and retries on the next scan.
 
-When the forge connection fails during open, the server SHALL record forge-unreachable on the upgrade request.
+#### Scenario: Branch collision reused
+- **WHEN** the deterministic branch name already exists on the forge
+- **THEN** the server reuses the existing branch request without a second open.
 
-#### Scenario: Forge unreachable stored
-- **WHEN** the forge connection fails during open of an upgrade pull request
-- **THEN** the server answers 502 with code forge-unreachable and stores the failure on the upgrade request.
+#### Scenario: Absent pin refused
+- **WHEN** the pin is absent from unit settings at open time
+- **THEN** the server stores pin-not-found and skips open.
 
-### Requirement: Close upgrade request
+### Requirement: Close request
 
 When the scheduled poll finds the forge pull request merged or closed, the server SHALL mark the upgrade request closed.
 
@@ -134,8 +146,8 @@ When the scheduled poll finds the forge pull request merged or closed, the serve
 
 #### Scenario: Closed pull request closes request
 - **WHEN** the scheduled poll finds the forge pull request closed without merge
-- **THEN** the server marks the upgrade request closed without a version change.
+- **THEN** the server marks the upgrade request closed without a version change and suppresses reopen for 7 days.
 
 #### Scenario: Hand-changed pin closes request
-- **WHEN** the pin changes by hand while the upgrade request stays open
+- **WHEN** the pin in unit settings changes by hand while the upgrade request stays open
 - **THEN** the server marks the upgrade request closed as superseded.

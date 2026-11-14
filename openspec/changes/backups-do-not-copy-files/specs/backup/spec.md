@@ -20,6 +20,22 @@ Where registry storage is backed up, the server SHALL copy only files named by p
 - **WHEN** a namespace holds a staged upload with no published release
 - **THEN** the backup holds no entry for the staged file and the restore recreates no staged file.
 
+### Requirement: backup-missing-file
+
+When a backup finds a published release that names a SHA-256 key with no file, the server SHALL stop the backup with an error that names the release and version.
+
+#### Scenario: Missing key stops backup
+- **WHEN** a published release names a SHA-256 key with no file in the blob store
+- **THEN** the backup stops with an error that names the release, the version, and the missing SHA-256 key.
+
+### Requirement: backup-stop-unreadable-file
+
+When a backup cannot read a registry release file from the blob store, the server SHALL stop the backup with an error that names the release and version.
+
+#### Scenario: Unreadable file stops backup
+- **WHEN** a registry release file cannot be read from the blob store
+- **THEN** the backup stops with an error that names the release and version.
+
 ### Requirement: backup-collector-inputs
 
 When the registry file collector starts with an empty namespace ID or reads an empty file hash, the server SHALL stop with an error that names the bad input.
@@ -36,8 +52,12 @@ When the registry file collector starts with an empty namespace ID or reads an e
 
 When a namespace backup runs, the server SHALL read registry rows and the file list from one snapshot of the namespace.
 
-#### Scenario: Stable row and file set
-- **WHEN** a release is published while a namespace backup runs
+#### Scenario: Stable set on SQLite
+- **WHEN** a release is published while a namespace backup runs on SQLite
+- **THEN** the backup holds the rows and the files from the same point in time.
+
+#### Scenario: Stable set on PostgreSQL
+- **WHEN** a release is published while a namespace backup runs on PostgreSQL
 - **THEN** the backup holds the rows and the files from the same point in time.
 
 ### Requirement: backup-verify-hash
@@ -56,13 +76,17 @@ When a backup reads a release row with a file hash outside 64 lowercase hex char
 - **WHEN** a release row holds a file hash with path separators or characters outside lowercase hex
 - **THEN** the backup stops with an error that names the release and version.
 
-### Requirement: backup-stop-unreadable-file
+### Requirement: registry-file-entry-shape
 
-When a backup cannot read a registry release file from the blob store, the server SHALL stop the backup with an error that names the release and version.
+When a namespace backup holds registry files, the server SHALL write one entry per unique file with its SHA-256 key, size, release, version, and a section version field.
 
-#### Scenario: Unreadable file stops backup
-- **WHEN** a registry release file cannot be read from the blob store
-- **THEN** the backup stops with an error that names the release and version.
+#### Scenario: Entry shape fixed
+- **WHEN** a namespace backup holds registry files
+- **THEN** each entry holds the 64 lowercase hex SHA-256 key, the size in bytes, and the release name and version.
+
+#### Scenario: Old reader reads new backup
+- **WHEN** a reader before this change reads a backup with the registry file section
+- **THEN** the old reader ignores the registry file section by its version field and warns that files are absent.
 
 ### Requirement: backup-report-size
 
@@ -72,21 +96,37 @@ When a namespace backup copies registry release files, the server SHALL report t
 - **WHEN** a namespace backup copies registry release files
 - **THEN** the backup result reports the count of registry files and the total bytes copied.
 
+### Requirement: backup-authorized-audited
+
+When a principal creates a namespace backup with registry files, the server SHALL check the backup:create action and write an audit entry for the backup.
+
+#### Scenario: Backup checked and recorded
+- **WHEN** a principal creates a namespace backup with registry files
+- **THEN** the server allows the call only with the backup:create action on the installation and writes an audit entry that names the namespace.
+
 ### Requirement: check-registry-files-on-restore
 
 When a restore reads a namespace backup that names a registry file, the server SHALL refuse the restore if that file is missing.
 
 #### Scenario: Missing file fails restore
 - **WHEN** a backup names a registry file that the backup does not hold
-- **THEN** the restore stops with an error that names the missing SHA-256 key and writes no registry file.
+- **THEN** the restore stops with an error that names the missing SHA-256 key and makes no registry file visible.
+
+### Requirement: restore-manifest-shape
+
+When a restore reads a backup manifest with a registry file key outside 64 lowercase hex characters, the server SHALL refuse the restore before any registry file write.
+
+#### Scenario: Hostile manifest rejected
+- **WHEN** a backup manifest holds a registry file key outside 64 lowercase hex characters
+- **THEN** the restore stops with an error that names the bad key and makes no registry file visible.
 
 ### Requirement: restore-check-before-write
 
-When a restore reads a namespace backup with registry files, the server SHALL check all named files before writing any registry file.
+When a restore reads a namespace backup with registry files, the server SHALL check all named files before making any registry file visible.
 
 #### Scenario: Partial manifest writes nothing
 - **WHEN** a backup manifest is incomplete or corrupt
-- **THEN** the target store holds no new registry file from the backup.
+- **THEN** the target store makes no new registry file visible from the backup.
 
 ### Requirement: restore-verify-hash
 
@@ -94,18 +134,22 @@ When a restore writes a registry file, the server SHALL refuse the file if its b
 
 #### Scenario: Corrupt bytes refused
 - **WHEN** a backup file does not match its SHA-256 content key
-- **THEN** the restore stops with an error that names the SHA-256 key and writes no registry file.
+- **THEN** the restore stops with an error that names the SHA-256 key and makes no registry file visible.
 
 #### Scenario: Valid files land under target ID
 - **WHEN** a backup with registry files is restored to another installation
 - **THEN** the target blob store holds each release file under namespaces/<namespace ID>/registry/sha256/ keyed by the target namespace ID.
 
+#### Scenario: Pre-existing key hash-checked
+- **WHEN** the target store already holds different bytes under a SHA-256 key of the backup
+- **THEN** the restore stops with an error that names the SHA-256 key and makes no registry file visible.
+
 ### Requirement: restore-idempotent-retry
 
-When a registry file restore stops midway, the server SHALL remove partial files so a retry with the same backup completes.
+When a registry file restore stops midway, the server SHALL remove only partial files this restore staged so a retry with the same backup completes.
 
 #### Scenario: Midway failure leaves no partial files
-- **WHEN** a restore stops after writing part of the registry files
+- **WHEN** a restore stops after staging part of the registry files
 - **THEN** the target store holds no partial registry file and a retry with the same backup completes the copy.
 
 #### Scenario: Retry over existing keys completes
@@ -116,14 +160,34 @@ When a registry file restore stops midway, the server SHALL remove partial files
 
 When a restore reads a backup with registry rows and no registry file manifest section, the server SHALL warn and restore the rows without files.
 
-#### Scenario: Old backup warns and proceeds
+#### Scenario: Old backup warns and marks unavailable
 - **WHEN** a backup holds registry rows with no registry file manifest section
-- **THEN** the restore warns that registry files are absent, restores registry rows and signing keys without files, and names the backup command that makes a complete backup.
+- **THEN** the restore warns that registry files are absent, restores registry rows and signing keys without files, marks each file-backed release unavailable, and names the backup command that makes a complete backup.
+
+#### Scenario: Empty new backup stays available
+- **WHEN** a new backup holds an empty registry file manifest section and zero release files
+- **THEN** the restore completes without a file warning and without unavailable marks.
+
+### Requirement: restore-unavailable-fetch
+
+When a client fetches a release marked unavailable after a legacy restore, the server SHALL refuse the fetch with an error that names the release and version.
+
+#### Scenario: Unavailable release fetch fails clearly
+- **WHEN** a client fetches a release marked unavailable after a legacy restore
+- **THEN** the fetch fails with an error that names the release, the version, and the restore of a backup without files as the cause.
+
+### Requirement: restore-warn-channel
+
+When a restore completes from a backup without registry file entries, the server SHALL return the file warning in the restore result and the CLI output.
+
+#### Scenario: Warning visible in result
+- **WHEN** a restore completes from a backup without registry file entries
+- **THEN** the restore result holds a warning field that names the absent registry files and the backup command that makes a complete backup.
 
 ### Requirement: restore-authorized-audited
 
-When a principal restores a namespace backup with registry files, the server SHALL check the restore action and write an audit entry for the restore.
+When a principal restores a namespace backup with registry files, the server SHALL check the restore:execute action and write an audit entry for the restore.
 
 #### Scenario: Restore checked and recorded
 - **WHEN** a principal restores a namespace backup with registry files
-- **THEN** the server allows the call only with the restore action on the installation and writes an audit entry that names the namespace and the count of registry files.
+- **THEN** the server allows the call only with the restore:execute action on the installation and writes an audit entry that names the namespace and the count of registry files.

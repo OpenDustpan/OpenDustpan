@@ -12,13 +12,21 @@ The server SHALL store a curation-enabled setting per namespace that defaults to
 - **WHEN** a namespace administrator turns curation on and then off
 - **THEN** the API reports the new effective value and stored rules stay unchanged.
 
-### Requirement: store curation rules
+#### Scenario: Docs page toggle
+- **WHEN** a namespace administrator follows the docs page
+- **THEN** the docs page shows the toggle steps and the effective value.
+
+### Requirement: create-rule
 
 The server SHALL store each curation rule keyed by its namespace ID with an upstream host, a registry address prefix, and a semver constraint.
 
 #### Scenario: List rules
 - **WHEN** a namespace administrator creates a curation rule
 - **THEN** the server lists each rule with host, address prefix, and semver constraint for that namespace ID.
+
+#### Scenario: Edit rule
+- **WHEN** a namespace administrator edits one curation rule
+- **THEN** the server stores the edited host, prefix, and constraint for that namespace ID.
 
 ### Requirement: reject invalid rule
 
@@ -64,12 +72,28 @@ When curation is on and more than one rule exists for the namespace, the server 
 - **WHEN** the version is a prerelease outside the rule semver constraint
 - **THEN** the server refuses the download.
 
+### Requirement: match host exactly over https
+
+When curation is on, the server SHALL match the rule host exactly without subdomain wildcard and fetch the upstream host over HTTPS only.
+
+#### Scenario: Subdomain refused
+- **WHEN** the request host is a subdomain of the rule host
+- **THEN** the server refuses the download.
+
+#### Scenario: Plain http refused
+- **WHEN** the matched upstream address uses plain http
+- **THEN** the server refuses the upstream fetch.
+
 ### Requirement: refuse unlisted public release
 
 When curation is on and no curation rule matches the requested public release, the server SHALL refuse the download with 403 before it checks the cache.
 
 #### Scenario: Blocked provider artifact
 - **WHEN** curation is on and no rule matches the requested public OpenTofu provider release
+- **THEN** the server refuses the download with 403 that names the registry address before it checks the cache.
+
+#### Scenario: Blocked module artifact
+- **WHEN** curation is on and no rule matches the requested public OpenTofu module release
 - **THEN** the server refuses the download with 403 that names the registry address before it checks the cache.
 
 #### Scenario: Blocked plugin artifact
@@ -92,7 +116,31 @@ When curation allows the request and the cache holds no release for the registry
 - **WHEN** curation allows a Pulumi plugin release that the cache does not hold
 - **THEN** the server fetches the bytes once from the matched upstream host, stores them with checksum in cache, then serves them.
 
-### Requirement: serve allowed public release
+### Requirement: verify cached release
+
+When the server fetches an allowed public release, the server SHALL verify its checksum and enforce a size limit and a time limit before it stores the bytes in cache.
+
+#### Scenario: Bad checksum discarded
+- **WHEN** the fetched bytes fail checksum verify
+- **THEN** the server discards the bytes, stores no cache entry, and returns 502.
+
+#### Scenario: Oversize response refused
+- **WHEN** the upstream response passes the size or time limit
+- **THEN** the server stops the fetch and stores no cache entry.
+
+### Requirement: share single flight
+
+While two fetches for the same namespace address miss the cache at the same time, the server SHALL run one upstream fetch and discard partial bytes that never passed verify.
+
+#### Scenario: Concurrent misses share fetch
+- **WHEN** two fetches for the same namespace address miss the cache at the same time
+- **THEN** one upstream fetch runs and each waiter gets the same verified result.
+
+#### Scenario: Partial store never serves
+- **WHEN** a fetch stops or the instance stops before verify and store complete
+- **THEN** a later fetch refetches from upstream.
+
+### Requirement: evaluate-fetch
 
 When curation is on and one curation rule matches the requested public release and the audit write succeeds, the server SHALL serve the cached release.
 
@@ -107,6 +155,18 @@ When curation is on and one curation rule matches the requested public release a
 #### Scenario: Allowed Pulumi plugin
 - **WHEN** curation is on and one rule matches the Pulumi CLI plugin request
 - **THEN** the server returns the cached plugin bytes with its checksum.
+
+### Requirement: key cache by namespace
+
+When curation is on, the server SHALL key each cache entry by namespace ID and re-check the snapshot before each serve.
+
+#### Scenario: Old cache entry not served
+- **WHEN** curation is on, no rule matches, and the cache holds bytes stored before curation was on
+- **THEN** the server refuses the download with 403.
+
+#### Scenario: Removed rule stops serve
+- **WHEN** a namespace administrator removes the only matching rule
+- **THEN** later fetches for that address are refused with 403.
 
 ### Requirement: skip check when off
 
@@ -123,6 +183,14 @@ When curation allows the request but the cache and the matched upstream host hol
 #### Scenario: No upstream release
 - **WHEN** curation allows the request but the cache and the matched upstream host hold no release for the address
 - **THEN** the server returns 404 that names the registry address.
+
+### Requirement: refuse upstream failure
+
+When the matched upstream host fails with 5xx, timeout, or DNS failure, the server SHALL return 502 that names the registry address.
+
+#### Scenario: Upstream 5xx or timeout
+- **WHEN** the matched upstream host fails with 5xx, timeout, or DNS failure
+- **THEN** the server returns 502 that names the registry address and stores no cache entry.
 
 ### Requirement: record curation decision
 

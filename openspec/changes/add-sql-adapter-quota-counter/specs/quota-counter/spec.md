@@ -12,9 +12,21 @@ When Reserve runs for a key within max, the server SHALL store the reservation i
 - **WHEN** Reserve runs for a key with no stored count and max at least one
 - **THEN** the server creates the key row and stores the reservation
 
-#### Scenario: duplicate reservation retry keeps one row
-- **WHEN** Reserve repeats with the same reservation ID after a client retry
-- **THEN** the server keeps one reservation and reports success
+### Requirement: settled-plus-reserved-usage
+
+When Reserve runs on a units key, the server SHALL count settled units plus open reservations as usage.
+
+#### Scenario: settled plus reserved counts together
+- **WHEN** Reserve runs on a units key with max 5 in one namespace scope, 3 settled units and 1 open reservation
+- **THEN** Reserve succeeds for a fifth unit and is refused with quota.ErrExceeded for a sixth unit
+
+#### Scenario: destroy lowers settled
+- **WHEN** a destroy revision ends applied
+- **THEN** settled usage drops by one and a later Reserve succeeds
+
+#### Scenario: lower max refuses without a change
+- **WHEN** Reserve runs with a max below current usage
+- **THEN** Reserve returns quota.ErrExceeded and changes no row
 
 ### Requirement: atomic-record
 
@@ -23,6 +35,14 @@ When Record runs with checks where one requests limit fails, the server SHALL st
 #### Scenario: one failing check stores nothing
 - **WHEN** Record runs with checks where one requests limit fails
 - **THEN** the server stores no submit for any key
+
+#### Scenario: empty checks store nothing
+- **WHEN** Record runs with no checks
+- **THEN** the server returns success and stores no submit
+
+#### Scenario: repeated key counts once
+- **WHEN** Record runs with one key named twice in the checks within limit
+- **THEN** the server stores one submit for the repeated key
 
 ### Requirement: requests-window
 
@@ -40,17 +60,21 @@ When Record runs, the server SHALL count only submits inside the last window of 
 - **WHEN** Reserve runs while expired reservations exist for the key
 - **THEN** usage excludes them and no expired row remains for the counted keys
 
+#### Scenario: old submits are pruned inline
+- **WHEN** Record runs while submits older than the window exist for the key
+- **THEN** no submit older than the window remains for the counted keys
+
 ### Requirement: concurrent-reserve
 
 While two Reserve calls run at the same time on one key, the server SHALL keep the stored count at or below max.
 
 #### Scenario: two concurrent reserves keep max
-- **WHEN** two Reserve calls run at the same time on one key at max minus one
-- **THEN** at most max reservations exist and the loser gets quota.ErrExceeded
+- **WHEN** two Reserve calls run at the same time on one key with max 1 and usage 0
+- **THEN** 1 reservation exists for the key with max 1 in one namespace scope and the loser gets quota.ErrExceeded or a retryable store error
 
 #### Scenario: concurrent multi-key reserves within limit both succeed
 - **WHEN** two reserves run at the same time on the same two keys in opposite order within limit
-- **THEN** both reserves succeed with no deadlock and with each key stored once
+- **THEN** both reserves succeed with each key stored once
 
 #### Scenario: concurrent multi-key reserves over limit refuse one
 - **WHEN** two reserves run at the same time on the same two keys where only one fits
@@ -83,6 +107,10 @@ When a reservation is released, expires, settles, or gets a new end time, the se
 #### Scenario: set end moves expiry
 - **WHEN** SetEnd runs for a reservation
 - **THEN** the new endsAt controls expiry
+
+#### Scenario: release of a missing row succeeds
+- **WHEN** release or settle runs for an unknown or already expired reservation
+- **THEN** the server returns success and changes no row
 
 ### Requirement: rollback-stores-nothing
 

@@ -30,7 +30,7 @@ Where the ADR records module versions, the versions SHALL equal the versions in 
 
 ### Requirement: vuln-disposition
 
-Where GO-2026-5932 applies to x/crypto, the ADR SHALL record the fresh govulncheck output.
+Where the finding GO-2026-5932 applies to x/crypto, the ADR SHALL record the fresh govulncheck output.
 
 #### Scenario: govulncheck-matches
 - **WHEN** the fresh output matches the issue report

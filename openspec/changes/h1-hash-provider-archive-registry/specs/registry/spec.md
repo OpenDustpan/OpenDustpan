@@ -1,16 +1,20 @@
 ## ADDED Requirements
 
-### Requirement: Compute h1 hash
+### Requirement: compute h1 hash
 
-When a publisher publishes a provider archive, the server SHALL compute the H1 digest with the OpenTofu dirhash.h1 algorithm over sorted file entries and store it on the archive record.
+When a publisher publishes a provider archive, the server SHALL compute the H1 digest with the dirhash.h1 algorithm over sorted unpacked file entries and store it on the archive record.
 
 #### Scenario: Publish stores h1
 - **WHEN** a publisher publishes a provider archive with valid unpacked bytes.
-- **THEN** the stored archive record holds the H1 digest of the unpacked tree and tofu providers lock reports the same digest.
+- **THEN** the stored archive record holds the dirhash.h1 digest over sorted unpacked file entries and tofu providers lock reports the same digest.
 
 #### Scenario: Republish with changed bytes refused
 - **WHEN** a publisher republishes the same version with an archive of different H1.
 - **THEN** the server refuses the request with 409 registry.content-changed.
+
+#### Scenario: Large archive refused with path forward
+- **WHEN** a valid provider archive exceeds 64 MB unpacked or 16 MB in one file.
+- **THEN** the server refuses with 400 registry.bad-archive and the limit value and the docs step to split or shrink the archive.
 
 ### Requirement: Reject unsafe archive
 
@@ -21,10 +25,18 @@ When a provider archive holds an unsafe entry or exceeds the unpack limits, the 
 - **THEN** the server refuses the request with 400 registry.bad-archive and stores no release and leaves no file in the staging directory.
 
 #### Scenario: Limit exceeded refused
-- **WHEN** unpacked bytes exceed 64 MB, file count exceeds 1024, one file exceeds 16 MB, or expansion exceeds 100 times compressed size.
+- **WHEN** real decompressed bytes exceed 64 MB, file count exceeds 1024, one file exceeds 16 MB, or expansion exceeds 100 times compressed size.
 - **THEN** the server refuses the request with 400 registry.bad-archive.
 
-### Requirement: Read protocols from manifest
+#### Scenario: Declared size lie refused
+- **WHEN** zip headers declare small sizes but real decompressed bytes exceed a limit.
+- **THEN** the server refuses with 400 registry.bad-archive and stores no release.
+
+#### Scenario: Duplicate name refused
+- **WHEN** an archive holds duplicate entry names or names that collide after case folding.
+- **THEN** the server refuses with 400 registry.bad-archive.
+
+### Requirement: read protocols from manifest
 
 When a provider archive holds terraform-registry-manifest.json, the server SHALL derive the stored protocols only from that manifest.
 
@@ -33,8 +45,12 @@ When a provider archive holds terraform-registry-manifest.json, the server SHALL
 - **THEN** the server refuses the request with 400 registry.protocol-mismatch and stores no release.
 
 #### Scenario: Match stored
-- **WHEN** stated protocols match the protocols in terraform-registry-manifest.json.
+- **WHEN** stated protocols match the protocols in terraform-registry-manifest.json as an order-insensitive set with duplicates ignored.
 - **THEN** the stored release holds the manifest protocols.
+
+#### Scenario: Empty manifest list refused
+- **WHEN** the manifest lists an empty protocol list.
+- **THEN** the server refuses with 400 registry.protocol-mismatch.
 
 ### Requirement: Protocols without manifest
 
@@ -64,7 +80,7 @@ When terraform-registry-manifest.json lists a protocol value outside the known s
 - **WHEN** the manifest lists a protocol value outside the known set of 5.0 and 6.0.
 - **THEN** the server refuses the request with 400 registry.protocol-mismatch.
 
-### Requirement: Serve releases under slug
+### Requirement: serve releases under slug
 
 Where a namespace owns releases, the server SHALL serve its releases under the slug formed as the lowercase stable ID with unsafe characters removed.
 
@@ -75,6 +91,18 @@ Where a namespace owns releases, the server SHALL serve its releases under the s
 #### Scenario: Slug stable after rename
 - **WHEN** a namespace renames its display name.
 - **THEN** the registry slug path stays identical after the rename and the prior name path still serves existing releases.
+
+#### Scenario: Unknown slug refused
+- **WHEN** a client requests a slug that maps to no namespace.
+- **THEN** the server refuses with 404 registry.unknown-slug.
+
+#### Scenario: Slug collision resolved
+- **WHEN** two namespace IDs strip to the same slug or to an empty string.
+- **THEN** the second namespace receives the slug with a short suffix and each slug maps to one namespace.
+
+#### Scenario: Slug wins on conflict
+- **WHEN** a slug equals the prior name path of another namespace.
+- **THEN** the slug path serves the slug owner and the prior name path serves existing releases of the other namespace.
 
 ### Requirement: Count H1 in equality
 
@@ -123,3 +151,23 @@ When a publish request lacks authorization, carries a wrong content type, or exc
 #### Scenario: Denied principal refused before unpack
 - **WHEN** a principal without the publish grant sends a publish request.
 - **THEN** the server refuses with 403 without staging bytes.
+
+#### Scenario: Staged bytes cleaned
+- **WHEN** a publish crashes or a staged delete fails before the release stores.
+- **THEN** no staged bytes remain after the restart scan.
+
+### Requirement: Show limits as effective values
+
+Where a namespace owns releases, the server SHALL show the request and unpack limits as effective values in the API.
+
+#### Scenario: Limits visible
+- **WHEN** a caller reads the registry settings of a namespace.
+- **THEN** the API reports 32 MB request, 64 MB unpacked, 1024 files, and 16 MB per file.
+
+### Requirement: Module uploads skip archive checks
+
+When a publisher uploads a module archive, the server SHALL skip the provider unpack, H1, and manifest checks.
+
+#### Scenario: Module skips manifest
+- **WHEN** a publisher uploads a module archive through the uploads route.
+- **THEN** the server stores the module release without manifest or H1 checks.

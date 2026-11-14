@@ -1,16 +1,21 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+
 ## 1. Failing tests first
 
-- [ ] 1.1 Add a failing test for gate refusal with a decision record Check: TestSelfServiceBlueprintGateDeniesRequest fails on main
-- [ ] 1.2 Add a failing check that no import, path or docs text names the old package Check: Absence test fails on main when old mentions exist, then passes after deletion
+- [ ] 1.1 Add a failing test for refusal with a decision record Check: TestSelfServiceBlueprintGateDeniesRequest
+- [ ] 1.2 Add a failing check that no import, path or docs text names the old package Check: rg for the old package path over code, CLAUDE.md and docs returns nothing
 
 ## 2. Change
 
-- [ ] 2.1 Route blueprint evaluation through the gate package at change.propose Check: `go test ./pkg/gate/...` passes on SQLite and PostgreSQL
-- [ ] 2.2 Delete the old package, its adapters, suite, depguard entry and docs mentions; when code is absent, remove only what exists and leave the issue open Check: Absence search over code, CLAUDE.md, GLOSSARY.md and docs returns nothing
-- [ ] 2.3 Update the user docs page for blueprint gates and refusals Check: `make docs-lint` passes
+- [ ] 2.1 Route blueprint evaluation through gates at change.propose Check: `go test ./pkg/gate/...` passes on SQLite and PostgreSQL
+- [ ] 2.2 Delete the old package and its mentions, only what exists Check: rg for the old package path returns nothing
+- [ ] 2.3 Update the docs page Check: `make docs-lint` passes
+- [ ] 2.4 Add hostile tests and the mutation test Check: Mutation test that removes the fail-closed branch fails
 
 ## 3. Definition of done
 
-- [ ] 3.1 Run an e2e step against the real CLI and the real directory Check: e2e self-service request with a denied input shows the named input and the decision record ID
-- [ ] 3.2 Check the wiring, the route with its authorization actions, and the audit entry Check: The route test lists its actions and the audit entry exists
-- [ ] 3.3 Walk the user path from the docs page alone and run the full gate Check: `make check` reports zero findings
+- [ ] 3.1 Run the e2e refusal step with a personal token against the real binary once the self-service request route exists on main Check: e2e step shows the named input and the decision record ID
+- [ ] 3.2 Check the wiring, the route actions and the audit entry Check: The route test lists its actions
+- [ ] 3.3 Run the full gate Check: `make check` reports zero findings

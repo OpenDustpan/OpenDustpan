@@ -1,3 +1,7 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+
 ## 1. Failing tests
 
 - [ ] 1.1 Add failing backup suite test for registry file entries. Check: TestBackupRegistryFiles names each SHA-256 key, shared key stored once, and fails on main.
@@ -14,8 +18,13 @@
 - [ ] 2.2 Add restore presence, hash, and check-before-write logic with partial-file cleanup. Check: go test -race ./pkg/store/...
 - [ ] 2.3 Add release file hash reads where needed without a numbered migration. Check: make generate with clean sqlc diff.
 
-## 3. Definition of done
+## 3. Side effects (computed from main)
 
-- [ ] 3.1 Wire routes with authorization actions and backup commands to the new copy and check. Check: Backup and restore routes declare backup:create and restore:execute actions; make e2e backup step with registry publish, backup, restore on empty store, then fetch from registry.
-- [ ] 3.2 Update backup guide to remove the no-copy limit and cover legacy backups. Check: Docs page backup command runs as written and lists registry file copy, size report, legacy warning, and limits for large registries.
-- [ ] 3.3 Run usability check, e2e step, docs page, and full check. Check: make check with zero findings.
+- [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `internal/db` (`make generate`, sqlc). Never edit a generated file by hand. Check: the named files change in the same pull request
+
+## 4. Definition of done
+
+- [ ] 4.1 Wire the existing routes /api/server/backups and /api/server/backups/{} to the new copy and check, with backup:create and restore:execute. Check: API call POST /api/server/backups and the restore call under /api/server/backups/{} with an access token of a principal that holds backup:create and restore:execute on the installation; a call without the grant gets 403.
+- [ ] 4.2 Add the e2e step and update the backup guide to remove the no-copy limit and cover legacy backups. Check: make e2e backup step through the existing routes POST /api/server/backups and /api/server/backups/{} with the access token of an administrator principal: publish a registry release, create a backup, restore on an empty blob store, then fetch the release from the registry. Docs page command runs as written and lists file copy, size report, legacy warning and limits.
+- [ ] 4.3 Run the usability check and make check. Check: Usability check: the Operator completes the path from the docs page alone using /api/server/backups with an access token; each error names `opendustpan backup create --namespace <namespace>`; make check with zero findings.

@@ -1,3 +1,7 @@
+---
+version: 2
+---
+
 Roadmap: `docs/roadmap.md:393` (Run the job proxy as the only exit.).
 
 ## Why
@@ -14,15 +18,16 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Request refused because no proxy rule allows the host, method, or path. | Phase fails. Job log shows blocked by the job proxy with host and path. No retry inside job. | `opendustpan status` |
-| Tunnel host resolves to an address that the outbound guard denies. | Phase fails with egress denial reason. Job log shows blocked by the job proxy with host and path. | `opendustpan status` |
-| Job proxy fails to start, so the claim never starts a step. | Claim fails before steps start. No step output exists. | `opendustpan doctor` |
+| Request refused because no proxy rule allows the host, method, or path. | Request gets 403. Job log shows blocked by the job proxy with host and path. Run a new job after the author widens the proxy rule set. | `opendustpan status` |
+| Tunnel host resolves to an address that the outbound guard denies. | Connection gets refusal. Job log shows blocked by the job proxy with host and path. Run a new job after the pool range is fixed. | `opendustpan status` |
+| Job proxy fails to start, so the claim never starts a step. | Claim ends failed before any step starts. No step output exists. Fix the pool or proxy rule sets and start a new job. | `opendustpan doctor` |
 
 Evidence for the claims above:
 
 - ADR 327 keeps one proxy next to each job and the blocked log line with host and path. Proof: docs/adr/0327-the-job-proxy.md decisions 2 and 10 as quoted in adr_check.
 - ADR 330 keeps proxy as mode proxy of dustpan-launcher, one exit with tunnel rule, and dial with pkg/egress and pool ranges. Proof: docs/adr/0330-the-job-proxy-core-decisions.md decisions 1, 3, and 8 as quoted in adr_check.
 - Milestone step needs the design items of RFC 16 P2, P4, P5, P10 and the blocked line in the job log. Proof: Context pack roadmap step text for m6-step-07-part-2.
+- The outbound guard tunnel path already has a test in the proxy package. Proof: pkg/launcher/proxy/guard_test.go:31 (TestOutboundGuardTunnel)
 
 ## What Changes
 
@@ -53,6 +58,13 @@ Where the path still costs the person time or surprises them:
 - Runner operator must read pool ranges and upstream setting from API; missing value fails closed with no hint of which range to add.
 - Blocked line names host and path but not the proxy rule id, so author of proxy rules guesses which line to widen.
 - Proxy loss ends phase failed with no resume, so a short proxy restart costs a full rerun.
+
+## What main already does
+
+Each fact names its file, line and function on main. The change specifies only the difference.
+
+- Outbound guard tunnel path has a test at guard_test.go. (`pkg/launcher/proxy/guard_test.go:31 (TestOutboundGuardTunnel)`)
+- Proxy-only export check for job proxy consumer has a test. (`pkg/profile/exports_internal_test.go:13 (TestProxyOnlyForJobProxy)`)
 
 ## ADR check
 
@@ -93,30 +105,17 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: Change does not force proxy use on any unit. Proxy runs only where the team turned proxy rules on. Default behavior without proxy rules stays as on main.
 - Conflict: none.
 
-## Adversarial second pass
-
-A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
-
-- R1.1 (wrong claim): The user path and error table name `opendustpan job logs` and `opendustpan runner claim get`. The proposal's own Open questions section says these commands do not exist. The change cannot be built right until real commands are named or the commands are added. Resolution: answered: Replaced opendustpan job and runner commands with existing opendustpan status and opendustpan doctor; user path now uses docs page, console, and e2e surfaces only.
-- R1.2 (wrong claim): The proposal cites ADR 327 decision 3 (its own check says there is no decision 3) and lists ADR 327 decisions 1, 2, 8, 10, 18 and 20 as applying. The Open questions section reads 'Not spec-ready', so the gate fails. The text 'Open questions: none' is not met. Resolution: answered: Removed ADR 327 decision 3 from adr_check; open_questions is none with considered answers.
-- R1.3 (adr conflict): ADR 327 decision 2 says no runner starts a job proxy until the owner accepts P2, and ADR 330 decision 2 gives the placement (extended by ADR 353). The design applies the 'drop other packets, DNS included' rule only to firecracker and gvisor. The kubernetes and process isolation kinds have no requirement or scenario, and the proposal says only that they 'follow the same rule'. The placement and the network drop for these kinds are not specified. Resolution: answered: Added separate requirements for firecracker and gvisor host proxy with packet drop, and for kubernetes and process proxy per claim with only-exit rule.
-- R1.4 (adr conflict): ADR 353 decisions 1 and 2 make proxy use opt-in, and the default keeps behavior on main. No requirement or scenario says that a unit without proxy rules runs with no proxy and no route drop. The proposal states this only in the ADR effect text. Resolution: answered: Added no-proxy-without-rules requirement that a unit without proxy rules runs with no proxy and no route change.
-- R1.5 (missing scenario): The design lists a check for a non-canonical path, an SNI or Host mismatch, and a CONNECT host check (ADR 330 decision 7). The spec has no requirement or scenario for these checks. Tasks have no failing test for them either, so the hostile tests of the design have no mapping. Resolution: answered: Added requirements for unnamed CONNECT host, non-canonical path refusal, and SNI and Host match, with failing tests in tasks.
-- R1.6 (missing scenario): The upstream proxy is in scope, but the pool upstream proxy has no setting route or scenario. The pool credential sealing (ADR 330 decision 8) and the action `namespace:manage-runners` (decision 11) are not covered. The spec has only a guard scenario, and tasks have no test for it. A missing allowed range or upstream setting has no stated error. Resolution: answered: Added upstream guard requirement and private range refusal; pool setting routes and credential sealing stay in job-proxy-rule-sets dependency, stated in out_of_scope and depends_on.
-- R1.7 (failure mode): The DNS time-of-check to time-of-use risk is listed. The bound dial scenario only says the proxy connects to a checked address. No scenario covers a host that resolves to mixed addresses (one allowed, one denied), a DNS rebind between two lookups, or an address that fails to connect. It is also not stated whether the proxy may fall back to another checked address. Resolution: answered: Added mixed-address requirement: dial only guard-allowed checked addresses, never a denied address, with no fallback to an unchecked address.
-- R1.8 (failure mode): The spec has no scenario for proxy loss while the launcher is polling the server through the tunnel. The proxy session paths under /runner/v1 and the runner assignment version (ADR 330 decision 12) are only in task 3.1. No behavior is given for an invalid or reused session, or for a hostile step that connects to the proxy listener directly. Resolution: answered: Added launcher tunnel loss requirement that pending launcher polls fail closed and phase ends failed; proxy session auth stays in rule-sets part.
-- R1.9 (scope): The proxy rules come from the server through the proxy session (ADR 327 decision 2, P12). The change depends on job-proxy-rule-sets, but the Depends-on list names the same item twice. It does not say how the proxy loads its rules, so the 'unnamed host' behavior depends on a delivery path that is not specified. Resolution: answered: Kept single depends_on entry and stated proxy loads joined rule sets from coordinator assignment at claim start.
-- R1.10 (missing scenario): The blocked line is required to hold no secret. The scenario does not cover a non-canonical path (the path is only logged 'when it is canonical' in ADR 330 decision 10), or a very long or hostile host and path value that could inject log lines. It states no fixed reason either, which ADR 327 decision 10 requires. Resolution: answered: Blocked-line requirement now states canonical path only, fixed reason, and no header, body, query value, or credential, with hostile log-injection test.
-
 ## Open questions
 
 none
 
 Questions considered and answered:
 
-- Does the runtime need a new proxy product or dependency? ADR 327 decision 1 and ADR 330 decision 1 answer it: own Go code with net/http and crypto/tls, mode proxy of dustpan-launcher, no new dependency. No new tool is added.
-- Where does the job proxy run for each isolation kind? ADR 330 decision 2 answers it: firecracker and gvisor start one proxy on host per claim with one route to proxy address and drop of other packets; kubernetes and process use one proxy per claim with the same only-exit rule. Scope of this change keeps that placement.
-- How do bound dial, private ranges, and upstream proxy combine? ADR 327 decision 8 and ADR 330 decision 8 answer it: dial with pkg/egress rules, never always-denied addresses, private range only when pool allows it, pool upstream proxy only. This change applies that dial path.
-- Does this change add per-request records or phase audit entries? ADR 327 decision 10 answers it: this change writes only the job log line with host and path and a fixed reason. Full per-request records and phase audit stay in the later part.
+- Does the runtime need a new proxy product or dependency? ADR 327 decision 1 and ADR 330 decision 1 answer it: own Go code with net/http and crypto/tls, mode proxy of dustpan-launcher, no new dependency.
+- Where does the job proxy run for each isolation kind? ADR 330 decision 2 answers it: firecracker and gvisor start one proxy on host per claim with one route to proxy address and drop of other packets; kubernetes and process use one proxy per claim with the same only-exit rule.
+- How do bound dial, private ranges, and upstream proxy combine? ADR 327 decision 8 and ADR 330 decision 8 answer it: dial with pkg/egress rules, never always-denied addresses, private range only when pool allows it, pool upstream proxy only.
+- Does this change add per-request records or phase audit entries? ADR 327 decision 10 answers it: this change writes only the job log line with host and path and a fixed reason. Full records and phase audit stay in the later part.
+- Is the proxy on by default for every job? ADR 353 decisions 1 and 2 answer it: proxy runs only where the team set proxy rules.
+- Where is the upstream proxy credential stored? ADR 330 decision 8 answers it: the pool seals it. Pool storage is built in job-proxy-rule-sets, which this change depends on.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

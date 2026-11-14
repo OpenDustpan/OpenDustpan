@@ -1,3 +1,7 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+
 ## 1. Failing tests first
 
 - [ ] 1.1 Add failing test for h1 computation and SameContent with H1. Check: TestPublish_storesH1FromUnpackedBytes fails on main: stored Archive lacks H1.
@@ -12,10 +16,14 @@
 
 - [ ] 2.1 Build bounded unpack, H1 computation, and manifest protocol check. Check: `go test -race ./pkg/registry/... ./internal/registry/...` passes with new unpack limits, path checks, and manifest parse.
 - [ ] 2.2 Wire H1 and slug through store encode, SameContent, missing-H1 backfill, and publish path. Check: `go test -race ./pkg/store/...` passes; republish with changed H1 returns 409 registry.content-changed inside one transaction.
-- [ ] 2.3 Wire publish route with unit:manage action on the namespace object and e2e step against the real CLI. Check: `make e2e` registry step passes with tofu init against a namespace outside the safe subset, including mismatch and bad-archive cases.
+- [ ] 2.3 Wire publish route POST /api/dustpan/v1/namespaces/{}/registry/uploads with unit:manage action on the namespace object and e2e step against the real CLI. Check: `make e2e` registry step for POST /api/dustpan/v1/namespaces/{}/registry/uploads with an access token that carries unit:manage on the namespace passes with tofu init against a namespace outside the safe subset, including mismatch and bad-archive cases.
 
-## 3. Definition of done
+## 3. Side effects (computed from main)
 
-- [ ] 3.1 Write docs page for publish with h1, slug, and protocol errors. Check: Docs page commands run as written for publish, slug lookup, and protocol error.
-- [ ] 3.2 Run usability check of the full publish and install path. Check: Namespace administrator completes publish and tofu init from the docs page alone; each error names its one command.
-- [ ] 3.3 Pass definition of done: wiring, route with unit:manage on namespace, e2e step, docs page, usability check, make check. Check: `make check` reports zero findings.
+- [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
+
+## 4. Definition of done
+
+- [ ] 4.1 Write docs page for publish with h1, slug, and protocol errors. Check: Docs page commands run as written for publish, slug lookup, and protocol error.
+- [ ] 4.2 Run usability check of the full publish and install path. Check: Namespace administrator completes publish and tofu init from the docs page alone; each error names its one command.
+- [ ] 4.3 Pass definition of done for the publish route: wiring, route, e2e step, docs page, usability check, make check. Check: `make check` reports zero findings; wiring uses POST /api/dustpan/v1/namespaces/{}/registry/uploads with unit:manage on the namespace and an access token credential.

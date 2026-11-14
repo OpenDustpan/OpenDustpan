@@ -1,6 +1,6 @@
 ## ADDED Requirements
 
-### Requirement: Time to live on create
+### Requirement: NewLifetime stores expiry
 
 When a Developer requests an ephemeral unit from a blueprint, the server SHALL store its expiry time normalized to Unix milliseconds.
 
@@ -24,13 +24,13 @@ When a Developer requests an ephemeral unit from a blueprint, the server SHALL s
 - **WHEN** a Developer requests an ephemeral unit with a valid time to live
 - **THEN** the unit read returns the expiry as Unix milliseconds.
 
-### Requirement: Warning before expiry
+### Requirement: MarkWarned marks warning
 
 When an ephemeral unit reaches 24 hours before expiry, the server SHALL send one warning with an idempotency key to the webhook sink of the namespace.
 
 #### Scenario: Warning sent
 - **WHEN** an ephemeral unit reaches 24 hours before expiry
-- **THEN** the server sends one warning with extend and approve next steps to the webhook sink before expiry.
+- **THEN** the server sends one warning with unit ID, expiry time, extend next step, and review request next step to the webhook sink before expiry.
 
 #### Scenario: Warning sent once with retry
 - **WHEN** the webhook sink is down at the first warning time
@@ -39,6 +39,18 @@ When an ephemeral unit reaches 24 hours before expiry, the server SHALL send one
 #### Scenario: Short TTL warns at create
 - **WHEN** a unit is created with a time to live below 24 hours
 - **THEN** the server sends the warning at once with the same idempotency key.
+
+#### Scenario: Warning resets on extend
+- **WHEN** a principal extends an ephemeral unit before the destroy job is created
+- **THEN** the server clears the warned flag and sends one new warning with the new key for the new expiry.
+
+### Requirement: Warning payload
+
+When the server builds an expiry warning, the server SHALL include the unit ID, the expiry time, the extend next step and the review request next step.
+
+#### Scenario: BuildWarning payload
+- **WHEN** the server builds the warning of an ephemeral unit
+- **THEN** the warning holds the unit ID, the expiry time, the extend next step and the review request next step.
 
 ### Requirement: Destroy at expiry
 
@@ -52,17 +64,17 @@ When an ephemeral unit reaches its expiry time, the server SHALL create a destro
 - **WHEN** an ephemeral unit with an approval rule reaches its expiry time
 - **THEN** the server holds the destroy in approval wait until the review request approves it and the destroy never self approves.
 
-#### Scenario: Destroy held returns 409
-- **WHEN** a caller reads a destroy that an approval rule holds
-- **THEN** the destroy status returns 409 approval wait with the review request and the next step.
+#### Scenario: Destroy action held returns 409
+- **WHEN** a caller starts a destroy that an approval rule holds
+- **THEN** the destroy action returns 409 approval wait with the review request and the next step.
 
 #### Scenario: Destroy unclaimed or failed
 - **WHEN** no runner claims the destroy job or the destroy job fails
 - **THEN** the unit stays past expiry with state expiry-expired and the failed or unclaimed job visible in the unit read.
 
-#### Scenario: Failed destroy retries
+#### Scenario: Failed destroy retries bounded
 - **WHEN** the destroy job of an expired unit fails
-- **THEN** the server starts a new destroy job with the same expiry reason and links it to the unit.
+- **THEN** the server retries at most 5 times with backoff and then marks expiry-failed with an alert.
 
 #### Scenario: Hand deleted unit skips destroy
 - **WHEN** an ephemeral unit is already deleted by hand at expiry time
@@ -75,6 +87,10 @@ When an ephemeral unit reaches its expiry time, the server SHALL create a destro
 #### Scenario: Past expiry at start
 - **WHEN** the server starts with a unit already past expiry
 - **THEN** the server marks the unit expiry-expired and starts the destroy job path.
+
+#### Scenario: Tool CLI sees gone unit
+- **WHEN** the destroy at expiry completes
+- **THEN** the Pulumi CLI and OpenTofu receive not found for the unit state.
 
 ### Requirement: Review request holds waiting destroy
 
@@ -90,15 +106,19 @@ Where a destroy waits for approval, the server SHALL hold the destroy until the 
 
 #### Scenario: Self approval refused
 - **WHEN** the requester of the unit approves the waiting destroy
-- **THEN** the server refuses with 403 self approval denied.
+- **THEN** the server refuses with 403 self approval denied and writes a denial audit entry.
 
 #### Scenario: Cancel waiting destroy
 - **WHEN** a principal with manage on the unit cancels the waiting destroy
 - **THEN** the server cancels the waiting destroy and marks the unit expiry-cancelled.
 
-#### Scenario: Extend then approve completes
-- **WHEN** a principal with manage on the unit extends a unit in approval wait inside the maximum
-- **THEN** the server cancels the waiting destroy and applies the new expiry time.
+#### Scenario: Extend during wait cancels destroy
+- **WHEN** a principal with manage on the unit extends a unit in approval wait before job create
+- **THEN** the server cancels the waiting destroy and applies the new expiry time inside 30 days from create plus one 7 day extension.
+
+#### Scenario: Waiting destroy reminds
+- **WHEN** a destroy waits for approval past 24 hours
+- **THEN** the server sends a reminder every 24 hours and the unit read returns 200 with waiting state.
 
 ### Requirement: Extend time to live
 
@@ -109,7 +129,7 @@ When a principal with the manage action on the unit extends the time to live ins
 - **THEN** the server stores the new expiry time and returns it in the unit read.
 
 #### Scenario: Extend past maximum refused
-- **WHEN** a principal with manage on the unit extends past the maximum
+- **WHEN** a principal with manage on the unit extends past 30 days from create plus one 7 day extension
 - **THEN** the server refuses the request with 422 time-to-live past maximum.
 
 #### Scenario: Extend during destroy refused
@@ -127,6 +147,14 @@ When a principal lists units, the server SHALL return the expiry time of each ep
 #### Scenario: List shows expiry
 - **WHEN** a principal lists units in the namespace
 - **THEN** each ephemeral unit entry carries its expiry time in Unix milliseconds.
+
+### Requirement: Expiry fields stored
+
+Where an ephemeral unit exists, the server SHALL store its expiry time, warned flag, extension count, and state by the stable ID of the unit.
+
+#### Scenario: Fields persist
+- **WHEN** an ephemeral unit is created and extended
+- **THEN** the store holds expiry time, warned flag, extension count, and state with the stable ID of the unit.
 
 ### Requirement: Authorization of ephemeral endpoints
 

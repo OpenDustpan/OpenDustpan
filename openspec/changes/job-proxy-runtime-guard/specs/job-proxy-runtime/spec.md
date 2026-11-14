@@ -2,7 +2,7 @@
 
 ### Requirement: No proxy without rules
 
-When a unit has no proxy rules, the server SHALL run its jobs with no job proxy.
+When a unit has no proxy rules, the job proxy SHALL not start for its jobs.
 
 #### Scenario: Unit without proxy rules
 - **WHEN** a job runs on a unit with no proxy rules
@@ -10,31 +10,47 @@ When a unit has no proxy rules, the server SHALL run its jobs with no job proxy.
 
 ### Requirement: One proxy as only exit
 
-While a job of a unit with proxy rules runs, the server SHALL route all sandbox egress through one job proxy next to that job.
+While a job of a unit with proxy rules runs, the job proxy SHALL serve as the only egress of its sandbox.
 
 #### Scenario: Direct egress blocked
 - **WHEN** a step attempts a TCP connection that does not go through the job proxy address
-- **THEN** the connection fails and the phase ends failed.
+- **THEN** the connection fails with no direct path around the proxy.
 
 ### Requirement: Host proxy placement
 
-While a firecracker or gvisor claim with proxy rules runs, the server SHALL start one job proxy on the host with one sandbox route to the job proxy address.
+While a firecracker or gvisor claim with proxy rules runs, the coordinator SHALL start one job proxy on the host with one sandbox route to the job proxy address.
 
 #### Scenario: Sandbox with dropped packets
 - **WHEN** a claim with proxy rules runs with firecracker or gvisor isolation
-- **THEN** only packets to the job proxy address pass and DNS included other packets drop.
+- **THEN** only packets to the job proxy address pass and other packets including DNS drop.
 
 ### Requirement: Kubernetes and process placement
 
-While a kubernetes or process claim with proxy rules runs, the server SHALL run one job proxy per claim as the only exit of its steps.
+While a kubernetes or process claim with proxy rules runs, the coordinator SHALL run one job proxy per claim as the only exit of its steps.
 
 #### Scenario: Pod or process egress
 - **WHEN** a claim with proxy rules runs with kubernetes or process isolation
 - **THEN** all step egress passes the job proxy of the claim and direct egress fails.
 
+### Requirement: Route stays on restart
+
+While a proxied phase runs, the coordinator SHALL keep the sandbox route drop in place across proxy stop and restart.
+
+#### Scenario: Proxy restarts or stops
+- **WHEN** the job proxy of a claim stops or restarts mid-phase
+- **THEN** steps keep no direct route and new connections fail closed.
+
+### Requirement: Cross-claim isolation
+
+While two proxied claims share a host, the job proxy SHALL refuse a connection from outside its own claim sandbox.
+
+#### Scenario: Neighbor claim probe
+- **WHEN** a step of one claim attempts the proxy address of another claim on a shared host
+- **THEN** the connection fails.
+
 ### Requirement: Proxy rule load
 
-When the coordinator starts the job proxy, the server SHALL load the joined proxy rule sets of the unit from the claim assignment.
+When the coordinator starts the job proxy, the coordinator SHALL load the joined proxy rule sets of the unit from the claim assignment.
 
 #### Scenario: Rules at claim start
 - **WHEN** the coordinator starts the job proxy
@@ -46,7 +62,7 @@ When the coordinator starts the job proxy, the server SHALL load the joined prox
 
 ### Requirement: Server reach through tunnel
 
-While a proxied phase runs, the server SHALL allow launcher and tool traffic to the server host only through a built-in tunnel rule.
+While a proxied phase runs, the job proxy SHALL allow launcher and tool traffic to the server host only through a built-in tunnel rule.
 
 #### Scenario: Launcher reaches server
 - **WHEN** the launcher polls the server during a proxied phase
@@ -54,7 +70,7 @@ While a proxied phase runs, the server SHALL allow launcher and tool traffic to 
 
 ### Requirement: Proxy start failure
 
-If the job proxy fails to start, then the server SHALL fail the claim before any step starts.
+If the job proxy fails to start, then the coordinator SHALL fail the claim before any step starts.
 
 #### Scenario: Proxy fails to start
 - **WHEN** the coordinator cannot start the job proxy
@@ -62,7 +78,7 @@ If the job proxy fails to start, then the server SHALL fail the claim before any
 
 ### Requirement: Proxy loss mid-phase
 
-If the job proxy stops during a phase, then the server SHALL fail pending and new requests closed with no direct fallback.
+If the job proxy stops during a phase, then the job proxy SHALL fail pending and new requests closed with no direct fallback.
 
 #### Scenario: Proxy stops
 - **WHEN** the job proxy stops during a phase
@@ -70,7 +86,7 @@ If the job proxy stops during a phase, then the server SHALL fail pending and ne
 
 ### Requirement: Launcher tunnel loss
 
-If the job proxy stops while the launcher polls through the tunnel, then the server SHALL fail the poll closed.
+If the job proxy stops while the launcher polls through the tunnel, then the launcher SHALL fail the poll closed.
 
 #### Scenario: Poll during proxy loss
 - **WHEN** the job proxy stops while the launcher polls the server
@@ -78,23 +94,23 @@ If the job proxy stops while the launcher polls through the tunnel, then the ser
 
 ### Requirement: Unnamed host refused
 
-When a job requests a host that no proxy rule names, the server SHALL refuse the request before any upstream connection.
+When a job requests a host that no proxy rule names, the job proxy SHALL refuse the request before any upstream connection.
 
 #### Scenario: Unknown host
 - **WHEN** a job sends CONNECT for a host that no proxy rule names
-- **THEN** the proxy answers 403 before any TLS and writes the blocked line with host and path.
+- **THEN** the proxy answers 403 before any upstream connection and writes the blocked line with host and path.
 
 ### Requirement: Request identity check
 
-When the SNI or Host header differs from the CONNECT host, the server SHALL refuse the connection.
+When the SNI or Host header differs from the CONNECT host, the job proxy SHALL refuse the connection.
 
 #### Scenario: Mismatched identity
-- **WHEN** the SNI and the Host header of an inspect request differ from the CONNECT host
+- **WHEN** the SNI or Host header of a tunnel request differs from the CONNECT host
 - **THEN** the proxy refuses the connection without an upstream dial.
 
 ### Requirement: Non-canonical path
 
-When a request carries a path that is not canonical, the server SHALL refuse the request without normalization.
+When a request carries a path that is not canonical, the job proxy SHALL refuse the request without normalization.
 
 #### Scenario: Dot segments
 - **WHEN** a request carries a path that is not canonical
@@ -102,7 +118,7 @@ When a request carries a path that is not canonical, the server SHALL refuse the
 
 ### Requirement: Denied address refused
 
-When a tunnel host resolves to an address that the outbound guard denies, the server SHALL refuse the connection to that address.
+When a tunnel host resolves to an address that the outbound guard denies, the job proxy SHALL refuse the connection to that address.
 
 #### Scenario: Resolved denied address
 - **WHEN** a named tunnel host resolves to an address that the outbound guard denies
@@ -110,7 +126,7 @@ When a tunnel host resolves to an address that the outbound guard denies, the se
 
 ### Requirement: Bound dial
 
-When the job proxy dials a tunnel host, the server SHALL connect only to a resolved address that it checked with the outbound guard.
+When the job proxy dials a tunnel host, the job proxy SHALL connect only to a resolved address that it checked with the outbound guard.
 
 #### Scenario: Checked address dialed
 - **WHEN** a tunnel request passes the proxy rule and guard checks
@@ -120,17 +136,33 @@ When the job proxy dials a tunnel host, the server SHALL connect only to a resol
 - **WHEN** a host resolves to one allowed and one denied address
 - **THEN** the proxy uses only an allowed checked address and never dials a denied or unchecked address.
 
+### Requirement: No rebind between check and connect
+
+When the connect address differs from the guard-checked address, the job proxy SHALL refuse the dial.
+
+#### Scenario: Rebound address
+- **WHEN** the address at connect time differs from the checked address or maps to a denied range
+- **THEN** the dial fails closed and the proxy writes the blocked line.
+
 ### Requirement: Upstream proxy carries connection
 
-Where a pool names an upstream proxy, the server SHALL still apply the outbound guard to the resolved address of each rule host.
+Where a pool names an upstream proxy, the job proxy SHALL still apply the outbound guard to the resolved address of each rule host.
 
 #### Scenario: Guard still applies
 - **WHEN** a pool names an upstream proxy for a proxied phase
 - **THEN** the proxy checks the resolved rule host with the outbound guard and opens the upstream connection only on allow.
 
+### Requirement: Fixed reasons
+
+When the job proxy refuses or fails a request, the job proxy SHALL label it with one fixed reason from its reason map.
+
+#### Scenario: Fixed reason used
+- **WHEN** the job proxy refuses or fails a request
+- **THEN** the blocked line carries one value from the fixed reason map and no library error text.
+
 ### Requirement: Blocked line in job log
 
-When the job proxy refuses a request, the server SHALL write blocked by the job proxy with the host and the path to the job log.
+When the job proxy refuses a request, the job proxy SHALL write blocked by the job proxy with the host and the path to the job log.
 
 #### Scenario: Blocked request logged
 - **WHEN** the job proxy refuses a request
