@@ -11,11 +11,11 @@
 
 ## 2. Implementation
 
-- [x] 2.1 Fix each gap that the e2e steps find in the grant check in pkg/access/access.go (the reach function; confirm the file name on main in task 0.1), reached through the routes of the failing e2e steps (GET /api/server/namespaces/{namespace}/collections/{collection}/access-review, DELETE /api/server/grants/{id}) with a personal access token Check: `go test ./pkg/access/...`
+- [ ] 2.1 Fix each gap that the e2e steps find in the grant check in pkg/access/access.go (the reach function; confirm the file name on main in task 0.1), reached through the routes of the failing e2e steps (GET /api/server/namespaces/{namespace}/collections/{collection}/access-review, DELETE /api/server/grants/{id}) with a personal access token Check: `go test ./pkg/access/...`
 
-- [x] 2.2 Let the TFE discovery routes answer a holder of a grant inside the namespace. Edit the declarations in internal/api/tfe/routes.go (the routes at :126, :143, :164) and the adapter in internal/api/tfe/tfe.go. Check: `go test ./internal/api/tfe/...`
-- [x] 2.3 Let the Pulumi organization routes answer a holder of a grant inside the namespace. Edit the declarations in internal/api/pulumi/routes.go (for example /api/user/organizations/default at :156). Check: `go test ./internal/api/pulumi/...`
-- [x] 2.4 Write hostile tests in pkg/dustpan/route_actions_test.go. Test one: a collection grant never shows the units of another collection. Test two: a principal with no grant inside the namespace gets the 404 with the same body as an unknown namespace. Test three: a revoked grant loses discovery on the next request. Check: `go test ./pkg/dustpan/...`
+- [ ] 2.2 Let the TFE discovery routes answer a holder of a grant inside the namespace. Edit the declarations in internal/api/tfe/routes.go (the routes at :126, :143, :164) and the adapter in internal/api/tfe/tfe.go. Check: `go test ./internal/api/tfe/...`
+- [ ] 2.3 Let the Pulumi organization routes answer a holder of a grant inside the namespace. Edit the declarations in internal/api/pulumi/routes.go (for example /api/user/organizations/default at :156). Check: `go test ./internal/api/pulumi/...`
+- [ ] 2.4 Write hostile tests in pkg/dustpan/route_actions_test.go. Test one: a collection grant never shows the units of another collection. Test two: a principal with no grant inside the namespace gets the 404 with the same body as an unknown namespace. Test three: a revoked grant loses discovery on the next request. Check: `go test ./pkg/dustpan/...`
 
 ## 3. Side effects (computed from main)
 
