@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #915.
@@ -44,9 +44,12 @@ Out of scope:
 
 Depends on:
 
+- none
+
+Builds on (not a change):
+
 - #899
 - #901
-- `mirror-approvals-between-review-request` (order of the milestone review)
 
 ## Usability
 

@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 ## Why
@@ -44,7 +44,7 @@ Out of scope:
 
 Depends on:
 
-- `docs-commands-run-in-tests` (order of the milestone review)
+- none
 
 ## Usability
 

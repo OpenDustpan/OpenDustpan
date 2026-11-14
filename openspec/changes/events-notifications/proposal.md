@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:310` (Events and notifications).
@@ -52,7 +52,6 @@ Depends on:
 
 - chat-a2-outbox-deliveries-dispatcher
 - add-job-service-routes-start-1
-- `chat-a2-outbox-deliveries-dispatcher` (order of the milestone review)
 
 ## Usability
 

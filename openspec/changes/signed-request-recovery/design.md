@@ -305,7 +305,7 @@ The depguard rules in `.golangci.yml`: only `cmd/opendustpan` and
   in `--trusted-proxies`, any caller at all, because each request then carries
   the address of the proxy. The help for the operator: set `--trusted-proxies`
   when the server sits behind a proxy, submit from another source group, or use
-  the host command (bootstrap recovery).
+  the host command (`opendustpan host`).
 - `recovery sign` uses `golang.org/x/crypto/ssh` to read an encrypted OpenSSH
   key file. The module is already in `go.mod`. The package is new in the
   binary of the CLI.

@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:295` (Pre-merge apply, the option).
@@ -46,9 +46,6 @@ Depends on:
 - pull-request-automation-first-slice
 - report-plans-on-review-request
 - mirror-approvals-between-review-request
-- `apply-after-merge` (order of the milestone review)
-- `report-plans-on-review-request` (order of the milestone review)
-- `mirror-approvals-between-review-request` (order of the milestone review)
 
 ## Usability
 

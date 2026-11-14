@@ -39,7 +39,6 @@ Out of scope:
 Depends on:
 
 - person-delegates-dusty
-- `person-delegates-dusty` (order of the milestone review)
 
 ## Usability
 

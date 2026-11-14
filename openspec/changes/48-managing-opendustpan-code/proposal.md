@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -41,9 +41,11 @@ Out of scope:
 
 Depends on:
 
-- a stable REST API for groups and roles (milestone 4)
 - 68-installation-settings for the shape of installation settings
-- `68-installation-settings` (order of the milestone review)
+
+Builds on (not a change):
+
+- a stable REST API for groups and roles (milestone 4)
 
 ## Usability
 

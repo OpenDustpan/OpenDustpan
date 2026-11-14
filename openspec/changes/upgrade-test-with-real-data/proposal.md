@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 ## Why
@@ -44,9 +44,6 @@ Depends on:
 - agent-shapes-before-first-tag
 - key-encryption-key-rotation
 - release-artifacts-binary-archives
-- `agent-shapes-before-first-tag` (order of the milestone review)
-- `key-encryption-key-rotation` (order of the milestone review)
-- `docs-commands-run-in-tests` (order of the milestone review)
 
 ## Usability
 

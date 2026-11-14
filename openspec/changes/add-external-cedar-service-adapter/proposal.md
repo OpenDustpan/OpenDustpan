@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #1002.
@@ -44,9 +44,11 @@ Out of scope:
 
 Depends on:
 
-- #996
 - add-access-limits-per-scope
-- `add-access-limits-per-scope` (order of the milestone review)
+
+Builds on (not a change):
+
+- #996
 
 ## Usability
 

@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #1036.
@@ -42,11 +42,13 @@ Out of scope:
 
 Depends on:
 
+- blueprints
+
+Builds on (not a change):
+
 - #996
 - #1003
 - ADR 222 slice 1 issue
-- blueprints
-- `blueprints` (order of the milestone review)
 
 ## Usability
 

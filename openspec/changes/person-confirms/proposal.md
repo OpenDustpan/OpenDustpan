@@ -45,9 +45,6 @@ Depends on:
 - person-delegates-dusty
 - dusty-proposes-change-order
 - every-step-audited
-- `person-delegates-dusty` (order of the milestone review)
-- `dusty-proposes-change-order` (order of the milestone review)
-- `every-step-audited` (order of the milestone review)
 
 ## Usability
 

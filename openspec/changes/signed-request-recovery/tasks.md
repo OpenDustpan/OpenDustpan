@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 - [ ] 0.2 Run the adversarial second pass of `openspec/project.md` with a model of another provider. Put each answer in proposal.md, answered or as an open question. Check: proposal.md lists the answers, and "Open questions" still reads "none", or the change stops.
 
 ## 1. Failing tests first
@@ -70,13 +70,13 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 - [ ] 3.2 Update the test of ADR 245 decision 12 in `pkg/accesstoken/host_test.go` to name `internal/recovery` as the one other caller. Check: the test passes and fails when a third package names the host issuer.
 - [ ] 3.3 Update `docs/guides/host-recovery.md` (the stored mode) and `docs/reference/configuration.md` (`--recovery-public-key-file`). Check: `make docs-lint` passes.
 
 ## 4. Definition of done
 
-- [ ] 4.1 An e2e step `SignedRequestRecovery` in `e2e/signed_request_recovery_test.go` (NEW) against the real binary over TLS: one recovery, one replay, one bad signature. Check: `make e2e` passes.
+- [ ] 4.1 An e2e step `SignedRequestRecovery` in `e2e/signed_request_recovery_test.go` (NEW) against the real binary over TLS: one recovery, one replay, one bad signature. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 The docs page `docs/guides/signed-request-recovery.md`, with the risk statement of ADR 295 decision 2, the always-on notice, the two recovery steps and the crash case. Check: a test runs each command of the page.
-- [ ] 4.3 The usability check from the docs page alone. Check: the operator recovers, and each error names one command.
-- [ ] 4.4 Run all checks. Check: `make check` reports zero findings.
+- [ ] 4.3 The usability check from the docs page alone. Check: the operator recovers, and each error names one command. A person's step.
+- [ ] 4.4 Run all checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

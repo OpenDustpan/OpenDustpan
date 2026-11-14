@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #904.
@@ -47,9 +47,11 @@ Out of scope:
 
 Depends on:
 
-- #899
 - read-route-decision-records-change
-- `read-route-decision-records-change` (order of the milestone review)
+
+Builds on (not a change):
+
+- #899
 
 ## Usability
 
