@@ -1,7 +1,7 @@
 # audit Specification
 
 ## Purpose
-TBD - created by archiving change stack-rename-audit. Update Purpose after archive.
+The audit capability covers the entries that the server writes to the audit log of a namespace for a change. Each entry names the object by its stable ID, the action and what changed, and it commits in the same transaction as the change. It does not cover the sinks that ship the log to other systems.
 
 ## Requirements
 

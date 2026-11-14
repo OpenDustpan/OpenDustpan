@@ -1,7 +1,7 @@
 # manual-locks Specification
 
 ## Purpose
-TBD - created by archiving change phase-clock-unit-id. Update Purpose after archive.
+The manual locks capability covers how a lock that a person puts on a unit, a collection or a namespace interacts with a job that runs. It states which job phases pass a lock and which do not, and it identifies a unit by its stable ID so that a rename does not change the answer. It does not cover the tool locks of Pulumi or OpenTofu.
 
 ## Requirements
 

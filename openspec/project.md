@@ -169,6 +169,12 @@ change to `openspec/changes/archive/` and merges its spec deltas into
 Do not tick a task that is not done. If a task moves to another issue, write the
 issue next to the task and leave the box open.
 
+When an archive creates a new capability spec, the same pull request replaces
+the placeholder Purpose ("TBD") with a real Purpose of two to four sentences:
+what the capability covers for the user, and where it stops. `make docs-lint`
+fails when a line of a spec in `openspec/specs/` starts with "TBD". A reviewer
+refuses a "TBD" Purpose.
+
 A reviewer refuses a pull request that completes tasks without ticking them. A
 reviewer also refuses a pull request that completes the last task of a change
 and does not archive it.

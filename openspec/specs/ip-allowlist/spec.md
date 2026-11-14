@@ -1,7 +1,7 @@
 # ip-allowlist Specification
 
 ## Purpose
-TBD - created by archiving change ip-allow-refusal-status. Update Purpose after archive.
+The IP allowlist capability covers the refusal of a request from an address that a namespace allowlist does not hold. It states the one answer for every route that checks access, so that the refusal cannot be mistaken for an unknown object. It does not cover how a person edits the list.
 
 ## Requirements
 

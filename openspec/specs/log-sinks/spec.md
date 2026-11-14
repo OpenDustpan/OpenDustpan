@@ -1,7 +1,7 @@
 # log-sinks Specification
 
 ## Purpose
-TBD - created by archiving change webhook-sink-egress. Update Purpose after archive.
+The log sinks capability covers the sinks that send the audit log and the server log to an outside receiver, such as a webhook or an OTLP endpoint. It states that each request passes the egress rules of the installation and that a refusal appears in the status of the sink. It does not cover the content of the records.
 
 ## Requirements
 
