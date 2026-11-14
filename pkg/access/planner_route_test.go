@@ -80,7 +80,7 @@ func TestPlannerWriteRefused(t *testing.T) {
 // route, and the refusal path is proved at the handler by
 // TestRevealDeniesWithoutReadSecrets
 // (internal/api/pulumi/reveal_test.go:512).
-func TestPlannerAccessDecision(t *testing.T) {
+func TestPlannerAccessDecisionTable(t *testing.T) {
 	t.Parallel()
 
 	role, ok := access.BuiltInRole(access.RolePlanner)
