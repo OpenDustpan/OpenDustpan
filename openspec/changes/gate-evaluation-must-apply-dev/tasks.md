@@ -11,8 +11,8 @@
 ## 2. Implementation
 
 - [ ] 2.1 Wire KindReader into Service.Evaluate at pkg/gate/service.go:226 with one snapshot per call and document the contract in the doc comment. Check: `go test ./pkg/gate/...` passes
-- [ ] 2.2 Apply the same approver rules at the state.write gate in pkg/gate/statewrite.go: the approval outcome of a unit (`approvals` at :146-157 and the refusal at :311-313) normalizes approvers with RuleApprovers (pkg/gate/approvers.go:62), and an Unmeetable requirement denies. Check: `go test ./pkg/gate/... -run StateWrite` passes
-- [ ] 2.3 Pass the installation kind to the state.write gates in pkg/dustpan/stateguard.go: newStateWriteGates (:94) gives the gate service its KindReader adapter, so that a dev installation applies the dev approver rules. Check: `go test ./pkg/dustpan/... -run StateWrite` passes
+- [ ] 2.2 Apply the same approver rules at the state.write gate in pkg/gate/statewrite.go: requireApproval (:647) and requirementOfRule (:687), with the approval outcome of a unit (`approvals` at :146-157 and the refusal at :311-313), normalize approvers with RuleApprovers (pkg/gate/approvers.go:62), and an Unmeetable requirement denies. Check: `go test ./pkg/gate/... -run StateWrite` passes
+- [ ] 2.3 Pass the installation kind to the state.write gates in pkg/dustpan/stateguard.go: newStateWriteGates (:94) gives the gate service its KindReader adapter (gate.NewService at :120), so that a dev installation applies the dev approver rules. The internal tests that build the gate service through newStateWriteGates change with it: pkg/dustpan/stateguard_internal_test.go (:529, :593, :637) and pkg/dustpan/stateguard_groups_internal_test.go (:112). Check: `go test ./pkg/dustpan/... -run StateWrite` passes
 
 ## 3. Definition of done
 
