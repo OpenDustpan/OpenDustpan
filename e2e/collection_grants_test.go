@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -563,9 +564,7 @@ func checkViewerScope(t *testing.T, env *e2e.Env, pulumiCLI, tofuCLI e2e.Install
 		t.Fatal("pulumi up on team-a as viewer changed the stack")
 	}
 
-	if res := tofu.run(ctx, "opentofu", "a", "state", "pull"); res.ExitCode != 0 {
-		t.Fatalf("tofu state pull of team-a as viewer exits %d, want 0:\n%s", res.ExitCode, res.Stderr)
-	}
+	scopeViewerReadsWithoutSecrets(t, env, tofu, viewer)
 
 	beforeTofu := scopeAdminTofu(ctx, t, env, tofuCLI, "a")
 
@@ -574,6 +573,102 @@ func checkViewerScope(t *testing.T, env *e2e.Env, pulumiCLI, tofuCLI e2e.Install
 
 	if after := scopeAdminTofu(ctx, t, env, tofuCLI, "a"); after != beforeTofu {
 		t.Fatal("tofu apply on team-a as viewer changed the workspace")
+	}
+}
+
+// scopeViewerReadsWithoutSecrets proves the reads of the viewer on collection
+// team-a with OpenTofu. The viewer reads the team-a workspace and its current
+// state version through the API (200). The state download answers plain
+// secret values, so it needs unit:read-secrets, which the viewer does not
+// hold: `tofu state pull` of team-a fails with a visible 403 that names that
+// action, because the viewer may see the workspace. The workspace of team-b
+// stays hidden: the same 404 body as for an unknown workspace.
+func scopeViewerReadsWithoutSecrets(t *testing.T, env *e2e.Env, tofu *scopeRunner, viewer *scopePerson) {
+	t.Helper()
+
+	ctx := t.Context()
+	id := scopeViewerWorkspaceID(ctx, t, env, viewer, "a")
+
+	status, body, err := env.TFEStatus(
+		ctx, viewer.token.Secret, http.MethodGet, "/api/v2/workspaces/"+id+"/current-state-version", "",
+	)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET current state version of a as viewer answers %d (%v), want 200:\n%s", status, err, body)
+	}
+
+	res := tofu.run(ctx, "opentofu", "a", "state", "pull")
+	out := res.Stdout + "\n" + res.Stderr
+
+	if res.ExitCode == 0 || !strings.Contains(out, "403") || !strings.Contains(out, "unit:read-secrets") {
+		t.Fatalf(
+			"tofu state pull of team-a as viewer exits %d, want a 403 that names unit:read-secrets:\n%s",
+			res.ExitCode,
+			out,
+		)
+	}
+
+	scopeViewerHidden(ctx, t, env, viewer)
+}
+
+// scopeWorkspace is the part of a TFE workspace document that the viewer
+// steps read.
+type scopeWorkspace struct {
+	Data scopeWorkspaceData `json:"data"`
+}
+
+// scopeWorkspaceData holds the ID of a workspace document.
+type scopeWorkspaceData struct {
+	ID string `json:"id"`
+}
+
+// scopeViewerWorkspaceID reads one workspace of the scope namespace with the
+// viewer token, wants 200, and returns its ID.
+func scopeViewerWorkspaceID(
+	ctx context.Context, t *testing.T, env *e2e.Env, viewer *scopePerson, name string,
+) string {
+	t.Helper()
+
+	path := "/api/v2/organizations/" + scopeNamespace + "/workspaces/" + name
+
+	status, body, err := env.TFEStatus(ctx, viewer.token.Secret, http.MethodGet, path, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET workspace %s as viewer answers %d (%v), want 200:\n%s", name, status, err, body)
+	}
+
+	var ws scopeWorkspace
+
+	if jsonErr := json.Unmarshal([]byte(body), &ws); jsonErr != nil || ws.Data.ID == "" {
+		t.Fatalf("GET workspace %s as viewer: no workspace id in %s (%v)", name, body, jsonErr)
+	}
+
+	return ws.Data.ID
+}
+
+// scopeViewerHidden proves that the viewer of team-a gets the same 404 body
+// for the workspace of team-b as for an unknown workspace.
+func scopeViewerHidden(ctx context.Context, t *testing.T, env *e2e.Env, viewer *scopePerson) {
+	t.Helper()
+
+	const missing = "no-such-workspace"
+
+	org := "/api/v2/organizations/" + scopeNamespace + "/workspaces/"
+
+	statusB, bodyB, errB := env.TFEStatus(ctx, viewer.token.Secret, http.MethodGet, org+"b", "")
+	statusMissing, bodyMissing, errMissing := env.TFEStatus(ctx, viewer.token.Secret, http.MethodGet, org+missing, "")
+
+	if errB != nil || errMissing != nil {
+		t.Fatalf("GET workspace as viewer: %v, %v", errB, errMissing)
+	}
+
+	if statusB != http.StatusNotFound || statusMissing != http.StatusNotFound ||
+		scopeNormalize(bodyB, "b") != scopeNormalize(bodyMissing, missing) {
+		t.Fatalf(
+			"GET workspace b as viewer answers %d, a missing workspace %d, want the same 404:\n--- b ---\n%s\n--- missing ---\n%s",
+			statusB,
+			statusMissing,
+			bodyB,
+			bodyMissing,
+		)
 	}
 }
 
