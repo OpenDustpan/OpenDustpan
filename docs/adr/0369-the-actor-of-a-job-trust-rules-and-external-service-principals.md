@@ -124,7 +124,45 @@ A check of main on 14 November 2026 found:
      and the action of the rules.
    - The match compares exact bytes: no case folding and no Unicode
      normalization. The docs say so.
-5. **An agent, an approval and a retry (owner, 2026-11-14).**
+5. **A classification rule says what it does to existing principals
+   (owner, 2026-11-14).** A create or an update of a classification rule (a
+   glob or a condition on a claim) carries the field `existingPrincipals`.
+   It has one of four values:
+   - `refuse`: the default. When the rule would classify an existing
+     principal again, the server refuses the write and changes nothing. The
+     error has a code, the count of the principals, and the preview route.
+   - `skip`: the rule applies only to new accounts. The existing matches
+     stay as they are, and the answer lists them.
+   - `confirm`, with the field `expectedDigest`: the digest of the set that
+     a preview gave. The server classifies again only when the current set
+     has the same digest. Otherwise it refuses the write and changes
+     nothing, as a saved plan that is stale fails.
+   - `apply`: an explicit opt-in. The server classifies again each existing
+     principal that matches at the time of the write.
+
+   A rule that matches no existing principal needs no value: the default
+   `refuse` then writes the rule. The server refuses an unknown value. A
+   preview route (a dry run) answers the principals that a rule would
+   classify again, their count and the digest of the set, and changes
+   nothing. The audit entry of the write records the rule change, the value
+   of the field, the set of principals that the write classified, and its
+   count.
+
+   The precedents: ADR 270 decision 8 (a provider sends `If-Match`, and a
+   conflict changes nothing), ADR 270 decision 6 (a create never adopts an
+   existing object), ADR 153 decision 12 (a purge with dependents needs
+   `confirmDependents: true`, else 409), ADR 241 decision 8 (a dry run comes
+   first, and a stale plan answers 409) and ADR 309 decision 3 (a risky
+   delete is blocked by default). A value of the field in a configuration
+   file stays the same between two runs, so a provider stays idempotent:
+   `skip`, `refuse` and `apply` hold no digest. A provider can call the
+   preview in its plan, show the principals in the plan, and send `confirm`
+   with the digest at the apply.
+
+   The console shows the preview before the save, as it shows the blast
+   radius before a destroy or a delete (ADR 162 decision 16). This needs no
+   new decision for the console.
+6. **An agent, an approval and a retry (owner, 2026-11-14).**
    - An agent acts for a person with the intersection of the rights of both.
    - An approval does not lend an identity.
    - A retry keeps the actor and gets a new credential. It stops when the
@@ -174,7 +212,7 @@ changes that need it.
 
 - RFC 129 point 4 is decided. The changes of milestone 8 that waited only on
   point 4 cite this ADR.
-- The OpenSpec change `external-service-principal` covers decisions 3 and 4,
+- The OpenSpec change `external-service-principal` covers decisions 3 to 5,
   with the gaps of "What main lacks".
 - The access facts of the gate engine get the verified claims of the token.
   The gate schema version goes up.
