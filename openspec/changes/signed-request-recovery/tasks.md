@@ -7,7 +7,7 @@
 
 - [ ] 1.1 First boot stores the settings. Check: `go test ./pkg/store/... -run TestRecoverySettingsFirstBoot -count=1` fails on main (NEW test, both dialects).
 - [ ] 1.2 A valid request makes one temporary administrator and an encrypted answer. Check: `go test ./internal/recovery/ -run TestSignedRequestMakesOneTempAdmin -count=1` fails on main (NEW test).
-- [ ] 1.3 Fourteen refusal reasons give one answer and fourteen audit reasons. Check: `go test ./internal/api/server/ -run TestRecoveryRefusalsLookTheSame -count=1` fails on main (NEW test).
+- [ ] 1.3 Fifteen refusal reasons give one answer and fifteen audit reasons. Check: `go test ./internal/api/server/ -run TestRecoveryRefusalsLookTheSame -count=1` fails on main (NEW test).
 - [ ] 1.4 Replay, two at once on two instances, and a crash before the commit. Check: `go test ./pkg/store/... -run TestRecoveryNonceOnce -count=1` fails on main (NEW test).
 - [ ] 1.5 The time window and the skew. Check: `go test ./internal/recovery/ -run TestRequestWindow -count=1` fails on main (NEW test).
 - [ ] 1.6 The shared rate limit with the /64 group. Check: `go test ./pkg/store/... -run TestRecoveryRateLimitShared -count=1` fails on main (NEW test).
@@ -40,6 +40,7 @@
 - [ ] 1.33 A first-boot key file that holds two `ssh-ed25519` keys is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFirstBootKeyTwoKeys -count=1` fails on main (NEW test). `serve` does not start and the store holds no mode and no key.
 - [ ] 1.34 A first-boot key file that does not parse is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFirstBootKeyUnparsable -count=1` fails on main (NEW test). `serve` does not start and the store holds no mode and no key.
 - [ ] 1.35 An empty first-boot key file is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFirstBootKeyEmpty -count=1` fails on main (NEW test). `serve` does not start and the store holds no mode and no key.
+- [ ] 1.36 A `person` that names `admin`, `admin-2` and an existing principal (an expired temporary administrator) is refused. The request goes straight to the store transaction, as if the service allowlist had passed it. Check: `go test ./pkg/store/... -run TestRecoveryPersonTaken -count=1` fails on main (NEW test). Expect the reason `person` and no new row.
 
 ## 2. Build
 

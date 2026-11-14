@@ -47,6 +47,11 @@ When the stored mode is `signed-request` and a request is canonical, in its time
 - **WHEN** a request carries a `person` member that is not 1 to 64 characters of `[a-z0-9._-]`
 - **THEN** the server refuses it with the one answer and does not change the value
 
+#### Scenario: A person that is reserved or taken
+- **WHEN** a request carries a `person` that names a reserved subject or an existing principal
+- **THEN** the server answers with the one refusal, and the audit entry `recovery.refused` holds the reason `person`
+- **AND** the store holds no new person, grant, record, token or nonce
+
 ### Requirement: use-writes-one-audit-entry
 
 When a signed-request recovery succeeds, the server SHALL write one audit entry that holds the mode, the time and the client address, and the action `recovery:use-signed-request`, in the same transaction as the use.
@@ -60,8 +65,8 @@ When a signed-request recovery succeeds, the server SHALL write one audit entry 
 
 When the server refuses a recovery request for any reason, it SHALL answer `403` with the code `recovery.refused` and the same body, and write one audit entry with the reason.
 
-#### Scenario: The fourteen reasons look the same
-- **WHEN** requests fail for the reasons `shape`, `canonical`, `time`, `mode`, `installation`, `unknown-key`, `signature`, `nonce-used`, `rate-limit`, `recovery-active`, `maintenance`, `answer`, `store` and `address`
+#### Scenario: The fifteen reasons look the same
+- **WHEN** requests fail for the reasons `shape`, `canonical`, `time`, `mode`, `installation`, `unknown-key`, `signature`, `nonce-used`, `rate-limit`, `recovery-active`, `maintenance`, `answer`, `store`, `address` and `person`
 - **THEN** each answer has the same status, the same body and the same length
 - **AND** each audit entry `recovery.refused` holds its reason
 
