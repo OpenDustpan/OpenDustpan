@@ -147,7 +147,12 @@ A model of another provider than the drafter listed the open questions, failure 
 
 ## Open questions
 
-none
+Not spec-ready. An implementer read this change against main on 14 Nov 2026 and could not start without these answers:
+
+1. Security: this change lets the bind password come from any environment variable or file that the administrator names. A bind to a hostile directory could then send out other secrets or files of the server. The bind password must be a stored secret, or come only from an allowlist of names and paths, with each layer and its hostile test. Decides: PM; a change to this rule needs the owner.
+2. Do stored LDAP providers go through the existing `/api/server/sign-in-providers` resource with `mode` `ldap` (`internal/api/server/providers.go`; `ModeLDAP` is refused today in `pkg/session/providerconfig.go`), or a new resource? An implementer check found that the new route duplicates the existing one, that no fixed provider ID exists (`session.ErrProviderStatic` guards it), that the removal source kind `ldap` does not exist (`pkg/principal/removal.go`), and that the startup binding is in `pkg/dustpan/signin.go`. Decides: PM, by a re-check of this change against main.
+
+Earlier answers, before the implementer check:
 
 Questions considered and answered:
 

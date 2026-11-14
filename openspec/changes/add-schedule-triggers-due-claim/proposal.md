@@ -133,7 +133,11 @@ A model of another provider than the drafter listed the open questions, failure 
 
 ## Open questions
 
-none
+Not spec-ready. An implementer read this change against main on 14 Nov 2026 and could not start without these answers:
+
+1. Does the schedule reuse `internal/cron` (`Parse`, `Next`, the presets, the hash spread and the one-hour minimum already exist), or move it to `pkg/`, and why? What does `ClaimDue` add on top of the `ScheduleKey` idempotency key (`pkg/trigger/dispatcher.go`, with a race test in `pkg/trigger/triggertest`), and which table and columns hold the next slot? The output-read check at tick time contradicts ADR 273 and `pkg/trigger/readcheck.go`, which check at each output read. Decides: PM, by a re-check of this change against main.
+
+Earlier answers, before the implementer check:
 
 Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
 
