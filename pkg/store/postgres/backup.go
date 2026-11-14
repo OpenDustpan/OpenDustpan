@@ -456,7 +456,10 @@ func pgControlTables() []pgCopyTable {
 		},
 	}
 
-	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables(), pgNameLockControlTables())
+	return slices.Concat(
+		core, pgStoreCheckControlTables(), pgBlobDeleteLeaseControlTables(), pgRunnerControlTables(),
+		pgNameLockControlTables(),
+	)
 }
 
 // pgNameLockControlTables holds the COPY columns of the counts of the
@@ -494,6 +497,19 @@ func pgStoreCheckControlTables() []pgCopyTable {
 				"id", pgColTarget, pgColState, "requested_by", pgColStartedAtMs, pgColEndedAtMs, pgColError, "report",
 			},
 			orderBy: []string{"id"},
+		},
+	}
+}
+
+// pgBlobDeleteLeaseControlTables lists the column list of the blob delete
+// lease rows, which live in the live schema. The swap keeps the live rows, so
+// the restore waits for the deleters that run now.
+func pgBlobDeleteLeaseControlTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table:   backup.TableBlobDeleteLeases,
+			columns: []string{pgColHolder, pgColExpiresAtMs},
+			orderBy: []string{pgColHolder},
 		},
 	}
 }
@@ -538,11 +554,6 @@ func pgEmptiedTables() []pgCopyTable {
 				"final_at_ms",
 			},
 			orderBy: []string{pgColUnitID},
-		},
-		{
-			table:   backup.TableBlobDeleteLeases,
-			columns: []string{pgColHolder, pgColExpiresAtMs},
-			orderBy: []string{pgColHolder},
 		},
 	}
 }

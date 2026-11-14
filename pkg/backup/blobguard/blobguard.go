@@ -178,7 +178,16 @@ func HoldLease(
 		// rest of the window runs on a timer.
 		elapsed := now().Sub(start)
 
-		leaseCtx, cancel := context.WithTimeout(ctx, leaseWindow-elapsed)
+		// A clock that stepped back between the two reads gives a negative
+		// elapsed time. The rest of the window would then outlast the lease
+		// row that holds the delete, so clamp it to zero: the context ends
+		// at once and the delete fails closed.
+		rest := leaseWindow - elapsed
+		if elapsed < 0 {
+			rest = 0
+		}
+
+		leaseCtx, cancel := context.WithTimeout(ctx, rest)
 
 		return leaseCtx, func(releaseCtx context.Context) error {
 			cancel()
