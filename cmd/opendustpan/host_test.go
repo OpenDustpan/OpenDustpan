@@ -106,23 +106,24 @@ func parseHostOutput(t *testing.T, out string) hostCredentials {
 func openHostStore(ctx context.Context, t *testing.T, db string) *sqlite.Store {
 	t.Helper()
 
-	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate, "")
+	path, ok := strings.CutPrefix(db, "sqlite:")
+	if !ok {
+		t.Fatalf("database %q is no SQLite database", db)
+	}
+
+	st, err := sqlite.Open(ctx, path, sqlite.WithLogger(slog.New(slog.DiscardHandler)),
+		sqlite.WithBinaryVersion(version), sqlite.WithInstallationKind(""))
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
 
-	wrapped, ok := st.(sqliteStore)
-	if !ok {
-		t.Fatalf("store of %q is no SQLite store", db)
-	}
-
 	t.Cleanup(func() {
-		if err := wrapped.Close(); err != nil {
-			t.Errorf("close store: %v", err)
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
 		}
 	})
 
-	return wrapped.Store
+	return st
 }
 
 // TestHostCreateTempAdmin makes a temporary administrator for one named
@@ -654,21 +655,34 @@ func TestHostFailureLeavesNothing(t *testing.T) {
 
 	ctx := t.Context()
 
-	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler), openMigrate, "")
+	db := hostTestDB(t)
+
+	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate, "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 
 	t.Cleanup(st.close)
 
-	if _, err := createTempAdmin(ctx, failRecoveryStore{store: st}, aliceInput(), io.Discard); !errors.Is(
-		err, accesstoken.ErrNotOwnToken,
+	if _, createErr := createTempAdmin(ctx, failRecoveryStore{store: st}, aliceInput(), io.Discard); !errors.Is(
+		createErr, accesstoken.ErrNotOwnToken,
 	) {
-		t.Fatalf("host run with a refused token = %v, want ErrNotOwnToken", err)
+		t.Fatalf("host run with a refused token = %v, want ErrNotOwnToken", createErr)
 	}
 
-	requireHostCleanup(ctx, t, st)
-	requireHostRetry(ctx, t, st)
+	// The SQLite file has one holder at a time: close the store before the
+	// direct read of the grants, then open it again for the retry.
+	st.close()
+	requireHostCleanup(ctx, t, db)
+
+	retry, err := openStore(ctx, db, slog.New(slog.DiscardHandler), openMigrate, "")
+	if err != nil {
+		t.Fatalf("open store again: %v", err)
+	}
+
+	t.Cleanup(retry.close)
+
+	requireHostRetry(ctx, t, retry)
 }
 
 // aliceInput is the host input of the person alice.
@@ -676,27 +690,35 @@ func aliceInput() hostInput {
 	return hostInput{person: "alice", reason: "every administrator lost access"}
 }
 
-// grantLister lists the grants on an object. Both SQL adapters implement
-// it.
-type grantLister interface {
-	ListGrantsOn(ctx context.Context, obj identity.Object, q access.GrantQuery) ([]access.ListedGrant, int64, error)
-}
-
 // requireHostCleanup proves the failed run left no person, no live grant
-// and no record.
-func requireHostCleanup(ctx context.Context, t *testing.T, st store) {
+// and no record in the database db. It opens the SQLite adapter directly,
+// because the grant list is not a port of the built-in store, and closes it
+// before it returns.
+func requireHostCleanup(ctx context.Context, t *testing.T, db string) {
 	t.Helper()
 
-	if _, err := st.GetPrincipalBySubject(ctx, "alice"); !errors.Is(err, principal.ErrNotFound) {
-		t.Fatalf("principal after a failed run = %v, want ErrNotFound", err)
-	}
-
-	lister, ok := st.(grantLister)
+	path, ok := strings.CutPrefix(db, "sqlite:")
 	if !ok {
-		t.Fatal("the store lists no grants")
+		t.Fatalf("database %q is no SQLite database", db)
 	}
 
-	listed, total, err := lister.ListGrantsOn(ctx, identity.ServerObject(), access.GrantQuery{
+	st, err := sqlite.Open(ctx, path, sqlite.WithLogger(slog.New(slog.DiscardHandler)),
+		sqlite.WithBinaryVersion(version), sqlite.WithInstallationKind(""))
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+
+	defer func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	}()
+
+	if _, getErr := st.GetPrincipalBySubject(ctx, "alice"); !errors.Is(getErr, principal.ErrNotFound) {
+		t.Fatalf("principal after a failed run = %v, want ErrNotFound", getErr)
+	}
+
+	listed, total, err := st.ListGrantsOn(ctx, identity.ServerObject(), access.GrantQuery{
 		AfterSubject: "", AfterRole: "", Subject: "", Role: "", Limit: 100,
 	})
 	if err != nil {

@@ -34,6 +34,7 @@ func sweepChainServer(
 		nameLocks:        nameLockPrune{locks: nil},
 		issuer:           nil,
 		handler:          nil,
+		closeBuiltin:     nil,
 		started:          nil,
 		ungated:          nil,
 		mounted:          nil,
