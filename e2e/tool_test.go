@@ -94,6 +94,20 @@ func TestVersionsPinnedLeavesOutLatest(t *testing.T) {
 			value: "latest",
 			want:  []string{e2e.Latest},
 		},
+		{
+			name:  "terragrunt pinned",
+			tool:  e2e.Terragrunt(),
+			env:   "E2E_TERRAGRUNT_VERSIONS",
+			value: "pinned",
+			want:  []string{"1.2.1"},
+		},
+		{
+			name:  "terragrunt default",
+			tool:  e2e.Terragrunt(),
+			env:   "E2E_TERRAGRUNT_VERSIONS",
+			value: "",
+			want:  []string{"1.2.1"},
+		},
 	}
 
 	for _, tc := range cases {

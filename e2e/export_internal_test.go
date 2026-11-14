@@ -12,3 +12,9 @@ func SetBeforeLock(f *Fetcher, fn func()) {
 func CacheChecks(f *Fetcher) int64 {
 	return f.checks.Load()
 }
+
+// SetPinnedSum replaces the pinned checksum of archive in tool, so a test
+// can serve a fake archive under the real archive name.
+func SetPinnedSum(tool *Tool, archive, sum string) {
+	tool.pinned[archive] = sum
+}

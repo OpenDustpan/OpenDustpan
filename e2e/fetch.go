@@ -122,16 +122,8 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 		return Install{}, err
 	}
 
+	inst, member := f.installEntry(tool, label, version, want.source, archive)
 	dest := filepath.Join(f.CacheDir, strings.TrimSuffix(archive, ".tar.gz"))
-	binary := filepath.Join(dest, filepath.FromSlash(tool.binary))
-	inst := Install{
-		Tool:           tool.Name,
-		Label:          label,
-		Version:        version,
-		ChecksumSource: want.source,
-		Dir:            filepath.Dir(binary),
-		binary:         binary,
-	}
 
 	key := checkKey{archive: archive, sum: want.sum}
 	if f.cacheChecked(key) {
@@ -155,16 +147,17 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 	}
 
 	rel := release{
-		url:     tool.releaseFile(version, archive),
-		archive: archive,
-		sum:     want.sum,
-		dest:    dest,
-		binary:  filepath.FromSlash(tool.binary),
+		url:       tool.releaseFile(version, archive),
+		archive:   archive,
+		sum:       want.sum,
+		dest:      dest,
+		binary:    member,
+		installed: filepath.FromSlash(tool.binary),
 	}
 
 	// The cache comes from CI and is untrusted: an entry is used only when
 	// its archive and extracted files match the expected sum and the archive.
-	if f.checkCache(archive, rel.binary, want.sum) == nil {
+	if f.checkCache(archive, rel.binary, rel.installed, want.sum) == nil {
 		f.markCacheChecked(key)
 
 		return inst, nil
@@ -183,6 +176,23 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 	return inst, nil
 }
 
+// installEntry returns the Install of tool version in the cache directory of
+// f and the archive member holding the binary.
+func (f *Fetcher) installEntry(tool Tool, label, version, source, archive string) (Install, string) {
+	dest := filepath.Join(f.CacheDir, strings.TrimSuffix(archive, ".tar.gz"))
+	binary := filepath.Join(dest, filepath.FromSlash(tool.binary))
+	inst := Install{
+		Tool:           tool.Name,
+		Label:          label,
+		Version:        version,
+		ChecksumSource: source,
+		Dir:            filepath.Dir(binary),
+		binary:         binary,
+	}
+
+	return inst, filepath.FromSlash(tool.ArchiveBinaryName(version))
+}
+
 // lockEntry runs the beforeLock function of f, if it is set, and then locks
 // the entry of archive in the cache directory of f.
 func (f *Fetcher) lockEntry(archive string) (func(), error) {
@@ -195,10 +205,10 @@ func (f *Fetcher) lockEntry(archive string) (func(), error) {
 
 // checkCache counts the check and checks the entry of archive in the cache
 // directory of f.
-func (f *Fetcher) checkCache(archive, wantBinary, wantSum string) error {
+func (f *Fetcher) checkCache(archive, wantMember, wantBinary, wantSum string) error {
 	f.checks.Add(1)
 
-	return checkCache(f.CacheDir, archive, wantBinary, wantSum)
+	return checkCache(f.CacheDir, archive, wantMember, wantBinary, wantSum)
 }
 
 // lockEntry takes an exclusive lock on the lock file of archive in cacheDir
@@ -388,6 +398,9 @@ type release struct {
 	dest    string
 	// binary is the executable's path inside the archive, used to check extraction.
 	binary string
+	// installed is the executable's path inside dest; it differs from
+	// binary only when the archive names the binary differently.
+	installed string
 }
 
 // download fetches rel.url, checks it against rel.sum and unpacks it into
@@ -430,14 +443,14 @@ func (f *Fetcher) download(ctx context.Context, rel release) error {
 		return extractErr
 	}
 
-	if _, statErr := os.Stat(filepath.Join(stage, rel.binary)); statErr != nil {
-		return fmt.Errorf("%w: %s", ErrMissingBinary, rel.archive)
+	if err := stageMember(stage, rel); err != nil {
+		return err
 	}
 
 	if err := os.Rename(stage, rel.dest); err != nil {
 		// Another process finished first; keep this case only when its entry
 		// passes the same check.
-		if checkCache(f.CacheDir, rel.archive, rel.binary, rel.sum) == nil {
+		if checkCache(f.CacheDir, rel.archive, rel.binary, rel.installed, rel.sum) == nil {
 			return nil
 		}
 
@@ -454,9 +467,10 @@ func (f *Fetcher) download(ctx context.Context, rel release) error {
 }
 
 // checkCache reports whether the cache entry for archive in cacheDir holds
-// exactly the contents of that archive, and whether the archive has wantSum.
+// exactly the contents of that archive, with the archive member installed
+// under wantBinary, and whether the archive has wantSum.
 // The caller refuses the entry on any error.
-func checkCache(cacheDir, archive, wantBinary, wantSum string) error {
+func checkCache(cacheDir, archive, wantMember, wantBinary, wantSum string) error {
 	cacheRoot, err := os.OpenRoot(cacheDir)
 	if err != nil {
 		return fmt.Errorf("open cache dir: %w", err)
@@ -506,6 +520,10 @@ func checkCache(cacheDir, archive, wantBinary, wantSum string) error {
 		return err
 	}
 
+	if err := remapMember(want, wantMember, wantBinary); err != nil {
+		return err
+	}
+
 	if dirErr := checkCacheDir(root, want); dirErr != nil {
 		return dirErr
 	}
@@ -515,6 +533,25 @@ func checkCache(cacheDir, archive, wantBinary, wantSum string) error {
 	if _, err := root.Lstat(wantBinary); err != nil {
 		return fmt.Errorf("inspect cached CLI binary: %w", err)
 	}
+
+	return nil
+}
+
+// remapMember maps the archive member to its installed name in want, so the
+// directory check compares installed files. Only this one rename maps names;
+// every other name must match the archive exactly.
+func remapMember(want map[string]archiveEntry, wantMember, wantBinary string) error {
+	if wantMember == wantBinary {
+		return nil
+	}
+
+	member, ok := want[wantMember]
+	if !ok {
+		return fmt.Errorf("%w: archive path %q is missing from the cache", ErrCacheMismatch, wantMember)
+	}
+
+	delete(want, wantMember)
+	want[wantBinary] = member
 
 	return nil
 }
@@ -721,6 +758,26 @@ func removeCacheEntry(dest, archivePath string) error {
 
 	if err := os.RemoveAll(archivePath); err != nil {
 		return fmt.Errorf("remove refused cache archive: %w", err)
+	}
+
+	return nil
+}
+
+// stageMember checks that the staged extraction holds the archive member and
+// renames it to its installed name. The rename is the only rename of an
+// extracted entry; the cache check remaps the same entry, so a member that
+// the archive does not name is still refused.
+func stageMember(stage string, rel release) error {
+	if _, statErr := os.Stat(filepath.Join(stage, rel.binary)); statErr != nil {
+		return fmt.Errorf("%w: %s", ErrMissingBinary, rel.archive)
+	}
+
+	if rel.installed == rel.binary {
+		return nil
+	}
+
+	if err := os.Rename(filepath.Join(stage, rel.binary), filepath.Join(stage, rel.installed)); err != nil {
+		return fmt.Errorf("install %s: %w", rel.installed, err)
 	}
 
 	return nil

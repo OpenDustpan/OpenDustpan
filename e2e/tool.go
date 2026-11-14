@@ -21,8 +21,9 @@ const Latest = "latest"
 
 // Tool names, also used as report prefixes.
 const (
-	ToolPulumi = "pulumi"
-	ToolTofu   = "tofu"
+	ToolPulumi     = "pulumi"
+	ToolTofu       = "tofu"
+	ToolTerragrunt = "terragrunt"
 )
 
 const (
@@ -45,7 +46,7 @@ type Tool struct {
 	archive     func(version, goos, arch string) string
 	checksums   func(version string) string
 	pinned      map[string]string
-	// Name is ToolPulumi or ToolTofu.
+	// Name is ToolPulumi, ToolTofu or ToolTerragrunt.
 	Name string
 	// LatestURL answers with the newest release; parseLatest reads it.
 	LatestURL string
@@ -54,7 +55,10 @@ type Tool struct {
 	ReleaseURL  string
 	versionsEnv string
 	binary      string
-	defaults    []string
+	// archiveBinary names the executable inside the archive when it differs
+	// from binary. When nil, the archive holds binary itself.
+	archiveBinary func(version, goos, arch string) string
+	defaults      []string
 }
 
 // Pulumi describes the Pulumi CLI.
@@ -95,12 +99,13 @@ func Pulumi() Tool {
 			"pulumi-v3.200.0-linux-arm64.tar.gz":  "127e30ee5b34b32d616db1a3254ff2520e639cfb3b0f19dfc62b52f743465c2c",
 			"pulumi-v3.200.0-linux-x64.tar.gz":    "b48a7f6034c6ef554c25e1762b9e89d451d2ebd4f3671850a56fe395956fecbe",
 		},
-		Name:        ToolPulumi,
-		LatestURL:   "https://www.pulumi.com/latest-version",
-		ReleaseURL:  "https://get.pulumi.com/releases/sdk/%[2]s",
-		versionsEnv: "E2E_PULUMI_VERSIONS",
-		binary:      "pulumi/pulumi",
-		defaults:    []string{"3.262.0", "3.250.0", "3.200.0"},
+		Name:          ToolPulumi,
+		LatestURL:     "https://www.pulumi.com/latest-version",
+		ReleaseURL:    "https://get.pulumi.com/releases/sdk/%[2]s",
+		versionsEnv:   "E2E_PULUMI_VERSIONS",
+		binary:        "pulumi/pulumi",
+		archiveBinary: nil,
+		defaults:      []string{"3.262.0", "3.250.0", "3.200.0"},
 	}
 }
 
@@ -129,12 +134,44 @@ func OpenTofu() Tool {
 			"tofu_1.10.10_linux_amd64.tar.gz":  "75b529fd9481b23e46a895520883f04c537bd6be4bd0dff83ad87e85806b12f1",
 			"tofu_1.10.10_linux_arm64.tar.gz":  "cea25e126cc3428aec4bfb7c0e7acf117b4335c12160f4e4dbecd327a3f29bee",
 		},
-		Name:        ToolTofu,
-		LatestURL:   "https://get.opentofu.org/tofu/api.json",
-		ReleaseURL:  "https://github.com/opentofu/opentofu/releases/download/v%[1]s/%[2]s",
-		versionsEnv: "E2E_TOFU_VERSIONS",
-		binary:      "tofu",
-		defaults:    []string{"1.12.12", "1.11.14", "1.10.10"},
+		Name:          ToolTofu,
+		LatestURL:     "https://get.opentofu.org/tofu/api.json",
+		ReleaseURL:    "https://github.com/opentofu/opentofu/releases/download/v%[1]s/%[2]s",
+		versionsEnv:   "E2E_TOFU_VERSIONS",
+		binary:        "tofu",
+		archiveBinary: nil,
+		defaults:      []string{"1.12.12", "1.11.14", "1.10.10"},
+	}
+}
+
+// Terragrunt describes the Terragrunt CLI. The default matrix holds the one
+// pinned version 1.2.1 (released 2026-10-23); the archive name carries no
+// version, so only one version stays pinned. Terragrunt is a test-only pinned
+// binary of the e2e fetcher, the same way as OpenTofu: it is not a Go module
+// and it is not in the shipped binary.
+func Terragrunt() Tool {
+	return Tool{
+		parseLatest: func(body string) (string, error) { return strings.TrimSpace(body), nil },
+		archive: func(_, goos, arch string) string {
+			return fmt.Sprintf("terragrunt_%s_%s.tar.gz", goos, arch)
+		},
+		checksums: func(string) string { return "SHA256SUMS" },
+		// sha256 sums copied from SHA256SUMS of the GitHub release v1.2.1.
+		pinned: map[string]string{
+			"terragrunt_linux_amd64.tar.gz":  "08c8844cc69e4f03451ebb8f347cb57d9bd6b8db7b16e437ae5ec6f001228ef9",
+			"terragrunt_linux_arm64.tar.gz":  "8b92d56a20b2848365e22ef94f963fbfe25fedeebcacffacbc286cfcf9966066",
+			"terragrunt_darwin_amd64.tar.gz": "29806d1708f5c54e54bc6adfcacfb710d4bb1f6f180efd751692e6fad5985640",
+			"terragrunt_darwin_arm64.tar.gz": "0aded323f844ce682a715feb26393b67eff1400dc1722203fa4dd4e23b3bb182",
+		},
+		Name:        ToolTerragrunt,
+		LatestURL:   "https://github.com/gruntwork-io/terragrunt/releases/latest",
+		ReleaseURL:  "https://github.com/gruntwork-io/terragrunt/releases/download/v%[1]s/%[2]s",
+		versionsEnv: "E2E_TERRAGRUNT_VERSIONS",
+		binary:      "terragrunt",
+		archiveBinary: func(_, goos, arch string) string {
+			return fmt.Sprintf("terragrunt_%s_%s", goos, arch)
+		},
+		defaults: []string{"1.2.1"},
 	}
 }
 
@@ -250,6 +287,17 @@ func VersionAtLeast(version, minimum string) (bool, error) {
 	}
 
 	return slices.Compare(own, least) >= 0, nil
+}
+
+// ArchiveBinaryName returns the executable's path inside the archive of
+// version for this machine. It differs from binary only when the archive
+// names the binary differently from its installed name.
+func (t Tool) ArchiveBinaryName(version string) string {
+	if t.archiveBinary != nil {
+		return t.archiveBinary(version, runtime.GOOS, runtime.GOARCH)
+	}
+
+	return t.binary
 }
 
 // ArchiveName returns the release archive of version for this machine.

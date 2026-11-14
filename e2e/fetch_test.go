@@ -347,6 +347,7 @@ func TestFetchRejectsBadVersions(t *testing.T) {
 func TestFetchPinnedVersionFailsClosed(t *testing.T) {
 	tofu := e2e.OpenTofu()
 	pulumi := e2e.Pulumi()
+	tg := e2e.Terragrunt()
 
 	// The label is read inside each subtest, after t.Setenv: the version
 	// setting of the run (for example E2E_TOFU_VERSIONS=latest in the nightly
@@ -371,6 +372,13 @@ func TestFetchPinnedVersionFailsClosed(t *testing.T) {
 			env:       "E2E_PULUMI_VERSIONS",
 			versions:  "3.268.0",
 			checksums: func(label string) string { return "pulumi-" + label + "-checksums.txt" },
+		},
+		{
+			name:      "terragrunt default",
+			tool:      tg,
+			env:       "E2E_TERRAGRUNT_VERSIONS",
+			versions:  "",
+			checksums: func(string) string { return "SHA256SUMS" },
 		},
 	}
 
@@ -1039,6 +1047,126 @@ func TestFetchChecksArchiveWithoutBinary(t *testing.T) {
 
 	if got := downloads.Load(); got != 1 {
 		t.Errorf("archive downloaded %d times, want 1", got)
+	}
+}
+
+func TestFetchInstallsRenamedBinary(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	name, err := tool.ArchiveName(fakeVersion)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	member := tool.ArchiveBinaryName(fakeVersion)
+	if member == "terragrunt" {
+		t.Skipf("renamed binary needs a member name unlike the installed name on %s", name)
+	}
+
+	archive := tarball(t, []tar.Header{
+		{Name: member, Typeflag: tar.TypeReg, Mode: 0o755},
+	}, "#!/bin/sh\n")
+
+	sum := sha256.Sum256(archive)
+	wantSum := hex.EncodeToString(sum[:])
+	e2e.SetPinnedSum(&tool, name, wantSum)
+
+	var downloads atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) {
+		downloads.Add(1)
+
+		if _, writeErr := w.Write(archive); writeErr != nil {
+			t.Errorf("serve archive: %v", writeErr)
+		}
+	})
+	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := fmt.Fprintf(w, "%s  %s\n", wantSum, name); writeErr != nil {
+			t.Errorf("serve checksums: %v", writeErr)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	inst, err := fetcher.Install(t.Context(), tool, fakeVersion)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	if got := filepath.Base(inst.Binary()); got != "terragrunt" {
+		t.Errorf("installed binary %q, want %q", got, "terragrunt")
+	}
+
+	data, err := os.ReadFile(inst.Binary())
+	if err != nil {
+		t.Fatalf("read binary: %v", err)
+	}
+
+	if string(data) != "#!/bin/sh\n" {
+		t.Errorf("binary holds %q, want %q", data, "#!/bin/sh\n")
+	}
+
+	if _, err := fetcher.Install(t.Context(), tool, fakeVersion); err != nil {
+		t.Fatalf("reinstall: %v", err)
+	}
+
+	if got := downloads.Load(); got != 1 {
+		t.Errorf("archive downloaded %d times, want 1", got)
+	}
+}
+
+func TestFetchRejectsArchiveWithoutRenamedBinary(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	name, err := tool.ArchiveName(fakeVersion)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	member := tool.ArchiveBinaryName(fakeVersion)
+	if member == "terragrunt" {
+		t.Skipf("renamed binary needs a member name unlike the installed name on %s", name)
+	}
+
+	archive := tarball(t, []tar.Header{
+		{Name: "other", Typeflag: tar.TypeReg, Mode: 0o755},
+	}, "#!/bin/sh\n")
+
+	sum := sha256.Sum256(archive)
+	wantSum := hex.EncodeToString(sum[:])
+	e2e.SetPinnedSum(&tool, name, wantSum)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := w.Write(archive); writeErr != nil {
+			t.Errorf("serve archive: %v", writeErr)
+		}
+	})
+	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := fmt.Fprintf(w, "%s  %s\n", wantSum, name); writeErr != nil {
+			t.Errorf("serve checksums: %v", writeErr)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	if _, err := fetcher.Install(t.Context(), tool, fakeVersion); !errors.Is(err, e2e.ErrMissingBinary) {
+		t.Fatalf("got error %v, want ErrMissingBinary", err)
 	}
 }
 

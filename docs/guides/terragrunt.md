@@ -64,7 +64,7 @@ export TF_CLI_CONFIG_FILE=$PWD/dev.tfrc SSL_CERT_FILE=data/cert.pem
 From the live directory, run the apply over all units:
 
 ```sh
-terragrunt run-all apply --auto-approve --non-interactive --parallelism 3
+terragrunt run --all --non-interactive --parallelism 3 -- apply --auto-approve
 ```
 
 Each unit applies in its own workspace. A held lock blocks another unit
