@@ -21,6 +21,8 @@ import {
 import type { Decoder } from "./decode.js";
 import { invalidValue } from "./errors.js";
 import type {
+  AccessCollectionUnitCapError,
+  AccessCollectionUnitCapErrorArgs,
   AccessLimit,
   AddRegistryKeyRequest,
   ApiDescription,
@@ -374,6 +376,21 @@ function oneOf<T>(want: string, ...decoders: ReadonlyArray<Decoder<T>>): Decoder
     throw invalidValue(path, `want ${want}, got ${got}`);
   };
 }
+
+/** The validator of AccessCollectionUnitCapError. */
+export const decodeAccessCollectionUnitCapError: Decoder<AccessCollectionUnitCapError> = object<AccessCollectionUnitCapError>("AccessCollectionUnitCapError", {
+  code: int64,
+  errorArgs: ref(() => decodeAccessCollectionUnitCapErrorArgs),
+  errorCode: literal("access.collection-unit-cap"),
+  message: string,
+});
+
+/** The validator of AccessCollectionUnitCapErrorArgs. */
+export const decodeAccessCollectionUnitCapErrorArgs: Decoder<AccessCollectionUnitCapErrorArgs> = object<AccessCollectionUnitCapErrorArgs>("AccessCollectionUnitCapErrorArgs", {
+  cap: int64,
+  count: int64,
+  key: string,
+});
 
 /** The validator of AccessLimit. */
 export const decodeAccessLimit: Decoder<AccessLimit> = object<AccessLimit>("AccessLimit", {
@@ -750,6 +767,7 @@ export const decodeEnterMaintenanceResponse: Decoder<EnterMaintenanceResponse> =
 
 /** The validator of ErrorAnswer. A value of "errorCode" that no variant names gets the validator of ErrorResponse. */
 export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("ErrorAnswer", "errorCode", {
+  "access.collection-unit-cap": ref(() => decodeAccessCollectionUnitCapError),
   "backup.corrupt": ref(() => decodeBackupCorruptError),
   "backup.too-many-unverified": ref(() => decodeBackupTooManyUnverifiedError),
   "context.field-from-code": ref(() => decodeContextFieldFromCodeError),

@@ -27,6 +27,31 @@ var ErrNoReview = errors.New("the store reads no access review")
 // the export is refused instead of an incomplete answer.
 var ErrCollectionReview = errors.New("the export of a collection needs a store that holds collections")
 
+// ErrCollectionUnitCap reports the refusal of the export of a collection
+// that holds more units than the cap of SettingCollectionUnitCap allows. The
+// export is refused: no truncation and no paging.
+var ErrCollectionUnitCap = errors.New("the collection holds more units than the export allows")
+
+// CollectionUnitCapError is the refusal of the export of a collection that
+// holds more units than the cap of SettingCollectionUnitCap. Key is the key
+// of the setting, Count the count of the units of the collection, and Cap
+// the cap.
+type CollectionUnitCapError struct {
+	Key   string
+	Count int
+	Cap   int
+}
+
+// Error implements error. The text names the count, the cap and the setting
+// key.
+func (e *CollectionUnitCapError) Error() string {
+	return fmt.Sprintf("the collection holds %d units; the export allows at most %d; change the setting %s",
+		e.Count, e.Cap, e.Key)
+}
+
+// Unwrap returns ErrCollectionUnitCap.
+func (e *CollectionUnitCapError) Unwrap() error { return ErrCollectionUnitCap }
+
 // CollectionUnits lists the units of a collection, for the export of a
 // collection and for the read of deleted units. The collection package
 // implements it. CollectionUnitIDs returns the stable IDs of the units in the
@@ -134,9 +159,10 @@ type ReviewPage struct {
 // holds the grants on the collection, the grants on each unit that is in it
 // now (a deleted unit that is not purged included, with the state deleted),
 // and the grants on the containers of the collection. A collection that does
-// not exist returns ErrNotFound, and an authorizer with no collection port
-// ErrCollectionReview. A bad request returns ErrInvalid, and a store that
-// reads no review ErrNoReview.
+// not exist returns ErrNotFound, an authorizer with no collection port
+// ErrCollectionReview, and a collection over the cap of
+// SettingCollectionUnitCap a CollectionUnitCapError. A bad request returns
+// ErrInvalid, and a store that reads no review ErrNoReview.
 //
 // Each page reads collection membership again, so units that join or leave
 // between pages change the next page. The snapshot fixes the time of the
@@ -518,8 +544,9 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 // the grants on the collection by its stable ID, the grants on the units that
 // are in it now, and the grants with a data role on the objects that contain
 // it. It fails closed: it returns ErrNotFound for a collection that does not
-// exist, and ErrCollectionReview when no port lists the units, so a partial
-// answer is never given.
+// exist, ErrCollectionReview when no port lists the units, and a
+// CollectionUnitCapError for a collection over the cap, so a partial answer
+// is never given.
 func (s *Service) collectionReviewScope(
 	ctx context.Context, obj identity.Object, roles []string,
 ) (ReviewScope, error) {
@@ -560,7 +587,8 @@ func (s *Service) collectionReviewScope(
 // collectionInside returns the collection obj with its current stable ID, and
 // the targets of the grants on the units in it. It returns ErrNotFound when
 // the collection does not exist or when obj carries the ID of another
-// collection of the same name.
+// collection of the same name, and a CollectionUnitCapError when the
+// collection holds more units than the cap of SettingCollectionUnitCap.
 func (s *Service) collectionInside(
 	ctx context.Context, obj identity.Object, units CollectionUnits,
 ) (identity.Object, []string, error) {
@@ -597,6 +625,18 @@ func (s *Service) collectionInside(
 		if id != "" {
 			inside = append(inside, unitTargetPrefix+id)
 		}
+	}
+
+	// The export reads every unit of the collection, so a collection over the
+	// cap is refused instead of a truncated answer. The cap is read at each
+	// export, and a reader that fails gives the default cap.
+	// Defense in depth: the parse refuses a value above MaxCollectionUnitCap
+	// too, and this bound stays so that a new caller or a change of the parse
+	// cannot turn off the refusal.
+	unitCap := boundCollectionUnitCap(collectionUnitCap(ctx, s.settings))
+
+	if len(inside) > unitCap {
+		return obj, nil, &CollectionUnitCapError{Key: SettingCollectionUnitCap, Count: len(inside), Cap: unitCap}
 	}
 
 	return col, inside, nil
