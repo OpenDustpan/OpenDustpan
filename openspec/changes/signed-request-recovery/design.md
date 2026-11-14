@@ -34,7 +34,10 @@ at the expiry, and a review after use.
    `recovery_settings` and the first key in one transaction when the row does
    not exist. It reads the public key file under the rules of decision 13.
    With `--recovery-mode signed-request` and no key file, `serve`
-   refuses to start and names `--recovery-public-key-file`. The content of
+   refuses to start and names `--recovery-public-key-file`. In signed-request
+   recovery, `serve` also refuses to start when `--public-url` (the audience of
+   a request) is empty; on that refusal it stores nothing and logs one error.
+   The content of
    the file must parse as exactly one `ssh-ed25519` public key: the same
    parse and the same key type rule as the add route (decision 12). `serve`
    refuses a key of another type, more than one key, text that does not parse
@@ -46,7 +49,8 @@ at the expiry, and a review after use.
    A different setting writes one warning to the log at each start (ADR 347).
 3. **The canonical request.** `request.json` is one JSON object, UTF-8, with
    no white space, the members in this order, and no other member:
-   `version` (exactly 1), `audience` (the external URL of the server),
+   `version` (exactly 1), `audience` (the setting `--public-url`, the
+   external URL of the server),
    `installation` (the installation name),
    `person` (the name of the new temporary administrator: 1 to 64 characters
    of `[a-z0-9._-]`, no other value, and no normalization; a `person` that
@@ -60,12 +64,18 @@ at the expiry, and a review after use.
    exactly 32 bytes after base64url decoding) and
    `keyId` (the SHA-256 fingerprint of the signing key). The server decodes
    with a strict decoder, encodes the result again, and refuses the body when
-   the two byte strings differ. So one request has exactly one byte form, and
-   the signature covers exactly the bytes that the server reads. The server
-   refuses a `version` other than 1. The request binds to the installation
-   name and to the audience, the external URL of the server. Both must match.
-   Two installations with the same name and the same trust key are told apart
-   by the audience and by the nonce store of each installation.
+   the two byte strings differ. The CLI and the server encode the canonical
+   bytes with `encoding/json` and `SetEscapeHTML(false)`, so a `reason` that
+   holds `<`, `>` or `&` gives the same bytes on both sides. So one request
+   has exactly one byte form, and the signature covers exactly the bytes that
+   the server reads. The server refuses a `version` other than 1. The request
+   binds to the installation name and to the audience, the setting
+   `--public-url`. Both must match. The server compares the audience with the
+   configured URL byte for byte after one normalization: it removes a
+   trailing slash. It changes nothing else, no case and no port. A value that
+   does not match refuses with the reason `audience`. Two installations with
+   the same name and the same trust key are told apart by the audience and by
+   the nonce store of each installation.
 4. **The signature.** A detached SSH signature of the format of
    `ssh-keygen -Y sign`, hash `sha512`, namespace
    `opendustpan-recovery@<installation name>`. Only `ssh-ed25519` keys pass.
@@ -94,18 +104,20 @@ at the expiry, and a review after use.
      comment that names the service count). The transaction writes no count; it
      refuses a request when the stored count is over the limit,
    - refuses when a temporary administrator record of a recovery is live,
-   - inserts the nonce (a unique key, ADR 295 decision 3),
+   - inserts the nonce (a unique key, ADR 295 decision 3) with the sealed
+     answer of the request (decision 9),
    - makes the person, the grant, the record and the token, with their four
      audit entries (ADR 245 decision 7),
-   - seals the answer to the `answerKey` of the request (decision 9),
-   - writes one audit entry for the use that holds the mode, the time and the
-     client address, and the action `recovery:use-signed-request`,
+   - writes one audit entry for the use that holds the mode, the time, the
+     client address and the `keyId` of the signing key, and the action
+     `recovery:use-signed-request`,
    - writes the notification `break-glass.used` with the use (kind
-     `temp-admin`, mode `signed-request`, the client address, `Until` the end
-     of the record).
+     `temp-admin`, mode `signed-request`, the client address, the `keyId` of
+     the signing key, `Until` the end of the record).
 
-   A failure of any step fails the transaction, so a failed seal of the
-   answer creates nothing. On PostgreSQL the transaction pins READ COMMITTED
+   The transaction stores the sealed answer with the nonce, so a crash after
+   the commit loses no answer. A failure of any step fails the transaction, so
+   a failed seal of the answer creates nothing. On PostgreSQL the transaction pins READ COMMITTED
    and takes the advisory lock of the server audit scope first, as ADR 245
    decision 8 does. A refusal in the transaction rolls back and then writes
    the refusal audit entry in a second transaction, so a refusal leaves a
@@ -120,11 +132,12 @@ at the expiry, and a review after use.
    trusted has no effect on the client address.
 8. **One answer.** Every refusal, at each layer, answers `403` with the code
    `recovery.refused` and one fixed text. The audit entry
-   `recovery.refused` holds the reason code (`shape`, `canonical`, `time`,
-   `mode`, `installation`, `unknown-key`, `signature`, `nonce-used`,
-   `rate-limit`, `recovery-active`, `maintenance`, `answer`, `store`,
-   `address`, `person`). A malformed `answerKey` and a failed seal of the
-   answer both refuse with the reason `answer`. A malformed client address
+   `recovery.refused` holds the reason code, from this closed list of 16
+   reasons: `shape`, `canonical`, `time`, `mode`, `installation`, `audience`,
+   `unknown-key`, `signature`, `nonce-used`, `rate-limit`, `recovery-active`,
+   `maintenance`, `answer`, `store`, `address`, `person`. A wrong audience
+   refuses with the reason `audience`. A malformed `answerKey` and a failed
+   seal of the answer both refuse with the reason `answer`. A malformed client address
    refuses with the reason `address`. A request during maintenance mode
    refuses with the reason `maintenance`, and the refusal fails closed. A
    `person` that names a reserved subject or an existing principal refuses
@@ -141,10 +154,17 @@ at the expiry, and a review after use.
    HKDF-SHA256, AES-256-GCM, `crypto/hpke` of the standard library) to
    `answerKey`. The info string is `opendustpan-recovery v1` and the
    installation name. The additional data is the SHA-256 of the request bytes.
-   The server seals the answer in the transaction of decision 7. When the seal
-   fails, the server fails closed: it refuses the request with the reason
-   `answer`, writes the denial to the audit log and creates nothing. The plain
-   token never appears in the answer, a log or an audit entry.
+   The server seals the answer in the transaction of decision 7 and stores it
+   there with the nonce. When the same request (the same bytes, the same
+   nonce) comes again before `notAfter`, the server sends the stored sealed
+   answer again and creates nothing new. After `notAfter` the server refuses
+   the replay with the reason `nonce-used`. A request that carries the nonce
+   of a stored request but other bytes is refused with the reason
+   `nonce-used`. The answer is sealed to `answerKey`, so a copy gives nothing
+   without `request.key`. When the seal fails, the server fails closed: it
+   refuses the request with the reason `answer`, writes the denial to the
+   audit log and creates nothing. The plain token never appears in the answer,
+   a log or an audit entry.
 10. **The review.** The consumer of `break-glass.used` opens the review with
     `Store.Open` whatever `breakGlassReview.enabled` says. With the setting
     off, the review has no deadline and no notice steps. With it on, it has
@@ -155,7 +175,9 @@ at the expiry, and a review after use.
 11. **The two recovery steps.** The admin reset of the factors of a person and
     the issue of an enrollment code read one predicate,
     `tempadmin.IsRecoveryAdmin(principal)`, from the stored record of the
-    caller, never from the request. When it is true, the fresh-step check of
+    caller, never from the request. `tempadmin.TempAdmin` carries the recovery
+    mode of the record, so this predicate and the live-recovery check read it
+    from the stored row. When it is true, the fresh-step check of
     these two routes passes with an audit entry that names the temporary
     administrator and the exception. The reason and the reach checks stay.
     Every other route keeps its fresh-step check, with no branch on the
@@ -207,9 +229,9 @@ structure: the handler has one refusal writer, with no reason argument for the
 answer (decision 8). The rest are guards with a mutation test each: the times,
 the rate limit and the second live recovery.
 
-The depguard rules: only `cmd/opendustpan` and `internal/recovery` name the
-host issuer (ADR 295 decision 1). Only `cmd/opendustpan` and the package of the
-handler import `internal/recovery`.
+The depguard rules in `.golangci.yml`: only `cmd/opendustpan` and
+`internal/recovery` name the host issuer (ADR 295 decision 1). Only
+`cmd/opendustpan` and the package of the handler import `internal/recovery`.
 
 ## Risks
 
@@ -233,20 +255,20 @@ handler import `internal/recovery`.
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
 | HTTP handler | 8 KiB limit, content type, envelope shape, base64url, canonical form, members and the `person` allowlist, the `answerKey` shape (an X25519 public key of exactly 32 bytes), the `version` member, times, the stored mode check before any other work, the maintenance-mode check and the client-address parse. One answer. | Send an oversize body, a body with a duplicate member, a `person` outside the allowlist, an `answerKey` of 31 bytes and of 33 bytes and one that is not base64, a `version` other than 1, a non-canonical body, a wrong content type, a time past the skew, and a request in maintenance mode straight to the handler. Expect `recovery.refused` and no service call; a malformed client address gives a refusal with the reason `address`. |
-| Service (`internal/recovery`) | `parseSignedRequest` checks the shape, the times, the installation name, the audience and the signature against the bundle key again. It counts each attempt once: the per-source attempt, refused before the signature check, and the installation attempt, refused after it. | Call the service with a request for another installation, a request with a wrong audience, a key in the signature that is not in the bundle, a key type other than `ssh-ed25519`, and a canonical body with a bad signature. Expect a refusal and no store write. Send many bad signatures from many sources: the installation counter does not move, and a valid request after them succeeds. |
+| Service (`internal/recovery`) | `parseSignedRequest` checks the shape, the times, the installation name, the audience and the signature against the bundle key again. It counts each attempt once: the per-source attempt, refused before the signature check, and the installation attempt, refused after it. | Call the service with a request for another installation, a request with a wrong audience (a refusal with the reason `audience`), a key in the signature that is not in the bundle, a key type other than `ssh-ed25519`, and a canonical body with a bad signature. Expect a refusal and no store write. Send many bad signatures from many sources: the installation counter does not move, and a valid request after them succeeds. |
 | Store | The stored mode check (a second layer), the attempt count check (a second layer), the live-recovery check, the `person` check (a reserved subject or an existing principal refuses with the reason `person`) and the unique nonce insert, in the transaction of the temporary administrator. | Insert the same nonce twice, run two recoveries at once, run a recovery with the stored mode `bootstrap`, and run recoveries whose `person` names `admin`, `admin-2` and an existing principal (an expired temporary administrator), straight against the store. Expect one success at most, and a `person` refusal with the reason `person` and no new row. |
 | Key file | Every file that the server or the CLI reads or writes in the flow (`request.json`, `request.json.sig`, `request.key`, the private key file of `sign`, the public key file of `verify` and the public key file of the first boot) opens through `os.Root` or a clean-path containment check, with a 16 KiB size limit; the private key files are refused when group or others can read it. | Give a path that leaves the root, a file larger than 16 KiB and a `request.key` with mode 0644, straight to each reader. Expect a refusal. |
-| First boot (`serve`) | The content of `--recovery-public-key-file` must parse as exactly one `ssh-ed25519` public key, with the same parse and key type rule as the add route. On a malformed or wrong-type file, `serve` fails closed: it refuses to start, stores nothing and writes no recovery settings, and logs one error that names the file and the reason. | Start `serve` with a key file that holds an `ssh-rsa` key, two `ssh-ed25519` keys, text that does not parse and no content. Expect no start, no stored mode and no stored key. |
+| First boot (`serve`) | The content of `--recovery-public-key-file` must parse as exactly one `ssh-ed25519` public key, with the same parse and key type rule as the add route. In signed-request recovery, `serve` also refuses to start when `--public-url` (the audience of a request) is empty. On a malformed or wrong-type file or an empty `--public-url`, `serve` fails closed: it refuses to start, stores nothing and writes no recovery settings, and logs one error that names the file and the reason. | Start `serve` with a key file that holds an `ssh-rsa` key, two `ssh-ed25519` keys, text that does not parse and no content. Start `serve` in signed-request recovery with no `--public-url`. Expect no start, no stored mode and no stored key. |
 | Answer | HPKE to the key of the request, sealed in the transaction. A failed seal fails closed. | Decrypt with another key, and force a seal failure. Expect a failure, a refusal with reason `answer`, and no temporary administrator. |
 | Authorizer | Each later request checks the stored grant of the temporary administrator. The two recovery steps read the stored record. | Call a third fresh-step route as a temporary administrator. Expect `mfa.fresh-step-required`. |
-| Audit | Each refusal and each use writes an entry; the use entry holds the mode, the time, the client address and the action `recovery:use-signed-request`. The refusal entries go through `internal/denylimit`, keyed by the source group and the reason, so one source writes a bounded number of entries and one count of suppressed entries. | Break the store after the checks. Expect `recovery.refused` with reason `store` and one audit entry. Send N refusals from one source: expect a bounded number of entries and one count of suppressed entries. |
+| Audit | Each refusal and each use writes an entry; the use entry holds the mode, the time, the client address, the `keyId` of the signing key and the action `recovery:use-signed-request`. The refusal entries go through `internal/denylimit`, keyed by the source group and the reason, so one source writes a bounded number of entries and one count of suppressed entries. | Break the store after the checks. Expect `recovery.refused` with reason `store` and one audit entry. Send N refusals from one source: expect a bounded number of entries and one count of suppressed entries. |
 
 ## Quality attributes
 
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
 | security | 1 temporary administrator for each valid nonce. 0 for a replay | temporary administrators | the route, 2 instances on one database |
-| security | 1 answer for 15 refusal reasons: same status, body and length | answers | the route |
+| security | 1 answer for 16 refusal reasons: same status, body and length | answers | the route |
 | reliability | 0 temporary administrators and 0 nonces after a crash before the commit | rows | the route, one restart |
 
 ## Threat model
@@ -276,11 +298,11 @@ flowchart LR
 | Network | S | A caller forges a request. | boundary check | The server takes the client address from the trusted proxy when one is trusted, and otherwise the address of the TCP peer, and parses it with `net/netip`; a malformed address refuses. | A hostile forwarding header from a peer that is not trusted gives the client address of the peer, and a malformed address gives `recovery.refused` with reason `address`. |
 | Network | S | A caller forges a request. | fail closed | An unknown member, value or store error refuses, with an audit entry. | A store fault gives `recovery.refused` with reason `store`. |
 | Network | T | A caller replays a used request. | boundary check | The handler refuses a time outside the window, including `notAfter` more than 10 minutes after `notBefore`. | A request 3 minutes past `notAfter`, or with `notAfter` more than 10 minutes after `notBefore`, gives a refusal. |
-| Network | T | A caller replays a used request. | encode or contain | Placeholders only. The nonce is a unique key and its shape is checked. | A nonce with quote characters, a malformed nonce or a short nonce gives one row or a refusal. |
+| Network | T | A caller replays a used request. | encode or contain | Placeholders only. The nonce is a unique key and its shape is checked. The sealed answer is stored with the nonce, so a copy of the answer gives nothing without `request.key`. | A nonce with quote characters, a malformed nonce or a short nonce gives one row or a refusal. |
 | Network | T | A caller replays a used request. | limit | The nonce stays until `notAfter` plus 1 hour. | The purge keeps a row inside the window. |
-| Network | T | A caller replays a used request. | authorize at point of use | The nonce insert is in the transaction of the temporary administrator. | Two submits at once give one temporary administrator. |
+| Network | T | A caller replays a used request. | authorize at point of use | The nonce insert and the sealed answer are in the transaction of the temporary administrator. | A repeated request before `notAfter` gives the stored sealed answer and one temporary administrator; the same nonce with other bytes is refused with `nonce-used`. Two submits at once give one temporary administrator. |
 | Network | T | A caller replays a used request. | fail closed | A failed insert fails the transaction. | No record exists after a duplicate nonce. |
-| Network | I | A caller learns why a request failed. | boundary check | One refusal writer with no reason in the answer. | 15 refusal reasons give the same status, body and length. |
+| Network | I | A caller learns why a request failed. | boundary check | One refusal writer with no reason in the answer. | 16 refusal reasons give the same status, body and length. |
 | Network | I | A copy of a signed request gives the token. | encode or contain | HPKE to `answerKey`. | Decrypt with another key: failure. |
 | Network | I | A copy of a signed request gives the token. | fail closed | The seal of the answer is in the transaction of decision 7; a failed seal rolls back. | A forced seal failure gives `recovery.refused` with reason `answer` and no temporary administrator. |
 | Server | E | The temporary administrator does more than recovery steps with no fresh step. | authorize at point of use | Only the two routes read the predicate. | A token creation as a temporary administrator gives `mfa.fresh-step-required`. |
@@ -296,7 +318,7 @@ flowchart LR
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
 | Submit | Crash before the commit | The same request again, before `notAfter` plus 2 minutes. | No temporary administrator, no nonce. |
-| Submit | Crash after the commit, before the answer | A new request. The first temporary administrator is live, so the new request is refused until it ends or a site administrator ends it. | One temporary administrator, whose token nobody holds. Its review opens. The docs page names this case. |
+| Submit | Crash or a network error after the commit, before the answer | The same request again, before `notAfter`. | One temporary administrator and the stored sealed answer. The same request again gets that answer and creates nothing new; the first temporary administrator stays live, so a new request is refused until it ends or a site administrator ends it. Its review opens. |
 | Submit | Two submits at once with one nonce | None. | One temporary administrator. |
 | Submit | Clock skew over 2 minutes | Fix the clock and make a new request. | No change. |
 | Key add | A stolen session of a site administrator adds a key | A site administrator removes the key. | The notice to each site administrator and the audit entry show the add. |

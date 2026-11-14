@@ -55,7 +55,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Any refusal of the route: a bad signature, an unknown key, a time out of the window, a used nonce, the rate limit, a wrong mode, another installation or a live recovery | `403` with code `recovery.refused`, and the same text for each reason: "The server refused the recovery request. The audit log and the server log name the reason." | `opendustpan recovery verify --public-key <file> request.json` |
+| Any refusal of the route: a bad signature, an unknown key, a time out of the window, a used nonce, the rate limit, a wrong mode, another installation, a wrong audience or a live recovery | `403` with code `recovery.refused`, and the same text for each reason: "The server refused the recovery request. The audit log and the server log name the reason." | `opendustpan recovery verify --public-key <file> request.json` |
 | `recovery sign` gets a key file with no passphrase | Exit 1: "The key file is not encrypted. Encrypt it with a passphrase, then run the command again." | `ssh-keygen -p -f <file>` |
 | `recovery submit` gets an answer that `request.key` cannot decrypt | Exit 1: "The answer does not match request.key. Make a new request." | `opendustpan recovery request --help` |
 | A temporary administrator of a recovery calls a step that needs a fresh authentication, other than the two recovery steps | `403` with code `mfa.fresh-step-required` | `opendustpan recovery --help` (it names the two steps) |
@@ -78,16 +78,19 @@ Evidence for the claims above:
   bundle of offline operator keys (ADR 295 decision 8). The stored mode wins
   over `--recovery-mode` (ADR 245 decision 6).
 - A public route accepts a signed recovery request. It makes one temporary
-  administrator in one transaction, with the nonce, the review notification
-  and the audit entries (ADR 295, ADR 372).
+  administrator in one transaction, with the nonce, the sealed answer, the
+  review notification and the audit entries (ADR 295, ADR 372).
+- In signed-request recovery, `serve` refuses to start without `--public-url`
+  (the audience of a request) and without a key file.
 - Every refusal gives one answer. The audit entry and the server log hold the
-  reason.
+  reason, and a wrong audience has the reason `audience`.
 - The server encrypts the answer token with HPKE to the ephemeral key of the
-  request.
-- The break-glass use of the kind `temp-admin` records the recovery mode and
-  the source. A signed-request recovery opens its review whatever
-  `breakGlassReview.enabled` says, and sends one notice to the site
-  administrators.
+  request and stores the sealed answer with the nonce, so the same request
+  before `notAfter` gets the same answer again.
+- The break-glass use of the kind `temp-admin` records the recovery mode, the
+  source and the `keyId` of the signing key. A signed-request recovery opens
+  its review whatever `breakGlassReview.enabled` says, and sends one notice to
+  the site administrators.
 - A temporary administrator of a recovery (host command or route) can reset
   the factors of a person and issue an enrollment code with no fresh
   authentication (ADR 372 decision 6). Every other fresh step refuses it.
@@ -119,9 +122,10 @@ Depends on:
 
 Where the path still costs the person time or surprises them:
 
-- The request binds to the installation name and to the audience, the external
-  URL of the server. Both must match. The operator keeps the offline key and
-  both values from the first boot, and the docs page puts this in the
+- The request binds to the installation name and to the audience, the setting
+  `--public-url` (the external URL of the server). Both must match. The
+  operator keeps the offline key and both values from the first boot, and the
+  docs page puts this in the
   first-boot checklist.
 - A refusal never says why (ADR 295 decision 5). `recovery verify` finds the
   errors that the operator can make offline: the shape, the times, the key and
@@ -363,7 +367,9 @@ Questions considered and answered:
   recovery? The four decisions of the product manager above.
 - Why is a copied signed request useless? The request holds the HPKE public
   key of the CLI that made it. A copy without `request.key` gives an answer
-  that nobody else can decrypt, and the nonce makes it work once.
+  that nobody else can decrypt. Before `notAfter` the same request gets the
+  stored sealed answer again and creates nothing new; after `notAfter` the
+  server refuses it with `nonce-used`.
 - What if the locked-out person is a local user who also lost the password?
   The password reset code of ADR 285 decision 17 keeps its fresh step,
   because ADR 372 decision 6 names only the factor reset and the enrollment
@@ -372,8 +378,8 @@ Questions considered and answered:
   does"), so ADR 372 decision 4 holds.
 - Where does the installation name come from? The setting `--installation`
   (ADR 248). It is `local` by default, and the server never makes it at
-  random. The request binds to it and to the audience, the external URL of
-  the server.
+  random. The request binds to it and to the audience, the setting
+  `--public-url` (the external URL of the server).
 - Does a key add wait 24 hours, as the proposal of RFC 21 for its question O8
   said? No. RFC 21 is not accepted for O8, and no ADR asks for a wait. The add
   needs a fresh authentication and a reason, and it sends a notice to every

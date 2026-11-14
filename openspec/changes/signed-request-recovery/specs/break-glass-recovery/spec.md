@@ -2,7 +2,7 @@
 
 ### Requirement: first-boot-recovery-settings
 
-When an installation starts for the first time, the server SHALL store the recovery mode and, in signed-request recovery, the first key of the trust bundle, in one transaction. The installation name SHALL be the setting `--installation`.
+When an installation starts for the first time, the server SHALL store the recovery mode and, in signed-request recovery, the first key of the trust bundle, in one transaction. In signed-request recovery, the server SHALL refuse the start when `--public-url` is empty and SHALL store nothing. The installation name SHALL be the setting `--installation`.
 
 #### Scenario: First boot in signed-request recovery
 - **WHEN** `serve` starts for the first time with `--recovery-mode signed-request` and a key file
@@ -11,6 +11,10 @@ When an installation starts for the first time, the server SHALL store the recov
 #### Scenario: No key file
 - **WHEN** `serve` starts for the first time with `--recovery-mode signed-request` and no key file
 - **THEN** the server does not start and the error names `--recovery-public-key-file`
+
+#### Scenario: No public URL
+- **WHEN** `serve` starts for the first time with `--recovery-mode signed-request`, a key file and no `--public-url`
+- **THEN** the server does not start and the store holds no mode and no key
 
 #### Scenario: The stored mode wins
 - **WHEN** the stored mode is `signed-request` and a later start sets `--recovery-mode bootstrap`
@@ -60,21 +64,30 @@ When the stored mode is `signed-request` and a request is canonical, in its time
 - **THEN** the server answers with the one refusal, and the audit entry `recovery.refused` holds the reason `person`
 - **AND** the store holds no new person, grant, record, token or nonce
 
+### Requirement: audience-matches-public-url
+
+The audience of a request SHALL match the setting `--public-url`, the external URL of the server. The server SHALL compare the two byte for byte after one normalization: it removes a trailing slash and changes nothing else, no case and no port. A value that does not match SHALL refuse with the reason `audience`.
+
+#### Scenario: A wrong audience
+- **WHEN** a request carries an audience that does not match `--public-url` byte for byte
+- **THEN** the server refuses it with the one answer
+- **AND** the audit entry `recovery.refused` holds the reason `audience`
+
 ### Requirement: use-writes-one-audit-entry
 
-When a signed-request recovery succeeds, the server SHALL write one audit entry that holds the mode, the time and the client address, and the action `recovery:use-signed-request`, in the same transaction as the use.
+When a signed-request recovery succeeds, the server SHALL write one audit entry that holds the mode, the time, the client address and the `keyId` of the signing key, and the action `recovery:use-signed-request`, in the same transaction as the use.
 
 #### Scenario: The use audit entry
 - **WHEN** a signed-request recovery succeeds
-- **THEN** the store holds one audit entry with the action `recovery:use-signed-request`, the mode `signed-request`, the time and the client address
+- **THEN** the store holds one audit entry with the action `recovery:use-signed-request`, the mode `signed-request`, the time, the client address and the `keyId` of the signing key
 - **AND** the entry commits in the same transaction as the temporary administrator
 
 ### Requirement: one-answer-for-every-refusal
 
 When the server refuses a recovery request for any reason, it SHALL answer `403` with the code `recovery.refused` and the same body, and write the refusal audit entry with the reason, within the bound of the refusal limiter.
 
-#### Scenario: The fifteen reasons look the same
-- **WHEN** requests fail for the reasons `shape`, `canonical`, `time`, `mode`, `installation`, `unknown-key`, `signature`, `nonce-used`, `rate-limit`, `recovery-active`, `maintenance`, `answer`, `store`, `address` and `person`
+#### Scenario: The sixteen reasons look the same
+- **WHEN** requests fail for the reasons `shape`, `canonical`, `time`, `mode`, `installation`, `audience`, `unknown-key`, `signature`, `nonce-used`, `rate-limit`, `recovery-active`, `maintenance`, `answer`, `store`, `address` and `person`
 - **THEN** each answer has the same status, the same body and the same length
 - **AND** each audit entry `recovery.refused` holds its reason
 
@@ -107,11 +120,21 @@ When the installation is in maintenance mode, the server SHALL refuse a signed r
 
 ### Requirement: nonce-once
 
-When a nonce was used, the server SHALL refuse a second request with that nonce until the `notAfter` time of the first request plus 1 hour.
+When the same request (the same bytes, the same nonce) arrives again before `notAfter`, the server SHALL send the stored sealed answer again and SHALL create nothing new. When a request carries a nonce of a stored request with other bytes, or arrives after `notAfter`, the server SHALL refuse it with the one answer and the reason `nonce-used`. The server SHALL keep the nonce until the `notAfter` time of its request plus 1 hour.
 
-#### Scenario: Replay
-- **WHEN** a used request arrives again
-- **THEN** the server refuses it with the one answer and makes no temporary administrator
+#### Scenario: Replay before the end
+- **WHEN** the same request arrives again before `notAfter`
+- **THEN** the server sends the stored sealed answer again, makes no new temporary administrator and creates no new nonce
+
+#### Scenario: Replay with other bytes
+- **WHEN** a request carries a nonce of a stored request but other bytes
+- **THEN** the server refuses it with the one answer
+- **AND** the audit entry `recovery.refused` holds the reason `nonce-used`
+
+#### Scenario: Replay after the end
+- **WHEN** a request with a used nonce arrives after `notAfter`
+- **THEN** the server refuses it with the one answer
+- **AND** the audit entry `recovery.refused` holds the reason `nonce-used`
 
 #### Scenario: Two at once
 - **WHEN** two submits carry one new nonce at the same time on two instances
@@ -175,7 +198,7 @@ When a signed-request recovery succeeds, the server SHALL open a break-glass rev
 
 #### Scenario: Opt-in off
 - **WHEN** `breakGlassReview.enabled` is off and a recovery succeeds
-- **THEN** a review opens with no deadline and no notice steps, and each site administrator gets one notice with the time, the source and the principal
+- **THEN** a review opens with no deadline and no notice steps, and each site administrator gets one notice with the time, the source, the principal and the `keyId` of the signing key
 
 #### Scenario: Opt-in on
 - **WHEN** `breakGlassReview.enabled` is on and a recovery succeeds
