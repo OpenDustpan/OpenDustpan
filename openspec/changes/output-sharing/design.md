@@ -24,6 +24,7 @@ Unexported outputshare.checker built only by NewChecker with Store, Access, Atta
 | --- | --- | --- |
 | HTTP adapter | HTTP adapter allowlists producer object kinds and unit references, and declares unit:read-outputs on the producer object. | GET outputs read with principal name as consumer gets 403. |
 | service | Service rechecks rule match and starter grants at read time, including unit:read-secrets for secret outputs. | Revoked starter grant or removed rule between job start and read denies the in-flight read with 403. |
+| rate limit | Checker in internal/outputsharesvc limits denied reads per job token, returns 429 after the limit, and fails closed with 500 on an audit-store outage. | Flood of denied reads from one job token gets 429 with no extra audit writes. A failed audit write gets 500 with no outputs. |
 | store | Checker matches rules by stable ID only, so a renamed unit still matches and a removed-and-made-again unit does not match. | Consumer removed and made again under the same name is denied until a new rule names the new stable ID. |
 
 ## Diagrams

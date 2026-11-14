@@ -11,12 +11,18 @@
 - [ ] 1.5 Failing server test for retention, the repair pass and the Restore window, in pkg/history/retention_test.go. Check: TestRetentionDeletesOldArtifacts; calls ANY /api/server/deleted-units/sweep with an access token
 - [ ] 1.6 Failing server test for the fail-closed read, the rate limit and the page limit, in pkg/history/leak_test.go. Check: TestHistoryUnavailableFailsClosed; BLOCKED by the NEW history route; access token
 
+- [ ] 1.7 SECURITY. Failing test that sends tool admin straight to the history service and expects an error, in pkg/history/history_test.go. Check: TestHistoryRejectsUnknownTool
+- [ ] 1.8 SECURITY. Failing test that sends a history read with no grant straight to the history service and expects a denial, in pkg/history/leak_test.go. Check: TestHistoryReadDeniedWithoutGrant
+
 ## 2. build
 
 - [ ] 2.1 Implement the sqlite and postgres adapters with the fence and data-key encryption, in NEW pkg/store/sqlite/history.go and NEW pkg/store/postgres/history.go. Check: go test ./pkg/store/... -run History -timeout 60m
 - [ ] 2.2 Wire the NEW history, blame, point-in-time and redact routes with the NEW actions. The declaration file is NEW internal/api/apidesc/history_routes.go and the adapter file is NEW pkg/dustpan/history_routes.go. Check: route test lists each action; the NEW history route returns 200 with an access token
 - [ ] 2.3 Wire artifact expiry and Restore to the existing schedules and restore routes, in pkg/dustpan/schedules.go and pkg/workspace/service.go:1771 (func Restore). Check: the existing ANY /api/inventory/deleted-units/{}/{}/restore returns success inside 30 days with an access token
 - [ ] 2.4 Add the CLI history read and redact steps in NEW cmd/dustpan/history.go. Check: CLI redact with reason secret-exposure prints the redaction record
+
+- [ ] 2.5 SECURITY. Build the allowlist of the tool values pulumi and tofu and of the reasons secret-exposure, personal-data and other in the history service, in NEW pkg/history/allowlist.go. Check: go test ./pkg/history -run TestHistoryRejectsUnknownTool
+- [ ] 2.6 SECURITY. Check the NEW actions namespace:read-history and namespace:redact-history at the point of use in the history service, in NEW pkg/history/authorize.go. Check: go test ./pkg/history -run TestHistoryReadDeniedWithoutGrant
 
 ## 3. Side effects (computed from main)
 

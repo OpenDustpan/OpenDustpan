@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 7
 ---
 
 Roadmap: `docs/roadmap.md:183` (IP allowlists).

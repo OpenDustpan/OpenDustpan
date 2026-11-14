@@ -15,6 +15,11 @@
 - [ ] 2.3 Enforce single-use token, SHA-256 storage, dpj_ prefix, and one-hour default TTL in one fenced join transaction in the NEW file internal/runnersvc/join.go. Use the join route in internal/api/runnerapi/routes.go. Check: Join route replays one CreateJoinToken secret twice and second join answers runner.token-used
 - [ ] 2.4 Ship the NEW command opendustpan runner pools list for the namespace in the NEW file cmd/opendustpan/runner_pools.go. Check: `opendustpan runner pools list --namespace <ns>` lists the created pool
 
+- [ ] 2.5 SECURITY. Check namespace:manage-runners or namespace:read-runners at the start of each management handler in the NEW file internal/api/runnerapi/authorize_runners.go. Check: a request without the action gets 403 and no row is written
+- [ ] 2.6 SECURITY. Validate purpose, kind, isolation, concurrency 1 to 64 and TTL at most 7 days in the NEW file internal/runnersvc/validate.go. Check: the service refuses unknown or out-of-range values with runner.invalid and writes no row
+- [ ] 2.7 SECURITY. Write the hostile handler test for the 403 on each management route without namespace:manage-runners in the NEW file internal/api/runnerapi/manage_runners_forbidden_test.go. Check: NEW TestManagementRoutesForbiddenWithoutManageRunners in internal/api/runnerapi sends each pool, join-token, drain and retire route without the action and expects 403
+- [ ] 2.8 SECURITY. Write the hostile service test in the NEW file internal/runnersvc/validate_test.go that calls the service directly. Check: NEW TestServiceRejectsHostileInput in internal/runnersvc sends an unknown purpose, kind and isolation, concurrency 0 and a TTL above 7 days, and expects runner.invalid with no row written
+
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request

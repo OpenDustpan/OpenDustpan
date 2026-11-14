@@ -11,7 +11,12 @@
 ## 2. implementation
 
 - [ ] 2.1 Add expiresAt to the grant store, check and leased sweep in NEW file pkg/access/grant_expiry.go. Check: `go test ./pkg/access/... ./pkg/gate/...` passes.
+- [ ] 2.3 SECURITY. Build the HTTP route guard for set and delete of access limits: each mutating route declares its scope action and needs a fresh step. Declare it in the route table internal/api/server/routes.go and in its adapter file in the NEW file pkg/access/limit_routes.go. Check: a set or delete call without the action or without a fresh step gets 403 and no write.
 - [ ] 2.2 Add limit evaluation after grants and audit entries in the existing file pkg/access/limits.go (extend it; it holds LimitKind on main), and add the docs page in NEW file docs/access-limits.md. Check: `go test ./internal/...` passes; routes declare scope actions and fresh step.
+
+## 2a. hostile tests
+
+- [ ] 2.4 SECURITY. Add hostile test TestLimitRoutesRefuseWithoutActionOrFreshStep in the existing file pkg/access/limit_routes_test.go: send set and delete straight to the HTTP route without the scope action, and again without a fresh step. Check: each case gets 403 and no write; the test fails on main and passes after the fix.
 
 ## 3. Side effects (computed from main)
 

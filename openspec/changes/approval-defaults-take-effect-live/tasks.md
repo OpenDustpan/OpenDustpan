@@ -17,10 +17,16 @@
 - [ ] 1.11 Add failing test in NEW file internal/jobsvc/approval_authz_test.go for authorization refusal at StartJob (NEW). Check: TestJobPlanRightsRefusedFailsOnMain shows 403 for apply with plan-only rights.
 - [ ] 1.12 Add failing test in NEW file internal/jobsvc/approval_record_test.go for decision record contents. Check: TestJobDecisionRecordNamesGateFailsOnMain shows the record holds gate versions and schema version.
 
+- [ ] 1.13 SECURITY. Add hostile test TestJobBoundaryRejectsHostileInput in internal/jobsvc/approval_authz_test.go. It sends an empty subject and a malformed unit reference to StartJob. Check: TestJobBoundaryRejectsHostileInput shows refusal and zero engine calls.
+- [ ] 1.14 SECURITY. Add hostile test TestStateWriteReplayPriorRevisionRefused in NEW file internal/jobsvc/state_write_guard_test.go. It replays a prior-revision approval at the tool write handler. Check: TestStateWriteReplayPriorRevisionRefused shows refusal with the record named and no state write.
+
 ## 2. Wiring
 
 - [ ] 2.1 Add the new file internal/jobsvc and wire jobgate.Decider into the job service points from #968 with gate evaluation from #899. Check: go test ./pkg/gate/jobgate/... passes with the Decider wired at change.propose, change.planned and change.apply.
 - [ ] 2.2 Record each evaluation with gate versions and resume on the latest requirement set inside one store transaction, in NEW file internal/jobsvc/approval_record.go. Check: go test -race ./... for the touched packages passes and decision records name the gate, the gate versions and the schema version.
+
+- [ ] 2.3 SECURITY. Build the record version check in the tool write handlers in NEW file internal/jobsvc/state_write_guard.go. The handler refuses a state write when the stored record version does not match the dispatched revision. Check: go test ./internal/jobsvc/... passes and a state write with a stale record version is refused with the record named.
+- [ ] 2.4 SECURITY. Build the boundary validation of the job service port adapter in NEW file internal/jobsvc/boundary.go. It refuses an empty subject and a malformed unit reference before any Decider call. Check: go test ./internal/jobsvc/... passes and no engine call happens for hostile input.
 
 ## 3. Side effects (computed from main)
 

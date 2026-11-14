@@ -8,6 +8,11 @@
 - [ ] 1.2 Write failing test for a stale step on token creation in NEW file pkg/accesstoken/fresh_step_test.go. Route: POST /api/server/caller/tokens, credential kind: session cookie with an old MFA step. Check: TestMfaFreshStepForTokenAndReveal fails on main.
 - [ ] 1.3 Write failing test for VerifySecondFactor (NEW) with a replayed code in NEW file internal/mfasvc/verify_second_factor_test.go. Route: POST /api/dustpan/v1/sign-in/password, then the second factor step, credential kind: pending sign-in with a TOTP code. Check: TestVerifySecondFactorRefusesReplay fails on main.
 
+## 1b. Build and hostile tests
+
+- [ ] 1.4 SECURITY. Build the service MFA gate in NEW file internal/mfasvc/signin_pending.go: the pending sign-in type, VerifySecondFactor (NEW) with single-use TOTP codes, and the cookie-bound fresh step. Check: TestMfaLocalPasswordNeedsSecondFactor and TestVerifySecondFactorRefusesReplay pass.
+- [ ] 1.5 SECURITY. Write a hostile handler test for malformed factor input in NEW file internal/mfasvc/handler_input_test.go. Route: POST /api/dustpan/v1/sign-in/password, then the second factor step, credential kind: pending sign-in with a malformed code. Check: TestSecondFactorHandlerRefusesMalformedCode passes and a malformed code gets a refusal and no session.
+
 ## 2. Side effects (computed from main)
 
 - [x] 2.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.

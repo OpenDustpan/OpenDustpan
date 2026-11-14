@@ -13,6 +13,9 @@
 - [ ] 2.1 Implement causeRef storage in NEW file pkg/audit/cause.go on fan-out plan and apply jobs with the NEW constructor and copy the three cause fields into history entry rows and audit entry rows using stable IDs. Check: NEW constructor NewCauseRef plus TestFanOutCauseBinding via ANY /api/audit/entries with access token
 - [ ] 2.2 Expose the stored cause fields in pkg/history and pkg/audit on history reads and on the existing ANY /api/audit/entries list and ANY /api/audit/entries/{} read with existing grants and no TFE-compatible adapter field. Check: GET ANY /api/audit/entries with access token returns cause fields; history read returns cause under existing unit grant; no new route
 
+- [ ] 2.3 SECURITY. Build the audit-read grant guard on the audit read route in NEW file pkg/audit/cause_read.go. The guard checks the existing audit-read grant before it returns any cause field of ANY /api/audit/entries and ANY /api/audit/entries/{}. Check: a caller without the audit-read grant gets a denial and no cause field, proved by NEW TestAuditCauseReadRequiresGrant
+- [ ] 2.4 SECURITY. Write NEW hostile test TestAuditCauseReadRequiresGrant in NEW file pkg/audit/cause_test.go that reads the audit entries without the audit-read grant. Check: NEW TestAuditCauseReadRequiresGrant asserts denial and no cause disclosed, via ANY /api/audit/entries and ANY /api/audit/entries/{}, fails before task 2.3
+
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.

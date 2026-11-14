@@ -7,6 +7,9 @@
 - [ ] 1.1 Add failing tests in pkg/registry for the NEW SignFileURL and VerifyFileURL: cross-instance verify, tamper, expiry, v=2, overlong query, empty key. Check: `go test ./pkg/registry -run TestCrossInstanceURLVerifies -count=1` fails on main
 - [ ] 1.2 In pkg/dustpan/registry.go (func newRegistryProtocol), replace the random key with the NEW newSigningKey in NEW file pkg/registry/signingkey.go, derived from the stored key-encryption key, a stored secret; keep dustpan.WithRegistryURLKey (pkg/dustpan/registry.go:47) for tests and embedders only. Check: `go test ./pkg/dustpan -run TestRegistryURLKeyDerivedFromKEK -count=1` passes
 
+- [ ] 1.3 Build SignFileURL and VerifyFileURL in NEW file pkg/registry/signurl.go with the length-prefixed HMAC over version, namespace ID, file path and expiry, a constant-time compare, the v=1 version check and a 2048 byte length cap. Check: `go test ./pkg/registry -run TestCrossInstanceURLVerifies -count=1` passes
+- [ ] 1.4 SECURITY. Add a hostile test in NEW file pkg/registry/signurl_grant_test.go, test name TestSignFileURLWithoutReadGrantRefused, that calls SignFileURL without the registry read grant. Check: `go test ./pkg/registry -run TestSignFileURLWithoutReadGrantRefused -count=1` passes and no URL is made
+
 ## 2. Side effects (computed from main)
 
 - [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.

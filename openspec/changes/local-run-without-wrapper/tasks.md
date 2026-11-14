@@ -10,6 +10,7 @@
 - [ ] 1.4 Add failing test in e2e/claim_gate_test.go for a plain lock refused while a runner claim is active. BLOCKED by two-disjoint-claims, which adds the claim record. Check: TestPlainLockRefusedDuringClaim fails on main, passes after fix. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 1.5 Add failing test in e2e/fence_test.go for expiry and force-unlock with unit:manage, fence version, and audit entry, through /api/v2/workspaces/{}/actions/force-unlock with an access token. Check: TestPlainLockReleaseOnDisconnect fails on main, passes after fix. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 1.6 Add failing test in pkg/durable/runner_claimed_test.go for FIFO order of waiting runner jobs behind a plain holder. Check: TestPlainFifoQueueOrder fails on main, passes after fix.
+- [ ] 1.7 SECURITY. Add a store-level hostile test in e2e/fence_test.go that sends an upload with another lock ID straight to the store after lock expiry and after force-unlock. No route: the test calls the store only. Check: TestStoreRefusesUploadWithOtherLockID fails on main, passes after fix. Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. Implementation
 
@@ -17,6 +18,7 @@
 - [ ] 2.2 Implement refusal of a plain lock while a runner claim is active in internal/api/runnerapi, with the error in internal/errcode/catalog_workspace.go. Check: Plain lock during active claim is refused with the claim identity.
 - [ ] 2.3 Implement expiry reuse and operator force-unlock with fence and audit in internal/api/runnerapi. Check: Expired or force-unlocked plain lock writes fence version and audit entry with unit:manage, and switch check only for client-encrypted state; queued job starts.
 - [ ] 2.4 Record plain holder on workspace row, history, wait record, and audit in internal/api/runnerapi. Check: Workspace read shows live holder and reason, wait record names the holder, and history shows holder principal, interval, end cause, and reason.
+- [ ] 2.5 SECURITY. Build the port adapter guard in internal/api/runnerapi: the store keeps the holder identity and reason on the lock row and enforces holder match on unlock and upload. Check: TestStoreRefusesUploadWithOtherLockID in e2e/fence_test.go passes.
 
 ## 3. Definition of done
 
