@@ -1,81 +1,41 @@
 ## ADDED Requirements
 
-### Requirement: Retain state.write records for audit retention
+### Requirement: Prune expired records
 
-While a decision record of state.write exists, the server SHALL keep it until the audit retention passes and then delete it in the retention sweep.
+When the caller asks to prune with a cutoff time and a batch size of 1 to 1000 records, the server SHALL delete the state.write decision records older than the cutoff, up to the batch size, ordered by record ID.
 
-#### Scenario: pruneExpired prunes expired allow record
-- **WHEN** The retention sweep runs after the audit retention passes for an allow record of state.write.
-- **THEN** The record no longer reads through the record read route and the prune audit entry names its ID.
+#### Scenario: Expired record is deleted
+- **WHEN** a state.write record is older than the cutoff
+- **THEN** the method deletes it and returns its ID
 
-#### Scenario: Unexpired record is kept
-- **WHEN** The retention sweep runs before the audit retention passes.
-- **THEN** The record still reads with its fact document and gate outcomes.
+#### Scenario: Unexpired record stays
+- **WHEN** a state.write record is newer than the cutoff
+- **THEN** the record still reads
 
-#### Scenario: Expired refusal record is pruned
-- **WHEN** The sweep runs after the audit retention passes for a refusal record.
-- **THEN** The refusal record no longer reads and the prune entry names its ID.
+#### Scenario: Other record stays
+- **WHEN** a record of another decision point is older than the cutoff
+- **THEN** the method does not delete it
 
-#### Scenario: Expired unlocked-write record is pruned
-- **WHEN** The sweep runs after the audit retention passes for a record with operation kind unlocked-write.
-- **THEN** The record no longer reads after the sweep.
-
-#### Scenario: Open step is kept
-- **WHEN** The sweep meets a record whose explained step is still open.
-- **THEN** The sweep keeps the record until the step completes and the retention passes.
-
-#### Scenario: Stuck open step prunes with mark
-- **WHEN** The step stays open 7 days after the audit retention passes.
-- **THEN** The sweep deletes the record and the prune entry marks it open-step.
-
-#### Scenario: New write after prune still records
-- **WHEN** A state.write evaluation runs after the sweep pruned old records.
-- **THEN** The evaluation writes a new decision record with a new ID.
+#### Scenario: Batch is bounded
+- **WHEN** more records than the batch size are expired
+- **THEN** the method deletes only the batch size, lowest IDs first
 
 ### Requirement: Record every evaluation
 
-When the server evaluates state.write, the server SHALL write one decision record, also when no gate exists and the result is allow.
+When the server evaluates state.write, the server SHALL write one decision record, also when no gate exists.
 
-#### Scenario: Allow with no gate still records
-- **WHEN** A state.write evaluation allows with no gate and no limit in the chain.
-- **THEN** The server writes one decision record with the fact document and an empty gate list.
+#### Scenario: No gate still records
+- **WHEN** an evaluation allows with no gate and no limit
+- **THEN** the server writes one record
 
-#### Scenario: Record write failure fails closed
-- **WHEN** The decision record store cannot take the write during a state.write evaluation.
-- **THEN** The server answers 503 with code gate.unavailable and writes no partial record.
+#### Scenario: Record after prune
+- **WHEN** an evaluation runs after a prune
+- **THEN** the server writes a new record with a new ID
 
 ### Requirement: Held lock writes no record
 
 When a lock request arrives while the workspace lock is held, the server SHALL skip the state.write evaluation.
 
-#### Scenario: Retry against held lock writes nothing
-- **WHEN** An OpenTofu lock request arrives while the workspace lock is held.
-- **THEN** The server answers 409, runs no evaluation and writes no decision record.
-
-### Requirement: Prune keeps the audit reference
-
-When the retention sweep deletes a decision record, the server SHALL keep the record ID in the audit entry of the explained step.
-
-#### Scenario: Step audit entry keeps record ID
-- **WHEN** The sweep deletes the decision record of a state.write step.
-- **THEN** The audit entry of the step still names the record ID and the prune entry names the same ID.
-
-### Requirement: Sweep runs in safe batches
-
-While the retention sweep runs, the server SHALL delete expired state.write records in bounded batches ordered by stable record ID with one lease holder at a time.
-
-#### Scenario: Restart mid-batch is safe
-- **WHEN** The sweeper restarts in the middle of a batch.
-- **THEN** A rerun deletes only the records that still exist and never an unexpired record.
-
-#### Scenario: Two sweepers do not overlap
-- **WHEN** Two server processes start the sweep at the same time.
-- **THEN** Only one holder deletes records at a time through the store lease.
-
-#### Scenario: Writes proceed during sweep
-- **WHEN** A state.write evaluation runs while the sweep holds its lease.
-- **THEN** The evaluation writes its decision record with no block on the lease.
-
-#### Scenario: Effective sweep values are visible
-- **WHEN** An operator reads the installation settings.
-- **THEN** The settings resource shows the hourly cadence, the batch size of 100 and the last prune count.
+#### Scenario: Retry on held lock
+- **WHEN** a lock request arrives while the lock is held
+- **THEN** the server answers 409 and writes no record

@@ -1,12 +1,12 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #1003, #1034, #1035, #1159.
 
 ## Why
 
-**Persona: namespace administrator.** A namespace administrator sets who may change a stack or workspace and who must approve. On main, the gate configuration service exists and is wired, but the routes at collection, unit and installation scope are not all served. The administrator cannot set a policy for those scopes through the API.
+**Persona: namespace administrator.** A namespace administrator sets who may change a stack or workspace and who must approve. On main, the gate configuration service exists and is wired, but the routes are not served at every scope. The administrator cannot set a policy for those scopes through the API.
 
 The user path this change must make work:
 
@@ -32,21 +32,17 @@ Evidence for the claims above:
 - The reference docs directory exists. Proof: Pack path docs/reference exists: true.
 - A ConfigService is wired in the SDK and declared by the server API. Proof: rg gate.ConfigService gives pkg/dustpan/gateconfig.go:21 and internal/api/server/gate_config.go:24.
 - The store has a delete of the approval default. Proof: rg Settings.DeleteApprovalDefault gives pkg/gate/gatetest/gatetest.go:634; the pack lists pkg/store/internal/gatestore/settings.go:129.
-- No MinApprovals remains in non-test code. Proof: rg -n -F --glob '!*_test.go' 'MinApprovals' pkg internal cmd gives 0 matches, so no removal work is needed.
+- No MinApprovals remains in non-test code. Proof: rg -n -F --glob '!*_test.go' 'MinApprovals' pkg internal cmd gives 0 matches.
 - The gate error codes exist in the catalog. Proof: The pack lists gate.not-found at internal/errcode/catalog_gate.go:31 and gate.version-conflict at internal/errcode/catalog_gate.go:36.
 - The error code for a missing fresh step exists. Proof: The pack lists mfa.fresh-step-required at internal/errcode/catalog_mfa.go:15.
 - The issues disagree on what is served, so the tests decide what is new. Proof: Issue 1003 says there are no routes; issue 1159 says slice 1 serves namespace approval routes only.
-- No move of unit gate rows on rename is found in non-test code. Proof: rg -n -F --glob '!*_test.go' 'moveUnitGate' pkg internal cmd gives 0 matches.
 
 ## What Changes
 
 - Gate, approval-rule and approval-default routes at installation, namespace, collection and by-name unit scopes, with read and manage actions of each scope
 - The approval-default reset route, with 204 also when none is set
 - The signature carry-over setting route at each scope that ADR 230 names
-- Gate rows of a unit keyed on the stable unit ID, by an in-place edit of the baseline schema of each dialect
-- Fresh authentication, stable error codes, audit entries and limits on each change
-- Gates that name an approval rule as approval:<id>, resolved from the gate scope to wider scopes
-- Backup and restore of gate configuration rows through the table list
+- Fresh authentication, stable error codes and limits on each change
 - A reference page in docs/reference, and the generated client from make generate
 
 Out of scope:
@@ -98,21 +94,12 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 **ADR 230: Gate configuration: actions, routes, errors and audit entries** (owner-tagged: decision 1).
 
-- Decisions that apply: 1 (current), 2 (current), 3 (changed), 4 (extended), 5 (current), 6 (current), 7 (current).
+- Decisions that apply: 1 (current), 6 (current).
 - Changed by: ADR 268 changes decision 3; ADR 286 changes; ADR 335 extends decision 4; ADR 355 changes decision 3; ADR 355 changes decision 4. Chain to the end: ADR 268, ADR 286, ADR 335, ADR 355.
 - Current rule: this ADR, with ADR 268, 286, 335, 355.
 - Quote: "In the server, through the API (owner). Gates, access limits, approval rules, approval defaults, ownership rules, path sets and the signature carry-over setting are stored in the server."
 - Quote: "A scope holds at most 256 gates, 64 access limits, 64 approval rules, 256 ownership rules and 64 path sets."
-- Effect: The change serves the routes, actions, errors, audit entries, limits and backups of these decisions for gates, approval rules, approval defaults and the carry-over setting.
-- Conflict: none.
-
-**ADR 268: Approval-default reset route and gate read roles** (not owner-tagged).
-
-- Decisions that apply: the ADR as a whole.
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
-- Quote: "Approval-default reset route and gate read roles"
-- Effect: The change adds the DELETE route of the approval default, as this ADR decides.
+- Effect: The change serves the routes, errors and limits of these decisions for gates, approval rules, approval defaults and the carry-over setting.
 - Conflict: none.
 
 **ADR 355: Gate configuration paths and errors as shipped** (not owner-tagged).
@@ -122,16 +109,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR.
 - Quote: "The unit scope of the gate routes is `/api/dustpan/v1/namespaces/{namespace}/units/by-name/{tool}/{name}`. The segment `by-name` is part of the path."
 - Quote: "A gate configuration error that wraps `gate.ErrNotFound` has the status 404 and the code `gate.not-found`."
-- Effect: Every route, the docs page and the tests use the by-name unit path and these two error rows.
-- Conflict: none.
-
-**ADR 225: Approval rules, approval defaults and ownership rules** (owner-tagged: decision 1, 4).
-
-- Decisions that apply: 1 (changed), 4 (current).
-- Changed by: ADR 286 changes; ADR 299 changes decisions 1, 7 and 12. Chain to the end: ADR 286, ADR 299, ADR 328, ADR 359, ADR 368.
-- Current rule: this ADR, with ADR 286, 299.
-- Quote: "Approval defaults (owner). An approval default can be set on a namespace, a collection or a unit."
-- Effect: The routes store approval defaults and rules. Rule ID resolution goes from the gate scope to wider scopes. Requirement evaluation does not change here.
+- Effect: Every route, the docs page and the tests use the by-name unit path and these error rows.
 - Conflict: none.
 
 **ADR 224: Gates at fixed decision points** (owner-tagged: decision 12).
@@ -141,24 +119,6 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR, with ADR 241, 286, 313, 317, 335, 342, 353, 354.
 - Quote: "Final gates (owner, 2026-10-18)."
 - Effect: A narrower scope cannot change a wider gate. The service refuses it with gate.ErrFinal.
-- Conflict: none.
-
-**ADR 335: Gate decisions: deny gates, held locks, unlocked declares and the engine port** (owner-tagged (all decisions)).
-
-- Decisions that apply: the ADR as a whole.
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
-- Quote: "Gate decisions: deny gates, held locks, unlocked declares and the engine port"
-- Effect: A save of a gate while locks are held answers 409.
-- Conflict: none.
-
-**ADR 322: No migrations or compatibility code before the first tag** (owner-tagged: decision 1).
-
-- Decisions that apply: 1 (changed).
-- Changed by: ADR 325 changes decision 1; ADR 325 changes decision 5; ADR 325 changes decision 6; ADR 326 extends decision 1; ADR 362 changes decision 5. Chain to the end: ADR 325, ADR 326, ADR 362, ADR 363.
-- Current rule: this ADR, with ADR 325, 326, 362.
-- Quote: "Until the first tag, a pull request changes the schema by an edit of the baseline of each dialect, in place. It adds no numbered migration."
-- Effect: The stable-ID key is an in-place edit of the baseline of each dialect, with no numbered migration and no conversion code.
 - Conflict: none.
 
 **ADR 214: A user-facing feature needs its docs page in the same pull request** (not owner-tagged).
@@ -177,14 +137,10 @@ none
 Questions considered and answered:
 
 - Are gate objects stored in the server? Yes. ADR 230 decision 1 and ADR 222 decision 6.
-- Is the DELETE route of the approval default in scope? Yes. ADR 268 adds it. The route resets to no default and answers 204 also when none is set.
-- Which key names the unit scope of gate rows? The stable unit ID, by the owner decision of 19 October 2026 in issue 1003 and the rule of ADR 362. The path keeps the by-name form of ADR 355 decision 1, and the server resolves the name to the ID.
+- Is the DELETE route of the approval default in scope? Yes. ADR 268 adds it. It resets to no default and answers 204 also when none is set.
+- Which key names the unit scope of gate rows? The stable unit ID, by the owner decision of 19 October 2026 in issue 1003. The path keeps the by-name form of ADR 355 decision 1.
 - Is the default collection at namespace create part of this change? No. Owner decision, 13 Nov 2026 (queue P5) puts it in the namespace create transaction. These routes let an administrator list and delete such gates and rules.
 - Do access limits, ownership rules, path sets and decision records belong here? No. Other changes of this milestone own them.
 - Does MinApprovals need removal work? No. The rg of non-test code gives 0 matches.
-- How is a race on If-Match handled? The store compares the version inside the write transaction, so one writer wins.
-- Which changes need fresh authentication? A save or delete of a final gate, of an approval default and of an approval rule. A session needs a sign-in inside the fresh window. An access token never counts as fresh and gets mfa.fresh-step-required.
-- Do backups hold gate configuration? Yes. ADR 230 decision 7 says a backup holds these rows, so the table list names them.
-- Do issues 1034 and 1035 need work here? No. No MinApprovals remains on main, and profile gates are another change.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
