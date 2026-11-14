@@ -8,7 +8,7 @@ The state.write gate reads deleted-unit facts from SQLite. Separate reads under 
 2. **No atomic check-and-write.** The fact read and the gated write stay separate steps. The snapshot removes mixed rows inside the read only.
 3. **Fail closed on read failure.** A failed read returns the store error and no partial facts. When a select and the rollback both fail, the method returns the select error.
 4. **Existing settings with deferred close.** The read uses the existing connection settings. A deferred close runs on success, on error and on panic.
-5. **One fixed start-up log line.** Log one INFO line per start when the gate service is absent, then keep the current no-gate path. A log failure never blocks start.
+5. **One fixed start-up log line.** Main already writes it: recordStateWriteGates (pkg/dustpan/stategates_start.go:58-67) logs the WARN line `state.write gates: off` with the reason when the gates are off, and the INFO line `state.write gates: on` when they are on. A WARN is the safer level for an operator, and no ADR fixes the level, so the change keeps WARN. A log failure never blocks start.
 6. **Explicit rollback branch.** Replace the blank-assign rollback pattern with an explicit branch on the touched fact-read path only.
 
 ## Structure
@@ -69,7 +69,7 @@ stateDiagram-v2
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
 | Read deleted-unit facts inside one read-only transaction. | Begin, select, or rollback fails, or the context is canceled. | Return the store error with no partial facts; the caller retries the write as a new call. | Transaction closed; no facts returned. |
-| Log one INFO line at start when the gate service is absent. | Log write fails. | No retry; continue start on the no-gate path. | Server started with no gate service. |
+| Log the WARN line `state.write gates: off` at start when the gate service is absent. | Log write fails. | No retry; continue start on the no-gate path. | Server started with no gate service. |
 | Branch on the rollback error. | Rollback reports an error. | Return the select error if a select failed, else the rollback error. | Transaction closed; first error returned. |
 
 ## Change impact (computed from main)

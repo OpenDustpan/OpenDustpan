@@ -30,7 +30,7 @@ Evidence for the claims above:
 ## What Changes
 
 - SQLite GetDeletedUnitFacts reads all deleted-unit rows in one read-only transaction scoped to the call with deferred close.
-- Server logs one fixed INFO line per start when there is no gate service.
+- Server logs the fixed WARN line `state.write gates: off` once per start when there is no gate service (main already does this in pkg/dustpan/stategates_start.go:58-67; the change adds its test).
 - The touched rollback path no longer uses the blank-assign pattern, with unchanged close behavior.
 - No conformance suite behavior change; the fault wrapper keeps its fault behavior.
 

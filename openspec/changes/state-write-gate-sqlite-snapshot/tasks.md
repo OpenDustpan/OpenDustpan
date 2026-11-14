@@ -15,7 +15,7 @@
 
 - [ ] 2.1 Move GetDeletedUnitFacts reads into one read-only transaction with deferred close in pkg/store/sqlite/inventory.go:573 (GetDeletedUnitFacts). Check: `go test ./pkg/store/sqlite/ -run TestDeletedUnitFactsSnapshot -count=1` passes
 - [ ] 2.2 Remove the blank-assign rollback pattern on the touched path only. Check: `rg -n -F '_ = rollbackErr' pkg/store/sqlite` shows no hit in the touched function
-- [ ] 2.3 Add the one fixed start-up log line for an absent gate service in NEW file internal/servertest/nogate_log.go. Check: BLOCKED by the missing route and credential kind that reads deleted-unit facts; TestNoGateServiceStartLog passes
+- [ ] 2.3 The start-up log line for an absent gate service is on main: recordStateWriteGates in pkg/dustpan/stategates_start.go:58-67 writes the WARN line `state.write gates: off` with the reason. Keep it, and add its test TestNoGateServiceStartLog in NEW file internal/servertest/nogate_log_test.go (one WARN line without a gate service, the INFO line `state.write gates: on` and no WARN line with one). Check: BLOCKED by the missing route and credential kind that reads deleted-unit facts; TestNoGateServiceStartLog passes
 
 ## 3. Side effects (computed from main)
 
