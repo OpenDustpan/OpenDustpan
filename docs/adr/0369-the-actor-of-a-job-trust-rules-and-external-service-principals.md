@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-11-14. Decided by the project owner. Accepts point 4 of RFC 129. Adds the run-as principal of each automation
 
+Changed by:
+
+- ADR 370 changes: the point "The namespace service principal" of "Not
+  decided here" is decided.
+
 Changes:
 
 - Changes ADR 54 decision 6: a trust rule can opt in to the person who started the event. Four kinds of actor.

@@ -1,11 +1,12 @@
 # 338. The namespace service principal holds a stored grant
 
-Status: accepted · 2026-11-07. Decided by the project owner on 7 November 2026
+Status: superseded by ADR 370 · accepted 2026-11-07. Decided by the project owner on 7 November 2026
 
 Changed by:
 
 - ADR 369 changes decision 3: the namespace service principal has no role in
   a user automation.
+- ADR 370 supersedes: the namespace service principal is removed.
 
 Changes:
 
