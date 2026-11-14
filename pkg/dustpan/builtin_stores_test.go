@@ -429,6 +429,43 @@ func TestWithPostgreSQLRefusesAValueOfAnotherForm(t *testing.T) {
 	}
 }
 
+// TestOpenBuiltinPostgresRefusesAValueOfAnotherForm proves that the outer
+// layer refuses each value that does not name a PostgreSQL store before it
+// opens anything, and that the error repeats no part of the value. The cases
+// need no PostgreSQL server: the check refuses before any connection.
+func TestOpenBuiltinPostgresRefusesAValueOfAnotherForm(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		dsn  string
+	}{
+		{name: "empty value", dsn: ""},
+		{name: "SQLite form", dsn: "sqlite:x"},
+		{name: "other scheme", dsn: "mysql://h/db"},
+		{name: "keyword form", dsn: "host=h dbname=d"},
+		{name: "leading space", dsn: " postgres://h/db"},
+		{name: "wrong case", dsn: "POSTGRES://h/db"},
+		{name: "missing slash", dsn: "postgres:/h/db"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := dustpan.OpenBuiltinPostgresForTest(tc.dsn)
+			if !errors.Is(err, dustpan.ErrStoreDatabaseForm) {
+				t.Fatalf("openBuiltinPostgres(%q) = %v, want the form error", tc.dsn, err)
+			}
+
+			want := "WithPostgreSQL: " + dustpan.ErrStoreDatabaseForm.Error()
+			if err.Error() != want {
+				t.Fatalf("openBuiltinPostgres(%q) error = %q, want %q", tc.dsn, err.Error(), want)
+			}
+		})
+	}
+}
+
 // TestOpenPostgresStoreRefusesAValueOfAnotherForm proves that the inner layer
 // refuses such a value too, so that a new caller of the open cannot skip the
 // check.

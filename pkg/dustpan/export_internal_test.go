@@ -345,3 +345,15 @@ var ErrStoreDatabaseForm = errStoreDatabaseForm
 func OpenPostgresStoreForTest(ctx context.Context, dsn string) (*BuiltinStore, error) {
 	return openPostgresStore(ctx, dsn, defaultStoreConfig())
 }
+
+// OpenBuiltinPostgresForTest runs openBuiltinPostgres with a default settings
+// value and a built-in store whose dsn is the given value, so that a test
+// reaches the form check of the outer layer.
+func OpenBuiltinPostgresForTest(dsn string) error {
+	cfg := defaultSettings()
+
+	builtin := newBuiltinStoreSettings(builtinStorePostgresDSN, nil)
+	builtin.dsn = dsn
+
+	return openBuiltinPostgres(cfg, &builtin)
+}

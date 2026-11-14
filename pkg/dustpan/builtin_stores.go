@@ -260,9 +260,9 @@ func openBuiltinSQLite(cfg *settings, builtin *builtinStoreSettings) error {
 // value that names no such store never reaches the driver. The error repeats
 // no part of the value.
 func openBuiltinPostgres(cfg *settings, builtin *builtinStoreSettings) error {
-	// Defense in depth: openStoreConfig and openPostgresStore check the form
-	// too; this check stays so that WithPostgreSQL cannot hand a value of
-	// another form to the driver.
+	// Defense in depth: openPostgresStore checks the form too; this check
+	// stays so that WithPostgreSQL cannot hand a value of another form to the
+	// driver.
 	if !postgresDSNForm(builtin.dsn) {
 		return fmt.Errorf("WithPostgreSQL: %w", errStoreDatabaseForm)
 	}
