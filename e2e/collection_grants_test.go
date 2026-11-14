@@ -362,6 +362,96 @@ func scopeAdminTofu(ctx context.Context, t *testing.T, env *e2e.Env, cli e2e.Ins
 	return res.Stdout
 }
 
+// scopeWriterHiddenNoOracle proves the no-oracle rule for the writer on
+// collection team-a: `tofu state pull` of workspace b and of a workspace name
+// that does not exist fail the same way, and the workspace read answers both
+// names with the same 404 body.
+func scopeWriterHiddenNoOracle(
+	ctx context.Context,
+	t *testing.T,
+	env *e2e.Env,
+	tofu *scopeRunner,
+	writer *scopePerson,
+) {
+	t.Helper()
+
+	const missing = "no-such-workspace"
+
+	scopeWriteTofu(t, env, missing)
+
+	if res := tofu.run(ctx, "opentofu", missing, "init", "-input=false"); res.ExitCode != 0 {
+		t.Fatalf(
+			"tofu init of %s as writer exits %d, want 0:\n%s",
+			missing,
+			res.ExitCode,
+			res.Stderr,
+		)
+	}
+
+	gotB := tofu.run(ctx, "opentofu", "b", "state", "pull")
+	gotMissing := tofu.run(ctx, "opentofu", missing, "state", "pull")
+
+	if gotB.ExitCode == 0 || gotMissing.ExitCode == 0 {
+		t.Fatalf(
+			"tofu state pull exits b=%d missing=%d, want both non-zero",
+			gotB.ExitCode,
+			gotMissing.ExitCode,
+		)
+	}
+
+	normalize := func(out, name string) string {
+		out = strings.ReplaceAll(out, "workspace "+name, "workspace WORKSPACE")
+		return strings.ReplaceAll(out, `"`+name+`"`, `"WORKSPACE"`)
+	}
+
+	outB := normalize(gotB.Stdout+"\n"+gotB.Stderr, "b")
+	outMissing := normalize(gotMissing.Stdout+"\n"+gotMissing.Stderr, missing)
+
+	if outB != outMissing {
+		t.Fatalf(
+			"tofu state pull of team-b as writer of team-a differs from a missing workspace:\n--- b ---\n%s\n--- missing ---\n%s",
+			outB,
+			outMissing,
+		)
+	}
+
+	org := "/api/v2/organizations/" + scopeNamespace + "/workspaces/"
+
+	statusB, bodyB, err := env.TFEStatus(ctx, writer.token.Secret, http.MethodGet, org+"b", "")
+	if err != nil {
+		t.Fatalf("GET workspace b as writer: %v", err)
+	}
+
+	statusMissing, bodyMissing, err := env.TFEStatus(
+		ctx,
+		writer.token.Secret,
+		http.MethodGet,
+		org+missing,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("GET missing workspace as writer: %v", err)
+	}
+
+	if statusB != http.StatusNotFound || statusMissing != http.StatusNotFound {
+		t.Fatalf(
+			"GET workspace as writer answers b=%d missing=%d, want 404 for both",
+			statusB,
+			statusMissing,
+		)
+	}
+
+	if bodyB != bodyMissing {
+		t.Fatalf(
+			"GET workspace b as writer differs from a missing workspace:\n--- b (%d) ---\n%s\n--- missing (%d) ---\n%s",
+			statusB,
+			bodyB,
+			statusMissing,
+			bodyMissing,
+		)
+	}
+}
+
 // checkWriterScope proves that the writer on collection team-a writes and
 // reads the units of team-a and cannot see the units of team-b with the
 // OpenTofu CLI: without namespace:read and without a grant on team-b, the
@@ -396,8 +486,7 @@ func checkWriterScope(t *testing.T, env *e2e.Env, pulumiCLI, tofuCLI e2e.Install
 		t.Fatalf("tofu state pull of team-a as writer exits %d, want 0:\n%s", res.ExitCode, res.Stderr)
 	}
 
-	scopeHidden(t, tofu.run(ctx, "opentofu", "b", "state", "pull"),
-		"tofu state pull of team-b as writer of team-a")
+	scopeWriterHiddenNoOracle(ctx, t, env, tofu, writer)
 
 	beforeTofu := scopeAdminTofu(ctx, t, env, tofuCLI, "b")
 
