@@ -22,7 +22,8 @@ func TestEveryClassHasACode(t *testing.T) {
 	errs := []error{
 		errMissingOrganization, identity.ErrInvalidObject, namespace.ErrNotFound, collection.ErrInvalidName,
 		coreinventory.ErrUnitNotFound, collection.ErrNotFound, collection.ErrUnitNotFound,
-		collection.ErrAlreadyExists, collection.ErrNotEmpty, collection.ErrCollectionChanged,
+		collection.ErrPlacementCollectionMissing, collection.ErrAlreadyExists, collection.ErrNotEmpty,
+		collection.ErrCollectionChanged,
 		collection.ErrNoCollection, collection.ErrMoveOutOfLockedCollection, errMissingUnit, errCollectionBody,
 		errMoveBody, errInvalidQuery, errInvalidBody, errNoHistory, coreinventory.ErrInvalidName,
 		coreinventory.ErrNotFound, coreinventory.ErrNameTaken, savedview.ErrNotPerson, savedview.ErrNotFound,

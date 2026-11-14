@@ -723,6 +723,11 @@ func classifyPlacement(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusBadRequest, errcode.PlacementInvalidPosition, err.Error()), true
 	case errors.Is(err, collection.ErrPlacementRuleNotFound):
 		return problem.New(http.StatusNotFound, errcode.PlacementRuleNotFound, err.Error()), true
+	case errors.Is(err, collection.ErrPlacementCollectionMissing):
+		// The rule names a collection that does not exist. The text is the
+		// fixed one of the collection error, so the answer keeps the shape of
+		// a missing collection.
+		return problem.New(http.StatusNotFound, errcode.CollectionNotFound, collection.ErrNotFound.Error()), true
 	case errors.Is(err, collection.ErrPlacementConflict):
 		return problem.New(http.StatusConflict, errcode.PlacementConflict, err.Error()), true
 	case errors.Is(err, collection.ErrTooManyPlacementRules):

@@ -123,6 +123,21 @@ func newAccessFixtureFull(
 	return newAccessFixtureSignIn(t, entries, passkeys, nil)
 }
 
+// accessFixtureParts holds the optional parts of a fixture: its audit store,
+// its passkey service, the change of its console sign-in, its link service,
+// the clock of its access service and the logger of its handler. A nil
+// passkey service gets a real one over the store, a nil link service mounts
+// no link route, a nil clock is time.Now, and a nil logger discards its
+// lines.
+type accessFixtureParts struct {
+	entries  func(st *sqlite.Store) auditStore
+	passkeys apiserver.PasskeyService
+	tweak    func(in *apiserver.SignIn, st *sqlite.Store)
+	links    func(*sqlite.Store) *forgelinksvc.Service
+	now      func() time.Time
+	logger   *slog.Logger
+}
+
 // newAccessFixtureSignIn builds the fixture of newAccessFixtureFull and lets
 // tweak change the console sign-in before the handler reads it. With nil, the
 // sign-in stays as it is.
@@ -132,7 +147,9 @@ func newAccessFixtureSignIn(
 ) accessFixture {
 	t.Helper()
 
-	return newAccessFixtureAll(t, entries, passkeys, tweak, noGitHostLinks)
+	return newAccessFixtureAll(t, accessFixtureParts{
+		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks, now: nil, logger: nil,
+	})
 }
 
 // noGitHostLinks gives no link service: the routes of the links are not mounted.
@@ -151,23 +168,47 @@ func newAccessFixtureLinks(
 ) accessFixture {
 	t.Helper()
 
-	return newAccessFixtureAll(t, entries, nil, nil, links)
+	return newAccessFixtureAll(t, accessFixtureParts{
+		entries: entries, passkeys: nil, tweak: nil, links: links, now: nil, logger: nil,
+	})
 }
 
-// newAccessFixtureAll builds the fixture with the passkey service passkeys, the
-// sign-in change tweak and the link service that links gives for the store.
-func newAccessFixtureAll(
-	t *testing.T, entries func(st *sqlite.Store) auditStore, passkeys apiserver.PasskeyService,
-	tweak func(in *apiserver.SignIn, st *sqlite.Store), links func(*sqlite.Store) *forgelinksvc.Service,
+// newAccessFixtureClock is newAccessFixtureWith with the clock now of the
+// access service, which stamps the audit entry of an export, and the logger
+// of the handler, so a test reads the lines of a request.
+func newAccessFixtureClock(
+	t *testing.T, entries func(st *sqlite.Store) auditStore, now func() time.Time, logger *slog.Logger,
 ) accessFixture {
+	t.Helper()
+
+	return newAccessFixtureAll(t, accessFixtureParts{
+		entries: entries, passkeys: nil, tweak: nil, links: noGitHostLinks, now: now, logger: logger,
+	})
+}
+
+// handlerLogger returns logger, or a logger that discards its lines when
+// logger is nil.
+func handlerLogger(logger *slog.Logger) *slog.Logger {
+	if logger != nil {
+		return logger
+	}
+
+	return slog.New(slog.DiscardHandler)
+}
+
+// newAccessFixtureAll builds the fixture with the parts of a fixture.
+func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 	st := openServerTemplateStore(t, path)
 
+	passkeys := parts.passkeys
 	if passkeys == nil {
 		passkeys = newRoutePasskeys(t, st)
 	}
+
+	logger := handlerLogger(parts.logger)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
 	if err != nil {
@@ -192,7 +233,7 @@ func newAccessFixtureAll(
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
-		Now: nil, NewID: nil,
+		Now: parts.now, NewID: nil,
 		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
 	})
 	if err != nil {
@@ -252,8 +293,13 @@ func newAccessFixtureAll(
 		PasskeyBeginLimiter: nil,
 		PasskeyLimiter:      nil,
 	}
-	if tweak != nil {
-		tweak(signIn, st)
+	if parts.tweak != nil {
+		parts.tweak(signIn, st)
+	}
+
+	links := parts.links
+	if links == nil {
+		links = noGitHostLinks
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
@@ -271,7 +317,7 @@ func newAccessFixtureAll(
 		TempAdmins:       nil,
 		Authenticator:    subjectAuthenticator{},
 		Authorizer:       authz,
-		Logger:           slog.New(slog.DiscardHandler),
+		Logger:           logger,
 		Namespaces:       namespaces,
 		Backups:          nil,
 		Restores:         nil,
@@ -284,7 +330,7 @@ func newAccessFixtureAll(
 		Reach:            routeReach(st),
 		Tokens:           tokens,
 		Access:           grants,
-		Audit:            entries(st),
+		Audit:            parts.entries(st),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,

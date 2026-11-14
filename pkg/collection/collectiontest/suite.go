@@ -1105,7 +1105,10 @@ func testCreateStackPlacedRefused(t *testing.T, s Store) {
 		{"no collection ID", noID, ns.Fence(), collection.ErrNoCollection},
 		{"no collection name", noName, ns.Fence(), collection.ErrNoCollection},
 		{"a collection of another namespace", otherNS, ns.Fence(), collection.ErrNoCollection},
-		{"a collection that does not exist", placement(missing, ns.Fence()), ns.Fence(), collection.ErrNotFound},
+		{
+			"a collection that does not exist", placement(missing, ns.Fence()), ns.Fence(),
+			collection.ErrPlacementCollectionMissing,
+		},
 		{"a collection with another ID", placement(reborn, ns.Fence()), ns.Fence(), collection.ErrCollectionChanged},
 		{"a stale fence", placement(c, stale), stale, namespace.ErrFenced},
 		{"an audit entry of another namespace", foreign, ns.Fence(), audit.ErrInvalidEntry},
