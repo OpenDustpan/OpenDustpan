@@ -1,0 +1,28 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+
+## 1. Failing tests first
+
+- [ ] 1.1 Add failing tests in NEW file pkg/jobproxy/proxy_test.go for injection without values, fail closed, redirect strip, redaction, records, finish-phase audit, list-records and plan-phase block. Check: TestProxyInjectionHoldsNoValue fails on main.
+- [ ] 1.2 Add a failing e2e step in NEW file e2e/jobproxy_test.go against the real runner pool and the real Pulumi CLI. BLOCKED by the missing route name and credential kind in the pack: the records route path and the credential kind are not named there. Check: e2e step fails on main and the job log lacks blocked by the job proxy. Confirmed by: CI (the agent writes the e2e test).
+
+## 2. Implementation
+
+- [ ] 2.1 Implement credential hold and injection with fail closed in NEW file pkg/jobproxy/vault.go (NEW proxyCredentialVault and NEW newProxyCredentialVault). Check: `go test ./pkg/jobproxy/... -run TestProxyInjection -count=1` passes.
+- [ ] 2.2 Implement response scan and redaction with over-limit refuse in NEW file pkg/jobproxy/scan.go. Check: `go test ./pkg/jobproxy/... -run TestProxyResponseScan -count=1` passes.
+- [ ] 2.3 Add the per-request records route (list-records) with authorization actions. Declare it in NEW file internal/api/route/proxyrecords.go and write its adapter in NEW file internal/api/proxyrecords.go. Check: Route test passes and the route declares actions.
+- [ ] 2.4 Write phase aggregation and the idempotent audit entry (finish-phase) in NEW file pkg/audit/proxyphase.go. Check: `go test ./pkg/audit/... -run TestProxyPhaseAudit -count=1` passes.
+- [ ] 2.5 Enforce the plan-phase block with method-based write check in NEW file pkg/jobproxy/planblock.go (NEW planEffectiveRules and NEW newPlanEffectiveRules). Check: `go test ./pkg/jobproxy/... -run TestPlanPhaseWriteBlock -count=1` passes.
+
+## 3. Side effects (computed from main)
+
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+
+## 4. Definition of done
+
+- [ ] 4.1 Wire the routes with authorization actions. Check: Route test passes.
+- [ ] 4.2 Add the e2e step against the real runner. BLOCKED by the missing route name and credential kind in the pack. Check: e2e job log contains blocked by the job proxy. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Write the docs page in the same pull request. Check: Docs page shows records and the plan-phase block.
+- [ ] 4.4 Run the usability check. Check: Persona completes the path from the docs page alone. A person's step.
+- [ ] 4.5 Run make check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

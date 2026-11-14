@@ -1,0 +1,93 @@
+# A workflow-level cancel of ci.yml cancels every job of the run, so the tool
+# cache save is a workflow of its own. This workflow only saves, so a pull
+# request cannot change the cache that main uses.
+name: ci-cache
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new run must not cancel a save that is in progress.
+  group: ci-cache
+  cancel-in-progress: false
+
+jobs:
+  tool-cache:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      # These four values must change together with the scan job of ci.yml.
+      TRIVY_VERSION: 0.75.0
+      TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+      TRUFFLEHOG_VERSION: 3.99.2
+      TRUFFLEHOG_SHA256: 3c7b0d1dc4278294269bfdd7594bca8bb28c78da0a4a06ad202ded37b48deca4
+    # The job uses no repository file and no Go, so it has no checkout and no
+    # Go setup.
+    steps:
+      - name: Restore the scan tool archives
+        id: scan-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/scan-archives
+          key: scan-tools-${{ runner.os }}-trivy-${{ env.TRIVY_VERSION }}-${{ env.TRIVY_SHA256 }}-trufflehog-${{ env.TRUFFLEHOG_VERSION }}-${{ env.TRUFFLEHOG_SHA256 }}
+      - name: Download Trivy and TruffleHog
+        env:
+          SCAN_ARCHIVES: ${{ runner.temp }}/scan-archives
+        run: |
+          set -euo pipefail
+          mkdir -p "$SCAN_ARCHIVES" "$RUNNER_TEMP/scan"
+          cd "$RUNNER_TEMP/scan"
+
+          download() {
+            url=$1
+            dest=$2
+            attempt=1
+            wait=5
+            while [ "$attempt" -le 5 ]; do
+              if curl -fsSL --max-time 120 -o "$dest.part" "$url"; then
+                mv "$dest.part" "$dest"
+                return 0
+              fi
+              rm -f "$dest.part"
+              if [ "$attempt" -lt 5 ]; then
+                sleep "$wait"
+                wait=$((wait * 2))
+              fi
+              attempt=$((attempt + 1))
+            done
+            echo "error: cannot download $url" >&2
+            return 1
+          }
+
+          fetch() {
+            archive=$1
+            url=$2
+            sum=$3
+            if [ -f "$SCAN_ARCHIVES/$archive" ] && \
+              echo "$sum  $SCAN_ARCHIVES/$archive" | sha256sum -c - >/dev/null 2>&1; then
+              cp "$SCAN_ARCHIVES/$archive" "$archive"
+              return 0
+            fi
+            download "$url" "$archive"
+          }
+
+          fetch trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
+            "$TRIVY_SHA256"
+          fetch trufflehog.tar.gz \
+            "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_amd64.tar.gz" \
+            "$TRUFFLEHOG_SHA256"
+          echo "${TRIVY_SHA256}  trivy.tar.gz" | sha256sum -c -
+          echo "${TRUFFLEHOG_SHA256}  trufflehog.tar.gz" | sha256sum -c -
+          cp trivy.tar.gz trufflehog.tar.gz "$SCAN_ARCHIVES/"
+      - name: Save the scan tool archives
+        if: ${{ success() && steps.scan-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/scan-archives
+          key: ${{ steps.scan-cache.outputs.cache-primary-key }}

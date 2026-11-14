@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
-	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -166,7 +165,7 @@ func PlanJob(
 // the phase of job jobID on unit started. It returns the zero time when the
 // service has no phase clock or the clock has no answer.
 func ManualLockPhaseStart(
-	ctx context.Context, unit collection.UnitRef, jobID string, opts ...Option,
+	ctx context.Context, unit manuallock.Unit, jobID string, opts ...Option,
 ) (time.Time, error) {
 	cfg := defaultSettings()
 	for _, opt := range opts {

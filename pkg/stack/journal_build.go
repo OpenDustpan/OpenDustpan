@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -37,7 +38,10 @@ type builtSave struct {
 	stackID ID
 	fence   namespace.Fence
 	built   Checkpoint
-	blobs   *scopedBlobs
+	// origin is the writer of the state version that the built checkpoint
+	// publishes: the one of the update.
+	origin identity.StateOrigin
+	blobs  *scopedBlobs
 }
 
 // buildJournalCheckpoint replays the given batches of the update on its
@@ -201,7 +205,7 @@ func (s *Updates) builtCheckpoint(ref Ref, u Update, document []byte) (Checkpoin
 		BlobMD5:       [md5.Size]byte{},
 
 		// The commit of the build sets the start of its attempt.
-		AttemptStartedAt: time.Time{},
+		AttemptStartedAt: time.Time{}, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }
 
@@ -242,7 +246,7 @@ func builtRow(save builtSave, key blob.Key, prev *Checkpoint) checkpointSave {
 			Sequence:      0,
 			Invalid:       false,
 		},
-		digest: save.built.Digest, prev: prev, key: key, blobs: save.blobs,
+		digest: save.built.Digest, prev: prev, key: key, origin: save.origin, blobs: save.blobs,
 	}
 }
 
@@ -275,6 +279,7 @@ func (s *Updates) commitBuiltRow(
 		BlobKey:       save.key,
 		BlobSize:      size,
 		BlobMD5:       sum,
+		Origin:        save.origin,
 
 		AttemptStartedAt: started,
 	}
@@ -384,7 +389,10 @@ func (s *Updates) buildBeforeEnd(ctx context.Context, ref Ref, id UpdateID, u Up
 	}
 
 	return s.storeBuiltCheckpoint(
-		ctx, builtSave{ref: ref, id: id, stackID: st.ID, fence: ns.Fence(), built: built, blobs: bl},
+		ctx, builtSave{
+			ref: ref, id: id, stackID: st.ID, fence: ns.Fence(),
+			built: built, origin: u.Origin(), blobs: bl,
+		},
 	)
 }
 

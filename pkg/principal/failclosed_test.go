@@ -24,7 +24,8 @@ func TestNewServiceNeedsAGuard(t *testing.T) {
 	t.Parallel()
 
 	_, err := principal.NewService(principal.Config{
-		TempAdmins: nil, Store: openStore(t), Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		TempAdmins: nil, Store: openStore(t), Guard: nil, Namespaces: nil, Tokens: nil, GroupReach: nil,
+		Now: nil, NewID: nil,
 	})
 	if !errors.Is(err, principal.ErrMissingDependency) {
 		t.Fatalf("NewService without a guard = %v, want ErrMissingDependency", err)
@@ -111,7 +112,7 @@ func newGuardFixture(t *testing.T) guardFixture {
 
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil, Store: openStore(t), Guard: principal.AdminOnlyGuard{},
-		Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Namespaces: nil, Tokens: nil, GroupReach: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

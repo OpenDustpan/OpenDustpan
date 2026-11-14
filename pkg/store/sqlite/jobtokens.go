@@ -131,26 +131,31 @@ func (t *JobTokens) issueRecord(
 		return fmt.Errorf("%w: the expiry is not after the issue time", jobtoken.ErrInvalid)
 	}
 
-	// The starter row must exist before the insert: the foreign key of the
-	// token row would otherwise turn a missing starter into a driver error.
-	// The other reads run after the insert so that a duplicate digest answers
-	// ErrAlreadyExists before a missing job. An error after the insert rolls
-	// the transaction back, so it writes nothing.
+	// Read the issue world before the insert so that a foreign-key failure
+	// cannot hide the port error. Keep these errors until after the insert:
+	// a duplicate digest has priority. Every error rolls the transaction back.
 	//
 	// Defense in depth: loadIssueWorld reads the starter again and checks
-	// that it is enabled; this read stays so that the insert cannot reach its
-	// foreign key with a starter that has no row.
-	if err := requireStarter(ctx, q, tok.StarterID); err != nil {
-		return err
+	// that it is enabled; this check stays so that a missing starter is
+	// refused even without the foreign key.
+	starterErr := requireStarter(ctx, q, tok.StarterID)
+	world, worldErr := loadIssueWorld(ctx, q, tok)
+
+	insertErr := insertJobToken(ctx, q, tok)
+	if errors.Is(insertErr, jobtoken.ErrAlreadyExists) {
+		return insertErr
 	}
 
-	if err := insertJobToken(ctx, q, tok); err != nil {
-		return err
+	if worldErr != nil {
+		return worldErr
 	}
 
-	world, err := loadIssueWorld(ctx, q, tok)
-	if err != nil {
-		return err
+	if starterErr != nil {
+		return starterErr
+	}
+
+	if insertErr != nil {
+		return insertErr
 	}
 
 	return checkIssueLive(tok, &world, e.At)

@@ -42,7 +42,7 @@ func issueCases() []suiteCase {
 			test: testMissingStarterRecord,
 		},
 		{
-			name: "issue of a duplicate digest with a starter that has no principal row returns not live",
+			name: "issue of a duplicate digest with a starter that has no principal row returns already exists",
 			test: testDuplicateMissingStarterRecord,
 		},
 		{name: "issue with a starter that is not the job starter returns invalid", test: testStarterMismatch},
@@ -415,8 +415,8 @@ func testMissingStarterRecord(t *testing.T, h Harness) {
 }
 
 // testDuplicateMissingStarterRecord pins the error order of the port: a
-// starter with no principal row gives ErrNotLive before a duplicate digest
-// gives ErrAlreadyExists. The first record stays.
+// duplicate digest gives ErrAlreadyExists before a starter with no principal
+// row gives ErrNotLive. The first record stays.
 func testDuplicateMissingStarterRecord(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -432,8 +432,8 @@ func testDuplicateMissingStarterRecord(t *testing.T, h Harness) {
 	dup := tok
 	dup.StarterID = ident.NewID("prn-")
 
-	if err := tryIssue(t, h, dup, fence); !errors.Is(err, jobtoken.ErrNotLive) {
-		t.Fatalf("Issue of a duplicate digest with a starter that has no principal row = %v, want ErrNotLive", err)
+	if err := tryIssue(t, h, dup, fence); !errors.Is(err, jobtoken.ErrAlreadyExists) {
+		t.Fatalf("Issue of a duplicate digest with a starter that has no principal row = %v, want ErrAlreadyExists", err)
 	}
 
 	if m := mustRead(t, h, tok.Digest); m.Token.StarterID != starter.ID {

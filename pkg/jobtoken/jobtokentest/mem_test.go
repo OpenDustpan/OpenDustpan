@@ -182,12 +182,7 @@ func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audi
 		return fmt.Errorf("%w: the expiry is not after the issue time", jobtoken.ErrInvalid)
 	}
 
-	starter, ok := m.principals[tok.StarterID]
-	if !ok {
-		return jobtoken.ErrNotLive
-	}
-
-	if _, found := m.tokens[tok.Digest]; found {
+	if _, ok := m.tokens[tok.Digest]; ok {
 		return jobtoken.ErrAlreadyExists
 	}
 
@@ -201,7 +196,8 @@ func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audi
 		return jobtoken.ErrNotFound
 	}
 
-	if starter.deleted || starter.disabled {
+	starter, ok := m.principals[tok.StarterID]
+	if !ok || starter.deleted || starter.disabled {
 		return jobtoken.ErrNotLive
 	}
 

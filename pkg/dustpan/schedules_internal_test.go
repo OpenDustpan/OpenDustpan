@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
@@ -354,6 +355,9 @@ func TestJobSchedulesRunInactivityDisableOncePerTick(t *testing.T) {
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
 		Store:      st, Principals: st, Freshness: nil, Authorizer: nil,
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
 		Logger: slog.New(slog.DiscardHandler), Now: time.Now, NewID: nil,
 	})
 	if err != nil {

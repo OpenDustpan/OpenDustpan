@@ -39,6 +39,12 @@ func RunWithoutForeignKeys(ctx context.Context, db *sql.DB, query string, args .
 	return runErr
 }
 
+// DB returns the database handle of s, so a test can read or change rows
+// with direct SQL.
+func DB(s *Store) *sql.DB {
+	return s.conn
+}
+
 // RemoveInternalTemplates removes the white-box template directory built for
 // this test binary. It skips removal when the template was never built.
 func RemoveInternalTemplates() error {

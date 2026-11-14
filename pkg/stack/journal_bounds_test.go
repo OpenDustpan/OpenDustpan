@@ -25,7 +25,7 @@ func TestAppendJournalRefusesOversizedBatch(t *testing.T) {
 
 	ctx := t.Context()
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	u, err := f.svc.Create(ctx, f.ref, plan)
 	if err != nil {
@@ -67,7 +67,7 @@ func TestAppendJournalAcceptsBatchAtLimit(t *testing.T) {
 
 	ctx := t.Context()
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	u, err := f.svc.Create(ctx, f.ref, plan)
 	if err != nil {
@@ -254,7 +254,7 @@ func TestBuildJournalCheckpointMapsReplayBounds(t *testing.T) {
 
 	ctx := t.Context()
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	u, err := f.svc.Create(ctx, f.ref, plan)
 	if err != nil {
@@ -442,7 +442,7 @@ func TestAppendJournalAcceptsSingleEntryOverBatchBound(t *testing.T) {
 
 	ctx := t.Context()
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	u, err := f.svc.Create(ctx, f.ref, plan)
 	if err != nil {
@@ -483,7 +483,7 @@ func TestAppendJournalRefusesMultiEntryOverBatchBound(t *testing.T) {
 
 	ctx := t.Context()
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	u, err := f.svc.Create(ctx, f.ref, plan)
 	if err != nil {

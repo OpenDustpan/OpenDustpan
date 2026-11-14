@@ -202,12 +202,15 @@ func TestManualLockPassesOnlyAPhaseThatStartedBeforeIt(t *testing.T) {
 		{name: "no job", phaseStart: lockTestNow().Add(-time.Minute), askedJob: "", wantPassed: false},
 	}
 
-	unit := lockUnit("acme")
+	ref := lockUnit("acme")
+	unit := manuallock.Unit{Ref: ref, NamespaceID: "ns-1", UnitID: "unt-1"}
 
-	object, err := identity.UnitObject(unit.Tool, unit.Namespace, unit.Name)
+	object, err := identity.UnitObject(ref.Tool, ref.Namespace, ref.Name)
 	if err != nil {
 		t.Fatalf("unit object: %v", err)
 	}
+
+	object = object.WithUnitID(unit.UnitID)
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -216,6 +219,7 @@ func TestManualLockPassesOnlyAPhaseThatStartedBeforeIt(t *testing.T) {
 			var j job.Job
 
 			j.ID = "job-1"
+			j.NamespaceID = unit.NamespaceID
 			j.State = job.StateRunning
 			j.Spec.Unit = object
 			j.Phases = make([]job.Phase, 1)
@@ -224,7 +228,7 @@ func TestManualLockPassesOnlyAPhaseThatStartedBeforeIt(t *testing.T) {
 			srv, _ := lockServer(t, dustpan.WithJobStore(&phaseJobStore{Store: nil, j: j}))
 			locks := srv.ManualLocks()
 
-			_, lockErr := locks.Lock(t.Context(), lockAdmin(), manuallock.UnitTarget(unit), "freeze", lockAudit())
+			_, lockErr := locks.Lock(t.Context(), lockAdmin(), manuallock.UnitTarget(ref), "freeze", lockAudit())
 			if lockErr != nil {
 				t.Fatalf("lock: %v", lockErr)
 			}

@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/egress/egresshttp"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/logsink/logsinktest"
 	"opendustpan.org/opendustpan/pkg/logsink/webhook"
@@ -45,6 +47,37 @@ func TestConformance(t *testing.T) {
 			},
 		}
 	})
+}
+
+func TestWebhookSinkRefusesBlockedURL(t *testing.T) {
+	t.Parallel()
+
+	r := newReceiver(t, http.StatusNoContent)
+
+	client := egresshttp.ClientWith(
+		egress.Rules{Allow: nil, LoopbackForTests: false},
+		egress.NoRedirect, egress.HTTPSOnly,
+		egresshttp.Options{RootCAs: nil, Resolver: nil},
+	)
+	t.Cleanup(client.CloseIdleConnections)
+
+	s, err := webhook.New(webhook.Config{Client: client, URL: r.srv.URL, Secret: testSecret, Timeout: 0})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	closeOnCleanup(t, s)
+
+	rec := logsink.Record{Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: "m", Attrs: nil}
+
+	err = s.Write(t.Context(), []logsink.Record{rec})
+	if !errors.Is(err, egress.ErrRefused) {
+		t.Fatalf("write to a loopback URL: got %v, want %v", err, egress.ErrRefused)
+	}
+
+	if errors.Is(err, egresshttp.ErrDialRefused) {
+		t.Fatalf("write to a loopback URL: got %v, want the URL check, not the dial guard", err)
+	}
 }
 
 func TestNon2xxAnswerIsAnError(t *testing.T) {

@@ -21,6 +21,11 @@
 // The local password reads its own records and has its own entry,
 // CompleteLocal. It checks the Assertion and starts the session with the
 // generation that the check of the password read.
+//
+// A password method (LDAP) has its own entry, CompletePassword. It counts the
+// failures of the typed name and of the person that the method found, stops a
+// locked attempt before the password reaches the directory, and then does the
+// steps above.
 package signinsvc
 
 import (
@@ -34,6 +39,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -41,6 +48,10 @@ import (
 
 // ErrMissingDependency reports a Config without a required port.
 var ErrMissingDependency = errors.New("sign-in service needs a dependency")
+
+// ErrRemovalAlertUnrecorded reports that the removal alert and the audit
+// entry of its failure could not be written, so the sign-in was refused.
+var ErrRemovalAlertUnrecorded = errors.New("the removal alert and its audit entry could not be written")
 
 // Reasons of a refused sign-in, in the audit entry. No reason holds a
 // password, a ticket, a code, a token, a state or a cookie value.
@@ -53,6 +64,7 @@ const (
 	ReasonNoPrincipal        = "no principal"
 	ReasonDisabled           = "principal is disabled"
 	ReasonNotTarget          = "principal cannot sign in through an identity provider"
+	ReasonTargetLookup       = "temporary administrator read failed"
 	ReasonSubject            = "subject is not valid"
 	ReasonSubjectLength      = "subject over 255 bytes"
 	ReasonOpenIDAnswer       = "ID token was refused"
@@ -215,6 +227,16 @@ type Audit interface {
 	AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error)
 }
 
+// Removals records the members that a group claim sync removed, for the
+// removal alert. Nil records nothing.
+type Removals interface {
+	// Record stores one removal of each group in groupIDs for source, and
+	// alerts the administrators when the removals reach a limit. An error
+	// does not refuse the sign-in: the service records the failed alert and
+	// goes on. It refuses only when that record fails too.
+	Record(ctx context.Context, source principal.RemovalSource, groupIDs []string) error
+}
+
 // Config holds the ports of a Service. Groups may be nil: the service then
 // applies no group claim, and the audit entry of the session says so.
 type Config struct {
@@ -229,10 +251,18 @@ type Config struct {
 	// Groups applies the group claims of an Assertion. Nil means that no
 	// mapping exists, so no sign-in joins a group.
 	Groups principal.GroupClaimApplier
+	// Removals records the removals of a group claim sync for the removal
+	// alert. Nil records nothing.
+	Removals Removals
 	// States reads the state of a person for the passkey sign-in. Nil means
 	// that the passkey sign-in refuses every request.
 	States States
-	Logger *slog.Logger
+	// Locks counts the failed attempts of a password method. Nil, or a nil
+	// NameKeys, means that CompletePassword refuses every request.
+	Locks authgate.NameLockCounter
+	// NameKeys reads the key of the digests of the counts of Locks.
+	NameKeys NameKeys
+	Logger   *slog.Logger
 	// OnAuditFailure is called when an audit entry cannot be written. Nil
 	// means no call.
 	OnAuditFailure func()
@@ -340,7 +370,17 @@ func (s *Service) Complete(ctx context.Context, req *Request) (Result, error) {
 	// and refuses a temporary administrator. This check does not rely on it, so
 	// that a faulty lookup can never start a session for another person, for a
 	// principal of another kind or for a temporary administrator.
-	if !s.isTarget(ctx, &p, subject) {
+	target, targetErr := s.isTarget(ctx, &p, subject)
+	if targetErr != nil {
+		s.cfg.Logger.WarnContext(ctx, "sign-in refused: the read of the temporary administrators failed",
+			slog.String("provider", req.Provider.ID), slog.String("error", targetErr.Error()))
+
+		return none, s.refuse(ctx, req, &refusal{
+			reason: ReasonTargetLookup, answer: AnswerFailed, idpSubject: a.Subject, cause: targetErr,
+		})
+	}
+
+	if !target {
 		return none, s.refuse(ctx, req, &refusal{
 			reason: ReasonNotTarget, answer: AnswerRefused, idpSubject: a.Subject, cause: nil,
 		})
@@ -470,11 +510,11 @@ func (s *Service) admit(ctx context.Context, req *Request) (principal.Source, *r
 // isTarget reports whether the principal p is the person of the subject that
 // an identity provider may sign in or disable: a person of exactly this
 // subject, in no namespace, not a break-glass account and not a temporary
-// administrator. An error of the read of the temporary administrators is not
-// a target: the caller fails closed.
-func (s *Service) isTarget(ctx context.Context, p *principal.Principal, subject string) bool {
+// administrator. A failed read of the temporary administrators returns
+// false and the error, and the caller fails closed.
+func (s *Service) isTarget(ctx context.Context, p *principal.Principal, subject string) (bool, error) {
 	if p.Subject != subject || p.Kind != principal.KindPerson || p.Namespace != "" || p.BreakGlass {
-		return false
+		return false, nil
 	}
 
 	// Defense in depth: SignInPrincipal refuses a temporary administrator too.
@@ -482,12 +522,12 @@ func (s *Service) isTarget(ctx context.Context, p *principal.Principal, subject 
 	// a session for, or disable, a temporary administrator.
 	temp, err := s.cfg.TempAdmins.IsTempAdmin(ctx, p.ID)
 	if err != nil {
-		// The read failed: fail closed. The caller refuses as for a principal
-		// that is not a target.
-		return false
+		// The read failed: fail closed. The caller refuses, and the refusal
+		// names the failed read.
+		return false, err
 	}
 
-	return !temp
+	return !temp, nil
 }
 
 // checkLocal returns the reason for which the Assertion of req is not the
@@ -579,12 +619,73 @@ func (s *Service) applyGroups(
 		return "", fmt.Errorf("apply the group claims of a sign-in: %w", err)
 	}
 
+	removed := slices.Concat(res.Removed, res.Suspended)
+
+	if s.cfg.Removals != nil && len(removed) > 0 {
+		source := principal.RemovalSource{Kind: principal.RemovalSourceIdentityProvider, ID: p.ID}
+
+		if err := s.cfg.Removals.Record(ctx, source, removed); err != nil {
+			if alertErr := s.removalAlertFailed(ctx, e, source, principalID, err); alertErr != nil {
+				return "", alertErr
+			}
+		}
+	}
+
 	if res.NoMapping {
 		return noGroupMapping, nil
 	}
 
 	return fmt.Sprintf("added %d, removed %d, suspended %d, refused %d, unmapped %d",
 		len(res.Added), len(res.Removed), len(res.Suspended), len(res.Refused), len(res.Unmapped)), nil
+}
+
+// removalAlertFailed records an alert of the removals that could not be
+// written. The sign-in goes on when the entry of its failure is written. It
+// returns ErrRemovalAlertUnrecorded when that entry fails too.
+func (s *Service) removalAlertFailed(
+	ctx context.Context, e audit.Entry, source principal.RemovalSource, principalID string, alertErr error,
+) error {
+	s.cfg.Logger.ErrorContext(ctx, "the removal alert was not written",
+		slog.String("code", errcode.PrincipalRemovalAlertFailed),
+		slog.String("source_kind", string(source.Kind)),
+		slog.String("source_id", source.ID),
+		slog.String("error", alertErr.Error()))
+
+	if err := s.recordRemovalAlertFailure(ctx, e, source, principalID); err != nil {
+		s.cfg.Logger.ErrorContext(ctx, "the audit entry of the failed removal alert was not written",
+			slog.String("source_kind", string(source.Kind)), slog.String("source_id", source.ID),
+			slog.String("error", err.Error()))
+
+		if s.cfg.OnAuditFailure != nil {
+			s.cfg.OnAuditFailure()
+		}
+
+		return fmt.Errorf("%w: %w", ErrRemovalAlertUnrecorded, err)
+	}
+
+	return nil
+}
+
+// recordRemovalAlertFailure writes the audit entry of an alert of the
+// removals that could not be written.
+func (s *Service) recordRemovalAlertFailure(
+	ctx context.Context, e audit.Entry, source principal.RemovalSource, principalID string,
+) error {
+	// Only the request context of the sign-in entry carries over. Its
+	// changes and its token do not describe the failed alert.
+	entry := audit.Entry{
+		At: s.cfg.Sessions.Now(), Namespace: audit.ServerScope, Subject: string(source.Kind) + ":" + source.ID,
+		IDPSubject: "", TokenID: "", Action: principal.AuditActionMassRemovalAlert,
+		Object: principal.Ref(principalID), Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: e.SourceIP, UserAgent: e.UserAgent, Channel: e.Channel,
+		Kind: audit.KindSecurity, Outcome: audit.OutcomeFailure, RequestID: e.RequestID, ObjectID: "",
+		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
+		Reason: errcode.PrincipalRemovalAlertFailed,
+	}
+
+	_, err := s.cfg.Audit.AppendServer(ctx, entry)
+
+	return err
 }
 
 // noGroupMapping is the note that an entry holds for an Assertion with

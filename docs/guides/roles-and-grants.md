@@ -44,7 +44,7 @@ server does not store them, and an operator cannot change them.
 | `maintainer` | Everything in `writer`, plus manage, move, restore and lock units. It also manages collections and their units. It reads and uses the git host connections and the placement rules. |
 | `admin` | Every action of the data family. This includes the management of access on the namespace. |
 | `installation-operator` | Every action of the operator family for the installation. |
-| `account-administrator` | The administration family, except the sign-in management and the access restore, plus the data family and the delegation family. |
+| `account-administrator` | The administration family, except the sign-in management and the access restore, plus the data family and the delegation family. It makes the tokens of each service principal whose reach is inside its own reach. |
 | `site-administrator` | The operator, administration, data and delegation families. It holds every action except the actions of the caller's own access. |
 | `token-manager` | The action `principal:manage-tokens`, which issues service tokens. |
 
@@ -145,6 +145,9 @@ Some rules apply to a create:
 - A role with operator or administration actions goes on the installation only.
 - A grant on a service principal names a service principal, and it takes only
   delegation roles.
+- A grant of a delegation role, such as `token-manager`, on a service principal
+  needs a caller that holds the reach of that principal. Otherwise the answer is
+  `403`. See [Access tokens](access-tokens.md) for the reach.
 - The caller must hold every action of the role on that object. Otherwise the
   answer is `403`.
 - A current grant with the same subject, role and object gets `409`.

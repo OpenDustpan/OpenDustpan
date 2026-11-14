@@ -146,11 +146,19 @@ func newWrappedSWEnv(
 	// The gates of a unit belong to the unit, so the units of the tests exist.
 	for _, name := range []workspace.Name{"web", "other"} {
 		w := workspace.Workspace{
-			NamespaceID: "", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+			NamespaceID: "",
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
 			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-			LastRelease: workspace.NoRelease(), ID: workspace.ID("ws-test-" + string(name)),
-			Ref:       workspace.Ref{Namespace: "acme", Name: name},
-			Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+			LastRelease: workspace.NoRelease(),
+			ID:          workspace.ID("ws-test-" + string(name)),
+			Ref:         workspace.Ref{Namespace: "acme", Name: name},
+			Overrides: namespace.Overrides{
+				Forced:   false,
+				Unlocked: false,
+			},
+			Revision: 1,
+			Origin:   identity.StateOrigin{Job: "", Commit: ""},
 		}
 		if err = st.CreateWorkspace(t.Context(), w, fence); err != nil {
 			t.Fatalf("create workspace %s: %v", name, err)
@@ -1085,10 +1093,19 @@ func TestStateWriteGateStaysWithTheUnit(t *testing.T) {
 	}
 
 	w := workspace.Workspace{
-		NamespaceID: "", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		NamespaceID: "",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(), ID: "ws-test-web-again", Ref: ref,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		LastRelease: workspace.NoRelease(),
+		ID:          "ws-test-web-again",
+		Ref:         ref,
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Revision: 1,
+		Origin:   identity.StateOrigin{Job: "", Commit: ""},
 	}
 	if err = e.store.CreateWorkspace(t.Context(), w, e.fence); err != nil {
 		t.Fatalf("create workspace again: %v", err)
@@ -1117,10 +1134,19 @@ func (e swEnv) reuseSWWeb(t *testing.T) {
 	t.Helper()
 
 	w := workspace.Workspace{
-		NamespaceID: "", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		NamespaceID: "",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		LastRelease: workspace.NoRelease(), ID: "ws-test-web-new", Ref: workspace.Ref{Namespace: "acme", Name: "web"},
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		LastRelease: workspace.NoRelease(),
+		ID:          "ws-test-web-new",
+		Ref:         workspace.Ref{Namespace: "acme", Name: "web"},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Revision: 1,
+		Origin:   identity.StateOrigin{Job: "", Commit: ""},
 	}
 	if err := e.store.CreateWorkspace(t.Context(), w, e.fence); err != nil {
 		t.Fatalf("create workspace again: %v", err)

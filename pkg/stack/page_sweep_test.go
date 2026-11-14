@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -150,7 +151,7 @@ func TestStartSweepDeletesPageByPage(t *testing.T) {
 	spy.reset()
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -189,7 +190,7 @@ func (m *memUpdates) nameBlob(ref stack.Ref, id stack.UpdateID, key blob.Key) {
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
 
-		AttemptStartedAt: time.Time{},
+		AttemptStartedAt: time.Time{}, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -293,7 +294,7 @@ func TestStartSweepRefreshesReferencesBetweenPages(t *testing.T) {
 	mem.ageAll(2 * time.Hour)
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)

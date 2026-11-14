@@ -48,7 +48,7 @@ func handlerWith(t *testing.T, actions ...identity.Action) http.Handler {
 }
 
 // handlerAuthorizing returns a handler over a fresh store that asks authz.
-func handlerAuthorizing(t *testing.T, authz identity.Authorizer) http.Handler {
+func handlerAuthorizing(t *testing.T, authz identity.Authorizer, opts ...func(*runnerapi.Config)) *runnerapi.Handler {
 	t.Helper()
 
 	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -81,7 +81,7 @@ func handlerAuthorizing(t *testing.T, authz identity.Authorizer) http.Handler {
 
 	members := s.Runners()
 
-	h, err := runnerapi.NewHandler(runnerapi.Config{
+	cfg := runnerapi.Config{
 		Audit:                      newTestAudit(),
 		OnAuditFailure:             nil,
 		Namespaces:                 service,
@@ -105,7 +105,13 @@ func handlerAuthorizing(t *testing.T, authz identity.Authorizer) http.Handler {
 		Plans:                      nil,
 		Artifacts:                  nil,
 		OnHandoffRefusalSuppressed: nil,
-	})
+	}
+
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	h, err := runnerapi.NewHandler(cfg)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}

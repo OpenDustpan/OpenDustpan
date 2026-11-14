@@ -1,9 +1,11 @@
 package dustpan
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -167,9 +169,74 @@ func startOldOperation2(t *testing.T, store durable.Store) {
 	}
 }
 
+// clockedBeats is the durable store of a test with the heartbeats on a clock
+// that the test moves. Beat and LastBeat keep the beats in memory at the time
+// of clock; every other call goes to the wrapped store. So a test of the
+// heartbeat rule waits for no wall-clock time and reads the same times on any
+// machine.
+type clockedBeats struct {
+	DurableStore
+
+	clock *testClock
+	mu    *sync.Mutex
+	beats map[string]durable.Beat
+}
+
+// newClockedBeats returns store with its heartbeats on clock.
+func newClockedBeats(store DurableStore, clock *testClock) clockedBeats {
+	return clockedBeats{DurableStore: store, clock: clock, mu: &sync.Mutex{}, beats: map[string]durable.Beat{}}
+}
+
+// Beat records the beat of owner at the time of the clock.
+func (c clockedBeats) Beat(_ context.Context, owner string, lease time.Duration) error {
+	if owner == "" || lease <= 0 {
+		return durable.ErrInvalid
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.beats[owner] = durable.Beat{Owner: owner, At: c.clock.Now(), Lease: lease, Now: time.Time{}}
+
+	return nil
+}
+
+// LastBeat returns the beat whose time plus 2 lease periods is the latest, as
+// the port says, with Now from the clock.
+func (c clockedBeats) LastBeat(context.Context) (durable.Beat, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	last := durable.Beat{Owner: "", At: time.Time{}, Lease: 0, Now: c.clock.Now()}
+
+	for _, b := range c.beats {
+		end, lastEnd := b.At.Add(2*b.Lease), last.At.Add(2*last.Lease)
+		if last.Owner == "" || end.After(lastEnd) || (end.Equal(lastEnd) && b.At.After(last.At)) ||
+			(end.Equal(lastEnd) && b.At.Equal(last.At) && b.Owner > last.Owner) {
+			last = durable.Beat{Owner: b.Owner, At: b.At, Lease: b.Lease, Now: last.Now}
+		}
+	}
+
+	return last, nil
+}
+
+// clockedWatches returns an api watch and the tracking store of a worker
+// watch over store, both on clock, with the heartbeats of store on clock.
+func clockedWatches(store DurableStore, clock *testClock) (*workerWatch, trackingStore) {
+	beats := newClockedBeats(store, clock)
+
+	api := newTestWatch(beats, apiOnly(), beatLease, clock.Now)
+	worker := newTestWatch(beats, workerOnly(), beatLease, clock.Now)
+	worker.owner = "worker-1"
+
+	return api, trackingStore{DurableStore: beats, watch: worker}
+}
+
 // TestRollingUpgradeGivesNoRefusal proves that a due schedule that no worker
 // knows, as during a rolling upgrade while only older workers run, shows in
-// the report but does not make the gate refuse while the workers beat.
+// the report but does not make the gate refuse while the workers beat. The
+// heartbeats run on a clock that the test moves: the worker tries a claim each
+// eighth of a lease period, for more than 3 lease periods, with no wait.
 func TestRollingUpgradeGivesNoRefusal(t *testing.T) {
 	t.Parallel()
 
@@ -183,21 +250,21 @@ func TestRollingUpgradeGivesNoRefusal(t *testing.T) {
 		t.Fatalf("ensure schedule: %v", err)
 	}
 
-	api := newTestWatch(store, apiOnly(), beatLease, time.Now)
+	clock := &testClock{mu: sync.Mutex{}, now: time.Unix(1_800_000_000, 0).UTC()}
+	api, tracked := clockedWatches(store, clock)
 	api.specs = func() []durable.ScheduleSpec { return []durable.ScheduleSpec{spec} }
 	api.begin(t.Context())
 
-	_, tracked := workerOf(api)
+	end := clock.Now().Add(beatWait + beatLease)
 
-	deadline := time.Now().Add(beatWait + beatLease)
-
-	for time.Now().Before(deadline) {
+	for clock.Now().Before(end) {
 		claimAttempt(t, tracked)
-		pauseFor(t, beatLease/8)
-	}
 
-	if err := admitStartOf(t, api); err != nil {
-		t.Fatalf("start while old workers beat: %v, want it admitted", err)
+		if err := admitStartOf(t, api); err != nil {
+			t.Fatalf("start at %s while old workers beat: %v, want it admitted", clock.Now(), err)
+		}
+
+		clock.Set(clock.Now().Add(beatLease / 8))
 	}
 
 	report, err := api.WorkerReport(t.Context())
@@ -207,6 +274,42 @@ func TestRollingUpgradeGivesNoRefusal(t *testing.T) {
 
 	if report.Stuck || len(report.Schedules) != 1 || report.Schedules[0].Name != "new-job" {
 		t.Fatalf("report = %+v, want a live worker and the due schedule new-job", report)
+	}
+}
+
+// TestSilenceOfExactlyTwoLeasesIsAdmitted pins the boundary of the rule "last
+// beat plus 2 lease periods" on the clock of the test: a silence of exactly 2
+// lease periods is admitted, and 1 ms more is refused.
+func TestSilenceOfExactlyTwoLeasesIsAdmitted(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		silence time.Duration
+		want    error
+	}{
+		{name: "no silence", silence: 0, want: nil},
+		{name: "1 ms under 2 leases", silence: 2*beatLease - time.Millisecond, want: nil},
+		{name: "exactly 2 leases", silence: 2 * beatLease, want: nil},
+		{name: "1 ms over 2 leases", silence: 2*beatLease + time.Millisecond, want: noworker.ErrNoWorker},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			st := openTestStore(t)
+			clock := &testClock{mu: sync.Mutex{}, now: time.Unix(1_800_000_000, 0).UTC()}
+
+			api, tracked := clockedWatches(st.DurableOperations(), clock)
+			api.begin(t.Context())
+
+			claimAttempt(t, tracked)
+			clock.Set(clock.Now().Add(tc.silence))
+
+			err := admitStartOf(t, api)
+			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+				t.Fatalf("start after a silence of %s: %v, want %v", tc.silence, err, tc.want)
+			}
+		})
 	}
 }
 
