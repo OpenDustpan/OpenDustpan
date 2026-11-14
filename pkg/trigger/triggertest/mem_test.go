@@ -2,12 +2,14 @@ package triggertest_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/graph"
@@ -21,21 +23,30 @@ type key struct {
 	id trigger.ID
 }
 
+// errClockNotSet is the setup error of a fake whose clock no test injected.
+var errClockNotSet = errors.New("the clock of the store is not set")
+
 // mem is the reference adapter of Store and Dispatcher. It runs the suite, so
 // each case runs before any SQL adapter exists. It keeps the audit log that a
 // SQL adapter writes in the same transaction.
 type mem struct {
 	fences   map[namespace.Name]int64
 	triggers map[key]trigger.Trigger
+	next     map[key]time.Time
 	audited  map[namespace.Name]int
-	mu       sync.Mutex
+	// now is the clock of the store. The harness injects a fixed clock, and
+	// Harness.Now reads the same one. A mem without a clock fails its writes.
+	now func() time.Time
+	mu  sync.Mutex
 }
 
 func newMem() *mem {
 	return &mem{
 		fences:   map[namespace.Name]int64{},
 		triggers: map[key]trigger.Trigger{},
+		next:     map[key]time.Time{},
 		audited:  map[namespace.Name]int{},
+		now:      nil,
 		mu:       sync.Mutex{},
 	}
 }
@@ -82,7 +93,24 @@ func (m *mem) Put(_ context.Context, t trigger.Trigger, fence namespace.Fence, e
 		return fmt.Errorf("put: %w", err)
 	}
 
+	var prev *trigger.Trigger
+
+	if old, found := m.triggers[k]; found {
+		prev = &old
+	}
+
+	now, err := m.nowTime()
+	if err != nil {
+		return fmt.Errorf("put: %w", err)
+	}
+
+	slot, err := trigger.PutSlot(t, now, prev, m.next[k])
+	if err != nil {
+		return fmt.Errorf("put: %w", err)
+	}
+
 	m.triggers[k] = t
+	m.next[k] = slot
 	m.audited[k.ns]++
 
 	return nil
@@ -202,9 +230,81 @@ func (m *mem) Delete(_ context.Context, ns namespace.Name, id trigger.ID, fence 
 	}
 
 	delete(m.triggers, k)
+	delete(m.next, k)
 	m.audited[ns]++
 
 	return nil
+}
+
+// NextSlot implements trigger.Store.
+func (m *mem) NextSlot(_ context.Context, ns namespace.Name, id trigger.ID) (time.Time, error) {
+	if err := id.Validate(); err != nil {
+		return time.Time{}, fmt.Errorf("next slot: %w", err)
+	}
+
+	if _, err := namespace.ParseName(string(ns)); err != nil {
+		return time.Time{}, fmt.Errorf("next slot: %w: %w", trigger.ErrInvalid, err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k := key{ns: ns, id: id}
+	if _, ok := m.triggers[k]; !ok {
+		return time.Time{}, trigger.ErrNotFound
+	}
+
+	return m.next[k], nil
+}
+
+// ClaimDue implements trigger.Store.
+func (m *mem) ClaimDue(_ context.Context, c trigger.Claim, fence namespace.Fence, e audit.Entry) error {
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("claim: %w", err)
+	}
+
+	if err := checkEntry(e, c.Namespace); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence, c.Namespace); err != nil {
+		return err
+	}
+
+	k := key{ns: c.Namespace, id: c.Trigger}
+
+	t, ok := m.triggers[k]
+	if !ok {
+		return trigger.ErrNotFound
+	}
+
+	now, err := m.nowTime()
+	if err != nil {
+		return fmt.Errorf("claim: %w", err)
+	}
+
+	next, err := trigger.CheckClaim(c, t, m.next[k], now)
+	if err != nil {
+		return fmt.Errorf("claim: %w", err)
+	}
+
+	m.next[k] = next
+	m.audited[c.Namespace]++
+
+	return nil
+}
+
+// nowTime returns the injected clock of the fake. A mem without a clock is a
+// setup error: its writes fail instead of reading the clock of the process.
+func (m *mem) nowTime() (time.Time, error) {
+	if m.now == nil {
+		return time.Time{}, errClockNotSet
+	}
+
+	return m.now().UTC(), nil
 }
 
 // checkEntry refuses an audit entry that is not valid or names another
@@ -254,7 +354,11 @@ func TestConformance(t *testing.T) {
 	t.Parallel()
 
 	triggertest.Run(t, func(_ *testing.T, starter trigger.Starter) triggertest.Harness {
+		clock := time.UnixMilli(1_700_000_000_000).UTC()
+
 		m := newMem()
+		m.now = func() time.Time { return clock }
+
 		doubles := triggertest.NewDoubles()
 
 		dispatcher, err := doubles.Dispatcher(m, starter, m)
@@ -266,6 +370,7 @@ func TestConformance(t *testing.T) {
 			Store:      m,
 			Dispatcher: dispatcher,
 			Doubles:    doubles,
+			Now:        func(_ *testing.T) time.Time { return clock },
 			Namespace: func(_ *testing.T, name string) namespace.Fence {
 				m.mu.Lock()
 				defer m.mu.Unlock()
@@ -275,6 +380,14 @@ func TestConformance(t *testing.T) {
 				return namespace.Fence{Namespace: namespace.Name(name), FailoverVersion: 1}
 			},
 			StoreRaw: func(_ *testing.T, tr trigger.Trigger) { m.storeRaw(tr) },
+			SetNextSlot: func(t *testing.T, ns namespace.Name, id trigger.ID, slot time.Time) {
+				t.Helper()
+
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				m.next[key{ns: ns, id: id}] = slot
+			},
 			Audited: func(_ *testing.T, ns string) int {
 				m.mu.Lock()
 				defer m.mu.Unlock()

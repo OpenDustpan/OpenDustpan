@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -35,8 +36,31 @@ func (f namespaceFences) Fence(ctx context.Context, ns namespace.Name) (namespac
 // the queries of the store do.
 const insertTriggerSQL = `INSERT INTO triggers (
     namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
-    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
-) SELECT n.id, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14 FROM namespaces AS n WHERE n.name = $15`
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms, next_slot_ms
+) SELECT n.id, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $16 FROM namespaces AS n WHERE n.name = $15`
+
+// setSlotSQL moves the next slot of a trigger, as the time since its save would.
+const setSlotSQL = `UPDATE triggers SET next_slot_ms = $1 WHERE id = $2 AND namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)`
+
+// setNextSlot moves the next slot of a trigger with raw SQL.
+func setNextSlot(t *testing.T, s *postgres.Store, ns namespace.Name, id trigger.ID, slot time.Time) {
+	t.Helper()
+
+	err := s.ExecForTest(t.Context(), setSlotSQL, slot.UnixMilli(), string(id), ns.String())
+	if err != nil {
+		t.Fatalf("set the next slot of %s: %v", id, err)
+	}
+}
+
+// plantedSlot returns the next slot of a planted row: an enabled schedule trigger
+// needs one, and the table refuses a row without it.
+func plantedSlot(r triggerstore.Row) int64 {
+	if r.Kind == string(trigger.KindSchedule) && r.Enabled == 1 {
+		return 1
+	}
+
+	return 0
+}
 
 // plantTrigger writes tr with raw SQL. It runs no check of the rules of a
 // trigger and no check for a loop.
@@ -47,7 +71,7 @@ func plantTrigger(t *testing.T, s *postgres.Store, tr trigger.Trigger) {
 
 	err := s.ExecForTest(t.Context(), insertTriggerSQL, r.ID, r.UnitTool, r.UnitID, r.Kind, r.Preset, r.Cron,
 		r.SourceNamespace, r.SourceTool, r.SourceUnitID, r.Enabled, r.LastSaverSubject, r.LastSaverID,
-		r.CreatedAtMs, r.UpdatedAtMs, r.Namespace)
+		r.CreatedAtMs, r.UpdatedAtMs, r.Namespace, plantedSlot(r))
 	if err != nil {
 		t.Fatalf("plant trigger %s: %v", tr.ID, err)
 	}
@@ -69,6 +93,16 @@ func triggerHarness(base string) triggertest.Factory {
 			Store:      s.Triggers(),
 			Dispatcher: dispatcher,
 			Doubles:    doubles,
+			Now: func(t *testing.T) time.Time {
+				t.Helper()
+
+				now, err := s.DatabaseNow(t.Context())
+				if err != nil {
+					t.Fatalf("read the clock of the store: %v", err)
+				}
+
+				return now
+			},
 			Namespace: func(t *testing.T, name string) namespace.Fence {
 				t.Helper()
 
@@ -78,6 +112,11 @@ func triggerHarness(base string) triggertest.Factory {
 				t.Helper()
 
 				return len(allAuditEntries(t, s, namespace.Name(ns)))
+			},
+			SetNextSlot: func(t *testing.T, ns namespace.Name, id trigger.ID, slot time.Time) {
+				t.Helper()
+
+				setNextSlot(t, s, ns, id, slot)
 			},
 			StoreRaw: func(t *testing.T, tr trigger.Trigger) {
 				t.Helper()

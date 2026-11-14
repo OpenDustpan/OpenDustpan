@@ -1080,8 +1080,9 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 // checkStaged runs the checks of the staged rows in q: the staging name, the
 // sealed state, the namespace IDs, the owned rows, the grants and the
 // memberships of principals of a namespace, the removal alert markers and the
-// feature rows.
-func checkStaged(ctx context.Context, q pgQuerier, staging string, restoreAt time.Time) error {
+// feature rows. q is the handle of the transaction, so a check can read the
+// clock of the store in it.
+func checkStaged(ctx context.Context, q db.DBTX, staging string, restoreAt time.Time) error {
 	if identErr := checkStagingIdent(staging); identErr != nil {
 		return identErr
 	}
@@ -1994,7 +1995,7 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
 // the notification sinks, the triggers, the self-service blueprints, the trust rules and the
 // break-glass reviews.
-func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string) error {
+func checkStagedFeatureRows(ctx context.Context, pool db.DBTX, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
 		return err
 	}

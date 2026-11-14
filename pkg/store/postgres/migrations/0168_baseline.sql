@@ -1318,6 +1318,8 @@ CREATE TABLE triggers (
     last_saver_id text NOT NULL,
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
+    next_slot_ms bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT triggers_check CHECK (((next_slot_ms >= 0) AND ((kind <> 'schedule'::text) OR (enabled = 0) OR (next_slot_ms > 0)))),
     CONSTRAINT triggers_enabled_check CHECK ((enabled = ANY (ARRAY[(0)::bigint, (1)::bigint]))),
     CONSTRAINT triggers_kind_check CHECK ((kind = ANY (ARRAY['review-request-push'::text, 'schedule'::text, 'follows'::text])))
 );

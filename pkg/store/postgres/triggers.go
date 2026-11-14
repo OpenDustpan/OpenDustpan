@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -60,16 +61,12 @@ func (t triggers) Get(ctx context.Context, ns namespace.Name, id trigger.ID) (tr
 		return trigger.Trigger{}, err
 	}
 
-	row, err := t.s.queries.GetTrigger(ctx, db.GetTriggerParams{Namespace: ns.String(), ID: string(id)})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return trigger.Trigger{}, trigger.ErrNotFound
-	}
-
+	row, err := t.read(ctx, ns, id)
 	if err != nil {
-		return trigger.Trigger{}, fmt.Errorf("select trigger: %w", err)
+		return trigger.Trigger{}, err
 	}
 
-	return triggerstore.Trigger(triggerstore.Row(row))
+	return triggerstore.Trigger(row)
 }
 
 // Stored implements trigger.Store. It serves a row that fails its checks.
@@ -78,16 +75,12 @@ func (t triggers) Stored(ctx context.Context, ns namespace.Name, id trigger.ID) 
 		return trigger.Trigger{}, err
 	}
 
-	row, err := t.s.queries.GetTrigger(ctx, db.GetTriggerParams{Namespace: ns.String(), ID: string(id)})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return trigger.Trigger{}, trigger.ErrNotFound
-	}
-
+	row, err := t.read(ctx, ns, id)
 	if err != nil {
-		return trigger.Trigger{}, fmt.Errorf("select trigger: %w", err)
+		return trigger.Trigger{}, err
 	}
 
-	return triggerstore.Stored(triggerstore.Row(row)), nil
+	return triggerstore.Stored(row), nil
 }
 
 // List implements trigger.Store. A row that fails its checks fails the read.
@@ -155,6 +148,57 @@ func (t triggers) Delete(
 	})
 }
 
+// NextSlot implements trigger.Store.
+func (t triggers) NextSlot(ctx context.Context, ns namespace.Name, id trigger.ID) (time.Time, error) {
+	if err := triggerstore.CheckGet(ns, id); err != nil {
+		return time.Time{}, err
+	}
+
+	row, err := t.read(ctx, ns, id)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return triggerstore.NextSlot(row), nil
+}
+
+// ClaimDue implements trigger.Store. The claim and the move of the next slot
+// are one statement with a compare on the old slot, in the audited and fenced
+// transaction of the namespace.
+func (t triggers) ClaimDue(ctx context.Context, c trigger.Claim, fence namespace.Fence, e audit.Entry) error {
+	if err := triggerstore.CheckClaim(c, fence, e); err != nil {
+		return err
+	}
+
+	return t.s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+		unitID, err := triggerstore.ApplyClaim(ctx, triggerTx{q: q}, c)
+		if err != nil {
+			return err
+		}
+
+		if e.ObjectID == "" {
+			e.ObjectID = unitID
+		}
+
+		return nil
+	})
+}
+
+// read returns the row of the trigger id of ns, or trigger.ErrNotFound. It
+// checks nothing about the row: the caller applies the rules that it needs.
+func (t triggers) read(ctx context.Context, ns namespace.Name, id trigger.ID) (triggerstore.Row, error) {
+	row, err := t.s.queries.GetTrigger(ctx, db.GetTriggerParams{Namespace: ns.String(), ID: string(id)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return triggerstore.Row{}, trigger.ErrNotFound
+	}
+
+	if err != nil {
+		return triggerstore.Row{}, fmt.Errorf("select trigger: %w", err)
+	}
+
+	return triggerstore.Row(row), nil
+}
+
 // triggerTx is triggerstore.Tx over the queries of one transaction.
 type triggerTx struct {
 	q *db.Queries
@@ -210,6 +254,7 @@ func (x triggerTx) Upsert(ctx context.Context, r triggerstore.Row) error {
 		LastSaverID:      r.LastSaverID,
 		CreatedAtMs:      r.CreatedAtMs,
 		UpdatedAtMs:      r.UpdatedAtMs,
+		NextSlotMs:       r.NextSlotMs,
 		Namespace:        r.Namespace,
 	})
 	if err != nil {
@@ -223,11 +268,35 @@ func (x triggerTx) Upsert(ctx context.Context, r triggerstore.Row) error {
 	return nil
 }
 
+// Now implements triggerstore.Tx. It reads the clock of the database.
+func (x triggerTx) Now(ctx context.Context) (time.Time, error) {
+	ms, err := storeNow(ctx, x.q)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return time.UnixMilli(ms).UTC(), nil
+}
+
 // Remove implements triggerstore.Tx.
 func (x triggerTx) Remove(ctx context.Context, ns namespace.Name, id trigger.ID) (bool, error) {
 	n, err := x.q.DeleteTrigger(ctx, db.DeleteTriggerParams{Namespace: ns.String(), ID: string(id)})
 	if err != nil {
 		return false, fmt.Errorf("delete trigger: %w", err)
+	}
+
+	return n > 0, nil
+}
+
+// MoveNextSlot implements triggerstore.Tx.
+func (x triggerTx) MoveNextSlot(
+	ctx context.Context, ns namespace.Name, id trigger.ID, old, next int64,
+) (bool, error) {
+	n, err := x.q.MoveTriggerNextSlot(ctx, db.MoveTriggerNextSlotParams{
+		NextSlotMs: next, ID: string(id), OldNextSlotMs: old, Namespace: ns.String(),
+	})
+	if err != nil {
+		return false, fmt.Errorf("move next slot of trigger: %w", err)
 	}
 
 	return n > 0, nil

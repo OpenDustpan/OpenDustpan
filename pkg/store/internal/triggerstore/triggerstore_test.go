@@ -54,6 +54,10 @@ func TestRowRoundTrip(t *testing.T) {
 			t.Parallel()
 
 			row := triggerstore.RowOf(want, 42)
+			if want.Kind == trigger.KindSchedule {
+				row.NextSlotMs = 1 // Put sets the next slot of an enabled schedule trigger.
+			}
+
 			if row.CreatedAtMs != 42 || row.UpdatedAtMs != 42 || row.Namespace != "acme" {
 				t.Errorf("row = %+v, want times 42 and namespace acme", row)
 			}
@@ -149,6 +153,88 @@ func TestTriggerRefusesACorruptRow(t *testing.T) {
 
 			if got.ID != "" || got.LastSaver != "" {
 				t.Errorf("a corrupt row returned the trigger %+v", got)
+			}
+		})
+	}
+}
+
+// TestCheckStagedRefusesANextSlotThatTheScheduleCannotReach checks the rule of a
+// staged row: an enabled schedule trigger whose next slot is not a slot of its
+// schedule, or is after the first slot of the schedule after now plus the claim
+// skew, would never be due, so the schedule would stop. A claim accepts a slot
+// up to now plus MaxClaimSkew, so a backup from an instance whose clock is ahead
+// inside the skew can hold a next slot up to that bound. A trigger that is off,
+// or of another kind, has no slot to check.
+func TestCheckStagedRefusesANextSlotThatTheScheduleCannotReach(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 30, 11, 59, 30, 0, time.UTC)
+	first := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	in2100 := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// The first slot after now plus the claim skew: a claim accepts a slot up
+	// to that time, and the next slot of the claim is the first slot after it.
+	afterSkew, err := trigger.NextSlot(hourly(), now.Add(trigger.MaxClaimSkew))
+	if err != nil {
+		t.Fatalf("next slot: %v", err)
+	}
+
+	if !afterSkew.After(first) {
+		t.Fatalf("the first slot after now plus the claim skew = %v, want later than %v", afterSkew, first)
+	}
+
+	stepAfterSkew, err := trigger.NextSlot(hourly(), afterSkew)
+	if err != nil {
+		t.Fatalf("next slot: %v", err)
+	}
+
+	rowWithSlot := func(tr trigger.Trigger, slot time.Time) triggerstore.Row {
+		row := triggerstore.RowOf(tr, now.UnixMilli())
+		row.NextSlotMs = slot.UnixMilli()
+
+		return row
+	}
+
+	off := hourly()
+	off.Enabled = false
+
+	cases := []struct {
+		name string
+		row  triggerstore.Row
+		want error
+	}{
+		{"the first slot after now", rowWithSlot(hourly(), first), nil},
+		{"the first slot after now plus the claim skew", rowWithSlot(hourly(), afterSkew), nil},
+		{
+			"one schedule step after the first slot after now plus the claim skew",
+			rowWithSlot(hourly(), stepAfterSkew),
+			triggerstore.ErrCorrupt,
+		},
+		{"a slot in 2100", rowWithSlot(hourly(), in2100), triggerstore.ErrCorrupt},
+		{
+			"a time that is not a slot of the schedule",
+			rowWithSlot(hourly(), first.Add(-30*time.Minute)),
+			triggerstore.ErrCorrupt,
+		},
+		{"a trigger that is off", triggerstore.RowOf(off, 1), nil},
+		{"a follows trigger", triggerstore.RowOf(follows("f1", unitA(), unitC()), 1), nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := triggerstore.CheckStaged(tc.row, now)
+			if tc.want == nil {
+				if err != nil {
+					t.Fatalf("check = %v, want nil", err)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, tc.want) || !errors.Is(err, trigger.ErrInvalid) {
+				t.Fatalf("check = %v, want ErrCorrupt and ErrInvalid", err)
 			}
 		})
 	}
@@ -363,10 +449,19 @@ type memTx struct {
 	rows    map[string]triggerstore.Row
 	upserts int
 	removes int
+	moves   int
+	// clock is the clock of the store. newMemTx sets a fixed time, and a test
+	// that cares about the clock replaces it.
+	clock time.Time
+	// stale makes MoveNextSlot see a stored slot other than the one it is given.
+	stale bool
 }
 
 func newMemTx(triggers ...trigger.Trigger) *memTx {
-	m := &memTx{rows: map[string]triggerstore.Row{}, upserts: 0, removes: 0}
+	m := &memTx{
+		rows: map[string]triggerstore.Row{}, upserts: 0, removes: 0, moves: 0,
+		clock: time.UnixMilli(1_700_000_000_000).UTC(), stale: false,
+	}
 	for i := range triggers {
 		m.rows[string(triggers[i].ID)] = triggerstore.RowOf(triggers[i], 1)
 	}
@@ -405,6 +500,211 @@ func (m *memTx) Remove(_ context.Context, _ namespace.Name, id trigger.ID) (bool
 	m.removes++
 
 	return ok, nil
+}
+
+func (m *memTx) Now(_ context.Context) (time.Time, error) {
+	return m.clock, nil
+}
+
+func (m *memTx) MoveNextSlot(_ context.Context, _ namespace.Name, id trigger.ID, old, next int64) (bool, error) {
+	r, ok := m.rows[string(id)]
+	if !ok || m.stale || r.NextSlotMs != old {
+		return false, nil
+	}
+
+	r.NextSlotMs = next
+	m.rows[string(id)] = r
+	m.moves++
+
+	return true, nil
+}
+
+func hourly() trigger.Trigger {
+	return schedule("s1", unitA(), trigger.Frequency{Preset: "", Cron: "0 * * * *"})
+}
+
+func claimAt(slot time.Time) trigger.Claim {
+	return trigger.Claim{Namespace: "acme", Trigger: "s1", Slot: slot}
+}
+
+func TestApplyPutRecordsTheNextSlot(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 10, 30, 10, 20, 0, 0, time.UTC)
+	first := time.Date(2026, 10, 30, 11, 0, 0, 0, time.UTC)
+
+	tx := newMemTx()
+	tx.clock = at
+
+	if err := triggerstore.ApplyPut(t.Context(), tx, hourly(), at.Add(time.Hour), nil); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	// The slot comes from the clock of the store, and not from the time of the entry.
+	if got := triggerstore.NextSlot(tx.rows["s1"]); !got.Equal(first) {
+		t.Fatalf("next slot = %v, want %v", got, first)
+	}
+
+	// A claim moves it, and a replace with the same frequency keeps the move.
+	tx.clock = first
+
+	if _, err := triggerstore.ApplyClaim(t.Context(), tx, claimAt(first)); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	if err := triggerstore.ApplyPut(t.Context(), tx, hourly(), at.Add(time.Minute), nil); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+
+	if got, want := triggerstore.NextSlot(tx.rows["s1"]), first.Add(time.Hour); !got.Equal(want) {
+		t.Fatalf("next slot after a replace = %v, want %v", got, want)
+	}
+
+	off := hourly()
+	off.Enabled = false
+
+	if err := triggerstore.ApplyPut(t.Context(), tx, off, at, nil); err != nil {
+		t.Fatalf("put off: %v", err)
+	}
+
+	if got := triggerstore.NextSlot(tx.rows["s1"]); !got.IsZero() {
+		t.Fatalf("next slot of a trigger that is off = %v, want none", got)
+	}
+}
+
+func claimSlot() time.Time { return time.Date(2026, 10, 30, 11, 0, 0, 0, time.UTC) }
+
+func TestApplyClaimMovesTheSlotOnce(t *testing.T) {
+	t.Parallel()
+
+	slot := claimSlot()
+
+	tx := newMemTx()
+	tx.clock = slot.Add(-time.Minute)
+
+	if err := triggerstore.ApplyPut(t.Context(), tx, hourly(), slot.Add(-time.Minute), nil); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	tx.clock = slot
+
+	unitID, err := triggerstore.ApplyClaim(t.Context(), tx, claimAt(slot))
+	if err != nil || unitID != "a" || tx.moves != 1 {
+		t.Fatalf("claim = %q, %v, moves %d", unitID, err, tx.moves)
+	}
+
+	_, err = triggerstore.ApplyClaim(t.Context(), tx, claimAt(slot))
+	if !errors.Is(err, trigger.ErrNotDue) {
+		t.Fatalf("second claim = %v, want ErrNotDue", err)
+	}
+}
+
+func TestApplyClaimMoveThatChangesNoRow(t *testing.T) {
+	t.Parallel()
+
+	slot := claimSlot()
+
+	tx := newMemTx()
+	tx.clock = slot.Add(-time.Minute)
+
+	if err := triggerstore.ApplyPut(t.Context(), tx, hourly(), slot.Add(-time.Minute), nil); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	tx.clock = slot
+
+	tx.stale = true
+
+	_, err := triggerstore.ApplyClaim(t.Context(), tx, claimAt(slot))
+	if !errors.Is(err, trigger.ErrNotDue) {
+		t.Fatalf("claim = %v, want ErrNotDue", err)
+	}
+}
+
+func TestApplyClaimUnknownTrigger(t *testing.T) {
+	t.Parallel()
+
+	_, err := triggerstore.ApplyClaim(t.Context(), newMemTx(), claimAt(claimSlot()))
+	if !errors.Is(err, trigger.ErrNotFound) {
+		t.Fatalf("claim = %v, want ErrNotFound", err)
+	}
+}
+
+func TestApplyClaimRefusesARowThatFailsItsChecks(t *testing.T) {
+	t.Parallel()
+
+	bad := schedule("s1", unitA(), trigger.Frequency{Preset: "", Cron: "* * * * *"})
+	negative := newMemTx(hourly())
+	row := negative.rows["s1"]
+	row.NextSlotMs = -5
+	negative.rows["s1"] = row
+
+	noSlot := newMemTx(hourly())
+	row = noSlot.rows["s1"]
+	row.NextSlotMs = 0
+	noSlot.rows["s1"] = row
+
+	tests := []struct {
+		name string
+		tx   *memTx
+		want error
+	}{
+		{"a cron expression that is too frequent", newMemTx(bad), trigger.ErrInvalid},
+		{"a negative slot", negative, triggerstore.ErrCorrupt},
+		{"an enabled schedule trigger with no slot", noSlot, triggerstore.ErrCorrupt},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := triggerstore.ApplyClaim(t.Context(), tc.tx, claimAt(claimSlot()))
+			if !errors.Is(err, triggerstore.ErrCorrupt) || !errors.Is(err, tc.want) || tc.tx.moves != 0 {
+				t.Fatalf("claim = %v, moves %d, want ErrCorrupt and %v", err, tc.tx.moves, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckClaim(t *testing.T) {
+	t.Parallel()
+
+	fence := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
+	otherFence := namespace.Fence{Namespace: "other", FailoverVersion: 1}
+	bad := entryOf("acme")
+	bad.Action = ""
+
+	tests := []struct {
+		name  string
+		claim trigger.Claim
+		fence namespace.Fence
+		entry audit.Entry
+		want  error
+	}{
+		{
+			"empty claim",
+			trigger.Claim{Namespace: "", Trigger: "", Slot: time.Time{}},
+			fence,
+			entryOf("acme"), trigger.ErrInvalid,
+		},
+		{"fence of another namespace", claimAt(claimSlot()), otherFence, entryOf("acme"), namespace.ErrFenced},
+		{"entry of another namespace", claimAt(claimSlot()), fence, entryOf("other"), audit.ErrInvalidEntry},
+		{"invalid entry", claimAt(claimSlot()), fence, bad, audit.ErrInvalidEntry},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := triggerstore.CheckClaim(tc.claim, tc.fence, tc.entry); !errors.Is(err, tc.want) {
+				t.Errorf("CheckClaim = %v, want %v", err, tc.want)
+			}
+		})
+	}
+
+	if err := triggerstore.CheckClaim(claimAt(claimSlot()), fence, entryOf("acme")); err != nil {
+		t.Errorf("a valid claim = %v, want nil", err)
+	}
 }
 
 func TestApplyPut(t *testing.T) {
@@ -592,4 +892,28 @@ func TestApplyDelete(t *testing.T) {
 			t.Fatalf("delete = %v with %d rows left, want a clean-up of the row", err, len(tx.rows))
 		}
 	})
+}
+
+// TestApplyClaimRefusesASlotLaterThanTheClockOfTheStore proves the layer of the
+// store: the claim reads the clock of the store, so a slot far in the future is
+// refused and the next slot does not move.
+func TestApplyClaimRefusesASlotLaterThanTheClockOfTheStore(t *testing.T) {
+	t.Parallel()
+
+	slot := claimSlot()
+
+	tx := newMemTx()
+	tx.clock = slot.Add(-time.Minute)
+
+	if err := triggerstore.ApplyPut(t.Context(), tx, hourly(), slot.Add(-time.Minute), nil); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	before := tx.rows["s1"].NextSlotMs
+	far := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	_, err := triggerstore.ApplyClaim(t.Context(), tx, claimAt(far))
+	if !errors.Is(err, trigger.ErrInvalid) || tx.moves != 0 || tx.rows["s1"].NextSlotMs != before {
+		t.Fatalf("claim of a slot in 2100 = %v, moves %d, want ErrInvalid and no move", err, tx.moves)
+	}
 }

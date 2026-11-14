@@ -42,6 +42,9 @@ type Row struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	// NextSlotMs is the next slot of a schedule trigger in Unix milliseconds,
+	// and 0 when the row records none.
+	NextSlotMs int64
 }
 
 // RowOf returns the row of t, stamped with atMs.
@@ -62,6 +65,7 @@ func RowOf(t trigger.Trigger, atMs int64) Row {
 		Enabled:          0,
 		CreatedAtMs:      atMs,
 		UpdatedAtMs:      atMs,
+		NextSlotMs:       0,
 	}
 
 	if t.Source != (graph.Unit{Namespace: "", Tool: "", ID: ""}) {
@@ -76,8 +80,20 @@ func RowOf(t trigger.Trigger, atMs int64) Row {
 }
 
 // rebuild returns the trigger that r holds, with no check of the rules of a
-// trigger. It refuses an enabled flag that is not 0 or 1.
+// trigger. It refuses an enabled flag that is not 0 or 1 and a next slot below 0.
 func rebuild(r Row) (trigger.Trigger, error) {
+	if r.NextSlotMs < 0 {
+		return trigger.Trigger{}, fmt.Errorf("%w: %w: the next slot is %d, below 0",
+			ErrCorrupt, trigger.ErrInvalid, r.NextSlotMs)
+	}
+
+	// An enabled schedule trigger always has a next slot: Put sets it. A row
+	// without one is not a row that this server wrote, and a claim of it fails.
+	if r.Kind == string(trigger.KindSchedule) && r.Enabled == 1 && r.NextSlotMs == 0 {
+		return trigger.Trigger{}, fmt.Errorf("%w: %w: an enabled schedule trigger has a next slot",
+			ErrCorrupt, trigger.ErrInvalid)
+	}
+
 	if r.Enabled != 0 && r.Enabled != 1 {
 		return trigger.Trigger{}, fmt.Errorf("%w: %w: the enabled flag is %d, not 0 or 1",
 			ErrCorrupt, trigger.ErrInvalid, r.Enabled)
@@ -118,6 +134,55 @@ func Trigger(r Row) (trigger.Trigger, error) {
 	}
 
 	return t, nil
+}
+
+// CheckStaged checks the trigger row r that a restore stages, with now as the
+// clock of the store. It checks the row with Trigger, and then refuses an
+// enabled schedule trigger whose next slot is not a slot of its schedule, or is
+// after the first slot of the schedule after now plus trigger.MaxClaimSkew. A
+// claim accepts a slot up to now plus trigger.MaxClaimSkew, so a backup from an
+// instance whose clock is ahead inside the skew can hold such a next slot. A
+// later next slot would answer ErrNotDue to every claim of a real slot, so the
+// schedule would stop. A trigger that is off, or a trigger of another kind, has
+// no slot, and this rule does not apply to it. It returns ErrCorrupt for a row
+// that fails.
+//
+// Defense in depth: the store checks a row again when it reads it, and Put
+// writes the slot from the same clock. This check stays so that a bad row fails
+// the restore and does not wait for a claim.
+func CheckStaged(r Row, now time.Time) error {
+	t, err := Trigger(r)
+	if err != nil {
+		return err
+	}
+
+	if t.Kind != trigger.KindSchedule || !t.Enabled {
+		return nil
+	}
+
+	next := NextSlot(r)
+
+	if !trigger.IsSlot(t, next) {
+		return fmt.Errorf("%w: %w: the next slot %v is not a slot of the schedule",
+			ErrCorrupt, trigger.ErrInvalid, next)
+	}
+
+	after, err := trigger.NextSlot(t, now.Add(trigger.MaxClaimSkew))
+	if err != nil {
+		return fmt.Errorf("%w: %w: %w", ErrCorrupt, trigger.ErrInvalid, err)
+	}
+
+	if next.After(after) {
+		return fmt.Errorf(
+			"%w: %w: the next slot %v is after the first slot after the clock of the store plus the claim skew, %v",
+			ErrCorrupt,
+			trigger.ErrInvalid,
+			next,
+			after,
+		)
+	}
+
+	return nil
 }
 
 // Triggers returns the triggers of rows, in the order of rows. A row that
@@ -314,6 +379,14 @@ type Tx interface {
 	Upsert(ctx context.Context, r Row) error
 	// Remove deletes the trigger id of ns, and reports whether a row existed.
 	Remove(ctx context.Context, ns namespace.Name, id trigger.ID) (bool, error)
+	// MoveNextSlot sets the next slot of the enabled schedule trigger id of ns
+	// to next, in Unix milliseconds, only when it is old now. It reports whether
+	// it changed a row.
+	MoveNextSlot(ctx context.Context, ns namespace.Name, id trigger.ID, old, next int64) (bool, error)
+	// Now returns the time of the clock of the store, read in the transaction.
+	// PostgreSQL gives the clock of the database, so every instance agrees on it.
+	// SQLite has one process, and gives its clock.
+	Now(ctx context.Context) (time.Time, error)
 }
 
 // ApplyPut writes t in tx, stamped with at. It refuses a replace that changes
@@ -342,11 +415,118 @@ func ApplyPut(ctx context.Context, tx Tx, t trigger.Trigger, at time.Time, onSki
 
 	existing := Usable(rows, onSkip)
 
-	if err := trigger.CheckCycle(existing, t); err != nil {
-		return fmt.Errorf("put trigger: %w", err)
+	if cycleErr := trigger.CheckCycle(existing, t); cycleErr != nil {
+		return fmt.Errorf("put trigger: %w", cycleErr)
 	}
 
-	return tx.Upsert(ctx, RowOf(t, at.UnixMilli()))
+	var prev *trigger.Trigger
+
+	if found {
+		stored := Stored(old)
+		prev = &stored
+	}
+
+	// The first slot comes from the clock of the store, and not from the time of
+	// the audit entry that the caller stamped: one instance with a wrong clock
+	// must not choose the slot of a schedule.
+	clock, err := tx.Now(ctx)
+	if err != nil {
+		return err
+	}
+
+	slot, slotErr := trigger.PutSlot(t, clock, prev, fromMs(old.NextSlotMs))
+	if slotErr != nil {
+		return fmt.Errorf("put trigger: %w", slotErr)
+	}
+
+	r := RowOf(t, at.UnixMilli())
+	r.NextSlotMs = toMs(slot)
+
+	return tx.Upsert(ctx, r)
+}
+
+// fromMs returns the time of a slot in Unix milliseconds, and the zero time for 0.
+func fromMs(ms int64) time.Time {
+	if ms <= 0 {
+		return time.Time{}
+	}
+
+	return time.UnixMilli(ms).UTC()
+}
+
+// toMs returns the Unix milliseconds of a slot, and 0 for the zero time.
+func toMs(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+
+	return t.UnixMilli()
+}
+
+// NextSlot returns the next slot that r records, and the zero time when it
+// records none.
+func NextSlot(r Row) time.Time {
+	return fromMs(r.NextSlotMs)
+}
+
+// CheckClaim checks the arguments of a ClaimDue before the transaction starts,
+// as CheckPut does for a Put.
+func CheckClaim(c trigger.Claim, fence namespace.Fence, e audit.Entry) error {
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("claim trigger: %w", err)
+	}
+
+	if err := checkFenceNamespace(c.Namespace, fence); err != nil {
+		return err
+	}
+
+	return checkEntry(e, c.Namespace)
+}
+
+// ApplyClaim takes the slot of c in tx. It reads the row, applies
+// trigger.CheckClaim to it, and moves the next slot from the value that it read
+// to the slot after c.Slot. It returns the stable ID of the unit of the trigger,
+// for the audit entry. It returns trigger.ErrNotFound for an unknown trigger, the
+// errors of trigger.CheckClaim, and trigger.ErrNotDue when the move changed no
+// row because the slot moved since the read.
+func ApplyClaim(ctx context.Context, tx Tx, c trigger.Claim) (string, error) {
+	row, found, err := tx.Find(ctx, c.Namespace, c.Trigger)
+	if err != nil {
+		return "", err
+	}
+
+	if !found {
+		return "", trigger.ErrNotFound
+	}
+
+	// A row that fails its checks is not claimed: Trigger fails closed, so a
+	// row of another version or a restore never starts a plan at a rate that
+	// the rules refuse.
+	t, err := Trigger(row)
+	if err != nil {
+		return "", fmt.Errorf("claim trigger: %w", err)
+	}
+
+	clock, err := tx.Now(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	next, err := trigger.CheckClaim(c, t, NextSlot(row), clock)
+	if err != nil {
+		return "", fmt.Errorf("claim trigger: %w", err)
+	}
+
+	moved, err := tx.MoveNextSlot(ctx, c.Namespace, c.Trigger, row.NextSlotMs, toMs(next))
+	if err != nil {
+		return "", err
+	}
+
+	if !moved {
+		return "", trigger.ErrNotDue
+	}
+
+	return row.UnitID, nil
 }
 
 // ApplyDelete removes the trigger id of ns in tx. It returns the stable ID of

@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/triggerstore"
+	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
 // sqliteTriggerBackupTables holds the backup columns of the trigger table, in
@@ -31,21 +33,30 @@ func sqliteTriggerBackupTables() []sqliteBackupTable {
 				"last_saver_id",
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
+				"next_slot_ms",
 			},
 		},
 	}
 }
 
 // checkStagedTriggers checks each trigger row of a staged backup with the rules
-// of a stored trigger. A row that fails makes the backup corrupt, so a restore
-// never brings in a trigger that the server would not serve. It returns
-// backup.ErrCorrupt.
+// of a stored trigger and of its next slot, against the clock of the store. A
+// row that fails makes the backup corrupt, so a restore never brings in a
+// trigger that the server would not serve. It returns backup.ErrCorrupt.
 //
 // Defense in depth: the store checks a row again when it reads it. This check
 // stays so that a bad row fails the restore and does not wait for a reader.
 func checkStagedTriggers(ctx context.Context, conn *sql.DB) error {
+	nowMs, err := storeNow(ctx, db.New(conn))
+	if err != nil {
+		return err
+	}
+
+	now := time.UnixMilli(nowMs).UTC()
+
 	const query = `SELECT n.name, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+t.next_slot_ms
 FROM triggers AS t LEFT JOIN namespaces AS n ON n.id = t.namespace_id`
 
 	rows, err := conn.QueryContext(ctx, query)
@@ -63,7 +74,7 @@ FROM triggers AS t LEFT JOIN namespaces AS n ON n.id = t.namespace_id`
 			return scanErr
 		}
 
-		if _, trErr := triggerstore.Trigger(row); trErr != nil {
+		if trErr := triggerstore.CheckStaged(row, now); trErr != nil {
 			return fmt.Errorf("staged trigger %q is not valid: %w: %w", row.ID, trErr, backup.ErrCorrupt)
 		}
 	}
@@ -90,7 +101,7 @@ func scanStagedTrigger(rows *sql.Rows) (triggerstore.Row, error) {
 	scanErr := rows.Scan(
 		&namespace, &row.ID, &row.UnitTool, &row.UnitID, &row.Kind, &row.Preset, &row.Cron,
 		&row.SourceNamespace, &row.SourceTool, &row.SourceUnitID, &row.Enabled, &row.LastSaverSubject,
-		&row.LastSaverID, &row.CreatedAtMs, &row.UpdatedAtMs,
+		&row.LastSaverID, &row.CreatedAtMs, &row.UpdatedAtMs, &row.NextSlotMs,
 	)
 	if scanErr != nil {
 		return none, fmt.Errorf("read staged triggers: %w", backup.ErrExportRead)

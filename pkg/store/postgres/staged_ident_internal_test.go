@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 )
@@ -18,6 +19,13 @@ var errNoQuery = errors.New("no query may run")
 // values it returns are never read.
 type failQuerier struct {
 	t *testing.T
+}
+
+func (f failQuerier) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	f.t.Helper()
+	f.t.Fatalf("a query ran, want no query")
+
+	return pgconn.CommandTag{}, errNoQuery
 }
 
 func (f failQuerier) QueryRow(context.Context, string, ...any) pgx.Row {
