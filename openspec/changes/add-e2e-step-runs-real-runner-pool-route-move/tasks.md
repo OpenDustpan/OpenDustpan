@@ -1,10 +1,10 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the implementer's notes (the pull request body) before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing route tests for list, read, create, change, delete, token list, create and revoke, drain and retire on the new paths Check: TestPoolRoutes_NewPaths fails on main
+- [ ] 1.1 Add failing route tests for list, read, create, change, delete, token list, create and revoke, drain and retire on the new paths, with a personal token of a principal that holds namespace:manage-runners Check: TestPoolRoutes_NewPaths fails on main
 - [ ] 1.2 Add failing test that old pool paths answer 404 Check: TestPoolRoutes_OldPathsAreUnknown fails on main
 - [ ] 1.3 Add failing tests that each mutation stores its audit entry in the same transaction Check: TestPoolRoutes_AuditEntriesStoredInTransaction fails on main
 - [ ] 1.4 Add failing tests for 401 and 403 on each route Check: TestPoolRoutes_AuthRefusals fails on main
@@ -12,8 +12,8 @@
 ## 2. Build
 
 - [ ] 2.1 Move the adapter to the new prefix with the same actions Check: `go test ./pkg/runner/... ./internal/api/...` passes
-- [ ] 2.2 Write the audit entries of ADR 138 in each change transaction Check: `go test ./...` shows the audit events
-- [ ] 2.3 Update ServedRoutes in e2e/coverage.go and the API description for the moved routes Check: `make e2e` route coverage check lists the new paths
+- [ ] 2.2 Write the audit entries in each change transaction Check: `go test ./...` shows the audit events
+- [ ] 2.3 Update ServedRoutes in e2e/coverage.go: replace the old pool route GET /api/runners/{namespace}/pools with GET /api/dustpan/v1/namespaces/{namespace}/runner-pools, called with a personal token that holds namespace:read-runners Check: `make e2e` route coverage check lists the new paths
 
 ## 3. Side effects (computed from main)
 

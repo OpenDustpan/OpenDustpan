@@ -25,7 +25,7 @@
 
 - [ ] 4.1 Confirm the wiring with a server start with and without a gate service. Check: Start log shows the line once without a gate service and not with one
 - [ ] 4.2 Confirm no route or authorization change is needed. Check: Route table unchanged; the route test passes
-- [ ] 4.3 Record why no e2e step applies. Check: No user-visible route or credential kind to drive with the real CLI
+- [ ] 4.3 Record the e2e step: BLOCKED by the missing route, because the pack names no existing route and credential kind that reads deleted-unit facts alone. Check: BLOCKED by a route and credential kind for the fact read; TestDeletedUnitFactsSnapshot and the storetest gate suite cover it
 - [ ] 4.4 Record why no docs page applies. Check: Not applicable: only an operational log line
 - [ ] 4.5 Run the operator start-up check. Check: Operator reads the log line with no new command
 - [ ] 4.6 Run format, vet, lint and the full store test suite. Check: `make check` with zero findings

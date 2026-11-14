@@ -8,7 +8,7 @@ Local run-all uses the current TFE-compatible API with no server change. The fix
 
 ## Structure
 
-No new type and no new store. Isolation uses the current per-workspace lock and state versions in pkg/workspace through its current constructor.
+Files: `e2e/terragrunt_local_test.go` (NEW) with its fixture in `e2e/testdata/terragrunt-local/` (NEW); `docs/guides/terragrunt.md` (NEW) linked from `docs/guides/quickstart.md`; `docs/explanation/profiles-and-blueprints.md` (NEW) linked from `docs/guides/terragrunt.md` and `docs/guides/publish-a-blueprint.md`. No new type and no new store. Isolation uses the current per-workspace lock and state versions in pkg/workspace through its current constructor.
 
 ## Risks
 

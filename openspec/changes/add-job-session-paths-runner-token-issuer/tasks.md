@@ -17,7 +17,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Wire the issuer into job.Claimer Claim, Renew and Finish. The route /tofu/state/{namespace}/{workspace} (OpenTofu HTTP backend) accepts the credential kind job-token (identity.CredentialJobToken) for its own unit. Check: go test ./internal/servertest/... -run TestJobTokenWiring
-- [ ] 4.2 Add an e2e step that claims a phase through /runner/v1 and calls /tofu/state/{namespace}/{workspace} with the credential kind job-token on its unit and on another unit. BLOCKED for the hand-out to a launcher by the later credentials route; the step takes the token from the test server. Check: make e2e
+- [ ] 4.1 Wire the issuer into job.Claimer Claim, Renew and Finish. BLOCKED by the credentials session route of a later part for the end-to-end hand-out of the token. Until then, the server test claims a phase through the existing runner protocol under /runner/v1 and calls the existing route /tofu/state/{namespace}/{workspace} with the token (credential kind job-token, identity.CredentialJobToken), taking the token from the test server. Check: go test ./internal/servertest/... -run TestJobTokenWiring
+- [ ] 4.2 BLOCKED by the credentials session route of a later part: add an e2e step that claims a phase through /runner/v1 and calls the existing route /tofu/state/{namespace}/{workspace} with the job token (credential kind job-token, identity.CredentialJobToken) on its unit and on another unit. Check: make e2e
 - [ ] 4.3 Update docs/reference/runner-api.md and run the usability check. Check: make docs-lint
 - [ ] 4.4 Pass the full check. Check: make check with zero findings

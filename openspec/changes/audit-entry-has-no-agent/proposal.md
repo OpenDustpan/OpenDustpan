@@ -1,3 +1,7 @@
+---
+version: 2
+---
+
 Issue: #1317.
 
 ## Why
@@ -35,7 +39,11 @@ Out of scope:
 - Agent principals and delegations of RFC 121
 - Dusty runs and tools
 - MCP endpoint and stdio proxy
-- Definition of the agent/1 block format beyond ADR 126 decision 10 and ADR 128 decision 17
+- The agent/1 block itself (the fields of the entry, the hash encoding, the store columns, the API field and job.AgentRef): the change `audit-agent-block` lands it first. Definition of the agent/1 block format beyond ADR 126 decision 10 and ADR 128 decision 17
+
+Depends on:
+
+- `audit-agent-block` (the agent/1 block of the entry, its hash, columns, API field and job.AgentRef; this change only writes the job entries into it)
 
 ## Usability
 
