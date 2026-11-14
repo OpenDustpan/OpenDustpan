@@ -7,7 +7,7 @@
 
 - [ ] 1.1 First boot stores the settings. Check: `go test ./pkg/store/... -run TestRecoverySettingsFirstBoot -count=1` fails on main (NEW test, both dialects).
 - [ ] 1.2 A valid request makes one temporary administrator and an encrypted answer. Check: `go test ./internal/recovery/ -run TestSignedRequestMakesOneTempAdmin -count=1` fails on main (NEW test).
-- [ ] 1.3 Thirteen refusal reasons give one answer and thirteen audit reasons. Check: `go test ./internal/api/server/ -run TestRecoveryRefusalsLookTheSame -count=1` fails on main (NEW test).
+- [ ] 1.3 Fourteen refusal reasons give one answer and fourteen audit reasons. Check: `go test ./internal/api/server/ -run TestRecoveryRefusalsLookTheSame -count=1` fails on main (NEW test).
 - [ ] 1.4 Replay, two at once on two instances, and a crash before the commit. Check: `go test ./pkg/store/... -run TestRecoveryNonceOnce -count=1` fails on main (NEW test).
 - [ ] 1.5 The time window and the skew. Check: `go test ./internal/recovery/ -run TestRequestWindow -count=1` fails on main (NEW test).
 - [ ] 1.6 The shared rate limit with the /64 group. Check: `go test ./pkg/store/... -run TestRecoveryRateLimitShared -count=1` fails on main (NEW test).
@@ -21,7 +21,7 @@
 - [ ] 1.14 A key file path that leaves the root and a key file larger than 16 KiB are refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryKeyFileContained -count=1` fails on main (NEW test).
 - [ ] 1.15 A private key file that group or others can read is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoverySignPrivateKeyMode -count=1` fails on main (NEW test).
 - [ ] 1.16 A `person` member outside the allowlist is refused. Check: `go test ./internal/recovery/ -run TestRecoveryPersonAllowlist -count=1` fails on main (NEW test).
-- [ ] 1.17 A hostile forwarded header has no effect on the source, and a malformed address is refused. Check: `go test ./internal/recovery/ ./internal/api/server/ -run TestRecoverySourceAddress -count=1` fails on main (NEW test).
+- [ ] 1.17 A hostile forwarded header has no effect on the source, and a malformed address is refused with the reason `address`. Check: `go test ./internal/recovery/ ./internal/api/server/ -run TestRecoverySourceAddress -count=1` fails on main (NEW test).
 - [ ] 1.18 A request in maintenance mode gets the one answer, and the audit reason is `maintenance`. Check: `go test ./internal/api/server/ -run TestRecoveryMaintenanceRefused -count=1` fails on main (NEW test).
 - [ ] 1.19 A request whose `notAfter` is more than 10 minutes after `notBefore` is refused. Check: `go test ./internal/recovery/ -run TestRecoveryRequestWindowTenMinutes -count=1` fails on main (NEW test).
 - [ ] 1.20 A malformed or short nonce is refused. Check: `go test ./internal/recovery/ -run TestRecoveryNonceShape -count=1` fails on main (NEW test).
@@ -33,8 +33,8 @@
 - [ ] 1.26 A request with a wrong audience is refused at the service layer. Check: `go test ./internal/recovery/ -run TestRecoveryAudience -count=1` fails on main (NEW test).
 - [ ] 1.27 A `version` member other than 1 is refused. Check: `go test ./internal/recovery/ -run TestRecoveryVersion -count=1` fails on main (NEW test).
 - [ ] 1.28 A request whose installation name matches but whose audience does not is refused. Check: `go test ./internal/recovery/ -run TestRecoveryInstallationNameAndAudience -count=1` fails on main (NEW test).
-- [ ] 1.29 Every file that the CLI reads or writes in the flow (`request.json`, `request.json.sig`, `request.key` and the key files) refuses a path that leaves the root. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFlowFileContained -count=1` fails on main (NEW test).
-- [ ] 1.30 Every such file larger than 16 KiB is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFlowFileSize -count=1` fails on main (NEW test).
+- [ ] 1.29 Every file that the CLI reads or writes in the flow (`request.json`, `request.json.sig`, `request.key`, the private key file of `sign`, the public key file of `verify` and the public key file of the first boot) refuses a path that leaves the root. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFlowFileContained -count=1` fails on main (NEW test).
+- [ ] 1.30 Each of `request.json`, `request.json.sig`, `request.key`, the private key file of `sign`, the public key file of `verify` and the public key file of the first boot, larger than 16 KiB, is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFlowFileSize -count=1` fails on main (NEW test).
 - [ ] 1.31 `request.key` with mode 0644 is refused when the CLI reads it. Check: `go test ./cmd/opendustpan/ -run TestRecoveryRequestKeyMode -count=1` fails on main (NEW test).
 - [ ] 1.32 A first-boot key file that holds an `ssh-rsa` key is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFirstBootKeyType -count=1` fails on main (NEW test). `serve` does not start and the store holds no mode and no key.
 - [ ] 1.33 A first-boot key file that holds two `ssh-ed25519` keys is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFirstBootKeyTwoKeys -count=1` fails on main (NEW test). `serve` does not start and the store holds no mode and no key.

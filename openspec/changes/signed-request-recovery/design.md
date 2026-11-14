@@ -108,11 +108,12 @@ at the expiry, and a review after use.
    `recovery.refused` and one fixed text. The audit entry
    `recovery.refused` holds the reason code (`shape`, `canonical`, `time`,
    `mode`, `installation`, `unknown-key`, `signature`, `nonce-used`,
-   `rate-limit`, `recovery-active`, `maintenance`, `answer`, `store`). A
-   malformed `answerKey` and a failed seal of the answer both refuse with the
-   reason `answer`. A request during maintenance mode refuses with the reason
-   `maintenance`, and the refusal fails closed. The server log line holds the
-   same reason code and no request text.
+   `rate-limit`, `recovery-active`, `maintenance`, `answer`, `store`,
+   `address`). A malformed `answerKey` and a failed seal of the answer both
+   refuse with the reason `answer`. A malformed client address refuses with
+   the reason `address`. A request during maintenance mode refuses with the
+   reason `maintenance`, and the refusal fails closed. The server log line
+   holds the same reason code and no request text.
 9. **The answer.** On success the server encrypts `{"person", "token",
    "expires"}` with HPKE (RFC 9180, base mode, DHKEM(X25519, HKDF-SHA256),
    HKDF-SHA256, AES-256-GCM, `crypto/hpke` of the standard library) to
@@ -164,14 +165,14 @@ at the expiry, and a review after use.
     flag `--installation` of `request` names the installation name (ADR 248).
 
     The containment rule and the 16 KiB size limit apply to every file that
-    the CLI reads or writes in this flow: `request.json`, `request.json.sig`
-    and `request.key`, the private key file of `sign` and the public key file
-    of the first boot (decision 2). Each file opens through `os.Root` or a
-    clean-path containment check, with a size limit of 16 KiB. The reader
-    refuses a path that leaves the root and a file larger than 16 KiB. The
-    private key files are refused when group or others can read them: the
-    private key file of `sign`, and `request.key`, which the CLI writes with
-    mode 0600.
+    the CLI reads or writes in this flow: `request.json`, `request.json.sig`,
+    `request.key`, the private key file of `sign`, the public key file of
+    `verify` and the public key file of the first boot (decision 2). Each file
+    opens through `os.Root` or a clean-path containment check, with a size
+    limit of 16 KiB. The reader refuses a path that leaves the root and a
+    file larger than 16 KiB. The private key files are refused when group or
+    others can read them: the private key file of `sign`, and `request.key`,
+    which the CLI writes with mode 0600.
 
 ## Structure
 
@@ -205,10 +206,10 @@ handler import `internal/recovery`.
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| HTTP handler | 8 KiB limit, content type, envelope shape, base64url, canonical form, members and the `person` allowlist, the `answerKey` shape (an X25519 public key of exactly 32 bytes), the `version` member, times, the stored mode check before any other work, the maintenance-mode check and the client-address parse. One answer. | Send an oversize body, a body with a duplicate member, a `person` outside the allowlist, an `answerKey` of 31 bytes and of 33 bytes and one that is not base64, a `version` other than 1, a non-canonical body, a wrong content type, a time past the skew, a malformed client address, and a request in maintenance mode straight to the handler. Expect `recovery.refused` and no service call. |
+| HTTP handler | 8 KiB limit, content type, envelope shape, base64url, canonical form, members and the `person` allowlist, the `answerKey` shape (an X25519 public key of exactly 32 bytes), the `version` member, times, the stored mode check before any other work, the maintenance-mode check and the client-address parse. One answer. | Send an oversize body, a body with a duplicate member, a `person` outside the allowlist, an `answerKey` of 31 bytes and of 33 bytes and one that is not base64, a `version` other than 1, a non-canonical body, a wrong content type, a time past the skew, and a request in maintenance mode straight to the handler. Expect `recovery.refused` and no service call; a malformed client address gives a refusal with the reason `address`. |
 | Service (`internal/recovery`) | `parseSignedRequest` checks the shape, the times, the installation name, the audience and the signature against the bundle key again, and it counts the attempt and refuses before the signature check. | Call the service with a request for another installation, a request with a wrong audience, a key in the signature that is not in the bundle, a key type other than `ssh-ed25519`, and a canonical body with a bad signature. Expect a refusal and no store write. |
 | Store | The stored mode check (a second layer), the attempt counter (a second layer), the live-recovery check and the unique nonce insert, in the transaction of the temporary administrator. | Insert the same nonce twice, run two recoveries at once, and run a recovery with the stored mode `bootstrap`, straight against the store. Expect one success at most. |
-| Key file | Every file that the server or the CLI reads or writes in the flow (`request.json`, `request.json.sig`, `request.key` and the key files) opens through `os.Root` or a clean-path containment check, with a 16 KiB size limit; the private key files are refused when group or others can read it. | Give a path that leaves the root, a file larger than 16 KiB and a `request.key` with mode 0644, straight to each reader. Expect a refusal. |
+| Key file | Every file that the server or the CLI reads or writes in the flow (`request.json`, `request.json.sig`, `request.key`, the private key file of `sign`, the public key file of `verify` and the public key file of the first boot) opens through `os.Root` or a clean-path containment check, with a 16 KiB size limit; the private key files are refused when group or others can read it. | Give a path that leaves the root, a file larger than 16 KiB and a `request.key` with mode 0644, straight to each reader. Expect a refusal. |
 | First boot (`serve`) | The content of `--recovery-public-key-file` must parse as exactly one `ssh-ed25519` public key, with the same parse and key type rule as the add route. On a malformed or wrong-type file, `serve` fails closed: it refuses to start, stores nothing and writes no recovery settings, and logs one error that names the file and the reason. | Start `serve` with a key file that holds an `ssh-rsa` key, two `ssh-ed25519` keys, text that does not parse and no content. Expect no start, no stored mode and no stored key. |
 | Answer | HPKE to the key of the request, sealed in the transaction. A failed seal fails closed. | Decrypt with another key, and force a seal failure. Expect a failure, a refusal with reason `answer`, and no temporary administrator. |
 | Authorizer | Each later request checks the stored grant of the temporary administrator. The two recovery steps read the stored record. | Call a third fresh-step route as a temporary administrator. Expect `mfa.fresh-step-required`. |
@@ -219,7 +220,7 @@ handler import `internal/recovery`.
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
 | security | 1 temporary administrator for each valid nonce. 0 for a replay | temporary administrators | the route, 2 instances on one database |
-| security | 1 answer for 13 refusal reasons: same status, body and length | answers | the route |
+| security | 1 answer for 14 refusal reasons: same status, body and length | answers | the route |
 | reliability | 0 temporary administrators and 0 nonces after a crash before the commit | rows | the route, one restart |
 
 ## Threat model
@@ -245,14 +246,14 @@ flowchart LR
 | Network | S | A caller forges a request. | encode or contain | The service verifies with the bundle key that `keyId` names, never with the key in the signature, and accepts only `ssh-ed25519`. | A signature with a key that is not in the bundle, or with a key type other than `ssh-ed25519`, gives a refusal. |
 | Network | S | A caller forges a request. | limit | 8 KiB, 5 attempts in 15 minutes for each source, 30 for the installation, in the database. The server counts the attempt and refuses before the signature check. | The sixth attempt from one /64 group is refused on a second instance, and a refused request runs no signature check. |
 | Network | S | A caller forges a request. | authorize at point of use | The handler checks the stored mode before any other work, and the store checks it again in the transaction. | A valid request with the stored mode `bootstrap` gives a refusal. |
-| Network | S | A caller forges a request. | boundary check | The server takes the client address from the trusted proxy when one is trusted, and otherwise the address of the TCP peer, and parses it with `net/netip`; a malformed address refuses. | A hostile forwarding header from a peer that is not trusted gives the client address of the peer, and a malformed address gives a refusal. |
+| Network | S | A caller forges a request. | boundary check | The server takes the client address from the trusted proxy when one is trusted, and otherwise the address of the TCP peer, and parses it with `net/netip`; a malformed address refuses. | A hostile forwarding header from a peer that is not trusted gives the client address of the peer, and a malformed address gives `recovery.refused` with reason `address`. |
 | Network | S | A caller forges a request. | fail closed | An unknown member, value or store error refuses, with an audit entry. | A store fault gives `recovery.refused` with reason `store`. |
 | Network | T | A caller replays a used request. | boundary check | The handler refuses a time outside the window, including `notAfter` more than 10 minutes after `notBefore`. | A request 3 minutes past `notAfter`, or with `notAfter` more than 10 minutes after `notBefore`, gives a refusal. |
 | Network | T | A caller replays a used request. | encode or contain | Placeholders only. The nonce is a unique key and its shape is checked. | A nonce with quote characters, a malformed nonce or a short nonce gives one row or a refusal. |
 | Network | T | A caller replays a used request. | limit | The nonce stays until `notAfter` plus 1 hour. | The purge keeps a row inside the window. |
 | Network | T | A caller replays a used request. | authorize at point of use | The nonce insert is in the transaction of the temporary administrator. | Two submits at once give one temporary administrator. |
 | Network | T | A caller replays a used request. | fail closed | A failed insert fails the transaction. | No record exists after a duplicate nonce. |
-| Network | I | A caller learns why a request failed. | boundary check | One refusal writer with no reason in the answer. | 13 refusal reasons give the same status, body and length. |
+| Network | I | A caller learns why a request failed. | boundary check | One refusal writer with no reason in the answer. | 14 refusal reasons give the same status, body and length. |
 | Network | I | A copy of a signed request gives the token. | encode or contain | HPKE to `answerKey`. | Decrypt with another key: failure. |
 | Network | I | A copy of a signed request gives the token. | fail closed | The seal of the answer is in the transaction of decision 7; a failed seal rolls back. | A forced seal failure gives `recovery.refused` with reason `answer` and no temporary administrator. |
 | Server | E | The temporary administrator does more than recovery steps with no fresh step. | authorize at point of use | Only the two routes read the predicate. | A token creation as a temporary administrator gives `mfa.fresh-step-required`. |

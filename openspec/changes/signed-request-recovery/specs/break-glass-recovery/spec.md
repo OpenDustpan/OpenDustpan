@@ -60,8 +60,8 @@ When a signed-request recovery succeeds, the server SHALL write one audit entry 
 
 When the server refuses a recovery request for any reason, it SHALL answer `403` with the code `recovery.refused` and the same body, and write one audit entry with the reason.
 
-#### Scenario: The thirteen reasons look the same
-- **WHEN** requests fail for the reasons `shape`, `canonical`, `time`, `mode`, `installation`, `unknown-key`, `signature`, `nonce-used`, `rate-limit`, `recovery-active`, `maintenance`, `answer` and `store`
+#### Scenario: The fourteen reasons look the same
+- **WHEN** requests fail for the reasons `shape`, `canonical`, `time`, `mode`, `installation`, `unknown-key`, `signature`, `nonce-used`, `rate-limit`, `recovery-active`, `maintenance`, `answer`, `store` and `address`
 - **THEN** each answer has the same status, the same body and the same length
 - **AND** each audit entry `recovery.refused` holds its reason
 
@@ -202,7 +202,7 @@ When `opendustpan recovery sign` gets a key file that no passphrase encrypts, th
 
 ### Requirement: key-files-are-contained
 
-When the server or the CLI reads or writes a file of the flow, it SHALL open the file through a root or a clean-path containment check, SHALL limit the read to 16 KiB, and SHALL refuse a path that leaves the root or a file larger than 16 KiB. The rule applies to `request.json`, `request.json.sig`, `request.key` and the key files. The CLI SHALL write `request.key` with mode 0600, and SHALL refuse a private key file that group or others can read.
+When the server or the CLI reads or writes a file of the flow, it SHALL open the file through a root or a clean-path containment check, SHALL limit the read to 16 KiB, and SHALL refuse a path that leaves the root or a file larger than 16 KiB. The rule applies to `request.json`, `request.json.sig`, `request.key`, the private key file of `sign`, the public key file of `verify` and the public key file of the first boot.
 
 #### Scenario: A path that leaves the root
 - **WHEN** a file path leaves the root
@@ -211,6 +211,10 @@ When the server or the CLI reads or writes a file of the flow, it SHALL open the
 #### Scenario: A file larger than 16 KiB
 - **WHEN** a file is larger than 16 KiB
 - **THEN** the reader refuses it
+
+### Requirement: private-key-file-modes
+
+The CLI SHALL write `request.key` with mode 0600, and SHALL refuse a private key file that group or others can read.
 
 #### Scenario: A private key file that group or others can read
 - **WHEN** `request.key` or the private key file of `sign` has mode 0644
