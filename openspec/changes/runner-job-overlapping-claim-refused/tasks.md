@@ -21,7 +21,7 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Wire the refusal into the server and declare the authorization actions of the routes. Check: The route test finds an action and an object for each route
-- [ ] 4.2 Add the e2e step with real OpenTofu and a fake provider. Check: make e2e shows two claim records, job C blocked and no provider call from job C
+- [ ] 4.2 Add the e2e step with real OpenTofu and a fake provider. Check: BLOCKED by the register route and claim record of two-disjoint-claims; after that, make e2e shows two claim records, job C blocked and no provider call from job C
 - [ ] 4.3 Write the docs page for refused claims and the blocked status. Check: make docs-lint passes and each command on the page runs
 - [ ] 4.4 Run the usability check of the refusal path. Check: A developer finishes the path from the docs page alone, and each error names one command
 - [ ] 4.5 Run make check. Check: make check reports zero findings

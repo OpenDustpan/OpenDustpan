@@ -55,6 +55,14 @@ Where the path still costs the person time or surprises them:
 - A refused merge must name the blocking instance or base and the one command that fixes it.
 - A strict-case wait must state the case and that the run holds the whole-unit lock.
 
+## What main already does
+
+Each fact names its file, line and function on main. The change specifies only the difference.
+
+- The TFE-compatible API serves state versions through the route ANY /api/v2/state-versions. (`route table or API description`)
+- The TFE-compatible API serves state uploads through the route ANY /api/v2/state-uploads/{}/{}. (`route table or API description`)
+- The TFE-compatible API serves the current state version of a workspace through ANY /api/v2/workspaces/{}/current-state-version. (`route table or API description`)
+
 ## ADR check
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
@@ -102,7 +110,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
    - Options: Reuse the existing workspace lock lease for whole-unit waits with no new duration; Set a separate bounded wait with an explicit timeout and a blocked status for the waiter.
    - Recommended: Reuse the existing workspace lock lease for whole-unit waits with no new duration. Reason: ADR 302 decision 6 leaves retry interval and timeout of the local wrapper to the RFC, and the pack states no duration for a strict-case wait.
 
-Not spec-ready: a code check fails: no "main_facts": list what main already does (file:line and the function) from the pack; a code check fails: task "Add e2e step with real OpenTofu using a job token credential and a fak" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; the change conflicts with ADR 26: an RFC comes first; the change conflicts with ADR 302: an RFC comes first.
+Not spec-ready: a code check fails: main_facts[0]: "where" is not file:line (func Name); a code check fails: main_facts[1]: "where" is not file:line (func Name); a code check fails: main_facts[2]: "where" is not file:line (func Name); the change conflicts with ADR 26: an RFC comes first; the change conflicts with ADR 302: an RFC comes first.
 
 Questions considered and answered:
 

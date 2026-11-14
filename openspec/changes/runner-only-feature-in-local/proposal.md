@@ -31,7 +31,7 @@ Evidence for the claims above:
 - The local wrapper builds the launcher mask set from the profile open and masks child output on display and in upload bytes.
 - The wrapper drops empty secret values, refuses the start on a failed open or failed set build, and proceeds on an empty secret list.
 - The wrapper flushes the masker on child exit and on a signal and never writes credential material to display or upload bytes.
-- This change adds no route. E2e proves masked display and masked upload bytes with no plain text.
+- This change adds no route, no token and no authorization action. E2e proves masked display and masked upload bytes with no plain text.
 
 Out of scope:
 
@@ -78,14 +78,22 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. How does a local wrapper run authenticate its server calls during the step, who is the principal, and which actions does it hold? Decides: owner.
-   - Options: Mint a claim-bound launcher token for the local step with one principal for each job; Reuse the developer access token for the local step with no job principal.
-   - Recommended: Mint a claim-bound launcher token for the local step with one principal for each job Reason: ADR 302 decision 6 leaves one principal for each job and the retry and timeout to the RFC. The pack proves no local claim route and no local token mint.
-2. Does the C1 inventory name a runner-only feature beyond secret masking that this change must also port? Decides: PM.
-   - Options: Secret masking only in this change; Secret masking plus each non-exempt C1 entry in this change.
-   - Recommended: Secret masking only in this change Reason: The pack names no C1 inventory, so no other entry is proven.
+none
 
-Not spec-ready: a code check fails: resolution R5.2 says "answered" but its note says nothing was added: add it, or make it an open question.
+Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
+
+1. How does a local wrapper run authenticate its server calls during the step, who is the principal, and which actions does it hold?
+   - Options: Mint a claim-bound launcher token for the local step with one principal for each job; Reuse the developer access token for the local step with no job principal.
+   - Provisional decision (owner review 14 Nov): Mint a claim-bound launcher token for the local step with one principal for each job
+   - Reason: ADR 302 decision 6 leaves one principal for each job and the retry and timeout to the RFC. The pack proves no local claim route and no local token mint. Benchmark: AWS STS: short-lived credentials bound to one session and the least privilege of the action.
+   - Persona impact: A developer waits for the owner decision; no extra step once decided. Escape hatch: Masking works with the existing developer credential until the owner decides; runner runs are unchanged.
+   - Owner-tagged ADRs involved: ADR 302 (their words do not change).
+2. Does the C1 inventory name a runner-only feature beyond secret masking that this change must also port?
+   - Options: Secret masking only in this change; Secret masking plus each non-exempt C1 entry in this change.
+   - Provisional decision (owner review 14 Nov): Secret masking only in this change
+   - Reason: The pack names no C1 inventory, so no other entry is proven. Benchmark: Google: one reviewable change per concern, each with its own acceptance check.
+   - Persona impact: A developer gets masking now and other features later with no surprise. Escape hatch: Each later C1 entry ships in its own change.
+   - Owner-tagged ADRs involved: ADR 302 (their words do not change).
 
 Questions considered and answered:
 

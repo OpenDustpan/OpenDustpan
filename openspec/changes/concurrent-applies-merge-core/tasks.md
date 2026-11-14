@@ -19,14 +19,10 @@
 - [ ] 2.2 Merge uploads one resource instance at a time under fence with conflict refusal Check: `go test ./pkg/workspace/... -run TestMergeDisjoint -count=1` passes
 - [ ] 2.3 Enforce refuse rules, empty uploads, fail-closed behavior, and six strict whole-unit cases Check: `go test ./pkg/workspace/... -run TestStrictCase -count=1` passes
 
-## 3. Side effects (computed from main)
+## 3. Definition of done
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
-
-## 4. Definition of done
-
-- [ ] 4.1 Wire routes with authorization actions and fence check Check: Route test shows TFE state-version routes with authorization actions and fence check
-- [ ] 4.2 Add e2e step with real OpenTofu using a job token credential and a fake cloud provider log Check: E2E step shows two overlapping apply periods, final state with both changes, and two new state versions
-- [ ] 4.3 Write docs page for merge behavior and strict cases Check: Docs page ships in the same pull request
-- [ ] 4.4 Run usability check of developer path Check: Usability walk from docs page alone passes with exact errors
-- [ ] 4.5 Run full check suite Check: `make check` passes with zero findings
+- [ ] 3.1 Wire routes with authorization actions and fence check Check: Route test shows TFE state-version routes with authorization actions and fence check
+- [ ] 3.2 Add e2e step with real OpenTofu against the existing routes ANY /api/v2/state-versions and ANY /api/v2/state-uploads/{}/{}. BLOCKED by the owner answer on how a TFE-compatible request names its claim, so the credential kind is not yet fixed Check: E2E step shows two overlapping apply periods in a fake cloud provider log, final state with both changes, and two new state versions
+- [ ] 3.3 Write docs page for merge behavior and strict cases Check: Docs page ships in the same pull request
+- [ ] 3.4 Run usability check of developer path Check: Usability walk from docs page alone passes with exact errors
+- [ ] 3.5 Run full check suite Check: `make check` passes with zero findings

@@ -4,8 +4,8 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write a failing test that a data source claim waits for the running apply (NEW test TestStrictDataSourceWaits). Check: `go test ./internal/api/tfe -run TestStrictDataSourceWaits` fails on main; NEW test
-- [ ] 1.2 Write a failing test that the history names the case (NEW test TestStrictHistoryNamesCase). Check: `go test ./internal/api/tfe -run TestStrictHistoryNamesCase` fails on main; NEW test
+- [ ] 1.1 Write a failing test that a data source claim waits for the running apply (NEW test TestStrictDataSourceWaits). Check: NEW test: `go test ./internal/api/tfe -run TestStrictDataSourceWaits` fails on main
+- [ ] 1.2 Write a failing test that the history names the case (NEW test TestStrictHistoryNamesCase). Check: NEW test: `go test ./internal/api/tfe -run TestStrictHistoryNamesCase` fails on main
 
 ## 2. Implementation
 

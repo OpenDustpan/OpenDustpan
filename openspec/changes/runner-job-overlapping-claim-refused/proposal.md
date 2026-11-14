@@ -9,7 +9,7 @@ The user path this change must make work:
 1. **API.** Developer starts runner job C on the same workspace while job A applies. Job C registers its claim on the register route of the dependency item.
 2. **API.** Server refuses claim C with 409 that names blocking claim A, and moves job C to blocked. Developer reads the refusal with a job read.
 3. **Docs page.** Developer reads the guide for refused claims and blocked jobs.
-4. **E2e.** The e2e suite runs two runner jobs with real OpenTofu and a fake provider, and checks that the provider log has no call from job C.
+4. **E2e.** BLOCKED by the register route and the claim record of two-disjoint-claims: the e2e step cannot name its route and credential kind until that item ships. It then runs two runner jobs with real OpenTofu and a fake provider, with the job token of each runner phase, and checks that the provider log has no call from job C.
 
 Errors the person may hit, and the one command that helps:
 
@@ -59,7 +59,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - The claim gate e2e file exists and is the baseline for claim behavior. The pack gives no line or function for it. (`e2e/claim_gate_test.go:1 (func none named in the pack)`)
-- The runner protocol package exists. The pack gives no line or function for it. (`pkg/runner:1 (func none named in the pack)`)
+- The runner protocol HTTP adapter exists. The pack gives no line or function for it. (`internal/api/runnerapi:1 (func none named in the pack)`)
 
 ## ADR check
 
@@ -91,14 +91,14 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
    - Options: A replacement always counts as an overlap of its instance address; A closure test can prove some replacements disjoint.
    - Recommended: A replacement always counts as an overlap of its instance address Reason: ADR 302 decision 6 leaves the replacement rule and the closure test to the RFC, so this change cannot decide it. This change uses the safe option only as a placeholder until the RFC is accepted.
 
-Not spec-ready: a code check fails: main_facts[1]: `pkg/runner` does not exist on main; a code check fails: task "Add the e2e step with real OpenTofu and a fake provider." runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part>".
+Not spec-ready: a code check fails: main_facts[1]: `internal/api/runnerapi` does not exist on main.
 
 Questions considered and answered:
 
 - What happens when a runner job registers a claim that overlaps a running claim? ADR 302 decision 2: the server refuses the overlap before anything runs and the runner job ends as blocked.
 - Does a refused runner job retry on its own? ADR 302 decision 2 gives the retry only to the local wrapper. A refused runner job stays blocked; the person starts a new job.
 - Does this change cover Pulumi stacks? ADR 302 decision 3: OpenTofu is first, so this change covers workspaces only.
-- What happens to a claim that meets a case that keeps the whole-unit lock? ADR 302 decision 2: work that the server cannot prove disjoint takes turns. The item strict-case-takes-turns specifies those cases. This change adds no rule for them and refuses only claims that name the same resource instance.
+- What happens to a claim that meets a case that keeps the whole-unit lock? ADR 302 decision 2: work that the server cannot prove disjoint takes turns. The item strict-case-takes-turns specifies those cases. This change refuses only claims that name the same resource instance.
 - What gates the code of this change? ADR 302 decision 6: no code lands before the owner accepts the RFC as an ADR. The design states this gate.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

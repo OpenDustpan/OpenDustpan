@@ -55,7 +55,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - The roadmap step names the strict data source case. (`docs/roadmap.md:648`)
-- Source filter code is a separate package. (`pkg/source/source.go:1 (func Filter)`)
+- Source filter code lives in its own package. (`pkg/source`)
 
 ## ADR check
 
@@ -89,7 +89,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
    - Options: Wait for the RFC ADR and use its fields; Define local fields now.
    - Recommended: Wait for the RFC ADR and use its fields. Reason: ADR 302 decision 6 leaves claim ID, parent pointer and fence to the RFC.
 
-Not spec-ready: a code check fails: path `pkg/source/source.go` (.main_facts[1].where) does not exist in the checkout; use an existing path, or name it as new ("add the new file pkg/source/source.go"); a code check fails: test `TestStrictDataSourceWaits` (.tasks[0].items[0].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: test `TestStrictHistoryNamesCase` (.tasks[0].items[1].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: and 1 more.
+Not spec-ready: a code check fails: test `TestStrictDataSourceWaits` (.tasks[1].items[0].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: main_facts[1]: "where" is not file:line (func Name).
 
 Questions considered and answered:
 
