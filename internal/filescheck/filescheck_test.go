@@ -1,6 +1,7 @@
 package filescheck_test
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
@@ -389,10 +390,10 @@ func checkFilesCase(t *testing.T, script string, tt filesCase) {
 	if tt.wantExit != 0 && strings.Contains(string(output), "check-files: no file over") {
 		t.Errorf("Failed check reports success:\n%s", output)
 	}
-	if strings.ContainsRune(string(output), '\r') {
+	if bytes.ContainsRune(output, '\r') {
 		t.Errorf("Output contains a carriage return: %q", output)
 	}
-	if strings.Contains(string(output), "\ninjected") {
+	if bytes.Contains(output, []byte("\ninjected")) {
 		t.Errorf("Output contains an injected line: %q", output)
 	}
 }
