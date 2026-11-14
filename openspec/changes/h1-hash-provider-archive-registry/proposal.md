@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #1228, #1291.
@@ -19,7 +19,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Unpack exceeds size, count, ratio, or path limits. | The publish failed the archive check with code registry.bad-archive and the failed limit. Fix the archive and publish again, then run tofu init to confirm the install path. | `tofu init` |
+| Unpack exceeds size, count, ratio, or path limits. | The publish failed the archive check with the NEW code registry.bad-archive and the failed limit. Fix the archive and publish again, then run tofu init to confirm the install path. | `tofu init` |
 | Stated protocols differ from the manifest. | The publish failed with code registry.invalid and the stated value and the manifest value. Rebuild the publish request from the manifest and publish again, then run tofu init to confirm the install path. | `tofu init` |
 | Republish of the same version with different H1. | The republish changed the archive with code registry.version-exists and the version. Publish a new version with the changed archive, then run tofu init to confirm the install path. | `tofu init` |
 | Install requests an unknown namespace slug. | The registry path uses the namespace slug with code registry.not-found and the requested slug. List releases to copy the slug, then run tofu init to confirm the install path. | `tofu init` |
@@ -75,7 +75,7 @@ none
 Questions considered and answered:
 
 - Use one unpack routine for the h1 hash and the protocol manifest or two routines? The pack lists issue 1291 that the same bounded unpack serves both the h1 hash and the manifest read, so the spec uses one unpack routine for both.
-- Count the H1 field in SameContent or in a separate check? Issue 1228 states an H1 field in registry.Archive that SameContent counts, so the spec counts H1 in SameContent with a missing-H1 backfill rule.
+- Count the H1 field in SameContent or in a separate check? Issue 1228 states an H1 field in registry.Archive that SameContent counts, so the spec counts H1 in SameContent. No tag shipped a release without H1 and no installation holds one, so there is no backfill of an earlier shape (no data, no tag): every stored release gets H1 at publish.
 - Does an ADR answer the unpack limits or the slug derivation rule? The pack adrs list is empty and gives no ADR text, so no quoted decision line exists to answer the limit values, the slug rule, or the protocol rule, and this spec states each rule.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
