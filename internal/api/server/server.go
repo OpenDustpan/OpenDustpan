@@ -698,7 +698,7 @@ func classifyIdentity(err error) (failure, bool) {
 // part of the contract: the first function that maps the error decides.
 func classify(err error) failure {
 	for _, try := range []func(error) (failure, bool){
-		classifyStoreCheck, classifyMaintenance, classifyBodyTooLarge, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity, classifyWorker,
+		classifyStoreCheck, classifyMaintenance, classifyBodyTooLarge, classifyNamespace, classifyBackup, classifyPrincipal, classifyReview, classifyIdentity, classifyWorker,
 		classifyIPAllowlist, classifyGateConfig, classifySessionPolicy, classifySignIn, classifyProviders,
 		classifyGitHost, classifyInstance, classifyRequest,
 	} {

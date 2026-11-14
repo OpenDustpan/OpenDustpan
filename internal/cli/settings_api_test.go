@@ -2,10 +2,12 @@ package cli_test
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
@@ -46,6 +48,30 @@ func TestSettingDeclarationsAreValidAndCoverTheFileKeys(t *testing.T) {
 
 		if d.Database != databaseKeys[s.File] {
 			t.Fatalf("%s: database layer = %v", s.File, d.Database)
+		}
+	}
+}
+
+// TestDatabaseSettingsAreDeclared proves that the server declares each
+// setting that the database layer holds, with its default.
+func TestDatabaseSettingsAreDeclared(t *testing.T) {
+	t.Parallel()
+
+	registry, err := setting.NewRegistry(cli.SettingDeclarations())
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	for _, c := range []struct {
+		key  string
+		want string
+	}{
+		{key: access.SettingCollectionUnitCap, want: strconv.Itoa(access.DefaultCollectionUnitCap)},
+		{key: "branding.preset", want: ""},
+	} {
+		d, ok := registry.Lookup(setting.LevelInstallation, c.key)
+		if !ok || !d.Database || d.Default != c.want {
+			t.Fatalf("%s = %+v, %v; want a database setting with the default %q", c.key, d, ok, c.want)
 		}
 	}
 }

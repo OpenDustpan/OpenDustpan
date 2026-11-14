@@ -44,7 +44,7 @@ func TestGrantChecksSubjectNamespace(t *testing.T) {
 			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store,
 			Collections: f.units, Units: f.store,
 		},
-		Now: nil, NewID: nil, BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
+		Now: nil, NewID: nil, BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)

@@ -123,6 +123,37 @@ func newAccessFixtureFull(
 	return newAccessFixtureSignIn(t, entries, passkeys, nil)
 }
 
+// accessPorts holds the ports of the fixture that a test replaces. A nil
+// field keeps the port of the fixture: the stub collection port that lists no
+// unit, and no settings reader.
+type accessPorts struct {
+	collections access.UnitCollections
+	settings    access.Settings
+}
+
+// fixtureSpec holds what a test replaces in the fixture: the audit store that
+// entries returns for the store, the passkey service, the sign-in change
+// tweak, the link service that links gives for the store, and the ports that
+// ports names.
+type fixtureSpec struct {
+	entries  func(st *sqlite.Store) auditStore
+	passkeys apiserver.PasskeyService
+	tweak    func(in *apiserver.SignIn, st *sqlite.Store)
+	links    func(*sqlite.Store) *forgelinksvc.Service
+	ports    accessPorts
+}
+
+// newAccessFixturePorts is newAccessFixture with the collection port and the
+// settings reader that ports names.
+func newAccessFixturePorts(t *testing.T, ports accessPorts) accessFixture {
+	t.Helper()
+
+	return newAccessFixtureAll(t, fixtureSpec{
+		entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
+		links: noGitHostLinks, ports: ports,
+	})
+}
+
 // newAccessFixtureSignIn builds the fixture of newAccessFixtureFull and lets
 // tweak change the console sign-in before the handler reads it. With nil, the
 // sign-in stays as it is.
@@ -132,7 +163,10 @@ func newAccessFixtureSignIn(
 ) accessFixture {
 	t.Helper()
 
-	return newAccessFixtureAll(t, entries, passkeys, tweak, noGitHostLinks)
+	return newAccessFixtureAll(t, fixtureSpec{
+		entries: entries, passkeys: passkeys, tweak: tweak, links: noGitHostLinks,
+		ports: accessPorts{collections: nil, settings: nil},
+	})
 }
 
 // noGitHostLinks gives no link service: the routes of the links are not mounted.
@@ -151,20 +185,20 @@ func newAccessFixtureLinks(
 ) accessFixture {
 	t.Helper()
 
-	return newAccessFixtureAll(t, entries, nil, nil, links)
+	return newAccessFixtureAll(t, fixtureSpec{
+		entries: entries, passkeys: nil, tweak: nil, links: links,
+		ports: accessPorts{collections: nil, settings: nil},
+	})
 }
 
-// newAccessFixtureAll builds the fixture with the passkey service passkeys, the
-// sign-in change tweak and the link service that links gives for the store.
-func newAccessFixtureAll(
-	t *testing.T, entries func(st *sqlite.Store) auditStore, passkeys apiserver.PasskeyService,
-	tweak func(in *apiserver.SignIn, st *sqlite.Store), links func(*sqlite.Store) *forgelinksvc.Service,
-) accessFixture {
+// newAccessFixtureAll builds the fixture of spec.
+func newAccessFixtureAll(t *testing.T, spec fixtureSpec) accessFixture {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 	st := openServerTemplateStore(t, path)
 
+	passkeys := spec.passkeys
 	if passkeys == nil {
 		passkeys = newRoutePasskeys(t, st)
 	}
@@ -180,8 +214,13 @@ func newAccessFixtureAll(
 
 	seedStack(t, st, "acme", "web", "prod")
 
+	collections := spec.ports.collections
+	if collections == nil {
+		collections = stubCollections{}
+	}
+
 	authz, err := access.NewAuthorizer(
-		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st, Principals: st},
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: collections, Units: st, Principals: st},
 	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
@@ -193,7 +232,7 @@ func newAccessFixtureAll(
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
+		BootstrapAdmins: []string{"admin"}, Settings: spec.ports.settings, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -252,15 +291,15 @@ func newAccessFixtureAll(
 		PasskeyBeginLimiter: nil,
 		PasskeyLimiter:      nil,
 	}
-	if tweak != nil {
-		tweak(signIn, st)
+	if spec.tweak != nil {
+		spec.tweak(signIn, st)
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
 		Cursors:          testCursors(t),
 		LocalUsers:       newRouteLocalUsers(t, st),
 		Preferences:      nil,
-		GitHostLinks:     links(st),
+		GitHostLinks:     spec.links(st),
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
@@ -281,10 +320,9 @@ func newAccessFixtureAll(
 		Schema:           stubSchema{migrations: nil},
 		Journal:          nil,
 		Principals:       principals,
-		Reach:            routeReach(st),
 		Tokens:           tokens,
 		Access:           grants,
-		Audit:            entries(st),
+		Audit:            spec.entries(st),
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
@@ -297,6 +335,7 @@ func newAccessFixtureAll(
 		DenialLimiter:    nil,
 		Instances:        nil,
 		StoreChecks:      nil,
+		Reach:            routeReach(st),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

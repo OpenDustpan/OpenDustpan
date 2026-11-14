@@ -138,6 +138,7 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 			Grants: s, Roles: s, Callers: s, Principals: s, Collections: nil, Units: s,
 		},
 		Now: nil, NewID: nil, BootstrapAdmins: nil,
+		Settings:    nil,
 		LimitGroups: nil,
 	})
 	if err != nil {

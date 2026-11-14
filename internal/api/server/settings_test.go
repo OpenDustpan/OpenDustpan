@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -234,6 +235,29 @@ func checkSettingFields(t *testing.T, got map[string]map[string]any) {
 	enabled := got[settingtest.KeyEnabled]
 	if !isFalse(enabled["value"]) || !isTrue(enabled["mayReduceSecurity"]) || enabled["kind"] != "bool" {
 		t.Fatalf("enabled = %v", enabled)
+	}
+}
+
+// TestSettingsReadOfTheCollectionUnitCap proves that the settings read shows
+// the cap of the export of a collection as the server declares it: the
+// default value and the source default.
+func TestSettingsReadOfTheCollectionUnitCap(t *testing.T) {
+	t.Parallel()
+
+	registry, err := setting.NewRegistry(access.SettingDeclarations())
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	e := newSettingsEnvWith(t, registry, nil)
+
+	r := e.do(t, getCall(settingsURL))
+	wantSettingsStatus(t, r, http.StatusOK)
+
+	item := decodeSettings(t, r)[access.SettingCollectionUnitCap]
+	if item["value"] != float64(access.DefaultCollectionUnitCap) || item["source"] != "default" ||
+		item["default"] != float64(access.DefaultCollectionUnitCap) || item["kind"] != "int" {
+		t.Fatalf("cap = %v, want the default value and the source default", item)
 	}
 }
 

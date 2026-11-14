@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/signinsvc"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -33,6 +34,13 @@ func TestWriteErrorCodes(t *testing.T) {
 	tests := []writeErrorRow{
 		{"unauthenticated", identity.ErrUnauthenticated, http.StatusUnauthorized, errcode.AuthUnauthenticated, nil, ""},
 		{"denied", identity.ErrDenied, http.StatusForbidden, errcode.AccessDenied, nil, ""},
+		{
+			"collection over the cap",
+			&access.CollectionUnitCapError{Key: access.SettingCollectionUnitCap, Count: 10001, Cap: 10000},
+			http.StatusUnprocessableEntity, errcode.AccessCollectionUnitCap,
+			map[string]any{"count": int64(10001), "cap": int64(10000), "key": access.SettingCollectionUnitCap},
+			"",
+		},
 		{"invalid object", identity.ErrInvalidObject, http.StatusBadRequest, errcode.RequestInvalidObject, nil, ""},
 		{
 			"invalid body", apiserver.ErrInvalidBodyForTest, http.StatusBadRequest, errcode.RequestBodyInvalid, nil,

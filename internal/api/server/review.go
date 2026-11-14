@@ -59,6 +59,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -290,6 +291,21 @@ func (h *Handler) reviewAccess(action identity.Action) accessOp {
 
 		return ok(http.StatusOK, reviewPageOf(page), ""), nil
 	}
+}
+
+// classifyReview maps the errors of the export that no other classifier
+// maps: an export of a collection over its unit cap answers 422 with the
+// count, the cap and the setting key.
+func classifyReview(err error) (failure, bool) {
+	over, ok := errors.AsType[*access.CollectionUnitCapError](err)
+	if !ok {
+		return fail(0, ""), false
+	}
+
+	return failCoded(http.StatusUnprocessableEntity, over.Error(), errcode.AccessCollectionUnitCap,
+		errcode.Quantity("count", int64(over.Count)),
+		errcode.Quantity("cap", int64(over.Cap)),
+		errcode.Identifier("key", over.Key)), true
 }
 
 // reviewPageOf maps one page of an export to the wire.

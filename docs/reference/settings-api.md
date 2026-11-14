@@ -211,6 +211,7 @@ setting of the installation is static only.
 
 | Key | Kind | Default | Apply | Meaning |
 | --- | --- | --- | --- | --- |
+| `accessReview.collectionUnitCap` | `int` | 10000 | `live` | The largest count of units that the export of a collection reads. The server refuses an export over it, and refuses a value outside 1 to 100000. A raise counts as a change that reduces security. |
 | `branding.preset` | `string` | empty | `live` | The name of the branding preset of the installation. A name of lower-case letters, digits and hyphens, at most 32 characters. Empty means the standard palette. |
 | `egress.allowPlainConnections` | `bool` | `false` | `live` | Allow LDAP and SMTP connections with no TLS. An LDAP bind or an SMTP login then sends its password with no encryption. |
 

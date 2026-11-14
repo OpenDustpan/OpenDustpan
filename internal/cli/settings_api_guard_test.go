@@ -22,6 +22,7 @@ func TestOnlyKnownSettingsTakeDatabaseValues(t *testing.T) {
 	}
 
 	databaseKeys := []string{
+		"accessReview.collectionUnitCap",
 		"branding.preset",
 		"egress.allowPlainConnections",
 		"password.minLength",
