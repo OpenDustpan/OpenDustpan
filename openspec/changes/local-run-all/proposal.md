@@ -1,3 +1,7 @@
+---
+version: 2
+---
+
 Roadmap: `docs/roadmap.md:712` (Local run-all).
 
 ## Why
@@ -31,6 +35,7 @@ Evidence for the claims above:
 - Add the e2e step with real OpenTofu and real Terragrunt over TLS on PostgreSQL: 3 units, 3 workspaces, 3 new state versions and 3 history entries with no change order.
 - Add the guide section for Terragrunt with OpenDustpan for local use.
 - Add the NEW docs page that says why profiles and blueprints stay the recommended path and links it from the Terragrunt guide.
+- Files: the NEW e2e test file `e2e/terragrunt_local_test.go` with the NEW three-unit Terragrunt fixture in `e2e/testdata/terragrunt-local/`; the NEW guide `docs/guides/terragrunt.md` (its section "Run Terragrunt locally"), linked from the existing `docs/guides/quickstart.md`; the NEW explanation page `docs/explanation/profiles-and-blueprints.md`, linked from `docs/guides/terragrunt.md` and the existing `docs/guides/publish-a-blueprint.md`.
 
 Out of scope:
 

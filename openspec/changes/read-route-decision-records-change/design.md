@@ -4,8 +4,8 @@ Refusals at state.write name a record ID, but no route reads it. This change add
 
 ## Decisions
 
-1. **Two read routes with named guards.** The namespace route checks the namespace gate read action. The installation route checks installation:read-gates. Both look up by the gdr- ID and the scope. Missing records reuse gate.ErrNotFound.
-2. **Errors fail closed.** The service returns typed sentinels. The adapter maps them to 403 gate.denied and 404 gate.not-found. A store error gives gate.unavailable with no content. The read returns the stored masked form.
+1. **Two read routes with named guards.** The namespace route checks the namespace gate read action. The installation route checks installation:read-gates. Both look up by the gdr- ID and the scope. A failed check gives the same 404 as a missing record.
+2. **Errors fail closed.** The service returns typed sentinels. The adapter maps denial and absence to 404 gate.not-found. A store error gives gate.unavailable with no content. The read returns the stored masked form only.
 
 ## Structure
 
@@ -20,7 +20,7 @@ Unexported decisionRecord with a constructor that checks the gdr- ID and the sco
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| HTTP handler | Checks the scope read action before any read. | Read without the action, across namespaces and with no sign-in; expect 403 then 404. |
+| HTTP handler | Checks the scope read action before any read and answers 404 on failure. | Read without the action, across namespaces and with no sign-in; expect the same 404 body each time. |
 | service | Validates the ID and checks the scope again after the load. | Call with a forged scope and a non-gdr- ID; expect a sentinel. |
 | port adapter | Query by ID and namespace with placeholders only. | Pass an ID with SQL metacharacters; expect no row. |
 
@@ -32,7 +32,7 @@ After this change:
 sequenceDiagram
 Developer->>Server: state write refused with record ID
 Developer->>Server: GET record by ID
-Server->>Developer: record or 403 or 404
+Server->>Developer: record or 404
 ```
 
 Modules that the change touches, and their imports on main:
@@ -70,11 +70,11 @@ flowchart TB
 
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
-| Server trust boundary | I | A caller reads a record of another scope by guessing its ID. | boundary check | Reject a malformed gdr- ID. | Send IDs with separators and null bytes; expect 404. |
-| Server trust boundary | I | A caller reads a record of another scope by guessing its ID. | encode or contain | Placeholders only in the store query. | Send SQL metacharacters; expect no row. |
-| Server trust boundary | I | A caller reads a record of another scope by guessing its ID. | limit | One record by ID, no list. | Send an empty ID; expect 404. |
-| Server trust boundary | I | A caller reads a record of another scope by guessing its ID. | authorize at point of use | Check the scope read action and the scope again after the load. | Read across namespaces; expect 404. |
-| Server trust boundary | I | A caller reads a record of another scope by guessing its ID. | fail closed | A store error gives gate.unavailable with no content. | Force a store error; expect no record bytes. |
+| Server trust boundary | I | A caller reads a record of another scope by guessing its ID, or learns that it exists. | boundary check | Reject a malformed gdr- ID. | Send IDs with separators and null bytes; expect 404. |
+| Server trust boundary | I | A caller reads a record of another scope by guessing its ID, or learns that it exists. | encode or contain | Placeholders only in the store query. | Send SQL metacharacters; expect no row. |
+| Server trust boundary | I | A caller reads a record of another scope by guessing its ID, or learns that it exists. | limit | One record by ID, no list. | Send an empty ID; expect 404. |
+| Server trust boundary | I | A caller reads a record of another scope by guessing its ID, or learns that it exists. | authorize at point of use | Check the scope read action and the scope again after the load; answer the same 404. | Read across namespaces and without the action; expect identical bodies. |
+| Server trust boundary | I | A caller reads a record of another scope by guessing its ID, or learns that it exists. | fail closed | A store error gives gate.unavailable with no content. | Force a store error; expect no record bytes. |
 
 ## Contracts
 
@@ -82,7 +82,7 @@ flowchart TB
 
 - Invariant: The ID keeps the gdr- prefix.
 - Invariant: A read never changes the record.
-- `readRecord`: pre: The ID has the gdr- prefix and the scope of the path.. Post: Returns the stored record to a caller with the read action.; Answers 403 or 404 otherwise..
+- `readRecord`: pre: The ID has the gdr- prefix and the scope of the path.. Post: Returns the stored masked record to a caller with the read action.; Answers 404 otherwise..
 
 ## Failure modes
 
@@ -94,9 +94,9 @@ flowchart TB
 
 Tests:
 
-- `internal/removalalertsvc/fakes_test.go` names `gate.ErrNotFound`
 - `pkg/tempadmin/tempadmin_test.go` names `gate.ErrNotFound`
-- `internal/cost/costtest/mem_test.go` names `gate.ErrNotFound`
+- `internal/removalalertsvc/fakes_test.go` names `gate.ErrNotFound`
+- `pkg/manuallock/manuallock_test.go` names `gate.ErrNotFound`
 
 Docs pages:
 
