@@ -16,6 +16,20 @@ When an installation starts for the first time, the server SHALL store the recov
 - **WHEN** the stored mode is `signed-request` and a later start sets `--recovery-mode bootstrap`
 - **THEN** the effective mode is `signed-request` and the log has one warning
 
+### Requirement: first-boot-key-file-is-one-ed25519-key
+
+When an installation starts for the first time in signed-request recovery, the server SHALL read the key file and SHALL refuse the start when its content is not exactly one `ssh-ed25519` public key: a key of another type, more than one key, text that does not parse and an empty file are each refused. On that refusal the server SHALL store nothing and SHALL write no recovery settings.
+
+#### Scenario: Malformed key file
+- **WHEN** `serve` starts for the first time with `--recovery-mode signed-request` and a key file whose content does not parse as exactly one `ssh-ed25519` public key
+- **THEN** the server does not start and the store holds no mode and no key
+- **AND** the log has one error that names the file and the reason, with no key material
+
+#### Scenario: Wrong-type key file
+- **WHEN** `serve` starts for the first time with `--recovery-mode signed-request` and a key file that holds an `ssh-rsa` key or two `ssh-ed25519` keys
+- **THEN** the server does not start and the store holds no mode and no key
+- **AND** the log has one error that names the file and the reason, with no key material
+
 ### Requirement: signed-request-makes-one-temporary-administrator
 
 When the stored mode is `signed-request` and a request is canonical, in its time window, names this installation and its audience, is signed by a key of the trust bundle, has a new nonce, is inside the rate limits, and no temporary administrator of a recovery is live, the server SHALL make one temporary administrator and answer with the token encrypted to the key of the request.

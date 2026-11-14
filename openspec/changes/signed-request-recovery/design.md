@@ -28,7 +28,14 @@ at the expiry, and a review after use.
    `recovery_settings` and the first key in one transaction when the row does
    not exist. It reads the public key file under the rules of decision 13.
    With `--recovery-mode signed-request` and no key file, `serve`
-   refuses to start and names `--recovery-public-key-file`. When the row
+   refuses to start and names `--recovery-public-key-file`. The content of
+   the file must parse as exactly one `ssh-ed25519` public key: the same
+   parse and the same key type rule as the add route (decision 12). `serve`
+   refuses a key of another type, more than one key, text that does not parse
+   and an empty file. On a malformed or wrong-type key file, `serve` fails
+   closed: it refuses to start, stores nothing and writes no recovery
+   settings. It logs one error that names the file and the reason, and no key
+   material. When the row
    exists, the stored mode wins over `--recovery-mode` (ADR 245 decision 6).
    A different setting writes one warning to the log at each start (ADR 347).
 3. **The canonical request.** `request.json` is one JSON object, UTF-8, with
@@ -201,7 +208,8 @@ handler import `internal/recovery`.
 | HTTP handler | 8 KiB limit, content type, envelope shape, base64url, canonical form, members and the `person` allowlist, the `answerKey` shape (an X25519 public key of exactly 32 bytes), the `version` member, times, the stored mode check before any other work, the maintenance-mode check and the client-address parse. One answer. | Send an oversize body, a body with a duplicate member, a `person` outside the allowlist, an `answerKey` of 31 bytes and of 33 bytes and one that is not base64, a `version` other than 1, a non-canonical body, a wrong content type, a time past the skew, a malformed client address, and a request in maintenance mode straight to the handler. Expect `recovery.refused` and no service call. |
 | Service (`internal/recovery`) | `parseSignedRequest` checks the shape, the times, the installation name, the audience and the signature against the bundle key again, and it counts the attempt and refuses before the signature check. | Call the service with a request for another installation, a request with a wrong audience, a key in the signature that is not in the bundle, a key type other than `ssh-ed25519`, and a canonical body with a bad signature. Expect a refusal and no store write. |
 | Store | The stored mode check (a second layer), the attempt counter (a second layer), the live-recovery check and the unique nonce insert, in the transaction of the temporary administrator. | Insert the same nonce twice, run two recoveries at once, and run a recovery with the stored mode `bootstrap`, straight against the store. Expect one success at most. |
-| Key file | Every file that the CLI reads or writes in the flow (`request.json`, `request.json.sig`, `request.key` and the key files) opens through `os.Root` or a clean-path containment check, with a 16 KiB size limit; the private key files are refused when group or others can read it. | Give a path that leaves the root, a file larger than 16 KiB and a `request.key` with mode 0644, straight to each reader. Expect a refusal. |
+| Key file | Every file that the server or the CLI reads or writes in the flow (`request.json`, `request.json.sig`, `request.key` and the key files) opens through `os.Root` or a clean-path containment check, with a 16 KiB size limit; the private key files are refused when group or others can read it. | Give a path that leaves the root, a file larger than 16 KiB and a `request.key` with mode 0644, straight to each reader. Expect a refusal. |
+| First boot (`serve`) | The content of `--recovery-public-key-file` must parse as exactly one `ssh-ed25519` public key, with the same parse and key type rule as the add route. On a malformed or wrong-type file, `serve` fails closed: it refuses to start, stores nothing and writes no recovery settings, and logs one error that names the file and the reason. | Start `serve` with a key file that holds an `ssh-rsa` key, two `ssh-ed25519` keys, text that does not parse and no content. Expect no start, no stored mode and no stored key. |
 | Answer | HPKE to the key of the request, sealed in the transaction. A failed seal fails closed. | Decrypt with another key, and force a seal failure. Expect a failure, a refusal with reason `answer`, and no temporary administrator. |
 | Authorizer | Each later request checks the stored grant of the temporary administrator. The two recovery steps read the stored record. | Call a third fresh-step route as a temporary administrator. Expect `mfa.fresh-step-required`. |
 | Audit | Each refusal and each use writes an entry; the use entry holds the mode, the time, the client address and the action `recovery:use-signed-request`. | Break the store after the checks. Expect `recovery.refused` with reason `store` and one audit entry. |
@@ -250,6 +258,8 @@ flowchart LR
 | Server | E | The temporary administrator does more than recovery steps with no fresh step. | authorize at point of use | Only the two routes read the predicate. | A token creation as a temporary administrator gives `mfa.fresh-step-required`. |
 | Server | E | A second recovery runs while one is live. | authorize at point of use | The live-recovery check in the transaction. | A second valid request gives a refusal with reason `recovery-active`. |
 | Server | T | A recovery request during maintenance mode changes the installation. | fail closed | The handler refuses while the installation is in maintenance mode. | A request in maintenance mode gives `recovery.refused` with reason `maintenance`. |
+| Server | T | The first boot stores a key of the wrong type or a key that does not parse. | boundary check | The content of `--recovery-public-key-file` must parse as exactly one `ssh-ed25519` public key, with the same parse and key type rule as the add route. | An `ssh-rsa` key, two `ssh-ed25519` keys, text that does not parse and an empty file each refuse the start. |
+| Server | T | The first boot stores a key of the wrong type or a key that does not parse. | fail closed | On a malformed or wrong-type key file, `serve` refuses to start, stores nothing and writes no recovery settings, and logs one error that names the file and the reason. | After each hostile key file the store holds no mode and no key. |
 | Server | R | A use leaves no record. | fail closed | The notification, the audit entries and the record commit together. | A fault in the notification write leaves no temporary administrator. |
 
 ## Failure modes

@@ -36,6 +36,10 @@
 - [ ] 1.29 Every file that the CLI reads or writes in the flow (`request.json`, `request.json.sig`, `request.key` and the key files) refuses a path that leaves the root. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFlowFileContained -count=1` fails on main (NEW test).
 - [ ] 1.30 Every such file larger than 16 KiB is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFlowFileSize -count=1` fails on main (NEW test).
 - [ ] 1.31 `request.key` with mode 0644 is refused when the CLI reads it. Check: `go test ./cmd/opendustpan/ -run TestRecoveryRequestKeyMode -count=1` fails on main (NEW test).
+- [ ] 1.32 A first-boot key file that holds an `ssh-rsa` key is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFirstBootKeyType -count=1` fails on main (NEW test). `serve` does not start and the store holds no mode and no key.
+- [ ] 1.33 A first-boot key file that holds two `ssh-ed25519` keys is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFirstBootKeyTwoKeys -count=1` fails on main (NEW test). `serve` does not start and the store holds no mode and no key.
+- [ ] 1.34 A first-boot key file that does not parse is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFirstBootKeyUnparsable -count=1` fails on main (NEW test). `serve` does not start and the store holds no mode and no key.
+- [ ] 1.35 An empty first-boot key file is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryFirstBootKeyEmpty -count=1` fails on main (NEW test). `serve` does not start and the store holds no mode and no key.
 
 ## 2. Build
 
