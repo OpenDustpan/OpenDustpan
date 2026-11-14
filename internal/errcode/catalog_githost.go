@@ -3,6 +3,9 @@ package errcode
 // The codes of the area. A code is never removed and never changes its
 // meaning.
 const (
+	// GitHostAppBudgetSpent means that the calls that the key of the GitHub App signed in the current window
+	// reached the limit of the budget.
+	GitHostAppBudgetSpent = "git-host.app-budget-spent"
 	// GitHostAppNotRegistered means that the operator has not registered the GitHub App.
 	GitHostAppNotRegistered = "git-host.app-not-registered"
 	// GitHostInstallationNotAssigned means that the operator did not assign the installation of the Git host to the
@@ -41,6 +44,11 @@ const (
 // gitHostSpecs are the codes of the Git host connections.
 func gitHostSpecs() []Spec {
 	return []Spec{
+		{
+			Code:    GitHostAppBudgetSpent,
+			Meaning: "the calls that the key of the GitHub App signed in the current window reached the limit of the budget",
+			Args:    nil,
+		},
 		{Code: GitHostAppNotRegistered, Meaning: "the operator has not registered the GitHub App", Args: nil},
 		{
 			Code:    GitHostInstallationNotAssigned,

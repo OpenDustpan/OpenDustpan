@@ -14,13 +14,19 @@ func TestTheLimiterRefusesLimitsThatAreNotPositive(t *testing.T) {
 	good := DefaultCheckLimits()
 
 	for name, limits := range map[string]CheckLimits{
-		"zero":                      {PerConnection: 0, PerInstallation: 0, Window: 0},
-		"zero per installation":     {PerConnection: good.PerConnection, PerInstallation: 0, Window: good.Window},
-		"negative per installation": {PerConnection: good.PerConnection, PerInstallation: -1, Window: good.Window},
-		"zero per connection":       {PerConnection: 0, PerInstallation: good.PerInstallation, Window: good.Window},
-		"zero window":               {PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, Window: 0},
+		"zero":                      {PerConnection: 0, PerInstallation: 0, PerApp: good.PerApp, Window: 0},
+		"zero per installation":     {PerConnection: good.PerConnection, PerInstallation: 0, PerApp: good.PerApp, Window: good.Window},
+		"negative per installation": {PerConnection: good.PerConnection, PerInstallation: -1, PerApp: good.PerApp, Window: good.Window},
+		"zero per connection":       {PerConnection: 0, PerInstallation: good.PerInstallation, PerApp: good.PerApp, Window: good.Window},
+		"zero per app": {
+			PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, PerApp: 0, Window: good.Window,
+		},
+		"negative per app": {
+			PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, PerApp: -1, Window: good.Window,
+		},
+		"zero window": {PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, PerApp: good.PerApp, Window: 0},
 		"negative window": {
-			PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, Window: -time.Minute,
+			PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, PerApp: good.PerApp, Window: -time.Minute,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

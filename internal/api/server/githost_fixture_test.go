@@ -225,7 +225,9 @@ func newHostEnvWith(t *testing.T, authz identity.Authorizer, keys keyMode) *host
 
 	// The limits are wide, so that a test can check a connection many times.
 	// The tests of the limit set their own.
-	limits := forge.CheckLimits{PerConnection: time.Nanosecond, PerInstallation: 1000, Window: time.Minute}
+	limits := forge.CheckLimits{
+		PerConnection: time.Nanosecond, PerInstallation: 1000, PerApp: 1000, Window: time.Minute,
+	}
 
 	return newHostEnvLimited(t, authz, keys, &limits)
 }
@@ -278,7 +280,7 @@ func newHostEnvWrapped(
 
 			env.refused = append(env.refused, reason)
 		},
-		CheckLimits: limits, Now: nil,
+		CheckLimits: limits, Logger: nil, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("git host service: %v", err)
