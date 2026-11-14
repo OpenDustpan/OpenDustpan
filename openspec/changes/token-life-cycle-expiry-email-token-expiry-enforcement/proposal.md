@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 7
 ---
 
 Roadmap: `docs/roadmap.md:171` (Enforce token expiry, lifetime, and inactivity disable.).

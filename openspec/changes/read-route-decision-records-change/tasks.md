@@ -4,11 +4,11 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Failing test: read an own-namespace record with a personal access token on the NEW route. Check: TestDecisionRecordReadReturnsStoredRecord fails on main because the NEW route is missing.
-- [ ] 1.2 Failing test: in-scope read without the action gives the 404 of an unknown ID. Check: TestDecisionRecordReadDeniedGives404
-- [ ] 1.3 Failing test: foreign, malformed, expired and unauthenticated reads. Check: TestDecisionRecordReadForeignGives404
-- [ ] 1.4 Failing test: installation record read on the NEW installation route. Check: TestInstallationDecisionRecordRead
-- [ ] 1.5 Failing test: refusal names the record and no change-order command. Check: TestApprovalRefusalNamesRecordRead
+- [ ] 1.1 Failing test: read an own-namespace record with a personal access token on the NEW route. Write it in the NEW file internal/api/decisionrecord/decisionrecord_test.go. Check: TestDecisionRecordReadReturnsStoredRecord fails on main because the NEW route is missing.
+- [ ] 1.2 Failing test: in-scope read without the action gives the 404 of an unknown ID. Write it in the NEW file internal/api/decisionrecord/decisionrecord_test.go. Check: TestDecisionRecordReadDeniedGives404
+- [ ] 1.3 Failing test: foreign, malformed, expired and unauthenticated reads. Write it in the NEW file internal/api/decisionrecord/decisionrecord_test.go. Check: TestDecisionRecordReadForeignGives404
+- [ ] 1.4 Failing test: installation record read on the NEW installation route. Write it in the NEW file internal/api/decisionrecord/decisionrecord_test.go. Check: TestInstallationDecisionRecordRead
+- [ ] 1.5 Failing test: refusal names the record and no change-order command. Write it in the NEW file internal/api/stategate/refusal_test.go. Check: TestApprovalRefusalNamesRecordRead
 
 ## 2. Side effects (computed from main)
 

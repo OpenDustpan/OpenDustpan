@@ -18,7 +18,7 @@ Errors the person may hit, and the one command that helps:
 | --- | --- | --- |
 | Claim base is touched by a later version on an address of the claim. | Server answers 422 with the touching version and names the current state version. Plan again from the current state version, then register a new claim. | `tofu plan` |
 | Claim overlaps an accepted claim. | Server answers 409 with the blocking claim ID and stores no claim. Wait for the blocking claim to end, plan again, then register a new claim. | `GET /api/dustpan/v1/workspaces/{id}/claims` |
-| Claim holds a replace action. | Server answers 409 with the code `claim.closure-unproven` and stores no claim. This change does not build the closure test, and a closure that the server cannot prove is a conflict. Wait for the accepted claims to end, then register again. | `GET /api/dustpan/v1/workspaces/{id}/claims` |
+| Claim holds a replace action. | Server answers 409 with the code `claim.closure-unproven` (NEW) and stores no claim. This change does not build the closure test, and a closure that the server cannot prove is a conflict. Wait for the accepted claims to end, then register again. | `GET /api/dustpan/v1/workspaces/{id}/claims` |
 | Principal lacks unit:claim-register on the workspace. | Server answers 403 and names the missing action on the workspace. Ask a namespace administrator for the grant, then register again. | `GET /api/server/principals/{}/grants` |
 | Claim holds an empty resource set. | Server answers 422 and changes nothing. Plan with at least one non-replace resource change, then register again. | `tofu plan` |
 | Claim names a missing, deleted or locked workspace or an unknown base. | Server answers 404 for a missing workspace, 410 for a deleted workspace and 422 for a locked workspace or an unknown base version. Use the current workspace and base, then register again. | `GET /api/dustpan/v1/workspaces/{id}/claims` |
@@ -36,7 +36,7 @@ Evidence for the claims above:
 - Server accepts a second non-replace claim when its address set is disjoint from each accepted claim.
 - NEW: the job token of the apply phase is bound to the job and its apply claim (ADR 369 decision 1); a request with the token of another job, or after the claim ended, is refused.
 - NEW: the claim record and its audit entry name the actor, the job, the apply claim and the trigger (ADR 369 decision 5).
-- Server refuses an overlapping non-replace claim with 409, and a replace claim with 409 `claim.closure-unproven` (ADR 368 decision 6: an unproven closure is a conflict).
+- Server refuses an overlapping non-replace claim with 409, and a replace claim with 409 `claim.closure-unproven` (NEW) (ADR 368 decision 6: an unproven closure is a conflict).
 - Each accepted claim writes one audit entry, and each claim marks ended with an end time at job end or lease expiry.
 
 Out of scope:

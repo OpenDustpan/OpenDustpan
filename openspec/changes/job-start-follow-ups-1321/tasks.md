@@ -4,12 +4,12 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write the failing test for the count of operations skipped by the bound Check: TestClaimPollCountsBoundSkips fails on main
+- [ ] 1.1 Write the failing test for the count of operations skipped by the bound in pkg/store/internal/jobstore/claim_skips_test.go (NEW). Check: TestClaimPollCountsBoundSkips fails on main
 
 ## 2. Fix
 
-- [ ] 2.1 Correct the Route.IdempotencyKey comment Check: rg -n -F 'Route.IdempotencyKey' internal shows the fixed text
-- [ ] 2.2 Count and log the operations skipped by the bound of 64 Check: go test ./pkg/store/...
+- [ ] 2.1 Correct the Route.IdempotencyKey comment in internal/api/registry/operations.go:14 and in the route files of the operations packages. Check: rg -n -F 'Route.IdempotencyKey' internal shows the fixed text
+- [ ] 2.2 Count and log the operations skipped by the bound of 64 in pkg/store/internal/jobstore/claim_skips.go (NEW). Check: go test ./pkg/store/...
 
 ## 3. Side effects (computed from main)
 

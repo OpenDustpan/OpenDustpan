@@ -4176,3 +4176,15 @@ decisions:
   accepted_artifact: "docs/adr/0373-job-roles-the-answer-to-an-ended-token-and-the-break-glass-pass.md"
   evidence:
   - "docs/adr/0373-job-roles-the-answer-to-an-ended-token-and-the-break-glass-pass.md"
+- id: "adr-0374"
+  title: "ADR 374: Namespace discovery from inside, and the window of the old event secret"
+  decision: "1. **Namespace discovery from inside (owner, 2026-11-14).** The organization and discovery routes of a namespace also answer a principal who holds a grant on a collection or on a unit in that namespace. These are the TFE routes `GET /api/v2/organizations/{org}/entitlement-set`, the organization read and the workspace reads by organization, and the organization routes of the Pulumi Cloud-compatible API that the Pulumi CLI calls. 1. The answer holds only what the CLI needs: that the namespace exists, and its entitlements. 2. A list route still filters its items to what the caller can read. A grant on one collection never shows a unit of another collection. 3. Each other caller gets the same 404 as for an unknown namespace, with the same body. The answer is no existence oracle. 4. The answer names the grant that allowed it, so that a person can see why the server answered. 5. The check reads the grants at each request. A revoked grant loses the discovery read on the next request.\n2. **The old event secret stays valid for at most 7 days (owner, 2026-11-14).** During a rotation, the old event secret is valid for the check of an event only. It ends after 7 days, or earlier when the operator ends the rotation (the confirmation of the rotation). Each event that the server accepts with the old secret writes an audit entry. The API shows the effective end of the window. The server refuses an event signed with the old secret after the end, or after the confirmation. A secret older than the old secret is never valid: a registration keeps at most two event secrets.\n\nLater changes, from the status line of ADR 374: Decided by the project owner."
+  reason: "Two OpenSpec changes stopped on a question that no ADR answered. The project owner answered both questions on 14 November 2026 (\"All approved\"). - `groups-roles-grants`: a principal with a grant on a collection or on a unit only cannot use the OpenTofu CLI or the Pulumi CLI on that unit. The CLI first reads the organization of the namespace. OpenTofu reads `GET /api/v2/organizations/{org}/entitlement-set`, the organization and the workspace by organization. The Pulumi CLI calls the organization routes. These routes check an action on the namespace."
+  scope:
+  - "docs/adr/0374-namespace-discovery-from-inside-and-the-window-of-the-old-event-secret.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-14"
+  accepted_artifact: "docs/adr/0374-namespace-discovery-from-inside-and-the-window-of-the-old-event-secret.md"
+  evidence:
+  - "docs/adr/0374-namespace-discovery-from-inside-and-the-window-of-the-old-event-secret.md"
