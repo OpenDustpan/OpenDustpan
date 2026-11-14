@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:195` (Collections and placement).
@@ -112,7 +112,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Decisions that apply: the ADR as a whole.
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
-- Quote: "ADR 329 extends decisions 1 and 3: placement rules also match OpenTofu unit names, and a unit that no rule matches is refused."
+- Quote: "Placement rules also match OpenTofu unit names."
+- Quote: "This includes the OpenTofu HTTP backend."
 - Effect: Placement rules also match OpenTofu workspace names, and a unit that no rule matches is refused.
 - Conflict: none.
 
@@ -127,7 +128,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: ADR 329: the quote "ADR 329 extends decisions 1 and 3: placement rules also match OpenTofu unit name" is not in the ADR file (copy it character for character from the decision text of the pack).
+none
 
 Questions considered and answered:
 

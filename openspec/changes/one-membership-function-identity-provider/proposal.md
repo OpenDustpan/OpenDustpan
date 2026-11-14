@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Issue: #614, #621, #632.
@@ -133,11 +133,15 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. Which durable alert channel replaces the interim audit entry plus WARN line after events exist? Decides: PM.
-   - Options: Keep audit plus WARN, switch channel later without changing callers; Add a pending-alert table with retry now.
-   - Recommended: Keep audit plus WARN, switch channel later without changing callers Reason: The audit entry is the durable record and the WARN line is a view of it, so no alert is lost.
+none
 
-Not spec-ready: a code check fails: main_facts[3]: "where" is not file:line (func Name).
+Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
+
+1. Which durable alert channel replaces the interim audit entry plus WARN line after events exist?
+   - Options: Keep audit plus WARN, switch channel later without changing callers; Add a pending-alert table with retry now.
+   - Provisional decision (owner review 14 Nov): Keep audit plus WARN, switch channel later without changing callers
+   - Reason: The audit entry is the durable record and the WARN line is a view of it, so no alert is lost. Benchmark: SOC 2: the audit record is the durable evidence of a change.
+   - Persona impact: The site administrator still reads each change in the audit log. Escape hatch: Audit entries stay queryable through the API.
 
 Questions considered and answered:
 

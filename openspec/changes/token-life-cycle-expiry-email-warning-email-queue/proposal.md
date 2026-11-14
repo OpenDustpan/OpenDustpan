@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:171` (Send expiry warning email through SMTP queue.).
@@ -110,7 +110,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: design decision "Stable token ID with send-time recheck": a limit with no number; give the number, the unit and the scope.
+none
 
 Questions considered and answered:
 

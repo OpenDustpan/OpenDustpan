@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Issue: #897, #952.
@@ -144,7 +144,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: design decision "Temporary administrator session limit": a limit with no number; give the number, the unit and the scope.
+none
 
 Questions considered and answered:
 

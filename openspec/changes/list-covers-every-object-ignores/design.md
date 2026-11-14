@@ -70,8 +70,8 @@ flowchart LR
 Tests:
 
 - `internal/removalalertsvc/removalalertsvc_test.go` names `identity.Scope`
-- `internal/cost/costtest/mem_test.go` names `identity.Scope`
-- `internal/calendar/calendartest/mem_test.go` names `identity.Scope`
+- `e2e/claim_gate_test.go` names `identity.Scope`
+- `e2e/jobs_api_test.go` names `identity.Scope`
 
 Docs pages:
 
