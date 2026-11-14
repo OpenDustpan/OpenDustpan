@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -362,6 +363,17 @@ func scopeAdminTofu(ctx context.Context, t *testing.T, env *e2e.Env, cli e2e.Ins
 	return res.Stdout
 }
 
+// scopeNormalize replaces each whole-word use of a workspace name with one
+// placeholder, so that the answers for two names compare equal when they
+// differ only by the name that each request asked for. A name is replaced
+// only as a whole word: the letter of a one-letter name inside another word
+// (for example "backend") stays.
+func scopeNormalize(text, name string) string {
+	word := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
+
+	return word.ReplaceAllString(text, "WORKSPACE")
+}
+
 // scopeWriterHiddenNoOracle proves the no-oracle rule for the writer on
 // collection team-a: `tofu init` of workspace b and of a workspace name that
 // does not exist fail the same way, and the workspace read answers both
@@ -427,11 +439,7 @@ output "greeting" {
 	// A failed init leaves no backend, so `tofu state pull` cannot run
 	// after it; the init runs are the comparison.
 	normalize := func(out, dir, name string) string {
-		out = strings.ReplaceAll(out, dir, "DIR")
-		out = strings.ReplaceAll(out, "workspace "+name, "workspace WORKSPACE")
-		out = strings.ReplaceAll(out, `"`+name+`"`, `"WORKSPACE"`)
-		out = strings.ReplaceAll(out, "/"+name, "/WORKSPACE")
-		return strings.ReplaceAll(out, name, "WORKSPACE")
+		return scopeNormalize(strings.ReplaceAll(out, dir, "DIR"), name)
 	}
 
 	outB := normalize(gotB.Stdout+"\n"+gotB.Stderr, dirB, "b")
@@ -471,12 +479,8 @@ output "greeting" {
 		)
 	}
 
-	normalizeBody := func(body, name string) string {
-		return strings.ReplaceAll(body, name, "WORKSPACE")
-	}
-
-	normB := normalizeBody(bodyB, "b")
-	normMissing := normalizeBody(bodyMissing, missing)
+	normB := scopeNormalize(bodyB, "b")
+	normMissing := scopeNormalize(bodyMissing, missing)
 
 	if normB != normMissing {
 		t.Fatalf(
@@ -650,5 +654,43 @@ func checkScopeReview(
 		if !seen[id] {
 			t.Fatalf("the access-review export of team-a misses the grant %s", id)
 		}
+	}
+}
+
+func TestScopeNormalizeReplacesWholeWords(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, text, workspace, want string
+	}{
+		{
+			"one-letter name keeps other words",
+			`Initializing the backend... error creating workspace b: "b" at /workspaces/b`,
+			"b",
+			`Initializing the backend... error creating workspace WORKSPACE: "WORKSPACE" at /workspaces/WORKSPACE`,
+		},
+		{
+			"hyphenated name",
+			`Initializing the backend... error creating workspace no-such-workspace: "no-such-workspace"`,
+			"no-such-workspace",
+			`Initializing the backend... error creating workspace WORKSPACE: "WORKSPACE"`,
+		},
+		{
+			"404 body",
+			`{"errors":[{"status":"404","title":"not found","detail":"workspace b not found"}]}`,
+			"b",
+			`{"errors":[{"status":"404","title":"not found","detail":"workspace WORKSPACE not found"}]}`,
+		},
+		{"no use of the name", "backend body bb", "b", "backend body bb"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := scopeNormalize(tt.text, tt.workspace); got != tt.want {
+				t.Fatalf("scopeNormalize(%q, %q) = %q, want %q", tt.text, tt.workspace, got, tt.want)
+			}
+		})
 	}
 }
