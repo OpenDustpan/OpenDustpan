@@ -94,6 +94,7 @@ func TestDuplicateFinalIdempotent(t *testing.T) {
 	s := openUnitStateStore(t)
 
 	fence, unit := unitStateTofuUnit(t, s)
+	delivered := awaitingWriteBackJob(t, s, fence, unit)
 
 	w := unlockedForWrites(t, s, fence, unit)
 	sv := unitStatePending(t, w)
@@ -120,6 +121,8 @@ func TestDuplicateFinalIdempotent(t *testing.T) {
 	if got.VersionID != sv.ID.String() {
 		t.Fatalf("final version after the duplicate finalize = %q, want %q", got.VersionID, sv.ID)
 	}
+
+	assertWriteBackClosed(t, s, delivered.ID, sv.ID)
 }
 
 // TestFinalWriteRollback proves that a version write that fails inside the
