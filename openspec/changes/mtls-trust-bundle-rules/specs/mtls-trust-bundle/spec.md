@@ -1,41 +1,41 @@
 ## ADDED Requirements
 
-### Requirement: Save namespace trust bundle
+### Requirement: Save namespace trust bundle (save-bundle)
 
 When an administrator saves a trust bundle, the server SHALL store it as a new version under that namespace only.
 
 #### Scenario: Save valid bundle
-- **WHEN** administrator with the namespace action and fresh session runs save-bundle with a valid PEM bundle
-- **THEN** server stores a new version, keeps the prior version and writes an audit entry
+- **WHEN** an administrator with the namespace action and a fresh session runs save-bundle with a valid PEM bundle
+- **THEN** the server stores a new version, keeps the prior version and writes an audit entry
 
 ### Requirement: Refuse invalid bundle
 
-If a bundle holds malformed PEM, an expired CA, or input outside the size bounds, then the server SHALL refuse the save.
+If a bundle holds malformed PEM, an expired CA or input outside the size bounds, then the server SHALL refuse the save.
 
 #### Scenario: Refuse expired CA
-- **WHEN** bundle holds malformed PEM or an expired CA
-- **THEN** server refuses with 400, names the CA index and stores nothing
+- **WHEN** a bundle holds an expired CA
+- **THEN** the server refuses with 400, names the CA index and stores nothing
 
-### Requirement: Rotate bundle
+### Requirement: Rotate bundle (rotate-bundle)
 
-When an administrator runs rotate-bundle, the server SHALL add a new version and move the active pointer to it.
+When an administrator rotates the bundle, the server SHALL move the active pointer to the new version.
 
 #### Scenario: Pointer moves
-- **WHEN** administrator runs rotate-bundle with a valid bundle and an overlap of at most 24 hours
-- **THEN** server marks the new version active and states the overlap end
+- **WHEN** an administrator runs rotate-bundle with a valid bundle and an overlap of at most 24 hours
+- **THEN** the server marks the new version active and states the overlap end
 
 ### Requirement: Refuse active version delete
 
 If a caller deletes the active bundle version, then the server SHALL refuse the delete.
 
 #### Scenario: Active delete refused
-- **WHEN** caller deletes the active version
-- **THEN** server refuses with 409
+- **WHEN** a caller deletes the active version
+- **THEN** the server refuses with 409
 
-### Requirement: Fresh auth for bundle save
+### Requirement: Fresh authentication for bundle write
 
-When an administrator saves or rotates a trust bundle, the server SHALL require a fresh session authentication.
+If a bundle write arrives without a fresh session authentication, then the server SHALL refuse the write.
 
-#### Scenario: Token-only refused
-- **WHEN** save arrives with an access token only
-- **THEN** server refuses with 403 fresh-authentication-required
+#### Scenario: Token only refused
+- **WHEN** a save arrives with an access token only
+- **THEN** the server refuses with 403
