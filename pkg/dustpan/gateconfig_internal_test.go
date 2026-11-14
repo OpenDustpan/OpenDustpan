@@ -159,6 +159,7 @@ func groupFixture(t *testing.T, st principal.Store) approverdirectorytest.Fixtur
 		Guard:      principal.AdminOnlyGuard{},
 		Namespaces: nil,
 		Tokens:     nil,
+		GroupReach: nil,
 		Now:        nil,
 		NewID:      nil,
 	})

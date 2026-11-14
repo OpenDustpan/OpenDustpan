@@ -174,7 +174,7 @@ func pgCopyStackTables() []pgCopyTable {
 				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, pgColRevision,
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
 				pgColCreatedBy, "restored_from", "journal_version", "journal_closed", "token_id",
-				"journal_records_changed",
+				"journal_records_changed", pgColJobID, "git_head",
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},
@@ -358,7 +358,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				"id", pgColWorkspaceID, pgColStatus, "serial", "lineage", "md5", pgColSize,
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
 				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from", "sealed",
-				"sensitive_marks", "fenced_by", "unlocked_write",
+				"sensitive_marks", "fenced_by", "unlocked_write", "origin_job",
 			},
 			orderBy: []string{"id"},
 		},
@@ -530,6 +530,14 @@ func pgEmptiedTables() []pgCopyTable {
 			table:   backup.TablePasskeyChallenges,
 			columns: pgPasskeyChallengeColumns(),
 			orderBy: []string{pgColDigest},
+		},
+		{
+			table: backup.TableUnitState,
+			columns: []string{
+				pgColUnitID, pgColNamespaceID, "version_id", "final_version_id", "final_commit", "final_job",
+				"final_at_ms",
+			},
+			orderBy: []string{pgColUnitID},
 		},
 		{
 			table:   backup.TableBlobDeleteLeases,
@@ -1075,8 +1083,9 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 }
 
 // checkStaged runs the checks of the staged rows in q: the staging name, the
-// sealed state, the namespace IDs, the owned rows, the removal alert markers
-// and the feature rows.
+// sealed state, the namespace IDs, the owned rows, the grants and the
+// memberships of principals of a namespace, the removal alert markers and the
+// feature rows.
 func checkStaged(ctx context.Context, q pgQuerier, staging string, restoreAt time.Time) error {
 	if identErr := checkStagingIdent(staging); identErr != nil {
 		return identErr
@@ -1092,6 +1101,14 @@ func checkStaged(ctx context.Context, q pgQuerier, staging string, restoreAt tim
 
 	if ownedErr := checkStagedOwnedRows(ctx, q, staging); ownedErr != nil {
 		return ownedErr
+	}
+
+	if grantErr := checkStagedNamespacePrincipalGrants(ctx, q, staging); grantErr != nil {
+		return grantErr
+	}
+
+	if memberErr := checkStagedNamespacePrincipalMemberships(ctx, q, staging); memberErr != nil {
+		return memberErr
 	}
 
 	if markerErr := checkStagedRemovalAlerts(ctx, q, staging, restoreAt); markerErr != nil {

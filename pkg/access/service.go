@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/setting"
 )
 
 var _ principal.Guard = (*Service)(nil)
@@ -66,12 +67,26 @@ type Namespaces interface {
 	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
+// Settings answers the effective value of an installation setting.
+// *setting.Service meets it.
+type Settings interface {
+	// Effective returns the setting key of scope with its effective value
+	// and its source.
+	Effective(ctx context.Context, scope setting.Scope, key string) (setting.Item, error)
+}
+
 // ServiceConfig holds the dependencies of a Service.
 type ServiceConfig struct {
 	Store      Store
 	Directory  Directory
 	Namespaces Namespaces
 	Authorizer *Authorizer
+	// Reach holds the ports that the compare of a grant on a service
+	// principal reads: the grants, the roles, the callers and the
+	// principals. A grant of a role with a delegation action on a service
+	// principal needs it: the reach of the principal must fit inside the
+	// reach of the granter. A port that is nil refuses such a grant.
+	Reach ReachConfig
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
 	// NewID returns a new opaque ID with the prefix it takes. Nil means
@@ -81,6 +96,9 @@ type ServiceConfig struct {
 	// 6). They hold every action with no grant, so an access-review export
 	// shows one row for each.
 	BootstrapAdmins []string
+	// Settings reads the installation settings, for the cap of the export
+	// of a collection. Nil means DefaultCollectionUnitCap.
+	Settings Settings
 	// LimitGroups reads the access limits that a change of the members of
 	// a group can lift. Nil keeps the check of a group to its grants: a
 	// setup that keeps no access limits names no group.
@@ -98,9 +116,11 @@ type Service struct {
 	directory  Directory
 	namespaces Namespaces
 	authz      *Authorizer
+	reach      ReachConfig
 	now        func() time.Time
 	newID      func(prefix string) string
 	bootstrap  []string
+	settings   Settings
 	limits     LimitGroups
 }
 
@@ -129,8 +149,16 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 	}
 
 	return &Service{
-		store: cfg.Store, directory: cfg.Directory, namespaces: cfg.Namespaces, authz: cfg.Authorizer,
-		now: now, newID: newID, bootstrap: slices.Clone(cfg.BootstrapAdmins), limits: cfg.LimitGroups,
+		store:      cfg.Store,
+		directory:  cfg.Directory,
+		namespaces: cfg.Namespaces,
+		authz:      cfg.Authorizer,
+		reach:      cfg.Reach,
+		now:        now,
+		newID:      newID,
+		bootstrap:  slices.Clone(cfg.BootstrapAdmins),
+		settings:   cfg.Settings,
+		limits:     cfg.LimitGroups,
 	}, nil
 }
 
@@ -337,6 +365,14 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 	fence, err := s.checkGrant(ctx, in, role)
 	if err != nil {
 		return Grant{}, err
+	}
+
+	// Defense in depth: the check of the actions of granter runs again in
+	// the transaction of the write. The reach of the principal is read
+	// here, before the write: the reach reads the grants, the roles, the
+	// callers and the principals of the whole installation.
+	if reachErr := s.checkPrincipalReach(ctx, granter, in.Object, role); reachErr != nil {
+		return Grant{}, reachErr
 	}
 
 	chain, err := s.authz.chain(ctx, in.Object)
@@ -626,11 +662,13 @@ func grantChange(e audit.Entry, at time.Time, fence namespace.Fence, object stri
 // CheckGroupGrants implements principal.Guard: caller must hold every action
 // that the current grants of the group give, on each of their objects.
 //
-// An access limit of a scope that names the group holds for the members of
-// the group, so the change can lift the limit for one member: an add to a
-// group of an unless clause, a remove from a group of a when clause or of
+// An access limit or a gate of a scope that names the group holds for the
+// members of the group, so the change can lift it for one member: an add to
+// a group of an unless clause, a remove from a group of a when clause or of
 // the principal scope. A rename removes the members from the old name and
-// adds them to the new name, so it can lift a limit that names either name.
+// adds them to the new name, so it can lift an object that names either name.
+// An add to a group of an approval rule makes the member an approver, which
+// widens access.
 // The caller must be a site administrator then: the bootstrap administrator,
 // or a caller whom the access decision allows every action of the
 // site-administrator role on the installation. A change that can only add a
@@ -658,28 +696,48 @@ func (s *Service) CheckGroupGrants(
 
 	limit, lifted, err := s.limits.LimitLiftedBy(ctx, groupID, newName, change)
 	if err != nil {
-		return fmt.Errorf("%w: read the access limits that name the group %q: %w", ErrEscalation, groupID, err)
+		return fmt.Errorf(
+			"%w: read the access limits, gates and approval rules that name the group %q: %w",
+			ErrEscalation, groupID, err,
+		)
 	}
 
 	if !lifted {
 		return nil
 	}
 
+	kind := limitKindText(limit.Kind)
+
 	if !s.limitReadable(ctx, caller, limit) {
 		return fmt.Errorf(
-			"%w: an access limit that you cannot read names the group %q: only a site administrator can %s",
-			ErrEscalation, groupID, groupChangeText(change),
+			"%w: %s that you cannot read names the group %q: only a site administrator can %s",
+			ErrEscalation, kind, groupID, groupChangeText(change),
 		)
 	}
 
 	return fmt.Errorf(
-		"%w: access limit %q of %s names the group %q: only a site administrator can %s",
-		ErrEscalation, limit.ID, limit.Scope, groupID, groupChangeText(change),
+		"%w: %s %q of %s names the group %q: only a site administrator can %s",
+		ErrEscalation, kind, limit.ID, limit.Scope, groupID, groupChangeText(change),
 	)
 }
 
+// limitKindText returns the kind of ref with its article. A ref with no kind
+// counts as an access limit: defense in depth, because it comes from a reader
+// of another version.
+func limitKindText(kind LimitKind) string {
+	if kind == "" {
+		kind = LimitKindAccessLimit
+	}
+
+	if kind == LimitKindAccessLimit || kind == LimitKindApprovalRule {
+		return "an " + string(kind)
+	}
+
+	return "a " + string(kind)
+}
+
 // groupChangeText returns the text of the change for the refusal of a group
-// that an access limit names.
+// that an access limit, a gate or an approval rule names.
 func groupChangeText(change principal.GroupChange) string {
 	switch change {
 	case principal.GroupChangeAddMember:
@@ -737,6 +795,42 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 	for _, subject := range subjects {
 		if err := s.checkSubjectGrants(ctx, caller, subject); err != nil {
 			return err
+		}
+	}
+
+	return nil
+}
+
+// CheckGroupReach implements principal.GroupReach: caller must hold the
+// reach of every service principal that the current grants of the group
+// give. A membership gives the grants of the group, and a grant on a
+// service principal with a delegation action lets its holder act as that
+// principal, with every grant that it has now or gets later. It returns an
+// error that wraps identity.ErrDenied when the reach of the caller does not
+// hold every action, and when it cannot read what it needs.
+func (s *Service) CheckGroupReach(ctx context.Context, caller identity.Principal, groupID string) error {
+	if caller.Admin {
+		return nil
+	}
+
+	grants, err := s.store.GrantsOf(ctx, Subject{Kind: SubjectGroup, ID: groupID})
+	if err != nil {
+		return fmt.Errorf("%w: read the grants of group %q: %w", identity.ErrDenied, groupID, err)
+	}
+
+	for i := range grants {
+		role, err := s.GetRole(ctx, grants[i].Role)
+		if errors.Is(err, ErrNotFound) {
+			// A deleted custom role gives nothing, so it checks nothing.
+			continue
+		}
+
+		if err != nil {
+			return fmt.Errorf("%w: read the role %q: %w", identity.ErrDenied, grants[i].Role, err)
+		}
+
+		if err := s.checkPrincipalReach(ctx, caller, grants[i].Object, role); err != nil {
+			return fmt.Errorf("%w: %w", identity.ErrDenied, err)
 		}
 	}
 
@@ -1004,7 +1098,7 @@ func (s *Service) checkPrincipalObject(ctx context.Context, obj identity.Object)
 // the principal has, so only a principal that manages every grant can give
 // it.
 func (s *Service) checkDelegationGranter(ctx context.Context, granter identity.Principal, role Role) error {
-	if !slices.ContainsFunc(role.Actions, func(a identity.Action) bool { return families[a] == FamilyDelegation }) {
+	if !delegationAction(role) {
 		return nil
 	}
 
@@ -1015,6 +1109,12 @@ func (s *Service) checkDelegationGranter(ctx context.Context, granter identity.P
 	}
 
 	return err
+}
+
+// delegationAction reports whether role holds an action of the delegation
+// family, for example principal:manage-tokens.
+func delegationAction(role Role) bool {
+	return slices.ContainsFunc(role.Actions, func(a identity.Action) bool { return families[a] == FamilyDelegation })
 }
 
 // servicePrincipalsOfGroup returns the sorted IDs of the service
@@ -1323,13 +1423,192 @@ func (s *Service) checkEscalation(
 		return err
 	}
 
+	var missing []HeldAction
+
 	for _, a := range role.Actions {
 		if !held.has(a) {
-			return fmt.Errorf("%w: %s does not hold %s on %q", ErrEscalation, granter.Subject, a, obj.String())
+			missing = append(missing, HeldAction{Action: a, Object: obj})
 		}
 	}
 
+	if len(missing) == 0 {
+		return nil
+	}
+
+	slices.SortFunc(missing, func(a, b HeldAction) int {
+		if c := strings.Compare(string(a.Action), string(b.Action)); c != 0 {
+			return c
+		}
+
+		return strings.Compare(a.Object.String(), b.Object.String())
+	})
+
+	return &escalationError{
+		text: fmt.Sprintf("%s: %s does not hold %s on %q",
+			ErrEscalation, granter.Subject, missing[0].Action, obj.String()),
+		missing: missing,
+	}
+}
+
+// escalationError reports a role with actions that the granter does not hold
+// on the object. It wraps ErrEscalation, and it carries the missing actions
+// for the audit entry. Its text names the first action, as before.
+type escalationError struct {
+	text    string
+	missing []HeldAction
+}
+
+// Error implements error.
+func (e *escalationError) Error() string {
+	return e.text
+}
+
+// Unwrap lets errors.Is match ErrEscalation.
+func (e *escalationError) Unwrap() error {
+	return ErrEscalation
+}
+
+// MissingActions returns the actions of the role that the granter does not
+// hold, with the object of each, sorted.
+func (e *escalationError) MissingActions() []HeldAction {
+	return slices.Clone(e.missing)
+}
+
+// checkPrincipalReach refuses a grant of a role with a delegation action on
+// a service principal when the reach of the principal does not fit inside
+// the reach of granter. A holder of such a grant acts as the principal,
+// with every grant that it has now or gets later, so the grant must not
+// give more than the granter holds.
+//
+// It reads the reaches before the write, not in the transaction of the
+// write: the reach reads the grants, the roles, the callers and the
+// principals of the whole installation, and the transaction of a write
+// holds its own connection and its own reads.
+//
+// It returns nil when granter is an administrator, when obj is not a
+// service principal, and when the role holds no delegation action. A
+// missing port, a granter with no principal record and a failed read refuse
+// the grant. The refusal names the principal, and no cause.
+func (s *Service) checkPrincipalReach(
+	ctx context.Context, granter identity.Principal, obj identity.Object, role Role,
+) error {
+	if granter.Admin {
+		return nil
+	}
+
+	kind, ok := KindOf(obj)
+	if !ok || kind != ObjectPrincipal || !delegationAction(role) {
+		return nil
+	}
+
+	principalID := obj.PrincipalID()
+
+	holder, missing, err := s.missingReachActions(ctx, granter, principalID)
+	if err != nil {
+		return principalReachRefusal(ctx, holder, principalID, missing, err)
+	}
+
+	if len(missing) > 0 {
+		return principalReachRefusal(ctx, holder, principalID, missing, nil)
+	}
+
 	return nil
+}
+
+// missingReachActions returns the reach of granter and the actions of the
+// reach of the service principal principalID that it does not hold. A
+// missing port and a granter with no principal record answer an error: the
+// caller then refuses the grant.
+func (s *Service) missingReachActions(
+	ctx context.Context, granter identity.Principal, principalID string,
+) (Reach, []HeldAction, error) {
+	if err := s.reachReady(); err != nil {
+		return Reach{}, nil, err
+	}
+
+	p, err := s.directory.GetPrincipalBySubject(ctx, granter.Subject)
+	if err != nil {
+		return Reach{}, nil, fmt.Errorf("read the principal of the caller %q: %w", granter.Subject, err)
+	}
+
+	holder, err := ReachOf(ctx, s.reach, p.ID)
+	if err != nil {
+		return Reach{}, nil, fmt.Errorf("read the reach of the caller: %w", err)
+	}
+
+	target, err := ReachOf(ctx, s.reach, principalID)
+	if err != nil {
+		return holder, nil, fmt.Errorf("read the reach of principal %q: %w", principalID, err)
+	}
+
+	missing, err := holder.Missing(ctx, target)
+	if err != nil {
+		return holder, nil, fmt.Errorf("compare the reaches: %w", err)
+	}
+
+	return holder, missing, nil
+}
+
+// reachReady returns an error when the reach config does not hold the ports
+// that the reach compare reads. The caller then refuses the grant: the
+// compare never skips.
+func (s *Service) reachReady() error {
+	if s.reach.Grants == nil || s.reach.Roles == nil || s.reach.Callers == nil || s.reach.Principals == nil {
+		return fmt.Errorf("%w: the reach needs the grants, the roles, the callers and the principals",
+			ErrMissingDependency)
+	}
+
+	return nil
+}
+
+// principalReachRefusal returns the refusal of a grant on the service
+// principal principalID whose reach is not inside the reach of the granter,
+// and of a grant whose reaches the server cannot compare. Its text names
+// the principal only when holder reads the principals of the installation,
+// so the refusal never names an object that the caller cannot read. The
+// text never holds cause, which may hold driver detail. missing holds the
+// actions of the reach of the principal that the granter does not hold, for
+// the audit entry.
+func principalReachRefusal(
+	ctx context.Context, holder Reach, principalID string, missing []HeldAction, cause error,
+) error {
+	text := "the reach of an object that you cannot read is not inside the reach of the caller"
+
+	readable, err := holder.Has(ctx, identity.ActionServerReadPrincipals, identity.PrincipalObject(principalID))
+	if err == nil && readable {
+		text = fmt.Sprintf("the reach of principal %q is not inside the reach of the caller", principalID)
+	}
+
+	return &principalReachError{text: text, missing: slices.Clone(missing), cause: cause}
+}
+
+// principalReachError reports a grant that the reach compare refused. It
+// wraps ErrEscalation and the cause, which may hold driver detail. Its text
+// names the principal and not the cause.
+type principalReachError struct {
+	text    string
+	missing []HeldAction
+	cause   error
+}
+
+// Error implements error.
+func (r *principalReachError) Error() string {
+	return ErrEscalation.Error() + ": " + r.text
+}
+
+// MissingActions returns the actions of the reach of the principal that the
+// granter does not hold, with the object of each, sorted.
+func (r *principalReachError) MissingActions() []HeldAction {
+	return slices.Clone(r.missing)
+}
+
+// Unwrap lets errors.Is match ErrEscalation and the cause.
+func (r *principalReachError) Unwrap() []error {
+	if r.cause == nil {
+		return []error{ErrEscalation}
+	}
+
+	return []error{ErrEscalation, r.cause}
 }
 
 // checkSubject returns principal.ErrNotFound when the subject does not

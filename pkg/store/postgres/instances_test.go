@@ -39,8 +39,8 @@ func TestStoreCheckConformance(t *testing.T) {
 	storetest.RunStoreChecks(t, func(t *testing.T) storetest.StoreCheckStore {
 		t.Helper()
 
-		st := open(t, base)
+		st := openBackup(t, base)
 
-		return storetest.StoreCheckStore{Records: st, Ops: st.DurableOperationsPort()}
+		return storetest.StoreCheckStore{Records: st, Ops: st.DurableOperationsPort(), Witness: st}
 	})
 }

@@ -137,10 +137,6 @@ func (*svcStore) List(context.Context, job.Filter) (job.Page, error) {
 	return job.Page{Jobs: nil, Damaged: nil, After: ""}, nil
 }
 
-func (*svcStore) ObserveStateVersion(context.Context, job.StateVersion, namespace.Fence) ([]job.Job, error) {
-	return nil, nil
-}
-
 func (*svcStore) SetVerification(context.Context, job.ID, job.Verification, namespace.Fence, []audit.Entry,
 ) error {
 	return nil
@@ -262,7 +258,7 @@ func (a *svcAuthorizer) Authorize(_ context.Context, p identity.Principal, actio
 }
 
 func (*svcAuthorizer) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 // svcGates is a job.GateGuard that returns the gates in enforced, or err.
@@ -357,6 +353,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 						Directory:  "",
 						Revision:   "",
 					},
+					LocationSource: job.LocationSourceRequest,
 					Steps: []job.Step{
 						{
 							Name:             "plan",
@@ -742,8 +739,8 @@ func TestStartRefusesWhenPortsFail(t *testing.T) {
 			r.planner.spec = func(u identity.Object, _ *job.StartRequest) job.Spec {
 				return job.Spec{
 					Unit: u, Operation: job.OperationDestroy, Purpose: "", Executor: job.ExecutorRunner,
-					Location: emptyLocation(), Steps: nil, Pool: "p", Profile: "", Edits: nil, Delivery: "",
-					Defaulted: nil,
+					Location: emptyLocation(), LocationSource: "", Steps: nil, Pool: "p", Profile: "", Edits: nil,
+					Delivery: "", Defaulted: nil,
 				}
 			}
 		}},
@@ -1608,6 +1605,7 @@ type fieldCase struct {
 
 func fieldCases() []fieldCase {
 	repo := job.Location{Connection: "", Repository: "acme/infra", Ref: "main", Directory: "", Revision: ""}
+	revisionOnly := job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: "abcdef0"}
 	none := emptyLocation()
 
 	return []fieldCase{
@@ -1617,6 +1615,10 @@ func fieldCases() []fieldCase {
 		{"both with both actions", "ci", repo, "", nil},
 		{"a pool without namespace:manage-runners", "ci", none, job.ActionNamespaceManageRunners, identity.ErrDenied},
 		{"a location without unit:define-steps", "", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
+		{
+			"a revision-only location without unit:define-steps", "", revisionOnly, job.ActionUnitDefineSteps,
+			identity.ErrDenied,
+		},
 		{"both without namespace:manage-runners", "ci", repo, job.ActionNamespaceManageRunners, identity.ErrDenied},
 		{"both without unit:define-steps", "ci", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
 		{"no fields without the action of the pool", "", none, job.ActionNamespaceManageRunners, nil},

@@ -357,7 +357,11 @@ func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref, _ workspace.P
 		ID:          workspace.ID("ws-" + name.String()),
 		Ref:         workspace.Ref{Namespace: ns, Name: name},
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }
 
@@ -468,7 +472,7 @@ func (stubWorkspaces) BeginState(
 			RestoredFrom:    "",
 			SensitiveMarks:  nil,
 			FenceBy:         "",
-			UnlockedWrite:   false,
+			UnlockedWrite:   false, Origin: identity.StateOrigin{Job: "", Commit: ""},
 		},
 	}, nil
 }
@@ -546,7 +550,7 @@ func stubStateVersion() workspace.StateVersion {
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
-		UnlockedWrite:   false,
+		UnlockedWrite:   false, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -934,7 +938,11 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 		ID:          id,
 		Ref:         workspace.Ref{Namespace: ns, Name: parsed},
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }
 

@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/preferences"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -44,6 +45,8 @@ type serverHandlerInputs struct {
 	tokens     *accesstoken.Service
 	deleted    *deletedSweeper
 	stateWrite stategate.Effective
+	// cursors seals the cursor of each page of the namespace list.
+	cursors secret.Wrapper
 
 	// backups is the backup service and restores the restore service, both
 	// nil when no backup target is configured. checks is the store check
@@ -122,7 +125,7 @@ func newServerHandler(in serverHandlerInputs) (http.Handler, error) {
 		LocalUsers:       in.extras.localUsers,
 		Settings:         in.extras.settings,
 		InstallationKind: in.installationKind, StateWriteGates: in.stateWrite,
-		Instances: in.instances, StoreChecks: in.checks,
+		Instances: in.instances, StoreChecks: in.checks, Cursors: in.cursors,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)

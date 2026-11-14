@@ -233,7 +233,9 @@ func (h *Handler) viewCaller(
 			audited.Kind = ""
 		}
 
-		h.guard.Record(ctx, r, audited, refusal.Denial{Action: action, Object: obj, Reason: reason, Window: 0})
+		h.guard.Record(ctx, r, audited, refusal.Denial{
+			Action: action, Object: obj, Reason: reason, ReasonWithin: nil, Window: 0,
+		})
 
 		return nil, savedview.ErrNotPerson
 	}

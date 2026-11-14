@@ -157,12 +157,14 @@ func restoreJob(unit identity.Object) job.Job {
 	}
 
 	return job.Job{
-		ID: job.ID(ident.NewID(job.IDPrefix)),
+		ID:          job.ID(ident.NewID(job.IDPrefix)),
+		NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationRefresh, Purpose: "", Executor: job.ExecutorRunner,
 			Location: job.Location{
 				Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network", Revision: "abc123",
 			},
+			LocationSource: job.LocationSourceRequest,
 			Steps: []job.Step{{
 				Name: "refresh", Role: job.RoleTool, Phase: job.PhaseApply, Args: []string{"tofu", "apply"}, Env: nil,
 				Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: true, Outputs: nil,

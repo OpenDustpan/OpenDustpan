@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -38,6 +39,10 @@ func RunIPAllowlist(t *testing.T, newStore IPAllowlistFactory) {
 		{name: "set then get round trips IPv4 and IPv6", test: testIPAllowlistRoundTrip},
 		{name: "set replaces the list", test: testIPAllowlistReplace},
 		{name: "the zero list removes the rule", test: testIPAllowlistZeroRemoves},
+		{name: "no namespace has a list", test: testIPAllowlistNamespacesWithListEmpty},
+		{name: "two namespaces with a list and one without", test: testIPAllowlistNamespacesWithListOrder},
+		{name: "a removed list leaves no namespace", test: testIPAllowlistNamespacesWithListRemoved},
+		{name: "a namespace without a list sorts first", test: testIPAllowlistNamespacesWithListSkipsEmpty},
 		{name: "an unknown namespace is ErrNotFound", test: testIPAllowlistUnknownNamespace},
 		{name: "a stale fence is ErrFenced and writes nothing", test: testIPAllowlistStaleFence},
 		{name: "the audit entry joins the chain of the namespace", test: testIPAllowlistAuditEntry},
@@ -193,6 +198,94 @@ func testIPAllowlistZeroRemoves(t *testing.T, s IPAllowlistStore) {
 
 	if !got.IsEmpty() {
 		t.Fatalf("list after a remove = %v, want no rule", got.Strings())
+	}
+}
+
+// testIPAllowlistNamespacesWithListEmpty checks a store with no list answers
+// an empty result.
+func testIPAllowlistNamespacesWithListEmpty(t *testing.T, s IPAllowlistStore) {
+	t.Helper()
+
+	newNamespace(t, s, "acme")
+
+	got, err := s.NamespacesWithList(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces with a list: %v", err)
+	}
+
+	if got == nil || len(got) != 0 {
+		t.Fatalf("namespaces with a list = %v, want an empty slice", got)
+	}
+}
+
+// testIPAllowlistNamespacesWithListOrder checks the result holds only the
+// namespaces with a list, in name order.
+func testIPAllowlistNamespacesWithListOrder(t *testing.T, s IPAllowlistStore) {
+	t.Helper()
+
+	beta := newNamespace(t, s, "beta")
+	newNamespace(t, s, "gamma")
+	acme := newNamespace(t, s, "acme")
+
+	mustSetIPAllowlist(t, s, beta, []string{"10.0.0.0/8"}, ipAllowlistEntry(beta.Name))
+	mustSetIPAllowlist(t, s, acme, []string{"192.0.2.0/24"}, ipAllowlistEntry(acme.Name))
+
+	got, err := s.NamespacesWithList(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces with a list: %v", err)
+	}
+
+	want := []namespace.Name{"acme", "beta"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("namespaces with a list = %v, want %v", got, want)
+	}
+}
+
+// testIPAllowlistNamespacesWithListRemoved checks a namespace that lost its
+// list is not in the result.
+func testIPAllowlistNamespacesWithListRemoved(t *testing.T, s IPAllowlistStore) {
+	t.Helper()
+
+	acme := newNamespace(t, s, "acme")
+	mustSetIPAllowlist(t, s, acme, []string{"10.0.0.0/8"}, ipAllowlistEntry(acme.Name))
+
+	err := s.SetNamespaceList(t.Context(), acme.Name, ipallow.List{}, acme.Fence(), ipAllowlistEntry(acme.Name))
+	if err != nil {
+		t.Fatalf("remove the rule: %v", err)
+	}
+
+	got, err := s.NamespacesWithList(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces with a list: %v", err)
+	}
+
+	if len(got) != 0 {
+		t.Fatalf("namespaces with a list = %v, want none", got)
+	}
+}
+
+// testIPAllowlistNamespacesWithListSkipsEmpty checks a namespace whose name
+// sorts first and whose list is empty is not in the result.
+func testIPAllowlistNamespacesWithListSkipsEmpty(t *testing.T, s IPAllowlistStore) {
+	t.Helper()
+
+	first := newNamespace(t, s, "aardvark")
+	err := s.SetNamespaceList(t.Context(), first.Name, ipallow.List{}, first.Fence(), ipAllowlistEntry(first.Name))
+	if err != nil {
+		t.Fatalf("set the empty list: %v", err)
+	}
+
+	beta := newNamespace(t, s, "beta")
+	mustSetIPAllowlist(t, s, beta, []string{"10.0.0.0/8"}, ipAllowlistEntry(beta.Name))
+
+	got, err := s.NamespacesWithList(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces with a list: %v", err)
+	}
+
+	want := []namespace.Name{"beta"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("namespaces with a list = %v, want %v", got, want)
 	}
 }
 

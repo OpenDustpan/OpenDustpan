@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -42,6 +43,7 @@ func SettingDeclarations() []setting.Declaration {
 
 	held := localuser.SettingDeclarations()
 	held = append(held, session.SettingDeclarations()...)
+	held = append(held, access.SettingDeclarations()...)
 	held = append(held, plainconn.SettingDeclarations()...)
 	held = append(held, principal.RemovalAlertSettingDeclarations()...)
 	held = append(held, brandingPresetDeclaration())

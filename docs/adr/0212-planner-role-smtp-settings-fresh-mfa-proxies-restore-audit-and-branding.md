@@ -11,6 +11,8 @@ Changed by:
   preset only.
 - ADR 301 extends decision 2: the SMTP sender of the installation also sends
   the one-time code of the first enrollment of a factor.
+- ADR 365 changes decision 5: a wording refinement, the restore entries
+  follow the audit switch.
 
 ## Context
 
@@ -174,8 +176,9 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
    client. An operator behind it adds the load balancer address to
    `--trusted-proxies`, and the walk from the right then takes the client
    address. The security model page gives both setups.
-5. **A restore writes three audit entries.** A restore writes these audit
-   entries on the object `@server`. Each names the principal, the backup ID
+5. **A restore writes three audit entries.** When the audit log is on
+   (ADR 60 decision 2), a restore writes these audit entries on the object
+   `@server`. Each names the principal, the backup ID
    and the SHA-256 of the backup manifest.
    - **Start.** Before the server changes any data, it writes an entry of
      the restore start. A sink of ADR 60 receives it, so the record of the
@@ -286,3 +289,9 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
   next server tag (ADR 73).
 - The sign-in page reads `GET /api/dustpan/v1/sign-in` for its providers
   and its preset.
+
+## Changelog
+
+- 2026-11-13, wording refinement (ADR 365): decision 5 now starts "When the
+  audit log is on (ADR 60 decision 2)". ADR 60 decision 2 already said that
+  the server writes no entry when the switch is off.

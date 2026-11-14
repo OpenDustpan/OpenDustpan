@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -40,9 +41,15 @@ func membershipSetup(t *testing.T) (*Store, namespace.Namespace, workspace.ID) {
 
 	w := workspace.Workspace{
 		NamespaceID: "",
-		CreatedAt:   at, UpdatedAt: at, Lock: workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		LastRelease: workspace.NoRelease(),
-		ID:          id, Ref: ref, Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:          id,
+		Ref:         ref,
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Origin:      identity.StateOrigin{Job: "", Commit: ""},
 	}
 	if createErr := s.CreateWorkspace(ctx, w, ns.Fence()); createErr != nil {
 		t.Fatalf("create workspace: %v", createErr)

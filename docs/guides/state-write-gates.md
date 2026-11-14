@@ -197,6 +197,9 @@ with `400` and the code `gate.limit-membership`, for example `principal in
 resource.owners`. The server cannot check a change of the members of a group
 against such a limit, so it refuses to store one.
 
+A limit can name a group only when its author may manage groups with
+`server:manage-groups`, or is the bootstrap administrator.
+
 ## What a refusal looks like
 
 A refusal always answers 403 on the OpenTofu routes. So OpenTofu does not read

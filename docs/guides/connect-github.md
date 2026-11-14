@@ -212,8 +212,34 @@ Errors of a check:
 | 404 | The connection named in the path was not found. |
 | 409 | The operator did not give the installation to this namespace. Or the address of the app changed after its key was stored. Or the server cannot open the stored key. Or the address rules of the server refuse the address. |
 | 422 | GitHub refused the credential. |
-| 429 | The connection was checked more than once in 10 seconds, or the installation more than 30 times in a minute. The header `Retry-After` gives the wait time, at most 60 seconds. |
-| 503 | GitHub did not answer, or limited the rate. The header `Retry-After` gives the wait time when GitHub gave one, at most 60 seconds. |
+| 429 | The server limits the checks. It allows one check of a connection in 10 seconds, and 30 checks of an installation in a minute. The header `Retry-After` gives the wait time, at most 60 seconds. |
+| 503 | GitHub did not answer, or limited the rate. Or the app used its budget of signed calls (see below): then the message says so and gives the wait. The header `Retry-After` gives the wait time when the server or GitHub gave one, at most 60 seconds. |
+
+### The budget of the app
+
+The server signs some calls with the key of the app: each check, each
+installation token for a read or a write, and each read of an installation or
+of the app. GitHub limits these calls for each app. So the server allows 80
+signed calls of the app in a minute, which is 4,800 in an hour for one
+instance, below the GitHub limit of 5,000. All installations and all
+namespaces of the app share this budget. A call over the budget makes no call
+to GitHub, and the request answers 503 with `Retry-After`.
+
+The budget lives in the memory of one instance: each instance keeps its own
+budget. With several instances, the app can sign 80 calls in a minute in each
+instance, and the sum can pass the GitHub limit of 5,000 in an hour. An
+operator who runs several instances and embeds the server sets a lower
+`PerApp` with `WithGitHostCheckLimits`, so that the sum of the instances
+stays below 5,000 in an hour. The server has no flag for these limits.
+
+When one namespace uses the budget, the other namespaces wait too. A refused
+check writes a warning to the server log with the namespace, the connection
+and the wait. To find the namespace that uses the budget, read that log line
+and the audit log of the installation for the check entries, the write-backs
+and the reads of each namespace. To stop it, delete the grant that lets the
+principal check the connections, or end the assignment of the installation
+to the namespace (see "Step 2: the operator gives an installation to a
+namespace").
 
 The check takes no `Idempotency-Key`. A retry is safe.
 

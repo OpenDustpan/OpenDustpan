@@ -268,18 +268,32 @@ func (h *Handler) gitHostLinkRoutes() []Route {
 	routes := make([]Route, 0, gitHostLinkRouteCount)
 	routes = append(routes, []Route{
 		{
-			Method: http.MethodGet, Path: gitHostLinksPath, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
-			Serve: h.listGitHostLinks,
+			Method: http.MethodGet,
+			Path:   gitHostLinksPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionCallerRead,
+			},
+			Resolve:      resolveCaller,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.listGitHostLinks,
 		},
 		{
 			Method: http.MethodDelete, Path: gitHostLinkPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.deleteGitHostLink,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.deleteGitHostLink,
 		},
 		{
-			Method: http.MethodDelete, Path: principalGitHostLinks, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerManagePrincipals}, Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.deletePrincipalGitHostLink,
+			Method: http.MethodDelete,
+			Path:   principalGitHostLinks,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionServerManagePrincipals,
+			},
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.deletePrincipalGitHostLink,
 		},
 	}...)
 
@@ -292,15 +306,15 @@ func (h *Handler) gitHostLinkRoutes() []Route {
 	return append(routes, []Route{
 		{
 			Method: http.MethodPost, Path: gitHostLinkRequestsPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.startGitHostLink,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.startGitHostLink,
 		},
 		{
 			Method: http.MethodPost, Path: gitHostLinkShowPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.showGitHostLink,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.showGitHostLink,
 		},
 		{
 			Method: http.MethodPost, Path: gitHostLinksPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.fresh(identity.ActionCallerManageGitHostLinks, h.acceptGitHostLink),
 		},
 	}...)

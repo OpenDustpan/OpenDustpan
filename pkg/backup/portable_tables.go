@@ -134,6 +134,8 @@ func portableSpec() []PortableTable {
 				{Name: "journal_closed", Kind: KindBool},
 				{Name: "token_id", Kind: KindText},
 				{Name: "journal_records_changed", Kind: KindBool},
+				{Name: portColJobID, Kind: KindText},
+				{Name: "git_head", Kind: KindText},
 			},
 		},
 		{
@@ -470,6 +472,7 @@ func portableSpec() []PortableTable {
 				{Name: "sensitive_marks", Kind: KindBytes},
 				{Name: "fenced_by", Kind: KindText},
 				{Name: "unlocked_write", Kind: KindBool},
+				{Name: "origin_job", Kind: KindText},
 			},
 		},
 		{

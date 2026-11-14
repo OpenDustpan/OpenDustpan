@@ -156,6 +156,220 @@ func TestLimitGroupDirections(t *testing.T) {
 	}
 }
 
+// gateDirectionCase is one answer of GateGroupDirections that a test checks.
+type gateDirectionCase struct {
+	name      string
+	condition string
+	unless    string
+	want      map[string]cedargo.GroupDirections
+	wantErr   bool
+	// membership reports whether the error fails the membership rule.
+	membership bool
+}
+
+// check checks the answer of GateGroupDirections for the case.
+func (c gateDirectionCase) check(t *testing.T) {
+	t.Helper()
+
+	got, err := cedargo.GateGroupDirections(c.condition, c.unless)
+	if !c.wantErr {
+		if err != nil {
+			t.Fatalf("GateGroupDirections(%q, %q) = %v, want nil", c.condition, c.unless, err)
+		}
+
+		if !maps.Equal(got, c.want) {
+			t.Fatalf("GateGroupDirections(%q, %q) = %v, want %v", c.condition, c.unless, got, c.want)
+		}
+
+		return
+	}
+
+	if err == nil {
+		t.Fatalf("GateGroupDirections(%q, %q) = %v, nil, want an error", c.condition, c.unless, got)
+	}
+
+	if got != nil {
+		t.Fatalf("GateGroupDirections(%q, %q) = %v with the error %v, want nil", c.condition, c.unless, got, err)
+	}
+
+	if errors.Is(err, gate.ErrLimitMembership) != c.membership {
+		t.Fatalf("GateGroupDirections(%q, %q) = %v, want the membership rule %t",
+			c.condition, c.unless, err, c.membership)
+	}
+}
+
+// TestGateGroupDirections checks, for each position of a group in the
+// condition or the unless of a gate, the changes of its members that can
+// lift the gate.
+func TestGateGroupDirections(t *testing.T) {
+	t.Parallel()
+
+	cases := []gateDirectionCase{
+		{
+			name:       "a group in a when clause makes a remove lift the gate",
+			condition:  `principal in OpenDustpan::Group::"sre"`,
+			unless:     "",
+			want:       map[string]cedargo.GroupDirections{"sre": {Add: false, Remove: true}},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a group in an unless clause makes an add lift the gate",
+			condition:  "",
+			unless:     `principal in OpenDustpan::Group::"sre"`,
+			want:       map[string]cedargo.GroupDirections{"sre": {Add: true, Remove: false}},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a ! in a when clause makes an add lift the gate",
+			condition:  `!(principal in OpenDustpan::Group::"sre")`,
+			unless:     "",
+			want:       map[string]cedargo.GroupDirections{"sre": {Add: true, Remove: false}},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a ! in an unless clause makes a remove lift the gate",
+			condition:  "",
+			unless:     `!(principal in OpenDustpan::Group::"sre")`,
+			want:       map[string]cedargo.GroupDirections{"sre": {Add: false, Remove: true}},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:      "a set of groups makes a remove lift the gate",
+			condition: `principal in [OpenDustpan::Group::"sre", OpenDustpan::Group::"platform"]`,
+			unless:    "",
+			want: map[string]cedargo.GroupDirections{
+				"sre": {Add: false, Remove: true}, "platform": {Add: false, Remove: true},
+			},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "empty clauses name no group",
+			condition:  "",
+			unless:     "",
+			want:       map[string]cedargo.GroupDirections{},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a clause that does not parse is an error",
+			condition:  `principal in`,
+			unless:     "",
+			want:       nil,
+			wantErr:    true,
+			membership: false,
+		},
+		{
+			name:       "a right side that holds no group literal names no group",
+			condition:  `principal in resource.owners`,
+			unless:     "",
+			want:       map[string]cedargo.GroupDirections{},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a right side that is the principal variable names no group",
+			condition:  `principal in principal`,
+			unless:     "",
+			want:       map[string]cedargo.GroupDirections{},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a right side that is the resource variable names no group",
+			condition:  `principal in resource`,
+			unless:     "",
+			want:       map[string]cedargo.GroupDirections{},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a right side that is a set of the principal variable names no group",
+			condition:  `principal in [principal]`,
+			unless:     "",
+			want:       map[string]cedargo.GroupDirections{},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a right side that is a principal entity names no group",
+			condition:  `principal in OpenDustpan::Principal::"olga"`,
+			unless:     "",
+			want:       map[string]cedargo.GroupDirections{},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a right side that is the principal variable in the unless names no group",
+			condition:  "",
+			unless:     `principal in principal`,
+			want:       map[string]cedargo.GroupDirections{},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a right side that is the resource variable in the unless names no group",
+			condition:  "",
+			unless:     `principal in resource`,
+			want:       map[string]cedargo.GroupDirections{},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a right side that is a set of the principal variable in the unless names no group",
+			condition:  "",
+			unless:     `principal in [principal]`,
+			want:       map[string]cedargo.GroupDirections{},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a right side that is a principal entity in the unless names no group",
+			condition:  "",
+			unless:     `principal in OpenDustpan::Principal::"olga"`,
+			want:       map[string]cedargo.GroupDirections{},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a right side that names no group does not hide the group of another test",
+			condition:  `principal in principal && principal in OpenDustpan::Group::"sre"`,
+			unless:     "",
+			want:       map[string]cedargo.GroupDirections{"sre": {Add: false, Remove: true}},
+			wantErr:    false,
+			membership: false,
+		},
+		{
+			name:       "a right side that holds a group in another shape is an error",
+			condition:  `principal in (if true then OpenDustpan::Group::"sre" else OpenDustpan::Group::"sre")`,
+			unless:     "",
+			want:       nil,
+			wantErr:    true,
+			membership: true,
+		},
+		{
+			name:       "a set that mixes a group and a principal is an error",
+			condition:  `principal in [OpenDustpan::Group::"sre", OpenDustpan::Principal::"olga"]`,
+			unless:     "",
+			want:       nil,
+			wantErr:    true,
+			membership: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tc.check(t)
+		})
+	}
+}
+
 // TestLimitGroupDirectionsErrors checks the refusal of a text that the
 // engine does not parse, of a text that holds a count of policies other
 // than one, and of a membership test of principal that names a value that

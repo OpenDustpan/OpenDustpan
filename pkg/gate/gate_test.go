@@ -131,6 +131,7 @@ func TestCode(t *testing.T) {
 		{gate.ErrFinal, "gate.final"},
 		{gate.ErrInvalid, "gate.invalid"},
 		{gate.ErrLimit, "gate.limit"},
+		{gate.ErrLimitGroupReach, "gate.limit-group-reach"},
 		{gate.ErrLimitMembership, "gate.limit-membership"},
 		{gate.ErrUnavailable, "gate.unavailable"},
 		{fmt.Errorf("save: %w", gate.ErrFinal), "gate.final"},

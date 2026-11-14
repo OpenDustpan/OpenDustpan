@@ -94,6 +94,15 @@ func newFixture(tb testing.TB) *fixture {
 func newFixtureWithCollections(tb testing.TB, units access.UnitCollections) *fixture {
 	tb.Helper()
 
+	return newFixtureWithSettings(tb, units, nil)
+}
+
+// newFixtureWithSettings returns a fixture whose authorizer reads units
+// through the collection port and whose service reads the installation
+// settings through settings.
+func newFixtureWithSettings(tb testing.TB, units access.UnitCollections, settings access.Settings) *fixture {
+	tb.Helper()
+
 	st, err := sqlite.Open(tb.Context(), filepath.Join(tb.TempDir(), "dustpan.db"))
 	if err != nil {
 		tb.Fatalf("open store: %v", err)
@@ -113,8 +122,10 @@ func newFixtureWithCollections(tb testing.TB, units access.UnitCollections) *fix
 	}
 
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
+		Store: st, Directory: st, Namespaces: st, Authorizer: authz,
+		Reach: access.ReachConfig{Grants: st, Roles: st, Callers: st, Principals: st, Collections: units, Units: st},
+		Now:   nil, NewID: nil,
+		BootstrapAdmins: []string{"admin"}, Settings: settings, LimitGroups: nil,
 	})
 	if err != nil {
 		tb.Fatalf("new service: %v", err)
@@ -972,7 +983,7 @@ func TestListObjects(t *testing.T) {
 		t.Fatalf("list objects: %v", err)
 	}
 
-	if scope.All || len(scope.Namespaces) != 1 || len(scope.Collections) != 1 || len(scope.Units) != 1 {
+	if scope.CoversEveryObject() || len(scope.Namespaces) != 1 || len(scope.Collections) != 1 || len(scope.Units) != 1 {
 		t.Fatalf("read scope = %+v, want one namespace, one collection and one unit", scope)
 	}
 
@@ -981,7 +992,8 @@ func TestListObjects(t *testing.T) {
 		t.Fatalf("list objects: %v", err)
 	}
 
-	if scope.All || len(scope.Namespaces) != 0 || len(scope.Units) != 1 || scope.Units[0].String() != web.String() {
+	if scope.CoversEveryObject() || len(scope.Namespaces) != 0 || len(scope.Units) != 1 ||
+		scope.Units[0].String() != web.String() {
 		t.Fatalf("write scope = %+v, want the unit only", scope)
 	}
 }
@@ -1482,7 +1494,7 @@ func checkNamespaceTokenLists(t *testing.T, f *fixture, fx *namespaceTokenFixtur
 		t.Fatalf("list objects: %v", err)
 	}
 
-	if scope.All || len(scope.Principals) != 1 || scope.Principals[0].String() != fx.acmeBot.String() {
+	if scope.CoversEveryObject() || len(scope.Principals) != 1 || scope.Principals[0].String() != fx.acmeBot.String() {
 		t.Fatalf("principals of alice = %+v, want only %q", scope, fx.acmeBot.String())
 	}
 
@@ -1491,7 +1503,7 @@ func checkNamespaceTokenLists(t *testing.T, f *fixture, fx *namespaceTokenFixtur
 		t.Fatalf("list objects: %v", listErr)
 	}
 
-	if empty.All || len(empty.Principals) != 0 {
+	if empty.CoversEveryObject() || len(empty.Principals) != 0 {
 		t.Fatalf("principals of bob = %+v, want none", empty)
 	}
 }

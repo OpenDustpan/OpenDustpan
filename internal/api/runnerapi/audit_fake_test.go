@@ -56,6 +56,14 @@ func (a *testAudit) Check(context.Context, namespace.Name) (audit.CheckResult, e
 	return audit.CheckResult{Checked: 0, BadSequence: 0, Unchained: 0, Valid: true}, nil
 }
 
+// denied returns the entries that the handler kept.
+func (a *testAudit) denied() []audit.Entry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return append([]audit.Entry(nil), a.entries...)
+}
+
 func (a *testAudit) keep(e audit.Entry) audit.Entry {
 	a.mu.Lock()
 	defer a.mu.Unlock()

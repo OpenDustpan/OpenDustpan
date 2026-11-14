@@ -129,6 +129,7 @@ func (s *Service) buildFence(
 		SensitiveMarks:  cur.SensitiveMarks,
 		FenceBy:         by,
 		UnlockedWrite:   false,
+		Origin:          originFrom(ctx),
 	}
 
 	key, err := s.blobs.attemptKey(w.NamespaceID, w.ID, sv.ID)

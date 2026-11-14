@@ -171,7 +171,8 @@ func TestRenameKeepsUnitSettings(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 
-	if err := r.s.RenameStack(t.Context(), r.ref, stack.Name("prod"), r.ns.Fence()); err != nil {
+	e := membershipEntry(time.UnixMilli(1_700_000_300_000).UTC(), r.ns.Name, "unit:manage")
+	if err := r.s.RenameStack(t.Context(), r.ref, stack.Name("prod"), r.ns.Fence(), e); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 

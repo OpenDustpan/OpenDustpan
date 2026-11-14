@@ -48,21 +48,6 @@ func sqliteJobBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
-			table:   "unit_state_versions",
-			columns: []string{"unit_id", backupColNamespaceID, "version_id", backupColUpdatedAtMs},
-		},
-		{
-			table: "unit_final_versions",
-			columns: []string{
-				"unit_id",
-				backupColNamespaceID,
-				"version_id",
-				"commit_id",
-				backupColJobID,
-				backupColAtMs,
-			},
-		},
-		{
 			table:   "job_plans",
 			columns: []string{"id", backupColNamespaceID, backupColJobID, "body", backupColCreatedAtMs},
 		},

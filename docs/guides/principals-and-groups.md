@@ -203,7 +203,9 @@ read-only server actions: each `server:read-*` action. A grant inside one
 namespace, and a grant that a member holds as a person, do not make the
 group protected. A disabled principal of the installation counts: the group
 holds a grant on a principal of the installation, and the server can enable
-the principal again.
+the principal again. This classification is one of the
+[code rules](../reference/code-rules.md) that no grant, setting or
+administrator can change.
 
 The server stores a new group before it checks whether the group is
 protected. A new group holds no grant, so it is not protected.
@@ -332,6 +334,12 @@ Add a member in the console. The add needs a fresh sign-in. The body holds the p
 | The principal is already a member | `409` | `principal.already-exists` |
 | The group or the principal does not exist | `404` | `principal.not-found` |
 | The group is managed by a directory | `409` | `principal.managed-by-directory` |
+
+A membership gives the grants of the group. A group that holds a delegation
+role, such as `token-manager`, on a service principal gives each member the
+right to act as that principal. The add needs a caller that holds the reach of
+that principal. Otherwise the answer is `403`. See
+[Access tokens](access-tokens.md) for the reach.
 
 A group that a directory manages does not take membership changes from this
 API. Change the membership in the directory.

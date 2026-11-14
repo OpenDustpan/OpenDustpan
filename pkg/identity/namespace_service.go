@@ -128,13 +128,26 @@ func (r NamespaceServiceRule) Authorize(ctx context.Context, p Principal, action
 // of grants. It asks Next for every other principal.
 func (r NamespaceServiceRule) ListObjects(ctx context.Context, p Principal, action Action) (Scope, error) {
 	if IsNamespaceServiceSubject(p.Subject) {
-		return Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+		return Scope{
+			Namespaces:  nil,
+			Collections: nil,
+			Units:       nil,
+			Principals:  nil,
+			every:       everyObject{set: false, except: nil},
+		}, nil
 	}
 
 	scope, err := r.Next.ListObjects(ctx, p, action)
 	if err != nil {
-		return Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, fmt.Errorf(
-			"list objects: %w", err,
+		return Scope{
+			Namespaces:  nil,
+			Collections: nil,
+			Units:       nil,
+			Principals:  nil,
+			every:       everyObject{set: false, except: nil},
+		}, fmt.Errorf(
+			"list objects: %w",
+			err,
 		)
 	}
 
