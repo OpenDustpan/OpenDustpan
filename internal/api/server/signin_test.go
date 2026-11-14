@@ -808,6 +808,7 @@ func TestSignInTokenFreshness(t *testing.T) {
 			Message        string `json:"message"`
 			Reauthenticate string `json:"reauthenticate"`
 			Code           int    `json:"code"`
+			ErrorCode      string `json:"errorCode"`
 		}
 
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -815,9 +816,9 @@ func TestSignInTokenFreshness(t *testing.T) {
 		}
 
 		if rec.Code != http.StatusUnauthorized || body.Reauthenticate != "/api/server/sign-in/corp?fresh=1" ||
-			!strings.Contains(body.Message, "sign in again") {
-			t.Errorf("POST %s from a stale session = %d %s, want 401 with the path of a new sign-in", target,
-				rec.Code, rec.Body.String())
+			body.ErrorCode != "mfa.fresh-step-required" || !strings.Contains(body.Message, "sign in again") {
+			t.Errorf("POST %s from a stale session = %d %s, want 401 with the code and the path of a new sign-in",
+				target, rec.Code, rec.Body.String())
 		}
 	}
 }
@@ -900,13 +901,15 @@ func policyChangeEntry(at time.Time) audit.Entry {
 	}
 }
 
-// TestSignInFreshnessWindowOff proves that a window of 0 lets a session
-// with an old sign-in create a token.
-func TestSignInFreshnessWindowOff(t *testing.T) {
+// TestSignInFreshnessWindowZeroAsksEachTime proves that a window of 0 asks
+// for a fresh authentication at each step: even a session with a fresh
+// sign-in cannot create a token, and answers 401 with the path of a new
+// sign-in.
+func TestSignInFreshnessWindowZeroAsksEachTime(t *testing.T) {
 	t.Parallel()
 
 	e := newSignInEnv(t, true)
-	stale := e.staleSession(t)
+	fresh := e.signIn(t)
 
 	_, err := e.store.UpdateSessionPolicy(t.Context(), func(old session.Policy) (session.Policy, audit.Entry, error) {
 		old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = 0, false, e.clock.Now()
@@ -914,11 +917,42 @@ func TestSignInFreshnessWindowOff(t *testing.T) {
 		return old, policyChangeEntry(e.clock.Now()), nil
 	})
 	if err != nil {
-		t.Fatalf("turn the window off: %v", err)
+		t.Fatalf("set the window to 0: %v", err)
 	}
 
-	if rec := e.postWithSession(t, stale, "/api/server/caller/tokens", ownTokenBody()); rec.Code != http.StatusCreated {
-		t.Fatalf("own token with the window off = %d %s, want 201", rec.Code, rec.Body.String())
+	rec := e.postWithSession(t, fresh, "/api/server/caller/tokens", ownTokenBody())
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("own token with a window of 0 = %d %s, want 401", rec.Code, rec.Body.String())
+	}
+
+	var refused struct {
+		Reauthenticate string `json:"reauthenticate"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &refused); err != nil ||
+		refused.Reauthenticate != "/api/server/sign-in/corp?fresh=1" {
+		t.Fatalf("refusal with a window of 0 = %s, want the path of a new sign-in", rec.Body.String())
+	}
+}
+
+// TestStaleErrorNamesSignInPath proves that the 403 of a step with no fresh
+// authentication names the path of a new sign-in. The sign-in environment
+// answers "test-token" as an access token with no console session.
+func TestStaleErrorNamesSignInPath(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/caller/tokens",
+		strings.NewReader(ownTokenBody()))
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "/api/dustpan/v1/sign-in") {
+		t.Fatalf("token with an access token = %d %s, want 403 with the sign-in path", rec.Code,
+			rec.Body.String())
 	}
 }
 

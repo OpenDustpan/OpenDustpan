@@ -62,10 +62,12 @@ var errNoFreshnessCheck = errors.New("a token change from a console session has 
 
 // errFreshStepRequired is the refusal of a change that needs a fresh
 // authentication when the request has no console session. An access token
-// never gives a fresh authentication.
+// never gives a fresh authentication. The message names the path of a new
+// sign-in.
 var errFreshStepRequired = &codedError{
 	status: http.StatusForbidden, code: errcode.MFAFreshStepRequired, args: nil,
-	message: sessionauth.FreshStepRequiredMessage,
+	message: sessionauth.FreshStepRequiredMessage + "; sign in again with POST " +
+		"/api/dustpan/v1/sign-in/providers/{provider}/password, where {provider} is the ID of the provider",
 }
 
 // freshStepRequiredCode is the errorCode of a change that has no fresh
@@ -110,7 +112,8 @@ func freshParam(r *http.Request) (bool, error) {
 // policy, from a console session whose sign-in is older than the token
 // freshness window of the session policy. A request with no console
 // session, for example one with an access token, returns
-// errFreshStepRequired. A sign-in after now is too old. A window of 0 passes. With no session policy
+// errFreshStepRequired. A sign-in after now is too old. A window of 0 asks
+// at each step, so no sign-in passes. With no session policy
 // service, the window is session.DefaultTokenFreshness.
 func (h *Handler) checkTokenFreshness(r *http.Request) error {
 	caller, ok := sessionFromRequest(r)
@@ -131,6 +134,17 @@ func (h *Handler) checkTokenFreshness(r *http.Request) error {
 		}
 
 		window = policy.TokenFreshness
+	}
+
+	// A window of 0 asks for a fresh authentication at each step, so no
+	// sign-in passes, at any age. sessionauth.Fresh reports a window of 0
+	// as passing, so the server refuses here: requireFresh runs this check
+	// for each guarded step.
+	if window == 0 {
+		return reauthenticateError{
+			url:    reauthenticateURL(caller.Match.Session.Provider),
+			window: window,
+		}
 	}
 
 	// A sign-in after now has a negative age and is refused like a stale one.
