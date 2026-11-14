@@ -224,11 +224,25 @@ func classifyGitHostRequest(err error) (failure, bool) {
 		return fail(http.StatusTooManyRequests, "the connection was checked too often: try again later"), true
 	case errors.Is(err, forge.ErrAuth):
 		return fail(http.StatusUnprocessableEntity, "GitHub refused the credential of the connection"), true
+	case errors.Is(err, forge.ErrAppBudget):
+		return failCoded(http.StatusServiceUnavailable, appBudgetText(err), errcode.GitHostAppBudgetSpent), true
 	case errors.Is(err, forge.ErrUnavailable):
 		return fail(http.StatusServiceUnavailable, "GitHub did not answer: try again later"), true
 	default:
 		return fail(0, ""), false
 	}
+}
+
+// appBudgetText returns the message of a refusal by the budget of the signed
+// calls of the GitHub App, with the wait that Retry-After gives.
+func appBudgetText(err error) string {
+	const text = "the GitHub App used its budget of signed calls"
+
+	if seconds, ok := retryAfterSeconds(err); ok {
+		return text + ": try again in " + seconds + " seconds"
+	}
+
+	return text + ": try again later"
 }
 
 // rootText returns the sentence of the domain sentinel in err, without the
