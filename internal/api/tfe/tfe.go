@@ -593,15 +593,14 @@ func unitObject(ns workspace.Ref) (identity.Object, error) {
 	return tofuunit.Object(ns)
 }
 
-// enforceDiscovery serves a discovery route: it authenticates, then answers
+// enforceDiscovery serves the entitlement set: it authenticates, then answers
 // when the caller may read the namespace, or when the caller holds a grant
 // on a collection or on a unit in it. The answer holds only that the
-// namespace exists and its entitlements. A list route still filters its items
-// to what the caller may read. Any other caller gets the same 404 as for an
-// unknown namespace, with the same body, so the answer is no existence
-// oracle. Unknown organizations answer through the namespace read, before any
-// authorization runs. The check reads the grants at each request, so a
-// revoked grant loses the discovery read on the next request.
+// namespace exists and its entitlements. Any other caller gets the same 404
+// as for an unknown namespace, with the same body, so the answer is no
+// existence oracle. Unknown organizations answer through the namespace read,
+// before any authorization runs. The check reads the grants at each request,
+// so a revoked grant loses the discovery read on the next request.
 func (h *Handler) enforceDiscovery(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()

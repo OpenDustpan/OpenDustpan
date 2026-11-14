@@ -2544,6 +2544,74 @@ func TestUnknownPathAnswersJSONAPI404(t *testing.T) {
 	checkJSONAPIError(t, rec, http.StatusNotFound)
 }
 
+// collectionGrantAuthorizer denies every action, but reports a grant on one
+// collection of acme for the read actions: a caller who holds a grant inside
+// the namespace but cannot read the workspace.
+type collectionGrantAuthorizer struct{}
+
+func (collectionGrantAuthorizer) Authorize(
+	_ context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+func (collectionGrantAuthorizer) ListObjects(
+	_ context.Context, _ identity.Principal, _ identity.Action,
+) (identity.Scope, error) {
+	ns, err := namespace.ParseName("acme")
+	if err != nil {
+		return identity.Scope{}, err
+	}
+
+	return identity.Scope{
+		Namespaces:  nil,
+		Collections: []identity.Object{identity.CollectionObject(ns, "team-a")},
+		Units:       nil,
+		Principals:  nil,
+	}, nil
+}
+
+// TestCollectionGrantHidesOtherWorkspace proves a caller with a grant on one
+// collection who reads a workspace of another collection gets the same 404
+// body as for an unknown workspace: the grant opens only the entitlement set,
+// never a workspace, state version or output read.
+func TestCollectionGrantHidesOtherWorkspace(t *testing.T) {
+	t.Parallel()
+
+	handler := newEnforcingHandler(t, collectionGrantAuthorizer{})
+
+	get := func(target string) (int, string) {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		return rec.Code, rec.Body.String()
+	}
+
+	deniedCode, deniedBody := get("/api/v2/organizations/acme/workspaces/web")
+	missingCode, missingBody := get("/api/v2/organizations/acme/workspaces/missing")
+
+	if deniedCode != http.StatusNotFound {
+		t.Fatalf("workspace of another collection answers %d, want %d", deniedCode, http.StatusNotFound)
+	}
+
+	if missingCode != http.StatusNotFound {
+		t.Fatalf("unknown workspace answers %d, want %d", missingCode, http.StatusNotFound)
+	}
+
+	if deniedBody != missingBody {
+		t.Fatalf("hidden refusal body differs from unknown workspace body:\n%s\nwant:\n%s", deniedBody, missingBody)
+	}
+
+	if !strings.Contains(deniedBody, "not found") {
+		t.Fatalf("hidden refusal body %q holds no %q", deniedBody, "not found")
+	}
+}
+
 // SetOverrides is not used by this fake.
 func (stubNamespaceStore) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
