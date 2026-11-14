@@ -111,7 +111,7 @@ func checkAuditExport(ctx context.Context, t *testing.T, env *e2e.Env, org strin
 		t.Fatalf("the range holds another entry at sequence %d", from)
 	}
 
-	checkAuditExportCEF(ctx, t, env, base, len(part))
+	checkAuditExportCEF(ctx, t, env, base, part)
 
 	// The first export wrote one audit-read entry, which the second export
 	// reads. The entry names the scope.
@@ -129,9 +129,9 @@ func checkAuditExport(ctx context.Context, t *testing.T, env *e2e.Env, org strin
 	}
 }
 
-// checkAuditExportCEF proves that the CEF export of the same range holds
-// one CEF line for each JSON line, each with the sequence and the hash.
-func checkAuditExportCEF(ctx context.Context, t *testing.T, env *e2e.Env, base string, jsonLines int) {
+// checkAuditExportCEF proves that the CEF export holds one CEF line for each
+// JSON line, with the same sequence and the same hash.
+func checkAuditExportCEF(ctx context.Context, t *testing.T, env *e2e.Env, base string, jsonLines []exportLine) {
 	t.Helper()
 
 	status, body, err := env.APIStatus(ctx, http.MethodGet, base+"&format=cef", "")
@@ -142,16 +142,81 @@ func checkAuditExportCEF(ctx context.Context, t *testing.T, env *e2e.Env, base s
 	lines := strings.Split(strings.TrimSuffix(body, "\n"), "\n")
 	// The CEF export started later, so it also holds the entry of the JSON
 	// exports before it.
-	if len(lines) < jsonLines {
-		t.Fatalf("CEF export holds %d lines, want at least %d", len(lines), jsonLines)
+	if len(lines) < len(jsonLines) {
+		t.Fatalf("CEF export holds %d lines, want at least %d", len(lines), len(jsonLines))
 	}
+
+	jsonHash := make(map[int64]string, len(jsonLines))
+	for i := range jsonLines {
+		jsonHash[jsonLines[i].Sequence] = jsonLines[i].Hash
+	}
+
+	seen := checkCEFLines(t, lines, jsonHash)
+
+	for seq := range jsonHash {
+		if !seen[seq] {
+			t.Fatalf("CEF export holds no line for sequence %d", seq)
+		}
+	}
+}
+
+// checkCEFLines checks each CEF line against jsonHash: the line has the
+// prefix, the hash label, a sequence and a hash, and the hash of a sequence
+// that jsonHash holds is equal. It returns the sequences that a CEF line
+// carried. A sequence that jsonHash does not hold is allowed: the CEF export
+// can hold entries before the range of the JSON export.
+func checkCEFLines(t *testing.T, lines []string, jsonHash map[int64]string) map[int64]bool {
+	t.Helper()
+
+	seen := make(map[int64]bool, len(jsonHash))
 
 	for _, line := range lines {
 		if !strings.HasPrefix(line, "CEF:0|OpenDustpan|OpenDustpan|1|") ||
 			!strings.Contains(line, " cs5Label=hash") {
 			t.Fatalf("CEF line = %q", line)
 		}
+
+		sequence, ok := cefField(line, "cn1")
+		if !ok {
+			t.Fatalf("CEF line has no cn1: %q", line)
+		}
+
+		seq, err := strconv.ParseInt(sequence, 10, 64)
+		if err != nil {
+			t.Fatalf("CEF line has sequence %q: %v", sequence, err)
+		}
+
+		hash, ok := cefField(line, "cs5")
+		if !ok {
+			t.Fatalf("CEF line has no cs5: %q", line)
+		}
+
+		want, ok := jsonHash[seq]
+		if !ok {
+			continue
+		}
+
+		if hash != want {
+			t.Fatalf("CEF line for sequence %d has hash %s, want %s", seq, hash, want)
+		}
+
+		seen[seq] = true
 	}
+
+	return seen
+}
+
+// cefField returns the value of key in a CEF line: the text after " <key>="
+// up to the next space. A line with no such key gives false.
+func cefField(line, key string) (string, bool) {
+	_, rest, found := strings.Cut(line, " "+key+"=")
+	if !found {
+		return "", false
+	}
+
+	value, _, _ := strings.Cut(rest, " ")
+
+	return value, value != ""
 }
 
 // readAuditExport reads the export at path and decodes each line.

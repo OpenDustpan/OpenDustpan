@@ -122,7 +122,7 @@ func openLargeCheckpointFixture(t *testing.T) *largeCheckpointFixture {
 	store.addStack(ref, "stk-test")
 
 	u, err := svc.Create(t.Context(), ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create update: %v", err)

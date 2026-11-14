@@ -135,14 +135,21 @@ type fakeBackupStore struct {
 }
 
 var (
-	_ storetest.BackupStore    = (*fakeBackupStore)(nil)
-	_ storetest.RestoreStore   = (*fakeBackupStore)(nil)
-	_ storetest.Reopener       = (*fakeBackupStore)(nil)
-	_ storetest.StagingWitness = (*fakeBackupStore)(nil)
-	_ backup.KeyPeeker         = (*fakeBackupStore)(nil)
-	_ backup.Applier           = (*fakeBackupStore)(nil)
-	_ backup.Fencer            = (*fakeBackupStore)(nil)
+	_ storetest.BackupStore      = (*fakeBackupStore)(nil)
+	_ storetest.RestoreStore     = (*fakeBackupStore)(nil)
+	_ storetest.Reopener         = (*fakeBackupStore)(nil)
+	_ storetest.StagingWitness   = (*fakeBackupStore)(nil)
+	_ storetest.BreakGlassSeeder = (*fakeBackupStore)(nil)
+	_ backup.KeyPeeker           = (*fakeBackupStore)(nil)
+	_ backup.Applier             = (*fakeBackupStore)(nil)
+	_ backup.Fencer              = (*fakeBackupStore)(nil)
 )
+
+// BreakGlassPorts implements storetest.BreakGlassSeeder. The fake keeps no
+// break-glass reviews.
+func (*fakeBackupStore) BreakGlassPorts() storetest.BreakGlassPorts {
+	return storetest.BreakGlassPorts{Store: nil}
+}
 
 // newFakeBackupStore returns a fresh, empty fake of the SQLite dialect at
 // schema version 10.
@@ -466,7 +473,7 @@ func (s *fakeBackupStore) UpdateStackTags(
 // RenameStack implements stack.Store. Children key on the stable stack ID,
 // so only the stack row and the inventory entry move.
 func (s *fakeBackupStore) RenameStack(
-	_ context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
+	_ context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, _ audit.Entry,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

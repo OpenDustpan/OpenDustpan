@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -137,7 +138,7 @@ func (m *MemorySealer) SealContent(
 // content of another item or binding, or changed content.
 func (m *MemorySealer) OpenContent(
 	_ context.Context, ref secret.ItemRef, binding []byte, r io.Reader,
-) (io.Reader, error) {
+) (io.ReadCloser, error) {
 	aead, err := m.key(ref)
 	if err != nil {
 		return nil, err
@@ -157,7 +158,7 @@ func (m *MemorySealer) OpenContent(
 		return nil, secret.ErrDecrypt
 	}
 
-	return bytes.NewReader(plain), nil
+	return io.NopCloser(bytes.NewReader(plain)), nil
 }
 
 // SealContents implements secret.ItemSealer: it seals each part as
@@ -198,7 +199,7 @@ func (m *MemorySealer) OpenContents(
 		}
 
 		plain, err := io.ReadAll(r)
-		if err != nil {
+		if err = errors.Join(err, r.Close()); err != nil {
 			return nil, fmt.Errorf("read opened part %d: %w", i, err)
 		}
 

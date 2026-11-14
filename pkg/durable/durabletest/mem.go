@@ -832,6 +832,12 @@ func (m *Mem) HeartbeatHarness() HeartbeatHarness {
 func (m *memDB) heartbeatHarness() HeartbeatHarness {
 	return HeartbeatHarness{
 		Open: func(_ *testing.T, skew time.Duration) durable.HeartbeatStore { return memStore{db: m, skew: skew} },
+		Seed: func(_ *testing.T, owner string, at time.Time, lease time.Duration) {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+
+			m.beats[owner] = memBeat{at: at, lease: lease}
+		},
 	}
 }
 
@@ -873,13 +879,15 @@ func (s memStore) LastBeat(_ context.Context) (durable.Beat, error) {
 
 	beat := durable.Beat{Owner: "", At: time.Time{}, Lease: 0, Now: s.db.clock(s.skew)}
 
-	var validUntil time.Time
+	var validUntil int64
 
 	for owner, b := range s.db.beats {
-		until := b.at.Add(b.lease)
+		// The same int64 millisecond sum as the SQL stores, so a long lease
+		// cannot overflow time.Duration.
+		until := b.at.UnixMilli() + 2*b.lease.Milliseconds()
 
-		if beat.Owner == "" || until.After(validUntil) ||
-			(until.Equal(validUntil) && (b.at.After(beat.At) || (b.at.Equal(beat.At) && owner > beat.Owner))) {
+		if beat.Owner == "" || until > validUntil ||
+			(until == validUntil && (b.at.After(beat.At) || (b.at.Equal(beat.At) && owner > beat.Owner))) {
 			beat.Owner, beat.At, beat.Lease, validUntil = owner, b.at, b.lease, until
 		}
 	}

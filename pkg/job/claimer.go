@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,11 @@ const reasonNoPhase = "the operation does not belong to the current phase of a j
 // reasonNotRunnable is the reason of an operation whose job cannot take a
 // claim, for example a job that expired while it was dispatched.
 const reasonNotRunnable = "the job cannot take a claim on its current phase"
+
+// ReasonNamespaceMissing is the reason of an operation whose job is in a
+// namespace that does not exist. The claimer ends such an operation failed,
+// so it never blocks a kind.
+const ReasonNamespaceMissing = "the namespace of the job does not exist, so its phase cannot run"
 
 // DurableClaimer is the Claimer over a durable.Store and a Store. A phase is
 // a durable operation: the claim, its expiry and its cancel are the rules of
@@ -81,6 +87,7 @@ type DurableClaimer struct {
 	namespaces NamespaceReader
 	gates      GateGuard
 	now        func() time.Time
+	log        *slog.Logger
 }
 
 var _ Claimer = (*DurableClaimer)(nil)
@@ -94,14 +101,30 @@ func WithClaimerClock(now func() time.Time) ClaimerOption {
 	return func(c *DurableClaimer) { c.now = now }
 }
 
+// WithClaimerLogger sets the logger that records the end of a phase whose
+// namespace does not exist. The default is a discard logger, so the claimer
+// stays silent unless the caller passes a logger.
+func WithClaimerLogger(logger *slog.Logger) ClaimerOption {
+	return func(c *DurableClaimer) {
+		if logger != nil {
+			c.log = logger
+		}
+	}
+}
+
 // NewClaimer returns the claimer of the phases of jobs. namespaces gives the
 // current fence of the namespace of a unit. gates tells which enforced gates
 // cover the unit of a job at each claim. It is required: a claimer with a nil
 // guard refuses every claim, so no phase runs past a gate that nobody checks.
+// The logger of WithClaimerLogger records the end of a phase whose namespace
+// does not exist.
 func NewClaimer(
 	jobs Store, operations durable.Store, namespaces NamespaceReader, gates GateGuard, opts ...ClaimerOption,
 ) *DurableClaimer {
-	c := &DurableClaimer{jobs: jobs, operations: operations, namespaces: namespaces, gates: gates, now: time.Now}
+	c := &DurableClaimer{
+		jobs: jobs, operations: operations, namespaces: namespaces, gates: gates, now: time.Now,
+		log: slog.New(slog.DiscardHandler),
+	}
 
 	for _, o := range opts {
 		o(c)
@@ -148,7 +171,13 @@ func (c *DurableClaimer) Renew(ctx context.Context, pc PhaseClaim, d time.Durati
 		return PhaseClaim{}, fmt.Errorf("%w: a lease must be positive", ErrInvalid)
 	}
 
-	if err := c.checkFence(ctx, &pc); err != nil {
+	j, err := c.jobs.Get(ctx, pc.Job)
+	if err != nil {
+		return PhaseClaim{}, fmt.Errorf("read job %s: %w", pc.Job, err)
+	}
+
+	err = c.checkFence(ctx, &pc, &j)
+	if err != nil {
 		return PhaseClaim{}, err
 	}
 
@@ -369,7 +398,7 @@ func (c *DurableClaimer) claimOnce(
 
 	fence, err := c.fence(ctx, &j)
 	if err != nil {
-		return none, false, c.giveBack(ctx, op.Claim, err)
+		return none, false, c.giveBackOrEnd(ctx, &j, op.Claim, err)
 	}
 
 	if ev == EventPhaseFailed {
@@ -469,7 +498,7 @@ func (c *DurableClaimer) endUnrunnable(ctx context.Context, op *durable.Operatio
 
 	fence, err := c.fence(ctx, j)
 	if err != nil {
-		return none, false, c.giveBack(ctx, op.Claim, err)
+		return none, false, c.giveBackOrEnd(ctx, j, op.Claim, err)
 	}
 
 	return none, false, c.endPhase(ctx, op.Claim, j, fence, releaseEnd(j, j.Current, op.Claim))
@@ -524,9 +553,10 @@ func claimEvent(j *Job) (Event, string, bool) {
 // the current phase of j.
 func assignmentOf(op *durable.Operation, fence namespace.Fence, j *Job) Assignment {
 	a := Assignment{
-		Claim: PhaseClaim{Job: j.ID, Phase: j.Current, Claim: op.Claim, Fence: fence},
-		Job:   *j,
-		Plan:  nil,
+		Claim:   PhaseClaim{Job: j.ID, Phase: j.Current, Claim: op.Claim, Fence: fence},
+		Job:     *j,
+		Plan:    nil,
+		Profile: j.Spec.Profile,
 	}
 
 	if j.Current > 0 && j.Phases[j.Current].Kind == PhaseApply && j.Phases[j.Current-1].Kind == PhasePlan {
@@ -573,6 +603,30 @@ func (c *DurableClaimer) endOperation(ctx context.Context, claim durable.Claim, 
 	return nil
 }
 
+// giveBackOrEnd gives back the claim of an operation whose namespace read
+// failed, and ends it failed when the namespace does not exist. A namespace
+// ID is random and is never given again, so the namespace of the job does
+// not come back. Its name can come back, but a namespace that is created
+// again under that name is another namespace, and the job must not run in
+// it. Giving the operation back would make every poll claim it again and
+// hold the kind of the operation.
+//
+// The end of the job record cannot carry this reason: every write of a job
+// carries the fence of its namespace, and a missing namespace fails that
+// check. So the failed operation is the record of the end, and the log line
+// names it.
+func (c *DurableClaimer) giveBackOrEnd(ctx context.Context, j *Job, claim durable.Claim, cause error) error {
+	if !errors.Is(cause, namespace.ErrNotFound) {
+		return c.giveBack(ctx, claim, cause)
+	}
+
+	c.log.WarnContext(ctx, "the phase ends failed: the namespace of the job does not exist",
+		slog.String("job", string(j.ID)), slog.String("namespace", j.Spec.Unit.Namespace().String()),
+		slog.String("operation", string(claim.Operation)), slog.String("reason", ReasonNamespaceMissing))
+
+	return c.endOperation(ctx, claim, ReasonNamespaceMissing)
+}
+
 // giveBack gives back the claim of an operation that the claimer cannot run
 // now, and returns cause. The give-back uses the context of endContext, so a
 // canceled request does not leave the lease on the operation, and a database
@@ -595,11 +649,21 @@ func (c *DurableClaimer) giveBack(ctx context.Context, claim durable.Claim, caus
 	return cause
 }
 
-// fence returns the current fence of the namespace of the unit of j.
+// fence returns the current fence of the namespace of the unit of j. It
+// returns an error that wraps namespace.ErrNotFound when the namespace that
+// holds the name of the namespace of j is not the namespace that held the
+// unit of j when the job started: a namespace that is created again under
+// that name is another namespace, and the job must not run in it. A job with
+// no namespace ID is refused the same way.
 func (c *DurableClaimer) fence(ctx context.Context, j *Job) (namespace.Fence, error) {
 	ns, err := c.namespaces.GetNamespace(ctx, j.Spec.Unit.Namespace())
 	if err != nil {
 		return namespace.Fence{}, fmt.Errorf("read namespace %s: %w", j.Spec.Unit.Namespace(), err)
+	}
+
+	if j.NamespaceID == "" || ns.ID != j.NamespaceID {
+		return namespace.Fence{}, fmt.Errorf("job %s: namespace %s has ID %s, not %s: %w",
+			j.ID, ns.Name, ns.ID, j.NamespaceID, namespace.ErrNotFound)
 	}
 
 	return ns.Fence(), nil
@@ -608,13 +672,13 @@ func (c *DurableClaimer) fence(ctx context.Context, j *Job) (namespace.Fence, er
 // running checks the fence of pc, and returns the job of pc while it runs the
 // phase of pc. It returns ErrClaimLost for a job that moved on.
 func (c *DurableClaimer) running(ctx context.Context, pc *PhaseClaim) (Job, error) {
-	if err := c.checkFence(ctx, pc); err != nil {
-		return Job{}, err
-	}
-
 	j, err := c.jobs.Get(ctx, pc.Job)
 	if err != nil {
 		return Job{}, fmt.Errorf("read job %s: %w", pc.Job, err)
+	}
+
+	if err := c.checkFence(ctx, pc, &j); err != nil {
+		return Job{}, err
 	}
 
 	// Defense in depth: the token check of the durable store decides who holds
@@ -631,10 +695,12 @@ func (c *DurableClaimer) running(ctx context.Context, pc *PhaseClaim) (Job, erro
 	return j, nil
 }
 
-// checkFence returns namespace.ErrFenced when the fence of pc is not the
-// current fence of its namespace. The job store checks the fence again in
-// the transaction of each event.
-func (c *DurableClaimer) checkFence(ctx context.Context, pc *PhaseClaim) error {
+// checkFence reads the namespace of pc and checks it against the fence of pc
+// and the namespace ID of j. It returns namespace.ErrFenced when the fence of
+// pc is not the current fence of its namespace, and ErrClaimLost when the job
+// does not name the namespace that holds that name. The job store checks the
+// fence again in the transaction of each event.
+func (c *DurableClaimer) checkFence(ctx context.Context, pc *PhaseClaim, j *Job) error {
 	ns, err := c.namespaces.GetNamespace(ctx, pc.Fence.Namespace)
 	if err != nil {
 		return fmt.Errorf("read namespace %s: %w", pc.Fence.Namespace, err)
@@ -642,6 +708,17 @@ func (c *DurableClaimer) checkFence(ctx context.Context, pc *PhaseClaim) error {
 
 	if ns.FailoverVersion != pc.Fence.FailoverVersion {
 		return fmt.Errorf("claim of job %s: %w", pc.Job, namespace.ErrFenced)
+	}
+
+	// Defense in depth: the claim-time check of fence compares the namespace
+	// ID, and the store checks the fence of the namespace in the transaction
+	// of each event. This check stays so that a renewal or an event cannot
+	// use the claim of a job whose namespace a restore replaced under the
+	// same name. It does not rely on the claim-time check or on the fence
+	// check of the store.
+	if j.NamespaceID == "" || ns.ID != j.NamespaceID {
+		return fmt.Errorf("%w: %w: job %s: namespace %s has ID %s, not %s", ErrClaimLost,
+			durable.ErrClaimLost, j.ID, ns.Name, ns.ID, j.NamespaceID)
 	}
 
 	return nil

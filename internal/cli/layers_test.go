@@ -416,6 +416,62 @@ func TestSensitiveValuesNeverLogged(t *testing.T) {
 	}
 }
 
+// TestOIDCSecretNeverLogged proves that the client secret of the sign-in
+// never shows in the start log, also when the settings have more than one
+// layer.
+func TestOIDCSecretNeverLogged(t *testing.T) {
+	t.Parallel()
+
+	secret := "oidc-" + canaryValue
+
+	cases := []struct {
+		name string
+		env  map[string]string
+		file cli.ConfigFile
+	}{
+		{
+			name: "environment",
+			env:  map[string]string{"DUSTPAN_OIDC_CLIENT_SECRET": secret},
+			file: nil,
+		},
+		{
+			name: "environment over file",
+			env: map[string]string{
+				"DUSTPAN_OIDC_CLIENT_SECRET": secret,
+				"DUSTPAN_DATABASE":           "sqlite:" + secret + ".db",
+			},
+			file: cli.ConfigFile{"database": "sqlite:" + secret + "-file.db"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			resolved, err := cli.Resolve(serveFlagSet(t), cli.ServeSettings(), mapLookup(tc.env), tc.file)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+
+			var buf bytes.Buffer
+
+			logger := slog.New(slog.NewJSONHandler(&buf, nil))
+			cli.LogSettings(t.Context(), logger, resolved)
+			cli.LogOverrides(t.Context(), logger, resolved)
+
+			if form := leak(buf.String(), secret); form != "" {
+				t.Fatalf("the start log holds %s of the client secret:\n%s", form, buf.String())
+			}
+
+			if tc.file != nil {
+				if _, ok := linesByLevel(t, &buf, "WARN")["database"]; !ok {
+					t.Fatalf("no WARN line for the database setting:\n%s", buf.String())
+				}
+			}
+		})
+	}
+}
+
 // TestResolveRefusesUserInfo proves a URL setting with user information
 // stops the resolve in each layer, and the error never holds the value.
 func TestResolveRefusesUserInfo(t *testing.T) {

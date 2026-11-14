@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -318,7 +319,7 @@ type ManualLocks interface {
 	// job whose phase started before the lock passes. It returns
 	// manuallock.ErrNotLocked when no manual lock covers the unit for the
 	// request.
-	CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (manuallock.Lock, error)
+	CoveringFor(ctx context.Context, unit manuallock.Unit, jobID string) (manuallock.Lock, error)
 	// NamespaceLock returns the manual lock of the namespace, or
 	// manuallock.ErrNotLocked. The restore of a deleted unit asks it: a deleted
 	// unit has no inventory entry, so CoveringFor cannot find the lock of its
@@ -327,10 +328,10 @@ type ManualLocks interface {
 	// NamespaceLockFor is CoveringFor for a unit that does not exist yet: only
 	// the lock of its namespace covers it. A job whose phase started before
 	// the lock passes it.
-	NamespaceLockFor(ctx context.Context, unit collection.UnitRef, jobID string) (manuallock.Lock, error)
+	NamespaceLockFor(ctx context.Context, unit manuallock.Unit, jobID string) (manuallock.Lock, error)
 	// PhaseStart returns when the current phase of the job jobID on the unit
 	// started, or the zero time, which passes no lock.
-	PhaseStart(ctx context.Context, unit collection.UnitRef, jobID string) time.Time
+	PhaseStart(ctx context.Context, unit manuallock.Unit, jobID string) time.Time
 }
 
 // lockNounWorkspace names a workspace in the error of a manual lock.
@@ -437,8 +438,28 @@ func NewService(cfg Config) (*Service, error) {
 	return s, nil
 }
 
-// Create creates an unlocked workspace without state.
-func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
+// ErrPlacementUnsupported reports that the store cannot make a workspace and
+// put it in a collection in one transaction, so the service makes no workspace.
+var ErrPlacementUnsupported = errors.New("the store cannot put a new workspace in a collection")
+
+// Create creates an unlocked workspace without state and puts it in the
+// collection of p in one fenced transaction. It returns an error that matches
+// collection.ErrNoCollection, and makes no workspace, when p names no
+// collection, no checked collection ID, or a collection of another namespace.
+// It returns ErrPlacementUnsupported when the store is not a PlacedStore.
+func (s *Service) Create(ctx context.Context, ref Ref, p Placement) (Workspace, error) {
+	// Defense in depth: the handler chooses the collection by a placement rule
+	// and the store checks the collection in the transaction. This check stays
+	// so that a new caller cannot make a workspace that no collection holds.
+	if !p.Complete(ref.Namespace) {
+		return Workspace{}, errNoCollection(ref)
+	}
+
+	placed, ok := s.workspaces.(PlacedStore)
+	if !ok {
+		return Workspace{}, fmt.Errorf("create workspace %s: %w", ref, ErrPlacementUnsupported)
+	}
+
 	n, err := s.writable(ctx, ref.Namespace)
 	if err != nil {
 		return Workspace{}, err
@@ -458,7 +479,7 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 	// workspace in a locked namespace. The phase of the job of the request, if
 	// it has one, decides whether the lock applies to it, as it does for the
 	// lock request that follows the create.
-	if err := s.refuseNewUnitManualLock(ctx, ref, JobFrom(ctx)); err != nil {
+	if err := s.refuseNewUnitManualLock(ctx, ref, n.ID, JobFrom(ctx)); err != nil {
 		return Workspace{}, fmt.Errorf("create workspace %s: %w", ref, err)
 	}
 
@@ -467,12 +488,14 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 	// lock service, the pass is the zero time, which passes no lock.
 	pass := time.Time{}
 	if s.manual != nil {
-		pass = s.manual.PhaseStart(ctx, newUnitRef(ref), JobFrom(ctx))
+		pass = s.manual.PhaseStart(ctx, newLockUnitOf(ref, n.ID), JobFrom(ctx))
 	}
 
 	ctx = WithLockPass(ctx, pass)
 
-	if err := s.workspaces.CreateWorkspace(ctx, w, fence); err != nil {
+	p.Entry.At = now
+
+	if err := placed.CreateWorkspacePlaced(ctx, w, p, fence); err != nil {
 		return Workspace{}, fmt.Errorf("create workspace %s: %w", ref, err)
 	}
 
@@ -492,7 +515,11 @@ func newWorkspaceOf(ref Ref) Workspace {
 		Ref:         ref,
 		NamespaceID: "",
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -812,7 +839,8 @@ func checkLockRequest(req LockRequest) error {
 // could go on. It writes nothing, so a caller creates the workspace only after
 // it returns nil: a refused first request leaves no workspace.
 func (s *Service) AdmitFirstLock(ctx context.Context, ref Ref, req LockRequest) error {
-	if _, err := s.writable(ctx, ref.Namespace); err != nil {
+	n, err := s.writable(ctx, ref.Namespace)
+	if err != nil {
 		return err
 	}
 
@@ -823,7 +851,7 @@ func (s *Service) AdmitFirstLock(ctx context.Context, ref Ref, req LockRequest) 
 	// The manual lock query reads the row of the unit, and a unit that does not
 	// exist has none. The only lock that covers a new unit is the lock of its
 	// namespace, so the check reads that lock, with the rule of the job.
-	return s.refuseNewUnitManualLock(ctx, ref, req.JobID)
+	return s.refuseNewUnitManualLock(ctx, ref, n.ID, req.JobID)
 }
 
 // maxLockIDLength bounds a lock ID the caller chooses.
@@ -1117,7 +1145,9 @@ func (s *Service) BeginState(
 
 	defer unlock()
 
-	return s.createPending(ctx, w, in, sum, pendingDeclare{restoredFrom: "", unlocked: unlocked})
+	return s.createPending(ctx, w, in, sum, pendingDeclare{
+		restoredFrom: "", unlocked: unlocked, origin: originFrom(ctx),
+	})
 }
 
 // Authority is the caller's side of a declare: the overrides the caller may
@@ -1241,6 +1271,10 @@ func refuseWithoutRecorder(w Workspace, used []Override) error {
 type pendingDeclare struct {
 	restoredFrom StateVersionID
 	unlocked     bool
+	// origin is the writer of the declared version. A restore leaves it
+	// empty: the version holds the content of an earlier one, and no write of
+	// this request made it.
+	origin identity.StateOrigin
 }
 
 // forcedRefusal names the action and the switches that allow a forced write.
@@ -1537,14 +1571,14 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 		return nil, errors.Join(sanitizeOpenError(sv.ID, err), r.Close())
 	}
 
-	return &closeReader{reader: newVerifiedReader(opened, sv), closer: r, id: sv.ID}, nil
+	return &closeReader{reader: newVerifiedReader(opened, sv), opened: opened, closer: r, id: sv.ID}, nil
 }
 
 // OpenStateBlob returns the plain content of the sealed blob under key, for
 // the backup copy check. The key names one state version attempt as
 // "namespaces/<namespace id>/tofu/<workspace id>/<state version id>/<attempt>".
-// A failure reports the version ID only, never a key, a scope or content. The
-// caller closes the result.
+// A failure names the operation and, when it is known, the version ID or the
+// workspace ID, never a key, a scope or content. The caller closes the result.
 //
 // The namespace of the read comes from the workspace row of the version, never
 // from the key. A key that names another namespace gives blob.ErrOutOfScope,
@@ -1552,12 +1586,12 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
 	parsed, err := ParseStateBlobKey(key)
 	if err != nil {
-		return nil, fmt.Errorf("open state blob %q: %w", key, err)
+		return nil, fmt.Errorf("open state blob: %w", err)
 	}
 
 	sv, err := s.states.GetStateVersion(ctx, parsed.Version)
 	if err != nil {
-		return nil, fmt.Errorf("open state blob %q: %w", key, err)
+		return nil, fmt.Errorf("open state blob %s: %w", parsed.Version, err)
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)
@@ -1570,7 +1604,10 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 	// nothing, so one workspace never opens another's sealed bytes. The
 	// refusal goes to the audit log in the namespace of the row.
 	if parsed.Workspace != sv.Workspace || parsed.Version != sv.ID {
-		return nil, fmt.Errorf("open state blob %q: %w", key, s.blobs.refuseMismatch(ctx, w.NamespaceID))
+		return nil, fmt.Errorf(
+			"open state blob %s of workspace %s: %w",
+			parsed.Version, parsed.Workspace, s.blobs.refuseMismatch(ctx, w.NamespaceID),
+		)
 	}
 
 	r, err := s.blobs.get(ctx, w.NamespaceID, w.ID, key)
@@ -1583,7 +1620,7 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 		return nil, errors.Join(sanitizeOpenError(sv.ID, err), r.Close())
 	}
 
-	return &closeReader{reader: newVerifiedReader(opened, sv), closer: r, id: sv.ID}, nil
+	return &closeReader{reader: newVerifiedReader(opened, sv), opened: opened, closer: r, id: sv.ID}, nil
 }
 
 // History returns the finalized state versions of the workspace, newest
@@ -1784,7 +1821,10 @@ func (s *Service) restoreChecked(
 		return sv, err
 	}
 
-	_, unlockErr := s.Unlock(ctx, id, holder)
+	// The release that ends a restore belongs to the restore, not to the
+	// request that started it: it records no origin, like the version that
+	// the restore writes.
+	_, unlockErr := s.Unlock(WithJob(ctx, ""), id, holder)
 
 	return sv, errors.Join(err, unlockErr)
 }
@@ -1815,6 +1855,8 @@ func (s *Service) releaseWithoutState(
 	if err != nil {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
 	}
+
+	released.Origin = originFrom(ctx)
 
 	err = s.workspaces.SaveReleased(ctx, released, fence, forceUnlockEntry(entry, current, by, now))
 	if err != nil {
@@ -1870,7 +1912,8 @@ func (s *Service) followedState(ctx context.Context, w Workspace, in NewState) (
 
 // rejectEncryptedState fails with ErrClientEncrypted when state is a state
 // file the client encrypted: the resource routes cannot read it, while the
-// outputs list still works.
+// outputs list still works. A state that the check cannot classify is refused
+// with the error of the check: the state never reads as plaintext.
 func rejectEncryptedState(state []byte, id StateVersionID) error {
 	encrypted, err := IsClientEncrypted(state)
 	if err != nil {
@@ -2126,7 +2169,7 @@ func (s *Service) copyState(
 		Outputs: outputs,
 		Serial:  src.Serial,
 		Force:   true,
-	}, src.MD5, pendingDeclare{restoredFrom: src.ID, unlocked: false})
+	}, src.MD5, pendingDeclare{restoredFrom: src.ID, unlocked: false, origin: identity.StateOrigin{Job: "", Commit: ""}})
 	if err != nil {
 		return StateVersion{}, err
 	}
@@ -2260,7 +2303,7 @@ func (s *Service) copyBlob(
 		)
 	}
 
-	r = &closeReader{reader: opened, closer: r, id: src.ID}
+	r = &closeReader{reader: opened, opened: opened, closer: r, id: src.ID}
 
 	size, storeErr := s.store(ctx, storeInput{
 		namespace:   w.Ref.Namespace,
@@ -2472,7 +2515,7 @@ func (s *Service) sweepPage(ctx context.Context, w Workspace, page []blob.Object
 		}
 
 		if blobErr := s.blobs.deleteRetried(ctx, w.NamespaceID, w.ID, obj.Key); blobErr != nil {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete unreferenced content %q: %w", obj.Key, blobErr))
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete unreferenced content of %s: %w", w.Ref, blobErr))
 		}
 	}
 
@@ -2594,6 +2637,7 @@ func (s *Service) createPending(
 		RestoredFrom:    restoredFrom,
 		SensitiveMarks:  nil,
 		FenceBy:         "",
+		Origin:          decl.origin,
 	}
 
 	if err := s.states.CreateStateVersion(ctx, sv, fence, s.maxPending); err != nil {
@@ -2705,12 +2749,14 @@ func sanitizeOpenError(id StateVersionID, err error) error {
 	return fmt.Errorf("open state %s: %w", id, ErrSealedContent)
 }
 
-// closeReader reads sealed content and closes the underlying blob object. A
-// decryption failure while streaming maps to ErrSealedContent with the
-// version ID only, so the error holds no key, scope or content; anything
-// else passes through unchanged.
+// closeReader reads sealed content, and at Close closes the opened stream,
+// which clears its key, and the underlying blob object. A decryption failure
+// while streaming maps to ErrSealedContent with the version ID only, so the
+// error holds no key, scope or content; anything else passes through
+// unchanged.
 type closeReader struct {
 	reader io.Reader
+	opened io.Closer
 	closer io.Closer
 	id     StateVersionID
 }
@@ -2758,7 +2804,7 @@ func (v *verifiedReader) Read(p []byte) (int, error) {
 
 // Close closes the underlying blob object.
 func (r *closeReader) Close() error {
-	return r.closer.Close() //nolint:wrapcheck // Transparent wrapper: callers must see the original error.
+	return errors.Join(r.opened.Close(), r.closer.Close())
 }
 
 // change applies a lock transition to the stored workspace and saves it.
@@ -2791,6 +2837,10 @@ func (s *Service) change(
 	if err != nil {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", id, err)
 	}
+
+	// The write carries the origin of the request. The store publishes it as
+	// the origin of the state version that the write releases.
+	w.Origin = originFrom(ctx)
 
 	if err := s.workspaces.SaveWorkspace(ctx, w, fence); err != nil {
 		return Workspace{}, fmt.Errorf("save workspace %s: %w", id, err)
@@ -2835,6 +2885,8 @@ func (s *Service) releaseUnfenced(ctx context.Context, w Workspace, by string, e
 	if err != nil {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", w.ID, err)
 	}
+
+	released.Origin = originFrom(ctx)
 
 	if err := s.workspaces.ReleaseUnfenced(ctx, released, fence, entry); err != nil {
 		return Workspace{}, fmt.Errorf("release %s: %w", w.ID, err)
@@ -2958,9 +3010,9 @@ func (s *Service) refuseManualLock(ctx context.Context, w Workspace, jobID strin
 		return nil
 	}
 
-	l, err := s.manual.CoveringFor(ctx, collection.UnitRef{
-		Namespace: w.Ref.Namespace, Tool: InventoryTool, Name: w.Ref.Name.String(),
-	}, jobID)
+	unit := lockUnitOf(w)
+
+	l, err := s.manual.CoveringFor(ctx, unit, jobID)
 	if errors.Is(err, manuallock.ErrNotLocked) {
 		return nil
 	}
@@ -2972,7 +3024,7 @@ func (s *Service) refuseManualLock(ctx context.Context, w Workspace, jobID strin
 	return fmt.Errorf(
 		"%w: %w",
 		ErrLocked,
-		&manuallock.LockedError{Lock: l, Unit: newUnitRef(w.Ref), Noun: lockNounWorkspace, Name: w.Ref.String()},
+		&manuallock.LockedError{Lock: l, Unit: unit.Ref, Noun: lockNounWorkspace, Name: w.Ref.String()},
 	)
 }
 
@@ -2989,12 +3041,16 @@ func (s *Service) refuseRestoreUnderNamespaceLock(ctx context.Context, ns namesp
 // not exist yet, for the request of the job jobID. Only the lock of the
 // namespace can cover it. A job whose phase started before that lock passes,
 // as in refuseManualLock. A lock that cannot be read refuses the request.
-func (s *Service) refuseNewUnitManualLock(ctx context.Context, ref Ref, jobID string) error {
+func (s *Service) refuseNewUnitManualLock(
+	ctx context.Context, ref Ref, namespaceID namespace.ID, jobID string,
+) error {
 	if s.manual == nil {
 		return nil
 	}
 
-	l, err := s.manual.NamespaceLockFor(ctx, newUnitRef(ref), jobID)
+	unit := newLockUnitOf(ref, namespaceID)
+
+	l, err := s.manual.NamespaceLockFor(ctx, unit, jobID)
 	if errors.Is(err, manuallock.ErrNotLocked) {
 		return nil
 	}
@@ -3006,13 +3062,24 @@ func (s *Service) refuseNewUnitManualLock(ctx context.Context, ref Ref, jobID st
 	return fmt.Errorf(
 		"%w: %w",
 		ErrLocked,
-		&manuallock.LockedError{Lock: l, Unit: newUnitRef(ref), Noun: lockNounWorkspace, Name: ref.String()},
+		&manuallock.LockedError{Lock: l, Unit: unit.Ref, Noun: lockNounWorkspace, Name: ref.String()},
 	)
 }
 
 // newUnitRef returns the inventory reference of the workspace ref.
 func newUnitRef(ref Ref) collection.UnitRef {
 	return collection.UnitRef{Namespace: ref.Namespace, Tool: InventoryTool, Name: ref.Name.String()}
+}
+
+// lockUnitOf returns the lock unit of the workspace w.
+func lockUnitOf(w Workspace) manuallock.Unit {
+	return manuallock.Unit{Ref: newUnitRef(w.Ref), NamespaceID: w.NamespaceID, UnitID: w.ID.String()}
+}
+
+// newLockUnitOf returns the lock unit of ref, which does not exist yet, so it
+// has no unit ID.
+func newLockUnitOf(ref Ref, namespaceID namespace.ID) manuallock.Unit {
+	return manuallock.Unit{Ref: newUnitRef(ref), NamespaceID: namespaceID, UnitID: ""}
 }
 
 // refuseUnderNamespaceLock is refuseRestoreUnderNamespaceLock for the unit

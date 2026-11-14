@@ -35,23 +35,24 @@ func approverPolicy() gate.ApproverPolicy {
 }
 
 // awaitingApproval stores an apply job whose plan phase made a plan that
-// read the state version svOne, and whose apply phase has one approval gate
+// read the current state version, and whose apply phase has one approval gate
 // of two approvals that binds the plan. The job waits in awaiting-approval.
 func awaitingApproval(t *testing.T, h Harness, f fixture) job.Job {
 	t.Helper()
 
-	err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne)
-	if err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
+	// A harness without a state writer has no state version to bind.
+	version := ""
+	if h.WriteState != nil {
+		version = writeState(t, h, f, false)
 	}
 
 	made := time.Now()
 
 	j := newJob(f.unit, job.OperationApply, "")
 	j.Current = 1
-	j.Phases[0].StateVersion = svOne
+	j.Phases[0].StateVersion = version
 	j.Phases[0].Plan = &job.PlanRef{
-		ID: "pln-" + string(j.ID), ItemKey: secret.NewItemKeyID(), StateVersion: svOne,
+		ID: "pln-" + string(j.ID), ItemKey: secret.NewItemKeyID(), StateVersion: version,
 		Parts: []job.PlanPart{
 			{Kind: job.OutputPlanDisplay, Size: planSize, SHA256: "d1", Secret: false, StoredSize: 0, StoredMD5: ""},
 			{Kind: job.OutputPlanApply, Size: planSize, SHA256: "a1", Secret: true, StoredSize: 0, StoredMD5: ""},

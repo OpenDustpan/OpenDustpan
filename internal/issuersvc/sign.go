@@ -265,6 +265,15 @@ func checkCopyRoute(ns namespace.Name) string {
 // payload builds the claims of a token. The claims of the open never replace a
 // claim that the issuer sets.
 func payload(o profile.OpenContext, r signRequest, iss, jti string, now time.Time) ([]byte, error) {
+	// Defense in depth: checkRequest refuses these names through
+	// CheckClaimName too. This check stays so that a new caller of payload
+	// cannot sign a token that a relying party reads as a fresh sign-in.
+	for _, name := range profile.AuthenticationClaims() {
+		if _, ok := o.Claims[name]; ok {
+			return nil, fmt.Errorf("%w: the claim %q tells how a person signed in", profile.ErrInvalid, name)
+		}
+	}
+
 	claims := map[string]any{}
 	maps.Copy(claims, o.Claims)
 

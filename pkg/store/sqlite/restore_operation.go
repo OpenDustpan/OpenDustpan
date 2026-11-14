@@ -600,7 +600,7 @@ func endRestore(ctx context.Context, q *db.Queries, end backup.RestoreEnd) error
 	n, err := q.EndRestore(ctx, db.EndRestoreParams{
 		State:     string(end.State),
 		Error:     end.Error,
-		EndedAtMs: codec.OptionalMillis(end.EndedAt),
+		EndedAtMs: optionalMillis(end.EndedAt),
 		DevReport: report,
 		ID:        end.ID.String(),
 	})
@@ -758,7 +758,9 @@ func (s *Store) StageRestore(
 		return backup.Summary{}, none, removeErr
 	}
 
-	sum, err := s.buildCheckedStaging(ctx, path, in.Open, index, in.Want)
+	sum, err := s.buildCheckedStaging(ctx, path, in.Open, portableCheck{
+		index: index, want: in.Want, restoreAt: in.Options.RestoreAt,
+	})
 	if err != nil {
 		return backup.Summary{}, none, err
 	}

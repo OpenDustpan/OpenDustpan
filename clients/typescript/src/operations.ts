@@ -2,6 +2,8 @@
 
 import { anyValue, array, boolean, dateTime, int64, nullable, number, record, ref, string } from "./decode.js";
 import {
+  decodeAccessCollectionUnitCapError,
+  decodeAccessCollectionUnitCapErrorArgs,
   decodeAccessLimit,
   decodeAddRegistryKeyRequest,
   decodeApiDescription,
@@ -11,6 +13,8 @@ import {
   decodeApprovers,
   decodeBackupCorruptError,
   decodeBackupCorruptErrorArgs,
+  decodeBackupTooManyUnverifiedError,
+  decodeBackupTooManyUnverifiedErrorArgs,
   decodeBulkUnitSettingsError,
   decodeBulkUnitSettingsItem,
   decodeBulkUnitSettingsRequest,
@@ -19,6 +23,7 @@ import {
   decodeCapabilities,
   decodeChangeOwnPasswordRequest,
   decodeCollection,
+  decodeComponents,
   decodeContextAnswer,
   decodeContextDocument,
   decodeContextEntry,
@@ -50,6 +55,9 @@ import {
   decodeDriftResource,
   decodeDriftStatus,
   decodeDriftUnit,
+  decodeDueSchedule,
+  decodeEnterMaintenanceRequest,
+  decodeEnterMaintenanceResponse,
   decodeErrorAnswer,
   decodeErrorCode,
   decodeErrorResponse,
@@ -129,6 +137,7 @@ import {
   decodeLockRequest,
   decodeMaintenanceActiveWorkError,
   decodeMaintenanceActiveWorkErrorArgs,
+  decodeMaintenanceState,
   decodeManualLock,
   decodeMfaPasskeyLimitError,
   decodeMfaPasskeyLimitErrorArgs,
@@ -190,6 +199,33 @@ import {
   decodeSaveTriggerRequest,
   decodeSchemaBinaryBelowMinimumError,
   decodeSchemaBinaryBelowMinimumErrorArgs,
+  decodeSelfServiceBlueprint,
+  decodeSelfServiceChoice,
+  decodeSelfServiceComponent,
+  decodeSelfServiceDelivery,
+  decodeSelfServiceDraft,
+  decodeSelfServiceDraftWrite,
+  decodeSelfServiceFilter,
+  decodeSelfServiceGitDelivery,
+  decodeSelfServiceHomeKind,
+  decodeSelfServiceInput,
+  decodeSelfServiceInputType,
+  decodeSelfServiceJobDelivery,
+  decodeSelfServiceModule,
+  decodeSelfServiceOperand,
+  decodeSelfServiceOutputRef,
+  decodeSelfServicePlatform,
+  decodeSelfServicePolicyEffect,
+  decodeSelfServicePolicyRule,
+  decodeSelfServiceProgram,
+  decodeSelfServicePublishRequest,
+  decodeSelfServiceQuotaKind,
+  decodeSelfServiceQuotaRule,
+  decodeSelfServiceQuotaScope,
+  decodeSelfServiceRule,
+  decodeSelfServiceSource,
+  decodeSelfServiceVersion,
+  decodeSelfServiceVersionList,
   decodeSetting,
   decodeSettings,
   decodeSettingsLockedError,
@@ -240,6 +276,7 @@ import {
   decodeTrustRuleCondition,
   decodeTrustRuleKeySource,
   decodeTrustRuleList,
+  decodeUnclaimedOperation,
   decodeUnit,
   decodeUnitDefaults,
   decodeUnitDefaultsRequest,
@@ -271,15 +308,19 @@ import {
   decodeUpdateNamespaceIssuerRequest,
   decodeUpdatePreferencesRequest,
   decodeUpdateSettingsRequest,
+  decodeUpgradeCheck,
   decodeView,
   decodeViewLabel,
   decodeViewQuery,
+  decodeWorkerReport,
   decodeWorkloadToken,
   decodeWorkspaceNoStateAtError,
   decodeWorkspaceNoStateAtErrorArgs,
 } from "./decoders.js";
 import { operation } from "./execute.js";
 import type {
+  AccessCollectionUnitCapError,
+  AccessCollectionUnitCapErrorArgs,
   AccessLimit,
   AddRegistryKeyRequest,
   ApiDescription,
@@ -289,6 +330,8 @@ import type {
   Approvers,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupTooManyUnverifiedError,
+  BackupTooManyUnverifiedErrorArgs,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
@@ -297,6 +340,7 @@ import type {
   Capabilities,
   ChangeOwnPasswordRequest,
   Collection,
+  Components,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -328,6 +372,9 @@ import type {
   DriftResource,
   DriftStatus,
   DriftUnit,
+  DueSchedule,
+  EnterMaintenanceRequest,
+  EnterMaintenanceResponse,
   ErrorAnswer,
   ErrorCode,
   ErrorResponse,
@@ -407,6 +454,7 @@ import type {
   LockRequest,
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
+  MaintenanceState,
   ManualLock,
   MfaPasskeyLimitError,
   MfaPasskeyLimitErrorArgs,
@@ -468,6 +516,33 @@ import type {
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
+  SelfServiceBlueprint,
+  SelfServiceChoice,
+  SelfServiceComponent,
+  SelfServiceDelivery,
+  SelfServiceDraft,
+  SelfServiceDraftWrite,
+  SelfServiceFilter,
+  SelfServiceGitDelivery,
+  SelfServiceHomeKind,
+  SelfServiceInput,
+  SelfServiceInputType,
+  SelfServiceJobDelivery,
+  SelfServiceModule,
+  SelfServiceOperand,
+  SelfServiceOutputRef,
+  SelfServicePlatform,
+  SelfServicePolicyEffect,
+  SelfServicePolicyRule,
+  SelfServiceProgram,
+  SelfServicePublishRequest,
+  SelfServiceQuotaKind,
+  SelfServiceQuotaRule,
+  SelfServiceQuotaScope,
+  SelfServiceRule,
+  SelfServiceSource,
+  SelfServiceVersion,
+  SelfServiceVersionList,
   Setting,
   Settings,
   SettingsLockedError,
@@ -518,6 +593,7 @@ import type {
   TrustRuleCondition,
   TrustRuleKeySource,
   TrustRuleList,
+  UnclaimedOperation,
   Unit,
   UnitDefaults,
   UnitDefaultsRequest,
@@ -549,9 +625,11 @@ import type {
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
   UpdateSettingsRequest,
+  UpgradeCheck,
   View,
   ViewLabel,
   ViewQuery,
+  WorkerReport,
   WorkloadToken,
   WorkspaceNoStateAtError,
   WorkspaceNoStateAtErrorArgs,
@@ -1009,6 +1087,12 @@ export interface DeleteViewInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation enterMaintenance. */
+export interface EnterMaintenanceInput {
+  readonly body: EnterMaintenanceRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation exchangeWorkloadToken. */
 export interface ExchangeWorkloadTokenInput {
   readonly path: {
@@ -1099,6 +1183,25 @@ export interface GetApprovalRuleInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getBlueprintDraft. */
+export interface GetBlueprintDraftInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly blueprint: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getBlueprintVersion. */
+export interface GetBlueprintVersionInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly blueprint: string;
+    readonly version: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getCapabilities. */
 export interface GetCapabilitiesInput {
   readonly signal?: AbortSignal;
@@ -1139,6 +1242,11 @@ export interface GetCollectionLockInput {
     readonly namespace: string;
     readonly collection: string;
   };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getComponents. */
+export interface GetComponentsInput {
   readonly signal?: AbortSignal;
 }
 
@@ -1210,6 +1318,11 @@ export interface GetLocalUserLocksInput {
 
 /** The input of the operation getLocalUserPolicy. */
 export interface GetLocalUserPolicyInput {
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getMaintenance. */
+export interface GetMaintenanceInput {
   readonly signal?: AbortSignal;
 }
 
@@ -1456,12 +1569,27 @@ export interface GetUnitSettingsSuggestionsInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getUpgradeCheck. */
+export interface GetUpgradeCheckInput {
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getView. */
 export interface GetViewInput {
   readonly path: {
     readonly namespace: string;
     readonly view_id: string;
   };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getWorker. */
+export interface GetWorkerInput {
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation leaveMaintenance. */
+export interface LeaveMaintenanceInput {
   readonly signal?: AbortSignal;
 }
 
@@ -1475,6 +1603,14 @@ export interface ListAccessLimitsInput {
 
 /** The input of the operation listApprovalRules. */
 export interface ListApprovalRulesInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listBlueprints. */
+export interface ListBlueprintsInput {
   readonly path: {
     readonly namespace: string;
   };
@@ -1824,6 +1960,16 @@ export interface MakeGitHostConnectionDefaultInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation publishBlueprint. */
+export interface PublishBlueprintInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly blueprint: string;
+  };
+  readonly body: SelfServicePublishRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation publishModuleRelease. */
 export interface PublishModuleReleaseInput {
   readonly path: {
@@ -1994,6 +2140,16 @@ export interface ResetUnitSettingsInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation retireBlueprintVersion. */
+export interface RetireBlueprintVersionInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly blueprint: string;
+    readonly version: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation rotateNamespaceIssuerKeys. */
 export interface RotateNamespaceIssuerKeysInput {
   readonly path: {
@@ -2124,6 +2280,15 @@ export interface SetUnitGateInput {
 
 /** The input of the operation signInWithPassword. */
 export interface SignInWithPasswordInput {
+  readonly body: PasswordSignInRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation signInWithProviderPassword. */
+export interface SignInWithProviderPasswordInput {
+  readonly path: {
+    readonly provider: string;
+  };
   readonly body: PasswordSignInRequest;
   readonly signal?: AbortSignal;
 }
@@ -2261,6 +2426,18 @@ export interface UpdateUnitContextInput {
     readonly unit_id: string;
   };
   readonly body: UpdateContextRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation writeBlueprintDraft. */
+export interface WriteBlueprintDraftInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly blueprint: string;
+  };
+  readonly body: SelfServiceBlueprint;
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch: string;
   readonly signal?: AbortSignal;
 }
 
@@ -2997,6 +3174,23 @@ export const operations = {
     },
     undefined,
   ),
+  enterMaintenance: operation<EnterMaintenanceResponse>(
+    {
+      id: "enterMaintenance",
+      method: "POST",
+      path: "/api/dustpan/v1/maintenance/enter",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeEnterMaintenanceResponse),
+  ),
   exchangeWorkloadToken: operation<WorkloadToken>(
     {
       id: "exchangeWorkloadToken",
@@ -3184,6 +3378,40 @@ export const operations = {
     },
     ref(() => decodeApprovalRule),
   ),
+  getBlueprintDraft: operation<SelfServiceDraft>(
+    {
+      id: "getBlueprintDraft",
+      method: "GET",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/draft",
+      pathParameters: ["namespace", "blueprint"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeSelfServiceDraft),
+  ),
+  getBlueprintVersion: operation<SelfServiceVersion>(
+    {
+      id: "getBlueprintVersion",
+      method: "GET",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/versions/{version}",
+      pathParameters: ["namespace", "blueprint", "version"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeSelfServiceVersion),
+  ),
   getCapabilities: operation<Capabilities>(
     {
       id: "getCapabilities",
@@ -3268,6 +3496,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeManualLock),
+  ),
+  getComponents: operation<Components>(
+    {
+      id: "getComponents",
+      method: "GET",
+      path: "/api/dustpan/v1/components",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeComponents),
   ),
   getGate: operation<Gate>(
     {
@@ -3404,6 +3649,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeLocalUserPolicy),
+  ),
+  getMaintenance: operation<MaintenanceState>(
+    {
+      id: "getMaintenance",
+      method: "GET",
+      path: "/api/dustpan/v1/maintenance",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeMaintenanceState),
   ),
   getModuleRelease: operation<ModuleRelease>(
     {
@@ -3847,6 +4109,23 @@ export const operations = {
     },
     ref(() => decodeUnitSettingsSuggestions),
   ),
+  getUpgradeCheck: operation<UpgradeCheck>(
+    {
+      id: "getUpgradeCheck",
+      method: "GET",
+      path: "/api/dustpan/v1/upgrade-check",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeUpgradeCheck),
+  ),
   getView: operation<View>(
     {
       id: "getView",
@@ -3863,6 +4142,40 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeView),
+  ),
+  getWorker: operation<WorkerReport>(
+    {
+      id: "getWorker",
+      method: "GET",
+      path: "/api/dustpan/v1/worker",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeWorkerReport),
+  ),
+  leaveMaintenance: operation<MaintenanceState>(
+    {
+      id: "leaveMaintenance",
+      method: "POST",
+      path: "/api/dustpan/v1/maintenance/leave",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeMaintenanceState),
   ),
   listAccessLimits: operation<ListAccessLimitsResponse>(
     {
@@ -3897,6 +4210,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeListApprovalRulesResponse),
+  ),
+  listBlueprints: operation<SelfServiceVersionList>(
+    {
+      id: "listBlueprints",
+      method: "GET",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeSelfServiceVersionList),
   ),
   listCollectionAccessLimits: operation<ListAccessLimitsResponse>(
     {
@@ -4442,6 +4772,23 @@ export const operations = {
     },
     ref(() => decodeGitHostConnection),
   ),
+  publishBlueprint: operation<SelfServiceVersion>(
+    {
+      id: "publishBlueprint",
+      method: "POST",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/versions",
+      pathParameters: ["namespace", "blueprint"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeSelfServiceVersion),
+  ),
   publishModuleRelease: operation<ModuleRelease>(
     {
       id: "publishModuleRelease",
@@ -4697,6 +5044,23 @@ export const operations = {
     },
     undefined,
   ),
+  retireBlueprintVersion: operation<void>(
+    {
+      id: "retireBlueprintVersion",
+      method: "POST",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/versions/{version}/retire",
+      pathParameters: ["namespace", "blueprint", "version"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
   rotateNamespaceIssuerKeys: operation<NamespaceIssuerRotation>(
     {
       id: "rotateNamespaceIssuerKeys",
@@ -4890,6 +5254,23 @@ export const operations = {
       method: "POST",
       path: "/api/dustpan/v1/sign-in/password",
       pathParameters: [],
+      queryParameters: [],
+      security: "public",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  signInWithProviderPassword: operation<void>(
+    {
+      id: "signInWithProviderPassword",
+      method: "POST",
+      path: "/api/dustpan/v1/sign-in/providers/{provider}/password",
+      pathParameters: ["provider"],
       queryParameters: [],
       security: "public",
       idempotencyKey: "none",
@@ -5155,6 +5536,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeContextEntry),
+  ),
+  writeBlueprintDraft: operation<SelfServiceDraftWrite>(
+    {
+      id: "writeBlueprintDraft",
+      method: "PUT",
+      path: "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/draft",
+      pathParameters: ["namespace", "blueprint"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "required",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeSelfServiceDraftWrite),
   ),
 };
 

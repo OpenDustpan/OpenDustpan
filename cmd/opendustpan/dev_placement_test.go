@@ -43,8 +43,8 @@ func devRules(t *testing.T, url, token string) devRuleList {
 }
 
 // TestDevFirstStartMakesThePlacementRule proves that the first start of dev
-// makes the collection everything and one catch-all rule for Pulumi stacks in
-// the namespace dev, and that the banner names the rule and the command that
+// makes the collection everything and one catch-all rule for Pulumi stacks and
+// one for OpenTofu workspaces in the namespace dev, and that the banner names the rule and the command that
 // removes it.
 func TestDevFirstStartMakesThePlacementRule(t *testing.T) {
 	t.Parallel()
@@ -54,13 +54,15 @@ func TestDevFirstStartMakesThePlacementRule(t *testing.T) {
 	token := readToken(t, dir)
 
 	list := devRules(t, r.url, token)
-	if len(list.Rules) != 1 {
-		t.Fatalf("the first start made %d rules, want 1", len(list.Rules))
+	if len(list.Rules) != 2 {
+		t.Fatalf("the first start made %d rules, want 2", len(list.Rules))
 	}
 
-	got := list.Rules[0]
-	if got.Tool != "pulumi" || got.Project != "*" || got.Stack != "*" || got.Collection != "everything" {
-		t.Fatalf("rule = %+v, want pulumi */* in everything", got)
+	for i, tool := range []string{"pulumi", "opentofu"} {
+		got := list.Rules[i]
+		if got.Tool != tool || got.Project != "*" || got.Stack != "*" || got.Collection != "everything" {
+			t.Fatalf("rule %d = %+v, want %s */* in everything", i, got, tool)
+		}
 	}
 
 	banner := r.stderr.String()
@@ -75,23 +77,12 @@ func TestDevFirstStartMakesThePlacementRule(t *testing.T) {
 	}
 }
 
-// TestDevLaterStartKeepsARemovedRule proves that a later start of dev does not
-// make the rule again after the developer removed it, and prints no Placement
-// line.
-func TestDevLaterStartKeepsARemovedRule(t *testing.T) {
-	t.Parallel()
-
-	proc := newDevTestProcess(false)
-	home := t.TempDir()
-	dir := filepath.Join(t.TempDir(), "trial")
-	args := trialArgs(t, dir)
-
-	first := mustStartDev(t, proc, home, args...)
-	token := readToken(t, dir)
-	id := devRules(t, first.url, token).Rules[0].ID
+// deleteDevRule deletes the placement rule id of the namespace dev.
+func deleteDevRule(t *testing.T, serverURL, token, id string) {
+	t.Helper()
 
 	req, err := http.NewRequestWithContext(
-		t.Context(), http.MethodDelete, first.url+devRulesPath+"/"+id, http.NoBody,
+		t.Context(), http.MethodDelete, serverURL+devRulesPath+"/"+id, http.NoBody,
 	)
 	if err != nil {
 		t.Fatalf("request: %v", err)
@@ -110,6 +101,25 @@ func TestDevLaterStartKeepsARemovedRule(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("DELETE the rule = %d, want 204", resp.StatusCode)
+	}
+}
+
+// TestDevLaterStartKeepsARemovedRule proves that a later start of dev does not
+// make the rule again after the developer removed it, and prints no Placement
+// line.
+func TestDevLaterStartKeepsARemovedRule(t *testing.T) {
+	t.Parallel()
+
+	proc := newDevTestProcess(false)
+	home := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "trial")
+	args := trialArgs(t, dir)
+
+	first := mustStartDev(t, proc, home, args...)
+	token := readToken(t, dir)
+
+	for _, rule := range devRules(t, first.url, token).Rules {
+		deleteDevRule(t, first.url, token, rule.ID)
 	}
 
 	if stopErr := first.stop(t); stopErr != nil {

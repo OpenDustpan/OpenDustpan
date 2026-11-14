@@ -47,6 +47,7 @@ import type {
   DeleteUnitContextInput,
   DeleteUnitGateInput,
   DeleteViewInput,
+  EnterMaintenanceInput,
   ExchangeWorkloadTokenInput,
   ExportNamespaceIssuerInput,
   FinishPasskeyRegistrationInput,
@@ -58,11 +59,14 @@ import type {
   GetApiDescriptionInput,
   GetApprovalDefaultInput,
   GetApprovalRuleInput,
+  GetBlueprintDraftInput,
+  GetBlueprintVersionInput,
   GetCapabilitiesInput,
   GetCollectionInput,
   GetCollectionAccessLimitInput,
   GetCollectionGateInput,
   GetCollectionLockInput,
+  GetComponentsInput,
   GetGateInput,
   GetGitHostAppInput,
   GetGitHostConnectionInput,
@@ -71,6 +75,7 @@ import type {
   GetJobLogInput,
   GetLocalUserLocksInput,
   GetLocalUserPolicyInput,
+  GetMaintenanceInput,
   GetModuleReleaseInput,
   GetNamespaceContextInput,
   GetNamespaceIssuerInput,
@@ -97,9 +102,13 @@ import type {
   GetUnitOutputsInput,
   GetUnitSettingsInput,
   GetUnitSettingsSuggestionsInput,
+  GetUpgradeCheckInput,
   GetViewInput,
+  GetWorkerInput,
+  LeaveMaintenanceInput,
   ListAccessLimitsInput,
   ListApprovalRulesInput,
+  ListBlueprintsInput,
   ListCollectionAccessLimitsInput,
   ListCollectionGatesInput,
   ListCollectionsInput,
@@ -132,6 +141,7 @@ import type {
   LockCollectionInput,
   LockNamespaceInput,
   MakeGitHostConnectionDefaultInput,
+  PublishBlueprintInput,
   PublishModuleReleaseInput,
   PublishProviderReleaseInput,
   PutGitHostAppInput,
@@ -147,6 +157,7 @@ import type {
   ReplaceUnitSettingsInput,
   ResetLocalUserPasswordInput,
   ResetUnitSettingsInput,
+  RetireBlueprintVersionInput,
   RotateNamespaceIssuerKeysInput,
   SetAccessLimitInput,
   SetApprovalDefaultInput,
@@ -159,6 +170,7 @@ import type {
   SetUnitAccessLimitInput,
   SetUnitGateInput,
   SignInWithPasswordInput,
+  SignInWithProviderPasswordInput,
   StageRegistryUploadInput,
   StartDriftCheckInput,
   StartJobInput,
@@ -174,9 +186,12 @@ import type {
   UpdatePreferencesInput,
   UpdateSettingsInput,
   UpdateUnitContextInput,
+  WriteBlueprintDraftInput,
 } from "./operations.js";
 import type { ApiTransport } from "./transport.js";
 import type {
+  AccessCollectionUnitCapError,
+  AccessCollectionUnitCapErrorArgs,
   AccessLimit,
   AddRegistryKeyRequest,
   ApiDescription,
@@ -186,6 +201,8 @@ import type {
   Approvers,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupTooManyUnverifiedError,
+  BackupTooManyUnverifiedErrorArgs,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
@@ -194,6 +211,7 @@ import type {
   Capabilities,
   ChangeOwnPasswordRequest,
   Collection,
+  Components,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -225,6 +243,9 @@ import type {
   DriftResource,
   DriftStatus,
   DriftUnit,
+  DueSchedule,
+  EnterMaintenanceRequest,
+  EnterMaintenanceResponse,
   ErrorAnswer,
   ErrorCode,
   ErrorResponse,
@@ -304,6 +325,7 @@ import type {
   LockRequest,
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
+  MaintenanceState,
   ManualLock,
   MfaPasskeyLimitError,
   MfaPasskeyLimitErrorArgs,
@@ -365,6 +387,33 @@ import type {
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
+  SelfServiceBlueprint,
+  SelfServiceChoice,
+  SelfServiceComponent,
+  SelfServiceDelivery,
+  SelfServiceDraft,
+  SelfServiceDraftWrite,
+  SelfServiceFilter,
+  SelfServiceGitDelivery,
+  SelfServiceHomeKind,
+  SelfServiceInput,
+  SelfServiceInputType,
+  SelfServiceJobDelivery,
+  SelfServiceModule,
+  SelfServiceOperand,
+  SelfServiceOutputRef,
+  SelfServicePlatform,
+  SelfServicePolicyEffect,
+  SelfServicePolicyRule,
+  SelfServiceProgram,
+  SelfServicePublishRequest,
+  SelfServiceQuotaKind,
+  SelfServiceQuotaRule,
+  SelfServiceQuotaScope,
+  SelfServiceRule,
+  SelfServiceSource,
+  SelfServiceVersion,
+  SelfServiceVersionList,
   Setting,
   Settings,
   SettingsLockedError,
@@ -415,6 +464,7 @@ import type {
   TrustRuleCondition,
   TrustRuleKeySource,
   TrustRuleList,
+  UnclaimedOperation,
   Unit,
   UnitDefaults,
   UnitDefaultsRequest,
@@ -446,9 +496,11 @@ import type {
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
   UpdateSettingsRequest,
+  UpgradeCheck,
   View,
   ViewLabel,
   ViewQuery,
+  WorkerReport,
   WorkloadToken,
   WorkspaceNoStateAtError,
   WorkspaceNoStateAtErrorArgs,
@@ -634,6 +686,10 @@ export class Client {
     return execute(this.transport, operations.deleteView, input);
   }
 
+  enterMaintenance(input: EnterMaintenanceInput): Promise<Answer<EnterMaintenanceResponse>> {
+    return execute(this.transport, operations.enterMaintenance, input);
+  }
+
   exchangeWorkloadToken(input: ExchangeWorkloadTokenInput): Promise<Answer<WorkloadToken>> {
     return execute(this.transport, operations.exchangeWorkloadToken, input);
   }
@@ -678,6 +734,14 @@ export class Client {
     return execute(this.transport, operations.getApprovalRule, input);
   }
 
+  getBlueprintDraft(input: GetBlueprintDraftInput): Promise<Answer<SelfServiceDraft>> {
+    return execute(this.transport, operations.getBlueprintDraft, input);
+  }
+
+  getBlueprintVersion(input: GetBlueprintVersionInput): Promise<Answer<SelfServiceVersion>> {
+    return execute(this.transport, operations.getBlueprintVersion, input);
+  }
+
   getCapabilities(input: GetCapabilitiesInput = {}): Promise<Answer<Capabilities>> {
     return execute(this.transport, operations.getCapabilities, input);
   }
@@ -696,6 +760,10 @@ export class Client {
 
   getCollectionLock(input: GetCollectionLockInput): Promise<Answer<ManualLock>> {
     return execute(this.transport, operations.getCollectionLock, input);
+  }
+
+  getComponents(input: GetComponentsInput = {}): Promise<Answer<Components>> {
+    return execute(this.transport, operations.getComponents, input);
   }
 
   getGate(input: GetGateInput): Promise<Answer<Gate>> {
@@ -728,6 +796,10 @@ export class Client {
 
   getLocalUserPolicy(input: GetLocalUserPolicyInput = {}): Promise<Answer<LocalUserPolicy>> {
     return execute(this.transport, operations.getLocalUserPolicy, input);
+  }
+
+  getMaintenance(input: GetMaintenanceInput = {}): Promise<Answer<MaintenanceState>> {
+    return execute(this.transport, operations.getMaintenance, input);
   }
 
   getModuleRelease(input: GetModuleReleaseInput): Promise<Answer<ModuleRelease>> {
@@ -834,8 +906,20 @@ export class Client {
     return execute(this.transport, operations.getUnitSettingsSuggestions, input);
   }
 
+  getUpgradeCheck(input: GetUpgradeCheckInput = {}): Promise<Answer<UpgradeCheck>> {
+    return execute(this.transport, operations.getUpgradeCheck, input);
+  }
+
   getView(input: GetViewInput): Promise<Answer<View>> {
     return execute(this.transport, operations.getView, input);
+  }
+
+  getWorker(input: GetWorkerInput = {}): Promise<Answer<WorkerReport>> {
+    return execute(this.transport, operations.getWorker, input);
+  }
+
+  leaveMaintenance(input: LeaveMaintenanceInput = {}): Promise<Answer<MaintenanceState>> {
+    return execute(this.transport, operations.leaveMaintenance, input);
   }
 
   listAccessLimits(input: ListAccessLimitsInput): Promise<Answer<ListAccessLimitsResponse>> {
@@ -844,6 +928,10 @@ export class Client {
 
   listApprovalRules(input: ListApprovalRulesInput): Promise<Answer<ListApprovalRulesResponse>> {
     return execute(this.transport, operations.listApprovalRules, input);
+  }
+
+  listBlueprints(input: ListBlueprintsInput): Promise<Answer<SelfServiceVersionList>> {
+    return execute(this.transport, operations.listBlueprints, input);
   }
 
   listCollectionAccessLimits(input: ListCollectionAccessLimitsInput): Promise<Answer<ListAccessLimitsResponse>> {
@@ -974,6 +1062,10 @@ export class Client {
     return execute(this.transport, operations.makeGitHostConnectionDefault, input);
   }
 
+  publishBlueprint(input: PublishBlueprintInput): Promise<Answer<SelfServiceVersion>> {
+    return execute(this.transport, operations.publishBlueprint, input);
+  }
+
   publishModuleRelease(input: PublishModuleReleaseInput): Promise<Answer<ModuleRelease>> {
     return execute(this.transport, operations.publishModuleRelease, input);
   }
@@ -1034,6 +1126,10 @@ export class Client {
     return execute(this.transport, operations.resetUnitSettings, input);
   }
 
+  retireBlueprintVersion(input: RetireBlueprintVersionInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.retireBlueprintVersion, input);
+  }
+
   rotateNamespaceIssuerKeys(input: RotateNamespaceIssuerKeysInput): Promise<Answer<NamespaceIssuerRotation>> {
     return execute(this.transport, operations.rotateNamespaceIssuerKeys, input);
   }
@@ -1080,6 +1176,10 @@ export class Client {
 
   signInWithPassword(input: SignInWithPasswordInput): Promise<Answer<void>> {
     return execute(this.transport, operations.signInWithPassword, input);
+  }
+
+  signInWithProviderPassword(input: SignInWithProviderPasswordInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.signInWithProviderPassword, input);
   }
 
   stageRegistryUpload(input: StageRegistryUploadInput): Promise<Answer<StagedUpload>> {
@@ -1140,5 +1240,9 @@ export class Client {
 
   updateUnitContext(input: UpdateUnitContextInput): Promise<Answer<ContextEntry>> {
     return execute(this.transport, operations.updateUnitContext, input);
+  }
+
+  writeBlueprintDraft(input: WriteBlueprintDraftInput): Promise<Answer<SelfServiceDraftWrite>> {
+    return execute(this.transport, operations.writeBlueprintDraft, input);
   }
 }

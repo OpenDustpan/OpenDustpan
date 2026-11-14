@@ -48,7 +48,7 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 			t.Helper()
 
 			jobs := newFakeJobs()
-			jobs.listed = func(job.Filter) []job.Job { return nil }
+			jobs.listed = func(job.Filter) job.Page { return job.Page{Jobs: nil, Damaged: nil, After: ""} }
 			h := newHandler(t, newAuthorizer(readsNamespace()...), jobs)
 
 			return probe(h, http.MethodGet, jobsURL, "")

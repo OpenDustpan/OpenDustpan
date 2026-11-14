@@ -63,7 +63,7 @@ func TestUpgrade(t *testing.T) {
 
 	t.Logf("upgrade test ran over %d tags: %s", len(tags), strings.Join(tags, ", "))
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -81,28 +81,28 @@ func TestUpgrade(t *testing.T) {
 	runTagUpgrades(t, tags, databases, tools)
 }
 
-// installUpgradeTools installs the newest CLI of each tool and groups them.
+// installUpgradeTools installs one CLI of each tool and groups them.
 func installUpgradeTools(t *testing.T, fetcher *e2e.Fetcher) upgradeTools {
 	t.Helper()
 
-	pulumiVersions := e2e.Pulumi().Versions()
-	tofuVersions := e2e.OpenTofu().Versions()
+	pulumiVersion := e2e.Pulumi().Single()
+	tofuVersion := e2e.OpenTofu().Single()
 
-	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+	if pulumiVersion == "" || tofuVersion == "" {
 		t.Fatal("each tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	pulumiCLI, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersions[0])
+	pulumiCLI, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersion)
 	if err != nil {
-		t.Fatalf("install pulumi %s: %v", pulumiVersions[0], err)
+		t.Fatalf("install pulumi %s: %v", pulumiVersion, err)
 	}
 
-	tofuCLI, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersions[0])
+	tofuCLI, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersion)
 	if err != nil {
-		t.Fatalf("install tofu %s: %v", tofuVersions[0], err)
+		t.Fatalf("install tofu %s: %v", tofuVersion, err)
 	}
 
 	t.Logf("pulumi %s with tofu %s", pulumiCLI.Version, tofuCLI.Version)

@@ -36,8 +36,10 @@ type ItemSealerConfig struct {
 
 // ItemKeySealer is the ItemSealer over the key records of an ItemKeyIndex and
 // the wrapped key blobs of ItemKeyBlobs. Each item has its own random key.
-// The Wrapper wraps it with the associated data of the item, and the content
-// seals as a stream under a key that the stream derives from the item key.
+// The Wrapper wraps it with the associated data of the item and of the ID of
+// its record, and the content seals as a stream under a key that the stream
+// derives from the item key. The associated data of each chunk holds the item
+// and the ID of the record too.
 type ItemKeySealer struct {
 	index      ItemKeyIndex
 	blobs      *ItemKeyBlobs
@@ -136,31 +138,32 @@ func (s *ItemKeySealer) SealContent(
 		return nil, err
 	}
 
-	key, err := s.openItemKey(ctx, ref)
+	key, id, err := s.openItemKey(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
 
 	defer clear(key)
 
-	return sealStreamWith(key, ref, binding, r)
+	return sealStreamWith(key, itemContent{ref: ref, id: id}, binding, r)
 }
 
 // OpenContent implements ItemSealer. It reads the record before any blob, so
-// a shredded key answers ErrShredded at once.
+// a shredded key answers ErrShredded at once. The reader holds the item key
+// until it reads the stream header or until Close, so the caller closes it.
 func (s *ItemKeySealer) OpenContent(
 	ctx context.Context, ref ItemRef, binding []byte, r io.Reader,
-) (io.Reader, error) {
+) (io.ReadCloser, error) {
 	if err := checkBinding(binding); err != nil {
 		return nil, err
 	}
 
-	key, err := s.openItemKey(ctx, ref)
+	key, id, err := s.openItemKey(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
 
-	return openStreamWith(key, ref, binding, r, true), nil
+	return openStreamWith(key, itemContent{ref: ref, id: id}, binding, r, true), nil
 }
 
 // SealContents implements ItemSealer. It checks every binding before it reads
@@ -172,17 +175,18 @@ func (s *ItemKeySealer) SealContents(ctx context.Context, ref ItemRef, parts []C
 		}
 	}
 
-	key, err := s.openItemKey(ctx, ref)
+	key, id, err := s.openItemKey(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
 
 	defer clear(key)
 
+	content := itemContent{ref: ref, id: id}
 	out := make([][]byte, 0, len(parts))
 
 	for i := range parts {
-		r, err := sealStreamWith(key, ref, parts[i].Binding, bytes.NewReader(parts[i].Data))
+		r, err := sealStreamWith(key, content, parts[i].Binding, bytes.NewReader(parts[i].Data))
 		if err != nil {
 			return nil, fmt.Errorf("seal part %d: %w", i, err)
 		}
@@ -208,21 +212,18 @@ func (s *ItemKeySealer) OpenContents(ctx context.Context, ref ItemRef, parts []C
 		}
 	}
 
-	key, err := s.openItemKey(ctx, ref)
+	key, id, err := s.openItemKey(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
 
 	defer clear(key)
 
+	content := itemContent{ref: ref, id: id}
 	out := make([][]byte, 0, len(parts))
 
 	for i := range parts {
-		// The reader clears the key that it gets after the header, so each
-		// part gets its own copy.
-		plain, err := io.ReadAll(
-			openStreamWith(bytes.Clone(key), ref, parts[i].Binding, bytes.NewReader(parts[i].Data), true),
-		)
+		plain, err := openPart(key, content, parts[i])
 		if err != nil {
 			return nil, fmt.Errorf("open part %d: %w", i, err)
 		}
@@ -233,62 +234,88 @@ func (s *ItemKeySealer) OpenContents(ctx context.Context, ref ItemRef, parts []C
 	return out, nil
 }
 
-// openItemKey returns the raw item key of ref. The caller clears it. It reads
-// the record first and returns ErrShredded for a shredded record and
-// ErrKeyNotFound for no record or no blob. It reads only the blob version that
-// the record names. A key that does not unwrap for ref gives ErrDecrypt.
-func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, error) {
+// openPart opens one part of a batch and reads it to the end. The reader
+// clears the key that it gets, so the part gets its own copy, and Close
+// clears that copy also when the read fails before the header.
+func openPart(key []byte, content itemContent, part ContentPart) ([]byte, error) {
+	rd := openStreamWith(bytes.Clone(key), content, part.Binding, bytes.NewReader(part.Data), true)
+	plain, err := io.ReadAll(rd)
+
+	return plain, errors.Join(err, rd.Close())
+}
+
+// openItemKey returns the raw item key of ref and the ID of its record. The
+// caller clears the key. It reads the record first and returns ErrShredded for
+// a shredded record and ErrKeyNotFound for no record or no blob. It reads only
+// the blob version that the record names. A key that does not unwrap for ref
+// and the record ID gives ErrDecrypt.
+func (s *ItemKeySealer) openItemKey(ctx context.Context, ref ItemRef) ([]byte, ItemKeyID, error) {
 	if err := checkRef(ref); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	rec, err := s.index.GetItemKey(ctx, ref)
 	if err != nil {
-		return nil, fmt.Errorf("item key of %s: %w", ref, err)
+		return nil, "", fmt.Errorf("item key of %s: %w", ref, err)
 	}
 
 	// Defense in depth: the index looked the record up by the reference. This
 	// check stays so that a record of another item never opens the content of
 	// this one.
 	if rec.Ref != ref {
-		return nil, fmt.Errorf("%w: the record is not the record of %s", ErrDecrypt, ref)
+		return nil, "", fmt.Errorf("%w: the record is not the record of %s", ErrDecrypt, ref)
+	}
+
+	// Defense in depth: the store adapter and the blob view check the record
+	// ID too, and the associated data puts a length before each part. This
+	// check stays so that a record ID that is not valid never reaches the
+	// associated data.
+	if _, idErr := ParseItemKeyID(string(rec.ID)); idErr != nil {
+		return nil, "", fmt.Errorf("%w: the record of %s has an ID that is not valid", ErrDecrypt, ref)
 	}
 
 	if s.wrapper == nil {
-		return nil, fmt.Errorf("item key of %s: %w", ref, ErrKeyNotConfigured)
+		return nil, "", fmt.Errorf("item key of %s: %w", ref, ErrKeyNotConfigured)
 	}
 
 	// Defense in depth: unwrapKey checks the wrapper ID too. This check stays
 	// so that a key of another wrapper reads no namespace and no blob.
 	if rec.WrapperID != s.wrapper.ID() {
-		return nil, fmt.Errorf("%w: key of %s is wrapped by %q, server holds %q",
+		return nil, "", fmt.Errorf("%w: key of %s is wrapped by %q, server holds %q",
 			ErrDecrypt, ref, rec.WrapperID, s.wrapper.ID())
 	}
 
 	ns, err := s.namespaces.GetNamespace(ctx, ref.Scope.Namespace)
 	if err != nil {
-		return nil, fmt.Errorf("item key of %s: %w", ref, err)
+		return nil, "", fmt.Errorf("item key of %s: %w", ref, err)
 	}
 
 	// The record names the blob version. A blob of another version, for
 	// example a stray or planted later version, is never read.
 	blobKey, err := s.blobs.Key(ns.ID, rec.ID, rec.Blob.Version)
 	if err != nil {
-		return nil, fmt.Errorf("item key blob of %s: %w", ref, err)
+		return nil, "", fmt.Errorf("item key blob of %s: %w", ref, err)
 	}
 
 	wrapped, err := s.blobs.Get(ctx, ns.ID, blobKey)
 	if err != nil {
-		return nil, fmt.Errorf("item key blob of %s: %w", ref, err)
+		return nil, "", fmt.Errorf("item key blob of %s: %w", ref, err)
 	}
 
-	return unwrapKey(
+	// The associated data holds the record ID, so a wrapped key that was
+	// put under the blob key of another record does not unwrap.
+	key, err := unwrapKey(
 		ctx,
 		s.wrapper,
 		sealedKey{wrapperID: rec.WrapperID, ciphertext: wrapped},
-		ref.aad(),
+		itemKeyAAD(ref, rec.ID),
 		"item key of "+ref.String(),
 	)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return key, rec.ID, nil
 }
 
 // createItemKey makes a new item key for ref and stores its blob and, through
@@ -299,12 +326,13 @@ func (s *ItemKeySealer) createItemKey(ctx context.Context, tx ItemKeyTx, ref Ite
 		return ItemKey{}, fmt.Errorf("new item key of %s: %w", ref, err)
 	}
 
-	wrapped, err := wrapNewKey(ctx, s.wrapper, ref.aad(), "item key of "+ref.String())
+	// The ID comes first: the associated data of the wrapped key holds it.
+	id := NewItemKeyID()
+
+	wrapped, err := wrapNewKey(ctx, s.wrapper, itemKeyAAD(ref, id), "item key of "+ref.String())
 	if err != nil {
 		return ItemKey{}, err
 	}
-
-	id := NewItemKeyID()
 
 	blobKey, err := s.blobs.Key(ns.ID, id, itemKeyBlobVersion)
 	if err != nil {

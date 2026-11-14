@@ -149,7 +149,9 @@ func rawApp(t *testing.T, tokenBody string) rawHost {
 	pool := x509.NewCertPool()
 	pool.AddCert(srv.Certificate())
 
-	o, err := github.NewOpener(github.Config{Rules: loopbackRules(t), RootCAs: pool, Now: nil, Prover: testProver{}})
+	o, err := github.NewOpener(
+		github.Config{Rules: loopbackRules(t), RootCAs: pool, Now: nil, Prover: testProver{}, AppBudget: nil},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

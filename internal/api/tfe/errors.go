@@ -11,10 +11,12 @@ import (
 	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -559,11 +561,46 @@ func classifyInvalidState(err error) (errorClass, bool) {
 	return unclassified(), false
 }
 
+// classifyPlacement maps the errors of the placement of a unit: a new
+// workspace that no rule places, a server with no placement rules, a rule that
+// names a collection that does not exist, and a unit that is in no collection.
+// ok is false for any other error.
+func classifyPlacement(err error) (errorClass, bool) {
+	switch {
+	case errors.Is(err, collection.ErrNoPlacement):
+		return errorClass{
+			status: http.StatusUnprocessableEntity, title: titleUnprocessable, detail: err.Error(),
+			code: errcode.PlacementNoMatch, args: nil,
+		}, true
+	case errors.Is(err, tofuunit.ErrPlacementOff):
+		return errorClass{
+			status: http.StatusNotImplemented, title: "not implemented", detail: err.Error(),
+			code: errcode.PlacementUnavailable, args: nil,
+		}, true
+	case errors.Is(err, collection.ErrNotFound):
+		return errorClass{
+			status: http.StatusConflict, title: titleConflict, detail: err.Error(),
+			code: errcode.CollectionNotFound, args: nil,
+		}, true
+	case errors.Is(err, collection.ErrNoCollection):
+		return errorClass{
+			status: http.StatusConflict, title: titleConflict, detail: err.Error(),
+			code: errcode.UnitNoCollection, args: nil,
+		}, true
+	}
+
+	return unclassified(), false
+}
+
 // classify maps domain errors to a status, title, detail and code safe to
 // show callers. Unknown errors map to 500 with a generic detail and the code
 // server.internal.
 func classify(err error) errorClass {
 	if class, ok := classifyTooLarge(err); ok {
+		return class
+	}
+
+	if class, ok := classifyPlacement(err); ok {
 		return class
 	}
 

@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ErrToken reports a JWT that the exchange refuses. It wraps the reason. The
@@ -192,6 +193,10 @@ func split(raw string) (parts, error) {
 	payload, err := enc.DecodeString(pieces[1])
 	if err != nil {
 		return none, fmt.Errorf("%w: the payload is not unpadded base64url", ErrToken)
+	}
+
+	if !utf8.Valid(payload) {
+		return none, fmt.Errorf("%w: the payload is not UTF-8", ErrToken)
 	}
 
 	signature, err := enc.DecodeString(pieces[2])

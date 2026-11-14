@@ -2,6 +2,7 @@ package jobstore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -57,16 +58,17 @@ type editBody struct {
 }
 
 type specBody struct {
-	Unit      unitBody     `json:"unit"`
-	Operation string       `json:"operation"`
-	Purpose   string       `json:"purpose"`
-	Executor  string       `json:"executor"`
-	Location  locationBody `json:"location"`
-	Steps     []stepBody   `json:"steps"`
-	Pool      string       `json:"pool"`
-	Profile   string       `json:"profile"`
-	Edits     []editBody   `json:"edits"`
-	Delivery  string       `json:"delivery"`
+	Unit           unitBody     `json:"unit"`
+	Operation      string       `json:"operation"`
+	Purpose        string       `json:"purpose"`
+	Executor       string       `json:"executor"`
+	Location       locationBody `json:"location"`
+	LocationSource string       `json:"locationSource,omitempty"`
+	Steps          []stepBody   `json:"steps"`
+	Pool           string       `json:"pool"`
+	Profile        string       `json:"profile"`
+	Edits          []editBody   `json:"edits"`
+	Delivery       string       `json:"delivery"`
 	// Defaulted is absent from a body that an older server wrote and from a
 	// job whose request gave every value, and both decode to no list.
 	Defaulted []string `json:"defaulted,omitempty"`
@@ -114,6 +116,12 @@ type planBody struct {
 	CreatedAt    time.Time      `json:"createdAt"`
 	ExpiresAt    time.Time      `json:"expiresAt"`
 	RedactedAt   time.Time      `json:"redactedAt"`
+	// ReservePhase, ReserveOperation and ReserveToken name the phase and the
+	// claim that recorded a reserve. Only the claim that made the reserve
+	// fills it. A filled plan keeps no binding.
+	ReservePhase     int    `json:"reservePhase"`
+	ReserveOperation string `json:"reserveOperation"`
+	ReserveToken     int64  `json:"reserveToken"`
 }
 
 type gateBody struct {
@@ -226,8 +234,8 @@ func encodeSpec(s *job.Spec) specBody {
 	out := specBody{
 		Unit: encodeUnit(s.Unit), Operation: string(s.Operation), Purpose: string(s.Purpose),
 		Executor: string(s.Executor),
-		Location: locationBody(s.Location), Steps: nil, Pool: s.Pool, Profile: s.Profile, Edits: nil,
-		Delivery: string(s.Delivery), Defaulted: slices.Clone(s.Defaulted),
+		Location: locationBody(s.Location), LocationSource: string(s.LocationSource), Steps: nil, Pool: s.Pool,
+		Profile: s.Profile, Edits: nil, Delivery: string(s.Delivery), Defaulted: slices.Clone(s.Defaulted),
 	}
 
 	for i := range s.Steps {
@@ -255,14 +263,15 @@ func encodeSpec(s *job.Spec) specBody {
 func decodeSpec(b *specBody) (job.Spec, error) {
 	unit, err := decodeUnit(b.Unit)
 	if err != nil {
-		return job.Spec{}, err
+		return job.Spec{}, fmt.Errorf("%w: %w", errBodyUnit, err)
 	}
 
 	out := job.Spec{
 		Unit: unit, Operation: job.Operation(b.Operation), Purpose: job.Purpose(b.Purpose),
 		Executor: job.ExecutorKind(b.Executor),
-		Location: job.Location(b.Location), Steps: nil, Pool: b.Pool, Profile: b.Profile, Edits: nil,
-		Delivery: job.Delivery(b.Delivery), Defaulted: slices.Clone(b.Defaulted),
+		Location: job.Location(b.Location), LocationSource: job.LocationSource(b.LocationSource), Steps: nil,
+		Pool: b.Pool, Profile: b.Profile, Edits: nil, Delivery: job.Delivery(b.Delivery),
+		Defaulted: slices.Clone(b.Defaulted),
 	}
 
 	for i := range b.Steps {
@@ -319,6 +328,7 @@ func encodePlan(p *job.PlanRef) *planBody {
 	out := &planBody{
 		ID: p.ID, ItemKey: string(p.ItemKey), StateVersion: p.StateVersion, Parts: nil, CreatedAt: p.CreatedAt,
 		ExpiresAt: p.ExpiresAt, RedactedAt: p.RedactedAt,
+		ReservePhase: 0, ReserveOperation: "", ReserveToken: 0,
 	}
 
 	for _, part := range p.Parts {
@@ -327,6 +337,15 @@ func encodePlan(p *job.PlanRef) *planBody {
 			StoredSize: part.StoredSize, StoredMD5: part.StoredMD5,
 		})
 	}
+
+	return out
+}
+
+// encodeReservePlan returns the body of a reserve: the plan fields, and the
+// phase, the operation and the token of the claim that made the reserve.
+func encodeReservePlan(p *job.PlanRef, pc job.PhaseClaim) *planBody {
+	out := encodePlan(p)
+	out.ReservePhase, out.ReserveOperation, out.ReserveToken = pc.Phase, string(pc.Claim.Operation), pc.Claim.Token
 
 	return out
 }
@@ -456,7 +475,7 @@ func decodeStateVersion(b *stateVersionBody) (*job.StateVersion, error) {
 
 	unit, err := decodeUnit(b.Unit)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errBodyUnit, err)
 	}
 
 	return &job.StateVersion{
@@ -502,6 +521,13 @@ func encodeBody(j *job.Job) (string, error) {
 		}
 	}
 
+	// Defense in depth: the decode checks each stored body again. This check
+	// stays so that a write of an unknown value fails at the write and never
+	// stores a row that cannot decode.
+	if err := checkEnums(&b, job.ErrInvalid); err != nil {
+		return "", fmt.Errorf("encode job %s: %w", j.ID, err)
+	}
+
 	raw, err := json.Marshal(b)
 	if err != nil {
 		return "", fmt.Errorf("encode job %s: %w", j.ID, err)
@@ -510,11 +536,83 @@ func encodeBody(j *job.Job) (string, error) {
 	return string(raw), nil
 }
 
+// checkEnums returns an error that wraps sentinel for a source kind, an
+// agent mode or a verification result in b that this server never writes.
+// The error names the field and never the value. The decode wraps ErrDamaged,
+// because a stored row is untrusted: a restore or another version may have
+// written it. The encode wraps job.ErrInvalid, because there the value comes
+// from the caller. The empty agent mode is accepted, the empty source is
+// refused, and the empty verification is valid.
+func checkEnums(b *jobBody, sentinel error) error {
+	source := job.SourceKind(b.Source)
+	if !source.Valid() {
+		return fmt.Errorf("source: %w", sentinel)
+	}
+
+	mode := job.AgentMode(b.AgentMode)
+	if mode != "" && !mode.Valid() {
+		return fmt.Errorf("agent mode: %w", sentinel)
+	}
+
+	verification := job.Verification(b.Verification)
+	if !verification.Valid() {
+		return fmt.Errorf("verification: %w", sentinel)
+	}
+
+	return nil
+}
+
+// The kinds of damage of a stored job row. DamageReason returns their text as
+// the reason of a job.DamagedRow. The text never holds a value that the body
+// stored.
+var (
+	// errBodyJSON reports a body that is not JSON.
+	errBodyJSON = errors.New("the body is not JSON")
+	// errBodyValue reports a body that holds a value that this version does
+	// not know, for example a source kind, an agent mode or a verification
+	// result that another version of the server wrote.
+	errBodyValue = errors.New("the body holds a value that this version does not know")
+	// errBodyUnit reports a body that holds a unit reference that this
+	// version does not know.
+	errBodyUnit = errors.New("the body holds a unit reference that this version does not know")
+	// errBodyTrigger reports a body that holds a trigger reference that is
+	// not valid.
+	errBodyTrigger = errors.New("the body holds a trigger reference that is not valid")
+	// errRowUnit reports a body that names another namespace or another unit
+	// than its row.
+	errRowUnit = errors.New("the body names another namespace or unit than its row")
+)
+
+// DamageReason returns the kind of a decode error, for the reason of a
+// job.DamagedRow. It never returns a value that the body stored.
+func DamageReason(err error) string {
+	switch {
+	case errors.Is(err, errBodyJSON):
+		return errBodyJSON.Error()
+	case errors.Is(err, errBodyValue):
+		return errBodyValue.Error()
+	case errors.Is(err, errBodyUnit):
+		return errBodyUnit.Error()
+	case errors.Is(err, errBodyTrigger):
+		return errBodyTrigger.Error()
+	case errors.Is(err, errRowUnit):
+		return errRowUnit.Error()
+	default:
+		return "the body does not decode"
+	}
+}
+
 // decodeBody fills the fields of j that the body holds.
 func decodeBody(body string, j *job.Job) error {
 	var b jobBody
 	if err := json.Unmarshal([]byte(body), &b); err != nil {
-		return fmt.Errorf("decode job %s: %w", j.ID, err)
+		return fmt.Errorf("decode job %s: %w: %w", j.ID, errBodyJSON, err)
+	}
+
+	// A stored row is untrusted: a restore or another version of the server
+	// may have written it. The error names the field only, never the value.
+	if err := checkEnums(&b, ErrDamaged); err != nil {
+		return fmt.Errorf("decode job %s: %w: %w", j.ID, errBodyValue, err)
 	}
 
 	spec, err := decodeSpec(&b.Spec)
@@ -545,7 +643,7 @@ func decodeBody(body string, j *job.Job) error {
 		// A stored row is untrusted: a restore or another version may have
 		// written it. The read handler trusts this reference to find a saver.
 		if err := ref.Validate(); err != nil {
-			return fmt.Errorf("decode job %s: trigger: %w", j.ID, err)
+			return fmt.Errorf("decode job %s: %w: trigger", j.ID, errBodyTrigger)
 		}
 
 		j.Trigger = ref

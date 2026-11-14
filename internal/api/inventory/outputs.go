@@ -54,7 +54,7 @@ type unitOutputEntry struct {
 //
 //nolint:gochecknoglobals // A fixed value; Go has no constant structs.
 var outputsBody = apidesc.Typed[unitOutputsDocument]("UnitOutputs", apidesc.Declare[json.RawMessage](
-	map[string]any{"description": "Any JSON value of a plain output."},
+	map[string]any{"description": "Any JSON value."},
 ))
 
 // outputRoutes returns the row of the outputs route. The caller needs
