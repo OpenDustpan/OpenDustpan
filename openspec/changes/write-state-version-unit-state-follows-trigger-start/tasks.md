@@ -1,19 +1,27 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+
 ## 1. Failing tests first
 
-- [ ] 1.1 Add conformance cases for Trigger When and LastSaver validation Check: pkg/trigger/triggertest dispatcher cases for when applied pass and fail on main before the fix
-- [ ] 1.2 Add Upstream idempotency and ErrVersionMismatch conformance cases Check: triggertest Upstream suite shows duplicate-version and older-version cases failing on main
-- [ ] 1.3 Add saver read-check conformance cases Check: output read tests with missing, deleted, and disabled saver deny and fail on main
+- [ ] 1.1 Add Upstream conformance cases for applied, duplicate, older and concurrent older version Check: pkg/trigger/triggertest Upstream cases fail on main
+- [ ] 1.2 Add saver read-check cases for missing, deleted, disabled and grant-lost saver Check: pkg/outputshare/outputsharetest cases fail on main
 
 ## 2. Implementation
 
-- [ ] 2.1 Implement Dispatcher.Upstream over the final-version store with per-trigger error capture Check: go test ./pkg/trigger/... passes; Upstream verifies the version against the job store and uses one idempotency key per trigger and version
-- [ ] 2.2 Wire the OpenTofu final-version writer as the event sender Check: go test ./pkg/... passes; OpenTofu final-version write emits the upstream event, Pulumi emits nothing in this slice
-- [ ] 2.3 Publish the declared follower edge to the graph Check: go test ./internal/graph/... passes; follows trigger publishes a declared edge and safe delete names followers
-- [ ] 2.4 Carry the trigger ID on the job and check each source output read against the last saver Check: go test ./pkg/outputshare/... plus trigger read tests pass; missing saver denies
+- [ ] 2.1 Implement Dispatcher.Upstream with per-trigger error capture Check: go test ./pkg/trigger/... passes; the acceptance path is the route POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}/fire called with a personal access token
+- [ ] 2.2 Send the upstream event when OpenTofu writes a final state version Check: go test ./pkg/store/... ./pkg/dustpan/... passes
+- [ ] 2.3 Publish the declared follower edge to the graph Check: go test ./internal/graph/... passes
+- [ ] 2.4 Carry the trigger ID on the job and check source output reads against the last saver Check: go test ./pkg/outputshare/... passes
 
-## 3. Definition of done
+## 3. Side effects (computed from main)
 
-- [ ] 3.1 Wire routes, authorization actions, docs page, and e2e step Check: POST then GET of trigger routes with unit:manage-triggers action passes policy check; make check reports zero findings
-- [ ] 3.2 Add e2e step against the real CLI over TLS on SQLite and PostgreSQL Check: e2e with the real OpenTofu CLI applies workspace A and the plan job of workspace B starts once; a repeat event starts nothing
-- [ ] 3.3 Write the user docs page in the same pull request Check: docs page names which runs count as an apply for OpenTofu and the Pulumi rule for later; make docs-lint passes
-- [ ] 3.4 Run the usability check Check: persona completes the path from the docs page alone; each error names the one command that helps
+- [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+
+## 4. Definition of done
+
+- [ ] 4.1 Check authorization actions on the trigger routes Check: route test passes; make check reports zero findings
+- [ ] 4.2 Add e2e step against the real CLI Check: e2e with real OpenTofu: POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with a personal access token, run tofu apply on workspace A, then GET the trigger shows one plan job of workspace B; a repeat event starts nothing
+- [ ] 4.3 Write the user docs page Check: make docs-lint passes
+- [ ] 4.4 Run the usability check Check: persona completes the path from the docs page alone; each error names one command

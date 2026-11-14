@@ -1,27 +1,119 @@
 ## Context
 
-Push intake stays in the trigger domain and starts plans only through the job service. The Forge port delivers authenticated push events; the dispatcher matches units in the same namespace under the namespace fence. ADR 267 gives the match and plan-only rule; ADR 299 changes ADR 267 decisions 14 and 19 to one credential rule; ADR 338 and ADR 273 give the starter and read checks.
+The Forge port calls a new method Dispatcher.ReviewRequest on the existing trigger.Dispatcher port. The dispatcher starts plans only through the job service.
 
 ## Decisions
 
-1. **Paths filter and push dispatcher.** Extend Trigger with an unexported paths field set only by NewTrigger; empty input defaults to the cleaned working directory of the unit code location with a trailing separator rule, or the repository root marker for a root location, and any empty or absolute-escaping pattern fails the constructor. The dispatcher accepts only events that the Forge port authenticated, loads candidate review-request-push triggers of the namespace under the namespace fence, keeps targets of the same repository and branch, keeps triggers whose normalized paths touch the union of changed files across commits counting a rename as a delete plus an add and a force-push on its head files, refuses a fork push or a missing fork flag with an audit entry, starts each plan as the namespace service principal with source kind forge and the head commit per ADR 267 and ADR 299, serializes supersede steps per namespace so two concurrent pushes leave only the newer head plan, and supersedes the queued or running plan of the same trigger subject to the open-job limit.
-2. **Credential path for author code.** Run author code with unit profile credentials obtained through the profile attachment authority and not through the starter token. The namespace service principal holds only the stored start-of-plan grant with no token and no session per ADR 338; the job open of the profile uses the attachment authority and output reads use the last saver of the trigger per ADR 273.
+1. **Paths filter and push dispatcher.** Trigger gains an unexported paths field that only NewTrigger sets. Empty input defaults to the cleaned working directory. An empty, absolute or escaping pattern fails the constructor. The dispatcher keeps triggers of the same repository and branch whose paths touch the changed files, refuses a fork push with an audit entry, and starts the newer plan before it cancels the older one.
 
 ## Structure
 
-Trigger holds an unexported paths field set only by NewTrigger; empty input defaults to the normalized working directory of the code location and any invalid pattern fails the constructor so no stored trigger holds an open filter.
+Trigger holds an unexported paths field that only NewTrigger sets, so no stored trigger has an open filter.
 
 ## Risks
 
-- A fork push must never run author code with unit profile credentials.
-- A spoofed push event must never start a plan.
-- A truncated changed-file list must never silently skip or misroute a plan.
+- A fork push must never run author code.
+- A truncated changed-file list must never skip a plan silently.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| intake authentication | Boundary: the push intake accepts only events authenticated by the Forge port with signature and delivery-ID deduplication and rejects replayed or spoofed deliveries without a start. | Send a forged push with a bad signature and a replayed push directly to the intake and show no plan starts. |
-| fork refusal | Service: the dispatcher refuses a push marked as fork and refuses a push with a missing fork flag, and writes an audit entry for each refusal even when other checks are bypassed. | Send a fork push and a push with an empty fork flag with all other checks bypassed and show no plan starts. |
-| fork refusal at start | Service: the job start checks the fork flag again and refuses when the flag is missing before any profile open. | Call the job start with a missing fork flag directly at the service and show a denial with no profile open. |
-| authorization at start | Use: the job service checks the namespace fence, the plan-only port, the open-job limit, and the stored start grant of the namespace service principal at the point of start. | Call the start with a cross-namespace unit and with an apply operation directly at the service and show a denial. |
+| boundary check | NewTrigger rejects an invalid paths pattern. | Save a trigger with dot-dot, absolute and empty patterns and show the refusal. |
+| fail closed | The dispatcher refuses a fork push or a missing fork flag with an audit entry. | Send a fork push and show that no plan starts. |
+
+## Diagrams
+
+Today: `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` on main (from the route table and the handler body, route row internal/api/triggers/routes.go:93, handler internal/api/triggers/serve.go:123).
+
+```mermaid
+sequenceDiagram
+participant C as Client
+participant R as GET route
+participant H as listTriggers
+participant AZ as Authorizer
+participant Fmanager as manager
+C->>R: GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers
+R->>AZ: no action (ScopeAuthorized)
+R->>H: listTriggers
+H->>Fmanager: List
+H-->>C: answer
+```
+
+After this change:
+
+```mermaid
+sequenceDiagram
+participant F as forge port
+participant D as dispatcher
+participant J as job service
+F->>D: ReviewRequest
+D->>J: start plan
+```
+
+Modules that the change touches, and their imports on main:
+
+```mermaid
+flowchart LR
+P1[pkg/source]
+```
+
+New imports of this change (each one allowed by the module rules):
+
+- `pkg/forge` imports `pkg/trigger`
+- `pkg/trigger` imports `pkg/job`
+
+States and transitions after this change:
+
+```mermaid
+stateDiagram-v2
+[*] --> queued
+queued --> running
+running --> superseded
+```
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| Push to plan start latency | 5 | seconds at p95 | one push that matches up to 20 units |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart TB
+subgraph Forge[Forge boundary]
+F[Forge host]
+end
+subgraph Server[Server boundary]
+I[Push intake]
+D[Dispatcher]
+J[Job service]
+end
+F -->|push| I
+I --> D
+D --> J
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| Forge boundary | E | A fork push runs author code. | boundary check | NewTrigger and the intake accept only an allowlisted paths pattern and a known fork flag. | Save a trigger with a dot-dot pattern and send an event with no fork flag; both are refused. |
+| Forge boundary | E | A fork push runs author code. | encode or contain | Changed file paths are cleaned and matched with a containment check against the working directory. | Send a changed file named with dot-dot segments and show that it matches no trigger. |
+| Forge boundary | E | A fork push runs author code. | limit | The open-job limit and a cap per push bound the plans of one push. | Send a push that touches 500 units and show that the plans stay within the cap. |
+| Forge boundary | E | A fork push runs author code. | authorize at point of use | The job service checks the run-as principal at each start. | Start a plan for a principal with no start grant and show the refusal. |
+| Forge boundary | E | A fork push runs author code. | fail closed | Refuse a fork push or a missing fork flag with an audit entry. | Send a fork push and show that no plan starts. |
+
+## Contracts
+
+**trigger.Trigger**
+
+- Invariant: Stored paths are normalized and never empty.
+- `NewTrigger`: pre: Paths patterns do not escape the repository root.. Post: Stored paths equal the normalized input or the default..
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| Replace the older plan | The cancel of the older plan fails. | No retry; the newer plan proceeds. | The newer plan is queued. |

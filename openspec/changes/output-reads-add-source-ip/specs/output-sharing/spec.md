@@ -12,9 +12,17 @@ When the server refuses an output read, the server SHALL write SourceIP, UserAge
 - **WHEN** the server refuses an output read with 409 for client-encrypted state
 - **THEN** the denial audit entry holds the SourceIP, UserAgent and RequestID of the request
 
+### Requirement: Bounded request fields
+
+When the server writes the denial audit entry, the server SHALL store the observed request fields within the existing audit bounds.
+
 #### Scenario: Empty fields stay empty
 - **WHEN** the observed request fields are empty
 - **THEN** the denial audit entry holds empty values and the read stays refused
+
+#### Scenario: Overlong user agent stays bounded
+- **WHEN** the observed user agent exceeds the audit bounds
+- **THEN** the denial audit entry holds the bounded values and the read stays refused
 
 ### Requirement: Denial flood is limited
 
@@ -24,13 +32,13 @@ When denied output reads exceed the recorder budget, the server SHALL stop denia
 - **WHEN** denied output reads exceed the recorder budget
 - **THEN** further denial entries stop while reads stay refused
 
-### Requirement: Dropped entry stays refused
+### Requirement: Dropped denials write nothing further
 
-If the limiter drops the denial audit entry, then the server SHALL still refuse the output read.
+If the limiter drops the denial audit entry, then the server SHALL still refuse the output read with no extra audit entry.
 
-#### Scenario: Dropped denial stays refused
+#### Scenario: Flood drops write nothing further
 - **WHEN** the limiter drops the denial audit entry
-- **THEN** the read answers 403 or 409 with no output values
+- **THEN** the server writes no extra audit entry and the read stays refused
 
 ### Requirement: Append failure stays refused
 

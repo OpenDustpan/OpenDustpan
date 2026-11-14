@@ -1,3 +1,7 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+
 ## 1. Failing tests
 
 - [ ] 1.1 Add failing test that a denied output read writes SourceIP, UserAgent and RequestID. Check: TestDenialEntryHasRequestFields fails on main, passes after the fix, and covers the 403 no-rule case, the 409 client-encrypted case and the empty-fields case.
@@ -13,7 +17,7 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Check wiring, route and authorization actions. Check: Route test lists the outputs read route with its authorization actions.
-- [ ] 3.2 Run the e2e output-sharing step. Check: e2e output-sharing read with and without a rule passes against the real CLI.
+- [ ] 3.2 Run the e2e output-sharing step on the existing outputs read route with an access token. Check: e2e output-sharing step for `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit}/outputs` with an access token passes against the real CLI.
 - [ ] 3.3 Update the user docs in the same pull request. Check: Docs page for output sharing names the denial fields and the limit.
 - [ ] 3.4 Check the console audit view shows the new denial fields. Check: Namespace administrator reads a denial in the console audit view and sees the client address, user agent and request ID.
 - [ ] 3.5 Run make check with zero findings. Check: `make check` reports zero findings.
