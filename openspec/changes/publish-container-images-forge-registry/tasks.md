@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -10,8 +10,8 @@
 
 ## 2. Build
 
-- [ ] 2.1 Add the two-registry push, the comparison and the re-run rules to the tag release workflow in the NEW file .github/workflows/release.yml. Check: TestReleasePushesOneDigestToBothRegistries passes. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
-- [ ] 2.2 Set the chart default, add the override value and push the chart as an OCI artifact to the forge registry in the existing file deploy/helm/opendustpan/values.yaml (image.repository :18) and the chart tests in deploy/helm/charttest/chart_test.go and in the release workflow .github/workflows/release.yml. Check: TestChartDefaultRegistryAndOverride passes and `make chart-lint` (helm lint, helm template, kubeconform) passes in CI. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
+- [x] 2.1 Add the two-registry push, the comparison and the re-run rules to the tag release workflow in the NEW file .github/workflows/release.yml. Check: TestReleasePushesOneDigestToBothRegistries passes. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
+- [x] 2.2 Set the chart default, add the override value and push the chart as an OCI artifact to the forge registry in the existing file deploy/helm/opendustpan/values.yaml (image.repository :18) and the chart tests in deploy/helm/charttest/chart_test.go and in the release workflow .github/workflows/release.yml. Check: TestChartDefaultRegistryAndOverride passes and `make chart-lint` (helm lint, helm template, kubeconform) passes in CI. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
 - [ ] 2.3 Write the NEW install page docs/guides/install.md with both pull commands, each pinned by tag, and the image digest of the release, and add a link to it in the existing README.md. Check: TestInstallPageListsBothPullCommands passes.
 
 ## 3. Side effects (computed from main)
@@ -20,4 +20,4 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Tag a release candidate in CI, pull both references by digest, run `helm install` from the default registry, and check that an Operator completes the install page alone and each error names one command. Check: The CI run passes, the digests match, `make docs-lint` is clean and `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Tag a release candidate in CI, pull both references by digest, run `helm install` from the default registry, and check that an Operator completes the install page alone and each error names one command. Check: The CI run passes, the digests match, `make docs-lint` is clean and `make check` reports zero findings. Confirmed by: A person's step (after the workflow patch is applied).

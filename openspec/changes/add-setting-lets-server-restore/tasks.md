@@ -19,6 +19,6 @@
 
 - [ ] 4.1 Route test lists the settings route with its actions. Check: Route test passes
 - [ ] 4.2 E2E: PATCH /api/dustpan/v1/settings with a console session cookie (fresh step, never an access token), then POST /api/server/restores with the same session, over TLS. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Add the docs page and the report listing. Check: Docs page and report show the value
+- [ ] 4.3 Add the docs page NEW file docs/guides/restore-access-setting.md, and list the value in the admin access report in the existing file pkg/backup/service.go. Check: Docs page and report show the value
 - [ ] 4.4 Usability walk from the docs page alone. Check: Each error names one command. A person's step.
 - [ ] 4.5 Run full checks. Check: `make check` has zero findings. Confirmed by: CI (the agent runs the fast checks only).

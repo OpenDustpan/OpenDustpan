@@ -4,9 +4,9 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write the failing conformance test that an expired state.write record is deleted, in NEW pkg/gate/gatetest/prune_test.go. Add the suite entry in pkg/gate/gatetest/gatetest.go and the record helper in NEW pkg/gate/gatetest/run_records.go. Check: TestPruneExpiredDeletesExpired fails on main.
-- [ ] 1.2 Write the test that an unexpired record and a record of another decision point stay, in NEW pkg/gate/gatetest/prune_test.go. It uses the helper in NEW pkg/gate/gatetest/run_records.go. Check: TestPruneExpiredKeepsOthers fails on main.
-- [ ] 1.3 Write the test of the batch bound and the order by ID, in NEW pkg/gate/gatetest/prune_test.go. It registers in NEW pkg/gate/gatetest/gatetest.go. Check: TestPruneExpiredBatchOrder fails on main.
+- [ ] 1.1 Write the failing conformance test that an expired state.write record is deleted, in NEW pkg/gate/gatetest/prune_test.go. Add the suite entry in pkg/gate/gatetest/gatetest.go and the record helper in the existing pkg/gate/gatetest/run_records.go. Check: TestPruneExpiredDeletesExpired fails on main.
+- [ ] 1.2 Write the test that an unexpired record and a record of another decision point stay, in NEW pkg/gate/gatetest/prune_test.go. It uses the helper in the existing pkg/gate/gatetest/run_records.go. Check: TestPruneExpiredKeepsOthers fails on main.
+- [ ] 1.3 Write the test of the batch bound and the order by ID, in NEW pkg/gate/gatetest/prune_test.go. It registers in the existing pkg/gate/gatetest/gatetest.go. Check: TestPruneExpiredBatchOrder fails on main.
 - [ ] 1.4 Write the test that a new evaluation after a prune writes a record, in pkg/gate/statewrite_test.go next to TestEachEvaluationWritesOneRecord. Check: TestEvaluationAfterPruneRecords passes on main and guards the keep behavior.
 
 ## 2. Build

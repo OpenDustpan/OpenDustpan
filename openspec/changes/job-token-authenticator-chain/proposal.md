@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Short form: the job token authenticator chain and its authorization rule.

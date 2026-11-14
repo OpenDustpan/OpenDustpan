@@ -9,7 +9,7 @@ The registry signature check needs an OpenPGP dependency. Issue 1293 asks for it
 
 ## Structure
 
-No code change. One ADR file under docs/adr/, its entry in docs/adr/INDEX.md, and one docs link from the registry page.
+No code change. One ADR file under docs/adr/, its entry in docs/adr/INDEX.md, and one docs link from the registry page docs/guides/private-registry.md.
 
 ## Risks
 

@@ -26,4 +26,4 @@
 
 - [ ] 4.1 Wire the sweep in the server start, in the worker component Check: The sweep starts in `opendustpan serve` and a wiring test passes
 - [ ] 4.2 Run an e2e step with the real directory: upload through POST /api/dustpan/v1/namespaces/{}/registry/uploads with a personal token, a refused publish through PUT /api/dustpan/v1/namespaces/{}/registry/providers/{}/versions/{}, then the sweep Check: `make e2e` registry scenario passes. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Write the docs page and do the usability check from the page alone Check: The docs commands run in a test and `make check` reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.3 Write the NEW docs page `docs/guides/registry-sweep.md` and do the usability check from the page alone. The page states the 24-hour age, the reference rule, the 1-hour mark expiry and the pause in maintenance mode. Check: The docs commands run in a test and `make check` reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

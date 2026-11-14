@@ -17,7 +17,7 @@
 
 ## 2. Implementation
 
-- [ ] 2.1 Wire operation-to-action check in job start path in NEW file pkg/job/operation_actions.go. Route: POST /api/dustpan/v1/namespaces/{namespace}/jobs. Declare the route in NEW file internal/api/jobs/routes.go. Adapt the route in NEW file internal/api/jobs/handler.go. Check: Route test lists POST jobs with unit:run-plan for plan, the apply action for apply, the destroy action for destroy, and 400 for unknown operations.
+- [ ] 2.1 Wire operation-to-action check in job start path in NEW file pkg/job/operation_actions.go. Route: POST /api/dustpan/v1/namespaces/{namespace}/jobs. Declare the route in the existing file internal/api/jobs/routes.go and extend it for the operation check. Adapt the route in the existing file internal/api/jobs/start.go and extend it for the operation check. Check: Route test lists POST jobs with unit:run-plan for plan, the apply action for apply, the destroy action for destroy, and 400 for unknown operations.
 - [ ] 2.2 Record job decision and audit entry together in pkg/job/service.go:136. Check: Audit entry names starter, operation and decision in the same transaction as the queue insert.
 - [ ] 2.3 Write docs page for the planner role with the workstation caveat in NEW file docs/planner-role.md. Check: Docs page runs as written and warns that workstation plans read state with state actions outside this role. Confirmed by: CI (an e2e step in the NEW file e2e/planner_role_2_docs_test.go runs each command of the docs page against the e2e test server).
 

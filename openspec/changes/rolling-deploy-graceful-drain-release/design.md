@@ -4,11 +4,11 @@ Rolling deploy replaces one instance at a time while tool work runs. The leaving
 
 ## Decisions
 
-1. **Drain then release.** On SIGTERM the server enters draining, readiness answers 503, in-flight HTTP requests complete up to a bounded drain timeout, then held durable claims are released. New claims are refused while draining.
+1. **Drain then release, with main's path (PM decision, 14 Nov 2026).** On SIGTERM the server drains through WithDrainPeriod (DefaultDrainPeriod 10 s): GET /health/ready answers the 503 of main (pkg/dustpan/health.go:338) with a NEW `Retry-After` header, then the existing shutdown path runs with shutdownTimeout 30 s for in-flight requests, and the backup worker and the durable runners release their claims when Run returns (pkg/dustpan/dustpan.go:2094), so another instance takes them over. No new timer and no new constant.
 
 ## Structure
 
-Unexported draining gate in internal/instance built by NewDrainGate with a fixed timeout; only the gate can mark the instance draining and only its Close can release claims.
+No new type. The drain state is the `draining` flag of the readiness probe in pkg/dustpan/health.go:54, set at the start of the drain; the claim release is the return of Run in the existing shutdown path.
 
 ## Risks
 
@@ -34,7 +34,7 @@ Modules that the change touches, and their imports on main:
 
 ```mermaid
 flowchart LR
-P1[internal/instance]
+P1[pkg/dustpan]
 ```
 
 States and transitions after this change:
@@ -64,7 +64,7 @@ stopped --> [*]
 
 - Invariant: One instance record names one server process.
 - Invariant: A draining instance takes no new durable claims.
-- `BeginDrain`: pre: Instance record exists.. Post: Instance state becomes draining.; Readiness reports not ready..
+- The drain (pkg/dustpan/health.go, the `draining` flag): pre: the stop signal arrived. Post: readiness answers 503 with `Retry-After`; the shutdown path then releases the claims.
 - `ReleaseClaims`: pre: Instance holds claims.. Post: Held durable claims become claimable by another worker..
 
 **durable operation**
