@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -239,13 +240,32 @@ func checkPlannerTofuMasked(
 }
 
 // plannerCurrentVersionID returns the current state version ID of workspace
-// a as the planner sees it, through the planner token.
+// a as the planner sees it, through the planner token. It looks the workspace
+// up in the planner namespace: the shared WorkspaceIDByName helper reads the
+// e2e namespace instead, so a planner test must not use it.
 func plannerCurrentVersionID(ctx context.Context, t *testing.T, env *e2e.Env, token string) string {
 	t.Helper()
 
-	wsID := env.WorkspaceIDByName(ctx, t, "a")
-
 	status, body, err := env.TFEStatus(
+		ctx,
+		token,
+		http.MethodGet,
+		"/api/v2/organizations/"+plannerNamespace+"/workspaces/a",
+		"",
+	)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("get workspace a as planner answers %d, %v: %s", status, err, body)
+	}
+
+	var doc workspaceIDDoc
+
+	if uerr := json.Unmarshal([]byte(body), &doc); uerr != nil || doc.Data.ID == "" {
+		t.Fatalf("decode the workspace id as planner: %v (%s)", uerr, body)
+	}
+
+	wsID := doc.Data.ID
+
+	status, body, err = env.TFEStatus(
 		ctx,
 		token,
 		http.MethodGet,

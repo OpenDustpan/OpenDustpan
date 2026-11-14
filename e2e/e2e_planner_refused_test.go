@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -120,17 +121,70 @@ func runPlannerRefusedOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, stor
 		"pulumi destroy as planner",
 	)
 
-	scopeRefused(
-		t,
-		tofuRunner.run(ctx, "opentofu", "a", "apply", "-input=false", "-auto-approve"),
-		"tofu apply as planner",
-	)
+	plannerTofuWriteRefused(ctx, t, env, tofuRunner, dev)
+}
 
-	scopeRefused(
-		t,
-		tofuRunner.run(ctx, "opentofu", "a", "destroy", "-input=false", "-auto-approve"),
-		"tofu destroy as planner",
+// plannerTofuWriteRefused proves a planner cannot write with OpenTofu. The
+// CLI reads the organization settings before it plans, and that read needs
+// namespace:read on the organization, which a grant on a collection does not
+// give. So the CLI stops with a not-found organization and never reaches the
+// write: the run must exit non-zero. The server-side refusal is then proved
+// on the write itself: locking the workspace needs unit:write and answers
+// 403 with access.denied for the planner token.
+func plannerTofuWriteRefused(ctx context.Context, t *testing.T, env *e2e.Env, tofu *scopeRunner, dev *scopePerson) {
+	t.Helper()
+
+	for _, args := range [][]string{
+		{"apply", "-input=false", "-auto-approve"},
+		{"destroy", "-input=false", "-auto-approve"},
+	} {
+		res := tofu.run(ctx, "opentofu", "a", args...)
+		if res.ExitCode == 0 {
+			t.Fatalf("tofu %s as planner succeeds, want a refusal:\n%s",
+				strings.Join(args, " "), res.Stdout)
+		}
+	}
+
+	wsID := plannerWorkspaceIDAsAdmin(ctx, t, env)
+
+	status, body, err := env.TFEStatus(
+		ctx,
+		dev.token.Secret,
+		http.MethodPost,
+		"/api/v2/workspaces/"+wsID+"/actions/lock",
+		`{"data":{"type":"workspaces"}}`,
 	)
+	if err != nil {
+		t.Fatalf("lock workspace as planner: %v", err)
+	}
+
+	if status != http.StatusForbidden || !strings.Contains(body, "access.denied") {
+		t.Fatalf("lock workspace as planner answers %d, want 403 with access.denied: %s", status, body)
+	}
+}
+
+// plannerWorkspaceIDAsAdmin returns the ID of workspace a in the planner
+// namespace, read with the administrator token.
+func plannerWorkspaceIDAsAdmin(ctx context.Context, t *testing.T, env *e2e.Env) string {
+	t.Helper()
+
+	status, body, err := env.TFEStatusA(
+		ctx,
+		http.MethodGet,
+		"/api/v2/organizations/"+plannerNamespace+"/workspaces/a",
+		"",
+	)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("get workspace a answers %d, %v: %s", status, err, body)
+	}
+
+	var doc workspaceIDDoc
+
+	if uerr := json.Unmarshal([]byte(body), &doc); uerr != nil || doc.Data.ID == "" {
+		t.Fatalf("decode the workspace id: %v (%s)", uerr, body)
+	}
+
+	return doc.Data.ID
 }
 
 // runPlannerRevealRefusedOnStore runs the refused-reveal test on one store.
