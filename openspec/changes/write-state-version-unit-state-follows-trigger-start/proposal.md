@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Issue: #1211.

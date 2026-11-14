@@ -20,10 +20,10 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
-- [ ] 3.1 Wire routes for pool join tokens under /api/dustpan/v1/namespaces/{namespace}/runner-pools (declared in internal/api/runnerapi/join_token_routes.go, NEW), poll, claim, renew and heartbeat under ANY /runner/v1, and live log read; each route declares its authorization action. Write the runner join guide page NEW docs/guides/runner-join.md with each error command, and run each command on the page. Check: `make e2e` runner slice passes on SQLite and PostgreSQL over TLS with a real runner: join with a token, claim Pulumi and OpenTofu jobs, takeover after kill, TFE agent token refusal, live log read.
-- [ ] 3.2 Usability check: a runner operator completes the join from docs/guides/runner-join.md alone, and each error names its one command. Check: Manual walk-through recorded in the pull request body.
-- [ ] 3.3 Run full check with race, lint and conformance suites. Check: `make check` reports zero findings.
+- [ ] 3.1 Wire routes for pool join tokens under /api/dustpan/v1/namespaces/{namespace}/runner-pools (declared in internal/api/runnerapi/join_token_routes.go, NEW), poll, claim, renew and heartbeat under ANY /runner/v1, and live log read; each route declares its authorization action. Write the runner join guide page NEW docs/guides/runner-join.md with each error command, and run each command on the page. Check: `make e2e` runner slice passes on SQLite and PostgreSQL over TLS with a real runner: join with a token, claim Pulumi and OpenTofu jobs, takeover after kill, TFE agent token refusal, live log read. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.2 Usability check: a runner operator completes the join from docs/guides/runner-join.md alone, and each error names its one command. Check: Manual walk-through recorded in the pull request body. A person's step.
+- [ ] 3.3 Run full check with race, lint and conformance suites. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

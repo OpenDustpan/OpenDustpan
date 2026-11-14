@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 6
 ---
 
 Issue: #615, #617, #619, #626.
@@ -53,10 +53,6 @@ Depends on:
 - one-membership-function-identity-provider
 - add-one-generic-settings-api
 - keep-two-working-break-glass
-- `check-reach-when-grant-membership` (order of the milestone review)
-- `one-membership-function-identity-provider` (order of the milestone review)
-- `add-one-generic-settings-api` (order of the milestone review)
-- `keep-two-working-break-glass` (order of the milestone review)
 
 ## Usability
 

@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:383` (Curated upstreams).
@@ -64,7 +64,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - Error code for invalid signature exists. (`internal/errcode/catalog_registry.go:25 (registry.signature-invalid)`)
 - Error code for untrusted signature key exists. (`internal/errcode/catalog_registry.go:27 (registry.signature-untrusted-key)`)
 - Registry conformance test for provider registry exists. (`pkg/profile/provider/registry_test.go:20 (TestNewRegistry)`)
-- Artifact sweep schedule test exists. (`pkg/dustpan/schedules_internal_test.go:537 (TestJobScheduleArtifactSweepRuns)`)
+- Artifact sweep schedule test exists. (`pkg/dustpan/schedules_internal_test.go:538 (TestJobScheduleArtifactSweepRuns)`)
 
 ## ADR check
 

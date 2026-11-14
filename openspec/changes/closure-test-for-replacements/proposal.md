@@ -45,9 +45,12 @@ Out of scope:
 
 Depends on:
 
+- two-disjoint-claims (the register route and the apply claim record)
+
+Builds on (not a change):
+
 - ADR 368 on main (pull request #3052)
 - ADR 369 on main (pull request #3056)
-- two-disjoint-claims (the register route and the apply claim record)
 
 ## Usability
 

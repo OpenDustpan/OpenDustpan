@@ -4,21 +4,21 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write the failing test for the count of operations skipped by the bound in pkg/store/internal/jobstore/claim_skips_test.go (NEW). Check: TestClaimPollCountsBoundSkips fails on main
+- [ ] 1.1 Write the failing test TestClaimPollCountsBoundSkips in the NEW file pkg/job/claimer_skips_test.go (package job_test): a fake ClaimObserver gets the number of operations that one Claim skips past the bound `maxSkippedClaims` (pkg/job/claimer.go:30). Check: `go test ./pkg/job -run TestClaimPollCountsBoundSkips -count=1` fails on main
 
 ## 2. Fix
 
 - [ ] 2.1 Correct the Route.IdempotencyKey comment in internal/api/registry/operations.go:14 and in the route files of the operations packages. Check: rg -n -F 'Route.IdempotencyKey' internal shows the fixed text
-- [ ] 2.2 Count and log the operations skipped by the bound of 64 in pkg/store/internal/jobstore/claim_skips.go (NEW). Check: go test ./pkg/store/...
+- [ ] 2.2 Count and log the operations skipped by the bound where the bound is, in pkg/job/claimer.go (DurableClaimer.Claim, :137-166): add the NEW port `job.ClaimObserver` (`interface{ SkippedClaims(n int) }`) and the NEW no-op `job.NoopClaimObserver`, the default; the NEW option `job.WithClaimObserver` sets it, and a nil observer is refused (the no-op stays), as WithClaimerLogger does for a nil logger. The log line uses the claimer's injected slog logger (the option WithClaimerLogger sets it). pkg/job imports no metrics code (depguard). Check: `go test ./pkg/job/... -count=1` passes
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Confirm that no request flow changed, so the round-trip budgets stand: the change adds no route and no caller of a route. Check: the round-trip tests in `internal/servertest/roundtrips_test.go` pass unchanged. Confirmed by: CI (the round-trip tests pass unchanged).
+- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Wiring: the counter is reachable from the server metrics Check: The metrics route lists the counter
-- [ ] 4.2 E2E step: BLOCKED by the missing name of the runner poll route and runner credential kind in the pack; the step is a unit test until the owner of the runner protocol names them Check: TestClaimPollCountsBoundSkips
-- [ ] 4.3 Docs page note and usability check from the docs page alone Check: make docs-lint
-- [ ] 4.4 All checks pass Check: `make check` with zero findings
+- [ ] 4.1 Wire the metric in the wiring layer, which owns the metrics package: the NEW counter dustpan_job_claim_poll_skipped_total in internal/metrics/server.go, passed to the claimer through `job.WithClaimObserver` in pkg/dustpan/builtin_stores.go:372 (and internal/servertest/servertest.go:555). Write the wiring test TestClaimSkipsMoveTheMetric in the NEW file pkg/dustpan/claim_observer_internal_test.go. No route: the test reads the metrics registry only. Check: TestClaimSkipsMoveTheMetric passes and the metrics route lists the counter
+- [ ] 4.2 No e2e step (PM decision, rule 16): the skip counter lives in the durable claimer (pkg/job/claimer.go), which no route serves, so there is no route or credential to name. The proof is TestClaimPollCountsBoundSkips (task 1.1) and the NEW metric dustpan_job_claim_poll_skipped_total in internal/metrics/server.go, which task 4.1 shows on the metrics route. Check: `go test ./pkg/store/... -run TestClaimPollCountsBoundSkips` passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Docs page note and usability check from the docs page alone Check: make docs-lint. A person's step.
+- [ ] 4.4 All checks pass Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

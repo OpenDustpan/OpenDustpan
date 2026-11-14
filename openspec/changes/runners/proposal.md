@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:259` (Runners).
@@ -47,8 +47,11 @@ Depends on:
 
 - add-job-service-routes-start
 - add-job-session-paths-runner
-- wake-long-poll-when-operation
 - add-e2e-step-runs-real-runner-pool-route-move
+
+Removed from Depends on (14 Nov 2026, not a code dependency):
+
+- wake-long-poll-when-operation: out of scope of this change (cross-instance wake), not a code dependency
 
 ## Usability
 

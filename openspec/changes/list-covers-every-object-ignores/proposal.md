@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 7
 ---
 
 Issue: #698, #2964.
@@ -37,7 +37,6 @@ Depends on:
 
 - ip-allowlists
 - move-caller-routes-api-server
-- `move-caller-routes-api-server` (order of the milestone review)
 
 ## What main already does
 

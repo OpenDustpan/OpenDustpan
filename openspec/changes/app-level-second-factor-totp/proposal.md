@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #728.
@@ -20,8 +20,8 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Token creation with an OAuth session past the freshness window and no fresh app-factor step fails | 403 with error code mfa.fresh-step-required that names the factor step, or for a person with no factor the enrollment page | `GET /api/dustpan/v1/me/factors` |
-| First enrollment with a session alone and no enrollment code or email code fails | 403 with error code mfa.enrollment-required with the enrollment page path | `POST /api/dustpan/v1/me/factors/totp/enroll` |
-| Step-up with a wrong TOTP code fails | 400 with error code totp.invalid-code and the retry stays inside the rate limit | `POST /api/dustpan/v1/me/factors/step-up` |
+| First enrollment with a session alone and no enrollment code or email code fails | 403 with error code mfa.enrollment-required (NEW: no catalog code says that a first enrollment needs an enrollment code; mfa.fresh-step-required asks for a fresh step of a factor the person already has) with the enrollment page path | `POST /api/dustpan/v1/me/factors/totp/enroll` |
+| Step-up with a wrong TOTP code fails | 400 with error code mfa.ceremony-failed and the retry stays inside the rate limit | `POST /api/dustpan/v1/me/factors/step-up` |
 
 Evidence for the claims above:
 
@@ -47,16 +47,13 @@ Out of scope:
 - The factor store, admin reset and recovery-code rotation paths, owned by the mfa change
 - The zero-window behavior, owned by the fresh-authentication-window-0-turns change
 - Trusted-header proxy allowlist management, owned by the sign-in-methods change
-- Break-glass mode 2 recovery flow
+- Signed-request recovery, and the issue of an enrollment code by a temporary administrator of a recovery with no fresh step (ADR 372 decision 6), owned by the signed-request-recovery change
 
 Depends on:
 
 - mfa
 - sign-in-methods
 - fresh-authentication-window-0-turns
-- `mfa` (order of the milestone review)
-- `sign-in-methods` (order of the milestone review)
-- `fresh-authentication-window-0-turns` (order of the milestone review)
 
 ## Usability
 

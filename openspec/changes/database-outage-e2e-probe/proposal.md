@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:475` (Add long and short outage steps with retry measurement.).

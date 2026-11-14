@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -27,6 +27,10 @@ Out of scope:
 - Sibling RFCs 107, 108 and 110, each with its own change
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - runs (milestone 5)
 

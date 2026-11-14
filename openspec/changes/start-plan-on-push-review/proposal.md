@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 6
 ---
 
 Issue: #1213.
@@ -47,8 +47,6 @@ Depends on:
 - run-triggers
 - git-host-webhook-intake-post
 - add-job-service-routes-start-1
-- `run-triggers` (order of the milestone review)
-- `git-host-webhook-intake-post` (order of the milestone review)
 
 ## Usability
 
@@ -91,6 +89,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Conflict: none.
 
 ## Open questions
+
+none
 
 Questions considered and answered:
 

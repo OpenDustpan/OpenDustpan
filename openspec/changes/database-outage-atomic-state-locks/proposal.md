@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:475` (Make state and lock commits atomic with fencing.).

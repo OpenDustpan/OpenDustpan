@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -16,11 +16,11 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add e2e step with the test SMTP server and a personal access token used by the real CLI; the audit check is BLOCKED by the audit entry kind that this change adds. Check: E2E against the real binary over TLS shows two warning messages on the test SMTP server.
-- [ ] 4.2 Write docs page for SMTP settings, warning times, queue status and missing status. Check: Docs page commands run as written in a test.
-- [ ] 4.3 Run usability check of the operator path from the docs page. Check: Operator completes setup from the docs page alone and each error names the one command that helps.
-- [ ] 4.4 Run full check with zero findings. Check: `make check` reports zero findings.
+- [ ] 4.1 Add e2e step in NEW file `e2e/token_life_cycle_expiry_email_warning_email_queue_test.go` with the test SMTP server and a personal access token used by the real CLI, with `PATCH /api/dustpan/v1/settings` to set the relay and sender; the audit check is BLOCKED by the audit entry kind that this change adds. Check: E2E against the real binary over TLS shows two warning messages on the test SMTP server. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Write NEW docs page `docs/guides/expiry-warning-email.md` for SMTP settings, warning times, queue status and missing status. Check: Docs page commands run as written in a test. Confirmed by: CI (an e2e step in the NEW file e2e/token_life_cycle_expiry_email_warning_email_queue_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.3 Run usability check of the operator path from the docs page. Check: Operator completes setup from the docs page alone and each error names the one command that helps. A person's step.
+- [ ] 4.4 Run full check with zero findings. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

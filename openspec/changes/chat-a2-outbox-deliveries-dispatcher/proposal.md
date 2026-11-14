@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 6
 ---
 
 Issue: #1172.
@@ -44,7 +44,11 @@ Out of scope:
 
 Depends on:
 
-- chat-a1-notify-model-and-sink-contract
+- none
+
+Removed from Depends on (14 Nov 2026, not a code dependency):
+
+- chat-a1-notify-model-and-sink-contract: the A1 model is on main; no such change exists
 
 ## Usability
 

@@ -1,23 +1,24 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing API tests for valid publish, bad SHA-256, missing signature, bad signature, expired key and unknown version in NEW file `pkg/registry/provider_api_test.go`. Check: TestRegistryProvider_PublishValidListsInMirror fails on main.
-- [ ] 1.2 Add failing tests for team protocol discovery, versions list and download metadata in NEW file `pkg/registry/provider_team_test.go`. Check: TestRegistryProvider_TeamProtocolServesVersions fails on main.
-- [ ] 1.3 Add failing tests for host match, safe name, traversal names, size limit, key checks and cross-namespace isolation in NEW file `pkg/registry/provider_safety_test.go`. Check: TestRegistryProvider_SafeAddressRefusesForeignHost fails on main.
+- [x] 1.1 Publish, refusals and keys exist on main: `internal/registry/service/publish_test.go`, `internal/registry/service/refuse_test.go`. Check: `go test ./internal/registry/service/...` passes.
+- [x] 1.2 Team protocol exists on main: `internal/api/tfe/registry.go:30`. Check: `go test ./internal/api/tfe/...` passes.
+- [ ] 1.3 Add failing tests for the mirror index and cross-namespace isolation in NEW file `internal/registry/service/mirror_test.go`. Check: TestRegistryMirror_IndexListsActiveVersions fails on main.
 
 ## 2. Build
 
-- [ ] 2.1 Build publish, key register and removal, staged upload, mirror index, team protocol and download with atomic and immutable writes in NEW file `pkg/registry/provider.go`. Check: `go test -race ./pkg/registry/...` passes.
-- [ ] 2.2 Wire in NEW declaration file `internal/api/registry_routes.go` and NEW adapter file `internal/api/registry_handlers.go` the routes `GET/PUT /api/dustpan/v1/namespaces/{}/registry/providers/{}/versions/{}`, `GET/POST /api/dustpan/v1/namespaces/{}/registry/keys` and `POST /api/dustpan/v1/namespaces/{}/registry/uploads` with an access token of a personal token, each with its authorization action on the namespace object and an audit entry. Check: `make e2e` runs `tofu init` with a personal token, fetches a private provider and refuses a bad signature and a bad checksum.
+- [ ] 2.1 Build the mirror index and version listing from committed active rows in the NEW file `internal/registry/service/mirror.go` next to `internal/registry/service/read.go`. Check: `go test -race ./internal/registry/...` passes.
+- [ ] 2.2 Declare the mirror routes `GET /api/dustpan/v1/namespaces/{namespace}/registry/mirror/{addr}/index.json` and `GET /api/dustpan/v1/namespaces/{namespace}/registry/mirror/{addr}/{version}.json` in the existing file `internal/api/registry/routes.go:52` (func Handler.buildRoutes) and serve them in the NEW adapter file `internal/api/registry/mirror.go`, each with its authorization action on the namespace object and an audit entry. Check: `make e2e` runs `tofu init` through the mirror in `e2e/registry_test.go` (NEW test TestRegistryTofuInitMirror, which calls both mirror routes with an access token bearer credential that holds the read grant). Confirmed by: CI (the agent writes the e2e test).
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run all checks and fix findings in code. Check: `make check` passes with zero findings.
-- [ ] 4.2 Add the docs page and the usability check with the one helping command per error. Check: A Developer completes `tofu init` from the docs page alone against the real binary over TLS.
+- [ ] 4.1 Run all checks and fix findings in code. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Extend the existing guide docs/guides/private-registry.md with a section on the provider mirror and the one helping command for each error. Check: `make docs-lint` passes.
+- [ ] 4.3 Usability check: a Developer completes `tofu init` from docs/guides/private-registry.md alone against the real binary over TLS. Check: the steps in the pull request. A person's step.

@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #623, #627, #633.
@@ -56,15 +56,13 @@ Out of scope:
 - Reach recheck and act-as edges, and their guide text (change check-reach-when-grant-membership).
 - Group trust switches and protected groups, and their guide text (change let-group-trust-identity-provider).
 - The setting for the restore of access tables (change add-setting-lets-server-restore).
-- Mode 2 recovery route (change break-glass-mode-2).
+- Signed-request recovery route (change signed-request-recovery).
 - The change of the fresh-authentication window to 0 (change fresh-authentication-window-0-turns).
 
 Depends on:
 
 - add-setting-lets-server-restore
 - fresh-authentication-window-0-turns
-- `add-setting-lets-server-restore` (order of the milestone review)
-- `fresh-authentication-window-0-turns` (order of the milestone review)
 
 ## Usability
 

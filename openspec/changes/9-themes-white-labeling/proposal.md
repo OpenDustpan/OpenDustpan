@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -29,6 +29,10 @@ Out of scope:
 - Languages and locales (RFC 11)
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - Console core views (RFC 52)
 

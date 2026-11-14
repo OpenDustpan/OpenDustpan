@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:379` (Serve private providers with signature and checksum checks.).
@@ -29,11 +29,19 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Publish provider archive sets through the API with checksum and signature checks at upload.
-- Register per-namespace signing keys used only in that namespace.
-- Serve the OpenTofu provider mirror and the team provider protocol for private providers.
-- Refuse bad signatures, bad checksums, missing signatures, unknown versions, foreign hosts, unsafe names, traversal names, and cross-namespace reads, with audit entries.
-- Keep published versions immutable in the active state and publish atomically.
+Main already has these parts:
+
+- Publish of provider archive sets with checksum and signature checks at upload (`internal/api/registry/routes.go:52-73`, func Handler.buildRoutes; `internal/registry/service/publish.go`).
+- Per-namespace signing keys (`internal/registry/service/keys.go`).
+- Refusals with audit entries (`internal/registry/service/refuse.go`).
+- The team provider registry protocol providers.v1 (`internal/api/tfe/registry.go:30`, discovery at `internal/api/tfe/tfe.go:480-491`).
+- The e2e test with `tofu init` (`e2e/registry_test.go:178`, TestRegistryTofuInit).
+- The guide `docs/guides/private-registry.md`.
+
+This change adds:
+
+- The OpenTofu provider network mirror protocol: the NEW routes GET /api/dustpan/v1/namespaces/{namespace}/registry/mirror/{addr}/index.json and GET /api/dustpan/v1/namespaces/{namespace}/registry/mirror/{addr}/{version}.json.
+- Tests for the mirror protocol, an e2e step and a docs section.
 
 Out of scope:
 

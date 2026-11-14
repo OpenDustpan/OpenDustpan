@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -17,11 +17,11 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Wire the routes with their authorization actions. Check: Route declares its authorization actions and passes the route test.
-- [ ] 4.2 Add an e2e step against the real server and the real directory with a personal access token. Check: e2e step posts drafts to POST /api/dustpan/v1/namespaces/{namespace}/gates/simulate and installs one pack with a personal access token against the real server.
-- [ ] 4.3 Run the usability check from the docs page. Check: Persona follows the docs page alone and each error names the one command that helps.
-- [ ] 4.4 Run make check with zero findings. Check: make check passes with zero findings.
+- [ ] 4.2 Add an e2e step in NEW file e2e/gate_simulate_test.go against the real server and the real directory with a personal access token, for the route POST /api/dustpan/v1/namespaces/{namespace}/gates/simulate and the pack install route. Check: e2e step posts drafts to POST /api/dustpan/v1/namespaces/{namespace}/gates/simulate and installs one pack with a personal access token against the real server. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Run the usability check from the docs page. Check: Persona follows the docs page alone and each error names the one command that helps. A person's step.
+- [ ] 4.4 Run make check with zero findings. Check: make check passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).

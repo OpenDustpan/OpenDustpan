@@ -44,10 +44,12 @@ Out of scope:
 
 Depends on:
 
+- local-run-two-cases
+
+Builds on (not a change):
+
 - ADR 368 on main (pull request #3052)
 - ADR 369 on main (pull request #3056)
-- local-run-two-cases
-- `local-run-two-cases` (order of the milestone review)
 
 ## Usability
 

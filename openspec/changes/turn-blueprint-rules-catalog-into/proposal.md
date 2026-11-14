@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 4
 ---
 
 Issue: #1036.
@@ -26,12 +26,12 @@ Evidence for the claims above:
 - The issue states no tag shipped the removed shapes Proof: Issue 1036 text: No tag shipped them, so no data conversion exists (ADR 73).
 - The self-service code may not be on main yet Proof: Issue 1036 text: The Catalog code may not be on main yet. If it is not, the pull request removes only what exists and this issue stays open for the rest.
 - The gate error codes exist in the checkout Proof: internal/errcode/catalog_gate.go:17 defines gate.denied
-- The old rule-engine directory is absent from the checkout Proof: Context pack paths list: the old rule-engine directory does not exist on main; pkg/gate exists true
+- The old rule engine is the package internal/policy on main (the issue title names pkg/policy; main holds the package at internal/policy). Proof: internal/policy/policy.go; its users internal/selfservice/blueprint.go:143 (policy.Effect) and :680, internal/selfservice/request.go, internal/api/selfservice/blueprint_schema.go and the suite helpers in internal/selfservice/selfservicetest; its entries in .golangci.yml:291 (domain rule) and :715 (test paths).
 
 ## What Changes
 
 - Self-service evaluates blueprint rules through gates at change.propose, with one decision record for each completed evaluation
-- Delete the old rule-engine package, its four adapters, its conformance suite, its depguard entry, and its docs mentions, where they exist
+- Delete the old rule-engine package internal/policy (policy.go, contracts.go, endpoint.go, webhook.go and internal/policy/policytest), its entries in .golangci.yml, and its uses in internal/selfservice and internal/api/selfservice
 - Update the layout list of CLAUDE.md and GLOSSARY.md where the old package name remains
 - Update the user docs page for blueprint gates
 
@@ -42,11 +42,13 @@ Out of scope:
 
 Depends on:
 
+- blueprints
+
+Builds on (not a change):
+
 - #996
 - #1003
 - ADR 222 slice 1 issue
-- blueprints
-- `blueprints` (order of the milestone review)
 
 ## Usability
 
@@ -83,7 +85,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: the old rule-engine path does not exist in the checkout, so the change removes only what exists.
+none
 
 Questions considered and answered:
 

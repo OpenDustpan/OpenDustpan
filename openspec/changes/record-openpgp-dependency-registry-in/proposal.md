@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 5
 ---
 
 Issue: #1293.
@@ -29,7 +29,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Add one ADR that records the module versions, the owner approval, the reason go-crypto replaces the frozen package, and the GO-2026-5932 disposition with fresh govulncheck output. The ADR is written only after the owner answers the open questions.
+- Verify ADR 379 (docs/adr/0379-the-openpgp-dependency-of-the-registry.md). It records the module versions, the owner approval, and the GO-2026-5932 disposition. ADR 379 decision 1: "The three modules are approved at the versions in `go.mod` (owner, 2026-11-14)."
 - Add the ADR index entry and the registry docs link in the same change.
 
 Out of scope:
@@ -51,7 +51,8 @@ Each fact names its file, line and function on main. The change specifies only t
 - Registry test fixture imports go-crypto openpgp. (`internal/registry/pgpfixture/pgpfixture.go:15`)
 - Fixture imports the go-crypto armor package. (`internal/registry/pgpfixture/pgpfixture.go:16`)
 - Fixture imports the go-crypto packet package. (`internal/registry/pgpfixture/pgpfixture.go:17`)
-- The Makefile has the vuln target. (`Makefile:62 (func vuln)`)
+- The Makefile has the vuln target. (`Makefile:62`)
+- ADR 379 is on main. (`docs/adr/0379-the-openpgp-dependency-of-the-registry.md:1 (ADR 379)`)
 
 ## ADR check
 
@@ -61,19 +62,13 @@ No ADR is touched.
 
 ## Open questions
 
-1. Does the owner confirm the 2026-10-20 approval of go-crypto v1.5.2, circl v1.6.3 and x/crypto v0.56.0? Decides: owner.
-   - Options: Owner confirms the approval as stated in issue 1293; Owner gives a new approval with other versions or date.
-   - Recommended: Owner confirms the approval as stated in issue 1293 Reason: The approval rests on the issue text alone. The ADR must cite a decision that the owner states.
-2. Who accepts the GO-2026-5932 residual risk, when is it reviewed, and who is told of a future finding? Decides: owner.
-   - Options: Owner accepts the risk with a review date and a re-check on each dependency change; Owner refuses x/crypto v0.56.0 until the finding clears.
-   - Recommended: Owner accepts the risk with a review date and a re-check on each dependency change Reason: The frozen package has no fix, so the ADR needs a risk owner, a review date and a re-check trigger.
-3. Is the new ADR owner-tagged? Decides: owner.
-   - Options: Owner-tagged, so a later version change needs the owner; Not owner-tagged.
-   - Recommended: Owner-tagged, so a later version change needs the owner Reason: The tag decides who approves a later change to these modules.
-
-Not spec-ready: a code check fails: main_facts[3]: "where" is not file:line (func Name).
+none
 
 Questions considered and answered:
+
+- Does the owner confirm the approval for the versions in go.mod? Answer: yes. ADR 379 decision 1: "The three modules are approved at the versions in `go.mod` (owner, 2026-11-14)." The versions are go-crypto v1.5.2, circl v1.6.5 and x/crypto v0.58.1-0.20261020153306-9f2b28d4331a. These differ from issue 1293, so follow the ADR.
+- Who accepts the GO-2026-5932 residual risk? Answer: the project owner. ADR 379 decision 2: "The owner accepts the residual risk of GO-2026-5932 (owner, 2026-11-14)." The review date is 2027-02-14. Each version change checks the risk again with `make vuln`.
+- Is the ADR owner-tagged? Answer: yes. ADR 379 decision 3: "A version change of these modules needs the owner's word (owner, 2026-11-14)." The age rule of ADR 7 applies too.
 
 - Does an existing ADR already record the OpenPGP dependency? The pack adrs array is empty, so there is no decision text to quote. The new ADR changes no existing decision.
 - What module versions does the build use? The pack gives no go.mod list, so no version is stated as fact. A task runs go list -m and the ADR records only matching versions.

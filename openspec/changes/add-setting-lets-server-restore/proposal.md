@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Issue: #611.
@@ -40,13 +40,15 @@ Out of scope:
 
 - Default restore behavior without the setting (issue #553, lands first)
 - New roles or new actions beyond server:restore-access
-- Break-glass mode 2 recovery
+- Signed-request recovery (change signed-request-recovery)
 
 Depends on:
 
 - add-one-generic-settings-api
+
+Builds on (not a change):
+
 - issue-553-default-restore
-- `add-one-generic-settings-api` (order of the milestone review)
 
 ## Usability
 

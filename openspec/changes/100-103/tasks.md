@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -12,14 +12,14 @@
 
 - [ ] 2.1 Wire NEW tool-neutral jobs routes GET and POST /api/dustpan/v1/namespaces/{namespace}/jobs and the NEW cancel route in internal/api/jobs/routes.go (main declares the jobs routes there, at jobsPath; add only the routes and the cancel route that main does not have) with the NEW action unit:run-job and audit entries, plus openapi regen. Check: NEW POST /api/dustpan/v1/namespaces/{namespace}/jobs creates a job with access token holding the NEW action unit:run-job; BLOCKED by NEW jobs routes for the create call itself, read baseline on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=` with access token.
 - [ ] 2.2 Wire write-back advance in NEW internal/jobsvc/advance.go (NEW) under the server executor identity with idempotent phase reports. Check: Write-back advance verified with access token on the NEW jobs routes; BLOCKED by NEW jobs routes, read baseline on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=` with access token.
-- [ ] 2.3 Write docs page NEW docs/jobs.md for jobs: create, list, cancel, phases, and errors. Check: Docs page commands run as written in a fresh install, verified with access token reads on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=`; BLOCKED by NEW jobs routes for job create examples.
+- [ ] 2.3 Write docs page NEW docs/jobs.md for jobs: create, list, cancel, phases, and errors. Check: Docs page commands run as written in a fresh install, verified with access token reads on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=`; BLOCKED by NEW jobs routes for job create examples. Confirmed by: CI (an e2e step in the NEW file e2e/100_103_docs_test.go runs each command of the docs page against the e2e test server). A person's step.
 - [ ] 2.4 Measure job create latency target and record the result. Check: 500 ms p95 create to queued measured in internal/servertest with access token on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=` as the read baseline; BLOCKED by NEW POST /api/dustpan/v1/namespaces/{namespace}/jobs for the create call.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run usability check of the user path and fix error help text. Check: Developer completes create to write-back run from docs page alone, verified with access token on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=`; BLOCKED by NEW jobs routes for job calls.
-- [ ] 4.2 Run full definition of done: wiring, route, docs, usability, make check. Check: `make check` with zero findings after wiring; acceptance baseline uses access token on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=` and BLOCKED by NEW jobs routes for job calls.
+- [ ] 4.1 Run usability check of the user path and fix error help text. Check: Developer completes create to write-back run from docs page alone, verified with access token on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=`; BLOCKED by NEW jobs routes for job calls. A person's step.
+- [ ] 4.2 Run full definition of done: wiring, route, docs, usability, make check. Check: `make check` with zero findings after wiring; acceptance baseline uses access token on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=` and BLOCKED by NEW jobs routes for job calls. A person's step. Confirmed by: CI (the agent runs the fast checks only).

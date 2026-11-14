@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -33,6 +33,10 @@ Out of scope:
 - C# and Java clients
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - runs in milestone 5
 

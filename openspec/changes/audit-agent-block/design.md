@@ -4,13 +4,17 @@ The audit entry is hashed into a chain per scope. The agent data must enter the 
 
 ## Decisions
 
-1. **One block encoding.** ComputeHash appends the length-prefixed text agent/1 then the six fields in the fixed order agentRun, agentSession, tool, argsDigest, breakGlass as true or false, secretStage, each length-prefixed. No field is optional inside the block. It appends nothing when all six are empty and breakGlass is false.
+1. **One block encoding.** ComputeHash appends the length-prefixed text agent/1 then the six fields in the fixed order agentRun, agentSession, tool, argsDigest, breakGlass as true or false, secretStage, each length-prefixed. No field is optional inside the block. It appends nothing when Entry.Origin is nil. A non-nil Origin always appends the block.
 2. **Job entries use the block.** The conversion from Actor.Agent to job.AgentRef sets agentRun to the run ID for the channel agent, agentSession to the MCP session ID or the run ID, and breakGlass to true for a break-glass credential. tool, argsDigest and secretStage stay empty.
 3. **The delegation is not in the block.** No ADR places the delegation of ADR 354 in the agent/1 block. The block keeps its six fields. A later block version, agent/2, needs an owner decision.
 
 ## Structure
 
-An unexported agentBlock type in pkg/audit holds the six fields. Its constructor newAgentBlock checks length and character limits. Only ComputeHash encodes it, so no caller can hash a field outside the block. Entry holds the block by a constructor-checked setter.
+The NEW type `audit.Origin` in pkg/audit holds the six fields as unexported fields. Only the NEW constructor `audit.NewOrigin` makes one: it checks the length and character limits, and it refuses a partial origin (an empty agentRun or agentSession) with the NEW sentinel `audit.ErrInvalidOrigin`. tool, argsDigest and secretStage may be empty, and breakGlass may be false (decision 2). Entry holds it by pointer in the NEW field `Entry.Origin`; nil means an ordinary entry with no agent block. Only ComputeHash encodes it, so no caller can hash a field outside the block.
+
+Why a pointer to one value type: six more fields in Entry put it over the hugeParam limit of golangci-lint (gocritic) in the four structs that embed Entry. One pointer keeps Entry below the limit, so the embedding structs and the ports do not change, and no pointer is threaded through each port.
+
+Nil is safe in every reader: each reader of Entry.Origin checks for nil first, and `make nilaway` checks this. The store maps a nil Origin to NULL in the six columns, and NULL in all six columns back to nil. A row with some of the six columns NULL and others set is refused on read with `audit.ErrInvalidOrigin` (fail closed).
 
 ## Risks
 
@@ -21,11 +25,11 @@ An unexported agentBlock type in pkg/audit holds the six fields. Its constructor
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| boundary check | The constructor accepts only the allowlisted channel values and refuses control characters and values over 256 bytes. | TestAgentBlockRefusesHostileFields |
+| boundary check | NewOrigin accepts only the allowlisted channel values and refuses control characters, values over 256 bytes and a partial origin (empty agentRun or agentSession). | TestNewOriginRefusesHostileFields, TestNewOriginRefusesPartialOrigin |
 | encode or contain | Each field is length-prefixed in the hash, so a joined value cannot mimic two fields. SQL uses placeholders. | TestComputeHashDiffersForEachAgentField |
-| limit | A size limit of 256 bytes for each field. | TestAgentBlockRefusesOversizedField |
+| limit | A size limit of 256 bytes for each field. | TestNewOriginRefusesOversizedField |
 | authorize at point of use | The read route keeps its existing audit read action. The block shows only to a reader of the entry. | TestAuditEntriesRouteKeepsItsAction |
-| fail closed | A write with an invalid block fails and stores nothing. The chain check fails on a changed field. | TestChainCheckFailsOnChangedAgentField |
+| fail closed | A write with an invalid origin fails and stores nothing. A nil Origin writes NULL columns and hashes with no block. A stored row with a partial set of the six columns fails the read. The chain check fails on a changed field. | TestChainCheckFailsOnChangedAgentField, TestOriginNilIsNoBlock, TestStoreRefusesPartialOriginRow |
 
 ## Diagrams
 

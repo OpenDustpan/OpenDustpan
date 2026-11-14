@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -43,9 +43,11 @@ Out of scope:
 
 Depends on:
 
-- read-only tokens (RFC 20)
 - 39-reading-state-contents
-- `39-reading-state-contents` (order of the milestone review)
+
+Builds on (not a change):
+
+- read-only tokens (RFC 20)
 
 ## Usability
 

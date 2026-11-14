@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 6
 ---
 
 Issue: #1642.
@@ -41,7 +41,7 @@ Out of scope:
 
 Depends on:
 
-- `output-sharing` (order of the milestone review)
+- none
 
 ## Usability
 

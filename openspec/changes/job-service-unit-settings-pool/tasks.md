@@ -5,7 +5,7 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Write failing planner tests for settings resolution, override authorization, manual lock refusal and missing location in pkg/dustpan/jobservice_internal_test.go. Check: TestStartResolvesFromSettings fails on main
-- [ ] 1.2 Write failing read-check tests for run-as principal loss and manual-fire intersection in pkg/trigger/readcheck_test.go (NEW). Check: TestTriggerOutputReadDeniesAfterGrantLoss fails on main
+- [ ] 1.2 Write failing read-check tests for run-as principal loss and manual-fire intersection in the existing file pkg/trigger/readcheck_test.go: extend it in place and add new tests for the new behavior only. Check: TestTriggerOutputReadDeniesAfterGrantLoss fails on main
 - [ ] 1.3 Write a failing role test for the role mapping in pkg/access/planner_role_test.go. Check: TestJobActionsInBuiltInRoles fails on main
 
 ## 2. Build
@@ -16,10 +16,10 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 BLOCKED by the missing e2e helper for the trigger fire route and the job-token output read: add the e2e step against the real binary after the helper exists. Check: BLOCKED by the e2e helper
-- [ ] 4.2 Write the docs page and the usability check from the page alone. Check: make docs-lint
-- [ ] 4.3 Run the full check. Check: make check with zero findings
+- [ ] 4.1 BLOCKED by the missing e2e helper for the trigger fire route and the job-token output read: add the e2e step against the real binary after the helper exists. Check: BLOCKED by the e2e helper. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Write the docs page docs/guides/unit-settings-pool.md (NEW) and the usability check from the page alone. Check: make docs-lint. A person's step.
+- [ ] 4.3 Run the full check. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

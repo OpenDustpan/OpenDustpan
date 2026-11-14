@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 6
 ---
 
 Issue: #1157.
@@ -50,8 +50,6 @@ Depends on:
 - add-job-service-routes-start
 - several-approval-requirements-one-change
 - gate-evaluation-must-apply-dev
-- `several-approval-requirements-one-change` (order of the milestone review)
-- `gate-evaluation-must-apply-dev` (order of the milestone review)
 
 ## Usability
 

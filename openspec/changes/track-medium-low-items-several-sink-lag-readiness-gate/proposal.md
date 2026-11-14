@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 Issue: #718.
@@ -56,7 +56,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Readiness check type exists (`pkg/dustpan/health.go:36 (func readinessCheck)`)
-- Audit stores check exists (`pkg/dustpan/dustpan.go:1717 (func checkAuditStores)`)
+- Audit stores check exists (`pkg/dustpan/dustpan.go:1751 (func checkAuditStores)`)
 - Audit chain interval check exists (`pkg/dustpan/auditchain.go:76 (func checkAuditChainInterval)`)
 - Audit chain gate wrapper exists (`pkg/dustpan/maintenance.go:181 (func withAuditChainGate)`)
 - Restore steps list exists (`pkg/backup/restore_operation.go:272 (func RestoreSteps)`)

@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -17,10 +17,10 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step on PostgreSQL through the real binary over TLS that checks each agent step is audited and the chain verifies. Check: E2e step delegates, runs one agent step with a reason, lists GET /api/audit/entries with an access token and calls GET /api/audit/check with an access token.
-- [ ] 4.2 Run a usability check of the audit read path. Check: Persona completes the path from the docs page alone and each error names the one command that helps.
-- [ ] 4.3 Run the full check gate. Check: `make check` with zero findings.
+- [ ] 4.1 Add an e2e step in the existing file e2e/audit_export_test.go on PostgreSQL through the real binary over TLS that checks each agent step is audited and the chain verifies. The step extends that file and uses the routes GET /api/audit/entries and GET /api/audit/check with an access token. Check: E2e step delegates, runs one agent step with a reason, lists GET /api/audit/entries with an access token and calls GET /api/audit/check with an access token. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Run a usability check of the audit read path. Check: Persona completes the path from the docs page alone and each error names the one command that helps. A person's step.
+- [ ] 4.3 Run the full check gate. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

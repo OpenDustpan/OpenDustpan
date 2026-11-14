@@ -47,8 +47,6 @@ Depends on:
 - run-all-on-runner-fanout-plan-apply-jobs
 - record-names-cause
 - review-holds
-- `record-names-cause` (order of the milestone review)
-- `review-holds` (order of the milestone review)
 
 ## Usability
 

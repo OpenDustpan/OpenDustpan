@@ -98,11 +98,11 @@ When a namespace backup copies registry release files, the server SHALL report t
 
 ### Requirement: backup-authorized-audited
 
-When a principal creates a namespace backup with registry files, the server SHALL check the backup:create action and write an audit entry for the backup.
+When a principal creates an installation backup that holds registry files, the server SHALL check the server:backup action and write an audit entry for the backup.
 
 #### Scenario: Backup checked and recorded
-- **WHEN** a principal creates a namespace backup with registry files
-- **THEN** the server allows the call only with the backup:create action on the installation and writes an audit entry that names the namespace.
+- **WHEN** a principal creates an installation backup that holds registry files
+- **THEN** the server allows the call only with the server:backup action on the installation and writes an audit entry for the backup.
 
 ### Requirement: check-registry-files-on-restore
 
@@ -156,26 +156,6 @@ When a registry file restore stops midway, the server SHALL remove only partial 
 - **WHEN** a restore runs twice onto a target that already holds part of the SHA-256 keys
 - **THEN** the restore keeps the matching keys and writes the missing keys.
 
-### Requirement: restore-legacy-without-entries
-
-When a restore reads a backup with registry rows and no registry file manifest section, the server SHALL warn and restore the rows without files.
-
-#### Scenario: Old backup warns and marks unavailable
-- **WHEN** a backup holds registry rows with no registry file manifest section
-- **THEN** the restore warns that registry files are absent, restores registry rows and signing keys without files, marks each file-backed release unavailable, and names the backup command that makes a complete backup.
-
-#### Scenario: Empty new backup stays available
-- **WHEN** a new backup holds an empty registry file manifest section and zero release files
-- **THEN** the restore completes without a file warning and without unavailable marks.
-
-### Requirement: restore-unavailable-fetch
-
-When a client fetches a release marked unavailable after a legacy restore, the server SHALL refuse the fetch with an error that names the release and version.
-
-#### Scenario: Unavailable release fetch fails clearly
-- **WHEN** a client fetches a release marked unavailable after a legacy restore
-- **THEN** the fetch fails with an error that names the release, the version, and the restore of a backup without files as the cause.
-
 ### Requirement: restore-warn-channel
 
 When a restore completes from a backup without registry file entries, the server SHALL return the file warning in the restore result and the CLI output.
@@ -186,8 +166,8 @@ When a restore completes from a backup without registry file entries, the server
 
 ### Requirement: restore-authorized-audited
 
-When a principal restores a namespace backup with registry files, the server SHALL check the restore:execute action and write an audit entry for the restore.
+When a principal restores an installation backup that holds registry files, the server SHALL check the server:restore action and write an audit entry for the restore.
 
 #### Scenario: Restore checked and recorded
-- **WHEN** a principal restores a namespace backup with registry files
-- **THEN** the server allows the call only with the restore:execute action on the installation and writes an audit entry that names the namespace and the count of registry files.
+- **WHEN** a principal restores an installation backup that holds registry files
+- **THEN** the server allows the call only with the server:restore action on the installation and writes an audit entry for the restore.and the count of registry files.
