@@ -17,7 +17,7 @@ import (
 func newTestAppLog(t *testing.T, raw string, stderr *bytes.Buffer, lookup func(string) (string, bool)) (appLog, error) {
 	t.Helper()
 
-	app, err := newAppLog(strings.Fields(raw), slog.LevelInfo, "json", stderr, lookup)
+	app, err := newAppLog(strings.Fields(raw), slog.LevelInfo, "json", stderr, sinkEnv{lookup: lookup, ranges: nil})
 	if err == nil {
 		t.Cleanup(func() {
 			// A cleanup runs after the test context ends.
@@ -54,7 +54,13 @@ func TestAppLogWritesToStderrAndAFile(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "app.jsonl")
 
-	app, err := newAppLog([]string{"stderr", "file:" + path}, slog.LevelInfo, "json", &stderr, noEnv)
+	app, err := newAppLog(
+		[]string{"stderr", "file:" + path},
+		slog.LevelInfo,
+		"json",
+		&stderr,
+		sinkEnv{lookup: noEnv, ranges: nil},
+	)
 	if err != nil {
 		t.Fatalf("new app log: %v", err)
 	}

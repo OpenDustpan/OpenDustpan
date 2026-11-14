@@ -30,6 +30,10 @@ func protocolPaths() map[string]identity.Action {
 		protocol.PathSessionStepEnd:   identity.ActionRunnerClaim,
 		protocol.PathSessionLog:       identity.ActionRunnerClaim,
 		protocol.PathSessionFinish:    identity.ActionRunnerClaim,
+
+		protocol.PathSessionPlanUpload: identity.ActionRunnerClaim,
+		protocol.PathSessionPlanCommit: identity.ActionRunnerClaim,
+		protocol.PathSessionPlanPart:   identity.ActionRunnerClaim,
 	}
 }
 

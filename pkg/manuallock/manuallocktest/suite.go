@@ -898,7 +898,7 @@ func testStackRename(t *testing.T, s Store) {
 	unit := collection.UnitRef{Namespace: f.ns.Name, Tool: toolPulumi, Name: "web/prod"}
 	f.lock(t, manuallock.UnitTarget(unit), alice, testReason)
 
-	if err := s.RenameStack(t.Context(), st.Ref, "prod-2", f.ns.Fence()); err != nil {
+	if err := s.RenameStack(t.Context(), st.Ref, "prod-2", f.ns.Fence(), auditFor(f.ns.Fence())); err != nil {
 		t.Fatalf("RenameStack: %v", err)
 	}
 

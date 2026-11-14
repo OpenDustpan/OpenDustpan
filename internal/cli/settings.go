@@ -27,17 +27,18 @@ const referenceNone = "(none)"
 // default, the --help text and the reference default.
 func stringSetting(flag, env, def, help, reference string) *Setting {
 	return &Setting{
-		Flag:      flag,
-		Env:       env,
-		Default:   def,
-		Help:      help,
-		Reference: reference,
-		Doc:       "",
-		File:      "",
-		Kind:      KindString,
-		Sensitive: false,
-		URL:       false,
-		StepInput: false,
+		Flag:                 flag,
+		Env:                  env,
+		Default:              def,
+		Help:                 help,
+		Reference:            reference,
+		Doc:                  "",
+		File:                 "",
+		Kind:                 KindString,
+		Sensitive:            false,
+		URL:                  false,
+		StaticCredentialHost: false,
+		StepInput:            false,
 
 		NoPasswordInFile: false,
 	}
@@ -48,17 +49,18 @@ func stringSetting(flag, env, def, help, reference string) *Setting {
 // without an explicit flag or variable.
 func boolSetting(flag, env, help, reference string) *Setting {
 	return &Setting{
-		Flag:      flag,
-		Env:       env,
-		Default:   defaultFalse,
-		Help:      help,
-		Reference: reference,
-		Doc:       "",
-		File:      "",
-		Kind:      KindBool,
-		Sensitive: false,
-		URL:       false,
-		StepInput: false,
+		Flag:                 flag,
+		Env:                  env,
+		Default:              defaultFalse,
+		Help:                 help,
+		Reference:            reference,
+		Doc:                  "",
+		File:                 "",
+		Kind:                 KindBool,
+		Sensitive:            false,
+		URL:                  false,
+		StaticCredentialHost: false,
+		StepInput:            false,
 
 		NoPasswordInFile: false,
 	}
@@ -68,17 +70,18 @@ func boolSetting(flag, env, help, reference string) *Setting {
 // the default, the --help text and the reference default.
 func intSetting(flag, env, def, help, reference string) *Setting {
 	return &Setting{
-		Flag:      flag,
-		Env:       env,
-		Default:   def,
-		Help:      help,
-		Reference: reference,
-		Doc:       "",
-		File:      "",
-		Kind:      KindInt,
-		Sensitive: false,
-		URL:       false,
-		StepInput: false,
+		Flag:                 flag,
+		Env:                  env,
+		Default:              def,
+		Help:                 help,
+		Reference:            reference,
+		Doc:                  "",
+		File:                 "",
+		Kind:                 KindInt,
+		Sensitive:            false,
+		URL:                  false,
+		StaticCredentialHost: false,
+		StepInput:            false,
 
 		NoPasswordInFile: false,
 	}
@@ -89,17 +92,18 @@ func intSetting(flag, env, def, help, reference string) *Setting {
 // never get one.
 func envSetting(env, doc string) *Setting {
 	return &Setting{
-		Flag:      "",
-		Env:       env,
-		Default:   "",
-		Help:      "",
-		Reference: "",
-		Doc:       doc,
-		File:      "",
-		Kind:      KindString,
-		Sensitive: false,
-		URL:       false,
-		StepInput: false,
+		Flag:                 "",
+		Env:                  env,
+		Default:              "",
+		Help:                 "",
+		Reference:            "",
+		Doc:                  doc,
+		File:                 "",
+		Kind:                 KindString,
+		Sensitive:            false,
+		URL:                  false,
+		StaticCredentialHost: false,
+		StepInput:            false,
 
 		NoPasswordInFile: false,
 	}
@@ -128,7 +132,7 @@ var Settings = []*Setting{
 		"",
 		"sqlite:<path> or postgres://..., required (DUSTPAN_DATABASE)",
 		"(none: `serve` stops without it). `sqlite:<path>` or `postgres://...` for PostgreSQL 18 or later. The server checks the failover settings of the URL, for example `target_session_attrs` and `pool_max_conn_lifetime`. It sets a default for each one that the URL does not name: see [Database settings for a failover](../guides/several-instances.md#database-settings-for-a-failover)",
-	).WithFile("database").WithSensitive().WithNoPasswordInFile(),
+	).WithFile("database").WithStaticCredentialHost().WithSensitive().WithNoPasswordInFile(),
 	stringSetting(
 		"installation", "DUSTPAN_INSTALLATION", "local",
 		"name of this installation, the primary installation of the namespaces it creates (DUSTPAN_INSTALLATION)",
@@ -249,6 +253,13 @@ var Settings = []*Setting{
 			"has at least 32 bits. The server always refuses loopback, link-local, cloud metadata, unspecified and "+
 			"multicast addresses, also inside a range. It checks this when a person sets an address and at each call.",
 	).WithFile("git-host-allowed-ranges"),
+	boolSetting(
+		"allow-plain-connections", "DUSTPAN_ALLOW_PLAIN_CONNECTIONS",
+		"allow LDAP and SMTP connections with no TLS, except to loopback (DUSTPAN_ALLOW_PLAIN_CONNECTIONS)",
+		"(none: off). Set `true` only in a trusted network. An LDAP bind or an SMTP login then sends its "+
+			"password with no encryption. The settings resource also holds it, and a value from a flag, a "+
+			"variable or this file locks it",
+	).WithFile("egress.allowPlainConnections"),
 	stringSetting(
 		"branding-preset", "DUSTPAN_BRANDING_PRESET", "",
 		"name of the branding preset of the installation, for example high-contrast (DUSTPAN_BRANDING_PRESET)",
@@ -275,7 +286,7 @@ var Settings = []*Setting{
 		"blob-store", "DUSTPAN_BLOB_STORE", "fs",
 		"blob store fs with --blob-dir, or s3://<bucket>[/<prefix>] (DUSTPAN_BLOB_STORE)",
 		"`fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]`",
-	).WithFile("blob-store").WithURL(),
+	).WithFile("blob-store").WithStaticCredentialHost().WithURL(),
 	intSetting(
 		"blob-cache-bytes", "DUSTPAN_BLOB_CACHE_BYTES", "0",
 		"bytes of OpenTofu state blobs to keep in memory, 0 means no cache (DUSTPAN_BLOB_CACHE_BYTES)",
@@ -286,7 +297,7 @@ var Settings = []*Setting{
 		"s3-endpoint", "DUSTPAN_S3_ENDPOINT", "",
 		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
 		"(none: AWS)",
-	).WithFile("s3-endpoint").WithURL(),
+	).WithFile("s3-endpoint").WithStaticCredentialHost().WithURL(),
 	stringSetting(
 		"s3-region", "DUSTPAN_S3_REGION", "",
 		"S3 region, empty means us-east-1 (DUSTPAN_S3_REGION)",
@@ -296,7 +307,7 @@ var Settings = []*Setting{
 		"backup-target", "DUSTPAN_BACKUP_TARGET", "",
 		"backup target dir:/path or s3://<bucket>[/<prefix>], empty means no backups (DUSTPAN_BACKUP_TARGET)",
 		"(none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]`",
-	).WithFile("backup-target").WithURL(),
+	).WithFile("backup-target").WithStaticCredentialHost().WithURL(),
 	stringSetting(
 		"key-encryption-key-file", "DUSTPAN_KEY_ENCRYPTION_KEY_FILE", "",
 		"file holding the base64 key-encryption key, required without DUSTPAN_KEY_ENCRYPTION_KEY"+
@@ -397,14 +408,25 @@ var Settings = []*Setting{
 			"[<name>=]stderr, stdout, file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
 			"or webhook:<https URL> (DUSTPAN_LOG_SINK, targets separated by white space)",
 		"(none: stderr). For example `stderr syslog+tls://logs.example:6514`",
-	).WithFile("log-sink").WithSensitive(),
+	).WithFile("log-sink").WithStaticCredentialHost().WithSensitive(),
 	stringSetting(
 		"audit-sink", "DUSTPAN_AUDIT_SINK", "",
 		"a sink that gets a copy of each audit entry; repeat the flag for more sinks. Each is "+
 			"[<name>=]file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
 			"webhook:<https URL>, otlp:<https URL> or blob:<prefix> (DUSTPAN_AUDIT_SINK, sinks separated by white space)",
 		"(none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit`",
-	).WithFile("audit-sink").WithSensitive(),
+	).WithFile("audit-sink").WithStaticCredentialHost().WithSensitive(),
+	stringSetting(
+		"audit-sink-allowed-ranges", "DUSTPAN_AUDIT_SINK_ALLOWED_RANGES", "",
+		"comma-separated CIDRs that an audit or log sink may reach, in addition to public addresses "+
+			"(DUSTPAN_AUDIT_SINK_ALLOWED_RANGES)",
+		"(none: a sink reaches public addresses only). Set the range of a receiver on a private network, "+
+			"for example `10.20.0.0/16`. A range opens private-network addresses only. These are RFC 1918 and "+
+			"unique local addresses. An IPv4 range has at least 8 bits, and an IPv6 range has at least 32 bits. "+
+			"The server always refuses loopback, link-local, cloud metadata, unspecified and multicast addresses, "+
+			"also inside a range. It checks this at the start and at each connection. The setting applies to "+
+			"`--audit-sink` and `--log-sink`.",
+	).WithFile("audit-sink-allowed-ranges"),
 	stringSetting(
 		"audit-verify-keys-file", "DUSTPAN_AUDIT_VERIFY_KEYS_FILE", "",
 		"file of base64 Ed25519 public keys, one on each line, that may verify audit checkpoints "+
@@ -426,7 +448,7 @@ var Settings = []*Setting{
 		"(none: no console sign-in). The identity of a person does not hold the issuer. To use another "+
 			"issuer, also set a new `--oidc-provider`. Else a person of the new issuer gets the principal of a "+
 			"person of the old issuer with the same `sub`.",
-	).WithFile("oidc-issuer").WithURL().WithSensitive(),
+	).WithFile("oidc-issuer").WithStaticCredentialHost().WithURL().WithSensitive(),
 	stringSetting(
 		"oidc-provider", "DUSTPAN_OIDC_PROVIDER", "",
 		"ID of the OpenID Connect provider: 1 to 32 lower-case letters, digits and hyphens. It is part of the "+
@@ -457,6 +479,149 @@ var Settings = []*Setting{
 			"(DUSTPAN_OIDC_NO_AUTO_CREATE)",
 		"false",
 	).WithFile("oidc-no-auto-create"),
+	stringSetting(
+		"ldap-url",
+		"DUSTPAN_LDAP_URL",
+		"",
+		"address of the LDAP directory of the sign-in: ldaps://host[:port], or ldap://host[:port] with --ldap-start-tls; no path, query or user information. The sign-in also needs --ldap-provider, --ldap-bind-dn, --ldap-base-dn and --ldap-user-filter (DUSTPAN_LDAP_URL)",
+		"(none: no LDAP sign-in). The server binds to this host as the service account and as each person who signs in. A connection with no TLS is refused, except to a loopback IP address or with `egress.allowPlainConnections`.",
+	).WithFile("ldap.url").WithStaticCredentialHost().WithURL(),
+	stringSetting(
+		"ldap-provider",
+		"DUSTPAN_LDAP_PROVIDER",
+		"",
+		"ID of the LDAP provider: 1 to 32 lower-case letters, digits and hyphens. It is part of the identity of each person who signs in: the subject <provider ID>:<subject>. Never change the ID after the first sign-in (DUSTPAN_LDAP_PROVIDER)",
+		"(none). The ID is part of the identity of each person who signs in: the subject `<provider ID>:<subject>`. Never change the ID after the first sign-in. Another directory needs another ID.",
+	).WithFile("ldap.provider"),
+	stringSetting(
+		"ldap-display-name", "DUSTPAN_LDAP_DISPLAY_NAME", "",
+		"name of the LDAP provider that the console shows (DUSTPAN_LDAP_DISPLAY_NAME)",
+		"(the provider ID)",
+	).WithFile("ldap.displayName"),
+	boolSetting(
+		"ldap-start-tls", "DUSTPAN_LDAP_START_TLS",
+		"start TLS on an ldap:// URL before the first bind; not allowed with ldaps:// (DUSTPAN_LDAP_START_TLS)",
+		"false",
+	).WithFile("ldap.startTLS"),
+	stringSetting(
+		"ldap-ca-file", "DUSTPAN_LDAP_CA_FILE", "",
+		"PEM bundle of the certificate authorities of the LDAP directory (DUSTPAN_LDAP_CA_FILE)",
+		"(none: the system roots)",
+	).WithFile("ldap.caFile"),
+	stringSetting(
+		"ldap-allowed-ranges", "DUSTPAN_LDAP_ALLOWED_RANGES", "",
+		"comma-separated CIDRs that a connection to the LDAP directory may reach, in addition to public addresses "+
+			"(DUSTPAN_LDAP_ALLOWED_RANGES)",
+		"(none: a connection reaches public addresses only). Set the range of a directory on a private network, "+
+			"for example `10.20.0.0/16`. A range opens private-network addresses only. These are RFC 1918 and "+
+			"unique local addresses. An IPv4 range has at least 8 bits, and an IPv6 range has at least 32 bits. "+
+			"The server always refuses loopback, link-local, cloud metadata, unspecified and multicast addresses, "+
+			"also inside a range. It checks the address at each connection.",
+	).WithFile("ldap.allowedRanges"),
+	stringSetting(
+		"ldap-bind-dn", "DUSTPAN_LDAP_BIND_DN", "",
+		"DN of the service account of the LDAP sign-in (DUSTPAN_LDAP_BIND_DN)",
+		referenceNone,
+	).WithFile("ldap.bindDN"),
+	stringSetting(
+		"ldap-base-dn", "DUSTPAN_LDAP_BASE_DN", "",
+		"base DN of the user search of the LDAP sign-in; the entry of a person must be below it (DUSTPAN_LDAP_BASE_DN)",
+		referenceNone,
+	).WithFile("ldap.baseDN"),
+	stringSetting(
+		"ldap-user-filter",
+		"DUSTPAN_LDAP_USER_FILTER",
+		"",
+		"filter of the user search of the LDAP sign-in; it holds {user} at least once, for example (&(objectClass=person)(uid={user})) (DUSTPAN_LDAP_USER_FILTER)",
+		"(none). The server escapes the user name before it puts it in place of `{user}`.",
+	).WithFile("ldap.userFilter"),
+	stringSetting(
+		"ldap-user-name-attribute", "DUSTPAN_LDAP_USER_NAME_ATTRIBUTE", "",
+		"attribute that gives the user name of a person, for example uid (DUSTPAN_LDAP_USER_NAME_ATTRIBUTE)",
+		"(none: the user name that the person typed)",
+	).WithFile("ldap.userNameAttribute"),
+	stringSetting(
+		"ldap-email-attribute", "DUSTPAN_LDAP_EMAIL_ATTRIBUTE", "",
+		"attribute that gives the email of a person, for example mail (DUSTPAN_LDAP_EMAIL_ATTRIBUTE)",
+		"(none: no email)",
+	).WithFile("ldap.emailAttribute"),
+	stringSetting(
+		"ldap-name-attribute", "DUSTPAN_LDAP_NAME_ATTRIBUTE", "",
+		"attribute that gives the display name of a person, for example cn (DUSTPAN_LDAP_NAME_ATTRIBUTE)",
+		"(none: no name)",
+	).WithFile("ldap.nameAttribute"),
+	stringSetting(
+		"ldap-subject",
+		"DUSTPAN_LDAP_SUBJECT",
+		"entryUUID",
+		"attribute that gives the subject of a person: entryUUID, objectGUID, or the name of another attribute; never the DN, uid or email (DUSTPAN_LDAP_SUBJECT)",
+		"`entryUUID`. Use `objectGUID` for Active Directory. The subject must not change when a person changes a name or an email.",
+	).WithFile("ldap.subject"),
+	stringSetting(
+		"ldap-disabled-attribute",
+		"DUSTPAN_LDAP_DISABLED_ATTRIBUTE",
+		"",
+		"attribute that marks a disabled person, for example userAccountControl or nsAccountLock (DUSTPAN_LDAP_DISABLED_ATTRIBUTE)",
+		"(none: the server reads no such value)",
+	).WithFile("ldap.disabledAttribute"),
+	stringSetting(
+		"ldap-disabled-mask",
+		"DUSTPAN_LDAP_DISABLED_MASK",
+		"",
+		"bit mask of the disabled attribute, as a decimal number, for example 2 for userAccountControl (DUSTPAN_LDAP_DISABLED_MASK)",
+		"(none: compare the values of `ldap.disabledValues`)",
+	).WithFile("ldap.disabledMask"),
+	stringSetting(
+		"ldap-disabled-values",
+		"DUSTPAN_LDAP_DISABLED_VALUES",
+		"",
+		"comma-separated values of the disabled attribute that mark a disabled person, for example true for nsAccountLock (DUSTPAN_LDAP_DISABLED_VALUES)",
+		"(none)",
+	).WithFile("ldap.disabledValues"),
+	stringSetting(
+		"ldap-groups",
+		"DUSTPAN_LDAP_GROUPS",
+		"off",
+		"where the LDAP sign-in reads the groups of a person: off, search or memberOf; this version reads the groups but applies no membership (DUSTPAN_LDAP_GROUPS)",
+		"`off`. With groups on, a person with no group cannot sign in. This version reads the groups and applies no membership.",
+	).WithFile("ldap.groups"),
+	stringSetting(
+		"ldap-group-base-dn", "DUSTPAN_LDAP_GROUP_BASE_DN", "",
+		"base DN of the groups of the LDAP sign-in (DUSTPAN_LDAP_GROUP_BASE_DN)",
+		referenceNone,
+	).WithFile("ldap.groupBaseDN"),
+	stringSetting(
+		"ldap-group-filter",
+		"DUSTPAN_LDAP_GROUP_FILTER",
+		"",
+		"filter of a group entry for ldap.groups search, for example (objectClass=groupOfNames) (DUSTPAN_LDAP_GROUP_FILTER)",
+		referenceNone,
+	).WithFile("ldap.groupFilter"),
+	stringSetting(
+		"ldap-group-member-attribute",
+		"DUSTPAN_LDAP_GROUP_MEMBER_ATTRIBUTE",
+		"",
+		"attribute of a group that holds the DN of a member, for ldap.groups search, for example member (DUSTPAN_LDAP_GROUP_MEMBER_ATTRIBUTE)",
+		referenceNone,
+	).WithFile("ldap.groupMemberAttribute"),
+	stringSetting(
+		"ldap-group-member-of-attribute",
+		"DUSTPAN_LDAP_GROUP_MEMBER_OF_ATTRIBUTE",
+		"",
+		"attribute of an entry that holds the DN of its groups, for ldap.groups memberOf, for example memberOf (DUSTPAN_LDAP_GROUP_MEMBER_OF_ATTRIBUTE)",
+		referenceNone,
+	).WithFile("ldap.groupMemberOfAttribute"),
+	stringSetting(
+		"ldap-group-name-attribute", "DUSTPAN_LDAP_GROUP_NAME_ATTRIBUTE", "",
+		"attribute of a group that gives the group name, for example cn (DUSTPAN_LDAP_GROUP_NAME_ATTRIBUTE)",
+		referenceNone,
+	).WithFile("ldap.groupNameAttribute"),
+	boolSetting(
+		"ldap-no-auto-create",
+		"DUSTPAN_LDAP_NO_AUTO_CREATE",
+		"refuse the LDAP sign-in of a person who has no principal yet, instead of making one with no grant (DUSTPAN_LDAP_NO_AUTO_CREATE)",
+		"false",
+	).WithFile("ldap.noAutoCreate"),
 	stringSetting(
 		"server", "DUSTPAN_SERVER", "",
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
@@ -514,11 +679,25 @@ var Settings = []*Setting{
 	envSetting(
 		"DUSTPAN_OIDC_CLIENT_SECRET",
 		"The client secret of the server at the OpenID Connect provider. Required when you set "+
-			"`--oidc-issuer` and no secret file.",
+			"`--oidc-issuer` and no secret file. The server removes leading and trailing white space, "+
+			"and refuses a secret with a control character in it. "+
+			"When you set both, this variable wins over `DUSTPAN_OIDC_CLIENT_SECRET_FILE`.",
 	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_LDAP_BIND_PASSWORD",
+		"The password of the service account of the LDAP sign-in. Required when you set `--ldap-url` and "+
+			"no password file. No flag and no configuration file key sets it.",
+	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_LDAP_BIND_PASSWORD_FILE",
+		"A file that holds the password of the service account of the LDAP sign-in. Only its owner can "+
+			"read it. When you set both, `DUSTPAN_LDAP_BIND_PASSWORD` wins.",
+	),
 	envSetting(
 		"DUSTPAN_OIDC_CLIENT_SECRET_FILE",
 		"A file that holds the OpenID Connect client secret. Only its owner can read it. "+
+			"The server removes leading and trailing white space, such as a final line break, "+
+			"and refuses a secret with a control character in it. "+
 			"When you set both, `DUSTPAN_OIDC_CLIENT_SECRET` wins.",
 	),
 	envSetting(

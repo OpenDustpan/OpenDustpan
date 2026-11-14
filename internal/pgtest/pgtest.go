@@ -55,24 +55,31 @@ type Migrate func(ctx context.Context, dbURL string) error
 
 // BuildTemplate makes the database name on the server of base and migrates
 // the schema templateSchema in it with migrate. The database has no
-// connection after the call, so it can be the template of a clone.
+// connection after the call, so it can be the template of a clone. A step
+// that fails after CREATE DATABASE drops the database.
 func BuildTemplate(ctx context.Context, base, name string, migrate Migrate) error {
 	if err := exec(ctx, base, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
 		return fmt.Errorf("create the template database: %w", err)
 	}
 
+	// A template that a failed build leaves behind fills the disk of the
+	// server. The drop ignores the end of ctx, because a cleanup must run.
+	fail := func(err error) error {
+		return errors.Join(err, dropDatabase(context.WithoutCancel(ctx), base, name))
+	}
+
 	u, err := databaseURL(base, name)
 	if err != nil {
-		return err
+		return fail(err)
 	}
 
 	create := "CREATE SCHEMA " + pgx.Identifier{templateSchema}.Sanitize()
 	if schemaErr := exec(ctx, u.String(), create); schemaErr != nil {
-		return fmt.Errorf("create the template schema: %w", schemaErr)
+		return fail(fmt.Errorf("create the template schema: %w", schemaErr))
 	}
 
 	if migrateErr := migrate(ctx, withSearchPath(u).String()); migrateErr != nil {
-		return fmt.Errorf("migrate the template database: %w", migrateErr)
+		return fail(fmt.Errorf("migrate the template database: %w", migrateErr))
 	}
 
 	return nil
@@ -97,17 +104,41 @@ func MigratedURL(tb testing.TB, base string) string {
 // part of the name of a clone.
 const cloneSuffix = "_c"
 
+// maxCloneNameBytes is the longest database name that PostgreSQL keeps in
+// full. A longer name loses its end, and two clones can then share a name.
+const maxCloneNameBytes = 63
+
+// errCloneNameTooLong is the error of CloneName for a name longer than
+// maxCloneNameBytes bytes.
+var errCloneNameTooLong = errors.New("the clone name is too long")
+
+// CloneName returns the name of a new clone of the template database, with a
+// random suffix. It returns an error when the name is longer than
+// maxCloneNameBytes bytes.
+func CloneName(template string) (string, error) {
+	suffix := make([]byte, suffixBytes)
+	if _, err := rand.Read(suffix); err != nil {
+		return "", fmt.Errorf("random database name: %w", err)
+	}
+
+	name := template + cloneSuffix + hex.EncodeToString(suffix)
+	if len(name) > maxCloneNameBytes {
+		return "", fmt.Errorf("%w: %d bytes, the limit is %d", errCloneNameTooLong, len(name), maxCloneNameBytes)
+	}
+
+	return name, nil
+}
+
 // MigratedURLWithTimeout is MigratedURL for the template database template,
 // with timeout as the time limit of the drop of the clone.
 func MigratedURLWithTimeout(tb testing.TB, base, template string, timeout time.Duration) string {
 	tb.Helper()
 
-	suffix := make([]byte, suffixBytes)
-	if _, err := rand.Read(suffix); err != nil {
-		tb.Fatalf("random database name: %v", err)
+	name, nameErr := CloneName(template)
+	if nameErr != nil {
+		tb.Fatalf("clone name: %v", nameErr)
 	}
 
-	name := template + cloneSuffix + hex.EncodeToString(suffix)
 	clone := "CREATE DATABASE " + pgx.Identifier{name}.Sanitize() +
 		" TEMPLATE " + pgx.Identifier{template}.Sanitize() + " STRATEGY " + cloneStrategy
 

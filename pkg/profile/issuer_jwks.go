@@ -191,6 +191,15 @@ func registeredClaims() []string {
 	}
 }
 
+// AuthenticationClaims returns the claims that tell a relying party how and
+// when a person signed in: auth_time, amr and acr of OpenID Connect. A relying
+// party can read them as proof of a fresh or a stronger sign-in, for example
+// in a step-up check. The issuer signs for a job or a run, not for a sign-in
+// of a person, so no token of the issuer holds them.
+func AuthenticationClaims() []string {
+	return []string{"auth_time", "amr", "acr"}
+}
+
 // ClaimsSupported lists the claims that a token can hold. The list of the
 // claims of an open follows the claim set of the server.
 func ClaimsSupported() []string {
@@ -207,10 +216,16 @@ func ClaimsSupported() []string {
 const maxClaimName = 64
 
 // CheckClaimName reports whether name may be a claim of an open: snake_case,
-// or the AWS tags claim, and not a claim that the issuer sets itself.
+// or the AWS tags claim, not a claim that the issuer sets itself, and not an
+// authentication claim (see AuthenticationClaims).
 func CheckClaimName(name string) error {
 	if slices.Contains(registeredClaims(), name) {
 		return fmt.Errorf("%w: the claim %q is set by the issuer", ErrInvalid, name)
+	}
+
+	if slices.Contains(AuthenticationClaims(), name) {
+		return fmt.Errorf("%w: the claim %q tells how a person signed in, and a token of the issuer never holds it",
+			ErrInvalid, name)
 	}
 
 	if name != awsTagsClaim && !snakeCase(name) {

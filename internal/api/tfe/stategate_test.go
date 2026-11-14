@@ -130,7 +130,7 @@ func newAuditedHandler(t *testing.T, ws tfe.WorkspaceService, guard stategate.Gu
 		Authenticator: tokenAuthenticator{}, Authorizer: allowAll(), AddressGate: nil,
 		Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: ws, OutputChecker: nil,
 		BaseURL: baseurl.Resolver{}, Audit: entries, OnAuditFailure: nil, DenialLimiter: nil, Gate: nil,
-		MaxStateBytes: 0, Sessions: nil, SessionPolicy: nil, StateGuard: guard,
+		MaxStateBytes: 0, Sessions: nil, SessionPolicy: nil, StateGuard: guard, Placer: testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -351,7 +351,7 @@ func TestNilGuardDoesNotStart(t *testing.T) {
 		Logger: slog.New(slog.DiscardHandler), Namespaces: newTestNamespaces(t), Workspaces: newWriteCounter(),
 		OutputChecker: nil,
 		BaseURL:       baseurl.Resolver{}, Audit: newTestAudit(), OnAuditFailure: nil, DenialLimiter: nil, Gate: nil,
-		MaxStateBytes: 0, Sessions: nil, SessionPolicy: nil, StateGuard: nil,
+		MaxStateBytes: 0, Sessions: nil, SessionPolicy: nil, StateGuard: nil, Placer: testPlacer(),
 	})
 	if h != nil || !errors.Is(err, tfe.ErrMissingDependency) || !errors.Is(err, stategate.ErrNoGuard) {
 		t.Fatalf("NewHandler(no guard) = %v, %v, want ErrMissingDependency and stategate.ErrNoGuard", h, err)

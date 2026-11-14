@@ -24,29 +24,29 @@ import (
 func TestPasskeySignIn(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	pulumiVersions, tofuVersions := e2e.Pulumi().Versions(), e2e.OpenTofu().Versions()
-	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+	pulumiVersion, tofuVersion := e2e.Pulumi().Single(), e2e.OpenTofu().Single()
+	if pulumiVersion == "" || tofuVersion == "" {
 		t.Fatal("the Pulumi tool and the OpenTofu tool need at least one version in their matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	pulumi, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersions[0])
+	pulumi, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersion)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, pulumiVersions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, pulumiVersion, err)
 	}
 
-	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersions[0])
+	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersion)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, tofuVersions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, tofuVersion, err)
 	}
 
 	for _, db := range databases {
@@ -238,24 +238,24 @@ func checkPasskeyRefusals(t *testing.T, p passkeySignInClient) {
 func TestBreakGlassPasskey(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.OpenTofu().Versions()
-	if len(versions) == 0 {
+	version := e2e.OpenTofu().Single()
+	if version == "" {
 		t.Fatal("the OpenTofu tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), versions[0])
+	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, version, err)
 	}
 
 	for _, db := range databases {

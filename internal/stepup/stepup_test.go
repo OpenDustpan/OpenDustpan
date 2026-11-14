@@ -36,6 +36,8 @@ func TestServiceRules(t *testing.T) {
 
 	rules := []string{
 		"a TOTP step-up cannot add a step-up key",
+		"the service sets Challenge.CreatedBy and the adminID of EnrollFirstKey from the authenticated principal of the request, never from a request field",
+		"a refusal of AddKey or EnrollFirstKey is recorded once by the service as a failure entry, and the store appends nothing",
 		"a TOTP step-up cannot revoke a step-up key",
 		"a console sign-in with a password only or a recovery code cannot add a step-up key",
 		"the console path counts at the level key only after a WebAuthn assertion",
@@ -63,6 +65,17 @@ func TestServiceRules(t *testing.T) {
 		"a poll by another token of the same person gets ErrNotFound",
 		"a window credential on each one-write-only write fails with ErrMismatch",
 		"a key add, a key revoke, a TOTP enrollment, a TOTP reset and an admin reset each send an email to the person",
+		// The audit of refusals: exactly one layer records each one.
+		"a use refused with ErrNotFound, ErrExpired or ErrUsed appends one failure entry",
+		"a recorded failure refused with ErrNotFound, ErrExpired or ErrUsed appends one failure entry",
+		"a use refused with ErrMismatch or ErrFactorRefused appends no second entry",
+		"a refusal whose failure entry cannot be appended still refuses the write",
+		// The claims of other credentials. The tests of the server and of the
+		// issuer check the paths that exist today: a job token and an issued
+		// token get no fresh authentication and no claim from the header.
+		"a step-up challenge from a job token fails with ErrNotPerson and gives the job no step-up claim",
+		"a step-up credential with a job token gives the job token no step-up and no fresh-authentication claim",
+		"an issued token never holds a claim from a step-up credential of the request that opened its profile",
 	}
 
 	for _, rule := range rules {

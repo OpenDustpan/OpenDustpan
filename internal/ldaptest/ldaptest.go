@@ -120,6 +120,11 @@ type Group struct {
 	Link Link
 }
 
+// BindHook is a function that the directory calls before it answers a
+// bind. It receives the DN of the bind. A test uses it to hold the answer
+// of a bind until the test releases it.
+type BindHook func(dn string)
+
 // Server is a running directory. Its methods are safe for concurrent use.
 type Server struct {
 	pool            *x509.CertPool
@@ -139,6 +144,7 @@ type Server struct {
 	once            sync.Once
 	mu              sync.Mutex
 	fault           Fault
+	bindHook        BindHook
 	accepts         int
 	stopped         bool
 }
@@ -148,22 +154,22 @@ const listeners = 2
 
 // Start starts a directory on loopback with a new certificate authority,
 // and stops it when the test ends.
-func Start(t *testing.T) *Server {
-	t.Helper()
+func Start(tb testing.TB) *Server {
+	tb.Helper()
 
-	cert, pool := newCertificate(t)
+	cert, pool := newCertificate(tb)
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 
 	var lc net.ListenConfig
 
-	tlsLn, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	tlsLn, err := lc.Listen(tb.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		tb.Fatalf("listen: %v", err)
 	}
 
-	plainLn, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	plainLn, err := lc.Listen(tb.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		tb.Fatalf("listen: %v", err)
 	}
 
 	s := &Server{
@@ -184,6 +190,7 @@ func Start(t *testing.T) *Server {
 		once:            sync.Once{},
 		mu:              sync.Mutex{},
 		fault:           FaultNone,
+		bindHook:        nil,
 		accepts:         0,
 		stopped:         false,
 	}
@@ -193,9 +200,9 @@ func Start(t *testing.T) *Server {
 	go s.serve(s.tlsLn)
 	go s.serve(s.plainLn)
 
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		for _, err := range s.stopAndReport() {
-			t.Logf("ldaptest: %v", err)
+			tb.Logf("ldaptest: %v", err)
 		}
 	})
 
@@ -204,12 +211,12 @@ func Start(t *testing.T) *Server {
 
 // newCertificate returns a self-signed certificate for 127.0.0.1, ::1 and
 // localhost, and a pool that trusts it.
-func newCertificate(t *testing.T) (tls.Certificate, *x509.CertPool) {
-	t.Helper()
+func newCertificate(tb testing.TB) (tls.Certificate, *x509.CertPool) {
+	tb.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("generate key: %v", err)
+		tb.Fatalf("generate key: %v", err)
 	}
 
 	now := time.Now()
@@ -229,12 +236,12 @@ func newCertificate(t *testing.T) (tls.Certificate, *x509.CertPool) {
 
 	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
 	if err != nil {
-		t.Fatalf("create certificate: %v", err)
+		tb.Fatalf("create certificate: %v", err)
 	}
 
 	leaf, err := x509.ParseCertificate(der)
 	if err != nil {
-		t.Fatalf("parse certificate: %v", err)
+		tb.Fatalf("parse certificate: %v", err)
 	}
 
 	pool := x509.NewCertPool()
@@ -318,6 +325,16 @@ func (s *Server) SetFault(f Fault) {
 	defer s.mu.Unlock()
 
 	s.fault = f
+}
+
+// SetBindHook sets the function that the directory calls before it answers
+// each bind. A nil function answers each bind at once. A hook that waits
+// holds the answer of the bind.
+func (s *Server) SetBindHook(f BindHook) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.bindHook = f
 }
 
 // Binds returns the DN of each bind that the directory received, in order.
@@ -448,6 +465,15 @@ func (s *Server) currentFault() Fault {
 	defer s.mu.Unlock()
 
 	return s.fault
+}
+
+// currentBindHook returns the function that the directory calls before it
+// answers a bind.
+func (s *Server) currentBindHook() BindHook {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.bindHook
 }
 
 // recordBind records the DN of a bind.

@@ -12,6 +12,7 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
+	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -92,6 +93,11 @@ func TestWriteErrorCodes(t *testing.T) {
 		{
 			"state unavailable", maintenance.ErrUnavailable, http.StatusInternalServerError,
 			errcode.MaintenanceUnavailable, nil, "",
+		},
+		{
+			"removal alert unrecorded", signinsvc.ErrRemovalAlertUnrecorded, http.StatusServiceUnavailable,
+			errcode.PrincipalRemovalAlertUnrecorded, nil,
+			"the removal alert and its audit entry could not be written",
 		},
 		{"unclassified", errUnclassified, http.StatusInternalServerError, errcode.ServerInternal, nil, ""},
 	}
@@ -187,7 +193,7 @@ func TestEnterErrorCodes(t *testing.T) {
 		Canceled: []string{"opentofu/acme/net", "opentofu/acme/dns"},
 	}
 
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/maintenance", http.NoBody)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/maintenance", http.NoBody)
 	rec := httptest.NewRecorder()
 	apiserver.WriteEnterErrorForTest(rec, r, active)
 

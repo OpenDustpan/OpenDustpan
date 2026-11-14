@@ -204,6 +204,11 @@ func webUnit() collection.UnitRef {
 	return collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web"}
 }
 
+// webLockUnit returns the unit of webUnit with the stable IDs of the tests.
+func webLockUnit() manuallock.Unit {
+	return manuallock.Unit{Ref: webUnit(), NamespaceID: "ns-1", UnitID: "unt-1"}
+}
+
 func acmeTarget() manuallock.Target {
 	return manuallock.NamespaceTarget("acme")
 }
@@ -874,7 +879,7 @@ type fakePhases struct {
 	err  error
 }
 
-func (f fakePhases) PhaseStartedAt(_ context.Context, jobID string, _ collection.UnitRef) (time.Time, error) {
+func (f fakePhases) PhaseStartedAt(_ context.Context, jobID string, _ manuallock.Unit) (time.Time, error) {
 	if f.err != nil {
 		return time.Time{}, f.err
 	}
@@ -949,7 +954,7 @@ func TestCoveringForLetsAnEarlierPhasePass(t *testing.T) {
 				t.Fatalf("NewService: %v", err)
 			}
 
-			got, err := svc.CoveringFor(t.Context(), webUnit(), tc.jobID)
+			got, err := svc.CoveringFor(t.Context(), webLockUnit(), tc.jobID)
 			if tc.wantLocked {
 				if err != nil || got != held {
 					t.Fatalf("CoveringFor = %+v, %v; want the lock", got, err)
@@ -1014,7 +1019,7 @@ func TestCoveringForNeedsEveryLockToBeNewer(t *testing.T) {
 				t.Fatalf("NewService: %v", err)
 			}
 
-			got, err := svc.CoveringFor(t.Context(), webUnit(), "job-1")
+			got, err := svc.CoveringFor(t.Context(), webLockUnit(), "job-1")
 			if !errors.Is(err, tc.wantErr) || got != tc.want {
 				t.Fatalf("CoveringFor = %+v, %v; want %+v, %v", got, err, tc.want, tc.wantErr)
 			}
@@ -1039,9 +1044,155 @@ func TestCoveringForKeepsTheStoreAnswer(t *testing.T) {
 			t.Fatalf("NewService: %v", err)
 		}
 
-		if _, err := svc.CoveringFor(t.Context(), webUnit(), "job-1"); !errors.Is(err, storeErr) {
+		if _, err := svc.CoveringFor(t.Context(), webLockUnit(), "job-1"); !errors.Is(err, storeErr) {
 			t.Errorf("CoveringFor err = %v, want %v", err, storeErr)
 		}
+	}
+}
+
+// idPhases answers the start of the phase of one unit by its stable IDs, as
+// the phase clock of the job store does. The reference is not compared, so a
+// rename of the unit changes no answer. A unit with an empty unit ID is a unit
+// that does not exist yet, and the fake matches it by the namespace ID, the
+// tool and the name.
+type idPhases struct {
+	namespaceID namespace.ID
+	unitID      string
+	tool        string
+	name        string
+	start       time.Time
+}
+
+func (f idPhases) PhaseStartedAt(_ context.Context, _ string, unit manuallock.Unit) (time.Time, error) {
+	if unit.NamespaceID == "" || unit.NamespaceID != f.namespaceID {
+		return time.Time{}, manuallock.ErrNoPhase
+	}
+
+	if unit.UnitID != "" {
+		if unit.UnitID != f.unitID {
+			return time.Time{}, manuallock.ErrNoPhase
+		}
+
+		return f.start, nil
+	}
+
+	if unit.Ref.Tool != f.tool || unit.Ref.Name != f.name {
+		return time.Time{}, manuallock.ErrNoPhase
+	}
+
+	return f.start, nil
+}
+
+// TestCoveringForUsesTheUnitIDs proves that the phase clock receives the stable
+// namespace ID and unit ID of the request, so a phase passes the lock after a
+// rename of its unit. A request with an empty ID fails closed: it meets the
+// lock.
+func TestCoveringForUsesTheUnitIDs(t *testing.T) {
+	t.Parallel()
+
+	since := fixedNow()
+	held := manuallock.Lock{Since: since, Target: acmeTarget(), Holder: "alice", Reason: "freeze"}
+	good := webLockUnit()
+	renamed := manuallock.Unit{
+		Ref:         collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "web-2"},
+		NamespaceID: good.NamespaceID,
+		UnitID:      good.UnitID,
+	}
+
+	cases := []struct {
+		name       string
+		unit       manuallock.Unit
+		wantLocked bool
+	}{
+		{"the unit IDs", good, false},
+		{"a renamed unit with the same IDs", renamed, false},
+		{"no namespace ID", manuallock.Unit{Ref: good.Ref, NamespaceID: "", UnitID: good.UnitID}, true},
+		{"no unit ID", manuallock.Unit{Ref: good.Ref, NamespaceID: good.NamespaceID, UnitID: ""}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newStore()
+			store.held = held
+
+			svc, err := manuallock.NewService(manuallock.Config{
+				Store: store, Namespaces: fakeNamespaces{}, Authorizer: allowAll(), Now: fixedNow,
+				Phases: idPhases{
+					namespaceID: good.NamespaceID, unitID: good.UnitID,
+					tool: good.Ref.Tool, name: good.Ref.Name, start: since.Add(-time.Minute),
+				},
+			})
+			if err != nil {
+				t.Fatalf("NewService: %v", err)
+			}
+
+			got, err := svc.CoveringFor(t.Context(), tc.unit, "job-1")
+			if tc.wantLocked {
+				if err != nil || got != held {
+					t.Fatalf("CoveringFor = %+v, %v; want the lock", got, err)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, manuallock.ErrNotLocked) {
+				t.Fatalf("CoveringFor = %+v, %v; want ErrNotLocked", got, err)
+			}
+		})
+	}
+}
+
+// TestNamespaceLockForANewUnitLetsAnEarlierPhasePass proves the rule of
+// NamespaceLockFor for a unit that does not exist yet. The unit has no unit ID,
+// so the phase clock matches the job by the namespace ID, the tool and the
+// name. A phase that started before the namespace lock passes it. A unit with
+// no namespace ID matches no job, so it keeps the lock.
+func TestNamespaceLockForANewUnitLetsAnEarlierPhasePass(t *testing.T) {
+	t.Parallel()
+
+	since := fixedNow()
+	held := manuallock.Lock{Since: since, Target: acmeTarget(), Holder: "alice", Reason: "freeze"}
+	good := webLockUnit()
+	newUnit := manuallock.Unit{Ref: good.Ref, NamespaceID: good.NamespaceID, UnitID: ""}
+
+	cases := []struct {
+		name       string
+		unit       manuallock.Unit
+		wantLocked bool
+	}{
+		{"new unit with an earlier phase", newUnit, false},
+		{"new unit with no namespace ID", manuallock.Unit{Ref: good.Ref, NamespaceID: "", UnitID: ""}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newStore()
+			store.held = held
+
+			svc, err := manuallock.NewService(manuallock.Config{
+				Store: store, Namespaces: fakeNamespaces{}, Authorizer: allowAll(), Now: fixedNow,
+				Phases: idPhases{
+					namespaceID: good.NamespaceID, unitID: good.UnitID,
+					tool: good.Ref.Tool, name: good.Ref.Name, start: since.Add(-time.Minute),
+				},
+			})
+			if err != nil {
+				t.Fatalf("NewService: %v", err)
+			}
+
+			got, err := svc.NamespaceLockFor(t.Context(), tc.unit, "job-1")
+			if tc.wantLocked {
+				wantNamespaceLockHeld(t, got, err, held)
+
+				return
+			}
+
+			wantNamespaceLockPassed(t, got, err)
+		})
 	}
 }
 
@@ -1112,11 +1263,11 @@ func TestNamespaceLockForLetsAnEarlierPhasePass(t *testing.T) {
 				t.Fatalf("NewService: %v", err)
 			}
 
-			if start := svc.PhaseStart(t.Context(), webUnit(), tc.jobID); !start.Equal(tc.wantStart) {
+			if start := svc.PhaseStart(t.Context(), webLockUnit(), tc.jobID); !start.Equal(tc.wantStart) {
 				t.Errorf("PhaseStart = %v, want %v", start, tc.wantStart)
 			}
 
-			got, err := svc.NamespaceLockFor(t.Context(), webUnit(), tc.jobID)
+			got, err := svc.NamespaceLockFor(t.Context(), webLockUnit(), tc.jobID)
 			if tc.wantLocked {
 				wantNamespaceLockHeld(t, got, err, held)
 
@@ -1158,7 +1309,7 @@ func TestNamespaceLockForWithNoLock(t *testing.T) {
 
 	svc := newService(t, store)
 
-	if _, err := svc.NamespaceLockFor(t.Context(), webUnit(), "job-1"); !errors.Is(err, manuallock.ErrNotLocked) {
+	if _, err := svc.NamespaceLockFor(t.Context(), webLockUnit(), "job-1"); !errors.Is(err, manuallock.ErrNotLocked) {
 		t.Fatalf("NamespaceLockFor with no lock = %v, want ErrNotLocked", err)
 	}
 }

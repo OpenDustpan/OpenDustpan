@@ -158,7 +158,7 @@ func (h *Handler) checkSession(r *http.Request, rt Route, c *call) error {
 // session request signs: the hash of the JSON body, which it reads, or for an
 // upload the value of the header, which leaves the body to the handler.
 func (h *Handler) signedHash(r *http.Request, rt Route, c *call) ([]byte, error) {
-	if rt.Path == protocol.PathSessionLog {
+	if isUpload(rt.Path) {
 		if err := h.checkRelease(r); err != nil {
 			return nil, err
 		}
@@ -346,8 +346,10 @@ func (h *Handler) sessionResponse(r *http.Request, sess *runner.Session) (protoc
 		AssignmentVersion: runner.AssignmentVersion,
 		Assignment: protocol.Assignment{
 			Namespace: unit.Namespace().String(), Unit: unit.String(), Tool: unit.Tool(), Job: string(j.ID),
-			Phase: string(kind), Sweep: "", ServerURL: h.serverURL, Source: nil, Steps: stepsOf(j.Spec.Steps, kind),
-			Plan: nil, GitCredentials: gitModeOf(sp.pool.GitCredentials), GitHelper: sp.pool.GitCredentials.Helper,
+			Phase: string(kind), Sweep: "", ServerURL: h.serverURL, Source: nil,
+			Steps: stepsOf(j.Spec.Steps, kind, j.Phases, sp.claim.Phase),
+			Plan:  nil, GitCredentials: gitModeOf(sp.pool.GitCredentials), GitHelper: sp.pool.GitCredentials.Helper,
+			Profile: j.Spec.Profile,
 		},
 	}, nil
 }
@@ -365,7 +367,7 @@ func gitModeOf(g runner.GitCredentials) string {
 // stepsOf returns the steps of the phase kind, in the wire form of the
 // assignment. The assignment holds no secret: a step has an argument list and
 // variables that are not secret (job.Step.Env).
-func stepsOf(steps []job.Step, kind job.PhaseKind) []protocol.Step {
+func stepsOf(steps []job.Step, kind job.PhaseKind, phases []job.Phase, current int) []protocol.Step {
 	out := make([]protocol.Step, 0, len(steps))
 
 	for i := range steps {
@@ -376,7 +378,9 @@ func stepsOf(steps []job.Step, kind job.PhaseKind) []protocol.Step {
 
 		outputs := make([]protocol.Output, 0, len(s.Outputs))
 		for _, o := range s.Outputs {
-			outputs = append(outputs, protocol.Output{Kind: string(o.Kind), Path: o.Path})
+			outputs = append(outputs, protocol.Output{
+				Kind: string(o.Kind), Path: o.Path, Needed: outputNeeded(o.Kind, phases, current),
+			})
 		}
 
 		out = append(out, protocol.Step{
@@ -387,6 +391,23 @@ func stepsOf(steps []job.Step, kind job.PhaseKind) []protocol.Step {
 	}
 
 	return out
+}
+
+// outputNeeded reports whether a later phase of the job reads an output of
+// kind k: a plan-apply output is read by a later apply phase, and no other
+// output has a reader.
+func outputNeeded(k job.OutputKind, phases []job.Phase, current int) bool {
+	if k != job.OutputPlanApply {
+		return false
+	}
+
+	for i := current + 1; i < len(phases); i++ {
+		if phases[i].Kind == job.PhaseApply {
+			return true
+		}
+	}
+
+	return false
 }
 
 // sessionRenew renews the claim of the session by the lease of the pool, also

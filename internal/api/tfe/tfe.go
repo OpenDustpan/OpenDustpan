@@ -80,7 +80,7 @@ type OverrideWriter interface {
 // WorkspaceReader is what the workspace routes need: create, read and list.
 type WorkspaceReader interface {
 	// Create creates an unlocked workspace without state.
-	Create(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
+	Create(ctx context.Context, ref workspace.Ref, p workspace.Placement) (workspace.Workspace, error)
 	// Get returns the workspace called ref, or workspace.ErrNotFound.
 	Get(ctx context.Context, ref workspace.Ref) (workspace.Workspace, error)
 	// GetByID returns the workspace with id, or workspace.ErrNotFound.
@@ -285,6 +285,10 @@ type Config struct {
 	// the gates of state.write. It is required. A server whose store keeps
 	// no gates gives the guard of stategate.Off with its reason.
 	StateGuard stategate.Guard
+	// Placer chooses the collection of each new workspace from the first
+	// placement rule that matches it. Nil means the server keeps no placement
+	// rules: it then refuses to make a workspace.
+	Placer *tofuunit.Placer
 }
 
 // Handler serves the TFE-compatible API under /api/v2/, with service
@@ -311,6 +315,7 @@ type Handler struct {
 	registry *registryState
 	// admit asks the state.write guard before each checked write.
 	admit  *stategate.Admitter
+	placer *tofuunit.Placer
 	mux    *patternMux
 	routes []Route
 }
@@ -376,6 +381,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		gate:           cfg.Gate,
 		maxState:       cfg.MaxStateBytes,
 		admit:          admit,
+		placer:         cfg.Placer,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}

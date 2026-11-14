@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -40,38 +41,15 @@ func (s *Store) Jobs() JobStore {
 	return jobstore.New(jobRunner{s: s})
 }
 
-// PutUnitStateVersion records version as the current state version of the unit
-// unitID of the fence namespace, as the state write of its tool does. A plan
-// phase reads it at its claim, and an apply phase dispatches only while it is
-// the same.
-func (s *Store) PutUnitStateVersion(ctx context.Context, fence namespace.Fence, unitID, version string) error {
-	if unitID == "" {
-		return fmt.Errorf("%w: a state version needs a unit ID", job.ErrInvalid)
-	}
-
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		now, err := storeNow(ctx, q)
-		if err != nil {
-			return err
-		}
-
-		err = q.PutUnitStateVersion(ctx, db.PutUnitStateVersionParams{
-			UnitID: unitID, Namespace: fence.Namespace.String(), VersionID: version, UpdatedAtMs: now,
-		})
-		if err != nil {
-			return fmt.Errorf("put unit state version: %w", err)
-		}
-
-		return nil
-	})
-}
-
 // jobRunner opens the transactions of the job stores.
 type jobRunner struct {
 	s *Store
 }
 
 var _ jobstore.Runner = jobRunner{s: nil}
+
+// Logger implements jobstore.Runner.
+func (r jobRunner) Logger() *slog.Logger { return r.s.logger }
 
 // Write implements jobstore.Runner. It takes the shared write lock, reads the
 // installation state, and holds the namespace row FOR UPDATE before fn reads
@@ -120,12 +98,7 @@ var _ jobstore.Tx = (*jobTx)(nil)
 
 // Now implements jobstore.Tx.
 func (t *jobTx) Now(ctx context.Context) (time.Time, error) {
-	ms, err := storeNow(ctx, t.q)
-	if err != nil {
-		return time.Time{}, err
-	}
-
-	return time.UnixMilli(ms).UTC(), nil
+	return databaseNow(ctx, t.q)
 }
 
 // Job implements jobstore.Tx.
@@ -179,16 +152,7 @@ func (t *jobTx) InsertJob(ctx context.Context, r jobstore.Row) error {
 
 // UpdateJob implements jobstore.Tx.
 func (t *jobTx) UpdateJob(ctx context.Context, r jobstore.Row, prev int64) (bool, error) {
-	n, err := t.q.UpdateJob(ctx, db.UpdateJobParams{
-		State: string(r.State), Wait: string(r.Wait), CurrentPhase: int64(r.Phase), CurrentChanges: r.Changes,
-		CurrentOperation: r.Operation, Version: r.Version, Body: r.Body, UpdatedAtMs: r.UpdatedMs,
-		StateChangedAtMs: r.StateChangedMs, ID: string(r.ID), PrevVersion: prev,
-	})
-	if err != nil {
-		return false, jobIndexError("update job", err)
-	}
-
-	return n == 1, nil
+	return updateJobRow(ctx, t.q, r, prev)
 }
 
 // jobIndexError turns the unique violation of an index of the jobs table
@@ -257,20 +221,7 @@ func (t *jobTx) HolderOf(
 
 // Awaiting implements jobstore.Tx.
 func (t *jobTx) Awaiting(ctx context.Context, ns namespace.Name, unitID string) ([]jobstore.Row, error) {
-	rows, err := t.q.ListAwaitingJobsOfUnit(
-		ctx,
-		db.ListAwaitingJobsOfUnitParams{Namespace: ns.String(), UnitID: unitID},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("select awaiting jobs: %w", err)
-	}
-
-	out := make([]jobstore.Row, len(rows))
-	for i := range rows {
-		out[i] = jobRow(db.GetJobRow(rows[i]))
-	}
-
-	return out, nil
+	return awaitingRows(ctx, t.q, ns, unitID)
 }
 
 // List implements jobstore.Tx.
@@ -318,7 +269,7 @@ func (t *jobTx) List(ctx context.Context, q jobstore.Query) ([]jobstore.Row, err
 		where = append(where, "j.state_changed_at_ms > "+arg(q.StateChangedAfterMs))
 	}
 
-	query := `SELECT j.id, n.name, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+	query := `SELECT j.id, n.name, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
 		j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
 		j.state_changed_at_ms
 		FROM jobs AS j JOIN namespaces AS n ON n.id = j.namespace_id`
@@ -345,7 +296,7 @@ func scanJobRows(rows pgx.Rows) ([]jobstore.Row, error) {
 	for rows.Next() {
 		var g db.GetJobRow
 
-		err := rows.Scan(&g.ID, &g.Namespace, &g.UnitID, &g.Seq, &g.State, &g.Wait, &g.CurrentPhase,
+		err := rows.Scan(&g.ID, &g.Namespace, &g.NamespaceID, &g.UnitID, &g.Seq, &g.State, &g.Wait, &g.CurrentPhase,
 			&g.CurrentChanges, &g.CurrentOperation, &g.IdempotencyKey, &g.Version, &g.Body, &g.CreatedAtMs,
 			&g.UpdatedAtMs, &g.StateChangedAtMs)
 		if err != nil {
@@ -378,10 +329,11 @@ func (t *jobTx) Orphans(ctx context.Context, limit int) ([]jobstore.OrphanRow, e
 		r := &rows[i]
 		out[i] = jobstore.OrphanRow{
 			Row: jobRow(db.GetJobRow{
-				ID: r.ID, Namespace: r.Namespace, UnitID: r.UnitID, Seq: r.Seq, State: r.State, Wait: r.Wait,
-				CurrentPhase: r.CurrentPhase, CurrentChanges: r.CurrentChanges, CurrentOperation: r.CurrentOperation,
-				IdempotencyKey: r.IdempotencyKey, Version: r.Version, Body: r.Body, CreatedAtMs: r.CreatedAtMs,
-				UpdatedAtMs: r.UpdatedAtMs, StateChangedAtMs: r.StateChangedAtMs,
+				ID: r.ID, Namespace: r.Namespace, NamespaceID: r.NamespaceID, UnitID: r.UnitID, Seq: r.Seq,
+				State: r.State, Wait: r.Wait, CurrentPhase: r.CurrentPhase, CurrentChanges: r.CurrentChanges,
+				CurrentOperation: r.CurrentOperation, IdempotencyKey: r.IdempotencyKey, Version: r.Version,
+				Body: r.Body, CreatedAtMs: r.CreatedAtMs, UpdatedAtMs: r.UpdatedAtMs,
+				StateChangedAtMs: r.StateChangedAtMs,
 			}),
 			Missing: !r.OpState.Valid,
 		}
@@ -392,10 +344,22 @@ func (t *jobTx) Orphans(ctx context.Context, limit int) ([]jobstore.OrphanRow, e
 
 func jobRow(r db.GetJobRow) jobstore.Row {
 	return jobstore.Row{
-		ID: job.ID(r.ID), Namespace: namespace.Name(r.Namespace), UnitID: r.UnitID, Seq: r.Seq,
-		State: job.State(r.State), Wait: job.WaitReason(r.Wait), Phase: int(r.CurrentPhase), Changes: r.CurrentChanges,
-		Operation: r.CurrentOperation, Key: r.IdempotencyKey, Version: r.Version, Body: r.Body,
-		CreatedMs: r.CreatedAtMs, UpdatedMs: r.UpdatedAtMs, StateChangedMs: r.StateChangedAtMs,
+		ID:             job.ID(r.ID),
+		Namespace:      namespace.Name(r.Namespace),
+		NamespaceID:    namespace.ID(r.NamespaceID),
+		UnitID:         r.UnitID,
+		Seq:            r.Seq,
+		State:          job.State(r.State),
+		Wait:           job.WaitReason(r.Wait),
+		Phase:          int(r.CurrentPhase),
+		Changes:        r.CurrentChanges,
+		Operation:      r.CurrentOperation,
+		Key:            r.IdempotencyKey,
+		Version:        r.Version,
+		Body:           r.Body,
+		CreatedMs:      r.CreatedAtMs,
+		UpdatedMs:      r.UpdatedAtMs,
+		StateChangedMs: r.StateChangedAtMs,
 	}
 }
 
@@ -425,16 +389,16 @@ func (t *jobTx) CoveringLocks(ctx context.Context, ns namespace.Name, unitID str
 
 // StateVersion implements jobstore.Tx.
 func (t *jobTx) StateVersion(ctx context.Context, ns namespace.Name, unitID string) (string, error) {
-	v, err := t.q.GetUnitStateVersion(ctx, db.GetUnitStateVersionParams{Namespace: ns.String(), UnitID: unitID})
-	if errors.Is(err, pgx.ErrNoRows) {
+	row, ok, err := unitState(ctx, t.q, ns.String(), unitID)
+	if err != nil {
+		return "", err
+	}
+
+	if !ok {
 		return "", nil
 	}
 
-	if err != nil {
-		return "", fmt.Errorf("select unit state version: %w", err)
-	}
-
-	return v, nil
+	return row.VersionID, nil
 }
 
 // FinalVersion implements jobstore.Tx.
@@ -443,32 +407,19 @@ func (t *jobTx) FinalVersion(
 ) (jobstore.FinalVersion, bool, error) {
 	var none jobstore.FinalVersion
 
-	r, err := t.q.GetUnitFinalVersion(ctx, db.GetUnitFinalVersionParams{Namespace: ns.String(), UnitID: unitID})
-	if errors.Is(err, pgx.ErrNoRows) {
+	row, ok, err := unitState(ctx, t.q, ns.String(), unitID)
+	if err != nil {
+		return none, false, err
+	}
+
+	if !ok || row.FinalVersionID == "" {
 		return none, false, nil
 	}
 
-	if err != nil {
-		return none, false, fmt.Errorf("select final state version: %w", err)
-	}
-
 	return jobstore.FinalVersion{
-		UnitID: r.UnitID, VersionID: r.VersionID, Commit: r.CommitID, Job: job.ID(r.JobID),
-		At: time.UnixMilli(r.AtMs).UTC(),
+		UnitID: unitID, VersionID: row.FinalVersionID, Commit: row.FinalCommit, Job: job.ID(row.FinalJob),
+		At: time.UnixMilli(row.FinalAtMs).UTC(),
 	}, true, nil
-}
-
-// PutFinalVersion implements jobstore.Tx.
-func (t *jobTx) PutFinalVersion(ctx context.Context, ns namespace.Name, v jobstore.FinalVersion) error {
-	err := t.q.PutUnitFinalVersion(ctx, db.PutUnitFinalVersionParams{
-		UnitID: v.UnitID, Namespace: ns.String(), VersionID: v.VersionID, CommitID: v.Commit, JobID: string(v.Job),
-		AtMs: v.At.UnixMilli(),
-	})
-	if err != nil {
-		return fmt.Errorf("put final state version: %w", err)
-	}
-
-	return nil
 }
 
 // InsertFreeze implements jobstore.Tx.
@@ -537,12 +488,7 @@ func freezeRow(r db.ListJobFreezesRow) jobstore.FreezeRow {
 
 // StartOperation implements jobstore.Tx.
 func (t *jobTx) StartOperation(ctx context.Context, req *durable.StartRequest) (string, error) {
-	op, _, err := startOperation(ctx, t.q, *req)
-	if err != nil {
-		return "", err
-	}
-
-	return string(op.ID), nil
+	return startDurableOperation(ctx, t.q, req)
 }
 
 // CancelOperation implements jobstore.Tx.

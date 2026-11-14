@@ -40,7 +40,7 @@ func TestCheckPlanBodyPartRules(t *testing.T) {
 	}
 
 	part := func(kind string, size int64) string {
-		return fmt.Sprintf(`{"kind":%q,"size":%d,"sha256":%q,"secret":false}`, kind, size, hash)
+		return fmt.Sprintf(`{"kind":%q,"size":%d,"sha256":%q,"secret":%t}`, kind, size, hash, kind == "plan-apply")
 	}
 
 	cases := []struct {

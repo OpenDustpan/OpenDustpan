@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -149,7 +150,7 @@ func putForeignCheckpoint(t *testing.T, f updatesFixture, s stack.Started, key s
 		BlobSize:      1,
 		BlobMD5:       [16]byte{},
 
-		AttemptStartedAt: f.clock.Now(),
+		AttemptStartedAt: f.clock.Now(), Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	fence := namespace.Fence{Namespace: "", FailoverVersion: 0}

@@ -77,7 +77,7 @@ func newFakeUnits(exists bool) *fakeUnits {
 			Lock:        unlockedLock(),
 			LastRelease: workspace.NoRelease(),
 			Revision:    0,
-			Overrides:   on,
+			Overrides:   on, Origin: identity.StateOrigin{Job: "", Commit: ""},
 		},
 		exists:    exists,
 		hideOnce:  false,
@@ -111,7 +111,7 @@ func (f *fakeUnits) GetByID(ctx context.Context, _ workspace.ID) (workspace.Work
 }
 
 // Create makes the unit. A create on a unit that exists answers ErrAlreadyExists.
-func (f *fakeUnits) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+func (f *fakeUnits) Create(_ context.Context, _ workspace.Ref, _ workspace.Placement) (workspace.Workspace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -255,6 +255,11 @@ func (f *fakeUnits) WriteState(
 // fakeNamespaces answers the switches of the namespace of the unit.
 type fakeNamespaces struct{}
 
+// WritableHere returns the namespace as Get does.
+func (n fakeNamespaces) WritableHere(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return n.Get(ctx, name)
+}
+
 // Get returns the namespace with both switches on.
 func (fakeNamespaces) Get(context.Context, namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
@@ -370,6 +375,7 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -845,6 +851,7 @@ func TestLockRefusalsAreAudited(t *testing.T) {
 		Gate: nil, OnAuditFailure: nil,
 		DenialLimiter: nil,
 		StateGuard:    stategate.Off("the test keeps no gates"),
+		Placer:        testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -889,6 +896,7 @@ func TestOverrideRefusalsAreAudited(t *testing.T) {
 		Gate: nil, OnAuditFailure: nil,
 		DenialLimiter: nil,
 		StateGuard:    stategate.Off("the test keeps no gates"),
+		Placer:        testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -968,6 +976,7 @@ func TestRefusedUnlockedWriteIsAudited(t *testing.T) {
 				Gate: nil, OnAuditFailure: nil,
 				DenialLimiter: nil,
 				StateGuard:    stategate.Off("the test keeps no gates"),
+				Placer:        testPlacer(),
 			})
 			if err != nil {
 				t.Fatalf("new handler: %v", err)

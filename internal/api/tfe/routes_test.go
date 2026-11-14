@@ -274,7 +274,10 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -326,7 +329,7 @@ func (stubWorkspaces) Delete(_ context.Context, ref workspace.Ref, _ audit.Entry
 	}
 }
 
-func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Workspace, error) {
+func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref, _ workspace.Placement) (workspace.Workspace, error) {
 	if ref.Namespace.String() != "acme" {
 		return workspace.Workspace{}, namespace.ErrNotFound
 	}
@@ -354,7 +357,11 @@ func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Wo
 		ID:          workspace.ID("ws-" + name.String()),
 		Ref:         workspace.Ref{Namespace: ns, Name: name},
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }
 
@@ -465,7 +472,7 @@ func (stubWorkspaces) BeginState(
 			RestoredFrom:    "",
 			SensitiveMarks:  nil,
 			FenceBy:         "",
-			UnlockedWrite:   false,
+			UnlockedWrite:   false, Origin: identity.StateOrigin{Job: "", Commit: ""},
 		},
 	}, nil
 }
@@ -543,7 +550,7 @@ func stubStateVersion() workspace.StateVersion {
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
-		UnlockedWrite:   false,
+		UnlockedWrite:   false, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -586,8 +593,8 @@ func stubResourceState() string {
 // stubEncryptedState is a state file the client encrypted: the resources
 // hide inside the envelope, so the resource routes answer 409.
 func stubEncryptedState() string {
-	return `{"version":4,"terraform_version":"1.11.0","serial":3,"lineage":"seed-lineage",` +
-		`"encrypted_data":{"iv":"QUJD","data":"R0hJ"},"outputs":{},"resources":[]}`
+	return `{"serial":3,"lineage":"seed-lineage","meta":{},` +
+		`"encrypted_data":"x","encryption_version":"v0"}`
 }
 
 // stubResourceMarks are the kept json-state marks of the stub state: the
@@ -931,7 +938,11 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 		ID:          id,
 		Ref:         workspace.Ref{Namespace: ns, Name: parsed},
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }
 
@@ -953,7 +964,10 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -980,7 +994,10 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1009,7 +1026,10 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1769,7 +1789,7 @@ func TestErrorDocuments(t *testing.T) {
 // the 500 path stays covered now that the workspace service is required.
 type errorWorkspaces struct{}
 
-func (errorWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+func (errorWorkspaces) Create(_ context.Context, _ workspace.Ref, _ workspace.Placement) (workspace.Workspace, error) {
 	return workspace.Workspace{}, errTestInternal
 }
 
@@ -1942,7 +1962,10 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)

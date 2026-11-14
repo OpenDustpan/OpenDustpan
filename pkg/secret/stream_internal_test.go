@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -17,10 +18,10 @@ import (
 // with hmac, and AES-GCM from the cryptography package), not from this code.
 const (
 	katScopeAAD = "6f70656e6475737470616e2f7365637265742f76310061636d650073636f70652d31"
-	katSubkey   = "e56cdf46cbd82c8ef9dcd1d8fdb924d2a9a2585b6bf92d342c79ac331cbe2821"
+	katSubkey   = "26d1d015e83aa3d477c58429cc50f07a45ae3a662b7f2e43bb2e6023e51f3f2f"
 	katAAD      = "6f70656e6475737470616e2f7365637265742f76310061636d650073636f70652d31007303404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f0673762d6b6174000000000000000001"
 	katNonce    = "000000000000000000000000"
-	katCipher   = "2ae73dc69f198ecc68dfa6d136716887818b3ecf70ee783ea4a16d7596eb203d6b48"
+	katCipher   = "284379de39830200777e4eddaabc2d801d2700f1167084e0b08d3666a78b8f48437f"
 )
 
 // mustHex decodes a hex vector, failing the test on a malformed one.
@@ -75,7 +76,7 @@ func TestStreamFormatKnownAnswer(t *testing.T) {
 		t.Fatalf("scope label = %x", got)
 	}
 
-	subkey, err := deriveStreamKey(dek, salt, scope)
+	subkey, err := deriveStreamKey(dek, salt)
 	if err != nil {
 		t.Fatalf("derive stream key: %v", err)
 	}
@@ -143,6 +144,7 @@ func TestOpenLegacyStream(t *testing.T) {
 	stream = append(stream, sealed...)
 
 	reader := &openReader{
+		mu: sync.Mutex{}, closed: false, reading: false,
 		currentOnly: false,
 		dek:         bytes.Clone(dek), scope: scope, binding: nil, src: bytes.NewReader(stream),
 		aead: nil, version: 0, nonce: nil, header: nil, counter: 0,

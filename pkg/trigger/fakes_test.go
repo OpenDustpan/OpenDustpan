@@ -102,7 +102,7 @@ func (a *fakeAuthz) Authorize(_ context.Context, p identity.Principal, action id
 }
 
 func (*fakeAuthz) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 // grant allows subject to do the actions on the unit with the ID id.

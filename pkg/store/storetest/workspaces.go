@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -379,7 +380,11 @@ func newTestWorkspace(ns namespace.Namespace, name workspace.Name) workspace.Wor
 		Ref:         workspace.Ref{Namespace: ns.Name, Name: name},
 		NamespaceID: ns.ID,
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -476,7 +481,7 @@ func newPendingVersion(
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
-		UnlockedWrite:   false,
+		UnlockedWrite:   false, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -3462,7 +3467,7 @@ func newFenceVersion(t *testing.T, w workspace.Workspace, serial int64, at time.
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "admin",
-		UnlockedWrite:   false,
+		UnlockedWrite:   false, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 

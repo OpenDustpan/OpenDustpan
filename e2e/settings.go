@@ -54,7 +54,9 @@ func settingStoreOptions(st serverStore) []dustpan.Option {
 	case *sqlite.Store:
 		return []dustpan.Option{dustpan.WithSettings(s.SettingStore(), cli.SettingDeclarations(), nil)}
 	case *postgres.Store:
-		return []dustpan.Option{dustpan.WithSettings(s.SettingStore(), cli.SettingDeclarations(), nil)}
+		declarations := append(cli.SettingDeclarations(), postgres.SettingDeclarations()...)
+
+		return []dustpan.Option{dustpan.WithSettings(s.SettingStore(), declarations, nil)}
 	default:
 		return nil
 	}

@@ -63,6 +63,8 @@ func TestTofuLockInfoNamesMountedRoutes(t *testing.T) {
 func workspaceInCollection(t *testing.T, f fixture) {
 	t.Helper()
 
+	seedWebWorkspace(t, f)
+
 	if code, body := tofuDo(t, f, "LOCK", tofuLockBody); code != http.StatusOK {
 		t.Fatalf("LOCK = %d, want 200: %s", code, body)
 	}

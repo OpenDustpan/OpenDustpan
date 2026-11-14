@@ -67,6 +67,7 @@ func buildRecorderHarness(t *testing.T, db *memDB, keys *memKeyIndex, blobs blob
 			Claimer:    job.NewClaimer(db, db.durable, db, jobtest.NoGates{}),
 			Namespaces: db,
 			Domain:     db,
+			WriteState: nil,
 		},
 		Records:  db,
 		ItemKeys: keys,
@@ -258,10 +259,15 @@ type memRecords struct {
 	logs   map[string]memLogEntry
 }
 
-// memPlanEntry is the lookup row of a stored plan.
+// memPlanEntry is the lookup row of a stored plan. phase, operation and token
+// name the reserve of a plan with no part yet: only the claim that made the
+// reserve fills it.
 type memPlanEntry struct {
-	job  job.ID
-	plan job.PlanRef
+	job       job.ID
+	plan      job.PlanRef
+	phase     int
+	operation durable.ID
+	token     int64
 }
 
 // memLogEntry is the lookup row of a log version.
@@ -515,7 +521,7 @@ func (m *memDB) gatePlan(ctx context.Context, pc job.PhaseClaim) (memGate, error
 		return memGate{}, err
 	}
 
-	checkErr := job.CheckPutPlan(&next, pc.Phase, m.states[next.Spec.Unit.UnitID()])
+	checkErr := job.CheckPutPlan(&next, pc.Phase, "")
 
 	switch {
 	case checkErr == nil:
@@ -582,6 +588,16 @@ func (m *memDB) ReservePlan(ctx context.Context, pc job.PhaseClaim, np *job.NewP
 
 	next := g.next
 
+	// A repeat of a reserve returns the plan of the first one, with no second
+	// item key.
+	if e, ok := m.records.plans[np.Plan.ID]; ok {
+		if e.job != next.ID || len(e.plan.Parts) > 0 {
+			return job.PlanRef{}, fmt.Errorf("%w: plan %s is not reservable again", job.ErrConflict, np.Plan.ID)
+		}
+
+		return e.plan, nil
+	}
+
 	key, err := m.newKey(
 		ctx,
 		pc.Fence,
@@ -593,7 +609,9 @@ func (m *memDB) ReservePlan(ctx context.Context, pc job.PhaseClaim, np *job.NewP
 
 	p := np.Plan
 	p.ItemKey, p.Parts, p.StateVersion = key.ID, nil, next.Phases[pc.Phase].StateVersion
-	m.records.plans[p.ID] = memPlanEntry{job: next.ID, plan: p}
+	m.records.plans[p.ID] = memPlanEntry{
+		job: next.ID, plan: p, phase: pc.Phase, operation: pc.Claim.Operation, token: pc.Claim.Token,
+	}
 
 	return p, nil
 }
@@ -623,6 +641,8 @@ func (m *memDB) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 		return job.PlanRef{}, fmt.Errorf("%w: plan %s has parts", job.ErrConflict, p.ID)
 	case e.plan.ItemKey != p.ItemKey:
 		return job.PlanRef{}, fmt.Errorf("%w: plan %s has another item key", job.ErrInvalid, p.ID)
+	case e.phase != pc.Phase || e.operation != pc.Claim.Operation || e.token != pc.Claim.Token:
+		return job.PlanRef{}, fmt.Errorf("%w: plan %s was reserved by another phase or claim", job.ErrConflict, p.ID)
 	}
 
 	if partsErr := job.CheckPlanParts(p.Parts); partsErr != nil {
@@ -633,7 +653,9 @@ func (m *memDB) PutPlan(ctx context.Context, pc job.PhaseClaim, p job.PlanRef) (
 	plan.Parts, plan.StateVersion = p.Parts, next.Phases[pc.Phase].StateVersion
 	next.Phases[pc.Phase].Plan = &plan
 
-	m.records.plans[plan.ID] = memPlanEntry{job: next.ID, plan: plan}
+	m.records.plans[plan.ID] = memPlanEntry{
+		job: next.ID, plan: plan, phase: pc.Phase, operation: pc.Claim.Operation, token: pc.Claim.Token,
+	}
 	m.store(&next, time.Now().UTC())
 
 	return plan, nil
@@ -758,11 +780,17 @@ func (m *memDB) ArtifactNames(_ context.Context, ns namespace.Name, id job.ID) (
 		return job.ArtifactNames{}, job.ErrNotFound
 	}
 
-	out := job.ArtifactNames{Plans: []string{}, ChunkKeys: []string{}}
+	out := job.ArtifactNames{Plans: []string{}, Parts: map[string][]job.OutputKind{}, ChunkKeys: []string{}}
 
 	for planID := range m.records.plans {
-		if m.records.plans[planID].job == id {
-			out.Plans = append(out.Plans, planID)
+		if m.records.plans[planID].job != id {
+			continue
+		}
+
+		out.Plans = append(out.Plans, planID)
+
+		for _, part := range m.records.plans[planID].plan.Parts {
+			out.Parts[planID] = append(out.Parts[planID], part.Kind)
 		}
 	}
 

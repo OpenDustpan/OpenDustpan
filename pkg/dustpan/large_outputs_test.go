@@ -191,7 +191,9 @@ func prepareLargeWorkspace(
 		t.Fatalf("parse workspace name: %v", parseErr)
 	}
 
-	ws, createErr := f.base.srv.Workspaces().Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	ws, createErr := f.base.srv.Workspaces().Create(
+		ctx, workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, f.base.store, "acme"),
+	)
 	if createErr != nil {
 		t.Fatalf("create workspace: %v", createErr)
 	}
@@ -338,7 +340,9 @@ func prepareHTTPWorkspace(t *testing.T, f largeOutputsFixture) (workspace.Worksp
 		t.Fatalf("parse workspace name: %v", err)
 	}
 
-	ws, err := f.base.srv.Workspaces().Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := f.base.srv.Workspaces().Create(
+		ctx, workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, f.base.store, "acme"),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}

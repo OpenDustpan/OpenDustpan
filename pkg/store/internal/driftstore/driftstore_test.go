@@ -75,15 +75,15 @@ func unit() graph.Unit {
 func jobBody(tool, ns, unitID, purpose string) string {
 	return fmt.Sprintf(`{"spec":{"unit":{"tool":%q,"namespace":%q,"name":"network","unitID":%q},`+
 		`"operation":"refresh","purpose":%q,"executor":"runner","location":{},"steps":[],"pool":"","profile":"",`+
-		`"edits":[],"delivery":""},"phases":[]}`, tool, ns, unitID, purpose)
+		`"edits":[],"delivery":""},"phases":[],"source":"schedule"}`, tool, ns, unitID, purpose)
 }
 
 // jobRow returns a stored job of the unit that ran from epoch to epoch plus
 // ten minutes.
 func jobRow(id job.ID, state job.State, body string) jobstore.Row {
 	return jobstore.Row{
-		ID: id, Namespace: "acme", UnitID: "wsp-1", Seq: 1, State: state, Wait: "", Phase: 0, Changes: false,
-		Operation: "", Key: "", Version: 1, Body: body, CreatedMs: epoch().UnixMilli(),
+		ID: id, Namespace: "acme", NamespaceID: "", UnitID: "wsp-1", Seq: 1, State: state, Wait: "", Phase: 0,
+		Changes: false, Operation: "", Key: "", Version: 1, Body: body, CreatedMs: epoch().UnixMilli(),
 		UpdatedMs:      epoch().Add(10 * time.Minute).UnixMilli(),
 		StateChangedMs: 0,
 	}

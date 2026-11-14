@@ -137,9 +137,7 @@ func TestReadStateAtClientEncrypted(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	const encrypted = `{"encrypted_data":"c2VjcmV0"}`
-
-	if err := f.push(t, newState("lin-1", 1, encrypted), encrypted); err != nil {
+	if err := f.push(t, newState("lin-1", 1, envelope), envelope); err != nil {
 		t.Fatalf("push encrypted state: %v", err)
 	}
 
@@ -207,9 +205,7 @@ func namedFixture(t *testing.T, names inventory.Names, logErr error) (*workspace
 		t.Fatalf("lock: %v", err)
 	}
 
-	const encrypted = `{"encrypted_data":"c2VjcmV0"}`
-
-	if err := f.push(t, newState("lin-1", 1, encrypted), encrypted); err != nil {
+	if err := f.push(t, newState("lin-1", 1, envelope), envelope); err != nil {
 		t.Fatalf("push state: %v", err)
 	}
 

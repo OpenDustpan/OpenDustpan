@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/installation"
 )
@@ -61,6 +62,9 @@ type StageOptions struct {
 	// AllowDev is true when the server started with the setting that allows a
 	// dev backup in a production installation.
 	AllowDev bool
+	// RestoreAt is the time of the restore, from the clock of the restore
+	// service. A staged alert marker with a later time is corrupt.
+	RestoreAt time.Time
 }
 
 // CheckStageKind is the check that a stage call makes before it loads a row.

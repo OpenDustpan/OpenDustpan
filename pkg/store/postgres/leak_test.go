@@ -64,6 +64,10 @@ func (o ownDatabase) Run() int {
 	if tplErr := pgtest.BuildTemplate(ctx, base, template, migrateTemplate); tplErr != nil {
 		fmt.Fprintf(os.Stderr, "make the template database: %v\n", tplErr)
 
+		// The build drops the template database when it fails. The database
+		// of the test binary stays, so drop it here too.
+		dropTestDatabase(ctx, base, db.name)
+
 		return 1
 	}
 
@@ -232,6 +236,76 @@ func execOn(ctx context.Context, dbURL, stmt string) error {
 	}
 
 	return nil
+}
+
+// dropTestDatabase drops the test database name on the server of base. A
+// failure only reaches stderr: the caller decides the result. The drop ignores
+// the end of ctx, because a cleanup must run even when the build was canceled.
+func dropTestDatabase(ctx context.Context, base, name string) {
+	drop := "DROP DATABASE IF EXISTS " + pgx.Identifier{name}.Sanitize() + " WITH (FORCE)"
+	if dropErr := execOn(context.WithoutCancel(ctx), base, drop); dropErr != nil {
+		fmt.Fprintf(os.Stderr, "drop the test database %s: %v\n", name, dropErr)
+	}
+}
+
+// TestDropTestDatabaseIgnoresACanceledContext checks that the drop of the test
+// database still runs when the context of the build is canceled. A canceled
+// context must not keep the database.
+func TestDropTestDatabaseIgnoresACanceledContext(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("%s is not set", envURL)
+	}
+
+	suffix := make([]byte, 6)
+	if _, err := rand.Read(suffix); err != nil {
+		t.Fatalf("random name: %v", err)
+	}
+
+	name := "dustpan_test_drop" + hex.EncodeToString(suffix)
+
+	if err := execOn(t.Context(), base, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
+		t.Fatalf("create %s: %v", name, err)
+	}
+
+	t.Cleanup(func() { dropTestDatabase(context.Background(), base, name) })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	dropTestDatabase(ctx, base, name)
+
+	if testDatabaseExists(t, base, name) {
+		t.Fatalf("database %s stays after a drop with a canceled context", name)
+	}
+}
+
+// testDatabaseExists reports whether the database name exists on the server of
+// base.
+func testDatabaseExists(t *testing.T, base, name string) bool {
+	t.Helper()
+
+	conn, err := pgx.Connect(t.Context(), base)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	var n int
+
+	query := "SELECT count(*) FROM pg_database WHERE datname = $1"
+	if err = conn.QueryRow(t.Context(), query, name).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	return n > 0
 }
 
 // migrateTemplate opens the store at dbURL, which applies the migrations, and closes

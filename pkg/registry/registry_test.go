@@ -595,6 +595,77 @@ func checkOtherView(t *testing.T, key blob.Key) {
 	}
 }
 
+// TestAddressKey proves that a key holds one address, and that an address
+// round-trips through its key.
+func TestAddressKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  string
+		kind registry.Kind
+		want registry.Address
+		ok   bool
+	}{
+		{"provider", "payments", registry.KindProvider, addr(registry.KindProvider, "payments", ""), true},
+		{"module", "vpc/aws", registry.KindModule, addr(registry.KindModule, "vpc", "aws"), true},
+		{
+			"module name with a dash", "vpc-core/gcp", registry.KindModule,
+			addr(registry.KindModule, "vpc-core", "gcp"), true,
+		},
+		{"first page", "", registry.KindProvider, addr(registry.KindProvider, "", ""), true},
+		{"module key with no system", "vpc", registry.KindModule, addr(registry.KindModule, "", ""), false},
+		{"module key with an empty system", "vpc/", registry.KindModule, addr(registry.KindModule, "", ""), false},
+		{"provider key with a slash", "a/b", registry.KindProvider, addr(registry.KindProvider, "", ""), false},
+		{"upper case name", "Payments", registry.KindProvider, addr(registry.KindProvider, "", ""), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := registry.ParseAddressKey("acme", tt.kind, tt.key)
+			if !tt.ok {
+				if !errors.Is(err, registry.ErrInvalid) {
+					t.Fatalf("ParseAddressKey(%q) = %v, want ErrInvalid", tt.key, err)
+				}
+
+				return
+			}
+
+			if err != nil || got != tt.want {
+				t.Fatalf("ParseAddressKey(%q) = %+v, %v, want %+v", tt.key, got, err, tt.want)
+			}
+
+			if key := registry.AddressKey(got); key != tt.key {
+				t.Fatalf("AddressKey(%+v) = %q, want %q", got, key, tt.key)
+			}
+		})
+	}
+}
+
+// TestCompareAddresses proves that the order is by name, then by system, and
+// that it holds for modules that share a name.
+func TestCompareAddresses(t *testing.T) {
+	t.Parallel()
+
+	ordered := []registry.Address{
+		addr(registry.KindModule, "net", "aws"),
+		addr(registry.KindModule, "payments", "aws"),
+		addr(registry.KindModule, "payments", "gcp"),
+		addr(registry.KindModule, "payments-core", "aws"),
+	}
+
+	for i, a := range ordered {
+		for j, b := range ordered {
+			got := registry.CompareAddresses(a, b)
+			if (i < j && got >= 0) || (i == j && got != 0) || (i > j && got <= 0) {
+				t.Errorf("CompareAddresses(%v, %v) = %d", a, b, got)
+			}
+		}
+	}
+}
+
 func TestCompareVersions(t *testing.T) {
 	t.Parallel()
 

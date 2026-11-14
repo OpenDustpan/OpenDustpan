@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -28,8 +29,18 @@ func TestStoreCheckConformance(t *testing.T) {
 	storetest.RunStoreChecks(t, func(t *testing.T) storetest.StoreCheckStore {
 		t.Helper()
 
-		st := open(t)
+		st := openBackup(t)
 
-		return storetest.StoreCheckStore{Records: st, Ops: st.DurableOperationsPort()}
+		records, ok := st.(storecheck.Records)
+		if !ok {
+			t.Fatal("the store keeps no store checks")
+		}
+
+		witness, ok := st.(storetest.NullEndedWitness)
+		if !ok {
+			t.Fatal("the store has no raw end-time reader")
+		}
+
+		return storetest.StoreCheckStore{Records: records, Ops: st.DurableOperationsPort(), Witness: witness}
 	})
 }

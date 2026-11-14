@@ -99,7 +99,7 @@ func TestMixedVersion(t *testing.T) {
 		}
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -227,7 +227,7 @@ func TestMixedVersionBelowMinimum(t *testing.T) {
 		t.Fatal("the mixed-version test needs E2E_SERVER=binary (run make mixed-version-test)")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {

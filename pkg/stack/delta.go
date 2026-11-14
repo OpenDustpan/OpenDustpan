@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -75,6 +76,7 @@ func (s *Updates) SaveCheckpointDelta(
 		digest: save.digest,
 		prev:   save.prev,
 		key:    save.key,
+		origin: save.origin,
 		blobs:  save.blobs,
 	})
 	if err != nil {
@@ -107,7 +109,10 @@ type deltaCommit struct {
 	digest  [sha256.Size]byte
 	prev    *Checkpoint
 	key     blob.Key
-	blobs   *scopedBlobs
+	// origin is the writer of the state version that the save publishes: the
+	// one of the update.
+	origin identity.StateOrigin
+	blobs  *scopedBlobs
 }
 
 // deltaSave checks the lease and the validity rules of a delta and returns
@@ -153,6 +158,7 @@ func (s *Updates) deltaSave(
 		prev:    prev,
 		in:      in,
 		want:    want,
+		origin:  u.Origin(),
 		blobs:   bl,
 	}
 
@@ -242,6 +248,7 @@ type deltaPending struct {
 	prev    *Checkpoint
 	in      DeltaInput
 	want    []byte
+	origin  identity.StateOrigin
 	blobs   *scopedBlobs
 }
 
@@ -276,6 +283,7 @@ func (s *Updates) applyDelta(ctx context.Context, pending deltaPending) ([]byte,
 		digest:  digest,
 		prev:    pending.prev,
 		key:     key,
+		origin:  pending.origin,
 		blobs:   pending.blobs,
 	}, nil
 }
