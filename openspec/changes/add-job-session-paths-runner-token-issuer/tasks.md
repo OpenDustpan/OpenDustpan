@@ -4,12 +4,12 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write failing cases for make at claim, unit check, end on job end, expiry, step grace bound, takeover, retire, renew and loss of grants. Check: go test ./pkg/jobtoken/... -count=1
-- [ ] 1.2 Write failing store cases for one live token per claim, a race of two claims, a retry of a claim and a rollback. Check: go test ./pkg/store/... -run TestJobToken on SQLite and PostgreSQL
+- [ ] 1.1 Write failing cases for make at claim, unit check, end on job end, expiry, step grace bound, takeover, retire, renew and loss of grants in `pkg/jobtoken/issuer_test.go` (NEW). Check: go test ./pkg/jobtoken/... -count=1
+- [ ] 1.2 Write failing store cases for one live token per claim, a race of two claims, a retry of a claim and a rollback in `pkg/store/jobtoken_test.go` (NEW). Check: go test ./pkg/store/... -run TestJobToken on SQLite and PostgreSQL
 
 ## 2. Build
 
-- [ ] 2.1 Implement the issuer with hash storage, unit-limited checks and the step grace expiry. Check: go test ./pkg/jobtoken/... -count=1
+- [ ] 2.1 Implement the issuer with hash storage, unit-limited checks and the step grace expiry in `pkg/jobtoken/issuer.go` (NEW). Check: go test ./pkg/jobtoken/... -count=1
 
 ## 3. Side effects (computed from main)
 

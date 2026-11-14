@@ -4,16 +4,16 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add Sessions conformance cases: other credential, ended session, limit, sweep, fence, Put and Get. Check: `go test ./pkg/profile/profiletest -run TestSessions -count=1` fails on main
-- [ ] 1.2 Add table tests for merge, null removal, final, failed check, Expr and marks. Check: `go test ./pkg/profile/... -count=1`
-- [ ] 1.3 Add a test that $neverStore on a plain value saves. Check: `go test ./pkg/profile -run TestNeverStore -count=1`
+- [ ] 1.1 Add Sessions conformance cases: other credential, ended session, limit, sweep, fence, Put and Get, in NEW file pkg/profile/profiletest/sessions.go (NEW TestSessions). Check: `go test ./pkg/profile/profiletest -run TestSessions -count=1` fails on main
+- [ ] 1.2 Add table tests for merge, null removal, final, failed check, Expr and marks, in NEW file pkg/profile/open_test.go. Check: `go test ./pkg/profile/... -count=1`
+- [ ] 1.3 Add a test that $neverStore on a plain value saves, in NEW file pkg/profile/document_check_test.go (NEW TestNeverStore). Check: `go test ./pkg/profile -run TestNeverStore -count=1`
 
 ## 2. Build
 
-- [ ] 2.1 Implement Service.Open, the save fix in document_check.go, mode refusal and provider refusal. Check: `go test ./pkg/profile/... -count=1`
-- [ ] 2.2 Add SQL adapters for Sessions in both dialects, sealed with the root key, out of backups, with Sweep. Check: `go test ./pkg/store/... -count=1` and TestFrozenMigrations pass
-- [ ] 2.3 Wire both NEW routes with actions and replay. Check: `go test ./internal/api/profile/... -run TestRoutes -count=1` with %2F cases
-- [ ] 2.4 Write the access audit entry for each open and refused open. Check: `go test ./pkg/audit/... -count=1`
+- [ ] 2.1 Implement NEW Service.Open in NEW file pkg/profile/open.go, the save fix in pkg/profile/document_check.go, mode refusal and provider refusal. Check: `go test ./pkg/profile/... -count=1`
+- [ ] 2.2 Add NEW SQL adapters for the NEW Sessions port in both dialects, in NEW file pkg/store/internal/profilesessionstore/profilesessionstore.go, sealed with the root key, out of backups (pkg/backup/coverage.go:76), with Sweep. Check: `go test ./pkg/store/... -count=1` and TestFrozenMigrations pass
+- [ ] 2.3 Wire both NEW routes with actions and replay. The declaration file is internal/api/profile/routes.go (NEW) and the adapter file is internal/api/profile/open.go (NEW). Check: `go test ./internal/api/profile/... -run TestRoutes -count=1` with %2F cases
+- [ ] 2.4 Write the access audit entry for each open and refused open, with the NEW kind access in pkg/audit/audit.go. Check: `go test ./pkg/audit/... -count=1`
 
 ## 3. Side effects (computed from main)
 
