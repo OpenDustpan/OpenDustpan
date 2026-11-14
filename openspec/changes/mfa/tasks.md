@@ -6,6 +6,7 @@
 
 - [ ] 1.1 Write failing test for a pending sign-in on local password. Check: TestMfaLocalPasswordNeedsSecondFactor fails on main.
 - [ ] 1.2 Write failing test for a stale step on token creation. Check: TestMfaFreshStepForTokenAndReveal fails on main.
+- [ ] 1.3 Write failing test for VerifySecondFactor (NEW) with a replayed code. Check: TestVerifySecondFactorRefusesReplay fails on main.
 
 ## 2. Side effects (computed from main)
 

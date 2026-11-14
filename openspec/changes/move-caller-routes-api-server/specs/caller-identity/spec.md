@@ -70,7 +70,7 @@ When the caller sends DELETE /api/dustpan/v1/me/tokens/{id} for an own token, th
 
 ### Requirement: Old paths gone
 
-The server SHALL answer 404 from the router for each /api/server/caller path.
+The server SHALL answer 404 from the router for each path under /api/server/caller/access, /api/server/caller/grants and /api/server/caller/tokens.
 
 #### Scenario: Call old path
 - **WHEN** the caller sends a request to /api/server/caller/access

@@ -23,3 +23,15 @@ While built-in MFA is on, when the last MFA step is older than the window, the s
 #### Scenario: Stale step
 - **WHEN** the step is older than the window
 - **THEN** the server answers 403 and creates no token
+
+### Requirement: verify-second-factor
+
+When a person gives a second factor for a pending sign-in, the server SHALL accept a TOTP code through VerifySecondFactor (NEW) one time only.
+
+#### Scenario: Valid code
+- **WHEN** a person gives a valid TOTP code for a pending sign-in
+- **THEN** VerifySecondFactor issues a session
+
+#### Scenario: Replayed code
+- **WHEN** a person gives a TOTP code that the server already accepted
+- **THEN** VerifySecondFactor refuses it and issues no session

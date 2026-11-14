@@ -8,6 +8,7 @@
 - [ ] 1.2 Add failing audit tests (NEW) for refused and accepted changes, audit failure and local-source retention. Check: `go test ./pkg/principal -run TestIdentityProviderAudit -count=1` (NEW test) fails on main.
 - [ ] 1.3 Add failing route tests for server:manage-sign-in and the fresh step. Check: `go test ./internal/api/... -run TestIdpConfigAction -count=1` (NEW test) fails on main.
 - [ ] 1.4 Add a failing race test (NEW) for a concurrent group close or trust change. Check: `go test ./pkg/principal -run TestIdentityProviderRace -count=1` (NEW test) fails on main.
+- [ ] 1.5 Add failing tests (NEW) for an atomic SCIM PATCH and a per-operation Bulk status. Check: `go test ./pkg/principal -run TestScimBatchRules -count=1` (NEW test) fails on main.
 
 ## 2. Implementation
 

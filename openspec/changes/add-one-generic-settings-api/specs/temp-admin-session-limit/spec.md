@@ -30,7 +30,7 @@ When the session limit setting changes, the server SHALL apply the new limit to 
 
 ### Requirement: Range
 
-If a patch sets the session limit outside 1 minute to 24 hours, then the server SHALL refuse it with a 422.
+If a patch sets the session limit above 24 hours or below 1 millisecond, then the server SHALL refuse it with a 422.
 
 #### Scenario: Out of range
 - **WHEN** a patch sets the limit to 25 hours

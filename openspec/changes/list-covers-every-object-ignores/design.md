@@ -5,6 +5,7 @@ A scope with All set cannot name refused namespaces, so lists show namespaces th
 ## Decisions
 
 1. **Exclusion list on the scope.** The scope gets an unexported excluded-namespaces field. Only a constructor makes it; the constructor drops the list when All is false and sorts and dedupes names. The gate fills it per request.
+2. **Paged read.** NamespacesWithList returns one page of at most 200 names (default 50) and the gate reads every page. No call refuses for size.
 
 ## Structure
 
@@ -53,13 +54,10 @@ flowchart LR
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
 | Untrusted client to server | I | A client outside the allowlist learns the name of a namespace from a list. | boundary check | The gate resolves the client address and checks it against each namespace allowlist | Request with a spoofed forwarded header from an untrusted peer is judged by the TCP peer |
+| Untrusted client to server | I | A client outside the allowlist learns the name of a namespace from a list. | encode or contain | The exclusion names go to the store as placeholders in a NOT IN clause, in chunks | Namespace name with SQL text in the exclusion list on sqlite and postgres changes no other row |
+| Untrusted client to server | I | A client outside the allowlist learns the name of a namespace from a list. | limit | Paged read of at most 200 names for each page | Conformance rows at 200 names and one past it still list with exclusions |
 | Untrusted client to server | I | A client outside the allowlist learns the name of a namespace from a list. | authorize at point of use | The gate puts each refusing namespace in the exclusion list | Admin list from a refused address leaves out the namespace |
 | Untrusted client to server | I | A client outside the allowlist learns the name of a namespace from a list. | fail closed | A failed NamespacesWithList read denies the list | Gate with a failing NamespacesWithList gives an error |
-| Server to store | E | A consumer ignores the exclusion list and shows objects of a refused namespace. | encode or contain | NOT IN clause with placeholders in both dialects | Filter test with a refused namespace on sqlite and postgres |
-| Server to store | E | A consumer ignores the exclusion list and shows objects of a refused namespace. | limit | Bound on the number of names that NamespacesWithList returns | Conformance rows at the limit and one past it |
-| Server to store | E | A consumer ignores the exclusion list and shows objects of a refused namespace. | boundary check | The scope constructor drops the list when All is false and dedupes names | Constructor test with a hostile list and All false |
-| Server to store | E | A consumer ignores the exclusion list and shows objects of a refused namespace. | authorize at point of use | Each consumer applies the list when it reads objects | Conformance check that lists must be within Authorize for a scope with exclusions |
-| Server to store | E | A consumer ignores the exclusion list and shows objects of a refused namespace. | fail closed | A consumer that gets an unknown or oversized list returns an error | Consumer test with a list past the bound gives an error |
 
 ## Failure modes
 

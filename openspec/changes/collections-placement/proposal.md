@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:195` (Collections and placement).
@@ -54,7 +54,6 @@ Out of scope:
 Depends on:
 
 - groups-roles-grants
-- `groups-roles-grants` (order of the milestone review)
 
 ## Usability
 
