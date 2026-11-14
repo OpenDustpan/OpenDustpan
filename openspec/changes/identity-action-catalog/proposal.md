@@ -27,11 +27,11 @@ way. Some actions stay without a family on purpose, until their routes land.
   own.") holds 125 constants (`grep -c 'Action = "' pkg/identity/identity.go`
   gives 125). Go cannot list the constants of a block at run time, so no test
   can compare the family table with them today without reading the source.
-- **The uses of an action in a constant context.** `rg -n "const .*identity\.Action"`
-  gives three: `pkg/trigger/saver.go:32`, `:35` and
-  `internal/agent/actions.go:66`. `rg -n "case identity\.Action"` gives two
-  `case` lines in `internal/api/server/githost_fixture_test.go:60` and `:64`;
-  a `case` may name a variable.
+- **Constants stay constants.** An exported package variable could be
+  reassigned by any importing package (`identity.ActionJobApprove = "..."`),
+  which is worse for an authorization type than a missing table entry. The
+  actions therefore stay constants, and the catalog is a table of those
+  constants.
 
 ## ADR check
 
@@ -48,8 +48,9 @@ way. Some actions stay without a family on purpose, until their routes land.
   rule.
 - ADR 364 (owner): "Prefer unexported fields with a constructor that checks
   the invariants ... Do not add a custom check or a new tool." The catalog is
-  complete by construction (an unexported registry that only the declaration
-  of an action fills), not by a scan of the source.
+  an unexported array next to the constants, and nothing reads the source.
+  No exported value becomes mutable: the constants stay constants, and
+  `Actions()` returns a copy.
 - ADR 272 decision 4: `pkg/identity` is SDK. The change adds one exported
   function, `identity.Actions()`, which returns a copy. No tag of OpenDustpan
   exists, so the SDK surface may change (ADR 73).
@@ -58,35 +59,43 @@ way. Some actions stay without a family on purpose, until their routes land.
 
 ## Fix boundary
 
-- `pkg/identity`: each core action is declared through one unexported
-  function that records it in an unexported registry:
-  `ActionNamespaceRead = define("namespace:read")`. The actions become
-  package variables of type `Action`, so the registry is complete by
-  construction. `identity.Actions() []Action` returns a sorted copy. `define`
-  panics on a value that is empty, not of the form `area:verb`, or recorded
-  twice; the package tests prove each case.
-- The three constant declarations that name an action
-  (`pkg/trigger/saver.go:32`, `:35`, `internal/agent/actions.go:66`) become
-  variables.
+- `pkg/identity/identity.go`: the 125 action constants stay constants. Right
+  after their block, in the same file, an unexported array
+  `var catalog = [...]Action{ActionNamespaceRead, ...}` lists each of them
+  once, in the order of the block. `identity.Actions() []Action` returns a
+  sorted copy of it, so no caller can change the catalog.
+- The residual risk: a new constant that the author does not add to the
+  table. The table sits in the same file, directly after the block, so the
+  diff of a new action shows both places to the reviewer. No test reads the
+  source to close this gap (ADR 364); the comment above the block says that
+  each new action goes into the table too.
 - `pkg/access`: a test walks `identity.Actions()` and fails for an action
   that is neither in the family table (`access.FamilyOf`) nor on the list of
   `TestActionsWithoutRoutesAreUnclassified`, which moves to one variable in
-  the test file so that both tests read it. It also fails for
-  an action that is on that list and has a family.
-- No change of a family, a role, a route or a refusal.
+  the test file so that both tests read it. It also fails for an action that
+  is on that list and has a family.
+- No change of a family, a role, a route or a refusal, and no exported value
+  becomes mutable.
 
 ## Check
 
 `go test ./pkg/identity/... ./pkg/access/...` passes; removing one job action
 from the family table makes the new test fail and name it.
 
-Open questions: none. Considered:
-- Constants or variables? Variables: Go cannot enumerate constants, and a
-  registry filled by the declaration is the structure that makes a missing
-  entry impossible (ADR 364). Five uses in constant or `case` positions work
-  as variables (the evidence above lists them).
+## Open questions
+
+None. Considered:
+- Constants or variables? Constants. A registry that variables fill would be
+  complete by construction, but it would make every action string
+  reassignable from any importing package, a worse bug class for an
+  authorization type. The table next to the constants keeps every value
+  immutable, and its one residual risk (a constant missing from the table) is
+  visible in the diff of the change that adds the constant.
+- A check that reads the source to compare the table with the block? No: ADR
+  364 rules out a custom check, and the test of `pkg/access` already catches
+  the case that hurts (an action in the table without a family).
 - Adapter actions? The comment at `pkg/identity/identity.go:158` lets adapters
-  define their own; they are not core actions and stay out of the registry.
+  define their own; they are not core actions and stay out of the catalog.
 - Where does the unclassified list live? In the test file of `pkg/access`,
   next to `TestActionsWithoutRoutesAreUnclassified`, as today; a feature moves
   its actions off the list when its routes land.
