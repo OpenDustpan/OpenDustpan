@@ -1,7 +1,7 @@
 # jobs Specification
 
 ## Purpose
-TBD - created by archiving change one-state-version-source. Update Purpose after archive.
+The jobs capability covers the runner jobs of a unit: their phases, the plan that a job applies, and the check that refuses to apply a plan when the state of the unit changed after the plan. The server reads one stored state version of each unit for that check, and it writes that version in the same transaction as each state write of each tool.
 
 ## Requirements
 
