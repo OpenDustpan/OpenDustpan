@@ -42,7 +42,7 @@ When a caller repeats an open with the same Idempotency-Key, the server SHALL an
 
 ### Requirement: Store a session
 
-When an open with the consumer api, console or pulumi succeeds, the server SHALL Put one open session sealed with the data key of the root profile.
+When an open with the consumer api, console or pulumi succeeds, the server SHALL store one open session sealed with the data key of the root profile.
 
 #### Scenario: Put one session
 - **WHEN** a principal opens with the consumer api
@@ -50,4 +50,4 @@ When an open with the consumer api, console or pulumi succeeds, the server SHALL
 
 #### Scenario: Limit
 - **WHEN** a principal has 100 live sessions and opens again
-- **THEN** the open fails with the limit and Put stores nothing
+- **THEN** the open fails with the limit and nothing is stored

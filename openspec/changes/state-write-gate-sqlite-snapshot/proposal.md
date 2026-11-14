@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Issue: #1283.
@@ -62,12 +62,13 @@ No ADR is touched.
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Record why no e2e step applies." runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part>".
+none
 
 Questions considered and answered:
 
 - Does this change need a wider gate or store redesign? No. The issue lists three small follow-ups. The gated write stays unchanged.
 - Does this change conflict with an ADR? No. The pack adrs list is empty, so adr_check is empty.
 - Should the Postgres GetDeletedUnitFacts path change? No. The issue names only SQLite. Both dialects keep the same logical rows.
+- Does an e2e step apply? No. The pack names no existing route and credential kind that reads deleted-unit facts: the fact read runs inside the state write path and has no route of its own. The e2e step is BLOCKED by the missing route; the store tests cover the read.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

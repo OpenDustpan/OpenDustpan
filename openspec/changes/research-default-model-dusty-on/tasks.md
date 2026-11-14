@@ -4,7 +4,7 @@
 
 ## 1. Research note
 
-- [ ] 1.1 Write the failing check first: the note file does not exist on main. Check: `ls docs/research/dusty-hosted-default-model.md` fails before the change.
+- [ ] 1.1 Write the failing check first: the NEW note file docs/research/dusty-hosted-default-model.md does not exist on main yet. Check: `ls docs/research/dusty-hosted-default-model.md` fails before the change.
 - [ ] 1.2 Add the new file docs/research/dusty-hosted-default-model.md with the scored table, sources and access dates, and quality marked untested. Check: `rg -n "accessed|untested" docs/research/dusty-hosted-default-model.md` lists them.
 - [ ] 1.3 Add the decision rule, conflict rule, no-pinning rule and review date 2027-05-14 with refresh owner. Check: `rg -n "decision rule|2027-05-14|contested|region pinning" docs/research/dusty-hosted-default-model.md` lists them.
 

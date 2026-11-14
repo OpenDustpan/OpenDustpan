@@ -1,14 +1,14 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first; record each difference in the pull request body. Read each fact of "What main already does" at its file, line and function on the current main. Do not edit design.md or proposal.md during the implementation. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Conformance cases for namespace cover and join-leave. Check: TestManuallockNamespaceCover fails on main
-- [ ] 1.2 Dispatch tests for wait, running phase, timeout and release. Check: TestDispatchWaitsWithReasonLocked fails on main
-- [ ] 1.3 Job-token tests for OpenTofu lock and Pulumi update start with race cases. Check: TestToolLockWithPreLockJobToken fails on main
-- [ ] 1.4 Bulk route tests with mixed, duplicate and over-limit cases. Check: TestBulkLockPerItem fails on main
-- [ ] 1.5 Import-hold preview test. Check: TestPreviewUnderImportHold fails on main
+- [ ] 1.1 Conformance cases for namespace cover and join-leave in pkg/manuallock/manuallocktest/suite.go. Check: TestManuallockNamespaceCover fails on main
+- [ ] 1.2 Dispatch tests for wait, running phase, timeout and release in the NEW file pkg/manuallock/dispatch_test.go. Check: TestDispatchWaitsWithReasonLocked fails on main
+- [ ] 1.3 Job-token tests for OpenTofu lock and Pulumi update start with race cases in pkg/manuallock/manuallock_test.go. Check: TestToolLockWithPreLockJobToken (NEW, in pkg/manuallock/manuallock_test.go) fails on main
+- [ ] 1.4 Bulk route tests with mixed, duplicate and over-limit cases in the NEW file pkg/manuallock/bulk_test.go. Check: TestBulkLockPerItem fails on main
+- [ ] 1.5 Import-hold preview test in the NEW file pkg/manuallock/importhold_test.go. Check: TestPreviewUnderImportHold fails on main
 
 ## 2. Side effects (computed from main)
 

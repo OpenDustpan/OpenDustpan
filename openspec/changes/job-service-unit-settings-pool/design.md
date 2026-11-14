@@ -5,9 +5,10 @@ The planner reads pool, code location, profile reference and steps from the unit
 ## Decisions
 
 1. **Settings resolution with snapshot.** Order: request override, unit settings, namespace defaults, refusal. Resolved inputs freeze on the job at start. A job with a deleted pool stays queued.
-2. **Read check at each read.** The output-read handler calls OutputReadCheck.Allow for a job with a trigger, after check 1. Any error denies. The check uses unit:read-outputs of the run-as principal and of the manual-fire caller.
-3. **Stable profile reference.** Settings hold the profile stable ID, never its name. A removed profile fails the next start closed. Only the reference is stored here.
+2. **Read check at each read.** The output-read handler calls OutputReadCheck.Allow for a job with a trigger, after check 1. Any error denies.
+3. **Stable profile reference.** Settings hold the profile stable ID, never its name. A removed profile fails the next start closed.
 4. **No widening of the start grant.** A trigger start holds the plan start grant only. It carries a stored location and checks no override action.
+5. **Roles.** The actions map onto the existing roles of pkg/access as the owner decided. No new role is added.
 
 ## Structure
 
@@ -53,6 +54,13 @@ participant A as admin
 participant P as planner
 A->>P: save settings
 P->>P: resolve and queue
+```
+
+Modules that the change touches, and their imports on main:
+
+```mermaid
+flowchart LR
+P1[pkg/access]
 ```
 
 States and transitions after this change:

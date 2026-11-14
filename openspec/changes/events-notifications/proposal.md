@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:310` (Events and notifications).
@@ -67,7 +67,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Block test exists for sink URL guard. (`pkg/logsink/webhook/webhook_test.go:52 (TestWebhookSinkRefusesBlockedURL)`)
-- Built-in roles hold the notification action. (`pkg/access/access_test.go:1681 (TestBuiltInRolesHoldTheNotificationAction)`)
+- Built-in roles hold the notification action. (`pkg/access/access_test.go:1690 (TestBuiltInRolesHoldTheNotificationAction)`)
 - Subscription error codes are covered. (`internal/api/notifications/errcode_test.go:146 (TestSubscriptionErrorsHaveCodes)`)
 - Expiry warning of an ended token is covered. (`pkg/accesstoken/accesstoken_test.go:1413 (TestExpiryWarningOfAnEndedToken)`)
 

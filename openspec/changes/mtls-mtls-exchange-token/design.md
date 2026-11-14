@@ -7,7 +7,7 @@ The exchange is security code on an external TLS endpoint. It fails closed.
 1. **Verified chain value only.** The service takes an opaque verified-chain value from the TLS layer and never reads headers for a chain.
 2. **Single enabled rule match.** Match picks at most 1 enabled rule for each exchange call, by bundle ID and exact SPIFFE ID; 0 or 2 or more matches refuse.
 3. **Stored issue.** Match check and issue share one transaction. Revoke uses the service-token revoke routes.
-4. **Own kind.** The token has the kind `mtls-exchange` (ADR 371 decision 2). The constant `KindMTLSExchange` sits next to the other kinds in `pkg/accesstoken`. The credential stays `trust-token`.
+4. **Own kind.** The token has the kind `mtls-exchange` (ADR 371 decision 2). The constant `KindMTLSExchange` (NEW) sits next to the other kinds in `pkg/accesstoken`. The credential stays `trust-token`.
 
 ## Structure
 

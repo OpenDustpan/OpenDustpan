@@ -4,10 +4,10 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing report tests for one summary check, three unit checks and one edited comment. Check: reviewrequesttest report cases fail on main.
-- [ ] 1.2 Write failing Forge conformance cases for the check method. Check: forgetest check cases fail on main.
-- [ ] 1.3 Write failing renderer and summary tests: pending, failed, no change, zero units, stale head, Git host error, deleted comment, duplicate marker, foreign marker, long list. Check: renderer table test fails on main.
-- [ ] 1.4 Write failing timing tests across three levels, with an unset level, a later forbid, a bad value and audit entries. Check: unitsettings timing matrix test fails on main.
+- [ ] 1.1 Write failing report tests for one summary check, three unit checks and one edited comment in pkg/reviewrequest/report_test.go (NEW). Check: reviewrequesttest report cases fail on main.
+- [ ] 1.2 Write failing Forge conformance cases for the check method in pkg/forge/github/review_test.go (the Forge interface is at pkg/forge/forge.go:214). Check: forgetest check cases fail on main.
+- [ ] 1.3 Write failing renderer and summary tests in pkg/reviewrequest/render_test.go (NEW): pending, failed, no change, zero units, stale head, Git host error, deleted comment, duplicate marker, foreign marker, long list. Check: renderer table test fails on main.
+- [ ] 1.4 Write failing timing tests in pkg/unitsettings/timing_test.go (NEW) across three levels, with an unset level, a later forbid, a bad value and audit entries. Check: unitsettings timing matrix test fails on main.
 
 ## 2. Definition of done
 

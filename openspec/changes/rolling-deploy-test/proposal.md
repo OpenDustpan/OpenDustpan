@@ -1,0 +1,82 @@
+---
+version: 1
+---
+
+Roadmap: `docs/roadmap.md:466` (Test rolling deploy with mixed version pool.).
+
+## Why
+
+**Persona: operator.** An operator tries to deploy a new release instance by instance while teams keep running tofu apply and pulumi up. Without this test there is no proof that mixed versions stay safe and that old writes stop with a clear error.
+
+The user path this change must make work:
+
+1. **Server start.** Start three opendustpan serve binaries of one installation on PostgreSQL with S3 blobs behind round-robin TLS proxy
+2. **E2e.** Run tofu apply and pulumi up loops through proxy while replacing each binary one at a time
+3. **API.** Read proxy record and instance list to confirm each instance served each tool with zero failed commands
+
+Errors the person may hit, and the one command that helps:
+
+| Error | What the answer says | The command that helps |
+| --- | --- | --- |
+| Old binary write refused during mixed version pool | Server answers error code schema.binary-below-minimum with a clear version message. No write commits. Loop retries on another instance. Check with `GET /api/server/instances`. | `GET /api/server/instances` |
+| Request hits draining instance during replace | Proxy health check marks the draining instance unhealthy. Requests go to the next healthy instance. Check with `curl -k https://<proxy>/health/ready`. | `curl -k https://<proxy>/health/ready` |
+
+Evidence for the claims above:
+
+- A mixed version test target exists on main. Proof: Makefile:309
+- Main defines the schema below-minimum error code. Proof: internal/errcode/catalog_schema.go:8
+- Main checks the drain period in health. Proof: pkg/dustpan/health.go:493 (func checkDrainPeriod)
+- Main lists server instances. Proof: route table or API description for ANY /api/server/instances
+
+## What Changes
+
+- Add rolling deploy exit-test step with three binaries behind round-robin TLS proxy.
+- Run tofu apply and pulumi up loops with no failed command during one-at-a-time replace.
+- Fake contract migration with test-only minimum row write in test setup; use version check and drain from earlier parts.
+- Add no new server logic.
+
+Out of scope:
+
+- Version rows and minimum version check on write path
+- Graceful drain with 503 and claim release
+- Helm chart replicas and real contract migrations
+- Docs page with measured recovery figures
+
+Depends on:
+
+- rolling-deploy-version-minimum-check
+- rolling-deploy-graceful-drain-release
+- `rolling-deploy-graceful-drain-release` (the part before it in the split)
+
+## Usability
+
+Where the path still costs the person time or surprises them:
+
+- Operator must find which instance served each request from proxy record; record format must stay stable and machine readable.
+
+## What main already does
+
+Each fact names its file, line and function on main. The change specifies only the difference.
+
+- health checks the drain period (`pkg/dustpan/health.go:493 (func checkDrainPeriod)`)
+- store test refuses version zero in the journal suite (`pkg/store/storetest/journal.go:210 (func testJournalRefusesVersionZero)`)
+- store test refuses a bad version in the portable stage suite (`pkg/store/storetest/portable.go:279 (func testPortableStageRefusesVersion)`)
+- job service defines tofu apply steps (`pkg/dustpan/jobservice.go:846 (func tofuApplySteps)`)
+
+## ADR check
+
+Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+
+No ADR is touched.
+
+## Open questions
+
+none
+
+Questions considered and answered:
+
+- Does this change add server logic for version checks or drain? No. This part adds no server logic. Version refusal and drain ship in rolling-deploy-version-minimum-check and rolling-deploy-graceful-drain-release.
+- What pool and load does the rolling deploy step use? Three serve binaries behind a round-robin TLS proxy, with tofu apply and pulumi up loops. Contract migration is faked by a test-only minimum-version row write inside the test setup, with no server code.
+- How do refused old-binary writes fit zero failed commands? No. Refused writes are retried inside the loop. Zero failed commands means every CLI command exits 0 after retry, not zero refused writes.
+
+Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

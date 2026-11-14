@@ -6,7 +6,7 @@ The tool step needs a credential that acts as the starter on one unit and stops 
 
 1. **Issuer behind the claim.** The issuer stores the token hash, job ID, stable unit ID, claim ID and expiry in the claim transaction.
 2. **End in the same transaction.** Finish, takeover and retire end the token rows in the same transaction as their own write.
-3. **Routes.** The token is accepted on the Pulumi Cloud-compatible state routes and the OpenTofu HTTP backend route of its unit. It is refused on the REST API and on other units.
+3. **Routes.** The token is accepted on the state routes of its unit. It is refused on the REST API and on other units.
 4. **JobID only on job tokens.** Principal.JobID is set only when the credential is CredentialJobToken.
 
 ## Structure

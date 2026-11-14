@@ -4,15 +4,15 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing test that a denied output read writes SourceIP, UserAgent and RequestID. Check: TestDenialEntryHasRequestFields fails on main, passes after the fix, and covers the 403 no-rule case, the 409 client-encrypted case and the empty-fields case.
-- [ ] 1.2 Add failing test that a flood of refused output reads stops after the recorder budget while reads stay refused. Check: TestDenialFloodIsLimited fails on main, passes after the fix, and covers the flood-stop scenario with reads still refused.
-- [ ] 1.3 Add failing tests that a limiter drop and any other audit-append failure still refuse the read. Check: TestDroppedDenialStaysRefused and TestDenialAppendFailureStaysRefused fail on main and pass after the fix.
-- [ ] 1.4 Add failing test that an allowed read after a sharing rule returns outputs with no denial entry. Check: TestAllowedReadWritesNoDenial fails on main and passes after the fix.
+- [ ] 1.1 Add failing test in NEW file internal/outputsharesvc/denial_fields_test.go that a denied output read writes SourceIP, UserAgent and RequestID. Check: TestDenialEntryHasRequestFields fails on main, passes after the fix, and covers the 403 no-rule case, the 409 client-encrypted case and the empty-fields case.
+- [ ] 1.2 Add failing test in NEW file internal/outputsharesvc/denial_flood_test.go that a flood of refused output reads stops after the recorder budget while reads stay refused. Check: TestDenialFloodIsLimited fails on main, passes after the fix, and covers the flood-stop scenario with reads still refused.
+- [ ] 1.3 Add failing tests in NEW file internal/outputsharesvc/denial_failclosed_test.go that a limiter drop and any other audit-append failure still refuse the read. Check: TestDroppedDenialStaysRefused and TestDenialAppendFailureStaysRefused fail on main and pass after the fix.
+- [ ] 1.4 Add failing test in NEW file internal/outputsharesvc/denial_allowed_test.go that an allowed read after a sharing rule returns outputs with no denial entry. Check: TestAllowedReadWritesNoDenial fails on main and passes after the fix.
 
 ## 2. Fix
 
-- [ ] 2.1 Pass request fields from the handler to the checker and write denials through refusal.Recorder. Check: rg for the checker audit append shows only the recorder path.
-- [ ] 2.2 Run the affected unit and conformance suites. Check: `go test -race ./pkg/outputshare/... ./internal/outputsharesvc/...` passes.
+- [ ] 2.1 Pass request fields from the handler to the checker and write denials through refusal.Recorder (`internal/api/refusal/refusal.go:84`) in NEW file internal/outputsharesvc/denial.go. Check: rg for the checker audit append shows only the recorder path.
+- [ ] 2.2 Run the affected unit and conformance suites in the packages internal/outputsharesvc and pkg/outputshare. Check: `go test -race ./pkg/outputshare/... ./internal/outputsharesvc/...` passes.
 
 ## 3. Definition of done
 

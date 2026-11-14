@@ -20,7 +20,7 @@ When a principal with namespace:read-runners lists pools, the server SHALL retur
 
 When a principal with namespace:manage-runners creates a pool, the server SHALL store the pool and one pool-created audit entry in one transaction.
 
-#### Scenario: Create pool
+#### Scenario: create-pool
 - **WHEN** a principal with namespace:manage-runners creates a pool
 - **THEN** the server stores the pool and one audit entry together
 
@@ -56,7 +56,7 @@ When a principal with namespace:manage-runners drains or retires a runner, the s
 - **WHEN** a principal retires a runner
 - **THEN** the server retires it and stores one runner-retired entry
 
-### Requirement: Join tokens
+### Requirement: Create join token
 
 When a principal with namespace:manage-runners creates a join token, the server SHALL return the secret once at create and never on a later read or list.
 
@@ -64,7 +64,11 @@ When a principal with namespace:manage-runners creates a join token, the server 
 - **WHEN** a principal creates a join token
 - **THEN** the answer holds the secret once and a list holds none
 
-#### Scenario: Revoke join token
+### Requirement: Revoke join token
+
+When a principal with namespace:manage-runners revokes a join token, the server SHALL store the revoke and one join-token-revoked audit entry in one transaction.
+
+#### Scenario: revoke-join-token
 - **WHEN** a principal revokes a join token
 - **THEN** the server revokes it and stores one join-token-revoked entry in the same transaction
 

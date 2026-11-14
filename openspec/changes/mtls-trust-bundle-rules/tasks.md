@@ -9,7 +9,7 @@
 
 ## 2. Build
 
-- [ ] 2.1 Extend pkg/trustrule and the store with bundle versions and rule fields; edit the baseline of each dialect in name order Check: go test ./pkg/trustrule/... passes on SQLite and PostgreSQL
+- [ ] 2.1 Extend pkg/trustrule and the store with bundle versions and rule fields; add the two tables in name order to each baseline Check: go test ./pkg/trustrule/... passes on SQLite and PostgreSQL
 - [ ] 2.2 Extend internal/trustrulesvc and internal/api/trustrules with bundle routes and rule update, with actions and audit Check: route action test passes
 
 ## 3. Side effects (computed from main)

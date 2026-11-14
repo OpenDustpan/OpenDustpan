@@ -1,3 +1,7 @@
+---
+version: 3
+---
+
 ## Problem
 
 A site administrator lists the access tokens of a service principal. A token
@@ -23,8 +27,8 @@ must not share one kind. ADR 371 (owner, 2026-11-14) renames the kind to
 
 **IN**
 
-- `pkg/accesstoken/accesstoken.go`: replace `KindTrust` with `KindJWTExchange Kind = "jwt-exchange"`. Add the unexported set of exchange kinds and the method `Kind.FromExchange() bool`, true for each kind that a token exchange issues. Only this method names the exchange kinds.
-- `pkg/accesstoken/service.go` (`credentialOf`) and `pkg/accesstoken/scope.go` (`authorizeRevoke`): use `FromExchange` in place of the name of one kind, so that the mTLS kind of the change `mtls-mtls-exchange-token` gets the credential `trust-token` and the revoke rule of the service tokens with no second edit.
+- `pkg/accesstoken/accesstoken.go`: replace `KindTrust` with the NEW kind `KindJWTExchange Kind = "jwt-exchange"`. Add the unexported set of exchange kinds and the NEW method `Kind.FromExchange() bool`, true for each kind that a token exchange issues. Only this method names the exchange kinds.
+- `pkg/accesstoken/service.go` (`credentialOf`) and `pkg/accesstoken/scope.go` (`authorizeRevoke`): use the NEW method `FromExchange` in place of the name of one kind, so that the mTLS kind of the change `mtls-mtls-exchange-token` gets the credential `trust-token` and the revoke rule of the service tokens with no second edit.
 - `pkg/accesstoken/trust.go`, `pkg/store/internal/trustrulestore/trustrulestore.go`, `pkg/trustrule/trustruletest/exchange_cases.go` and the two test files: the new constant.
 - `docs/guides/workload-identity.md` and `GLOSSARY.md`: the kind `jwt-exchange`.
 

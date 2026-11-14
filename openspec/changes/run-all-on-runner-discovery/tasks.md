@@ -4,16 +4,16 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing server test for discovery job start on wrapper claim through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: TestDiscoveryStartsOneJob fails on main and passes after the change; it exercises ANY /runner/v1 with a runner token in the pool namespace.
-- [ ] 1.2 Add failing server test for preview output with 3 unit references through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: TestDiscoveryPreviewListsUnits fails on main and passes after the change; it reads the preview through ANY /runner/v1 with a runner token.
-- [ ] 1.3 Add failing hostile tests for path escape with symlinks, unit count limit, foreign token, and 300 second timeout through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: TestDiscoveryRefusesEscape, TestDiscoveryRefusesLimit, TestDiscoveryRefusesForeignToken, and TestDiscoveryTimeout fail on main and pass after the change.
-- [ ] 1.4 Add failing audit tests for start, complete, failed, and refused entries through ANY /runner/v1 with a runner token and read through ANY /api/audit/entries with an access token passing the audit read gate. Check: TestDiscoveryAuditNamesCause and TestDiscoveryAuditRefusal fail on main and pass after the change.
+- [ ] 1.1 Add failing server test for discovery job start on wrapper claim in NEW file pkg/runner/discovery_test.go through ANY /runner/v1 (declaration file: pkg/dustpan/apidesc_server_test.go) with a runner token passing the runner authorization gate. Check: TestDiscoveryStartsOneJob fails on main and passes after the change; it exercises ANY /runner/v1 with a runner token in the pool namespace.
+- [ ] 1.2 Add failing server test for preview output with 3 unit references in NEW file pkg/runner/discovery_preview_test.go through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: TestDiscoveryPreviewListsUnits fails on main and passes after the change; it reads the preview through ANY /runner/v1 with a runner token.
+- [ ] 1.3 Add failing hostile tests for path escape with symlinks, unit count limit, foreign token, and 300 second timeout in NEW file pkg/runner/discovery_hostile_test.go through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: TestDiscoveryRefusesEscape, TestDiscoveryRefusesLimit, TestDiscoveryRefusesForeignToken, and TestDiscoveryTimeout fail on main and pass after the change.
+- [ ] 1.4 Add failing audit tests for start, complete, failed, and refused entries in NEW file pkg/audit/discovery_test.go through ANY /runner/v1 with a runner token and read through ANY /api/audit/entries with an access token passing the audit read gate. Check: TestDiscoveryAuditNamesCause and TestDiscoveryAuditRefusal fail on main and pass after the change.
 
 ## 2. Build
 
-- [ ] 2.1 Wire discovery operation through ANY /runner/v1 with a runner token passing the runner authorization gate with namespace-scoped authorization. Check: Claim through ANY /runner/v1 with a runner token starts a terragrunt-discover job in the pool namespace.
-- [ ] 2.2 Write audit entries for discovery start, complete, failed, and refused through ANY /api/audit/entries with an access token passing the audit read gate. Check: Read ANY /api/audit/entries with an access token and check the start and complete entries.
-- [ ] 2.3 Add repeat check on the idempotency key for the discovery record through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: Run discovery twice with the same Idempotency-Key header and check one discovery record.
+- [ ] 2.1 Wire discovery operation in NEW file pkg/runner/discovery.go (NEW error code `run.discovery-refused` in internal/errcode/catalog_runner.go) through ANY /runner/v1 with a runner token passing the runner authorization gate with namespace-scoped authorization. Check: Claim through ANY /runner/v1 with a runner token starts a terragrunt-discover job in the pool namespace.
+- [ ] 2.2 Write audit entries for discovery start, complete, failed, and refused in NEW file pkg/audit/discovery.go through ANY /api/audit/entries with an access token passing the audit read gate. Check: Read ANY /api/audit/entries with an access token and check the start and complete entries.
+- [ ] 2.3 Add repeat check on the idempotency key for the discovery record in NEW file pkg/runner/discovery_idempotency.go through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: Run discovery twice with the same Idempotency-Key header and check one discovery record.
 
 ## 3. Definition of done
 

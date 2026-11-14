@@ -4,13 +4,13 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write failing tests for newWarningState: inside and outside the window, expired, no expiry, boundaries, precedence and zero threshold. Check: go test ./pkg/accesstoken -run TestWarningFor fails on main
-- [ ] 1.2 Write failing tests for 403 without the read grant and for the audit entry. Check: go test ./internal/token fails on main
+- [ ] 1.1 Write failing tests in pkg/accesstoken/accesstoken_test.go:1386 (TestWarningFor) for newWarningState (NEW): inside and outside the window, expired, no expiry, boundaries, precedence and zero threshold. Check: go test ./pkg/accesstoken -run TestWarningFor fails on main
+- [ ] 1.2 Write failing tests in internal/api/server/tokens_test.go (NEW) for 403 without the read grant and for the audit entry. Check: go test ./internal/token fails on main
 
 ## 2. Build
 
-- [ ] 2.1 Add the warning fields to GET /api/server/caller/tokens with a personal token. Check: API test returns expiry, seconds left and level
-- [ ] 2.2 Add the same fields to the list reads under /api/server/tokens and /api/server/principals/{}/tokens. Check: API test returns a level for each token
+- [ ] 2.1 Add the warning fields to GET /api/server/caller/tokens with a personal token. Edit the route row in internal/api/server/tokens.go:543, the handler serveTokenRead in internal/api/server/tokens.go:232 and the declaration in internal/api/apidesc/openapi.json. Check: API test returns expiry, seconds left and level
+- [ ] 2.2 Add the same fields to the list reads under /api/server/tokens and /api/server/principals/{}/tokens. Edit the route rows and handlers in internal/api/server/tokens.go and the declaration in internal/api/apidesc/openapi.json. Check: API test returns a level for each token
 
 ## 3. Side effects (computed from main)
 

@@ -4,13 +4,13 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing Evaluate tests for RuleApprovers, Unmeetable and CountsAsSignature with a fake KindReader. Check: TestEvaluateAppliesRuleApprovers fails on main
-- [ ] 1.2 Port ADR 253 table tests 4a and 4b to the Evaluate level. Check: TestEvaluateDevTable4a4b fails on main
-- [ ] 1.3 Add failing tests for kind error, unknown kind, dev installation and empty approver list. Check: TestEvaluateKindErrorFailsClosed fails on main
+- [ ] 1.1 Add failing Evaluate tests for RuleApprovers, Unmeetable and CountsAsSignature with a fake KindReader in pkg/gate/approvers_test.go. Check: TestEvaluateAppliesRuleApprovers fails on main
+- [ ] 1.2 Port ADR 253 table tests 4a and 4b to the Evaluate level in pkg/gate/approvers_test.go. Check: TestEvaluateDevTable4a4b fails on main
+- [ ] 1.3 Add failing tests for kind error, unknown kind, dev installation and empty approver list in pkg/gate/approvers_test.go. Check: TestEvaluateKindErrorFailsClosed fails on main
 
 ## 2. Implementation
 
-- [ ] 2.1 Wire KindReader into Service.Evaluate with one snapshot per call and document the contract in the doc comment. Check: `go test ./pkg/gate/...` passes
+- [ ] 2.1 Wire KindReader into Service.Evaluate at pkg/gate/service.go:226 with one snapshot per call and document the contract in the doc comment. Check: `go test ./pkg/gate/...` passes
 
 ## 3. Definition of done
 
