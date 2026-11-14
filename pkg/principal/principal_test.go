@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -126,7 +127,8 @@ func TestNewServiceNeedsStore(t *testing.T) {
 
 	_, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      nil, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      nil, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
+		Now: nil, NewID: nil,
 	})
 	if !errors.Is(err, principal.ErrMissingDependency) {
 		t.Fatalf("NewService without a store = %v, want ErrMissingDependency", err)
@@ -236,7 +238,7 @@ func TestServiceEntries(t *testing.T) {
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
 		Store:      st,
-		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil,
+		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
 		Now:   func() time.Time { return at },
 		NewID: func(prefix string) string { return prefix + "fixed" },
 	})
@@ -258,6 +260,101 @@ func TestServiceEntries(t *testing.T) {
 	if got.Object != "principal:prn-fixed" || !got.At.Equal(at) || got.Kind != audit.KindChange ||
 		got.Outcome != audit.OutcomeSuccess {
 		t.Fatalf("entry = %+v, want the change of prn-fixed at the Service time", got)
+	}
+}
+
+// TestUpdateGroupSwitchEntries proves that each change of the switch that
+// closes a group to the identity provider writes the new permission of the
+// identity provider in the reason of the entry, and that a change of the
+// same value writes no reason.
+func TestUpdateGroupSwitchEntries(t *testing.T) {
+	t.Parallel()
+
+	st := openStore(t)
+	at := time.Date(2026, time.October, 13, 23, 0, 0, 0, time.UTC)
+
+	svc, err := principal.NewService(principal.Config{
+		TempAdmins: nil,
+		Store:      st,
+		Guard:      principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
+		Now:   func() time.Time { return at },
+		NewID: func(prefix string) string { return prefix + "fixed" },
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	entry := testEntry()
+	entry.Action = "server:manage-groups"
+
+	g, err := svc.CreateGroup(t.Context(), entry, principal.GroupInput{Name: "ops", Description: ""})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+
+	closed, open := true, false
+
+	steps := []switchStep{
+		{name: "close the group", value: &closed, reason: "the identity provider may add members: off"},
+		{name: "open the group", value: &open, reason: "the identity provider may add members: on"},
+		{name: "set the same value again", value: &open, reason: ""},
+	}
+
+	fx := switchFixture{svc: svc, st: st, entry: entry, id: g.ID}
+	for _, step := range steps {
+		fx.check(t, step)
+	}
+}
+
+// switchFixture holds the service, its store, the entry of the caller and
+// the ID of the group whose switch a step changes.
+type switchFixture struct {
+	svc   *principal.Service
+	st    *sqlite.Store
+	entry audit.Entry
+	id    string
+}
+
+// switchStep is one change of the switch of a group and the reason that its
+// audit entry must carry.
+type switchStep struct {
+	name   string
+	value  *bool
+	reason string
+}
+
+// check sets the switch of the group to the value of step with one change
+// and proves that the group reads the value and that the newest entry of the
+// scope @server carries the reason of step.
+func (fx switchFixture) check(t *testing.T, step switchStep) {
+	t.Helper()
+
+	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		Subject: "tester", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		Kind: "", Credential: "", JobID: "",
+	}
+
+	changed, err := fx.svc.UpdateGroup(t.Context(), fx.entry, caller, fx.id, principal.GroupUpdate{
+		Name: nil, Description: nil, ClosedToIdentityProvider: step.value,
+	})
+	if err != nil {
+		t.Fatalf("%s: %v", step.name, err)
+	}
+
+	if changed.ClosedToIdentityProvider != *step.value {
+		t.Fatalf("%s: the group reads %v, want %v", step.name, changed.ClosedToIdentityProvider, *step.value)
+	}
+
+	listing, err := fx.st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil || len(listing.Entries) == 0 {
+		t.Fatalf("%s: entries = %+v, %v; want at least one", step.name, listing.Entries, err)
+	}
+
+	got := listing.Entries[0]
+	if got.Action != "server:manage-groups" || got.Object != principal.GroupRef(fx.id) ||
+		got.Kind != audit.KindChange || got.Outcome != audit.OutcomeSuccess || got.Reason != step.reason {
+		t.Fatalf("%s: entry = %+v, want a change of %s with the reason %q", step.name, got, fx.id, step.reason)
 	}
 }
 
@@ -307,6 +404,7 @@ func newServiceOverStore(t *testing.T) *principal.Service {
 			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        nil,
 			NewID:      nil,
 		},

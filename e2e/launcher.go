@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -230,10 +231,37 @@ func (r *FakeRunner) call(ctx context.Context, tb testing.TB, path string, body 
 // FakeLauncher is the launcher of a claim: it holds the job session that the
 // session client of the launcher opened, and signs each call with its key.
 type FakeLauncher struct {
-	sess *session.Session
-	ID   string
+	sess   *session.Session
+	tamper *tamperTransport
+	ID     string
 	// Assignment is what the server answered to the exchange.
 	Assignment protocol.Assignment
+}
+
+// tamperTransport is the transport of a fake launcher. It sends each request
+// as the client signed it, except the next one after PutTampered, whose body it
+// replaces after the signature, as an attacker on the path could.
+type tamperTransport struct {
+	inner envTransport
+
+	mu   sync.Mutex
+	body []byte
+}
+
+// Do implements session.Transport.
+func (t *tamperTransport) Do(ctx context.Context, req *session.Request) (*session.Response, error) {
+	t.mu.Lock()
+	body := t.body
+	t.body = nil
+	t.mu.Unlock()
+
+	if body != nil {
+		changed := *req
+		changed.Body = body
+		req = &changed
+	}
+
+	return t.inner.Do(ctx, req)
 }
 
 // OpenSession exchanges the handoff token for a job session with the session
@@ -241,12 +269,39 @@ type FakeLauncher struct {
 func (e *Env) OpenSession(ctx context.Context, tb testing.TB, handoff string) *FakeLauncher {
 	tb.Helper()
 
-	sess, err := session.Open(ctx, e.protocolClient(), handoff)
+	tamper := &tamperTransport{inner: envTransport{env: e}, mu: sync.Mutex{}, body: nil}
+	client := &session.Client{Server: e.URL, Transport: tamper, Release: launcherRelease, Now: nil}
+
+	sess, err := session.Open(ctx, client, handoff)
 	if err != nil {
 		tb.Fatalf("session exchange: %v", err)
 	}
 
-	return &FakeLauncher{sess: sess, ID: sess.ID, Assignment: sess.Assignment}
+	return &FakeLauncher{sess: sess, tamper: tamper, ID: sess.ID, Assignment: sess.Assignment}
+}
+
+// PutTampered uploads like PutLog, but the body on the wire is sent, not
+// signed: the header and the proof carry the hash of signed.
+func (l *FakeLauncher) PutTampered(ctx context.Context, tb testing.TB, path string, signed, sent []byte) (int, []byte) {
+	tb.Helper()
+
+	l.tamper.mu.Lock()
+	l.tamper.body = sent
+	l.tamper.mu.Unlock()
+
+	return l.PutLog(ctx, tb, path, signed)
+}
+
+// Get sends a signed GET of the session and returns the status and the body.
+func (l *FakeLauncher) Get(ctx context.Context, tb testing.TB, path string) (int, []byte) {
+	tb.Helper()
+
+	resp, err := l.sess.Get(ctx, path)
+	if err != nil {
+		tb.Fatalf("GET %s: %v", path, err)
+	}
+
+	return resp.Status, resp.Body
 }
 
 // Post sends a signed POST of the session with a JSON body (nil sends none)

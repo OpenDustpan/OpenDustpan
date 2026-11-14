@@ -15,18 +15,22 @@ import (
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
-// ErrPlainRefused reports a connection with no TLS that the plain-transport
-// setting does not allow. It matches session.ErrMethodUnavailable too.
+// ErrPlainRefused reports a connection with no TLS to a host that is not a
+// loopback IP address, when the installation setting that allows plain
+// connections is off. It matches session.ErrMethodUnavailable too.
 var ErrPlainRefused = errors.New("a connection with no TLS to the directory is not allowed")
 
 // plainRefused returns the error of a refused plain connection to address.
-// It names the address and the setting to change.
+// It names the address, the setting key and the one call that changes the
+// setting.
 func plainRefused(address string) error {
-	return fmt.Errorf("%w: %w: %s: use ldaps:// or StartTLS, or allow plain connections in the installation settings",
-		session.ErrMethodUnavailable, ErrPlainRefused, address)
+	return fmt.Errorf(`%w: %w: %s: use ldaps:// or StartTLS, or send PATCH /api/dustpan/v1/settings `+
+		`with {"%s": true}`, session.ErrMethodUnavailable, ErrPlainRefused, address,
+		plainconn.SettingAllowPlainConnections)
 }
 
 // plainRule is the rule of the dial guard for a connection with no TLS.
@@ -55,6 +59,12 @@ func dialControl(rules egress.Rules, rule plainRule) func(network, address strin
 			return err
 		}
 
+		// The egress guard runs first. It refuses a loopback address unless
+		// the rules set LoopbackForTests. With the production rules, a plain
+		// connection to a loopback address is refused by the guard, and the
+		// plainLoopbackOnly rule has no effect. The rule has an effect only
+		// when the egress rules allow loopback, which only tests do.
+		//
 		// Defense in depth: Verify refuses a plain URL whose host is not a
 		// loopback IP address before it dials. This check stays so that a
 		// name that resolves to another address cannot pass with no TLS.
@@ -189,7 +199,9 @@ func (m *Method) closeConn(ctx context.Context, conn *ldap.Conn) {
 	}
 }
 
-// allowPlain reads the plain-transport setting. An error counts as false.
+// allowPlain calls the AllowPlain hook of the config, which reads the
+// installation setting that allows plain connections. An error counts as
+// false.
 func (m *Method) allowPlain(ctx context.Context) bool {
 	on, err := m.allowPlainFn(ctx)
 	if err != nil {

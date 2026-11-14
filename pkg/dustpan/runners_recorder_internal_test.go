@@ -1,6 +1,7 @@
 package dustpan
 
 import (
+	"log/slog"
 	"path/filepath"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func fullRecorderInputs(t *testing.T) *jobRecorderInputs {
 
 	return &jobRecorderInputs{
 		jobs: st.Jobs(), blobs: blobs, updates: st, namespaceStore: st, wrapper: wrapper, now: time.Now,
-		namespaces: namespaces, retention: defaultJobRetention(),
+		logger: slog.New(slog.DiscardHandler), namespaces: namespaces, retention: defaultJobRetention(),
 	}
 }
 

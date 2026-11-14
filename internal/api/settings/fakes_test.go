@@ -137,13 +137,17 @@ type memStore struct {
 	// hold, when set, runs at the start of every Put, before the store takes its
 	// lock. A test uses it to keep a write in flight.
 	hold func()
+	// defaultsAtPut, when set, replaces the defaults at the start of every
+	// Put, as another writer that commits between the read of the handler and
+	// the write. The write then returns the new defaults.
+	defaultsAtPut *unitsettings.NamespaceDefaults
 }
 
 func newMemStore(records idempotency.Store) *memStore {
 	return &memStore{
 		replays: records,
 		mu:      sync.Mutex{}, records: map[string]unitsettings.Settings{}, defaults: noDefaults(),
-		entries: nil, writes: 0, failWith: nil, hold: nil,
+		entries: nil, writes: 0, failWith: nil, hold: nil, defaultsAtPut: nil,
 	}
 }
 
@@ -161,7 +165,7 @@ func (m *memStore) Get(_ context.Context, unit identity.Object) (unitsettings.Se
 
 func (m *memStore) Put(
 	ctx context.Context, s *unitsettings.Settings, expected int64, _ namespace.Fence, e audit.Entry,
-) (unitsettings.Settings, error) {
+) (unitsettings.PutResult, error) {
 	if m.hold != nil {
 		m.hold()
 	}
@@ -170,26 +174,35 @@ func (m *memStore) Put(
 	defer m.mu.Unlock()
 
 	if m.failWith != nil {
-		return unitsettings.Settings{}, m.failWith
+		return unitsettings.PutResult{}, m.failWith
+	}
+
+	if m.defaultsAtPut != nil {
+		m.defaults = *m.defaultsAtPut
 	}
 
 	if m.records[s.Unit.UnitID()].Version != expected {
-		return unitsettings.Settings{}, unitsettings.ErrConflict
+		return unitsettings.PutResult{}, unitsettings.ErrConflict
 	}
 
 	next := *s
 	next.Version = expected + 1
 	next.UpdatedAt = e.At
 
-	if err := m.finish(ctx, next); err != nil {
-		return unitsettings.Settings{}, err
+	defaults := m.defaults
+	defaults.Namespace = s.Unit.Namespace()
+
+	out := unitsettings.PutResult{Settings: next, Defaults: defaults}
+
+	if err := m.finish(ctx, out); err != nil {
+		return unitsettings.PutResult{}, err
 	}
 
 	m.records[s.Unit.UnitID()] = next
 	m.entries = append(m.entries, e)
 	m.writes++
 
-	return next, nil
+	return out, nil
 }
 
 func (m *memStore) Delete(
@@ -452,6 +465,17 @@ type recordingAudit struct {
 }
 
 func (a *recordingAudit) Append(_ context.Context, _ namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.entries = append(a.entries, e)
+
+	return e, nil
+}
+
+// AppendServer keeps an entry of the installation scope, so that a test counts
+// the refusals of a namespace that does not exist.
+func (a *recordingAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 

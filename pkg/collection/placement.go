@@ -18,6 +18,13 @@ var (
 	// ErrPlacementRuleNotFound reports a placement rule that the namespace does not hold.
 	ErrPlacementRuleNotFound = errors.New("placement rule not found: list the rules with " +
 		"GET /api/dustpan/v1/namespaces/{namespace}/placement-rules")
+	// ErrPlacementCollectionMissing reports that a placement rule names a
+	// collection that does not exist. A rule write returns it when the rule
+	// names such a collection, and the placement of a new unit returns it when
+	// the rule that matches the unit names one. Make the collection, or change
+	// the rule to name a collection that exists.
+	ErrPlacementCollectionMissing = errors.New("collection not found: create it with " +
+		"POST /api/dustpan/v1/namespaces/{namespace}/collections, or change the placement rule")
 	// ErrInvalidPattern reports a pattern that fails validation.
 	ErrInvalidPattern = errors.New("invalid placement pattern")
 	// ErrInvalidPlacementTool reports a tool that has no placement rules.
@@ -47,13 +54,17 @@ const (
 	MaxPlacementRules = 200
 )
 
-// ToolPulumi is the tool whose new units a placement rule places. OpenTofu
-// does not use rules: the project of its cloud block names the collection.
-const ToolPulumi = "pulumi"
+// The tools whose new units a placement rule places. A rule for ToolOpenTofu
+// matches a new workspace with the project "*" and the workspace name in the
+// stack pattern, because a workspace has no project.
+const (
+	ToolPulumi   = "pulumi"
+	ToolOpenTofu = "opentofu"
+)
 
 // PlacementTools lists the tools that placement rules support.
 func PlacementTools() []string {
-	return []string{ToolPulumi}
+	return []string{ToolPulumi, ToolOpenTofu}
 }
 
 // Pattern is a validated pattern for a project name or a stack name. It is a
@@ -262,8 +273,9 @@ func (e *PlacementError) Error() string {
 	return fmt.Sprintf(
 		"no placement rule matches %s stack %s/%s in namespace %s: add a rule with "+
 			"POST /api/dustpan/v1/namespaces/%s/placement-rules, "+
-			"or make the collection first and make the unit through the API with that collection",
-		e.Tool, quoteName(e.Project), quoteName(e.Stack), e.Namespace, e.Namespace,
+			"or create a collection with POST /api/dustpan/v1/namespaces/%s/collections "+
+			"and put the unit into it with PUT /api/inventory/unit-collection",
+		e.Tool, quoteName(e.Project), quoteName(e.Stack), e.Namespace, e.Namespace, e.Namespace,
 	)
 }
 
@@ -302,20 +314,21 @@ func quoteName(s string) string {
 type PlacementStore interface {
 	// CreatePlacementRule inserts r at r.Position and moves the rules from that
 	// position on down by one place. Position 0 means the end of the list, read
-	// in the same transaction. It returns ErrNotFound when r.Collection does not
-	// exist in the namespace, ErrInvalidPosition when r.Position is not 0 or from
-	// 1 to the count of rules plus 1, ErrPlacementConflict when the result has a
-	// hidden rule, ErrTooManyPlacementRules at MaxPlacementRules, and
-	// namespace.ErrFenced when the fence is stale. It also returns ErrNotFound
-	// when r.Namespace is not the namespace of the fence.
+	// in the same transaction. It returns ErrPlacementCollectionMissing when
+	// r.Collection does not exist in the namespace, ErrInvalidPosition when
+	// r.Position is not 0 or from 1 to the count of rules plus 1,
+	// ErrPlacementConflict when the result has a hidden rule,
+	// ErrTooManyPlacementRules at MaxPlacementRules, and namespace.ErrFenced
+	// when the fence is stale. It also returns ErrNotFound when r.Namespace is
+	// not the namespace of the fence.
 	CreatePlacementRule(ctx context.Context, r Rule, fence namespace.Fence, e audit.Entry) error
 	// UpdatePlacementRule replaces the tool, the patterns and the collection of
 	// the rule r.ID, and moves it to r.Position. Position 0 keeps the place of
 	// the rule. It does not change the creator or the creation time. It returns
 	// ErrPlacementRuleNotFound (also when r.Namespace is not the namespace of the
-	// fence), ErrNotFound for a missing collection, ErrInvalidPosition when
-	// r.Position is not 0 or from 1 to the count of rules,
-	// ErrPlacementConflict when the result has a hidden rule, and
+	// fence), ErrPlacementCollectionMissing for a missing collection,
+	// ErrInvalidPosition when r.Position is not 0 or from 1 to the count of
+	// rules, ErrPlacementConflict when the result has a hidden rule, and
 	// namespace.ErrFenced.
 	UpdatePlacementRule(ctx context.Context, r Rule, fence namespace.Fence, e audit.Entry) error
 	// DeletePlacementRule removes the rule id and closes the gap in the

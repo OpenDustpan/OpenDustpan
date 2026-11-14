@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -443,7 +444,16 @@ func memService(tb testing.TB, base memBase, sealer workspace.Sealer) (*workspac
 		tb.Fatalf("name: %v", nameErr)
 	}
 
-	ws, wsErr := svc.Create(tb.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	acme, getErr := base.namespaces.Get(tb.Context(), "acme")
+	if getErr != nil {
+		tb.Fatalf("namespace: %v", getErr)
+	}
+
+	ws, wsErr := svc.Create(
+		tb.Context(),
+		workspace.Ref{Namespace: "acme", Name: name},
+		placementtest.Workspace(tb, base.store, acme.Fence()),
+	)
 	if wsErr != nil {
 		tb.Fatalf("create: %v", wsErr)
 	}

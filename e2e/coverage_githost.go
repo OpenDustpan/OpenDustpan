@@ -49,7 +49,8 @@ func coverageGitHost(tb testing.TB) *forge.Service {
 		Store: struct{ forge.Store }{nil}, Namespaces: coverageNamespaceStore{},
 		Secrets: struct{ forge.SecretSealer }{nil}, Audit: struct{ audit.Store }{nil},
 		Openers:  []forge.Opener{coverageOpener{Opener: nil}},
-		CheckURL: func(string) error { return nil }, OnAuditFailure: nil, OnRefused: nil, CheckLimits: nil, Now: nil,
+		CheckURL: func(string) error { return nil }, OnAuditFailure: nil, OnRefused: nil, CheckLimits: nil,
+		Logger: nil, Now: nil,
 	})
 	if err != nil {
 		tb.Fatalf("Git host service: %v", err)

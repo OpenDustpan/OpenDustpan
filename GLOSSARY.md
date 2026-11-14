@@ -28,6 +28,12 @@ _Avoid_: Namespace status, account status
 The stable, opaque identifier of a namespace, with the prefix `ns-`. The server makes it when it creates the namespace, and it never changes. A new namespace with the name of a purged namespace gets a new Namespace ID. So rows that hold the old ID never reach it.
 _Avoid_: Namespace key, org ID, UUID
 
+**Namespace switcher**:
+The control in the top bar of the hosted console that changes the namespace that the console shows. The URL carries the namespace.
+
+**Account switcher**:
+The control of the hosted console that changes the account. It appears only for a person who is a member of several accounts.
+
 **Unit**:
 One deployable instance of infrastructure with its own state, in the model of the tool that owns it. A Pulumi stack and an OpenTofu workspace are units.
 _Avoid_: Environment, deployment, target
@@ -781,6 +787,11 @@ _Avoid_: Snapshot, revision, checkpoint
 The value paths that the `json-state` rendering of one state version marks in `sensitive_values`. The server keeps only these paths, never a value from the rendering (ADR 41, decision 9). A masked state read masks each marked path.
 _Avoid_: Sensitive values (that is the field of the rendering)
 
+**Apply claim**:
+The reservation of the resource instances that one saved plan changes and reads. A runner job or the local `dustpan` wrapper registers it before the apply (ADR 302, ADR 368). The server refuses an apply claim that overlaps a live one before anything runs. An apply claim has a lease, and an upload under an ended apply claim fails. Under a live apply claim, the server assigns the serial of the merged state version.
+_Avoid_: Claim (alone: a claim is also the durable claim of a phase, the claim of a runner and the job-ID claim), resource lock, reservation
+_Copy says_: "claim" on a page that is only about applies.
+
 **Lineage**:
 The identifier that all state versions of one state history share.
 _Avoid_: History ID
@@ -925,6 +936,10 @@ _Avoid_: Drift report, drift diff, drift state (a state is the record of a tool)
 **Drift schedule**:
 The setting that turns on drift checks. A unit, a collection or a namespace has it. It is off by default. The frequency is a preset or a custom cron expression. The most specific setting wins, in the order unit, collection, namespace. With no setting, no drift check starts on its own (ADR 263).
 _Avoid_: Drift policy (a policy alone names no object), drift trigger
+
+**Auto-dedrift**:
+The automatic remediation of a drift. The server starts a job that brings a drifted unit back to its code. A **drift result** starts this job. It is not the **drift check**. It is available and opt-in, and it is off by default. A namespace can turn it off. The opt-out of a namespace always wins over an opt-in at another object. The job meets the same gates, approvals, freezes and access limits as a job that a person starts. The audit log records it as automatic (ADR 358).
+_Avoid_: Auto-remediation, self-healing, auto-fix
 
 **Trigger**:
 A rule of one unit that starts a plan of that unit on its own (ADR 267). It has one kind: `review-request-push`, `schedule` or `follows`. A trigger starts a plan and nothing else. The job passes through the job service, so the gates, the approval rules, the freezes and the manual locks apply. A trigger has no pool: the job takes the runner pool of the unit settings.

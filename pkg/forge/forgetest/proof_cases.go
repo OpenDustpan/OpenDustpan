@@ -23,7 +23,8 @@ func proofLineOf(message string) string {
 }
 
 // caseFindCommitNeedsTheProof checks that a commit with the trailer counts only
-// when its proof opens for the trailer, the base commit and the repository.
+// when its proof opens for the trailer, the base commit, the branch, the
+// digest of the changes and the repository.
 // Each pushed commit below has the origin of a commit of the connection, so
 // that the checks of the author, the committer and the verification pass and
 // only the proof can stop it.
@@ -46,34 +47,49 @@ func caseFindCommitNeedsTheProof(t *testing.T, h Harness) {
 		ctx,
 		h.Repo,
 		"main",
-		forge.Delivery{Trailer: jobTrailer("j-60"), Base: head.ID},
+		forge.DeliveryOf(genuineRequest(head.ID, "j-60")),
 		head.Time,
 	)
 	if err != nil || found.ID != good.ID {
 		t.Fatalf("FindCommit with a good proof = %+v, %v; want the commit %q", found, err, good.ID)
 	}
 
+	// Each row but the first ones differs from the good delivery in one part
+	// only, so only the binding of that part can stop it.
+	// A delivery of another branch never reaches the proof: FindCommit
+	// refuses a ref that is not the branch of the delivery (see
+	// caseFindCommitInvalidDelivery).
+	good60 := forge.DeliveryOf(genuineRequest(head.ID, "j-60"))
+	otherChanges := good60
+	otherChanges.Changes = forge.ChangesDigest([]forge.FileChange{writeFile("g-j-60.txt", "y\n")})
+	otherBase := good60
+	otherBase.Base = anyBase
+
 	tests := []struct {
-		name    string
-		message string
-		trailer string
-		base    string
+		name     string
+		message  string
+		delivery forge.Delivery
 	}{
-		{"no proof", "Update the stacks\n\n" + jobTrailer("j-61"), jobTrailer("j-61"), head.ID},
+		{
+			"no proof", "Update the stacks\n\n" + jobTrailer("j-61"),
+			forge.DeliveryOf(genuineRequest(head.ID, "j-61")),
+		},
 		{
 			"the proof of another job",
 			"Update the stacks\n\n" + jobTrailer("j-62") + "\n" + proof,
-			jobTrailer("j-62"),
-			head.ID,
+			forge.DeliveryOf(genuineRequest(head.ID, "j-62")),
 		},
 		{
 			"a proof that is not a proof",
 			"Update the stacks\n\n" + jobTrailer("j-63") + "\n" + proofKeyPrefix + "AAAA",
-			jobTrailer("j-63"),
-			head.ID,
+			forge.DeliveryOf(genuineRequest(head.ID, "j-63")),
 		},
-		{"the proof of another base commit", goodMessage, jobTrailer("j-60"), anyBase},
-		{"two proofs", twiceMessage + "\n" + proofLineOf(twiceMessage), jobTrailer("j-64"), twiceBase.ID},
+		{"the proof of another base commit", goodMessage, otherBase},
+		{"the proof of other changes", goodMessage, otherChanges},
+		{
+			"two proofs", twiceMessage + "\n" + proofLineOf(twiceMessage),
+			forge.DeliveryOf(genuineRequest(twiceBase.ID, "j-64")),
+		},
 	}
 
 	for i, tt := range tests {
@@ -83,7 +99,7 @@ func caseFindCommitNeedsTheProof(t *testing.T, h Harness) {
 			ctx,
 			h.Repo,
 			"main",
-			forge.Delivery{Trailer: tt.trailer, Base: tt.base},
+			tt.delivery,
 			head.Time,
 		)
 		if problem := judgeFind(got, findErr, "", forge.ErrUntrustedCommit); problem != "" {
@@ -106,7 +122,9 @@ func caseFindCommitProofIsOfThisRepository(t *testing.T, h Harness) {
 		t.Fatalf("Clone = %v", err)
 	}
 
-	own, err := h.Forge.Commit(ctx, clone, commitOn("main", head.ID, "j-70", writeFile("a.txt", "1\n")))
+	req := commitOn("main", head.ID, "j-70", writeFile("a.txt", "1\n"))
+
+	own, err := h.Forge.Commit(ctx, clone, req)
 	if err != nil {
 		t.Fatalf("Commit in the other repository = %v", err)
 	}
@@ -121,7 +139,7 @@ func caseFindCommitProofIsOfThisRepository(t *testing.T, h Harness) {
 		ctx,
 		clone,
 		"main",
-		forge.Delivery{Trailer: jobTrailer("j-70"), Base: head.ID},
+		forge.DeliveryOf(req),
 		head.Time,
 	)
 	if err != nil || found.ID != own.ID {
@@ -135,7 +153,7 @@ func caseFindCommitProofIsOfThisRepository(t *testing.T, h Harness) {
 		ctx,
 		h.Repo,
 		"main",
-		forge.Delivery{Trailer: jobTrailer("j-70"), Base: head.ID},
+		forge.DeliveryOf(req),
 		head.Time,
 	)
 	if problem := judgeFind(got, findErr, "", forge.ErrUntrustedCommit); problem != "" {

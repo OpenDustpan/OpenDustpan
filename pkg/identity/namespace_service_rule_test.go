@@ -20,13 +20,10 @@ func (a allowAll) Authorize(context.Context, identity.Principal, identity.Action
 	return nil
 }
 
-func (a allowAll) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+func (a allowAll) ListObjects(_ context.Context, _ identity.Principal, _ identity.Action) (identity.Scope, error) {
 	*a.asked++
 
-	scope := identity.AdminScope(p)
-	scope.All = true
-
-	return scope, nil
+	return identity.Every(), nil
 }
 
 // TestNamespaceServiceRuleSuite runs the namespace service principal suite
@@ -93,7 +90,8 @@ func TestNamespaceServiceRuleNeverAsksNext(t *testing.T) {
 				t.Errorf("Next asked %d times, want %d", asked, tc.wantAsked)
 			}
 
-			if tc.wantAsked == 0 && (!errors.Is(authErr, identity.ErrDenied) || listErr != nil || scope.All) {
+			if tc.wantAsked == 0 &&
+				(!errors.Is(authErr, identity.ErrDenied) || listErr != nil || scope.CoversEveryObject()) {
 				t.Errorf(
 					"Authorize = %v, ListObjects = %+v, %v; want a denial and an empty scope",
 					authErr, scope, listErr,

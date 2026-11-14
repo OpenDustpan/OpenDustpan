@@ -247,18 +247,42 @@ func (r registryStore) List(ctx context.Context, addr registry.Address) ([]regis
 
 // Addresses implements registry.Store. A row that fails its checks is left out.
 func (r registryStore) Addresses(
-	ctx context.Context, ns namespace.Name, kind registry.Kind,
-) ([]registry.Address, error) {
+	ctx context.Context, ns namespace.Name, kind registry.Kind, after string, limit int,
+) ([]registry.Address, string, error) {
 	probe := registry.Address{Namespace: ns, Kind: kind, Name: "probe", System: probeSystem(kind)}
 	if err := probe.Validate(); err != nil {
-		return nil, fmt.Errorf("list registry addresses: %w", err)
+		return nil, "", fmt.Errorf("list registry addresses: %w", err)
 	}
 
+	if limit < 1 || limit > registry.MaxAddressPage {
+		return nil, "", fmt.Errorf("%w: limit %d", registry.ErrInvalid, limit)
+	}
+
+	// Defense in depth: the callers check the cursor too; the store refuses a
+	// cursor that does not hold an address of the kind.
+	cursor, err := registry.ParseAddressKey(ns, kind, after)
+	if err != nil {
+		return nil, "", fmt.Errorf("list registry addresses: %w", err)
+	}
+
+	// The query reads one row more than the page, so that the extra row tells
+	// whether a next page exists.
 	rows, err := r.s.queries.ListRegistryAddresses(ctx, db.ListRegistryAddressesParams{
-		Namespace: ns.String(), Kind: string(kind),
+		Namespace: ns.String(), Kind: string(kind), AfterName: cursor.Name, AfterSystem: cursor.System,
+		Lim: int32(limit) + 1,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("select registry addresses: %w", err)
+		return nil, "", fmt.Errorf("select registry addresses: %w", err)
+	}
+
+	next := ""
+
+	if len(rows) > limit {
+		rows = rows[:limit]
+		last := rows[limit-1]
+		next = registry.AddressKey(registry.Address{
+			Namespace: ns, Kind: kind, Name: last.Name, System: last.System,
+		})
 	}
 
 	out := make([]registry.Address, 0, len(rows))
@@ -272,7 +296,7 @@ func (r registryStore) Addresses(
 		out = append(out, addr)
 	}
 
-	return out, nil
+	return out, next, nil
 }
 
 // probeSystem returns a valid system for kind, so that Addresses can check the

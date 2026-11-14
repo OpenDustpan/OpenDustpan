@@ -162,6 +162,10 @@ type roundTripTracer struct {
 	mu    sync.Mutex
 	mode  traceMode
 	trips []roundTrip
+	// swapHook, when set, is the one-shot hook of the next statement that
+	// locks the durable control tables of a swap. The tracer runs the hook on
+	// the goroutine that sends the statement, before the statement goes out.
+	swapHook func()
 }
 
 var (
@@ -172,7 +176,7 @@ var (
 )
 
 func newRoundTripTracer() *roundTripTracer {
-	return &roundTripTracer{mu: sync.Mutex{}, mode: traceOff, trips: nil}
+	return &roundTripTracer{mu: sync.Mutex{}, mode: traceOff, trips: nil, swapHook: nil}
 }
 
 // statementLabel shortens a statement to its sqlc name or its first characters.
@@ -189,12 +193,18 @@ func statementLabel(sql string) string {
 	return flat
 }
 
-// TraceQueryStart implements pgx.QueryTracer.
+// TraceQueryStart implements pgx.QueryTracer. A swap hook runs before the
+// statement is recorded, so the hook adds no round trip of its own to the
+// count.
 func (r *roundTripTracer) TraceQueryStart(
 	ctx context.Context,
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
+	if hook := r.takeSwapHook(data.SQL); hook != nil {
+		hook()
+	}
+
 	r.record("query", data.SQL)
 
 	return ctx
@@ -354,6 +364,33 @@ func (r *roundTripTracer) record(kind, sql string) {
 	r.mu.Unlock()
 }
 
+// setSwapHook sets hook as the one-shot hook of the next statement that locks
+// the durable control tables of a swap. The hook runs on the goroutine that
+// sends the statement, before the statement goes out.
+func (r *roundTripTracer) setSwapHook(hook func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.swapHook = hook
+}
+
+// takeSwapHook returns the hook of the first statement that locks the durable
+// control tables of a swap, and clears it. It returns nil for every other
+// statement and after the hook ran once, so the hook runs at most one time.
+func (r *roundTripTracer) takeSwapHook(sql string) func() {
+	if !strings.HasPrefix(sql, "LOCK TABLE ") || !strings.Contains(sql, ".durable_operations,") {
+		return nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	hook := r.swapHook
+	r.swapHook = nil
+
+	return hook
+}
+
 // storeOptions returns the options that give the store of a cluster the tracer.
 func (r *roundTripTracer) storeOptions() []postgres.Option {
 	return []postgres.Option{postgres.WithQueryTracer(r)}
@@ -478,6 +515,10 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 	h.call(
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
 		`{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
+	)
+	h.call(
+		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
+		`{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
 	)
 
 	return h
@@ -773,41 +814,61 @@ type requestFlow struct {
 // workspace to its inventory row, with one update in the same transaction.
 // So "lock" and "unlock" each hold 1 round trip for that write, and "lock,
 // upload and unlock" holds 2.
+//
+// A lock and the declare of a state version refuse a workspace that no
+// collection holds. Each check reads the unit and its membership with one
+// statement and no transaction. So "lock" and "opentofu upload" each hold 1
+// round trip for it, and "lock, upload and unlock" holds 2.
+//
+// Each check of the state.write gates first reads the principal record of the
+// caller with one query, for its groups and its break-glass mark. So "lock",
+// "lock, upload and unlock" and each pulumi flow that meets the gates hold 1
+// round trip for that read.
+//
+// Each write that moves the state of a unit writes its state version to
+// unit_state with one statement in the transaction of the write. A final
+// version also reads the jobs of the unit that wait for one. So "opentofu
+// upload" and "pulumi checkpoint save" each hold 1 round trip for the write,
+// "unlock" holds 2 for the final version of the release, and "pulumi cancel"
+// and the other pulumi flows that end an update hold up to 4 for their writes
+// and their final version.
 func requestFlows() []requestFlow {
 	return []requestFlow{
-		{"opentofu upload", 41, func(h *rtHarness) {
+		{"opentofu upload", 43, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 31, func(h *rtHarness) {
+		{"lock", 34, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
-		{"unlock", 11, func(h *rtHarness) {
+		{"unlock", 13, func(h *rtHarness) {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 87, func(h *rtHarness) {
+		{"lock, upload and unlock", 95, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
 				h.unlock()
 			})
 		}},
-		{"pulumi checkpoint save", 13, func(h *rtHarness) {
+		{"pulumi checkpoint save", 14, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.save(run, 1) })
 			h.complete(run)
 		}},
-		// The budget is 62. The second save reads the blob guard after the
+		// The budget is 67. The second save reads the blob guard after the
 		// commit that replaces the previous checkpoint blob, so that a backup
 		// that started before the commit cannot lose the blob. The
 		// transaction of the create writes the record of the item key of the
 		// update, which seals its event payloads at rest: a read of the
-		// record, a read of the namespace, the insert and a read back.
-		{"pulumi update cycle", 62, func(h *rtHarness) {
+		// record, a read of the namespace, the insert and a read back. The
+		// start reads the stack one time, so that the manual lock check
+		// matches the lock by the stable ID of the stack, not by its name.
+		{"pulumi update cycle", 67, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()
@@ -833,29 +894,35 @@ func requestFlows() []requestFlow {
 		// together, and the write of the decision record with one statement in
 		// its own fenced transaction are part of each budget. A stack is in a
 		// collection, so each of these flows also reads or deletes the
-		// membership of the unit: one more round trip in each budget.
-		{"pulumi stack rm", 38, func(h *rtHarness) {
+		// membership of the unit: one more round trip in each budget. The
+		// manual lock check of each flow reads the stack one time, so that it
+		// matches the lock by the stable ID of the stack, not by its name: one
+		// more round trip in each budget.
+		{"pulumi stack rm", 40, func(h *rtHarness) {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 65, func(h *rtHarness) {
+		{"pulumi stack import", 70, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 66, func(h *rtHarness) {
+		{"pulumi stack restore", 71, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)
 			h.complete(run)
 			h.measureStackCall(http.MethodPost, "/restore/1", "", http.StatusOK)
 		}},
-		{"pulumi stack rename", 35, func(h *rtHarness) {
+		// The rename appends its audit entry in the transaction of the rename:
+		// one read of the namespace, one read of the last entry of the chain and
+		// one insert.
+		{"pulumi stack rename", 41, func(h *rtHarness) {
 			h.newStack()
 			body := `{"newName":"` + h.stack + `-renamed"}`
 			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)
 		}},
-		{"pulumi cancel", 31, func(h *rtHarness) {
+		{"pulumi cancel", 36, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.measure(func() { h.call(http.MethodPost, run.path+"/cancel", "", http.StatusOK) })
@@ -1269,28 +1336,59 @@ func backupModel() costModel {
 // name_lock_key tables of the installation, so that a restore cannot clear a
 // lockout, and each kept table costs one delete and one copy.
 //
+// The restore keeps the used_tickets table too, so that a restore cannot let
+// a ticket that a server used work again. The measured cost of that table is
+// 1 round trip more than perOther gives, so the fixed part holds 1 more.
+//
 // perOther counts 2 round trips for each table that a backup leaves out. An
 // emptied table that the restore only reads for its column check costs 1. So
 // the fixed part takes 1 off for passkey_challenges, the table of the open
 // passkey ceremonies, which a restore leaves empty.
 //
-// The fixed part takes 2 off for group_mappings. The run makes 5 round trips
-// for that table, 2 fewer than the cost of a table in the model: the dev strip
-// counts no rows in it, and the other statements for it are the staging count
-// and the read of the backup.
+// The fixed part takes 2 off for each table of Tables that the dev strip never
+// counts, group_mappings and member_removals. The run makes 5 round trips for
+// one of those tables, 2 fewer than the cost of a table in the model: the dev
+// strip counts no rows in it, and the other statements for it are the staging
+// count and the read of the backup.
 //
 // The fixed part also holds forgeStripClassTrips: the dev strip counts the rows
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
+//
+// The fixed part takes breakGlassReviewTrips off for break_glass_reviews.
+//
+// The fixed part also holds stagedJobCheckTrips: the staged check of the job
+// rows reads the job rows of the staging schema in one statement, once for
+// each restore.
+//
+// The fixed part also holds removalAlertTrips for member_removal_alerts, a
+// table of Tables that the dev strip never counts either.
+//
+// The fixed part also holds stagedPrincipalCheckTrips: the staged checks of
+// the grants and the memberships of principals of a namespace.
+//
+// The fixed part also holds unitStateTrips: the restore derives the state
+// version of each unit from the restored rows.
 func restoreModel() costModel {
 	return costModel{
-		fixed:        344 + forgeStripClassTrips,
+		fixed: 342 + 1 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips + removalAlertTrips +
+			stagedPrincipalCheckTrips + unitStateTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
 	}
 }
+
+// unitStateTrips is the number of round trips by which the state version of
+// each unit changes the fixed part. The restore derives the versions with one
+// statement for the workspaces and one for the stacks: 2 round trips. A
+// restore closes no write-back job, so it reads no waiting jobs. The measured
+// run also makes 3 round trips more than the model gives for the table lists,
+// where unit_state is a table that the restore empties and the two earlier
+// tables of state versions are gone. The measured runs at 3 and at 30 units
+// both hold these 5 round trips, so the count does not grow with the units.
+const unitStateTrips = 5
 
 // forgeStripClassTrips is the number of round trips of the two classes of the
 // Git host links that the dev strip counts for each principal class: the links
@@ -1300,6 +1398,32 @@ func restoreModel() costModel {
 // 30 units both hold these 2 round trips, so the count does not grow with the
 // units.
 const forgeStripClassTrips = 2
+
+// breakGlassReviewTrips is the number of round trips that the restore of the
+// table break_glass_reviews makes fewer than perTable gives. The measured run
+// makes 6 round trips for that table, not 7, at 3 and at 30 units, so the
+// difference does not grow with the units.
+const breakGlassReviewTrips = 1
+
+// stagedJobCheckTrips is the number of round trips of the staged check of the
+// job rows: the check reads the job rows of the staging schema in one
+// statement, once for each restore. It does not grow with the units or the
+// tables.
+const stagedJobCheckTrips = 1
+
+// stagedPrincipalCheckTrips is the number of round trips of the staged checks
+// of the principals of a namespace: checkStagedNamespacePrincipalGrants and
+// checkStagedNamespacePrincipalMemberships each read the staging schema in one
+// query, once for each restore. The count is fixed: it does not grow with the
+// units or the tables.
+const stagedPrincipalCheckTrips = 2
+
+// removalAlertTrips is the change in the fixed part for the table
+// member_removal_alerts. Like member_removals, it costs 2 round trips fewer
+// than a table in the model, because the dev strip counts no rows in it. The
+// restore reads the staged rows of the table once more, to refuse an alert
+// marker after the time of the restore, which adds 1 round trip.
+const removalAlertTrips = -2 + 1
 
 // checkCount fails the test when the count is not the count of the model,
 // and shows the statement list of the run.

@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/faultlog"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
+	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -78,12 +79,12 @@ func (h *Handler) putSettings(w http.ResponseWriter, r *http.Request, p identity
 	err = h.idem.Handle(w, r, idempotent.Call{
 		Principal: p.Subject,
 		Build: func(result any) (idempotency.Answer, error) {
-			stored, ok := result.(unitsettings.Settings)
+			out, ok := result.(unitsettings.PutResult)
 			if !ok {
 				return idempotency.Answer{}, errWritten
 			}
 
-			view := cur.Updated(&stored)
+			view := cur.Updated(&out.Settings, out.Defaults)
 
 			return settingsAnswer(&view)
 		},
@@ -496,13 +497,18 @@ func (h *Handler) bulkTarget(
 	}
 
 	read := identity.ActionUnitRead
-	if err := readRefusal(read, h.guard.Authorize(ctx, r, p, read, t.obj)); err != nil {
-		return target{}, err
-	}
-
 	manage := identity.ActionUnitManage
-	if err := h.guard.Authorize(ctx, r, p, manage, t.obj); err != nil {
-		return target{}, fmt.Errorf("authorize %s: %w", manage, err)
+
+	g := route.Guard{Tokens: nil, Sessions: nil, Refusals: h.guard}
+	checks := route.Checks{
+		Namespace:     identity.NamespaceObject(ns.ns.Name),
+		Reads:         []identity.Action{read},
+		Actions:       []identity.Action{manage},
+		NotFound:      errNotFound,
+		RequireAction: false,
+	}
+	if err := g.AuthorizeObject(ctx, r, p, t.obj, checks); err != nil {
+		return target{}, err
 	}
 
 	return t, nil

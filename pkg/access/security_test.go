@@ -22,13 +22,22 @@ import (
 func (f *fixture) principals(tb testing.TB) *principal.Service {
 	tb.Helper()
 
-	svc, err := principal.NewService(
+	return f.principalsWith(tb, f.svc)
+}
+
+// principalsWith returns a principal service over the fixture store whose
+// Guard, GroupReach and Tokens are svc.
+func (f *fixture) principalsWith(tb testing.TB, svc *access.Service) *principal.Service {
+	tb.Helper()
+
+	p, err := principal.NewService(
 		principal.Config{
 			TempAdmins: nil,
 			Store:      f.store,
-			Guard:      f.svc,
+			Guard:      svc,
+			GroupReach: svc,
 			Namespaces: nil,
-			Tokens:     f.svc,
+			Tokens:     svc,
 			Now:        nil,
 			NewID:      nil,
 		},
@@ -37,7 +46,7 @@ func (f *fixture) principals(tb testing.TB) *principal.Service {
 		tb.Fatalf("principal service: %v", err)
 	}
 
-	return svc
+	return p
 }
 
 // accountAdministrator stores the principal subject with the
@@ -540,7 +549,7 @@ func TestGrantBelowInstallationGivesDataActionsOnly(t *testing.T) {
 		t.Fatalf("list objects: %v", err)
 	}
 
-	if scope.All || len(scope.Namespaces) != 0 {
+	if scope.CoversEveryObject() || len(scope.Namespaces) != 0 {
 		t.Fatalf("scope of server:backup = %+v, want nothing", scope)
 	}
 }

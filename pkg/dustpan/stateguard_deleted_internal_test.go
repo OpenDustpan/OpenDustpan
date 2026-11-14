@@ -57,7 +57,7 @@ func seedDeletedWorkspace(t *testing.T, st *sqlite.Store, n namespace.Namespace)
 		NamespaceID: n.ID,
 		Ref:         workspace.Ref{Namespace: "acme", Name: name},
 		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-		Revision:    1,
+		Revision:    1, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 	if err = st.CreateWorkspace(ctx, w, n.Fence()); err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -108,6 +108,8 @@ func newDeletedGuard(t *testing.T) deletedGuard {
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
 	}
+
+	createPrincipals(t, st, time.Unix(0, 0), "alice")
 
 	n, err := nss.Create(ctx, "acme")
 	if err != nil {

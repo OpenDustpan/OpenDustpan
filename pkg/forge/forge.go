@@ -18,11 +18,14 @@ package forge
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -283,14 +286,22 @@ type Commits interface {
 	// "Key: value". A takeover of a write-back calls it before a second
 	// commit.
 	//
-	// d names the commit by the Trailer and the Base of the CommitRequest
-	// that made it. Commit adds a proof to the commit that binds the
-	// trailer, the base and the repository, and FindCommit counts a commit
-	// only when its proof opens for the same three values. A commit with no
-	// proof, or with the proof of another trailer, base or repository, is
-	// ErrUntrustedCommit. It returns ErrInvalid for a base that is not a
-	// full commit ID, and ErrUnsupported when the connection has no key to
+	// d names the commit by the Trailer, the Base, the Branch and the
+	// digest of the Changes of the CommitRequest that made it (see
+	// DeliveryOf). Commit adds a proof to the commit that binds the
+	// repository, the trailer, the base, the branch and the digest, and
+	// FindCommit counts a commit only when its proof opens for the same five
+	// values. A commit with no proof, or with the proof of another value of
+	// one of them, is ErrUntrustedCommit. ref must be d.Branch: FindCommit
+	// searches the branch that the request committed to, so the branch in
+	// the proof is the branch where the search finds the commit. It returns
+	// ErrInvalid for a ref that is not d.Branch, for a delivery that fails
+	// ValidateDelivery, and ErrUnsupported when the connection has no key to
 	// open the proof.
+	//
+	// The proof shows that the server made a commit for these changes. It
+	// does not show that the commit holds them: FindCommit does not compare
+	// the digest with the diff of the commit.
 	FindCommit(ctx context.Context, repo, ref string, d Delivery, since time.Time) (Commit, error)
 }
 
@@ -515,9 +526,9 @@ const (
 //
 // Trailer is the trailer line that FindCommit searches for, for example
 // "Dustpan-Job: j-123". It must be a line of the last paragraph of Message.
-// The adapter adds a proof next to it that binds Trailer, Base and the
-// repository, so that FindCommit can tell this commit from a commit that a
-// person pushed with the same line.
+// The adapter adds a proof next to it that binds Trailer, Base, Branch, the
+// digest of Changes and the repository, so that FindCommit can tell this
+// commit from a commit that a person pushed with the same line.
 type CommitRequest struct {
 	Branch    string
 	NewBranch bool
@@ -528,11 +539,110 @@ type CommitRequest struct {
 	Changes   []FileChange
 }
 
-// Delivery names a commit that a write-back made: the trailer line and the base
-// commit of its CommitRequest. FindCommit takes it.
+// Delivery names a commit that a write-back made: the trailer line, the base
+// commit, the branch and the digest of the changes of its CommitRequest.
+// FindCommit takes it. DeliveryOf makes it from the request.
 type Delivery struct {
 	Trailer string
 	Base    string
+	Branch  string
+	// Changes is ChangesDigest of the changes of the request.
+	Changes string
+}
+
+// DeliveryOf returns the Delivery of the commit that req asks for.
+func DeliveryOf(req CommitRequest) Delivery {
+	return Delivery{Trailer: req.Trailer, Base: req.Base, Branch: req.Branch, Changes: ChangesDigest(req.Changes)}
+}
+
+// changesDigestPrefix starts each digest of changes. It names the hash.
+const changesDigestPrefix = "sha256:"
+
+// changesDigestPurpose starts the bytes that ChangesDigest hashes, so that
+// the digest of changes is never the hash of other data of the same bytes.
+const changesDigestPurpose = "dustpan.forge.changes.v1"
+
+// changesLengthBase is the base of the length before each part that
+// ChangesDigest hashes.
+const changesLengthBase = 10
+
+// ChangesDigest returns the digest of changes: "sha256:" and the SHA-256, as
+// lowercase hex, of the changes in their order. Each change gives its path,
+// whether it is a delete, and its content. Each part has its length before
+// it, in decimal digits and then a colon, so that no path or content can move
+// bytes into the next part. The content of a delete is not part of it.
+func ChangesDigest(changes []FileChange) string {
+	h := sha256.New()
+
+	part := func(b []byte) {
+		var n []byte
+
+		n = strconv.AppendInt(n, int64(len(b)), changesLengthBase)
+		n = append(n, ':')
+		_, _ = h.Write(n) // The write of a hash does not fail.
+		_, _ = h.Write(b) // The write of a hash does not fail.
+	}
+
+	part([]byte(changesDigestPurpose))
+	part([]byte(strconv.Itoa(len(changes))))
+
+	for _, c := range changes {
+		part([]byte(c.Path))
+
+		if c.Delete {
+			part([]byte("delete"))
+			part(nil)
+		} else {
+			part([]byte("write"))
+			part(c.Content)
+		}
+	}
+
+	return changesDigestPrefix + hex.EncodeToString(h.Sum(nil))
+}
+
+// ValidateChangesDigest checks that d has the form of a ChangesDigest:
+// "sha256:" and 64 lowercase hex digits. It returns an error that wraps
+// ErrInvalid.
+func ValidateChangesDigest(d string) error {
+	hexPart, ok := strings.CutPrefix(d, changesDigestPrefix)
+	if !ok || len(hexPart) != sha256.Size*2 {
+		return fmt.Errorf("%w: a digest of changes is sha256: and 64 hex digits", ErrInvalid)
+	}
+
+	for i := range len(hexPart) {
+		c := hexPart[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return fmt.Errorf("%w: a digest of changes has only the digits 0-9 and a-f", ErrInvalid)
+		}
+	}
+
+	return nil
+}
+
+// ValidateDelivery checks d before an adapter calls the forge: the trailer is
+// set, the base is a full commit ID, the branch is a valid branch name, and
+// the digest of the changes has its form. It returns an error that wraps
+// ErrInvalid. An adapter checks the text of the trailer with its own rules
+// too.
+func ValidateDelivery(d Delivery) error {
+	if d.Trailer == "" {
+		return fmt.Errorf("%w: the delivery has no trailer line", ErrInvalid)
+	}
+
+	if err := ValidateCommitID(d.Base); err != nil {
+		return fmt.Errorf("the base commit: %w", err)
+	}
+
+	if err := validateRef(d.Branch); err != nil {
+		return fmt.Errorf("the branch of the delivery: %w", err)
+	}
+
+	if err := ValidateChangesDigest(d.Changes); err != nil {
+		return fmt.Errorf("the changes of the delivery: %w", err)
+	}
+
+	return nil
 }
 
 // ValidateCommit checks req before an adapter calls the forge. It returns

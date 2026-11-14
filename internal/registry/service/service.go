@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -86,6 +87,13 @@ type Config struct {
 	Inspector  registry.KeyInspector
 	Blobs      blob.Store
 	Namespaces Namespaces
+	// Audit is required: it records the refused publishes.
+	Audit Auditor
+	// Logger is required: it logs a refused publish whose audit entry could not be written.
+	Logger *slog.Logger
+	// OnAuditFailure is required: it runs once for each refused publish whose audit entry
+	// could not be written, so that the loss is counted.
+	OnAuditFailure func()
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 	// MaxArchiveBytes and MaxReleaseBytes override the defaults when above zero.
@@ -93,6 +101,11 @@ type Config struct {
 	MaxReleaseBytes int64
 	// MaxModuleArchiveBytes overrides DefaultMaxModuleArchiveBytes when above zero.
 	MaxModuleArchiveBytes int64
+}
+
+// Auditor appends the entries of refused publishes. audit.Store satisfies it.
+type Auditor interface {
+	Append(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error)
 }
 
 // Service implements the use cases of the registry.
@@ -103,33 +116,60 @@ type Service struct {
 	inspector  registry.KeyInspector
 	blobs      blob.Store
 	namespaces Namespaces
+	auditor    Auditor
+	logger     *slog.Logger
+	onAudit    func()
 	now        func() time.Time
 	maxFile    int64
 	maxRelease int64
 	maxModule  int64
 }
 
-// New returns a Service. It returns ErrMissingDependency when a port is nil.
-func New(cfg Config) (*Service, error) {
+// checkConfig returns ErrMissingDependency for the first port of cfg that is nil.
+func checkConfig(cfg Config) error {
+	missing := ""
+
 	switch {
 	case cfg.Store == nil:
-		return nil, fmt.Errorf("%w: store", ErrMissingDependency)
+		missing = "store"
 	case cfg.Keys == nil:
-		return nil, fmt.Errorf("%w: key store", ErrMissingDependency)
+		missing = "key store"
 	case cfg.Verifier == nil:
-		return nil, fmt.Errorf("%w: signature verifier", ErrMissingDependency)
+		missing = "signature verifier"
 	case cfg.Inspector == nil:
-		return nil, fmt.Errorf("%w: key inspector", ErrMissingDependency)
+		missing = "key inspector"
 	case cfg.Blobs == nil:
-		return nil, fmt.Errorf("%w: blob store", ErrMissingDependency)
+		missing = "blob store"
 	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespaces", ErrMissingDependency)
+		missing = "namespaces"
+	case cfg.Audit == nil:
+		missing = "audit"
+	case cfg.Logger == nil:
+		missing = "logger"
+	case cfg.OnAuditFailure == nil:
+		missing = "audit failure hook"
+	default:
+		// Every port is set: missing stays empty.
+	}
+
+	if missing != "" {
+		return fmt.Errorf("%w: %s", ErrMissingDependency, missing)
+	}
+
+	return nil
+}
+
+// New returns a Service. It returns ErrMissingDependency when a port is nil.
+func New(cfg Config) (*Service, error) {
+	if err := checkConfig(cfg); err != nil {
+		return nil, err
 	}
 
 	s := &Service{
 		store: cfg.Store, keys: cfg.Keys, verifier: cfg.Verifier, inspector: cfg.Inspector, blobs: cfg.Blobs,
-		namespaces: cfg.Namespaces, now: cfg.Now, maxFile: cfg.MaxArchiveBytes, maxRelease: cfg.MaxReleaseBytes,
-		maxModule: cfg.MaxModuleArchiveBytes,
+		namespaces: cfg.Namespaces, auditor: cfg.Audit, logger: cfg.Logger, onAudit: cfg.OnAuditFailure,
+		now: cfg.Now, maxFile: cfg.MaxArchiveBytes,
+		maxRelease: cfg.MaxReleaseBytes, maxModule: cfg.MaxModuleArchiveBytes,
 	}
 
 	if s.now == nil {

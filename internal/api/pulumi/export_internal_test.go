@@ -23,3 +23,9 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	h.logger = slog.New(slog.DiscardHandler)
 	h.writeError(r.Context(), w, err)
 }
+
+// CheckGitHead exposes the commit allowlist of the create handler to the
+// black-box test.
+func CheckGitHead(raw string) string {
+	return acceptedGitHead(raw)
+}

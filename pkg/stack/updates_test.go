@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -793,7 +794,7 @@ func newUpdatesFull(
 func (f updatesFixture) started(t *testing.T, kind stack.UpdateKind) stack.Started {
 	t.Helper()
 
-	return f.startedPlan(t, stack.Plan{Kind: kind, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	return f.startedPlan(t, stack.Plan{Kind: kind, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""})
 }
 
 func (f updatesFixture) startedPlan(t *testing.T, plan stack.Plan) stack.Started {
@@ -940,7 +941,7 @@ func TestOneMutatingUpdateAtATime(t *testing.T) {
 	running := f.started(t, stack.KindUpdate)
 
 	second, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1034,7 +1035,10 @@ func TestDryRunsDoNotMutate(t *testing.T) {
 	ctx := t.Context()
 	running := f.started(t, stack.KindUpdate)
 
-	dry := f.startedPlan(t, stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0})
+	dry := f.startedPlan(
+		t,
+		stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
+	)
 	if dry.Update.Mutates() || dry.Update.Version != 0 {
 		t.Errorf("dry run: mutates %t version %d, want false 0", dry.Update.Mutates(), dry.Update.Version)
 	}
@@ -1303,7 +1307,7 @@ func TestCreateRecordsRequester(t *testing.T) {
 	u, err := f.svc.Create(
 		ctx,
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "alice@example.com", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "alice@example.com", RestoredFrom: 0, GitHead: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1693,7 +1697,7 @@ func TestStartSweepsOldOrphanBlobs(t *testing.T) {
 	mem.ageAll(2 * time.Hour)
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -1736,7 +1740,7 @@ func TestStartKeepsYoungBlobs(t *testing.T) {
 	}
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -1783,7 +1787,7 @@ func TestStartKeepsReferencedBlobs(t *testing.T) {
 	mem.ageAll(90 * time.Minute)
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -1832,7 +1836,7 @@ func TestStartSucceedsWhenSweepDeleteFails(t *testing.T) {
 	mem.ageAll(2 * time.Hour)
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -1930,7 +1934,7 @@ func TestCheckpointLogsHoldNoBlobKey(t *testing.T) {
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
 
-		AttemptStartedAt: clk.Now(),
+		AttemptStartedAt: clk.Now(), Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if _, err := f.store.PutCheckpoint(ctx, stored, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
@@ -2134,6 +2138,76 @@ func TestHistoryOfMissingStack(t *testing.T) {
 	}
 }
 
+// deleteAfterGetStacks deletes the stack after its first successful read, as a
+// delete that lands between the reads of History.
+type deleteAfterGetStacks struct {
+	stack.CheckpointStacks
+
+	drop func()
+	read atomic.Bool
+}
+
+func (s *deleteAfterGetStacks) GetStack(ctx context.Context, ref stack.Ref) (stack.Stack, error) {
+	st, err := s.CheckpointStacks.GetStack(ctx, ref)
+	if err != nil {
+		return stack.Stack{}, err
+	}
+
+	if s.read.CompareAndSwap(false, true) {
+		s.drop()
+	}
+
+	return st, nil
+}
+
+// withStacks returns the fixture's service with other stack reads.
+func (f updatesFixture) withStacks(t *testing.T, stacks stack.CheckpointStacks) *stack.Updates {
+	t.Helper()
+
+	svc, err := stack.NewUpdates(stack.UpdatesConfig{
+		Sealer:             f.sealer,
+		BlobGuard:          blobguardtest.None{},
+		ManualLocks:        nil,
+		Updates:            f.store,
+		Tokens:             nil,
+		Checkpoints:        f.store,
+		Events:             f.store,
+		Namespaces:         f.namespaces,
+		Stacks:             stacks,
+		Blobs:              f.blobs,
+		Now:                f.clock.Now,
+		Logger:             nil,
+		MaxCheckpointBytes: 1024,
+		Journal:            nil,
+		Replayer:           nil,
+		Refusals:           f.refusals,
+	})
+	if err != nil {
+		t.Fatalf("new updates: %v", err)
+	}
+
+	return svc
+}
+
+// TestHistoryOfStackDeletedBetweenReads proves that a stack deleted between
+// the existence check and the listing answers ErrNotFound, not an empty
+// history.
+func TestHistoryOfStackDeletedBetweenReads(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdates(t)
+	stacks := &deleteAfterGetStacks{
+		CheckpointStacks: f.store,
+		drop:             func() { f.store.dropStack(f.ref) },
+		read:             atomic.Bool{},
+	}
+
+	_, err := f.withStacks(t, stacks).History(t.Context(), f.ref, stack.Page{Limit: 0, Offset: 0})
+	if !errors.Is(err, stack.ErrNotFound) {
+		t.Fatalf("history of a stack deleted between the reads = %v, want stack.ErrNotFound", err)
+	}
+}
+
 // hookedKeepSet runs before the keep-set read of a sweep, so a test changes
 // the stack between the listing of the blobs and that read.
 type hookedKeepSet struct {
@@ -2261,7 +2335,7 @@ func TestStartSweepKeepsBlobsWhenTheStackChanges(t *testing.T) {
 			svc := f.withKeepSetHook(t, func() { tc.change(f.store, f.ref) })
 
 			preview, createErr := f.svc.Create(t.Context(), f.ref, stack.Plan{
-				Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0,
+				Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 			})
 			if createErr != nil {
 				t.Fatalf("create preview: %v", createErr)

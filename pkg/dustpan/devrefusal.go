@@ -104,10 +104,11 @@ func devRefusalAudit(cfg *settings) func(ctx context.Context, subject string) {
 		}
 
 		rec.Record(ctx, nil, person, refusal.Denial{
-			Action: session.ActionSignIn,
-			Object: identity.ServerObject(),
-			Reason: devRefusalReason,
-			Window: devRefusalWindow,
+			Action:       session.ActionSignIn,
+			Object:       identity.ServerObject(),
+			Reason:       devRefusalReason,
+			ReasonWithin: nil,
+			Window:       devRefusalWindow,
 		})
 	}
 }

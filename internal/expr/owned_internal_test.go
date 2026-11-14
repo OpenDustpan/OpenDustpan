@@ -1,6 +1,7 @@
 package expr
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -117,8 +118,10 @@ func TestCloneEnvIsDeep(t *testing.T) {
 
 // TestUncountedWorkEndsWithinTheLimit runs expressions whose work no counter
 // of the meter covers: scans of the largest list that the environment allows,
-// and of nested lists. Each must return within a short time after the limit,
-// with a result or with ErrRuleFailed, and its goroutine must end.
+// and of nested lists. The time limit is 0, so the context is already done
+// with context.DeadlineExceeded and the test does not depend on a timer. A run
+// that ends after the limit fails closed: the caller gets the error of the
+// deadline, and the goroutine of the run ends at the end of its scan.
 func TestUncountedWorkEndsWithinTheLimit(t *testing.T) {
 	t.Parallel()
 
@@ -143,6 +146,8 @@ func TestUncountedWorkEndsWithinTheLimit(t *testing.T) {
 			t.Parallel()
 
 			e := mustNew(t, NewLimiter())
+			e.timeout = 0
+
 			env := &selfservice.Env{
 				Value:   nil,
 				Inputs:  map[string]any{"l": bigList(100_000), "rows": rows},
@@ -151,22 +156,101 @@ func TestUncountedWorkEndsWithinTheLimit(t *testing.T) {
 				Request: schema().Request,
 			}
 
-			start := time.Now()
 			_, err := e.Bool(t.Context(), tc.source, env)
 
 			if errors.Is(err, errEnvTooBig) {
 				t.Fatalf("Bool() error = %v, the test environment must be under its size limit", err)
 			}
 
-			if err != nil && !errors.Is(err, selfservice.ErrRuleFailed) {
-				t.Fatalf("Bool() error = %v, want nil or ErrRuleFailed", err)
-			}
-
-			if elapsed := time.Since(start); elapsed > time.Second {
-				t.Fatalf("Bool() returned after %v, want within 1s of the limit of %v", elapsed, e.timeout)
+			if !errors.Is(err, selfservice.ErrRuleFailed) || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("Bool() error = %v, want ErrRuleFailed from the time limit", err)
 			}
 
 			waitIdle(t, e)
 		})
+	}
+}
+
+// TestRunOutcomeFailsClosedAtTheLimit checks the time limit of a run that
+// ended. When the context is done, the outcome is the error of the deadline,
+// also when the run gave a result. In run, the result and the end of the
+// context can be ready together, and select then picks one at random.
+func TestRunOutcomeFailsClosedAtTheLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		ctx      func(*testing.T) context.Context
+		result   runResult
+		want     any
+		wantErrs []error
+	}{
+		{
+			name:     "result after the limit",
+			ctx:      pastLimit,
+			result:   runResult{out: true, err: nil},
+			want:     nil,
+			wantErrs: []error{selfservice.ErrRuleFailed, context.DeadlineExceeded},
+		},
+		{
+			name:     "error after the limit",
+			ctx:      pastLimit,
+			result:   runResult{out: nil, err: selfservice.ErrLimit},
+			want:     nil,
+			wantErrs: []error{selfservice.ErrRuleFailed, context.DeadlineExceeded},
+		},
+		{
+			name:     "result within the limit",
+			ctx:      (*testing.T).Context,
+			result:   runResult{out: true, err: nil},
+			want:     true,
+			wantErrs: nil,
+		},
+		{
+			name:     "error within the limit",
+			ctx:      (*testing.T).Context,
+			result:   runResult{out: nil, err: selfservice.ErrLimit},
+			want:     nil,
+			wantErrs: []error{selfservice.ErrRuleFailed, selfservice.ErrLimit},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := runOutcome(tc.ctx(t), tc.result)
+			checkRunOutcome(t, got, err, tc.want, tc.wantErrs)
+		})
+	}
+}
+
+// pastLimit answers a context whose time limit has passed.
+func pastLimit(t *testing.T) context.Context {
+	t.Helper()
+
+	ctx, cancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	t.Cleanup(cancel)
+
+	return ctx
+}
+
+// checkRunOutcome checks the outcome of runOutcome against want and the
+// errors that err must wrap.
+func checkRunOutcome(t *testing.T, got any, err error, want any, wantErrs []error) {
+	t.Helper()
+
+	if got != want {
+		t.Errorf("runOutcome() = %v, want %v", got, want)
+	}
+
+	if len(wantErrs) == 0 && err != nil {
+		t.Fatalf("runOutcome() error = %v, want nil", err)
+	}
+
+	for _, wantErr := range wantErrs {
+		if !errors.Is(err, wantErr) {
+			t.Errorf("runOutcome() error = %v, want %v", err, wantErr)
+		}
 	}
 }
