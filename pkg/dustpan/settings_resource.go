@@ -17,7 +17,8 @@ const drainPeriodKey = "server.drainPeriod"
 func drainPeriodDeclaration(period time.Duration) setting.Declaration {
 	return setting.Declaration{
 		Key: drainPeriodKey, Level: setting.LevelInstallation, Kind: setting.KindString, Default: period.String(),
-		Secret: false, Database: false, Apply: setting.ApplyRestart, Check: nil, ReducesSecurity: nil,
+		Secret: false, Database: false, StaticCredentialHost: false, Apply: setting.ApplyRestart, Check: nil,
+		ReducesSecurity: nil,
 		Doc: "The time between the stop signal and the start of the shutdown. In it, GET /health/ready " +
 			"answers 503 and the server serves all other requests, so a load balancer takes the instance " +
 			"out of its pool.",
