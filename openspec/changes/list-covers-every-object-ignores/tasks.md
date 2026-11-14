@@ -5,7 +5,7 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Add the conformance row that leaves out a namespace. Check: `go test ./pkg/identity/identitytest -count=1`
-- [ ] 1.2 Add store tests of the NOT IN filter and the bound. Check: `go test ./pkg/store/... -count=1`
+- [ ] 1.2 Add store tests of the NOT IN filter and of the paged read at 200 names and one past it. Check: `go test ./pkg/store/... -count=1`
 
 ## 2. Side effects (computed from main)
 

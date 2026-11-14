@@ -17,7 +17,7 @@
 
 - [ ] 3.1 Wire both routes with actions installation:manage-settings and namespace:manage-settings. Check: The route policy test lists both routes with their actions.
 - [ ] 3.2 Add the proposed amendment text of ADR 245 decision 10 for the owner. Check: The pull request lists the text and the owner confirmation.
-- [ ] 3.3 Add an e2e step: PATCH /api/dustpan/v1/settings with a console session cookie that holds a fresh step, and the same weaker patch with an access token that is refused; then run the real Pulumi CLI and OpenTofu with a token. Check: make e2e step settings passes
+- [ ] 3.3 Add an e2e step on `PATCH /api/dustpan/v1/settings` with a console session cookie that holds a fresh step, and the same weaker patch with an access token that is refused. BLOCKED by the missing e2e helper that makes a console session cookie with a fresh step; the step adds it. Then run the real Pulumi CLI and OpenTofu with a token. Check: make e2e step settings passes
 - [ ] 3.4 Write the docs page. Check: make docs-lint passes
 - [ ] 3.5 Run the usability check from the docs page alone. Check: Each error names the one command that helps.
 - [ ] 3.6 Run the full gate. Check: make check with zero findings
