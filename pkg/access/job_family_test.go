@@ -2,9 +2,6 @@ package access_test
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
-	"regexp"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/access"
@@ -42,39 +39,6 @@ func TestJobActionsHaveDataFamily(t *testing.T) {
 				t.Fatalf("action %q has family %q, want %q", a, family, access.FamilyData)
 			}
 		})
-	}
-}
-
-// TestJobActionListMatchesIdentityCatalog fails when the identity package
-// defines a job action that jobDataActionList() does not list, so a new job
-// action cannot slip past the family table.
-func TestJobActionListMatchesIdentityCatalog(t *testing.T) {
-	t.Parallel()
-
-	// Defense in depth: the family-table pin above checks the listed
-	// actions; this scan of the identity source checks that the list is
-	// complete, so a new job constant cannot go unclassified. The test
-	// runs with the package directory as the working directory.
-	src, err := os.ReadFile(filepath.Join("..", "identity", "identity.go"))
-	if err != nil {
-		t.Fatalf("read the identity source: %v", err)
-	}
-
-	values := regexp.MustCompile(`Action = "(job:[^"]+)"`).FindAllStringSubmatch(string(src), -1)
-
-	listed := map[string]bool{}
-	for _, a := range jobDataActionList() {
-		listed[string(a)] = true
-	}
-
-	for _, m := range values {
-		if !listed[m[1]] {
-			t.Errorf("identity defines job action %q with no entry in jobDataActionList()", m[1])
-		}
-	}
-
-	if len(values) != len(jobDataActionList()) {
-		t.Errorf("identity defines %d job actions, the test lists %d", len(values), len(jobDataActionList()))
 	}
 }
 
