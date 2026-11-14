@@ -47,6 +47,18 @@ A person who also holds cloud credentials can change the cloud from a
 workstation. The role does not prevent that. To limit it, do not give cloud
 credentials to a planner.
 
+## Refused actions
+
+A planner reads state with secret values masked. A planner cannot pull the
+full OpenTofu state: the download answers plain secret values, so it needs
+`unit:read-secrets`, which the role does not hold. Each write and each
+secret reveal answers 403 with the error code `access.denied`. The server
+records each refusal.
+
+- `pulumi up` or `pulumi destroy` as planner is refused.
+- `tofu apply` or `tofu destroy` as planner is refused.
+- A read of the plain text of a secret value as planner is refused.
+
 ## Give the role
 
 Make a grant with the role `planner` on the installation. A grant with the role
