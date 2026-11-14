@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Roadmap: `docs/roadmap.md:280` (Policy and approvals).

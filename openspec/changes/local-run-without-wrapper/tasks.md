@@ -21,7 +21,7 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Wire route with authorization actions and audit entries. Check: TFE-compatible lock route checks run-plan or run-apply on the workspace object and upload checks run-apply; route test passes.
-- [ ] 3.2 Add e2e step against real OpenTofu and fake cloud provider, using the route /api/v2/workspaces/{}/actions/lock with an access token and a runner job through /runner/v1 with a job token. BLOCKED by strict-case-takes-turns for the queue. Check: e2e step replays plain tofu apply during a running runner apply and checks provider log order on Linux with PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.2 Add e2e step in the NEW file e2e/local_run_without_wrapper_test.go against real OpenTofu and fake cloud provider, using the route /api/v2/workspaces/{}/actions/lock with an access token and a runner job through /runner/v1 with a job token. BLOCKED by strict-case-takes-turns for the queue. Check: e2e step replays plain tofu apply during a running runner apply and checks provider log order on Linux with PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.3 Write guide section for plain run lock behavior. Check: Docs page runs as written from a developer laptop. Confirmed by: CI (an e2e step in the NEW file e2e/local_run_without_wrapper_docs_test.go runs each command of the docs page against the e2e test server).
 - [ ] 3.4 Run usability check of user path. Check: Developer completes plain apply and reads holder from docs page alone; each error names one command. A person's step.
 - [ ] 3.5 Run full check suite. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

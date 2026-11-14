@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Roadmap: `docs/roadmap.md:300` (Write-back).
@@ -81,7 +81,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: main_facts[1]: `pkg/forge/github/commit_test.go:465` is in func TestCommitMessageHasTheAuthorAsCoAuthor, not TestCommitNeedsATrailerInTheLastBlock.
+none
 
 Questions considered and answered:
 

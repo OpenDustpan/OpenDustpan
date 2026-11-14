@@ -10,7 +10,7 @@
 
 ## 3. Verification
 
-- [ ] 3.1 In NEW file e2e/ldap_sign_in_test.go, E2E: route `POST /api/dustpan/v1/sign-in/providers/{provider}/password` with the LDAP user name and password credential: sign-in over TLS; plain connection refused with the opt-in off, allowed with it on, refused again with it off. Check: `make e2e` runs `TestLDAPSignIn` on SQLite and PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.1 Extend the existing e2e/ldap_signin_test.go (TestLDAPSignIn at :28) with the steps that main lacks. E2E: route `POST /api/dustpan/v1/sign-in/providers/{provider}/password` with the LDAP user name and password credential: sign-in over TLS; plain connection refused with the opt-in off, allowed with it on, refused again with it off. Check: `make e2e` runs `TestLDAPSignIn` on SQLite and PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.2 In internal/ldapauth/hostile_test.go and NEW file cmd/opendustpan/ldap_hostile_test.go, hostile tests for the settings, the connection, the method and the handler, and one test per guard that fails when the guard is removed. Check: `go test -race ./cmd/opendustpan/ ./pkg/dustpan/ ./internal/ldapauth/ ./internal/signinsvc/ ./internal/api/server/`.
 - [ ] 3.3 Update `docs/guides/ldap-sign-in.md`: the lockout setting, its risk, and "groups are read and not applied". Check: `make docs-lint` exits 0.
 - [ ] 3.4 In docs/guides/ldap-sign-in.md, usability check: a person follows the guide alone against the test directory and signs in. Each error they cause names the setting or the one command that helps. Check: the steps and the errors are in the pull request description. A person's step.

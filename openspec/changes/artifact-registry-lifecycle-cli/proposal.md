@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:379` (Support yank, revoke, and registry read commands.).
