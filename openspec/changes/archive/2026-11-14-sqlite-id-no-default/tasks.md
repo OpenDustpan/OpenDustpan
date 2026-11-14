@@ -26,7 +26,7 @@
 
 ## 3. Verification
 
-- [ ] 3.1 The existing store conformance tests pass. Check:
+- [x] 3.1 The existing store conformance tests pass. Check:
   `go test ./pkg/store/sqlite` passes, and the PostgreSQL command passes with a
   test database.
-- [ ] 3.2 `make check` reports zero findings. Check: the command exits 0.
+- [x] 3.2 `make check` reports zero findings. Check: the command exits 0.

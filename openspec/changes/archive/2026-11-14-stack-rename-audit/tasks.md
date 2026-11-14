@@ -12,5 +12,5 @@
 ## 3. Documentation and verification
 
 - [x] 3.1 Add one sentence to `docs/guides/audit-log.md`: a stack rename writes an entry with the old and the new name. Check: `make docs-lint` exits 0.
-- [ ] 3.2 Run `go test ./pkg/stack/... ./pkg/store/sqlite/... ./pkg/store/postgres/... ./internal/api/pulumi/...` with `-timeout 60m` for each store package. Check: the packages pass.
-- [ ] 3.3 Run `make check`. Check: zero findings.
+- [x] 3.2 Run `go test ./pkg/stack/... ./pkg/store/sqlite/... ./pkg/store/postgres/... ./internal/api/pulumi/...` with `-timeout 60m` for each store package. Check: the packages pass.
+- [x] 3.3 Run `make check`. Check: zero findings.

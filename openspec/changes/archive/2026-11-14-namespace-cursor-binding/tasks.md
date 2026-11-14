@@ -18,5 +18,5 @@
 ## 3. Docs and checks
 
 - [x] 3.1 `docs/reference/namespaces-api.md` (new): the list route, its `limit` and `cursor` parameters, the answer fields, and the rule that a cursor works only with the query that made it, and that another query answers 400 `request.page-token-invalid`. Check: `make docs-lint` exits 0.
-- [ ] 3.2 `go test ./internal/api/server/... ./pkg/dustpan/...` and `go vet ./internal/api/server/...` report nothing.
-- [ ] 3.3 `make check` reports zero findings.
+- [x] 3.2 `go test ./internal/api/server/... ./pkg/dustpan/...` and `go vet ./internal/api/server/...` report nothing.
+- [x] 3.3 `make check` reports zero findings.
