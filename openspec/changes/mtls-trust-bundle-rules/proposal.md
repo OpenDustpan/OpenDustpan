@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:188` (Bundle and rule API with audit ships first.).
@@ -56,8 +56,8 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main has the trust rule domain package (`pkg/trustrule`)
 - Main has a workload token exchange test that this part does not replace (`e2e/workload_test.go:38 (func TestWorkloadTokenExchange)`)
+- Main has a test that the trust token lives the exchange lifetime (`pkg/accesstoken/trust_token_test.go:59 (func TestTrustTokenLivesTheExchangeLifetime)`)
 
 ## ADR check
 
@@ -65,7 +65,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 **ADR 54: Workload identity: OIDC and JWT token exchange, and mTLS** (not owner-tagged).
 
-- Decisions that apply: 4 (current), 5 (changed), 8 (changed).
+- Decisions that apply: 4 (current), 8 (changed).
 - Changed by: ADR 69 extends; ADR 70 changes decisions 5 and 8; ADR 204 changes decision 3; ADR 222 extends decision 5; ADR 223 extends decision 5; ADR 284 changes decision 3; ADR 369 changes decision 6. Chain to the end: ADR 69, ADR 70, ADR 204, ADR 222, ADR 223, ADR 284, ADR 369, ADR 297, ADR 142, ADR 210, ADR 216, ADR 227, ADR 245, ADR 306, ADR 320, ADR 321, ADR 332, ADR 354, ADR 248, ADR 286, ADR 335, ADR 351, ADR 240, ADR 313, ADR 362, ADR 370, ADR 301, ADR 333, ADR 149, ADR 247, ADR 273, ADR 339, ADR 295, ADR 363.
 - Current rule: this ADR, with ADR 69, 70, 204, 222, 223, 284, 369.
 - Quote: "mTLS client certificates. A workload can prove its identity with a TLS client certificate. The server checks the certificate against a trust bundle that an administrator configures."
@@ -111,7 +111,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: main_facts[0]: "where" is not file:line (func Name).
+none
 
 Questions considered and answered:
 

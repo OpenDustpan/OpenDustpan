@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Issue: #1325.
@@ -34,11 +34,11 @@ Out of scope:
 - Test window 0 refuses age 0 and an old step Check: TestFreshWindowZeroAsksEachTime fails on main
 - Test the 403 names the sign-in path Check: TestStaleErrorNamesSignInPath fails on main
 - Test age equal to a nonzero window is fresh Check: TestFreshBoundaryEqualsWindow fails on main
+- Test an out-of-range window value is refused Check: TestFreshWindowConstructorRefusesOutOfRange fails on main
 - Comment on fresh() names mfa.fresh-step-required Check: rg -n 'mfa.fresh-step-required' pkg/breakglass/breakglass.go
 - Route keeps its authorization actions Check: Route test passes
 - E2E step: POST /api/dustpan/v1/sign-in/providers/{provider}/password with a stale session cookie, then a guarded step, checks the 403 path Check: make e2e
 - Docs page lists the 403 text Check: make docs-lint
-- Usability check from the docs page alone Check: Site administrator completes the path
 
 ## What main already does
 
@@ -73,11 +73,16 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. Do the Pulumi CLI decrypt routes need a fresh authentication? Decides: owner.
-   - Options: Add a fresh check to the decrypt routes; Leave the decrypt routes unchanged and record why.
-   - Recommended: Leave the decrypt routes unchanged and record why Reason: The CLI sends an access token, which never gives fresh authentication, so a check would break each run.
+none
 
-Not spec-ready: a code check fails: threat 1 (A caller with a stale session does a gua): no guard and hostile test for encode or contain, limit.
+Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
+
+1. Do the Pulumi CLI decrypt routes need a fresh authentication?
+   - Options: Add a fresh check to the decrypt routes; Leave the decrypt routes unchanged and record why.
+   - Provisional decision (owner review 14 Nov): Leave the decrypt routes unchanged and record why
+   - Reason: The CLI sends an access token, which never gives fresh authentication, so a check would break each run. Benchmark: AWS: CLI calls with access keys do not ask to sign in again.
+   - Persona impact: A check would break each CLI run with an access token. Escape hatch: The routes stay unchanged and the reveal step keeps its fresh check.
+   - Owner-tagged ADRs involved: ADR 227, ADR 297 (their words do not change).
 
 Questions considered and answered:
 

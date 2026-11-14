@@ -7,6 +7,7 @@
 - [ ] 1.1 Test window 0 refuses age 0 and an old step Check: TestFreshWindowZeroAsksEachTime fails on main
 - [ ] 1.2 Test the 403 names the sign-in path Check: TestStaleErrorNamesSignInPath fails on main
 - [ ] 1.3 Test age equal to a nonzero window is fresh Check: TestFreshBoundaryEqualsWindow fails on main
+- [ ] 1.4 Test an out-of-range window value is refused Check: TestFreshWindowConstructorRefusesOutOfRange fails on main
 
 ## 2. Side effects (computed from main)
 

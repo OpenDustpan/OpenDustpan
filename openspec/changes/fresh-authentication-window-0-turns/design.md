@@ -47,6 +47,8 @@ flowchart LR
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
 | Client to server | E | A caller with a stale session does a guarded step when the window is 0. | boundary check | The fresh time comes only from the sealed access cookie. | Send a forged fresh-time header and check for 403. |
+| Client to server | E | A caller with a stale session does a guarded step when the window is 0. | encode or contain | The window is an unexported freshWindow value made only by newFreshWindow, so no raw integer reaches the check. | Call newFreshWindow with 30, 1000 and -1 and check that each is refused. |
+| Client to server | E | A caller with a stale session does a guarded step when the window is 0. | limit | The window accepts only 0 and 60 to 900 seconds, so no value turns the check off or makes it longer. | Store a window of 100000 and check that the step still refuses a stale session. |
 | Client to server | E | A caller with a stale session does a guarded step when the window is 0. | authorize at point of use | requireFresh compares age at the step and refuses at window 0. | Window 0 and age 0 gives 403. |
 | Client to server | E | A caller with a stale session does a guarded step when the window is 0. | fail closed | An unreadable window gives 0. | Fail the settings read and check for 403. |
 
