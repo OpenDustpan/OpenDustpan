@@ -4,7 +4,7 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write failing conformance cases in `internal/quota/quotatest/quotatest.go` for ErrExceeded, first use, released reservation, expired reservation, atomic Record, empty checks, repeated key, window expiry, inline pruning, stale fence, settled plus reserved usage, destroy, lower max, SetEnd, settle idempotency, release of a missing row, and rolled-back Reserve. Check: `go test ./internal/quota/quotatest/...` names the missing SQL cases
+- [ ] 1.1 Write failing conformance cases in `internal/quota/quotatest/quotatest.go` for ErrExceeded, first use, released reservation, expired reservation, atomic Record, empty checks, repeated key, window expiry, inline pruning, stale fence, settled plus reserved usage, destroy, lower max, SetEnd, and rolled-back Reserve. The end of a reservation keeps the cases that main's suite has: `testSettle` (a repeat settle changes nothing; a release of a settled reservation is `quota.ErrEnded`), `testRelease` (a repeat release changes nothing; a settle of a released reservation is `quota.ErrEnded`) and `testUnknown` (an unknown ID is `quota.ErrNotFound`) in `internal/quota/quotatest/quotatest.go`; do not change their expected errors. Check: `go test ./internal/quota/quotatest/...` names the missing SQL cases
 - [ ] 1.2 Extend the in-memory reference adapter in `internal/quota/quotatest/mem_test.go` when the suite needs it. Check: `go test -race ./internal/quota/...` passes on the in-memory adapter
 
 ## 2. Adapter

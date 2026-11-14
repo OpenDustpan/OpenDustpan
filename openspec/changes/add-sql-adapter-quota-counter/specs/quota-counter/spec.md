@@ -108,9 +108,17 @@ When a reservation is released, expires, settles, or gets a new end time, the se
 - **WHEN** SetEnd runs for a reservation
 - **THEN** the new endsAt controls expiry
 
-#### Scenario: release of a missing row succeeds
-- **WHEN** release or settle runs for an unknown or already expired reservation
-- **THEN** the server returns success and changes no row
+#### Scenario: release or settle of an unknown reservation is ErrNotFound
+- **WHEN** release or settle runs for a reservation ID that the counter has no row for
+- **THEN** the counter returns an error that wraps `quota.ErrNotFound` and changes no row
+
+#### Scenario: release of a settled or settle of a released reservation is ErrEnded
+- **WHEN** release runs for a settled reservation, or settle runs for a released reservation
+- **THEN** the counter returns an error that wraps `quota.ErrEnded` and changes no row
+
+#### Scenario: a repeat release or settle changes nothing
+- **WHEN** release runs again for a released reservation, or settle runs again for a settled reservation
+- **THEN** the counter returns no error and changes no row
 
 ### Requirement: rollback-stores-nothing
 
