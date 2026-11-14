@@ -154,6 +154,25 @@ The definition of done for a change is:
   alone, and each error names the one command that helps;
 - `make check` with zero findings.
 
+### Tick and archive
+
+The pull request that completes a task ticks that task in `tasks.md`. A pull
+request that completes only some tasks of a change ticks those tasks and leaves
+the others open.
+
+The pull request that completes the last task of a change ticks its tasks and
+archives the change with the `openspec` command, in the same pull request:
+`npx @fission-ai/openspec@1.15.0 archive <change> --yes`. The command moves the
+change to `openspec/changes/archive/` and merges its spec deltas into
+`openspec/specs/`. Do not move the files by hand.
+
+Do not tick a task that is not done. If a task moves to another issue, write the
+issue next to the task and leave the box open.
+
+A reviewer refuses a pull request that completes tasks without ticking them. A
+reviewer also refuses a pull request that completes the last task of a change
+and does not archive it.
+
 ### Validation
 
 Run `npx @fission-ai/openspec@1.15.0 validate --all` and `make docs-lint`.
