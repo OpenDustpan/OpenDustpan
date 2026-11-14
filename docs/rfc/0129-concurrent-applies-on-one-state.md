@@ -1,15 +1,16 @@
 ---
 rfc: 129
 title: Concurrent applies on one state, the six open points of ADR 302
-status: discussing
+status: accepted
+adr: 368
 created: 2026-11-14
 ---
 
 # RFC 129. Concurrent applies on one state: the six open points of ADR 302
 
-Status: discussing. The owner accepted points 1 to 3 and 5 to 7 on 14
+Status: accepted (ADR 368, ADR 369). The owner accepted points 1 to 3 and 5 to 7 on 14
 November 2026 as recommended ([ADR 368](../adr/0368-concurrent-applies-apply-claims-server-serial-fences-and-the-closure-test.md)).
-Point 4 stays open. This is the RFC that ADR 302 decision 6 asks for. It
+Point 4 was decided the same day ([ADR 369](../adr/0369-the-actor-of-a-job-trust-rules-and-external-service-principals.md)). This is the RFC that ADR 302 decision 6 asks for. It
 touches ADR 26 decision 3, ADR 44 decisions 1 and 9, ADR 100 decision 20 and
 ADR 299 decision 19. It does not edit an accepted ADR. An owner decision on
 it gives a new ADR, and milestone 8 code starts only after that ADR (ADR 302
@@ -275,8 +276,12 @@ working on, and someone must look before anyone else writes there.
 
 ### 4. One principal for each job on the TFE-compatible path
 
-**Open.** The owner did not take the recommendation on 14 November 2026,
-and will give the industry view of this point. The options stay as written.
+**Decided** by the owner on 14 November 2026 ([ADR 369](../adr/0369-the-actor-of-a-job-trust-rules-and-external-service-principals.md)). The credential
+mechanics of option A stand: the job token names the apply claim, and the
+launcher token of the local wrapper is bound to its apply claim. The identity
+is always the actual actor that a stored trust rule resolves, never the job.
+ADR 369 adds three layers (identity, grants, conditions on the verified token
+claims) and four kinds of actor.
 
 **Context.** ADR 44 decision 9: "The server makes no attempt to tell two
 clients with one token apart while one of them holds the lock. Distinct
@@ -493,8 +498,7 @@ so an address change never passes the closure test.
 
 ## Open questions
 
-- Point 4: how the server tells the jobs apart on the TFE-compatible path, and
-  if that needs one principal for each job. The owner decides.
+None. ADR 368 and ADR 369 decide all points.
 
 ## Checklist
 
@@ -506,4 +510,4 @@ so an address change never passes the closure test.
 
 Points 1 to 3 and 5 to 7 accepted by the owner on 14 November 2026:
 [ADR 368](../adr/0368-concurrent-applies-apply-claims-server-serial-fences-and-the-closure-test.md).
-Point 4 is open.
+Point 4 accepted by the owner on 14 November 2026: [ADR 369](../adr/0369-the-actor-of-a-job-trust-rules-and-external-service-principals.md).

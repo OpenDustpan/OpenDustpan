@@ -175,4 +175,4 @@ both together.
 | [125](0125-blast-radius-index.md) | An index of the unit graph and the blast radius that is fast and small | discussing; design only |
 | [126](0126-placement-replication-and-moves.md) | Placement, routing, replication and moves: one design for RFCs 37, 66 and 88 | draft |
 | [128](0128-reach-growth-and-token-managers.md) | Reach growth and token managers | discussing |
-| [129](0129-concurrent-applies-on-one-state.md) | Concurrent applies on one state: the six open points of ADR 302 | discussing; points 1 to 3 and 5 to 7 accepted (ADR 368); point 4 open |
+| [129](0129-concurrent-applies-on-one-state.md) | Concurrent applies on one state: the six open points of ADR 302 | accepted (ADR 368, ADR 369) |
