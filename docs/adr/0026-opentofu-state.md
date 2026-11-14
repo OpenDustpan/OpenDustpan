@@ -12,6 +12,8 @@ Changed by:
 - ADR 45 changes decisions 4 and 5: the state size default and checks while
   the upload streams.
 - ADR 220 changes decision 2: the state blob key gets a namespace prefix.
+- ADR 368 changes decision 3: under a live apply claim, the server assigns the
+  serial.
 
 ## Context
 
