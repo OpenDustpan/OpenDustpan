@@ -89,10 +89,12 @@ A row holds these fields:
 
 | Field | Meaning |
 | --- | --- |
-| `grantID` | The ID of the grant. It is empty on a bootstrap row. |
-| `subject` | The holder, `principal:<id>` or `group:<id>#member`. |
+| `grantID` | The ID of the grant. It is empty on a code-rule row. |
+| `subject` | The holder, `principal:<id>` or `group:<id>#member`. It is empty on a code-rule row. |
 | `subjectName` | The name of the holder. |
 | `holder` | `bootstrap admin token` on a bootstrap row only. |
+| `source` | Where the row comes from: `grant` for a stored grant, `code-rule` for a row that a code rule gives with no stored grant. |
+| `rule` | The code rule of a code-rule row, for example `bootstrap admin token`. It is empty on a grant row. |
 | `role` | The role of the grant. |
 | `object` | The object of the grant. |
 | `objectState` | `live`, `deleted` or `purged`. |
@@ -108,7 +110,10 @@ A row holds these fields:
 A bootstrap row is the bootstrap administrator token. Every review lists it when
 the request has no `subject` filter. On the installation review it has no
 `inheritedFrom`. On any other review, `inheritedFrom` is `@server`, the
-installation.
+installation. Its `source` is `code-rule` and its `rule` is `bootstrap admin
+token`: the token holds every action by a code rule with no stored grant
+record, and it ends on the first sign-in of a person. See the catalog of code
+rules for that rule.
 
 ## Read a history
 

@@ -126,9 +126,9 @@ func runCollectionGrantScopeOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install
 
 	checkWriterScope(t, env, pulumiCLI, tofuCLI, writer)
 	checkViewerScope(t, env, pulumiCLI, tofuCLI, viewer)
+	checkScopeReview(ctx, t, env, writerGrant, viewerGrant)
 	checkScopeRevocation(ctx, t,
 		scopeRunnerFor(t, env, pulumiCLI, writer), scopeRunnerFor(t, env, tofuCLI, writer), writerGrant.ID)
-	checkScopeReview(ctx, t, env, writerGrant, viewerGrant)
 }
 
 // scopeSetup makes the namespace, the two collections and the placement
@@ -319,8 +319,10 @@ func scopeRefused(t *testing.T, res e2e.Result, what string) {
 
 	out := res.Stdout + "\n" + res.Stderr
 
-	if res.ExitCode == 0 || !strings.Contains(out, "403") {
-		t.Fatalf("%s exits %d without a 403, want a refusal:\n%s", what, res.ExitCode, out)
+	// The Pulumi CLI prints the status number; OpenTofu prints the TFE error
+	// text "forbidden" with the refused action.
+	if res.ExitCode == 0 || (!strings.Contains(out, "403") && !strings.Contains(out, "forbidden: the action")) {
+		t.Fatalf("%s exits %d without a 403 or a forbidden action, want a refusal:\n%s", what, res.ExitCode, out)
 	}
 }
 
@@ -596,12 +598,31 @@ func scopeViewerReadsWithoutSecrets(t *testing.T, env *e2e.Env, tofu *scopeRunne
 		t.Fatalf("GET current state version of a as viewer answers %d (%v), want 200:\n%s", status, err, body)
 	}
 
+	var sv scopeWorkspace
+
+	if jsonErr := json.Unmarshal([]byte(body), &sv); jsonErr != nil || sv.Data.ID == "" {
+		t.Fatalf("GET current state version of a as viewer: no id in %s (%v)", body, jsonErr)
+	}
+
+	// The state download answers plain secret values: the server refuses it
+	// to a viewer with 403 (the viewer may see the workspace, so the refusal
+	// is visible, not a hidden 404).
+	status, body, err = env.TFEStatus(
+		ctx, viewer.token.Secret, http.MethodGet, "/api/v2/state-versions/"+sv.Data.ID+"/download", "",
+	)
+	if err != nil || status != http.StatusForbidden || !strings.Contains(body, "unit:read-secrets") {
+		t.Fatalf("GET state download of a as viewer answers %d (%v), want 403 that names unit:read-secrets:\n%s",
+			status, err, body)
+	}
+
+	// OpenTofu prints the refusal as text, without the status number.
 	res := tofu.run(ctx, "opentofu", "a", "state", "pull")
 	out := res.Stdout + "\n" + res.Stderr
 
-	if res.ExitCode == 0 || !strings.Contains(out, "403") || !strings.Contains(out, "unit:read-secrets") {
+	if res.ExitCode == 0 || !strings.Contains(out, "forbidden") || !strings.Contains(out, "unit:read-secrets") {
 		t.Fatalf(
-			"tofu state pull of team-a as viewer exits %d, want a 403 that names unit:read-secrets:\n%s",
+			"tofu state pull of team-a as viewer exits %d, want a refusal that says forbidden and names "+
+				"unit:read-secrets:\n%s",
 			res.ExitCode,
 			out,
 		)
@@ -610,8 +631,8 @@ func scopeViewerReadsWithoutSecrets(t *testing.T, env *e2e.Env, tofu *scopeRunne
 	scopeViewerHidden(ctx, t, env, viewer)
 }
 
-// scopeWorkspace is the part of a TFE workspace document that the viewer
-// steps read.
+// scopeWorkspace is the part of a TFE document (a workspace or a state
+// version) that the viewer steps read: its ID.
 type scopeWorkspace struct {
 	Data scopeWorkspaceData `json:"data"`
 }
@@ -688,11 +709,46 @@ func checkScopeRevocation(
 	scopeRefused(t, pulumi.run(ctx, "pulumi", "a", "stack", "export"),
 		"pulumi stack export after the revoke")
 
-	// The revoked writer keeps no grant in the namespace, so OpenTofu hides
-	// the workspace with the same 404 as for an unknown one; the run still
-	// fails on the next request.
-	scopeHidden(t, tofu.run(ctx, "opentofu", "a", "state", "pull"),
-		"tofu state pull after the revoke")
+	// The revoked writer keeps no grant in the namespace, so the namespace
+	// itself is hidden: OpenTofu reads the organization first and gets the
+	// same 404 as for an unknown organization. OpenTofu prints that 404 as
+	// "not found", without the status number.
+	res := tofu.run(ctx, "opentofu", "a", "state", "pull")
+	out := res.Stdout + "\n" + res.Stderr
+
+	if res.ExitCode == 0 || !strings.Contains(out, `organization "`+scopeNamespace+`"`) ||
+		!strings.Contains(out, "not found") {
+		t.Fatalf("tofu state pull after the revoke exits %d, want the organization not found:\n%s", res.ExitCode, out)
+	}
+
+	scopeOrganizationHidden(ctx, t, tofu.env, tofu.person)
+}
+
+// scopeOrganizationHidden proves, with direct HTTP calls, that the scope
+// namespace answers the person the same 404 body as an unknown organization,
+// once only the name is normalized: no existence oracle.
+func scopeOrganizationHidden(ctx context.Context, t *testing.T, env *e2e.Env, person *scopePerson) {
+	t.Helper()
+
+	const missing = "no-such-organization"
+
+	path := func(org string) string { return "/api/v2/organizations/" + org + "/entitlement-set" }
+
+	status, body, err := env.TFEStatus(ctx, person.token.Secret, http.MethodGet, path(scopeNamespace), "")
+	statusMissing, bodyMissing, errMissing := env.TFEStatus(ctx, person.token.Secret, http.MethodGet, path(missing), "")
+
+	if err != nil || errMissing != nil {
+		t.Fatalf("GET entitlement set after the revoke: %v, %v", err, errMissing)
+	}
+
+	if status != http.StatusNotFound || statusMissing != http.StatusNotFound ||
+		scopeNormalize(body, scopeNamespace) != scopeNormalize(bodyMissing, missing) {
+		t.Fatalf(
+			"GET entitlement set after the revoke answers %d, an unknown organization %d, want the same 404:"+
+				"\n--- %s ---\n%s\n--- missing ---\n%s",
+			status, statusMissing, scopeNamespace, body, bodyMissing,
+		)
+	}
 }
 
 // checkScopeReview proves that the access-review export of collection team-a
@@ -730,17 +786,7 @@ func checkScopeReview(
 	for i := range doc.Grants {
 		row := &doc.Grants[i]
 
-		if row.Holder == "" || row.Role == "" || row.Object == "" {
-			t.Fatalf("the review row %+v misses the holder, role or object", row)
-		}
-
-		if row.GrantedBy == "" || row.GrantedAtMs == nil {
-			t.Fatalf("the review row %+v misses the creator or time", row)
-		}
-
-		if !allowed[row.Object] {
-			t.Fatalf("the review row %+v names an object outside collection team-a", row)
-		}
+		checkScopeRow(t, row, allowed)
 
 		seen[row.GrantID] = true
 	}
@@ -749,6 +795,58 @@ func checkScopeReview(
 		if !seen[id] {
 			t.Fatalf("the access-review export of team-a misses the grant %s", id)
 		}
+	}
+}
+
+// checkScopeRow proves that one row of the access-review export of
+// collection team-a names its role and object, and that the object belongs
+// to the collection. A row with source "grant" names its holder in subject
+// and subjectName, and keeps the grant ID, the creator and the time; a row
+// with source "code-rule" names its holder in holder and the rule
+// "bootstrap admin token" of the catalog of code rules, with no grant ID,
+// creator or time. Any other source fails the test.
+func checkScopeRow(t *testing.T, row *e2eReviewRow, allowed map[string]bool) {
+	t.Helper()
+
+	if row.Role == "" || row.Object == "" {
+		t.Fatalf("the review row %+v misses the role or object", row)
+	}
+
+	checkScopeSource(t, row)
+
+	if !allowed[row.Object] {
+		t.Fatalf("the review row %+v names an object outside collection team-a", row)
+	}
+}
+
+// checkScopeSource proves that a row of the access-review export of
+// collection team-a names a known source. A row with source "grant" names
+// its holder in subject and subjectName, and keeps the grant ID, the creator
+// and the time; a row with source "code-rule" names its holder in holder and
+// the rule "bootstrap admin token" of the catalog of code rules, with no
+// grant ID, creator or time. Any other source fails the test.
+func checkScopeSource(t *testing.T, row *e2eReviewRow) {
+	t.Helper()
+
+	switch row.Source {
+	case "grant":
+		if row.Subject == "" || row.SubjectName == "" {
+			t.Fatalf("the review row %+v misses the holder", row)
+		}
+
+		if row.GrantID == "" || row.GrantedBy == "" || row.GrantedAtMs == nil {
+			t.Fatalf("the review row %+v misses the grant ID, creator or time", row)
+		}
+	case "code-rule":
+		if row.Holder == "" {
+			t.Fatalf("the review row %+v misses the holder", row)
+		}
+
+		if row.Rule != "bootstrap admin token" {
+			t.Fatalf("the review row %+v names no known code rule", row)
+		}
+	default:
+		t.Fatalf("the review row %+v has no known source", row)
 	}
 }
 
