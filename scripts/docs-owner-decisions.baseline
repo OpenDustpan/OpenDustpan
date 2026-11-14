@@ -1,0 +1,789 @@
+docs/adr/0047-soft-delete-and-units-stay-in-their-namespace.md	The owner said that retention is "Configurable, default to 30 days or
+docs/adr/0047-soft-delete-and-units-stay-in-their-namespace.md	model" can restore a unit. The owner said about a move between namespaces:
+docs/adr/0047-soft-delete-and-units-stay-in-their-namespace.md	something reasonable". The owner said that "a user with permission by our FGA
+docs/adr/0059-hosted-service-has-no-feature-gap.md	latest tagged release, for example for an urgent fix. The owner said on
+docs/adr/0072-scale-out-on-one-database.md	The owner said: "We can do whatever we want before the first tag."
+docs/adr/0077-the-hosted-service-is-opendustpan-cloud.md	# 77. The name of the hosted service is OpenDustpan Cloud (owner)
+docs/adr/0124-agents-never-see-decrypted-secrets.md	- **Hosted: per-account opt-in plus the same second stage** (owner
+docs/adr/0130-runner-pools-runners-and-coordinators.md	1. **A runner is a coordinator (owner, for the two kinds).** A runner is a
+docs/adr/0130-runner-pools-runners-and-coordinators.md	3. **A pool has a purpose that never changes (owner).** The purpose is
+docs/adr/0130-runner-pools-runners-and-coordinators.md	4. **The word (owner).** The owner's text says "sweeps", and this design
+docs/adr/0130-runner-pools-runners-and-coordinators.md	5. **A pool for sweeps is read-only (owner).** A pool for sweeps carries a
+docs/adr/0130-runner-pools-runners-and-coordinators.md	6. **One claim at a time by default (owner).** A pool has a concurrency
+docs/adr/0130-runner-pools-runners-and-coordinators.md	The project owner approved every decision of this ADR. The label "(owner)"
+docs/adr/0131-the-runner-protocol.md	5. **The long poll (owner).** A poll waits for work for at most 50 seconds
+docs/adr/0131-the-runner-protocol.md	9. **Cancel (owner).** A renewal during a cancel answers
+docs/adr/0131-the-runner-protocol.md	Status: accepted · 2026-10-18 · adds to ADR 101 decisions 2, 13 and 15. Decision 7: decision 4 governs the release of a claim after the session wait (owner, 2026-10-19). `RunnerRenew` releases no claim. It returns `runner.ErrSessionWaitPassed`, and the handler releases the claim through `job.Claimer` or `SweepClaimer` (PR #881)
+docs/adr/0131-the-runner-protocol.md	The project owner approved every decision of this ADR. The label "(owner)"
+docs/adr/0132-runner-protocol-versions-and-skew.md	2. **The skew rule (owner).** A server of release `X.Y.Z` accepts a runner
+docs/adr/0132-runner-protocol-versions-and-skew.md	releases of skew between the server and a runner (owner). The project
+docs/adr/0133-runner-identities-and-tokens.md	10. **The deliveries of a handoff token (owner)** (`runner.HandoffFor`):
+docs/adr/0133-runner-identities-and-tokens.md	11. **Job sessions (owner).** The launcher makes an Ed25519 key pair in
+docs/adr/0133-runner-identities-and-tokens.md	2. **Join tokens (owner).** A principal with `namespace:manage-runners`
+docs/adr/0133-runner-identities-and-tokens.md	6. **Key rotation (owner).** A key older than 25 days gets `rotateKey` in
+docs/adr/0133-runner-identities-and-tokens.md	7. **A join again of an idle runner (owner).** A runner that was offline
+docs/adr/0133-runner-identities-and-tokens.md	9. **Handoff tokens (owner, for the deliveries).** For each claim, the
+docs/adr/0133-runner-identities-and-tokens.md	The project owner decided on 17 October 2026 (owner):
+docs/adr/0134-the-launcher-contract.md	- **OpenTofu (owner).** The launcher writes a CLI configuration that
+docs/adr/0134-the-launcher-contract.md	- **Pulumi (owner).** The launcher writes the credentials file of a
+docs/adr/0134-the-launcher-contract.md	1. **One static binary (owner).** `dustpan-launcher` is pure Go, with no
+docs/adr/0134-the-launcher-contract.md	5. **A step is an argument list (owner).** The launcher starts `Args[0]`
+docs/adr/0134-the-launcher-contract.md	7. **Credentials go to the tool step only (owner).** Before a step of the
+docs/adr/0134-the-launcher-contract.md	9. **Timeouts and signals (owner).** The launcher owns the deadline of
+docs/adr/0134-the-launcher-contract.md	The project owner approved every decision of this ADR. The label "(owner)"
+docs/adr/0134-the-launcher-contract.md	The project owner decided on 17 October 2026 (owner):
+docs/adr/0135-the-source-pipeline.md	1. **A source snapshot (owner).** A **source snapshot** is the code of one
+docs/adr/0135-the-source-pipeline.md	2. **The server gets the pack (owner).** At the start of a runner job, the
+docs/adr/0135-the-source-pipeline.md	4. **The launcher checks the pack (owner).** Before it writes a file, the
+docs/adr/0135-the-source-pipeline.md	6. **The source policy (owner).** A namespace has a source policy
+docs/adr/0135-the-source-pipeline.md	7. **Git credentials of a step (owner).** A tool that runs git during a
+docs/adr/0135-the-source-pipeline.md	The project owner approved every decision of this ADR. The label "(owner)"
+docs/adr/0135-the-source-pipeline.md	The project owner decided on 17 October 2026 (owner):
+docs/adr/0136-the-kubernetes-coordinator.md	1. **One Job for each claim (owner).** For each claim of a phase or a sweep,
+docs/adr/0136-the-kubernetes-coordinator.md	10. **The validation matrix (owner).** The e2e tests of the Kubernetes
+docs/adr/0136-the-kubernetes-coordinator.md	3. **The TokenReview pull (owner).** The coordinator serves one HTTPS path,
+docs/adr/0136-the-kubernetes-coordinator.md	The project owner approved every decision of this ADR. The label "(owner)"
+docs/adr/0136-the-kubernetes-coordinator.md	The project owner decided on 17 October 2026 (owner):
+docs/adr/0137-the-machine-coordinator.md	1. **A static coordinator on its own host (owner).** The machine runner is
+docs/adr/0137-the-machine-coordinator.md	2. **Three sandboxes (owner)** (`runner.Isolation`):
+docs/adr/0137-the-machine-coordinator.md	5. **The handoff (owner)** (`runner.HandoffFor`):
+docs/adr/0137-the-machine-coordinator.md	8. **No VM for each job (owner).** The coordinator never creates a cloud VM
+docs/adr/0137-the-machine-coordinator.md	The project owner approved every decision of this ADR. The label "(owner)"
+docs/adr/0137-the-machine-coordinator.md	The project owner decided on 17 October 2026 (owner):
+docs/adr/0139-runner-dependencies-and-the-runner-module.md	1. **`client-go` for the Kubernetes coordinator (owner).** The adapter of
+docs/adr/0139-runner-dependencies-and-the-runner-module.md	2. **go-containerregistry for the machine coordinator (owner).** The
+docs/adr/0139-runner-dependencies-and-the-runner-module.md	Status: accepted · 2026-10-30. Accepted by [ADR 282](0282-runners-and-remote-runs-accept-rfc-6.md), from owner decisions of 18 and 26 October 2026. Decides the choices that ADR 136 decision 9 and ADR 137 decision 4 park. Decision 4 superseded by ADR 282 decision 4: the runner lives in its own repository, `OpenDustpan/dustpan-runner`
+docs/adr/0154-history-gaps-found-before-the-implementation.md	The store checks that `key.Ref` names the item that it creates (owner,
+docs/adr/0170-provider-wrappers-and-the-providerkit-module.md	- gRPC APIs (owner: "later gRPC"). A gRPC engine needs the descriptors of
+docs/adr/0170-provider-wrappers-and-the-providerkit-module.md	1. **No server-side fact adapter (owner).** The server never calls an IPAM,
+docs/adr/0170-provider-wrappers-and-the-providerkit-module.md	2. **Three ways to make a provider (owner).** A team declares an HTTP
+docs/adr/0170-provider-wrappers-and-the-providerkit-module.md	3. **A separate repository (owner).** The project owner decided on 18
+docs/adr/0170-provider-wrappers-and-the-providerkit-module.md	4. **The gates of this repository, copied (owner).** The new repository has
+docs/adr/0170-provider-wrappers-and-the-providerkit-module.md	7. **Pure Go (owner).** Every binary of the module builds with
+docs/adr/0170-provider-wrappers-and-the-providerkit-module.md	The label "(owner)" names a decision that a text of the owner of 17 or 18
+docs/adr/0170-provider-wrappers-and-the-providerkit-module.md	The project owner decided on 17 October 2026 (owner):
+docs/adr/0171-the-provider-declaration-format.md	the Pulumi CLI (owner). A CLI provider comes from a description too.
+docs/adr/0173-the-http-engine-and-its-execution-port.md	- gRPC APIs (owner: "later gRPC").
+docs/adr/0173-the-http-engine-and-its-execution-port.md	or state in plain text where that can be avoided (owner).
+docs/adr/0173-the-http-engine-and-its-execution-port.md	pagination, retries, and drift detection through read (owner). Secrets pass
+docs/adr/0174-the-cli-engine-and-its-execution-port.md	2. **An argument list, no shell (owner).** The command starter starts the
+docs/adr/0174-the-cli-engine-and-its-execution-port.md	the launcher, and parses the output as JSON (owner). ADR 101 decision 10,
+docs/adr/0175-secrets-in-provider-wrappers.md	1. **A credential enters only through the provider configuration (owner).**
+docs/adr/0175-secrets-in-provider-wrappers.md	plain text where that can be avoided (owner).
+docs/adr/0176-one-core-two-protocol-adapters.md	an OpenTofu provider and a Pulumi provider (owner). The owner left the method
+docs/adr/0178-the-provider-sdk-for-authors.md	conventions as a declared provider (owner).
+docs/adr/0179-conformance-suites-for-provider-wrappers.md	writes and declares providers of its own (owner). A team then needs a way to
+docs/adr/0180-console-themes-color-schemes-and-preferences.md	1. **Two themes (owner).** The default theme is quiet and serious. It uses
+docs/adr/0180-console-themes-color-schemes-and-preferences.md	11. **A preset is not a user scheme (owner).** The palette of
+docs/adr/0180-console-themes-color-schemes-and-preferences.md	2. **Keyboard shortcuts (owner).** The selection of the Terminal theme
+docs/adr/0180-console-themes-color-schemes-and-preferences.md	4. **No work only for phones (owner).** The themes get no design for small
+docs/adr/0180-console-themes-color-schemes-and-preferences.md	5. **Color schemes from Gogh (owner).** The Terminal theme offers color
+docs/adr/0180-console-themes-color-schemes-and-preferences.md	label "(owner)".
+docs/adr/0180-console-themes-color-schemes-and-preferences.md	license file or in its text (owner). Nord comes from the official Nord
+docs/adr/0181-console-languages-formats-and-translation.md	1. **The languages of the first release (owner).** The console ships 32
+docs/adr/0181-console-languages-formats-and-translation.md	10. **One message file for each language (owner).** The console keeps each
+docs/adr/0181-console-languages-formats-and-translation.md	11. **Text that is neutral to gender (owner).** A message never selects a
+docs/adr/0181-console-languages-formats-and-translation.md	13. **Machine-made values are never translated (owner).** Names, URNs,
+docs/adr/0181-console-languages-formats-and-translation.md	14. **Logical CSS properties (owner).** The console uses logical properties,
+docs/adr/0181-console-languages-formats-and-translation.md	17. **Do not translate too much (owner).** Each language has a list of terms
+docs/adr/0181-console-languages-formats-and-translation.md	18. **A native speaker signs off the list (owner).** An engineer whose
+docs/adr/0181-console-languages-formats-and-translation.md	19. **Machine translation with inputs (owner).** A first translation comes
+docs/adr/0181-console-languages-formats-and-translation.md	2. **The default is the browser (owner).** With no setting, the console
+docs/adr/0181-console-languages-formats-and-translation.md	20. **Native review for high-stakes text (owner).** A native speaker
+docs/adr/0181-console-languages-formats-and-translation.md	22. **A pseudo-locale (owner).** Test builds of the console have the
+docs/adr/0181-console-languages-formats-and-translation.md	23. **Modern Standard Arabic (owner).** The `ar` messages are in Modern
+docs/adr/0181-console-languages-formats-and-translation.md	25. **Digits follow the formatting locale, with an override (owner).** The
+docs/adr/0181-console-languages-formats-and-translation.md	3. **A person can select any language (owner).** Settings lists each
+docs/adr/0181-console-languages-formats-and-translation.md	31. **Charts with a time axis (owner).** The direction of time in a chart
+docs/adr/0181-console-languages-formats-and-translation.md	4. **The language and the formats are separate settings (owner).** The
+docs/adr/0181-console-languages-formats-and-translation.md	5. **Overrides for each person (owner).** On top of the formatting locale, a
+docs/adr/0181-console-languages-formats-and-translation.md	from them. Each decision of the owner has the label "(owner)". The project
+docs/adr/0182-stable-error-codes-for-api-errors.md	1. **A stable machine code for each error (owner).** Each error that an API
+docs/adr/0182-stable-error-codes-for-api-errors.md	2. **The console never parses English text (owner).** The console selects
+docs/adr/0182-stable-error-codes-for-api-errors.md	an error. This ADR records that decision with the label "(owner)", and the
+docs/adr/0183-console-accessibility-and-mobile-platform-behavior.md	"(owner)", and the design decisions that follow from them.
+docs/adr/0183-console-accessibility-and-mobile-platform-behavior.md	1. **Designed against WCAG 2.2 AA (owner).** The project designs the
+docs/adr/0183-console-accessibility-and-mobile-platform-behavior.md	3. **An axe gate in the console e2e suite (owner).** The e2e suite runs axe
+docs/adr/0183-console-accessibility-and-mobile-platform-behavior.md	5. **Screen-reader checks in acceptance (owner).** A screen or a flow that
+docs/adr/0183-console-accessibility-and-mobile-platform-behavior.md	6. **Platform behaviors are acceptance checks (owner).** A screen or a flow
+docs/adr/0190-change-orders-an-object-above-jobs.md	(owner, ADR 128 decision 10). An agent records no verdict: it submits
+docs/adr/0190-change-orders-an-object-above-jobs.md	The project owner decided on 18 October 2026 (owner):
+docs/adr/0190-change-orders-an-object-above-jobs.md	each of these principals (owner). An agent never becomes an author:
+docs/adr/0190-change-orders-an-object-above-jobs.md	jobs (owner), through `job.Service` and the wiring:
+docs/adr/0190-change-orders-an-object-above-jobs.md	of its jobs (owner). The `job.Decider` adapter gives no gate of the type
+docs/adr/0190-change-orders-an-object-above-jobs.md	the label "(owner)". This pull request holds design only: ADRs, ports and
+docs/adr/0191-plan-revisions-unit-plans-and-signatures.md	6. **A new plan resets the signatures (owner).** An attach voids each
+docs/adr/0191-plan-revisions-unit-plans-and-signatures.md	that the signatures reset when a new plan is attached (owner). So the
+docs/adr/0192-reviews-approve-request-changes-and-reject.md	Reject and close (owner). Request changes and Reject and close each
+docs/adr/0192-reviews-approve-request-changes-and-reject.md	`changeorder.ErrReasonRequired` (owner).
+docs/adr/0192-reviews-approve-request-changes-and-reject.md	each group (owner). `changeorder.Eligible` holds the rule, and a
+docs/adr/0192-reviews-approve-request-changes-and-reject.md	the verdicts of a reviewer (owner):
+docs/adr/0192-reviews-approve-request-changes-and-reject.md	| `reject-and-close` | an eligible approver, never an author, never an agent | required | The change order ends `closed` (owner). |
+docs/adr/0192-reviews-approve-request-changes-and-reject.md	| `request-changes` | an eligible approver, never an author, never an agent | required | Opens at least one request-changes thread. The change order stays open (owner). |
+docs/adr/0193-threads-anchors-and-draft-reviews.md	10. **A dismissal needs a reason (owner).** A resolve of a blocking thread
+docs/adr/0193-threads-anchors-and-draft-reviews.md	comments on parts of it. The owner decided (owner):
+docs/adr/0193-threads-anchors-and-draft-reviews.md	still blocks approval until a person resolves it (owner). The console
+docs/adr/0193-threads-anchors-and-draft-reviews.md	with no agent reference (owner, ADR 128 decision 13):
+docs/adr/0194-the-review-view-of-a-big-plan.md	"Needs attention", one by one, and never in a change group (owner). A
+docs/adr/0194-the-review-view-of-a-big-plan.md	(`changeorder.View`) has the cause first, then the effect (owner). The
+docs/adr/0194-the-review-view-of-a-big-plan.md	a big plan (owner):
+docs/adr/0200-profiles-config-secrets-and-credentials-for-every-tool.md	1. **A domain package `pkg/profile` (owner).** The package is tool-neutral.
+docs/adr/0200-profiles-config-secrets-and-credentials-for-every-tool.md	The project owner decided on 18 October 2026 (owner):
+docs/adr/0200-profiles-config-secrets-and-credentials-for-every-tool.md	of the owner has the label "(owner)". The other decisions are the design of
+docs/adr/0200-profiles-config-secrets-and-credentials-for-every-tool.md	we do not take are the evaluation of ESC syntax (owner), `policyConfig`
+docs/adr/0201-the-profile-document-imports-and-expressions.md	owner also asked for a design that is easy to use, not clunky (owner).
+docs/adr/0201-the-profile-document-imports-and-expressions.md	with the ESC language (owner). A migration tool may come later. The
+docs/adr/0204-opendustpan-as-an-oidc-issuer.md	(owner).
+docs/adr/0204-opendustpan-as-an-oidc-issuer.md	an audience for each target and short lifetimes (owner). The login
+docs/adr/0205-the-claims-of-an-issued-token-and-the-subject.md	A person's e-mail address is not in a token by default (owner).
+docs/adr/0205-the-claims-of-an-issued-token-and-the-subject.md	products (owner):
+docs/adr/0206-the-profile-provider-port-rotators-and-conformance.md	8. **A conformance suite for each port (owner).** `providertest` holds
+docs/adr/0206-the-profile-provider-port-rotators-and-conformance.md	The project owner decided on 18 October 2026 (owner):
+docs/adr/0207-the-built-in-profile-providers.md	- `outputs/opendustpan` is the bridge between the tools (owner). A
+docs/adr/0207-the-built-in-profile-providers.md	The project owner decided on 18 October 2026 (owner):
+docs/adr/0208-the-external-adapter-protocol.md	The project owner decided on 18 October 2026 (owner):
+docs/adr/0209-how-each-tool-reads-a-profile.md	1. **Two client programs (owner).** This ADR supersedes the sentence of the
+docs/adr/0209-how-each-tool-reads-a-profile.md	10. **The warning in the docs (owner).** The docs page of the data source
+docs/adr/0209-how-each-tool-reads-a-profile.md	3. **Never store, and the ephemeral resource (owner).** `ephemeral
+docs/adr/0209-how-each-tool-reads-a-profile.md	4. **The provider authenticates as OpenTofu does (owner).** The provider
+docs/adr/0209-how-each-tool-reads-a-profile.md	5. **The Pulumi CLI, through the Pulumi Cloud-compatible API (owner).** The
+docs/adr/0209-how-each-tool-reads-a-profile.md	The project owner decided on 18 October 2026 (owner):
+docs/adr/0209-how-each-tool-reads-a-profile.md	server never evaluates ESC syntax (owner: no ESC language
+docs/adr/0210-the-tool-neutral-api-prefix-paths-actions-versions-and-style.md	6. **Every mutating route takes an `Idempotency-Key` (owner decision
+docs/adr/0210-the-tool-neutral-api-prefix-paths-actions-versions-and-style.md	Decision 6 is an owner decision of 2026-10-18.
+docs/adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md	**Approvals (owner decision 2026-10-18).** An approval of a gate of a
+docs/adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md	7. **One settings API (owner decision 2026-10-18).** The installation has
+docs/adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md	Decision 7 and the approval part of decision 3 are owner decisions of
+docs/adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md	10. **Manual locks (owner decision 2026-10-18).** A person can put a manual
+docs/adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md	Decision 10 is an owner decision of 2026-10-18.
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	# 215. The namespace is the tenant, and OpenDustpan Cloud is multitenant (owner)
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	- **Notices (owner).** The server sends a notification (ADR 145) to the
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	- **Work in progress runs to its end (owner).** A Pulumi update with a
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	1. **OpenDustpan Cloud is multitenant (owner).** OpenDustpan Cloud runs
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	12. **One person in two namespaces has two principals (owner).** Each
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	13. **The namespace owns deprovisioning (owner).** The namespace
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	16. **Four states (owner).** A namespace has one of these states:
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	18. **Not decided (owner).** The server has no billing object, no billing
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	2. **The namespace is the tenant (owner).** The server has no object above
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	3. **The word "account" (owner).** "Account" is the label of the hosted
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	4. **One host, with the namespace in the path (owner).** OpenDustpan Cloud
+docs/adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md	9. **Each principal and each group has a home (owner).** The home of a
+docs/adr/0216-namespace-administration-and-operator-scope.md	# 216. Namespace administration and operator scope: where each installation action goes (owner)
+docs/adr/0216-namespace-administration-and-operator-scope.md	1. **Operator scope and namespace scope (owner).** The operator scope is
+docs/adr/0216-namespace-administration-and-operator-scope.md	SSO of the namespace (owner). This replaces ADR 70 decision 11 for the
+docs/adr/0217-customer-managed-keys-for-each-namespace.md	# 217. Customer-managed keys for each namespace: the key hierarchy and rotation (owner)
+docs/adr/0217-customer-managed-keys-for-each-namespace.md	(owner).** A namespace administrator starts it with
+docs/adr/0217-customer-managed-keys-for-each-namespace.md	1. **Four levels (owner).** From the top:
+docs/adr/0217-customer-managed-keys-for-each-namespace.md	17. **The customer key (owner).** A rotation in the KMS makes a new key
+docs/adr/0217-customer-managed-keys-for-each-namespace.md	18. **The namespace key (owner).** A rotation makes a new namespace key
+docs/adr/0218-what-a-namespace-is-for-and-when-to-make-one.md	# 218. What a namespace is for, and when to make a namespace or a collection (owner)
+docs/adr/0218-what-a-namespace-is-for-and-when-to-make-one.md	1. **A namespace is a boundary (owner).** It is the smallest object that
+docs/adr/0218-what-a-namespace-is-for-and-when-to-make-one.md	3. **A blueprint never serves another namespace (owner).** A request of the
+docs/adr/0218-what-a-namespace-is-for-and-when-to-make-one.md	4. **One namespace can be backed up and restored (owner).** This adds to
+docs/adr/0219-a-static-lock-can-turn-a-feature-off.md	# 219. A lock in the static layer can turn a feature off (owner)
+docs/adr/0219-a-static-lock-can-turn-a-feature-off.md	1. **A lock can set a switch to off (owner).** The static layer can lock
+docs/adr/0220-isolation-between-namespaces-on-shared-infrastructure.md	# 220. Isolation between namespaces on shared infrastructure (owner)
+docs/adr/0220-isolation-between-namespaces-on-shared-infrastructure.md	(owner). It replaces the name `quota.storageBytes` of RFC 68, because
+docs/adr/0221-no-bucket-of-the-customer.md	# 221. No bucket of the customer (owner)
+docs/adr/0221-no-bucket-of-the-customer.md	1. **No bucket of the customer (owner).** OpenDustpan Cloud stores the blobs
+docs/adr/0221-no-bucket-of-the-customer.md	2. **Data residency: self-host (owner).** A customer that must keep its
+docs/adr/0222-one-model-for-access-gates-approvals-and-facts.md	1. **Five parts (owner).** One model answers the three questions:
+docs/adr/0222-one-model-for-access-gates-approvals-and-facts.md	2. **Six decision points (owner).** `change.propose`, `change.planned`,
+docs/adr/0222-one-model-for-access-gates-approvals-and-facts.md	3. **One decision record for each evaluation (owner).** The record explains
+docs/adr/0222-one-model-for-access-gates-approvals-and-facts.md	5. **No outcome relaxes another (owner).** Each part can only add a refusal,
+docs/adr/0222-one-model-for-access-gates-approvals-and-facts.md	6. **Stored in the server, configured through the API (owner).** Gates,
+docs/adr/0222-one-model-for-access-gates-approvals-and-facts.md	7. **Cedar, linked and as a service (owner).** The server links `cedar-go`
+docs/adr/0222-one-model-for-access-gates-approvals-and-facts.md	9. **Never claim compliance (owner).** A starter pack is "designed against"
+docs/adr/0222-one-model-for-access-gates-approvals-and-facts.md	decision 16, owner decision of 2026-10-18).
+docs/adr/0223-access-limits-cedar-forbid-policies-for-each-scope.md	1. **Forbid only (owner).** An access limit is one Cedar `forbid` policy. A
+docs/adr/0224-gates-at-fixed-decision-points.md	**A break-glass for gates in error (owner, 2026-10-18).** A person can
+docs/adr/0224-gates-at-fixed-decision-points.md	**`onError: skip` (owner, 2026-10-18).** The author of a gate can set
+docs/adr/0224-gates-at-fixed-decision-points.md	1. **A gate (owner).** A gate is a stored object with these fields:
+docs/adr/0224-gates-at-fixed-decision-points.md	12. **Final gates (owner, 2026-10-18).** A narrower scope never changes the
+docs/adr/0224-gates-at-fixed-decision-points.md	13. **An error fails closed (owner).** A diagnostic error of the engine
+docs/adr/0224-gates-at-fixed-decision-points.md	14. **Combining (owner).** For each unit, in this order:
+docs/adr/0224-gates-at-fixed-decision-points.md	16. **`state.write`: writes from a person's own CLI (owner, 2026-10-18).**
+docs/adr/0224-gates-at-fixed-decision-points.md	2. **Six decision points (owner).**
+docs/adr/0224-gates-at-fixed-decision-points.md	4. **One Cedar request for each unit (owner).** The server evaluates all the
+docs/adr/0224-gates-at-fixed-decision-points.md	6. **Exemptions with `unless` (owner).** A wider gate carves out its own
+docs/adr/0224-gates-at-fixed-decision-points.md	9. **One deep engine port, two adapters (owner).** The port `gate.Engine`
+docs/adr/0225-approval-rules-approval-defaults-and-ownership-rules.md	(owner, 2026-10-18). `owners` is not an approval rule, and a gate
+docs/adr/0225-approval-rules-approval-defaults-and-ownership-rules.md	**Who may approve a default with no approvers (owner, 2026-10-18).** Any
+docs/adr/0225-approval-rules-approval-defaults-and-ownership-rules.md	1. **An approval rule is data (owner).** An approval rule has these fields:
+docs/adr/0225-approval-rules-approval-defaults-and-ownership-rules.md	12. **Signatures can carry over to an identical plan (owner, 2026-10-18).**
+docs/adr/0225-approval-rules-approval-defaults-and-ownership-rules.md	2. **Sources of requirements (owner, 2026-10-18).** A requirement comes
+docs/adr/0225-approval-rules-approval-defaults-and-ownership-rules.md	4. **Approval defaults (owner).** An approval default can be set on a
+docs/adr/0225-approval-rules-approval-defaults-and-ownership-rules.md	5. **Fresh MFA for approvals (owner).** An approval of a change that holds a
+docs/adr/0225-approval-rules-approval-defaults-and-ownership-rules.md	6. **Distinct people (owner).** The approvals across all the requirements of
+docs/adr/0225-approval-rules-approval-defaults-and-ownership-rules.md	9. **Ownership rules (owner).** An ownership rule is stored in the server and
+docs/adr/0226-facts-typed-versioned-fact-documents.md	**Scope of the built-in gates (owner, 2026-10-18).** Each built-in gate
+docs/adr/0226-facts-typed-versioned-fact-documents.md	1. **A fact (owner).** A fact is a typed value that the server produces
+docs/adr/0226-facts-typed-versioned-fact-documents.md	10. **External checks (owner).** An external check is a producer of facts.
+docs/adr/0226-facts-typed-versioned-fact-documents.md	13. **Named path sets (owner, 2026-10-18).** A path set is a stored object
+docs/adr/0226-facts-typed-versioned-fact-documents.md	3. **A missing fact is a typed value (owner).** Each fact always has a value
+docs/adr/0226-facts-typed-versioned-fact-documents.md	8. **Cost gates (owner).** A cost gate is an ordinary gate at
+docs/adr/0226-facts-typed-versioned-fact-documents.md	9. **Source filter (owner).** The setting of ADR 135 decision 6 is now the
+docs/adr/0226-facts-typed-versioned-fact-documents.md	The credential kinds are an owner decision of 2026-10-18. A token that a
+docs/adr/0227-one-fresh-authentication-window.md	2. **One window everywhere (owner).** The installation has one setting,
+docs/adr/0227-one-fresh-authentication-window.md	3. **0 asks every time (owner, 2026-10-18).** A window of 0 asks for a
+docs/adr/0228-expr-computes-values-only.md	1. **Values only (owner).** Expr computes values: a profile value in `${ }`
+docs/adr/0228-expr-computes-values-only.md	2. **One package (owner).** One package, `internal/expr`, holds the Expr
+docs/adr/0228-expr-computes-values-only.md	3. **One builtin set (owner).** One list, `expr.Builtins`, holds the
+docs/adr/0229-decision-records-simulate-and-starter-packs.md	1. **One record for each evaluation (owner).** Each evaluation of a decision
+docs/adr/0229-decision-records-simulate-and-starter-packs.md	3. **A warn blocks auto-apply (owner).** `autoApply` is `true` only when the
+docs/adr/0229-decision-records-simulate-and-starter-packs.md	4. **Fixed controls in the record (owner).** The record shows the state of
+docs/adr/0229-decision-records-simulate-and-starter-packs.md	6. **The simulate route (owner).** `POST .../namespaces/{namespace}/gates/simulate`
+docs/adr/0229-decision-records-simulate-and-starter-packs.md	7. **Starter packs (owner).** A starter pack is a set of gates and approval
+docs/adr/0230-gate-configuration-actions-routes-errors-and-audit.md	1. **In the server, through the API (owner).** Gates, access limits,
+docs/adr/0231-afrikaans.md	1. **Afrikaans (owner).** The set of ADR 181 decision 1 gets Afrikaans
+docs/adr/0231-afrikaans.md	the label "(owner)".
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	1. **Three statuses (owner).** Each translated message and each language
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	10. **Native speakers where the owner finds them (owner).** The owner asks
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	11. **The project owner reviews English, Dutch and Afrikaans (owner).** The
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	12. **The review order (owner).** Reviewers check high-stakes messages
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	14. **A term list can ship as a draft (owner).** ADR 181 decision 18 needs
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	16. **The user documentation gets translations now (owner).** The user
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	4. **A note on an unchecked language (owner).** When a language has the
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	5. **A report of one string (owner).** A person reports one wrong
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	7. **Credit for each translator and reviewer (owner).** The console and the
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	8. **Machine translation first (owner).** A new string gets a machine
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	9. **A translation agent and a review agent (owner).** An AI translation
+docs/adr/0232-translation-status-credits-and-the-machine-translation-note.md	This ADR records these decisions of the owner with the label "(owner)",
+docs/adr/0233-message-rules-and-the-checks-of-each-translation.md	1. **A shared list and a list for each language (owner).** One shared term
+docs/adr/0234-where-server-text-is-localized-errors-emails-and-chat.md	11. **One package for server messages (owner).** A package in `internal/`
+docs/adr/0234-where-server-text-is-localized-errors-emails-and-chat.md	5. **The language of a notice (owner).**
+docs/adr/0234-where-server-text-is-localized-errors-emails-and-chat.md	6. **The formats of a notice (owner).** The server formats numbers with
+docs/adr/0234-where-server-text-is-localized-errors-emails-and-chat.md	messages. Those decisions have the label "(owner)".
+docs/adr/0235-operator-branding-the-product-name-logo-colors-and-agent-name.md	(owner).** The console and the emails and chat messages of ADR 234 show
+docs/adr/0235-operator-branding-the-product-name-logo-colors-and-agent-name.md	1. **Four things (owner).** An operator can change the application name,
+docs/adr/0235-operator-branding-the-product-name-logo-colors-and-agent-name.md	owner with the label "(owner)", and the design decisions that follow from
+docs/adr/0236-accessibility-gates-in-the-console-checks-and-for-every-language.md	1. **The target stays "designed against WCAG 2.2 AA" (owner).** ADR 183
+docs/adr/0236-accessibility-gates-in-the-console-checks-and-for-every-language.md	2. **An axe gate in the console's checks (owner).** The unit tests of the
+docs/adr/0236-accessibility-gates-in-the-console-checks-and-for-every-language.md	6. **The email check runs in the console repository (owner).** A Go test
+docs/adr/0236-accessibility-gates-in-the-console-checks-and-for-every-language.md	of the owner with the label "(owner)", and the design decisions that
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	1. **Two server commands (owner).** The binary gets a second server
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	12. **A one-time sign-in link (owner).** At the first start of a data
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	13. **Credentials of the CLIs in `dev.env` and `dev.tfrc` (owner).** `dev`
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	16. **HTTP by default, and `--tls` (owner).** `dev` serves plain HTTP by
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	17. **The certificate of `--tls` (owner).** With `--tls`, `dev` makes one
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	19. **The namespace `dev` (owner).** `dev` creates the namespace `dev` when
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	23. **The name (owner).** The marker is the _installation kind_. Its values
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	4. **A directory for each user by default (owner).** `dev` keeps its data
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	5. **`--ephemeral` (owner).** `--ephemeral` makes a new directory with
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	an owner decision may have one too. The other decisions are the design of RFC 75 that the owner accepted
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	start gate. A decision of the owner has the label "(owner)". A decision of
+docs/adr/0237-opendustpan-dev-a-server-for-a-trial-and-the-installation-kind.md	store (owner). The banner names the guide page for trusting the leaf
+docs/adr/0241-an-import-is-an-api-resource-that-the-server-runs.md	1. **The import tool and the guide, both now (owner).** OpenDustpan gets an
+docs/adr/0241-an-import-is-an-api-resource-that-the-server-runs.md	A decision of the owner has the label "(owner)". A decision of the product
+docs/adr/0242-what-an-import-moves-history-sealing-and-secrets.md	11. **The server seals every imported state at rest (owner).** An imported
+docs/adr/0242-what-an-import-moves-history-sealing-and-secrets.md	8. **Secrets under the service provider are re-encrypted (owner).** For a
+docs/adr/0244-the-move-check-the-guide-pages-and-the-e2e-steps.md	1. **One unit first, then a whole namespace (owner).** The move check for
+docs/adr/0246-a-helm-chart-for-opendustpan-serve.md	5. **An external PostgreSQL database only (owner).** The chart runs no
+docs/adr/0265-a-unit-shows-all-its-states-with-one-fixed-set-of-words.md	Issue #933 holds the owner decisions 26.1 and 26.2 of 18 October 2026. ADR 222
+docs/adr/0265-a-unit-shows-all-its-states-with-one-fixed-set-of-words.md	Status: accepted · 2026-10-20. Decisions 1 to 4 are owner decisions. Decisions 5 to 14 are decided by the product manager under the owner's delegation of 20 October 2026. Extends ADR 13. Supersedes in part ADR 213 decision 9: the vocabulary now holds `locked`, derived from the lock flag (decision 5). Accepts RFC 26
+docs/adr/0266-a-saved-view-is-a-server-object-with-an-api.md	1. **A saved view is a server object with an API (owner decision 40.3).** The
+docs/adr/0269-private-providers-and-modules-are-uploaded-as-the-archive-set.md	Decisions 1 to 3 are owner decisions. Decisions 4 to 11 are decided by the
+docs/adr/0271-the-forge-port-git-host-connections-and-the-installation-level-github-app.md	Status: accepted · 2026-10-20. Decisions 1 to 11 and 13 are owner decisions. The project manager decided details of decisions 8, 10, 12 and 13 on the same day, under the owner's delegation. Amends ADR 213 decision 7. Accepts RFC 89, except its questions 4 and 11
+docs/adr/0272-the-public-sdk-surface.md	Status: accepted · 2026-10-22. Decisions 1 to 3 are owner decisions. Supersedes decision 1 of ADR 35 in part. Amends ADR 2 and ADR 35 (the rule on ports and services). Accepts RFC 103
+docs/adr/0274-dialect-neutral-store-logic.md	Status: accepted · 2026-10-22. Decisions 1 to 7 are owner decisions. Supersedes two decisions of ADR 3 in part. Accepts RFC 104
+docs/adr/0275-the-typescript-client-is-one-published-package.md	Decisions 1 to 6 and 8 are owner decisions. Decision 7 has a mark.
+docs/adr/0275-the-typescript-client-is-one-published-package.md	Status: accepted · 2026-10-22. Decisions 1 to 6 and 8 are owner decisions. Decision 7 is a PM decision, taken on the owner's behalf. The package name in decision 2 is a proposal of the author, and the first publish fixes it. Amends decisions O6 and O7 and rule A3 of amendment 1 of RFC 99. Amends ADR 7 in part (the age rule for dependencies). Follows ADR 264
+docs/adr/0276-every-error-answer-has-a-code-and-its-arguments.md	1. **Every error answer has a code (owner).** Each 4xx and 5xx answer of
+docs/adr/0276-every-error-answer-has-a-code-and-its-arguments.md	10. **A code is a contract (owner).** A code never changes its meaning. The
+docs/adr/0276-every-error-answer-has-a-code-and-its-arguments.md	2. **The names of the codes (owner).** A code is a dotted string in the
+docs/adr/0276-every-error-answer-has-a-code-and-its-arguments.md	3. **The arguments, from the start (owner).** An answer carries the values
+docs/adr/0276-every-error-answer-has-a-code-and-its-arguments.md	4. **The English text stays (owner).** The `message` of the camelCase
+docs/adr/0276-every-error-answer-has-a-code-and-its-arguments.md	5. **The fields of each shape (owner).** The fields are those of ADR 182
+docs/adr/0276-every-error-answer-has-a-code-and-its-arguments.md	6. **No translation of error answers in the server (owner).** The server
+docs/adr/0276-every-error-answer-has-a-code-and-its-arguments.md	9. **The codes are in the API description (owner).** The schema of
+docs/adr/0276-every-error-answer-has-a-code-and-its-arguments.md	Status: accepted · 2026-10-23. Decisions 1 to 6, 9 and 10 are owner decisions. Decisions 7 and 8 are the design of the author, and follow from them. Extends ADR 182. Supersedes in part ADR 182 decisions 4 and 7. Follows ADR 210 decision 10 for times
+docs/adr/0276-every-error-answer-has-a-code-and-its-arguments.md	error answers. This ADR records that decision with the label "(owner)". It
+docs/adr/0278-supported-platforms.md	(owner)
+docs/adr/0278-supported-platforms.md	both conditions: (owner)
+docs/adr/0278-supported-platforms.md	code in CI and does not promise to keep it. (owner)
+docs/adr/0278-supported-platforms.md	for example code in a file that only one other platform builds. (owner)
+docs/adr/0278-supported-platforms.md	for them. (owner)
+docs/adr/0278-supported-platforms.md	no regression on Linux or macOS, and no new build tag. (owner)
+docs/adr/0279-no-release-before-milestone-7.md	ADR 21 do not change. (owner)
+docs/adr/0279-no-release-before-milestone-7.md	ADR 280. (owner)
+docs/adr/0280-milestone-7-high-availability-on-one-database.md	1. **Scope: one installation, active-active (owner).** Milestone 7 makes one
+docs/adr/0280-milestone-7-high-availability-on-one-database.md	2. **Milestone 7 is in the release gate (owner).** Milestone 7 is a part of
+docs/adr/0280-milestone-7-high-availability-on-one-database.md	3. **A restore is a durable operation (owner).** A restore becomes a durable
+docs/adr/0280-milestone-7-high-availability-on-one-database.md	4. **503 with `Retry-After` when the store is not available (owner).** When the
+docs/adr/0280-milestone-7-high-availability-on-one-database.md	5. **The minimum supported topology (owner).**
+docs/adr/0280-milestone-7-high-availability-on-one-database.md	6. **Measured figures, no SLA, no compliance claim (owner).** The docs give
+docs/adr/0280-milestone-7-high-availability-on-one-database.md	7. **Blob deletes wait while a backup runs: RFC 105 option 3 (owner).** The
+docs/adr/0280-milestone-7-high-availability-on-one-database.md	8. **The lease stays at 30 seconds (owner).** The lease period of a durable
+docs/adr/0280-milestone-7-high-availability-on-one-database.md	high availability. Each decision below has the label "(owner)".
+docs/adr/0281-any-s3-compatible-store-the-database-decides-which-write-wins.md	1. **Correctness never depends on a store capability (owner).** OpenDustpan
+docs/adr/0281-any-s3-compatible-store-the-database-decides-which-write-wins.md	10. **A breaking change to `blob.Store` (owner).** Before 1.0, the public
+docs/adr/0281-any-s3-compatible-store-the-database-decides-which-write-wins.md	2. **The database decides which write wins (owner).** Conditional writes are
+docs/adr/0281-any-s3-compatible-store-the-database-decides-which-write-wins.md	3. **One delete path (owner).** A caller deletes many blobs with parallel
+docs/adr/0281-any-s3-compatible-store-the-database-decides-which-write-wins.md	4. **A write quota before 1.0 (owner).** The server limits the blob bytes or
+docs/adr/0281-any-s3-compatible-store-the-database-decides-which-write-wins.md	5. **A backlog gauge (owner).** A metric gives the number of pending purge
+docs/adr/0281-any-s3-compatible-store-the-database-decides-which-write-wins.md	6. **Paged `List` (owner).** `List` returns one page at a time, ordered by
+docs/adr/0281-any-s3-compatible-store-the-database-decides-which-write-wins.md	7. **No `Stat` now (owner).** The port gets `Stat` only when a caller needs
+docs/adr/0281-any-s3-compatible-store-the-database-decides-which-write-wins.md	8. **A minimal start-up check, and a deep store check (owner).**
+docs/adr/0281-any-s3-compatible-store-the-database-decides-which-write-wins.md	9. **The docs say what was tested (owner).** The docs always say exactly
+docs/adr/0281-any-s3-compatible-store-the-database-decides-which-write-wins.md	Each decision below has the label "(owner)". A part that the author of this
+docs/adr/0282-runners-and-remote-runs-accept-rfc-6.md	3. **The project accepts ADR 139 (owner, 18 October 2026).** The runner uses
+docs/adr/0282-runners-and-remote-runs-accept-rfc-6.md	4. **The runner lives in its own repository (owner, 26 October 2026).**
+docs/adr/0283-packaging-for-v0-1-0.md	1. **TLS from files and a reverse proxy (owner).** For `v0.1.0`, the server
+docs/adr/0283-packaging-for-v0-1-0.md	2. **No ACME (owner).** The server does not get certificates through ACME in
+docs/adr/0283-packaging-for-v0-1-0.md	3. **No OS packages (owner).** `v0.1.0` ships binary archives, the container
+docs/adr/0283-packaging-for-v0-1-0.md	4. **Signing and an SBOM come later (owner).** `v0.1.0` ships the
+docs/adr/0283-packaging-for-v0-1-0.md	5. **Multi-arch images with buildx and QEMU (owner).** The owner says yes
+docs/adr/0283-packaging-for-v0-1-0.md	`v0.1.0`. Each decision below with the label "(owner)" states that
+docs/adr/0283-packaging-for-v0-1-0.md	whether ACME is in scope. On 12 October 2026 the owner said: "Built-in TLS
+docs/adr/0285-local-users-sign-in-with-a-password-and-a-passkey.md	1. **A local user has a password, passkeys, or both (owner).** A local user
+docs/adr/0285-local-users-sign-in-with-a-password-and-a-passkey.md	21. **"Require MFA" applies to the password (owner, through RFC 21 P7).**
+docs/adr/0285-local-users-sign-in-with-a-password-and-a-passkey.md	24. **A demo person, only on a dev installation (owner, and PM decision under the owner's delegation).**
+docs/adr/0286-self-service-failover-and-promotion-three-renames.md	1. **Catalog becomes Self-service (owner).** The request gateway is
+docs/adr/0286-self-service-failover-and-promotion-three-renames.md	2. **Promotion of an installation becomes failover (owner).** The action is
+docs/adr/0286-self-service-failover-and-promotion-three-renames.md	3. **Promotion goes to environment promotion (owner).** RFC 55 uses:
+docs/adr/0286-self-service-failover-and-promotion-three-renames.md	Status: accepted · 2026-10-31. Decisions 1 to 3 are owner decisions of 31 October 2026. Decisions 4 to 7 are PM decisions under the owner's delegation, of 31 October 2026, and follow from decisions 1 to 3. Changes the words of ADRs 4, 100, 110 to 117, 128, 144, 160, 166 and 181. Changes the words of ADRs 199 to 201, 203 to 205, 207, 210, 211, 213 and 218. Changes the words of ADRs 220, 222, 224 to 226, 228 to 230, 248, 271, 273 and 280. Changes the words of RFC 55
+docs/adr/0287-no-contributor-license-agreement.md	a contributor to assign copyright. (owner)
+docs/adr/0287-no-contributor-license-agreement.md	each contributor, for the contribution of that contributor. (owner)
+docs/adr/0287-no-contributor-license-agreement.md	is the same as the outbound license (Apache-2.0 section 5). (owner)
+docs/adr/0287-no-contributor-license-agreement.md	issue that asks for it. (owner)
+docs/adr/0287-no-contributor-license-agreement.md	it covers. (owner)
+docs/adr/0287-no-contributor-license-agreement.md	not change the license of this repository. (owner)
+docs/adr/0287-no-contributor-license-agreement.md	only formal step that a contributor does. (owner)
+docs/adr/0287-no-contributor-license-agreement.md	step. The project has not decided it. It needs its own decision. (owner)
+docs/adr/0288-the-sign-in-page-looks-the-same-on-every-installation.md	1. **One look before sign-in (owner).** The sign-in page looks the same on every installation. It shows the installation name as text. It shows no operator logo and no operator accent color. (owner)
+docs/adr/0288-the-sign-in-page-looks-the-same-on-every-installation.md	2. **Branding after sign-in (owner).** The console shows the operator's logo and accent color only after a person signs in. (owner)
+docs/adr/0289-marks-of-git-hosts-in-the-console.md	1. **GitLab and Gitea (owner).** The console writes the name as text. It shows a generic icon that means "opens another site". It shows no logo of either host. (owner)
+docs/adr/0289-marks-of-git-hosts-in-the-console.md	2. **GitHub (owner).** The console shows the GitHub mark without change, in black or white. It is smaller than the OpenDustpan mark. (owner)
+docs/adr/0289-marks-of-git-hosts-in-the-console.md	3. **Forgejo (owner).** The console shows the Forgejo logo. The license of that logo is CC BY-SA 4.0. The console shows the attribution that the license needs, and a link to the license. (owner)
+docs/adr/0289-marks-of-git-hosts-in-the-console.md	4. **Only where we name the integration (owner).** A mark or an icon appears only where the console names the integration. One example is the page of a Git host connection. A mark is never decoration. (owner)
+docs/adr/0290-console-themes-friendly-theme-dropped-and-the-search-shortcut.md	1. **No Friendly theme (owner).** The console has no Friendly theme. Default and Terminal stay (ADR 180 decision 1). (owner)
+docs/adr/0290-console-themes-friendly-theme-dropped-and-the-search-shortcut.md	2. **Search shortcut in the Default theme (owner).** In the Default theme, Ctrl K (Cmd K on macOS) opens search. The console shows no shortcut hint for it. This amends ADR 180 decision 2: the Default theme has one console shortcut, and it has no hint. (owner)
+docs/adr/0290-console-themes-friendly-theme-dropped-and-the-search-shortcut.md	4. **No Maple Mono (owner).** The console does not use the font Maple Mono. The fonts of ADR 180 decision 1 stay. (owner)
+docs/adr/0291-insights-count-failures-by-token-and-service-principal.md	1. **The unit of a failure count (owner).** Insights count failures by access token and by service principal. They never count failures by person. (owner)
+docs/adr/0291-insights-count-failures-by-token-and-service-principal.md	3. **Failure insights are opt-in (owner).** An installation shows failure insights only when an operator turns them on. The setting is off by default. Its effective value is in the API. A change writes an audit entry. (owner)
+docs/adr/0292-plain-ldap-and-smtp-connections-are-refused-unless-an-operator-opts-in.md	1. **Refused by default (owner).** The server refuses an LDAP connection and an SMTP connection that has no TLS, except to a loopback address. (owner)
+docs/adr/0292-plain-ldap-and-smtp-connections-are-refused-unless-an-operator-opts-in.md	2. **An explicit opt-in (owner).** An installation can allow plain connections with one setting. The setting is off by default. (owner)
+docs/adr/0292-plain-ldap-and-smtp-connections-are-refused-unless-an-operator-opts-in.md	3. **The setting is visible (owner).** The API shows its effective value and its source. Each change writes an audit entry. The console shows the state in a quiet way, in the settings and in the status of the connection. It shows no warning banner. (owner)
+docs/adr/0292-plain-ldap-and-smtp-connections-are-refused-unless-an-operator-opts-in.md	4. **The hosted service never turns it on (owner).** The hosted service does not allow the setting. (owner)
+docs/adr/0293-the-stuck-hint-of-a-runner-job.md	1. **One rule (owner).** The hint "stuck" shows when a running job has had no output for 10 minutes. There is no other rule. There is no rule that compares the time with earlier jobs. (owner)
+docs/adr/0293-the-stuck-hint-of-a-runner-job.md	2. **A setting with an effective value (owner).** The 10 minutes are a setting. The API shows its effective value and its source. A change writes an audit entry. (owner)
+docs/adr/0293-the-stuck-hint-of-a-runner-job.md	3. **A hint, never a status (owner).** "Stuck" is a hint. It is never a status word. The status of the job does not change. The executor or a person changes the status. The hint does not. (owner)
+docs/adr/0294-registry-used-by-evidence-needs-an-exact-version.md	1. **Exact inputs only (owner).** A provider version shows in "Used by" only when the Pulumi checkpoint has an exact `inputs.version` for it. Otherwise the page shows "Version not known". The server never guesses a version, for example from a lock file or from the newest release. (owner)
+docs/adr/0294-registry-used-by-evidence-needs-an-exact-version.md	2. **Self-service request (owner).** A request in the catalog (Self-service) shows the exact program version, with a label that says it is the program version. (owner)
+docs/adr/0295-break-glass-recovery-mode-2-over-the-network.md	1. **The route is allowed (owner).** Mode 2 may run over the network. A route in the server accepts a signed recovery request. The route makes a temporary administrator. This amends ADR 245 decision 12 for this route only. The test of that decision names the route as the one other caller. (owner)
+docs/adr/0295-break-glass-recovery-mode-2-over-the-network.md	2. **The risk statement (owner).** The documentation states the risk in these words. "A theft of the private key alone gives a bounded remote temporary administrator." The bound is the expiry. The limits of a temporary administrator in ADR 245 also apply. (owner)
+docs/adr/0295-break-glass-recovery-mode-2-over-the-network.md	3. **The nonce is a unique-key insert.** The server inserts the nonce of a request with a unique key. The insert is in the same transaction that makes the temporary administrator. A second request with the same nonce fails the insert. The transaction fails with it. (owner)
+docs/adr/0295-break-glass-recovery-mode-2-over-the-network.md	4. **A shared rate limit.** The database holds the counter of the rate limit, so all instances share it. An IPv6 address counts as its /64 group. (owner)
+docs/adr/0295-break-glass-recovery-mode-2-over-the-network.md	5. **One answer for every refusal.** Every refusal gives the same answer: the same status, the same body and the same shape. A caller cannot tell the reason of a refusal. A bad signature, an old time, a used nonce, a rate limit and a wrong mode look the same. The audit entry holds the real reason. (owner)
+docs/adr/0295-break-glass-recovery-mode-2-over-the-network.md	6. **The answer token is encrypted.** The server encrypts the token in the answer. It uses an ephemeral public key that the CLI sends in the request. Only the CLI that made the request can read the token. (owner)
+docs/adr/0295-break-glass-recovery-mode-2-over-the-network.md	7. **Nonce retention.** The server keeps a nonce until the not-after time of its request plus 1 hour. (owner)
+docs/adr/0295-break-glass-recovery-mode-2-over-the-network.md	8. **A condition on shipping.** The route ships only after the store keeps the first-boot recovery mode and the key. This is the item "A stored recovery mode" in ADR 245. Until then the route does not exist. (owner)
+docs/adr/0296-change-links-between-adrs-and-the-adr-index.md	(owner)
+docs/adr/0296-change-links-between-adrs-and-the-adr-index.md	(owner)
+docs/adr/0296-change-links-between-adrs-and-the-adr-index.md	(owner)
+docs/adr/0296-change-links-between-adrs-and-the-adr-index.md	ADR. The prose of its status line stays. (owner)
+docs/adr/0296-change-links-between-adrs-and-the-adr-index.md	Nobody edits it by hand. (owner)
+docs/adr/0296-change-links-between-adrs-and-the-adr-index.md	changes no ADR has the item "- None.". (owner)
+docs/adr/0296-change-links-between-adrs-and-the-adr-index.md	earlier ADR starts with "superseded by ADR N". (owner)
+docs/adr/0296-change-links-between-adrs-and-the-adr-index.md	for code structure, symbols and history. `CLAUDE.md` says so. (owner)
+docs/adr/0296-change-links-between-adrs-and-the-adr-index.md	optional. (owner)
+docs/adr/0296-change-links-between-adrs-and-the-adr-index.md	paths", goes in the note. (owner)
+docs/adr/0296-change-links-between-adrs-and-the-adr-index.md	references and a read of each later ADR. (owner)
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	1. **Four review modes, with no default (owner).** The mode is a required
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	10. **The approval floor (owner).** At every level, a new delete, a new
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	11. **The reset at each level (owner, 1 November 2026).** Each level resets
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	12. **The binding level takes over signature carry-over (owner. Details by
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	13. **Refresh and drift (owner, 31 October 2026).** A refresh keeps the
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	14. **Authors (owner).** Whoever opened the review request, authored a commit
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	15. **A merge and the apply (owner).** A merge starts an apply only when the
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	18. **The checks of each gate decision (owner. Details by the PM).** Each
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	19. **Plan conflicts in place of unit locks (owner).** Two review requests
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	20. **One credential rule for every start of a plan (owner. Details by the
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	21. **Forks (owner).** A review request from a fork gets no plan until a
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	25. **The plan comment (owner).** One comment on the review request, edited
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	26. **Leaks (owner).** A comment command and a console button redact a plan.
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	29. **No polling (owner).** Webhooks, a "Plan again" button and the command
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	31. **Webhooks and identity (owner).** The server verifies each signature,
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	32. **No user token stored on the backend (owner).** These rules hold apart
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	33. **Failures (owner).** A Git host that says "not mergeable" or does not
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	35. **Agents never approve, on either side (owner).**
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	4. **The scope of the mode (owner, 1 November 2026).** The mode is a unit
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	5. **The strictest mode for a review request (owner, 1 November 2026. Order
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	6. **Branch-wide settings (owner, 1 November 2026).** Before the server turns
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	8. **One view of a change (owner).** The change order page has three panes:
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	9. **Three binding levels (owner).** A visible setting for each scope, with
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	The owner decisions of 31 October 2026 are in RFC 114, "Decisions of the
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	owner decisions that the PM keeps. RFC 114 had nine open questions. The owner
+docs/adr/0299-review-requests-and-change-orders-one-integration-with-the-git-host.md	owner". The owner decisions of 1 November 2026 (decisions 4, 5, 6 and 11
+docs/adr/0301-fresh-step-for-oauth-and-trusted-header-sign-in.md	1. **A factor of OpenDustpan gives the fresh step (owner).** For a person
+docs/adr/0301-fresh-step-for-oauth-and-trusted-header-sign-in.md	15. **The first enrollment of a person with no factor (owner).** The owner
+docs/adr/0301-fresh-step-for-oauth-and-trusted-header-sign-in.md	16. **The console offers passkey and TOTP first (owner).** The three
+docs/adr/0301-fresh-step-for-oauth-and-trusted-header-sign-in.md	17. **Limits (owner).** The email code is the only weak channel. It proves
+docs/adr/0301-fresh-step-for-oauth-and-trusted-header-sign-in.md	2. **Only these two methods (owner).** OIDC keeps `max_age`, SAML keeps
+docs/adr/0301-fresh-step-for-oauth-and-trusted-header-sign-in.md	3. **Sign-in stays the same (owner).** The sign-in with these two methods
+docs/adr/0301-fresh-step-for-oauth-and-trusted-header-sign-in.md	4. **No factor, no fresh step (owner).** A person of these methods who has
+docs/adr/0301-fresh-step-for-oauth-and-trusted-header-sign-in.md	under the owner's delegation. Rules 15 to 17 are owner decisions of 1
+docs/adr/0302-milestone-8-concurrent-applies-on-one-state.md	1. **Concurrent applies are a feature of OpenDustpan (owner).** Concurrent
+docs/adr/0302-milestone-8-concurrent-applies-on-one-state.md	2. **The design is job-aware (owner).**
+docs/adr/0302-milestone-8-concurrent-applies-on-one-state.md	3. **The order of tools (owner).** OpenTofu is first. The Pulumi CLI follows
+docs/adr/0302-milestone-8-concurrent-applies-on-one-state.md	4. **A local CLI wrapper (owner).** The `dustpan` CLI wraps the real `tofu`
+docs/adr/0302-milestone-8-concurrent-applies-on-one-state.md	5. **Milestone 8 (owner).** These decisions form milestone 8, after
+docs/adr/0302-milestone-8-concurrent-applies-on-one-state.md	6. **The design order (owner).** An RFC for concurrent applies comes first.
+docs/adr/0302-milestone-8-concurrent-applies-on-one-state.md	has the label "(owner)".
+docs/adr/0304-native-run-all-fan-out-applies-in-milestone-9.md	1. **OpenDustpan supports Terragrunt as a wrapper (owner).** A team that already
+docs/adr/0304-native-run-all-fan-out-applies-in-milestone-9.md	2. **A team can already change many units in one reviewed change (owner).**
+docs/adr/0304-native-run-all-fan-out-applies-in-milestone-9.md	3. **Milestone 9 adds native run-all support: fan-out applies (owner).**
+docs/adr/0304-native-run-all-fan-out-applies-in-milestone-9.md	9. **Profiles and blueprints stay the recommended path (owner, same
+docs/adr/0304-native-run-all-fan-out-applies-in-milestone-9.md	The project owner decided on 1 November 2026 (owner): "teams can already
+docs/adr/0304-native-run-all-fan-out-applies-in-milestone-9.md	conversation).** The owner said, right before the decision quoted in the
+docs/adr/0304-native-run-all-fan-out-applies-in-milestone-9.md	native fan-out (owner).**
+docs/adr/0304-native-run-all-fan-out-applies-in-milestone-9.md	unchanged (owner).** OpenDustpan adds no wrapper, no flag and no change
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	(owner).** The operator takes these shapes:
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	1. **OpenDustpan builds its own Kubernetes operator (owner).** The operator
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	10. **Every resource reports status in the kstatus form (owner, 18 October
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	11. **Import from other operators is not in scope now (owner, 18 October
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	12. **The phase 1 e2e steps start now (owner, 18 October 2026).** They run
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	3. **The operator fills the gaps of RFC 31 (owner).**
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	4. **The work runs through OpenDustpan jobs and gates (owner).** The
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	5. **Crossplane compositions are out (owner).** They are not an alternative
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	6. **The place in the order (owner).** The operator comes after the Catalog
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	9. **The operator ships with the coordinator (owner, 18 October 2026).** The
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	The label "(owner)" names a decision that the words of the owner of
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	The operator has two kinds of resource (owner):
+docs/adr/0305-our-own-kubernetes-operator-modeled-on-the-pulumi-kubernetes-operator.md	ships (owner, 18 October 2026). The Catalog is the blueprint feature of
+docs/adr/0306-break-glass-session-limit-mass-suspension-alert-and-disable-rules.md	4. **Audit and notice (owner, 2026-10-20, accepted as written for now).** Each disable writes an audit entry. Each disable notifies the other admins.
+docs/adr/0306-break-glass-session-limit-mass-suspension-alert-and-disable-rules.md	5. **Re-enable and maintenance mode (owner, 2026-10-20, accepted as written for now).** Re-enable stays checked. Disable works in maintenance mode.
+docs/adr/0306-break-glass-session-limit-mass-suspension-alert-and-disable-rules.md	The project owner made these decisions in the owner decision files of 18 and 20 October 2026. A check on 1 November 2026 found no ADR that states them.
+docs/adr/0307-opentofu-only-uploaded-plans-and-tfe-run-fields.md	The project owner made these decisions in the owner decision file of 18 October 2026. A check on 1 November 2026 found no ADR that states them.
+docs/adr/0308-catalog-adoption-no-home-move-and-git-drift.md	The project owner made these decisions in the owner decision file 2026-10-17, entries dated 18 October. A check on 1 November 2026 found no ADR that states them. ADR 110 does not decide them.
+docs/adr/0309-bulk-actions-batch-records-and-the-delete-guard.md	The project owner made these decisions in the owner decision file 2026-10-17, entries dated 18 October. A check on 1 November 2026 found no ADR that states them. ADR 213 decision 5 sets bulk calls of up to 100 IDs. It leaves the first bulk actions open. ADR 153 decision 9 gives the guard of the Pulumi CLI.
+docs/adr/0310-run-order-run-options-per-run-values-and-sources-without-git.md	The project owner made these decisions in the owner decision file 2026-10-17, entries dated 18 October. A check on 1 November 2026 found no ADR that states them.
+docs/adr/0311-console-first-screens-hosted-header-and-the-look-of-dusty.md	The project owner made these decisions in the owner decision file 2026-10-17. Some entries are dated 18 October. A check on 1 November 2026 found no ADR that states them. The console is in its own repository. The decisions are here because the server ADRs hold the decisions of the project.
+docs/adr/0313-grant-expiry-declared-edges-profile-objects-and-operator-imports.md	The project owner made these decisions in the owner decision file 2026-10-17, entries dated 18 and 19 October. A check on 1 November 2026 found no ADR that states them.
+docs/adr/0314-jobs-are-for-user-workloads-and-dusty-streams-its-answers.md	The project owner made these decisions in the owner decision file 2026-10-17, entries dated 18 October. A check on 1 November 2026 found no ADR that states them. ADR 120 lists the stream of an answer as not decided.
+docs/adr/0315-container-registries-quickstart-lock-event-history-scan-and-docs-rules.md	The project owner made these decisions in the owner decision file 2026-10-17, entries dated 18 and 19 October. A check on 1 November 2026 found no ADR that states them.
+docs/adr/0316-approval-of-the-provider-dependencies-and-the-openpgp-library.md	1. **Dependencies of the provider kit (owner, 2026-10-18).** The verbatim quote of the owner:
+docs/adr/0316-approval-of-the-provider-dependencies-and-the-openpgp-library.md	2. **The OpenPGP library (owner, 2026-10-20).** The verbatim quote of the owner:
+docs/adr/0316-approval-of-the-provider-dependencies-and-the-openpgp-library.md	The project owner made these decisions in the owner decision files of 18 and 20 October 2026. A check on 1 November 2026 found no ADR that states them. ADR 176 lists the dependencies as open.
+docs/adr/0317-gate-rows-key-on-the-unit-id-and-the-identity-of-an-agent-commit.md	The project owner made these decisions in the owner decision files of 19 and 20 October 2026. ADR 224 and ADR 76 are older. Decision 1 is later than ADR 224 decision 1, so it wins. Decision 2 changes two decisions of ADR 76. ADR 76 decision 7 is a PM addition, so the owner line wins by rank. ADR 76 decision 8 is a decision of the owner, and the owner line is later, so it wins by date.
+docs/adr/0318-research-first-environments-upgrades-and-the-exit-path.md	The project owner made these decisions in the owner decision file 2026-10-17, entries dated 18 October. A check on 1 November 2026 found no ADR that states them. No ADR owns the topics.
+docs/adr/0319-agents-keep-the-commit-trailer-that-their-tool-adds.md	1. **The trailer is not a rule (owner, 2026-11-01).** The verbatim quote of the owner:
+docs/adr/0319-agents-keep-the-commit-trailer-that-their-tool-adds.md	ADR 317 decision 2 records an owner decision of 20 October 2026. One part says: "no Co-Authored-By trailer". The owner made a later decision on 1 November 2026, 22:00 UTC. It replaces that part.
+docs/adr/0320-one-sign-in-path-for-every-sign-in-method.md	14. **The rules of ADR 70 apply as they are (owner, ADR 70).** A protected
+docs/adr/0320-one-sign-in-path-for-every-sign-in-method.md	17. **LDAP is a password method (owner, ADR 285 decision 21).** For the
+docs/adr/0320-one-sign-in-path-for-every-sign-in-method.md	21. **An LDAP lock is visible and ends with a record (owner, ADR 285
+docs/adr/0321-ldap-saml-cas-oauth-groups-and-trusted-header-sign-in.md	21. **Library (owner, ADR 285).** `github.com/russellhaering/gosaml2` with
+docs/adr/0321-ldap-saml-cas-oauth-groups-and-trusted-header-sign-in.md	34. **Fresh authentication (owner, ADR 301).** None from the provider. ADR
+docs/adr/0321-ldap-saml-cas-oauth-groups-and-trusted-header-sign-in.md	40. **Fresh authentication (owner, ADR 301).** None from the proxy. ADR 301
+docs/adr/0321-ldap-saml-cas-oauth-groups-and-trusted-header-sign-in.md	7. **TLS (owner, ADR 292).** `ldaps://` or StartTLS, with certificate checks
+docs/adr/0321-ldap-saml-cas-oauth-groups-and-trusted-header-sign-in.md	8. **The service account password (owner, ADR 63).** It is a sensitive
+docs/adr/0322-no-migrations-or-compatibility-code-before-the-first-tag.md	1. **One baseline for each dialect until the first tag (owner).** Each
+docs/adr/0322-no-migrations-or-compatibility-code-before-the-first-tag.md	2. **No migration or compatibility code for untagged shapes (owner).**
+docs/adr/0322-no-migrations-or-compatibility-code-before-the-first-tag.md	4. **The runner stays proven (owner).** `TestRunnerAppliesAFixtureChain`
+docs/adr/0322-no-migrations-or-compatibility-code-before-the-first-tag.md	5. **The checks are disabled, not removed (owner).** These tests skip with a
+docs/adr/0322-no-migrations-or-compatibility-code-before-the-first-tag.md	| A new schema file and a new schema-hash mechanism beside the runner | The owner said to stop using the mechanism, not to replace it (direction 5). The runner already has a place for a content check. |
+docs/adr/0323-the-tool-neutral-api-stays-v1-and-can-break-before-1-0.md	1. **The tool-neutral API stays at `v1` (owner).** The API under
+docs/adr/0323-the-tool-neutral-api-stays-v1-and-can-break-before-1-0.md	2. **One version of the description until the first release (owner).**
+docs/adr/0323-the-tool-neutral-api-stays-v1-and-can-break-before-1-0.md	4. **The tool-compatible APIs do not change (owner).** The Pulumi
+docs/adr/0323-the-tool-neutral-api-stays-v1-and-can-break-before-1-0.md	| A new major version of the path for each break | No client depends on the API yet (direction 1), and the owner said that v1 can break (direction 2). |
+docs/adr/0324-a-schema-mismatch-refuses-and-dev-reset-starts-again.md	1. **Every command refuses a schema mismatch (owner).** On a database with
+docs/adr/0324-a-schema-mismatch-refuses-and-dev-reset-starts-again.md	2. **One explicit reset for dev (owner).** `opendustpan dev reset
+docs/adr/0324-a-schema-mismatch-refuses-and-dev-reset-starts-again.md	5. **No risk to production (owner).** `dev reset` works on a data directory
+docs/adr/0324-a-schema-mismatch-refuses-and-dev-reset-starts-again.md	| A new schema-hash mechanism for the check | The runner already refuses a changed migration (ADR 322 decision 3). The owner said to stop using the mechanism, not to replace it (direction 5). |
+docs/adr/0325-the-release-record-turns-the-shipped-migration-checks-on.md	Status: accepted · 2026-11-03. A PM decision, taken on the owner's behalf. It changes the mechanism of ADRs 322 and 323 only. The owner decisions of those ADRs do not change
+docs/adr/0325-the-release-record-turns-the-shipped-migration-checks-on.md	path. Architecture review round 9 found this (issue #2335). The owner said
+docs/adr/0326-split-the-hot-files-by-area-in-small-steps.md	(owner).**
+docs/adr/0326-split-the-hot-files-by-area-in-small-steps.md	2. **`e2e/coverage.go` splits into one file for each area (owner).** Each
+docs/adr/0326-split-the-hot-files-by-area-in-small-steps.md	3. **One route test for the whole server (owner).** One test builds the
+docs/adr/0326-split-the-hot-files-by-area-in-small-steps.md	4. **`queries.sql` splits only when the data shows the need (owner).** One
+docs/adr/0326-split-the-hot-files-by-area-in-small-steps.md	5. **`pkg/dustpan/dustpan.go` splits in the smaller form (owner).** The
+docs/adr/0326-split-the-hot-files-by-area-in-small-steps.md	6. **These files do not split (owner):** `GLOSSARY.md`, the API description,
+docs/adr/0326-split-the-hot-files-by-area-in-small-steps.md	`queries.sql`, never at the end (owner).** This applies now, to the
+docs/adr/0326-split-the-hot-files-by-area-in-small-steps.md	marker. A change of that source is a change of an owner decision, and it
+docs/adr/0327-the-job-proxy.md	### The owner decisions
+docs/adr/0327-the-job-proxy.md	1. **Our own proxy (owner, 26 October 2026: Recommendation item 1).** The
+docs/adr/0327-the-job-proxy.md	10. **Fixed reasons (owner, 26 October 2026: Recommendation item 9).** The
+docs/adr/0327-the-job-proxy.md	18. **The words (owner, 1 November 2026: the words of milestone 6).** One
+docs/adr/0327-the-job-proxy.md	2. **Next to each job (owner, 26 October 2026: Recommendation item 1).** The
+docs/adr/0327-the-job-proxy.md	20. **The scope (owner, 1 November 2026: no scope cut).** All of RFC 16
+docs/adr/0327-the-job-proxy.md	4. **Proxy rules are plain data (owner, 26 October 2026: Recommendation
+docs/adr/0327-the-job-proxy.md	6. **One CA for each job (owner, 26 October 2026: Recommendation item 4).**
+docs/adr/0327-the-job-proxy.md	7. **Each request (owner, 26 October 2026: Recommendation items 3, 5, 6 and
+docs/adr/0327-the-job-proxy.md	8. **The outbound guard and the upstream proxy (owner, 26 October 2026:
+docs/adr/0327-the-job-proxy.md	Each decision has the label "(owner, <date>: <source>)".
+docs/adr/0327-the-job-proxy.md	| Owner decision | Decision of this ADR |
+docs/adr/0328-the-review-modes-by-milestone.md	1. **Modes 2 and 4 in milestone 5 (owner).** The exit test of milestone 5
+docs/adr/0328-the-review-modes-by-milestone.md	2. **Modes 1 and 3 in milestone 6 (owner).** The exit test of milestone 6
+docs/adr/0329-placement-rules-match-opentofu-unit-names.md	- This ADR does not decide the syntax of a rule for an OpenTofu unit name, or how it relates to the `project` of the `cloud` block. These points are not part of the owner decision.
+docs/adr/0329-placement-rules-match-opentofu-unit-names.md	1. **Placement rules also match OpenTofu unit names (owner).** Placement rules also match OpenTofu unit names.
+docs/adr/0329-placement-rules-match-opentofu-unit-names.md	2. **Fail closed (owner).** The server refuses a unit that no rule matches.
+docs/adr/0329-placement-rules-match-opentofu-unit-names.md	3. **The OpenTofu HTTP backend (owner).** This includes the OpenTofu HTTP backend.
+docs/adr/0331-environment-promotion-is-in-milestone-6.md	1. **RFC 55 is in milestone 6 (owner).** Environment promotion is in milestone 6, on the rule that no feature gets cut.
+docs/adr/0331-environment-promotion-is-in-milestone-6.md	2. **RFC 55 is the research (owner).** [RFC 55](../rfc/0055-environment-promotion.md) is the research for this feature.
+docs/adr/0331-environment-promotion-is-in-milestone-6.md	3. **The ordered rollout stays later (owner).** The ordered rollout stays later, as ADR 318 decision 3 says.
+docs/adr/0332-saml-starts-at-the-service-provider-and-group-claims-map-by-rule.md	1. **SAML sign-in starts at OpenDustpan (owner, 2026-11-07).** The normal SAML sign-in is SP-started. The server makes the `AuthnRequest` and checks `InResponseTo`.
+docs/adr/0332-saml-starts-at-the-service-provider-and-group-claims-map-by-rule.md	2. **A portal tile is a bookmark (owner, 2026-11-07).** A tile in an identity provider portal is a bookmark to the SP-started URL of OpenDustpan. It starts an SP-started sign-in. It sends no unsolicited assertion.
+docs/adr/0332-saml-starts-at-the-service-provider-and-group-claims-map-by-rule.md	3. **IdP-started SAML is a setting (owner, 2026-11-07).** True IdP-started SAML accepts an assertion that has no request. It is a setting of each SAML provider. It is off by default.
+docs/adr/0332-saml-starts-at-the-service-provider-and-group-claims-map-by-rule.md	4. **IdP-started SAML has four required checks (owner, 2026-11-07).** When the setting is on, the server accepts an unsolicited assertion only with all of these checks:
+docs/adr/0332-saml-starts-at-the-service-provider-and-group-claims-map-by-rule.md	6. **Group mapping is a rule for each provider (owner, 2026-11-07).** Each provider has a rule: a trusted claim pattern. A claim value that matches the pattern is linked to a group. The link names the provider and the claim value. It never names the group by name alone.
+docs/adr/0332-saml-starts-at-the-service-provider-and-group-claims-map-by-rule.md	7. **Explicit single mappings handle exceptions (owner, 2026-11-07).** An explicit mapping links one claim value of one provider to one group. Use it for a value that the pattern does not cover.
+docs/adr/0332-saml-starts-at-the-service-provider-and-group-claims-map-by-rule.md	8. **The rules are a sensitive setting (owner, 2026-11-07).** A change to a rule or to an explicit mapping is a sensitive setting. It writes an audit entry and needs a fresh authentication (step-up), as ADR 70 decision 22 says for a claim mapping.
+docs/adr/0332-saml-starts-at-the-service-provider-and-group-claims-map-by-rule.md	9. **SCIM comes later (owner, 2026-11-07).** This ADR adds no SCIM. When SCIM comes, it uses the same mapping, as ADR 320 decision 13 says.
+docs/adr/0333-passkey-challenges-in-a-sealed-cookie-and-name-lock-alerts.md	1. **The challenge is a sealed, short-lived cookie (owner, 2026-11-07).** The challenge of a passkey sign-in lives in a sealed cookie with a short life. The server stores no row at the start of the ceremony.
+docs/adr/0333-passkey-challenges-in-a-sealed-cookie-and-name-lock-alerts.md	2. **A replay record follows a successful sign-in (owner, 2026-11-07).** The server writes a replay record only after a successful sign-in. A start and a failed response write no record.
+docs/adr/0333-passkey-challenges-in-a-sealed-cookie-and-name-lock-alerts.md	3. **This replaces the per-source caps (owner, 2026-11-07).** The caps on open passkey challenges do not apply any more. They were for each source address, for each site group and for the installation. No row holds an open challenge.
+docs/adr/0333-passkey-challenges-in-a-sealed-cookie-and-name-lock-alerts.md	4. **A lock that ends has an audit kind (owner, 2026-11-07).** ADR 285 decision 23 gets the audit kind `sign-in.name-lock-ended`. The server writes it when a lock by name ends.
+docs/adr/0333-passkey-challenges-in-a-sealed-cookie-and-name-lock-alerts.md	5. **Lock alerts have a ceiling (owner, 2026-11-07).** The alerts of ADR 285 decision 16 have a ceiling for each installation and hour. After the ceiling, the server writes one summary alert for the rest of the hour. The ceiling is 10 alerts for each installation and hour. The summary alert gives the count of alerts left out and the top sources. The ceiling is a setting. The API shows its effective value.
+docs/adr/0334-chat-senders-use-the-strict-host-list-and-sinks-write-non-finite-floats-as-text.md	1. **Delete the legacy chat host path (owner, 2026-11-07).** A chat sink has one host rule. Code does not keep a second, weaker path for a sink with a host that the strict list refuses. This applies to the webhook sink too, because both use the same list.
+docs/adr/0334-chat-senders-use-the-strict-host-list-and-sinks-write-non-finite-floats-as-text.md	2. **The strict host list applies twice (owner, 2026-11-07).** The server checks the host against the strict list when a person saves the sink. The sender checks it again at send time. The two checks are separate layers. Neither check relies on the other.
+docs/adr/0334-chat-senders-use-the-strict-host-list-and-sinks-write-non-finite-floats-as-text.md	4. **The OTLP sink takes `?ca-file=` (owner, 2026-11-07).** The URL of an OTLP sink can have the query option `ca-file`. Its value is the path of a PEM file. The file holds the certificate authorities that the sink trusts for its endpoint. The option adds to the system roots. It does not turn off the check of the certificate.
+docs/adr/0335-gate-decisions-deny-gates-held-locks-and-the-engine-port.md	1. **A deny gate on a cancel or a force-unlock stays (owner, 2026-11-07).** A `deny` gate at `state.write` can refuse a Pulumi update cancel or a force-unlock. The gate keeps its effect. No rule passes it. The way out is to edit the gate. The edit needs the actions and the fresh authentication that ADR 224 decision 12 gives.
+docs/adr/0335-gate-decisions-deny-gates-held-locks-and-the-engine-port.md	2. **A break-glass for a gate comes later (owner, 2026-11-07).** A break-glass for a `deny` gate, with a review after use, is a later feature. Until a later ADR accepts it, the break-glass of ADR 224 decision 13 passes the gates in error only.
+docs/adr/0335-gate-decisions-deny-gates-held-locks-and-the-engine-port.md	3. **An unlocked state version on the TFE-compatible API (owner, 2026-11-07).** Such a write meets `state.write` before its transaction. Its operation kind is `unlocked-write`. A refusal refuses the write. This is the rule that ADR 224 decision 16 already gives for the HTTP backend. The refusal can leave resources that no stored state records. The record and the error say so, as they do for the HTTP backend.
+docs/adr/0335-gate-decisions-deny-gates-held-locks-and-the-engine-port.md	4. **A held lock outlives a new gate (owner, 2026-11-07).** A lock that is held when a gate is saved is not changed by that gate. A new gate applies at the next lock.
+docs/adr/0335-gate-decisions-deny-gates-held-locks-and-the-engine-port.md	5. **A save needs a flag when locks are held (owner, 2026-11-07).** Locks can be held on units in the scope of a gate. Then a save of the gate needs an explicit flag in the request. Without the flag, the save answers 409 and changes nothing. The answer lists the held locks: for each lock, the unit, the holder and the time. With the flag, the save goes on. The audit entry names the held locks.
+docs/adr/0335-gate-decisions-deny-gates-held-locks-and-the-engine-port.md	6. **Docs and UI make this very obvious (owner, 2026-11-07).** The user documentation for gates has a section on held locks. The console shows the held locks before a person saves a gate. It also shows that the gate does not apply to them.
+docs/adr/0335-gate-decisions-deny-gates-held-locks-and-the-engine-port.md	7. **The gate engine port stays pluggable (owner, 2026-11-07).** The port `gate.Engine` of ADR 224 decision 9 stays the one place where an engine plugs in. Cedar is the default engine. OPA, Expr or another engine stays possible as an alternative adapter of the same port. An adapter must run the conformance suite `pkg/gate/gatetest`. A new adapter needs its own ADR, as ADR 224 decision 9 says.
+docs/adr/0336-the-github-app-is-the-author-of-a-write-back-commit.md	1. **The App is the author, and the person is a co-author (owner, 2026-11-07).** A write-back commit on GitHub has the GitHub App as its author. The message has a `Co-authored-by` trailer that names the person who asked. The job record and the audit entry stay the record of who asked and why.
+docs/adr/0336-the-github-app-is-the-author-of-a-write-back-commit.md	2. **GitHub signs the commit (owner, 2026-11-07).** The adapter makes the commit with `createCommitOnBranch`. GitHub signs it. The server holds no signing key for a write-back commit.
+docs/adr/0336-the-github-app-is-the-author-of-a-write-back-commit.md	3. **The write-back follows a moved head at most 3 times (owner, 2026-11-07).** The head of the branch can move after the base. Then the write-back may read the files again at the new head. It may try again. It makes at most 3 retries.
+docs/adr/0336-the-github-app-is-the-author-of-a-write-back-commit.md	4. **A retry has two conditions (owner, 2026-11-07).** The write-back retries only when both are true:
+docs/adr/0337-the-last-released-lock-is-in-the-workspace-api-and-not-in-the-inventory.md	1. **`lastRelease` moves to the workspace API (owner, 2026-11-07).** The API of the workspace shows the record of the last released lock. The record holds the lock ID, the holder, the releaser, the time and the kind, `normal` or `forced`. The inventory entry of a unit does not have the field.
+docs/adr/0337-the-last-released-lock-is-in-the-workspace-api-and-not-in-the-inventory.md	2. **The rule of ADR 298 does not change (owner, 2026-11-07).** The record is still kept on the workspace row. It still matches for 24 hours after the release. A repeated unlock still uses it. Only the API that shows it changes.
+docs/adr/0338-the-namespace-service-principal-holds-a-stored-grant.md	1. **The permission is a stored grant (owner, 2026-11-07).** The server makes a stored grant in the same transaction that makes the namespace. The grant is for the namespace service principal. The grant gives the principal the action `unit:run-plan` on its own namespace. The creator of the grant is the creator of the namespace. The grant has the time of the namespace creation.
+docs/adr/0338-the-namespace-service-principal-holds-a-stored-grant.md	2. **A person can list and revoke the grant (owner, 2026-11-07).** The grant shows in the list of grants like each other grant. A holder of the right to manage access can revoke it. The decision that a trigger starts a plan then names the grant that allowed it.
+docs/adr/0338-the-namespace-service-principal-holds-a-stored-grant.md	3. **The principal still holds nothing else (owner, 2026-11-07).** The grant covers the start of a plan only. The principal still has no token and no session. The rule of ADR 267 decision 14 about the read check of the last saver does not change.
+docs/adr/0339-the-first-administrator-gets-a-one-time-code-from-the-bootstrap-token.md	1. **Option B of RFC 117 is accepted (owner, 2026-11-07).** The bootstrap admin token asks for a one-time code for one principal. The person redeems the code in a console session with a fresh sign-in.
+docs/adr/0339-the-first-administrator-gets-a-one-time-code-from-the-bootstrap-token.md	3. **The redeem (owner, 2026-11-07).** The person sends the code in the body of a `POST` in a console session with a fresh authentication. One transaction makes the `site-administrator` grant on the installation, spends the code and stores the marker. It writes an audit entry. The entry names the bootstrap administrator as the creator, and the person and the sign-in ID as the one who took the role.
+docs/adr/0339-the-first-administrator-gets-a-one-time-code-from-the-bootstrap-token.md	4. **The code (owner, 2026-11-07).** The code is 32 bytes from `crypto/rand`. It goes in a `POST` body only. The server never logs it, stores a hash only and compares in constant time. One code is valid at a time, for 10 minutes, for one use, for one role (`site-administrator`) on the installation only.
+docs/adr/0339-the-first-administrator-gets-a-one-time-code-from-the-bootstrap-token.md	5. **The principal (owner, 2026-11-07).** The route accepts only the ID of a live, enabled person of the installation. It also needs a reason with no control or format characters. It refuses a break-glass person, a temporary administrator, a service and a `dev:` subject.
+docs/adr/0339-the-first-administrator-gets-a-one-time-code-from-the-bootstrap-token.md	6. **Fail closed (owner, 2026-11-07).** The redeem checks three facts in the store transaction. The marker is not set. The code names the principal of the session. The authentication of the session is fresh. An unknown state, a set marker or a failed audit write refuses the request. The refusal writes an audit entry.
+docs/adr/0339-the-first-administrator-gets-a-one-time-code-from-the-bootstrap-token.md	7. **The marker is a stored fact (owner, 2026-11-07).** The marker is an installation fact with a read in the API. A later loss of every administrator goes through recovery (ADR 57, ADR 245), not through this route.
+docs/adr/0339-the-first-administrator-gets-a-one-time-code-from-the-bootstrap-token.md	8. **The guides change with the code (owner, 2026-11-07).** Three guides change in the pull request that builds the route. They are console sign-in, local users and workload identity.
+docs/adr/0340-measure-background-blob-families-by-total-job-time.md	1. **Background families are measured by total job time (owner, 2026-11-07).** Accept the background cost. A background blob family is measured by the total time of its job. This changes ADR 281 decision 2 for these families.
+docs/adr/0340-measure-background-blob-families-by-total-job-time.md	2. **Hot paths keep the per-operation measure (owner, 2026-11-07).** A path where a person or a CLI waits keeps the per-operation measure. ADR 281 decision 2 stays for these paths.
+docs/adr/0340-measure-background-blob-families-by-total-job-time.md	3. **The record states the job (owner, 2026-11-07).** For each background family, the benchmark record states these items:
+docs/adr/0340-measure-background-blob-families-by-total-job-time.md	4. **A miss goes to the owner (owner, 2026-11-07).** A family that misses its limit goes back to the owner with the numbers.
+docs/adr/0341-a-taint-that-reaches-a-secret-source-is-a-routing-change.md	1. **The taint reaches an export key (owner, 2026-11-07).** Any change whose taint reaches a secret source, in any export key, is a routing change. It needs `profile:open` as well as `profile:write`. This holds for a save, a rollback, a tag move and the apply of a draft. It also holds for the referrers of the changed profile, as ADR 202 decision 2 says for blocks.
+docs/adr/0341-a-taint-that-reaches-a-secret-source-is-a-routing-change.md	2. **An unknown export key fails closed (owner, 2026-11-07).** An export key can be unknown to the server. Then each change under that key is a routing change. A key becomes known only when an ADR lists it. The code that computes the taint must also handle it.
+docs/adr/0342-gates-read-state-facts-for-three-more-writes.md	1. **Three writes fill the state facts (owner, 2026-11-07).** For these writes, the server sets `state.available` to `true` and fills `state.resources` and `state.removed`:
+docs/adr/0342-gates-read-state-facts-for-three-more-writes.md	2. **The server reads the body with limits (owner, 2026-11-07).** The server reads the new state from the body before the gate runs. The read has a size limit, a depth limit and a time limit. The limits are settings. The API shows their effective values. The server refuses a request that is over a limit.
+docs/adr/0342-gates-read-state-facts-for-three-more-writes.md	3. **The read fails closed (owner, 2026-11-07).** The server may fail to read the body or to count the resources in it. Then it does not set `state.available` to `true`. It refuses the write, and the error names the reason. It never allows the write with empty facts.
+docs/adr/0342-gates-read-state-facts-for-three-more-writes.md	4. **Counts follow the earlier rule (owner, 2026-11-07).** `state.resources` counts resource instances, and `state.removed` names instance addresses, as for the restore of a state version.
+docs/adr/0343-runner-work-imports-sweeps-and-the-runner-repository.md	1. **A tool import is a runner job (owner, 2026-11-07).** An import that needs the CLI of a tool runs as a runner job. Examples are `tofu state pull` and `pulumi stack export`. The CLI does not run in the server.
+docs/adr/0343-runner-work-imports-sweeps-and-the-runner-repository.md	2. **A bulk import runs in the server (owner, 2026-11-07).** A bulk import reads another backend directly. It keeps the rule of ADR 241 decision 2: it runs in the server, in durable operations.
+docs/adr/0343-runner-work-imports-sweeps-and-the-runner-repository.md	3. **Sweeps run on a runner (owner, 2026-11-07).** ADR 164 decision 1 stays.
+docs/adr/0343-runner-work-imports-sweeps-and-the-runner-repository.md	4. **A pool may have more than one purpose (owner, 2026-11-07).**
+docs/adr/0343-runner-work-imports-sweeps-and-the-runner-repository.md	5. **Converters (owner, 2026-11-07).** A converter from a cloud inventory service to the sweep report format runs on a runner pool that has the sweep purpose.
+docs/adr/0343-runner-work-imports-sweeps-and-the-runner-repository.md	6. **The runner repository is an exception for the runner only (owner, 2026-11-07).** The runner lives in its own repository, as ADR 282 decision 4 says. No other component gets a repository of its own from this exception.
+docs/adr/0344-an-agent-drafts-a-change-order-and-a-person-confirms-it.md	1. **An agent drafts a change order (owner, 2026-11-07).**
+docs/adr/0344-an-agent-drafts-a-change-order-and-a-person-confirms-it.md	2. **A person confirms it (owner, 2026-11-07).** The draft is not a change order until a person confirms it.
+docs/adr/0344-an-agent-drafts-a-change-order-and-a-person-confirms-it.md	3. **The rest of decision 14 stays (owner, 2026-11-07).** An agent still records no verdict. It does not attach a plan, approve, request changes, reject or close. It does not resolve or reopen a thread. It does not ask for an apply.
+docs/adr/0345-an-artifact-version-has-four-states.md	1. **Four states (owner, 2026-11-07).** The state of an artifact version is `published`, `deprecated`, `retracted` or `revoked`.
+docs/adr/0346-a-unit-moves-between-collections-never-between-namespaces.md	1. **No one-click move between namespaces (owner, 2026-11-07).** The server has no one-click move of a unit to another namespace. Such a move would break grants. A person exports the unit and imports it into the other namespace, as ADR 47 decision 7 says.
+docs/adr/0346-a-unit-moves-between-collections-never-between-namespaces.md	2. **A person can move between collections (owner, 2026-11-07).** A person can move a unit to another collection of the same namespace. The authorization model must allow it (ADR 51 decision 6).
+docs/adr/0347-warn-do-not-block-for-choices-that-the-operator-owns.md	1. **Warn, do not block (owner, 2026-11-07).** When the operator of an installation makes a risky choice about something that the operator owns, the server warns. It does not block the choice. The warning names the risk and the setting to change.
+docs/adr/0347-warn-do-not-block-for-choices-that-the-operator-owns.md	2. **The personas (owner, 2026-11-07).** The rule in decision 1 is the default for the homelab, startup and platform personas.
+docs/adr/0347-warn-do-not-block-for-choices-that-the-operator-owns.md	4. **Security controls keep their own rules (owner, 2026-11-07).** This ADR does not change a security control. Authentication, authorization, secrets and the audit log keep the rules of their own ADRs, in every mode.
+docs/adr/0348-the-console-is-responsive-and-has-no-work-only-for-phones.md	1. **Responsive designs (owner, 2026-11-07).** A console design is responsive. One design works on all screen sizes.
+docs/adr/0348-the-console-is-responsive-and-has-no-work-only-for-phones.md	2. **No phone-only work (owner, 2026-11-07).** The project does not do design or build work that serves only phones.
+docs/adr/0349-the-openpgp-library-is-also-allowed-in-the-server-registry.md	1. **The server registry may use the OpenPGP library (owner, 2026-11-07).** The server registry may use the OpenPGP library of ADR 316 decision 2. It uses the library to check signatures of private providers and modules.
+docs/adr/0349-the-openpgp-library-is-also-allowed-in-the-server-registry.md	2. **The same versions (owner, 2026-11-07).** The versions of ADR 316 decision 2 apply. A new version or a new library needs a new approval.
+docs/adr/0350-opendustpan-runners-replace-hcp-terraform-agents.md	2. **A TFE agent token is refused (owner, 2026-11-07).** A TFE agent token is long-lived and has many uses. A runner join token has one use and a short life (ADR 133 decision 2). When the server serves the routes of the TFE agent tokens, a request to create a token fails. The answer is a JSON:API error with a clear message. The message names the route that creates a join token: `POST /pools/{pool}/join-tokens` of the runner API. The documentation says why the token is refused.
+docs/adr/0350-opendustpan-runners-replace-hcp-terraform-agents.md	4. **The agent pool routes are not decided (owner, 2026-11-07).** The pool management routes (level 1a) stay undecided. A later RFC covers them. Until the RFC is accepted, ADR 254 decision 4 holds: the server does not serve the TFE agent pool API.
+docs/adr/0351-opendustpan-computes-provenance-signals-and-administrators-write-the-policy.md	- **Ownership is a fact (owner, 2026-11-07).** Every package has an `ownership` fact with one of two values. `first-party` means that the organization built and published the package in its own private registry or namespace. `third-party` means public code or other outside code. In the regulated sense, third-party code is SOUP.
+docs/adr/0351-opendustpan-computes-provenance-signals-and-administrators-write-the-policy.md	- **The administrator may apply strict rules to first-party packages (owner, 2026-11-07).** This is a choice, as in decision 2. The administrator writes a gate that reads `ownership`.
+docs/adr/0351-opendustpan-computes-provenance-signals-and-administrators-write-the-policy.md	- **The defaults differ (owner, 2026-11-07).** A first-party package goes through the review flow that the team already has. That flow is the review request and the gates of the team. A first-party package has no provenance policy by default. A third-party package goes through the provenance policy of the administrator. The example policies follow this split.
+docs/adr/0351-opendustpan-computes-provenance-signals-and-administrators-write-the-policy.md	2. **The administrator writes the policy (owner, 2026-11-07).** The policy is a gate over those facts, with the gate model of ADR 222 to ADR 230. An administrator puts it at the installation, the namespace or the unit. The administrator decides which vendors, organizations, registries and versions to trust. The administrator decides what each signal means. The administrator decides which external checks a package needs.
+docs/adr/0351-opendustpan-computes-provenance-signals-and-administrators-write-the-policy.md	3. **Guidelines and example policies (owner, 2026-11-07).** OpenDustpan ships guidelines and example policies for each kind of organization. They are data that an administrator copies and edits. They are not defaults. The kinds are a startup, an enterprise with an allowlist, and a regulated organization. The regulated organization has a SOUP process and a record of each approved item.
+docs/adr/0351-opendustpan-computes-provenance-signals-and-administrators-write-the-policy.md	4. **No magic (owner, 2026-11-07).** Each allow and each deny names the policy and the facts that it read. The API shows the effective policy. A signal from outside the installation is an unverified fact. The documentation says which signals an attacker can fake, for example stars. A fact shows its origin, the host that gave it and the time of its read.
+docs/adr/0351-opendustpan-computes-provenance-signals-and-administrators-write-the-policy.md	5. **Integrity is code (owner, 2026-11-07).** The server serves only the bytes that a person admitted. It checks each hash, each size limit and each signed URL. This is not a view on provenance. An administrator cannot turn it off.
+docs/adr/0351-opendustpan-computes-provenance-signals-and-administrators-write-the-policy.md	6. **One mechanism, two kinds of package (owner, 2026-11-07).** The same facts and the same gates serve every package. This covers the public packages of RFC 93, the private packages of ADR 269 and RFC 101, and the sweep plugins of RFC 123. The distinction between public and private packages is a fact and a default. It is not a second mechanism. The owner's words:
+docs/adr/0353-gates-at-every-step-of-an-untrusted-plan-as-opt-in-settings.md	4. **Accepted questions (owner, 2026-11-07).** The owner accepted the recommendation of each of the 12 questions of the RFC, as the settings of decision 1:
+docs/adr/0353-gates-at-every-step-of-an-untrusted-plan-as-opt-in-settings.md	5. **The rest of the proposal (owner, 2026-11-07).** The rest of the proposal of the RFC applies as settings of decision 1. It has these items:
+docs/adr/0353-gates-at-every-step-of-an-untrusted-plan-as-opt-in-settings.md	6. **Security rules stay (owner, 2026-11-07).** A control that a team turns on is never weaker than the rules of ADR 250 in `CLAUDE.md`. A setting can turn a control off only by an explicit stored value that has a record of who set it and when.
+docs/adr/0354-agent-principals-delegation-and-the-kind-agent.md	1. **The person who delegated may confirm (owner, 2026-11-07).** Question 1. The person who delegated (Alice) may confirm a change that her own agent proposed, by default. This is the confirmation step of ADR 125 and ADR 128. Four-eyes comes from an approval rule that counts Alice as the author: with `authorMayApprove: false` on the namespace, a second person must approve. A one-person installation keeps working.
+docs/adr/0354-agent-principals-delegation-and-the-kind-agent.md	2. **Revocation during an apply (owner, 2026-11-07).** Question 2. A phase that the person confirmed finishes, because the person saw and allowed that exact plan. No new phase starts. Every phase that was not confirmed stops at its next call. This is configurable: an installation setting holds the behavior, with the recommended value as the default. The API shows the effective value.
+docs/adr/0354-agent-principals-delegation-and-the-kind-agent.md	3. **The lifetimes of a delegation (owner, 2026-11-07).** Question 3. The default lifetime is 7 days, and 30 days at most, for a public client. It is 30 days and 90 days for Dusty and for confidential clients. This is configurable: an installation setting holds the lifetimes, with these values as the default. The API shows the effective values.
+docs/adr/0358-automatic-drift-remediation-is-opt-in-and-a-namespace-can-opt-out.md	1. **Auto-dedrift is available and opt-in (owner, 2026-10-21).** The server
+docs/adr/0358-automatic-drift-remediation-is-opt-in-and-a-namespace-can-opt-out.md	Status: accepted · 2026-11-07. Records the owner decision of 21 October 2026 on automatic drift remediation
+docs/rfc/0004-what-sits-under-a-namespace.md	- Groups do not nest (owner input, 2026-10-11). TFE projects are flat, and a
+docs/rfc/0005-profiles.md	work. Each is an **owner decision**. The recommendations stay as above:
+docs/rfc/0010-artifact-registry-and-curated-upstreams.md	- `pkgmirror.Scanner` for a scan report, if owner decision D3 takes the
+docs/rfc/0010-artifact-registry-and-curated-upstreams.md	| R14 | The scan job `package-scan` and the fact group `scan` | M | `pkgmirror`, `runner-protocol`, `store-migrations` | R6, owner decision D3 |
+docs/rfc/0010-artifact-registry-and-curated-upstreams.md	| R6 | Admission: `package.admit` with its built-in gate and rule. The server fetch through `pkg/egress`, with an upstream allowlist. The archive checks, the `h1:` hash, the signature check with `pgpverify`. The upload for an air gap | L | `pkgmirror`, `gate-facts` | R5, owner decision D1 |
+docs/rfc/0010-artifact-registry-and-curated-upstreams.md	| Which scanners | **Owner decision D3.** Recommended: no scanner in the server. A runner job of the kind `package-scan` runs a scanner image of the team, for example `govulncheck -mode=binary` or OSV-Scanner. It uploads a report in the model of RFC 90. The fact group `scan` of `package.admit` reads it. Option 2: a scanner in the server. It adds a tool, its database and its network access to the server. Option 3: no scanning in Milestone 6. |
+docs/rfc/0012-api-edits-and-write-back.md	*Owner decision.* Recommendation: (a). It works with the rule "require
+docs/rfc/0013-policy-and-approvals.md	- ADR 212 decision 3 (owner decision): an approval of a `destroy` phase
+docs/rfc/0016-egress-proxy.md	### Owner decisions
+docs/rfc/0016-egress-proxy.md	- ADR 136 decision 4: the RBAC change of owner decision D5.
+docs/rfc/0016-egress-proxy.md	The RBAC change is owner decision D5.
+docs/rfc/0016-egress-proxy.md	| The name of a rule | **Owner decision D4.** Recommended: "proxy rule". "Egress" names the outbound guard and the egress allowlist. |
+docs/rfc/0016-egress-proxy.md	| X1 | `pkg/jobproxy`: rule model, parser, `CanonicalPath`, `Render`, `Match`, reasons, table and fuzz tests | M | `jobproxy` | owner decision D4 (the name) |
+docs/rfc/0016-egress-proxy.md	| X7 | The Kubernetes coordinator: the proxy Job, the NetworkPolicy of a claim (after owner decision D5) | L | `runner-k8s` | X5 |
+docs/rfc/0020-access-tokens.md	proposes the names and the TLS rule (owner question O3 of RFC 21).
+docs/rfc/0021-directory-sync-and-sign-in.md	(owner decision O14).** It is the only option that ships mode 2 as accepted,
+docs/rfc/0021-directory-sync-and-sign-in.md	(owner decision O4),** because B adds a path with no binding, and A keeps
+docs/rfc/0021-directory-sync-and-sign-in.md	(owner decision O6),** because the host recovery path is the fallback for a
+docs/rfc/0021-directory-sync-and-sign-in.md	**Recommendation: A (owner decision O7).** It needs no new module, it lets the
+docs/rfc/0021-directory-sync-and-sign-in.md	**Recommendation: B (owner decision O3, with the LDAP question).** The server
+docs/rfc/0021-directory-sync-and-sign-in.md	**Recommendation: gosaml2 (owner decision O11, a new dependency).** It has
+docs/rfc/0021-directory-sync-and-sign-in.md	**Recommendation: no (owner decision O12),** because the precedents point in
+docs/rfc/0021-directory-sync-and-sign-in.md	**TOTP (owner decision O13).** RFC 102 is still `discussing`, so this
+docs/rfc/0021-directory-sync-and-sign-in.md	**The amendment of ADR 245 (owner decision O14).** ADR 245
+docs/rfc/0021-directory-sync-and-sign-in.md	B (owner decision O5).** Option B amends ADR 55 decision 8, which says that a
+docs/rfc/0021-directory-sync-and-sign-in.md	host at any time (fetched). **Recommendation: B (owner decision O8),** with
+docs/rfc/0021-directory-sync-and-sign-in.md	owner decision as a yes or no question.
+docs/rfc/0021-directory-sync-and-sign-in.md	the mark "owner decision". The list "Questions for the owner" holds each
+docs/rfc/0023-events-and-notifications.md	*Owner decision.* Recommendation: (a). The roadmap item of Milestone 5
+docs/rfc/0026-unit-status.md	- Lists (owner, 26.2): all states of a unit show as badges with a tooltip.
+docs/rfc/0026-unit-status.md	- Words (owner, 26.1): in sync, running, queued, locked, waiting for
+docs/rfc/0026-unit-status.md	records the decisions: the words and the badge rule (owner, 2026-10-18), and
+docs/rfc/0027-pull-request-automation.md	*Owner decision.* It depends on ephemeral units (RFC 43), which the
+docs/rfc/0027-pull-request-automation.md	*Owner decision.* Recommendation: (a). An incident across namespaces
+docs/rfc/0027-pull-request-automation.md	*Owner decision.* Recommendation: (a). It changes ADR 190 decision 10:
+docs/rfc/0027-pull-request-automation.md	3. **How the apply after the merge works.** *Owner decision.* The owner
+docs/rfc/0027-pull-request-automation.md	9. **A third command, `dustpan plan`.** *Owner decision*, because ADR 271
+docs/rfc/0031-kubernetes.md	- Stale plans and lock contention on large shared states (owner research).
+docs/rfc/0033-customer-managed-keys.md	on 2026-10-18 (owner decision). The customer key wraps the namespace key of
+docs/rfc/0036-high-availability.md	into one baseline now, not at the first tag. The owner said: "We can do
+docs/rfc/0037-federation.md	Decided in part on 2026-10-18 (owner decisions):
+docs/rfc/0037-federation.md	Decided on 2026-10-19 (owner decision in ADR 248):
+docs/rfc/0037-federation.md	objective (RPO) for each reference architecture of RFC 68 (owner decision 5
+docs/rfc/0037-federation.md	with its own action, answers the placement. An optional edge proxy (owner
+docs/rfc/0043-ephemeral-units.md	### Owner decisions
+docs/rfc/0043-ephemeral-units.md	revision, `absent`, with both values. The default is owner decision D8.
+docs/rfc/0043-ephemeral-units.md	the limit also holds for administrators is owner decision D9. The action
+docs/rfc/0055-environment-promotion.md	### Owner decision D10. A preview rule applies
+docs/rfc/0055-environment-promotion.md	### Owner decision D6. The words (decided)
+docs/rfc/0055-environment-promotion.md	Whether a preview rule may apply with no person is owner decision D10.
+docs/rfc/0056-upgrade-pull-requests.md	## Scope (owner, 27 October 2026)
+docs/rfc/0059-installation-api.md	every route that changes data takes an `Idempotency-Key` header (owner
+docs/rfc/0060-maintenance-mode-visibility-wait.md	handles it. The project lead proposed a lease rule. The owner said: "All
+docs/rfc/0065-opentofu-http-backend.md	The project lead recommended an answer to each question. The owner said: "All
+docs/rfc/0066-moving-units-between-namespaces-and-installations.md	import/export." The owner said that the scope of this tooling is not clear
+docs/rfc/0067-spend-and-cost-tool-integration.md	running stored code in the browser. The owner said about that idea: "This is
+docs/rfc/0068-installation-settings.md	(owner approval). It must watch the directory, not the file, because of
+docs/rfc/0068-installation-settings.md	Decided in part on 2026-10-18 (owner decisions):
+docs/rfc/0068-installation-settings.md	Owner decision 4 of "The hosted service": fair-use limits on the stored
+docs/rfc/0068-installation-settings.md	too, so an operator of any installation can set them (owner direction point
+docs/rfc/0068-installation-settings.md	without replication. Replication does not replace a backup (owner,
+docs/rfc/0068-installation-settings.md	| IP allowlist feature switch | ADR 55 decision 8 | pending | no | installation | API, live | Off by default (owner, 2026-10-13). |
+docs/rfc/0068-installation-settings.md	| Inactivity period | ADR 53 decisions 4 and 6 | pending | no | as above | API, live | Default 90 days (PCI DSS 8.2.6). An administrator can set any value, also no limit (owner, 2026-10-13). |
+docs/rfc/0075-commands-by-intent.md	- `doctor` sits in `internal/cli`. It calls `stat` on the key file (owner,
+docs/rfc/0076-hosted-multitenancy-open-questions.md	ADRs 215 to 221 record the owner decisions of 2026-10-18: OpenDustpan Cloud
+docs/rfc/0078-localization-open-questions.md	Decision (owner): A. ADR 235 decision 4 records it.
+docs/rfc/0078-localization-open-questions.md	Decision (owner): A. An AI translation agent with the full context of the
+docs/rfc/0078-localization-open-questions.md	Decision (owner): A. `golang.org/x/text` is a direct dependency, for
+docs/rfc/0078-localization-open-questions.md	Decision (owner): B, now, with the same process as the console. ADRs,
+docs/rfc/0078-localization-open-questions.md	Decision (owner): B. Emails use the person's `language`, then
+docs/rfc/0078-localization-open-questions.md	Decision (owner): a report of one string now, not a form of the page. ADR
+docs/rfc/0078-localization-open-questions.md	Decision (owner): research the precedent first: what other products do,
+docs/rfc/0088-federation-model.md	**Owner decision (open question 6):** the installation that owns a
+docs/rfc/0088-federation-model.md	The failover-version fence of ADR 4 fits the owner decision, and it stays.
+docs/rfc/0088-federation-model.md	These parts of RFC 79 and RFC 87 contradict the owner decision. The
+docs/rfc/0088-federation-model.md	between installations, so it fits the owner decision with "region"
+docs/rfc/0088-federation-model.md	| 87 (PR #880) | Open question 6 (does a lease partition stop writes) | Moot. The owner decision is option c: a partition stops nothing, and only an operator promotes. |
+docs/rfc/0089-forge-port.md	## Credential expiry and rotation (owner decision, 2026-10-20)
+docs/rfc/0089-forge-port.md	## Webhook intake (owner decision, 2026-10-20: parse in the port, the route outside it)
+docs/rfc/0089-forge-port.md	### Owner decisions of 20 October 2026
+docs/rfc/0089-forge-port.md	### Owner decisions that this RFC keeps
+docs/rfc/0089-forge-port.md	### The GitHub App scope (owner decision, 2026-10-20)
+docs/rfc/0089-forge-port.md	### Webhook hostname and federation (owner decision, 2026-10-20)
+docs/rfc/0089-forge-port.md	### Where it lives (owner decision, 2026-10-20)
+docs/rfc/0089-forge-port.md	**A forge bridge (owner decision, 2026-10-20, Q5 A, not in the Go port yet).** A bridge is a small
+docs/rfc/0089-forge-port.md	**Owner decision, 2026-10-20.** The commands are `dustpan apply` and
+docs/rfc/0089-forge-port.md	**Owner decision, 2026-10-20: A, as proposed.** The options below are the
+docs/rfc/0089-forge-port.md	**Owner decision, 2026-10-20: A, as proposed.** The options below are the
+docs/rfc/0089-forge-port.md	**Owner decision, 2026-10-20: A, as proposed.** The options below are the
+docs/rfc/0089-forge-port.md	**Owner decision, 2026-10-20: B, as proposed, with `maintainer` by
+docs/rfc/0089-forge-port.md	**Owner decision, 2026-10-20: B.** The person or IaC gives the webhook
+docs/rfc/0089-forge-port.md	**Owner decision, 2026-10-20: C**, with the condition of "Webhook hostname
+docs/rfc/0089-forge-port.md	**Owner decision, 2026-10-20: the question is moot as framed.** ADR 135
+docs/rfc/0089-forge-port.md	- **An event is a hint** (owner decision, 2026-10-20, Q2 A). The server reads the object through
+docs/rfc/0089-forge-port.md	- **Credential expiry and rotation (owner decision, 2026-10-20).** The
+docs/rfc/0089-forge-port.md	- **Old Q7, the GitHub App scope (owner decision, 2026-10-20).** One
+docs/rfc/0089-forge-port.md	- **Q10: C (owner decision, 2026-10-20).** 204 and the poll, until the
+docs/rfc/0089-forge-port.md	- **Q1: A (owner decision, 2026-10-20).** The port lives in `pkg/forge`,
+docs/rfc/0089-forge-port.md	- **Q2: A (owner decision, 2026-10-20).** `ParseEvent` in the port, the
+docs/rfc/0089-forge-port.md	- **Q3: moot (owner decision, 2026-10-20).** The source comes only as the
+docs/rfc/0089-forge-port.md	- **Q5: A (owner decision, 2026-10-20).** The bridge dials out and
+docs/rfc/0089-forge-port.md	- **Q6: B (owner decision, 2026-10-20).** The action
+docs/rfc/0089-forge-port.md	- **Q8: `dustpan apply` and `unlock` (owner decision, 2026-10-20).** Linked
+docs/rfc/0089-forge-port.md	- **Q9: B (owner decision, 2026-10-20).** The person, the console form or
+docs/rfc/0089-forge-port.md	- **The first forge is GitHub, then GitLab** (owner, 2026-10-18, issue
+docs/rfc/0089-forge-port.md	8). Q8 gives the command list (owner decision, 2026-10-20).
+docs/rfc/0089-forge-port.md	Old Q7 (the GitHub App scope) has an owner decision: see "The GitHub App
+docs/rfc/0089-forge-port.md	The code term is "forge". User-facing text never says "forge" (owner
+docs/rfc/0089-forge-port.md	`namespace:use-git-host-connection` (owner decision, 2026-10-20, Q6 B).
+docs/rfc/0089-forge-port.md	command runs as the linked principal with its actions (owner decision of
+docs/rfc/0089-forge-port.md	connection for other live fetches (Q3, owner decision, 2026-10-20).
+docs/rfc/0089-forge-port.md	that adds a credential set (Q9, owner decision, 2026-10-20). No read answers
+docs/rfc/0089-forge-port.md	| Comment commands (RFC 27, Q8) (owner decision, 2026-10-20, no Go constant yet) | A new comment on a review request | A signed event. A read of the comment through the API, with the stable ID of its author, before the server acts. A read of the review request with its head and whether the Git host lets it merge (the field `Mergeable` of `Review` is proposed: it enters the Go interface with this consumer). A reply. | `ParseEvent`, `ReadComment`, `PutComment`, `ReadReview` | `events`, `comment`, `review` |
+docs/rfc/0089-forge-port.md	| Source fetch (`fetch`, ADR 135) | The `source.fetch` operation, in the server, for the source of each job and each auth kind of the port (app, token) | A credential for the git protocol. The token can be the long-lived token of the connection: it stays in the server. A runner gets the source only as the pack that the server builds (owner decision, 2026-10-20). A deploy key may come later as an auth kind for the source fetch only. The port has no deploy key now. | `RepoToken` | `git-access` |
+docs/rfc/0089-forge-port.md	| `POST` or `PATCH` of a code location or a Catalog request home that names a connection (owner decision, 2026-10-20, Q6 B) | Names the connection. The call also needs its own action on the unit. | `namespace:use-git-host-connection` | the connection (`namespace:<ns>/git-host-connection:<id>`) |
+docs/rfc/0089-forge-port.md	| `RepoToken(repo)` | A token for the git protocol. An app connection answers a token that reads only `repo` and expires in at most 1 hour, with `Scoped` set. A `token` connection answers its own token with `Scoped` not set. | `ErrUnsupported` when the auth kind has no token for the git protocol. `ErrNotFound` for a missing repository. The runner path refuses a token with `Scoped` not set, so the long-lived token never leaves the server. A runner never gets a token for the source of its job (owner decision, 2026-10-20). |
+docs/rfc/0089-forge-port.md	| `repo-token` | `RepoToken` with `Token.Scoped` set: one repository, read only, at most 1 hour. Only for the git credential mode `forge` of a runner step, never for the source of a job (owner decision, 2026-10-20). |
+docs/rfc/0093-vetted-supply-chain-for-providers-modules-and-plugins.md	## Owner decision of 2026-11-07: signals, not verdicts
+docs/rfc/0093-vetted-supply-chain-for-providers-modules-and-plugins.md	### Two kinds of package: first-party and third-party (owner, 2026-11-07)
+docs/rfc/0093-vetted-supply-chain-for-providers-modules-and-plugins.md	publish. The provenance policy does not apply to it by default (owner,
+docs/rfc/0093-vetted-supply-chain-for-providers-modules-and-plugins.md	starter packs. None is a built-in verdict, because the owner decision stands.
+docs/rfc/0093-vetted-supply-chain-for-providers-modules-and-plugins.md	the choice of the administrator, as in the first owner decision. The server
+docs/rfc/0093-vetted-supply-chain-for-providers-modules-and-plugins.md	| 2 | `package.admit` as a seventh decision point | **Changed on 2026-11-07.** Still an owner decision (it amends ADRs 224, 225, 226 and 229), now question 1. Option C.1 with no built-in final gate: the administrator writes the gates. |
+docs/rfc/0094-ci-shim-secrets-at-run-time-out-of-state.md	server also makes (owner comment: "the shim is one layer, not the only
+docs/rfc/0096-follow-ups-after-an-apply.md	**Owner decision to respect.** OpenDustpan never pulls Puppet, Ansible or
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	### Owner decisions
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	(owner decision, 2026-10-20).
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	**O1. One generator of our own (owner decision, 2026-10-20).** One
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	**O2. The templates come from good clients with permissive licenses (owner
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	**O3. One shared conformance suite (owner decision, 2026-10-20).** One suite
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	**O4. Each client uses what is standard for its language (owner decision,
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	**O5. The standard library comes first (owner decision, 2026-10-20).** Where
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	**O6. The languages and their order (owner decision, 2026-10-20).**
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	**O7. One repository for each language (owner decision, 2026-10-20).** The
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	- **Question 6** has an answer: the owner decisions below. The trial
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	- **Zig.** The owner said that Zig comes only if a generator path exists.
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	Amendment 1 replaces this option: one repository for each language (owner
+docs/rfc/0099-the-api-description-and-the-generated-sdks.md	adapter. This is the first slice, as the owner said.
+docs/rfc/0100-saved-views.md	- A saved view is a server object with an API (ADR 266, owner decision 40.3).
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	### Owner decisions of 20 October 2026 (not reopened)
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	#1234, part of #967). It holds the owner decisions of 20 October 2026 and the
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	**The PR-comment apply (owner decision 5).** A comment never holds a step-up.
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	- Option A keeps D7, owner decision 4 and the break-glass rules. Its
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	- Option C breaks owner decision 4 and turns a routine setup into a
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	1. **CLI-native factors (owner decision).** The step-up runs in the CLI with
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	2. **On by default, a namespace can turn it off (owner decision).** CLI
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	3. **Only people do a second factor (owner decision).** A service principal
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	4. **The rule stays (owner decision).** An access token never gives a fresh
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	5. **PR-comment apply (owner decision, RFC 89 question 8).** When a stack
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	CLI factors of owner decision 1 are a factor of OpenDustpan. The ADR that
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	Option C overrides owner decision 4 instead (see option C). "No magic" in
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	The opt-out of owner decision 2 is a separate namespace setting,
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	by default, and owner decision 2 has CLI step-up on by default. A person can
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	is an exception to ADR 227 decision 6 and owner decision 4 for this
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	is an exception to owner decision 4.
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	never gives a fresh authentication (ADR 227 decision 6, owner decision 4).
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	not exist yet. It needs a shell on the host. It breaks owner decision 4.
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	owner decision 4). So it cannot reach the level `key` that D6 asks for. To
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	| A grant of `principal:manage-tokens`, and a trust rule that names a principal (an act-as edge) | ADR 70 decisions 1, 3 and 10, owner decision 3 | no: #1159 | yes, one write only |
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	| C. Mark the access token as fresh for a time | No new credential. | It breaks owner decision 4. Not an option. |
+docs/rfc/0102-cli-step-up-for-writes-that-need-a-fresh-authentication.md	| Overrides | D5 and D6 | D5, D6, and reopens D7 | owner decision 4 | D5 and D6 |
+docs/rfc/0103-the-public-sdk-surface.md	It holds the owner decisions of 22 October 2026 as decided and does not reopen
+docs/rfc/0111-blueprint-rollouts-and-the-migration-of-answers.md	**Owner decision D7**, because it amends accepted ADRs. The
+docs/rfc/0111-blueprint-rollouts-and-the-migration-of-answers.md	- Question 1 is owner decision D7 (it amends ADRs 190, 191 and 116).
+docs/rfc/0111-blueprint-rollouts-and-the-migration-of-answers.md	delegation, not an owner decision.
+docs/rfc/0111-blueprint-rollouts-and-the-migration-of-answers.md	| B3 | A change order unit plan that names a Catalog revision. The attach, and the plan job and the apply job on the rendered snapshot. The cause diff of the documents | M | `changeorder`, `store-migrations` | the ADR of owner decision D7 |
+docs/rfc/0113-rules-that-hold-by-themselves.md	**Recommendation:** a separate pull request (owner) cuts the overview parts of
+docs/rfc/0113-rules-that-hold-by-themselves.md	**Recommendation:** the fast `Stop` hook, as a later pull request (owner),
+docs/rfc/0113-rules-that-hold-by-themselves.md	each model, each week. This changes only `docs/agents/` (owner). **Reason:**
+docs/rfc/0113-rules-that-hold-by-themselves.md	| 10 | Area briefs and their check (owner) | the eight `AGENTS.md` briefs of Q4, a `CLAUDE.md` with `@AGENTS.md` next to each, the root `CLAUDE.md` as an import of the root `AGENTS.md`, `scripts/agent-files-check.py`, `Makefile`, the `area:` labels in `docs/agents/issue-tracker.md` | Line limit, the three sections and the ADR line, ADR names, the import line, no symbolic links, superseded ADRs, STE lint | `docs/agents/` with the steward pull request. Lands after it. | 2, 3, 4, 5 (the briefs name their gates), the steward pull request |
+docs/rfc/0113-rules-that-hold-by-themselves.md	| 11 | Project skills (owner) | the three `.agents/project-skills/od-*/SKILL.md`, the six Repowise skills moved, `.claude/skills/` links, the check of PR 10 | Lock and link checks, STE lint in strict mode | `.claude/skills/` | 3, 4, 10 |
+docs/rfc/0113-rules-that-hold-by-themselves.md	| 18 | The root agent file keeps its rules only (owner) | `AGENTS.md`, `CLAUDE.md` at the root | The agent file check of PR 10 also runs on the root | Each pull request that edits the root file. Lands in a quiet window. | 10 |
+docs/rfc/0113-rules-that-hold-by-themselves.md	| 19 | The fast `Stop` hook (owner) | `.claude/settings.json`, `.claude/hooks/stop-verify.py` | Fast gates on the changed files before the agent stops | `.claude/settings.json`, with PR 7 | 1, 6, 9, 10 |
+docs/rfc/0113-rules-that-hold-by-themselves.md	| 20 | Review precision in the review and merge docs (owner) | `docs/agents/` | None. A metric. | `docs/agents/`, with the steward pull request | the steward pull request |
+docs/rfc/0113-rules-that-hold-by-themselves.md	| 7 | The push hook (owner) | `.claude/settings.json`, `.claude/hooks/push-alone.py` | A refused compound `git push`, with the allowed form | `.claude/settings.json`, low | none |
+docs/rfc/0120-split-the-hot-files-by-area.md	The owner said about a split of these central lists: "that will probably be
+docs/rfc/0121-agent-principals.md	Accepted on 7 November 2026 (owner). [ADR 354](../adr/0354-agent-principals-delegation-and-the-kind-agent.md) records the decision.
+docs/rfc/0122-gates-at-every-step-of-an-untrusted-plan.md	Accepted on 7 November 2026 (owner). [ADR 353](../adr/0353-gates-at-every-step-of-an-untrusted-plan-as-opt-in-settings.md) records the decision.
+docs/rfc/0122-gates-at-every-step-of-an-untrusted-plan.md	The owner said "yes" to scanners at the plan step. On 7 November 2026 the
+docs/rfc/README.md	| [93](0093-vetted-supply-chain-for-providers-modules-and-plugins.md) | A vetted supply chain for OpenTofu providers and modules and Pulumi resource plugins | discussing; owner decision of 2026-11-07 (ADR 351) |

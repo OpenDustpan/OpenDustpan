@@ -149,6 +149,11 @@ DOCS_ADRS := $(shell ls docs/adr/*.md | awk -F/ 'substr($$3, 1, 4) + 0 >= 14')
 # self-test are in the script.
 BANNED    := python3 -I scripts/docs-banned-words.py
 ADR_DECISIONS := python3 -I scripts/adr-decisions.py
+# Owner decision claims in the ADRs that docs-lint reads, and in the RFCs, must
+# quote the owner and give a date or a link. A claim that lacks one must be in
+# scripts/docs-owner-decisions.baseline, and each baseline entry must still match.
+OWNER_DECISIONS := python3 -I scripts/docs-owner-decisions.py
+OWNER_DOCS := $(DOCS_ADRS) $(wildcard docs/rfc/*.md)
 
 # The change links between ADRs and the generated docs/adr/INDEX.md. ADR 296
 # is the first ADR with a "Changes:" list. The older ADRs have only the
@@ -159,6 +164,8 @@ docs-lint: ## ASD-STE100 structural rules, banned words and the Repowise decisio
 	$(STE_LINT) $(DOCS) $(DOCS_ADRS)
 	$(BANNED) --selftest
 	$(BANNED) $(DOCS) $(DOCS_ADRS)
+	$(OWNER_DECISIONS) --selftest
+	$(OWNER_DECISIONS) $(OWNER_DOCS)
 	$(ADR_DECISIONS) --selftest
 	$(ADR_DECISIONS) --check
 	python3 -I scripts/adr-index.py --selftest
