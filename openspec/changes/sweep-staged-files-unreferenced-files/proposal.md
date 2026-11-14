@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #1290.
@@ -55,8 +55,6 @@ Depends on:
 - artifact-registry
 - h1-hash-provider-archive-registry
 - backups-do-not-copy-files
-- `h1-hash-provider-archive-registry` (order of the milestone review)
-- `backups-do-not-copy-files` (order of the milestone review)
 
 ## Usability
 

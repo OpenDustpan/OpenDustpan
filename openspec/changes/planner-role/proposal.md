@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:166` (The planner role).
@@ -47,7 +47,6 @@ Out of scope:
 Depends on:
 
 - groups-roles-grants
-- `groups-roles-grants` (order of the milestone review)
 
 ## Usability
 

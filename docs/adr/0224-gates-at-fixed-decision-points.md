@@ -16,6 +16,10 @@ Changed by:
 - ADR 353 extends decision 2: a seventh decision point, change.plan.
 - ADR 353 changes decision 14: a requirement of change.plan blocks the plan phase.
 - ADR 354 extends: gates and approvals name the subject of a delegated request.
+- ADR 377 changes decision 8: CI runs the validator of the official Rust
+  `cedar` CLI from a pinned image.
+- ADR 377 extends decision 9: the external adapter speaks a small versioned
+  format of OpenDustpan.
 .
 ## Context
 

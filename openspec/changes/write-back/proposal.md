@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:300` (Write-back).
@@ -47,7 +47,6 @@ Out of scope:
 Depends on:
 
 - add-job-service-routes-start-1
-- `git-host-webhook-intake-post` (order of the milestone review)
 
 ## Usability
 

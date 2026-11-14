@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -32,10 +32,12 @@ Out of scope:
 
 Depends on:
 
+- 47-discovery-codification
+
+Builds on (not a change):
+
 - sweep plugin milestone (RFC 123) slices 0 to 6
 - agents milestone (milestone 10) slices 7 and 8
-- 47-discovery-codification
-- `47-discovery-codification` (order of the milestone review)
 
 ## Usability
 

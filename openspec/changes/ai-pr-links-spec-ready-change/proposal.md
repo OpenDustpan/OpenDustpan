@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Short form: a CI check that an AI-authored pull request links a spec-ready

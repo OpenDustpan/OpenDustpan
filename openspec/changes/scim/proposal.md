@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:153` (SCIM).
@@ -55,11 +55,6 @@ Depends on:
 - one-membership-function-identity-provider
 - keep-two-working-break-glass
 - add-one-generic-settings-api
-- `groups-roles-grants` (order of the milestone review)
-- `collections-placement` (order of the milestone review)
-- `one-membership-function-identity-provider` (order of the milestone review)
-- `keep-two-working-break-glass` (order of the milestone review)
-- `add-one-generic-settings-api` (order of the milestone review)
 
 ## Usability
 

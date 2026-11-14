@@ -6,7 +6,7 @@ The adapter turns gate.Engine calls into service calls. Protocol faults give gat
 
 1. **Service adapter behind gate.Engine.** Add an unexported externalEngine with a constructor that takes endpoint, CA, credential and timeout and exposes only gate.Engine.
 2. **Strict answer check.** Check TLS, credential, no redirect, timeout, answer size, both echoed IDs, unknown and extra policy IDs and unit mismatch. Each fault gives gate.ErrUnavailable.
-3. **Outage behavior.** Start when the service is unreachable. Enforce gates fail closed. The save and access-limit rules follow the owner decision.
+3. **Outage behavior.** Start when the service is unreachable. Enforce gates fail closed. A save follows ADR 224 decision 8: with no answer from the service, a save that switches a gate to `evaluate`, removes it or sets `onError: skip` goes on with the linked validator only, with an audit entry that says so; every other save fails with `gate.ErrUnavailable`. The access-limit rule during an outage waits for the owner (open question 5).
 
 ## Structure
 

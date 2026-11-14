@@ -6,7 +6,7 @@
 
 - [ ] 1.1 Add conformance cases for ClaimDue: double claim, invalid slot and collapse of missed slots in pkg/trigger/triggertest/dispatcher.go. ClaimDue is NEW. It is an in-process test: BLOCKED by no route, because the harness calls the store port directly with no credential. Check: TestClaimDueDoubleStart fails on main
 - [ ] 1.2 Add a case to the Dispatcher.Scheduled suite in pkg/trigger/triggertest that returns ErrInvalid for a foreign slot. It is an in-process test: BLOCKED by no route, because the suite calls the dispatcher directly with no credential. Check: TestDispatcherScheduledInvalidSlot fails on main
-- [ ] 1.3 Add cron tests for parser, Next, presets and spread in the new cron package, in the NEW file pkg/cron/cron_test.go. Check: TestSchedulePresetSpread fails on main
+- [ ] 1.3 Add cron tests for parser, Next, presets and spread in the new cron package, in the NEW file internal/cron/cron_test.go. Check: TestSchedulePresetSpread fails on main
 
 ## 2. Build
 

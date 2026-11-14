@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -37,6 +37,10 @@ Out of scope:
 - A server-assisted copy endpoint
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - unit lifecycle (RFC 17, ADR 47)
 

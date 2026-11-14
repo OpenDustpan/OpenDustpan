@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:472` (Schedules).
@@ -44,7 +44,6 @@ Out of scope:
 Depends on:
 
 - alternation
-- `alternation` (order of the milestone review)
 
 ## Usability
 
