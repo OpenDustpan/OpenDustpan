@@ -15,7 +15,7 @@
 ## 2. Build
 
 - [ ] 2.1 Build bounded unpack, H1 computation, and manifest protocol check in NEW file internal/registry/service/unpack.go, with H1 on registry.Archive in pkg/registry/registry.go. Check: `go test -race ./pkg/registry/... ./internal/registry/...` passes with new unpack limits, path checks, and manifest parse.
-- [ ] 2.2 Wire H1 and slug through store encode in pkg/store/internal/registrystore/registrystore.go:109, SameContent in pkg/registry/registry.go:397, missing-H1 backfill, and publish path in internal/registry/service/publish.go:307. Check: `go test -race ./pkg/store/...` passes; republish with changed H1 returns 409 registry.content-changed inside one transaction.
+- [ ] 2.2 Wire H1 and slug through store encode in pkg/store/internal/registrystore/registrystore.go:109, SameContent in pkg/registry/registry.go:397, missing-H1 backfill, and publish path in internal/registry/service/publish.go:307. Check: `go test -race ./pkg/store/...` passes; republish with changed H1 returns 409 registry.version-exists inside one transaction.
 - [ ] 2.3 Wire publish route POST /api/dustpan/v1/namespaces/{}/registry/uploads (declaration file internal/api/registry/handlers.go, adapter file NEW internal/api/registry/uploads.go) with unit:manage action on the namespace object and e2e step against the real CLI. Check: `make e2e` registry step for POST /api/dustpan/v1/namespaces/{}/registry/uploads with an access token that carries unit:manage on the namespace passes with tofu init against a namespace outside the safe subset, including mismatch and bad-archive cases.
 
 ## 3. Side effects (computed from main)

@@ -129,6 +129,6 @@ W-->D
 | --- | --- | --- | --- |
 | copy | Worker killed during copy. | Taker claims after expiry and reruns copy with new token; copy renews the lease. | copying with new fencing token. |
 | swap | Worker killed during swap. | Taker reads swapped flag in row; when false it reruns fenced swap once, when true it moves to drop-old. | swapped once; second swap refused by token and swapped flag. |
-| drop-old | Drop-old blocked by live lock. | 5 s lock wait then backoff retry, 12 attempts; then restore ends failed with restore.lock-wait. | dropped after lock frees, else failed with lock-wait on the row. |
+| drop-old | Drop-old blocked by live lock. | 5 s lock wait then backoff retry, 12 attempts; then restore ends failed with restore.lock-wait (NEW: no catalog code names a restore step that waited for a lock; restore.ended names a restore that already ended). | dropped after lock frees, else failed with lock-wait on the row. |
 | cleanupStage | Worker killed during cleanupStage. | Taker reruns cleanupStage; removal is idempotent by restore ID. | cleaned. |
 | cancel | Cancel during copy, swap, or drop-old. | Next step checks canceled flag with token and stops without further writes. | canceled. |

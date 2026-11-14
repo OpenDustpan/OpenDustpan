@@ -10,7 +10,7 @@ When a principal with the run action cancels a job that has not reached a final 
 
 #### Scenario: Cancel a finished job
 - **WHEN** a principal cancels a finished job
-- **THEN** the server answers 409 job.state
+- **THEN** the server answers 409 job.wrong-state
 
 ### Requirement: Approve job
 
@@ -22,7 +22,7 @@ When a principal with the approve action approves a job that waits for approval,
 
 #### Scenario: Approve without the action
 - **WHEN** a principal without the action approves
-- **THEN** the server answers 403 job.forbidden
+- **THEN** the server answers 403 access.denied
 
 ### Requirement: Stale plan refusal
 
@@ -30,7 +30,7 @@ If the shown plan revision differs from the current plan revision, then the serv
 
 #### Scenario: Approve after a new plan
 - **WHEN** the shown revision is old
-- **THEN** the server answers 409 job.state
+- **THEN** the server answers 409 job.wrong-state
 
 ### Requirement: Reject job
 
@@ -50,7 +50,7 @@ When a principal with the run action confirms a job that waits for confirmation,
 
 #### Scenario: Confirm a job that does not wait
 - **WHEN** a principal confirms such a job
-- **THEN** the server answers 409 job.state
+- **THEN** the server answers 409 job.wrong-state
 
 ### Requirement: Redact job log
 
