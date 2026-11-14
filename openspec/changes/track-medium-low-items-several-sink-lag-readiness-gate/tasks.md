@@ -1,0 +1,24 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+
+## 1. Failing tests first
+
+- [ ] 1.1 Add failing restore step tests for held lock retry and idempotent rerun Check: The NEW test `TestDropOldLiveSchemaRetriesOnHeldLock` fails on main, passes after
+- [ ] 1.2 Add failing readiness tests for shared cursor lag and chain gate Check: The NEW test `TestReadinessReflectsSinkLagAndChainGate` fails on main, passes after
+
+## 2. Implement
+
+- [ ] 2.1 Implement own drop step with staging name from restores row and SET LOCAL lock_timeout Check: `go test ./pkg/backup/ -run TestDropOldLive -count=1`
+- [ ] 2.2 Wire shared sink cursor lag and chain gate into readiness with 300 s bound and 30 s debounce Check: `go test ./pkg/dustpan/ -run TestReadinessReflectsSinkLag -count=1`
+- [ ] 2.3 Keep OpenTofu retry in finalize step with no other retry path Check: `go test ./pkg/workspace/ -run TestFinalizeRetryOnly -count=1`
+
+## 3. Side effects (computed from main)
+
+- [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+
+## 4. Definition of done
+
+- [ ] 4.1 Add operator guide page and e2e step on ANY /api/server/restores/{} with access token for swap wait and readiness reason Check: e2e step on ANY /api/server/restores/{} with access token checks drop retry then done, plus `curl -s http://127.0.0.1:8080/health/ready` shows reason
+- [ ] 4.2 Run PostgreSQL restore path on ANY /api/server/restores/{} with access token, hostile input tests for constructor and schema guard, usability check, and full check Check: `DUSTPAN_TEST_POSTGRES_URL=$DB go test ./pkg/store/postgres/ -run Restore -count=1` plus `make check` with zero findings
