@@ -303,7 +303,7 @@ func TestPlacementErrorText(t *testing.T) {
 		t.Errorf("error text has %d bytes, want a bounded text", len(text))
 	}
 
-	for _, want := range []string{"acme", "placement-rules"} {
+	for _, want := range []string{"acme", "opendustpan placement add"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("error text %q lacks %q", text, want)
 		}

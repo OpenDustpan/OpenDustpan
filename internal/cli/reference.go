@@ -268,7 +268,8 @@ func writeStepInputs(out *strings.Builder) {
 func writeClients(out *strings.Builder) {
 	out.WriteString("## Client commands\n")
 	out.WriteString("\n")
-	out.WriteString("`opendustpan namespace create`, `opendustpan backup`, `opendustpan backup\n")
+	out.WriteString("`opendustpan namespace create`, the `opendustpan collection` and\n")
+	out.WriteString("`opendustpan placement` commands, `opendustpan backup`, `opendustpan backup\n")
 	out.WriteString("check`, `opendustpan upgrade check`, `opendustpan restore` and the\n")
 	out.WriteString("`opendustpan audit-chain` commands call a running server. They read the\n")
 	out.WriteString("server URL from `--server` or\n")
@@ -286,6 +287,7 @@ func writeClients(out *strings.Builder) {
 	}
 
 	out.WriteString("\n")
+	writePlacementCommands(out)
 	out.WriteString("`opendustpan key generate` calls no server and opens no database. It writes a\n")
 	out.WriteString("new key-encryption key file to the path in `--out` and refuses a file that\n")
 	out.WriteString("exists.\n")
@@ -299,6 +301,23 @@ func writeClients(out *strings.Builder) {
 	out.WriteString("The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of\n")
 	out.WriteString("the backup commands. The [audit log guide](../guides/audit-log.md) shows\n")
 	out.WriteString("the audit chain commands.\n")
+}
+
+func writePlacementCommands(out *strings.Builder) {
+	out.WriteString("`collection create` takes `<namespace>/<name>` and prints the stable collection ID.\n")
+	out.WriteString("`collection list` prints the ID and `<namespace>/<name>`, separated by a tab.\n")
+	out.WriteString("`placement add` needs `--tool`, `--project`, `--stack` and `--collection`.\n")
+	out.WriteString("Use the tool code `pulumi` or `opentofu`. For OpenTofu, set `--project '*'`.\n")
+	out.WriteString("The `--stack` pattern matches stack names or workspace names. Quote each `*`\n")
+	out.WriteString("so the shell does not expand it. `--collection` takes a name or a stable ID.\n")
+	out.WriteString("The command reads the collection list and sends only the stable ID in the rule.\n")
+	out.WriteString("An unknown name makes no rule. Run `opendustpan collection list` to see the names.\n")
+	out.WriteString("`--position` starts at 1. Omit it to append the rule. The first matching rule wins.\n")
+	out.WriteString("`placement list` prints tab-separated position, rule ID, tool code, project pattern,\n")
+	out.WriteString("stack pattern and collection ID. `placement delete` takes the namespace and rule ID.\n")
+	out.WriteString("Deleting a rule does not move stacks or workspaces that it already placed.\n")
+	out.WriteString("The [quickstart](../guides/quickstart.md) shows the create and add commands.\n")
+	out.WriteString("\n")
 }
 
 // clientRow is one row of the client flags table: the command and its flags
@@ -316,6 +335,11 @@ func clientRows() []clientRow {
 		cmd   Command
 	}{
 		{"opendustpan namespace create <name>", NamespaceCreateCommand(nil)},
+		{"opendustpan collection create <namespace>/<name>", CollectionCreateCommand(nil)},
+		{"opendustpan collection list <namespace>", CollectionListCommand(nil)},
+		{"opendustpan placement add <namespace>", PlacementAddCommand(nil)},
+		{"opendustpan placement list <namespace>", PlacementListCommand(nil)},
+		{"opendustpan placement delete <namespace> <rule-id>", PlacementDeleteCommand(nil)},
 		{"opendustpan backup", BackupCommand(nil)},
 		{"opendustpan backup check --backup <id>", BackupCheckCommand(nil)},
 		{"opendustpan restore --backup <id>", RestoreCommand(nil)},

@@ -150,7 +150,7 @@ func TestPlacementNoMatch(t *testing.T) {
 	f := newPlacementFixture(t)
 
 	_, err := f.place("payments", "prod")
-	if !errors.Is(err, collection.ErrNoPlacement) || !strings.Contains(err.Error(), "placement-rules") {
+	if !errors.Is(err, collection.ErrNoPlacement) || !strings.Contains(err.Error(), "opendustpan placement add") {
 		t.Fatalf("Place with no rule: err = %v, want ErrNoPlacement with the fix", err)
 	}
 

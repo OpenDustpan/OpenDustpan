@@ -55,6 +55,21 @@ The server keeps its data in `data/dustpan.db` and in `data/blobs`. Leave it run
 
 Use at least 3 characters for a namespace name. The Pulumi CLI refuses a shorter owner name with `error: invalid stack owner`. The server accepts 1 to 100 characters.
 
+Make a collection and a placement rule for each tool before you make a stack or workspace:
+
+```sh
+./bin/opendustpan collection create --server https://localhost:8080 --ca-file data/cert.pem acme/everything
+./bin/opendustpan placement add --server https://localhost:8080 --ca-file data/cert.pem \
+  --tool pulumi --project '*' --stack '*' --collection everything acme
+./bin/opendustpan placement add --server https://localhost:8080 --ca-file data/cert.pem \
+  --tool opentofu --project '*' --stack '*' --collection everything acme
+```
+
+The create command prints the stable collection ID. Each add command resolves `everything` to that ID.
+The first matching rule places each new stack or workspace in the collection.
+Quote `*` so the shell does not expand it. No matching rule gives `placement.no-match`.
+Run `opendustpan placement add` to add the rule that is missing.
+
 Go on to [Connect the Pulumi CLI](#connect-the-pulumi-cli). The certificate file is `data/cert.pem`.
 
 ## Compose stack with PostgreSQL and S3-compatible storage
@@ -93,6 +108,19 @@ Make a namespace. The container already has the admin token:
 ```sh
 docker compose exec opendustpan /opendustpan namespace create \
   --server https://localhost:8080 --ca-file /tls/cert.pem acme
+```
+
+Make the collection and both placement rules in the container:
+
+```sh
+docker compose exec opendustpan /opendustpan collection create \
+  --server https://localhost:8080 --ca-file /tls/cert.pem acme/everything
+docker compose exec opendustpan /opendustpan placement add \
+  --server https://localhost:8080 --ca-file /tls/cert.pem \
+  --tool pulumi --project '*' --stack '*' --collection everything acme
+docker compose exec opendustpan /opendustpan placement add \
+  --server https://localhost:8080 --ca-file /tls/cert.pem \
+  --tool opentofu --project '*' --stack '*' --collection everything acme
 ```
 
 The server is at `https://localhost:8080`. The certificate file is `deploy/compose/tls/cert.pem`. To use another host port, set `OPENDUSTPAN_PORT` in `.env`.
