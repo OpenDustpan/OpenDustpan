@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-11-07. Decided by the project owner on 7 November 2026. Answers question O4 of [RFC 21](../rfc/0021-directory-sync-and-sign-in.md) and the held decision 12 of ADR 320
 
+Changed by:
+
+- ADR 376 changes decision 9: a wording refinement with the owner's word,
+  SCIM comes in milestone 4.
+
 Changes:
 
 - Changes ADR 320 decision 12: the form of the group mapping is a rule for each provider, with explicit single mappings for exceptions.
@@ -35,7 +40,7 @@ Decided by the project owner on 7 November 2026.
 6. **Group mapping is a rule for each provider (owner, 2026-11-07).** Each provider has a rule: a trusted claim pattern. A claim value that matches the pattern is linked to a group. The link names the provider and the claim value. It never names the group by name alone.
 7. **Explicit single mappings handle exceptions (owner, 2026-11-07).** An explicit mapping links one claim value of one provider to one group. Use it for a value that the pattern does not cover.
 8. **The rules are a sensitive setting (owner, 2026-11-07).** A change to a rule or to an explicit mapping is a sensitive setting. It writes an audit entry and needs a fresh authentication (step-up), as ADR 70 decision 22 says for a claim mapping.
-9. **SCIM comes later (owner, 2026-11-07).** This ADR adds no SCIM. When SCIM comes, it uses the same mapping, as ADR 320 decision 13 says.
+9. **SCIM comes in milestone 4 (owner, 2026-11-07, and owner, 2026-11-14).** This ADR adds no SCIM. SCIM comes in milestone 4. It uses the same mapping, as ADR 320 decision 13 says.
 
 ## Consequences
 
@@ -44,3 +49,12 @@ Decided by the project owner on 7 November 2026.
 - A group that two providers use has one link for each pair of provider and claim value. A claim value of one provider never reaches a group that another provider linked.
 - ADR 70 decisions 13, 14, 15 and 16 still apply. A rule does not add a member to a protected group unless the group trusts the identity provider.
 - This ADR does not decide the syntax of the claim pattern or the exact maximum age of an assertion. It does not decide the shape of the audit entries. A later decision does.
+
+## Changelog
+
+- 2026-11-14, wording refinement (ADR 376), with the owner's word ("1.A"):
+  decision 9 said "SCIM comes later (owner, 2026-11-07). [...] When SCIM
+  comes, it uses the same mapping, as ADR 320 decision 13 says." It now says
+  "SCIM comes in milestone 4. It uses the same mapping, as ADR 320 decision 13
+  says." The words "later" did not say how much later, and the exit test of
+  milestone 4 in `docs/roadmap.md` already had a SCIM step.
