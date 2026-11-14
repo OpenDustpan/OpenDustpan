@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:149` (MFA).
@@ -53,13 +53,12 @@ Depends on:
 - add-one-generic-settings-api
 - fresh-authentication-window-0-turns
 - `add-one-generic-settings-api` (order of the milestone review)
-- `fresh-authentication-window-0-turns` (order of the milestone review)
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
-- A person who loses all factors waits for an administrator reset.
+- A person who loses all factors waits for an administrator reset, or uses the break-glass path of the administrator.
 
 ## What main already does
 
@@ -93,7 +92,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: a security change needs "threats.dfd": a Mermaid flowchart with each trust boundary as a subgraph; a code check fails: threat 1 (An attacker replays a TOTP code.): no guard and hostile test for encode or contain, limit, fail closed; a code check fails: contract method VerifySecondFactor: no requirement or scenario names it.
+none
 
 Questions considered and answered:
 
