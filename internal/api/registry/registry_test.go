@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -133,6 +134,9 @@ type fixture struct {
 	// handler answers a success status that the description does not give.
 	served http.Handler
 	store  *sqlite.Store
+	// service is the registry service that the handler uses, for a test that
+	// compares a management answer with the rule of the registry protocol.
+	service *service.Service
 	// registry counts the calls that reach the address list of the store.
 	registry *countingRegistryStore
 }
@@ -228,7 +232,13 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 		t.Fatalf("handler: %v", err)
 	}
 
-	return fixture{handler: handler, served: apidesctest.CheckStatus(t, handler), store: store, registry: registryStore}
+	return fixture{
+		handler:  handler,
+		served:   apidesctest.CheckStatus(t, handler),
+		store:    store,
+		service:  svc,
+		registry: registryStore,
+	}
 }
 
 const base = "/api/dustpan/v1/namespaces/acme/registry"
@@ -305,12 +315,19 @@ func buildSet(t *testing.T, sg pgpfixture.Signer) archiveSet {
 func buildSetFor(t *testing.T, sg pgpfixture.Signer, name string) archiveSet {
 	t.Helper()
 
+	return buildSetVersion(t, sg, name, providerVersion)
+}
+
+// buildSetVersion builds the archive set of version of the provider name.
+func buildSetVersion(t *testing.T, sg pgpfixture.Signer, name, version string) archiveSet {
+	t.Helper()
+
 	s := archiveSet{sums: nil, sig: nil, archive: map[string][]byte{}, names: nil}
 
 	var sums strings.Builder
 
 	for _, p := range []string{"linux_amd64", "darwin_arm64"} {
-		file := fmt.Sprintf("terraform-provider-%s_%s_%s.zip", name, providerVersion, p)
+		file := fmt.Sprintf("terraform-provider-%s_%s_%s.zip", name, version, p)
 		data := []byte("zip bytes of " + file)
 		sum := sha256.Sum256(data)
 		fmt.Fprintf(&sums, "%s  %s\n", hex.EncodeToString(sum[:]), file)
@@ -381,17 +398,25 @@ func (f fixture) publishBody(t *testing.T, s archiveSet) []byte {
 func (f fixture) publishBodyFor(t *testing.T, s archiveSet, name string) []byte {
 	t.Helper()
 
+	return f.publishBodyVersion(t, s, name, providerVersion)
+}
+
+// publishBodyVersion makes the publish body of s for the provider name and
+// version.
+func (f fixture) publishBodyVersion(t *testing.T, s archiveSet, name, version string) []byte {
+	t.Helper()
+
 	files := make([]map[string]string, 0, 2+len(s.names))
 	files = append(
 		files,
 		map[string]string{
 			"role":   "sums",
-			"name":   releasecheck.SumsName(name, providerVersion),
+			"name":   releasecheck.SumsName(name, version),
 			"upload": f.stage(t, s.sums),
 		},
 		map[string]string{
 			"role":   "signature",
-			"name":   releasecheck.SignatureName(name, providerVersion),
+			"name":   releasecheck.SignatureName(name, version),
 			"upload": f.stage(t, s.sig),
 		},
 	)
@@ -412,6 +437,7 @@ type publishedWire struct {
 	KeyFingerprint string          `json:"keyFingerprint"`
 	PublishedBy    string          `json:"publishedBy"`
 	Files          []publishedFile `json:"files"`
+	Served         bool            `json:"served"`
 }
 
 type publishedFile struct {
@@ -477,6 +503,219 @@ func TestPublishFlow(t *testing.T) {
 
 	if !slices.Equal(actions, []string{"registry:manage-keys", "registry:publish"}) {
 		t.Errorf("audit actions = %v", actions)
+	}
+}
+
+// TestPublishAnswerServed proves that the answer of a publish says that the
+// release is served: a publish passed the check of a trusted signing key.
+func TestPublishAnswerServed(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sg := pgpfixture.NewSigner(t)
+	f.trust(t, "acme", sg)
+
+	got := f.do(t, request{
+		token: "publisher", method: http.MethodPut, target: base + "/providers/payments/versions/1.0.0",
+		body: f.publishBody(t, buildSet(t, sg)), headers: map[string]string{"Idempotency-Key": "publish-served"},
+	})
+	wantCode(t, "publish", got, http.StatusOK)
+
+	var doc publishedWire
+	if err := json.Unmarshal([]byte(got.body), &doc); err != nil {
+		t.Fatalf("publish answer = %q, %v", got.body, err)
+	}
+
+	if !doc.Served {
+		t.Fatalf("publish answer = %q, want served true", got.body)
+	}
+}
+
+// servedRelease is the part of a release answer that the served tests read.
+type servedRelease struct {
+	Version string `json:"version"`
+	Served  bool   `json:"served"`
+}
+
+// servedPage is the list answer of the served test.
+type servedPage struct {
+	Releases []servedRelease `json:"releases"`
+}
+
+// publishVersion publishes version of the provider, signed by sg.
+func (f fixture) publishVersion(t *testing.T, sg pgpfixture.Signer, version string) {
+	t.Helper()
+
+	body := f.publishBodyVersion(t, buildSetVersion(t, sg, providerName, version), providerName, version)
+	wantCode(t, "publish "+version, f.call(t, "admin", http.MethodPut,
+		base+"/providers/"+providerName+"/versions/"+version, body), http.StatusOK)
+}
+
+// listServed returns the served flag of each release of the provider, by
+// version.
+func (f fixture) listServed(t *testing.T) map[string]bool {
+	t.Helper()
+
+	list := f.call(t, "reader", http.MethodGet, base+"/providers/"+providerName+"/versions", nil)
+	wantCode(t, "list", list, http.StatusOK)
+
+	var page servedPage
+	if err := json.Unmarshal([]byte(list.body), &page); err != nil {
+		t.Fatalf("list answer = %q, %v", list.body, err)
+	}
+
+	out := make(map[string]bool, len(page.Releases))
+	for _, rel := range page.Releases {
+		out[rel.Version] = rel.Served
+	}
+
+	return out
+}
+
+// protocolServed returns the versions of the provider that the registry
+// protocol serves.
+func (f fixture) protocolServed(t *testing.T) map[string]bool {
+	t.Helper()
+
+	rels, err := f.service.ServableReleases(t.Context(), "acme", providerName)
+	if err != nil && !errors.Is(err, registry.ErrNotFound) {
+		t.Fatalf("ServableReleases: %v", err)
+	}
+
+	out := make(map[string]bool, len(rels))
+	for i := range rels {
+		out[rels[i].Version] = true
+	}
+
+	return out
+}
+
+// sameServed reports whether two maps agree on the served flag of each version.
+// A version that a map does not hold is not served.
+func sameServed(a, b map[string]bool) bool {
+	for version, served := range a {
+		if b[version] != served {
+			return false
+		}
+	}
+
+	for version, served := range b {
+		if a[version] != served {
+			return false
+		}
+	}
+
+	return true
+}
+
+// TestListReleasesServed proves that the management versions list keeps a
+// release whose signing key was removed, marks it not served, and marks the
+// releases that the registry protocol serves. Each flag agrees with the list
+// that the protocol serves.
+func TestListReleasesServed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		remove     []string
+		wantServed map[string]bool
+	}{
+		{"the keys are trusted", nil, map[string]bool{"1.0.0": true, "2.0.0": true}},
+		{"the key of the later release is removed", []string{"current"}, map[string]bool{
+			"1.0.0": true, "2.0.0": false,
+		}},
+		{"every key is removed", []string{"old", "current"}, map[string]bool{
+			"1.0.0": false, "2.0.0": false,
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			old, current := pgpfixture.NewSigner(t), pgpfixture.NewSigner(t)
+			keys := map[string]pgpfixture.Signer{"old": old, "current": current}
+
+			f.trust(t, "acme", old)
+			f.trust(t, "acme", current)
+			f.publishVersion(t, old, "1.0.0")
+			f.publishVersion(t, current, "2.0.0")
+
+			for _, label := range tt.remove {
+				wantCode(t, "remove the "+label+" key", f.call(t, "admin", http.MethodDelete,
+					base+"/keys/"+keys[label].Key.Fingerprint, nil), http.StatusNoContent)
+			}
+
+			served := f.listServed(t)
+			if !maps.Equal(served, tt.wantServed) {
+				t.Fatalf("served = %v, want %v", served, tt.wantServed)
+			}
+
+			// The list of the protocol is the rule: a version is served
+			// exactly when the protocol offers its download.
+			if protocol := f.protocolServed(t); !sameServed(served, protocol) {
+				t.Errorf("served = %v, but the protocol serves %v", served, protocol)
+			}
+		})
+	}
+}
+
+// TestGetReleaseServed proves that the management read of one release marks a
+// release that the registry protocol serves as served, and a release whose
+// signing key the namespace removed as not served.
+func TestGetReleaseServed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		remove     []string
+		version    string
+		wantServed bool
+	}{
+		{"the keys are trusted", nil, "1.0.0", true},
+		{"the key of another release is removed", []string{"current"}, "1.0.0", true},
+		{"the key of the release is removed", []string{"old"}, "1.0.0", false},
+		{"every key is removed", []string{"old", "current"}, "2.0.0", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			old, current := pgpfixture.NewSigner(t), pgpfixture.NewSigner(t)
+			keys := map[string]pgpfixture.Signer{"old": old, "current": current}
+
+			f.trust(t, "acme", old)
+			f.trust(t, "acme", current)
+			f.publishVersion(t, old, "1.0.0")
+			f.publishVersion(t, current, "2.0.0")
+
+			for _, label := range tt.remove {
+				wantCode(t, "remove the "+label+" key", f.call(t, "admin", http.MethodDelete,
+					base+"/keys/"+keys[label].Key.Fingerprint, nil), http.StatusNoContent)
+			}
+
+			got := f.call(t, "reader", http.MethodGet,
+				base+"/providers/"+providerName+"/versions/"+tt.version, nil)
+			wantCode(t, "get the release", got, http.StatusOK)
+
+			var rel servedRelease
+			if err := json.Unmarshal([]byte(got.body), &rel); err != nil {
+				t.Fatalf("release answer = %q, %v", got.body, err)
+			}
+
+			if rel.Version != tt.version || rel.Served != tt.wantServed {
+				t.Fatalf("release = %+v, want version %s served %t", rel, tt.version, tt.wantServed)
+			}
+
+			// The list of the protocol is the rule: a version is served
+			// exactly when the protocol offers its download.
+			if protocol := f.protocolServed(t); rel.Served != protocol[tt.version] {
+				t.Errorf("served = %t, but the protocol serves %t", rel.Served, protocol[tt.version])
+			}
+		})
 	}
 }
 

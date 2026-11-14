@@ -100,6 +100,23 @@ type collections struct {
 	Fixed  [2]int32          `json:"fixed"`
 }
 
+// nilMaps holds the map shapes that the JSON tags alone decide: a nil map
+// without omitempty is written as null, and a nil map with omitempty is left
+// out.
+type nilMaps struct {
+	Plain   map[string]string `json:"plain"`
+	Omitted map[string]string `json:"omitted,omitempty"`
+}
+
+// taggedMaps holds the map shapes that the dustpan tags decide: the required
+// and optional tags promise a value that is never null, and the nullable tag
+// lets the value be null.
+type taggedMaps struct {
+	Required map[string]string `dustpan:"required" json:"required"`
+	Optional map[string]string `dustpan:"optional" json:"optional"`
+	Nullable map[string]string `dustpan:"nullable" json:"nullable"`
+}
+
 type omitting struct {
 	Always  string    `json:"always"`
 	Empty   string    `json:"empty,omitempty"`
@@ -132,6 +149,25 @@ type embeddingPointer struct {
 
 type embeddingTagged struct {
 	base `json:"base"`
+}
+
+// requiredInner holds a required field that the two embeddings below promote.
+type requiredInner struct {
+	Name string `dustpan:"required" json:"name"`
+}
+
+// requiredThroughPointer promotes a required field through an embedded pointer.
+// A nil pointer leaves the field out, so the tag cannot hold.
+type requiredThroughPointer struct {
+	*requiredInner
+}
+
+// embeddedRequired promotes the required field through an embedded struct,
+// which cannot be nil, so the tag holds.
+type embeddedRequired struct {
+	requiredInner
+
+	Own string `dustpan:"required" json:"own"`
 }
 
 type shallow struct {
@@ -407,9 +443,9 @@ func TestReflectorShapes(t *testing.T) {
 			`{"Collections":{"type":"object","required":["fixed","free","inners","labels","names","nested","raw"],"properties":{
 			"names":{"type":"array","items":{"type":"string"}},
 			"inners":{"type":"array","items":{"$ref":"#/components/schemas/Inner"}},
-			"labels":{"type":"object","additionalProperties":{"type":"string"}},
-			"nested":{"type":"object","additionalProperties":{"$ref":"#/components/schemas/Inner"}},
-			"free":{"type":"object","additionalProperties":true},
+			"labels":{"type":["object","null"],"additionalProperties":{"type":"string"}},
+			"nested":{"type":["object","null"],"additionalProperties":{"$ref":"#/components/schemas/Inner"}},
+			"free":{"type":["object","null"],"additionalProperties":true},
 			"raw":{"type":"string","format":"byte"},
 			"fixed":{"type":"array","items":{"type":"integer","format":"int32"}}}},
 			"Inner":{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}}`,
@@ -493,6 +529,14 @@ func TestReflectorShapes(t *testing.T) {
 			apidesc.Typed[shout]("Shout"),
 			`{"Shout":{"type":"object","required":["unitID"],"properties":{"unitID":{"type":"string"}}}}`,
 		},
+		{
+			"the map tags decide the nullability: required and optional are never null, and nullable can be null",
+			apidesc.Typed[taggedMaps]("TaggedMaps"),
+			`{"TaggedMaps":{"type":"object","required":["required"],"properties":{
+			"required":{"type":"object","additionalProperties":{"type":"string"}},
+			"optional":{"type":"object","additionalProperties":{"type":"string"}},
+			"nullable":{"type":["object","null"],"additionalProperties":{"type":"string"}}}}}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -509,6 +553,55 @@ func TestReflectorShapes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestNilMapFollowsTheNullabilityRule proves the rule for a map field in both
+// places that matter: the JSON that encoding/json writes and the schema. A nil
+// map without omitempty is null on the wire, so its schema holds null too. A
+// nil map with omitempty is left out, so its schema does not hold null.
+func TestNilMapFollowsTheNullabilityRule(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a nil map without omitempty is null on the wire", func(t *testing.T) {
+		t.Parallel()
+
+		var zero nilMaps
+
+		raw, err := json.Marshal(zero)
+		if err != nil {
+			t.Fatalf("json.Marshal = %v", err)
+		}
+
+		var wire map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &wire); err != nil {
+			t.Fatalf("%s is not an object: %v", raw, err)
+		}
+
+		if got := string(wire["plain"]); got != "null" {
+			t.Errorf("plain = %s, want null", got)
+		}
+
+		if _, ok := wire["omitted"]; ok {
+			t.Errorf("%s holds omitted, and omitempty leaves a nil map out", raw)
+		}
+	})
+
+	t.Run("the schema follows the same rule", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := schemasOf(t, apidesc.Typed[nilMaps]("NilMaps"))
+		if err != nil {
+			t.Fatalf("Build() = %v", err)
+		}
+
+		want := wantSchemas(t, `{"NilMaps":{"type":"object","required":["plain"],"properties":{
+		"plain":{"type":["object","null"],"additionalProperties":{"type":"string"}},
+		"omitted":{"type":"object","additionalProperties":{"type":"string"}}}}}`)
+
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("schemas =\n%s\nwant\n%s", jsonOf(got), jsonOf(want))
+		}
+	})
 }
 
 // own is a type with its own JSON form.
@@ -757,6 +850,45 @@ func TestReflectorRefusesWhatItCannotTell(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRequiredThroughAnEmbeddedPointer proves that field discovery refuses the
+// tag required on a field that an embedded pointer promotes, because a nil
+// pointer leaves the field out, and that an ordinary required field and a
+// required field that an embedded struct promotes stay valid.
+func TestRequiredThroughAnEmbeddedPointer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the tag required is refused with a reason", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := schemasOf(t, apidesc.Typed[requiredThroughPointer]("RequiredThroughPointer"))
+		if !errors.Is(err, apidesc.ErrInvalidBody) {
+			t.Fatalf("Build() = %v, want ErrInvalidBody", err)
+		}
+
+		for _, want := range []string{"required", "embedded pointer"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("Build() = %v, want an error that names %q", err, want)
+			}
+		}
+	})
+
+	t.Run("ordinary required fields and an embedded struct stay valid", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := schemasOf(t, apidesc.Typed[embeddedRequired]("EmbeddedRequired"))
+		if err != nil {
+			t.Fatalf("Build() = %v", err)
+		}
+
+		want := wantSchemas(t, `{"EmbeddedRequired":{"type":"object","required":["name","own"],"properties":{
+		"name":{"type":"string"},"own":{"type":"string"}}}}`)
+
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("schemas =\n%s\nwant\n%s", jsonOf(got), jsonOf(want))
+		}
+	})
 }
 
 type choice string

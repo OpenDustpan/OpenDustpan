@@ -70,9 +70,7 @@
         "type": "object"
       },
       "ApiDescription": {
-        "additionalProperties": {
-          "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-        },
+        "additionalProperties": true,
         "type": "object"
       },
       "ApprovalDefault": {
@@ -264,9 +262,7 @@
             "type": "integer"
           },
           "errorArgs": {
-            "additionalProperties": {
-              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-            },
+            "additionalProperties": true,
             "type": "object"
           },
           "errorCode": {
@@ -433,9 +429,7 @@
             "type": "string"
           },
           "data": {
-            "additionalProperties": {
-              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-            },
+            "additionalProperties": true,
             "type": "object"
           },
           "hidden": {
@@ -492,7 +486,10 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/ContextAnswer"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -762,16 +759,10 @@
       "CreateGitHostConnectionRequest": {
         "properties": {
           "apiAddress": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "appID": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "auth": {
             "type": [
@@ -780,25 +771,13 @@
             ]
           },
           "credential": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "credentials": {
-            "items": {
-              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-            },
-            "type": [
-              "array",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "eventSecret": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "installationID": {
             "type": [
@@ -813,10 +792,7 @@
             ]
           },
           "privateKey": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "push": {
             "type": [
@@ -2007,7 +1983,10 @@
               },
               "type": "array"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -4518,6 +4497,9 @@
           "publishedBy": {
             "type": "string"
           },
+          "served": {
+            "type": "boolean"
+          },
           "version": {
             "type": "string"
           }
@@ -4530,6 +4512,7 @@
           "protocols",
           "publishedAt",
           "publishedBy",
+          "served",
           "version"
         ],
         "type": "object"
@@ -7318,7 +7301,10 @@
             "additionalProperties": {
               "type": "string"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "name": {
             "type": "string"

@@ -186,9 +186,11 @@ curl -X DELETE -H "Authorization: token $DUSTPAN_TOKEN" \
   https://dustpan.example.com/api/dustpan/v1/namespaces/acme/registry/keys/<fingerprint>
 ```
 
-The releases that the key signed stay in the record. The registry stops
-serving them, because the download document must name the key that signed
-the release. The list of versions does not show them, so `tofu init` selects
+The releases that the key signed stay in the record. The management list
+`GET .../registry/providers/{name}/versions` shows them with `"served": false`.
+The registry stops serving them, because the download document must name the
+key that signed the release. The version list of the registry protocol does
+not show them, so `tofu init` selects
 an older version that a trusted key signed. If you pin one of these versions,
 `tofu init` fails. Register the key again to serve them again.
 

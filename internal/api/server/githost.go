@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
@@ -209,8 +210,9 @@ func classifyGitHostRequest(err error) (failure, bool) {
 	case errors.Is(err, forge.ErrConnectionNotFound), errors.Is(err, forge.ErrAssignmentNotFound),
 		errors.Is(err, forge.ErrNoRegistration):
 		return fail(http.StatusNotFound, rootText(err)), true
-	case errors.Is(err, forge.ErrInvalid),
-		errors.Is(err, errGitHostAppBody),
+	case errors.Is(err, forge.ErrInvalid):
+		return fail(http.StatusBadRequest, invalidText(err)), true
+	case errors.Is(err, errGitHostAppBody),
 		errors.Is(err, errGitHostInstallationBody),
 		errors.Is(err, errGitHostConnectionBody),
 		errors.Is(err, errGitHostOperatorOwns),
@@ -256,6 +258,19 @@ func rootText(err error) string {
 	}
 
 	return "request refused"
+}
+
+// invalidText returns the sentence of the domain sentinel in err and the
+// reason of the check that refused the input, without the names of the steps
+// that wrapped them. The reason follows the last sentence in the chain.
+func invalidText(err error) string {
+	sentinel := forge.ErrInvalid.Error()
+
+	if i := strings.LastIndex(err.Error(), sentinel); i >= 0 {
+		return err.Error()[i:]
+	}
+
+	return sentinel
 }
 
 // maxRetryAfterSeconds caps the Retry-After header of the Git host routes. A

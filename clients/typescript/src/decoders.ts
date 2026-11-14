@@ -516,7 +516,7 @@ export const decodeContextDocument: Decoder<ContextDocument> = object<ContextDoc
   deleted: optional(boolean),
   object: ref(() => decodeContextObject),
   schemaVersion: int64,
-  sections: record(ref(() => decodeContextAnswer)),
+  sections: nullable(record(ref(() => decodeContextAnswer))),
 });
 
 /** The validator of ContextEntry. */
@@ -599,15 +599,15 @@ export const decodeCreateCollectionRequest: Decoder<CreateCollectionRequest> = o
 
 /** The validator of CreateGitHostConnectionRequest. */
 export const decodeCreateGitHostConnectionRequest: Decoder<CreateGitHostConnectionRequest> = object<CreateGitHostConnectionRequest>("CreateGitHostConnectionRequest", {
-  apiAddress: nullable(string),
-  appID: nullable(string),
+  apiAddress: anyValue,
+  appID: anyValue,
   auth: nullable(string),
-  credential: nullable(string),
-  credentials: nullable(array(anyValue)),
-  eventSecret: nullable(string),
+  credential: anyValue,
+  credentials: anyValue,
+  eventSecret: anyValue,
   installationID: nullable(string),
   kind: nullable(string),
-  privateKey: nullable(string),
+  privateKey: anyValue,
   push: nullable(boolean),
 });
 
@@ -873,7 +873,7 @@ export const decodeGitHostApp: Decoder<GitHostApp> = object<GitHostApp>("GitHost
 export const decodeGitHostCheck: Decoder<GitHostCheck> = object<GitHostCheck>("GitHostCheck", {
   account: ref(() => decodeGitHostAccount),
   capabilities: array(string),
-  missing: record(array(string)),
+  missing: nullable(record(array(string))),
 });
 
 /** The validator of GitHostConnection. */
@@ -1678,6 +1678,7 @@ export const decodeProviderRelease: Decoder<ProviderRelease> = object<ProviderRe
   protocols: array(string),
   publishedAt: string,
   publishedBy: string,
+  served: boolean,
   version: string,
 });
 
@@ -2556,7 +2557,7 @@ export const decodeUnitSettingsStep: Decoder<UnitSettingsStep> = object<UnitSett
   allowFailure: boolean,
   args: array(string),
   dir: string,
-  env: record(string),
+  env: nullable(record(string)),
   name: string,
   outputs: array(ref(() => decodeUnitSettingsStepOutput)),
   phase: string,
