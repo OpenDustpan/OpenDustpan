@@ -4,12 +4,12 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write failing conformance tests for path match, two rules, evaluate mode, unless auto-apply, warn, unless error, operationSource, excuse scope, apply recheck, count with fresh authentication and record fields. Check: gatetest.TestOwnershipPathAddsRequirement fails on main.
+- [ ] 1.1 Write failing conformance tests in the NEW file pkg/gate/gatetest/ownership_test.go for path match, two rules, evaluate mode, unless auto-apply, warn, unless error, operationSource, excuse scope, apply recheck, count with fresh authentication and record fields. Check: gatetest.TestOwnershipPathAddsRequirement fails on main.
 
 ## 2. Build
 
-- [ ] 2.1 Implement the ownership matcher, the unless evaluation and the autoApply record fields. Check: gatetest.TestOwnershipUnlessAutoApply passes on SQLite and PostgreSQL.
-- [ ] 2.2 Test matching cost with 256 rules and the 4 KiB condition limit. Check: Evaluation of 256 rules takes at most 500 ms; an oversized body fails at save.
+- [ ] 2.1 Implement the ownership matcher in the NEW file pkg/gate/ownership.go, the unless evaluation and the autoApply record fields in pkg/gate/record.go:173. Check: gatetest.TestOwnershipUnlessAutoApply passes on SQLite and PostgreSQL.
+- [ ] 2.2 Test matching cost with 256 rules and the 4 KiB condition limit in the NEW file pkg/gate/ownership_bench_test.go. Check: Evaluation of 256 rules takes at most 500 ms; an oversized body fails at save.
 
 ## 3. Side effects (computed from main)
 

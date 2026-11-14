@@ -4,23 +4,23 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing service test for Pulumi apply that waits under an approval default. Check: TestJobApprovalWaitPulumiFailsOnMain shows missing wait for a Pulumi apply under a default.
-- [ ] 1.2 Add failing service test for OpenTofu apply that waits under an approval default. Check: TestJobApprovalWaitOpenTofuFailsOnMain shows missing wait for an OpenTofu run under a default.
-- [ ] 1.3 Add failing service test for apply with no default that needs no approval. Check: TestJobNoDefaultNeedsNoApprovalFailsOnMain shows an apply without default proceeds.
-- [ ] 1.4 Add failing test for recheck at change.apply with a new requirement. Check: TestJobRecheckApplyFailsOnMain shows a default saved after start blocks the apply dispatch.
-- [ ] 1.5 Add failing test for recheck-only-adds on removal during wait. Check: TestJobRecheckOnlyAddsFailsOnMain shows removal of a default while in wait does not release the wait.
-- [ ] 1.6 Add failing test for deny plus approval requirement combine order. Check: TestJobDenyBeatsApprovalFailsOnMain shows deny stops the change when an approval requirement also matches.
-- [ ] 1.7 Add failing test for deny gate and engine error fail-closed. Check: TestJobDenyAndErrorFailClosedFailsOnMain shows deny refusal and enforce-mode error stop.
-- [ ] 1.8 Add failing test for unavailable facts fail-closed. Check: TestJobUnavailableFactsFailsOnMain shows unavailable facts keep the wait with error result.
-- [ ] 1.9 Add failing test for evaluate mode with no block. Check: TestJobEvaluateModeFailsOnMain shows an evaluate-mode default records without wait.
-- [ ] 1.10 Add failing test for wait persistence across restart and lease expiry. Check: TestJobWaitSurvivesRestartFailsOnMain shows stored wait and signatures survive restart and lease loss.
-- [ ] 1.11 Add failing test for authorization refusal at StartJob. Check: TestJobPlanRightsRefusedFailsOnMain shows 403 for apply with plan-only rights.
-- [ ] 1.12 Add failing test for decision record contents. Check: TestJobDecisionRecordNamesGateFailsOnMain shows the record holds gate versions and schema version.
+- [ ] 1.1 Add failing service test in NEW file internal/jobsvc/approval_wait_test.go for Pulumi apply that waits under an approval default. Check: TestJobApprovalWaitPulumiFailsOnMain shows missing wait for a Pulumi apply under a default.
+- [ ] 1.2 Add failing service test in NEW file internal/jobsvc/approval_wait_test.go for OpenTofu apply that waits under an approval default. Check: TestJobApprovalWaitOpenTofuFailsOnMain shows missing wait for an OpenTofu run under a default.
+- [ ] 1.3 Add failing service test in NEW file internal/jobsvc/approval_wait_test.go for apply with no default that needs no approval. Check: TestJobNoDefaultNeedsNoApprovalFailsOnMain shows an apply without default proceeds.
+- [ ] 1.4 Add failing test in NEW file internal/jobsvc/approval_recheck_test.go for recheck at change.apply with a new requirement. Check: TestJobRecheckApplyFailsOnMain shows a default saved after start blocks the apply dispatch.
+- [ ] 1.5 Add failing test in NEW file internal/jobsvc/approval_recheck_test.go for recheck-only-adds on removal during wait. Check: TestJobRecheckOnlyAddsFailsOnMain shows removal of a default while in wait does not release the wait.
+- [ ] 1.6 Add failing test in NEW file internal/jobsvc/approval_combine_test.go for deny plus approval requirement combine order. Check: TestJobDenyBeatsApprovalFailsOnMain shows deny stops the change when an approval requirement also matches.
+- [ ] 1.7 Add failing test in NEW file internal/jobsvc/approval_combine_test.go for deny gate and engine error fail-closed. Check: TestJobDenyAndErrorFailClosedFailsOnMain shows deny refusal and enforce-mode error stop.
+- [ ] 1.8 Add failing test in NEW file internal/jobsvc/approval_facts_test.go for unavailable facts fail-closed. Check: TestJobUnavailableFactsFailsOnMain shows unavailable facts keep the wait with error result.
+- [ ] 1.9 Add failing test in NEW file internal/jobsvc/approval_facts_test.go for evaluate mode with no block. Check: TestJobEvaluateModeFailsOnMain shows an evaluate-mode default records without wait.
+- [ ] 1.10 Add failing test in NEW file internal/jobsvc/approval_persist_test.go for wait persistence across restart and lease expiry. Check: TestJobWaitSurvivesRestartFailsOnMain shows stored wait and signatures survive restart and lease loss.
+- [ ] 1.11 Add failing test in NEW file internal/jobsvc/approval_authz_test.go for authorization refusal at StartJob (NEW). Check: TestJobPlanRightsRefusedFailsOnMain shows 403 for apply with plan-only rights.
+- [ ] 1.12 Add failing test in NEW file internal/jobsvc/approval_record_test.go for decision record contents. Check: TestJobDecisionRecordNamesGateFailsOnMain shows the record holds gate versions and schema version.
 
 ## 2. Wiring
 
 - [ ] 2.1 Add the new file internal/jobsvc and wire jobgate.Decider into the job service points from #968 with gate evaluation from #899. Check: go test ./pkg/gate/jobgate/... passes with the Decider wired at change.propose, change.planned and change.apply.
-- [ ] 2.2 Record each evaluation with gate versions and resume on the latest requirement set inside one store transaction. Check: go test -race ./... for the touched packages passes and decision records name the gate, the gate versions and the schema version.
+- [ ] 2.2 Record each evaluation with gate versions and resume on the latest requirement set inside one store transaction, in NEW file internal/jobsvc/approval_record.go. Check: go test -race ./... for the touched packages passes and decision records name the gate, the gate versions and the schema version.
 
 ## 3. Side effects (computed from main)
 

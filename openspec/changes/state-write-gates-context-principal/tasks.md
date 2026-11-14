@@ -4,13 +4,13 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing mapping tests for principalSubjects.Subject for person, service, workload, identity.KindAgent, and an unknown kind. Check: New subject mapping test fails on main with agent mapped to person, passes after the fix.
-- [ ] 1.2 Add failing gate evaluation tests at state.write for an agent gate against each caller kind. Check: New GuardStateWrite test with context.principal.kind == agent passes only for the agent kind.
+- [ ] 1.1 Add failing mapping tests in a NEW file pkg/dustpan/stateguard_kind_internal_test.go for principalSubjects.Subject (pkg/dustpan/stateguard.go:335) for person, service, workload, identity.KindAgent, and an unknown kind. Check: New subject mapping test fails on main with agent mapped to person, passes after the fix.
+- [ ] 1.2 Add failing gate evaluation tests in pkg/gate/gate_test.go at state.write (pkg/gate/statewrite.go:65, Service.GuardStateWrite) for an agent gate against each caller kind. Check: New GuardStateWrite test with context.principal.kind == agent passes only for the agent kind.
 
 ## 2. Fix
 
 - [ ] 2.1 Map identity.KindAgent to gate.PrincipalAgent in principalSubjects.Subject with fail-closed unknown handling through the NEW function newSubjectKind. Check: rg shows identity.KindAgent defined by person-delegates-dusty and its use in pkg/dustpan/stateguard.go through the NEW function newSubjectKind with a fail-closed unknown branch.
-- [ ] 2.2 Apply the same kind mapping at the access-limit schema and the change.propose decision point. Check: Same hostile unknown-kind test passes at the adapter, service and handler layers with the NEW error code gate.unknown-principal-kind, covering the access-limit schema and the change.propose decision point.
+- [ ] 2.2 Apply the same kind mapping at the access-limit schema and the change.propose decision point in pkg/dustpan/stateguard.go through the NEW function newSubjectKind. Check: Same hostile unknown-kind test passes at the adapter, service and handler layers with the NEW error code gate.unknown-principal-kind, covering the access-limit schema and the change.propose decision point.
 - [ ] 2.3 Update docs/guides/state-write-gates.md to state that state.write sets agent for agent principals. Check: docs/guides/state-write-gates.md no longer says the server does not set agent, and its example runs as written.
 
 ## 3. Side effects (computed from main)

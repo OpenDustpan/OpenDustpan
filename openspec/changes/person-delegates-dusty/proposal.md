@@ -22,7 +22,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - No delegation record exists on main; keyword Dusty has no e2e, no guide and no code in the pack. Proof: keywords Dusty e2e_count 0 with e2e [], guides [], code []
-- Main already pins delegation-scoped grant checks and revoke checks on objects. Proof: pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly) and pkg/access/access_test.go:1089 (TestRevokeChecksTheObject)
+- Main already pins delegation-scoped grant checks and revoke checks on objects. Proof: pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly) and pkg/access/access_test.go:1098 (TestRevokeChecksTheObject)
 - Milestone exit test needs one stored delegation with holder, scope, creator and time, listable and revocable. Proof: roadmap step: Pass: 1 delegation is a stored record with a holder, a scope, a creator and a time.
 
 ## What Changes
@@ -57,7 +57,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Grants on a principal take delegation actions only in a pin test. (`pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly)`)
-- Revoke checks the object before it revokes. (`pkg/access/access_test.go:1089 (TestRevokeChecksTheObject)`)
+- Revoke checks the object before it revokes. (`pkg/access/access_test.go:1098 (TestRevokeChecksTheObject)`)
 - Token scopes fit the principal kind. (`pkg/accesstoken/accesstoken_test.go:904 (TestScopesFitTheKind)`)
 
 ## ADR check

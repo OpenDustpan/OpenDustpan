@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:287` (Pull request automation, first slice).
