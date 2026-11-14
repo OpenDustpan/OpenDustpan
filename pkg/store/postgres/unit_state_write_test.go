@@ -177,12 +177,24 @@ func (h *unitStateLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 // WithGroup implements slog.Handler.
 func (h *unitStateLogHandler) WithGroup(string) slog.Handler { return h }
 
-// count returns the number of records that the handler collected.
-func (h *unitStateLogHandler) count() int {
+// damagedCount returns the number of collected records that report the
+// damaged job row of a state write. The store shares the logger with other
+// background work, so only the damaged-row record counts here.
+func (h *unitStateLogHandler) damagedCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	return len(h.records)
+	n := 0
+
+	for i := range h.records {
+		r := &h.records[i]
+		if r.Level == slog.LevelWarn &&
+			r.Message == "the job of a state write is unreadable: the commit stays empty" {
+			n++
+		}
+	}
+
+	return n
 }
 
 // openUnitStateStoreWithLogger opens a store of the test database whose
@@ -297,8 +309,8 @@ func TestDamagedJobRowGivesAnEmptyCommit(t *testing.T) {
 		t.Fatalf("final commit = %q, want the empty commit", got.Commit)
 	}
 
-	if handler.count() != 1 {
-		t.Fatalf("log records = %d, want 1", handler.count())
+	if handler.damagedCount() != 1 {
+		t.Fatalf("damaged-row log records = %d, want 1", handler.damagedCount())
 	}
 }
 
