@@ -111,6 +111,10 @@ follows the guide and gets a 404.
   Mutation: remove the curl case from `extractDocRoutes`; the curl case of the
   table test fails with a missing route.
 
+## Contract
+
+No new option: `dustpan.WithLDAPProvider(p dustpan.LDAPProvider) dustpan.Option` (pkg/dustpan/ldap.go:68) exists on main and carries the LDAP config, the bind password included (`LDAPProvider.BindPassword`, a `session.Password`). The environment read (`DUSTPAN_LDAP_BIND_PASSWORD`, cmd/opendustpan/signin.go) stays in cmd/opendustpan and passes the value to that option. The test uses the option directly (PM decision, 14 Nov 2026: no environment in tests).
+
 ## ADR check
 
 - **ADR 17 decision 6 (not owner-tagged by the rule; the context says the owner
