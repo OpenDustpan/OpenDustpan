@@ -787,6 +787,11 @@ _Avoid_: Snapshot, revision, checkpoint
 The value paths that the `json-state` rendering of one state version marks in `sensitive_values`. The server keeps only these paths, never a value from the rendering (ADR 41, decision 9). A masked state read masks each marked path.
 _Avoid_: Sensitive values (that is the field of the rendering)
 
+**Apply claim**:
+The reservation of the resource instances that one saved plan changes and reads. A runner job or the local `dustpan` wrapper registers it before the apply (ADR 302, ADR 368). The server refuses an apply claim that overlaps a live one before anything runs. An apply claim has a lease, and an upload under an ended apply claim fails. Under a live apply claim, the server assigns the serial of the merged state version.
+_Avoid_: Claim (alone: a claim is also the durable claim of a phase, the claim of a runner and the job-ID claim), resource lock, reservation
+_Copy says_: "claim" on a page that is only about applies.
+
 **Lineage**:
 The identifier that all state versions of one state history share.
 _Avoid_: History ID

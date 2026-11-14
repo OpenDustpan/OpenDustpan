@@ -3171,7 +3171,8 @@ func unitCollections(cfg *settings) (access.UnitCollections, error) {
 // namespace store, or returns nil when the store keeps no roles and grants.
 // The service checks escalation with the grant model, so it uses the
 // configured authorizer when that is an access.Authorizer, and its own one
-// otherwise.
+// otherwise. It reads the cap of the export of a collection from the settings
+// service when the server keeps one.
 func newAccessService(cfg *settings) (*access.Service, error) {
 	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
@@ -3195,6 +3196,11 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		}
 	}
 
+	var settings access.Settings
+	if settingsSvc := newSettingService(cfg, cfg.namespaceStore); settingsSvc != nil {
+		settings = settingsSvc
+	}
+
 	reach, reachErr := reachConfig(cfg)
 	if reachErr != nil {
 		return nil, fmt.Errorf("access service: %w", reachErr)
@@ -3209,7 +3215,7 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz,
 		Reach: reach, Now: nil, NewID: nil,
-		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), LimitGroups: limits,
+		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), Settings: settings, LimitGroups: limits,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access service: %w", err)

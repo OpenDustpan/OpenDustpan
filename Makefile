@@ -163,6 +163,7 @@ docs-lint: ## ASD-STE100 structural rules, banned words and the Repowise decisio
 	$(ADR_DECISIONS) --check
 	python3 -I scripts/adr-index.py --selftest
 	$(ADR_INDEX) --check
+	@if grep -rn '^TBD' openspec/specs; then echo 'openspec/specs: a Purpose is a placeholder. Write a real Purpose.'; exit 1; fi
 
 adr-decisions: ## Write .repowise/decisions.yaml, the accepted decisions for Repowise, from docs/adr. docs-lint fails when the file is not current.
 	$(ADR_DECISIONS)
