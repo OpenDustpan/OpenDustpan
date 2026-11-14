@@ -7,7 +7,7 @@
 
 - [ ] 1.1 First boot stores the settings. Check: `go test ./pkg/store/... -run TestRecoverySettingsFirstBoot -count=1` fails on main (NEW test, both dialects).
 - [ ] 1.2 A valid request makes one temporary administrator and an encrypted answer. Check: `go test ./internal/recovery/ -run TestSignedRequestMakesOneTempAdmin -count=1` fails on main (NEW test).
-- [ ] 1.3 Eleven refusal reasons give one answer and eleven audit reasons. Check: `go test ./internal/api/server/ -run TestRecoveryRefusalsLookTheSame -count=1` fails on main (NEW test).
+- [ ] 1.3 Twelve refusal reasons give one answer and twelve audit reasons. Check: `go test ./internal/api/server/ -run TestRecoveryRefusalsLookTheSame -count=1` fails on main (NEW test).
 - [ ] 1.4 Replay, two at once on two instances, and a crash before the commit. Check: `go test ./pkg/store/... -run TestRecoveryNonceOnce -count=1` fails on main (NEW test).
 - [ ] 1.5 The time window and the skew. Check: `go test ./internal/recovery/ -run TestRequestWindow -count=1` fails on main (NEW test).
 - [ ] 1.6 The shared rate limit with the /64 group. Check: `go test ./pkg/store/... -run TestRecoveryRateLimitShared -count=1` fails on main (NEW test).
@@ -17,6 +17,16 @@
 - [ ] 1.10 Key add, overlap, removal and the last key. Check: `go test ./internal/api/server/ -run TestRecoveryKeyRotation -count=1` fails on main (NEW test).
 - [ ] 1.11 The signer refuses a plain key file. Check: `go test ./cmd/opendustpan/ -run TestRecoverySignNeedsPassphrase -count=1` fails on main (NEW test).
 - [ ] 1.12 A hostile-input test for each layer of the design table, each with the other layers off. Check: `go test ./internal/recovery/ ./internal/api/server/ ./pkg/store/... -run 'TestRecoveryLayer' -count=1` fails on main (NEW tests).
+- [ ] 1.13 The rate limit bounds the signature check: many requests with bad signatures from one source stop at the limit, and the signature check does not run for a refused request. Check: `go test ./internal/recovery/ -run TestRecoveryRateLimitBoundsSignature -count=1` fails on main (NEW test).
+- [ ] 1.14 A key file path that leaves the root and a key file larger than 16 KiB are refused. Check: `go test ./cmd/opendustpan/ -run TestRecoveryKeyFileContained -count=1` fails on main (NEW test).
+- [ ] 1.15 A private key file that group or others can read is refused. Check: `go test ./cmd/opendustpan/ -run TestRecoverySignPrivateKeyMode -count=1` fails on main (NEW test).
+- [ ] 1.16 A `person` member outside the allowlist is refused. Check: `go test ./internal/recovery/ -run TestRecoveryPersonAllowlist -count=1` fails on main (NEW test).
+- [ ] 1.17 A hostile forwarded header has no effect on the source, and a malformed address is refused. Check: `go test ./internal/recovery/ ./internal/api/server/ -run TestRecoverySourceAddress -count=1` fails on main (NEW test).
+- [ ] 1.18 A request in maintenance mode gets the one answer, and the audit reason is `maintenance`. Check: `go test ./internal/api/server/ -run TestRecoveryMaintenanceRefused -count=1` fails on main (NEW test).
+- [ ] 1.19 A request whose `notAfter` is more than 10 minutes after `notBefore` is refused. Check: `go test ./internal/recovery/ -run TestRecoveryRequestWindowTenMinutes -count=1` fails on main (NEW test).
+- [ ] 1.20 A malformed or short nonce is refused. Check: `go test ./internal/recovery/ -run TestRecoveryNonceShape -count=1` fails on main (NEW test).
+- [ ] 1.21 A key in a request that is not `ssh-ed25519` is refused. Check: `go test ./internal/recovery/ -run TestRecoveryKeyTypeEd25519 -count=1` fails on main (NEW test).
+- [ ] 1.22 A request with a wrong content type is refused, and a hostile forwarded address has no effect. Check: `go test ./internal/api/server/ -run TestRecoveryContentTypeAndForwarded -count=1` fails on main (NEW test).
 
 ## 2. Build
 
@@ -27,6 +37,10 @@
 - [ ] 2.5 The exception of ADR 372 decision 6 in the admin reset route and the enrollment code route. Check: `TestRecoveryAdminFreshSteps` passes.
 - [ ] 2.6 The CLI commands `recovery request|sign|verify|submit` and `recovery keys list|add|remove`. Check: `go test ./cmd/opendustpan/ -run TestRecovery -count=1` passes.
 - [ ] 2.7 The purge of nonces and attempt windows. Check: `go test ./pkg/store/... -run TestRecoveryPurge -count=1` passes.
+- [ ] 2.8 The review list filters on the mode. Check: `go test ./internal/api/server/ -run TestRecoveryReviewListMode -count=1` passes.
+- [ ] 2.9 The route test lists `POST /api/dustpan/v1/recovery/signed-requests` on its public list, with the action `recovery:use-signed-request` and the reason that the caller has no identity yet and the signed request is the credential. Check: the route test passes, and the refusal audit entry and the break-glass use record that action.
+- [ ] 2.10 The handler checks the stored recovery mode before any other work, with a defense-in-depth comment that names the store-transaction check. The store transaction keeps its own mode check. Check: the layer test fails when the handler check is removed.
+- [ ] 2.11 Each check that runs at two layers has a defense-in-depth comment that names the other layer, and a test that sends hostile input directly to that layer. Check: the layer tests pass, and each comment names the other layer.
 
 ## 3. Side effects (computed from main)
 
