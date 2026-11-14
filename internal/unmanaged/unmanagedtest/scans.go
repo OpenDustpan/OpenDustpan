@@ -27,13 +27,12 @@ func scanCases() []suiteCase {
 	}
 }
 
-// scanOf returns a sweep of the namespace ns: a cloud sweep of the target name
-// target, or a state check.
-func scanOf(ns string, k unmanaged.ScanKind, target string) unmanaged.Scan {
+// scanOf returns a cloud sweep of namespace acme for target aws.
+func scanOf() unmanaged.Scan {
 	return unmanaged.Scan{
-		Namespace: namespace.Name(ns),
-		Kind:      k,
-		Target:    target,
+		Namespace: namespace.Name("acme"),
+		Kind:      unmanaged.ScanCloud,
+		Target:    "aws",
 		CreatedAt: at(),
 		EndedAt:   time.Time{},
 		ID:        "",
@@ -159,7 +158,7 @@ func testDeleteTargetCancelsScan(t *testing.T, h Harness) {
 
 	must(t, "create target", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
 
-	s, err := h.Scans.StartScan(t.Context(), scanOf("acme", unmanaged.ScanCloud, "aws"), f, e)
+	s, err := h.Scans.StartScan(t.Context(), scanOf(), f, e)
 	must(t, "start", err)
 
 	must(t, "delete target", h.Scans.DeleteTarget(t.Context(), "acme", "aws", f, e))
@@ -482,15 +481,11 @@ func testScanConcurrent(t *testing.T, h Harness) {
 	errs := make([]error, callers)
 
 	for i := range callers {
-		wg.Add(1)
-
-		go func(i int) {
-			defer wg.Done()
-
+		wg.Go(func() {
 			<-start
 
-			_, errs[i] = h.Scans.StartScan(ctx, scanOf("acme", unmanaged.ScanCloud, "aws"), f, e)
-		}(i)
+			_, errs[i] = h.Scans.StartScan(ctx, scanOf(), f, e)
+		})
 	}
 
 	close(start)
@@ -546,10 +541,10 @@ func testScanRollback(t *testing.T, h Harness) {
 		t.Fatalf("targets = %d, want the one target before the refused writes", len(targets))
 	}
 
-	first, err := h.Scans.StartScan(t.Context(), scanOf("acme", unmanaged.ScanCloud, "aws"), f, s)
+	first, err := h.Scans.StartScan(t.Context(), scanOf(), f, s)
 	must(t, "start", err)
 
-	_, err = h.Scans.StartScan(t.Context(), scanOf("acme", unmanaged.ScanCloud, "aws"), f, s)
+	_, err = h.Scans.StartScan(t.Context(), scanOf(), f, s)
 	wantErr(t, "start a second sweep", err, unmanaged.ErrScanBusy)
 
 	_, err = h.Scans.AdvanceScan(t.Context(), unmanaged.ScanAdvance{
@@ -601,7 +596,7 @@ func testScanPoolChanged(t *testing.T, h Harness) {
 
 	h.SetPoolPurpose(t, "acme", Pool, PurposeJobs)
 
-	_, err := h.Scans.StartScan(t.Context(), scanOf("acme", unmanaged.ScanCloud, "aws"), f, s)
+	_, err := h.Scans.StartScan(t.Context(), scanOf(), f, s)
 	wantErr(t, "start after the purpose changed", err, unmanaged.ErrInvalidTarget)
 
 	list, err := h.Scans.Scans(t.Context(), "acme", "", "", 10)
@@ -613,6 +608,6 @@ func testScanPoolChanged(t *testing.T, h Harness) {
 
 	h.SetPoolPurpose(t, "acme", Pool, PurposeSweeps)
 
-	_, err = h.Scans.StartScan(t.Context(), scanOf("acme", unmanaged.ScanCloud, "aws"), f, s)
+	_, err = h.Scans.StartScan(t.Context(), scanOf(), f, s)
 	must(t, "start after the purpose returned", err)
 }

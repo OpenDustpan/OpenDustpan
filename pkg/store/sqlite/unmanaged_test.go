@@ -115,7 +115,7 @@ func newUnmanagedHarness(t *testing.T) unmanagedtest.Harness {
 		Scans:          s.UnmanagedScans(),
 		Namespace:      unmanagedDomain{s: s}.Namespace,
 		PurgeNamespace: nil,
-		SetPoolPurpose: func(t *testing.T, ns string, pool string, purpose string) {
+		SetPoolPurpose: func(t *testing.T, ns, pool, purpose string) {
 			t.Helper()
 
 			_, err := sqlite.DB(s).ExecContext(t.Context(),

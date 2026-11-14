@@ -1998,53 +1998,27 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 // the notification sinks, the triggers, the self-service blueprints, the trust rules, the
 // sweep targets and the sweeps, and the break-glass reviews.
 func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string) error {
-	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
-		return err
+	checks := []func(context.Context, pgQuerier, string) error{
+		checkStagedDriftResults,
+		checkStagedJobs,
+		checkStagedUnitSettings,
+		checkStagedRegistry,
+		checkStagedGitHost,
+		checkStagedSinks,
+		checkStagedNotifications,
+		checkStagedTriggers,
+		checkStagedSelfServiceBlueprints,
+		checkStagedTrustRules,
+		checkStagedUnmanaged,
+		checkStagedBreakGlassReviews,
+		checkStagedForgeLinks,
 	}
 
-	if err := checkStagedJobs(ctx, pool, staging); err != nil {
-		return err
+	for _, check := range checks {
+		if err := check(ctx, pool, staging); err != nil {
+			return err
+		}
 	}
 
-	if err := checkStagedUnitSettings(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	if err := checkStagedRegistry(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	if err := checkStagedGitHost(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	if err := checkStagedSinks(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	if err := checkStagedNotifications(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	if err := checkStagedTriggers(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	if err := checkStagedSelfServiceBlueprints(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	if err := checkStagedTrustRules(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	if err := checkStagedUnmanaged(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	if err := checkStagedBreakGlassReviews(ctx, pool, staging); err != nil {
-		return err
-	}
-
-	return checkStagedForgeLinks(ctx, pool, staging)
+	return nil
 }

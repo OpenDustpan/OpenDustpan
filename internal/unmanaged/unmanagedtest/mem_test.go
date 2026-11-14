@@ -1125,7 +1125,7 @@ func TestMem(t *testing.T) {
 				delete(m.fences, ns)
 				delete(m.pools, ns)
 			},
-			SetPoolPurpose: func(_ *testing.T, ns string, pool string, purpose string) {
+			SetPoolPurpose: func(_ *testing.T, ns, pool, purpose string) {
 				m.mu.Lock()
 				defer m.mu.Unlock()
 
