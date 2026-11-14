@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:153` (SCIM).
@@ -149,7 +149,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
    - Options: 100 DELETEs per 5 minutes for each credential; 1000 DELETEs per 5 minutes for each credential.
    - Recommended: 100 DELETEs per 5 minutes for each credential. Reason: A mass disable needs a bound that shows as a setting.
 
-Not spec-ready: a code check fails: task "Add the e2e step: a SCIM client calls the NEW /api/dustpan/v1/scim/v2/" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: threat 1 (A caller without the SCIM credential wri): no guard and hostile test for encode or contain; the change conflicts with an owner-tagged decision of ADR 332.
+Not spec-ready: the change conflicts with an owner-tagged decision of ADR 332.
 
 Questions considered and answered:
 

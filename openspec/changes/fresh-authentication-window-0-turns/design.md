@@ -57,10 +57,15 @@ flowchart LR
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
 | Client to server | E | A caller with a stale session or an access token does a guarded step when the window is 0. | boundary check | The handler refuses a window value outside 0 and 60 to 900 and a token as fresh proof. | Send a guarded request with an access token and check for 403 mfa.fresh-step-required. |
+| Client to server | E | A caller with a stale session or an access token does a guarded step when the window is 0. | encode or contain | The fresh time comes only from the sealed access cookie, never from a header or a body field; the server ignores a client value. | Send a guarded request with a forged fresh-time header and body field, and check for 403 mfa.fresh-step-required. |
+| Client to server | E | A caller with a stale session or an access token does a guarded step when the window is 0. | limit | The step uses the shortest window that holds, so a longer window never widens the check. | Set namespace 0 against installation 900 and check that each step asks. |
 | Client to server | E | A caller with a stale session or an access token does a guarded step when the window is 0. | authorize at point of use | The service compares the age with the shortest window at the step, with 0 as ask each time. | Call the step with window 0 and age 0 and check for 403. |
 | Client to server | E | A caller with a stale session or an access token does a guarded step when the window is 0. | fail closed | A missing or unreadable window or session refuses the step. | Remove the fresh time from the session and check for 403 mfa.fresh-step-required. |
 | Client to server | T | A person sets a longer narrow window to weaken the check. | boundary check | The setting refuses a longer narrow window and values outside 0 and 60 to 900. | Send freshAuthSeconds 1000 and check the refusal and the stored value. |
+| Client to server | T | A person sets a longer narrow window to weaken the check. | encode or contain | newFreshChecker is the only constructor of the window value; a raw integer never reaches the check. | Send freshAuthSeconds as a negative number and a string, and check that the server refuses both. |
 | Client to server | T | A person sets a longer narrow window to weaken the check. | limit | The step uses the shortest window that holds. | Set namespace 0 against installation 900 and check each step asks. |
+| Client to server | T | A person sets a longer narrow window to weaken the check. | authorize at point of use | A change to a longer window needs a fresh authentication at the time of the change, checked in the settings service. | Change the window from 60 to 900 with a stale session and check for 403 mfa.fresh-step-required and the stored value kept. |
+| Client to server | T | A person sets a longer narrow window to weaken the check. | fail closed | A window that the store cannot read gives the strictest value, 0. | Make the settings read fail and check that a guarded step answers 403 mfa.fresh-step-required. |
 
 ## Failure modes
 

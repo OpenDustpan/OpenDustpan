@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:141` (Sign-in methods).
@@ -106,7 +106,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: threats.dfd: line 17: "S<-->I" does not parse; a code check fails: threat 1 (A client forges the trusted header.): no guard and hostile test for encode or contain, limit, authorize at point of use; a code check fails: threat 2 (A changed or wrapped SAML assertion.): no guard and hostile test for encode or contain, limit, authorize at point of use; a code check fails: and 2 more.
+Not spec-ready: a code check fails: a security change needs "threats.dfd": a Mermaid flowchart with each trust boundary as a subgraph.
 
 Questions considered and answered:
 

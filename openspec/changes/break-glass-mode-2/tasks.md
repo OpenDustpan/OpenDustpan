@@ -31,7 +31,7 @@
 
 ## 5. Definition of done
 
-- [ ] 5.1 Add an e2e step with POST /api/dustpan/v1/recovery/redeem (NEW route) and a signed-request credential (Ed25519 offline key). Check: `make e2e` step BreakGlassMode2 passes against the real binary over TLS.
+- [ ] 5.1 Add an e2e step for the redeem route. BLOCKED by the route and the signed-request credential (Ed25519 offline key), which this change creates; no existing route or credential kind carries it. Check: BLOCKED by the new redeem route; then `make e2e` step BreakGlassMode2 passes against the real binary over TLS.
 - [ ] 5.2 Add the console sign-in step. Check: Browser check signs in with the issued session.
 - [ ] 5.3 Write the docs page in the same pull request. Check: Docs commands run as written.
 - [ ] 5.4 Run the usability check. Check: Operator completes recovery from the docs page; each error names one command.

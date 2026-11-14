@@ -1,12 +1,12 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #698, #2964.
 
 ## Problem
 
-A list that covers every object ignores namespace IP allowlists. A client outside the allowlist of a namespace still sees that namespace in a list, while the gated check refuses each object of it. The scope cannot name the namespaces that it leaves out.
+A site administrator who is not the bootstrap administrator lists namespaces from an address outside the allowlist of one namespace. Today the list still shows that namespace, while the gated check refuses each object of it. The scope cannot name the namespaces that it leaves out. The fix adds an exclusion list to the scope.
 
 ## Evidence
 
@@ -20,6 +20,7 @@ A list that covers every object ignores namespace IP allowlists. A client outsid
 - The IP allowlist gate fills the list for each request.
 - The namespace filter of both dialects, the deleted-units read scope, the namespace list and the caller-access API apply the list.
 - NamespacesWithList gets a bound, with conformance rows at the limit and one past it.
+- The conformance check of list against authorize covers a scope with exclusions.
 
 Out of scope:
 
@@ -76,7 +77,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
    - Options: Refuse past a fixed limit with a named error; Page the read and apply exclusions in chunks.
    - Recommended: Page the read, so no list call fails for the installation. Reason: ADR 361 leaves the cost limit open; paging avoids an installation-wide outage of list calls.
 
-Not spec-ready: a code check fails: no "quality": give each non-functional target with a number, a unit and a scope, or "none affected" with the reason; a code check fails: a security change needs "threats.dfd": a Mermaid flowchart with each trust boundary as a subgraph; a code check fails: a security change needs STRIDE threats for each trust boundary ("threats.items").
+Not spec-ready: a code check fails: threat 1 (A client outside the allowlist learns th): no guard and hostile test for boundary check, encode or contain, limit; a code check fails: threat 2 (A consumer ignores the exclusion list an): no guard and hostile test for boundary check, authorize at point of use, fail closed.
 
 Questions considered and answered:
 

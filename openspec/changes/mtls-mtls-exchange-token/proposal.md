@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:188` (Exchange issues a trust token for a matched workload.).
@@ -106,7 +106,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
    - Options: Extend kind trust to mTLS; Define a new stored kind for mTLS.
    - Recommended: Extend kind trust to mTLS Reason: ADR 284 decision 1 is owner-tagged and names the JWT only. One revoke path is simpler.
 
-Not spec-ready: a code check fails: test `TestMtlsExchangeVerify` (.tasks[0].items[0].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: test `TestMtlsTrustTokenIssue` (.tasks[0].items[1].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: design decision "Single enabled rule match": a limit with no number; give the number, the unit and the scope; the change conflicts with an owner-tagged decision of ADR 284.
+Not spec-ready: the change conflicts with an owner-tagged decision of ADR 284.
 
 Questions considered and answered:
 

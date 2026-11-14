@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:188` (E2E step and docs prove mTLS with real CLIs.).
@@ -101,7 +101,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Add failing e2e refusals on the exchange route: hostile certificates a" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: task "Add failing e2e grant and lifetime checks with the trust token: 403 wi" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: task "Wire the e2e step with test CA, SPIFFE ID certificate, trust bundle, a" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: and 1 more.
+none
 
 Questions considered and answered:
 

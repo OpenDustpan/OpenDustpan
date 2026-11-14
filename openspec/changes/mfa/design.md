@@ -56,10 +56,10 @@ States and transitions after this change:
 
 ```mermaid
 stateDiagram-v2
- [*] --> NoSession
- NoSession --> Pending: password ok
+ [*] --> SignedOut: NEW
+ SignedOut --> Pending: password ok
  Pending --> Session: second factor ok
- Pending --> NoSession: refused
+ Pending --> SignedOut: refused
 ```
 
 ## Quality attributes

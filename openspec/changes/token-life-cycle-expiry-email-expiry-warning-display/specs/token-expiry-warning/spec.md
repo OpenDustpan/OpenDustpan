@@ -18,7 +18,7 @@ When a caller reads an access token, the server SHALL include the expiry time, t
 
 ### Requirement: Threshold rule
 
-When the server computes the warning level, the server SHALL apply inclusive boundaries, give urgent precedence and treat a threshold of 0 as a disabled window.
+When the server computes the warning level with newWarningState, the server SHALL apply inclusive boundaries, give urgent precedence and treat a threshold of 0 as a disabled window.
 
 #### Scenario: Exact boundary
 - **WHEN** a token expires exactly at the second threshold

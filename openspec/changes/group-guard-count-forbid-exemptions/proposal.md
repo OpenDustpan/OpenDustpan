@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #1160.
@@ -76,17 +76,28 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. Is the rule 'the caller holds each limited action at the scope of the limit' the right rule for a widening membership change, and how do site administrators and break-glass sessions meet it? Decides: owner.
-   - Options: Caller holds each limited action at the scope of the limit, plus the group write action; A site administrator passes with the group write action alone; Break-glass sessions stay outside the guard, as they stay outside limits.
-   - Recommended: Caller holds each limited action at the scope of the limit, plus the group write action. Reason: The caller who unlocks an action through membership could already do that action. This matches the issue scope. The specs build this rule.
-2. Does a refused widening membership change write an audit entry only, or also a decision record? Decides: PM.
-   - Options: Audit entry only; Audit entry plus a decision record.
-   - Recommended: Audit entry only. Reason: The decision record rule covers refusals of calls, not membership writes.
-3. Does a bulk membership batch with one widening entry fail as a whole batch or entry by entry? Decides: PM.
-   - Options: Atomic batch refusal with per-entry errors; Per-entry apply with per-entry refusal.
-   - Recommended: Atomic batch refusal with per-entry errors. Reason: Atomic refusal avoids a partial widening state.
+none
 
-Not spec-ready: a code check fails: test `TestGroupGuardForbidWidening` (.tasks[0].items[0].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: test `TestGroupGuardUnnamedGroup` (.tasks[0].items[1].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: test `TestGroupGuardCases` (.tasks[0].items[2].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: and 2 more.
+Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
+
+1. Is the rule 'the caller holds each limited action at the scope of the limit' the right rule for a widening membership change, and how do site administrators and break-glass sessions meet it?
+   - Options: Caller holds each limited action at the scope of the limit, plus the group write action; A site administrator passes with the group write action alone; Break-glass sessions stay outside the guard, as they stay outside limits.
+   - Provisional decision (owner review 14 Nov): Caller holds each limited action at the scope of the limit, plus the group write action.
+   - Reason: The caller who unlocks an action through membership could already do that action. This matches the issue scope. The specs build this rule. Benchmark: AWS IAM: a change that grants an effective permission needs that permission in the caller (privilege escalation check).
+   - Persona impact: Routine group work stays as today. A site administrator who lacks a limited action is refused and must hold it. Escape hatch: A holder of the limited actions makes the change, and the audit entry names the limit, the group, the principal and the caller.
+   - Owner-tagged ADRs involved: ADR 223 (their words do not change).
+2. Does a refused widening membership change write an audit entry only, or also a decision record?
+   - Options: Audit entry only; Audit entry plus a decision record.
+   - Provisional decision (owner review 14 Nov): Audit entry only.
+   - Reason: The decision record rule covers refusals of calls, not membership writes. Benchmark: SOC 2: each security change and refusal keeps one audit record.
+   - Persona impact: No persona loses access. Escape hatch: The audit entry names the caller in all cases.
+   - Owner-tagged ADRs involved: ADR 223 (their words do not change).
+3. Does a bulk membership batch with one widening entry fail as a whole batch or entry by entry?
+   - Options: Atomic batch refusal with per-entry errors; Per-entry apply with per-entry refusal.
+   - Provisional decision (owner review 14 Nov): Atomic batch refusal with per-entry errors.
+   - Reason: Atomic refusal avoids a partial widening state. Benchmark: AWS IAM: a failed batch write applies no part and lists per-entry errors.
+   - Persona impact: SCIM sync rules stay unchanged. Escape hatch: The caller resubmits the batch after the rights change.
+   - Owner-tagged ADRs involved: ADR 223 (their words do not change).
 
 Questions considered and answered:
 

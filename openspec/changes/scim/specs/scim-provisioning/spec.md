@@ -32,6 +32,14 @@ When SCIM creates a person, the server SHALL store the person with the source sc
 - **WHEN** SCIM creates a person
 - **THEN** the person has the source scim and the same subject on each update.
 
+### Requirement: scim-input-containment
+
+If a SCIM filter, path value or body field has a character outside the allowlist, then the server SHALL refuse the request with 400 and pass no raw value to the store.
+
+#### Scenario: Hostile filter
+- **WHEN** a filter holds a quote, a control character or a line break
+- **THEN** the server answers 400, runs no query with that value and writes an audit entry.
+
 ### Requirement: protected-group
 
 If a SCIM membership targets a protected group that does not trust the identity provider, then the server SHALL refuse the add with 403.

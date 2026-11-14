@@ -54,8 +54,8 @@ P1[pkg/accesstoken]
 
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
-| correctness | 100% of reads at the 14-day and 3-day boundaries give the right level | percent of test reads | token reads under /api/server |
-| observability | 100% of listed tokens carry a level and seconds left | percent of listed tokens | token list reads |
+| correctness | 100% of reads at the 14-day and 3-day boundaries give the right level | percent of test reads | token reads under /api/server/caller/tokens |
+| observability | 100% of listed tokens carry a level and seconds left | percent of listed tokens | token list reads under /api/server/tokens |
 
 ## Threat model
 

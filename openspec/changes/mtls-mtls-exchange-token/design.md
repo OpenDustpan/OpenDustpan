@@ -5,7 +5,7 @@ The exchange is security code on an external TLS endpoint. It fails closed.
 ## Decisions
 
 1. **Verified chain value only.** The service takes an opaque verified-chain value from the TLS layer and never reads headers for a chain.
-2. **Single enabled rule match.** Match picks at most one enabled rule by bundle ID and exact SPIFFE ID; any other result refuses.
+2. **Single enabled rule match.** Match picks at most 1 enabled rule for each exchange call, by bundle ID and exact SPIFFE ID; 0 or 2 or more matches refuse.
 3. **Stored issue.** Match check and issue share one transaction. Revoke uses the service-token revoke routes.
 
 ## Structure

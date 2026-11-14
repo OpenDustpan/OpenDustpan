@@ -4,8 +4,8 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing service tests for the verify scenarios (NEW test TestMtlsExchangeVerify). Check: `go test ./pkg/trust/ -run TestMtlsExchangeVerify` fails on main
-- [ ] 1.2 Write failing issue tests (NEW test TestMtlsTrustTokenIssue). Check: `go test ./pkg/accesstoken/ -run TestMtlsTrustTokenIssue` fails on main
+- [ ] 1.1 Write failing service tests for the verify scenarios (NEW test TestMtlsExchangeVerify). Check: NEW test: `go test ./pkg/trust/ -run TestMtlsExchangeVerify` fails on main
+- [ ] 1.2 Write failing issue tests (NEW test TestMtlsTrustTokenIssue). Check: NEW test: `go test ./pkg/accesstoken/ -run TestMtlsTrustTokenIssue` fails on main
 
 ## 2. Build
 

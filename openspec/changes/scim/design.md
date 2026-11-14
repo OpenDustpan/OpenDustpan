@@ -65,6 +65,7 @@ flowchart LR
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
 | SCIM routes | S | A caller without the SCIM credential writes users or disables accounts. | boundary check | Strict decode and an allowlist of fields. | Send extra fields and an oversize body. Each is refused. |
+| SCIM routes | S | A caller without the SCIM credential writes users or disables accounts. | encode or contain | The store uses placeholders only. The filter parser accepts an allowlist of attributes and characters and builds no SQL text from the filter. | Send a filter with a quote, a SQL fragment and a line break. The server answers 400 and the tables stay unchanged. |
 | SCIM routes | S | A caller without the SCIM credential writes users or disables accounts. | authorize at point of use | SCIM-scoped bearer credential on each route. | Send an admin token without SCIM scope. The server answers 401. |
 | SCIM routes | S | A caller without the SCIM credential writes users or disables accounts. | limit | A rate limit on DELETE for each credential. | Send a burst of DELETEs. The excess gets 429. |
 | SCIM routes | S | A caller without the SCIM credential writes users or disables accounts. | fail closed | An unknown credential or value is denied and audited. | Send an unknown credential. The server answers 401 and writes an audit entry. |

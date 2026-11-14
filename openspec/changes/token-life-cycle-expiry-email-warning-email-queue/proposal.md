@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:171` (Send expiry warning email through SMTP queue.).
@@ -13,7 +13,7 @@ The user path this change must make work:
 1. **API.** Set installation SMTP relay and sender through `PATCH /api/dustpan/v1/settings`; set the SMTP password only through env or file.
 2. **Server start.** Start the server with SMTP settings from env or file; the warning sender starts with it.
 3. **Docs page.** Follow the docs page to set SMTP and check that the test SMTP server gets the warning.
-4. **E2e.** Run e2e against the real binary over TLS with the test SMTP server and a personal access token; check the sent warning and the audit entry through `GET /api/dustpan/v1/namespaces/{namespace}/audit`. BLOCKED by the expiry enforcement and display parts for the CLI warning check only.
+4. **E2e.** Run e2e against the real binary over TLS with the test SMTP server and a personal access token that the real CLI uses; check the two sent warnings. The audit check is BLOCKED by the missing audit read route for the warning entry kind, which this change adds as new in what_changes.
 
 Errors the person may hit, and the one command that helps:
 
@@ -24,14 +24,16 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- Milestone step 6 requires the server to send the warning email to the test SMTP server before expiry. Proof: An access token records its last-used time. A token past its expiry gives 401 to both CLIs. A token with no use for the inactivity period is disabled. Before the expiry, the server sends the warning email to the test SMTP server
-- This change is part 3 of the token expiry split and covers the SMTP queue with one retry, not enforcement or display. Proof: This part sends expiry warning email through installation SMTP settings with a durable queue and one retry.
+- Milestone step 6 requires the server to send the warning email to the test SMTP server before expiry. Proof: Before the expiry, the server sends the warning email to the test SMTP server (roadmap step 6).
+- This change covers the SMTP queue with one retry, not enforcement or display. Proof: This part sends expiry warning email through installation SMTP settings with a durable queue and one retry (item scope).
+- Main has tests of the expiry warning of a token. Proof: pkg/accesstoken/accesstoken_test.go:1386 TestWarningFor and pkg/accesstoken/accesstoken_test.go:1413 TestExpiryWarningOfAnEndedToken.
 
 ## What Changes
 
 - Queue one expiry warning email row per token per warning time and send through resolved installation SMTP settings.
 - Retry a temporary failed send once after 15 minutes, fail a permanent send at once, then mark failed with the reason.
 - Record send state queued, sending, retry, sent or failed with reason for the display part to show.
+- Write one audit entry per delivered, skipped or failed warning; the e2e step reads it through the existing audit export of the namespace, and a new route is not added.
 
 Out of scope:
 
@@ -87,7 +89,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 227 changes decision 3; ADR 232 changes decision 6; ADR 235 changes decision 6; ADR 301 extends decision 2; ADR 365 changes decision 5. Chain to the end: ADR 227, ADR 232, ADR 235, ADR 301, ADR 365, ADR 320, ADR 339, ADR 354, ADR 288, ADR 332.
 - Current rule: this ADR, with ADR 227, 232, 235, 301, 365.
 - Quote: "SMTP settings are installation settings."
-- Effect: The sender reads relay and sender from installation settings. The password comes only from env or file, never from the database.
+- Effect: The sender reads relay and sender from installation settings. The password comes only from env or file.
 - Conflict: none.
 
 **ADR 292: Plain LDAP and SMTP connections are refused unless an operator opts in** (owner-tagged (all decisions)).
@@ -101,18 +103,18 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "The hosted service never turns it on (owner). The hosted service does not allow the setting."
 - Quote: "Fail closed. If the setting is missing or not valid, the value is off."
 - Quote: "TLS checks stay. A connection with TLS keeps the certificate checks of RFC 21."
-- Effect: The dialer refuses plain SMTP except to loopback unless the opt-in allows it, fails closed, names address, setting and command in each refusal, keeps TLS certificate checks, and never enables plain on the hosted service.
+- Effect: The dialer refuses plain SMTP except to loopback unless the opt-in allows it, fails closed, names address, setting and command in each refusal, keeps certificate checks, and never enables plain on the hosted service.
 - Conflict: none.
 
 ## Open questions
 
-Not spec-ready: a code check fails: route `GET /api/dustpan/v1/namespaces/{namespace}/audit` (.user_path[3].step) is not in the API description or the route table; use an existing route (nearest: /api/server/namespaces/{}/unit-grants/{}; a code check fails: test `TestWarningQueue` (.tasks[1].items[0].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: test `TestPlainRefused` (.tasks[1].items[1].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: and 7 more.
+Not spec-ready: a code check fails: design decision "Stable token ID with send-time recheck": a limit with no number; give the number, the unit and the scope.
 
 Questions considered and answered:
 
-- When does the server send the warning email and with which settings? ADR 53 decision 11 requires the email warning and names SMTP settings as its need; ADR 212 decision 2 places those settings at installation scope; ADR 69 decision 5 sets the two send times and says both are settings.
-- Does the queue allow plain SMTP? ADR 292 decisions 1, 2 and 5 refuse plain SMTP by default, allow one opt-in setting, and fail closed. Decision 5 requires each refusal to name the address, the setting and the one command that changes it.
-- Does this part enforce expiry or show the API warning field? No. Enforcement and the API warning field are in the other two parts of the split.
-- Which setting keys hold SMTP and warning times, and can the queue promise no duplicate email? No new setting is declared here. The sender reads resolved settings. SMTP cannot give at-most-once after accept, so the design states at-least-once after accept with a single lease holder before accept.
+- When does the server send the warning email and with which settings? ADR 53 decision 11 requires the email warning; ADR 212 decision 2 places SMTP settings at installation scope; ADR 69 decision 5 sets the two send times as settings.
+- Does the queue allow plain SMTP? ADR 292 decisions 1, 2 and 5 refuse plain SMTP by default, allow one opt-in, and fail closed.
+- Does this part enforce expiry or show the API warning field? No. Those are in the other two parts of the split.
+- Can the queue promise no duplicate email? No. SMTP cannot give at-most-once after accept, so the design states at-least-once after accept with one lease holder before accept.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

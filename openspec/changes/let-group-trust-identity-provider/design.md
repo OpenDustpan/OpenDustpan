@@ -73,9 +73,18 @@ flowchart LR
 
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
-| Caller boundary | E | A caller without reach or a fresh step sets trust and widens access. | boundary check | The handler validates the group ID and body. | A bad ID and a bad body give 404 and 400. |
+| Caller boundary | E | A caller without reach or a fresh step sets trust and widens access. | boundary check | The handler validates the group ID and body with an allowlist. | A bad ID and a bad body give 404 and 400. |
+| Caller boundary | E | A caller without reach or a fresh step sets trust and widens access. | encode or contain | The store uses placeholders only for the group ID. | A group ID with SQL text changes no row and gives 404. |
+| Caller boundary | E | A caller without reach or a fresh step sets trust and widens access. | limit | The body has a size limit and one field. | An oversized body gives 400 and changes nothing. |
 | Caller boundary | E | A caller without reach or a fresh step sets trust and widens access. | authorize at point of use | The service checks server:manage-sign-in and reach cover for the group. | An uncovered caller and a caller without the action get 403. |
 | Caller boundary | E | A caller without reach or a fresh step sets trust and widens access. | fail closed | A stale step, no factor, an agent token or IdP-started SAML is refused and audited. | Each of these gets 403 mfa.fresh-step-required. |
-| Identity provider boundary | T | The identity provider adds members to a protected group that is not trusted. | authorize at point of use | The membership function refuses the add unless the group is trusted or full sync is on. | An add to an untrusted protected group is refused and audited. |
+| Identity provider boundary | T | The identity provider adds members to a protected group that is not trusted. | boundary check | The membership function accepts only group values that the mapping names. | An unmapped group value adds no membership. |
+| Identity provider boundary | T | The identity provider adds members to a protected group that is not trusted. | encode or contain | Memberships reference the group by stable ID, not by name. | A group renamed to a trusted name gets no trust. |
 | Identity provider boundary | T | The identity provider adds members to a protected group that is not trusted. | limit | A closed group and a break-glass account stay unchanged. | A sync over a closed group and a break-glass member changes nothing. |
+| Identity provider boundary | T | The identity provider adds members to a protected group that is not trusted. | authorize at point of use | The membership function refuses the add unless the group is trusted or full sync is on. | An add to an untrusted protected group is refused and audited. |
+| Identity provider boundary | T | The identity provider adds members to a protected group that is not trusted. | fail closed | If the trust value cannot be read, the function refuses the add. | A store read error adds no membership and writes an audit entry. |
+| Store boundary | R | A trust change has no record of who made it. | boundary check | The adapter rejects a trust row with no setter or time. | A write with an empty setter fails. |
+| Store boundary | R | A trust change has no record of who made it. | encode or contain | The audit entry is built from typed fields, with CR and LF removed. | A setter name with CR and LF is logged on one line. |
+| Store boundary | R | A trust change has no record of who made it. | limit | The write touches only the group row in one transaction. | A trust write changes no other group row. |
+| Store boundary | R | A trust change has no record of who made it. | authorize at point of use | The adapter takes only a value that the constructor made. | A raw bool cannot compile as a trust value. |
 | Store boundary | R | A trust change has no record of who made it. | fail closed | The audit entry is written in the same transaction as the change. | A failed audit write rolls back the trust change. |

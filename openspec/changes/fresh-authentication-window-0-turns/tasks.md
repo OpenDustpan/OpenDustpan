@@ -14,6 +14,7 @@
 - [ ] 1.8 Add failing test for window 30 and 1000 refused Check: TestFreshInvalidWindowRefused fails on main
 - [ ] 1.9 Add failing test for change to longer window needs fresh and change to 0 needs none Check: TestFreshWindowChangeToLongerNeedsFresh fails on main
 - [ ] 1.10 Add failing test for approval-rule window 0 against installation 900 Check: TestFreshApprovalRuleZeroAsksEachTime fails on main
+- [ ] 1.11 Add failing test for forged window value, a hostile session and a missing fresh time Check: TestFreshHostileInputsFailClosed fails on main
 
 ## 2. Side effects (computed from main)
 

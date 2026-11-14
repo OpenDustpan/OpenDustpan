@@ -4,7 +4,7 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write failing tests for the warning field inside and outside the window, expired, no expiry, boundaries, precedence and zero threshold. Check: go test ./pkg/accesstoken -run TestWarningFor fails on main
+- [ ] 1.1 Write failing tests for newWarningState: inside and outside the window, expired, no expiry, boundaries, precedence and zero threshold. Check: go test ./pkg/accesstoken -run TestWarningFor fails on main
 - [ ] 1.2 Write failing tests for 403 without the read grant and for the audit entry. Check: go test ./internal/token fails on main
 
 ## 2. Build

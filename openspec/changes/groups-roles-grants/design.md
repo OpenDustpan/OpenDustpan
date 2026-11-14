@@ -54,9 +54,16 @@ flowchart LR
 
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
+| Server | E | A writer or viewer does an action outside its grant | boundary check | The handler rejects a request with an unknown token or a malformed object name | Send a write with a malformed unit name and expect a refusal |
+| Server | E | A writer or viewer does an action outside its grant | encode or contain | The store reads grants with placeholders only, scoped to the namespace | Send a collection name with SQL text and expect no grant match |
+| Server | E | A writer or viewer does an action outside its grant | limit | A grant on one collection reaches only that collection and its units | A writer on collection A writes a unit of collection B and expects 403 |
 | Server | E | A writer or viewer does an action outside its grant | authorize at point of use | The service checks the stored grant for the action and object | A viewer runs tofu apply and expects 403 |
-| Server | E | A writer or viewer does an action outside its grant | fail closed | An unknown or ended grant denies | Use a token after its grant ends and expect 403 |
+| Server | E | A writer or viewer does an action outside its grant | fail closed | An unknown or ended grant denies and writes an audit entry | Use a token after its grant ends and expect 403 |
+| Server | I | A caller reads the export without the read-access action | boundary check | The export route validates namespace and collection path values | Ask for an export of a malformed collection name and expect 400 |
+| Server | I | A caller reads the export without the read-access action | encode or contain | The export query uses placeholders and the namespace of the path | Ask for the export of namespace A with a collection of namespace B and expect no rows |
+| Server | I | A caller reads the export without the read-access action | limit | The export is limited to the object of the route | Ask for the export of collection A and expect no grant of collection B |
 | Server | I | A caller reads the export without the read-access action | authorize at point of use | The export route checks its read-access action | Ask for the export without the action and expect 403 |
+| Server | I | A caller reads the export without the read-access action | fail closed | An error in the check denies the export | Fail the grant read and expect 403 with no rows |
 
 ## Failure modes
 

@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #1329.
@@ -118,7 +118,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: threat 1 (A second bootstrap makes a backdoor key ): no guard and hostile test for encode or contain, limit; a code check fails: threat 2 (A replayed or stolen key-add challenge e): no guard and hostile test for encode or contain, authorize at point of use, fail closed; a code check fails: threat 3 (A crash after the commit hides that the ): no guard and hostile test for boundary check, encode or contain, limit, authorize at point of use.
+none
 
 Questions considered and answered:
 

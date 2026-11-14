@@ -13,5 +13,5 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Add the new route PUT and DELETE /api/server/groups/{id}/trust. Its action is server:manage-sign-in on the installation, the object is the group. The audit entry holds the group ID, the setter, the time and the old and new value. Edit the baselines and the backup table list. Add the docs page. Check: `curl -X PUT $SERVER/api/server/groups/$ID/trust` with a site administrator access token returns 204 in the e2e step; `sqlc diff` is clean.
-- [ ] 3.2 Add the e2e step against the real server with a site administrator access token. Run the usability check and the full gate. Check: `make e2e` and `make check` with zero findings.
+- [ ] 3.1 Add the new route PUT and DELETE /api/server/groups/{id}/trust. Its action is server:manage-sign-in on the installation, the object is the group. The audit entry holds the group ID, the setter, the time and the old and new value. Edit the baselines and the backup table list. Add the docs page. BLOCKED by add-one-generic-settings-api for the full sync route. Check: `curl -X PUT $SERVER/api/server/groups/$ID/trust` with the access token of a site administrator principal returns 204 in the e2e step; `sqlc diff` is clean.
+- [ ] 3.2 Add the e2e step against the real server, with the access token of a site administrator principal, on PUT and DELETE /api/server/groups/{id}/trust. Run the usability check and the full gate. Check: `make e2e` and `make check` with zero findings.

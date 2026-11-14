@@ -24,7 +24,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add e2e step against the real CLI with require MFA on. Check: `make e2e TEST=local-mfa-require` runs pulumi up and tofu apply with the token and checks audit entries.
+- [ ] 4.1 Add e2e step against the real Pulumi CLI and OpenTofu. A local user signs in with POST /api/dustpan/v1/sign-in/password and a TOTP second factor, then creates a personal access token at POST /api/dustpan/v1/me/tokens. BLOCKED by the second-factor route: the pack names no route for the TOTP step, so the design of this change must name it first. Check: `make e2e` runs pulumi up and tofu apply with the personal token and checks audit entries.
 - [ ] 4.2 Add user docs for MFA. Check: Docs commands run as written in CI.
 - [ ] 4.3 Run usability check. Check: Developer completes sign-in from the docs alone; each error names one command.
 - [ ] 4.4 Pass definition of done. Check: `make check` passes with zero findings.

@@ -55,10 +55,25 @@ flowchart LR
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
 | Network boundary | S | An attacker forges a recovery request. | boundary check | The service checks the Ed25519 signature against the pinned key. | Submit a request signed by another key to the service. |
+| Network boundary | S | An attacker forges a recovery request. | encode or contain | The handler decodes the body as strict JSON with fixed fields and a bounded ID form; it never builds paths or queries from it. | Send a request with unknown fields and a SQL-like ID directly to the handler and expect 400 and no store call. |
+| Network boundary | S | An attacker forges a recovery request. | limit | 8 KB body limit and the per-address refusal throttle. | Send a 1 MB body and expect refusal before parsing. |
+| Network boundary | S | An attacker forges a recovery request. | authorize at point of use | The service checks the pinned key, mode, audience and installation ID at redeem, not only at the handler. | Call the service directly with a request for another installation ID and expect refusal. |
 | Network boundary | S | An attacker forges a recovery request. | fail closed | Any unknown value gives 401 and an audit entry. | Submit a malformed request and check for 401 and one audit entry. |
+| Network boundary | T | An attacker replays a used request. | boundary check | The handler checks the request ID form and the expiry before the service call. | Send an empty and an over-long ID to the handler and expect 400. |
+| Network boundary | T | An attacker replays a used request. | encode or contain | The store uses placeholders only and a unique key on the request ID. | Submit an ID with quote characters to the store and expect a plain miss or one row. |
+| Network boundary | T | An attacker replays a used request. | limit | Used IDs live until expiry plus 7 days, then the purge removes them. | Run the purge and check that a row inside the window stays. |
 | Network boundary | T | An attacker replays a used request. | authorize at point of use | The store consumes the ID once with compare-and-set. | Submit the same ID twice at once to the store. |
+| Network boundary | T | An attacker replays a used request. | fail closed | A store error on consume gives 503 and no session. | Inject a store fault and expect no session and an audit entry. |
+| Server | D | A flood of bad requests exhausts the server. | boundary check | The handler refuses a wrong mode and a wrong content type before any signature work. | Send a wrong content type and expect refusal with no signature check. |
+| Server | D | A flood of bad requests exhausts the server. | encode or contain | The refusal log is a bounded ring keyed by client address; no request text is stored. | Send 100000 refusals and check the log size stays at the bound. |
 | Server | D | A flood of bad requests exhausts the server. | limit | 8 KB body limit and a per-address refusal throttle; a valid signature bypasses it. | Send a flood of bad signatures, then one valid request from the same address. |
+| Server | D | A flood of bad requests exhausts the server. | authorize at point of use | The service checks the signature again for each request that passes the throttle. | Call the service directly after the throttle passes a forged request and expect refusal. |
+| Server | D | A flood of bad requests exhausts the server. | fail closed | When the throttle state is unavailable, the handler refuses. | Break the throttle state and expect 503. |
+| Server | E | The recovery session gains more rights than recovery. | boundary check | The session carries the recovery administrator subject only. | Decode the issued cookie and check that it names one subject. |
+| Server | E | The recovery session gains more rights than recovery. | encode or contain | The session is a sealed cookie bound to the session generation. | Alter the cookie bytes and expect 401. |
 | Server | E | The recovery session gains more rights than recovery. | limit | The session lifetime uses the freshAuthSeconds window. | Use the session after the window and expect 401. |
+| Server | E | The recovery session gains more rights than recovery. | authorize at point of use | Each route checks the action for the object against the stored grants of the recovery administrator. | Call a route without a grant with the session and expect 403. |
+| Server | E | The recovery session gains more rights than recovery. | fail closed | A stale generation gives 401 and an audit entry. | Use a cookie from before a second recovery and expect 401. |
 
 ## Failure modes
 

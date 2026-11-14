@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #624, #628.
@@ -12,10 +12,10 @@ The user path this change must make work:
 
 1. **Docs page.** Site administrator opens the docs page for break-glass sign-in and starts a sign-in with a typed reason.
 2. **API.** The passkey sign-in route receives the reason. The server checks the passkey assertion first. Only a valid assertion leads to the reason check, the alert audit entry in the sign-in transaction, a session with a time limit from the setting, and then a WARN log line.
-3. **API.** Each request of the session writes an audit entry that names the session ID and the reason. Sign-out and the refresh route are exempt from the 503 rule.
+3. **API.** Each request of the session writes an audit entry that names the session ID and the reason. Sign-out and the session end routes are exempt from the 503 rule.
 4. **API.** The administrator reads the principal response from the principals routes in `internal/api/server/principals.go`. It shows the last test time and a flag for 90 days with no test.
 5. **Console.** The console shows a banner for the flag with a link to the docs page.
-6. **E2e.** BLOCKED by passkey sign-in for local users (issue 607). When it lands, the step signs in a break-glass account through `POST /api/dustpan/v1/sign-in/passkey/finish` with a passkey credential, a typed reason, checks the expiry and reads the flag.
+6. **E2e.** BLOCKED by passkey sign-in for local users (issue 607). When it lands, the step signs in a break-glass account through `POST /api/dustpan/v1/sign-in/passkey/finish` with a passkey credential and a typed reason, checks the expiry and reads the flag.
 
 Errors the person may hit, and the one command that helps:
 
@@ -139,7 +139,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: threat 1 (An attacker replays or forges a passkey ): no guard and hostile test for encode or contain, limit, authorize at point of use; a code check fails: threat 2 (An attacker changes the sealed cookie to): no guard and hostile test for encode or contain, authorize at point of use, fail closed; a code check fails: threat 3 (A reason with CR, LF or a control charac): no guard and hostile test for boundary check, limit, authorize at point of use, fail closed; a code check fails: and 4 more.
+none
 
 Questions considered and answered:
 

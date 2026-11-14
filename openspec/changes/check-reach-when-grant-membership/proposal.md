@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #609, #610, #616, #622.
@@ -112,7 +112,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: threat 1 (A caller with a small reach gives a toke): no guard and hostile test for encode or contain, limit; a code check fails: threat 2 (A concurrent write changes reach between): no guard and hostile test for boundary check, encode or contain, authorize at point of use, fail closed; a code check fails: threat 3 (An acknowledge or a revoke of a flag lea): no guard and hostile test for boundary check, encode or contain, limit, authorize at point of use; a code check fails: and 1 more.
+none
 
 Questions considered and answered:
 

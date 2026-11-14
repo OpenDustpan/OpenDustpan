@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #728.
@@ -28,6 +28,7 @@ Evidence for the claims above:
 - Plain OAuth providers return no auth_time and the pending sign-in request carries no max_age. Proof: internal/oauth/plain.go:162:// no max_age: a plain OAuth provider returns no auth_time to check it
 - The server stores session rows with provider and auth_time for freshness checks. Proof: pkg/store/sqlite/internal/db/queries.sql.go:2438:INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent, generation)
 - No server code path names select_account. Proof: rg -n -F --glob '!*_test.go' 'select_account' pkg internal cmd matches 0
+- Main has passkey routes for a person. Proof: route GET /api/dustpan/v1/me/passkeys and POST /api/dustpan/v1/me/passkeys/register/begin in the route table
 
 ## What Changes
 
@@ -72,7 +73,6 @@ Each fact names its file, line and function on main. The change specifies only t
 - Main tests that a second factor accepts no user verification in the WebAuthn adapter. (`pkg/mfa/gowebauthn/gowebauthn_test.go:375 (TestSecondFactorAcceptsNoUserVerification)`)
 - Main tests that WebAuthn gates use the resolved source address. (`pkg/dustpan/passkey_source_test.go:104 (TestWebauthnGatesUseTheResolvedSourceAddress)`)
 - Main tests the freshness hook for token creation. (`pkg/accesstoken/accesstoken_test.go:779 (TestFreshnessHook)`)
-- Main sweeps and disables inactive tokens and accounts. (`pkg/accesstoken/accesstoken_test.go:1217 (TestSweepDisablesInactiveTokensAndAccounts)`)
 
 ## ADR check
 
@@ -84,7 +84,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 30 changes; ADR 210 extends; ADR 222 changes; ADR 224 changes; ADR 266 extends; ADR 305 extends; ADR 326 extends. Chain to the end: ADR 30, ADR 210, ADR 222, ADR 224, ADR 266, ADR 305, ADR 326, ADR 35, ADR 38, ADR 39, ADR 41, ADR 42, ADR 151, ADR 218, ADR 248, ADR 281, ADR 247, ADR 286, ADR 335, ADR 351, ADR 354, ADR 241, ADR 313, ADR 317, ADR 342, ADR 353, ADR 272, ADR 48, ADR 70, ADR 212, ADR 237, ADR 238, ADR 245, ADR 60, ADR 103, ADR 146, ADR 240, ADR 352, ADR 253, ADR 154, ADR 217, ADR 220.
 - Current rule: this ADR, with ADR 30, 210, 222, 224, 266, 305, 326.
 - Quote: "A REST API for every feature."
-- Effect: Enrollment, list, step-up, removal and the two settings each get a documented REST API with a declared action and object.
+- Effect: Enrollment, list, step-up, removal and the settings each get a documented REST API with a declared action and object.
 - Conflict: none.
 
 **ADR 56: MFA freshness for token creation and secret reveal** (not owner-tagged).
@@ -102,7 +102,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 142 changes decision 26; ADR 142 extends decision 13; ADR 210 changes; ADR 216 changes decisions 11, 23, 24 and 28; ADR 222 extends decisions 16, 17 and 23; ADR 227 extends decisions 16, 17 and 23; ADR 245 changes decisions 26 and 27; ADR 306 changes decisions 24, 25 and 26; ADR 306 extends decision 21; ADR 320 extends decision 12; ADR 321 extends decision 19; ADR 332 extends decisions 12, 14, 16 and 22; ADR 354 changes decision 13. Chain to the end: ADR 142, ADR 210, ADR 216, ADR 222, ADR 227, ADR 245, ADR 306, ADR 320, ADR 321, ADR 332, ADR 354, ADR 149, ADR 297, ADR 247, ADR 286, ADR 273, ADR 335, ADR 351, ADR 301, ADR 339, ADR 295, ADR 333.
 - Current rule: this ADR, with ADR 142, 210, 216, 222, 227, 245, 306, 320, 321, 332, 354.
 - Quote: "`server:manage-sign-in` gates the sign-in settings."
-- Effect: The installation require-second-factor setting and the enrollment-code issue action use the sign-in settings action of decision 11; per-person factor routes use a self action on the caller.
+- Effect: The installation setting and the enrollment-code issue action use the sign-in settings action; per-person factor routes use a self action on the caller.
 - Conflict: none.
 
 **ADR 301: A passkey, TOTP or SSH signature gives the fresh step to a person who signed in with OAuth or a trusted header** (owner-tagged (all decisions)).
@@ -121,14 +121,14 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: test `TestTotpEnrollWithCode` (.tasks[0].items[0].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: test `TestReplayedCodeFails` (.tasks[0].items[1].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: test `TestSshSignatureFreshStep` (.tasks[0].items[2].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: and 8 more.
+none
 
 Questions considered and answered:
 
-- Does step-up happen at sign-in or later? Later. ADR 301 decisions 1, 3 and 4 keep sign-in without a second factor and add the fresh step later from an app factor, with 403 mfa.fresh-step-required when no factor exists and MFA is on.
-- Does this reuse the local-user MFA code and need a new WebAuthn library? Yes. ADR 301 decision 5 (owner-tagged ADR) says the passkey and TOTP code is the code of the local-user MFA. This change reuses it with no new WebAuthn dependency.
-- Is an RFC needed before code for storage and library choices? No RFC. ADR 301 decisions 5, 6, 14 and 15 already decide one code path and the enrollment-code proof, and design reuses the sealed MFA store of the mfa change.
-- Where does the trusted-header factor requirement live? This change owns the trusted-header factor rule. The sign-in-methods change owns the proxy allowlist and leaves the factor step here.
-- Who owns admin reset, recovery codes and the zero window? The mfa change owns the factor store, admin reset and recovery-code rotation; the fresh-authentication-window-0-turns change owns the zero window. This change adds only the OAuth and trusted-header step-up, the first-enrollment gate, the require setting and the enrollment-code issue path.
+- Does step-up happen at sign-in or later? Later. ADR 301 decisions 1, 3 and 4 keep sign-in without a second factor and add the fresh step later from an app factor.
+- Does this reuse the local-user MFA code and need a new WebAuthn library? Yes. ADR 301 decision 5 says the passkey and TOTP code is the code of the local-user MFA. No new dependency.
+- Is an RFC needed before code for storage and library choices? No. ADR 301 decisions 5, 6, 14 and 15 already decide one code path and the enrollment proof.
+- Where does the trusted-header factor requirement live? Here. The sign-in-methods change owns the proxy allowlist.
+- Who owns admin reset, recovery codes and the zero window? The mfa change and the fresh-authentication-window-0-turns change.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

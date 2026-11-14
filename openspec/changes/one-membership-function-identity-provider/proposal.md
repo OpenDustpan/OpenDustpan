@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #614, #621, #632.
@@ -18,7 +18,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| SCIM add of a user to a protected or closed group is refused. | SCIM answers a SCIM error with code idp.protected-group that names the group and the refusing rule. Check the mapping with the docs page. | `curl /api/dustpan/v1/capabilities` |
+| SCIM add of a user to a protected or closed group is refused. | SCIM answers a SCIM error with code idp.protected-group that names the group and the refusing rule. | `curl /api/dustpan/v1/capabilities` |
 | Group claim at sign-in names a protected or closed group. | Sign-in succeeds with no new membership. The audit entry names the refused group and the refusing rule. | `curl /api/dustpan/v1/capabilities` |
 | Change to identity provider, claim mapping, or account matching without server:manage-sign-in or without a fresh step inside the one window is refused. | 403 with code authz.forbidden or mfa.fresh-step-required. The no-factor message names the enrollment page and each way to enroll. | `curl /api/dustpan/v1/capabilities` |
 
@@ -65,7 +65,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - Main defines the sign-in failure error code used by sign-in refusals. (`internal/errcode/catalog_signin.go:8`)
 - Main has a grant race test that covers membership removal races. (`pkg/access/race_test.go:169`)
 - Main has a blocklist input-length test for sign-in names. (`pkg/localuser/blocklist/blocklist_test.go:115`)
-- Main has a check make target that gates this change. (`Makefile:14 (target check)`)
+- Main has a check make target that gates this change. (`Makefile:14`)
 
 ## ADR check
 
@@ -137,12 +137,12 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 1. Does the PM confirm that a SCIM PATCH is atomic and a Bulk request is per operation? Decides: PM.
    - Options: PATCH atomic, Bulk per operation; Per-row commit for both.
-   - Recommended: PATCH atomic, Bulk per operation Reason: RFC 7644 defines PATCH as atomic, and a partial commit would surprise the client. Provisional design and specs already use this rule.
+   - Recommended: PATCH atomic, Bulk per operation Reason: RFC 7644 defines PATCH as atomic, and a partial commit would surprise the client.
 2. Which durable alert channel replaces the interim audit entry plus WARN line after events exist? Decides: PM.
    - Options: Keep audit plus WARN, switch channel later without changing callers; Add a pending-alert table with retry now.
-   - Recommended: Keep audit plus WARN, switch channel later without changing callers Reason: Provisional: the audit entry is the durable record and the WARN line is a view of it, so no alert is lost.
+   - Recommended: Keep audit plus WARN, switch channel later without changing callers Reason: The audit entry is the durable record and the WARN line is a view of it, so no alert is lost.
 
-Not spec-ready: a code check fails: path `docs/guides/idp-membership-and-alerts.md` (.tasks[2].items[0].text) does not exist in the checkout; use an existing path, or name it as new ("add the new file docs/guides/idp-membership-and-aler; a code check fails: test `TestApplyIdentityProviderMemberships` (.tasks[0].items[0].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: test `TestIdentityProviderAudit` (.tasks[0].items[1].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence; a code check fails: and 6 more.
+Not spec-ready: a code check fails: main_facts[3]: "where" is not file:line (func Name).
 
 Questions considered and answered:
 

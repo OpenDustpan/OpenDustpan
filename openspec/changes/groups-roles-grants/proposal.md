@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:159` (Groups, roles and grants).
@@ -11,7 +11,7 @@ Roadmap: `docs/roadmap.md:159` (Groups, roles and grants).
 The user path this change must make work:
 
 1. **API.** Create a group, add a member and grant writer on collection A with `POST /api/server/namespaces/{namespace}/collections/{collection}/grants`
-2. **CLI.** Run `pulumi up` and `tofu apply` with an access token on a unit of collection A and on a unit of collection B
+2. **CLI.** Run `pulumi up` and `tofu apply` with a personal access token of a non-admin person on a unit of collection A and on a unit of collection B
 3. **CLI.** Run `pulumi stack export` and `tofu state pull` with a viewer grant
 4. **API.** Revoke the grant with `DELETE /api/server/grants/{id}` and retry the CLI command with the same token
 5. **API.** Read the access-review export with `GET /api/server/namespaces/{namespace}/collections/{collection}/access-review`
@@ -79,7 +79,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Write a failing e2e for viewer read and write with `pulumi stack expor" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: task "Fix each gap that the e2e steps find in the grant check" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part>"; a code check fails: task "Update docs/guides/roles-and-grants.md and docs/guides/access-review.m" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: and 2 more.
+none
 
 Questions considered and answered:
 

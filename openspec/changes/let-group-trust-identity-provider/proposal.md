@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #615, #617, #619, #626.
@@ -138,7 +138,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
    - Options: API only; API plus flag, file and database layers.
    - Recommended: API only for on and off. Reason: A fresh step cannot apply to a flag or a file value, and no ADR names the allowed layers. Provisional decision in force: API only. The owner confirms or changes it.
 
-Not spec-ready: a code check fails: task "Add the new route PUT and DELETE /api/server/groups/{id}/trust. Its ac" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: task "Add the e2e step against the real server with a site administrator acc" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: threat 1 (A caller without reach or a fresh step s): no guard and hostile test for encode or contain, limit; a code check fails: and 2 more.
+Not spec-ready: a code check fails: task "Add the e2e step against the real server, with the access token of a s" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part.
 
 Questions considered and answered:
 
@@ -146,6 +146,6 @@ Questions considered and answered:
 - How does a new installation take the schema change? The project rule says one baseline per dialect until the first tag, so no upgrade path exists.
 - Where does full sync end suspended rows? ADR 70 decision 17 makes each removal final. Suspension is a separate change.
 - Where does the fresh step of an SSO person come from? From the protocol of the method (ADR 320 decision 16). OAuth and trusted-header persons use a factor of OpenDustpan (ADR 301 decision 1). An agent never has one (ADR 354).
-- Which setting layers may set full sync? Provisional decision for this draft: the API only, because a fresh step cannot apply to a flag or file value. It is a provisional decision, listed as an open question for the owner to confirm; implementation uses it until the owner answers.
+- Which setting layers may set full sync? Provisional decision for this draft: the API only, because a fresh step cannot apply to a flag or file value. It is listed as an open question for the owner to confirm.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

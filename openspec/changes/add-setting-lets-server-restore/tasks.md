@@ -18,7 +18,7 @@
 ## 4. definition of done
 
 - [ ] 4.1 Route test lists the settings route with its actions. Check: Route test passes
-- [ ] 4.2 E2E: console session changes the setting, then a restore runs over TLS. Check: `make e2e`
+- [ ] 4.2 E2E: PATCH /api/dustpan/v1/settings with a console session cookie (fresh step, never an access token), then POST /api/server/restores with the same session, over TLS. Check: `make e2e`
 - [ ] 4.3 Add the docs page and the report listing. Check: Docs page and report show the value
 - [ ] 4.4 Usability walk from the docs page alone. Check: Each error names one command
 - [ ] 4.5 Run full checks. Check: `make check` has zero findings

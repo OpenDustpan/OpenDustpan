@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:149` (MFA).
@@ -119,7 +119,6 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 301 extends decision 1; ADR 320 extends decision 1; ADR 339 extends decision 6; ADR 354 extends. Chain to the end: ADR 301, ADR 320, ADR 339, ADR 354, ADR 332.
 - Current rule: this ADR, with ADR 301, 320, 339, 354.
 - Quote: "A fresh authentication. A fresh authentication is a built-in MFA step (ADR 46) or a new authentication at the SSO identity provider (ADR 71). It is fresh when its age is not above the window."
-- Quote: "One window everywhere (owner). The installation has one setting, `freshAuthSeconds`, with the default 900 (15 minutes). Each step that an ADR names as "fresh MFA", "a fresh MFA step" or "a fresh authentication" uses it: token creation and rotation, a secret reveal, the changes of ADR 70 decisions 16"
 - Quote: "0 asks every time (owner, 2026-10-18). A window of 0 asks for a fresh authentication at each step. No value turns the check off. The other values are 60 to 900 seconds. A window of 0 is the strictest value, so a change to 0 needs no fresh authentication. A change to a longer window needs one, as ADR"
 - Effect: The change uses the one fresh-authentication window and the 403 error for token creation, token rotation, and reveal.
 - Conflict: none.
@@ -130,7 +129,6 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 297 changes decisions 5, 17, 19, 20 and 21; ADR 301 extends decision 1; ADR 312 changes decision 29; ADR 320 extends decision 21; ADR 333 changes decision 16; ADR 333 extends decision 20; ADR 333 extends decision 23. Chain to the end: ADR 297, ADR 301, ADR 312, ADR 320, ADR 333, ADR 332.
 - Current rule: this ADR, with ADR 297, 301, 312, 320, 333.
 - Quote: "A passkey or TOTP as the second factor. When built-in MFA is on (ADR 46), a password sign-in makes a pending sign-in, not a session (RFC 21 P7). The person then gives a passkey (user verification `preferred`), a TOTP cod"
-- Quote: ""Require MFA" applies to the password (owner, through RFC 21 P7). The installation setting `mfa.requireForAll` makes each password sign-in ask for a second factor. While an SSO provider exists and `signIn.localPassword.e"
 - Effect: A password sign-in creates a pending sign-in and requires a passkey or TOTP second factor when require MFA applies.
 - Conflict: none.
 
@@ -140,16 +138,14 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 301 extends decision 1; ADR 333 extends decision 4. Chain to the end: ADR 301, ADR 333.
 - Current rule: this ADR, with ADR 301, 333.
 - Quote: "One session generation for each person. Each principal has a session generation, a count that starts at 1. Each cookie carries the generation that the issue read. A cookie authenticates and refreshes only while its gener"
-- Quote: "Sign-in paths. - **MFA.** A pending sign-in is a sealed cookie (decisions of the owner, item 1). It cannot authenticate a request. The factor lock of the person counts the wrong factors (ADR 285 decision 14). A good fact"
 - Effect: A pending sign-in cannot authenticate a request, wrong factors count under the factor lock, and the generation check stays.
 - Conflict: none.
 
 **ADR 301: A passkey, TOTP or SSH signature gives the fresh step to a person who signed in with OAuth or a trusted header** (owner-tagged (all decisions)).
 
-- Decisions that apply: 1 (current), 3 (current), 4 (current), 11 (current), 12 (current).
+- Decisions that apply: 11 (current), 12 (current).
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
-- Quote: "The step belongs to one sign-in (PM). The server records the fresh step in the sealed access cookie of the sign-in that did it, and in no other sign-in. The kind of the step is one of the kinds of ADR 297 decision 1 (`pa"
 - Quote: "Only when MFA is on (PM). ADR 56 decision 5 holds. On an installation with MFA off, the server asks for no fresh step, as for every other method. The rules of this ADR apply when MFA is on."
 - Effect: The fresh step is bound to the sealed access cookie of one sign-in; applies only when MFA is on.
 - Conflict: none.
@@ -165,7 +161,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Add e2e step against the real CLI with require MFA on." runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part>"; a code check fails: the state diagram after this change: `NoSession` does not resolve on main; use the name main has, or mark it NEW.
+Not spec-ready: a code check fails: route `POST /api/dustpan/v1/me/tokens` (.tasks[2].items[0].text) is not in the API description or the route table; use an existing route (nearest: /api/server/tokens/{}, /api/server/tokens, /api/serve; a code check fails: the state diagram after this change: `SignedOut` does not resolve on main; use the name main has, or mark it NEW.
 
 Questions considered and answered:
 

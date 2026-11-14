@@ -4,10 +4,10 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add table-driven failing tests for protected, trusted, full-sync, closed, closed-plus-trusted and closed-plus-full-sync groups for each source, plus unmapped values and repeat adds. Check: `go test ./pkg/principal -run TestApplyIdentityProviderMemberships -count=1` fails on main.
-- [ ] 1.2 Add failing audit tests for refused and accepted changes, audit failure and local-source retention. Check: `go test ./pkg/principal -run TestIdentityProviderAudit -count=1` fails on main.
-- [ ] 1.3 Add failing route tests for server:manage-sign-in and the fresh step. Check: `go test ./internal/api/... -run TestIdpConfigAction -count=1` fails on main.
-- [ ] 1.4 Add a failing race test for a concurrent group close or trust change. Check: `go test ./pkg/principal -run TestIdentityProviderRace -count=1` fails on main.
+- [ ] 1.1 Add table-driven failing tests (NEW) for protected, trusted, full-sync, closed, closed-plus-trusted and closed-plus-full-sync groups for each source, plus unmapped values and repeat adds. Check: `go test ./pkg/principal -run TestApplyIdentityProviderMemberships -count=1` (NEW test) fails on main.
+- [ ] 1.2 Add failing audit tests (NEW) for refused and accepted changes, audit failure and local-source retention. Check: `go test ./pkg/principal -run TestIdentityProviderAudit -count=1` (NEW test) fails on main.
+- [ ] 1.3 Add failing route tests for server:manage-sign-in and the fresh step. Check: `go test ./internal/api/... -run TestIdpConfigAction -count=1` (NEW test) fails on main.
+- [ ] 1.4 Add a failing race test (NEW) for a concurrent group close or trust change. Check: `go test ./pkg/principal -run TestIdentityProviderRace -count=1` (NEW test) fails on main.
 
 ## 2. Implementation
 
@@ -23,6 +23,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Write docs/guides/idp-membership-and-alerts.md and update the protected-groups guide sentence. Check: Each command on the page runs as written.
+- [ ] 4.1 Add the new file docs/guides/idp-membership-and-alerts.md and update the protected-groups guide sentence. Check: Each command on the page runs as written.
 - [ ] 4.2 Full e2e of a refused SCIM add and a refused claim. Check: BLOCKED by the SCIM adapter and the sign-in claim adapters, which are not on main.
 - [ ] 4.3 Run the full checks and the usability check from the docs page alone. Check: `make check` reports zero findings.

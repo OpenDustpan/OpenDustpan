@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:171` (Show token expiry warnings in API and CLIs.).
@@ -90,14 +90,20 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. Which field or header of the tool-compatible responses can make the real Pulumi CLI and OpenTofu show a warning, and with which text? Decides: PM.
-   - Options: Send a custom response header and use a wrapper script; Use a body field that each CLI already prints; Show the warning only in the token reads, the console banner and first-party command output.
-   - Recommended: Show the warning only in the token reads, the console banner and first-party command output until a spike proves a field the real CLIs render. Reason: ADR 53 decision 11 requires a CLI warning but names no field. The pack proves no CLI behavior for a custom header.
-2. Do the threshold settings keys exist, and what do negative, zero and inverted values mean? Decides: PM.
-   - Options: Reuse existing keys; 0 disables a window; negative is refused; Add new keys with the same rule.
-   - Recommended: Reuse existing keys if present; 0 disables a window; negative is refused; urgent wins when both match. Reason: ADR 69 decision 5 says both are settings but the pack names no keys.
+none
 
-Not spec-ready: a code check fails: route `/api/server` (.quality[0].scope) is not in the API description or the route table; use an existing route (nearest: /api/server/tokens/{}, /api/server/tokens, /api/server/token-policy/sweep), or; a code check fails: contract method newWarningState: no requirement or scenario names it.
+Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
+
+1. Which field or header of the tool-compatible responses can make the real Pulumi CLI and OpenTofu show a warning, and with which text?
+   - Options: Send a custom response header and use a wrapper script; Use a body field that each CLI already prints; Show the warning only in the token reads, the console banner and first-party command output.
+   - Provisional decision (owner review 14 Nov): Show the warning only in the token reads, the console banner and first-party command output until a spike proves a field the real CLIs render.
+   - Reason: ADR 53 decision 11 requires a CLI warning but names no field. The pack proves no CLI behavior for a custom header. Benchmark: AWS IAM shows expiring credential warnings in the console and the API, and leaves CLI text to the client.
+   - Persona impact: A developer sees the warning in the API and the console in every option. Escape hatch: The docs page states which surfaces show the warning, and a later change adds the CLI carriage.
+2. Do the threshold settings keys exist, and what do negative, zero and inverted values mean?
+   - Options: Reuse existing keys; 0 disables a window; negative is refused; Add new keys with the same rule.
+   - Provisional decision (owner review 14 Nov): Reuse existing keys if present; 0 disables a window; negative is refused; urgent wins when both match.
+   - Reason: ADR 69 decision 5 says both are settings but the pack names no keys. Benchmark: AWS Organizations refuses negative periods at the settings API.
+   - Persona impact: No persona loses access. A refused PATCH names the valid range. Escape hatch: An administrator reverts the settings PATCH. The next read uses the old value.
 
 Questions considered and answered:
 

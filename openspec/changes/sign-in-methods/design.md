@@ -73,29 +73,32 @@ Data flow and trust boundaries:
 
 ```mermaid
 flowchart LR
- subgraph Browser[Untrusted client]
- B[Browser]
- end
- subgraph Proxy[Operator proxy]
- P[Proxy]
- end
- subgraph Server[OpenDustpan]
- S[Sign-in service]
- D[(One-time ID store)]
- end
- subgraph IdP[Identity provider]
- I[IdP]
- end
- B-->P-->S
- S-->D
- S<-->I
+ B[Browser] --> P[Proxy]
+ P --> S[Sign-in service]
+ S --> D[(One-time ID store)]
+ S --> I[Identity provider]
+ I --> S
 ```
 
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
 | Proxy to server | S | A client forges the trusted header. | boundary check | Signed token and peer address on the list | TestTrustedHeaderProxyGate |
+| Proxy to server | S | A client forges the trusted header. | encode or contain | Only the peer socket address is read; X-Forwarded-For is ignored | TestTrustedHeaderSpoofedForwardedFor |
+| Proxy to server | S | A client forges the trusted header. | limit | The session has no more reach than the person holds | TestHeaderSessionReach |
+| Proxy to server | S | A client forges the trusted header. | authorize at point of use | Provider on and person enabled are checked at each sign-in | TestHeaderDisabledPerson |
 | Proxy to server | S | A client forges the trusted header. | fail closed | Off by default; deny on unknown | TestTrustedHeaderDefaultOff |
 | IdP to server | T | A changed or wrapped SAML assertion. | boundary check | Pinned certificate signature check | TestSamlRefusals |
+| IdP to server | T | A changed or wrapped SAML assertion. | encode or contain | Only the signed element is read; a wrapped element is refused | TestSamlWrappedSignature |
+| IdP to server | T | A changed or wrapped SAML assertion. | limit | Assertion age of 5 minutes at most | TestSamlOldAssertion |
+| IdP to server | T | A changed or wrapped SAML assertion. | authorize at point of use | Audience and recipient checked for the provider | TestSamlIdpStartedChecks |
 | IdP to server | T | A changed or wrapped SAML assertion. | fail closed | Refuse on store failure | TestBrowserStoreOutageFailsClosed |
-| IdP to server | R | A refused sign-in leaves no record. | authorize at point of use | One audit entry for each refusal | TestAuditEntryPerRefusal |
+| IdP to server | R | A refused sign-in leaves no record. | boundary check | Each refusal passes one function that writes the entry | TestAuditEntryPerRefusal |
+| IdP to server | R | A refused sign-in leaves no record. | encode or contain | CR and LF removed from logged values | TestAuditEntryStripsNewlines |
+| IdP to server | R | A refused sign-in leaves no record. | limit | One entry for each refusal, with a size bound on fields | TestAuditEntryFieldBound |
+| IdP to server | R | A refused sign-in leaves no record. | authorize at point of use | Only the audit read action reads the entries | TestAuditReadAction |
+| IdP to server | R | A refused sign-in leaves no record. | fail closed | If the entry cannot be written, the sign-in is refused | TestAuditWriteFailureRefuses |
+| Browser to server | D | A flood of unsolicited requests fills the ID store. | boundary check | Reject an unsolicited assertion that fails the first checks before it is stored | TestUnsolicitedRejectedBeforeStore |
+| Browser to server | D | A flood of unsolicited requests fills the ID store. | encode or contain | IDs are stored with placeholders and a length bound | TestOneTimeIdLengthBound |
 | Browser to server | D | A flood of unsolicited requests fills the ID store. | limit | Size bound and expiry delete | TestOneTimeIdStoreBound |
+| Browser to server | D | A flood of unsolicited requests fills the ID store. | authorize at point of use | Unsolicited storage only where IdP-started is on for the provider | TestUnsolicitedOffByDefault |
+| Browser to server | D | A flood of unsolicited requests fills the ID store. | fail closed | Refuse when the bound is reached | TestOneTimeIdStoreFull |

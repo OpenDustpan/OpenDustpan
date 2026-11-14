@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:201` (Break-glass mode 2).
@@ -157,7 +157,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
    - Options: A second valid request ends the first session; Refuse until the first ends.
    - Recommended: A second valid request ends the first session Reason: An operator who lost the first session recovers at once. Both uses are audited.
 
-Not spec-ready: a code check fails: task "Add an e2e step with POST /api/dustpan/v1/recovery/redeem (NEW route) " runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: threat 1 (An attacker forges a recovery request.): no guard and hostile test for encode or contain, limit, authorize at point of use; a code check fails: threat 2 (An attacker replays a used request.): no guard and hostile test for boundary check, encode or contain, limit, fail closed; a code check fails: and 2 more; the change conflicts with ADR 142: an RFC comes first; the change conflicts with ADR 46: an RFC comes first.
+Not spec-ready: the change conflicts with ADR 142: an RFC comes first; the change conflicts with ADR 46: an RFC comes first.
 
 Questions considered and answered:
 

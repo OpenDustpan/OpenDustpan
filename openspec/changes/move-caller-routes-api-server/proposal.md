@@ -1,42 +1,42 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #1264, #1497.
 
 ## Why
 
-**Persona: developer.** A developer manages their own sign-in state through the API: they check what they can do and they make and revoke their own access tokens. Today the preferences routes sit at /api/dustpan/v1/me/preferences, while access, grants and tokens still sit at /api/server/caller. One caller needs two prefixes, and the API description gate leaves those routes outside the description.
+**Persona: developer.** A developer manages their own sign-in state through the API: they check what they can do and they make and revoke their own access tokens. Today the preferences routes sit at /api/dustpan/v1/me/preferences, while access, grants and tokens still sit at /api/server/caller/access, /api/server/caller/grants and /api/server/caller/tokens. One caller needs two prefixes, and the API description gate leaves those routes outside the description.
 
 The user path this change must make work:
 
-1. **Docs page.** Read the account docs page and call GET /api/dustpan/v1/me/access and GET /api/dustpan/v1/me/grants.
-2. **API.** List, create, rotate and delete own tokens through /api/dustpan/v1/me/tokens.
+1. **Docs page.** Read the account docs page. It names the new paths /api/dustpan/v1/me/access and /api/dustpan/v1/me/grants (both NEW paths, see what_changes).
+2. **API.** List, create, rotate and delete own tokens through /api/dustpan/v1/me/tokens (NEW path) with a personal access token.
 3. **CLI.** Use the token with the Pulumi CLI and OpenTofu against the server.
-4. **Console.** Use the console account views that read the same /me routes.
+4. **Console.** Change the console to call the new paths. The console change merges before the next server tag.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| The caller calls an old /api/server/caller path after the move. | 404 from the router. The server keeps no alias and no redirect. | `curl -H "Authorization: Bearer $TOKEN" https://server/api/dustpan/v1/me/access` |
-| The caller calls a /me route with no access token. | 401 with a stable error code. | `curl -H "Authorization: Bearer $TOKEN" https://server/api/dustpan/v1/me/access` |
+| The caller calls an old caller path after the move. | 404 from the router. The server keeps no alias and no redirect. | `curl -H "Authorization: Bearer $TOKEN" https://server/api/dustpan/v1/me/access` |
+| The caller calls a me route with no access token. | 401 with a stable error code. | `curl -H "Authorization: Bearer $TOKEN" https://server/api/dustpan/v1/me/access` |
 | The caller sends cursor, limit, a bad pageToken or a pageSize above the maximum. | 400 with a stable error code. The message names pageSize and pageToken. | `curl -H "Authorization: Bearer $TOKEN" "https://server/api/dustpan/v1/me/tokens?pageSize=50"` |
 
 Evidence for the claims above:
 
 - The caller routes live in the installation adapter. Proof: path internal/api/server exists; issue 1264 lists GET /api/server/caller/access, GET /api/server/caller/grants and the token routes under /api/server/caller/tokens
 - The mount helper for v1 paths is in pkg/dustpan. Proof: code fact: mountV1 at pkg/dustpan/dustpan.go:3636
-- The not-moved list and the fail-closed test exist. Proof: main: TestClassCheckFailsClosed at pkg/dustpan/apidesc_test.go:420; path pkg/dustpan/apidesc_classes_test.go exists
+- The fail-closed test of the not-moved list exists. Proof: main: TestClassCheckFailsClosed at pkg/dustpan/apidesc_test.go:420; path pkg/dustpan/apidesc_classes_test.go exists
 - Coverage rows live in e2e/coverage.go. Proof: path e2e/coverage.go exists; issue 1264 asks to move each route with its row
 - The caller routes are in the route table of main. Proof: main routes: ANY /api/server/caller/tokens, /api/server/caller/tokens/{}, /api/server/caller/access and /api/server/caller/grants
 
 ## What Changes
 
-- GET /api/dustpan/v1/me/access replaces GET /api/server/caller/access
-- GET /api/dustpan/v1/me/grants replaces GET /api/server/caller/grants
-- GET and POST /api/dustpan/v1/me/tokens replace the token list and create
-- DELETE /api/dustpan/v1/me/tokens/{id} and the rotate route replace the old ones
+- NEW path GET /api/dustpan/v1/me/access replaces GET /api/server/caller/access
+- NEW path GET /api/dustpan/v1/me/grants replaces GET /api/server/caller/grants
+- NEW paths GET and POST /api/dustpan/v1/me/tokens replace the token list and create under /api/server/caller/tokens
+- NEW path DELETE /api/dustpan/v1/me/tokens/{id} and the rotate route replace the old ones
 - The old paths stop being served, with no alias
 - The six entries leave the not-moved list; the description, e2e rows and docs follow
 
@@ -74,7 +74,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "One prefix for the tool-neutral REST API. Each route of the tool-neutral REST API moves under `/api/dustpan/v1/`."
 - Quote: "No path holds the word "server"."
 - Quote: "Lists** page with an opaque cursor. A request takes `pageSize` and `pageToken`."
-- Effect: The caller routes move under the v1 prefix with no alias. Paths hold no word server. Moved lists use pageSize, pageToken and nextPageToken. Decision 6 (Idempotency-Key) applies to the mutating routes, and the pack shows only its scope start, so this change adds no rule beyond the header being accepted.
+- Effect: The caller routes move under the v1 prefix with no alias. Paths hold no word server. Moved lists use pageSize, pageToken and nextPageToken. The mutating routes accept the Idempotency-Key header as decision 6 says.
 - Conflict: none.
 
 **ADR 276: Every error answer has a code and its arguments** (owner-tagged: decision 1, 3).
@@ -91,15 +91,15 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 1. What are the default pageSize and the maximum pageSize of the moved token list? Decides: PM.
    - Options: default 50, maximum 200; default 20, maximum 100.
-   - Recommended: default 50, maximum 200 Reason: The ADRs fix the names and give no numbers. Tests read the declared values from the API description, so the numbers can change in one place.
+   - Recommended: default 50, maximum 200 Reason: The ADRs fix the names and give no numbers. Tests read the declared values from the API description, so the numbers change in one place.
 
-Not spec-ready: a code check fails: route `/api/server/caller` (.summary) is not in the API description or the route table; use an existing route (nearest: /api/server/caller/tokens/{}, /api/server/caller/tokens, /api/server/caller/gran; a code check fails: route `GET /api/dustpan/v1/me/access` (.user_path[0].step) is not in the API description or the route table; use an existing route (nearest: /api/server/caller/access, /api/dustpan/v1/me/preferences, ; a code check fails: route `GET /api/dustpan/v1/me/grants` (.user_path[0].step) is not in the API description or the route table; use an existing route (nearest: /api/server/principals/{}/grants/{}, /api/server/principals; a code check fails: and 6 more.
+Not spec-ready: a code check fails: route `/api/server/caller` (.tasks[1].items[1].check) does not resolve on main; use the name main has, or mark it NEW in the same sentence.
 
 Questions considered and answered:
 
 - Do old paths stay as aliases? No. ADR 210 decision 1: no alias and no redirect, because no tag shipped them.
 - Do cursor and limit keep their names? No. ADR 210 decision 10 names pageSize and pageToken.
-- Do the moved mutating routes take Idempotency-Key? Yes, by ADR 210 decision 6. The change uses the shared idempotency mechanism and sets no new numbers.
+- Do the moved mutating routes take Idempotency-Key? Yes, by ADR 210 decision 6, through the shared idempotency mechanism.
 - Do error answers carry codes? Yes. ADR 276 decisions 1 and 3.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

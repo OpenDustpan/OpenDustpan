@@ -69,11 +69,11 @@ Tests:
 - `pkg/access/group_limits_test.go` names `access.CheckGroupGrants`
 - `internal/api/server/principals_test.go` names `access.CheckGroupGrants`
 - `pkg/tempadmin/tempadmin_test.go` names `gate.ErrInvalid`
+- `internal/cost/cost_test.go` names `gate.ErrInvalid`
 - `pkg/outputshare/outputsharetest/mem_test.go` names `gate.ErrInvalid`
-- `pkg/outputshare/outputshare_test.go` names `gate.ErrInvalid`
-- `pkg/manuallock/manuallock_test.go` names `identity.Authorizer`
 - `internal/outputsharesvc/outputsharesvc_test.go` names `identity.Authorizer`
-- `pkg/outputshare/outputshare_test.go` names `identity.Authorizer`
+- `pkg/manuallock/manuallock_test.go` names `identity.Authorizer`
+- `internal/outputsharesvc/checker_test.go` names `identity.Authorizer`
 - `internal/authgate/authgate_test.go` names `gate.ErrLimited`
 
 ADRs:
@@ -83,6 +83,6 @@ ADRs:
 - `docs/adr/0141-freeze-schedules.md` names `gate.ErrInvalid`
 - `docs/adr/0051-collections-of-units.md` names `identity.Authorizer`
 - `docs/adr/0273-output-sharing-rules-and-the-read-outputs-action.md` names `identity.Authorizer`
-- `docs/adr/0013-separate-tool-models-shared-read-model-and-access.md` names `identity.Authorizer`
+- `docs/adr/0052-groups-roles-grants-and-access-review.md` names `identity.Authorizer`
 - `docs/adr/0230-gate-configuration-actions-routes-errors-and-audit.md` names `gate.ErrLimited`
 - `docs/adr/0223-access-limits-cedar-forbid-policies-for-each-scope.md` names `gate.ErrLimited`

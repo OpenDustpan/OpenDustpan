@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #897, #952.
@@ -15,7 +15,7 @@ The user path this change must make work:
 3. **API.** Try a locked key, an unknown key, a weaker change with no fresh step, a missing Idempotency-Key and a stale revision. Read each refusal.
 4. **Console.** Open the settings page of a scope. The console reads the same resource and shows locked keys with no control.
 5. **Docs page.** Read the settings guide and the note on the temporary administrator session limit.
-6. **E2e.** Run the settings step with the real server: a patch with a console session that holds a fresh step, then a patch with an access token that is refused for a weaker value.
+6. **E2e.** Run the settings step against the real server: `PATCH /api/dustpan/v1/settings` with a console session cookie that holds a fresh step, then the same weaker patch with an access token, which is refused with 403.
 
 Errors the person may hit, and the one command that helps:
 
@@ -63,9 +63,8 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The error codes settings.key-unknown, settings.locked, settings.static-only and settings.value-invalid exist. (`internal/errcode/catalog_settings.go:7 (func catalog)`)
-- The temporary administrator package exists. (`pkg/tempadmin/authenticator.go:71 (func Next)`)
-- The bootstrap admin code exists in the tempadmin package. (`pkg/tempadmin/authenticator.go:137 (func AdminSubjects)`)
+- The error codes settings.key-unknown, settings.locked, settings.static-only and settings.value-invalid exist. (`internal/errcode/catalog_settings.go:7`)
+- The temporary administrator package exists. (`pkg/tempadmin/authenticator.go:71`)
 
 ## Owner decisions that apply
 
@@ -93,7 +92,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 295 changes decision 12. Chain to the end: ADR 295.
 - Current rule: this ADR, with ADR 295.
 - Quote: "One record lifetime. A record and its token end at the same time: 24 hours after the create, or the maximum of the token policy when that is shorter."
-- Effect: The setting changes the 24 hours to a 1 hour default. Owner decision, 13 Nov 2026 (queue P12, provisional) sets it. This change carries the amendment text of decision 10 for the owner to confirm; the limit key is declared in the same pull request as that amendment. The host reset follows decisions 2, 3 and 5: it refuses in mode 3, needs a reason and obeys the off switch.
+- Effect: The setting changes the 24 hours to a 1 hour default. Owner decision, 13 Nov 2026 (queue P12, provisional) sets it. This change carries the amendment text of decision 10 for the owner to confirm; the limit key ships with that amendment. The host reset follows decisions 2, 3 and 5.
 - Conflict: rfc_needed.
 
 **ADR 219: A lock in the static layer can turn a feature off (owner)** (owner-tagged (all decisions)).
@@ -145,16 +144,16 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: main_facts[2]: `pkg/tempadmin/authenticator.go:137` is in func Decorator.Now, not AdminSubjects; a code check fails: task "Add an e2e step with a session that holds a fresh step and a token tha" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: design decision "Temporary administrator session limit": a limit with no number; give the number, the unit and the scope; a code check fails: and 4 more.
+Not spec-ready: a code check fails: design decision "Temporary administrator session limit": a limit with no number; give the number, the unit and the scope.
 
 Questions considered and answered:
 
 - What is the shape of the API? ADR 212 decision 7 and ADR 219 decision 3.
 - What ends a temporary administrator record? Owner decision, 13 Nov 2026 (queue P12, provisional): the shorter of the setting and the token policy maximum.
-- Does ADR 245 decision 10 block the limit? Its text says 24 hours. The change carries the amendment text. The key ships with the owner's confirmation of the amendment, so tasks and specs do not contradict the ADR.
+- Does ADR 245 decision 10 block the limit? Its text says 24 hours. The change carries the amendment text. The key ships with the owner's confirmation of the amendment.
 - What if the audit write fails? The audit entry is in the same transaction, so the whole PATCH fails.
 - How does an operator recover from a bad stored limit? A null PATCH, or the host reset option with a reason.
-- Can an access token or an agent make a weaker change? No. ADR 227 decision 6 and ADR 354 say they never get a fresh step. A weaker patch with a token gets 403.
+- Can an access token or an agent make a weaker change? No. ADR 227 decision 6 and ADR 354 say they never get a fresh step.
 - Do audit entries leak sensitive values? No. A sensitive key is static-only and cannot be patched, and audit entries mask any sensitive value.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

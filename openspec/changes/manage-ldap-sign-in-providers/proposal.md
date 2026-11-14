@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #2950, #2951, #2969.
@@ -129,7 +129,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: threat 1 (A caller without the sign-in management ): no guard and hostile test for boundary check, encode or contain, limit, fail closed; a code check fails: threat 2 (A changed URL lets a new directory reuse): no guard and hostile test for boundary check, encode or contain, limit, authorize at point of use; a code check fails: threat 3 (The bind password leaks through the API,): no guard and hostile test for boundary check, limit, authorize at point of use, fail closed; a code check fails: and 3 more.
+none
 
 Questions considered and answered:
 

@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #1325.
@@ -84,11 +84,16 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. Do the Pulumi CLI decrypt routes need a fresh authentication? Decides: owner.
-   - Options: Add fresh check to Pulumi CLI decrypt routes; Leave decrypt routes without fresh check and record why.
-   - Recommended: Leave decrypt routes without fresh check and record why Reason: ADR 227 decision 2 lists the steps that need fresh proof and does not name decrypt routes. The Pulumi CLI sends decrypt calls with an access token, which never gives fresh authentication.
+none
 
-Not spec-ready: a code check fails: threat 1 (A caller with a stale session or an acce): no guard and hostile test for encode or contain, limit; a code check fails: threat 2 (A person sets a longer narrow window to ): no guard and hostile test for encode or contain, authorize at point of use, fail closed.
+Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
+
+1. Do the Pulumi CLI decrypt routes need a fresh authentication?
+   - Options: Add fresh check to Pulumi CLI decrypt routes; Leave decrypt routes without fresh check and record why.
+   - Provisional decision (owner review 14 Nov): Leave decrypt routes without fresh check and record why
+   - Reason: ADR 227 decision 2 lists the steps that need fresh proof and does not name decrypt routes. The Pulumi CLI sends decrypt calls with an access token, which never gives fresh authentication. Benchmark: AWS: sensitive acts ask to sign in again, and CLI calls with access keys do not.
+   - Persona impact: Asking on decrypt would break each CLI run with an access token; leaving it out keeps the current path. Escape hatch: Decrypt routes stay unchanged. The reveal step keeps its fresh check.
+   - Owner-tagged ADRs involved: ADR 227 (their words do not change).
 
 Questions considered and answered:
 
