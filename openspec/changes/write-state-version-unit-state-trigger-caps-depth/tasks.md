@@ -4,10 +4,10 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing conformance cases for per-unit and per-source caps on trigger.Store.Put. Check: trigger storetest cap case fails on main via POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with access token: save 21st trigger fails with cap 20, save 51st follower fails with cap 50
-- [ ] 1.2 Add failing conformance cases for PUT count rules and lowered caps. Check: trigger storetest PUT case fails on main via PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id} with access token: same unit and source succeeds at cap, moved source recounts, lowered cap keeps rows
-- [ ] 1.3 Add failing conformance cases for save-time cycle refusal with serialized namespace writes. Check: trigger storetest cycle case fails on main via POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with access token: closing save names loop path, concurrent closing saves serialize
-- [ ] 1.4 Add failing tests for the depth counter in the job origin and the refusal above depth 10. Check: dispatcher test fails on main via POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}/fire with access token: depth 11 refuses with audit entry and log line, missing origin starts at zero, manual fire resets, audit failure keeps refusal
+- [ ] 1.1 Add failing conformance cases for per-unit and per-source caps on trigger.Store.Put. Check: trigger conformance cap test fails on main: 21st trigger and 51st follower refused with the cap number
+- [ ] 1.2 Add failing cases for PUT count rules and lowered caps. Check: trigger conformance PUT test fails on main: same source succeeds at cap, moved source recounts
+- [ ] 1.3 Add failing cases for cycle refusal with serialized writes. Check: trigger conformance cycle test fails on main: closing save names the loop, concurrent closing saves serialize
+- [ ] 1.4 Add failing tests for the depth counter and the refusal above 10. Check: BLOCKED by write-state-version-unit-state-follows-trigger-start, which adds the trigger start path; then dispatcher depth test with POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}/fire and a namespace administrator access token: depth 11 refused with audit entry and log line, manual fire resets
 
 ## 2. Side effects (computed from main)
 
@@ -16,8 +16,8 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Wire caps, cycle check, and depth guard through the trigger routes and the job dispatcher. Check: PUT trigger route returns 422 with cap number and loop path via PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id} with access token, settings GET shows effective cap values
-- [ ] 3.2 Prove per-adapter serialization of trigger writes of one namespace. Check: conformance suite passes the concurrent closing-save case on the in-memory, SQLite, and PostgreSQL adapters
-- [ ] 3.3 Add e2e steps against the real server for caps, cycle refusal, and depth stop. Check: e2e against real server via POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with access token: 21st trigger refused, 51st follower refused, loop save refused, chain stops at depth 10 with audit entry
-- [ ] 3.4 Write the docs page for trigger caps, cycle errors, and the depth guard. Check: docs page for trigger limits and depth guard passes `make docs-lint`
-- [ ] 3.5 Run the full definition of done: wiring, routes with actions, e2e, docs, usability check from the docs page alone. Check: `make check` reports zero findings after wiring routes POST and PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with access token
+- [ ] 3.1 Wire caps, cycle check and depth guard through the trigger routes and the job dispatcher. Check: PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id} with a namespace administrator access token returns 422 with cap number or loop path
+- [ ] 3.2 Prove serialization on each adapter. Check: conformance suite passes the concurrent closing-save case on SQLite and PostgreSQL
+- [ ] 3.3 Add an e2e step against the real server. Check: make e2e: with a namespace administrator access token, POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers refuses the 21st trigger and PUT refuses a loop save; the depth 10 step is BLOCKED by write-state-version-unit-state-follows-trigger-start
+- [ ] 3.4 Write the docs page for caps, cycle errors and the depth guard. Check: make docs-lint passes on the page
+- [ ] 3.5 Run the full definition of done with a usability check from the docs page alone. Check: make check reports zero findings

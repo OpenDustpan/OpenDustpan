@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #1211.
@@ -32,7 +32,7 @@ Evidence for the claims above:
 ## What Changes
 
 - Dispatcher.Upstream verifies the final state version, enforces one plan per trigger and version, returns ErrVersionMismatch for an older version, and records per-trigger start errors.
-- OpenTofu final-version write sends the upstream event; Pulumi sends nothing in this slice.
+- The OpenTofu final-version write sends the upstream event from publishUnitState, inside the fenced transaction. No observer port is added. Pulumi sends nothing in this slice.
 - Follows plan jobs carry the trigger ID and check each source output read against the current grants of the last saver.
 - Follows triggers publish a declared dependency edge for the graph and safe delete.
 - Manual fire of a final version through the trigger fire route refires missed followers with the same idempotency key.
@@ -65,8 +65,8 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Dispatcher.Upstream is the trigger fan-out entry point. (`pkg/trigger/ports.go:192`)
 - ErrVersionMismatch reports an upstream event that is not a final state version of the unit. (`pkg/trigger/trigger.go:48`)
-- The trigger dispatcher conformance harness drives Upstream with an applied version. (`pkg/trigger/triggertest/dispatcher.go:76`)
-- Trigger rows carry LastSaver subject and LastSaverID stable principal ID. (`pkg/trigger/trigger.go:190`)
+- The conformance harness drives Upstream with an applied version. (`pkg/trigger/triggertest/dispatcher.go:76`)
+- Trigger rows carry LastSaver and LastSaverID. (`pkg/trigger/trigger.go:190`)
 - Upstream verifies the event against the final state versions of the unit. (`pkg/trigger/ports.go:183`)
 - A test of the final-version read path exists. (`pkg/dustpan/triggers_versions_internal_test.go:36`)
 
@@ -81,11 +81,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR, with ADR 273, 299, 307, 310, 338.
 - Quote: "**A `follows` trigger names a source unit, and the server refuses a cycle at save.** After the source applies, a plan of the unit starts. The source is a unit reference, so a unit of one tool can follow a unit of another"
 - Quote: "A `follows` trigger is a declared dependency edge. ADR 153 decision 2 says that a feature that declares a link between units adds its own kind of edge, with the evidence `declared`. The `follows` trigger does that. Such"
-- Quote: ""A applies" uses only what the server can see (question 1). - For the Pulumi CLI, an update of the kind `update` counts. A refresh, a preview and a destroy do not. - For OpenTofu over the state backend, any final state v"
 - Quote: "A `follows` trigger has a field `when` (question 2). The default is `applied`: after each apply of the source. The value `outputs-changed` comes in a later slice."
-- Quote: "The principal of a start that no person makes (question 3). - The start runs as the namespace service principal. That principal holds only the action that starts a plan. - For a job that a trigger starts, check 2 of ADR"
 - Quote: "A trigger starts a plan and nothing else. The acceptance criteria name a plan for each kind. The port that a trigger uses to start a job can start a plan and nothing else. No trigger starts an apply in these slices (RFC"
-- Quote: "The source kinds (question 4). A `schedule` trigger records the source kind `schedule`. A push records `forge`. A `follows` start records the new source kind `trigger`. A manual fire keeps the source kind of the caller ("
 - Effect: This change implements the applied start, the declared edge, the sender filter, the plan-only start, the saver read rule and the trigger source kind.
 - Conflict: none.
 
@@ -95,7 +92,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 286 changes. Chain to the end: ADR 286.
 - Current rule: this ADR, with ADR 286.
 - Quote: "Check 2: the principal that started the job holds `unit:read-outputs` on the producer with its own current grants, and `unit:read-secrets` for a secret output."
-- Effect: The read of source outputs by a follows plan uses the last saver check with unit:read-outputs and unit:read-secrets. This supersedes the unit:read wording of issue 1211.
+- Effect: The read of source outputs by a follows plan uses the last saver check with unit:read-outputs and unit:read-secrets.
 - Conflict: none.
 
 **ADR 338: The namespace service principal holds a stored grant** (owner-tagged (all decisions)).
@@ -113,19 +110,20 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 315 extends. Chain to the end: ADR 315.
 - Current rule: this ADR, with ADR 315.
 - Quote: "No page, not done. A reviewer refuses such a pull request when the page is not in it. A later pull request for the docs does not make the first one done."
-- Effect: The change ships the docs page that names which runs of each tool count as an apply in the same pull request.
+- Effect: The change ships the docs page in the same pull request.
 - Conflict: none.
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Add e2e step against the real CLI" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part>".
+none
 
 Questions considered and answered:
 
-- What counts as an apply of the source unit? ADR 267 decision 12 answers it: for OpenTofu any final state version counts; for the Pulumi CLI only an update of kind update counts. The docs page states this rule.
-- When does a follows trigger fire? ADR 267 decision 13 answers it: field when with default applied; outputs-changed is a later slice and is out of scope here.
-- Which principal starts the plan and whose grants govern source output reads? ADR 267 decisions 14 and 15, ADR 273 decision 5 and ADR 338 decision 3 answer it: source kind trigger, start as namespace service principal, output reads checked against the current grants of the last saver with unit:read-outputs plus unit:read-secrets, fail closed. ADR 273 governs where issue 1211 says unit:read.
-- How does the fan-out stay safe across the trigger store and the job service? No shared transaction exists between the trigger store and the job service. The per-trigger idempotency key with the lifetime of the version record gives safety. A crash between job start and cursor write replays the same key and returns the first job.
-- Does a follows trigger work across namespaces? ADR 267 decision 21 answers it: no follow across namespaces.
+- What counts as an apply of the source unit? ADR 267 decision 12: for OpenTofu any final state version counts.
+- When does a follows trigger fire? ADR 267 decision 13: field when, default applied; outputs-changed is out of scope.
+- Whose grants govern source output reads? ADR 267 decision 14, ADR 273 decision 5 and ADR 338 decision 3: the last saver, fail closed.
+- How does fan-out stay safe without a shared transaction? A per-trigger idempotency key per version replays the first job after a crash.
+- Where does the sender hook in? In publishUnitState inside the fenced transaction; no observer port.
+- Does a follows trigger cross namespaces? ADR 267 decision 21: no.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

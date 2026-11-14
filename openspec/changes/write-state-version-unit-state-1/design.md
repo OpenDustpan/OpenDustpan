@@ -1,20 +1,19 @@
 ## Context
 
-The job store needs current and last-final versions, but no tool package writes them. This part adds the writes and the same-transaction observe call. Later parts use the versions to start follows plans.
+Main already writes the current and final versions and closes awaiting jobs in the fenced transaction. This part adds proof and docs only.
 
 ## Decisions
 
-1. **Wiring adapter maps to job.StateVersion.** Each tool store defines a local unexported observer field of a local Observer port type with plain fields (unit ID, version ID, commit, final flag). The internal wiring implements the port and maps the plain fields to job.StateVersion outside the tool package. The tool package never imports job. The job-store observe logic runs through the wiring delegate in the same transaction handle.
-2. **Same-transaction observe with order guard.** Current-version write and final-version observe run in the fenced transaction of the state write, keyed by stable unit ID, ordered by commit order with a monotonic guard. A failure or fence loss rolls back state and version rows. A store built without an observer refuses a final write at run time. No compile-time guarantee is claimed.
+1. **Keep the direct close of main.** publishUnitState in each SQL store writes both versions and calls CloseAwaiting in the same fenced transaction. No code path changes.
+2. **Prove it with tests at each layer.** Store tests cover current, final, idempotent and rollback cases on SQLite and PostgreSQL. One e2e step covers both real CLIs.
 
 ## Structure
 
-Unexported field observer in each tool SQL store struct, set only by constructor NewStoreWithObserver. A store built without an observer refuses a final write at run time with a 500 error.
+The guard test unitStateWriteQueries makes publishUnitState the only writer of unit_state. No new type is added.
 
 ## Risks
 
-- A missed final flag leaves a write-back job open until a later final write closes it.
-- A stale concurrent commit could move the current version backwards without the monotonic guard.
+- A test that passes on main proves no new behavior, so each test must also fail when the write is removed.
 
 ## Diagrams
 
@@ -22,26 +21,43 @@ After this change:
 
 ```mermaid
 sequenceDiagram
-participant P as Pulumi CLI
-participant O as OpenTofu
-participant S as Tool store
-participant W as Wiring observer
-participant J as Job observe logic
-P->>S: save checkpoint
-O->>S: finalize version
-S->>S: write current version in fenced tx
-S->>W: observe plain version
-W->>J: apply final rule in same tx
-S-->>P: commit or rollback
+participant C as Tool CLI
+participant S as SQL store
+C->>S: state write
+S->>S: publishUnitState in fenced tx
+S-->>C: commit or rollback
+```
+
+Modules that the change touches, and their imports on main:
+
+```mermaid
+flowchart LR
+P1[pkg/store/postgres]
+P2[pkg/stack]
+P1 --> P2
+```
+
+States on main in the touched packages:
+
+```mermaid
+stateDiagram-v2
+state
+status
+state_version_id
+latest
+running
+succeeded
+failed
+cancelled
 ```
 
 States and transitions after this change:
 
 ```mermaid
 stateDiagram-v2
-[*] --> writing: state write starts
-writing --> committed: observe passes
-writing --> rolledback: observe fails or fence lost
+[*] --> writing
+writing --> committed
+writing --> rolledback
 committed --> [*]
 rolledback --> [*]
 ```
@@ -50,12 +66,21 @@ rolledback --> [*]
 
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
-| correctness | 100 | percent | each tool state write transaction |
+| State write overhead of the version rows | 0 extra transactions and 0 extra round trips from the client | transactions per state write | Pulumi checkpoint and OpenTofu finalize writes on SQLite and PostgreSQL; no code path changes in this part |
 
 ## Failure modes
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
-| Final state write | Observe call fails inside the transaction | Return the error and roll back the state write; client pushes state again | Neither state nor version rows commit |
-| Concurrent state writes | Two state writes of one unit commit out of order | Monotonic guard keeps the newer committed version; loser retries its push | Current version equals the highest committed version |
-| Fenced state write | Fence lost during the write | Abort the transaction and return a fence error; client re-reads and retries | Neither state nor version rows commit |
+| State write | The version write fails inside the transaction | The client pushes the state again | Neither state nor version rows commit |
+
+## Change impact (computed from main)
+
+Tests:
+
+- `internal/selfservice/selfservicetest/mem_test.go` names `Store.ObserveStateVersion`
+
+ADRs:
+
+- `docs/adr/0116-request-states-jobs-approvals-and-freezes.md` names `Store.ObserveStateVersion`
+- `docs/adr/0100-a-shared-job-model-on-durable-operations.md` names `Store.ObserveStateVersion`

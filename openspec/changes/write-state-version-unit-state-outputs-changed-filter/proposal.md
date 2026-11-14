@@ -1,12 +1,12 @@
 ---
-version: 2
+version: 3
 ---
 
 Issue: #1215.
 
 ## Why
 
-**Persona: developer.** Developer runs a stack that follows another stack. Each apply of the source starts a plan even when no shared output changed. The noise hides real changes. The server must start follower plans only when the root outputs changed.
+**Persona: developer.** Developer runs a stack or workspace that follows another one. Each apply of the source starts a plan, even when no shared output changed. The noise hides real changes. The server must start follower plans only when the root outputs changed.
 
 The user path this change must make work:
 
@@ -19,20 +19,20 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Save of a follows trigger with an unknown when value fails. | 400 with code trigger.invalid and a message that names the allowed values applied and outputs-changed. | `curl -X PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` |
-| Apply of source with unchanged outputs starts no follower plan. | No new plan job for followers with when outputs-changed; the trigger read still shows when outputs-changed. | `curl /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` |
+| Save of a follows trigger with an unknown when value fails. | 400 with code trigger.invalid and a message that names the allowed values applied and outputs-changed. | `PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` |
+| Apply of the source with unchanged outputs starts no follower plan. | No new plan job for followers with when outputs-changed; the trigger read still shows when outputs-changed. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` |
 
 Evidence for the claims above:
 
 - Dispatcher.Upstream is the entry point that decides follows starts. Proof: pkg/trigger/ports.go:136:// Outcome is the result of one trigger in a Dispatcher.Upstream call.
 - A test helper drives Dispatcher.Upstream with an applied final version. Proof: pkg/trigger/triggertest/dispatcher.go:76:	out, err := h.Dispatcher.Upstream(t.Context(), trigger.Applied{Unit: a, Version: applied})
-- Issue #1215 asks for the outputs-changed value, the digest at final write, and the compare in Dispatcher.Upstream. Proof: Part of #909. Outcome: A `follows` trigger can start a plan only when the root outputs of the source changed since its last apply.
+- Issue 1215 asks for the outputs-changed value, the digest at final write, and the compare in Dispatcher.Upstream. Proof: Part of #909. Outcome: A `follows` trigger can start a plan only when the root outputs of the source changed since its last apply.
 
 ## What Changes
 
-- Root-outputs digest written at each apply-counting final state version, with no secret value in the digest or in any answer
+- Root-outputs digest written inside publishUnitState, in the same fenced transaction as each apply-counting final state version, with no secret value in the digest or in any answer
 - Field value outputs-changed for the when field of a follows trigger on the trigger routes
-- Compare in Dispatcher.Upstream that skips starts when the digest matches the immediate prior apply-counting final digest with version-pair binding
+- Compare in Dispatcher.Upstream that skips starts when the digest matches the immediate prior apply-counting final digest, bound to the version pair
 - Docs page and e2e step with real CLI binaries that applies twice, once with a changed output
 
 Out of scope:
@@ -61,6 +61,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Dispatcher.Upstream decides follows starts. (`pkg/trigger/ports.go:192`)
 - Test helper drives Dispatcher.Upstream with an applied final version. (`pkg/trigger/triggertest/dispatcher.go:76`)
+- Unit state is written only in publishUnitState, inside the fenced transaction, which also closes awaiting jobs with jobstore.CloseAwaiting. No observer port exists and none is added. (`pkg/store/sqlite/unit_state.go:97`)
 
 ## ADR check
 
@@ -96,15 +97,16 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Add failing dispatcher test: unchanged outputs skip, changed outputs s" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: task "Write the digest at final write and compare in Dispatcher.Upstream aga" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part; a code check fails: task "Run the full check: wiring, route actions, e2e, docs, usability." runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part>"; a code check fails: and 1 more.
+none
 
 Questions considered and answered:
 
-- Should outputs-changed ship now or stay a later slice? ADR 267 decision 13 answers it: default applied, outputs-changed comes in a later slice; this change is that slice.
-- What does the server compare? Issue #1215 answers it: a digest of the root outputs stored at final write; it never leaves the server and holds no value.
+- Should outputs-changed ship now or stay a later slice? ADR 267 decision 13: default applied, outputs-changed comes in a later slice; this change is that slice.
+- What does the server compare? Issue 1215: a digest of the root outputs stored at final write; it never leaves the server and holds no value.
 - Does an outputs-changed start bypass policy checks? ADR 267 decision 2: gates, approvals, freezes, locks and open-job limits apply as to any job.
-- Which version is prior, and does a secret-only change count? The immediate previous apply-counting final version of the same source (ADR 267 decision 12). Secret plain values become a fixed marker; names, types and secret marks stay in the input, so a secret-only value change stays equal and a secret to plain flip differs.
-- Is a migration backfill needed? No backfill and no numbered migration. The baseline holds the new column. A version without a digest counts as changed once at the next compare.
-- What does a retry or replay compare? The version pair of the triggering apply. A replay gives the same pair and the dispatcher starts at most 1 plan per follower per source version.
+- Which version is prior, and does a secret-only change count? The immediate previous apply-counting final version of the same source (ADR 267 decision 12). Secret plain values become a fixed marker; a secret-only value change stays equal and a secret to plain flip differs.
+- Is a migration backfill needed? No backfill and no numbered migration. The baseline holds the new column. A version without a digest counts as changed once.
+- What does a retry or replay compare? The version pair of the triggering apply. A replay gives the same pair, so at most 1 plan starts per follower per source version.
+- Where is the digest written? PM decision: unit state is written only in publishUnitState inside the fenced transaction. The digest is written there. No observer port exists or is added.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
