@@ -13,7 +13,7 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Run the e2e step with the TFE-compatible state routes and a job token. Check: BLOCKED by RFC 129 point 4; then `make e2e` passes
+- [ ] 3.1 Run the e2e step with the TFE-compatible state routes and a job token. Check: `make e2e` passes
 - [ ] 3.2 Add a docs page for the data source case. Check: add the new file docs/guides/strict-case-takes-turns.md
 - [ ] 3.3 Run the usability check from the docs page. Check: each error names `dustpan job show <job-id>`
 - [ ] 3.4 Run the full check. Check: `make check` reports zero findings

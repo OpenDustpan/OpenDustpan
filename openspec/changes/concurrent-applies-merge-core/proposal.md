@@ -32,6 +32,7 @@ Evidence for the claims above:
 - Merge state uploads one resource instance at a time under claim fence
 - Commit each merged state version with the next serial in one transaction with compare-and-swap and crash safety
 - Refuse overlapping writes, superseded bases, instance conflicts, empty uploads, hostile uploads, and mismatched fences fail-closed
+- NEW: the access facts of a state write hold the verified token claims `ref`, `ref_protected` and the event source, so an access limit can refuse an apply from an unprotected branch (ADR 369 decision 2). Main has no such fact (`pkg/gate/facts.go:487 (AccessFacts)`).
 - Hold the whole-unit lock for strict cases: data sources, providers configured from resources, root outputs, client-encrypted state, version or lineage mismatch, and local run without wrapper
 
 Out of scope:
@@ -46,6 +47,7 @@ Out of scope:
 Depends on:
 
 - ADR 368 on main (pull request #3052)
+- ADR 369 on main (pull request #3056)
 - two-disjoint-claims
 
 ## Usability
@@ -60,9 +62,9 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The TFE-compatible API serves state versions through the route ANY /api/v2/state-versions. (`route table or API description`)
-- The TFE-compatible API serves state uploads through the route ANY /api/v2/state-uploads/{}/{}. (`route table or API description`)
-- The TFE-compatible API serves the current state version of a workspace through ANY /api/v2/workspaces/{}/current-state-version. (`route table or API description`)
+- The TFE-compatible API serves state versions through the route ANY /api/v2/state-versions. (`internal/api/tfe/routes.go:243 (Handler.stateRoutes)`)
+- The TFE-compatible API serves state uploads through the route ANY /api/v2/state-uploads/{}/{}. (`internal/api/tfe/routes.go:351 (Handler.stateWriteRoutes)`)
+- The TFE-compatible API serves the current state version of a workspace through ANY /api/v2/workspaces/{}/current-state-version. (`internal/api/tfe/routes.go:243 (Handler.stateRoutes)`)
 
 ## ADR check
 
@@ -90,6 +92,16 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: Each merge attempt runs under the attempt deadline and a refused merge publishes no version, so no orphan version appears.
 - Conflict: none.
 
+**ADR 369: The actor of a job: trust rules, conditions on token claims, and external service principals** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current), 2 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "A TFE-compatible request names its apply claim through the job token."
+- Quote: "Conditions: the access limits and the gates read the verified claims of the token: `ref`, `ref_protected` and the event source."
+- Effect: An upload under an apply claim names its claim through the job token. The access limits of the upload read the verified token claims.
+- Conflict: none.
+
 **ADR 368: Concurrent applies: apply claims, the server serial, fences and the closure test** (owner-tagged (all decisions)).
 
 - Decisions that apply: 2 (current), 3 (current), 4 (current), 6 (current).
@@ -104,22 +116,18 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 2 (current), 6 (current).
-- Changed by: ADR 368 extends decision 6. Chain to the end: ADR 368.
-- Current rule: this ADR, with ADR 368.
+- Changed by: ADR 368 extends decision 6; ADR 369 extends decision 6. Chain to the end: ADR 368, ADR 369.
+- Current rule: this ADR, with ADR 368, 369.
 - Quote: "The server serves each job the state version that the plan used as its base."
 - Quote: "The server merges each upload one resource instance at a time."
 - Quote: "Work that the server cannot prove disjoint takes turns."
 - Quote: "The code of milestone 8 comes after the project owner accepts that RFC as an ADR."
-- Effect: This change follows the job-aware merge rule. ADR 368 decides the serial and the fence of each claim. The job on the TFE-compatible path waits for RFC 129 point 4.
+- Effect: This change follows the job-aware merge rule. ADR 368 decides the serial and the fence of each claim. ADR 369 decides the credential of the job on the TFE-compatible path.
 - Conflict: none.
 
 ## Open questions
 
-1. How does the server find the apply claim of a request on the TFE-compatible path: one principal for each job, or another credential that names the job? Decides: owner.
-   - Options: The job-ID claim of the job token names the apply claim, with the person as the principal; A new service principal for each job; A header that names the apply claim.
-   - Recommended: none. RFC 129 point 4 stays open: the owner did not take its recommendation on 14 November 2026 and gives the industry view later (ADR 368, "Not decided here").
-
-Not spec-ready: RFC 129 point 4 is open for the owner, and the code checks of the main facts fail (the "where" of each fact is not file:line).
+none
 
 Questions considered and answered:
 
@@ -127,5 +135,7 @@ Questions considered and answered:
 - Which ADR decisions govern the merge? ADR 302 decision 2 requires per-instance merge and refusal of overlap. ADR 26 decisions 3 and 7 require lineage and fenced finalize in one transaction. ADR 281 decision 11 bounds each attempt to 30 minutes.
 - What do reads without a claim return? Reads without a claim return latest. Reads under a claim return the named base. A pruned or deleted base fails closed with replan.
 - What lease and timeout govern a wait? ADR 368 decision 5 for the local wrapper: backoff from 1 to 30 seconds with jitter, a default wait of 30 minutes, `--claim-timeout` from 0 to 6 hours. A runner job does not wait: it turns the refusal into the status blocked (ADR 302 decision 2).
+- Which credential names the apply claim on the TFE-compatible path? ADR 369 decision 1 (owner): the actor is the person or principal that a stored trust rule resolves, never the job. The job acts through a short-lived credential bound to the job and its apply claim, and a TFE-compatible request names its apply claim through the job token.
+- Can an access limit refuse an upload from an unprotected branch? Yes, after the NEW access facts of ADR 369 decision 2. A branch rule is a condition, never a second identity.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

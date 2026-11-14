@@ -9,7 +9,7 @@ The user path this change must make work:
 1. **API.** Start two runner jobs on one workspace through the jobs API. Job A plans a disjoint change. Job D plans a change that reads a data source.
 2. **CLI.** Watch job D with `dustpan job show <job-id>` while job A applies. Job D shows the status blocked, the holder and the case data-source, then starts again when the lock of A is released.
 3. **Docs page.** Read the history of the workspace and see the strict case data-source on the item of D.
-4. **E2e.** Run the e2e step with real OpenTofu and a fake cloud provider log that shows ordered apply periods. BLOCKED by RFC 129 point 4 (the job on the TFE-compatible path).
+4. **E2e.** Run the e2e step with real OpenTofu and a fake cloud provider log that shows ordered apply periods.
 
 Errors the person may hit, and the one command that helps:
 
@@ -41,6 +41,7 @@ Out of scope:
 Depends on:
 
 - ADR 368 on main (pull request #3052)
+- ADR 369 on main (pull request #3056)
 - two-disjoint-claims
 - concurrent-applies-merge-core
 - `two-disjoint-claims` (order of the milestone review)
@@ -64,6 +65,16 @@ Each fact names its file, line and function on main. The change specifies only t
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
 
+**ADR 369: The actor of a job: trust rules, conditions on token claims, and external service principals** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "A job acts through a short-lived credential that is bound to the job and to its apply claim."
+- Quote: "A TFE-compatible request names its apply claim through the job token."
+- Effect: The e2e step writes state through the TFE-compatible routes with the job token, which names the apply claim.
+- Conflict: none.
+
 **ADR 368: Concurrent applies: apply claims, the server serial, fences and the closure test** (owner-tagged (all decisions)).
 
 - Decisions that apply: 3 (current), 7 (current).
@@ -77,8 +88,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 2 (current), 6 (current).
-- Changed by: ADR 368 extends decision 6. Chain to the end: ADR 368.
-- Current rule: this ADR, with ADR 368.
+- Changed by: ADR 368 extends decision 6; ADR 369 extends decision 6. Chain to the end: ADR 368, ADR 369.
+- Current rule: this ADR, with ADR 368, 369.
 - Quote: "Work that the server cannot prove disjoint takes turns."
 - Quote: "An RFC for concurrent applies comes first."
 - Effect: The change covers the data source case only and gives it the whole-unit lock. It adds no claim field. ADR 368 decision 7 keeps the six cases.
@@ -95,16 +106,13 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. How does the server find the apply claim of a request on the TFE-compatible path: one principal for each job, or another credential that names the job? Decides: owner.
-   - Options: The job-ID claim of the job token names the apply claim, with the person as the principal; A new service principal for each job; A header that names the apply claim.
-   - Recommended: none. RFC 129 point 4 stays open: the owner did not take its recommendation on 14 November 2026 and gives the industry view later (ADR 368, "Not decided here"). This change needs it for the e2e step, which writes state through the TFE-compatible routes with a job token.
-
-Not spec-ready: RFC 129 point 4 is open for the owner.
+none
 
 Questions considered and answered:
 
 - Which strict case does this change cover? Data sources only. ADR 302 decision 2 lists six cases. The other five are out of scope.
 - Does a runner job with a data source plan wait on the whole-unit lock, or end as blocked? It ends as blocked and the job service starts it again when the lock is released; that is how it takes turns. ADR 302 decision 2 (owner): "A runner job turns the refusal into the status "blocked". The local `dustpan` wrapper waits: it tries the claim again after the refusal until the blocking claim ends, or until a timeout." The owner's approved M8 answer of 14 November 2026 (decisions week log): "a data-source plan waits on the whole-unit lock". Decided by the PM under the decision rule on 14 November 2026. The local wrapper waits with ADR 368 decision 5.
 - Which record fields does the history entry use for the case and the claim? ADR 368 decision 3: the parent, the base and the apply claim ID of each state version.
+- Which credential names the apply claim on the TFE-compatible path? ADR 369 decision 1 (owner): the actor is the person or principal that a stored trust rule resolves, never the job. The job acts through a short-lived credential bound to the job and its apply claim, and a TFE-compatible request names its apply claim through the job token.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

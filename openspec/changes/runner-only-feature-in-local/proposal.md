@@ -45,6 +45,7 @@ Out of scope:
 Depends on:
 
 - ADR 368 on main (pull request #3052)
+- ADR 369 on main (pull request #3056)
 - local-run-two-cases
 - `local-run-two-cases` (order of the milestone review)
 
@@ -67,23 +68,31 @@ Each fact names its file, line and function on main. The change specifies only t
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
 
+**ADR 369: The actor of a job: trust rules, conditions on token claims, and external service principals** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current), 3 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "The local wrapper gets a launcher token that is bound to its apply claim."
+- Quote: "The local wrapper always acts as the person who signed in."
+- Effect: The local step authenticates with the launcher token bound to the apply claim, and the actor is the signed-in person.
+- Conflict: none.
+
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 4 (current), 5 (current), 6 (current).
-- Changed by: ADR 368 extends decision 6. Chain to the end: ADR 368.
-- Current rule: this ADR, with ADR 368.
+- Changed by: ADR 368 extends decision 6; ADR 369 extends decision 6. Chain to the end: ADR 368, ADR 369.
+- Current rule: this ADR, with ADR 368, 369.
 - Quote: "A local CLI wrapper (owner). The `dustpan` CLI wraps the real `tofu` or `pulumi` CLI on the machine of the user, in the same way as the runner wrapper does. A local run can then take part: it registers claims, and it can use the other features that today work only in OpenDustpan runners."
 - Quote: "Milestone 8 ports each of these features to the local wrapper."
-- Effect: The change ports only secret masking with StreamMasker. It adds no claim, token or route. The job principal stays with RFC 129 point 4.
+- Effect: The change ports only secret masking with StreamMasker. It adds no claim, token or route. ADR 369 decides the credential of the local step.
 - Conflict: none.
 
 ## Open questions
 
-1. How does the server find the apply claim of a request on the TFE-compatible path: one principal for each job, or another credential that names the job? Decides: owner.
-   - Options: The job-ID claim of the job token names the apply claim, with the person as the principal; A new service principal for each job; A header that names the apply claim.
-   - Recommended: none. RFC 129 point 4 stays open: the owner did not take its recommendation on 14 November 2026 and gives the industry view later (ADR 368, "Not decided here").
+none
 
-Not spec-ready: RFC 129 point 4 is open for the owner. The provisional decision of 13 November on the token of the local step is withdrawn, because the owner did not take that recommendation.
+Answered by ADR 369 (owner, 2026-11-14): the local step authenticates with a launcher token bound to the apply claim, and the actor is the person who signed in. This restores the token decision that the owner approved on 14 November 2026 at about 13:15 UTC.
 
 Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
 

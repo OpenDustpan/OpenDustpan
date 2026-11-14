@@ -53,6 +53,7 @@ Depends on:
 - runner-job-overlapping-claim-refused
 - concurrent-applies-merge-core
 - ADR 368 on main (pull request #3052)
+- ADR 369 on main (pull request #3056)
 - `two-disjoint-claims` (order of the milestone review)
 - `runner-job-overlapping-claim-refused` (order of the milestone review)
 
@@ -84,6 +85,16 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: This change keeps the lineage check. Under a live apply claim the server assigns the serial (ADR 368 decision 2), built in concurrent-applies-merge-core.
 - Conflict: none.
 
+**ADR 369: The actor of a job: trust rules, conditions on token claims, and external service principals** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current), 3 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "The local wrapper gets a launcher token that is bound to its apply claim."
+- Quote: "The local wrapper always acts as the person who signed in."
+- Effect: The wrapper acts as the signed-in person and gives `tofu` a launcher token bound to its apply claim, through the credentials helper.
+- Conflict: none.
+
 **ADR 368: Concurrent applies: apply claims, the server serial, fences and the closure test** (owner-tagged (all decisions)).
 
 - Decisions that apply: 4 (current), 5 (current).
@@ -98,8 +109,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 2 (current), 4 (current), 6 (current).
-- Changed by: ADR 368 extends decision 6. Chain to the end: ADR 368.
-- Current rule: this ADR, with ADR 368.
+- Changed by: ADR 368 extends decision 6; ADR 369 extends decision 6. Chain to the end: ADR 368, ADR 369.
+- Current rule: this ADR, with ADR 368, 369.
 - Quote: "A runner job registers its saved plan as a claim before the apply."
 - Quote: "The `dustpan` CLI wraps the real `tofu` or `pulumi` CLI on the machine of the user, in the same way as the runner wrapper does."
 - Quote: "The retry interval and the timeout of the local wrapper."
@@ -109,17 +120,14 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. How does the server find the apply claim of a request on the TFE-compatible path: one principal for each job, or another credential that names the job? Decides: owner.
-   - Options: The job-ID claim of the job token names the apply claim, with the person as the principal; A new service principal for each job; A header that names the apply claim.
-   - Recommended: none. RFC 129 point 4 stays open: the owner did not take its recommendation on 14 November 2026 and gives the industry view later (ADR 368, "Not decided here").
-
-Not spec-ready: RFC 129 point 4 is open for the owner. It decides the credential that the wrapper gives to `tofu` on the TFE-compatible path.
+none
 
 Questions considered and answered:
 
 - Does a refused local run wait or end as blocked? ADR 302 decision 2: the local wrapper waits and tries the claim again until the blocking claim ends or until the timeout ends. A runner job turns the same refusal into the status blocked.
 - Which retry interval, timeout and claim lifetime does the wrapper use? ADR 368 decisions 4 and 5: backoff from 1 to 30 seconds with full jitter, a default wait of 30 minutes, `--claim-timeout` from 0 to 6 hours, a lease of 90 seconds renewed every 30 seconds.
-- Does code start before the RFC is accepted? ADR 368 accepts RFC 129 except point 4. The wrapper on the TFE-compatible path waits for the ADR of point 4.
+- Does code start before the RFC is accepted? ADR 368 and ADR 369 accept all of RFC 129. Code starts when both are on main.
 - Does this change repeat history, expiry, or auth rules owned by other changes? No. Those belong to two-disjoint-claims and concurrent-applies-merge-core.
+- Which credential does the wrapper give to `tofu`? ADR 369 decision 1 (owner): a launcher token bound to the apply claim of the wrapper, and the actor is the person who signed in (decision 3).
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

@@ -34,6 +34,8 @@ Evidence for the claims above:
 - New route POST /api/dustpan/v1/workspaces/{id}/claims: a runner job or local wrapper registers a non-replace claim with base state version, address set and principal.
 - New route GET /api/dustpan/v1/workspaces/{id}/claims: lists each claim with state, base, address set, principal, job ID, start time and end time.
 - Server accepts a second non-replace claim when its address set is disjoint from each accepted claim.
+- NEW: the job token of the apply phase is bound to the job and its apply claim (ADR 369 decision 1); a request with the token of another job, or after the claim ended, is refused.
+- NEW: the claim record and its audit entry name the actor, the job, the apply claim and the trigger (ADR 369 decision 5).
 - Server refuses an overlapping non-replace claim with 409, and a replace claim with 409 `claim.closure-unproven` (ADR 368 decision 6: an unproven closure is a conflict).
 - Each accepted claim writes one audit entry, and each claim marks ended with an end time at job end or lease expiry.
 
@@ -50,7 +52,7 @@ Out of scope:
 Depends on:
 
 - ADR 368 on main (pull request #3052)
-- An ADR that decides RFC 129 point 4 (the job on the TFE-compatible path)
+- ADR 369 on main (pull request #3056)
 
 ## Usability
 
@@ -82,6 +84,16 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: Claim registration grants no lock ID and publishes no state version. The lock, serial and lineage checks stay unchanged.
 - Conflict: none.
 
+**ADR 369: The actor of a job: trust rules, conditions on token claims, and external service principals** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current), 5 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "A job acts through a short-lived credential that is bound to the job and to its apply claim."
+- Quote: "A TFE-compatible request names its apply claim through the job token."
+- Effect: The register route binds the apply claim to the job token of the phase. The record names the actor, the job and the apply claim.
+- Conflict: none.
+
 **ADR 368: Concurrent applies: apply claims, the server serial, fences and the closure test** (owner-tagged (all decisions)).
 
 - Decisions that apply: 1 (current), 4 (current), 6 (current).
@@ -96,28 +108,25 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 302: Milestone 8: concurrent applies on one state** (owner-tagged (all decisions)).
 
 - Decisions that apply: 2 (current), 3 (current), 6 (current).
-- Changed by: ADR 368 extends decision 6. Chain to the end: ADR 368.
-- Current rule: this ADR, with ADR 368.
+- Changed by: ADR 368 extends decision 6; ADR 369 extends decision 6. Chain to the end: ADR 368, ADR 369.
+- Current rule: this ADR, with ADR 368, 369.
 - Quote: "A runner job registers its saved plan as a claim before the apply."
 - Quote: "OpenTofu is first."
 - Quote: "The code of milestone 8 comes after the project owner accepts that RFC as an ADR."
-- Effect: ADR 368 answers decision 6, except one principal for each job on the TFE-compatible path. This change records two disjoint runner-job claims and refuses overlapping ones, with no merge and no serial assignment. It waits for the ADR of RFC 129 point 4.
+- Effect: ADR 368 answers decision 6, except one principal for each job on the TFE-compatible path. This change records two disjoint runner-job claims and refuses overlapping ones, with no merge and no serial assignment. ADR 369 decides the credential of the job.
 - Conflict: none.
 
 ## Open questions
 
-1. How does the server find the apply claim of a request on the TFE-compatible path: one principal for each job, or another credential that names the job? Decides: owner.
-   - Options: The job-ID claim of the job token names the apply claim, with the person as the principal; A new service principal for each job; A header that names the apply claim.
-   - Recommended: none. RFC 129 point 4 stays open: the owner did not take its recommendation on 14 November 2026 and gives the industry view later (ADR 368, "Not decided here").
-
-Not spec-ready: RFC 129 point 4 is open for the owner.
+none
 
 Questions considered and answered:
 
 - Where does claim registration happen in the runner path? ADR 302 decision 2: a runner job registers its saved plan as a claim before the apply.
 - Does this change assign serials or merge state under claims? No. ADR 368 decisions 2 and 3 decide them, and concurrent-applies-merge-core builds them.
 - Which tool does this step cover? ADR 302 decision 3: OpenTofu first.
-- Can code start now? No. ADR 368 accepts RFC 129 except point 4, and this change registers claims from runner jobs on the TFE-compatible path. It waits for the ADR of point 4.
+- Can code start now? Yes, when ADR 368 and ADR 369 are on main.
 - What is the claim ID and the expiry rule? ADR 368 decisions 3 and 4: a stable ID for each apply claim, and a lease (the durable claim of the apply phase for a runner job, 90 seconds renewed every 30 seconds for the local wrapper).
+- Which credential names the apply claim on the TFE-compatible path? ADR 369 decision 1 (owner): the actor is the person or principal that a stored trust rule resolves, never the job. The job acts through a short-lived credential bound to the job and its apply claim, and a TFE-compatible request names its apply claim through the job token.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

@@ -46,6 +46,7 @@ Out of scope:
 Depends on:
 
 - ADR 368 on main (pull request #3052)
+- ADR 369 on main (pull request #3056)
 - two-disjoint-claims (the register route and the apply claim record)
 
 ## Usability
@@ -121,11 +122,7 @@ Each quote is copied from the file in `docs/adr/`. A decision is owner-tagged wh
 
 ## Open questions
 
-1. How does the server find the apply claim of a request on the TFE-compatible path: one principal for each job, or another credential that names the job? Decides: owner.
-   - Options: The job-ID claim of the job token names the apply claim, with the person as the principal; A new service principal for each job; A header that names the apply claim.
-   - Recommended: none. RFC 129 point 4 stays open (ADR 368, "Not decided here"). This change needs it only for its e2e step (task 3.1). The checker, the decoder and the review request path do not depend on it.
-
-Not spec-ready: RFC 129 point 4 is open for the owner.
+none
 
 Questions considered and answered:
 
@@ -137,6 +134,7 @@ Questions considered and answered:
 - Does the check depend on the order of the two plans? No. The check runs both ways, and one failure is a conflict. A test calls `Check(a, b)` and `Check(b, a)` for each case.
 - Does this change the approval floor? No. ADR 299 decision 10 stays.
 - Who answers the refusal? The register route of two-disjoint-claims, with the codes in the table above.
+- Which credential does the e2e step use? The job token of each apply phase, which names the apply claim (ADR 369 decision 1).
 - Does this need a new dependency? No. The decoder uses `encoding/json` with a size limit.
 
 Drafted by the PM for milestone 8 from ADR 368 decision 6.
