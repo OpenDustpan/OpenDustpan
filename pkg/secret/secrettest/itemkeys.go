@@ -581,6 +581,7 @@ const attemptDeadlineForTest = 300 * time.Millisecond
 // ErrItemKeyAttemptExpired, and no record stays, so no record can name a blob
 // that the reaper deleted after the grace period. A transaction inside the
 // deadline commits.
+// Real time: it proves that a real context deadline ends a late commit.
 func testItemKeyTxDeadline(t *testing.T, s ItemKeyStore) {
 	t.Helper()
 	fence := itemKeyNamespace(t, s)

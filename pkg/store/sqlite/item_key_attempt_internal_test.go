@@ -88,6 +88,7 @@ func TestBeforeCommitRefusesALateWrite(t *testing.T) {
 // time and commits after the deadline, with no check before the commit, as if
 // that check had failed. The deadline of the context of the attempt alone
 // must end it, and the error maps to ErrItemKeyAttemptExpired.
+// Real time: it proves that a real context deadline ends a late commit.
 func TestTheContextEndsALateCommit(t *testing.T) {
 	t.Parallel()
 

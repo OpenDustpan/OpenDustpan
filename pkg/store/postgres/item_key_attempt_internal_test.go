@@ -112,6 +112,7 @@ func TestBeforeCommitRefusesALateWrite(t *testing.T) {
 // time and commits after the deadline, with no check before the commit, as if
 // that check had failed. transaction_timeout alone must end it, and the error
 // maps to ErrItemKeyAttemptExpired.
+// Real time: it proves that the real transaction_timeout ends a late commit.
 func TestTheDatabaseEndsALateCommit(t *testing.T) {
 	t.Parallel()
 
