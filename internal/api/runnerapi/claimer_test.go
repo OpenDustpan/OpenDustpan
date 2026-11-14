@@ -30,11 +30,16 @@ func unitOf(t *testing.T, s stores, fence namespace.Fence, name string) identity
 	now := time.UnixMilli(1_700_000_000_000).UTC()
 
 	w := workspace.Workspace{
-		NamespaceID: "", CreatedAt: now, UpdatedAt: now,
+		NamespaceID: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
 		Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
 		LastRelease: workspace.NoRelease(),
-		ID:          workspace.ID(ident.NewID("ws-")), Ref: workspace.Ref{Namespace: fence.Namespace, Name: ref},
-		Revision: 1, Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		ID:          workspace.ID(ident.NewID("ws-")),
+		Ref:         workspace.Ref{Namespace: fence.Namespace, Name: ref},
+		Revision:    1,
+		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Origin:      identity.StateOrigin{Job: "", Commit: ""},
 	}
 	if err = s.units.CreateWorkspace(t.Context(), w, fence); err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -67,12 +72,14 @@ func dispatchPlan(t *testing.T, e *env, pool string, unit identity.Object) job.J
 	t.Helper()
 
 	j := job.Job{
-		ID: job.ID(ident.NewID(job.IDPrefix)),
+		ID:          job.ID(ident.NewID(job.IDPrefix)),
+		NamespaceID: "",
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationPlan, Purpose: "", Executor: job.ExecutorRunner,
 			Location: job.Location{
 				Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network", Revision: "abc123",
 			},
+			LocationSource: job.LocationSourceRequest,
 			Steps: []job.Step{{
 				Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"}, Env: nil,
 				Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,

@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/pkg/unitsettings"
 )
 
 var errDiskFull = errors.New("disk is full")
@@ -52,6 +54,52 @@ func TestKeyedPutRunsOnce(t *testing.T) {
 
 	if a := decode(t, r.call(t, http.MethodGet, settingsPath, "", nil)); a.Version != 1 {
 		t.Errorf("version after the replay = %d, want 1", a.Version)
+	}
+}
+
+// TestKeyedPutAnswersTheDefaultsOfTheWrite checks that the answer of a keyed
+// write holds the unit defaults that the store read in the transaction of the
+// write, not the defaults of the earlier read, and that the replay of the
+// stored answer holds them too.
+func TestKeyedPutAnswersTheDefaultsOfTheWrite(t *testing.T) {
+	t.Parallel()
+
+	r := newRig(t, fullAccess()...)
+
+	before := unitsettings.NamespaceDefaults{
+		Namespace: "acme", Pool: "rp-" + "0123456789abcdef", Version: 1, UpdatedAt: time.Time{},
+	}
+	after := unitsettings.NamespaceDefaults{
+		Namespace: "acme", Pool: "rp-" + "fedcba9876543210", Version: 2, UpdatedAt: time.Time{},
+	}
+	r.store.defaults = before
+	r.store.defaultsAtPut = &after
+
+	// The body sets no pool, so the effective pool comes from the defaults.
+	body := `{"codeLocation":{"repository":"acme/infra","ref":"main"}}`
+	header := keyedHeader("defaults-1", `"0"`)
+
+	first := r.call(t, http.MethodPut, settingsPath, body, header)
+	wantStatus(t, first, http.StatusOK, "")
+	checkEffectivePool(t, "first answer", decode(t, first), after.Pool)
+
+	again := r.call(t, http.MethodPut, settingsPath, body, header)
+	wantStatus(t, again, http.StatusOK, "")
+
+	if again.Header().Get(replayedHeader) != "true" {
+		t.Errorf("the replay header = %q, want true", again.Header().Get(replayedHeader))
+	}
+
+	checkEffectivePool(t, "replay", decode(t, again), after.Pool)
+}
+
+// checkEffectivePool fails the test unless the effective pool of the answer
+// is pool and comes from the namespace defaults.
+func checkEffectivePool(t *testing.T, what string, a answerOf, pool string) {
+	t.Helper()
+
+	if a.Effective["pool"].Value != pool || a.Effective["pool"].Origin != "namespace-default" {
+		t.Errorf("%s: effective pool = %+v, want %s from the namespace defaults", what, a.Effective["pool"], pool)
 	}
 }
 

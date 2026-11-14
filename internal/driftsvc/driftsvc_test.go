@@ -39,28 +39,28 @@ func (r *recordingStarter) Start(_ context.Context, a job.Actor, req job.StartRe
 // startedJob returns the job that the starter makes. Only its ID matters.
 func startedJob() job.Job {
 	return job.Job{
-		ID: "job-started", Spec: emptySpec(), State: job.StateQueued, Wait: job.WaitNone, Reason: "", Phases: nil,
-		Current: 0, StartedBy: "", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil,
-		Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "", Version: 1,
-		Trigger:   nil,
-		CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		ID: "job-started", NamespaceID: "", Spec: emptySpec(), State: job.StateQueued, Wait: job.WaitNone,
+		Reason: "", Phases: nil, Current: 0, StartedBy: "", Source: job.SourceAPI, Agent: "", AgentMode: "",
+		BreakGlass: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "",
+		RequestHash: "", Version: 1, Trigger: nil, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 		StateChangedAt: time.Time{},
 	}
 }
 
 func emptySpec() job.Spec {
 	return job.Spec{
-		Unit:      identity.Object{},
-		Operation: job.OperationRefresh,
-		Purpose:   job.PurposeDriftCheck,
-		Executor:  job.ExecutorRunner,
-		Location:  noLocation(),
-		Steps:     nil,
-		Pool:      "",
-		Profile:   "",
-		Edits:     nil,
-		Delivery:  "",
-		Defaulted: nil,
+		Unit:           identity.Object{},
+		Operation:      job.OperationRefresh,
+		Purpose:        job.PurposeDriftCheck,
+		Executor:       job.ExecutorRunner,
+		Location:       noLocation(),
+		LocationSource: "",
+		Steps:          nil,
+		Pool:           "",
+		Profile:        "",
+		Edits:          nil,
+		Delivery:       "",
+		Defaulted:      nil,
 	}
 }
 
@@ -210,6 +210,30 @@ func TestCheckKey(t *testing.T) {
 	}
 }
 
+// TestCheckKeyReachesTheJobService proves: the key that the server makes for a
+// drift check starts with the prefix that the routes reserve for the server,
+// and the path from the check to the job service accepts it. Only a caller key
+// is refused.
+func TestCheckKeyReachesTheJobService(t *testing.T) {
+	t.Parallel()
+
+	starter := newStarter(nil)
+	svc := newChecker(t, starter, time.UnixMilli(1_800_000_000_000).UTC())
+
+	if _, err := svc.Check(t.Context(), actorAda(), requestFor(t, "network")); err != nil {
+		t.Fatalf("Check = %v", err)
+	}
+
+	if len(starter.requests) != 1 {
+		t.Fatalf("starts = %d, want 1", len(starter.requests))
+	}
+
+	key := starter.requests[0].IdempotencyKey
+	if !strings.HasPrefix(key, driftsvc.CheckKeyPrefix) || !driftsvc.ReservedKey(key) {
+		t.Errorf("key = %q, want one with the reserved prefix %q", key, driftsvc.CheckKeyPrefix)
+	}
+}
+
 func TestCheckRefusesWhatIsNoUnit(t *testing.T) {
 	t.Parallel()
 
@@ -221,6 +245,36 @@ func TestCheckRefusesWhatIsNoUnit(t *testing.T) {
 	_, err := newChecker(t, starter, time.Now()).Check(t.Context(), actorAda(), req)
 	if !errors.Is(err, drift.ErrInvalid) || len(starter.requests) != 0 {
 		t.Fatalf("Check of a namespace = %v with %d starts, want ErrInvalid and none", err, len(starter.requests))
+	}
+}
+
+// TestCheckRefusesAHiddenRuneInTheReason sends a reason that the route
+// refuses straight to the service, as if the route check had failed. The
+// service refuses it too and starts no job.
+func TestCheckRefusesAHiddenRuneInTheReason(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ name, reason string }{
+		{"line separator", "a\u2028b"},
+		{"paragraph separator", "a\u2029b"},
+		{"format character", "a\u200bb"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			starter := newStarter(nil)
+
+			req := requestFor(t, "network")
+			req.Reason = tt.reason
+
+			_, err := newChecker(t, starter, time.Now()).Check(t.Context(), actorAda(), req)
+			if !errors.Is(err, drift.ErrInvalid) || len(starter.requests) != 0 {
+				t.Fatalf("Check with reason %q = %v with %d starts, want ErrInvalid and none",
+					tt.reason, err, len(starter.requests))
+			}
+		})
 	}
 }
 

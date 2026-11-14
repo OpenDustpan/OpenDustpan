@@ -3,10 +3,13 @@ package signinsvc_test
 import (
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -56,6 +59,21 @@ func checkRefusedEntry(t *testing.T, w *world, reason, providerID string, kind s
 
 	if e.Outcome == audit.OutcomeSuccess || e.Action != session.ActionSignIn {
 		t.Errorf("audit entry = %s %s, want a refusal of the sign-in", e.Action, e.Outcome)
+	}
+}
+
+// checkRefusalCause fails unless the refusal err holds the cause error, or
+// the cause is nil. The cause reaches the caller in the refusal: the audit
+// entry holds the reason alone.
+func checkRefusalCause(t *testing.T, err, cause error) {
+	t.Helper()
+
+	if cause == nil {
+		return
+	}
+
+	if !errors.Is(err, cause) || !strings.Contains(err.Error(), cause.Error()) {
+		t.Fatalf("refusal %v does not hold the cause %v", err, cause)
 	}
 }
 
@@ -605,6 +623,130 @@ func TestCompleteNoGroupsInTheAssertion(t *testing.T) {
 	}
 }
 
+// TestCompleteGroupsRecordsTheRemovals checks that a sign-in whose claims
+// remove and suspend members records the IDs of both with the source of the
+// provider.
+func TestCompleteGroupsRecordsTheRemovals(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals = true, true
+	w.groupsResult = principal.GroupClaimResult{
+		Added: nil, Removed: []string{"grp-a"}, Suspended: []string{"grp-b"},
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
+	if _, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil)); err != nil {
+		t.Fatalf("Complete() = %v", err)
+	}
+
+	if len(w.removals) != 1 || w.removals[0].Kind != principal.RemovalSourceIdentityProvider ||
+		w.removals[0].ID != "corp" {
+		t.Fatalf("removals = %+v, want the removals of the provider corp", w.removals)
+	}
+
+	if len(w.removedIDs) != 1 || !slices.Equal(w.removedIDs[0], []string{"grp-a", "grp-b"}) {
+		t.Fatalf("groups = %v, want grp-a and grp-b", w.removedIDs)
+	}
+}
+
+// TestCompleteGroupsNoRemovalRecordsNothing checks that a sign-in that
+// removes no member calls no recorder.
+func TestCompleteGroupsNoRemovalRecordsNothing(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals = true, true
+	w.groupsResult = principal.GroupClaimResult{
+		Added: []string{"grp-a"}, Removed: nil, Suspended: nil,
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
+	if _, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil)); err != nil {
+		t.Fatalf("Complete() = %v", err)
+	}
+
+	if len(w.removals) != 0 {
+		t.Fatalf("removals = %+v, want none", w.removals)
+	}
+}
+
+// TestCompleteGroupsRecordErrorGoesOn checks that a failure to record the
+// removals does not refuse the sign-in: the service writes one ERROR line and
+// one audit entry of the failed alert, then starts the session.
+func TestCompleteGroupsRecordErrorGoesOn(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals, w.removalsErr = true, true, errStoreStopped
+	w.groupsResult = principal.GroupClaimResult{
+		Added: nil, Removed: []string{"grp-a"}, Suspended: nil,
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
+	if _, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil)); err != nil {
+		t.Fatalf("Complete() = %v, want the sign-in to go on", err)
+	}
+
+	if len(w.starts) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(w.starts))
+	}
+
+	if len(w.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(w.entries))
+	}
+
+	checkRemovalAlertFailureEntry(t, w.entries[0])
+
+	if !strings.Contains(w.logs.text(), errcode.PrincipalRemovalAlertFailed) ||
+		!strings.Contains(w.logs.text(), "identity-provider") {
+		t.Fatalf("log = %q, want the code and the source kind", w.logs.text())
+	}
+
+	if w.auditFailed != 0 {
+		t.Fatalf("audit failures = %d, want 0", w.auditFailed)
+	}
+}
+
+// checkRemovalAlertFailureEntry fails unless e is the audit entry of the
+// failed removal alert of the provider corp.
+func checkRemovalAlertFailureEntry(t *testing.T, e audit.Entry) {
+	t.Helper()
+
+	if e.Action != principal.AuditActionMassRemovalAlert || e.Outcome != audit.OutcomeFailure ||
+		e.Kind != audit.KindSecurity || e.Namespace != audit.ServerScope ||
+		e.Subject != "identity-provider:corp" || e.Reason != errcode.PrincipalRemovalAlertFailed {
+		t.Fatalf("audit entry = %+v, want the failure of the removal alert", e)
+	}
+}
+
+// TestCompleteGroupsRecordAndAuditErrorsRefuseTheSignIn checks that the
+// sign-in is refused when the audit entry of the failed alert fails too.
+func TestCompleteGroupsRecordAndAuditErrorsRefuseTheSignIn(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.withGroupsPort, w.withRemovals, w.removalsErr = true, true, errStoreStopped
+	w.auditErr = errStoreStopped
+	w.groupsResult = principal.GroupClaimResult{
+		Added: nil, Removed: []string{"grp-a"}, Suspended: nil,
+		Refused: nil, Unmapped: nil, NoMapping: false,
+	}
+
+	_, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), groupsAssertion(), nil))
+	if !errors.Is(err, signinsvc.ErrRemovalAlertUnrecorded) || !errors.Is(err, errStoreStopped) {
+		t.Fatalf("Complete() = %v, want the unrecorded alert and the audit error", err)
+	}
+
+	if len(w.starts) != 0 {
+		t.Fatalf("sessions = %d, want 0", len(w.starts))
+	}
+
+	if w.auditFailed != 1 {
+		t.Fatalf("audit failures = %d, want 1", w.auditFailed)
+	}
+}
+
 // TestRefusalSurvivesAnAuditFailure checks that a failed audit write still
 // refuses the sign-in and reports the failure.
 func TestRefusalSurvivesAnAuditFailure(t *testing.T) {
@@ -629,33 +771,78 @@ func TestRefusalSurvivesAnAuditFailure(t *testing.T) {
 func TestNewRefusesAMissingPort(t *testing.T) {
 	t.Parallel()
 
-	var cfg signinsvc.Config
+	cases := []struct {
+		name  string
+		clear func(cfg *signinsvc.Config)
+	}{
+		{"principals", func(cfg *signinsvc.Config) { cfg.Principals = nil }},
+		{"disabler", func(cfg *signinsvc.Config) { cfg.Disabler = nil }},
+		{"generations", func(cfg *signinsvc.Config) { cfg.Generations = nil }},
+		{"sessions", func(cfg *signinsvc.Config) { cfg.Sessions = nil }},
+		{"audit log", func(cfg *signinsvc.Config) { cfg.Audit = nil }},
+		{"temporary administrators", func(cfg *signinsvc.Config) { cfg.TempAdmins = nil }},
+		{"logger", func(cfg *signinsvc.Config) { cfg.Logger = nil }},
+	}
 
-	if _, err := signinsvc.New(cfg); !errors.Is(err, signinsvc.ErrMissingDependency) {
-		t.Fatalf("New() = %v, want ErrMissingDependency", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld()
+			cfg := signinsvc.Config{
+				Principals:     w,
+				Disabler:       w,
+				Generations:    w,
+				Sessions:       w,
+				Audit:          w,
+				TempAdmins:     w,
+				Groups:         nil,
+				Removals:       nil,
+				States:         nil,
+				Locks:          nil,
+				NameKeys:       nil,
+				Logger:         slog.New(slog.DiscardHandler),
+				OnAuditFailure: nil,
+			}
+			tc.clear(&cfg)
+
+			if _, err := signinsvc.New(cfg); !errors.Is(err, signinsvc.ErrMissingDependency) {
+				t.Fatalf("New() = %v, want ErrMissingDependency", err)
+			}
+		})
 	}
 }
 
-// lookupCase is one principal that a faulty lookup returns with a nil error.
+// lookupCase is one answer of a faulty lookup layer: a principal that the
+// lookup returns with a nil error, or a failed read of the temporary
+// administrators. cause is the error that the refusal must hold, or nil.
 type lookupCase struct {
-	change func(p *principal.Principal)
+	change func(w *world)
+	cause  error
 	name   string
 }
 
-// hostileLookups returns the principals that the service must never sign in
-// or disable for the subject corp:sub-1, one for each condition of the check.
+// hostileLookups returns the answers that the service must never sign in or
+// disable for the subject corp:sub-1, one for each condition of the check.
 func hostileLookups() []lookupCase {
 	return []lookupCase{
-		{func(p *principal.Principal) { p.Subject = "other:sub-9" }, "other subject"},
-		{func(p *principal.Principal) { p.Kind = principal.KindService }, "not a person"},
-		{func(p *principal.Principal) { p.Namespace = "team-a" }, "principal of a namespace"},
-		{func(p *principal.Principal) { p.BreakGlass = true }, "break-glass account"},
+		{func(w *world) { w.principal.Subject = "other:sub-9" }, nil, "other subject"},
+		{func(w *world) { w.principal.Kind = principal.KindService }, nil, "not a person"},
+		{func(w *world) { w.principal.Namespace = "team-a" }, nil, "principal of a namespace"},
+		{func(w *world) { w.principal.BreakGlass = true }, nil, "break-glass account"},
+		{func(w *world) { w.tempAdmin = true }, nil, "temporary administrator"},
+		{
+			func(w *world) { w.tempAdminErr = errStoreStopped }, errStoreStopped,
+			"temporary administrator read failed",
+		},
 	}
 }
 
-// TestCompleteSubjectDisabledChecksTheLookup sends a principal that the
-// lookup should never return, with a nil error, to the disable step. The
-// step must disable and bump nothing, as if the lookup layer had failed.
+// TestCompleteSubjectDisabledChecksTheLookup sends the answers that the
+// lookup layer should never give, with a nil error, to the disable step. The
+// step must disable and bump nothing, as if the lookup layer had failed. A
+// failed read of the temporary administrators has its own reason, and the
+// refusal holds the read error.
 func TestCompleteSubjectDisabledChecksTheLookup(t *testing.T) {
 	t.Parallel()
 
@@ -664,25 +851,41 @@ func TestCompleteSubjectDisabledChecksTheLookup(t *testing.T) {
 			t.Parallel()
 
 			w := newWorld()
-			tc.change(&w.principal)
+			tc.change(w)
+
+			reason := signinsvc.ReasonDisableNotTarget
+			if tc.cause != nil {
+				reason = signinsvc.ReasonTargetLookup
+			}
 
 			_, err := w.service(t).Complete(t.Context(),
 				requestOf(oidcProvider(), disabledAssertion(), session.ErrSubjectDisabled))
-			if r := refusalOf(t, err); r.Reason != signinsvc.ReasonDisableNotTarget {
-				t.Fatalf("reason = %q, want %q", r.Reason, signinsvc.ReasonDisableNotTarget)
+			r := refusalOf(t, err)
+
+			if r.Reason != reason {
+				t.Fatalf("reason = %q, want %q", r.Reason, reason)
 			}
+
+			if !errors.Is(err, session.ErrSubjectDisabled) {
+				t.Fatalf("the refusal holds no method error: %v", err)
+			}
+
+			checkRefusalCause(t, err, tc.cause)
+			checkCauseLogged(t, w, tc.cause)
 
 			if len(w.disabled) != 0 || len(w.bumped) != 0 {
 				t.Fatalf("disabled %v, bumped %v, want none", w.disabled, w.bumped)
 			}
 
-			checkRefusedEntry(t, w, signinsvc.ReasonDisableNotTarget, "corp", session.MethodOIDC)
+			checkRefusedEntry(t, w, reason, "corp", session.MethodOIDC)
 		})
 	}
 }
 
-// TestCompleteChecksTheLookup sends the same principals to the success path.
-// The service must refuse and start no session.
+// TestCompleteChecksTheLookup sends the same answers to the success path.
+// The service must refuse and start no session. A failed read of the
+// temporary administrators has its own reason, and the refusal holds the
+// read error.
 func TestCompleteChecksTheLookup(t *testing.T) {
 	t.Parallel()
 
@@ -691,15 +894,46 @@ func TestCompleteChecksTheLookup(t *testing.T) {
 			t.Parallel()
 
 			w := newWorld()
-			tc.change(&w.principal)
+			tc.change(w)
 
-			_, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), oidcAssertion(), nil))
-			if r := refusalOf(t, err); r.Reason != signinsvc.ReasonNotTarget {
-				t.Fatalf("reason = %q, want %q", r.Reason, signinsvc.ReasonNotTarget)
+			reason := signinsvc.ReasonNotTarget
+			if tc.cause != nil {
+				reason = signinsvc.ReasonTargetLookup
 			}
 
-			checkRefusedEntry(t, w, signinsvc.ReasonNotTarget, "corp", session.MethodOIDC)
+			_, err := w.service(t).Complete(t.Context(), requestOf(oidcProvider(), oidcAssertion(), nil))
+			r := refusalOf(t, err)
+
+			if r.Reason != reason {
+				t.Fatalf("reason = %q, want %q", r.Reason, reason)
+			}
+
+			checkRefusalCause(t, err, tc.cause)
+
+			checkRefusedEntry(t, w, reason, "corp", session.MethodOIDC)
+
+			// A failed read is a fault, not a decision about the person.
+			answer, outcome := signinsvc.AnswerRefused, audit.OutcomeDenied
+			if tc.cause != nil {
+				answer, outcome = signinsvc.AnswerFailed, audit.OutcomeFailure
+			}
+
+			if r.Answer != answer || w.entries[0].Outcome != outcome {
+				t.Fatalf("answer %v, outcome %q, want %v, %q", r.Answer, w.entries[0].Outcome, answer, outcome)
+			}
+
+			checkCauseLogged(t, w, tc.cause)
 		})
+	}
+}
+
+// checkCauseLogged fails unless the log of w holds the text of cause, or the
+// cause is nil.
+func checkCauseLogged(t *testing.T, w *world, cause error) {
+	t.Helper()
+
+	if cause != nil && !strings.Contains(w.logs.text(), cause.Error()) {
+		t.Fatalf("the log does not name the cause %q: %s", cause, w.logs.text())
 	}
 }
 

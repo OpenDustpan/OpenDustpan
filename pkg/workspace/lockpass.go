@@ -3,6 +3,8 @@ package workspace
 import (
 	"context"
 	"time"
+
+	"opendustpan.org/opendustpan/pkg/identity"
 )
 
 type (
@@ -25,6 +27,15 @@ func JobFrom(ctx context.Context) string {
 	}
 
 	return ""
+}
+
+// originFrom returns the origin of the state write that the request in ctx
+// makes: the job whose job token made it. The commit stays empty, because
+// OpenTofu reports none: a job write takes it from the spec of the job when
+// the store publishes the version. A request with another credential gives an
+// empty origin.
+func originFrom(ctx context.Context) identity.StateOrigin {
+	return identity.StateOrigin{Job: JobFrom(ctx), Commit: ""}
 }
 
 // WithLockPass returns a context for Store.CreateWorkspace. startedAt is when

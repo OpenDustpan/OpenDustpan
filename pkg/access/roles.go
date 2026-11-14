@@ -45,8 +45,9 @@ const (
 	// RoleAccountAdministrator holds the administration, data and
 	// delegation actions: the tenant side of a hosted installation. It holds
 	// no operator action, and no action of siteOnlyActions. On the installation, the delegation actions let it
-	// make a token for any service principal and so act as that principal,
-	// with every grant that the principal has now or gets later.
+	// make a token for a service principal whose reach fits inside its own
+	// reach, and so act as that principal, with every grant that the
+	// principal has now or gets later.
 	RoleAccountAdministrator = "account-administrator"
 	// RoleSiteAdministrator holds the actions of every family. A
 	// self-hosted installation can use it. Like RoleAccountAdministrator,
@@ -85,7 +86,7 @@ var builtInDescriptions = []struct {
 	},
 	{
 		RoleAccountAdministrator,
-		"Manages principals, groups, roles, grants and namespaces, makes the tokens of every service principal, and holds every data action.",
+		"Manages principals, groups, roles, grants and namespaces, makes the tokens of each service principal whose reach fits inside its own reach, and holds every data action.",
 	},
 	{RoleSiteAdministrator, "Holds every action of the installation."},
 	{

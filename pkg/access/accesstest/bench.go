@@ -72,7 +72,7 @@ func Bench(b *testing.B, s BenchStore) {
 	units, collections := seedBenchInstallation(b, s)
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: s, Callers: s, Collections: collections, Units: s, Principals: nil,
+		Store: s, Callers: s, Collections: collections, Units: s, Principals: s,
 	})
 	if err != nil {
 		b.Fatalf("authorizer: %v", err)
@@ -174,7 +174,7 @@ func seedBenchPrincipals(b *testing.B, s BenchStore) {
 	for i := range benchGroups {
 		g := principal.Group{
 			CreatedAt: at(0), UpdatedAt: at(0), ID: fmt.Sprintf("grp-%04d", i), Name: fmt.Sprintf("team-%04d", i),
-			Description: "", Source: principal.SourceLocal, MemberCount: 0,
+			Description: "", Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 		}
 		if err := s.CreateGroup(ctx, g, entry()); err != nil {
 			b.Fatalf("seed group: %v", err)

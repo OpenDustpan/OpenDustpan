@@ -311,7 +311,10 @@ func addKeepSetStack(t *testing.T, f fixture, ns namespace.Name, name string, ke
 			renamed := ref
 			renamed.Stack = stack.Name(name + "-renamed")
 
-			if err := f.s.RenameStack(t.Context(), ref, renamed.Stack, f.fence); err != nil {
+			err := f.s.RenameStack(
+				t.Context(), ref, renamed.Stack, f.fence, renameEntry(ref.Namespace, ref),
+			)
+			if err != nil {
 				t.Fatalf("rename stack %s: %v", ref, err)
 			}
 

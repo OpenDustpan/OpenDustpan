@@ -512,3 +512,154 @@ func TestRefusedAddressCountsAgainstTheLimits(t *testing.T) {
 			f.store.secretReads-reads, len(f.store.entries)-entries)
 	}
 }
+
+// windowEnd returns the end of the window of length that holds now, on the
+// clock of authgatetest.Memory.
+func windowEnd(now time.Time, length time.Duration) time.Time {
+	at, ms := now.UnixMilli(), length.Milliseconds()
+
+	return time.UnixMilli((at/ms + 1) * ms)
+}
+
+// TestTakeRefusesHostileIdentifiers sends hostile names and sink IDs to the
+// limiter. Each case must fail before a counter call, so the counts of the
+// valid keys stay the same.
+func TestTakeRefusesHostileIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	const (
+		validNS = namespace.Name("shop")
+		validID = "snk-aaaaaaaaaaaaaaaaaaaa"
+	)
+
+	tests := []struct {
+		name string
+		ns   namespace.Name
+		id   string
+	}{
+		{"empty namespace", "", validID},
+		{"empty sink ID", validNS, ""},
+		{"empty namespace and sink ID", "", ""},
+		{"slash in namespace", "a/b", validID},
+		{"slash in sink ID", validNS, "snk-a/b"},
+		{"pipe in namespace", "a|b", validID},
+		{"pipe in sink ID", validNS, "snk-a|b"},
+		{"counter key in namespace", "sinktest|namespace|x", validID},
+		{"counter key in sink ID", validNS, "sinktest|namespace|x"},
+		{"parent in namespace", "..", validID},
+		{"parent in sink ID", validNS, "snk-.."},
+		{"path up in sink ID", validNS, "snk-a/../b"},
+		{"carriage return in namespace", "a\rb", validID},
+		{"carriage return in sink ID", validNS, "snk-a\rb"},
+		{"line feed in namespace", "a\nb", validID},
+		{"line feed in sink ID", validNS, "snk-a\nb"},
+		{
+			"long namespace", namespace.Name(strings.Repeat("a", namespace.MaxNameLength+1)),
+			validID,
+		},
+		{"long sink ID", validNS, notify.SinkIDPrefix + strings.Repeat("a", 100)},
+		{"no sink prefix", validNS, "b"},
+		{"uppercase sink ID", validNS, "snk-AAAAAAAAAAAAAAAAAAAA"},
+		{"non-ASCII in namespace", "shöp", validID},
+		{"non-ASCII in sink ID", validNS, "snk-äaaa"},
+		{"NUL in namespace", "a\x00b", validID},
+		{"NUL in sink ID", validNS, "snk-a\x00b"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkHostileTake(t, validNS, validID, tt.ns, tt.id)
+		})
+	}
+}
+
+// checkHostileTake proves that take refuses the hostile namespace and sink ID
+// before a counter call, and that the counts of the valid keys stay the same.
+func checkHostileTake(
+	t *testing.T, validNS namespace.Name, validID string, hostileNS namespace.Name, hostileID string,
+) {
+	t.Helper()
+
+	clk := newClock()
+	counter := authgatetest.NewMemory(clk.Now)
+	now := clk.Now()
+
+	if _, err := sinks.TakeForTest(t.Context(), counter, validNS, validID, now); err != nil {
+		t.Fatalf("TakeForTest of a valid sink = %v, want nil", err)
+	}
+
+	sinkKey := sinks.SinkKeyForTest(validNS, validID)
+	namespaceKey := sinks.NamespaceKeyForTest(validNS)
+	sinkEnd := windowEnd(now, sinks.TestSinkInterval)
+	namespaceEnd := windowEnd(now, sinks.TestNamespaceWindow)
+	adds := counter.Adds()
+	sinkCount := counter.Count(sinkKey, sinkEnd)
+	namespaceCount := counter.Count(namespaceKey, namespaceEnd)
+
+	if sinkCount != 1 || namespaceCount != 1 {
+		t.Fatalf("counts of the valid keys = %d and %d, want 1 and 1", sinkCount, namespaceCount)
+	}
+
+	_, err := sinks.TakeForTest(t.Context(), counter, hostileNS, hostileID, now)
+	if !errors.Is(err, notify.ErrInvalid) || errors.Is(err, sinks.ErrLimitUnavailable) {
+		t.Fatalf(
+			"TakeForTest(%q, %q) = %v, want notify.ErrInvalid and not ErrLimitUnavailable",
+			hostileNS,
+			hostileID,
+			err,
+		)
+	}
+
+	if got := counter.Adds(); got != adds {
+		t.Fatalf("the refused take wrote %d counts, want none", got-adds)
+	}
+
+	if got := counter.Count(sinkKey, sinkEnd); got != sinkCount {
+		t.Fatalf("the count of the sink key changed from %d to %d", sinkCount, got)
+	}
+
+	if got := counter.Count(namespaceKey, namespaceEnd); got != namespaceCount {
+		t.Fatalf("the count of the namespace key changed from %d to %d", namespaceCount, got)
+	}
+}
+
+// TestHostileIdentifiersCannotShareACounterKey proves that the pair that
+// would make one counter key, namespace "a" with sink ID "b/c" and namespace
+// "a/b" with sink ID "c", is refused before it writes: the limits never count
+// the two pairs as one.
+func TestHostileIdentifiersCannotShareACounterKey(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	counter := authgatetest.NewMemory(clk.Now)
+	now := clk.Now()
+
+	first := sinks.SinkKeyForTest("a", "b/c")
+	second := sinks.SinkKeyForTest("a/b", "c")
+	if first != second {
+		t.Fatalf("the counter keys %q and %q differ, so the case does not collide", first, second)
+	}
+
+	pairs := []struct {
+		ns namespace.Name
+		id string
+	}{{"a", "b/c"}, {"a/b", "c"}}
+
+	for _, pair := range pairs {
+		_, err := sinks.TakeForTest(t.Context(), counter, pair.ns, pair.id, now)
+		if !errors.Is(err, notify.ErrInvalid) || errors.Is(err, sinks.ErrLimitUnavailable) {
+			t.Fatalf(
+				"TakeForTest(%q, %q) = %v, want notify.ErrInvalid and not ErrLimitUnavailable",
+				pair.ns,
+				pair.id,
+				err,
+			)
+		}
+	}
+
+	if counter.Adds() != 0 || counter.Windows() != 0 {
+		t.Fatalf("the refused takes wrote %d counts in %d windows, want none", counter.Adds(), counter.Windows())
+	}
+}

@@ -714,7 +714,7 @@ func checkPublication(p *selfservice.Publication, fence namespace.Fence, e []aud
 		return fmt.Errorf("%w: reference %s, blueprint %q", selfservice.ErrInvalid, p.Ref, p.Blueprint.Name)
 	case p.DraftVersion < 1:
 		return fmt.Errorf("%w: draft %s at %d", selfservice.ErrConflict, p.Ref, p.DraftVersion)
-	case p.Blueprint.ExprVersion != "" && !validExprVersion(p.Blueprint.ExprVersion):
+	case p.Blueprint.ExprVersion != "" && !validExprVersion(string(p.Blueprint.ExprVersion)):
 		return fmt.Errorf("%w: Expr version %q", selfservice.ErrInvalid, p.Blueprint.ExprVersion)
 	}
 
@@ -811,7 +811,9 @@ func (m *memDB) SetExprVersion(_ context.Context, c selfservice.ExprVersionChang
 		return fmt.Errorf("%w: Expr version %q", selfservice.ErrInvalid, c.Expr)
 	}
 
-	return m.changeVersion(c.Ref, c.Number, fence, e, func(v *selfservice.Version) { v.Blueprint.ExprVersion = c.Expr })
+	return m.changeVersion(c.Ref, c.Number, fence, e, func(v *selfservice.Version) {
+		v.Blueprint.ExprVersion = selfservice.ExprVersionName(c.Expr)
+	})
 }
 
 // checkDraft checks that p publishes the stored draft, once. The caller holds

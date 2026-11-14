@@ -39,6 +39,11 @@ The discovery document has these members:
 | `scopes_supported` | `["openid"]` |
 | `claims_supported` | The claims that a token can hold |
 
+A token never holds `auth_time`, `amr` or `acr`. A relying party can read these
+claims as proof that a person signed in a short time ago, or with a stronger
+factor. The issuer signs for a job or a run, not for a sign-in of a person. An
+open whose claims hold one of these names fails, and the server signs no token.
+
 Each key of the JWKS has `kty` (`RSA`), `use` (`sig`), `alg` (`RS256`), `kid`,
 `n` and `e`. A key ID starts with `oik-`. No answer holds a private key.
 

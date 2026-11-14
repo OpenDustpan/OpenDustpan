@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
@@ -149,21 +150,21 @@ func (f sweepFixture) deleteUnits(t *testing.T) []sweptUnit {
 
 	ref := stack.Ref{Namespace: "acme", Project: "web", Stack: "prod"}
 
-	st, err := f.svc.stacks.Create(ctx, ref, nil)
+	ns, err := f.svc.namespaces.Get(ctx, "acme")
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	st, err := f.svc.stacks.CreatePlaced(ctx, ref, nil, placementtest.Stack(t, f.store, ns.Fence()))
 	if err != nil {
 		t.Fatalf("create stack: %v", err)
 	}
 
 	wsRef := workspace.Ref{Namespace: "acme", Name: "prod"}
 
-	ws, err := f.svc.workspaces.Create(ctx, wsRef)
+	ws, err := f.svc.workspaces.Create(ctx, wsRef, placementtest.Workspace(t, f.store, ns.Fence()))
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
-	}
-
-	ns, err := f.svc.namespaces.Get(ctx, "acme")
-	if err != nil {
-		t.Fatalf("get namespace: %v", err)
 	}
 
 	units := []sweptUnit{

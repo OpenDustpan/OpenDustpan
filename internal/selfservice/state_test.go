@@ -385,6 +385,16 @@ func TestRequirements(t *testing.T) {
 		err  error
 	}{
 		{
+			"write draft", selfservice.OpWriteDraft, target("", identity.Object{}, false),
+			[]selfservice.Requirement{{Action: selfservice.ActionBlueprintPublish, Object: bp}},
+			nil,
+		},
+		{
+			"publish", selfservice.OpPublish, target("", identity.Object{}, false),
+			[]selfservice.Requirement{{Action: selfservice.ActionBlueprintPublish, Object: bp}},
+			nil,
+		},
+		{
 			"create", selfservice.OpSubmit, target(selfservice.OperationCreate, identity.Object{}, false),
 			[]selfservice.Requirement{{Action: selfservice.ActionSelfServiceRequest, Object: bp}},
 			nil,

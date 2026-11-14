@@ -1112,7 +1112,7 @@ func (k NotificationStore) Record(ctx context.Context, fence namespace.Fence, a 
 
 // History implements notify.Deliveries.
 func (k NotificationStore) History(
-	ctx context.Context, scope namespace.Name, id string, limit int,
+	ctx context.Context, scope namespace.Name, id string, after *notify.DeliveryCursor, limit int,
 ) ([]notify.Delivery, error) {
 	var out []notify.Delivery
 
@@ -1133,10 +1133,21 @@ func (k NotificationStore) History(
 			return nil
 		}
 
-		rows, err := q.ListNotificationDeliveriesOfSubscription(ctx,
-			db.ListNotificationDeliveriesOfSubscriptionParams{
-				Scope: scope.String(), SubscriptionID: id, MaxRows: rowLimit(limit),
-			})
+		var rows []db.NotificationDelivery
+
+		if after == nil {
+			rows, err = q.ListNotificationDeliveriesOfSubscription(ctx,
+				db.ListNotificationDeliveriesOfSubscriptionParams{
+					Scope: scope.String(), SubscriptionID: id, MaxRows: rowLimit(limit),
+				})
+		} else {
+			rows, err = q.ListNotificationDeliveriesOfSubscriptionAfter(ctx,
+				db.ListNotificationDeliveriesOfSubscriptionAfterParams{
+					Scope: scope.String(), SubscriptionID: id,
+					AfterMs: after.NextAt.UnixMilli(), AfterID: after.ID, MaxRows: rowLimit(limit),
+				})
+		}
+
 		if err != nil {
 			return fmt.Errorf("select deliveries: %w", err)
 		}
@@ -1150,6 +1161,47 @@ func (k NotificationStore) History(
 	}
 
 	return out, nil
+}
+
+// CountBefore implements notify.Deliveries.
+func (k NotificationStore) CountBefore(
+	ctx context.Context, scope namespace.Name, id string, after *notify.DeliveryCursor, maxCount int,
+) (int, error) {
+	var count int64
+
+	// One snapshot, so the subscription and its deliveries come from one state.
+	err := k.s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		sub, err := q.GetNotificationSubscription(ctx, id)
+
+		switch {
+		case err == nil && sub.Scope != scope.String():
+			return fmt.Errorf("count deliveries of %s: %w", id, notify.ErrNotFound)
+		case err != nil && !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("select subscription: %w", err)
+		default:
+			// The subscription is in the scope, or it was deleted and its history stays.
+		}
+
+		if after == nil || maxCount <= 0 {
+			return nil
+		}
+
+		count, err = q.CountNotificationDeliveriesOfSubscriptionBefore(ctx,
+			db.CountNotificationDeliveriesOfSubscriptionBeforeParams{
+				Scope: scope.String(), SubscriptionID: id,
+				AfterMs: after.NextAt.UnixMilli(), AfterID: after.ID, MaxRows: rowLimit(maxCount),
+			})
+		if err != nil {
+			return fmt.Errorf("count deliveries: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return int(count), nil
 }
 
 // Redeliver implements notify.Deliveries.

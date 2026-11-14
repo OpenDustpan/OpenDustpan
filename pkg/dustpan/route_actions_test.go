@@ -37,6 +37,7 @@ var publicRoutes = map[string]string{
 	"GET /health/ready/{component}":                                    "readiness probe of one component",
 	"GET /api/server/sign-in/{provider}":                               "start of an identity provider sign-in",
 	"POST /api/dustpan/v1/sign-in/password":                            "the user name and the password in the body are the credential",
+	"POST /api/dustpan/v1/sign-in/providers/{provider}/password":       "the user name and the password in the body are the credential, checked at the directory of the provider",
 	"POST /api/dustpan/v1/sign-in/dev-code":                            "the one-time code of a dev installation is the credential",
 	"POST /api/dustpan/v1/sign-in/passkey/begin":                       "start of a passkey sign-in: the person has no session, and the options name no person",
 	"POST /api/dustpan/v1/sign-in/passkey/finish":                      "the signed response of the passkey in the body is the credential",
@@ -496,6 +497,14 @@ func TestRouteActionsCheckFailsOnAMutation(t *testing.T) {
 			want: "zzNoAction declares no action",
 		},
 		{
+			name:   "a self-service write route whose operation drops its action",
+			public: publicRoutes,
+			facts: mutate(base, func(f *routeFacts) {
+				dropOperationActions(f, http.MethodPut, selfServiceDraftPath, "writeBlueprintDraft")
+			}),
+			want: "writeBlueprintDraft declares no action",
+		},
+		{
 			name:   "a tool route with a row that has no enforced action",
 			public: publicRoutes,
 			facts: mutate(base, func(f *routeFacts) {
@@ -688,6 +697,19 @@ func operationOf(id, path string, actions []string) apidesc.Operation {
 }
 
 // mutate returns a copy of f that change has edited.
+// selfServiceDraftPath is the path of the draft route of the blueprint API.
+const selfServiceDraftPath = "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/draft"
+
+// dropOperationActions replaces the operation of method and path by one that
+// declares no action, as a description that lost its action would.
+func dropOperationActions(f *routeFacts, method, path, id string) {
+	for i := range f.operations {
+		if f.operations[i].Method == method && f.operations[i].Path == path {
+			f.operations[i] = operationOf(id, path, nil)
+		}
+	}
+}
+
 func mutate(f routeFacts, change func(*routeFacts)) routeFacts {
 	out := routeFacts{
 		sources:      slices.Clone(f.sources),

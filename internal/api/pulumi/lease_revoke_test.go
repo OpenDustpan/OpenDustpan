@@ -90,7 +90,7 @@ func startWithToken(t *testing.T, f updateFixture, token string) (updatePaths, s
 	u, err := f.updates.Create(
 		t.Context(),
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)

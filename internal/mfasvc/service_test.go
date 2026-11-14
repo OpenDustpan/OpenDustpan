@@ -469,10 +469,6 @@ type ownerCase struct {
 func TestCeremonyBelongsToTheCaller(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
-	aliceCred, _ := f.register(t, alice, "laptop")
-	bobCred, _ := f.register(t, bob, "phone")
-
 	cases := []ownerCase{
 		{name: "a registration of another person", run: ownRegistrationBegin},
 		{name: "a registration finished in another session", run: ownRegistrationFinish},
@@ -487,6 +483,13 @@ func TestCeremonyBelongsToTheCaller(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
+
+			// Each subtest makes its own fixture and credentials: Assert
+			// changes the counter of the credential that it uses.
+			f := newFixture(t)
+			aliceCred, _ := f.register(t, alice, "laptop")
+			bobCred, _ := f.register(t, bob, "phone")
+
 			c.run(t, f, aliceCred, bobCred)
 		})
 	}

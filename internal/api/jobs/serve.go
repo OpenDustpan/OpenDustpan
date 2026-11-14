@@ -65,7 +65,15 @@ type locationResponse struct {
 	Ref        string `json:"ref,omitempty"`
 	Directory  string `json:"directory,omitempty"`
 	Revision   string `json:"revision,omitempty"`
+	Source     string `json:"source,omitempty"`
 }
+
+// The sources of the effective code location of a job.
+const (
+	locationSourceRequest   = "request"
+	locationSourceUnit      = "unit"
+	locationSourceNamespace = "namespace"
+)
 
 type stepResponse struct {
 	Name             string `json:"name"`
@@ -240,20 +248,55 @@ func setETag(w http.ResponseWriter, j *job.Job) {
 	w.Header().Set("ETag", `"v`+strconv.FormatInt(j.Version, 10)+`"`)
 }
 
-// answerLocation maps a code location to its wire shape. A repository that
-// job.CheckRepository refuses is answered empty.
+// answerLocation maps the effective code location of s to its wire shape. It
+// names the source of the location. A repository that job.CheckRepository
+// refuses is answered empty.
 //
 // Defense in depth: the job service and the planner refuse such a repository
 // at the start, so no new job holds one. This check stays so that a record
 // from before that check, or from another writer of the store, never gives a
 // caller the password or the user name that a repository URL can hold.
-func answerLocation(l job.Location) locationResponse {
-	out := locationResponse(l)
+func answerLocation(s *job.Spec) locationResponse {
+	l := s.Location
+	out := locationResponse{
+		Connection: l.Connection, Repository: l.Repository, Ref: l.Ref, Directory: l.Directory,
+		Revision: l.Revision, Source: "",
+	}
+
+	if !l.IsZero() {
+		out.Source = locationSourceOf(s)
+	}
+
 	if job.CheckRepository(l.Repository) != nil {
 		out.Repository = ""
 	}
 
 	return out
+}
+
+// locationSourceOf returns the source of the effective code location of s. A
+// job that a server did not record a source for gets the source that its list
+// of defaulted values gives.
+func locationSourceOf(s *job.Spec) string {
+	if s.LocationSource == "" {
+		if slices.Contains(s.Defaulted, job.DefaultedLocation) {
+			return locationSourceUnit
+		}
+
+		return locationSourceRequest
+	}
+
+	switch s.LocationSource {
+	case job.LocationSourceUnit:
+		return locationSourceUnit
+	case job.LocationSourceNamespace:
+		return locationSourceNamespace
+	case job.LocationSourceRequest:
+		return locationSourceRequest
+	default:
+		// A source that this server does not know names no source.
+		return ""
+	}
 }
 
 // toJobResponse maps a job to its wire shape.
@@ -270,7 +313,7 @@ func toJobResponse(j *job.Job) jobResponse {
 		State:        string(j.State),
 		Wait:         string(j.Wait),
 		Reason:       j.Reason,
-		Location:     answerLocation(j.Spec.Location),
+		Location:     answerLocation(&j.Spec),
 		Pool:         "",
 		PoolID:       j.Spec.Pool,
 		Profile:      j.Spec.Profile,

@@ -1,0 +1,32 @@
+{
+ "openapi": "3.1.0",
+ "info": {"title": "Type list", "version": "0.1.0"},
+ "tags": [{"name": "widgets", "description": "Widgets."}],
+ "paths": {
+  "/api/dustpan/v1/widget": {
+   "get": {
+    "operationId": "getWidget",
+    "tags": ["widgets"],
+    "responses": {
+     "200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Widget"}}}},
+     "default": {"description": "err", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorResponse"}}}}
+    },
+    "x-dustpan-actions": [{"action": "unit:read", "object": "unit"}]
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "Widget": {"type": "object", "required": ["value", "state"], "properties": {
+    "value": {"type": ["string", "number", "boolean"], "description": "The value."},
+    "count": {"type": ["integer", "string"], "description": "A count or a text."},
+    "amount": {"type": ["number", "string"], "description": "An amount or a text."},
+    "note": {"type": ["string", "null"], "description": "A note."},
+    "state": {"$ref": "#/components/schemas/State", "description": "The state."}}},
+   "State": {"type": "string", "enum": ["open", "closed"]},
+   "ErrorResponse": {"type": "object", "required": ["code", "message"],
+    "properties": {"code": {"type": "integer"}, "message": {"type": "string"}, "errorCode": {"type": "string"},
+     "errorArgs": {"type": "object", "additionalProperties": true}}}
+  }
+ }
+}

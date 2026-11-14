@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"slices"
 	"time"
@@ -167,6 +168,39 @@ func (c *Checker) Now() time.Time {
 
 	return time.Now().UTC()
 }
+
+// SignInFromBody reports whether a sign-in that starts a session from the
+// body of r may come from where it comes from. It is the check against login
+// CSRF: another site must not sign the browser of a visitor in to an account
+// of the attacker. The request has no session cookie yet, so Authenticate
+// does not check it. The route calls this check before any store or
+// directory call, and refuses a request that fails it.
+//
+//   - The media type of the body must be application/json. A form of another
+//     site can send only text/plain, application/x-www-form-urlencoded or
+//     multipart/form-data without a CORS preflight, and the server answers
+//     no preflight.
+//   - The Origin header, when present, must be an allowed origin. "null" is
+//     not one.
+//   - The Sec-Fetch-Site header, when present, must not be cross-site.
+//
+// A request with neither header comes from a client that is not a browser,
+// for example curl, and passes when its media type is JSON.
+func (c *Checker) SignInFromBody(r *http.Request) bool {
+	mediaType, _, err := mime.ParseMediaType(apidesc.Header(r, "Content-Type"))
+	if err != nil || mediaType != jsonMediaType {
+		return false
+	}
+
+	if origin := apidesc.Header(r, "Origin"); origin != "" && !slices.Contains(c.origins, origin) {
+		return false
+	}
+
+	return apidesc.Header(r, "Sec-Fetch-Site") != "cross-site"
+}
+
+// jsonMediaType is the only media type of the body of a sign-in.
+const jsonMediaType = "application/json"
 
 // refuseOwner returns identity.ErrUnauthenticated, wrapped, for the owner of a
 // session that no session can act as. A dev person is refused when the Checker

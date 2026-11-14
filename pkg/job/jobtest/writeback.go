@@ -48,11 +48,6 @@ func deliver(t *testing.T, h Harness, f fixture, unit identity.Object, d job.Del
 	return stored
 }
 
-// version returns a state version of unit at at.
-func version(unit identity.Object, id string, at time.Time, final bool) job.StateVersion {
-	return job.StateVersion{Unit: unit, VersionID: id, Commit: "", Job: "", At: at, Final: final}
-}
-
 // followUp reports whether the operation of kind k of the job id exists:
 // a start with its key returns it and created false.
 func followUp(t *testing.T, h Harness, id job.ID, k durable.Kind) bool {
@@ -94,16 +89,19 @@ func testObserveStaleFence(t *testing.T, h Harness) {
 		t.Fatalf("BumpFence = %v", err)
 	}
 
-	_, err := h.Jobs.ObserveStateVersion(t.Context(), version(f.unit, svOne, time.Now().Add(time.Second), true),
-		f.fence)
+	if h.WriteState == nil {
+		t.Fatal("the harness gives no state writer")
+	}
+
+	_, err := h.WriteState(t.Context(), f.fence, f.unit, true)
 	if !errors.Is(err, namespace.ErrFenced) {
-		t.Fatalf("ObserveStateVersion with a stale fence = %v, want ErrFenced", err)
+		t.Fatalf("WriteState with a stale fence = %v, want ErrFenced", err)
 	}
 
 	assertState(t, h, j.ID, job.StateAwaitingState)
 }
 
-func testObserveStateVersion(t *testing.T, h Harness) {
+func testFinalStateVersionCloses(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := setUp(t, h)
@@ -114,23 +112,24 @@ func testObserveStateVersion(t *testing.T, h Harness) {
 	}
 
 	delivered := deliver(t, h, f, f.unit, job.DeliveryDirectPush)
+
+	// A final write of another unit closes none of this unit.
+	writeStateOf(t, h, f.fence, other, true)
+	assertState(t, h, delivered.ID, job.StateAwaitingState)
+
 	elsewhere := deliver(t, h, f, other, job.DeliveryDirectPush)
-	after := time.Now().Add(time.Second)
 
-	closesNone(t, h, f, map[string]job.StateVersion{
-		"before the delivery":   version(f.unit, "sv-early", delivered.Delivery.DeliveredAt.Add(-time.Second), true),
-		"an intermediate write": version(f.unit, "sv-mid", after, false),
-	})
+	// An intermediate write of the unit closes none of its jobs.
+	writeState(t, h, f, false)
+	assertState(t, h, delivered.ID, job.StateAwaitingState)
 
-	closed, err := h.Jobs.ObserveStateVersion(t.Context(), version(f.unit, svOne, after, true), f.fence)
-	if err != nil || len(closed) != 1 || closed[0].ID != delivered.ID {
-		t.Fatalf("ObserveStateVersion closed %v, %v; want %s", ids(closed), err, delivered.ID)
-	}
+	closedBy := writeState(t, h, f, true)
 
-	if closed[0].State != job.StateSucceeded || closed[0].Closed == nil || closed[0].Closed.VersionID != svOne ||
-		closed[0].Verification != job.VerificationPending {
-		t.Fatalf("closed job = %s, %+v, %q; want succeeded, closed by sv-1, verification pending",
-			closed[0].State, closed[0].Closed, closed[0].Verification)
+	closed, err := h.Jobs.Get(t.Context(), delivered.ID)
+	if err != nil || closed.State != job.StateSucceeded || closed.Closed == nil ||
+		closed.Closed.VersionID != closedBy || closed.Verification != job.VerificationPending {
+		t.Fatalf("closed job = %s, %+v, %q, %v; want succeeded, closed by %s, verification pending",
+			closed.State, closed.Closed, closed.Verification, err, closedBy)
 	}
 
 	if !followUp(t, h, delivered.ID, job.KindVerify) {
@@ -138,19 +137,6 @@ func testObserveStateVersion(t *testing.T, h Harness) {
 	}
 
 	assertState(t, h, elsewhere.ID, job.StateAwaitingState)
-}
-
-// closesNone fails t when a state version of versions closes a job. The
-// keys name the cases.
-func closesNone(t *testing.T, h Harness, f fixture, versions map[string]job.StateVersion) {
-	t.Helper()
-
-	for name := range versions {
-		closed, err := h.Jobs.ObserveStateVersion(t.Context(), versions[name], f.fence)
-		if err != nil || len(closed) != 0 {
-			t.Fatalf("%s: closed %v, %v; want none", name, ids(closed), err)
-		}
-	}
 }
 
 func testMergeAndVerify(t *testing.T, h Harness) {
@@ -163,22 +149,19 @@ func testMergeAndVerify(t *testing.T, h Harness) {
 		t.Fatalf("the delivery of a review request started no %s operation", job.KindReviewWatch)
 	}
 
-	closesNone(t, h, f, map[string]job.StateVersion{
-		"a state version before the merge": version(f.unit, svOne, time.Now(), true),
-	})
-
-	merged := change(&j, job.EventMerged)
-	merged.MergedAt = time.Now().UTC()
-	j = apply(t, h, f, merged)
-
-	if j.State != job.StateAwaitingState || j.Delivery == nil || j.Delivery.MergedAt.IsZero() {
-		t.Fatalf("merged job = %s, %+v; want awaiting-state with a merge time", j.State, j.Delivery)
+	// The final version is written before the merge. The merge at its time
+	// closes the job on it.
+	closedBy := writeState(t, h, f, true)
+	if fv := finalVersionOf(t, h, f.fence.Namespace, f.unit.UnitID()); fv.VersionID != closedBy {
+		t.Fatalf("final version = %s, want the write %s", fv.VersionID, closedBy)
 	}
 
-	closed, err := h.Jobs.ObserveStateVersion(t.Context(),
-		version(f.unit, svTwo, merged.MergedAt.Add(time.Second), true), f.fence)
-	if err != nil || len(closed) != 1 || closed[0].ID != j.ID {
-		t.Fatalf("a state version after the merge closed %v, %v; want %s", ids(closed), err, j.ID)
+	merged := change(&j, job.EventMerged)
+	merged.MergedAt = finalVersionOf(t, h, f.fence.Namespace, f.unit.UnitID()).At
+	j = apply(t, h, f, merged)
+
+	if j.State != job.StateSucceeded || j.Closed == nil || j.Closed.VersionID != closedBy {
+		t.Fatalf("merged job = %s, %+v; want succeeded, closed by %s", j.State, j.Closed, closedBy)
 	}
 
 	verify(t, h, f, j.ID)
@@ -231,11 +214,9 @@ func testPlanStale(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := setUp(t, h)
+	old := writeState(t, h, f, false)
+	current := writeState(t, h, f, false)
 	now := time.Now()
-
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
 
 	tests := []struct {
 		name string
@@ -243,9 +224,9 @@ func testPlanStale(t *testing.T, h Harness) {
 		made time.Time
 		want error
 	}{
-		{"another state version", svOne, now, job.ErrPlanStale},
-		{"too old", svTwo, now.Add(-job.DefaultMaxPlanAge - time.Hour), job.ErrPlanStale},
-		{"fresh", svTwo, now, nil},
+		{"another state version", old, now, job.ErrPlanStale},
+		{"too old", current, now.Add(-job.DefaultMaxPlanAge - time.Hour), job.ErrPlanStale},
+		{"fresh", current, now, nil},
 	}
 
 	for _, tt := range tests {

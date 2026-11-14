@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-22. Decisions 1 to 7 are owner decisions. Supersedes two decisions of ADR 3 in part. Accepts RFC 104
 
+Changed by:
+
+- ADR 362 extends decisions 2 and 6: RFC 103 step 8 comes before step 7 of this ADR. MySQL waits for the end of the work of this ADR.
+
 ## Context
 
 ADR 3 makes each SQL dialect a full adapter. Each dialect has its own

@@ -58,7 +58,7 @@ func TestHighAvailability(t *testing.T) {
 		t.Fatalf("stores: %v", err)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	pulumiVersions := e2e.Pulumi().Versions()
 	tofuVersions := e2e.OpenTofu().Versions()

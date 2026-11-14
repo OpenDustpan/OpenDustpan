@@ -35,7 +35,7 @@ func runningLatestCases() []runningLatestCase {
 					t.Fatalf("latest state version of the base: %v", err)
 				}
 
-				plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+				plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 				u, err := f.svc.Create(t.Context(), f.ref, plan)
 				if err != nil {
@@ -54,7 +54,7 @@ func runningLatestCases() []runningLatestCase {
 			start: func(t *testing.T, f *buildFixture) (int64, []byte) {
 				t.Helper()
 
-				plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+				plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 				u, err := f.svc.Create(t.Context(), f.ref, plan)
 				if err != nil {

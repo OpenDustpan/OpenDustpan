@@ -249,6 +249,9 @@ const (
 	TypeRef
 	// TypeAny is any JSON value.
 	TypeAny
+	// TypeUnion is a choice between two or more primitive kinds, in the
+	// order of the description. Members holds the kinds.
+	TypeUnion
 )
 
 // Type is the type of a field, a parameter or a body.
@@ -267,4 +270,8 @@ type Type struct {
 	// Nullable is true for a value that can be JSON null. A client keeps
 	// absent, null and a value apart where the body is a merge patch.
 	Nullable bool
+	// Members are the kinds of a TypeUnion, in the order of the
+	// description. Each kind is a primitive kind and no kind repeats. It is
+	// nil for any other kind.
+	Members []TypeKind
 }

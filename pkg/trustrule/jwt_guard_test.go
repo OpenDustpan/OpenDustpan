@@ -73,6 +73,75 @@ func TestVerifyRefusesAPayloadMemberTwiceOrTrailingData(t *testing.T) {
 	}
 }
 
+// TestTokenPayloadRefusesInvalidUTF8 checks that a signed payload with a byte
+// that is not UTF-8 in the iss claim is refused before the claim compare.
+func TestTokenPayloadRefusesInvalidUTF8(t *testing.T) {
+	t.Parallel()
+
+	s := edSigner(t, "guard-ed")
+	ks := keys(t, s)
+	issuer := "https://token.actions.example.com"
+
+	c := claims()
+	c["iss"] = issuer
+
+	body, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("encode claims: %v", err)
+	}
+
+	raw := s.rawToken(t, s.header(), strings.Replace(string(body), issuer, issuer+"\xff", 1))
+
+	if _, verifyErr := trustrule.Verify(raw, ks); !errors.Is(verifyErr, trustrule.ErrToken) ||
+		!strings.Contains(verifyErr.Error(), "the payload is not UTF-8") {
+		t.Errorf("Verify = %v, want ErrToken with the payload is not UTF-8", verifyErr)
+	}
+
+	if _, issuerErr := trustrule.UnverifiedIssuer(raw); !errors.Is(issuerErr, trustrule.ErrToken) ||
+		!strings.Contains(issuerErr.Error(), "the payload is not UTF-8") {
+		t.Errorf("UnverifiedIssuer = %v, want ErrToken with the payload is not UTF-8", issuerErr)
+	}
+}
+
+// TestTokenPayloadAcceptsValidUTF8 checks that a signed payload with valid
+// UTF-8 in the iss claim still passes the check of the issuer.
+func TestTokenPayloadAcceptsValidUTF8(t *testing.T) {
+	t.Parallel()
+
+	s := edSigner(t, "guard-ed")
+	ks := keys(t, s)
+	issuer := "https://token.actions.example.com"
+	valid := issuer + "\ufffd"
+
+	c := claims()
+	c["iss"] = issuer
+
+	body, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("encode claims: %v", err)
+	}
+
+	raw := s.rawToken(t, s.header(), strings.Replace(string(body), issuer, valid, 1))
+
+	tok, err := trustrule.Verify(raw, ks)
+	if err != nil {
+		t.Fatalf("Verify = %v, want nil", err)
+	}
+
+	if err = tok.CheckIssuer(valid); err != nil {
+		t.Errorf("CheckIssuer = %v, want nil", err)
+	}
+
+	got, err := trustrule.UnverifiedIssuer(raw)
+	if err != nil {
+		t.Fatalf("UnverifiedIssuer = %v, want nil", err)
+	}
+
+	if got != valid {
+		t.Errorf("UnverifiedIssuer = %q, want %q", got, valid)
+	}
+}
+
 // TestVerifyRefusesALongTokenOfThreeParts checks the size limit alone: the
 // token has three parts and a valid signature.
 func TestVerifyRefusesALongTokenOfThreeParts(t *testing.T) {

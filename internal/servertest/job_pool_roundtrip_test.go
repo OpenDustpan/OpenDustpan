@@ -86,6 +86,7 @@ func clusterWithPool(t *testing.T) *servertest.Cluster {
 		}
 	}
 
+	seedPlacement(t, c, 0, `{"name":"acme"}`)
 	workspaceID(t, c)
 
 	return c

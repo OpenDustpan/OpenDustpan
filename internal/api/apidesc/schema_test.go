@@ -626,6 +626,11 @@ type holdsOwn struct {
 	Value own `json:"value"`
 }
 
+// holdsOwnPointer is a struct whose field is a pointer to a declared type.
+type holdsOwnPointer struct {
+	Value *own `json:"value"`
+}
+
 type holdsPtrOwn struct {
 	Value ptrOwn `json:"value"`
 }
@@ -727,6 +732,112 @@ func TestReflectorRefusesWhatItCannotTell(t *testing.T) {
 		{
 			"an open enum with a value twice",
 			apidesc.Typed[withKind]("WithKind", apidesc.DeclareOpenEnum[kindName]("KindName", "onCall", "onCall")),
+		},
+		{
+			"a type list with an object name",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"object", "string"},
+			})),
+		},
+		{
+			"a type list with an array name",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"array", "string"},
+			})),
+		},
+		{
+			"an empty type list",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{"type": []any{}})),
+		},
+		{
+			"a type list with one name",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{"type": []any{"string"}})),
+		},
+		{
+			"a type list with a name twice",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"string", "string"},
+			})),
+		},
+		{
+			"a type list with an unknown name",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"text", "number"},
+			})),
+		},
+		{
+			"a type list with a name that is not a string",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{1, "string"},
+			})),
+		},
+		{
+			"a type list with null beside two names",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"string", "number", "null"},
+			})),
+		},
+		{
+			"a type list with null first",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"null", "string"},
+			})),
+		},
+		{
+			"a type list with an unknown name and null",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"text", "null"},
+			})),
+		},
+		{
+			"a type list with an enum",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"string", "number"}, "enum": []any{"a"},
+			})),
+		},
+		{
+			"a type list with a format",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"string", "number"}, "format": "date-time",
+			})),
+		},
+		{
+			"a type that is a number",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{"type": 3})),
+		},
+		{
+			"a type list with several names behind a pointer",
+			apidesc.Typed[holdsOwnPointer]("HoldsOwnPointer", apidesc.Declare[own](map[string]any{
+				"type": []any{"string", "number"},
+			})),
+		},
+		{
+			"a description of an unknown field",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.DescribeField[holdsOwn]("other", "Text.")),
+		},
+		{
+			"a description that is empty",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.DescribeField[holdsOwn]("value", "")),
+		},
+		{
+			"two descriptions of one field",
+			apidesc.Typed[holdsOwn](
+				"HoldsOwn",
+				apidesc.DescribeField[holdsOwn]("value", "One."),
+				apidesc.DescribeField[holdsOwn]("value", "Two."),
+			),
+		},
+		{
+			"a description of a type that is not a struct",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.DescribeField[string]("value", "Text.")),
+		},
+		{
+			"a description of a type with its own schema",
+			apidesc.Typed[inner](
+				"Inner",
+				apidesc.Declare[inner](map[string]any{"type": "string"}),
+				apidesc.DescribeField[inner]("name", "Text."),
+			),
 		},
 	}
 
@@ -876,6 +987,147 @@ func TestBuildRefusesFormsOutsideTheSubset(t *testing.T) {
 	}
 }
 
+// TestBuildChecksDeclaredTypeAndRequired proves that the declared check reads
+// the values of type and required: a type name of the subset, a list of them
+// and a list of strings pass at the top and at each depth, and any other value
+// is refused.
+func TestBuildChecksDeclaredTypeAndRequired(t *testing.T) {
+	t.Parallel()
+
+	declare := func(schema map[string]any) apidesc.Body {
+		return apidesc.Typed[holdsChoice]("HoldsChoice", apidesc.Declare[choice](schema))
+	}
+	property := func(child map[string]any) map[string]any {
+		return map[string]any{"type": "object", "properties": map[string]any{"name": child}}
+	}
+
+	tests := []struct {
+		name    string
+		body    apidesc.Body
+		wantErr bool
+	}{
+		{"an object type", declare(map[string]any{"type": "object"}), false},
+		{"an array type", declare(map[string]any{"type": "array", "items": map[string]any{"type": "string"}}), false},
+		{"a string type", declare(map[string]any{"type": "string"}), false},
+		{"an integer type", declare(map[string]any{"type": "integer"}), false},
+		{"a number type", declare(map[string]any{"type": "number"}), false},
+		{"a boolean type", declare(map[string]any{"type": "boolean"}), false},
+		{"a null type", declare(map[string]any{"type": "null"}), false},
+		{"a type list", declare(map[string]any{"type": []any{"string", "null"}}), false},
+		{
+			"a required list",
+			declare(map[string]any{
+				"type": "object", "required": []any{"name"},
+				"properties": map[string]any{"name": map[string]any{"type": "string"}},
+			}),
+			false,
+		},
+		{
+			"a valid schema in a property",
+			declare(property(map[string]any{
+				"type": "object", "required": []any{"inner"},
+				"properties": map[string]any{"inner": map[string]any{"type": "integer"}},
+			})),
+			false,
+		},
+		{
+			"a valid type in the values of a map",
+			declare(map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "boolean"}}),
+			false,
+		},
+		{"a misspelled type", declare(map[string]any{"type": "strnig"}), true},
+		{"a type that is not a string", declare(map[string]any{"type": 5}), true},
+		{"an empty type list", declare(map[string]any{"type": []any{}}), true},
+		{
+			"a type list with a value that is not a string",
+			declare(map[string]any{"type": []any{"string", 3}}),
+			true,
+		},
+		{
+			"a type list with a name that is not in the subset",
+			declare(map[string]any{"type": []any{"string", "text"}}),
+			true,
+		},
+		{"a misspelled type in a property", declare(property(map[string]any{"type": "strnig"})), true},
+		{"a type that is not a string in a property", declare(property(map[string]any{"type": 5})), true},
+		{
+			"a misspelled type in the items",
+			declare(map[string]any{"type": "array", "items": map[string]any{"type": "strnig"}}),
+			true,
+		},
+		{
+			"a misspelled type in the values of a map",
+			declare(map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "strnig"}}),
+			true,
+		},
+		{"a required that is not a list", declare(map[string]any{"required": "name"}), true},
+		{"a required that is an object", declare(map[string]any{"required": map[string]any{"name": true}}), true},
+		{"a required with a value that is not a string", declare(map[string]any{"required": []any{"name", 3}}), true},
+		{"a required that is not a list in a property", declare(property(map[string]any{"required": "name"})), true},
+		{
+			"a required with a value that is not a string in a property",
+			declare(property(map[string]any{"required": []any{"name", 3}})),
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := schemasOf(t, tt.body)
+
+			if tt.wantErr {
+				if !errors.Is(err, apidesc.ErrInvalidBody) {
+					t.Fatalf("Build() = %v, want ErrInvalidBody", err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Build() = %v, want no error", err)
+			}
+		})
+	}
+}
+
+// TestBuildNamesTheBadTypeAndRequired proves that the refusal of a declared
+// type or required value names the member and the value.
+func TestBuildNamesTheBadTypeAndRequired(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body apidesc.Body
+		want string
+	}{
+		{
+			"a misspelled type",
+			apidesc.Typed[holdsChoice]("HoldsChoice", apidesc.Declare[choice](map[string]any{"type": "strnig"})),
+			`member "type" is the type name "strnig"`,
+		},
+		{
+			"a required with a value that is not a string",
+			apidesc.Typed[holdsChoice]("HoldsChoice", apidesc.Declare[choice](
+				map[string]any{"required": []any{"name", 3}},
+			)),
+			`member "required" holds the value 3`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := schemasOf(t, tt.body)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Build() = %v, want an error that holds %q", err, tt.want)
+			}
+		})
+	}
+}
+
 // TestNullableKeepsNull proves that a pointer to a pointer is as nullable as a
 // pointer: the second pointer never drops the null branch of a reference, of an
 // open enum or of a type list.
@@ -950,6 +1202,22 @@ func TestReflectorAcceptsDeclaredTypes(t *testing.T) {
 			`{"HoldsOwn":{"type":"object","required":["value"],"properties":{"value":{
 			"type":"object","required":["v"],"properties":{"v":{"type":"string"}}}}}}`,
 		},
+		{
+			"a declared type list",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"string", "number", "boolean"},
+			})),
+			`{"HoldsOwn":{"type":"object","required":["value"],"properties":{
+			"value":{"type":["string","number","boolean"]}}}}`,
+		},
+		{
+			"a declared type list with null",
+			apidesc.Typed[holdsOwn]("HoldsOwn", apidesc.Declare[own](map[string]any{
+				"type": []any{"string", "null"},
+			})),
+			`{"HoldsOwn":{"type":"object","required":["value"],"properties":{
+			"value":{"type":["string","null"]}}}}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -963,6 +1231,95 @@ func TestReflectorAcceptsDeclaredTypes(t *testing.T) {
 
 			if want := wantSchemas(t, tt.want); !reflect.DeepEqual(got, want) {
 				t.Errorf("schemas =\n%s", jsonOf(got))
+			}
+		})
+	}
+}
+
+// describedRef is a struct with a field that is a reference.
+type describedRef struct {
+	Inner inner `json:"inner"`
+}
+
+// describedList is a struct with a list field and a nullable field.
+type describedList struct {
+	Names []string `json:"names"`
+	Maybe *string  `json:"maybe"`
+}
+
+// TestReflectorWritesFieldDescriptions proves that a field takes its own
+// description, that the text of the field wins over the description of its
+// type, and that the text of a reference stands next to it.
+func TestReflectorWritesFieldDescriptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body apidesc.Body
+		want string
+	}{
+		{
+			"the text of the field wins over the text of the type",
+			apidesc.Typed[holdsOwn](
+				"HoldsOwn",
+				apidesc.Declare[own](map[string]any{"type": "string", "description": "The type."}),
+				apidesc.DescribeField[holdsOwn]("value", "The field."),
+			),
+			`{"HoldsOwn":{"type":"object","required":["value"],"properties":{
+			"value":{"type":"string","description":"The field."}}}}`,
+		},
+		{
+			"the text of a reference stands next to the $ref",
+			apidesc.Typed[describedRef](
+				"DescribedRef",
+				apidesc.DescribeField[describedRef]("inner", "The inner object."),
+			),
+			`{"DescribedRef":{"type":"object","required":["inner"],"properties":{
+			"inner":{"$ref":"#/components/schemas/Inner","description":"The inner object."}}},
+			"Inner":{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}}`,
+		},
+		{
+			"the text of a field of a nested struct",
+			apidesc.Typed[describedRef]("DescribedRef", apidesc.DescribeField[inner]("name", "The name.")),
+			`{"DescribedRef":{"type":"object","required":["inner"],"properties":{
+			"inner":{"$ref":"#/components/schemas/Inner"}}},
+			"Inner":{"type":"object","required":["name"],"properties":{"name":{"type":"string","description":"The name."}}}}`,
+		},
+		{
+			"the text of a list field and of a nullable field",
+			apidesc.Typed[describedList](
+				"DescribedList",
+				apidesc.DescribeField[describedList]("names", "The names."),
+				apidesc.DescribeField[describedList]("maybe", "The optional text."),
+			),
+			`{"DescribedList":{"type":"object","required":["maybe","names"],"properties":{
+			"names":{"type":"array","items":{"type":"string"},"description":"The names."},
+			"maybe":{"type":["string","null"],"description":"The optional text."}}}}`,
+		},
+		{
+			"the same text twice stays one text",
+			apidesc.Typed[describedRef](
+				"DescribedRef",
+				apidesc.DescribeField[describedRef]("inner", "The inner object."),
+				apidesc.DescribeField[describedRef]("inner", "The inner object."),
+			),
+			`{"DescribedRef":{"type":"object","required":["inner"],"properties":{
+			"inner":{"$ref":"#/components/schemas/Inner","description":"The inner object."}}},
+			"Inner":{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := schemasOf(t, tt.body)
+			if err != nil {
+				t.Fatalf("Build() = %v", err)
+			}
+
+			if want := wantSchemas(t, tt.want); !reflect.DeepEqual(got, want) {
+				t.Errorf("schemas =\n%s\nwant\n%s", jsonOf(got), jsonOf(want))
 			}
 		})
 	}

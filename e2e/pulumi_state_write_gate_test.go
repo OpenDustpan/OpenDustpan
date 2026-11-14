@@ -98,9 +98,16 @@ func pulumiStateWriteGateScenario(t *testing.T, env *e2e.Env, org string) {
 	t.Helper()
 
 	// The steps write gates through the store of the in-process server, as the
-	// OpenTofu scenario does.
+	// OpenTofu scenario does. The server binary holds its database open, so in
+	// the binary mode the steps do not run. The skip names the 403 lines of the
+	// contract that only these steps produce.
 	if e2e.UseBinaryServer() {
-		t.Log("skip the Pulumi state.write gate steps: gate writes need the in-process server")
+		stack := "/api/stacks/{namespace}/{project}/{stack}"
+		env.SkipScenario(t, "pulumi state.write gates", "gate writes need the in-process server",
+			e2e.Gap{Route: "DELETE " + stack, Status: http.StatusForbidden},
+			e2e.Gap{Route: "POST " + stack + "/import", Status: http.StatusForbidden},
+			e2e.Gap{Route: "POST " + stack + "/rename", Status: http.StatusForbidden},
+			e2e.Gap{Route: "POST " + stack + "/update/{update}/cancel", Status: http.StatusForbidden})
 
 		return
 	}

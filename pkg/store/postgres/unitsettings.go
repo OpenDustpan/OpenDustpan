@@ -37,36 +37,46 @@ func (u UnitSettingsStore) Get(ctx context.Context, unit identity.Object) (units
 // Put implements unitsettings.Store.
 func (u UnitSettingsStore) Put(
 	ctx context.Context, s *unitsettings.Settings, expected int64, fence namespace.Fence, e audit.Entry,
-) (unitsettings.Settings, error) {
+) (unitsettings.PutResult, error) {
 	if err := s.Validate(); err != nil {
-		return unitsettings.Settings{}, err
+		return unitsettings.PutResult{}, err
 	}
 
 	if err := settingsstore.CheckFence(s.Unit.Namespace(), fence); err != nil {
-		return unitsettings.Settings{}, err
+		return unitsettings.PutResult{}, err
 	}
 
 	if err := settingsstore.CheckEntry(&e, fence.Namespace); err != nil {
-		return unitsettings.Settings{}, err
+		return unitsettings.PutResult{}, err
 	}
 
-	var stored unitsettings.Settings
+	var out unitsettings.PutResult
 
 	err := u.s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
-		var (
-			entry *audit.Entry
-			err   error
-		)
+		tx := settingsTx{q: q}
 
-		stored, entry, err = settingsstore.Write(ctx, settingsTx{q: q}, s, expected, e)
+		stored, entry, err := settingsstore.Write(ctx, tx, s, expected, e)
+		if err != nil {
+			return err
+		}
 
-		return appendAndFinish(ctx, q, entry, stored, err)
+		// The defaults are read in the transaction of the write, so the
+		// effective value that the caller computes from them matches the
+		// record that this write stores.
+		defaults, err := settingsstore.ReadDefaults(ctx, tx, s.Unit.Namespace())
+		if err != nil {
+			return err
+		}
+
+		out = unitsettings.PutResult{Settings: stored, Defaults: defaults}
+
+		return appendAndFinish(ctx, q, entry, out, nil)
 	})
 	if err != nil {
-		return unitsettings.Settings{}, err
+		return unitsettings.PutResult{}, err
 	}
 
-	return stored, nil
+	return out, nil
 }
 
 // Delete implements unitsettings.Store.

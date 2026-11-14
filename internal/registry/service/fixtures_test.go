@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -32,22 +33,36 @@ const (
 	subject                = "user:ada"
 )
 
+// addressCall records one call of memStore.Addresses: the limit of the call,
+// the number of address rows that the store read, and the number of addresses
+// that the call returned.
+type addressCall struct {
+	limit    int
+	rows     int
+	returned int
+}
+
 // memStore is registry.Store and registry.KeyStore in memory.
 type memStore struct {
 	mu       sync.Mutex
 	releases map[string]registry.Release
 	keys     map[namespace.Name][]registry.KeyRecord
 	audits   []audit.Entry
+	// addressCalls records each Addresses call, oldest first.
+	addressCalls []addressCall
 	// beforeCommit, when it is not nil, runs at the start of Publish, before the
 	// key check. A test uses it to remove a key between the checks of the
 	// service and the commit.
 	beforeCommit func()
+	// publishErr, when it is not nil, is the answer of the next Publish call
+	// after beforeCommit. A test uses it for a write that fails in the commit.
+	publishErr error
 }
 
 func newMemStore() *memStore {
 	return &memStore{
 		mu: sync.Mutex{}, releases: map[string]registry.Release{}, keys: map[namespace.Name][]registry.KeyRecord{},
-		audits: nil, beforeCommit: nil,
+		audits: nil, addressCalls: nil, beforeCommit: nil, publishErr: nil,
 	}
 }
 
@@ -66,6 +81,13 @@ func (m *memStore) Publish(_ context.Context, r registry.Release, _ namespace.Fe
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.publishErr != nil {
+		err := m.publishErr
+		m.publishErr = nil
+
+		return err
+	}
 
 	// The contract of the port: the key is trusted at the time of the write.
 	// A module has no signature and no key.
@@ -118,7 +140,20 @@ func (m *memStore) List(_ context.Context, a registry.Address) ([]registry.Relea
 	return out, nil
 }
 
-func (m *memStore) Addresses(_ context.Context, ns namespace.Name, kind registry.Kind) ([]registry.Address, error) {
+func (m *memStore) Addresses(
+	_ context.Context, ns namespace.Name, kind registry.Kind, after string, limit int,
+) ([]registry.Address, string, error) {
+	if limit < 1 || limit > registry.MaxAddressPage {
+		return nil, "", fmt.Errorf("%w: limit %d", registry.ErrInvalid, limit)
+	}
+
+	// Defense in depth: the callers check the cursor too; the store refuses a
+	// cursor that does not hold an address of the kind.
+	cursor, err := registry.ParseAddressKey(ns, kind, after)
+	if err != nil {
+		return nil, "", err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -133,11 +168,29 @@ func (m *memStore) Addresses(_ context.Context, ns namespace.Name, kind registry
 		}
 	}
 
-	slices.SortFunc(out, func(x, y registry.Address) int {
-		return strings.Compare(x.Name+"/"+x.System, y.Name+"/"+y.System)
-	})
+	slices.SortFunc(out, registry.CompareAddresses)
 
-	return out, nil
+	if cursor.Name != "" {
+		out = slices.DeleteFunc(out, func(a registry.Address) bool {
+			return registry.CompareAddresses(a, cursor) <= 0
+		})
+	}
+
+	// The store reads one address more than the page, as the SQL store does,
+	// so that the extra address tells whether a next page exists.
+	rows := min(limit+1, len(out))
+	out = out[:rows]
+
+	next := ""
+
+	if len(out) > limit {
+		out = out[:limit]
+		next = registry.AddressKey(out[limit-1])
+	}
+
+	m.addressCalls = append(m.addressCalls, addressCall{limit: limit, rows: rows, returned: len(out)})
+
+	return out, next, nil
 }
 
 func (m *memStore) AddKey(_ context.Context, k registry.KeyRecord, _ namespace.Fence, e audit.Entry) error {
@@ -238,6 +291,36 @@ type env struct {
 	ids    map[namespace.Name]namespace.ID
 	caller *service.Caller
 	now    time.Time
+	aud    *memAudit
+	// logs holds the log lines of the service; failures counts the audit failures.
+	logs     *bytes.Buffer
+	failures *int
+}
+
+// memAudit is an audit store for a test. It holds the appended entries in
+// memory, and it fails every append when err is set.
+type memAudit struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+	err     error
+}
+
+func newMemAudit() *memAudit {
+	return &memAudit{mu: sync.Mutex{}, entries: nil, err: nil}
+}
+
+// Append records e, or returns the error of the audit store.
+func (m *memAudit) Append(_ context.Context, _ namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.err != nil {
+		return audit.Entry{}, m.err
+	}
+
+	m.entries = append(m.entries, e)
+
+	return e, nil
 }
 
 // principalOf returns a person with the given subject.
@@ -282,6 +365,22 @@ func namespaceOf(name namespace.Name, id namespace.ID, now time.Time) namespace.
 
 // config returns the service config of a test over the given stores.
 func config(store *memStore, blobs blob.Store, ns nsStub, at time.Time) service.Config {
+	return configAudit(store, blobs, ns, at, auditSinks{
+		aud: newMemAudit(), logger: slog.New(slog.DiscardHandler), onFail: func() {},
+	})
+}
+
+// auditSinks are the audit dependencies of a service config: the audit store,
+// the logger and the audit failure hook.
+type auditSinks struct {
+	aud    service.Auditor
+	logger *slog.Logger
+	onFail func()
+}
+
+// configAudit returns the service config of a test over the given stores and
+// audit sinks.
+func configAudit(store *memStore, blobs blob.Store, ns nsStub, at time.Time, sinks auditSinks) service.Config {
 	v := pgpverify.Verifier{Now: func() time.Time { return at }}
 
 	return service.Config{
@@ -291,6 +390,9 @@ func config(store *memStore, blobs blob.Store, ns nsStub, at time.Time) service.
 		Inspector:             v,
 		Blobs:                 blobs,
 		Namespaces:            ns,
+		Audit:                 sinks.aud,
+		Logger:                sinks.logger,
+		OnAuditFailure:        sinks.onFail,
 		Now:                   func() time.Time { return at },
 		MaxArchiveBytes:       1 << 20,
 		MaxReleaseBytes:       3 << 20,
@@ -320,12 +422,23 @@ func newEnv(t *testing.T, flip bool) *env {
 		ns[name] = namespaceOf(name, ids[name], now)
 	}
 
-	svc, err := service.New(config(store, blobs, ns, now))
+	aud := newMemAudit()
+	logs := &bytes.Buffer{}
+	failures := new(int)
+
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+
+	svc, err := service.New(configAudit(store, blobs, ns, now, auditSinks{
+		aud: aud, logger: logger, onFail: func() { *failures++ },
+	}))
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
 
-	return &env{svc: svc, store: store, blobs: blobs, ids: ids, caller: callerOf(subject), now: now}
+	return &env{
+		svc: svc, store: store, blobs: blobs, ids: ids, caller: callerOf(subject), now: now, aud: aud,
+		logs: logs, failures: failures,
+	}
 }
 
 // trust registers the key of s in ns, through the service.

@@ -12,6 +12,11 @@ the check, which refuses it. A write that changes one object takes the optional
 header `If-Match` with the version of the object. A version that does not match
 answers 412.
 
+A `PUT` of the GitHub App registration with `If-Match`, when no registration
+exists, answers 404. The answer is not 412. A `PUT` with `If-Match` whose version
+does not match an existing registration answers 412. A `PUT` with `If-Match`
+whose version matches the current version answers 200.
+
 | Method and path | Action | Object | Answer |
 | --- | --- | --- | --- |
 | `GET /git-host-apps/github` | `server:read-git-host` | the installation | The registration, with no secret |

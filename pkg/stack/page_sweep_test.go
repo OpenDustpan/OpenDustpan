@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/blobtest"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -21,9 +24,10 @@ import (
 type pageSpyBlob struct {
 	*memBlob
 
-	mu        sync.Mutex
-	deletes   int
-	atRequest []int
+	mu         sync.Mutex
+	deletes    int
+	atRequest  []int
+	onContinue func()
 }
 
 func (s *pageSpyBlob) Delete(ctx context.Context, key blob.Key) error {
@@ -40,10 +44,24 @@ func (s *pageSpyBlob) ListPage(ctx context.Context, req blob.PageRequest) (blob.
 	if req.After != "" {
 		s.mu.Lock()
 		s.atRequest = append(s.atRequest, s.deletes)
+		hook := s.onContinue
 		s.mu.Unlock()
+
+		if hook != nil {
+			hook()
+		}
 	}
 
 	return s.memBlob.ListPage(ctx, req)
+}
+
+// continueWith runs hook when the listing asks for the page after the first
+// one, so a test changes the stack between two listings.
+func (s *pageSpyBlob) continueWith(hook func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.onContinue = hook
 }
 
 // putOrphans writes n blobs that no row names under dir, with names that sort
@@ -99,7 +117,9 @@ func TestStartSweepDeletesPageByPage(t *testing.T) {
 
 	clk := newClock()
 	mem := newMemBlob(clk)
-	spy := &pageSpyBlob{memBlob: mem, mu: sync.Mutex{}, deletes: 0, atRequest: nil}
+	spy := &pageSpyBlob{
+		memBlob: mem, mu: sync.Mutex{}, deletes: 0, atRequest: nil, onContinue: nil,
+	}
 	f := newUpdatesWith(t, clk, spy, nil)
 	ctx := t.Context()
 	first := f.started(t, stack.KindUpdate)
@@ -131,7 +151,7 @@ func TestStartSweepDeletesPageByPage(t *testing.T) {
 	spy.reset()
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -146,6 +166,148 @@ func TestStartSweepDeletesPageByPage(t *testing.T) {
 	}
 
 	requireSwept(t, mem, orphans, named)
+}
+
+// nameBlob records a checkpoint row that names key, as a save does, so that a
+// later sweep keeps the blob.
+func (m *memUpdates) nameBlob(ref stack.Ref, id stack.UpdateID, key blob.Key) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.checkpoints[id] = stack.Checkpoint{
+		NamespaceID: "", StackID: "",
+		SavedAt:       time.Time{},
+		Features:      nil,
+		Deployment:    nil,
+		Update:        id,
+		Ref:           ref,
+		Lease:         token.Digest{},
+		SchemaVersion: 0,
+		Sequence:      0,
+		Digest:        [32]byte{},
+		Invalid:       false,
+		BlobKey:       key,
+		BlobSize:      0,
+		BlobMD5:       [16]byte{},
+
+		AttemptStartedAt: time.Time{}, Origin: identity.StateOrigin{Job: "", Commit: ""},
+	}
+}
+
+// pageOf returns the one-based page of key in the listing under dir.
+func pageOf(t *testing.T, mem *memBlob, dir string, key blob.Key) int {
+	t.Helper()
+
+	all, err := blobtest.ListAll(t.Context(), mem, dir)
+	if err != nil {
+		t.Fatalf("list %s: %v", dir, err)
+	}
+
+	at := slices.IndexFunc(all, func(obj blob.Object) bool { return obj.Key == key })
+	if at < 0 {
+		t.Fatalf("key %s is not in the listing of %s", key, dir)
+	}
+
+	return at/blob.MaxPageLimit + 1
+}
+
+// requireKept fails t unless key is stored.
+func requireKept(t *testing.T, mem *memBlob, key blob.Key) {
+	t.Helper()
+
+	body, err := mem.Get(t.Context(), key)
+	if err != nil {
+		t.Fatalf("blob %s: %v, want it kept", key, err)
+	}
+
+	if closeErr := body.Close(); closeErr != nil {
+		t.Fatalf("close blob %s: %v", key, closeErr)
+	}
+}
+
+// requireUnreferenced fails t when a row of the stack names key.
+func requireUnreferenced(t *testing.T, store *memUpdates, stackID stack.ID, key blob.Key) {
+	t.Helper()
+
+	refs, err := store.ReferencedBlobKeys(t.Context(), stackID)
+	if err != nil {
+		t.Fatalf("referenced keys: %v", err)
+	}
+
+	if slices.Contains(refs, key) {
+		t.Fatalf("blob %s is referenced: %v", key, refs)
+	}
+}
+
+// TestStartSweepRefreshesReferencesBetweenPages proves that the sweep reads
+// the referenced keys again for each page. A blob on the second page is not
+// referenced when the sweep starts, and a row names it after the sweep lists
+// and sweeps the first page. The blob stays.
+func TestStartSweepRefreshesReferencesBetweenPages(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	mem := newMemBlob(clk)
+	spy := &pageSpyBlob{
+		memBlob: mem, mu: sync.Mutex{}, deletes: 0, atRequest: nil, onContinue: nil,
+	}
+	f := newUpdatesWith(t, clk, spy, nil)
+	ctx := t.Context()
+	first := f.started(t, stack.KindUpdate)
+
+	err := f.svc.SaveCheckpoint(
+		ctx, f.ref, first.Update.ID, first.Token, checkpoint(1, envelope(`{"a":1}`)),
+	)
+	if err != nil {
+		t.Fatalf("save checkpoint: %v", err)
+	}
+
+	dir := fmt.Sprintf("%sstk-test/%s/", f.prefix, first.Update.ID)
+
+	saved, err := blobtest.ListAll(ctx, mem, dir)
+	if err != nil || len(saved) != 1 {
+		t.Fatalf("blobs of the update after the save = %v, %v; want the one checkpoint blob", saved, err)
+	}
+
+	named := saved[0].Key
+	orphans := putOrphans(t, mem, dir, blob.MaxPageLimit+100)
+
+	late, err := blob.ParseKey(dir + "2-late")
+	if err != nil {
+		t.Fatalf("late key: %v", err)
+	}
+
+	if putErr := mem.Put(ctx, late, strings.NewReader("late")); putErr != nil {
+		t.Fatalf("write the late blob: %v", putErr)
+	}
+
+	if page := pageOf(t, mem, dir, late); page != 2 {
+		t.Fatalf("the late blob is on page %d, want page two", page)
+	}
+
+	requireUnreferenced(t, f.store, "stk-test", late)
+
+	if _, err = f.svc.Complete(ctx, f.ref, first.Update.ID, first.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete first update: %v", err)
+	}
+
+	mem.ageAll(2 * time.Hour)
+
+	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
+	})
+	if err != nil {
+		t.Fatalf("create next update: %v", err)
+	}
+
+	spy.continueWith(func() { f.store.nameBlob(f.ref, next.ID, late) })
+
+	if _, err = f.svc.Start(ctx, f.ref, next.ID); err != nil {
+		t.Fatalf("start next update: %v", err)
+	}
+
+	requireSwept(t, mem, orphans, late)
+	requireKept(t, mem, named)
 }
 
 // reset forgets the requests so far.

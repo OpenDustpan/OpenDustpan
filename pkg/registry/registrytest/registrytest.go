@@ -40,6 +40,13 @@ const (
 	actionPublish = "registry:publish"
 	// fixtureT is the epoch of the fixtures, in Unix milliseconds.
 	fixtureT = 1_800_000_000_000
+	// addressModule is the name of the module of the address cases. It is also
+	// the name of one provider, so a page of providers never holds it.
+	addressModule = "payments"
+	// addressSystem is the target system of the module of the address cases.
+	addressSystem = "aws"
+	// addressPageSize is the page size that the address case reads with.
+	addressPageSize = 2
 )
 
 // Harness is one fresh, empty store for one subtest. Namespace makes the
@@ -197,7 +204,10 @@ func storeCases() []storeCase {
 		{"a provider with bad plugin protocols is refused", testBadProtocols},
 		{"an unsigned provider is refused", testUnsignedProvider},
 		{"list orders by semantic version precedence", testListOrder},
-		{"addresses lists each address once", testAddresses},
+		{"addresses are read in pages", testAddresses},
+		{"module addresses are read in pages", testModuleAddresses},
+		{"addresses with a bad cursor", testAddressesBadCursor},
+		{"addresses with a bad limit", testAddressesBadLimit},
 		{"addresses with a bad kind", testAddressesBadKind},
 		{"publish with a key that the namespace removed", testPublishRemovedKey},
 		{"publish with a key that the namespace never trusted", testPublishUnknownKey},
@@ -593,20 +603,253 @@ func testUnsignedProvider(t *testing.T, h Harness) {
 func testAddresses(t *testing.T, h Harness) {
 	t.Helper()
 
-	f := homed(t, h, acme)
-	homed(t, h, beta)
-	mustPublish(t, h, provider("payments", v100), f)
-	mustPublish(t, h, provider("payments", "1.1.0"), f)
-	mustPublish(t, h, provider("ledger", v100), f)
+	// Several providers with several versions each: a second version of one
+	// provider does not make a second address.
+	want := []string{"delta", "eta", "ledger", addressModule, "vault"}
 
-	got, err := h.Store.Addresses(t.Context(), acme, registry.KindProvider)
-	if err != nil || len(got) != 2 || got[0].Name != "ledger" || got[1].Name != "payments" {
-		t.Fatalf("Addresses = %+v, %v", got, err)
+	publishAddresses(t, h)
+
+	got := readAddresses(t, h, want)
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("addresses = %v, want %v", got, want)
 	}
 
-	none, err := h.Store.Addresses(t.Context(), beta, registry.KindProvider)
-	if err != nil || len(none) != 0 {
-		t.Fatalf("Addresses of another namespace = %+v, %v", none, err)
+	// The module of acme and the provider of beta stay out of the pages of
+	// the providers of acme.
+	modules, _, err := h.Store.Addresses(t.Context(), acme, registry.KindModule, "", registry.MaxAddressPage)
+	if err != nil || len(modules) != 1 || modules[0].Name != addressModule || modules[0].System != addressSystem {
+		t.Fatalf("module addresses = %+v, %v, want the module of acme", modules, err)
+	}
+
+	inBeta, _, err := h.Store.Addresses(t.Context(), beta, registry.KindProvider, "", registry.MaxAddressPage)
+	if err != nil || len(inBeta) != 1 || inBeta[0].Name != "other" {
+		t.Fatalf("providers of beta = %+v, %v, want the provider of beta", inBeta, err)
+	}
+}
+
+// publishAddresses publishes the fixtures of the address cases: five providers
+// of acme with two versions each, one provider of beta, and one module of acme
+// that shares the name of a provider.
+func publishAddresses(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := homed(t, h, acme)
+	fb := homed(t, h, beta)
+
+	for _, name := range []string{"vault", "delta", addressModule, "eta", "ledger"} {
+		mustPublish(t, h, provider(name, v100), f)
+		mustPublish(t, h, provider(name, "1.1.0"), f)
+	}
+
+	other := provider("other", v100)
+	other.Address = address(beta, registry.KindProvider, "other", "")
+	mustPublish(t, h, other, fb)
+
+	mustPublish(t, h, moduleRelease(addressModule, addressSystem), f)
+}
+
+// moduleRelease returns a valid module release of the namespace acme.
+func moduleRelease(name, system string) registry.Release {
+	return registry.Release{
+		Address:         address(acme, registry.KindModule, name, system),
+		Version:         v100,
+		SumsFile:        "",
+		SumsSHA256:      "",
+		SignatureFile:   "",
+		SignatureSHA256: "",
+		KeyFingerprint:  "",
+		Protocols:       nil,
+		PublishedBy:     publisher,
+		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
+		Archives:        []registry.Archive{{Platform: "", FileName: name + ".zip", SHA256: sumB, Size: 1}},
+		Files:           nil,
+	}
+}
+
+// testModuleAddresses proves that the pages of the modules of a namespace
+// hold every module once, in order, also when modules share a name.
+func testModuleAddresses(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := homed(t, h, acme)
+
+	// Two modules share the name payments and one name holds a dash, so a
+	// cursor of a name alone cannot page them.
+	want := []string{
+		"net/" + addressSystem,
+		addressModule + "/" + addressSystem,
+		addressModule + "/gcp",
+		"payments-core/" + addressSystem,
+	}
+
+	for _, a := range [][2]string{
+		{addressModule, addressSystem}, {addressModule, "gcp"}, {"payments-core", addressSystem}, {"net", addressSystem},
+	} {
+		mustPublish(t, h, moduleRelease(a[0], a[1]), f)
+	}
+
+	if got := readModuleAddresses(t, h, len(want)); !slices.Equal(got, want) {
+		t.Fatalf("module addresses = %v, want %v", got, want)
+	}
+}
+
+// readModuleAddresses reads the pages of the modules of acme one address at a
+// time until the store reports no next page, and returns every key in order.
+func readModuleAddresses(t *testing.T, h Harness, maxPages int) []string {
+	t.Helper()
+
+	var (
+		got   []string
+		after string
+	)
+
+	for pages := 0; ; pages++ {
+		if pages > maxPages {
+			t.Fatalf("the pages did not end after %d pages", pages)
+		}
+
+		page, next, err := h.Store.Addresses(t.Context(), acme, registry.KindModule, after, 1)
+		if err != nil {
+			t.Fatalf("Addresses(after %q): %v", after, err)
+		}
+
+		if len(page) == 0 {
+			t.Fatalf("Addresses(after %q) = no address before the last page", after)
+		}
+
+		got = append(got, modulePageKeys(t, page, after)...)
+
+		if next == "" {
+			return got
+		}
+
+		if last := registry.AddressKey(page[len(page)-1]); next != last {
+			t.Fatalf("next cursor = %q, want the key of the last address %q", next, last)
+		}
+
+		after = next
+	}
+}
+
+// modulePageKeys checks one page of modules and returns its keys.
+func modulePageKeys(t *testing.T, page []registry.Address, after string) []string {
+	t.Helper()
+
+	keys := make([]string, 0, len(page))
+
+	for i, a := range page {
+		if a.Namespace != acme || a.Kind != registry.KindModule {
+			t.Fatalf("Addresses(after %q)[%d] = %+v, want a module of acme", after, i, a)
+		}
+
+		if i > 0 && registry.CompareAddresses(page[i-1], a) >= 0 {
+			t.Fatalf("Addresses(after %q) = %+v, want addresses in order", after, page)
+		}
+
+		keys = append(keys, registry.AddressKey(a))
+	}
+
+	return keys
+}
+
+// readAddresses reads the pages of the providers of acme with the address page
+// size until the store reports no next page, and returns every name in order.
+func readAddresses(t *testing.T, h Harness, want []string) []string {
+	t.Helper()
+
+	var got []string
+
+	after := ""
+
+	for pages := 0; ; pages++ {
+		if pages > len(want) {
+			t.Fatalf("the pages did not end after %d pages", pages)
+		}
+
+		page, next, err := h.Store.Addresses(t.Context(), acme, registry.KindProvider, after, addressPageSize)
+		if err != nil {
+			t.Fatalf("Addresses(after %q): %v", after, err)
+		}
+
+		if len(page) == 0 {
+			t.Fatalf("Addresses(after %q) = no address before the last page", after)
+		}
+
+		got = append(got, addressNames(t, page, after)...)
+
+		if next == "" {
+			return got
+		}
+
+		if next != page[len(page)-1].Name {
+			t.Fatalf("next cursor = %q, want the last name %q", next, page[len(page)-1].Name)
+		}
+
+		after = next
+	}
+}
+
+// addressNames checks one page of providers and returns its names.
+func addressNames(t *testing.T, page []registry.Address, after string) []string {
+	t.Helper()
+
+	names := make([]string, 0, len(page))
+
+	for i, a := range page {
+		if a.Namespace != acme || a.Kind != registry.KindProvider || a.System != "" {
+			t.Fatalf("Addresses(after %q)[%d] = %+v, want a provider of acme", after, i, a)
+		}
+
+		if a.Name <= after {
+			t.Fatalf("Addresses(after %q) returned %q, want a name after the cursor", after, a.Name)
+		}
+
+		if i > 0 && page[i-1].Name >= a.Name {
+			t.Fatalf("Addresses(after %q) = %+v, want names in order", after, page)
+		}
+
+		names = append(names, a.Name)
+	}
+
+	return names
+}
+
+// testAddressesBadCursor proves that a cursor that does not hold the name,
+// and for a module the system, of an address of the kind is refused.
+func testAddressesBadCursor(t *testing.T, h Harness) {
+	t.Helper()
+
+	homed(t, h, acme)
+
+	for _, tc := range []struct {
+		kind   registry.Kind
+		cursor string
+	}{
+		{registry.KindProvider, "a/b"},
+		{registry.KindProvider, "Payments"},
+		{registry.KindModule, "vpc"},
+		{registry.KindModule, "vpc/AWS"},
+		{registry.KindModule, "/aws"},
+		{registry.KindModule, "vpc/"},
+	} {
+		_, _, err := h.Store.Addresses(t.Context(), acme, tc.kind, tc.cursor, registry.MaxAddressPage)
+		if !errors.Is(err, registry.ErrInvalid) {
+			t.Fatalf("Addresses(%s, cursor %q) = %v, want ErrInvalid", tc.kind, tc.cursor, err)
+		}
+	}
+}
+
+func testAddressesBadLimit(t *testing.T, h Harness) {
+	t.Helper()
+
+	homed(t, h, acme)
+
+	for _, limit := range []int{0, -1, registry.MaxAddressPage + 1} {
+		_, _, err := h.Store.Addresses(t.Context(), acme, registry.KindProvider, "", limit)
+		if !errors.Is(err, registry.ErrInvalid) {
+			t.Fatalf("Addresses(limit %d) = %v, want ErrInvalid", limit, err)
+		}
 	}
 }
 
@@ -615,7 +858,8 @@ func testAddressesBadKind(t *testing.T, h Harness) {
 
 	homed(t, h, acme)
 
-	if _, err := h.Store.Addresses(t.Context(), acme, "plugin"); !errors.Is(err, registry.ErrInvalid) {
+	_, _, err := h.Store.Addresses(t.Context(), acme, "plugin", "", registry.MaxAddressPage)
+	if !errors.Is(err, registry.ErrInvalid) {
 		t.Fatalf("Addresses = %v, want ErrInvalid", err)
 	}
 }

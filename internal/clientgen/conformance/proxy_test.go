@@ -6,7 +6,9 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -343,5 +345,187 @@ func TestProxyOtherListenerRecordsAndAnswers204(t *testing.T) {
 	if !strings.HasPrefix(f.proxy.OtherURL(), "http://localhost:") ||
 		!strings.HasPrefix(f.proxy.URL(), "http://127.0.0.1:") {
 		t.Errorf("the two listeners should differ by host name: %s %s", f.proxy.URL(), f.proxy.OtherURL())
+	}
+}
+
+// connectionHeaderCase is one row of TestProxyDropsConnectionNominatedHeaders.
+// dropRequest and dropAnswer are the headers that the other side must not see.
+// keepRequest and keepAnswer are the headers that the other side must see with
+// the values of the row.
+type connectionHeaderCase struct {
+	name              string
+	requestConnection []string
+	requestHeaders    http.Header
+	answerConnection  []string
+	answerHeaders     http.Header
+	dropRequest       []string
+	dropAnswer        []string
+	keepRequest       http.Header
+	keepAnswer        http.Header
+}
+
+// connectionHeaderCases are the rows of TestProxyDropsConnectionNominatedHeaders.
+func connectionHeaderCases() []connectionHeaderCase {
+	return []connectionHeaderCase{
+		{
+			name:              "mixed-case names",
+			requestConnection: []string{"x-Remove-Me"},
+			requestHeaders:    http.Header{"X-Remove-Me": {"secret"}, "X-Keep-Me": {"kept"}},
+			answerConnection:  []string{"x-Remove-Answer"},
+			answerHeaders:     http.Header{"X-Remove-Answer": {"secret"}, "X-Keep-Answer": {"kept"}},
+			dropRequest:       []string{"Connection", "X-Remove-Me"},
+			dropAnswer:        []string{"Connection", "X-Remove-Answer"},
+			keepRequest:       http.Header{"X-Keep-Me": {"kept"}},
+			keepAnswer:        http.Header{"X-Keep-Answer": {"kept"}},
+		},
+		{
+			name:              "several Connection fields",
+			requestConnection: []string{"X-One", "X-Two"},
+			requestHeaders:    http.Header{"X-One": {"1"}, "X-Two": {"2"}, "X-Keep-Me": {"kept"}},
+			answerConnection:  []string{"X-Three", "X-Four"},
+			answerHeaders:     http.Header{"X-Three": {"3"}, "X-Four": {"4"}, "X-Keep-Answer": {"kept"}},
+			dropRequest:       []string{"Connection", "X-One", "X-Two"},
+			dropAnswer:        []string{"Connection", "X-Three", "X-Four"},
+			keepRequest:       http.Header{"X-Keep-Me": {"kept"}},
+			keepAnswer:        http.Header{"X-Keep-Answer": {"kept"}},
+		},
+		{
+			name:              "comma-separated values",
+			requestConnection: []string{"X-One, X-Two"},
+			requestHeaders:    http.Header{"X-One": {"1"}, "X-Two": {"2"}, "X-Keep-Me": {"kept"}},
+			answerConnection:  []string{"X-Three, X-Four"},
+			answerHeaders:     http.Header{"X-Three": {"3"}, "X-Four": {"4"}, "X-Keep-Answer": {"kept"}},
+			dropRequest:       []string{"Connection", "X-One", "X-Two"},
+			dropAnswer:        []string{"Connection", "X-Three", "X-Four"},
+			keepRequest:       http.Header{"X-Keep-Me": {"kept"}},
+			keepAnswer:        http.Header{"X-Keep-Answer": {"kept"}},
+		},
+		{
+			name:              "standard hop-by-hop headers",
+			requestConnection: nil,
+			requestHeaders:    http.Header{"Keep-Alive": {"timeout=5"}, "X-Keep-Me": {"kept"}},
+			answerConnection:  nil,
+			answerHeaders:     http.Header{"Keep-Alive": {"timeout=5"}, "X-Keep-Answer": {"kept"}},
+			dropRequest:       []string{"Connection", "Keep-Alive"},
+			dropAnswer:        []string{"Connection", "Keep-Alive"},
+			keepRequest:       http.Header{"X-Keep-Me": {"kept"}},
+			keepAnswer:        http.Header{"X-Keep-Answer": {"kept"}},
+		},
+	}
+}
+
+// TestProxyDropsConnectionNominatedHeaders checks that the proxy removes every
+// header that the Connection header of a message nominates, in both
+// directions, and keeps the headers that do not belong to the connection.
+func TestProxyDropsConnectionNominatedHeaders(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range connectionHeaderCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotUpstream, resp := sendConnectionCase(t, tt)
+			defer closeBody(t, resp)
+
+			checkDroppedHeaders(t, "the upstream saw the request header", gotUpstream, tt.dropRequest)
+			checkKeptHeaders(t, "the upstream saw", gotUpstream, tt.keepRequest)
+			checkDroppedHeaders(t, "the client saw the answer header", resp.Header, tt.dropAnswer)
+			checkKeptHeaders(t, "the client saw", resp.Header, tt.keepAnswer)
+		})
+	}
+}
+
+// sendConnectionCase sends the request of the row through a proxy in front of a
+// server that records the request headers and answers with the headers of the
+// row. It returns the headers of the upstream request and the answer.
+func sendConnectionCase(t *testing.T, tt connectionHeaderCase) (http.Header, *http.Response) {
+	t.Helper()
+
+	var (
+		mu       sync.Mutex
+		upstream http.Header
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		upstream = r.Header.Clone()
+		mu.Unlock()
+
+		for name, values := range tt.answerHeaders {
+			w.Header()[name] = slices.Clone(values)
+		}
+
+		for _, value := range tt.answerConnection {
+			w.Header().Add("Connection", value)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	proxy, err := conformance.NewProxy(t.Context(), conformance.ProxyOptions{
+		Upstream:   srv.URL,
+		Operations: []model.Operation{route("getThing", model.MethodGet, "/api/dustpan/v1/things/{thing_id}")},
+	})
+	if err != nil {
+		t.Fatalf("new proxy: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := proxy.Close(); closeErr != nil {
+			t.Errorf("close proxy: %v", closeErr)
+		}
+	})
+
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}}
+	t.Cleanup(client.CloseIdleConnections)
+
+	req, err := http.NewRequestWithContext(
+		t.Context(), http.MethodGet, proxy.URL()+"/api/dustpan/v1/things/a", http.NoBody,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, values := range tt.requestHeaders {
+		req.Header[name] = slices.Clone(values)
+	}
+
+	for _, value := range tt.requestConnection {
+		req.Header.Add("Connection", value)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+
+	mu.Lock()
+	gotUpstream := upstream.Clone()
+	mu.Unlock()
+
+	return gotUpstream, resp
+}
+
+// checkDroppedHeaders checks that the other side did not see each header.
+func checkDroppedHeaders(t *testing.T, side string, got http.Header, drop []string) {
+	t.Helper()
+
+	for _, name := range drop {
+		if values := got.Values(name); len(values) != 0 {
+			t.Errorf("%s %s: %v", side, name, values)
+		}
+	}
+}
+
+// checkKeptHeaders checks that the other side saw each header with the value of
+// the row.
+func checkKeptHeaders(t *testing.T, side string, got, keep http.Header) {
+	t.Helper()
+
+	for name, want := range keep {
+		if values := got.Values(name); !slices.Equal(values, want) {
+			t.Errorf("%s %s = %v, want %v", side, name, values, want)
+		}
 	}
 }

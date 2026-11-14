@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -224,6 +225,10 @@ type Workspace struct {
 	// Revision increases with every change; stores accept a write only if they
 	// hold Revision-1.
 	Revision int64
+	// Origin names the job whose token made the request that writes the row.
+	// A write records it when it releases the lock and publishes the current
+	// version of the unit; a read gives it as zero.
+	Origin identity.StateOrigin
 }
 
 // RepeatsRelease reports whether q repeats the release that the record of w

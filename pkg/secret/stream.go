@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -44,6 +45,10 @@ const (
 	streamAADSep = 0x00
 	// streamAADKind names stream chunks in their associated data.
 	streamAADKind = 's'
+	// streamKeyInfo is the HKDF info of a stream key. It names the purpose
+	// only. The associated data of each chunk binds the stream to its scope,
+	// or to its item and the ID of the item key record.
+	streamKeyInfo = "opendustpan/stream-key/v1"
 )
 
 // ErrStreamLimit reports a stream that would exceed streamMaxChunks chunks.
@@ -51,6 +56,9 @@ var ErrStreamLimit = errors.New("sealed stream exceeds the chunk limit")
 
 // ErrInvalidBinding reports a stream binding that is empty or too long.
 var ErrInvalidBinding = errors.New("invalid stream binding")
+
+// ErrStreamClosed reports a read of an opened stream after its Close.
+var ErrStreamClosed = errors.New("sealed stream reader is closed")
 
 // streamLast marks whether a chunk ends the stream. It is a byte, not a
 // flag, so the chunk position and its end travel as one value.
@@ -120,9 +128,10 @@ func streamNonce(counter uint64) []byte {
 }
 
 // deriveStreamKey returns the key of one stream: HKDF-SHA-256 over the data
-// key, with the stream salt and the scope label.
-func deriveStreamKey(dek, salt []byte, scope aadSource) ([]byte, error) {
-	key, err := hkdf.Key(sha256.New, dek, salt, string(scope.aad()), dataKeyBytes)
+// key, with the stream salt and the purpose label streamKeyInfo. The key does
+// not bind the scope: the associated data of each chunk does.
+func deriveStreamKey(dek, salt []byte) ([]byte, error) {
+	key, err := hkdf.Key(sha256.New, dek, salt, streamKeyInfo, dataKeyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("derive stream key: %w", err)
 	}
@@ -169,7 +178,7 @@ func sealStreamWith(dek []byte, scope aadSource, binding []byte, r io.Reader) (i
 		return nil, fmt.Errorf("generate stream salt: %w", err)
 	}
 
-	key, err := deriveStreamKey(dek, salt, scope)
+	key, err := deriveStreamKey(dek, salt)
 	if err != nil {
 		return nil, err
 	}
@@ -196,8 +205,10 @@ func sealStreamWith(dek []byte, scope aadSource, binding []byte, r io.Reader) (i
 // binding, and returns a reader of the plaintext. Any cut, reorder,
 // extension or tamper fails with ErrDecrypt, with no key, scope or content in
 // the error. A legacy stream opens for its scope and does not check the
-// binding, because the legacy format did not bind it.
-func (s *Service) OpenStream(ctx context.Context, scope Scope, binding []byte, r io.Reader) (io.Reader, error) {
+// binding, because the legacy format did not bind it. The reader can hold the
+// raw data key until it reads the stream header. The caller closes the
+// reader: Close clears the key, also when the reader was never read.
+func (s *Service) OpenStream(ctx context.Context, scope Scope, binding []byte, r io.Reader) (io.ReadCloser, error) {
 	if err := checkBinding(binding); err != nil {
 		return nil, err
 	}
@@ -211,10 +222,12 @@ func (s *Service) OpenStream(ctx context.Context, scope Scope, binding []byte, r
 }
 
 // openStreamWith opens a stream with the key dek. The reader takes dek and
-// clears it after the header. When current is true, only the current stream
-// format opens: the legacy format has no binding, and an item never had it.
-func openStreamWith(dek []byte, scope aadSource, binding []byte, r io.Reader, current bool) io.Reader {
+// clears it after the header, or at Close when no header was read. When
+// current is true, only the current stream format opens: the legacy format
+// has no binding, and an item never had it.
+func openStreamWith(dek []byte, scope aadSource, binding []byte, r io.Reader, current bool) *openReader {
 	return &openReader{
+		mu: sync.Mutex{}, closed: false, reading: false,
 		dek: dek, scope: scope, binding: bytes.Clone(binding), src: r, currentOnly: current,
 		aead: nil, version: 0, nonce: nil, header: nil, counter: 0,
 		pending: nil, final: false, sealedBuf: nil, plainBuf: nil,
@@ -251,10 +264,10 @@ func (s *Service) SealState(
 }
 
 // OpenState opens a stream sealed by SealState for the same workspace scope
-// and state version.
+// and state version. The caller closes the reader, as for OpenStream.
 func (s *Service) OpenState(
 	ctx context.Context, ns namespace.Name, workspaceID, versionID string, r io.Reader,
-) (io.Reader, error) {
+) (io.ReadCloser, error) {
 	scope, err := NewScope(ns, workspaceID)
 	if err != nil {
 		return nil, err
@@ -319,7 +332,7 @@ func (s *Service) OpenOutputs(
 	}
 
 	plain, err := io.ReadAll(opened)
-	if err != nil {
+	if err = errors.Join(err, opened.Close()); err != nil {
 		return nil, fmt.Errorf("open outputs: %w", err)
 	}
 
@@ -436,15 +449,24 @@ func (r *sealReader) sealNext() error {
 	return nil
 }
 
-// openReader opens one sealed stream chunk at a time.
+// openReader opens one sealed stream chunk at a time. It is not safe for
+// concurrent reads, but Close can run at the same time as a Read.
 type openReader struct {
+	// mu guards dek, closed and reading. Close changes them.
+	mu     sync.Mutex
+	closed bool
+	// reading is true while a Read runs. Close then leaves the stream
+	// state to that Read, which releases it when it returns.
+	reading bool
 	// currentOnly refuses the legacy stream format.
 	currentOnly bool
-	dek         []byte
-	aead        cipher.AEAD
-	scope       aadSource
-	binding     []byte
-	src         io.Reader
+	// dek is the raw key until the header is read or until Close. Then it is
+	// cleared and nil.
+	dek     []byte
+	aead    cipher.AEAD
+	scope   aadSource
+	binding []byte
+	src     io.Reader
 
 	// version is the format byte of the stream, set by its header.
 	version byte
@@ -464,8 +486,32 @@ type openReader struct {
 	plainBuf  []byte
 }
 
+// Close clears the raw key that the reader still holds, also when the reader
+// was never read. A Read after Close returns ErrStreamClosed. Close does not
+// close the source. A second Close does nothing.
+func (r *openReader) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.closed = true
+	clear(r.dek)
+	r.dek = nil
+
+	if !r.reading {
+		r.release()
+	}
+
+	return nil
+}
+
 // Read opens the next chunk when its buffer runs dry.
 func (r *openReader) Read(p []byte) (int, error) {
+	if !r.begin() {
+		return 0, ErrStreamClosed
+	}
+
+	defer r.end()
+
 	for len(r.pending) == 0 {
 		done, err := r.openNext()
 		if err != nil {
@@ -481,6 +527,76 @@ func (r *openReader) Read(p []byte) (int, error) {
 	r.pending = r.pending[n:]
 
 	return n, nil
+}
+
+// dropKey clears the raw key that the reader still holds. A stream whose
+// header fails never needs it.
+func (r *openReader) dropKey() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	clear(r.dek)
+	r.dek = nil
+}
+
+// begin marks a Read as running. It reports false after Close.
+func (r *openReader) begin() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.closed {
+		r.release()
+
+		return false
+	}
+
+	r.reading = true
+
+	return true
+}
+
+// end marks the Read as done. When Close ran during the Read, end releases
+// the stream state that Close left to it.
+func (r *openReader) end() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.reading = false
+
+	if r.closed {
+		r.release()
+	}
+}
+
+// release drops the stream cipher, which holds the key schedule, and clears
+// and drops the buffers of sealed and plain bytes. The caller holds mu, and no
+// Read runs.
+func (r *openReader) release() {
+	r.aead = nil
+	r.pending = nil
+	clear(r.plainBuf[:cap(r.plainBuf)])
+	r.plainBuf = nil
+	clear(r.sealedBuf[:cap(r.sealedBuf)])
+	r.sealedBuf = nil
+}
+
+// takeKey returns the raw key and removes it from the reader, so that only
+// the caller holds it and clears it. It fails after Close.
+func (r *openReader) takeKey() ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Defense in depth: Read checks for Close before each chunk too. This
+	// check stays so that a Close that runs while Read waits for the header
+	// bytes leaves no key to use.
+	if r.closed || r.dek == nil {
+		return nil, ErrStreamClosed
+	}
+
+	dek := r.dek
+	r.dek = nil
+
+	return dek, nil
 }
 
 // openNext reads one sealed frame and buffers its plaintext. It reports
@@ -522,60 +638,84 @@ func (r *openReader) checkTrailing() (bool, error) {
 }
 
 // readHeader reads the format byte of the stream and what follows it, and
-// sets up the key of the stream. A legacy stream uses the data key itself.
+// sets up the key of the stream. A legacy stream uses the data key itself. It
+// takes the raw key only after the header bytes are read, so a Close while
+// the source blocks clears the key at once. The key is cleared when
+// readHeader returns, also on an error.
 func (r *openReader) readHeader() error {
-	var version [1]byte
-	if _, err := io.ReadFull(r.src, version[:]); err != nil {
-		return fmt.Errorf("%w: sealed stream header", ErrDecrypt)
+	version, extra, err := r.readHeaderBytes()
+	if err != nil {
+		r.dropKey()
+
+		return err
 	}
 
-	defer clear(r.dek)
+	dek, err := r.takeKey()
+	if err != nil {
+		return err
+	}
 
-	switch version[0] {
+	defer clear(dek)
+
+	var key []byte
+
+	switch version {
 	case streamVersion:
-		salt := make([]byte, streamSaltSize)
-		if _, err := io.ReadFull(r.src, salt); err != nil {
-			return fmt.Errorf("%w: sealed stream header", ErrDecrypt)
-		}
-
-		key, err := deriveStreamKey(r.dek, salt, r.scope)
+		key, err = deriveStreamKey(dek, extra)
 		if err != nil {
 			return fmt.Errorf("%w: sealed stream header", ErrDecrypt)
 		}
 
 		defer clear(key)
 
-		aead, err := newAEAD(key)
-		if err != nil {
-			return err
-		}
-
-		r.aead = aead
-		r.header = append([]byte{streamVersion}, salt...)
+		r.header = append([]byte{streamVersion}, extra...)
 	case streamLegacyVersion:
-		if r.currentOnly {
-			return fmt.Errorf("%w: sealed stream header", ErrDecrypt)
-		}
-
-		nonce := make([]byte, streamLegacyNonceSize)
-		if _, err := io.ReadFull(r.src, nonce); err != nil {
-			return fmt.Errorf("%w: sealed stream header", ErrDecrypt)
-		}
-
-		aead, err := newAEAD(r.dek)
-		if err != nil {
-			return err
-		}
-
-		r.aead = aead
-		r.nonce = nonce
+		key = dek
+		r.nonce = extra
 	default:
+		// Defense in depth: readHeaderBytes refuses an unknown format byte
+		// too. This check stays so that no key is set up for a format that
+		// this reader does not know.
 		return fmt.Errorf("%w: sealed stream header", ErrDecrypt)
 	}
 
-	r.version = version[0]
+	aead, err := newAEAD(key)
+	if err != nil {
+		return err
+	}
+
+	r.aead = aead
+	r.version = version
 
 	return nil
+}
+
+// readHeaderBytes reads the format byte of the stream and the salt or the
+// legacy nonce that follows it. It refuses an unknown format, and the legacy
+// format when the reader opens only the current format.
+func (r *openReader) readHeaderBytes() (byte, []byte, error) {
+	var version [1]byte
+	if _, err := io.ReadFull(r.src, version[:]); err != nil {
+		return 0, nil, fmt.Errorf("%w: sealed stream header", ErrDecrypt)
+	}
+
+	var size int
+
+	switch {
+	case version[0] == streamVersion:
+		size = streamSaltSize
+	case version[0] == streamLegacyVersion && !r.currentOnly:
+		size = streamLegacyNonceSize
+	default:
+		return 0, nil, fmt.Errorf("%w: sealed stream header", ErrDecrypt)
+	}
+
+	extra := make([]byte, size)
+	if _, err := io.ReadFull(r.src, extra); err != nil {
+		return 0, nil, fmt.Errorf("%w: sealed stream header", ErrDecrypt)
+	}
+
+	return version[0], extra, nil
 }
 
 // readFrame reads one sealed frame and buffers its plaintext.

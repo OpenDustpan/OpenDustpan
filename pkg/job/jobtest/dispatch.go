@@ -232,8 +232,9 @@ func testTakeover(t *testing.T, h Harness) {
 	shortenOp(t, h, first.Claim)
 
 	op := claimAfterExpiry(t, h, "runner-2", job.RunnerKind(j.Spec.Pool))
-	if string(op.ID) != operation || op.Claim.Token < 2 {
-		t.Fatalf("takeover claim = %s, token %d; want %s with a new token", op.ID, op.Claim.Token, operation)
+	if string(op.ID) != operation || op.Claim.Token != first.Claim.Token+1 {
+		t.Fatalf("takeover claim = %s, token %d; want %s with the token after %d", op.ID, op.Claim.Token, operation,
+			first.Claim.Token)
 	}
 
 	got := claimed(t, h, f, &j, "runner-2")
@@ -327,8 +328,8 @@ func testOrphans(t *testing.T, h Harness) {
 		t.Fatalf("durable Cancel = %v", err)
 	}
 
-	orphans, err := h.Jobs.Orphans(t.Context(), orphanPage)
-	if err != nil || len(orphans) != 1 || orphans[0].Job.ID != lost.ID || orphans[0].Missing {
+	orphans, damaged, err := h.Jobs.Orphans(t.Context(), orphanPage)
+	if err != nil || len(orphans) != 1 || orphans[0].Job.ID != lost.ID || orphans[0].Missing || len(damaged) != 0 {
 		t.Fatalf("Orphans = %v, %v; want only %s with an ended operation (not %s or %s)", orphanIDs(orphans), err,
 			lost.ID, live.ID, queued.ID)
 	}
@@ -337,7 +338,8 @@ func testOrphans(t *testing.T, h Harness) {
 		t.Fatalf("reconcile of an orphan = %s, want failed", got.State)
 	}
 
-	if orphans, err = h.Jobs.Orphans(t.Context(), orphanPage); err != nil || len(orphans) != 0 {
+	if orphans, damaged, err = h.Jobs.Orphans(t.Context(), orphanPage); err != nil || len(orphans) != 0 ||
+		len(damaged) != 0 {
 		t.Fatalf("Orphans after the reconcile = %v, %v; want none", orphanIDs(orphans), err)
 	}
 }

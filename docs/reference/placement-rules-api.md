@@ -6,8 +6,9 @@ the stack name. It does not send a collection. The rules of the namespace
 match the project name and the stack name. The first rule that matches names
 the collection.
 
-OpenTofu does not use placement rules. The `project` of its `cloud` block names
-the collection.
+OpenTofu uses the same rules for a new workspace. A workspace has no project, so
+the server matches a rule with the project `*`, and the `stack` pattern of the
+rule matches the name of the workspace.
 
 This page describes the rules and the routes that manage them. The server
 applies the rules when the Pulumi CLI makes a stack, for example with
@@ -23,7 +24,7 @@ A namespace has an ordered list of rules. Each rule has these fields:
 | `id` | The stable ID of the rule, with the prefix `plr-`. |
 | `namespace` | The name of the namespace. |
 | `position` | The place of the rule in the list, from 1. The positions have no gap. |
-| `tool` | The tool of the units that the rule places. The value is `pulumi`. |
+| `tool` | The tool of the units that the rule places. The value is `pulumi` or `opentofu`. |
 | `project` | The pattern for the Pulumi project name. |
 | `stack` | The pattern for the stack name. |
 | `collection` | The name of the collection for a stack that matches. The collection must exist. |

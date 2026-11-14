@@ -108,6 +108,7 @@ func areas() []func() []Spec {
 		requestSpecs,
 		restoreSpecs,
 		runSpecs,
+		selfServiceSpecs,
 		runnerSpecs,
 		schemaSpecs,
 		secretSpecs,

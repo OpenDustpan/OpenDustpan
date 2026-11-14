@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -139,7 +140,7 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 	if recorder == nil {
 		built, ok, buildErr := newDurableRecorder(&jobRecorderInputs{
 			jobs: cfg.jobStore, blobs: cfg.blobStore, updates: cfg.updateStore, namespaceStore: cfg.namespaceStore,
-			wrapper: cfg.secretWrapper, now: cfg.now, namespaces: svc.namespaces,
+			wrapper: cfg.secretWrapper, now: cfg.now, namespaces: svc.namespaces, logger: cfg.logger,
 			retention: cfg.jobRetention,
 		})
 		if buildErr != nil {
@@ -151,6 +152,11 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 		}
 	}
 
+	deps, err := planDepsOf(recorder, svc, cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := runnerapi.NewHandler(runnerapi.Config{
 		Namespaces: svc.namespaces, Pools: cfg.runners, Members: cfg.runners, Handoffs: cfg.runners,
 		Claimer: claimer, Sweeps: nil, Operations: cfg.durableStore,
@@ -158,13 +164,42 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 		Authorizer: cfg.authorizer, Sessions: cfg.sessionCookies, Logger: cfg.logger, Release: release,
 		ServerURL: publicURL, Now: cfg.now, PollInterval: 0,
 		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,
-		OnHandoffRefusalSuppressed: nil,
+		Plans: deps.plans, Artifacts: deps.artifacts, OnHandoffRefusalSuppressed: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runner api: %w", err)
 	}
 
 	return handler, nil
+}
+
+// planDeps are what the plan paths of a launcher need. A part that the server
+// lacks is nil, and the plan paths then answer not-found.
+type planDeps struct {
+	plans     job.PlanRecorder
+	artifacts job.ArtifactReader
+}
+
+// planDepsOf returns the recorder as a plan recorder, and the reader of stored
+// plans. A recorder from WithJobRecorder may not store plans, and a server may
+// lack the stores for the reader.
+func planDepsOf(recorder job.CheckedRecorder, svc services, cfg *settings) (planDeps, error) {
+	var deps planDeps
+
+	if p, ok := recorder.(job.PlanRecorder); ok {
+		deps.plans = p
+	}
+
+	reader, canRead, err := newJobArtifactReader(svc, cfg)
+	if err != nil {
+		return planDeps{plans: nil, artifacts: nil}, err
+	}
+
+	if canRead {
+		deps.artifacts = reader
+	}
+
+	return deps, nil
 }
 
 // jobRecorderInputs are the values that newDurableRecorder reads.
@@ -175,6 +210,7 @@ type jobRecorderInputs struct {
 	namespaceStore namespace.Store
 	wrapper        secret.Wrapper
 	now            func() time.Time
+	logger         *slog.Logger
 	namespaces     *namespace.Service
 	// retention is the period of each new plan and each new job log version.
 	retention jobRetention
@@ -213,7 +249,7 @@ func newDurableRecorder(in *jobRecorderInputs) (*job.DurableRecorder, bool, erro
 	recorder, err := job.NewRecorder(job.RecorderConfig{
 		Store: records, Jobs: in.jobs, Blobs: blobs, Sealer: sealer,
 		Namespaces: jobNamespaces{namespaces: in.namespaces}, Retention: in.retention,
-		Now: in.now,
+		Now: in.now, Log: in.logger,
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("job recorder: %w", err)

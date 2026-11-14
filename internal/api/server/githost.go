@@ -98,7 +98,7 @@ func (h *Handler) gitHostInstallationRoutes() []Route {
 	row := func(method, path string, actions []identity.Action, serve RouteHandler) Route {
 		return Route{
 			Method: method, Path: path, Scope: ScopeAuthorized, Actions: actions, Resolve: resolveServer,
-			ActionsFor: nil, Serve: serve,
+			ActionsFor: nil, OpaqueDenial: false, Serve: serve,
 		}
 	}
 
@@ -120,7 +120,7 @@ func (h *Handler) gitHostNamespaceRoutes() []Route {
 	row := func(method, path string, actions []identity.Action, serve RouteHandler) Route {
 		return Route{
 			Method: method, Path: path, Scope: ScopeAuthorized, Actions: actions, Resolve: resolveNamespacePath,
-			ActionsFor: nil, Serve: serve,
+			ActionsFor: nil, OpaqueDenial: false, Serve: serve,
 		}
 	}
 

@@ -434,8 +434,9 @@ func TestDemoSeedRevokesAGrantOutsideTheFixedSet(t *testing.T) {
 }
 
 // TestDemoSeedFailsClosedOnTheLastSiteAdministrator proves that the seed stops
-// with access.ErrLastSiteAdministrator, and keeps the grant, when the extra
-// grant is the last site-administrator grant of the installation.
+// with access.ErrLastSiteAdministrator, and changes nothing else, when the
+// extra grant is the last site-administrator grant of the installation: the
+// grant, the password and the required grants stay as they are.
 func TestDemoSeedFailsClosedOnTheLastSiteAdministrator(t *testing.T) {
 	t.Parallel()
 
@@ -446,22 +447,187 @@ func TestDemoSeedFailsClosedOnTheLastSiteAdministrator(t *testing.T) {
 		t.Fatalf("new demo seed: %v", err)
 	}
 
-	if _, runErr := seed.Run(t.Context(), nil); runErr != nil {
-		t.Fatalf("first run: %v", runErr)
+	first, err := seed.Run(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
 	}
 
 	personID, _ := demoGrants(t.Context(), t, f)
 	extraSiteAdministrator(t, f, "grt-last-site-admin", personID)
 
-	if _, runErr := seed.Run(t.Context(), nil); !errors.Is(runErr, access.ErrLastSiteAdministrator) {
+	// The second run names a namespace, so its admin grant is a required grant
+	// that does not exist yet. The refused revoke must leave it missing.
+	names := makeNamespaces(t, f, "dev")
+
+	_, before := demoGrants(t.Context(), t, f)
+
+	if _, runErr := seed.Run(t.Context(), names); !errors.Is(runErr, access.ErrLastSiteAdministrator) {
 		t.Fatalf("second run = %v, want %v", runErr, access.ErrLastSiteAdministrator)
 	}
 
-	_, got := demoGrants(t.Context(), t, f)
+	if !personCanSignIn(t, f, first) {
+		t.Error("the refused start changed the password")
+	}
 
-	kept := access.RoleSiteAdministrator + " " + identity.ServerObject().String()
+	_, after := demoGrants(t.Context(), t, f)
+	if !slices.Equal(before, after) {
+		t.Fatalf("grants after the refused start = %v, want %v", after, before)
+	}
+}
+
+// errRevokeDown is the error of a revoke that the store cannot do.
+var errRevokeDown = errors.New("revoke down")
+
+// failingRevokes is the grant store of f that fails each revoke after the
+// first one, and records the grant that the first revoke ended.
+type failingRevokes struct {
+	localusersvc.DemoGrants
+
+	revoked []string
+}
+
+func (g *failingRevokes) RevokeGrant(
+	ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check access.GrantCheck,
+) error {
+	if len(g.revoked) > 0 {
+		return errRevokeDown
+	}
+
+	if err := g.DemoGrants.RevokeGrant(ctx, id, fence, e, check); err != nil {
+		return err
+	}
+
+	g.revoked = append(g.revoked, id)
+
+	return nil
+}
+
+// extraNamespaceAdmin gives the admin role on a new namespace "spare" to the
+// principal id, as a person with the right to do so would do between two
+// starts.
+func extraNamespaceAdmin(t *testing.T, f *fixture, grantID, principalID string) {
+	t.Helper()
+
+	spare := makeNamespaces(t, f, "spare")
+
+	ns, err := f.store.GetNamespace(t.Context(), spare[0])
+	if err != nil {
+		t.Fatalf("read the namespace spare: %v", err)
+	}
+
+	g := access.Grant{
+		CreatedAt: time.UnixMilli(1700000000000).UTC(), Condition: nil, Object: identity.NamespaceObject(spare[0]),
+		ID: grantID, Role: access.RoleAdmin, CreatedBy: "admin",
+		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: principalID},
+	}
+
+	entry := auditEntryOf(access.GrantRef(g))
+	entry.Action, entry.Namespace = "server:manage-access", spare[0]
+
+	if err := f.store.CreateGrant(t.Context(), g, ns.Fence(), entry, nil); err != nil {
+		t.Fatalf("add the grant %s: %v", grantID, err)
+	}
+}
+
+// checkRevokedOnce fails unless exactly one of the extra grants
+// grt-extra-admin and grt-extra-site-admin was revoked, that grant stays
+// revoked, and the other one stays.
+func checkRevokedOnce(t *testing.T, f *fixture, personID string, revoked []string) {
+	t.Helper()
+
+	a, b := "grt-extra-admin", "grt-extra-site-admin"
+
+	if len(revoked) != 1 {
+		t.Fatalf("revoked grants = %v, want one", revoked)
+	}
+
+	current, err := f.store.GrantsOf(t.Context(), access.Subject{Kind: access.SubjectPrincipal, ID: personID})
+	if err != nil {
+		t.Fatalf("grants of the demo person: %v", err)
+	}
+
+	got := make([]string, 0, len(current))
+	for i := range current {
+		got = append(got, current[i].ID)
+	}
+
+	kept := a
+	if revoked[0] == a {
+		kept = b
+	}
+
+	if slices.Contains(got, revoked[0]) {
+		t.Errorf("grants after the failed start = %v, want %s to stay revoked", got, revoked[0])
+	}
+
 	if !slices.Contains(got, kept) {
-		t.Fatalf("grants after the refused start = %v, want the site-administrator grant to stay", got)
+		t.Errorf("grants after the failed start = %v, want %s to stay", got, kept)
+	}
+}
+
+// TestDemoSeedFailsClosedOnASecondRevoke proves that a revoke that fails
+// after an earlier revoke stops the seed: the earlier extra grant stays
+// revoked, the other extra grant stays, and the password and the required
+// grants do not change.
+func TestDemoSeedFailsClosedOnASecondRevoke(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	seed, err := demoSeedFor(t, f, installation.KindDev)
+	if err != nil {
+		t.Fatalf("new demo seed: %v", err)
+	}
+
+	first, err := seed.Run(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	personID, _ := demoGrants(t.Context(), t, f)
+
+	// A second site administrator, so that no revoke removes the last one.
+	other, err := f.principals.CreatePrincipal(t.Context(), auditEntryOf("principal:other"), principal.Input{
+		Subject: "other-admin", DisplayName: "Other", Kind: principal.KindPerson,
+	})
+	if err != nil {
+		t.Fatalf("make the second administrator: %v", err)
+	}
+
+	extraSiteAdministrator(t, f, "grt-other-site-admin", other.ID)
+	extraSiteAdministrator(t, f, "grt-extra-site-admin", personID)
+
+	extraNamespaceAdmin(t, f, "grt-extra-admin", personID)
+
+	// The second run names a namespace, so its admin grant is a required grant
+	// that does not exist yet. The failed revoke must leave it missing.
+	names := makeNamespaces(t, f, "dev")
+
+	grants := &failingRevokes{DemoGrants: f.store, revoked: nil}
+
+	failing, err := localusersvc.NewDemoSeed(localusersvc.DemoConfig{
+		Passwords: f.store, Principals: f.principals, Grants: grants, Namespaces: f.store, Hasher: f.hasher,
+		Blocklist: blocklist.Embedded(), Kind: installation.KindDev, Now: nil, Random: nil,
+	})
+	if err != nil {
+		t.Fatalf("new demo seed: %v", err)
+	}
+
+	if _, runErr := failing.Run(t.Context(), names); !errors.Is(runErr, errRevokeDown) {
+		t.Fatalf("second run = %v, want %v", runErr, errRevokeDown)
+	}
+
+	if !personCanSignIn(t, f, first) {
+		t.Error("the failed start changed the password")
+	}
+
+	checkRevokedOnce(t, f, personID, grants.revoked)
+
+	_, after := demoGrants(t.Context(), t, f)
+
+	required := access.RoleAdmin + " " + identity.NamespaceObject(names[0]).String()
+	if slices.Contains(after, required) {
+		t.Errorf("grants after the failed start = %v, want no %s", after, required)
 	}
 }
 

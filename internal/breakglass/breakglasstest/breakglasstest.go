@@ -13,6 +13,8 @@ package breakglasstest
 import (
 	"context"
 	"errors"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,6 +54,8 @@ func Run(t *testing.T, newHarness Factory) {
 	}{
 		{"open stores a review and appends one entry", testOpen},
 		{"a second open of one use returns the first review", testOpenOnce},
+		{"two opens of one use at the same time return one review and append one entry", testOpenConcurrent},
+		{"two opens of one session at the same time return one review and append one entry", testOpenSessionConcurrent},
 		{"get of an unknown ID is ErrNotFound", testGetUnknown},
 		{"get of a review of another scope is ErrNotFound", testGetOtherScope},
 		{"record stores a verdict once", testRecordOnce},
@@ -241,6 +245,103 @@ func testOpenOnce(t *testing.T, h Harness) {
 	entries, err := h.Domain.AuditEntries(t.Context(), shop)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("audit entries = %d (%v), want 1", len(entries), err)
+	}
+}
+
+// openAnswer is the answer of one open in a concurrency case.
+type openAnswer struct {
+	ID  string
+	Err error
+}
+
+// concurrentOpen opens first and second at the same time, on one start
+// channel, and returns the answers of the two calls.
+func concurrentOpen(
+	t *testing.T, h Harness, fence namespace.Fence, first, second breakglass.Review,
+) [2]openAnswer {
+	t.Helper()
+
+	start := make(chan struct{})
+
+	var wait sync.WaitGroup
+
+	var out [2]openAnswer
+
+	open := func(i int, r breakglass.Review) {
+		defer wait.Done()
+
+		<-start
+
+		got, err := h.Store.Open(t.Context(), r, fence, entry(r.Use.Scope, openAction(r)))
+		out[i] = openAnswer{ID: got.ID, Err: err}
+	}
+
+	wait.Add(2)
+	go open(0, first)
+	go open(1, second)
+	close(start)
+	wait.Wait()
+
+	return out
+}
+
+// testOpenConcurrent proves that two opens of one use at the same time
+// return one review and append one audit entry. The namespace row holds the
+// opens apart, so the second open reads the review of the first.
+func testOpenConcurrent(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+
+	const rounds = 20
+
+	for round := range rounds {
+		ref := "job-" + strconv.Itoa(round)
+		first := review("bgr-a-"+strconv.Itoa(round), ref, now())
+		second := review("bgr-b-"+strconv.Itoa(round), ref, now())
+
+		answers := concurrentOpen(t, h, fence, first, second)
+		if answers[0].Err != nil || answers[1].Err != nil {
+			t.Fatalf("round %d: Open = %v, %v, want nil", round, answers[0].Err, answers[1].Err)
+		}
+
+		if answers[0].ID != answers[1].ID {
+			t.Fatalf("round %d: open IDs = %s and %s, want one review", round, answers[0].ID, answers[1].ID)
+		}
+	}
+
+	entries, err := h.Domain.AuditEntries(t.Context(), shop)
+	if err != nil || len(entries) != rounds {
+		t.Fatalf("audit entries = %d (%v), want %d", len(entries), err, rounds)
+	}
+}
+
+// testOpenSessionConcurrent proves that two opens of one session at the same
+// time return one review and append one audit entry, with the zero fence of
+// audit.ServerScope.
+func testOpenSessionConcurrent(t *testing.T, h Harness) {
+	t.Helper()
+
+	const rounds = 20
+
+	for round := range rounds {
+		ref := "ses-" + strconv.Itoa(round)
+		first := session("bgr-a-"+strconv.Itoa(round), ref)
+		second := session("bgr-b-"+strconv.Itoa(round), ref)
+
+		answers := concurrentOpen(t, h, zero(), first, second)
+		if answers[0].Err != nil || answers[1].Err != nil {
+			t.Fatalf("round %d: Open = %v, %v, want nil", round, answers[0].Err, answers[1].Err)
+		}
+
+		if answers[0].ID != answers[1].ID {
+			t.Fatalf("round %d: open IDs = %s and %s, want one review", round, answers[0].ID, answers[1].ID)
+		}
+	}
+
+	entries, err := h.Domain.AuditEntries(t.Context(), audit.ServerScope)
+	if err != nil || len(entries) != rounds {
+		t.Fatalf("server audit entries = %d (%v), want %d", len(entries), err, rounds)
 	}
 }
 

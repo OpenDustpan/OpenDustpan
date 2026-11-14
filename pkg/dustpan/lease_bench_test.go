@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/pgtest"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
@@ -156,7 +157,8 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 	leases := make([]benchLease, len(modes))
 
 	for i, m := range modes {
-		leases[i] = startBenchLease(b, stacks, updates, m.stack, m.tokenID)
+		createBenchStack(b, stacks, s.stacks, m.stack)
+		leases[i] = startBenchLease(b, updates, m.stack, m.tokenID)
 	}
 
 	handler := leaseBenchHandler(b, s, blobs)
@@ -216,6 +218,7 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 			Guard:      principal.AdminOnlyGuard{},
 			Namespaces: nil,
 			Tokens:     nil,
+			GroupReach: nil,
 			Now:        now,
 			NewID:      nil,
 		},
@@ -226,7 +229,11 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
-		Store:      s.tokens, Principals: s.principals, Freshness: nil, Authorizer: nil, Logger: nil, Now: now,
+		Store:      s.tokens, Principals: s.principals, Freshness: nil, Authorizer: nil,
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
+		Logger: nil, Now: now,
 		NewID: nil,
 	})
 	if err != nil {
@@ -252,9 +259,7 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 // startBenchLease creates and starts a mutating update on the stack named
 // stackName, started by the access token tokenID, or by no token when tokenID
 // is empty. It returns the checkpoint path and the lease token.
-func startBenchLease(
-	b *testing.B, stacks *stack.Service, updates *stack.Updates, stackName, tokenID string,
-) benchLease {
+func startBenchLease(b *testing.B, updates *stack.Updates, stackName, tokenID string) benchLease {
 	b.Helper()
 
 	ctx := b.Context()
@@ -264,12 +269,8 @@ func startBenchLease(
 		b.Fatalf("parse ref: %v", err)
 	}
 
-	if _, createErr := stacks.Create(ctx, ref, nil); createErr != nil {
-		b.Fatalf("create stack %s: %v", stackName, createErr)
-	}
-
 	u, err := updates.Create(ctx, ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		b.Fatalf("create update: %v", err)
@@ -392,4 +393,18 @@ func leaseBenchSchemaURL(b *testing.B, base string) string {
 	u.RawQuery = q.Encode()
 
 	return u.String()
+}
+
+// createBenchStack makes the stack acme/web/stackName in a collection.
+func createBenchStack(b *testing.B, stacks *stack.Service, store any, stackName string) {
+	b.Helper()
+
+	ref, err := stack.ParseRef("acme", "web", stackName)
+	if err != nil {
+		b.Fatalf("parse ref: %v", err)
+	}
+
+	if _, createErr := stacks.CreatePlaced(b.Context(), ref, nil, placeStack(b, store, "acme")); createErr != nil {
+		b.Fatalf("create stack %s: %v", stackName, createErr)
+	}
 }

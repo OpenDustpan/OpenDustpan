@@ -59,10 +59,11 @@ type Tool struct {
 
 // Pulumi describes the Pulumi CLI.
 //
-// The matrix is the newest release plus two older minors. Pulumi ships a minor
-// roughly weekly, so the older entries are spaced out (about four months and
-// one year back) to cover genuinely different CLI behavior rather than three
-// near-identical builds.
+// The default matrix is the three pinned versions, each from a different older
+// minor. Pulumi ships a minor roughly weekly, so the pins are spaced out (about
+// two months, four months and one year back) to cover genuinely different CLI
+// behavior rather than three near-identical builds. The scheduled nightly run
+// sets E2E_PULUMI_VERSIONS to latest to run the newest release.
 func Pulumi() Tool {
 	return Tool{
 		parseLatest: func(body string) (string, error) { return strings.TrimSpace(body), nil },
@@ -76,6 +77,15 @@ func Pulumi() Tool {
 		checksums: func(version string) string { return "pulumi-" + version + "-checksums.txt" },
 		// sha256 sums copied from https://get.pulumi.com/releases/sdk/pulumi-<version>-checksums.txt.
 		pinned: map[string]string{
+			// The journal tests (make e2e-journal) run this version.
+			"pulumi-v3.268.0-darwin-arm64.tar.gz": "ef509a84f0ad8f4ed0ec04be957e6688f094eb9a1cdc676a4864103d66d8a4e9",
+			"pulumi-v3.268.0-darwin-x64.tar.gz":   "b0c4e37e9fd9573d3e09b65606124486ef2c2049db1237ca6037c4204c6a99a8",
+			"pulumi-v3.268.0-linux-arm64.tar.gz":  "47c1b9283b7997337b0a373d240f771a6aeb42ee5dd2e213c14604247c7ff15a",
+			"pulumi-v3.268.0-linux-x64.tar.gz":    "903cafeaa9f6327e4bf53a8b7b99ae660f26198acfa804a2f982bf5de3f1de0b",
+			"pulumi-v3.262.0-darwin-arm64.tar.gz": "a3c2ff50ef94962711649e234a28ed3803618cbb2f313505a88ca86c30da98e0",
+			"pulumi-v3.262.0-darwin-x64.tar.gz":   "7db45a6fb6f876e7181925861613b1aa2ae4eea7629f2fb495b221c67c0ec117",
+			"pulumi-v3.262.0-linux-arm64.tar.gz":  "224ffde7339807abca1ee8866372e37fcf23f27a1e31056326188f81823b69a4",
+			"pulumi-v3.262.0-linux-x64.tar.gz":    "0469448b9853f723340bf19273c817482bca90f5c02c4cac9fa18a530df6402a",
 			"pulumi-v3.250.0-darwin-arm64.tar.gz": "dbd289ce3069cf567683252082e226aef533775f546df7286f64f3f36f5fda28",
 			"pulumi-v3.250.0-darwin-x64.tar.gz":   "8aa1615ed737022949d4050bf183ab37bce1f9cecb88877bc6636db82604e348",
 			"pulumi-v3.250.0-linux-arm64.tar.gz":  "deb4bf0d05b4cbaf3adcf82ffa44039ad0ebf039e33338ead8136877a437b4e5",
@@ -90,12 +100,13 @@ func Pulumi() Tool {
 		ReleaseURL:  "https://get.pulumi.com/releases/sdk/%[2]s",
 		versionsEnv: "E2E_PULUMI_VERSIONS",
 		binary:      "pulumi/pulumi",
-		defaults:    []string{Latest, "3.250.0", "3.200.0"},
+		defaults:    []string{"3.262.0", "3.250.0", "3.200.0"},
 	}
 }
 
-// OpenTofu describes the OpenTofu CLI. The matrix is the newest release plus
-// the last patch of the two previous minors.
+// OpenTofu describes the OpenTofu CLI. The default matrix is the three pinned
+// versions: the last patch of each of the three previous minors. The scheduled
+// nightly run sets E2E_TOFU_VERSIONS to latest to run the newest release.
 func OpenTofu() Tool {
 	return Tool{
 		parseLatest: newestStable,
@@ -105,32 +116,38 @@ func OpenTofu() Tool {
 		checksums: func(version string) string { return "tofu_" + version + "_SHA256SUMS" },
 		// sha256 sums copied from tofu_<version>_SHA256SUMS on each GitHub release.
 		pinned: map[string]string{
-			"tofu_1.12.7_darwin_arm64.tar.gz":  "02d84784a9b0d6ce43f55e6c7e069a07909c392b067261d5a6aed924e96e5c76",
-			"tofu_1.12.7_darwin_amd64.tar.gz":  "4321cd122774683ad17f01d3324eff24129a184353a921174c3baad06ad3c925",
-			"tofu_1.12.7_linux_amd64.tar.gz":   "8b0967cc14715bfb03d5e04dd0da0a47c668dcb33cb3a84996413a48b1aa51c0",
-			"tofu_1.12.7_linux_arm64.tar.gz":   "f407848e706d50711937955bbfcddf97929767f73bda4480415c8aff2ea44671",
+			"tofu_1.12.12_darwin_arm64.tar.gz": "47f72f1662dfbf5c0f39b213f189be04df6a44f1c666f455ceb54390eb5dbb0a",
+			"tofu_1.12.12_darwin_amd64.tar.gz": "b6bc144a5b42713bef7fa2c841edff41835bd4881dbd85d4770529f397c44edd",
+			"tofu_1.12.12_linux_amd64.tar.gz":  "b2a2e0ebdebf410d07706e67fb1b6ffc27e049dd80600188d9acc9634035e3a7",
+			"tofu_1.12.12_linux_arm64.tar.gz":  "6fff506545782de496d7cb29653359b9fca29b0b9979eb9e985fd8092e89f289",
 			"tofu_1.11.14_darwin_arm64.tar.gz": "76d7c6e5be6fbe13496e691873603ffaec28bd734b6138b4e9bc8e6d3c710ec6",
 			"tofu_1.11.14_darwin_amd64.tar.gz": "a3ad1623fad49f77b4128cc4af15dac6aea1e61dc191b337962def71e526b383",
 			"tofu_1.11.14_linux_amd64.tar.gz":  "88ee1d2e1a69f266ac99b8b30374e07757a42219e745b046ea0426c08ea951ae",
 			"tofu_1.11.14_linux_arm64.tar.gz":  "6c4d06e6c1235578f80f192c95257918450c5a28eb1aadbf34973dcd4fc1fdd0",
+			"tofu_1.10.10_darwin_arm64.tar.gz": "e2b8199813e311b2da90955cdbca34b11903b3b0e8937abd32888b6f16ea5568",
+			"tofu_1.10.10_darwin_amd64.tar.gz": "a4e05949878021717bd73818d23aa32b49445ce7e9ab5a4d1b38419f1e163baa",
+			"tofu_1.10.10_linux_amd64.tar.gz":  "75b529fd9481b23e46a895520883f04c537bd6be4bd0dff83ad87e85806b12f1",
+			"tofu_1.10.10_linux_arm64.tar.gz":  "cea25e126cc3428aec4bfb7c0e7acf117b4335c12160f4e4dbecd327a3f29bee",
 		},
 		Name:        ToolTofu,
 		LatestURL:   "https://get.opentofu.org/tofu/api.json",
 		ReleaseURL:  "https://github.com/opentofu/opentofu/releases/download/v%[1]s/%[2]s",
 		versionsEnv: "E2E_TOFU_VERSIONS",
 		binary:      "tofu",
-		defaults:    []string{Latest, "1.12.7", "1.11.14"},
+		defaults:    []string{"1.12.12", "1.11.14", "1.10.10"},
 	}
 }
 
-// Pinned is the version label that stands for every pinned version of the
-// default matrix, which is the default matrix without Latest. The nightly run
-// uses it to run the pinned versions and Latest as two separate jobs.
+// Pinned is the version label that stands for the pinned versions of the
+// default matrix. The default matrix holds no Latest. The nightly run uses it
+// to run the pinned versions and Latest as two separate jobs.
 const Pinned = "pinned"
 
 // Versions returns the matrix from the tool's environment variable
-// (E2E_PULUMI_VERSIONS or E2E_TOFU_VERSIONS), or its defaults. The label
-// Pinned in the variable stands for the pinned versions of the defaults.
+// (E2E_PULUMI_VERSIONS or E2E_TOFU_VERSIONS). When the variable is not set it
+// returns the pinned versions of the default matrix. The label Pinned in the
+// variable stands for every pinned version. The scheduled nightly run sets the
+// variable to latest to run the newest release.
 func (t Tool) Versions() []string {
 	raw := os.Getenv(t.versionsEnv)
 	if raw == "" {
@@ -154,6 +171,27 @@ func (t Tool) Versions() []string {
 	}
 
 	return versions
+}
+
+// Single returns the version of a test that installs one version of the
+// tool: the first label of Versions that is not Latest. A pinned version has
+// its sha256 sum in this file, so a cached binary needs no network request.
+// When Versions holds Latest only, Single returns Latest: the scheduled run of
+// the newest releases sets the matrix to Latest. When Versions is empty, Single
+// returns "".
+func (t Tool) Single() string {
+	versions := t.Versions()
+	if len(versions) == 0 {
+		return ""
+	}
+
+	for _, label := range versions {
+		if label != Latest {
+			return label
+		}
+	}
+
+	return Latest
 }
 
 // IsMatrixEnd reports whether label is the newest or the oldest version in
@@ -274,6 +312,11 @@ func semver(s string) []int {
 	parts := make([]int, 0, semverParts)
 
 	for _, f := range fields {
+		// Digits only: Atoi also accepts a sign, for example "+1".
+		if f == "" || strings.Trim(f, "0123456789") != "" {
+			return nil
+		}
+
 		n, err := strconv.Atoi(f)
 		if err != nil || n < 0 {
 			return nil

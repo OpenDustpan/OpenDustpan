@@ -124,12 +124,13 @@ type View struct {
 	Context unitsettings.Context
 }
 
-// Updated returns the view of the record stored, with the defaults and the
-// namespace facts of v. It reads nothing, so a store can build the stored
-// answer of a request in the transaction of the write.
-func (v *View) Updated(stored *unitsettings.Settings) View {
+// Updated returns the view of the record stored, with defaults as the unit
+// defaults of the view and the namespace facts of v. It reads nothing, so a
+// caller can build the stored answer of a request in the transaction of the
+// write.
+func (v *View) Updated(stored *unitsettings.Settings, defaults unitsettings.NamespaceDefaults) View {
 	return View{
-		Settings: *stored, Defaults: v.Defaults, Effective: unitsettings.Resolve(stored, v.Defaults, v.Context),
+		Settings: *stored, Defaults: defaults, Effective: unitsettings.Resolve(stored, defaults, v.Context),
 		DefaultConnection: v.DefaultConnection, Context: v.Context,
 	}
 }
@@ -288,14 +289,16 @@ func (s *Service) Put(
 
 	e.Action = unitsettings.AuditActionChanged
 
-	stored, err := s.store.Put(ctx, in, expected, fence, s.stamp(e, in.Unit, fence))
+	out, err := s.store.Put(ctx, in, expected, fence, s.stamp(e, in.Unit, fence))
 	if err != nil {
 		return View{}, fmt.Errorf("write unit settings: %w", err)
 	}
 
-	// The view reads nothing: the answer of a keyed request holds the same
-	// bytes that the store kept in the transaction of the write.
-	return cur.Updated(&stored), nil
+	// The view uses the defaults that the store read in the transaction of
+	// the write, not the defaults of cur, which came from an earlier read.
+	// The view reads nothing else: the answer of a keyed request holds the
+	// same bytes that the store kept in the transaction of the write.
+	return cur.Updated(&out.Settings, out.Defaults), nil
 }
 
 // checkDirectory returns an error that wraps unitsettings.ErrInvalid for a

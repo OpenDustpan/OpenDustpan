@@ -344,8 +344,12 @@ func TestEnterCanceledInFlight(t *testing.T) {
 
 	// The canceled enter left no turn: a new shared hold starts at once. The
 	// probe takes the gate only, because the write in flight holds the
-	// database write lock.
-	probe, err := r.s.holdWrite(t.Context())
+	// database write lock. The time limit keeps a failed release from
+	// hanging the test.
+	probeCtx, probeCancel := context.WithTimeout(t.Context(), gateWait)
+	defer probeCancel()
+
+	probe, err := r.s.holdWrite(probeCtx)
 	if err != nil {
 		t.Fatalf("hold after the canceled enter = %v, want nil", err)
 	}
