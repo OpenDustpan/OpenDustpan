@@ -5,7 +5,7 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Write failing service tests for the verify scenarios (NEW test TestMtlsExchangeVerify). Check: NEW test: `go test ./pkg/trust/ -run TestMtlsExchangeVerify` fails on main
-- [ ] 1.2 Write failing issue tests (NEW test TestMtlsTrustTokenIssue). Check: NEW test: `go test ./pkg/accesstoken/ -run TestMtlsTrustTokenIssue` fails on main
+- [ ] 1.2 Write failing issue tests (NEW test TestMtlsTrustTokenIssue): the token has the kind `mtls-exchange`, the token list and the issue audit entry show the kind, and the credential is `trust-token`. Check: NEW test: `go test ./pkg/accesstoken/ -run TestMtlsTrustTokenIssue` fails on main
 
 ## 2. Build
 
@@ -13,5 +13,5 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 BLOCKED by open question 1 (owner decision on kind trust for mTLS) and by part 1 (bundle and rule API); then wire the route POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange with its action. Check: Route test shows the action; `make check` with zero findings
+- [ ] 3.1 BLOCKED by part 1 (bundle and rule API) until it merges; then wire the route POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange with its action. Check: Route test shows the action; `make check` with zero findings
 - [ ] 3.2 Usability check from the docs draft. Check: The persona completes the path and each error names one command

@@ -30,8 +30,9 @@ Evidence for the claims above:
 ## What Changes
 
 - The mTLS exchange verifies chain, time with no skew, bundle revocation and exact SPIFFE ID against one enabled rule over direct TLS.
-- It issues a stored trust token with capped lifetime and an exchange audit entry in one transaction, with shared revoke and grant and limit enforcement.
-- NEW error codes mtls.* and token.issue-failed. The new credential use for mTLS waits for the owner (open question 1).
+- It issues a stored access token of the kind `mtls-exchange` (ADR 371 decision 2) with capped lifetime and an exchange audit entry in one transaction, with shared revoke and grant and limit enforcement.
+- The request credential of the token stays `trust-token` (ADR 284 decision 2; ADR 371 changes no credential).
+- NEW error codes mtls.* and token.issue-failed.
 
 Out of scope:
 
@@ -39,6 +40,7 @@ Out of scope:
 - E2E proof with real CLIs and the docs page (part 3).
 - JWT and OIDC exchange.
 - New token life-cycle rules.
+- The rename of the kind `trust` to `jwt-exchange` (change `token-kind-jwt-exchange`).
 
 Depends on:
 
@@ -76,11 +78,21 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 284: The token exchange issues a stored access token** (owner-tagged (all decisions)).
 
 - Decisions that apply: 1 (current).
+- Changed by: ADR 371 changes decision 1. Chain to the end: ADR 371.
+- Current rule: this ADR, with ADR 371.
+- Quote: "The exchange issues a stored access token. The exchange endpoint checks the JWT of a workload once, against the trust rules of the namespace."
+- Effect: Decision 1 names the JWT exchange only. ADR 371 decision 2 decides the mTLS exchange: it issues a stored token of the kind `mtls-exchange` with the same life cycle.
+- Conflict: none.
+
+**ADR 371: Each way to prove identity in the token exchange has its own token kind** (owner-tagged (decisions 1, 2 and 3)).
+
+- Decisions that apply: 2 (current), 3 (current), 4 (current).
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
-- Quote: "The exchange issues a stored access token. The exchange endpoint checks the JWT of a workload once, against the trust rules of the namespace."
-- Effect: Decision 1 names the JWT exchange only. Issue of kind trust for mTLS needs an owner decision. This change does not proceed on it until then.
-- Conflict: owner_blocks.
+- Quote: "An exchange that checks a TLS client certificate against the trust rules issues a stored access token of the kind `mtls-exchange` for the principal of the rule."
+- Quote: "This ADR changes no credential: a token of either kind of decision 1 or 2 gives the credential `trust-token`."
+- Effect: The mTLS exchange issues kind `mtls-exchange`. The token list and the issue audit entry show the kind. The credential stays `trust-token`.
+- Conflict: none.
 
 **ADR 69: Token lifetime and session defaults** (not owner-tagged).
 
@@ -102,13 +114,12 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. May the mTLS exchange issue stored kind trust, or does it need an owner decision or a new kind? Decides: owner.
-   - Options: Extend kind trust to mTLS; Define a new stored kind for mTLS.
-   - Recommended: Extend kind trust to mTLS Reason: ADR 284 decision 1 is owner-tagged and names the JWT only. One revoke path is simpler.
-
-Not spec-ready: the change conflicts with an owner-tagged decision of ADR 284.
+none
 
 Questions considered and answered:
+
+- May the mTLS exchange issue a stored token, and of which kind? ADR 371 decision 2 (owner, 2026-11-14): a stored access token of the kind `mtls-exchange`, with the life cycle of ADR 284 decision 1. The open question of the earlier draft is answered.
+- Does the credential change? No. ADR 371 "Not decided here" keeps the credential `trust-token` for both kinds.
 
 - Stored or stateless token? Stored, as ADR 284 decision 1 does for JWT; its use for mTLS is open question 1.
 - Lifetime? ADR 69 decision 6: setting, default 1 hour, capped at the leaf not-after time.
