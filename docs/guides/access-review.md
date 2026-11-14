@@ -34,7 +34,8 @@ the namespace or the installation appears only when its role gives a data action
 or manages access, and its row has `inheritedFrom`. A deleted unit
 that is not purged stays in the list, with `objectState` set to `deleted`.
 The export reads at most `accessReview.collectionUnitCap` units, 10000 by
-default. A collection over that count gets `422`.
+default, and the setting takes 1 to 100000. A collection over that count gets
+`422`. A change to a larger cap needs a fresh sign-in.
 
 The route takes the same query values as the other routes: `limit`, `cursor`,
 `from` and `to`, `subject`, and `expand`. An unknown collection gets `404`.

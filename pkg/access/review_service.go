@@ -630,7 +630,12 @@ func (s *Service) collectionInside(
 	// The export reads every unit of the collection, so a collection over the
 	// cap is refused instead of a truncated answer. The cap is read at each
 	// export, and a reader that fails gives the default cap.
-	if unitCap := collectionUnitCap(ctx, s.settings); len(inside) > unitCap {
+	// Defense in depth: the parse refuses a value above MaxCollectionUnitCap
+	// too, and this bound stays so that a new caller or a change of the parse
+	// cannot turn off the refusal.
+	unitCap := boundCollectionUnitCap(collectionUnitCap(ctx, s.settings))
+
+	if len(inside) > unitCap {
 		return obj, nil, &CollectionUnitCapError{Key: SettingCollectionUnitCap, Count: len(inside), Cap: unitCap}
 	}
 

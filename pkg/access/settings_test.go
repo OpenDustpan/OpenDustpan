@@ -3,6 +3,7 @@ package access_test
 import (
 	"context"
 	"errors"
+	"math"
 	"strconv"
 	"testing"
 
@@ -28,7 +29,8 @@ func (r capReader) Effective(context.Context, setting.Scope, string) (setting.It
 
 // TestCollectionUnitCapResolution proves that the cap of the export of a
 // collection fails toward the default: no reader, a reader that fails, and a
-// value that is not a whole number of at least 1 give the default cap.
+// value outside the bounds of MinCollectionUnitCap to MaxCollectionUnitCap
+// give the default cap.
 func TestCollectionUnitCapResolution(t *testing.T) {
 	t.Parallel()
 
@@ -58,6 +60,14 @@ func TestCollectionUnitCapResolution(t *testing.T) {
 			name: "a value that is not a number", settings: capReader{value: new("many"), err: nil},
 			want: access.DefaultCollectionUnitCap,
 		},
+		{
+			name: "a value above the max", settings: capReader{value: new("100001"), err: nil},
+			want: access.DefaultCollectionUnitCap,
+		},
+		{
+			name: "the largest whole number", settings: capReader{value: new("9223372036854775807"), err: nil},
+			want: access.DefaultCollectionUnitCap,
+		},
 		{name: "a value of 1", settings: capReader{value: new("1"), err: nil}, want: 1},
 		{name: "a value of 7", settings: capReader{value: new("7"), err: nil}, want: 7},
 	}
@@ -73,9 +83,109 @@ func TestCollectionUnitCapResolution(t *testing.T) {
 	}
 }
 
+// TestParseCollectionUnitCap checks the bounds of the parse of the cap of the
+// export of a collection. A value below 1 or above 100000 is refused, and the
+// refusal names the range and never the value.
+func TestParseCollectionUnitCap(t *testing.T) {
+	t.Parallel()
+
+	wantRefusal := "the value is not a whole number from " + strconv.Itoa(access.MinCollectionUnitCap) +
+		" to " + strconv.Itoa(access.MaxCollectionUnitCap)
+
+	accepted := []struct {
+		name  string
+		value string
+		want  int
+	}{
+		{name: "1 is accepted", value: "1", want: access.MinCollectionUnitCap},
+		{name: "100000 is accepted", value: "100000", want: access.MaxCollectionUnitCap},
+		{name: "a leading plus sign is accepted", value: "+5", want: 5},
+	}
+
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := access.ParseCollectionUnitCap(tc.value)
+			if err != nil {
+				t.Fatalf("parse %q: %v", tc.value, err)
+			}
+
+			if got != tc.want {
+				t.Fatalf("parse %q = %d, want %d", tc.value, got, tc.want)
+			}
+		})
+	}
+
+	refused := []struct {
+		name  string
+		value string
+	}{
+		{name: "0 is refused", value: "0"},
+		{name: "-1 is refused", value: "-1"},
+		{name: "100001 is refused", value: "100001"},
+		{name: "the largest whole number is refused", value: "9223372036854775807"},
+		{name: "a whole number above the largest is refused", value: "9223372036854775808"},
+		{name: "a word is refused", value: "many"},
+		{name: "an empty value is refused", value: ""},
+		{name: "a leading space is refused", value: " 10"},
+		{name: "a trailing space is refused", value: "10 "},
+		{name: "a power of ten is refused", value: "1e3"},
+		{name: "a hexadecimal value is refused", value: "0x10"},
+	}
+
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := access.ParseCollectionUnitCap(tc.value)
+			if err == nil {
+				t.Fatalf("parse %q = no error, want an error", tc.value)
+			}
+
+			// The refusal is the same text for each refused value, so it
+			// holds no value.
+			if err.Error() != wantRefusal {
+				t.Fatalf("the refusal of %q = %q, want the constant %q", tc.value, err.Error(), wantRefusal)
+			}
+		})
+	}
+}
+
+// TestBoundCollectionUnitCap checks the defense-in-depth bound of the cap of
+// the export of a collection: a value above the max gives the max, and a value
+// below the min gives the default.
+func TestBoundCollectionUnitCap(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		n    int
+		want int
+	}{
+		{name: "0 gives the default", n: 0, want: access.DefaultCollectionUnitCap},
+		{name: "-1 gives the default", n: -1, want: access.DefaultCollectionUnitCap},
+		{name: "1 stays", n: access.MinCollectionUnitCap, want: access.MinCollectionUnitCap},
+		{name: "the max stays", n: access.MaxCollectionUnitCap, want: access.MaxCollectionUnitCap},
+		{name: "one over the max gives the max", n: access.MaxCollectionUnitCap + 1, want: access.MaxCollectionUnitCap},
+		{name: "the largest whole number gives the max", n: math.MaxInt, want: access.MaxCollectionUnitCap},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := access.BoundCollectionUnitCapForTest(tc.n); got != tc.want {
+				t.Fatalf("bound %d = %d, want %d", tc.n, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestCollectionUnitCapDeclaration proves the shape of the declaration of the
 // cap: an installation setting that the database layer holds, applied live,
-// with the default cap, and a check that refuses each value below 1.
+// with the default cap, and a check that refuses each value outside the
+// bounds.
 func TestCollectionUnitCapDeclaration(t *testing.T) {
 	t.Parallel()
 
@@ -111,6 +221,48 @@ func TestCollectionUnitCapDeclaration(t *testing.T) {
 			err := d.CheckValue(tc.value)
 			if (err == nil) != tc.want {
 				t.Fatalf("check %q = %v, want an error: %t", tc.value, err, !tc.want)
+			}
+		})
+	}
+}
+
+// TestCollectionUnitCapReducesSecurity checks that a raise of the cap of the
+// export of a collection counts as a change that reduces security, and that a
+// value that does not parse on either side does too.
+func TestCollectionUnitCapReducesSecurity(t *testing.T) {
+	t.Parallel()
+
+	var reduces func(old, next string) bool
+
+	for _, d := range access.SettingDeclarations() {
+		if d.Key == access.SettingCollectionUnitCap {
+			reduces = d.ReducesSecurity
+		}
+	}
+
+	if reduces == nil {
+		t.Fatalf("the declaration of %s has no ReducesSecurity function", access.SettingCollectionUnitCap)
+	}
+
+	tests := []struct {
+		name string
+		old  string
+		next string
+		want bool
+	}{
+		{name: "a raise reduces security", old: "10", next: "11", want: true},
+		{name: "the same value does not", old: "10", next: "10", want: false},
+		{name: "a lower value does not", old: "10", next: "9", want: false},
+		{name: "an old value that does not parse reduces security", old: "many", next: "10", want: true},
+		{name: "a next value that does not parse reduces security", old: "10", next: "many", want: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := reduces(tc.old, tc.next); got != tc.want {
+				t.Fatalf("ReducesSecurity(%q, %q) = %v, want %v", tc.old, tc.next, got, tc.want)
 			}
 		})
 	}

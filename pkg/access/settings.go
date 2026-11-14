@@ -2,7 +2,6 @@ package access
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 
@@ -14,19 +13,28 @@ import (
 // shows the effective value and its source.
 const SettingCollectionUnitCap = "accessReview.collectionUnitCap"
 
-// DefaultCollectionUnitCap is the cap of the export of a collection when no
-// administrator set another one.
-const DefaultCollectionUnitCap = 10000
+// Bounds of the cap of the export of a collection.
+const (
+	// DefaultCollectionUnitCap is the cap of the export of a collection when
+	// no administrator set another one.
+	DefaultCollectionUnitCap = 10000
+	// MinCollectionUnitCap is the smallest cap that the setting accepts.
+	MinCollectionUnitCap = 1
+	// MaxCollectionUnitCap is the largest cap that the setting accepts.
+	MaxCollectionUnitCap = 100000
+)
 
 // errCollectionUnitCap is the reason of a value that the setting refuses. The
 // settings resource shows the text, so it holds no value.
-var errCollectionUnitCap = errors.New("the value is not a whole number of at least 1")
+var errCollectionUnitCap = fmt.Errorf("the value is not a whole number from %d to %d",
+	MinCollectionUnitCap, MaxCollectionUnitCap)
 
 // ParseCollectionUnitCap parses the value of SettingCollectionUnitCap. It
-// returns an error for a value that is not a whole number of at least 1.
+// returns an error for a value that is not a whole number of
+// MinCollectionUnitCap to MaxCollectionUnitCap.
 func ParseCollectionUnitCap(value string) (int, error) {
 	n, err := strconv.Atoi(value)
-	if err != nil || n < 1 {
+	if err != nil || n < MinCollectionUnitCap || n > MaxCollectionUnitCap {
 		return 0, errCollectionUnitCap
 	}
 
@@ -48,17 +56,26 @@ func SettingDeclarations() []setting.Declaration {
 
 				return err
 			},
-			ReducesSecurity: nil,
-			Doc: fmt.Sprintf("The largest count of units that the export of a collection reads. The default is %d.",
-				DefaultCollectionUnitCap),
+			// A larger cap lets the export of a collection read more units.
+			ReducesSecurity: func(old, next string) bool {
+				o, oErr := ParseCollectionUnitCap(old)
+				n, nErr := ParseCollectionUnitCap(next)
+
+				return oErr != nil || nErr != nil || n > o
+			},
+			Doc: fmt.Sprintf(
+				"The largest count of units that the export of a collection reads, from %d to %d. The default is %d.",
+				MinCollectionUnitCap, MaxCollectionUnitCap, DefaultCollectionUnitCap,
+			),
 		},
 	}
 }
 
 // collectionUnitCap returns the cap of the export of a collection: the
 // effective value of SettingCollectionUnitCap. It fails toward the default:
-// no reader, a reader that fails, or a value that is not a whole number of
-// at least 1 gives DefaultCollectionUnitCap, never no limit.
+// no reader, a reader that fails, or a value outside the bounds of
+// MinCollectionUnitCap to MaxCollectionUnitCap gives DefaultCollectionUnitCap,
+// never no limit.
 func collectionUnitCap(ctx context.Context, settings Settings) int {
 	if settings == nil {
 		return DefaultCollectionUnitCap
@@ -72,6 +89,21 @@ func collectionUnitCap(ctx context.Context, settings Settings) int {
 	n, err := ParseCollectionUnitCap(item.Value)
 	if err != nil {
 		return DefaultCollectionUnitCap
+	}
+
+	return n
+}
+
+// boundCollectionUnitCap keeps n in the bounds of SettingCollectionUnitCap. A
+// value below MinCollectionUnitCap gives DefaultCollectionUnitCap, and a value
+// above MaxCollectionUnitCap gives MaxCollectionUnitCap.
+func boundCollectionUnitCap(n int) int {
+	if n < MinCollectionUnitCap {
+		return DefaultCollectionUnitCap
+	}
+
+	if n > MaxCollectionUnitCap {
+		return MaxCollectionUnitCap
 	}
 
 	return n
