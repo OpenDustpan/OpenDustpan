@@ -518,6 +518,29 @@ func TestReadsPassThrough(t *testing.T) {
 	}
 }
 
+func TestManuallockNamespaceCover(t *testing.T) {
+	t.Parallel()
+
+	held := manuallock.Lock{
+		Since: fixedNow(), Target: manuallock.NamespaceTarget("acme"), Holder: "alice", Reason: "incident",
+	}
+	store := newStore()
+	store.held = held
+	svc := newService(t, store)
+
+	got, err := svc.Covering(t.Context(), webUnit())
+	if err != nil || got.Holder != "alice" || got.Reason != "incident" {
+		t.Fatalf("Covering of a unit in a locked namespace = %+v, %v; want the namespace lock", got, err)
+	}
+
+	store.held = manuallock.Lock{Since: time.Time{}, Target: zeroTarget(), Holder: "", Reason: ""}
+	store.getErr = manuallock.ErrNotLocked
+
+	if _, err := svc.Covering(t.Context(), webUnit()); !errors.Is(err, manuallock.ErrNotLocked) {
+		t.Fatalf("Covering of a unit in an unlocked namespace: err = %v, want ErrNotLocked", err)
+	}
+}
+
 func TestLockedErrorNamesTheHolderAndTheReason(t *testing.T) {
 	t.Parallel()
 
