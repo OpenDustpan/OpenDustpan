@@ -38,12 +38,12 @@
 - [x] 3.2 Extend `testRestoreKeepsControlRows` in
   `pkg/store/storetest/restore.go` with a not-ended row and the witness. Check:
   `go test ./pkg/store/sqlite -run TestRestoreConformance` passes.
-- [ ] 3.3 Apply each mutation of the "Check" section of `proposal.md` one at a
+- [x] 3.3 Apply each mutation of the "Check" section of `proposal.md` one at a
   time. Check: each named case fails and names the mutation.
 
 ## 4. Verification
 
-- [ ] 4.1 `go test ./pkg/store/sqlite` passes. Check: the command exits 0.
-- [ ] 4.2 The existing API tests of backups, restores and store checks pass.
+- [x] 4.1 `go test ./pkg/store/sqlite` passes. Check: the command exits 0.
+- [x] 4.2 The existing API tests of backups, restores and store checks pass.
   Check: `go test ./internal/api/server` exits 0.
-- [ ] 4.3 `make check` reports zero findings. Check: the command exits 0.
+- [x] 4.3 `make check` reports zero findings. Check: the command exits 0.

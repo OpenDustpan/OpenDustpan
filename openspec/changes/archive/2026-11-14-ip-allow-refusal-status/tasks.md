@@ -16,8 +16,8 @@
 ## 3. The e2e step and the docs
 
 - [x] 3.1 `e2e/ipallow_test.go`: the step reads one route of each surface from outside the list and expects 403 with `access.ip-not-allowed`, as the `override-switches` step does. Check: `go test -tags e2e ./e2e/ -run TestIPAllowlists`.
-- [ ] 3.2 Docs: no change. `docs/guides/ip-allowlists.md:104-105` and `GLOSSARY.md:191` already state the 403, and the fix makes the code agree. Check: `make docs-lint` exits 0.
-- [ ] 3.3 `make check` reports zero findings.
+- [x] 3.2 Docs: no change. `docs/guides/ip-allowlists.md:104-105` and `GLOSSARY.md:191` already state the 403, and the fix makes the code agree. Check: `make docs-lint` exits 0.
+- [x] 3.3 `make check` reports zero findings.
 
 ## 4. One entry for each refusal
 
