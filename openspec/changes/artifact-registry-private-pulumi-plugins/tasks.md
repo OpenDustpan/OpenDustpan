@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -13,13 +13,13 @@
 ## 2. Build
 
 - [ ] 2.1 Wire publish record to the new plugin download route with registry read actions and audit entries. Declare the route in internal/api/apidesc/routes_plugins.go (NEW) and write its adapter in internal/registrysvc/plugin_http.go (NEW). Check: GET on the new plugin download route under /api/dustpan/v1/namespaces/{}/registry with a personal access token streams bytes; bad version gives 403 that names the artifact.
-- [ ] 2.2 Add e2e step in NEW file e2e/pulumi_plugin_test.go against the real Pulumi CLI on SQLite and PostgreSQL. It publishes through PUT /api/dustpan/v1/namespaces/{}/registry/providers/{}/versions/{} (existing route; declared in internal/api/apidesc/routes_plugins.go (NEW) with its adapter in internal/registrysvc/plugin_http.go (NEW)) and installs through the new plugin download route under /api/dustpan/v1/namespaces/{}/registry (declared in internal/api/apidesc/routes_plugins.go (NEW); adapter in internal/registrysvc/plugin_http.go (NEW)), both with a personal access token. Check: E2E `pulumi plugin install` over TLS against the new plugin download route with a personal access token passes on both dialects.
-- [ ] 2.3 Write docs page in NEW file docs/registry/pulumi-plugins.md for publish and install of a private Pulumi plugin. Check: Docs page command sequence runs as written in a test.
+- [ ] 2.2 Add e2e step in NEW file e2e/pulumi_plugin_test.go against the real Pulumi CLI on SQLite and PostgreSQL. It publishes through PUT /api/dustpan/v1/namespaces/{}/registry/providers/{}/versions/{} (existing route; declared in internal/api/apidesc/routes_plugins.go (NEW) with its adapter in internal/registrysvc/plugin_http.go (NEW)) and installs through the new plugin download route under /api/dustpan/v1/namespaces/{}/registry (declared in internal/api/apidesc/routes_plugins.go (NEW); adapter in internal/registrysvc/plugin_http.go (NEW)), both with a personal access token. Check: E2E `pulumi plugin install` over TLS against the new plugin download route with a personal access token passes on both dialects. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 2.3 Write docs page in NEW file docs/registry/pulumi-plugins.md for publish and install of a private Pulumi plugin. Check: Docs page command sequence runs as written in a test. Confirmed by: CI (an e2e step in the NEW file e2e/artifact_registry_private_pulumi_plugins_docs_test.go runs each command of the docs page against the e2e test server).
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run wiring check, route authorization check, docs page, usability walk, and full check set. The routes are the new plugin download route under /api/dustpan/v1/namespaces/{}/registry (declared in internal/api/apidesc/routes_plugins.go (NEW), adapter in internal/registrysvc/plugin_http.go (NEW)) and the existing route PUT /api/dustpan/v1/namespaces/{}/registry/providers/{}/versions/{}; the credential kind is a personal access token. Check: Route test shows registry read actions on the new plugin download route (personal access token); the e2e step above passes; docs test passes; `make check` reports zero findings.
+- [ ] 4.1 Run wiring check, route authorization check, docs page, usability walk, and full check set. The routes are the new plugin download route under /api/dustpan/v1/namespaces/{}/registry (declared in internal/api/apidesc/routes_plugins.go (NEW), adapter in internal/registrysvc/plugin_http.go (NEW)) and the existing route PUT /api/dustpan/v1/namespaces/{}/registry/providers/{}/versions/{}; the credential kind is a personal access token. Check: Route test shows registry read actions on the new plugin download route (personal access token); the e2e step above passes; docs test passes; `make check` reports zero findings. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

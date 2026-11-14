@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Roadmap: `docs/roadmap.md:466` (Block old writes below stored minimum version.).

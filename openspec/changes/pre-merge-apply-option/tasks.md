@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -13,11 +13,11 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
 - [ ] 3.1 Implement applyTiming, wiring, the job start route with its authorization actions and preMergeGuard. Check: `GET /api/dustpan/v1/namespaces/{namespace}/units` shows the effective value.
-- [ ] 3.2 Add e2e step: BLOCKED by the missing named route and credential kind of the fake forge until the job start route and its access token are fixed by the route open question. Check: BLOCKED by the route open question.
+- [ ] 3.2 Add e2e step: BLOCKED by the missing named route and credential kind of the fake forge until the job start route and its access token are fixed by the route open question. Check: BLOCKED by the route open question. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.3 Write the docs page in the same pull request. Check: Docs page states the project does not recommend pre-merge apply.
-- [ ] 3.4 Run usability check and full checks. Check: `make check` with zero findings.
+- [ ] 3.4 Run usability check and full checks. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

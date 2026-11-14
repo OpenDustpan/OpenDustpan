@@ -2,7 +2,7 @@ SECURITY: this change is security code (ADR 250): identity, classification and t
 
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -24,11 +24,11 @@ SECURITY: this change is security code (ADR 250): identity, classification and t
 
 ## 3. Side effects
 
-- [ ] 3.1 Regenerate the API description and the clients (`make generate`, `make clients-generate`). Check: the generated files change in the same pull request.
+- [ ] 3.1 Regenerate the API description and the clients (`make generate`, `make clients-generate`). Check: the generated files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 E2e: a token exchange of a classified account, a preview, a create with each value of `existingPrincipals`, and a refused console sign-in. Check: `make e2e` passes.
+- [ ] 4.1 E2e: a token exchange of a classified account, a preview, a create with each value of `existingPrincipals`, and a refused console sign-in. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Docs page `docs/guides/external-service-principals.md`. Check: `make docs-lint` passes, and a test runs each command of the page.
-- [ ] 4.3 Usability check: the site administrator completes the path from the docs page alone, and each error names its one command. Check: the check is recorded in the pull request.
-- [ ] 4.4 Full check. Check: `make check` reports zero findings.
+- [ ] 4.3 Usability check: the site administrator completes the path from the docs page alone, and each error names its one command. Check: the check is recorded in the pull request. A person's step.
+- [ ] 4.4 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

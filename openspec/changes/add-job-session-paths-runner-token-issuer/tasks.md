@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -10,6 +10,7 @@
 ## 2. Build
 
 - [ ] 2.1 Implement the issuer with hash storage, unit-limited checks and the step grace expiry in `pkg/jobtoken/issuer.go` (NEW). Check: go test ./pkg/jobtoken/... -count=1
+- [ ] 2.2 Implement the SQL adapters of jobtoken.Store (pkg/jobtoken/store.go:16) in NEW files `pkg/store/sqlite/jobtokens.go` and `pkg/store/postgres/jobtokens.go`, with the NEW table job_tokens in `pkg/store/sqlite/migrations/0168_baseline.sql` and `pkg/store/postgres/migrations/0168_baseline.sql` (in name order) and its queries in the `queries.sql` file of each dialect. A token row references its namespace, its unit and its job by stable ID only (the namespace ID, the unit ID, the job ID). It stores no namespace or unit name as a reference; a name is a label only. The read of a token joins on the IDs, so a rename never changes which token is found. Run the conformance suite `pkg/jobtoken/jobtokentest` on both stores, with a hostile case: a token of a renamed namespace still resolves to the same unit, and a token whose namespace ID is another namespace is not found. Check: `go test -race ./pkg/store/sqlite/...` passes, and `DUSTPAN_TEST_POSTGRES_URL=<url> go test -race -timeout 60m ./pkg/store/postgres/...` passes
 
 ## 3. Side effects (computed from main)
 
@@ -18,6 +19,6 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Wire the issuer into job.Claimer Claim, Renew and Finish. BLOCKED by the credentials session route of a later part for the end-to-end hand-out of the token. Until then, the server test claims a phase through the existing runner protocol under /runner/v1 and calls the existing route /tofu/state/{namespace}/{workspace} with the token (credential kind job-token, identity.CredentialJobToken), taking the token from the test server. Check: go test ./internal/servertest/... -run TestJobTokenWiring
-- [ ] 4.2 BLOCKED by the credentials session route of a later part: add an e2e step that claims a phase through /runner/v1 and calls the existing route /tofu/state/{namespace}/{workspace} with the job token (credential kind job-token, identity.CredentialJobToken) on its unit and on another unit. Check: make e2e
-- [ ] 4.3 Update docs/reference/runner-api.md and run the usability check. Check: make docs-lint
-- [ ] 4.4 Pass the full check. Check: make check with zero findings
+- [ ] 4.2 BLOCKED by the credentials session route of a later part: add an e2e step that claims a phase through /runner/v1 and calls the existing route /tofu/state/{namespace}/{workspace} with the job token (credential kind job-token, identity.CredentialJobToken) on its unit and on another unit. Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Update docs/reference/runner-api.md and run the usability check. Check: make docs-lint. A person's step.
+- [ ] 4.4 Pass the full check. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

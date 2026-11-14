@@ -24,7 +24,7 @@
   the sentence "The routes are not available yet." to
   `docs/guides/publish-a-blueprint.md`. Change no route and serve no new route.
   Check: the test passes and its output lists the marked routes.
-- [ ] 2.3 `make docs-lint` reports zero findings. Check: the command exits 0.
+- [ ] 2.3 `make docs-lint` reports zero findings. Check: the command exits 0. Confirmed by: CI (the agent runs the fast checks only).
 
 ## 3. Verification
 
@@ -35,4 +35,4 @@
 - [ ] 3.2 Prove guard 2: ignore the marker in `routeIsMarked`;
   `TestDocsRouteCheckFailsOnAnUnservedRoute` fails. Check: the test names the
   marker.
-- [ ] 3.3 `make check` reports zero findings. Check: the command exits 0.
+- [ ] 3.3 `make check` reports zero findings. Check: the command exits 0. Confirmed by: CI (the agent runs the fast checks only).

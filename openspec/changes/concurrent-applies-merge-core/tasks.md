@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -23,7 +23,7 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Wire routes with authorization actions and fence check Check: Route test shows TFE state-version routes with authorization actions and fence check
-- [ ] 3.2 Add e2e step with real OpenTofu against the existing routes ANY /api/v2/state-versions and ANY /api/v2/state-uploads/{}/{}. BLOCKED by the owner answer on how a TFE-compatible request names its claim, so the credential kind is not yet fixed Check: E2E step shows two overlapping apply periods in a fake cloud provider log, final state with both changes, and two new state versions
+- [ ] 3.2 Add e2e step with real OpenTofu against the existing routes ANY /api/v2/state-versions and ANY /api/v2/state-uploads/{}/{}. BLOCKED by the owner answer on how a TFE-compatible request names its claim, so the credential kind is not yet fixed Check: E2E step shows two overlapping apply periods in a fake cloud provider log, final state with both changes, and two new state versions. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.3 Write docs page for merge behavior and strict cases Check: Docs page ships in the same pull request
-- [ ] 3.4 Run usability check of developer path Check: Usability walk from docs page alone passes with exact errors
-- [ ] 3.5 Run full check suite Check: `make check` passes with zero findings
+- [ ] 3.4 Run usability check of developer path Check: Usability walk from docs page alone passes with exact errors. A person's step.
+- [ ] 3.5 Run full check suite Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).

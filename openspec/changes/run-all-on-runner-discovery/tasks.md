@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -17,7 +17,7 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Add e2e step against the real runner and the real directory over 3 units through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: Real runner claims a wrapper job over 3 Terragrunt units through ANY /runner/v1 with a runner token and the preview lists 3 unit references with no state version.
-- [ ] 3.2 Write the Terragrunt discovery docs page in the same pull request. Check: Docs page command sequence runs as written against a test installation.
-- [ ] 3.3 Run the usability check of the discovery path. Check: Runner operator completes discovery from the docs page alone and each error names the one command that helps.
-- [ ] 3.4 Run the full check suite. Check: `make check` with zero findings.
+- [ ] 3.1 Add e2e step against the real runner and the real directory over 3 units through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: Real runner claims a wrapper job over 3 Terragrunt units through ANY /runner/v1 with a runner token and the preview lists 3 unit references with no state version. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.2 Write the Terragrunt discovery docs page in the same pull request. Check: Docs page command sequence runs as written against a test installation. Confirmed by: CI (an e2e step in the NEW file e2e/run_all_on_runner_discovery_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 3.3 Run the usability check of the discovery path. Check: Runner operator completes discovery from the docs page alone and each error names the one command that helps. A person's step.
+- [ ] 3.4 Run the full check suite. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

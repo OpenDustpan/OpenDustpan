@@ -1,11 +1,11 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing release test for versioned multi-arch image build with pinned console hash in the NEW file `e2e/release_image_test.go`. The test runs an acceptance path on no API route: BLOCKED by the missing route, because the image build has no API route and no credential kind. It calls the NEW script `scripts/release-build-image.sh`. Check: TestReleaseImageBuildsFromVersion fails on main, passes after.
-- [ ] 1.2 Add failing artifact install test that starts the built image and runs the operator persona path in the NEW file `e2e/release_artifact_install_test.go`. The test calls the existing route `ANY/GET /api/dustpan/v1/git-host-installations` with a session credential. Check: TestReleaseArtifactInstallRunsPersonaPath fails on main, passes after.
+- [ ] 1.1 Add failing release test for versioned multi-arch image build with pinned console hash in the NEW file `e2e/release_image_test.go`. The test runs an acceptance path on no API route: BLOCKED by the missing route, because the image build has no API route and no credential kind. It calls the NEW script `scripts/release-build-image.sh`. Check: TestReleaseImageBuildsFromVersion fails on main, passes after. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.2 Add failing artifact install test that starts the built image and runs the operator persona path in the NEW file `e2e/release_artifact_install_test.go`. The test calls the existing route `ANY/GET /api/dustpan/v1/git-host-installations` with a session credential. Check: TestReleaseArtifactInstallRunsPersonaPath fails on main, passes after. Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. Build
 
@@ -16,11 +16,11 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Wire image tag to server --version stamp via ldflags. Check: Image exposes no new route; route test unchanged and no API description change.
-- [ ] 4.2 Add e2e step for install from built image against the existing route with a session credential. Check: e2e step calls the existing route `ANY/GET /api/dustpan/v1/git-host-installations`, passes the authorization gate, with a session credential.
-- [ ] 4.3 Run usability check of install-from-artifacts page. Check: Operator follows docs page alone and completes install from image.
-- [ ] 4.4 Run full checks and fix findings. Check: `make check` with zero findings.
+- [ ] 4.2 Add e2e step for install from built image against the existing route with a session credential. Check: e2e step calls the existing route `ANY/GET /api/dustpan/v1/git-host-installations`, passes the authorization gate, with a session credential. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Run usability check of install-from-artifacts page. Check: Operator follows docs page alone and completes install from image. A person's step.
+- [ ] 4.4 Run full checks and fix findings. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

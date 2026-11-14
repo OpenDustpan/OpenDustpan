@@ -4188,3 +4188,15 @@ decisions:
   accepted_artifact: "docs/adr/0374-namespace-discovery-from-inside-and-the-window-of-the-old-event-secret.md"
   evidence:
   - "docs/adr/0374-namespace-discovery-from-inside-and-the-window-of-the-old-event-secret.md"
+- id: "adr-0375"
+  title: "ADR 375: AI-authored pull requests link a spec-ready OpenSpec change"
+  decision: "1. **CI fails an AI-authored pull request that links no spec-ready change (owner, 2026-11-08).** The owner said: \"For AI issues only\". A pull request is AI-authored when a commit has the author email of an agent commit (ADR 317 decision 2) or when its body discloses an AI tool (ADR 76 decision 2). The body must name `openspec/changes/<id>` of a change whose proposal says \"Open questions: none\". An archived change counts.\n2. **A pull request of a person is exempt (owner, 2026-11-08).** CI does not check a pull request with no AI signal.\n\nLater changes, from the status line of ADR 375: Decided by the project owner."
+  reason: "Agent work starts only from an OpenSpec change whose proposal says \"Open questions: none\" (`openspec/project.md`, the spec-ready gate). Nothing checks that an agent pull request names such a change. The project owner decided on 8 November 2026 that CI checks it, and that the check applies to AI-authored pull requests only."
+  scope:
+  - "docs/adr/0375-ai-authored-pull-requests-link-a-spec-ready-openspec-change.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-08"
+  accepted_artifact: "docs/adr/0375-ai-authored-pull-requests-link-a-spec-ready-openspec-change.md"
+  evidence:
+  - "docs/adr/0375-ai-authored-pull-requests-link-a-spec-ready-openspec-change.md"

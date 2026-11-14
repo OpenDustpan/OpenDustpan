@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:717` (Gate apply starts on change-order dependencies after RFC 115.).
