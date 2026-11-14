@@ -34,6 +34,7 @@ type mem struct {
 	triggers map[key]trigger.Trigger
 	next     map[key]time.Time
 	audited  map[namespace.Name]int
+	last     map[namespace.Name]audit.Entry
 	// now is the clock of the store. The harness injects a fixed clock, and
 	// Harness.Now reads the same one. A mem without a clock fails its writes.
 	now func() time.Time
@@ -46,6 +47,7 @@ func newMem() *mem {
 		triggers: map[key]trigger.Trigger{},
 		next:     map[key]time.Time{},
 		audited:  map[namespace.Name]int{},
+		last:     map[namespace.Name]audit.Entry{},
 		now:      nil,
 		mu:       sync.Mutex{},
 	}
@@ -112,6 +114,12 @@ func (m *mem) Put(_ context.Context, t trigger.Trigger, fence namespace.Fence, e
 	m.triggers[k] = t
 	m.next[k] = slot
 	m.audited[k.ns]++
+
+	if e.ObjectID == "" {
+		e.ObjectID = t.Unit.ID
+	}
+
+	m.last[k.ns] = e
 
 	return nil
 }
@@ -225,13 +233,20 @@ func (m *mem) Delete(_ context.Context, ns namespace.Name, id trigger.ID, fence 
 	}
 
 	k := key{ns: ns, id: id}
-	if _, ok := m.triggers[k]; !ok {
+	stored, ok := m.triggers[k]
+	if !ok {
 		return trigger.ErrNotFound
 	}
 
 	delete(m.triggers, k)
 	delete(m.next, k)
 	m.audited[ns]++
+
+	if e.ObjectID == "" {
+		e.ObjectID = stored.Unit.ID
+	}
+
+	m.last[ns] = e
 
 	return nil
 }
@@ -293,6 +308,9 @@ func (m *mem) ClaimDue(_ context.Context, c trigger.Claim, fence namespace.Fence
 
 	m.next[k] = next
 	m.audited[c.Namespace]++
+
+	e.ObjectID = t.Unit.ID
+	m.last[c.Namespace] = e
 
 	return nil
 }
@@ -393,6 +411,12 @@ func TestConformance(t *testing.T) {
 				defer m.mu.Unlock()
 
 				return m.audited[namespace.Name(ns)]
+			},
+			LastAudit: func(_ *testing.T, ns string) audit.Entry {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				return m.last[namespace.Name(ns)]
 			},
 		}
 	})

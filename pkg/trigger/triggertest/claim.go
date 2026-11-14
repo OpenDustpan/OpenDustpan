@@ -43,6 +43,7 @@ func claimCases() []suiteCase {
 		{"claim: a claim refuses a stale fence and a fence of another namespace", caseClaimFence},
 		{"claim: a claim refuses an invalid audit entry and one of another namespace", caseClaimEntry},
 		{"claim: a claim appends one audit entry", caseClaimAudit},
+		{"claim: a claim names the stored trigger in the audit entry, not the caller", caseClaimAuditObjectID},
 		{"claim: of many claims of one slot at once exactly one succeeds", caseClaimConcurrent},
 		{"claim: a claim of a stored row that fails its checks is invalid", caseClaimCorruptRow},
 		{"claim: a claim and a start of one slot give one job", caseClaimThenStart},
@@ -432,6 +433,26 @@ func caseClaimAudit(t *testing.T, h Harness, _ *Recorder) {
 
 	if got := h.Audited(t, string(acme)); got != before+1 {
 		t.Errorf("audit entries after a claim = %d, want %d", got, before+1)
+	}
+}
+
+func caseClaimAuditObjectID(t *testing.T, h Harness, _ *Recorder) {
+	t.Helper()
+
+	if h.LastAudit == nil {
+		t.Skip("the harness has no audit entry hook")
+	}
+
+	fence := h.Namespace(t, string(acme))
+	_, past := pastSlots(t, h, fence)
+
+	e := claimEntry(h.Now(t))
+	e.ObjectID = "some-other-unit"
+
+	must(t, "claim", h.Store.ClaimDue(t.Context(), claimOf("h1", past[0]), fence, e))
+
+	if got := h.LastAudit(t, string(acme)); got.ObjectID != "a" {
+		t.Errorf("object ID of the claim entry = %q, want %q", got.ObjectID, "a")
 	}
 }
 

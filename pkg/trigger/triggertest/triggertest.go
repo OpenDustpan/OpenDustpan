@@ -29,7 +29,9 @@ import (
 // doubles behind it: the harness builds the Dispatcher with Doubles.Dispatcher.
 // Namespace makes the namespace name and returns its current fence. Audited is
 // an optional hook: a case that needs it skips when it is nil. It returns the
-// number of audit entries of the namespace. StoreRaw is another optional hook:
+// number of audit entries of the namespace. LastAudit is another optional
+// hook: a case that needs it skips when it is nil. It returns the last audit
+// entry of the namespace. StoreRaw is another optional hook:
 // it writes tr into the store without Validate and without the cycle check, as
 // a row of another version or a restore would. A case that needs it skips when
 // it is nil. SetNextSlot and Now are required by the claim cases.
@@ -39,6 +41,7 @@ type Harness struct {
 	Doubles    *Doubles
 	Namespace  func(t *testing.T, name string) namespace.Fence
 	Audited    func(t *testing.T, ns string) int
+	LastAudit  func(t *testing.T, ns string) audit.Entry
 	StoreRaw   func(t *testing.T, tr trigger.Trigger)
 	// SetNextSlot writes the next slot of the enabled schedule trigger id of ns
 	// without any check, as if the time since its save had passed. The claim cases

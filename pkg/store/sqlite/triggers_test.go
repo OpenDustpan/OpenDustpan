@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/triggerstore"
@@ -109,6 +110,16 @@ func triggerHarness(t *testing.T, starter trigger.Starter) triggertest.Harness {
 			t.Helper()
 
 			return len(allAuditEntries(t, s, namespace.Name(ns)))
+		},
+		LastAudit: func(t *testing.T, ns string) audit.Entry {
+			t.Helper()
+
+			entries := allAuditEntries(t, s, namespace.Name(ns))
+			if len(entries) == 0 {
+				t.Fatalf("no audit entries in %s", ns)
+			}
+
+			return entries[len(entries)-1]
 		},
 		SetNextSlot: func(t *testing.T, ns namespace.Name, id trigger.ID, slot time.Time) {
 			t.Helper()

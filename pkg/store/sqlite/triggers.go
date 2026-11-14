@@ -190,9 +190,7 @@ func (t triggers) ClaimDue(ctx context.Context, c trigger.Claim, fence namespace
 			return err
 		}
 
-		if e.ObjectID == "" {
-			e.ObjectID = unitID
-		}
+		e.ObjectID = unitID
 
 		return nil
 	})
