@@ -12,7 +12,7 @@
 
 ## 2. change
 
-- [ ] 2.1 Add the column to each dialect baseline in name order. Edit the baseline file of each dialect under pkg/store (NEW column in the state version table). Check: `make generate` and `sqlc diff` are clean with no numbered migration file
+- [ ] 2.1 Add the column to each dialect baseline in name order. Edit the baseline file of each dialect under pkg/store (NEW column in the state version table). Add the same column to the backup column list of the table in pkg/backup/portable_tables.go, because a backup holds every column. Check: `make generate` and `sqlc diff` are clean with no numbered migration file
 - [ ] 2.2 Write the bit at finalize and read it in Latest in pkg/workspace/state_meta.go. Check: `go test ./pkg/workspace/...` passes
 - [ ] 2.3 Add a guard test that removes the constructor rejection in pkg/outputshare/outputsharetest/states.go. Check: The mutation fails the conformance suite
 

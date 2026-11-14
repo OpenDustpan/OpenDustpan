@@ -21,4 +21,4 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Ship the ADR, the index entry and the docs link with the docs page and usability check. Check: `make docs-lint` and `make check` report zero findings; the Operator reaches the ADR from the docs page alone. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Add the link to ADR 379 (docs/adr/0379-the-openpgp-dependency-of-the-registry.md) in the existing guide docs/guides/private-registry.md, and run the usability check from that page. Check: `make docs-lint` and `make check` report zero findings; the Operator reaches the ADR from the docs page alone. A person's step. Confirmed by: CI (the agent runs the fast checks only).

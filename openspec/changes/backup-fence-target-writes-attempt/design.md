@@ -5,7 +5,7 @@ Backup target writes run on two or more instances behind one load balancer on on
 ## Decisions
 
 1. **Attempt prefix as a type.** Attempt-scoped layout `backups/<id>/<attempt>/` makes cross-attempt damage impossible by shape. NEW unexported type `attemptPrefix` in `pkg/backup` with NEW constructor `newAttemptPrefix` checks allowlist for each part and refuses dot-dot and slash. Clear, put, delete, and manifest-write helpers take `attemptPrefix`, never a plain string. The attempt equals the claim fencing token, stored in the backups baseline row and in the manifest. Each Put and each Delete re-reads the claim token right before the target call and skips the call when the claim moved. Finish calls `Check` on that prefix with sizes and blob copies, then commits in the fenced transaction that compares manifest attempt with live claim attempt. The manifest write is fenced too.
-2. **Cleanup under the live claim.** Only the live-claim holder deletes old prefixes, after its own finish commit. The live holder lists the parent `backups/<id>/`, deletes only non-live attempt prefixes of the same backup, and re-checks the claim before each delete batch. It never deletes the live prefix named by the finished manifest. A stale writer that resumes after the delete recreates only its own stale prefix; the next list by the live holder or retention expiry removes it again. A backup that never finishes leaves prefixes until retention expiry deletes each prefix of the expired backup.
+2. **Cleanup under the live claim.** Only the live-claim holder deletes old prefixes, after its own finish commit. The live holder lists the parent `backups/<id>/`, deletes only non-live attempt prefixes of the same backup, and re-checks the claim before each delete batch. It never deletes the live prefix named by the finished manifest. A stale writer that resumes after the delete recreates only its own stale prefix; the next list by the live holder removes it again. A backup that never finishes leaves its prefixes in the target. Main has no backup retention and no backup delete, so they stay until an operator deletes them; the several-instances guide names the attempt layout so that the operator can find them.
 3. **Baseline edit.** Schema change is an in-place edit of the baseline of each dialect adding the backups attempt column, per ADR 322. No numbered migration and no old-layout read path because no tag shipped the old layout.
 
 ## Structure
@@ -15,7 +15,7 @@ NEW unexported type `attemptPrefix` in `pkg/backup` built only by NEW `newAttemp
 ## Risks
 
 - Manifest must name the attempt or a reader cannot tell which prefix is live.
-- Each takeover leaves one orphaned prefix until the live holder or retention expiry deletes it.
+- Each takeover leaves one orphaned prefix until the live holder deletes it.
 
 ## Diagrams
 
@@ -90,7 +90,7 @@ A --> D
 | store boundary | I | A stale holder commits finish or cleanup for an attempt it no longer holds. | encode or contain | Attempt stored as a bounded token string of at most 64 allowlisted characters. | Store an oversized attempt and check the write is refused. |
 | store boundary | I | A stale holder commits finish or cleanup for an attempt it no longer holds. | limit | Only the live-claim holder deletes non-live prefixes of the same backup. | Delete a live prefix from a stale claim and check it is refused. |
 | store boundary | I | A stale holder commits finish or cleanup for an attempt it no longer holds. | authorize at point of use | Cleanup delete checks the live claim at the point of use before each batch. | Run cleanup with a stale token and check no delete happens. |
-| store boundary | I | A stale holder commits finish or cleanup for an attempt it no longer holds. | fail closed | Deny cleanup on fence loss and leave prefixes for retention expiry. | Lose the claim mid-cleanup and check remaining prefixes stay until expiry. |
+| store boundary | I | A stale holder commits finish or cleanup for an attempt it no longer holds. | fail closed | Deny cleanup on fence loss and leave the prefixes for the live holder. | Lose the claim mid-cleanup and check that the remaining prefixes stay. |
 
 ## Contracts
 
@@ -105,6 +105,6 @@ A --> D
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
-| Backup target write | Instance killed between target writes and finish commit | Another worker instance reclaims after lease expiry and runs the next attempt under a new prefix | Backup stays running; old prefix is orphaned until the live holder or retention expiry deletes it |
+| Backup target write | Instance killed between target writes and finish commit | Another worker instance reclaims after lease expiry and runs the next attempt under a new prefix | Backup stays running; old prefix is orphaned until the live holder deletes it |
 | Backup finish | Stale holder resumes with blob delete in flight after survivor finish | No retry; delete lands under the stale attempt prefix only | Finished backup stays complete; Check passes |
-| Backup finish cleanup | Cleanup lists parent while a stale writer still runs | Live holder re-lists the parent and deletes the recreated stale prefix; retention expiry is the last cleanup | Live prefix stays readable; stale prefix is removed on the next pass |
+| Backup finish cleanup | Cleanup lists parent while a stale writer still runs | Live holder re-lists the parent and deletes the recreated stale prefix | Live prefix stays readable; stale prefix is removed on the next pass |

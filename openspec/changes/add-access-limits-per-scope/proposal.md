@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 7
 ---
 
 Issue: #906.
@@ -111,9 +111,11 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: requirement "limit-list": a limit with no number; give the number, the unit and the scope.
+none
 
 Questions considered and answered:
+
+- How many limits does the list answer, and does it page? At most 64 for each scope in one answer, with no paging. No ADR gives the number. Main already caps the limits of a scope at 64 at save (`MaxAccessLimitsPerScope`, pkg/gate/rules.go:15), so the list can never hold more; one answer of at most 64 items is within the maximum page size of 200 that the audit list uses (pkg/audit/audit.go:147). Product manager decision (rule 16), benchmark: main already answers the gates of a scope whole, with no paging, under the save cap `MaxGatesPerScope` (internal/api/server/gate_objects.go has no page parameter); the limits follow the same rule.
 
 - Which grant conditions ship as grant fields? Only expiry; other conditions come through Cedar forbid limits (ADR 223 decisions 1 and 2).
 - How do limits avoid locking out gate configuration? ADR 223 decision 10: both guards refuse at save.

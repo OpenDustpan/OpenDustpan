@@ -17,7 +17,7 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Wire both NEW routes with their actions. Check: Route test shows the actions of both routes.
-- [ ] 3.2 Update the API description. Check: `make generate` leaves no diff. Confirmed by: the driver's gates.
+- [ ] 3.2 Update the API description in `internal/api/apidesc/openapi.json` with `make generate`. Never edit it by hand. Check: `make generate` leaves no diff. Confirmed by: the driver's gates.
 - [ ] 3.3 Docs page for the read call. Check: `make docs-lint` passes and the curl command runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/read_route_decision_records_change_docs_test.go runs each command of the docs page against the e2e test server).
 - [ ] 3.4 E2e step and usability check. Check: BLOCKED by the e2e fixture: a gate that refuses a write with the real OpenTofu CLI and a personal access token of a principal with the gate read action; the step reads the NEW route. A person's step. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.5 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
