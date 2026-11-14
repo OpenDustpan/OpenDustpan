@@ -2,7 +2,7 @@
 
 ### Requirement: store-encrypted-bit-at-finalize
 
-When an OpenTofu state version finalizes, the server SHALL store the client-encrypted bit from the upload stream in the state version row.
+When an OpenTofu state version finalizes, including by forced write or restore, the server SHALL store the client-encrypted bit from the upload stream in the state version row.
 
 #### Scenario: finalize stores bit
 - **WHEN** an OpenTofu state upload finalizes
@@ -10,7 +10,11 @@ When an OpenTofu state version finalizes, the server SHALL store the client-encr
 
 #### Scenario: concurrent finalizes
 - **WHEN** two state versions of one unit finalize at the same time
-- **THEN** the exposed latest row holds the bit of the winning version
+- **THEN** the exposed latest row is the version latest by finalize order and holds the bit of that winning version
+
+#### Scenario: forced write and restore store bit
+- **WHEN** a forced write or a restore creates a state version
+- **THEN** the new state version row holds the client-encrypted bit from its stream
 
 ### Requirement: latest avoids blob read
 
@@ -22,7 +26,7 @@ When a caller reads the latest state version whose stored bit is present, the se
 
 #### Scenario: missing blob with present bit
 - **WHEN** the latest row holds a present bit and the blob is missing or unreadable
-- **THEN** the read answers from the stored row bit and performs no blob check
+- **THEN** the encrypted check answers from the stored row bit and performs no blob check
 
 ### Requirement: refuse-both-keys
 
@@ -30,7 +34,7 @@ If an uploaded state document holds both encrypted_data and version, then the se
 
 #### Scenario: both keys refused
 - **WHEN** an uploaded document holds both encrypted_data and version
-- **THEN** the upload fails with invalid state and stores no version
+- **THEN** the upload fails with invalid state, the pending version is removed, and no version is stored
 
 ### Requirement: legacy-null-bit-fallback
 
@@ -71,3 +75,11 @@ If no finalized state version exists, then the server SHALL answer not found wit
 #### Scenario: pending version only
 - **WHEN** only a pending upload exists
 - **THEN** the read skips the pending version and answers not found or the last finalized version
+
+### Requirement: shred-redaction-precedence
+
+If the latest state item is shredded or redacted, then the server SHALL answer shredded or redacted before any outputs answer.
+
+#### Scenario: shredded latest with present bit
+- **WHEN** the latest item is shredded or redacted and its row holds a present bit
+- **THEN** the read answers shredded without using the stored bit for outputs

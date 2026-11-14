@@ -1,3 +1,7 @@
+---
+version: 2
+---
+
 Roadmap: `docs/roadmap.md:315` (Output sharing).
 
 ## Why
@@ -41,7 +45,6 @@ Out of scope:
 Depends on:
 
 - add-output-sharing-setting-new
-- job-service-unit-settings-pool
 - `add-output-sharing-setting-new` (order of the milestone review)
 - `job-service-unit-settings-pool` (order of the milestone review)
 
@@ -51,6 +54,18 @@ Where the path still costs the person time or surprises them:
 
 - A Developer learns of a 403 only at job run time when the producer saved no rule.
 - Rule setup names stable unit and collection IDs, and copy must show stack and workspace names with tool and namespace.
+
+## What main already does
+
+Each fact names its file, line and function on main. The change specifies only the difference.
+
+- Built-in roles hold output sharing actions (`pkg/access/access_test.go:1723`)
+- Custom role with unit read only does not read outputs (`pkg/access/access_test.go:1778`)
+- Grant check names subject and namespace (`pkg/access/access_test.go:783`)
+- Read refuses job starter subject without principal (`pkg/jobtoken/jobtokentest/mem_test.go:671`)
+- Reveal denies without read-secrets (`internal/api/pulumi/reveal_test.go:510`)
+- Apply steps refuse hostile Pulumi names (`pkg/dustpan/jobservice_applysteps_internal_test.go:120`)
+- Every audit event has a producer (`pkg/runner/handoff_test.go:158`)
 
 ## ADR check
 
@@ -70,33 +85,6 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "Defense in depth (ADR 250). Each layer stops a bad read alone: - The HTTP adapter checks the request with an allowlist of object kinds. - The store runs `Rule.Validate` at each write. It checks that each unit and each collection of the producer namespace that a rule names exists with its stable ID. It binds `Get` and `Delete` to the producer of the route, so that `unit:manage-sharing` on one unit does not reach a"
 - Effect: This change enforces only the cross-tool read check: a naming rule plus unit:read-outputs of the starter plus unit:read-secrets for a secret output at each read. Rule storage, validation, and the new-unit default live in add-output-sharing-setting-new.
 - Conflict: none.
-
-## Adversarial second pass
-
-A model of another provider than the drafter listed the open questions, failure modes and missing scenarios. Each finding is answered in this change or is an open question.
-
-- R1.1 (open question): The Open questions section reads not spec-ready. Two routes named in the error table, GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/sharing-rules and GET /api/dustpan/v1/me/reach, are not in the API description or the route table, so the one command that helps does not exist. File: proposal.md. Resolution: answered: Replaced both one-commands with routes from the route table: list units and the tool-neutral outputs read. No new route is named in the error table.
-- R1.2 (missing scenario): The spec has no requirement or scenario for saving, reading or deleting sharing rules, although proposal step 1 and task 2 depend on them. The 404 unit.not-found path for an unknown producer or consumer ID, and the store Validate and Get/Delete binding from design layer 3, are also not specified. File: specs/output-sharing/spec.md. Resolution: answered: Added rule-manage requirement with save, read, delete scenarios, 404 for unknown stable ID, and producer binding.
-- R1.3 (open question): ADR 273 decision 6 (decrypt only outputs of the latest checkpoint for a caller that passes both checks) is not in the spec. The spec only says secret values are sealed for the authorized path, which leaves the decrypt rule and its checks undefined. File: specs/output-sharing/spec.md. Resolution: answered: Added decrypt-only-outputs requirement with latest-checkpoint and hostile-ciphertext scenarios.
-- R1.4 (failure mode): The design risks revoked starter grants and removed rules between job start and read, and the layer table says the in-flight read is denied with 403. The spec has no scenario for revocation, rule removal mid-job, or a race between a rule delete and a read. File: specs/output-sharing/spec.md. Resolution: answered: Added revocation mid-job requirement with removed-rule and revoked-grant scenarios.
-- R1.5 (missing scenario): The proposal promises a denial audit entry and the design hostile tests cover a namespace-kind consumer and a principal-name consumer, but the spec has no scenario for either hostile input. The spec also has no audit requirement for the OpenTofu success read, although the project rule requires a record for each automatic action. File: specs/output-sharing/spec.md. Resolution: answered: Added hostile-kind and audit requirements covering namespace-kind and principal-name consumers and the OpenTofu audit entry.
-- R1.6 (missing scenario): Decision 8 requires that a Pulumi read of OpenTofu outputs runs through the terraform_remote_state routes and that only e2e-driven CLI versions are supported. The spec's covered-routes requirement omits these routes and any version gate. File: specs/output-sharing/spec.md. Resolution: answered: Added terraform_remote_state route coverage and e2e-driven version gate to the covered-routes requirement.
-- R1.7 (scope): Task 2.2 wires only the tool-neutral and TFE outputs routes, but the change claims Pulumi reads of OpenTofu outputs, which need the terraform_remote_state path of ADR 273 decision 8. The task list and the spec do not match the claimed user path. File: tasks.md. Resolution: answered: Build task now wires the tool-neutral, TFE-compatible, and terraform_remote_state paths together.
-- R1.8 (open question): The ADR check lists decisions 1, 2, 3, 5, 7, 8, 10 and 11 but omits decisions 4 (newUnitDefault), 6 (decrypt) and 12 (defense in depth), which the change touches. Decision 3 (no namespace-wide consumer across namespaces) is not reflected in the spec's consumer scope. File: proposal.md. Resolution: answered: Extended adr_check to decisions 1,2,3,4,5,6,7,8,10,11,12 with quotes for cross-namespace scope, new-unit default, decrypt, and defense in depth.
-- R1.9 (failure mode): The design layer 1 guard requires an allowlist of producer and consumer object kinds, but the spec does not say how a read behaves when the job token has no attachment for the profile block, or when the producer unit is renamed or removed and made again. Stable-ID behavior is not specified. File: specs/output-sharing/spec.md. Resolution: answered: Added stable-ID requirement for rename, remove-and-make-again, and missing job attachment.
-- R1.10 (wrong claim): The proposal's evidence says the roles guide documents the read outputs path (docs/guides/roles-and-grants.md), but the change's tasks do not include updating that guide, and no docs task covers the 403 error shape named in the proposal table. File: proposal.md. Resolution: answered: Removed the roles-guide claim and made the docs task cover the 403 error shape and the one commands.
-- R2.1 (failure mode): specs/output-sharing/spec.md: no requirement says what happens when the audit write fails during a successful read or a denial. The project rule says nothing happens without a record, so the read must be refused or its outcome defined. Resolution: answered: Added fail-closed audit requirement: when the audit write fails the server fails the read with 500 and returns no outputs.
-- R2.2 (failure mode): specs/output-sharing/spec.md: the recheck at each read does not cover a rule delete or grant revoke that lands between the check and the response or decrypt of an in-flight read. The time-of-check to time-of-use window is not specified. Resolution: answered: Added atomic check-and-serve requirement: rule and grant recheck in the same store read as the response and decrypt; mid-flight delete or revoke denies with 403.
-- R2.3 (missing scenario): specs/output-sharing/spec.md: the stable-ID requirement covers only the producer. Renaming or removing a consumer unit or a consumer collection, which a rule names by stable ID, has no scenario, although ADR 273 decision 2 and the project rule require stable IDs for stored references. Resolution: answered: Extended stable-ID requirement with consumer rename still matches and consumer remove-and-make-again denies until a new rule names the new ID.
-- R2.4 (open question): specs/output-sharing/spec.md: the secret-output scenario says values are sealed for the authorized path, but the change does not define the sealing or the decrypt path. The Checker needs the States port answer for an encrypted or unencrypted latest state, and that case is not covered. Resolution: answered: Added secret sealing requirement: secret values return as producer ciphertext, decrypt only through the decrypt-only path, with States client-encrypted bit scenarios.
-- R2.5 (missing scenario): specs/output-sharing/spec.md: no scenario covers a read when the producer has no state yet, the latest state is missing, or the producer never checkpointed. Resolution: answered: Added no-latest-state scenario returning 404 with unit.not-found.
-- R2.6 (missing scenario): specs/output-sharing/spec.md: the proposal promises error code unit.forbidden and a 403 naming unit:read-secrets, but the spec scenarios for denials name neither the code nor the action. Resolution: answered: Denial scenarios now state 403 with error code unit.forbidden and name unit:read-secrets for the secret path.
-- R2.7 (missing scenario): specs/output-sharing/spec.md: the output routes requirement says only e2e-driven CLI versions are served, but gives no response for an undriven version or a version that cannot read the route. Resolution: answered: Added undriven-version scenario returning the version error that names supported e2e-driven versions.
-- R2.8 (missing scenario): specs/output-sharing/spec.md: no scenario covers a job whose consumer unit is the producer itself, or a rule that names a collection with no units. Resolution: answered: Added self-read needs no rule and empty-collection rule matches no job scenarios.
-- R2.9 (missing scenario): specs/output-sharing/spec.md: the rule-manage requirement names no route, no action for list (unit:read-access per ADR 273 decision 10) and no action for delete, so the authorization of each rule route is not stated. Resolution: answered: Rule-manage requirement now names PUT with unit:manage-sharing, GET list with unit:read-access, and DELETE with unit:manage-sharing on the same producer object.
-- R2.10 (scope): tasks.md: task 2.2 gives an acceptance check only for the tool-neutral outputs route, with no check for the TFE-compatible routes or the terraform_remote_state path, although the spec covers all three. Resolution: answered: Build task check now requires tool-neutral, TFE-compatible, and terraform_remote_state paths each with 200 with rule and 403 without.
-- R2.11 (open question): specs/output-sharing/spec.md: the hostile-kind scenarios accept either 400 or 403, and the denial audit is not stated for them. The response code and the audit entry are left open. Resolution: answered: Hostile-kind requirement now fixes 400 for unknown kind with validation error and 403 for principal as consumer, each with a denial audit entry.
-- M.10 (consistency): Rule management duplicates add-output-sharing-setting-new. This change says only 'starter grants', but the other changes say unit:read-outputs. Resolution: answered: Removed the rule-management requirement from this change; this change now specifies only the cross-tool read check as a naming rule plus unit:read-outputs plus unit:read-secrets, and depends on add-output-sharing-setting-new for rule storage and on job-service-unit-settings-pool for job context.
 
 ## Open questions
 

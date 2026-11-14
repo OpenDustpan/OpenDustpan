@@ -4,7 +4,7 @@
 
 While a decision record of state.write exists, the server SHALL keep it until the audit retention passes and then delete it in the retention sweep.
 
-#### Scenario: Expired allow record is pruned
+#### Scenario: pruneExpired prunes expired allow record
 - **WHEN** The retention sweep runs after the audit retention passes for an allow record of state.write.
 - **THEN** The record no longer reads through the record read route and the prune audit entry names its ID.
 
@@ -14,7 +14,7 @@ While a decision record of state.write exists, the server SHALL keep it until th
 
 #### Scenario: Expired refusal record is pruned
 - **WHEN** The retention sweep runs after the audit retention passes for a refusal record written in its own transaction.
-- **THEN** The refusal record no longer reads and the prune audit entry names its ID while the step audit entry keeps the ID.
+- **THEN** The refusal record no longer reads and the prune audit entry names its ID while the step audit entry keeps the ID when it exists.
 
 #### Scenario: Expired unlocked-write record is pruned
 - **WHEN** The retention sweep runs after the audit retention passes for a state.write record with operation kind unlocked-write.
@@ -23,6 +23,14 @@ While a decision record of state.write exists, the server SHALL keep it until th
 #### Scenario: Open step is kept
 - **WHEN** The sweep meets a state.write record whose explained step is still open.
 - **THEN** The sweep keeps the record and deletes it only after the step completes and the retention passes.
+
+#### Scenario: Stuck open step prunes with mark
+- **WHEN** The step stays open 7 days after the audit retention passes.
+- **THEN** The sweep deletes the record and the prune entry marks it open-step.
+
+#### Scenario: Record with no step entry still prunes
+- **WHEN** The sweep meets an expired record with no step audit entry and no open step.
+- **THEN** The sweep deletes the record and the prune entry names its ID.
 
 #### Scenario: New write after prune still records
 - **WHEN** A state.write evaluation runs after the sweep pruned its old records.
@@ -35,6 +43,10 @@ When the server evaluates state.write, the server SHALL write one decision recor
 #### Scenario: Allow with no gate still records
 - **WHEN** A state.write evaluation allows with no gate and no limit in the chain.
 - **THEN** The server writes one decision record with the fact document and an empty gate list.
+
+#### Scenario: Record write failure fails closed
+- **WHEN** The decision record store cannot take the write during a state.write evaluation.
+- **THEN** The server answers 503 with code gate.unavailable and writes no partial record.
 
 ### Requirement: Held lock writes no record
 
@@ -52,11 +64,7 @@ When the retention sweep deletes a decision record, the server SHALL keep the re
 - **WHEN** The retention sweep deletes the decision record of a state.write step.
 - **THEN** The audit entry of the explained step still names the record ID and the prune batch entry names the same ID.
 
-#### Scenario: Missing step entry blocks prune
-- **WHEN** The sweep meets an expired record with no step audit entry.
-- **THEN** The sweep keeps the record and deletes it only after the step audit entry exists and the retention passes.
-
-### Requirement: Sweep runs in safe batches
+### Requirement: pruneExpired sweep runs in safe batches
 
 While the retention sweep runs, the server SHALL delete expired state.write records in bounded batches ordered by stable record ID with one lease holder at a time.
 
@@ -71,3 +79,7 @@ While the retention sweep runs, the server SHALL delete expired state.write reco
 #### Scenario: Writes proceed during sweep
 - **WHEN** A state.write evaluation runs while the sweep holds its lease.
 - **THEN** The state write evaluates and writes its decision record with no block on the sweep lease.
+
+#### Scenario: Effective sweep values are visible
+- **WHEN** An operator reads the installation settings after the sweep is wired.
+- **THEN** The settings resource shows the hourly cadence, the batch size of 100, and the last prune count.
