@@ -11,6 +11,7 @@
 
 - [ ] 2.1 Implement the five methods in pkg/job/service.go (func at line 357 and its neighbors) Check: `go test ./pkg/job -count=1` passes
 - [ ] 2.2 Declare the routes in NEW file internal/api/jobs/actions.go and register them in the existing adapter of internal/api/jobs Check: `go test ./internal/api/jobs -run TestJobActionRoutes -count=1` passes
+- [ ] 2.3 Add the NEW error code job.wrong-state to internal/errcode/catalog_job.go (next to job.unsupported), with its message and the one command that helps, and its row in internal/errcode/catalog_test.go. Check: `go test ./internal/errcode/...`
 
 ## 3. Side effects (computed from main)
 

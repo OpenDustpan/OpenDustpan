@@ -42,11 +42,11 @@ When a later state version touched an address of the claim after its base, the s
 
 ### Requirement: Replace claim is a conflict until the closure test
 
-When a caller registers a claim that holds a replace action, the server SHALL answer 409 with the code `claim.closure-unproven` and store no claim, because this change does not prove the closure of a replacement.
+When a caller registers a claim that holds a replace action, the server SHALL answer 409 with the code `placement.conflict` and store no claim, because this change does not prove the closure of a replacement.
 
 #### Scenario: Replace refused
 - **WHEN** a claim holds a replace action
-- **THEN** the server answers 422 and stores no claim
+- **THEN** the server answers 409 with the code `placement.conflict` and stores no claim
 
 ### Requirement: Authorize claim registration
 

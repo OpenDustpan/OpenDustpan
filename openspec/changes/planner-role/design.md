@@ -8,7 +8,7 @@ The planner role is a data role in the existing access model. No new table or gr
 
 ## Structure
 
-The built-in role table with an unexported action set that only its constructor makes; the constructor checks that planner holds the viewer actions plus unit:run-plan, job:read-plans and changeorder:author.
+The built-in role table with an unexported action set that only its constructor makes; the constructor checks that planner holds the viewer actions plus unit:run-plan and job:read-plans. The action changeorder:author joins planner with the change order routes (ADR 197 decision 3).
 
 ## Risks
 
@@ -70,8 +70,8 @@ flowchart LR
 
 **access**
 
-- Invariant: Planner holds the viewer actions plus unit:run-plan, job:read-plans and changeorder:author.
-- `CheckAccess`: pre: Caller presents a session or an access token.. Post: Allows planner state reads.; Refuses writes and reveal..
+- Invariant: Planner holds the viewer actions plus unit:run-plan and job:read-plans. The action changeorder:author joins planner with the change order routes (ADR 197 decision 3).
+- `Authorizer.Authorize` (pkg/access/authorizer.go:111), tested by TestPlannerAccessDecision in pkg/access/planner_role_test.go: pre: Caller presents a session or an access token. Post: Allows planner state reads; refuses writes and reveal with access.denied.
 
 ## Failure modes
 
