@@ -149,7 +149,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
    - Options: 100 DELETEs per 5 minutes for each credential; 1000 DELETEs per 5 minutes for each credential.
    - Recommended: 100 DELETEs per 5 minutes for each credential. Reason: A mass disable needs a bound that shows as a setting.
 
-Not spec-ready: the change conflicts with an owner-tagged decision of ADR 332.
+Deferred: SCIM comes later (ADR 332 decision 9).
 
 Questions considered and answered:
 
