@@ -1,18 +1,18 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #1255.
 
 ## Why
 
-**Persona: operator.** Operator runs an installation where OpenTofu lock retries write one decision record per lock request with no prune, so disk use grows. The operator needs bounded retention that still keeps each record for audit.
+**Persona: operator.** Operator runs an installation where OpenTofu lock requests write one decision record per evaluation and no job prunes them, so disk use grows. The operator needs bounded retention that still keeps each record for audit.
 
 The user path this change must make work:
 
 1. **Docs page.** Operator reads the docs page for decision record retention and the audit retention setting.
-2. **CLI.** Developer runs tofu plan and apply against the server; each state write writes one decision record.
-3. **API.** Namespace administrator lists state.write decision records through the tool-neutral API and sees expired records disappear after the sweep.
+2. **CLI.** Developer runs tofu plan and apply against the server; each state write evaluation writes one decision record.
+3. **API.** Namespace administrator reads state.write decision records through the existing record read route and sees expired records disappear after the sweep.
 
 Errors the person may hit, and the one command that helps:
 
@@ -22,15 +22,15 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- The server evaluates state.write gates around state writes. Proof: pkg/dustpan/stategates_start.go:15:// stateWriteGatesKey is the key of the effective value of the state.write
-- Each OpenTofu lock request was one evaluation and lock retries repeat it. Proof: Part of #899. Follows #1032. Each OpenTofu lock request is one evaluation, and `-lock-timeout` retries a lock many times. So the records grow with every lock request, and no job prunes them.
-- A retry against a held lock writes no record because the route asks the guard only when the lock is free. Proof: Note: the TFE lock route now asks the guard only when the lock is free, so a retry against a held lock writes no record.
+- The server builds the state.write gates and records their effective value at start. Proof: pkg/dustpan/stategates_start.go:58 (func Server.recordStateWriteGates) and pkg/dustpan/stateguard.go:94 (func newStateWriteGates), as the PM finding verified on main.
+- Each OpenTofu lock request is one evaluation, and no job prunes the records. Proof: Issue 1255: each OpenTofu lock request is one evaluation, and -lock-timeout retries a lock many times. So the records grow with every lock request, and no job prunes them.
+- A retry against a held lock writes no record. Proof: internal/api/tfe/locks.go:168 (func Handler.lockOnce) runs guardStateWrite with lockCheck on a workspace that was free at the last read; a held workspace answers 409 and asks no guard. Issue 1255 note: the TFE lock route asks the guard only when the lock is free.
 
 ## What Changes
 
 - Keep one decision record for each state.write evaluation, including allow results with no gate.
 - Prune state.write decision records after the audit retention in bounded batches ordered by stable record ID.
-- Keep the lock-held fast path: retries against a held lock write no record because no evaluation runs.
+- Keep the held-lock behavior: a retry on a held workspace asks no guard and writes no record.
 
 Out of scope:
 
@@ -43,15 +43,18 @@ Out of scope:
 
 Where the path still costs the person time or surprises them:
 
-- Operators see record growth only as steady disk use with a visible prune count, not as an unbounded table.
-- The no-record case never surprises auditors: every allowed write still has a record until retention passes.
+- Operators see record growth as steady disk use with a visible prune count, not as an unbounded table.
+- Every allowed write still has a record until retention passes, so auditors see no gap.
 
 ## What main already does
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Each evaluation writes one decision record. (`pkg/gate/statewrite_test.go:606 (TestEachEvaluationWritesOneRecord)`)
-- The TFE adapter documents the state.write guard around checked writes. (`internal/api/tofuhttp/tofuhttp.go:108`)
+- The server records the effective value of the state.write gates at start. (`pkg/dustpan/stategates_start.go:58 (func Server.recordStateWriteGates)`)
+- The state.write gates are built here. (`pkg/dustpan/stateguard.go:94 (func newStateWriteGates)`)
+- The TFE lock handler runs guardStateWrite with lockCheck before the placer and the lock call, on a workspace free at the last read; a held workspace answers 409 and asks no guard. (`internal/api/tfe/locks.go:168 (func Handler.lockOnce)`)
+- The force-unlock handler reads the allowance first, then runs guardStateWrite with forceUnlockCheck before the override audit entry. (`internal/api/tfe/locks.go:352 (force-unlock handler)`)
 - The stategate adapter guards the state.write decision point for HTTP adapters that write state. (`internal/api/stategate/stategate.go:30`)
 
 ## ADR check
@@ -82,7 +85,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 286 changes. Chain to the end: ADR 286.
 - Current rule: this ADR, with ADR 286.
 - Quote: "A record of `state.write` or of an access limit lives for the audit retention (ADR 68)."
-- Effect: The change keeps the audit-retention lifetime for state.write records and adds the sweep that enforces it; a prune batch entry names each deleted ID and the step entry keeps its ID when it exists.
+- Effect: The change keeps the audit-retention lifetime for state.write records and adds the sweep that enforces it; a prune batch entry names each deleted ID.
 - Conflict: none.
 
 **ADR 335: Gate decisions: deny gates, held locks, unlocked declares and the engine port** (owner-tagged (all decisions)).
@@ -91,7 +94,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
 - Quote: "An unlocked state version on the TFE-compatible API (owner, 2026-11-07). Such a write meets `state.write` before its transaction."
-- Effect: An unlocked-write refusal is a state.write gate outcome, so its record follows the same audit-retention prune as each state.write record.
+- Effect: An unlocked-write refusal is a state.write outcome, so its record follows the same audit-retention prune.
 - Conflict: none.
 
 ## Open questions
@@ -100,10 +103,10 @@ none
 
 Questions considered and answered:
 
-- May an evaluation with no gate and no limit skip its decision record? No. ADR 222 decision 3 needs one record for each evaluation, owner-tagged. The volume fix is the retention sweep over time, not skipping records and not a per-retry cap.
-- How long does a state.write decision record live, including refusals and unlocked writes? ADR 229 decision 5 sets it: a record of state.write lives for the audit retention. The sweep deletes expired records, allow and refusal, including unlocked-write; the audit entry of the step keeps the record ID when such an entry exists, and the prune entry names each deleted ID.
-- Which audit retention value applies when the retention changes after a record is written? The sweep reads the current audit retention at sweep time and applies it to records already written. A shorter retention makes old records eligible at the next sweep; a longer retention keeps them until the new period passes.
-- May a namespace administrator prune installation access-limit records through this sweep? No. The sweep is a system background task with no caller principal. It deletes only namespace-scoped state.write records.
-- What cadence, batch size, and stuck-step rule does the sweep use, and where does the server show them? Cadence is once per hour and batch size is 100 records per batch with a 5 minute lease. The settings resource shows the effective cadence, batch size, and last prune count. A stuck open step becomes eligible 7 days after the audit retention passes, and the prune entry marks it as open-step.
+- May an evaluation with no gate and no limit skip its decision record? No. ADR 222 decision 3 needs one record for each evaluation, owner-tagged. The volume fix is the retention sweep over time, not skipping records.
+- How long does a state.write decision record live, including refusals and unlocked writes? ADR 229 decision 5: a record of state.write lives for the audit retention. The sweep deletes expired records, allow and refusal, including unlocked-write.
+- Which audit retention value applies when the retention changes after a record is written? The sweep reads the current audit retention at sweep time. A shorter value makes old records eligible at the next sweep.
+- May a namespace administrator prune installation access-limit records through this sweep? No. The sweep is a system background task with no caller principal and deletes only namespace-scoped state.write records.
+- What cadence, batch size and stuck-step rule does the sweep use? Once per hour, 100 records per batch, 5 minute lease. The settings resource shows the effective values and the last prune count. A stuck open step becomes eligible 7 days after retention passes, and the prune entry marks it open-step.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #897, #952.
@@ -23,11 +23,11 @@ Errors the person may hit, and the one command that helps:
 | --- | --- | --- |
 | PATCH reduces security without a fresh authentication | 403 with code mfa.fresh-step-required. The error names the path of a new sign-in. Nothing changes. | `GET /api/dustpan/v1/settings` |
 | PATCH writes a key that the static layer locks | 409 with code settings.locked. The error names the switch and says the operator locked it. | `GET /api/dustpan/v1/settings` |
-| PATCH names an undeclared key | 422 with code settings.key-unknown naming the key. | `GET /api/dustpan/v1/settings` |
+| PATCH names an undeclared key | 400 with code settings.key-unknown naming the key. | `GET /api/dustpan/v1/settings` |
 | PATCH writes a sensitive key that only an environment variable or a file can set | 409 with code settings.static-only naming the key. | `GET /api/dustpan/v1/settings` |
-| PATCH sets tempadmin.session-limit outside 1 millisecond to 24 hours | 422 with code settings.value-invalid naming the key and the range. | `GET /api/dustpan/v1/settings` |
+| PATCH sets tempadmin.session-limit outside 1 millisecond to 24 hours | 400 with code settings.value-invalid naming the key and the range. | `GET /api/dustpan/v1/settings` |
 | PATCH has no Idempotency-Key header | The refusal of the idempotency rule of the tool-neutral API. Nothing changes. | `GET /api/dustpan/v1/settings` |
-| PATCH carries a revision that is not the current revision | 412 with code settings.revision-stale. Nothing changes. | `GET /api/dustpan/v1/settings` |
+| PATCH carries a revision that is not the current revision | 412 with the NEW code settings.revision-stale. Nothing changes. | `GET /api/dustpan/v1/settings` |
 | The stored session limit is outside the range and the host command refuses to create a temporary administrator | The host command refuses, names the key and the reset option, and writes an audit entry. No record exists. | `opendustpan host create-temp-admin --reset-session-limit --reason "<text>"` |
 
 Evidence for the claims above:

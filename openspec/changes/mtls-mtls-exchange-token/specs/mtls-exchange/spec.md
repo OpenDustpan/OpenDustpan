@@ -26,7 +26,11 @@ When a workload calls the mTLS exchange over direct TLS, the server SHALL accept
 
 ### Requirement: Issue stored trust token
 
-When the checks pass, the server SHALL issue a stored access token with the exchanged-token lifetime.
+When the checks pass, the server SHALL issue a stored access token of the kind `mtls-exchange` with the exchanged-token lifetime.
+
+#### Scenario: Kind of the token
+- **WHEN** The checks pass.
+- **THEN** The token has the kind `mtls-exchange`, the token list of the principal shows that kind, the issue audit entry records it, and a request with the token has the credential `trust-token`.
 
 #### Scenario: Capped expiry
 - **WHEN** The checks pass with the default setting.
