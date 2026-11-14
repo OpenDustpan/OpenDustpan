@@ -15,10 +15,22 @@ import (
 const workflowStubs = `
 docker() {
   if [ "$1" = "buildx" ] && [ "$2" = "imagetools" ] && [ "$3" = "inspect" ]; then
-    case "$4" in
+    shift 3
+    format=""
+    ref=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --format) format="$2"; shift 2 ;;
+        *) ref="$1"; shift ;;
+      esac
+    done
+    case "$format" in
+      *Platform*) echo "linux/amd64 linux/arm64 "; return 0 ;;
+    esac
+    case "$ref" in
       *ghcr.io*) result="$STUB_FORGE" ;;
       *docker.io*) result="$STUB_HUB" ;;
-      *) echo "stub: unexpected reference $4" >&2; return 99 ;;
+      *) echo "stub: unexpected reference $ref" >&2; return 99 ;;
     esac
     case "$result" in
       ""|NOTFOUND) echo "Error: manifest unknown" >&2; return 1 ;;
@@ -104,7 +116,7 @@ func runWorkflowScript(t *testing.T, script string, env map[string]string) (int,
 		full = append(full, key+"="+value)
 	}
 
-	command := exec.CommandContext(t.Context(), "bash", "-s")
+	command := exec.CommandContext(t.Context(), "bash", "--noprofile", "--norc", "-eo", "pipefail", "-s")
 	command.Stdin = strings.NewReader(workflowStubs + "\n" + script)
 	command.Env = full
 	command.Dir = t.TempDir()
@@ -215,6 +227,26 @@ func TestReleaseWorkflowRerun(t *testing.T) {
 				"TAG":        "v0.1.0",
 				"STUB_FORGE": "NOTFOUND",
 				"STUB_HUB":   "ERROR:connection reset",
+			},
+			want:    1,
+			wantOut: "cannot inspect",
+		},
+		{
+			name: "tls unknown authority fails closed",
+			env: map[string]string{
+				"TAG":        "v0.1.0",
+				"STUB_FORGE": "ERROR:x509: certificate signed by unknown authority",
+				"STUB_HUB":   "NOTFOUND",
+			},
+			want:    1,
+			wantOut: "cannot inspect",
+		},
+		{
+			name: "unknown host fails closed",
+			env: map[string]string{
+				"TAG":        "v0.1.0",
+				"STUB_FORGE": "NOTFOUND",
+				"STUB_HUB":   "ERROR:unknown host registry.example",
 			},
 			want:    1,
 			wantOut: "cannot inspect",

@@ -26,17 +26,33 @@ docker buildx imagetools inspect docker.io/opendustpan/opendustpan:v0.1.0
 
 ## Install with Helm
 
+Make the two Secrets first. The chart refuses an install without both
+names: `database.existingSecret.name` holds the PostgreSQL URL and
+`keyEncryptionKey.existingSecret.name` holds the key from
+`opendustpan key generate`.
+
+```sh
+kubectl create secret generic opendustpan-database \
+  --from-literal=database-url='postgres://opendustpan@db.example:5432/opendustpan?sslmode=verify-full'
+kubectl create secret generic opendustpan-key-encryption-key \
+  --from-file=key-encryption-key=<file from opendustpan key generate --out>
+```
+
 Install with the chart default registry:
 
 ```sh
-helm install opendustpan oci://ghcr.io/opendustpan/charts/opendustpan --version 0.1.0
+helm install opendustpan oci://ghcr.io/opendustpan/charts/opendustpan --version 0.1.0 \
+  --set database.existingSecret.name=opendustpan-database \
+  --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key
 ```
 
-Or switch to Docker Hub with one value:
+Or switch to Docker Hub with one more value:
 
 ```sh
 helm install opendustpan oci://ghcr.io/opendustpan/charts/opendustpan --version 0.1.0 \
-  --set image.repository=docker.io/opendustpan/opendustpan
+  --set image.repository=docker.io/opendustpan/opendustpan \
+  --set database.existingSecret.name=opendustpan-database \
+  --set keyEncryptionKey.existingSecret.name=opendustpan-key-encryption-key
 ```
 
 ## Maintainer setup: Docker Hub secrets

@@ -85,9 +85,28 @@ func renderedImage(t *testing.T, output string) string {
 // TestChartDefaultRegistryAndOverride runs `helm template` with the
 // defaults and with the Docker Hub override value, and checks that the
 // default image names the forge container registry and the override
-// names Docker Hub. It names no route and no credential kind.
+// names Docker Hub. It also checks the new behavior of this change: the
+// values file documents the one-value override and the shared digest.
+// It names no route and no credential kind.
 func TestChartDefaultRegistryAndOverride(t *testing.T) {
 	t.Parallel()
+
+	root, err := os.OpenRoot("../deploy/helm/opendustpan")
+	if err != nil {
+		t.Fatalf("open the chart: %v", err)
+	}
+	raw, readErr := root.ReadFile("values.yaml")
+	if closeErr := root.Close(); readErr != nil || closeErr != nil {
+		t.Fatalf("read values.yaml: %v %v", readErr, closeErr)
+	}
+	for _, want := range []string{
+		"docker.io/opendustpan/opendustpan",
+		"same digest",
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("values.yaml lacks the documented override %q", want)
+		}
+	}
 
 	def := renderedImage(t, helmTemplate(t))
 	if !strings.Contains(def, "ghcr.io/opendustpan/opendustpan") {

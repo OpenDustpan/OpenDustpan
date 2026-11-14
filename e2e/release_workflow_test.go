@@ -72,7 +72,9 @@ func TestReleasePushesOneDigestToBothRegistries(t *testing.T) {
 
 // checkJobGuard checks that the job guard limits the publish job to tag
 // events in the main repository, so fork runs and pull_request runs stop
-// before any secret read.
+// before any secret read. The guard is a text match only: it does not run
+// the workflow against a hostile event. TestReleaseJobGuardRejectsUntrustedEvents
+// next to this check evaluates the parsed `if:` against hostile events.
 func checkJobGuard(t *testing.T, workflow string) {
 	t.Helper()
 
@@ -186,6 +188,97 @@ func checkPushOrder(t *testing.T, workflow string) {
 	}
 	if !strings.Contains(workflow, "--platform linux/amd64,linux/arm64") {
 		t.Error("the release workflow does not build both architectures")
+	}
+	for _, want := range []string{"linux/amd64", "linux/arm64", "Platform"} {
+		if !strings.Contains(workflow, want) {
+			t.Errorf("the release workflow lacks the platform check %q", want)
+		}
+	}
+}
+
+// jobGuardClauses answers the clauses of the publish job `if:`, joined
+// with &&. It matches the `if:` at the job indent (4 spaces); step
+// conditions sit deeper and must not match.
+func jobGuardClauses(t *testing.T, workflow string) []string {
+	t.Helper()
+
+	line := ""
+	for lineText := range strings.Lines(workflow) {
+		if rest, ok := strings.CutPrefix(lineText, "    if: "); ok {
+			line = strings.TrimSpace(rest)
+		}
+	}
+	if line == "" {
+		t.Fatal("the release workflow has no job guard")
+	}
+	clauses := strings.Split(line, "&&")
+	if len(clauses) < 3 {
+		t.Fatalf("the job guard joins too few clauses with &&: %q", line)
+	}
+	for i, clause := range clauses {
+		clauses[i] = strings.TrimSpace(clause)
+	}
+
+	return clauses
+}
+
+// guardPasses evaluates the parsed job guard clauses against one event:
+// the tag push in the main repository passes, while a fork tag push, a
+// pull_request event, and a branch push stop before any secret read.
+func guardPasses(t *testing.T, clauses []string, event, ref, repo string) bool {
+	t.Helper()
+
+	for _, clause := range clauses {
+		if !clauseSatisfied(t, clause, event, ref, repo) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// clauseSatisfied answers whether one guard clause holds for the event.
+func clauseSatisfied(t *testing.T, clause, event, ref, repo string) bool {
+	t.Helper()
+
+	switch {
+	case strings.Contains(clause, "github.event_name"):
+		return event == "push"
+	case strings.Contains(clause, "startsWith(github.ref"):
+		return strings.HasPrefix(ref, "refs/tags/v")
+	case strings.Contains(clause, "github.repository"):
+		return repo == "OpenDustpan/OpenDustpan"
+	default:
+		t.Fatalf("the job guard has an unevaluated clause %q", clause)
+		return false
+	}
+}
+
+// TestReleaseJobGuardRejectsUntrustedEvents parses the publish job `if:`
+// and evaluates it against hostile events: a fork tag push, a
+// pull_request event, and a branch push in the main repository all stop
+// before any secret read, while a main-repository tag push passes.
+func TestReleaseJobGuardRejectsUntrustedEvents(t *testing.T) {
+	t.Parallel()
+
+	workflow := releaseWorkflow(t)
+	clauses := jobGuardClauses(t, workflow)
+
+	for _, tc := range []struct {
+		name  string
+		event string
+		ref   string
+		repo  string
+		want  bool
+	}{
+		{"main tag push passes", "push", "refs/tags/v0.1.0", "OpenDustpan/OpenDustpan", true},
+		{"fork tag push stops", "push", "refs/tags/v0.1.0", "attacker/OpenDustpan", false},
+		{"pull request stops", "pull_request", "refs/tags/v0.1.0", "OpenDustpan/OpenDustpan", false},
+		{"branch push stops", "push", "refs/heads/main", "OpenDustpan/OpenDustpan", false},
+	} {
+		if got := guardPasses(t, clauses, tc.event, tc.ref, tc.repo); got != tc.want {
+			t.Errorf("%s: guard = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

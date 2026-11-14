@@ -32,6 +32,10 @@ func TestInstallPageListsBothPullCommands(t *testing.T) {
 		"DOCKERHUB_USERNAME",
 		"DOCKERHUB_TOKEN",
 		"gh secret set DOCKERHUB_TOKEN --repo OpenDustpan/OpenDustpan",
+		"--set database.existingSecret.name=",
+		"--set keyEncryptionKey.existingSecret.name=",
+		"kubectl create secret generic opendustpan-database",
+		"kubectl create secret generic opendustpan-key-encryption-key",
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the install page lacks %q", want)
