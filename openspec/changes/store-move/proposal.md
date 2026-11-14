@@ -35,14 +35,17 @@ with the SDK; add to the persona table of `openspec/project.md`).
 
 1. Today: `st, err := sqlite.Open(ctx, path)`, then 23 options such as
    `dustpan.WithStackStore(st)`, `dustpan.WithJobStore(st)`.
-2. After: `dustpan.NewServer(dustpan.WithSQLite(path), ...)` or
-   `dustpan.WithPostgreSQL(dsn)`. One option opens the store and sets every
-   store port. A wrong path or DSN fails `NewServer` with the error of the
-   store, which names the setting.
+2. After: `store, err := dustpan.OpenStore(ctx, database)`, then
+   `dustpan.NewServer(..., dustpan.WithBuiltinStore(store))`, with
+   `defer store.Close()`. One call opens the store, and one option sets
+   every store port. The caller closes the store. A wrong form or a store
+   that cannot open fails with an error that names the accepted forms or
+   the setting. `dustpan.WithSQLite(path)` and `dustpan.WithPostgreSQL(dsn)`
+   remain for a server that opens and closes its own store.
 3. A third-party store still works: the ports and `pkg/store/storetest` stay
    public, and the 23 options stay.
 4. Docs: the SDK page (`docs/reference/`, the embedding section) shows the
-   one-option form.
+   `OpenStore` form and the store's `Close`.
 
 ## What changes
 
@@ -50,19 +53,22 @@ with the SDK; add to the persona table of `openspec/project.md`).
 
 - IN (PR B): move the 28 packages to `internal/store/...` with the same names; keep
   `pkg/store/storetest` (a conformance suite, SDK by ADR 272 decision 4); (PR A) add
-  `dustpan.WithSQLite` and `dustpan.WithPostgreSQL`, built on the store
-  wiring that `cmd/opendustpan` has today, so the wiring exists once; update
-  `sqlc.yaml`, the Makefile, CI paths, `.golangci.yml`, the layout in
-  `AGENTS.md` and the docs paths.
+  `dustpan.OpenStore`, `dustpan.BuiltinStore`, `dustpan.StorePorts` and
+  `dustpan.WithBuiltinStore`, built on the store wiring that `cmd/opendustpan`
+  has today, so the wiring exists once; keep `dustpan.WithSQLite` and
+  `dustpan.WithPostgreSQL`; update `sqlc.yaml`, the Makefile, CI paths,
+  `.golangci.yml`, the layout in `AGENTS.md` and the docs paths.
 - OUT: the built-in blob, log sink, notify and forge adapters (RFC 103 step
   7); the SDK surface check (RFC 103 step 1); every logic change.
 
 ### How it lands
 
-- **PR A (hand-written, normal review):** `dustpan.WithSQLite`,
-  `dustpan.WithPostgreSQL`, and `cmd/opendustpan` using them, on today's
-  paths. It touches `pkg/dustpan` and `cmd`, not the store internals, so it
-  can land before or beside the #2989 fix.
+- **PR A (hand-written, normal review):** `dustpan.OpenStore`,
+  `dustpan.BuiltinStore`, `dustpan.StorePorts`, `dustpan.WithBuiltinStore`,
+  `dustpan.WithSQLite`, `dustpan.WithPostgreSQL`, and `cmd/opendustpan`
+  using `OpenStore` and `WithBuiltinStore`, on today's paths. It touches
+  `pkg/dustpan` and `cmd`, not the store internals, so it can land before or
+  beside the #2989 fix.
 - **PR B (scripted only, no logic):** the move, made by
   `scripts/move-store.sh` (`git mv`, import path rewrite, `make generate`),
   committed with it. A conflict is never resolved by hand: the script runs
@@ -100,7 +106,8 @@ No conflict with an owner-tagged decision.
 the SHA-256 of each baseline is the same before and after the move (the
 baselines are embedded relative to their package), `go list ./pkg/...` shows no `store/sqlite`, `store/postgres`, `store/schema`
 or `store/internal` path. A test in `pkg/dustpan` starts a server with
-`WithSQLite` alone and runs one stack update and one workspace state write.
+`OpenStore` and `WithBuiltinStore` and runs one stack update and one
+workspace state write.
 
 ## Open questions
 
@@ -108,6 +115,7 @@ none
 
 Decided by the PM on 2026-11-08, reviewed by the implementation lead:
 1. The move lands after the #2989 fix.
-2. The names are `WithSQLite(path string, opts ...)` and
-   `WithPostgreSQL(dsn string, opts ...)`.
+2. The names are `OpenStore(ctx, database, opts ...)`,
+   `BuiltinStore`, `StorePorts`, `WithBuiltinStore`, `WithSQLite(path
+   string, opts ...)` and `WithPostgreSQL(dsn string, opts ...)`.
 3. The embedder persona is added to `openspec/project.md`.
