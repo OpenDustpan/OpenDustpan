@@ -207,16 +207,22 @@ An error has the fields `code` (the HTTP status), `message` and `errorCode`.
 ## Settings of the installation
 
 The server declares two settings that the database layer holds. Each other
-setting of the installation is static only.
+setting of the installation is read-only: the static layer sets it, or the
+server sets it itself.
 
 | Key | Kind | Default | Apply | Meaning |
 | --- | --- | --- | --- | --- |
 | `branding.preset` | `string` | empty | `live` | The name of the branding preset of the installation. A name of lower-case letters, digits and hyphens, at most 32 characters. Empty means the standard palette. |
 | `egress.allowPlainConnections` | `bool` | `false` | `live` | Allow LDAP and SMTP connections with no TLS. An LDAP bind or an SMTP login then sends its password with no encryption. |
+| `server.drainPeriod` | `string` | `10s` | `restart` | The time between the stop signal and the start of the shutdown. In it, `GET /health/ready` answers 503 and the server serves all other requests, so a load balancer takes the instance out of its pool. |
 
 The flag `--branding-preset`, the variable `DUSTPAN_BRANDING_PRESET` and the
 key `branding.preset` of the configuration file set it from the static layer
 and lock it.
+
+The server sets `server.drainPeriod` itself: no flag, variable or file key
+sets it, and its value is the drain that the server runs with. A `PATCH` of
+it answers 409 with `settings.static-only`.
 
 The flag `--allow-plain-connections`, the variable
 `DUSTPAN_ALLOW_PLAIN_CONNECTIONS` and the key
