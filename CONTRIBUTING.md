@@ -106,7 +106,8 @@ You can use AI tools to help you write code, tests and text. These rules
 apply:
 
 - **Say that you used AI.** In the pull request or the issue, name the tool
-  and say which parts it wrote.
+  and say which parts it wrote. An AI-authored pull request names its
+  OpenSpec change with the line `Change: openspec/changes/<id>`.
 - **Understand every change.** A human submits the change, understands all
   of it, and can explain what it does and how it works with the rest of the
   system, without the help of the tool. If you cannot do this, do not submit

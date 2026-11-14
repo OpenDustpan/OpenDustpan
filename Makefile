@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: cover regenerate-baseline release-record-check ai-pr-spec-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -179,6 +179,14 @@ ifeq ($(origin VERSION),command line)
 else
 	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
 endif
+
+# The pull request body and the author email of each commit of the pull
+# request, one per line. They have no defaults: CI passes both files, and a
+# local run passes its own files. Not part of check: the check needs a pull
+# request, and a local run has none.
+ai-pr-spec-check: ## Fail an AI-authored pull request that names no spec-ready OpenSpec change (needs PR_BODY_FILE and PR_COMMITS_FILE).
+	@if [ -z "$(PR_BODY_FILE)" ] || [ -z "$(PR_COMMITS_FILE)" ]; then echo "usage: make ai-pr-spec-check PR_BODY_FILE=<body-file> PR_COMMITS_FILE=<commits-file>" >&2; exit 1; fi
+	bash scripts/check-ai-pr-spec.sh '$(PR_BODY_FILE)' '$(PR_COMMITS_FILE)'
 
 adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.
 	$(ADR_INDEX)
