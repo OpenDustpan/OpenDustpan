@@ -634,12 +634,10 @@ CREATE TABLE job_plans (
 CREATE TABLE job_tokens (
     digest text NOT NULL,
     namespace_id text NOT NULL,
-    unit_namespace text NOT NULL,
     starter_id text NOT NULL,
     job_id text NOT NULL,
     unit_tool text NOT NULL,
     unit_id text NOT NULL,
-    unit_name text NOT NULL,
     claim_operation text NOT NULL,
     claim_token bigint NOT NULL,
     expires_at_ms bigint NOT NULL,
@@ -650,8 +648,6 @@ CREATE TABLE job_tokens (
     CONSTRAINT job_tokens_job_id_check CHECK ((job_id <> ''::text)),
     CONSTRAINT job_tokens_starter_id_check CHECK ((starter_id <> ''::text)),
     CONSTRAINT job_tokens_unit_id_check CHECK ((unit_id <> ''::text)),
-    CONSTRAINT job_tokens_unit_name_check CHECK ((unit_name <> ''::text)),
-    CONSTRAINT job_tokens_unit_namespace_check CHECK ((unit_namespace <> ''::text)),
     CONSTRAINT job_tokens_unit_tool_check CHECK ((unit_tool <> ''::text))
 );
 

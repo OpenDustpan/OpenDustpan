@@ -61,12 +61,14 @@ func (t *JobTokens) GetByDigest(ctx context.Context, d jobtoken.Digest) (jobtoke
 		return jobtoken.Match{}, fmt.Errorf("select job token: %w", err)
 	}
 
-	// Defense in depth: the service checks the unit ID of the job too; this
-	// check stays so that a renamed namespace cannot redirect a token.
+	// Defense in depth: the service checks the unit ID of the job too.
+	// This check stays so that a restored namespace ID cannot redirect a token.
 	if row.Namespace != row.UnitNamespace {
 		return jobtoken.Match{}, jobtoken.ErrNotFound
 	}
 
+	// Defense in depth: the service checks the job unit ID too. This check
+	// refuses a restored token that names a job in another namespace.
 	if row.Namespace != row.JobNamespace {
 		return jobtoken.Match{}, jobtoken.ErrNotFound
 	}
@@ -276,12 +278,10 @@ func insertJobToken(ctx context.Context, q *db.Queries, tok jobtoken.Token) erro
 	err := q.InsertJobToken(ctx, db.InsertJobTokenParams{
 		Digest:         tok.Digest.String(),
 		Namespace:      tok.Namespace.String(),
-		UnitNamespace:  tok.Namespace.String(),
 		StarterID:      tok.StarterID,
 		JobID:          string(tok.JobID),
 		UnitTool:       tok.Unit.Tool(),
 		UnitID:         tok.Unit.UnitID(),
-		UnitName:       tok.Unit.UnitName(),
 		ClaimOperation: string(tok.ClaimOperation),
 		ClaimToken:     tok.ClaimToken,
 		ExpiresAtMs:    codec.Millis(tok.ExpiresAt),

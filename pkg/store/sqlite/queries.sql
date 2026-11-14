@@ -4792,18 +4792,18 @@ ORDER BY c.blob_key;
 
 -- name: InsertJobToken :exec
 INSERT INTO job_tokens (
-    digest, namespace_id, unit_namespace, starter_id, job_id, unit_tool, unit_id, unit_name, claim_operation,
+    digest, namespace_id, starter_id, job_id, unit_tool, unit_id, claim_operation,
     claim_token, expires_at_ms, created_at_ms
 ) VALUES (
     sqlc.arg(digest), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
-    sqlc.arg(unit_namespace), sqlc.arg(starter_id), sqlc.arg(job_id), sqlc.arg(unit_tool), sqlc.arg(unit_id),
-    sqlc.arg(unit_name), sqlc.arg(claim_operation), sqlc.arg(claim_token), sqlc.arg(expires_at_ms),
+    sqlc.arg(starter_id), sqlc.arg(job_id), sqlc.arg(unit_tool), sqlc.arg(unit_id),
+    sqlc.arg(claim_operation), sqlc.arg(claim_token), sqlc.arg(expires_at_ms),
     sqlc.arg(created_at_ms)
 );
 
 -- name: GetJobToken :one
-SELECT t.digest, n.name AS namespace, t.unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
-       t.unit_name,
+SELECT t.digest, n.name AS namespace, u.namespace AS unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
+       CAST(u.name AS TEXT) AS unit_name,
        t.claim_operation, t.claim_token, t.expires_at_ms, t.created_at_ms,
        o.state AS operation_state, o.claim_token AS operation_claim_token,
        o.claim_expires_at_ms AS operation_claim_expires_at_ms,
@@ -4813,6 +4813,15 @@ SELECT t.digest, n.name AS namespace, t.unit_namespace, t.starter_id, t.job_id, 
        s.kind AS starter_kind, s.disabled_at_ms AS starter_disabled_at_ms
 FROM job_tokens AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
+-- Defense in depth: the service checks the unit ID too. Resolve only a live
+-- unit row so that a restored token cannot reach a removed unit by name.
+JOIN (
+    SELECT id, 'pulumi' AS tool, namespace, project || '/' || name AS name
+    FROM stacks WHERE deleted_at_ms IS NULL
+    UNION ALL
+    SELECT id, 'opentofu' AS tool, namespace, name
+    FROM workspaces WHERE deleted_at_ms IS NULL
+) AS u ON u.id = t.unit_id AND u.tool = t.unit_tool
 JOIN durable_operations AS o ON o.id = t.claim_operation
 JOIN jobs AS j ON j.id = t.job_id
 JOIN namespaces AS jn ON jn.id = j.namespace_id

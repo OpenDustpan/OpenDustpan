@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +68,8 @@ func (w *jobTokenWorld) harness() jobtokentest.Harness {
 		DeleteNamespace:     w.deleteNamespace,
 		RenameNamespace:     w.renameNamespace,
 		Unit:                w.makeUnit,
+		DeleteUnit:          w.deleteUnit,
+		PurgeUnit:           w.purgeUnit,
 		Principal:           w.makePrincipal,
 		Disable:             w.disable,
 		Delete:              w.deletePrincipal,
@@ -104,8 +107,7 @@ func (w *jobTokenWorld) makeNamespace(t *testing.T, name string) namespace.Fence
 	return ns.Fence()
 }
 
-// makeUnit makes the reference of a unit. No port stores a unit reference, so
-// the world keeps it in memory.
+// makeUnit stores a unit and returns its reference with the stable ID.
 func (w *jobTokenWorld) makeUnit(t *testing.T, ns, tool, name string) identity.Object {
 	t.Helper()
 
@@ -114,7 +116,39 @@ func (w *jobTokenWorld) makeUnit(t *testing.T, ns, tool, name string) identity.O
 		t.Fatalf("unit reference: %v", err)
 	}
 
-	return ref.WithUnitID(ident.NewID("unt-"))
+	unit := ref.WithUnitID(ident.NewID("unt-"))
+	if tool == "pulumi" {
+		project, stackName, _ := strings.Cut(name, "/")
+		w.exec(t, `INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
+			VALUES ($1, $2, $3, $4, 1, 0, 0)`, ns, project, stackName, unit.UnitID())
+	} else {
+		w.exec(t, `INSERT INTO workspaces (namespace, name, id, revision, created_at_ms, updated_at_ms)
+			VALUES ($1, $2, $3, 1, 0, 0)`, ns, name, unit.UnitID())
+	}
+
+	return unit
+}
+
+// deleteUnit marks the unit as deleted without a service or handler check.
+func (w *jobTokenWorld) deleteUnit(t *testing.T, unit identity.Object) {
+	t.Helper()
+
+	if unit.Tool() == "pulumi" {
+		w.exec(t, `UPDATE stacks SET deleted_at_ms = $1 WHERE id = $2`, jobTokenMs, unit.UnitID())
+	} else {
+		w.exec(t, `UPDATE workspaces SET deleted_at_ms = $1 WHERE id = $2`, jobTokenMs, unit.UnitID())
+	}
+}
+
+// purgeUnit removes the unit row without a service or handler check.
+func (w *jobTokenWorld) purgeUnit(t *testing.T, unit identity.Object) {
+	t.Helper()
+
+	if unit.Tool() == "pulumi" {
+		w.exec(t, `DELETE FROM stacks WHERE id = $1`, unit.UnitID())
+	} else {
+		w.exec(t, `DELETE FROM workspaces WHERE id = $1`, unit.UnitID())
+	}
 }
 
 // makePrincipal makes the principal with the subject subject.
@@ -174,6 +208,8 @@ func (w *jobTokenWorld) deleteNamespace(t *testing.T, ns namespace.Name) {
 	for _, stmt := range []string{
 		`ALTER TABLE jobs DROP CONSTRAINT jobs_namespace_id_fkey`,
 		`ALTER TABLE job_tokens DROP CONSTRAINT job_tokens_namespace_id_fkey`,
+		`ALTER TABLE stacks DROP CONSTRAINT stacks_namespace_fkey`,
+		`ALTER TABLE workspaces DROP CONSTRAINT workspaces_namespace_fkey`,
 	} {
 		w.exec(t, stmt)
 	}
@@ -186,7 +222,17 @@ func (w *jobTokenWorld) deleteNamespace(t *testing.T, ns namespace.Name) {
 func (w *jobTokenWorld) renameNamespace(t *testing.T, ns namespace.Name, newName string) {
 	t.Helper()
 
+	// The fixture changes the legacy name references too. Its isolated
+	// schema has no other rows that reference the namespace name.
+	w.exec(t, `ALTER TABLE stacks DROP CONSTRAINT stacks_namespace_fkey`)
+	w.exec(t, `ALTER TABLE workspaces DROP CONSTRAINT workspaces_namespace_fkey`)
 	w.exec(t, `UPDATE namespaces SET name = $1 WHERE name = $2`, newName, ns.String())
+	w.exec(t, `UPDATE stacks SET namespace = $1 WHERE namespace = $2`, newName, ns.String())
+	w.exec(t, `UPDATE workspaces SET namespace = $1 WHERE namespace = $2`, newName, ns.String())
+	w.exec(t, `ALTER TABLE stacks ADD CONSTRAINT stacks_namespace_fkey
+		FOREIGN KEY (namespace) REFERENCES namespaces(name)`)
+	w.exec(t, `ALTER TABLE workspaces ADD CONSTRAINT workspaces_namespace_fkey
+		FOREIGN KEY (namespace) REFERENCES namespaces(name)`)
 }
 
 // rename returns the reference of unit under newName. The stable unit ID stays.
@@ -196,6 +242,13 @@ func (w *jobTokenWorld) rename(t *testing.T, unit identity.Object, newName strin
 	ref, err := identity.UnitObject(unit.Tool(), unit.Namespace(), newName)
 	if err != nil {
 		t.Fatalf("renamed unit reference: %v", err)
+	}
+
+	if unit.Tool() == "pulumi" {
+		project, name, _ := strings.Cut(newName, "/")
+		w.exec(t, `UPDATE stacks SET project = $1, name = $2 WHERE id = $3`, project, name, unit.UnitID())
+	} else {
+		w.exec(t, `UPDATE workspaces SET name = $1 WHERE id = $2`, newName, unit.UnitID())
 	}
 
 	return ref.WithUnitID(unit.UnitID())
@@ -222,10 +275,20 @@ func (w *jobTokenWorld) makeJob(
 	var location job.Location
 
 	j := job.Job{
-		ID: job.ID(ident.NewID(job.IDPrefix)),
+		ID: job.ID(ident.NewID(job.IDPrefix)), NamespaceID: "",
 		Spec: job.Spec{
-			Unit: unit, Operation: job.OperationPlan, Purpose: "", Executor: job.ExecutorRunner,
-			Location: location, Steps: nil, Pool: "", Profile: "", Edits: nil, Delivery: "", Defaulted: nil,
+			Unit:           unit,
+			Operation:      job.OperationPlan,
+			Purpose:        "",
+			Executor:       job.ExecutorRunner,
+			Location:       location,
+			LocationSource: "",
+			Steps:          nil,
+			Pool:           "",
+			Profile:        "",
+			Edits:          nil,
+			Delivery:       "",
+			Defaulted:      nil,
 		},
 		State: job.StateQueued, Wait: job.WaitNone, Reason: "", Phases: phases, Current: 0,
 		StartedBy: starter.Principal.Subject, Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil,
@@ -348,13 +411,13 @@ func (w *jobTokenWorld) writeRaw(t *testing.T, tok jobtoken.Token) {
 
 	w.exec(t, `
 		INSERT INTO job_tokens (
-			digest, namespace_id, unit_namespace, starter_id, job_id, unit_tool, unit_id, unit_name,
+			digest, namespace_id, starter_id, job_id, unit_tool, unit_id,
 			claim_operation, claim_token, expires_at_ms, created_at_ms
 		) VALUES (
-			$1, (SELECT id FROM namespaces WHERE name = $2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+			$1, (SELECT id FROM namespaces WHERE name = $2), $3, $4, $5, $6, $7, $8, $9, $10
 		)`,
-		tok.Digest.String(), tok.Namespace.String(), tok.Namespace.String(), tok.StarterID, string(tok.JobID),
-		tok.Unit.Tool(), tok.Unit.UnitID(), tok.Unit.UnitName(), string(tok.ClaimOperation), tok.ClaimToken,
+		tok.Digest.String(), tok.Namespace.String(), tok.StarterID, string(tok.JobID),
+		tok.Unit.Tool(), tok.Unit.UnitID(), string(tok.ClaimOperation), tok.ClaimToken,
 		tok.ExpiresAt.UnixMilli(), tok.CreatedAt.UnixMilli(),
 	)
 }
@@ -366,13 +429,13 @@ func (w *jobTokenWorld) writeRawInNamespace(t *testing.T, tok jobtoken.Token, ns
 
 	w.exec(t, `
 		INSERT INTO job_tokens (
-			digest, namespace_id, unit_namespace, starter_id, job_id, unit_tool, unit_id, unit_name,
+			digest, namespace_id, starter_id, job_id, unit_tool, unit_id,
 			claim_operation, claim_token, expires_at_ms, created_at_ms
 		) VALUES (
-			$1, (SELECT id FROM namespaces WHERE name = $2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+			$1, (SELECT id FROM namespaces WHERE name = $2), $3, $4, $5, $6, $7, $8, $9, $10
 		)`,
-		tok.Digest.String(), ns.String(), tok.Namespace.String(), tok.StarterID, string(tok.JobID),
-		tok.Unit.Tool(), tok.Unit.UnitID(), tok.Unit.UnitName(), string(tok.ClaimOperation), tok.ClaimToken,
+		tok.Digest.String(), ns.String(), tok.StarterID, string(tok.JobID),
+		tok.Unit.Tool(), tok.Unit.UnitID(), string(tok.ClaimOperation), tok.ClaimToken,
 		tok.ExpiresAt.UnixMilli(), tok.CreatedAt.UnixMilli(),
 	)
 }

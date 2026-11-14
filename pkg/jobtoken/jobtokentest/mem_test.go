@@ -71,28 +71,30 @@ type memWorld struct {
 	units      map[string]identity.Object
 	principals map[string]*memPrincipal
 	// bySubject maps the subject of a principal to the ID of its record.
-	bySubject map[string]string
-	jobs      map[job.ID]*job.Job
-	claims    map[durable.ID]*memClaim
-	tokens    map[jobtoken.Digest]memToken
-	audit     map[namespace.Name][]audit.Entry
+	bySubject     map[string]string
+	jobs          map[job.ID]*job.Job
+	jobNamespaces map[job.ID]string
+	claims        map[durable.ID]*memClaim
+	tokens        map[jobtoken.Digest]memToken
+	audit         map[namespace.Name][]audit.Entry
 }
 
 var _ jobtoken.Store = (*memWorld)(nil)
 
 func newMemWorld() *memWorld {
 	return &memWorld{
-		mu:         sync.Mutex{},
-		fences:     map[namespace.Name]int64{},
-		namespaces: map[string]*memNamespace{},
-		nsByName:   map[namespace.Name]string{},
-		units:      map[string]identity.Object{},
-		principals: map[string]*memPrincipal{},
-		bySubject:  map[string]string{},
-		jobs:       map[job.ID]*job.Job{},
-		claims:     map[durable.ID]*memClaim{},
-		tokens:     map[jobtoken.Digest]memToken{},
-		audit:      map[namespace.Name][]audit.Entry{},
+		mu:            sync.Mutex{},
+		fences:        map[namespace.Name]int64{},
+		namespaces:    map[string]*memNamespace{},
+		nsByName:      map[namespace.Name]string{},
+		units:         map[string]identity.Object{},
+		principals:    map[string]*memPrincipal{},
+		bySubject:     map[string]string{},
+		jobs:          map[job.ID]*job.Job{},
+		jobNamespaces: map[job.ID]string{},
+		claims:        map[durable.ID]*memClaim{},
+		tokens:        map[jobtoken.Digest]memToken{},
+		audit:         map[namespace.Name][]audit.Entry{},
 	}
 }
 
@@ -130,9 +132,13 @@ func (m *memWorld) GetByDigest(_ context.Context, d jobtoken.Digest) (jobtoken.M
 	}
 
 	tok := row.token
-	if ns.name != tok.Unit.Namespace() {
+	unit, ok := m.units[tok.Unit.UnitID()]
+	if !ok || ns.name != unit.Namespace() || unit.Tool() != tok.Unit.Tool() {
 		return mch, jobtoken.ErrNotFound
 	}
+
+	tok.Namespace = ns.name
+	tok.Unit = unit
 
 	starter, ok := m.principals[tok.StarterID]
 	if !ok || starter.deleted {
@@ -140,7 +146,7 @@ func (m *memWorld) GetByDigest(_ context.Context, d jobtoken.Digest) (jobtoken.M
 	}
 
 	j, ok := m.jobs[tok.JobID]
-	if !ok {
+	if !ok || m.jobNamespaces[tok.JobID] != row.namespaceID {
 		return mch, jobtoken.ErrNotFound
 	}
 
@@ -272,6 +278,8 @@ func (m *memWorld) harness() jobtokentest.Harness {
 		DeleteNamespace:     m.deleteNamespace,
 		RenameNamespace:     m.renameNamespace,
 		Unit:                m.makeUnit,
+		DeleteUnit:          m.deleteUnit,
+		PurgeUnit:           m.deleteUnit,
 		Principal:           m.makePrincipal,
 		Disable:             m.disable,
 		Delete:              m.deletePrincipal,
@@ -370,6 +378,20 @@ func (m *memWorld) renameNamespace(t *testing.T, ns namespace.Name, newName stri
 		delete(m.audit, ns)
 		m.audit[renamed] = entries
 	}
+
+	for id := range m.units {
+		unit := m.units[id]
+		if unit.Namespace() != ns {
+			continue
+		}
+
+		ref, refErr := identity.UnitObject(unit.Tool(), renamed, unit.UnitName())
+		if refErr != nil {
+			t.Fatal(refErr)
+		}
+
+		m.units[id] = ref.WithUnitID(id)
+	}
 }
 
 func (m *memWorld) makeUnit(t *testing.T, nsName, tool, name string) identity.Object {
@@ -398,6 +420,15 @@ func (m *memWorld) makeUnit(t *testing.T, nsName, tool, name string) identity.Ob
 	m.units[id] = unit
 
 	return unit
+}
+
+func (m *memWorld) deleteUnit(t *testing.T, unit identity.Object) {
+	t.Helper()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.units, unit.UnitID())
 }
 
 func (m *memWorld) makePrincipal(t *testing.T, subject string) jobtokentest.Starter {
@@ -475,6 +506,7 @@ func (m *memWorld) makeJob(
 	}
 
 	m.jobs[j.ID] = &j
+	m.jobNamespaces[j.ID] = m.nsByName[unit.Namespace()]
 	m.claims[op.ID] = &memClaim{state: op.State, token: op.Token, leaseEnd: op.LeaseEnd}
 
 	return j

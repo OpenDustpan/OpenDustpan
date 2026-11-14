@@ -1053,12 +1053,10 @@ CREATE TABLE job_tokens (
     digest          TEXT    NOT NULL PRIMARY KEY
         CHECK (length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*'),
     namespace_id    TEXT    NOT NULL REFERENCES namespaces (id),
-    unit_namespace  TEXT    NOT NULL CHECK (unit_namespace <> ''),
     starter_id      TEXT    NOT NULL REFERENCES principals (id) CHECK (starter_id <> ''),
     job_id          TEXT    NOT NULL CHECK (job_id <> ''),
     unit_tool       TEXT    NOT NULL CHECK (unit_tool <> ''),
     unit_id         TEXT    NOT NULL CHECK (unit_id <> ''),
-    unit_name       TEXT    NOT NULL CHECK (unit_name <> ''),
     claim_operation TEXT    NOT NULL CHECK (claim_operation <> ''),
     claim_token     INTEGER NOT NULL CHECK (claim_token > 0),
     expires_at_ms   INTEGER NOT NULL,

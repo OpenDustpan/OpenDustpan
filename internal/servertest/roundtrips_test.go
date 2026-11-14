@@ -1345,6 +1345,8 @@ func backupModel() costModel {
 // the fixed part takes 1 off for passkey_challenges, the table of the open
 // passkey ceremonies, and 1 more for job_tokens, the table of the job tokens,
 // which a restore leaves empty.
+// The job token column check uses one statement, with no change in cost
+// when the token rows keep only IDs instead of names.
 //
 // The fixed part takes 2 off for each table of Tables that the dev strip never
 // counts, group_mappings and member_removals. The run makes 5 round trips for

@@ -433,7 +433,10 @@ func testDuplicateMissingStarterRecord(t *testing.T, h Harness) {
 	dup.StarterID = ident.NewID("prn-")
 
 	if err := tryIssue(t, h, dup, fence); !errors.Is(err, jobtoken.ErrAlreadyExists) {
-		t.Fatalf("Issue of a duplicate digest with a starter that has no principal row = %v, want ErrAlreadyExists", err)
+		t.Fatalf(
+			"Issue of a duplicate digest with a starter that has no principal row = %v, want ErrAlreadyExists",
+			err,
+		)
 	}
 
 	if m := mustRead(t, h, tok.Digest); m.Token.StarterID != starter.ID {
@@ -612,8 +615,8 @@ func testRenamedUnit(t *testing.T, h Harness) {
 	}
 
 	m := mustRead(t, h, tok.Digest)
-	if m.Token.Unit.UnitID() != unit.UnitID() {
-		t.Fatalf("token unit ID = %q, want %q", m.Token.Unit.UnitID(), unit.UnitID())
+	if m.Token.Unit != renamed {
+		t.Fatalf("token unit = %+v, want %+v", m.Token.Unit, renamed)
 	}
 
 	if m.Claim.JobUnitID != unit.UnitID() {

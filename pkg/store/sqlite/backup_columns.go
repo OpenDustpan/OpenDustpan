@@ -630,8 +630,8 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 		{
 			table: backup.TableJobTokens,
 			columns: []string{
-				backupColDigest, backupColNamespaceID, "unit_namespace", "starter_id", backupColJobID, "unit_tool",
-				backupColUnitID, "unit_name", "claim_operation", "claim_token", backupColExpiresAtMs,
+				backupColDigest, backupColNamespaceID, "starter_id", backupColJobID, "unit_tool",
+				backupColUnitID, "claim_operation", "claim_token", backupColExpiresAtMs,
 				backupColCreatedAtMs,
 			},
 		},

@@ -44,16 +44,16 @@ type Store interface {
 
 	// GetByDigest returns the record whose secret has the digest d, with the
 	// claim that the store reads at the same time. The row keeps the
-	// namespace by its stable ID. The store reads the starter principal by
+	// namespace and the unit by their stable IDs. The store resolves their
+	// current names in the same read. The store reads the starter principal by
 	// Token.StarterID and sets Claim.StarterRecordID to the ID of that record.
 	// The store resolves the subject in job.StartedBy to the ID of its
 	// principal record and sets Claim.JobStarterID to that ID; a subject with
 	// no principal gives ErrNotFound. Claim.JobStarterID comes from the job,
 	// never from the token row. It returns ErrNotFound when no record has the
-	// digest, when the namespace of the row no longer exists, when the current
-	// name of that namespace differs from the namespace of the unit of the
-	// record (a rename, for example by a failover), when the starter principal
-	// is deleted, or when the job or the claim operation of the record does
+	// digest, when the namespace or the live unit of the row no longer exists,
+	// when the namespace differs from the namespace of the unit or the job,
+	// when the starter principal is deleted, or when the job or claim operation
 	// not exist. A disabled starter comes back with StarterEnabled false.
 	// Every other failure comes back wrapped; the store never returns a driver
 	// error.
