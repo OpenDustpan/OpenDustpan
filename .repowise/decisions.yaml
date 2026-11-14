@@ -4089,3 +4089,15 @@ decisions:
   accepted_artifact: "docs/adr/0366-wording-refinements-of-adr-160-and-adr-263.md"
   evidence:
   - "docs/adr/0366-wording-refinements-of-adr-160-and-adr-263.md"
+- id: "adr-0367"
+  title: "ADR 367: The agent tool catalog grows to 15 tools"
+  decision: "1. **The catalog can grow past 12 tools (owner, 2026-11-14).** The three tools of the change `give-dusty-tools-comment-propose` join the catalog without a further ADR. The catalog then has 15 tools.\n2. **The test moves to the new count (owner, 2026-11-14).** The test of ADR 122 decision 1 keeps the catalog at 8 to 15 tools. A change that makes the catalog larger than 15 tools needs a new ADR.\n3. **The size is checked again after the benchmark (owner, 2026-11-14).** After the Dusty benchmark (the change `benchmark-dusty-runs-wait-approval`), the project checks the size of the catalog again. An optimization, for example a merge or a removal of tools, is a later decision.\n4. **The contract rules stay (owner, 2026-11-14).** The other rules of ADR 122 decision 14 do not change. A tool or a required parameter is never renamed or deleted without a deprecation. A new tool, an optional parameter or a new enum value can come at any time.\n\nLater changes, from the status line of ADR 367: Decided by the project owner."
+  reason: "ADR 122 decision 14 says: \"A change that makes the catalog larger than 12 tools needs a new ADR.\" ADR 122 decision 1 says: \"A test keeps the catalog at 8 to 12 tools\". The test is `TestCatalogSize` in `internal/agent/tools_test.go`. The context of ADR 120 records the owner's range: \"About 8 to 12 task-shaped tools, not a passthrough of the raw API.\" ADR 122 has the \"Changed by\" items of ADR 128 (decision 1, the row `cancel_change`) and ADR 210 (the route paths and the `server:` action names). Neither changes decision 14."
+  scope:
+  - "internal/agent/tools_test.go"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-14"
+  accepted_artifact: "docs/adr/0367-the-agent-tool-catalog-grows-to-15-tools.md"
+  evidence:
+  - "docs/adr/0367-the-agent-tool-catalog-grows-to-15-tools.md"
