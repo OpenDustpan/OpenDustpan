@@ -660,6 +660,7 @@ func (h *Handler) serveDiscovery(
 	}
 
 	if !errors.Is(err, identity.ErrDenied) {
+		h.denyDiscovery(ctx, r, p, obj, err)
 		h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", identity.ActionNamespaceRead, err))
 
 		return
@@ -667,6 +668,7 @@ func (h *Handler) serveDiscovery(
 
 	holds, holdsErr := h.holdsGrantInNamespace(ctx, p, ns)
 	if holdsErr != nil {
+		h.denyDiscovery(ctx, r, p, obj, holdsErr)
 		h.writeError(ctx, w, holdsErr)
 
 		return

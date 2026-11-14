@@ -120,7 +120,8 @@ func TestDiscoveryIPAllowlistRefusesCollectionGrant(t *testing.T) {
 		t.Run(target, func(t *testing.T) {
 			t.Parallel()
 
-			handler := discoveryHandlerWithAudit(t, ipBlockedCollectionAuthorizer{}, newTestAudit())
+			entries := newTestAudit()
+			handler := discoveryHandlerWithAudit(t, ipBlockedCollectionAuthorizer{}, entries)
 
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
 			req.Header.Set("Authorization", "Bearer test-token")
@@ -129,6 +130,10 @@ func TestDiscoveryIPAllowlistRefusesCollectionGrant(t *testing.T) {
 
 			if rec.Code != http.StatusForbidden {
 				t.Fatalf("GET %s outside the allowlist answers %d, want %d", target, rec.Code, http.StatusForbidden)
+			}
+
+			if got := countDeniedEntries(entries); got != 1 {
+				t.Fatalf("GET %s writes %d denial entries, want 1", target, got)
 			}
 		})
 	}
@@ -174,6 +179,93 @@ func TestDiscoveryWritesNoDenialForServedGrant(t *testing.T) {
 
 	if got := countDeniedEntries(denied); got != 1 {
 		t.Fatalf("refused discovery request writes %d denial entries, want 1", got)
+	}
+}
+
+// storeDownAuthorizer fails the namespace read with a store error, not a
+// refusal.
+type storeDownAuthorizer struct{}
+
+func (storeDownAuthorizer) Authorize(
+	_ context.Context, _ identity.Principal, action identity.Action, _ identity.Object,
+) error {
+	if action == identity.ActionNamespaceRead {
+		return errStoreDown
+	}
+
+	return fmt.Errorf("%w: may not %s", identity.ErrDenied, action)
+}
+
+func (storeDownAuthorizer) ListObjects(
+	_ context.Context, _ identity.Principal, _ identity.Action,
+) (identity.Scope, error) {
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
+}
+
+// TestDiscoveryAuthorizerErrorWritesDenial proves a failed namespace read
+// writes exactly one audit denial entry and answers 500.
+func TestDiscoveryAuthorizerErrorWritesDenial(t *testing.T) {
+	t.Parallel()
+
+	entries := newTestAudit()
+	handler := discoveryHandlerWithAudit(t, storeDownAuthorizer{}, entries)
+
+	req := httptest.NewRequestWithContext(
+		t.Context(), http.MethodGet, "/api/v2/organizations/acme/entitlement-set", http.NoBody,
+	)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("entitlement set with a failed check answers %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+
+	if got := countDeniedEntries(entries); got != 1 {
+		t.Fatalf("failed discovery check writes %d denial entries, want 1", got)
+	}
+}
+
+// failingListAuthorizer denies the namespace read and fails the grant check.
+type failingListAuthorizer struct{}
+
+func (failingListAuthorizer) Authorize(
+	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
+) error {
+	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+func (failingListAuthorizer) ListObjects(
+	_ context.Context, _ identity.Principal, _ identity.Action,
+) (identity.Scope, error) {
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, errStoreDown
+}
+
+// TestDiscoveryGrantCheckErrorWritesDenial proves a failed grant check writes
+// exactly one audit denial entry and answers 500.
+func TestDiscoveryGrantCheckErrorWritesDenial(t *testing.T) {
+	t.Parallel()
+
+	entries := newTestAudit()
+	handler := discoveryHandlerWithAudit(t, failingListAuthorizer{}, entries)
+
+	req := httptest.NewRequestWithContext(
+		t.Context(), http.MethodGet, "/api/v2/organizations/acme/entitlement-set", http.NoBody,
+	)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf(
+			"entitlement set with a failed grant check answers %d, want %d",
+			rec.Code,
+			http.StatusInternalServerError,
+		)
+	}
+
+	if got := countDeniedEntries(entries); got != 1 {
+		t.Fatalf("failed grant check writes %d denial entries, want 1", got)
 	}
 }
 
