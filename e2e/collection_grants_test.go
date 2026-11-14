@@ -363,9 +363,9 @@ func scopeAdminTofu(ctx context.Context, t *testing.T, env *e2e.Env, cli e2e.Ins
 }
 
 // scopeWriterHiddenNoOracle proves the no-oracle rule for the writer on
-// collection team-a: `tofu state pull` of workspace b and of a workspace name
-// that does not exist fail the same way, and the workspace read answers both
-// names with the same 404 body.
+// collection team-a: `tofu init` of workspace b and of a workspace name that
+// does not exist fail the same way, and the workspace read answers both
+// names with the same 404 body after normalization.
 func scopeWriterHiddenNoOracle(
 	ctx context.Context,
 	t *testing.T,
@@ -377,39 +377,69 @@ func scopeWriterHiddenNoOracle(
 
 	const missing = "no-such-workspace"
 
-	scopeWriteTofu(t, env, missing)
+	rc := filepath.Join(env.Home(), "tofurc-scope-"+writer.name)
+	extra := []string{"TF_CLI_CONFIG_FILE=" + rc}
 
-	if res := tofu.run(ctx, "opentofu", missing, "init", "-input=false"); res.ExitCode != 0 {
-		t.Fatalf(
-			"tofu init of %s as writer exits %d, want 0:\n%s",
-			missing,
-			res.ExitCode,
-			res.Stderr,
-		)
+	runInit := func(name, dir string) e2e.Result {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("make %s: %v", dir, err)
+		}
+
+		config := fmt.Sprintf(`terraform {
+  cloud {
+    hostname     = %q
+    organization = %q
+    workspaces {
+      name = %q
+    }
+  }
+}
+
+output "greeting" {
+  value = "hello"
+}
+`, env.Host(), scopeNamespace, name)
+
+		env.WriteFile(t, filepath.Join(dir, "main.tf"), config)
+
+		res, err := env.RunAs(ctx, tofu.cli, dir, extra, "init", "-input=false")
+		if err != nil {
+			t.Fatalf("tofu init of %s as writer: %v", name, err)
+		}
+
+		return res
 	}
 
-	gotB := tofu.run(ctx, "opentofu", "b", "state", "pull")
-	gotMissing := tofu.run(ctx, "opentofu", missing, "state", "pull")
+	dirB := filepath.Join(env.Home(), "tofu-scope-nooracle-b")
+	dirMissing := filepath.Join(env.Home(), "tofu-scope-nooracle-missing")
+
+	gotB := runInit("b", dirB)
+	gotMissing := runInit(missing, dirMissing)
 
 	if gotB.ExitCode == 0 || gotMissing.ExitCode == 0 {
 		t.Fatalf(
-			"tofu state pull exits b=%d missing=%d, want both non-zero",
+			"tofu init exits b=%d missing=%d, want both non-zero",
 			gotB.ExitCode,
 			gotMissing.ExitCode,
 		)
 	}
 
-	normalize := func(out, name string) string {
+	// A failed init leaves no backend, so `tofu state pull` cannot run
+	// after it; the init runs are the comparison.
+	normalize := func(out, dir, name string) string {
+		out = strings.ReplaceAll(out, dir, "DIR")
 		out = strings.ReplaceAll(out, "workspace "+name, "workspace WORKSPACE")
-		return strings.ReplaceAll(out, `"`+name+`"`, `"WORKSPACE"`)
+		out = strings.ReplaceAll(out, `"`+name+`"`, `"WORKSPACE"`)
+		out = strings.ReplaceAll(out, "/"+name, "/WORKSPACE")
+		return strings.ReplaceAll(out, name, "WORKSPACE")
 	}
 
-	outB := normalize(gotB.Stdout+"\n"+gotB.Stderr, "b")
-	outMissing := normalize(gotMissing.Stdout+"\n"+gotMissing.Stderr, missing)
+	outB := normalize(gotB.Stdout+"\n"+gotB.Stderr, dirB, "b")
+	outMissing := normalize(gotMissing.Stdout+"\n"+gotMissing.Stderr, dirMissing, missing)
 
 	if outB != outMissing {
 		t.Fatalf(
-			"tofu state pull of team-b as writer of team-a differs from a missing workspace:\n--- b ---\n%s\n--- missing ---\n%s",
+			"tofu init of team-b as writer of team-a differs from a missing workspace:\n--- b ---\n%s\n--- missing ---\n%s",
 			outB,
 			outMissing,
 		)
@@ -441,7 +471,14 @@ func scopeWriterHiddenNoOracle(
 		)
 	}
 
-	if bodyB != bodyMissing {
+	normalizeBody := func(body, name string) string {
+		return strings.ReplaceAll(body, name, "WORKSPACE")
+	}
+
+	normB := normalizeBody(bodyB, "b")
+	normMissing := normalizeBody(bodyMissing, missing)
+
+	if normB != normMissing {
 		t.Fatalf(
 			"GET workspace b as writer differs from a missing workspace:\n--- b (%d) ---\n%s\n--- missing (%d) ---\n%s",
 			statusB,
