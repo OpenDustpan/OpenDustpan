@@ -4,15 +4,15 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing claimer tests: purpose match, kind match, purpose change during the claim. Check: `go test ./pkg/runner/ -run TestSweepClaimer -count=1` fails on main
-- [ ] 1.2 Write failing route tests: report auth, bounds, malformed lines, header checks, cut stream, second upload, concurrent finish, finish cases. Check: `go test ./internal/api/runnerapi/ -run TestSweepReport -count=1` fails on main
-- [ ] 1.3 Write failing pool service tests for the purpose refusal and the purpose change. Check: `go test ./internal/runnersvc/ -run TestSweepPurposeInstallationOnly -count=1` fails on main
+- [ ] 1.1 Write failing claimer tests in the NEW file pkg/runner/sweep_claimer_test.go: purpose match, kind match, purpose change during the claim. Check: `go test ./pkg/runner/ -run TestSweepClaimer -count=1` fails on main
+- [ ] 1.2 Write failing route tests in the NEW file internal/api/runnerapi/sweep_report_test.go: report auth, bounds, malformed lines, header checks, cut stream, second upload, concurrent finish, finish cases. Check: `go test ./internal/api/runnerapi/ -run TestSweepReport -count=1` fails on main
+- [ ] 1.3 Write failing pool service tests in the NEW file internal/runnersvc/sweep_purpose_test.go for the purpose refusal and the purpose change. Check: `go test ./internal/runnersvc/ -run TestSweepPurposeInstallationOnly -count=1` fails on main
 
 ## 2. Build
 
-- [ ] 2.1 Implement the sweep claimer and wire the poll by pool purpose. Check: `go test ./pkg/runner/ ./internal/api/runnerapi/ -count=1` passes
-- [ ] 2.2 Add the report and finish routes with the streaming bound and the encrypted blob write. Check: `go test ./internal/api/runnerapi/ -run TestSweepReport -count=1` passes
-- [ ] 2.3 Refuse a namespace pool with the sweep purpose in the pool service. Check: `go test ./internal/runnersvc/ -run TestSweepPurposeInstallationOnly -count=1` passes
+- [ ] 2.1 Implement the sweep claimer in the NEW file pkg/runner/sweep_claimer.go (NEW names: NewSweepClaimer, sweepClaimer) and wire the poll by pool purpose in the adapter file internal/api/runnerapi/protocol.go. Check: `go test ./pkg/runner/ ./internal/api/runnerapi/ -count=1` passes
+- [ ] 2.2 Add the report and finish routes with the streaming bound and the encrypted blob write. Declare the routes in internal/api/runnerapi/routes.go and write the handlers in the NEW adapter file internal/api/runnerapi/sweep_report.go. Check: `go test ./internal/api/runnerapi/ -run TestSweepReport -count=1` passes
+- [ ] 2.3 Refuse a namespace pool with the sweep purpose in the pool service in the NEW file internal/runnersvc/service.go (NEW name: the pool service). Check: `go test ./internal/runnersvc/ -run TestSweepPurposeInstallationOnly -count=1` passes
 - [ ] 2.4 Document the sweep entries in docs/reference/runner-api.md. Check: `make docs-lint` passes
 
 ## 3. Side effects (computed from main)

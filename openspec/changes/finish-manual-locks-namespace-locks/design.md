@@ -4,7 +4,7 @@ The shared core pkg/manuallock holds the check. Tool adapters, job dispatch and 
 
 ## Decisions
 
-1. **One coverage check.** One Covered call checks unit, collection and namespace rows, with stable IDs.
+1. **One coverage check.** One Covering call checks unit, collection and namespace rows, with stable IDs.
 2. **Dispatch check at claim.** Dispatch reads the lock in the transaction that claims the phase.
 
 ## Structure
@@ -25,7 +25,7 @@ sequenceDiagram
 participant C as Client
 participant D as Dispatch
 C->>D: Lock namespace
-D-->>C: Covered unit stays queued
+D-->>C: Covering: the unit stays queued
 ```
 
 Modules that the change touches, and their imports on main:
@@ -79,7 +79,7 @@ svc-->store
 
 - Invariant: One active lock per object.
 - Invariant: Reason is 1 to 500 characters.
-- `Covered`: pre: Caller passes the namespace ID and unit reference.. Post: Answers holder and reason when any level matches..
+- `Covering`: pre: Caller passes the namespace ID and unit reference.. Post: Answers holder and reason when any level matches..
 
 ## Failure modes
 

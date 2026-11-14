@@ -4,15 +4,15 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing queue tests for due warning, late-created token, stale token skip and missing address. Check: `go test ./pkg/accesstoken -run TestQueueWarningAtWarningTime -count=1` is NEW and fails on main.
-- [ ] 1.2 Add failing email content test for owner address, token name, expiry date and no secret. Check: `go test ./pkg/notify -run TestWarningEmailContent -count=1` is NEW and fails on main.
-- [ ] 1.3 Add failing TLS, opt-in, certificate and input tests for the SMTP sender. Check: `go test ./internal/smtpsvc -run TestPlainRefused -count=1` is NEW and fails on main.
+- [ ] 1.1 Add failing queue tests for due warning, late-created token, stale token skip and missing address in `pkg/accesstoken/accesstoken_test.go`. Check: `go test ./pkg/accesstoken -run TestQueueWarningAtWarningTime -count=1` is NEW and fails on main.
+- [ ] 1.2 Add failing email content test for owner address, token name, expiry date and no secret in NEW file `pkg/notify/warning_email_test.go`. Check: `go test ./pkg/notify -run TestWarningEmailContent -count=1` is NEW and fails on main.
+- [ ] 1.3 Add failing TLS, opt-in, certificate and input tests for the SMTP sender in NEW file `internal/smtpsvc/smtp_test.go`. Check: `go test ./internal/smtpsvc -run TestPlainRefused -count=1` is NEW and fails on main.
 
 ## 2. Build
 
-- [ ] 2.1 Build durable warning queue with states queued, sending, retry, sent and failed and one retry. Check: `go test ./pkg/accesstoken -run TestWarningQueue -count=1` is NEW and passes.
-- [ ] 2.2 Wire SMTP sender to resolved installation settings with TLS rule, fixed poll, lease and backoff. Check: `go test ./internal/smtpsvc -run TestPlainRefused -count=1` is NEW and passes.
-- [ ] 2.3 Write audit entry for each delivered, skipped or failed warning. Check: `go test ./pkg/accesstoken -run TestWarningAudit -count=1` is NEW and passes.
+- [ ] 2.1 Build durable warning queue with states queued, sending, retry, sent and failed and one retry in NEW file `pkg/accesstoken/warning_queue.go`. Check: `go test ./pkg/accesstoken -run TestWarningQueue -count=1` is NEW and passes.
+- [ ] 2.2 Wire SMTP sender to resolved installation settings with TLS rule, fixed poll, lease and backoff in NEW file `internal/smtpsvc/smtp.go`. Check: `go test ./internal/smtpsvc -run TestPlainRefused -count=1` is NEW and passes.
+- [ ] 2.3 Write audit entry for each delivered, skipped or failed warning in NEW file `pkg/accesstoken/warning_audit.go`. Check: `go test ./pkg/accesstoken -run TestWarningAudit -count=1` is NEW and passes.
 
 ## 3. Side effects (computed from main)
 

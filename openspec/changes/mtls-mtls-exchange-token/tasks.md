@@ -4,12 +4,12 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing service tests for the verify scenarios (NEW test TestMtlsExchangeVerify). Check: NEW test: `go test ./pkg/trust/ -run TestMtlsExchangeVerify` fails on main
-- [ ] 1.2 Write failing issue tests (NEW test TestMtlsTrustTokenIssue): the token has the kind `mtls-exchange`, the token list and the issue audit entry show the kind, and the credential is `trust-token`. Check: NEW test: `go test ./pkg/accesstoken/ -run TestMtlsTrustTokenIssue` fails on main
+- [ ] 1.1 Write failing service tests for the verify scenarios in NEW file pkg/trust/mtls_exchange_test.go (NEW test TestMtlsExchangeVerify). Check: NEW test: `go test ./pkg/trust/ -run TestMtlsExchangeVerify` fails on main
+- [ ] 1.2 Write failing issue tests in NEW file pkg/accesstoken/mtls_trust_token_test.go (NEW test TestMtlsTrustTokenIssue): the token has the kind `mtls-exchange`, the token list and the issue audit entry show the kind, and the credential is `trust-token`. Check: NEW test: `go test ./pkg/accesstoken/ -run TestMtlsTrustTokenIssue` fails on main
 
 ## 2. Build
 
-- [ ] 2.1 Build the verified-chain value, match and one-transaction issue. Check: `go test -race ./pkg/trust/... ./pkg/accesstoken/...`
+- [ ] 2.1 Build the verified-chain value, match and one-transaction issue in NEW file pkg/trust/mtls_exchange.go, and add NEW constant KindMTLSExchange in pkg/accesstoken. Check: `go test -race ./pkg/trust/... ./pkg/accesstoken/...`
 
 ## 3. Definition of done
 
