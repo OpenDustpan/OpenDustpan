@@ -5,7 +5,7 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Write failing tests for GET on both scopes and a namespace refusal in the NEW file internal/api/server/settings_get_test.go. Check: TestSettingsGetEffectiveSourceLockedRevision
-- [ ] 1.2 Write failing tests for PATCH refusals, atomic apply, stale revision, masked audit and audit failure in the NEW file internal/api/server/settings_patch_test.go. Check: TestSettingsPatchRefusals and TestSettingsPatchAtomic
+- [ ] 1.2 Write failing tests for PATCH refusals, atomic apply, stale revision, masked audit and audit failure in the NEW file internal/api/server/settings_patch_test.go; TestSettingsPatchRefusals exists on main in internal/api/server/settings_test.go, so extend it there. Check: TestSettingsPatchRefusals and TestSettingsPatchAtomic
 - [ ] 1.3 Write failing tests for the fresh step, the token refusal and idempotent replay in the NEW file internal/api/server/settings_fresh_test.go. Check: TestSettingsPatchFreshStep and TestSettingsPatchIdempotency
 - [ ] 1.4 Write failing tests for the session limit, the create audit entry and the host reset in the NEW file pkg/tempadmin/session_limit_test.go. Check: TestTempAdminSessionLimit, TestTempAdminCreateAuditNamesLimit and TestHostResetSessionLimit
 - [ ] 1.5 Add the NEW catalog code settings.revision-stale to internal/errcode/catalog_settings.go, and make the settings routes answer a stale revision with 412 and this code in place of request.precondition-failed (internal/api/server/settings.go, the If-Match check of the patch). Write the NEW test TestPatchStaleRevisionAnswersRevisionStale in the NEW file internal/api/server/settings_stale_test.go. Check: the NEW test TestPatchStaleRevisionAnswersRevisionStale fails on main.
