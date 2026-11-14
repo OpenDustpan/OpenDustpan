@@ -178,15 +178,28 @@ func ParseFilter(s string) (Filter, error) {
 	}
 }
 
-// DaysLeft returns the whole days until the expiry of t at the time now,
-// or false when t is not active. The server answers it, so a client never
-// needs its own clock to warn.
+// DaysUntil answers the number of started days from now until expiresAt:
+// the remaining days rounded up, at least 1 while the expiry is ahead and
+// 0 once it passed. The CLI warning calls it, so the server and the CLI
+// cannot disagree about the count.
+func DaysUntil(expiresAt, now time.Time) int64 {
+	d := expiresAt.Sub(now)
+	if d <= 0 {
+		return 0
+	}
+
+	return int64((d + day - 1) / day)
+}
+
+// DaysLeft returns the started days left until the expiry of t at the time
+// now, at least 1 for an active token, or false when t is not active. The
+// server answers it, so a client never needs its own clock to warn.
 func (t Token) DaysLeft(now time.Time) (int64, bool) {
 	if t.StatusAt(now) != StatusActive {
 		return 0, false
 	}
 
-	return int64(t.ExpiresAt.Sub(now) / day), true
+	return DaysUntil(t.ExpiresAt, now), true
 }
 
 // Owner is the principal of a token, as the Authenticator answers it.

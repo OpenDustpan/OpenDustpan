@@ -2005,3 +2005,79 @@ func TestNoPersonalTokenOfAnotherPerson(t *testing.T) {
 		t.Fatalf("administrator revoke of a personal token: %v", err)
 	}
 }
+
+// TestDaysLeft proves the count of started days left of a 90-day token at
+// each step of its life: 90 through the whole first day, 89 from the start
+// of the second day, 1 in the last millisecond, and no count once the token
+// is not active.
+func TestDaysLeft(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	tok, _ := f.create(t, f.service, "deploy")
+	start := f.clock.Now()
+	expires := tok.ExpiresAt
+
+	revoked := tok
+	revoked.RevokedAt = start
+	disabled := tok
+	disabled.DisabledAt = start
+
+	tests := []struct {
+		name   string
+		token  accesstoken.Token
+		now    time.Time
+		days   int64
+		active bool
+	}{
+		{"creation_plus_1ms_answers_90", tok, start.Add(time.Millisecond), 90, true},
+		{"creation_plus_one_day_minus_1ms_answers_90", tok, start.Add(24*time.Hour - time.Millisecond), 90, true},
+		{"creation_plus_one_day_answers_89", tok, start.Add(24 * time.Hour), 89, true},
+		{"expiry_minus_1ms_answers_1", tok, expires.Add(-time.Millisecond), 1, true},
+		{"at_expiry_is_not_active", tok, expires, 0, false},
+		{"revoked_is_not_active", revoked, start, 0, false},
+		{"disabled_is_not_active", disabled, start, 0, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			days, active := tc.token.DaysLeft(tc.now)
+			if active != tc.active || days != tc.days {
+				t.Fatalf("days left = %d, %v; want %d, %v", days, active, tc.days, tc.active)
+			}
+		})
+	}
+}
+
+// TestDaysUntil proves that a partial day rounds up: one day and 1 ms is 2
+// started days, and anything below one day is 1 while the expiry is ahead.
+func TestDaysUntil(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name      string
+		expiresAt time.Time
+		days      int64
+	}{
+		{"one_day_and_1ms_answers_2", now.Add(24*time.Hour + time.Millisecond), 2},
+		{"23h59m59s_answers_1", now.Add(23*time.Hour + 59*time.Minute + 59*time.Second), 1},
+		{"one_day_answers_1", now.Add(24 * time.Hour), 1},
+		{"1ms_answers_1", now.Add(time.Millisecond), 1},
+		{"at_expiry_answers_0", now, 0},
+		{"past_expiry_answers_0", now.Add(-time.Millisecond), 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if days := accesstoken.DaysUntil(tc.expiresAt, now); days != tc.days {
+				t.Fatalf("days until = %d, want %d", days, tc.days)
+			}
+		})
+	}
+}
