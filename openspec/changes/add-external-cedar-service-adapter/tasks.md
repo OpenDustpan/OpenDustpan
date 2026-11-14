@@ -4,8 +4,8 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write the conformance run of the adapter with a test service Check: gatetest.RunEngine fails on main
-- [ ] 1.2 Write hostile transport and protocol tests Check: go test ./pkg/gate/... fails on main
+- [ ] 1.1 Write the conformance run of the adapter with a test service in pkg/gate/external_engine_conformance_test.go (NEW). It calls gatetest.RunEngine (pkg/gate/gatetest/run_engine.go:29) with a factory for NewExternalEngine (NEW). Check: gatetest.RunEngine fails on main
+- [ ] 1.2 Write hostile transport and protocol tests in pkg/gate/external_engine_hostile_test.go (NEW). Check: go test ./pkg/gate/... fails on main
 
 ## 2. Definition of done
 
