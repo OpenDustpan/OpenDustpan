@@ -1367,6 +1367,10 @@ func backupModel() costModel {
 // strip counts no rows in it, and the other statements for it are the staging
 // count and the read of the backup.
 //
+// The fixed part takes 8 off for the 4 tables of the quota counter
+// (quota_keys, quota_reservations, quota_reservation_keys and quota_requests).
+// The dev strip counts no rows in them either, so each costs 5 round trips, as
+// group_mappings does.
 // The fixed part takes 2 off for the 2 tables of the sweeps (unmanaged_targets
 // and unmanaged_scans). The dev strip counts no rows in them either, so each
 // costs 5 round trips, 4 fewer in all. The check of the staged rows reads each
@@ -1408,7 +1412,7 @@ func backupModel() costModel {
 // model gives a table.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 339 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+		fixed: 331 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips,
 		perTable:     7,
