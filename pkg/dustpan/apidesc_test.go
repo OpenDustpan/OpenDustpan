@@ -47,7 +47,7 @@ const openAPIPath = "/api/dustpan/v1/openapi.json"
 func publicOperations() []string {
 	return []string{
 		"beginPasskeySignIn", "exchangeWorkloadToken", "finishPasskeySignIn", "getApiDescription", "getCapabilities",
-		"redeemLocalUserCode", "signInWithPassword",
+		"redeemLocalUserCode", "signInWithPassword", "signInWithProviderPassword",
 	}
 }
 

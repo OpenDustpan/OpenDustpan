@@ -120,6 +120,7 @@ func newRestoreFixtureWorkers(
 		Backups:         backups,
 		Maintenance:     storetest.StateMaintenance{State: stores.registry, Hold: false},
 		Blobs:           stores.live,
+		Leases:          stores.registry,
 		Target:          target,
 		Key:             nil,
 		Installation:    "test",
@@ -148,6 +149,7 @@ func newRestoreFixtureWorkers(
 	aud := newTestAudit()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -620,6 +622,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	}
 
 	denied, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -839,6 +842,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -959,6 +963,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 		Backups:         backups,
 		Maintenance:     storetest.StateMaintenance{State: stores.registry, Hold: false},
 		Blobs:           stores.live,
+		Leases:          stores.registry,
 		Target:          stores.target,
 		Key:             nil,
 		Installation:    "test",
@@ -985,6 +990,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -1096,6 +1102,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 		Backups:         backups,
 		Maintenance:     storetest.StateMaintenance{State: stores.registry, Hold: false},
 		Blobs:           stores.live,
+		Leases:          stores.registry,
 		Target:          stores.target,
 		Key:             nil,
 		Installation:    "test",
@@ -1122,6 +1129,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -1216,12 +1224,13 @@ func checkAuditEntryNamesAccessMode(t *testing.T, stores backupStores, id, want 
 			continue
 		}
 
-		if !strings.Contains(entry.Object, id) || !strings.Contains(entry.Object, want) {
-			t.Fatalf("restore audit object = %q, want restore %s with %q",
-				entry.Object, id, want)
+		if !strings.Contains(entry.Object, id) {
+			continue
 		}
 
-		return
+		if strings.Contains(entry.Object, want) {
+			return
+		}
 	}
 
 	t.Fatalf("no audit entry names restore %s with %q", id, want)

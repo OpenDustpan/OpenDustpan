@@ -836,7 +836,7 @@ func (f fixture) redeliverAndStop(t *testing.T, ns namespace.Namespace, d notify
 		Action: "delivery:redeliver", Object: "acme", Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
 		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 		RequestID: "", ObjectID: d.ID, PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "",
-		PrincipalKind: "", JobID: "",
+		PrincipalKind: "", JobID: "", Origin: nil,
 	}
 
 	if err := store.Redeliver(t.Context(), d.ID, at, ns.Fence(), entry); err != nil {

@@ -55,6 +55,7 @@ func (r *devRun) seedDemo(ctx context.Context, in runInputs) error {
 		TempAdmins: nil,
 		Store:      st,
 		Guard:      principal.AdminOnlyGuard{},
+		GroupReach: nil,
 		Namespaces: nil,
 		Tokens:     nil,
 		Now:        nil,

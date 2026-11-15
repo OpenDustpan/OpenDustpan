@@ -183,7 +183,7 @@ func (h *Handler) devSignInRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodPost, Path: devCodePath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.devCodeSignIn,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.devCodeSignIn,
 		},
 	}
 }

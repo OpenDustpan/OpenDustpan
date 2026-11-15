@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -307,7 +309,28 @@ func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, names swapNames) erro
 		return fmt.Errorf("drop staging control schema: %w", err)
 	}
 
-	return fenceRestored(ctx, tx, live)
+	if err := fenceRestored(ctx, tx, live); err != nil {
+		return err
+	}
+
+	return deriveUnitState(ctx, tx, live, s.logger)
+}
+
+// deriveUnitState records the state version of every unit of the restored
+// schema live in unit_state, in tx: a restore derives the version from the
+// restored rows and brings no stored version back. A workspace takes the state
+// version that its row makes current, a stack the digest of its last
+// checkpoint.
+//
+// A restored version is not final: it predates the delivery of any waiting
+// job, so the final fields stay empty and a write-back job that waits for a
+// state version keeps waiting. The write is one statement for the workspaces
+// and one for the stacks, through the one writer of unit_state.
+func deriveUnitState(ctx context.Context, tx pgx.Tx, live string, logger *slog.Logger) error {
+	return publishUnitState(ctx, db.New(tx), unitStateWrite{
+		kind: unitStateWriteRestore, nsName: "", unitID: "", version: "", final: false,
+		origin: identity.StateOrigin{Job: "", Commit: ""}, atMs: 0, exec: tx, schema: live, logger: logger,
+	})
 }
 
 // fenceRestored increments the failover version of every namespace of the

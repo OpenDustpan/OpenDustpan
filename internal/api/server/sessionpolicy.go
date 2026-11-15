@@ -73,14 +73,28 @@ func (h *Handler) sessionPolicyRoutes() []Route {
 
 	return []Route{
 		{
-			Method: http.MethodGet, Path: sessionPolicyPath, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerReadTokens}, Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.getSessionPolicy,
+			Method: http.MethodGet,
+			Path:   sessionPolicyPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionServerReadTokens,
+			},
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.getSessionPolicy,
 		},
 		{
-			Method: http.MethodPatch, Path: sessionPolicyPath, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerManageSignIn}, Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.changeSessionPolicy,
+			Method: http.MethodPatch,
+			Path:   sessionPolicyPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionServerManageSignIn,
+			},
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.changeSessionPolicy,
 		},
 	}
 }

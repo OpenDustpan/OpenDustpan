@@ -222,6 +222,7 @@ func TestRunnersOpenSessionRace(t *testing.T) {
 			ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
 			Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "",
 			Hash: "", Sequence: 0, FenceVersion: fence.FailoverVersion, PrincipalKind: "", JobID: "", Reason: "",
+			Origin: nil,
 		}}
 	}
 

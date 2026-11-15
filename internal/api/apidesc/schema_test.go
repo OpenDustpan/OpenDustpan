@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -849,6 +850,147 @@ func TestBuildRefusesFormsOutsideTheSubset(t *testing.T) {
 
 			if _, err := schemasOf(t, tt.body); !errors.Is(err, apidesc.ErrInvalidBody) {
 				t.Fatalf("Build() = %v, want ErrInvalidBody", err)
+			}
+		})
+	}
+}
+
+// TestBuildChecksDeclaredTypeAndRequired proves that the declared check reads
+// the values of type and required: a type name of the subset, a list of them
+// and a list of strings pass at the top and at each depth, and any other value
+// is refused.
+func TestBuildChecksDeclaredTypeAndRequired(t *testing.T) {
+	t.Parallel()
+
+	declare := func(schema map[string]any) apidesc.Body {
+		return apidesc.Typed[holdsChoice]("HoldsChoice", apidesc.Declare[choice](schema))
+	}
+	property := func(child map[string]any) map[string]any {
+		return map[string]any{"type": "object", "properties": map[string]any{"name": child}}
+	}
+
+	tests := []struct {
+		name    string
+		body    apidesc.Body
+		wantErr bool
+	}{
+		{"an object type", declare(map[string]any{"type": "object"}), false},
+		{"an array type", declare(map[string]any{"type": "array", "items": map[string]any{"type": "string"}}), false},
+		{"a string type", declare(map[string]any{"type": "string"}), false},
+		{"an integer type", declare(map[string]any{"type": "integer"}), false},
+		{"a number type", declare(map[string]any{"type": "number"}), false},
+		{"a boolean type", declare(map[string]any{"type": "boolean"}), false},
+		{"a null type", declare(map[string]any{"type": "null"}), false},
+		{"a type list", declare(map[string]any{"type": []any{"string", "null"}}), false},
+		{
+			"a required list",
+			declare(map[string]any{
+				"type": "object", "required": []any{"name"},
+				"properties": map[string]any{"name": map[string]any{"type": "string"}},
+			}),
+			false,
+		},
+		{
+			"a valid schema in a property",
+			declare(property(map[string]any{
+				"type": "object", "required": []any{"inner"},
+				"properties": map[string]any{"inner": map[string]any{"type": "integer"}},
+			})),
+			false,
+		},
+		{
+			"a valid type in the values of a map",
+			declare(map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "boolean"}}),
+			false,
+		},
+		{"a misspelled type", declare(map[string]any{"type": "strnig"}), true},
+		{"a type that is not a string", declare(map[string]any{"type": 5}), true},
+		{"an empty type list", declare(map[string]any{"type": []any{}}), true},
+		{
+			"a type list with a value that is not a string",
+			declare(map[string]any{"type": []any{"string", 3}}),
+			true,
+		},
+		{
+			"a type list with a name that is not in the subset",
+			declare(map[string]any{"type": []any{"string", "text"}}),
+			true,
+		},
+		{"a misspelled type in a property", declare(property(map[string]any{"type": "strnig"})), true},
+		{"a type that is not a string in a property", declare(property(map[string]any{"type": 5})), true},
+		{
+			"a misspelled type in the items",
+			declare(map[string]any{"type": "array", "items": map[string]any{"type": "strnig"}}),
+			true,
+		},
+		{
+			"a misspelled type in the values of a map",
+			declare(map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "strnig"}}),
+			true,
+		},
+		{"a required that is not a list", declare(map[string]any{"required": "name"}), true},
+		{"a required that is an object", declare(map[string]any{"required": map[string]any{"name": true}}), true},
+		{"a required with a value that is not a string", declare(map[string]any{"required": []any{"name", 3}}), true},
+		{"a required that is not a list in a property", declare(property(map[string]any{"required": "name"})), true},
+		{
+			"a required with a value that is not a string in a property",
+			declare(property(map[string]any{"required": []any{"name", 3}})),
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := schemasOf(t, tt.body)
+
+			if tt.wantErr {
+				if !errors.Is(err, apidesc.ErrInvalidBody) {
+					t.Fatalf("Build() = %v, want ErrInvalidBody", err)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Build() = %v, want no error", err)
+			}
+		})
+	}
+}
+
+// TestBuildNamesTheBadTypeAndRequired proves that the refusal of a declared
+// type or required value names the member and the value.
+func TestBuildNamesTheBadTypeAndRequired(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body apidesc.Body
+		want string
+	}{
+		{
+			"a misspelled type",
+			apidesc.Typed[holdsChoice]("HoldsChoice", apidesc.Declare[choice](map[string]any{"type": "strnig"})),
+			`member "type" is the type name "strnig"`,
+		},
+		{
+			"a required with a value that is not a string",
+			apidesc.Typed[holdsChoice]("HoldsChoice", apidesc.Declare[choice](
+				map[string]any{"required": []any{"name", 3}},
+			)),
+			`member "required" holds the value 3`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := schemasOf(t, tt.body)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Build() = %v, want an error that holds %q", err, tt.want)
 			}
 		})
 	}

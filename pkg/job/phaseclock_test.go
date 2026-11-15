@@ -41,6 +41,7 @@ func (s getStore) Get(_ context.Context, id job.ID) (job.Job, error) {
 func phaseJob(unit identity.Object, state job.State, cur int, started time.Time) job.Job {
 	j := jobIn(state, nil)
 	j.ID = "job-1"
+	j.NamespaceID = "ns-1"
 	j.Spec.Unit = unit
 	j.Current = cur
 	j.Phases = []job.Phase{phaseOf(job.PhaseApply, 1, nil)}
@@ -58,32 +59,134 @@ func TestPhaseClock(t *testing.T) {
 		t.Fatalf("UnitObject: %v", err)
 	}
 
+	unit = unit.WithUnitID("unt-1")
+
 	other, err := identity.UnitObject("opentofu", "acme", "dns")
 	if err != nil {
 		t.Fatalf("UnitObject: %v", err)
 	}
 
-	ref := collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "network"}
-	one := func(j job.Job) map[job.ID]job.Job { return map[job.ID]job.Job{"job-1": j} }
+	other = other.WithUnitID("unt-2")
 
-	// Each case: name, the jobs of the store, the error of the store, the
-	// expected error (nil for an answer), and the expected start.
+	sameName, err := identity.UnitObject("opentofu", "acme", "network")
+	if err != nil {
+		t.Fatalf("UnitObject: %v", err)
+	}
+
+	sameName = sameName.WithUnitID("unt-2")
+
+	ref := manuallock.Unit{
+		Ref: collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "network"}, NamespaceID: "ns-1",
+		UnitID: "unt-1",
+	}
+	noNamespace := manuallock.Unit{Ref: ref.Ref, NamespaceID: "", UnitID: ref.UnitID}
+	newUnit := manuallock.Unit{Ref: ref.Ref, NamespaceID: ref.NamespaceID, UnitID: ""}
+	otherName := manuallock.Unit{
+		Ref:         collection.UnitRef{Namespace: "acme", Tool: "opentofu", Name: "dns"},
+		NamespaceID: ref.NamespaceID,
+		UnitID:      "",
+	}
+	otherNamespace := manuallock.Unit{Ref: ref.Ref, NamespaceID: "ns-2", UnitID: ""}
+	noNamespaceNewUnit := manuallock.Unit{Ref: ref.Ref, NamespaceID: "", UnitID: ""}
+
+	one := func(j job.Job) map[job.ID]job.Job { return map[job.ID]job.Job{"job-1": j} }
+	noNamespaceJob := func() map[job.ID]job.Job {
+		j := phaseJob(unit, job.StateRunning, 0, started)
+		j.NamespaceID = ""
+
+		return one(j)
+	}
+
+	// Each case: name, the job that the store holds, the error of the store, the
+	// unit of the request, the expected error (nil for an answer), and the
+	// expected start.
 	cases := []struct {
 		name    string
 		jobs    map[job.ID]job.Job
 		storeEr error
+		asked   manuallock.Unit
 		want    error
 		wantAt  time.Time
 	}{
-		{"running phase", one(phaseJob(unit, job.StateRunning, 0, started)), nil, nil, started},
-		{"dispatched phase", one(phaseJob(unit, job.StateDispatched, 0, started)), nil, nil, started},
-		{"canceling phase", one(phaseJob(unit, job.StateCanceling, 0, started)), nil, nil, started},
-		{"queued job", one(phaseJob(unit, job.StateQueued, 0, started)), nil, manuallock.ErrNoPhase, time.Time{}},
-		{"finished job", one(phaseJob(unit, job.StateSucceeded, 0, started)), nil, manuallock.ErrNoPhase, time.Time{}},
+		{"running phase", one(phaseJob(unit, job.StateRunning, 0, started)), nil, ref, nil, started},
+		{"dispatched phase", one(phaseJob(unit, job.StateDispatched, 0, started)), nil, ref, nil, started},
+		{"canceling phase", one(phaseJob(unit, job.StateCanceling, 0, started)), nil, ref, nil, started},
+		{
+			"queued job", one(phaseJob(unit, job.StateQueued, 0, started)), nil, ref,
+			manuallock.ErrNoPhase,
+			time.Time{},
+		},
+		{
+			"finished job", one(phaseJob(unit, job.StateSucceeded, 0, started)), nil, ref,
+			manuallock.ErrNoPhase,
+			time.Time{},
+		},
 		{
 			"job of another unit",
 			one(phaseJob(other, job.StateRunning, 0, started)),
 			nil,
+			ref,
+			manuallock.ErrNoPhase,
+			time.Time{},
+		},
+		{
+			"another unit with the same name",
+			one(phaseJob(sameName, job.StateRunning, 0, started)),
+			nil,
+			ref,
+			manuallock.ErrNoPhase,
+			time.Time{},
+		},
+		{
+			"job with no namespace ID",
+			noNamespaceJob(),
+			nil,
+			ref,
+			manuallock.ErrNoPhase,
+			time.Time{},
+		},
+		{
+			"job with no unit ID",
+			one(phaseJob(unit.WithUnitID(""), job.StateRunning, 0, started)),
+			nil,
+			ref,
+			manuallock.ErrNoPhase,
+			time.Time{},
+		},
+		{
+			"unit with no namespace ID", one(phaseJob(unit, job.StateRunning, 0, started)), nil, noNamespace,
+			manuallock.ErrNoPhase,
+			time.Time{},
+		},
+		{
+			"new unit with the same name",
+			one(phaseJob(unit, job.StateRunning, 0, started)),
+			nil,
+			newUnit,
+			nil,
+			started,
+		},
+		{
+			"new unit with another name",
+			one(phaseJob(unit, job.StateRunning, 0, started)),
+			nil,
+			otherName,
+			manuallock.ErrNoPhase,
+			time.Time{},
+		},
+		{
+			"new unit in another namespace ID",
+			one(phaseJob(unit, job.StateRunning, 0, started)),
+			nil,
+			otherNamespace,
+			manuallock.ErrNoPhase,
+			time.Time{},
+		},
+		{
+			"new unit with no namespace ID",
+			one(phaseJob(unit, job.StateRunning, 0, started)),
+			nil,
+			noNamespaceNewUnit,
 			manuallock.ErrNoPhase,
 			time.Time{},
 		},
@@ -91,11 +194,12 @@ func TestPhaseClock(t *testing.T) {
 			"phase out of range",
 			one(phaseJob(unit, job.StateRunning, 3, started)),
 			nil,
+			ref,
 			manuallock.ErrNoPhase,
 			time.Time{},
 		},
-		{"unknown job", map[job.ID]job.Job{}, nil, manuallock.ErrNoPhase, time.Time{}},
-		{"store fails", nil, errStoreDown, errStoreDown, time.Time{}},
+		{"unknown job", map[job.ID]job.Job{}, nil, ref, manuallock.ErrNoPhase, time.Time{}},
+		{"store fails", nil, errStoreDown, ref, errStoreDown, time.Time{}},
 	}
 
 	for _, tc := range cases {
@@ -104,7 +208,7 @@ func TestPhaseClock(t *testing.T) {
 
 			clock := job.PhaseClock{Jobs: getStore{Store: nil, jobs: tc.jobs, err: tc.storeEr}}
 
-			got, err := clock.PhaseStartedAt(t.Context(), "job-1", ref)
+			got, err := clock.PhaseStartedAt(t.Context(), "job-1", tc.asked)
 			if !errors.Is(err, tc.want) || !got.Equal(tc.wantAt) {
 				t.Fatalf("got %v, %v; want %v, %v", got, err, tc.wantAt, tc.want)
 			}

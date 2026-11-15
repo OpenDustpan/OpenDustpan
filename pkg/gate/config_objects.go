@@ -285,6 +285,15 @@ func (s *ConfigService) checkPolicy(ctx context.Context, schema Schema, p Policy
 		return fmt.Errorf("%w: this server has no policy engine to check %s", ErrUnavailable, p.ID)
 	}
 
+	// The membership test of an access limit is checked before the policy
+	// check, so that the text of a limit whose group guard cannot read it
+	// gets the code of that rule and not the diagnostic of the policy check.
+	if p.Kind == PolicyLimit {
+		if err := s.engine.CheckLimitMembership(ctx, p.Text); err != nil {
+			return fmt.Errorf("check %s: %w", p.ID, err)
+		}
+	}
+
 	diags, err := s.engine.Check(ctx, schema, []Policy{p})
 	if err != nil {
 		return fmt.Errorf("check %s: %w", p.ID, err)

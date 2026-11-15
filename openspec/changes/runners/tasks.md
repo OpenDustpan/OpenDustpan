@@ -1,0 +1,38 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the implementer's notes (the pull request body) before the first test. Check: the pull request body lists the differences, or says that there are none.
+
+## 1. Failing tests first
+
+- [ ] 1.1 Write failing test TestJoinTokenOneUse in NEW file pkg/runner/runnertest/join_token_test.go for one-use join and token-used refusal. Record each difference from the design in the pull request body. Check: `go test ./pkg/runner/runnertest -run TestJoinTokenOneUse` fails on main, passes after the fix.
+- [ ] 1.2 Write failing test TestJoinTokenExpiredRevoked in NEW file pkg/runner/runnertest/join_token_expiry_test.go for expired and revoked tokens (new codes token-expired and token-revoked). Check: `go test ./pkg/runner/runnertest -run TestJoinTokenExpiredRevoked` fails on main, passes after.
+- [ ] 1.3 Write failing test TestJoinTokenRevokeList in NEW file internal/api/runnerapi/join_token_routes_test.go for revoke, list, 1 hour default, 7 day maximum, pool mismatch and bad JoinChallenge. The route declaration and its adapter are in internal/api/runnerapi (NEW file join_token_routes.go). Check: `go test ./internal/api/runnerapi -run TestJoinTokenRevokeList` fails on main, passes after.
+- [ ] 1.4 Write failing test TestTfeAgentTokenRefused in NEW file internal/api/tfe/agent_token_refused_test.go: TFE agent token create gives a JSON:API error naming POST /pools/{pool}/join-tokens. Check: `go test ./internal/api/tfe -run TestTfeAgentTokenRefused` fails on main, passes after.
+- [ ] 1.5 Write failing test TestClaimBothTools in NEW file internal/api/runnerapi/poll_claim_test.go for Pulumi and OpenTofu claims and the concurrent poll race. Check: `go test ./internal/api/runnerapi -run TestClaimBothTools` fails on main, passes after.
+- [ ] 1.6 Write failing test TestUnmatchedLabelsStayQueued in NEW file pkg/runner/runnertest/labels_test.go for the queued job and the missing-label read. Check: `go test ./pkg/runner/runnertest -run TestUnmatchedLabelsStayQueued` fails on main, passes after.
+- [ ] 1.7 Write failing test TestLeaseExpiryTakeover in NEW file pkg/runner/runnertest/lease_takeover_test.go for 60 second lease expiry, stale renew refusal, retired live claim and the takeover audit entry. Check: `go test ./pkg/runner/runnertest -run TestLeaseExpiryTakeover` fails on main, passes after.
+- [ ] 1.8 Write failing hostile test TestProofReplayRefused in NEW file internal/api/runnerapi/proof_replay_test.go for replayed and stale Dustpan-Proof on poll. Check: `go test ./internal/api/runnerapi -run TestProofReplayRefused` fails on main, passes after.
+- [ ] 1.9 Write failing test TestRenewOwnerCheck in NEW file pkg/runner/runnertest/renew_owner_test.go for renew by a non-owner. Check: `go test ./pkg/runner/runnertest -run TestRenewOwnerCheck` fails on main, passes after.
+- [ ] 1.10 Write failing test TestMustRejoinAndRetired in NEW file internal/api/runnerapi/retired_test.go for must-rejoin on expired key and retired refusal on poll, renew and session request. Check: `go test ./internal/api/runnerapi -run TestMustRejoinAndRetired` fails on main, passes after.
+- [ ] 1.11 Write failing test TestHeartbeatCancelRotation in NEW file internal/api/runnerapi/heartbeat_test.go for heartbeat lists, sessionOpen true, canceled true and rotateKey after 25 days. Check: `go test ./internal/api/runnerapi -run TestHeartbeatCancelRotation` fails on main, passes after.
+- [ ] 1.12 Write failing test TestRequestLimits in NEW file internal/api/runnerapi/limits_test.go for Dustpan-Release mismatch, 4 MiB oversize and wrong-pool key. Check: `go test ./internal/api/runnerapi -run TestRequestLimits` fails on main, passes after.
+- [ ] 1.13 Write failing test TestLiveLogReadStream in NEW file internal/api/jobs/log_read_stream_test.go for ordered log read with unit:read-logs and resume from a chunk number. Check: `go test ./internal/api/jobs -run TestLiveLogReadStream` fails on main, passes after.
+
+## 1A. Build tasks for the guarded layers
+
+- [ ] 1.14 SECURITY. Build the proof check in NEW file internal/api/runnerapi/proof_check.go: it checks the Dustpan-Proof signature, the time window, the nonce cache and the Dustpan-Release header before any state read. Check: `go build ./internal/api/runnerapi` passes and TestProofReplayRefused passes.
+- [ ] 1.15 SECURITY. Build the one-transaction join in NEW file pkg/runner/join.go: it checks token hash, expiry, prior use and pool match, then consumes the token and inserts the runner in one transaction. Check: `go build ./pkg/runner` passes and TestJoinTokenOneUse passes.
+- [ ] 1.16 SECURITY. Build the conditional claim write in NEW file pkg/runner/claim_lease.go: the claim insert uses a conditional write on lease owner and expiry, and newClaimLease checks pool, owner, expiry and monotonic renew. Check: `go build ./pkg/runner` passes and TestClaimBothTools passes.
+- [ ] 1.17 SECURITY. Build the renew owner check in NEW file pkg/runner/renew.go: renew refuses a caller that does not own the live claim. Check: `go build ./pkg/runner` passes and TestRenewOwnerCheck passes.
+- [ ] 1.18 SECURITY. Write hostile test TestJoinConcurrentOneWins in NEW file pkg/runner/runnertest/join_concurrent_test.go: two concurrent joins with one token send hostile input straight to the store layer; one wins and the other gets token-used. Check: `go test ./pkg/runner/runnertest -run TestJoinConcurrentOneWins` fails on main, passes after.
+- [ ] 1.19 SECURITY. Write hostile test TestClaimLeaseConditionalWrite in NEW file pkg/runner/runnertest/claim_conditional_test.go: a claim write against a live lease of another owner goes straight to the claim layer and is refused. Check: `go test ./pkg/runner/runnertest -run TestClaimLeaseConditionalWrite` fails on main, passes after.
+
+## 2. Side effects (computed from main)
+
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+
+## 3. Definition of done
+
+- [ ] 3.1 Wire routes for pool join tokens under /api/dustpan/v1/namespaces/{namespace}/runner-pools (declared in internal/api/runnerapi/join_token_routes.go, NEW), poll, claim, renew and heartbeat under ANY /runner/v1, and live log read; each route declares its authorization action. Write the runner join guide page NEW docs/guides/runner-join.md with each error command, and run each command on the page. Check: `make e2e` runner slice passes on SQLite and PostgreSQL over TLS with a real runner: join with a token, claim Pulumi and OpenTofu jobs, takeover after kill, TFE agent token refusal, live log read. Confirmed by: CI (the agent writes the e2e test). `make docs-lint` passes on each edited guide.
+- [ ] 3.2 Usability check: a runner operator completes the join from docs/guides/runner-join.md alone, and each error names its one command. Check: Manual walk-through recorded in the pull request body. A person's step.
+- [ ] 3.3 Run full check with race, lint and conformance suites. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

@@ -152,7 +152,7 @@ func testInventoryLabelsFollowRename(t *testing.T, s Store) {
 	want := map[string]string{"app": "web", "team": "payments"}
 	ns, st := createTagged(t, s, want)
 
-	if err := s.RenameStack(t.Context(), st.Ref, "live", ns.Fence()); err != nil {
+	if err := s.RenameStack(t.Context(), st.Ref, "live", ns.Fence(), renameEntry(ns.Name, st.Ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 

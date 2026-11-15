@@ -81,7 +81,7 @@ func (h *Handler) namespaceOverrideRoutes() []Route {
 			// Reading the switches needs namespace:read on the namespace.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceRead},
-			Resolve: resolveNamespacePath, ActionsFor: nil,
+			Resolve: resolveNamespacePath, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.readNamespaceOverrides,
 		},
 		{
@@ -91,7 +91,7 @@ func (h *Handler) namespaceOverrideRoutes() []Route {
 			// switch is the outer bound of the switches of its units.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceSetOverrides},
-			Resolve: resolveNamespacePath, ActionsFor: nil,
+			Resolve: resolveNamespacePath, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.writeNamespaceOverrides,
 		},
 	}

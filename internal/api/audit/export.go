@@ -353,6 +353,7 @@ func (h *Handler) recordExport(r *http.Request, p identity.Principal, ns namespa
 		Reason:        "",
 		PrincipalKind: string(p.Kind),
 		JobID:         p.JobID,
+		Origin:        nil,
 	}
 
 	ctx := r.Context()

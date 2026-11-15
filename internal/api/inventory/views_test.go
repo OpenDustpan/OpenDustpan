@@ -398,6 +398,7 @@ func TestViewHandlerChecksTheOwner(t *testing.T) {
 		views: func(inner savedview.Store) savedview.Store {
 			return newOwnerBlindStore(inner)
 		},
+		units:         nil,
 		noIdempotency: false,
 	})
 
