@@ -56,8 +56,6 @@ GENERATED=(
 	docs/adr/INDEX.md
 	.repowise/decisions.yaml
 	docs/reference/configuration.md
-	'pkg/store/postgres/migrations/*.sql.sha256'
-	'pkg/store/sqlite/migrations/*.sql.sha256'
 )
 
 # The subject of each commit that this workflow makes. The loop guard reads it.
@@ -202,19 +200,6 @@ refuse_other_conflicts() {
 	fi
 }
 
-# write_hashes: write the SHA-256 file of each store migration that has one.
-write_hashes() {
-	local hash_file sql sum
-	for hash_file in pkg/store/postgres/migrations/*.sql.sha256 pkg/store/sqlite/migrations/*.sql.sha256; do
-		[ -f "$hash_file" ] || continue
-		sql="${hash_file%.sha256}"
-		[ -f "$sql" ] || die "no migration for the hash file $hash_file"
-		sum="$(sha256sum "$sql")"
-		printf '%s\n' "${sum%% *}" >"$hash_file"
-		log "wrote $hash_file"
-	done
-}
-
 # regenerate: run each generator. The API description comes first, because
 # the clients read it. This runs the Makefile and the tests of the pull
 # request.
@@ -226,7 +211,6 @@ regenerate() {
 	go test ./internal/clientgen/typescript -run TestRenderGolden -update -count=1
 	make adr-index
 	make adr-decisions
-	write_hashes
 }
 
 # filter_generated: read NUL-separated paths and write the generated ones,
