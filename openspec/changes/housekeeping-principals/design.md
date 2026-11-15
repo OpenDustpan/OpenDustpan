@@ -8,7 +8,7 @@ ADR 370 removes the namespace service principal and gives each housekeeping purp
 2. **The install writes principals and grants.** In the transaction that makes the installation, the store writes one principal of kind `service` and source `builtin` for each purpose, and one stored grant of its role on its object, with the install as the creator and the install time. Code defines the role. The grant row decides who holds it.
 3. **Each run authorizes.** Each housekeeping service takes its `identity.Principal` from NEW `principal.Housekeeping(purpose)` and calls the authorizer before it acts, as any caller does. A denial changes nothing and writes an audit entry with the outcome `denied`. The audit entry of each run names the principal.
 4. **No path in from outside.** The authenticator refuses a credential that names a `builtin` principal. The token services refuse to make a token for one. A grant to a housekeeping principal of a role that its purpose does not hold is refused.
-5. **The namespace service principal goes.** Delete `pkg/identity/namespace_service.go`, `authorizeNamespaceService`, `NamespaceServiceRule`, the guard and each check in the trigger and job start path. The run-as principal of ADR 369 decision 7 takes its place in the trigger changes.
+5. **The namespace service principal stays for now.** The dispatcher needs it until the run-as principal of ADR 369 decision 7 exists. The first trigger change (run-triggers) deletes it with that principal (ADR 370: this change lands before the trigger changes "or with them").
 
 ## Structure
 
