@@ -124,8 +124,35 @@ func TestClientVersionDefaultsToTheDescriptionVersion(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, stderr)
 	}
 
-	if raw := readFile(t, dir, "package.json"); !strings.Contains(raw, `"version": "0.3.0"`) {
+	// A run without -publish writes no client version and no digest.
+	if raw := readFile(t, dir, "package.json"); !strings.Contains(raw, `"version": "0.0.0"`) {
 		t.Errorf("package.json:\n%s", raw)
+	}
+
+	raw := readFile(t, dir, "src/metadata.ts")
+	if strings.Contains(raw, "clientVersion:") || strings.Contains(raw, "descriptionSha256:") {
+		t.Errorf("metadata.ts of a run without -publish:\n%s", raw)
+	}
+
+	dir1 := t.TempDir()
+	publishArgs := []string{"-target", "typescript", "-description", syntheticPath, "-out", dir1, "-publish"}
+	if code, _, stderr := run(t, publishArgs...); code != cli.ExitOK {
+		t.Fatalf("-publish: exit %d\n%s", code, stderr)
+	}
+
+	if raw = readFile(t, dir1, "package.json"); !strings.Contains(raw, `"version": "0.3.0"`) {
+		t.Errorf("package.json of -publish:\n%s", raw)
+	}
+
+	if raw = readFile(t, dir1, "src/metadata.ts"); !strings.Contains(raw, "descriptionSha256:") {
+		t.Errorf("metadata.ts of -publish:\n%s", raw)
+	}
+
+	noPublish := []string{
+		"-target", "typescript", "-description", syntheticPath, "-out", t.TempDir(), "-client-version", "0.3.7",
+	}
+	if code, _, _ := run(t, noPublish...); code != cli.ExitUsage {
+		t.Errorf("-client-version without -publish: want exit %d, got %d", cli.ExitUsage, code)
 	}
 
 	dir2 := t.TempDir()
@@ -138,6 +165,7 @@ func TestClientVersionDefaultsToTheDescriptionVersion(t *testing.T) {
 		syntheticPath,
 		"-out",
 		dir2,
+		"-publish",
 		"-client-version",
 		"0.3.7",
 	)
@@ -163,6 +191,7 @@ func TestMetadataHoldsTheDigestOfTheDescription(t *testing.T) {
 		syntheticPath,
 		"-out",
 		dir,
+		"-publish",
 		"-server-release",
 		"abc123",
 	)
@@ -232,7 +261,10 @@ func TestRefusals(t *testing.T) {
 		},
 		{
 			"client version of another minor",
-			[]string{"-target", "typescript", "-description", syntheticPath, "-out", out, "-client-version", "0.9.0"},
+			[]string{
+				"-target", "typescript", "-description", syntheticPath, "-out", out,
+				"-publish", "-client-version", "0.9.0",
+			},
 			cli.ExitFailed,
 			"client version",
 		},

@@ -95,7 +95,7 @@ func Generate(opts Options) (Generated, error) {
 	}
 
 	files, err := golang.New().Render(api, clientgen.Options{
-		Package: Module, ClientVersion: version, ServerRelease: opts.ServerRelease,
+		Package: Module, Publish: false, ClientVersion: version, ServerRelease: opts.ServerRelease,
 		ServerCommit: "development", Description: nil,
 		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: "",
 	})

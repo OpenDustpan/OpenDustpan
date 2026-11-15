@@ -181,14 +181,24 @@ type data struct {
 	// Header is the first line of each generated source file.
 	Header string
 	// Package is the npm name of the package.
-	Package            string
+	Package string
+	// Publish is true for the files of a published package. Only then do
+	// ClientVersion and DescriptionSHA256 have a value, and the templates
+	// write them.
+	Publish            bool
 	ClientVersion      string
 	DescriptionVersion string
 	DescriptionSHA256  string
 	ServerRelease      string
 	ServerCommit       string
-	// DescriptionText is the bytes of the description as a TypeScript string literal.
-	DescriptionText  string
+	// PackageVersion is the version in package.json: the client version of a
+	// published package, and unpublishedVersion else.
+	PackageVersion string
+	// DescriptionLines are the lines of the description, each as a TypeScript
+	// string literal. The text joins them with "\n", so that the bytes are
+	// exact and one changed line of the description changes one line of the
+	// generated file.
+	DescriptionLines []string
 	GeneratorVersion string
 	Title            string
 	Types            []typeView
@@ -206,7 +216,6 @@ func newData(api *model.API, opts clientgen.Options, runtime map[string][]byte) 
 
 	tokens := []struct{ what, value string }{
 		{"description version", api.Version},
-		{"client version", opts.ClientVersion},
 		{"server release", opts.ServerRelease},
 		{"generator version", opts.GeneratorVersion},
 	}
@@ -217,15 +226,11 @@ func newData(api *model.API, opts clientgen.Options, runtime map[string][]byte) 
 		}
 	}
 
-	if !sha256Pattern.MatchString(opts.DescriptionSHA256) {
-		return nil, fmt.Errorf("%w: description digest %q", clientgen.ErrInvalidName, opts.DescriptionSHA256)
-	}
-
-	if err := checkEvidence(opts); err != nil {
+	if err := checkPublish(api, opts); err != nil {
 		return nil, err
 	}
 
-	if err := clientgen.CheckClientVersion(api.Version, opts.ClientVersion); err != nil {
+	if err := checkEvidence(opts); err != nil {
 		return nil, err
 	}
 
@@ -234,6 +239,27 @@ func newData(api *model.API, opts clientgen.Options, runtime map[string][]byte) 
 	}
 
 	return newView(api, opts, runtime)
+}
+
+// checkPublish checks the client version and the digest. A publish run needs
+// both. A run that is not a publish run does not write them, and still checks
+// a value that the caller gives.
+func checkPublish(api *model.API, opts clientgen.Options) error {
+	if opts.Publish || opts.ClientVersion != "" {
+		if err := clientgen.CheckToken("client version", opts.ClientVersion); err != nil {
+			return err
+		}
+
+		if err := clientgen.CheckClientVersion(api.Version, opts.ClientVersion); err != nil {
+			return err
+		}
+	}
+
+	if (opts.Publish || opts.DescriptionSHA256 != "") && !sha256Pattern.MatchString(opts.DescriptionSHA256) {
+		return fmt.Errorf("%w: description digest %q", clientgen.ErrInvalidName, opts.DescriptionSHA256)
+	}
+
+	return nil
 }
 
 // checkEvidence checks the options that name the source of the description:
@@ -253,7 +279,9 @@ func checkEvidence(opts clientgen.Options) error {
 
 	// Defense in depth: the caller computes the digest, and this check makes
 	// sure that the package never carries a copy that its digest does not name.
-	if sum := sha256.Sum256(opts.Description); hex.EncodeToString(sum[:]) != opts.DescriptionSHA256 {
+	// A run that is not a publish run gets a digest only to check it.
+	if sum := sha256.Sum256(opts.Description); opts.DescriptionSHA256 != "" &&
+		hex.EncodeToString(sum[:]) != opts.DescriptionSHA256 {
 		return fmt.Errorf(
 			"%w: the digest %s is not the digest of the bytes of the description",
 			clientgen.ErrInvalidDescription, opts.DescriptionSHA256,
@@ -268,9 +296,18 @@ func newView(api *model.API, opts clientgen.Options, runtime map[string][]byte) 
 	d := new(data)
 	d.Header = header(opts.GeneratorVersion, api.Version)
 	d.Package, d.Title = opts.Package, api.Title
-	d.ClientVersion, d.DescriptionVersion = opts.ClientVersion, api.Version
-	d.DescriptionSHA256, d.ServerRelease, d.GeneratorVersion = opts.DescriptionSHA256, opts.ServerRelease, opts.GeneratorVersion
-	d.ServerCommit, d.DescriptionText = opts.ServerCommit, tsString(string(opts.Description))
+	d.DescriptionVersion, d.PackageVersion = api.Version, unpublishedVersion
+	d.ServerRelease, d.GeneratorVersion = opts.ServerRelease, opts.GeneratorVersion
+	d.ServerCommit = opts.ServerCommit
+
+	if opts.Publish {
+		d.Publish, d.ClientVersion, d.DescriptionSHA256 = true, opts.ClientVersion, opts.DescriptionSHA256
+		d.PackageVersion = opts.ClientVersion
+	}
+
+	for line := range strings.SplitSeq(string(opts.Description), "\n") {
+		d.DescriptionLines = append(d.DescriptionLines, tsString(line))
+	}
 
 	seen := make(map[string]string)
 
@@ -342,6 +379,11 @@ func operationUsesOneOf(op *model.Operation) bool {
 
 // sha256Pattern is the shape of a SHA-256 digest in lowercase hexadecimal.
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// unpublishedVersion is the version in the package.json of a run that is not a
+// publish run. It does not depend on the description, so that a change of the
+// description does not change the file.
+const unpublishedVersion = "0.0.0"
 
 // developmentCommit is the server commit of a run that is not a release.
 const developmentCommit = "development"
