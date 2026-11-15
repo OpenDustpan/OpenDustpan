@@ -487,15 +487,15 @@ func TestDeliveryHistoryRefusesBadTokens(t *testing.T) {
 	f := newFixture(t)
 	sub := f.makeSubscription(t)
 
-	nextAt := f.clock.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond).UnixMilli()
+	nextAtMs := f.clock.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond).UnixMilli()
 
 	tests := []struct {
 		name  string
 		token string
 	}{
-		{"empty cursor ID", historyTokenFor(t, sub, nextAt, "")},
+		{"empty cursor ID", historyTokenFor(t, sub, nextAtMs, "")},
 		{"creation time before the Unix epoch", historyTokenFor(t, sub, -1, "dlv-aaaaaaaaaaaaaaaaaaaa")},
-		{"cursor ID that is not a delivery ID", historyTokenFor(t, sub, nextAt, "sub-aaaaaaaaaaaaaaaaaaaa")},
+		{"cursor ID that is not a delivery ID", historyTokenFor(t, sub, nextAtMs, "sub-aaaaaaaaaaaaaaaaaaaa")},
 	}
 
 	for _, tc := range tests {

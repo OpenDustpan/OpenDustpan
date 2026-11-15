@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check
+.PHONY: cover regenerate-baseline release-record-check ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -179,6 +179,20 @@ ifeq ($(origin VERSION),command line)
 else
 	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
 endif
+
+# The pull request body and the author email of each commit of the pull
+# request, one per line. They have no defaults: CI passes both files, and a
+# local run passes its own files. Not part of check: the check needs a pull
+# request, and a local run has none.
+# The recipe reads both paths from the environment, never from the command
+# text. make exports a variable that came from the environment or from the
+# command line, so a path that holds a quote, a space or a shell word stays one
+# word and cannot escape into the command. The empty check and the two reads
+# use "$$VAR", which the shell expands; no value is pasted into the command.
+export PR_BODY_FILE PR_COMMITS_FILE
+ai-pr-spec-check: ## Fail an AI-authored pull request that names no spec-ready OpenSpec change (needs PR_BODY_FILE and PR_COMMITS_FILE).
+	@if [ -z "$$PR_BODY_FILE" ] || [ -z "$$PR_COMMITS_FILE" ]; then echo "usage: make ai-pr-spec-check PR_BODY_FILE=<body-file> PR_COMMITS_FILE=<commits-file>" >&2; exit 1; fi
+	bash scripts/check-ai-pr-spec.sh "$$PR_BODY_FILE" "$$PR_COMMITS_FILE"
 
 # The PR body check reads the body from a file, so CI writes the body to a file
 # first. PR_BODY_FILE has no default: the target refuses to run without it.
