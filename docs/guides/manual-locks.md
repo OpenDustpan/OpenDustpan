@@ -229,7 +229,8 @@ The server answers:
 
 `GET` on the same path answers the lock, or 404 when the object has no manual
 lock. A stack or workspace in the inventory list has the field `manualLock` when a
-lock covers it, for a lock on itself and for a lock on its collection. The field has the same
+lock covers it, for a lock on itself, for a lock on its collection, or for a
+lock on its namespace. The field has the same
 shape as the answer above. The field `object` names the object that holds the
 lock. The field `lock` of the stack or workspace stays the lock of the tool.
 

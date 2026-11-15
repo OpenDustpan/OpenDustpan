@@ -366,7 +366,7 @@ type DirectSwitches struct {
 //   - ErrAgentDenied in AgentModeDirect, when a switch of sw is off,
 //   - ErrInvalid for an unknown mode.
 func CheckAgent(spec *Spec, a Actor, sw DirectSwitches) (bool, error) {
-	if a.Agent == "" || !spec.Changes() {
+	if a.Agent.IsZero() || !spec.Changes() {
 		return false, nil
 	}
 

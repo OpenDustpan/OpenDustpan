@@ -269,7 +269,10 @@ func placeAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (placedE
 			e.At = codec.FromMillis(row.AtMs)
 		}
 
-		stored := fromAuditRow(row)
+		stored, err := fromAuditRow(row)
+		if err != nil {
+			return placedEntry{}, err
+		}
 		last = &stored
 	}
 
@@ -313,6 +316,16 @@ func insertPlacedEntry(
 		e.Hash = audit.ComputeHash(e, "")
 	}
 
+	// STRICT tables hold no boolean type, so the flag is an INTEGER 0 or 1.
+	// A nil origin writes the empty value in the seven columns.
+	origin := e.Origin
+
+	var breakGlass int64
+
+	if origin != nil && origin.BreakGlass() {
+		breakGlass = 1
+	}
+
 	insertErr := q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
 		Namespace:     e.Namespace.String(),
 		Sequence:      e.Sequence,
@@ -327,6 +340,13 @@ func insertPlacedEntry(
 		SourceIp:      e.SourceIP,
 		UserAgent:     e.UserAgent,
 		Channel:       string(e.Channel),
+		AgentRun:      origin.Run(),
+		AgentSession:  origin.Session(),
+		ArgsDigest:    origin.ArgsDigest(),
+		BreakGlass:    breakGlass,
+		DelegationID:  origin.DelegationID(),
+		SecretStage:   origin.SecretStage(),
+		Tool:          origin.Tool(),
 		Kind:          string(e.Kind),
 		Outcome:       string(e.Outcome),
 		RequestID:     e.RequestID,
@@ -390,7 +410,12 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 	entries := make([]audit.Entry, 0, len(rows))
 
 	for i := range rows {
-		entries = append(entries, fromAuditRow(rows[i]))
+		e, err := fromAuditRow(rows[i])
+		if err != nil {
+			return audit.Listing{}, err
+		}
+
+		entries = append(entries, e)
 	}
 
 	return audit.Listing{Entries: entries, Total: total}, nil
@@ -483,16 +508,23 @@ func checkScope(
 		bad     int64
 	)
 
-	err = walkScope(ctx, q, ns, func(row db.AuditEntry) {
+	err = walkScope(ctx, q, ns, func(row db.AuditEntry) error {
 		if bad != 0 {
-			return
+			return nil
 		}
 
 		checked++
 
-		if !walk.StepStored(fromAuditRow(row), row.Changes.String) {
+		entry, rowErr := fromAuditRow(row)
+		if rowErr != nil {
+			return rowErr
+		}
+
+		if !walk.StepStored(entry, row.Changes.String) {
 			bad = row.Sequence
 		}
+
+		return nil
 	})
 	if err != nil {
 		return audit.CheckResult{}, err
@@ -511,12 +543,28 @@ func checkScope(
 // NULL changes column reads as nil. The changes decode leniently, for
 // display: a text that does not decode reads as nil, so a list always
 // answers the entry, and only the chain check reports the changed text.
-func fromAuditRow(row db.AuditEntry) audit.Entry {
+// All seven agent columns empty read as a nil Origin. A row with a partial
+// set is refused: the write path validates the origin, so such a row names
+// a database that another writer changed by hand.
+func fromAuditRow(row db.AuditEntry) (audit.Entry, error) {
 	ns := namespace.Name(row.Namespace)
 
 	changes, err := audit.DecodeChanges(row.Changes.String)
 	if err != nil {
 		changes = nil
+	}
+
+	origin, err := audit.NewOrigin(audit.OriginArgs{
+		Run:          row.AgentRun,
+		Session:      row.AgentSession,
+		Tool:         row.Tool,
+		ArgsDigest:   row.ArgsDigest,
+		BreakGlass:   row.BreakGlass != 0,
+		DelegationID: row.DelegationID,
+		SecretStage:  row.SecretStage,
+	})
+	if err != nil {
+		return audit.Entry{}, fmt.Errorf("audit entry at sequence %d: %w", row.Sequence, err)
 	}
 
 	return audit.Entry{
@@ -535,6 +583,7 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		SourceIP:      row.SourceIp,
 		UserAgent:     row.UserAgent,
 		Channel:       audit.Channel(row.Channel),
+		Origin:        origin,
 		Kind:          audit.Kind(row.Kind),
 		Outcome:       audit.Outcome(row.Outcome),
 		RequestID:     row.RequestID,
@@ -545,8 +594,7 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		PrincipalKind: row.PrincipalKind,
 		JobID:         row.JobID,
 		Reason:        row.Reason,
-		Origin:        nil,
-	}
+	}, nil
 }
 
 // toNullInt64 maps a nil count to NULL: only a decrypt call stores a count.

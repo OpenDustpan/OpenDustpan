@@ -149,7 +149,7 @@ func TestDestroyApprovalNeedsFreshStep(t *testing.T) {
 			var a job.Actor
 			a.Principal.Subject, a.Principal.Admin = "approver", true
 			a.Principal.Kind, a.Principal.Credential = tc.kind, tc.credential
-			a.Agent, a.ConfirmAuth, a.AuthAt = tc.agent, tc.auth, at.Add(-tc.age)
+			a.Agent, a.ConfirmAuth, a.AuthAt = job.AgentRef(tc.agent), tc.auth, at.Add(-tc.age)
 
 			var binding job.PlanBinding
 			_, err := r.service.Approve(t.Context(), a, r.store.current.ID, job.VerdictApprove, binding, "")

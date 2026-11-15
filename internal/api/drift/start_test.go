@@ -78,7 +78,7 @@ func checkStartedRequest(t *testing.T, r *rig) {
 		t.Errorf("request = %+v, want the defaults of the job service", req)
 	}
 
-	if req.UserAgent != "drift-test" || actor.Principal.Subject != "ada" || actor.Agent != "" {
+	if req.UserAgent != "drift-test" || actor.Principal.Subject != "ada" || !actor.Agent.IsZero() {
 		t.Errorf("request = %+v by %+v, want the user agent and the person ada", req, actor)
 	}
 }
