@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -9,8 +9,9 @@
 
 ## 2. Build
 
-- [ ] 2.1 Extend pkg/trustrule and the store with bundle versions and rule fields; add the two tables in name order to each baseline Check: go test ./pkg/trustrule/... passes on SQLite and PostgreSQL
-- [ ] 2.2 Extend internal/trustrulesvc and internal/api/trustrules with bundle routes and rule update, with actions and audit Check: route action test passes
+- [ ] 2.1 Extend pkg/trustrule with bundle versions and rule fields, and add `Update` to the `trustrule.Store` port. Add the conformance tests of the new method to pkg/trustrule/trustruletest first. Check: go test ./pkg/trustrule/... passes
+- [ ] 2.2 Implement `Update` and the bundle methods on both SQL adapters, each of which asserts `var _ trustrule.Store`: pkg/store/sqlite/trustrules.go and pkg/store/postgres/trustrules.go. Put the shared checks in pkg/store/internal/trustrulestore/trustrulestore.go. Add the new queries in name order to pkg/store/sqlite/queries.sql and pkg/store/postgres/queries.sql, then run `make generate` for internal/db. Add the tables `trust_bundles` and `trust_bundle_versions` in name order to pkg/store/sqlite/migrations/0168_baseline.sql and pkg/store/postgres/migrations/0168_baseline.sql. If the store move has changed these paths on main, use the new paths. Check: go build ./... and go test ./pkg/store/... -run TestTrustRule pass on SQLite and PostgreSQL
+- [ ] 2.3 Extend internal/trustrulesvc and internal/api/trustrules with bundle routes and rule update, with actions and audit Check: route action test passes
 
 ## 3. Side effects (computed from main)
 
