@@ -672,7 +672,8 @@ func registryRoutesOf(t *testing.T, h *tfe.Handler) map[string]tfe.Scope {
 	seen := map[string]tfe.Scope{}
 
 	for _, route := range h.Routes() {
-		if !strings.HasPrefix(route.Path, "/v1/providers/") && !strings.HasPrefix(route.Path, "/v1/modules/") {
+		if !strings.HasPrefix(route.Path, "/v1/providers/") && !strings.HasPrefix(route.Path, "/v1/modules/") &&
+			!strings.HasPrefix(route.Path, "/v1/mirror/") {
 			continue
 		}
 
@@ -699,6 +700,8 @@ func TestRegistryRoutesDeclareScopes(t *testing.T) {
 		"GET /v1/modules/{namespace}/{name}/{system}/versions":                 tfe.ScopeRegistry,
 		"GET /v1/modules/{namespace}/{name}/{system}/{version}/download":       tfe.ScopeRegistry,
 		"GET /v1/modules/{namespace}/{name}/{system}/{version}/files/{sha256}": tfe.ScopeSigned,
+		"GET /v1/mirror/{hostname}/{namespace}/{type}/index.json":              tfe.ScopeRegistry,
+		"GET /v1/mirror/{hostname}/{namespace}/{type}/{file}":                  tfe.ScopeRegistry,
 	}
 
 	if !maps.Equal(seen, want) {
@@ -707,8 +710,9 @@ func TestRegistryRoutesDeclareScopes(t *testing.T) {
 
 	// Every served pattern has a row.
 	for _, pattern := range f.handler.RegisteredPatterns() {
-		if _, ok := want[pattern]; (strings.Contains(pattern, "/v1/providers/") || strings.Contains(pattern, "/v1/modules/")) &&
-			!ok {
+		isRegistry := strings.Contains(pattern, "/v1/providers/") || strings.Contains(pattern, "/v1/modules/") ||
+			strings.Contains(pattern, "/v1/mirror/")
+		if _, ok := want[pattern]; isRegistry && !ok {
 			t.Errorf("served route %q has no row", pattern)
 		}
 	}
