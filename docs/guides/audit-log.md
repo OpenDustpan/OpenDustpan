@@ -455,7 +455,7 @@ It prints where to approve and ends with an error.
 
 - Turning the chain on needs the action `server:set-audit-chain` (operator family).
 - Turning the chain off needs `server:set-audit-chain` (operator family) and `server:disable-audit-chain` (administration family).
-  A service principal cannot approve it: a person must approve turning the chain off.
+  Only a person can approve turning the chain off. A refusal writes a denied entry in `@server` with the action `server:set-audit-chain`.
 
 The approval writes an entry in `@server` with the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
 Then the server migrates the log in the background.
