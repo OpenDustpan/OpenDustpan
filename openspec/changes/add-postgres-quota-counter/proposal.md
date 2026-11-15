@@ -6,7 +6,22 @@ Issue: #1030. Also: #3158.
 
 Short form: tech debt (the second half of add-sql-adapter-quota-counter). Owner lane: M6.
 
-Waits for: #2847
+Implemented by: #2857
+
+## Note for F4 (the pull request that implements this change)
+
+#2857 (head `e577fdfe`) covers tasks 1.1 and 1.2: `pkg/store/postgres/quota.go`
+and `pkg/store/postgres/quota_test.go` run `quotatest.Run`, whose race cases
+(`testReserveRace`, `testRecordRace`, `testSettleRace`) are the concurrency
+proof. Three tasks are not in #2857 yet and must land in it before it merges:
+
+- 1.3: `quotaTx.Reserve` of `pkg/store/postgres/quota.go` does not refuse a
+  reservation key that no check covers (#3158), and the run with that guard
+  removed is not in the pull request body.
+- 1.4: no `pkg/store/postgres/quota_internal_test.go` with the two changed-row
+  tests for the `n == 0` checks (`quota.go:252` and `:372` on #2857).
+- 1.5: no `pkg/store/postgres/quota_backup_test.go` with
+  `TestQuotaBackupRestoresReservationKeys`.
 
 ## Problem
 

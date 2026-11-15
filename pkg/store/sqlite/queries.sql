@@ -3409,6 +3409,12 @@ FROM runner_pools p
 JOIN namespaces n ON n.id = p.namespace_id
 WHERE p.id = sqlc.arg(id);
 
+-- name: GetRunnerPoolByName :one
+-- The pool of a namespace with the name, for a caller that names a pool as a
+-- person does. It returns no row for a pool of another namespace.
+SELECT id, purpose FROM runner_pools
+WHERE namespace_id = sqlc.arg(namespace_id) AND name = sqlc.arg(name);
+
 -- name: ListRunnerPools :many
 SELECT p.id, p.namespace_id, n.name AS namespace_name, p.name, p.purpose, p.lease_ms, p.concurrency, p.isolation,
        p.git_mode, p.git_helper, p.created_at_ms, p.updated_at_ms
@@ -4565,11 +4571,12 @@ WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AN
 
 -- name: SkipPendingNotificationDeliveriesOfSubscription :exec
 UPDATE notification_deliveries
-SET state = 'skipped', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
+SET state = 'skipped', delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '', lease_until_ms = 0,
+    version = notification_deliveries.version + 1
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
 
 -- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = sqlc.arg(id);
@@ -4581,11 +4588,11 @@ WHERE scope = sqlc.arg(scope) AND notification_id = sqlc.arg(notification_id)
 
 -- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
     last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     sqlc.arg(id), sqlc.arg(scope), sqlc.arg(notification_id), sqlc.arg(subscription_id), sqlc.arg(sink_id),
-    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
+    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
 );
 
 -- name: ListDueNotificationDeliveryScopes :many
@@ -4606,7 +4613,7 @@ WHERE notification_deliveries.id IN (
     ORDER BY d.next_at_ms, d.id
     LIMIT sqlc.arg(max_rows)
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
           last_error, delivered_at_ms, owner, lease_until_ms, version;
 
 -- name: RecordNotificationAttempt :execrows
@@ -4636,7 +4643,7 @@ SELECT COUNT(*) FROM (
 ) AS within_bound;
 
 -- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
@@ -4648,7 +4655,7 @@ LIMIT sqlc.arg(max_rows);
 -- time, delivery ID): the rows with an older next time, or with the same next
 -- time and a smaller ID. The bound on next_at_ms lets the index scan start at
 -- the cursor.
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
@@ -4659,10 +4666,13 @@ LIMIT sqlc.arg(max_rows);
 
 -- name: RedeliverNotificationDelivery :execrows
 UPDATE notification_deliveries
-SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,
-    version = notification_deliveries.version + 1
+SET state = 'pending', attempts = 0, redeliveries = notification_deliveries.redeliveries + 1,
+    last_error = '', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
-  AND notification_deliveries.state <> 'pending';
+  AND notification_deliveries.state <> 'pending'
+  -- Defense in depth: the adapter checks the limit before the update; this predicate stays so that two
+  -- redelivers at the same time cannot pass the limit.
+  AND notification_deliveries.redeliveries < sqlc.arg(max_redeliveries);
 
 -- name: UpsertTrigger :execrows
 -- The caller checks the fence in the same transaction. A row that exists keeps
@@ -5681,3 +5691,123 @@ LEFT JOIN principal_session_generations g ON g.principal_id = p.id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
 WHERE p.id = ? AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1;
+
+-- Sweep targets and sweeps. A target names a runner pool of its namespace and
+-- the account scopes that a sweep reads. A sweep is one run of a target, or one
+-- state check of the namespace, and it keeps the name of a target that a person
+-- deleted. A row holds the namespace ID, and the reads join the name of the
+-- namespace, because a caller names a namespace by its name.
+
+-- name: CancelUnmanagedScansOfTarget :execrows
+-- Cancels the sweeps of target that a cancel event allows: a sweep in the match
+-- keeps its status. The caller appends one audit entry for the delete.
+UPDATE unmanaged_scans SET status = 'canceled', ended_at_ms = sqlc.arg(ended_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND target = sqlc.arg(target)
+  AND status IN ('queued', 'dispatched', 'running');
+
+-- name: CountOpenUnmanagedScansOfTarget :one
+-- The sweeps of target that did not end. A start of a sweep refuses while one
+-- exists.
+SELECT COUNT(*) FROM unmanaged_scans
+WHERE namespace_id = sqlc.arg(namespace_id) AND target = sqlc.arg(target) AND kind = sqlc.arg(kind)
+  AND status NOT IN ('succeeded', 'failed', 'canceled', 'expired');
+
+-- name: CountUnmanagedTargets :one
+-- The targets of a namespace, for the limit of MaxTargets.
+SELECT COUNT(*) FROM unmanaged_targets WHERE namespace_id = sqlc.arg(namespace_id);
+
+-- name: CountUnmanagedTargetsOfPool :one
+-- The targets that name a runner pool. A delete of the pool refuses while one
+-- exists.
+SELECT COUNT(*) FROM unmanaged_targets WHERE pool_id = sqlc.arg(pool_id);
+
+-- name: DeleteUnmanagedTarget :execrows
+DELETE FROM unmanaged_targets WHERE namespace_id = sqlc.arg(namespace_id) AND name = sqlc.arg(name);
+
+-- name: GetUnmanagedScan :one
+SELECT s.id, n.name AS namespace, s.seq, s.target, s.kind, s.status, s.started_by, s.reason, s.scopes_json,
+       s.counts_json, s.created_at_ms, s.ended_at_ms
+FROM unmanaged_scans AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND s.id = sqlc.arg(id);
+
+-- name: GetUnmanagedTarget :one
+-- The pool of a target and its purpose, for a write of the target and for the
+-- kind of the durable operation of a sweep. A target whose pool belongs to
+-- another namespace gives no row.
+SELECT t.pool_id, p.purpose, p.namespace_id AS pool_namespace_id
+FROM unmanaged_targets AS t
+JOIN runner_pools AS p ON p.id = t.pool_id
+WHERE t.namespace_id = sqlc.arg(namespace_id) AND t.name = sqlc.arg(name)
+  AND p.namespace_id = t.namespace_id;
+
+-- name: InsertUnmanagedScan :exec
+INSERT INTO unmanaged_scans (
+    id, namespace_id, seq, target, kind, status, started_by, reason, scopes_json, counts_json,
+    created_at_ms, ended_at_ms
+) VALUES (
+    sqlc.arg(id), sqlc.arg(namespace_id), sqlc.arg(seq), sqlc.arg(target), sqlc.arg(kind), sqlc.arg(status),
+    sqlc.arg(started_by), sqlc.arg(reason), sqlc.arg(scopes_json), sqlc.arg(counts_json),
+    sqlc.arg(created_at_ms), sqlc.arg(ended_at_ms)
+);
+
+-- name: InsertUnmanagedTarget :execrows
+-- The caller checks the fence in the same transaction. A target of the same
+-- name in the namespace is not written.
+INSERT INTO unmanaged_targets (
+    namespace_id, name, pool_id, scopes_json, command_json, every_ms, timeout_ms, enabled
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(name), sqlc.arg(pool_id), sqlc.arg(scopes_json), sqlc.arg(command_json),
+    sqlc.arg(every_ms), sqlc.arg(timeout_ms), sqlc.arg(enabled)
+)
+ON CONFLICT (namespace_id, name) DO NOTHING;
+
+-- name: ListUnmanagedScans :many
+-- The sweeps of a namespace for target, newest first, or of every target when
+-- target is empty. It starts after the sweep whose ID is after, and an unknown
+-- after gives no row.
+SELECT s.id, n.name AS namespace, s.seq, s.target, s.kind, s.status, s.started_by, s.reason, s.scopes_json,
+       s.counts_json, s.created_at_ms, s.ended_at_ms
+FROM unmanaged_scans AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+  AND (CAST(sqlc.arg(target) AS TEXT) = '' OR s.target = sqlc.arg(target))
+  AND (CAST(sqlc.arg(after) AS TEXT) = '' OR s.seq < (
+      SELECT c.seq FROM unmanaged_scans AS c
+      WHERE c.namespace_id = s.namespace_id AND c.id = sqlc.arg(after)))
+ORDER BY s.seq DESC
+LIMIT sqlc.arg(page_size);
+
+-- name: ListUnmanagedTargets :many
+-- The targets of a namespace with the name of their pool, ordered by name. A
+-- target whose pool belongs to another namespace gives no row.
+SELECT n.name AS namespace, t.name, p.name AS pool_name, t.scopes_json, t.command_json, t.every_ms,
+       t.timeout_ms, t.enabled
+FROM unmanaged_targets AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+JOIN runner_pools AS p ON p.id = t.pool_id
+WHERE n.name = sqlc.arg(namespace)
+  AND p.namespace_id = t.namespace_id
+ORDER BY t.name;
+
+-- name: NextUnmanagedScanSeq :one
+-- The sequence number of the next sweep of a namespace. The write transaction
+-- orders it, and the unique index on (namespace_id, seq) refuses a duplicate.
+SELECT CAST(COALESCE(MAX(s.seq), 0) + 1 AS INTEGER) AS seq
+FROM unmanaged_scans AS s
+WHERE s.namespace_id = sqlc.arg(namespace_id);
+
+-- name: UpdateUnmanagedScan :exec
+-- It replaces the status, the reason, the scopes, the counts and the end of the
+-- sweep. The caller read the sweep in the same transaction.
+UPDATE unmanaged_scans SET status = sqlc.arg(status), reason = sqlc.arg(reason),
+    scopes_json = sqlc.arg(scopes_json), counts_json = sqlc.arg(counts_json), ended_at_ms = sqlc.arg(ended_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id);
+
+-- name: UpdateUnmanagedTarget :execrows
+-- It replaces the target of the same name. It changes no row when the target is
+-- not there.
+UPDATE unmanaged_targets SET pool_id = sqlc.arg(pool_id), scopes_json = sqlc.arg(scopes_json),
+    command_json = sqlc.arg(command_json), every_ms = sqlc.arg(every_ms), timeout_ms = sqlc.arg(timeout_ms),
+    enabled = sqlc.arg(enabled)
+WHERE namespace_id = sqlc.arg(namespace_id) AND name = sqlc.arg(name);

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -29,6 +30,14 @@ var ErrSinkNotInNamespace = errors.New("the namespace holds no notification dest
 // ErrNotRedeliverable reports a delivery that cannot be sent again now: it is
 // pending, or its subscription no longer sends it.
 var ErrNotRedeliverable = errors.New("the delivery cannot be sent again")
+
+// ErrRedeliverTooSoon reports a delivery that stopped less than the retry
+// policy waits, so a person cannot send it again yet. The error keeps the
+// wait of the store in its chain.
+var ErrRedeliverTooSoon = errors.New("the delivery stopped too recently")
+
+// ErrRedeliverLimit reports a delivery that has no manual redeliveries left.
+var ErrRedeliverLimit = errors.New("the delivery has no redeliveries left")
 
 // MaxHistory is the most deliveries that one read of the history reaches. A
 // page that would end after this count has no next page.
@@ -58,6 +67,8 @@ type Config struct {
 	Subscriptions notify.Subscriptions
 	Deliveries    notify.Deliveries
 	Namespaces    Namespaces
+	// Audit keeps the entry of a redeliver that the limit refuses.
+	Audit audit.Store
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 }
@@ -67,14 +78,15 @@ type Service struct {
 	subs       notify.Subscriptions
 	deliveries notify.Deliveries
 	namespaces Namespaces
+	audit      audit.Store
 	now        func() time.Time
 }
 
 // NewService returns a Service. It returns ErrMissingDependency when a port is
 // missing.
 func NewService(cfg Config) (*Service, error) {
-	if cfg.Subscriptions == nil || cfg.Deliveries == nil || cfg.Namespaces == nil {
-		return nil, fmt.Errorf("%w: subscriptions, deliveries and namespaces", ErrMissingDependency)
+	if cfg.Subscriptions == nil || cfg.Deliveries == nil || cfg.Namespaces == nil || cfg.Audit == nil {
+		return nil, fmt.Errorf("%w: subscriptions, deliveries, namespaces and audit", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -82,7 +94,9 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
-	return &Service{subs: cfg.Subscriptions, deliveries: cfg.Deliveries, namespaces: cfg.Namespaces, now: now}, nil
+	return &Service{
+		subs: cfg.Subscriptions, deliveries: cfg.Deliveries, namespaces: cfg.Namespaces, audit: cfg.Audit, now: now,
+	}, nil
 }
 
 // Caller is the principal who calls a use case. By is the template of the
@@ -308,18 +322,32 @@ func (s *Service) History(
 }
 
 // Redeliver makes the stopped delivery id pending again. It returns
-// notify.ErrNotFound, ErrNotRedeliverable, namespace.ErrNotFound or
-// namespace.ErrFenced.
+// notify.ErrNotFound, ErrNotRedeliverable, ErrRedeliverTooSoon,
+// ErrRedeliverLimit, namespace.ErrNotFound or namespace.ErrFenced.
 func (s *Service) Redeliver(ctx context.Context, c *Caller, ns namespace.Name, id string) error {
 	fence, err := s.fence(ctx, ns)
 	if err != nil {
 		return err
 	}
 
-	err = s.deliveries.Redeliver(ctx, id, fence, s.entry(c, ns, actionRedeliver, id))
+	err = s.deliveries.Redeliver(ctx, id, s.now().UTC(), fence, s.entry(c, ns, actionRedeliver, id))
 	switch {
+	case errors.Is(err, notify.ErrRedeliverLimit):
+		e := s.entry(c, ns, actionRedeliver, id)
+		e.Outcome = audit.OutcomeDenied
+		e.Kind = audit.KindChange
+		e.Reason = errcode.SinkDeliveryRedeliverLimit
+
+		if _, appendErr := s.audit.Append(ctx, fence, e); appendErr != nil {
+			return fmt.Errorf("redeliver %s: %w", id,
+				errors.Join(ErrRedeliverLimit, err, fmt.Errorf("append audit entry: %w", appendErr)))
+		}
+
+		return fmt.Errorf("redeliver %s: %w", id, errors.Join(ErrRedeliverLimit, err))
 	case errors.Is(err, notify.ErrConflict):
 		return fmt.Errorf("redeliver %s: %w", id, errors.Join(ErrNotRedeliverable, err))
+	case errors.Is(err, notify.ErrTooSoon):
+		return fmt.Errorf("redeliver %s: %w", id, errors.Join(ErrRedeliverTooSoon, err))
 	case err != nil:
 		return fmt.Errorf("redeliver %s: %w", id, err)
 	default:

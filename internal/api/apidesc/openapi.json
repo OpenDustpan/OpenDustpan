@@ -119,9 +119,7 @@
         "type": "object"
       },
       "ApiDescription": {
-        "additionalProperties": {
-          "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-        },
+        "additionalProperties": true,
         "type": "object"
       },
       "ApprovalDefault": {
@@ -290,6 +288,137 @@
         ],
         "type": "object"
       },
+      "BackupManifest": {
+        "properties": {
+          "blobs": {
+            "items": {
+              "$ref": "#/components/schemas/ManifestBlob"
+            },
+            "type": "array"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "damaged": {
+            "items": {
+              "$ref": "#/components/schemas/DamagedBlob"
+            },
+            "type": "array"
+          },
+          "dialect": {
+            "type": "string"
+          },
+          "format": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "installationKind": {
+            "type": "string"
+          },
+          "primaryInstallations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rowCounts": {
+            "additionalProperties": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "schemaVersion": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "sqlFiles": {
+            "items": {
+              "$ref": "#/components/schemas/PortableFile"
+            },
+            "type": "array"
+          },
+          "sqlFormat": {
+            "type": "string"
+          },
+          "sqlSha256": {
+            "type": "string"
+          },
+          "sqlSize": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "unverified": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          },
+          "wrapperIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "blobs",
+          "createdAt",
+          "dialect",
+          "format",
+          "id",
+          "installationKind",
+          "primaryInstallations",
+          "rowCounts",
+          "schemaVersion",
+          "sqlFiles",
+          "sqlFormat",
+          "sqlSha256",
+          "sqlSize",
+          "version",
+          "wrapperIds"
+        ],
+        "type": "object"
+      },
+      "BackupSummary": {
+        "properties": {
+          "endedAt": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "startedAt",
+          "state",
+          "target"
+        ],
+        "type": "object"
+      },
       "BackupTooManyUnverifiedError": {
         "description": "The error answer with the code backup.too-many-unverified.",
         "properties": {
@@ -335,6 +464,35 @@
         ],
         "type": "object"
       },
+      "BlobFindings": {
+        "properties": {
+          "damaged": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "missing": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "named": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "damaged",
+          "keys",
+          "missing",
+          "named"
+        ],
+        "type": "object"
+      },
       "BulkUnitSettingsError": {
         "properties": {
           "code": {
@@ -342,9 +500,7 @@
             "type": "integer"
           },
           "errorArgs": {
-            "additionalProperties": {
-              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-            },
+            "additionalProperties": true,
             "type": "object"
           },
           "errorCode": {
@@ -439,6 +595,17 @@
         ],
         "type": "object"
       },
+      "CancelRestoreResponse": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "Capabilities": {
         "properties": {
           "apiVersion": {
@@ -468,6 +635,24 @@
         "required": [
           "currentPassword",
           "newPassword"
+        ],
+        "type": "object"
+      },
+      "CheckBackupResponse": {
+        "properties": {
+          "complete": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "complete",
+          "id"
         ],
         "type": "object"
       },
@@ -511,9 +696,7 @@
             "type": "string"
           },
           "data": {
-            "additionalProperties": {
-              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-            },
+            "additionalProperties": true,
             "type": "object"
           },
           "hidden": {
@@ -570,7 +753,10 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/ContextAnswer"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -840,16 +1026,10 @@
       "CreateGitHostConnectionRequest": {
         "properties": {
           "apiAddress": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "appID": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "auth": {
             "type": [
@@ -858,25 +1038,13 @@
             ]
           },
           "credential": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "credentials": {
-            "items": {
-              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-            },
-            "type": [
-              "array",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "eventSecret": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "installationID": {
             "type": [
@@ -891,10 +1059,7 @@
             ]
           },
           "privateKey": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "push": {
             "type": [
@@ -1147,6 +1312,37 @@
         ],
         "type": "object"
       },
+      "DamagedBlob": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "md5": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "sealed": {
+            "type": "boolean"
+          },
+          "size": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "md5",
+          "reason",
+          "size",
+          "state"
+        ],
+        "type": "object"
+      },
       "DeletedUnit": {
         "properties": {
           "deletedAt": {
@@ -1222,6 +1418,29 @@
           "skipped",
           "waitingBlobPurges",
           "waitingFor"
+        ],
+        "type": "object"
+      },
+      "DevData": {
+        "properties": {
+          "classes": {
+            "additionalProperties": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "principals": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "classes",
+          "principals"
         ],
         "type": "object"
       },
@@ -1627,8 +1846,8 @@
           "principal.already-exists",
           "principal.disabled",
           "principal.invalid",
-          "principal.last-break-glass",
           "principal.managed-by-directory",
+          "principal.no-working-break-glass",
           "principal.not-disabled",
           "principal.not-found",
           "principal.removal-alert-failed",
@@ -1722,6 +1941,8 @@
           "sink.conflict",
           "sink.delivery-not-found",
           "sink.delivery-not-redeliverable",
+          "sink.delivery-redeliver-limit",
+          "sink.delivery-too-soon",
           "sink.invalid",
           "sink.no-sender",
           "sink.no-url",
@@ -1756,6 +1977,7 @@
           "state-version.too-large",
           "state-version.upload-denied",
           "store.failover-setting-invalid",
+          "store.server-version-unsupported",
           "storecheck.cooldown",
           "storecheck.invalid-target",
           "storecheck.no-target",
@@ -2041,6 +2263,110 @@
         ],
         "type": "object"
       },
+      "GetBackupResponse": {
+        "properties": {
+          "endedAt": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/BackupManifest"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "unverifiedKeyCount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "unverifiedKeyLimit": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "startedAt",
+          "state",
+          "target",
+          "unverifiedKeyCount",
+          "unverifiedKeyLimit"
+        ],
+        "type": "object"
+      },
+      "GetRestoreResponse": {
+        "properties": {
+          "backupID": {
+            "type": "string"
+          },
+          "devData": {
+            "$ref": "#/components/schemas/DevData"
+          },
+          "endedAt": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/BackupManifest"
+          },
+          "missingBlobLimit": {
+            "$ref": "#/components/schemas/MissingBlobLimit"
+          },
+          "notHeld": {
+            "$ref": "#/components/schemas/BlobFindings"
+          },
+          "preBackupFound": {
+            "$ref": "#/components/schemas/BlobFindings"
+          },
+          "preBackupID": {
+            "type": "string"
+          },
+          "requestedBy": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/RestoreWarning"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "backupID",
+          "id",
+          "missingBlobLimit",
+          "requestedBy",
+          "startedAt",
+          "state",
+          "warnings"
+        ],
+        "type": "object"
+      },
       "GitHostAccount": {
         "properties": {
           "expiresAt": {
@@ -2136,7 +2462,10 @@
               },
               "type": "array"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -3025,6 +3354,20 @@
         ],
         "type": "object"
       },
+      "ListBackupsResponse": {
+        "properties": {
+          "backups": {
+            "items": {
+              "$ref": "#/components/schemas/BackupSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "backups"
+        ],
+        "type": "object"
+      },
       "ListCollectionsResponse": {
         "properties": {
           "collections": {
@@ -3322,6 +3665,20 @@
         "required": [
           "nextPageToken",
           "providers"
+        ],
+        "type": "object"
+      },
+      "ListRestoresResponse": {
+        "properties": {
+          "restores": {
+            "items": {
+              "$ref": "#/components/schemas/RestoreSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "restores"
         ],
         "type": "object"
       },
@@ -3678,6 +4035,29 @@
         ],
         "type": "object"
       },
+      "ManifestBlob": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "md5": {
+            "type": "string"
+          },
+          "sealed": {
+            "type": "boolean"
+          },
+          "size": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "md5",
+          "size"
+        ],
+        "type": "object"
+      },
       "ManualLock": {
         "properties": {
           "holder": {
@@ -3743,6 +4123,28 @@
         },
         "required": [
           "limit"
+        ],
+        "type": "object"
+      },
+      "MissingBlobLimit": {
+        "properties": {
+          "count": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "percent": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "percentAbove": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "percent",
+          "percentAbove"
         ],
         "type": "object"
       },
@@ -3934,6 +4336,18 @@
           "principal": {
             "type": "string"
           },
+          "redeliverableAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "redeliveriesRemaining": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "redeliveryLimit": {
+            "format": "int64",
+            "type": "integer"
+          },
           "sink": {
             "type": "string"
           },
@@ -3954,6 +4368,8 @@
           "nextAt",
           "notification",
           "principal",
+          "redeliveriesRemaining",
+          "redeliveryLimit",
           "sink",
           "state",
           "subscription",
@@ -4344,6 +4760,42 @@
         ],
         "type": "object"
       },
+      "PortableFile": {
+        "properties": {
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "path": {
+            "type": "string"
+          },
+          "rows": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "table": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "columns",
+          "path",
+          "rows",
+          "sha256",
+          "size",
+          "table"
+        ],
+        "type": "object"
+      },
       "Preferences": {
         "properties": {
           "colorMode": {
@@ -4662,6 +5114,9 @@
           "publishedBy": {
             "type": "string"
           },
+          "served": {
+            "type": "boolean"
+          },
           "version": {
             "type": "string"
           }
@@ -4674,6 +5129,7 @@
           "protocols",
           "publishedAt",
           "publishedBy",
+          "served",
           "version"
         ],
         "type": "object"
@@ -5081,6 +5537,52 @@
         ],
         "type": "object"
       },
+      "RestoreSummary": {
+        "properties": {
+          "backupID": {
+            "type": "string"
+          },
+          "endedAt": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "errorCode": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "preBackupID": {
+            "type": "string"
+          },
+          "requestedBy": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/RestoreWarning"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "backupID",
+          "id",
+          "requestedBy",
+          "startedAt",
+          "state",
+          "warnings"
+        ],
+        "type": "object"
+      },
       "RestoreSwappedError": {
         "description": "The error answer with the code restore.swapped.",
         "properties": {
@@ -5119,6 +5621,21 @@
         },
         "required": [
           "restore"
+        ],
+        "type": "object"
+      },
+      "RestoreWarning": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "text"
         ],
         "type": "object"
       },
@@ -6261,6 +6778,17 @@
         ],
         "type": "object"
       },
+      "StartBackupResponse": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "StartDriftCheckRequest": {
         "properties": {
           "location": {
@@ -6313,6 +6841,47 @@
           "pool",
           "reason",
           "unit"
+        ],
+        "type": "object"
+      },
+      "StartRestoreRequest": {
+        "properties": {
+          "backupID": {
+            "type": "string"
+          },
+          "checkOnly": {
+            "type": "boolean"
+          },
+          "force": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "backupID",
+          "checkOnly",
+          "force"
+        ],
+        "type": "object"
+      },
+      "StartRestoreResponse": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "missingBlobLimit": {
+            "$ref": "#/components/schemas/MissingBlobLimit"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/RestoreWarning"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "missingBlobLimit",
+          "warnings"
         ],
         "type": "object"
       },
@@ -7485,7 +8054,10 @@
             "additionalProperties": {
               "type": "string"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "name": {
             "type": "string"
@@ -8126,6 +8698,168 @@
           },
           {
             "action": "server:disable-audit-chain",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/backups": {
+      "get": {
+        "operationId": "listBackups",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListBackupsResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "backups"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:backup",
+            "object": "server"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "startBackup",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartBackupResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "backups"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:backup",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/backups/{id}": {
+      "get": {
+        "operationId": "getBackup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetBackupResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "backups"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:backup",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/backups/{id}/check": {
+      "get": {
+        "operationId": "checkBackup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckBackupResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "backups"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:backup",
             "object": "server"
           }
         ]
@@ -17735,6 +18469,178 @@
         ]
       }
     },
+    "/api/dustpan/v1/restores": {
+      "get": {
+        "operationId": "listRestores",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListRestoresResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "restores"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:restore",
+            "object": "server"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "startRestore",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartRestoreResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "restores"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:restore",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/restores/{id}": {
+      "get": {
+        "operationId": "getRestore",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetRestoreResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "restores"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:restore",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/restores/{id}/cancel": {
+      "post": {
+        "operationId": "cancelRestore",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelRestoreResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "restores"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:restore",
+            "object": "server"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/self-service/blueprints/{namespace}": {
       "get": {
         "operationId": "listBlueprints",
@@ -18571,6 +19477,9 @@
       "name": "audit"
     },
     {
+      "name": "backups"
+    },
+    {
       "name": "capabilities"
     },
     {
@@ -18638,6 +19547,9 @@
     },
     {
       "name": "registry"
+    },
+    {
+      "name": "restores"
     },
     {
       "name": "self-service"
