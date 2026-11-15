@@ -1,10 +1,10 @@
 ## Context
 
-Agent steps use the same REST API as a person. The audit log stores per-namespace entries with a hash chain plus an installation scope. The agent block of audit-entry-has-no-agent supplies the agent field. This change stores the delegation ID and the reason on each entry of a delegated step, and verifies the chain over those fields.
+Agent steps use the same REST API as a person. The audit log stores per-namespace entries with a hash chain plus an installation scope. The agent block of audit-entry-has-no-agent supplies the agent field. This change writes the delegation ID into the agent block (its seventh field `delegationID`, ADR 380) and the reason into the existing the field `Reason` of `audit.Entry` of each entry of a delegated step; the chain covers both.
 
 ## Decisions
 
-1. **Stored delegation and reason fields on the audit entry.** Reuse the agent block of audit-entry-has-no-agent for the agent field and store only the NEW fields delegation ID and reason here. Store them at write time, in the same transaction as an allowed step. A denied step writes a denial entry in its own transaction. If the denial append fails the call is still refused with 503. Readers get the fields from the stored entry, never from a join. Each entry stores a hash-input version: version 1 for old entries, version 2 for new entries with delegation and reason. The version is part of the hash input.
+1. **The delegation in the agent block, the reason in Entry.Reason (ADR 380, owner).** The delegation ID goes into the seventh field `delegationID` of the agent block (`audit.Origin`, built by audit-agent-block), and the reason into the existing the field `Reason` of `audit.Entry`. `audit.Entry` gets no field. Store both at write time, in the same transaction as an allowed step. A denied step writes a denial entry in its own transaction. If the denial append fails the call is still refused with 503.
 2. **Reason input, limit and error.** The caller supplies the reason as the body field reason on each delegated tool call, and it is required every time. The reason holds at most 500 Unicode code points, each an ASCII printable character 0x20 to 0x7E. The server refuses a missing, long, or out-of-allowlist reason with the NEW error code audit.reason-invalid, with no entry written, and repeats nothing of the input. Transcript text never enters the reason. A forged or unknown delegation ID is never stored raw: the denial entry stores the literal unknown-delegation plus at most 64 ASCII printable characters of the input.
 
 ## Structure

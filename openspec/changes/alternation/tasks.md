@@ -16,5 +16,5 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Update docs/guides/high-availability.md with the three-instance proxy layout Check: High-availability guide names the alternation topology, proxy TLS trust setup for both CLIs, shared S3 bucket check, and the proxy record check
+- [ ] 3.1 Update docs/guides/high-availability.md with the three-instance proxy layout Check: High-availability guide names the alternation topology, proxy TLS trust setup for both CLIs, shared S3 bucket check, and the proxy record check. `make docs-lint` passes on each edited guide.
 - [ ] 3.2 Run full definition of done: wiring through proxy, real CLI traffic, docs page, usability check from docs page, make check Check: `make check` reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

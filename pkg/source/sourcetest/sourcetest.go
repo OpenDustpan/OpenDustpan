@@ -147,6 +147,7 @@ func EntryForFilter(fence namespace.Fence, text string) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 }
 

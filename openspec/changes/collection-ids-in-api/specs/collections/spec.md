@@ -9,5 +9,5 @@ The server SHALL store and take the collection of a placement rule by its stable
 - **THEN** the placement rules of the old collection place no unit into the new one
 
 #### Scenario: A rule body names a collection by name
-- **WHEN** a client creates a placement rule with `collection` and no `collectionId`
+- **WHEN** a client creates a placement rule with `collection` and no `collectionID`
 - **THEN** the server answers 400 placement.collection-id-required and stores nothing

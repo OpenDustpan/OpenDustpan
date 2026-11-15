@@ -1,12 +1,14 @@
 # 76. AI-assisted contributions
 
-Status: accepted · 2026-10-17 · the sign-off of agent commits after the push of October 2026 is an open question
+Status: accepted · 2026-10-17 · ADR 381 answers the open question of the sign-off of agent commits
 
 Changed by:
 
 - ADR 317 changes decisions 7 and 8: the identity of an agent commit and the trailer.
 - ADR 375 extends decision 2: an AI-authored pull request also names its
   spec-ready OpenSpec change.
+- ADR 381 changes decision 8: the agent sign-off applies until the first
+  tag, and the owner signs off after it. It answers the open question.
 
 ## Context
 
@@ -67,3 +69,11 @@ signs off.
 - A DCO check in CI can come later. Until then, reviewers check the
   sign-off.
 - The rule on AI-generated media in `CONTRIBUTING.md` stays.
+
+## Changelog
+
+- 2026-11-15, status line (ADR 381): the status line said "the sign-off of
+  agent commits after the push of October 2026 is an open question". It now
+  says "ADR 381 answers the open question of the sign-off of agent commits".
+  The owner answered the question on 15 November 2026. The words of the
+  decisions do not change.

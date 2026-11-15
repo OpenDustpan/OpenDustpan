@@ -73,6 +73,10 @@ type releaseDocument struct {
 	PublishedBy    string        `json:"publishedBy"`
 	KeyFingerprint string        `json:"keyFingerprint"`
 	Files          []releaseFile `json:"files"`
+	// Served reports whether the provider registry protocol serves the release
+	// now. A release whose signing key the namespace removed stays in the
+	// management list with Served false.
+	Served bool `json:"served"`
 }
 
 type listReleasesResponse struct {
@@ -109,7 +113,7 @@ type listKeysResponse struct {
 
 func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
-func toRelease(r registry.Release) releaseDocument {
+func toRelease(r registry.Release, served bool) releaseDocument {
 	files := make([]releaseFile, 0, fixedFiles+len(r.Archives))
 	files = append(files,
 		releaseFile{Role: string(service.RoleSums), Name: r.SumsFile, SHA256: r.SumsSHA256, Platform: "", Size: 0},
@@ -134,7 +138,7 @@ func toRelease(r registry.Release) releaseDocument {
 	return releaseDocument{
 		Namespace: r.Address.Namespace.String(), Name: r.Address.Name, Version: r.Version,
 		Protocols: append([]string{}, r.Protocols...), PublishedAt: formatTime(r.PublishedAt),
-		PublishedBy: r.PublishedBy, KeyFingerprint: r.KeyFingerprint, Files: files,
+		PublishedBy: r.PublishedBy, KeyFingerprint: r.KeyFingerprint, Files: files, Served: served,
 	}
 }
 
@@ -153,13 +157,14 @@ func callerOf(r *http.Request, p identity.Principal) *service.Caller {
 		UserAgent: audit.TruncateUserAgent(userAgent(r)), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: string(p.Kind),
-		JobID: p.JobID,
+		JobID:  p.JobID,
+		Origin: nil,
 	}
 
 	// The audit log refuses a kind it does not know, so an unknown kind is
 	// recorded as no kind.
 	switch p.Kind {
-	case identity.KindPerson, identity.KindService, identity.KindWorkload:
+	case identity.KindPerson, identity.KindService, identity.KindWorkload, identity.KindAgent:
 	default:
 		by.PrincipalKind = ""
 	}
@@ -390,6 +395,30 @@ func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request, _ identi
 	h.writeJSON(ctx, w, http.StatusOK, page)
 }
 
+// servedVersions returns the versions of the provider name in ns that the
+// registry protocol serves now. It reads the list of the protocol, so the
+// management view applies the same rule. A provider with no servable release
+// gives an empty set, not an error.
+func (h *Handler) servedVersions(
+	ctx context.Context, ns namespace.Name, name string,
+) (map[string]bool, error) {
+	rels, err := h.service.ServableReleases(ctx, ns, name)
+	if errors.Is(err, registry.ErrNotFound) {
+		return map[string]bool{}, nil
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]bool, len(rels))
+	for i := range rels {
+		out[rels[i].Version] = true
+	}
+
+	return out, nil
+}
+
 // listReleases serves GET .../registry/providers/{name}/versions.
 func (h *Handler) listReleases(w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object) {
 	ctx := r.Context()
@@ -401,9 +430,16 @@ func (h *Handler) listReleases(w http.ResponseWriter, r *http.Request, _ identit
 		return
 	}
 
+	served, err := h.servedVersions(ctx, obj.Namespace(), r.PathValue("name"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	out := make([]releaseDocument, 0, len(found))
 	for i := range found {
-		out = append(out, toRelease(found[i]))
+		out = append(out, toRelease(found[i], served[found[i].Version]))
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, listReleasesResponse{Releases: out})
@@ -420,7 +456,14 @@ func (h *Handler) getRelease(w http.ResponseWriter, r *http.Request, _ identity.
 		return
 	}
 
-	h.writeJSON(ctx, w, http.StatusOK, toRelease(rel))
+	served, err := h.servedVersions(ctx, obj.Namespace(), r.PathValue("name"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, toRelease(rel, served[rel.Version]))
 }
 
 // addKey serves POST .../registry/keys.
@@ -495,7 +538,8 @@ func jsonAnswer(status int, body any) (idempotency.Answer, error) {
 	}, nil
 }
 
-// releaseAnswer answers a publish: 200 with the release. A repeat of a
+// releaseAnswer answers a publish: 200 with the release. A publish passed the
+// check of a trusted signing key, so the release is served. A repeat of a
 // published version answers 200 too.
 func releaseAnswer(identity.Object) answerFunc {
 	return func(result any) (idempotency.Answer, error) {
@@ -504,7 +548,7 @@ func releaseAnswer(identity.Object) answerFunc {
 			return idempotency.Answer{}, errResult
 		}
 
-		return jsonAnswer(http.StatusOK, toRelease(rel))
+		return jsonAnswer(http.StatusOK, toRelease(rel, true))
 	}
 }
 

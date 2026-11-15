@@ -4253,3 +4253,42 @@ decisions:
   accepted_artifact: "docs/adr/0379-the-openpgp-dependency-of-the-registry.md"
   evidence:
   - "docs/adr/0379-the-openpgp-dependency-of-the-registry.md"
+- id: "adr-0380"
+  title: "ADR 380: The delegation in the agent block of an audit entry"
+  decision: "1. **Seven fields in the one agent block (owner, 2026-11-15).** The agent block of ADR 126 decision 10 holds seven fields in this fixed order: `agentRun`, `agentSession`, `tool`, `argsDigest`, `breakGlass` as `true` or `false`, `secretStage`, and `delegationID`. `delegationID` is the stable ID of the delegation of ADR 354 under which the agent acted (ADR 362), and it is empty when the step had no delegation. The block starts with the length-prefixed text `agent/1`, then the seven fields, each length-prefixed, with an empty value when it is not set. Inside the block no field is optional.\n2. **An entry with all seven fields empty writes no block.** An entry with all seven fields empty (and `breakGlass` false) writes no block. An entry with any of the seven fields set writes the block.\n3. **No block version and no compatibility path.** The block keeps the text `agent/1`. No entry was hashed with six fields under a tag, so the chain check reads one block shape only, and no code reads a six-field block.\n4. **The encoding stays injective.** An entry without the block has a fixed count of length-prefixed fields, and an entry with it has that count plus eight: the version text and the seven fields.\n\nLater changes, from the status line of ADR 380: Decided by the project owner."
+  reason: "ADR 126 decision 10 puts six fields of an agent step into the hash encoding of an audit entry, as one agent block. ADR 354 (owner, 2026-11-07) lets an agent act for a person under a delegation. A delegated step must record the delegation that allowed it, and a change of that record must break the audit chain like a change of any other field."
+  scope:
+  - "docs/adr/0380-the-delegation-in-the-agent-block-of-an-audit-entry.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-15"
+  accepted_artifact: "docs/adr/0380-the-delegation-in-the-agent-block-of-an-audit-entry.md"
+  evidence:
+  - "docs/adr/0380-the-delegation-in-the-agent-block-of-an-audit-entry.md"
+- id: "adr-0381"
+  title: "ADR 381: Agent sign-off until the first tag"
+  decision: "1. **Until the first tag, the agent signs off (owner, 2026-11-15).** Until the first tag, each agent commit keeps a `Signed-off-by:` line with the commit author identity of the agent, as ADR 76 decision 8 and ADR 317 decision 2 say.\n2. **The owner cleans up the history before the first tag (owner, 2026-11-15).** ADR 76 decision 8 already planned this cleanup. Nothing waits for it.\n3. **After the first tag, the owner signs off (owner, 2026-11-15).** After the first tag, each agent commit carries the `Signed-off-by:` line of the project owner. The owner gives one standing statement for the agent sessions that the owner runs.\n4. **The release gate gets an item (owner, 2026-11-15).** The gate of the first release gets the item \"agent sign-off rule settled\"."
+  reason: "ADR 76 decision 8 (owner, 2026-10-17) says: \"until the push ends on 2026-10-22, each agent commit carries a `Signed-off-by:` line with the commit author identity of the agent. The owner cleans up the history later. Nothing waits for this cleanup.\" ADR 317 decision 2 (owner, 2026-10-20) sets that identity for the author and the DCO sign-off. ADR 319 changes only the trailer part of ADR 317 decision 2."
+  scope:
+  - "CLAUDE.md"
+  - "CONTRIBUTING.md"
+  - "docs/roadmap.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-15"
+  accepted_artifact: "docs/adr/0381-agent-sign-off-until-the-first-tag.md"
+  evidence:
+  - "docs/adr/0381-agent-sign-off-until-the-first-tag.md"
+- id: "adr-0382"
+  title: "ADR 382: A repeatable domain refusal goes through the shared denial limiter"
+  decision: "1. **A repeatable domain refusal goes through the shared denial limiter (owner, 2026-11-15).** A domain refusal that the same caller can repeat, for example a redeliver that comes too soon or a redeliver at its limit, goes through the shared denial limiter. The first refusal of a key in a window writes the audit entry. The limiter counts the later identical refusals, and the next entry of the key reports the count.\n2. **No refusal leaves the count (owner, 2026-11-15).** The limiter drops no refusal from the count. The audit log shows the first refusal and the count of the others, so ADR 250 decision 3 holds.\n3. **New domain refusals use the limiter by default (owner, 2026-11-15).** A new domain refusal that a caller can repeat records its audit entry through the shared denial limiter."
+  reason: "ADR 250 decision 3 (owner) says, in its layer \"Fail closed and record\": \"Every denial and every use of a privilege goes to the audit log.\" The redeliver route of notification deliveries refuses a redeliver that comes too soon (429) and a redeliver of a delivery at its limit (409). Each refusal writes one denied audit entry. A script that repeats the call writes one entry for each call, with no bound. The caller can fill the audit log of the namespace with entries that say the same thing."
+  scope:
+  - "internal/api/refusal"
+  - "internal/denylimit"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-15"
+  accepted_artifact: "docs/adr/0382-a-repeatable-domain-refusal-goes-through-the-shared-denial-limiter.md"
+  evidence:
+  - "docs/adr/0382-a-repeatable-domain-refusal-goes-through-the-shared-denial-limiter.md"

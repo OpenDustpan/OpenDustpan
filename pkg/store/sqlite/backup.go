@@ -1140,7 +1140,8 @@ func blobRefs(ctx context.Context, conn *sql.DB) (blobrefs.BackupRefs, error) {
 		UNION ALL
 		SELECT blob_key AS content_key, size AS size, md5 AS md5, 0 AS sealed FROM update_journal
 		UNION ALL
-		SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || CAST(blob_version AS TEXT) AS content_key,
+		SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || CAST(blob_version AS TEXT)
+			|| '-' || blob_attempt AS content_key,
 			blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM item_keys WHERE shredded_at_ms = 0
 		ORDER BY content_key`
 
@@ -1279,8 +1280,8 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
-// the notification sinks, the triggers, the self-service blueprints, the trust rules and the
-// break-glass reviews.
+// the notification sinks, the triggers, the self-service blueprints, the trust rules, the
+// break-glass reviews, the sweep targets and the sweeps.
 func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	if err := checkStagedDriftResults(ctx, conn); err != nil {
 		return err
@@ -1322,9 +1323,19 @@ func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 		return err
 	}
 
-	if err := checkStagedBreakGlassReviews(ctx, conn); err != nil {
+	if err := checkStagedBreakGlassAndUnmanaged(ctx, conn); err != nil {
 		return err
 	}
 
 	return checkStagedForgeLinks(ctx, conn)
+}
+
+// checkStagedBreakGlassAndUnmanaged checks the rows of the staged break-glass
+// reviews and of the unmanaged resource sweeps.
+func checkStagedBreakGlassAndUnmanaged(ctx context.Context, conn *sql.DB) error {
+	if err := checkStagedBreakGlassReviews(ctx, conn); err != nil {
+		return err
+	}
+
+	return checkStagedUnmanaged(ctx, conn)
 }

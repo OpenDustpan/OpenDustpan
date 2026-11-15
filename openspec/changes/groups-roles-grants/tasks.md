@@ -4,10 +4,10 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Write a failing e2e for writer scope across two collections with the real Pulumi CLI and OpenTofu, route PUT /api/server/namespaces/{namespace}/collections/{collection}/grants, personal access token of a non-admin person Check: the step of TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go fails on main
-- [ ] 1.2 Write a failing e2e for viewer read and write with `pulumi stack export`, `tofu state pull`, `pulumi up` and `tofu apply`, grant route POST /api/server/namespaces/{namespace}/collections/{collection}/grants, personal access token of a viewer Check: the step of TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go fails on main
-- [ ] 1.3 Write a failing e2e for revocation, route DELETE /api/server/grants/{id}, and the retry with the same personal access token Check: the step of TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go fails on main
-- [ ] 1.4 Write a failing e2e for the access-review export, route GET /api/server/namespaces/{namespace}/collections/{collection}/access-review, with a site administrator session Check: the access-review step of TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go fails on main
+- [x] 1.1 Write a failing e2e for writer scope across two collections with the real Pulumi CLI and OpenTofu, route PUT /api/server/namespaces/{namespace}/collections/{collection}/grants, personal access token of a non-admin person Check: the step of TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go fails on main
+- [x] 1.2 Write a failing e2e for viewer read and write with `pulumi stack export`, `tofu state pull`, `pulumi up` and `tofu apply`, grant route POST /api/server/namespaces/{namespace}/collections/{collection}/grants, personal access token of a viewer Check: the step of TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go fails on main
+- [x] 1.3 Write a failing e2e for revocation, route DELETE /api/server/grants/{id}, and the retry with the same personal access token Check: the step of TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go fails on main
+- [x] 1.4 Write a failing e2e for the access-review export, route GET /api/server/namespaces/{namespace}/collections/{collection}/access-review, with a site administrator session Check: the access-review step of TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go fails on main
 
 ## 2. Implementation
 
@@ -24,8 +24,8 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Wiring and routes keep their authorization actions Check: route test passes
-- [ ] 4.2 Update docs/guides/roles-and-grants.md and docs/guides/access-review.md; each command on the pages uses the route GET /api/server/namespaces/{namespace}/collections/{collection}/access-review or DELETE /api/server/grants/{id} with a personal access token Check: the commands on the pages run in e2e
+- [x] 4.2 Update docs/guides/roles-and-grants.md and docs/guides/access-review.md; each command on the pages uses the route GET /api/server/namespaces/{namespace}/collections/{collection}/access-review or DELETE /api/server/grants/{id} with a personal access token Check: the commands on the pages run in e2e
 - [ ] 4.3 Usability check: the persona completes the path from the docs page alone Check: each error names one helping command
-- [ ] 4.5 Run TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go: the steps of tasks 1.1 to 1.4, with the real Pulumi CLI and OpenTofu, the route DELETE /api/server/grants/{id} and a personal access token of a non-admin person. Check: `go test ./e2e/ -run TestCollectionGrantScope -count=1` passes. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.6 Run the discovery step of TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go (ADR 374 decision 1) with the real OpenTofu CLI, the route GET /api/v2/organizations/{organization}/entitlement-set and a personal access token of a person who holds a grant on one collection only. Check: `go test ./e2e/ -run TestCollectionGrantScope -count=1` passes, including the entitlement-set read before and after the revoke. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.4 Run the full check Check: `make check` with zero findings
+- [x] 4.5 Run TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go: the steps of tasks 1.1 to 1.4, with the real Pulumi CLI and OpenTofu, the route DELETE /api/server/grants/{id} and a personal access token of a non-admin person. Check: `go test -tags e2e ./e2e/ -run TestCollectionGrantScope -count=1` passes. Confirmed by: CI (the agent writes the e2e test).
+- [x] 4.6 Run the discovery step of TestCollectionGrantScope in the NEW file e2e/collection_grants_test.go (ADR 374 decision 1) with the real OpenTofu CLI, the route GET /api/v2/organizations/{organization}/entitlement-set and a personal access token of a person who holds a grant on one collection only. Check: `go test -tags e2e ./e2e/ -run TestCollectionGrantScope -count=1` passes, including the entitlement-set read before and after the revoke. Confirmed by: CI (the agent writes the e2e test).
+- [x] 4.4 Run the full check Check: `make check` with zero findings

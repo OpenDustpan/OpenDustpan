@@ -123,7 +123,7 @@ process that runs a restore stops, another worker continues the restore after
 the lease ends. The [several instances guide](several-instances.md) gives the
 steps.
 
-The worker that runs a restore renews the claim of the restore while it works. During the swap on PostgreSQL, a renewal waits from the copy of the durable control tables to the end of the swap. That time grows with the size of the installation. On SQLite, a renewal waits for the whole swap. A renewal can fail, for example when the database does not answer. Then the worker stops the step and gives the claim back before the lease ends. The worker log then has a WARN entry `durable operation claim renewal failed`, with the operation ID, the kind `restore`, the attempt and the owner. When another worker took the claim, the entry is `durable operation claim lost; another instance can own the operation`. The restore keeps its state, for example `applying`, and `GET /api/server/restores/{id}` shows it. A worker then claims the restore again and runs the stopped step again from its start. The swap is one database transaction, so a stopped swap changes no data. Do not start the restore again.
+The worker that runs a restore renews the claim of the restore while it works. During the swap on PostgreSQL, a renewal waits from the copy of the durable control tables to the end of the swap. That time grows with the size of the installation. On SQLite, a renewal waits for the whole swap. A renewal can fail, for example when the database does not answer. Then the worker stops the step and gives the claim back before the lease ends. The worker log then has a WARN entry `durable operation claim renewal failed`, with the operation ID, the kind `restore`, the attempt and the owner. When another worker took the claim, the entry is `durable operation claim lost; another instance can own the operation`. The restore keeps its state, for example `applying`, and `GET /api/dustpan/v1/restores/{id}` shows it. A worker then claims the restore again and runs the stopped step again from its start. The swap is one database transaction, so a stopped swap changes no data. Do not start the restore again.
 
 Before the restore changes data, it takes a backup of the live data, the backup before restore. The worker that runs the restore also runs this backup, under a claim that the start of the backup takes. Another worker continues this backup only when that claim ends or expires. This backup checks each live blob against the size and MD5 in its own live row. When a live blob is absent, or its bytes have another size or MD5 than its row, the backup does not stop. It records the blob in the `damaged` list of its manifest. Each entry has the key, the state (`missing` or `damaged`) and the reason (`absent`, `size`, `checksum` or `sealed`). It also has the size and MD5 of the live row. The backup holds no copy of these blobs. Sealed OpenTofu state that does not open goes in the list too, with the reason `unopened`. Damaged bytes cause it, and so does a wrong key-encryption key. Every other read error stops the backup and the restore. When the backup finds missing or damaged blobs, the audit log holds one entry with the counts and the first keys.
 
@@ -134,13 +134,13 @@ Blobs are write-once. A restore adds keys and never writes over a live blob. So 
 
 `opendustpan restore` prints this text and the next step. It does not tell you to run the same restore again before you put the good bytes back or change the blob store setting.
 
-When the command cannot read a restore that started, for example while the database of the server is not available, it names the restore ID. The server resumes the restore on its own, so you do not run it again. Read its state with `GET /api/server/restores/{id}`.
+When the command cannot read a restore that started, for example while the database of the server is not available, it names the restore ID. The server resumes the restore on its own, so you do not run it again. Read its state with `GET /api/dustpan/v1/restores/{id}`.
 
 Each of these stops has an error code in the restore answer (`errorCode`): `restore.live-blobs-damaged` or `restore.live-blobs-missing`. `opendustpan restore` chooses its next step from the code.
 
 A restore always takes a new backup before restore. A pre-backup ID can name a backup that exists, or a backup that another restore started. Then the restore stops before any live change with the code `restore.pre-backup-foreign`. Run the restore again.
 
-No setting changes the bound. The answers of `POST /api/server/restores` and `GET /api/server/restores/{id}` show it as `missingBlobLimit`, with `count` (10), `percent` (20) and `percentAbove` (1).
+No setting changes the bound. The answers of `POST /api/dustpan/v1/restores` and `GET /api/dustpan/v1/restores/{id}` show it as `missingBlobLimit`, with `count` (10), `percent` (20) and `percentAbove` (1).
 
 For each blob of the backup, the restore does one of these:
 
@@ -150,7 +150,7 @@ For each blob of the backup, the restore does one of these:
 
 Each registry release file of the backup goes through the same write-once rule, keyed by its SHA-256 content key. The restore reads every named file from the backup target and checks each copy against its SHA-256 key before any registry file becomes visible. A file that the backup does not hold, or whose bytes do not match its key, stops the restore before it writes any registry file. The error names the SHA-256 key and the command `opendustpan backup`. A live blob that already holds the key with other bytes stops the restore, as for every other blob.
 
-A restore that went on after the backup before restore found missing blobs succeeds with the warning `missing-live-blobs`. The answer of `GET /api/server/restores/{id}` has `preBackupFound`. It holds the count of blobs that the live data names (`named`), the counts `missing` and `damaged`, and the first 10 keys (`keys`). A restore that stopped at the live blobs has `preBackupFound` too.
+A restore that went on after the backup before restore found missing blobs succeeds with the warning `missing-live-blobs`. The answer of `GET /api/dustpan/v1/restores/{id}` has `preBackupFound`. It holds the count of blobs that the live data names (`named`), the counts `missing` and `damaged`, and the first 10 keys (`keys`). A restore that stopped at the live blobs has `preBackupFound` too.
 
 A backup whose manifest holds no `registryFiles` part restores the registry rows without the release files. The restore then ends with the warning `registry-files-absent`: the registry serves no file of the restored releases. Run `opendustpan backup` again on the source installation, then restore the new backup.
 
@@ -272,12 +272,12 @@ token that has the action `server:restore`:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
-  https://dustpan.example/api/server/restores/rst-aaa/cancel
+  https://dustpan.example/api/dustpan/v1/restores/rst-aaa/cancel
 ```
 
 | Answer | Meaning |
 | --- | --- |
-| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. The restore row can stay `checking` until the step that runs ends. In one test run this took about 6 seconds. Read `GET /api/server/restores/{id}` until its status is `failed`. |
+| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. The restore row can stay `checking` until the step that runs ends. In one test run this took about 6 seconds. Read `GET /api/dustpan/v1/restores/{id}` until its status is `failed`. |
 | 409 `restore.swapped` | The restore already swapped the data. It runs to its end. To undo it, restore the backup taken before it. |
 | 409 `restore.ended` | The restore already ended. |
 | 404 | No restore has this ID. |
@@ -369,8 +369,8 @@ restore applies. These writes run, each with its audit entry:
   until an administrator enables it again. The check of a disable in normal
   operation stays in force: the caller holds every action that the grants of
   the principal give. The server refuses the disable of the last enabled
-  break-glass account with 409 and the error code `principal.last-break-glass`,
-  also in maintenance mode. Keep a second enabled break-glass account first
+  break-glass account with 409 and the error code
+  `principal.no-working-break-glass`, also in maintenance mode. Keep a second enabled break-glass account first
   (see [Keep a break-glass account](break-glass-accounts.md)).
 - the expiry of a temporary administrator, which ends the record, disables the
   principal, revokes its grants and tokens and ends its group memberships.
@@ -402,8 +402,11 @@ kind that the server does not know, or a target that is not an ID) changes
 nothing and gets an entry with the outcome `denied`. The restore skips a
 disable that would leave the restored data with no enabled break-glass
 account. It keeps that account enabled and writes an entry with the outcome
-`denied` and the reason `principal.last-break-glass` (see
-[Keep a break-glass account](break-glass-accounts.md)).
+`denied` and the reason `principal.no-working-break-glass` (see
+[Keep a break-glass account](break-glass-accounts.md)). The restore stops
+with the code `principal.no-working-break-glass` when it lowers the count of
+working break-glass accounts and leaves fewer than two
+(see [Other paths](break-glass-accounts.md#other-paths)).
 
 The server records only the revocations of the current stay in maintenance mode. A
 new enter starts a new stay. A revocation that you made in normal

@@ -603,6 +603,13 @@ func (r *reflector) structSchema(t reflect.Type) (object, error) {
 			return nil, fmt.Errorf("field %q: %w", f.name, err)
 		}
 
+		if f.isNullableMap() {
+			schema, err = nullable(schema)
+			if err != nil {
+				return nil, fmt.Errorf("%w: field %q of %s: %w", ErrInvalidBody, f.name, t, err)
+			}
+		}
+
 		if text, ok := r.described[t][f.name]; ok {
 			schema = withDescription(schema, text)
 		}

@@ -307,6 +307,7 @@ func TestTrimToFitKeepsAuditChainFields(t *testing.T) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	rec := audit.ToRecord(entry)

@@ -58,20 +58,32 @@ stopped --> [*]
 | availability | readiness 503 within 1 s | s | per instance SIGTERM |
 | recovery | claimable by another worker within 60 s | s | per released durable claim |
 
+## Contract
+
+```go
+// internal/api/admit
+var ErrDraining = errors.New("the instance drains") // NEW; Start returns it wrapped
+// pkg/dustpan
+func (s *Server) Draining() bool // NEW: true from the start of the drain on (readiness.draining)
+```
+
+- Error code `instance.draining` (NEW, internal/errcode): 503 with `Retry-After: <drain period in whole seconds>` on each durable start route (`POST /api/dustpan/v1/backups`, the restore, audit chain and store check starts, and the job, drift and trigger starts) while the instance drains. The authorization action of each route does not change.
+- `GET /health/ready` while draining: 503, the body of main (failed: draining) and `Retry-After`.
+
 ## Contracts
 
 **instance**
 
 - Invariant: One instance record names one server process.
-- Invariant: A draining instance takes no new durable claims.
+- Invariant: A draining instance takes no new durable claims, and a durable start route answers 503 with `Retry-After` while it drains.
 - The drain (pkg/dustpan/health.go, the `draining` flag): pre: the stop signal arrived. Post: readiness answers 503 with `Retry-After`; the shutdown path then releases the claims.
-- `ReleaseClaims`: pre: Instance holds claims.. Post: Held durable claims become claimable by another worker..
+- The backup worker (`startBackupWorker`, pkg/dustpan/dustpan.go:2130, stopped and awaited by `Server.Run` at :2096-2111): pre: the instance holds a claim. Post: the claim is released when the worker returns, and another worker can claim it.
 
 **durable operation**
 
 - Invariant: One claim holder owns one operation step at one time.
 - Invariant: A released claim can run again on another worker.
-- `ReleaseOnShutdown`: pre: Shutdown started after drain timeout or SIGTERM.. Post: Claim is released for takeover..
+- The release on shutdown is the return of the backup worker in `Server.Run` (pkg/dustpan/dustpan.go:2096-2111): pre: shutdown started after the drain. Post: the claim is released for takeover.
 
 ## Failure modes
 

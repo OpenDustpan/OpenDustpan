@@ -6,6 +6,9 @@ Changed by:
 
 - ADR 129 extends decisions 6 and 7: filtered value count and entries for
   probes, secrets, allowlist.
+- ADR 380 changes decision 10: the agent block holds seven fields, with the
+  delegation ID as the seventh. The rule that old entries hash as before
+  goes.
 
 ## Context
 

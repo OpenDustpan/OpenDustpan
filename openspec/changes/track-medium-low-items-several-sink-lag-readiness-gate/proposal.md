@@ -11,7 +11,7 @@ Issue: #718.
 The user path this change must make work:
 
 1. **Server start.** Start two instances on one PostgreSQL database with DUSTPAN_TEST_POSTGRES_URL
-2. **API.** Run restore to swap through ANY /api/server/restores/{} with access token, then watch drop-old-live step retry on held lock
+2. **API.** Run restore to swap through ANY /api/dustpan/v1/restores/{} with access token, then watch drop-old-live step retry on held lock
 3. **API.** Query readiness while sink lags; read reason for not ready
 4. **Docs page.** Follow guide for restore swap waits and readiness gate
 
@@ -56,7 +56,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Readiness check type exists (`pkg/dustpan/health.go:36 (func readinessCheck)`)
-- Audit stores check exists (`pkg/dustpan/dustpan.go:1751 (func checkAuditStores)`)
+- Audit stores check exists (`pkg/dustpan/dustpan.go:1751 (func checkOptionalStores)`)
 - Audit chain interval check exists (`pkg/dustpan/auditchain.go:76 (func checkAuditChainInterval)`)
 - Audit chain gate wrapper exists (`pkg/dustpan/maintenance.go:181 (func withAuditChainGate)`)
 - Restore steps list exists (`pkg/backup/restore_operation.go:272 (func RestoreSteps)`)

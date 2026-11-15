@@ -4,6 +4,9 @@ The blueprint routes manage the drafts and the published versions of the
 blueprints of a namespace. A published version is the document that a
 requester uses. The routes live under `/api/dustpan/v1/self-service/`.
 
+The server serves these routes with the SQLite and the PostgreSQL store. No
+flag turns them on.
+
 ## Grants apply at namespace level
 
 Grants apply at namespace level today: a blueprint action is checked on the

@@ -555,6 +555,7 @@ func baseEntry(scope namespace.Name, subject, action string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -600,6 +601,7 @@ func deniedEntry(
 		Reason:        "",
 		PrincipalKind: principalKind(p.Kind),
 		JobID:         Clean(p.JobID, audit.MaxJobIDLen),
+		Origin:        nil,
 	}
 }
 

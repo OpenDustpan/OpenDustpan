@@ -4,6 +4,8 @@ version: 4
 
 Roadmap: `docs/roadmap.md:466` (Drain instances with 503 and release claims.).
 
+Issue: #2027.
+
 ## Why
 
 **Persona: operator.** Operator replaces each instance with a newer build while teams run work. Without a clean drain the proxy still sends requests to the leaving instance and background work stalls until a lease expires. This change lets in-flight work drain before the instance leaves the pool and releases claims for takeover.
@@ -57,7 +59,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - A readiness drain test exists. (`pkg/dustpan/health_internal_test.go:224 (func TestReadinessDrains)`)
 - A backup takeover test after graceful stop exists. (`internal/servertest/backup_test.go:367 (func TestBackupTakeoverAfterGracefulStop)`)
 - A shutdown-during-write test that leaves a backup for another worker exists. (`pkg/backup/service_durable_test.go:480 (func TestShutdownDuringWriteStepLeavesTheBackupForAnotherWorker)`)
-- An audit shipper lease-release test on shutdown exists. (`pkg/audit/ship_test.go:1292 (func TestShipperReleasesItsLeaseOnShutdown)`)
+- An audit shipper lease-release test on shutdown exists. (`pkg/audit/ship_test.go:1293 (func TestShipperReleasesItsLeaseOnShutdown)`)
 
 ## ADR check
 

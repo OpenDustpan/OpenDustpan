@@ -21,13 +21,13 @@
 - [ ] 2.3 Wire artifact expiry and Restore to the existing schedules and restore routes, in pkg/dustpan/schedules.go and pkg/workspace/service.go:1771 (func Restore). Check: the existing ANY /api/inventory/deleted-units/{}/{}/restore returns success inside 30 days with an access token
 - [ ] 2.4 Add the CLI history read and redact steps in NEW cmd/dustpan/history.go. Check: CLI redact with reason secret-exposure prints the redaction record
 
-- [ ] 2.5 SECURITY. Build the allowlist of the tool values pulumi and tofu and of the reasons secret-exposure, personal-data and other in the history service, in NEW pkg/history/allowlist.go. Check: go test ./pkg/history -run TestHistoryRejectsUnknownTool
-- [ ] 2.6 SECURITY. Check the NEW actions namespace:read-history and namespace:redact-history at the point of use in the history service, in NEW pkg/history/authorize.go. Check: go test ./pkg/history -run TestHistoryReadDeniedWithoutGrant
+- [ ] 2.5 SECURITY. Build the allowlist of the tool values pulumi and tofu and of the reasons secret-exposure, personal-data and other in the history service, in NEW pkg/history/allowlist.go. The task adds the NEW top-level test `TestHistoryRejectsUnknownTool` in a `_test.go` file of `pkg/history`, so that the Check runs it. Check: go test ./pkg/history -run TestHistoryRejectsUnknownTool
+- [ ] 2.6 SECURITY. Check the NEW actions namespace:read-history and namespace:redact-history at the point of use in the history service, in NEW pkg/history/authorize.go. The task adds the NEW top-level test `TestHistoryReadDeniedWithoutGrant` in a `_test.go` file of `pkg/history`, so that the Check runs it. Check: go test ./pkg/history -run TestHistoryReadDeniedWithoutGrant
 
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `internal/db` (`make generate`, sqlc). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`); `internal/db` (`make generate`, sqlc). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. definition of done
 

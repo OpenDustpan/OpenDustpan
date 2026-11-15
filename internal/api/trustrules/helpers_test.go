@@ -272,6 +272,7 @@ func (e *env) storePrincipal(id, subject string, ns namespace.Name, kind princip
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "",
 		JobID: "", Reason: "",
+		Origin: nil,
 	}
 
 	var err error

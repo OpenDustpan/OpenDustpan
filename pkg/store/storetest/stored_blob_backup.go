@@ -449,6 +449,7 @@ func publishModule(t *testing.T, rig *StoredBlobBackupRig, ns namespace.Namespac
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	if err = rig.Registry.Publish(ctx, rel, ns.Fence(), entry); err != nil {

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 
@@ -48,21 +50,40 @@ type gitHostConnectionsDocument struct {
 // gitHostConnectionRequest is the body of a create. The fields that the
 // operator owns are in the struct only so that a request that holds one fails
 // with a sentence that says so, and not with the sentence of an unknown field.
+// Each of them holds the JSON value as it came, because a field that the
+// request held with the value null must fail like a field that holds a value.
 type gitHostConnectionRequest struct {
-	Kind           *string `json:"kind"`
-	Auth           *string `json:"auth"`
-	InstallationID *string `json:"installationID"`
-	Push           *bool   `json:"push"`
-	APIAddress     *string `json:"apiAddress"`
-	AppID          *string `json:"appID"`
-	PrivateKey     *string `json:"privateKey"`
-	EventSecret    *string `json:"eventSecret"`
-	Credential     *string `json:"credential"`
-	Credentials    *[]any  `json:"credentials"`
+	Kind           *string       `json:"kind"`
+	Auth           *string       `json:"auth"`
+	InstallationID *string       `json:"installationID"`
+	Push           *bool         `json:"push"`
+	APIAddress     operatorOwned `json:"apiAddress"`
+	AppID          operatorOwned `json:"appID"`
+	PrivateKey     operatorOwned `json:"privateKey"`
+	EventSecret    operatorOwned `json:"eventSecret"`
+	Credential     operatorOwned `json:"credential"`
+	Credentials    operatorOwned `json:"credentials"`
+}
+
+// operatorOwned holds the JSON value of a field that only the operator sets.
+// It has its own type so that the API description can say that a request that
+// holds the field is refused.
+type operatorOwned []byte
+
+// UnmarshalJSON keeps a copy of the value as it came. The decoder calls it for
+// the value null too, so a field that the request held is never nil.
+func (o *operatorOwned) UnmarshalJSON(b []byte) error {
+	if err := (*json.RawMessage)(o).UnmarshalJSON(b); err != nil {
+		return fmt.Errorf("an operator field: %w", err)
+	}
+
+	return nil
 }
 
 // ownsFields reports whether the request holds a field that only the operator
-// sets.
+// sets. The decoder leaves an absent field nil and keeps the four bytes of
+// null for a field that the request held with the value null, so a field that
+// the request held is never nil.
 func (q *gitHostConnectionRequest) ownsFields() bool {
 	return q.APIAddress != nil || q.AppID != nil || q.PrivateKey != nil || q.EventSecret != nil ||
 		q.Credential != nil || q.Credentials != nil
@@ -257,7 +278,8 @@ func (h *Handler) makeGitHostConnection(
 ) {
 	view, err := h.createConnection(w, r, p, ns)
 	if err != nil {
-		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "create"}, err)
+		// The create names no connection: the route made none.
+		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "create", id: ""}, err)
 
 		return
 	}
@@ -345,7 +367,7 @@ func (h *Handler) removeGitHostConnection(
 	}
 
 	if err != nil {
-		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "delete"}, err)
+		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "delete", id: id}, err)
 
 		return
 	}
@@ -373,7 +395,7 @@ func (h *Handler) setGitHostDefault(
 ) {
 	version, _, err := ifMatch(r)
 	if err != nil {
-		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "make-default"}, err)
+		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "make-default", id: r.PathValue("id")}, err)
 
 		return
 	}
@@ -383,7 +405,7 @@ func (h *Handler) setGitHostDefault(
 		version,
 	)
 	if err != nil {
-		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "make-default"}, err)
+		h.failGitHostConnection(w, r, p, connectionChange{ns: ns, verb: "make-default", id: r.PathValue("id")}, err)
 
 		return
 	}
@@ -399,7 +421,7 @@ func (h *Handler) checkGitHostConnection(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
-	change := connectionChange{ns: obj.Namespace(), verb: "check"}
+	change := connectionChange{ns: obj.Namespace(), verb: "check", id: ""}
 
 	if idempotent.Present(r) {
 		h.failGitHostConnection(w, r, p, change, errGitHostIdempotencyKey)
@@ -441,21 +463,33 @@ func (h *Handler) checkGitHostConnection(
 }
 
 // connectionChange names a change of a connection that a failure entry records:
-// the namespace and the verb.
+// the namespace, the verb, and the ID of the connection that the change holds,
+// which is empty when the change holds none.
 type connectionChange struct {
 	ns   namespace.Name
 	verb string
+	id   string
 }
 
 // failGitHostConnection writes the failure entry of a refused change of a
 // connection, and answers err. The entry names the connection by a fixed
-// object of the namespace.
+// object of the namespace, and by the ID of the change when it holds one that
+// the server could have made. A create holds none.
 func (h *Handler) failGitHostConnection(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, c connectionChange, err error,
 ) {
+	object := "git-host-connection:" + c.verb
+
+	// Defense in depth: the ID comes from the path, which is not trusted. Only
+	// an ID of the shape that the server makes reaches the audit log, so the
+	// log never holds other text of a request.
+	if forge.ValidConnectionID(c.id) {
+		object += ":" + c.id
+	}
+
 	h.appendObjectChange(r, p, identity.NamespaceObject(c.ns), serverChange{
 		at: h.now(), action: identity.ActionNamespaceManageGitHostConnections,
-		object: "git-host-connection:" + c.verb, outcome: audit.OutcomeFailure,
+		object: object, outcome: audit.OutcomeFailure,
 	})
 	h.writeGitHostError(r, w, err)
 }

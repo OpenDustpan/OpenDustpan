@@ -18,9 +18,9 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
 
 ## 4. definition of done
 
 - [ ] 4.1 Confirm the existing outputs routes use the Latest port with no new route Check: Test log shows one row read and no blob read
-- [ ] 4.2 Pass the full check Check: `make check` reports zero findings
+- [ ] 4.2 Pass the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

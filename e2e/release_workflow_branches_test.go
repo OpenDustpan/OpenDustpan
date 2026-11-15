@@ -45,6 +45,11 @@ docker() {
   elif [ "$1" = "buildx" ] && [ "$2" = "build" ]; then
     return 0
   elif [ "$1" = "login" ]; then
+    # The real docker reads the password from stdin for docker login
+    # with --password-stdin. A stub that returns before it reads closes
+    # the pipe while echo still writes, echo gets SIGPIPE, and pipefail
+    # then gives the step the exit code 141.
+    cat >/dev/null
     if [ -n "$STUB_LOGIN_FAIL" ]; then echo "authentication denied" >&2; return 1; fi
     return 0
   fi
@@ -56,6 +61,11 @@ gh() {
   echo "$STUB_PERMISSION"
 }
 helm() {
+  # The real helm reads the password from stdin for helm registry login
+  # with --password-stdin, also when the login fails. A stub that returns
+  # before it reads closes the pipe while echo still writes, echo gets
+  # SIGPIPE, and pipefail then gives the step the exit code 141.
+  if [ "$1" = "registry" ] && [ "$2" = "login" ]; then cat >/dev/null; fi
   if [ -n "$STUB_HELM_FAIL" ]; then echo "stub: helm failed" >&2; return 1; fi
   if [ "$1" = "show" ] && [ "$2" = "chart" ]; then
     case "$STUB_CHART" in
@@ -461,10 +471,24 @@ func TestReleaseWorkflowChartRerun(t *testing.T) {
 		return env
 	}
 
+	// A token larger than the 64 KiB pipe buffer of Linux, and smaller
+	// than the 128 KiB limit of one environment string. A login stub
+	// that never reads stdin closes the pipe before echo finishes, echo
+	// gets SIGPIPE, and pipefail gives the step the exit code 141.
+	largeToken := strings.Repeat("t", 100*1024)
+
 	checkBranchTable(t, script, []branchCase{
 		{
 			name:    "first run pushes a missing chart",
 			env:     with(map[string]string{"MODE": "build", "STUB_CHART": "NOTFOUND"}),
+			want:    0,
+			wantOut: "",
+		},
+		{
+			name: "a large token waits for the login stub",
+			env: with(map[string]string{
+				"MODE": "build", "STUB_CHART": "NOTFOUND", "GHCR_TOKEN": largeToken,
+			}),
 			want:    0,
 			wantOut: "",
 		},

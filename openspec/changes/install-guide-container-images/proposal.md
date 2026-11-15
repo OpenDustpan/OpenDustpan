@@ -22,8 +22,12 @@ No test runs the commands of the page.
   `docs/install.md` and checks that strings are on the page. It runs no command.
 - `README.md` has no link to the install page (`grep -n install.md README.md`
   finds no line).
-- The release notes give the image digest of each tag (design decision 3 of
-  publish-container-images-forge-registry).
+- The release workflow writes the image digest of each tag to the summary of
+  its run only (`.github/workflows/release.yml:211`,
+  `echo "digest=$FORGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"`). The comment at
+  `.github/workflows/release.yml:16-18` records why: the job keeps
+  `contents:read`, and an edit of the release notes needs `contents:write`
+  (a trade-off that the owner confirmed). The release notes hold no digest.
 
 ## Fix boundary
 
@@ -31,7 +35,8 @@ No test runs the commands of the page.
   `git mv`, and change the path in `e2e/install_docs_test.go`.
 - Add to the page a section "Pull by digest": the form
   `ghcr.io/opendustpan/opendustpan@sha256:<digest>`, and where the digest of
-  each release is (the release notes, and `docker buildx imagetools inspect`).
+  each release is: the summary of the release workflow run, and
+  `docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:<tag>`.
 - Add a link to `docs/guides/install.md` in `README.md`.
 - The NEW e2e step `TestInstallGuideCommands` in the NEW file
   `e2e/install_guide_docs_test.go` runs each command of the page that needs no
@@ -43,7 +48,7 @@ No test runs the commands of the page.
 
 ## Check
 
-`go test ./e2e/ -run 'TestInstallPageListsBothPullCommands|TestInstallGuideCommands' -count=1`
+`go test -tags e2e -count=1 -run 'TestInstallPageListsBothPullCommands|TestInstallGuideCommands' ./e2e/`
 passes, and `make docs-lint` reports nothing.
 
 ## ADR check
