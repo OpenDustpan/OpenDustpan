@@ -294,6 +294,13 @@ func TagHasMinimumCheck(ctx context.Context, tb testing.TB, tag string) bool {
 func RefHasMinimumCheck(ctx context.Context, tb testing.TB, ref string) bool {
 	tb.Helper()
 
+	if ref == "" || strings.HasPrefix(ref, "-") {
+		// Defense in depth: callers pass release tags and HEAD trees only;
+		// this check stays so that a hostile ref cannot become an option of
+		// the git grep command.
+		return false
+	}
+
 	runCtx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 

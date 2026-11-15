@@ -527,6 +527,7 @@ release tag, the matrix fails instead of reporting zero old binaries. Run
 | --- | --- | --- |
 | An old binary refuses its writes on the new schema. | The old binary read a higher minimum row and refused its own writes with error code `schema.binary-below-minimum`. Rebuild the binaries and run the matrix again. | `make mixed-version-test` |
 | No release tag is reachable, and the clone is shallow. | The harness fails loudly and names the missing tags, because a shallow clone can hide a tag that exists. | `git fetch --tags` |
+| No ancestor v* tag exists. | The matrix reports zero old binaries and runs the same steps against a second process of the current binary. Run `git fetch --tags` with full history before the run, to prove that no tag exists. | `git fetch --tags` |
 | A release tag does not build or does not start. | The failure names the tag and the log line that explains it. | `make mixed-version-test` |
 
 ## Release checklist

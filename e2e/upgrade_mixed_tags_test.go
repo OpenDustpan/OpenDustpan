@@ -168,6 +168,18 @@ func checkPreMinimumTag(t *testing.T) {
 	if e2e.TagHasMinimumCheck(t.Context(), t, "v0.0.0-not-a-tag") {
 		t.Error("a release tag whose tree git cannot read must give no minimum check")
 	}
+
+	// A hostile ref that starts with "-" answers false, so it never becomes
+	// an option of the git grep command. Without the guard the read searches
+	// the working tree, which holds the sentinel, and answers true.
+	if e2e.RefHasMinimumCheck(t.Context(), t, "-q") {
+		t.Error("a ref that starts with - must give no minimum check")
+	}
+
+	// An empty ref answers false, so a missing name never reads a tree.
+	if e2e.RefHasMinimumCheck(t.Context(), t, "") {
+		t.Error("an empty ref must give no minimum check")
+	}
 }
 
 // checkOneFailedTagFailsTheRun checks the isolation of the peer build loop: a
