@@ -454,7 +454,9 @@ func docsPrecheck(cfg DocsConfig, cmd DocsCommand) (DocsResult, bool) {
 	}
 
 	// Defense in depth: the runner refuses these texts here, and the process
-	// also gets a closed environment and a fresh work directory.
+	// also gets a closed environment and a fresh work directory. The text
+	// patterns stop common mistakes only. They are not a sandbox: review a
+	// checked page like test code, because its blocks run as the CI user.
 	if docsSudoWord.MatchString(cmd.text) {
 		res.Reason = "refused: the block uses sudo"
 
@@ -507,7 +509,9 @@ func runDocsBlock(ctx context.Context, cfg DocsConfig, block DocsCommand, dir st
 	cmd.SysProcAttr = new(syscall.SysProcAttr)
 	cmd.SysProcAttr.Setpgid = true
 	cmd.Cancel = func() error {
-		// Kill the whole process group, so no child outlives the block.
+		// Kill the whole process group, so no child outlives the block. The
+		// kill after the run covers a child that outlives the shell; the two
+		// kills cover each other, so no test fails when only one is removed.
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 	cmd.WaitDelay = docsKillGrace

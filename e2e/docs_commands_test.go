@@ -470,11 +470,65 @@ func TestDocsCommandsDockerGate(t *testing.T) {
 		t.Errorf("docker without marker: status %s", r.Status)
 	}
 
+	// The reason proves that the gate refused the block. Without it, a host
+	// that has no Docker would fail the block when it runs, with any reason.
+	if !strings.Contains(r.Reason, "no needs-docker marker") {
+		t.Errorf("docker without marker: reason %q", r.Reason)
+	}
+
 	marked := "<!-- docs-check-skip: needs-docker -->\n" + fenced("docker ps\n")
 	unset := e2e.NewDocsConfig(0, func(string) string { return "" })
 
 	r = runOne(t, marked, unset)
 	if r.Status != e2e.DocsSkipped || r.Reason != e2e.DocsSkipNeedsDocker {
 		t.Errorf("docker with marker, E2E_COMPOSE unset: status %s reason %q", r.Status, r.Reason)
+	}
+}
+
+// TestDocsCommandsClosedEnvironment checks the closed environment layer: the
+// block gets five named variables and no other variable of the host, and its
+// HOME and TMPDIR are inside the work directory. It does not run in
+// parallel, because t.Setenv changes the environment of the process.
+func TestDocsCommandsClosedEnvironment(t *testing.T) {
+	t.Setenv("DOCS_TEST_HOST_SECRET", "host-secret-value")
+
+	r := runOne(t, fenced("env\npwd\n"), docsDefault())
+	if r.Status != e2e.DocsPassed {
+		t.Fatalf("status %s, reason %q", r.Status, r.Reason)
+	}
+
+	if strings.Contains(r.Output, "host-secret-value") || strings.Contains(r.Output, "DOCS_TEST_HOST_SECRET") {
+		t.Fatal("the block saw a variable of the host")
+	}
+
+	// bash adds PWD, OLDPWD, SHLVL and _ by itself.
+	allowed := map[string]bool{
+		"PATH": true, "HOME": true, "TMPDIR": true, "OPENDUSTPAN_URL": true,
+		"E2E_COMPOSE": true, "PWD": true, "OLDPWD": true, "SHLVL": true, "_": true,
+	}
+
+	vars := map[string]string{}
+	lines := strings.Split(strings.TrimSpace(r.Output), "\n")
+
+	for _, line := range lines[:len(lines)-1] {
+		name, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+
+		if !allowed[name] {
+			t.Errorf("the block saw the variable %q", name)
+		}
+
+		vars[name] = value
+	}
+
+	dir := lines[len(lines)-1]
+	if vars["HOME"] != dir {
+		t.Errorf("HOME %q, want the work directory %q", vars["HOME"], dir)
+	}
+
+	if vars["TMPDIR"] != filepath.Join(dir, "tmp") {
+		t.Errorf("TMPDIR %q, want inside the work directory %q", vars["TMPDIR"], dir)
 	}
 }
