@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -36,6 +37,11 @@ var (
 	// that cannot track restores.
 	errRestoreNeedsOperations = errors.New(
 		"backup target needs a namespace store with durable operations that cancel before a step",
+	)
+	// errRestoreNeedsLeases reports a backup target with a namespace store
+	// that cannot hold the leases of the blob deletes.
+	errRestoreNeedsLeases = errors.New(
+		"backup target needs a namespace store that holds the blob delete leases",
 	)
 )
 
@@ -252,21 +258,21 @@ func newRestoreService(in restoreInputs) (*backup.RestoreService, error) {
 		return nil, errRestoreNeedsOperations
 	}
 
-	admit := restoreMinimumAdmit(in.store)
+	// The after-apply step waits for zero live leases of the blob deleters
+	// before it checks the named blobs, and this assertion checks the
+	// namespace store at the start. A store that cannot hold the leases
+	// cannot run a restore, and the server does not start a restore service
+	// without it: a restore that skipped the wait could find a blob that the
+	// restored data names deleted. Defense in depth: the constructor of
+	// RestoreService refuses a nil port too.
+	leases, isLeases := in.store.(blobguard.Leases)
+	if !isLeases {
+		return nil, errRestoreNeedsLeases
+	}
 
-	var steps []restoreStep
-	if in.chain != nil {
-		admit = admitBoth(admit, in.chain.admitRestore)
-		steps = append(steps, in.chain.afterRestore)
-
-		if in.chain.checkpoints != nil {
-			serverAudit, auditErr := serverAuditOf(in.store)
-			if auditErr != nil {
-				return nil, auditErr
-			}
-
-			steps = append(steps, newEpochAfterRestore(in.chain.checkpoints, serverAudit, in.now))
-		}
+	hooks, err := restoreHooksOf(in)
+	if err != nil {
+		return nil, err
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
@@ -275,11 +281,12 @@ func newRestoreService(in restoreInputs) (*backup.RestoreService, error) {
 		Backups:      in.backups,
 		Maintenance:  in.maint,
 		Blobs:        in.blobs,
+		Leases:       leases,
 		Target:       in.settings.target,
 		Key:          in.key,
 		Installation: in.installation,
-		AfterApply:   afterRestore(steps...),
-		Admit:        admit,
+		AfterApply:   hooks.after,
+		Admit:        hooks.admit,
 
 		AllowDevBackups: in.settings.allowDevBackups,
 		AllowDevHint:    in.settings.allowDevHint,
@@ -295,6 +302,38 @@ func newRestoreService(in restoreInputs) (*backup.RestoreService, error) {
 	}
 
 	return service, nil
+}
+
+// restoreHooks holds the hooks of a restore.
+type restoreHooks struct {
+	// after converges the restored data after the swap: the steps of the
+	// audit chain and of the server.
+	after func(context.Context) error
+	// admit refuses a restore while a change of the audit chain waits for an
+	// approval.
+	admit func(context.Context) error
+}
+
+// restoreHooksOf returns the hooks of a restore of in.
+func restoreHooksOf(in restoreInputs) (restoreHooks, error) {
+	admit := restoreMinimumAdmit(in.store)
+
+	var steps []restoreStep
+	if in.chain != nil {
+		admit = admitBoth(admit, in.chain.admitRestore)
+		steps = append(steps, in.chain.afterRestore)
+
+		if in.chain.checkpoints != nil {
+			serverAudit, err := serverAuditOf(in.store)
+			if err != nil {
+				return restoreHooks{}, err
+			}
+
+			steps = append(steps, newEpochAfterRestore(in.chain.checkpoints, serverAudit, in.now))
+		}
+	}
+
+	return restoreHooks{after: afterRestore(steps...), admit: admit}, nil
 }
 
 // restoreLiveError returns errRestoreNeedsLive with the name of each port of

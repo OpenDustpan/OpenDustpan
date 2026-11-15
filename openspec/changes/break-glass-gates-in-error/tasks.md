@@ -1,11 +1,21 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the implementer's notes (the pull request body) before the first test. Check: the pull request body lists the differences, or says that there are none.
+
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing conformance tests for error pass, replay, expiry on the store clock, wrong unit or kind, unlocked-write and unit-import kinds, evaluate mode, refusals, deny refusal, and override audit entry. Check: TestStateWriteBreakGlass_ErrorPassesOnce, TestStateWriteBreakGlass_ReplayRefuses, TestStateWriteBreakGlass_BadReasonRefuses, and TestStateWriteBreakGlass_DenyRefuses fail on main.
-- [ ] 1.2 Implement break-glass check, single-use pass store with conditional consume, and decision record link. Check: `go test ./pkg/gate/... ./internal/api/stategate/...` passes.
-- [ ] 1.3 Wire break-glass through Pulumi and TFE-compatible state.write routes with the namespace:break-gate-error action. Check: `GET /api/dustpan/v1/namespaces/{namespace}/decision-records/{id}` shows the break-glass marker on the passed write.
+- [ ] 1.1 Write the failing tests of the scenarios in the NEW file `pkg/gate/breakglass_test.go`; TestBreakGlassChangeFailsClosed exists on main in `pkg/gate/statewrite_test.go`: extend it there, and when it passes on main from the start, the pull request body says so. Check: TestBreakGlassErrorPassesOnce, TestBreakGlassReplayRefuses, TestBreakGlassExpiryRefuses, TestBreakGlassBadReasonRefuses, TestBreakGlassDenyStillRefuses, TestBreakGlassWrongUnitOrKindRefuses and TestBreakGlassChangeFailsClosed fail on main.
 
-## 2. Definition of done
+## 2. Implementation
 
-- [ ] 2.1 Add e2e step against real CLI for error pass and single use. Check: E2E step with real CLI writes state while a unit gate in enforce mode is in error, then reuses the pass and fails.
-- [ ] 2.2 Write docs page for break-glass at state.write. Check: Docs page for state.write break-glass lists reason, fresh auth, 15-minute single use and override audit.
-- [ ] 2.3 Run usability check, wiring check and make check. Check: `opendustpan status` names the gate in error and `make check` reports zero findings.
+- [ ] 2.1 Add the pass type, the decision function and the fail-closed port in the NEW file `pkg/gate/breakglass.go`. Check: `go test ./pkg/gate/...` passes.
+- [ ] 2.2 Add a conformance suite of the port for the follow-up adapters in the NEW file `pkg/gate/breakglass_conformance_test.go`. Check: The suite runs against an in-memory fake in `go test ./pkg/gate/...`.
+
+## 3. Side effects (computed from main)
+
+- [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
+
+## 4. Definition of done
+
+- [ ] 4.1 The route fields, the e2e step against the real CLI and the usable docs page for the pass: BLOCKED by break-glass-pass-wiring, which adds the pass store, the routes and the proof kind. Here, add a docs note that break-glass is not reachable yet. Check: `make docs-lint` passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

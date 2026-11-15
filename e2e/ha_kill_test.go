@@ -438,7 +438,7 @@ func haWaitBackupClaim(ctx context.Context, t *testing.T, conn *pgx.Conn) haBack
 func haStartBackup(ctx context.Context, t *testing.T, env *e2e.Env) string {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/backups", "")
 	if err != nil || status != http.StatusAccepted {
 		t.Fatalf("POST backups answers %d: %v (%s)", status, err, body)
 	}
@@ -544,7 +544,7 @@ func haWaitBackupSucceeded(ctx context.Context, t *testing.T, env *e2e.Env, id s
 	t.Helper()
 
 	for time.Now().Before(deadline) {
-		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/backups/"+id, "")
+		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/backups/"+id, "")
 		if err == nil && status == http.StatusOK {
 			var doc backupDoc
 

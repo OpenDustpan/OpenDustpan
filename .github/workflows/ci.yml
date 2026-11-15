@@ -135,6 +135,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The body goes through an environment variable, so the shell never
+      # interpolates it. The step reads the body of the event: after an edit
+      # of the body, push again to check the new body.
+      - name: Check that the PR body names an issue
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          make pr-body-check PR_BODY_FILE="$RUNNER_TEMP/pr-body.md"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -198,6 +208,19 @@ jobs:
         run: make docs-lint
       - name: The release record checks pass
         run: make release-record-check
+      # The files check reads the files that the change adds against the merge
+      # base with main. It runs on pull requests and in the merge queue, so
+      # every change that reaches main is checked. An earlier step can have
+      # fetched main with its history already; a second --unshallow fails.
+      - name: No large or binary file
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            git fetch --no-tags --unshallow origin +refs/heads/main:refs/remotes/origin/main
+          else
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          fi
+          make files-check FILES_BASE=origin/main
       # A failed job saves too: its build cache is still valid. The key is the
       # one that the restore step computed.
       - &go-cache-save

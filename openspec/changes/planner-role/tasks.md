@@ -1,18 +1,20 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing e2e and service tests for planner state read with Pulumi CLI and OpenTofu, including masked read of a state version written before the change. Check: TestPlannerReadsStateWithBothCLIs fails on main.
-- [ ] 1.2 Add failing tests for refused up, destroy, apply, secret reveal, state history export, non-plan job start, token creation for another principal, grant union and revocation. Check: TestPlannerWriteRefused, TestPlannerSecretRevealRefused, TestPlannerOtherRoutesRefused, TestPlannerGrantUnion and TestPlannerRevocation fail on main.
+- [x] 1.1 Write failing tests in NEW file e2e/e2e_planner_test.go of planner reads with an access token on the existing route /api/stacks/{}/{}/{}/state/{}/outputs and the masked state read GET /api/v2/state-versions/{state_version_id}/resources. ADR 212 decision 1: a planner "reads state with the state actions that the role gives, as viewer does". ADR 41 gives the masked read with unit:read; the raw download GET /api/v2/state-versions/{state_version_id}/download needs unit:read-secrets, so `pulumi stack export` and `tofu state pull` answer access.denied. Check: TestPlannerReadsStateWithBothCLIs fails on main.
+- [x] 1.2 Write failing tests in NEW file e2e/e2e_planner_refused_test.go of refused writes and reveal with an access token on /api/stacks/{}/{}/{}/state/{}/reveal. Each refusal answers 403 with access.denied (internal/errcode/errcode.go:19). Check: TestPlannerWriteRefused and TestPlannerSecretRevealRefused fail on main.
+- [x] 1.3 Write failing tests TestPlannerAccessDecision in pkg/access/planner_role_test.go (existing file, pkg/access/planner_role_test.go:12 TestPlannerRole) that Authorizer.Authorize (pkg/access/authorizer.go:111) allows planner reads and refuses writes, reveal and a token for another principal with access.denied. Check: TestPlannerAccessDecision fails on main.
+- [x] 1.4 Write hostile tests in pkg/access/planner_role_test.go for the size limit and containment: TestPlannerHostileInputLimited and TestPlannerGrantContainment (a planner grant on one collection never reaches a unit of another collection). Check: TestPlannerHostileInputLimited and TestPlannerGrantContainment fail on main.
 
-## 2. Implementation
+## 2. Side effects (computed from main)
 
-- [ ] 2.1 Define the planner action set as viewer plus unit:run-plan, job:read-plans and changeorder:author with no secret action. Check: `go test ./pkg/access/...` passes with the planner action set including changeorder:author.
-- [ ] 2.2 Wire the action checks into Pulumi, TFE-compatible, HTTP backend and tool-neutral handlers for reads, writes, reveals, exports, settings, token and job routes. Check: `go test ./internal/api/...` shows 403 unit.forbidden for planner writes and 403 secret.forbidden for planner reveals, plus 403 for settings, token, export and non-plan job routes.
-- [ ] 2.3 Enforce the action check and read-time masking in store adapters. Check: `go test ./pkg/store/...` shows the adapter refuses a planner write in the fenced transaction and masks secrets at read time for all state versions.
-- [ ] 2.4 Close the server plan-job start for planners pending the protected-branch gate. Check: `go test ./internal/api/...` shows 403 for planner plan-job start until the milestone 5 gate ships.
-- [ ] 2.5 Run the e2e planner scenario with a planner token for the local CLI path only. Check: Planner scenario with the real Pulumi CLI and OpenTofu passes for local read, local plan and preview with masked secrets, refused write and refused reveal.
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
 
 ## 3. Definition of done
 
-- [ ] 3.1 Update the docs page with grant, read, refused write and masked local plan examples. Check: Planner role page renders and each command runs as written.
-- [ ] 3.2 Run a usability check of the planner path. Check: Developer completes the local CLI path from the docs page alone and each error names the help command.
-- [ ] 3.3 Run the full check including route, policy and audit tests. Check: `make check` reports zero findings.
+- [x] 3.1 Run the e2e planner step with the real Pulumi CLI and OpenTofu, a personal access token, route /api/stacks/{}/{}/{}/state/{}/reveal and the masked state route GET /api/v2/state-versions/{state_version_id}/resources. Check: make e2e planner step passes.
+- [x] 3.2 Update docs/guides/planner-role.md and run its commands. Check: Each command runs as written. `make docs-lint` passes on each edited guide.
+- [x] 3.3 Run the full check. Check: `make check` reports zero findings.

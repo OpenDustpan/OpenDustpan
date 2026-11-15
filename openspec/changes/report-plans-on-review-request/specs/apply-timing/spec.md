@@ -12,6 +12,14 @@ If a wider level forbids overrides, then the server SHALL refuse a narrower valu
 - **WHEN** the namespace allows overrides, the collection forbids them and a unit sets a different value
 - **THEN** the write is refused with 409 and names the collection setting
 
+### Requirement: Later forbid
+
+If a wider level starts to forbid overrides, then the server SHALL use the wider value as the effective timing.
+
+#### Scenario: Forbid after unit value
+- **WHEN** a unit holds pre-merge and the namespace then forbids overrides with post-merge
+- **THEN** the effective value is post-merge, names the namespace level and the unit value stays stored
+
 ### Requirement: Unit value wins
 
 Where every wider level allows overrides, the server SHALL use the unit value as the effective timing.
@@ -27,6 +35,14 @@ If a unit has no value, then the server SHALL use the value of the narrowest wid
 #### Scenario: Unit unset
 - **WHEN** the unit has no value and the collection sets pre-merge
 - **THEN** the effective value is pre-merge and names the collection level
+
+### Requirement: Value allowlist
+
+If a timing value is not post-merge or pre-merge, then the server SHALL refuse the write with status 400.
+
+#### Scenario: Unknown value
+- **WHEN** a write sets the value later
+- **THEN** the write is refused with 400 and nothing changes
 
 ### Requirement: Timing audit
 

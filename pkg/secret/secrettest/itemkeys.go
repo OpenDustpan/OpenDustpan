@@ -1,6 +1,7 @@
 package secrettest
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -47,6 +48,7 @@ func RunItemKeys(t *testing.T, newStore ItemKeyFactory) {
 		{name: "a valid fence of another namespace refuses create and shred", test: testItemKeyOtherNamespaceFence},
 		{name: "a record with a bad blob description is refused", test: testItemKeyBadBlobInfo},
 		{name: "a transaction keeps its record on commit and drops it on rollback", test: testItemKeyTx},
+		{name: "a transaction past its attempt deadline does not commit", test: testItemKeyTxDeadline},
 		{name: "the transaction reads a namespace, and a missing one is ErrNotFound", test: testItemKeyTxNamespace},
 		{name: "list pages the records of one scope by ID", test: testItemKeyList},
 		{name: "wrapper IDs leave out shredded records", test: testItemKeyWrapperIDs},
@@ -109,6 +111,9 @@ func itemRef(t *testing.T, scopeID string, kind secret.ItemKind, item string) se
 	return ref
 }
 
+// validAttempt is a valid attempt part of a blob key of the suite.
+const validAttempt = "abcdefghij0123456789"
+
 // newItemKey returns a record of ref that is not stored yet.
 func newItemKey(ref secret.ItemRef, wrapperID string) secret.ItemKey {
 	return secret.ItemKey{
@@ -117,7 +122,12 @@ func newItemKey(ref secret.ItemRef, wrapperID string) secret.ItemKey {
 		Ref:        ref,
 		ID:         secret.NewItemKeyID(),
 		WrapperID:  wrapperID,
-		Blob:       secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}},
+		Blob: secret.ItemKeyBlobInfo{
+			Version: 1,
+			Size:    60,
+			MD5:     [16]byte{1, 2, 3},
+			Attempt: "abcdefghij0123456789",
+		},
 	}
 }
 
@@ -472,10 +482,16 @@ func testItemKeyBadBlobInfo(t *testing.T, s ItemKeyStore) {
 	fence := itemKeyNamespace(t, s)
 
 	for name, info := range map[string]secret.ItemKeyBlobInfo{
-		"no version":   {Version: 0, Size: 60, MD5: [16]byte{1}},
-		"huge version": {Version: secret.MaxItemKeyVersion + 1, Size: 60, MD5: [16]byte{1}},
-		"no size":      {Version: 1, Size: 0, MD5: [16]byte{1}},
-		"huge size":    {Version: 1, Size: secret.MaxWrappedItemKeyBytes + 1, MD5: [16]byte{1}},
+		"no version":   {Version: 0, Size: 60, MD5: [16]byte{1}, Attempt: validAttempt},
+		"huge version": {Version: secret.MaxItemKeyVersion + 1, Size: 60, MD5: [16]byte{1}, Attempt: validAttempt},
+		"no size":      {Version: 1, Size: 0, MD5: [16]byte{1}, Attempt: validAttempt},
+		"huge size":    {Version: 1, Size: secret.MaxWrappedItemKeyBytes + 1, MD5: [16]byte{1}, Attempt: validAttempt},
+		// A new record always names a key with an attempt part.
+		"no attempt part":            {Version: 1, Size: 60, MD5: [16]byte{1}, Attempt: ""},
+		"a short attempt part":       {Version: 1, Size: 60, MD5: [16]byte{1}, Attempt: "abc"},
+		"an attempt in upper case":   {Version: 1, Size: 60, MD5: [16]byte{1}, Attempt: "ABCDEFGHIJ0123456789"},
+		"an attempt with a slash":    {Version: 1, Size: 60, MD5: [16]byte{1}, Attempt: "abcdefghij/123456789"},
+		"an attempt with a line end": {Version: 1, Size: 60, MD5: [16]byte{1}, Attempt: "abcdefghij\n123456789"},
 	} {
 		ref := itemRef(t, "stk-one", secret.ItemKindState, "upd-"+strings.ReplaceAll(name, " ", "-"))
 		k := newItemKey(ref, "builtin-1")
@@ -553,5 +569,73 @@ func testItemKeyTxNamespace(t *testing.T, s ItemKeyStore) {
 	})
 	if err != nil {
 		t.Fatalf("transaction: %v", err)
+	}
+}
+
+// attemptDeadlineForTest is the deadline that the deadline case gives the
+// transaction through its context.
+const attemptDeadlineForTest = 300 * time.Millisecond
+
+// testItemKeyTxDeadline holds a transaction open past its attempt deadline,
+// as a slow caller or a lock wait does. The commit fails with
+// ErrItemKeyAttemptExpired, and no record stays, so no record can name a blob
+// that the reaper deleted after the grace period. A transaction inside the
+// deadline commits.
+// Real time: it proves that a real context deadline ends a late commit.
+func testItemKeyTxDeadline(t *testing.T, s ItemKeyStore) {
+	t.Helper()
+	fence := itemKeyNamespace(t, s)
+	late := itemRef(t, "stk-one", secret.ItemKindState, "upd-late")
+	inTime := itemRef(t, "stk-one", secret.ItemKindState, "upd-in-time")
+
+	ctx, cancel := context.WithTimeout(t.Context(), attemptDeadlineForTest)
+	defer cancel()
+
+	err := s.InItemKeyTx(ctx, fence, func(tx secret.ItemKeyTx) error {
+		if _, createErr := tx.CreateItemKey(ctx, newItemKey(late, "builtin-1")); createErr != nil {
+			return createErr
+		}
+
+		<-ctx.Done()
+		// The context of the call has ended, so the wait runs on a copy of it
+		// that does not end with it.
+		waitFor(context.WithoutCancel(ctx), attemptDeadlineForTest/3)
+
+		return nil
+	})
+	if !errors.Is(err, secret.ErrItemKeyAttemptExpired) {
+		t.Errorf("late commit err = %v, want ErrItemKeyAttemptExpired", err)
+	}
+
+	if _, getErr := s.GetItemKey(t.Context(), late); !errors.Is(getErr, secret.ErrKeyNotFound) {
+		t.Errorf("a late transaction left a record: err = %v", getErr)
+	}
+
+	// The same deadline, with a commit just inside it.
+	inTimeCtx, cancelInTime := context.WithTimeout(t.Context(), attemptDeadlineForTest)
+	defer cancelInTime()
+
+	err = s.InItemKeyTx(inTimeCtx, fence, func(tx secret.ItemKeyTx) error {
+		_, createErr := tx.CreateItemKey(inTimeCtx, newItemKey(inTime, "builtin-1"))
+
+		return createErr
+	})
+	if err != nil {
+		t.Fatalf("transaction inside the deadline: %v", err)
+	}
+
+	if _, getErr := s.GetItemKey(t.Context(), inTime); getErr != nil {
+		t.Errorf("a transaction inside the deadline left no record: err = %v", getErr)
+	}
+}
+
+// waitFor waits for d, or until ctx ends.
+func waitFor(ctx context.Context, d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
 	}
 }

@@ -6,6 +6,9 @@ Changed by:
 
 - ADR 128 changes decision 1: the row cancel_change.
 - ADR 210 changes: the route paths and the server: action names.
+- ADR 367 changes decision 1: the test keeps the catalog at 8 to 15 tools.
+- ADR 367 changes decision 14: the catalog can have more than 12 tools, for the
+  three tools of the comment and propose change.
 
 ## Context
 

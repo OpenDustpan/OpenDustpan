@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 )
 
 // TestRestoreSwappedManifestIsRefusedAtEachStep proves that a restore fails
@@ -67,6 +68,7 @@ func runSwappedManifestRestore(t *testing.T, from int) {
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          proxy,
 		Key:             testWrapper(),
 		Installation:    "eu-west",

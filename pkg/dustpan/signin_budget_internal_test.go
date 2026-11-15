@@ -65,6 +65,7 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 		ValueCount: nil, SourceIP: budgetAddress, UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
 		Outcome: "", RequestID: "", PrevHash: "", Hash: "", Sequence: 0, Changes: nil, ObjectID: "",
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	owner, err := principals.CreatePrincipal(t.Context(), entry,

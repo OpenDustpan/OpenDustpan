@@ -26,9 +26,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -193,7 +193,7 @@ func ValidateReason(reason string) error {
 // look different from its bytes, so a stored text that the server shows or
 // logs refuses it.
 func IsHiddenRune(r rune) bool {
-	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+	return ident.IsHiddenRune(r)
 }
 
 // Entry is one append-only record of an action in a namespace. Namespace and
@@ -228,7 +228,9 @@ func IsHiddenRune(r rune) bool {
 // stays empty when the action had none. PrincipalKind is the kind of the
 // principal record that acted: "person", "service" or "workload", and empty
 // when the server cannot name the kind. JobID is the job whose token acted,
-// and empty for every other credential.
+// and empty for every other credential. Origin is the agent block of an
+// entry that an agent run made; nil means an ordinary entry with no agent
+// block.
 type Entry struct {
 	At            time.Time
 	Namespace     namespace.Name
@@ -255,7 +257,13 @@ type Entry struct {
 	PrincipalKind string
 	JobID         string
 	Reason        string
+	Origin        *Origin
 }
+
+// Origin is the agent block of an audit entry: it names the agent run that
+// made the entry. It holds no values yet, and no code reads it yet: ComputeHash
+// and the stores do not encode it.
+type Origin struct{}
 
 // AtMs returns the time of the entry in Unix milliseconds, as stored.
 func (e Entry) AtMs() int64 {

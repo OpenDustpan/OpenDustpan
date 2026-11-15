@@ -10,15 +10,19 @@ When a person creates a subscription with a type filter, the server SHALL enqueu
 
 #### Scenario: Sink deleted
 - **WHEN** a subscription sink is deleted
-- **THEN** no further delivery enqueues and pending rows end with reason sink-deleted
+- **THEN** no further delivery enqueues and pending rows stay pending until retention ends
 
 ### Requirement: Job start notice
 
 When a job starts, the server SHALL append a start notice in the scope of the unit.
 
-#### Scenario: Plan starts
-- **WHEN** a job with operation plan starts on a unit with a matching subscription
+#### Scenario: Plan starts from API
+- **WHEN** a job with operation plan starts from the API on a unit with a matching subscription
 - **THEN** a start notice exists with the unit reference and one delivery is enqueued for each matching subscription
+
+#### Scenario: Plan starts from runner
+- **WHEN** a job with operation plan starts from a runner claim
+- **THEN** the same single start notice exists with the same dedupe key shape
 
 ### Requirement: Approval wait notice
 
@@ -36,6 +40,14 @@ When a job reaches a terminal state, the server SHALL append the terminal notice
 - **WHEN** a job reaches a terminal state
 - **THEN** one terminal notice exists with the end state and links to the job and to the state version
 
+#### Scenario: Approval rejected
+- **WHEN** an approval wait ends by rejection
+- **THEN** one terminal notice exists with the rejecting actor
+
+#### Scenario: Approval timed out
+- **WHEN** an approval wait ends by timeout
+- **THEN** one terminal notice exists with the timeout
+
 #### Scenario: Cancel before start
 - **WHEN** a queued job is canceled before its first phase starts
 - **THEN** one terminal notice exists with the actor and no duplicate start notice exists
@@ -48,6 +60,10 @@ When the same scope and dedupe key is appended twice, the server SHALL keep one 
 - **WHEN** a job transaction retries with the same scope and dedupe key
 - **THEN** no second start notice with the same dedupe key exists
 
+#### Scenario: Retried attempt new key
+- **WHEN** a job retries with a new attempt number and a new dedupe key
+- **THEN** a new start notice exists for the new attempt
+
 ### Requirement: Token expiry notice
 
 When an access token enters its expiry warning window, the server SHALL append an expiry notice in the scope of the token owner.
@@ -59,6 +75,14 @@ When an access token enters its expiry warning window, the server SHALL append a
 #### Scenario: Token renewed in window
 - **WHEN** a token in its warning window is rotated, renewed or revoked
 - **THEN** no further expiry notice with the old expiry exists
+
+#### Scenario: Short lifetime
+- **WHEN** a token has a lifetime under 14 days or is made inside the window
+- **THEN** only the warnings the token still meets exist
+
+#### Scenario: Schedule restarts
+- **WHEN** the expiry schedule restarts after a stop
+- **THEN** no duplicate notice exists for a stored dedupe key
 
 ### Requirement: Signed delivery
 
@@ -73,8 +97,8 @@ When the dispatcher delivers to a webhook sink, the server SHALL sign the POST p
 - **THEN** the receiver refuses the POST and the attempt counts as a temporary failure
 
 #### Scenario: Replay
-- **WHEN** an attacker replays a signed POST
-- **THEN** the receiver refuses the second POST with the same notification ID and timestamp
+- **WHEN** a signed POST arrives twice
+- **THEN** a duplicate POST with the same notification ID and timestamp is ignored by idempotence
 
 ### Requirement: Secret rotation
 
@@ -84,13 +108,9 @@ When a webhook sink holds two active signing secrets, the server SHALL send both
 - **WHEN** a webhook sink holds two active signing secrets
 - **THEN** each delivery carries both signatures until the old secret is deleted
 
-### Requirement: Sink test
-
-When a person tests a webhook sink, the server SHALL send one signed probe through the egress guard.
-
-#### Scenario: Test receiver
-- **WHEN** a person tests a webhook sink before rotation
-- **THEN** the test sends one signed probe and reports success or the error class with no state change
+#### Scenario: Only secret deleted
+- **WHEN** the only signing secret of a sink is deleted
+- **THEN** further deliveries fail closed with an audit entry and no unsigned send
 
 ### Requirement: Retry and suspend
 
@@ -104,11 +124,15 @@ When a delivery fails with a temporary error, the server SHALL retry with backof
 - **WHEN** a receiver answers with a retry delay
 - **THEN** the sender waits for the asked period before the next attempt
 
-### Requirement: Suspended redelivery order
+#### Scenario: New notice while suspended
+- **WHEN** a new job notice arrives while the subscription is suspended
+- **THEN** the notice enqueues as pending and waits for redeliver
+
+### Requirement: Suspended Claim redelivery order
 
 When the dispatcher redelivers a suspended subscription, the server SHALL send pending deliveries in per-scope sequence order.
 
-#### Scenario: Redeliver after fix
+#### Scenario: Claim redeliver after fix
 - **WHEN** a person redelivers a suspended subscription after the receiver is fixed
 - **THEN** pending deliveries send in per-scope sequence order and the receiver restores order by sequence
 
@@ -143,6 +167,10 @@ While a notice exists, the server SHALL keep secret values, credentials, state, 
 #### Scenario: Job with secrets
 - **WHEN** a job that used a profile with secrets ends
 - **THEN** the body holds names, IDs, summary, sequence and links, and holds no secret value, state, plan or log
+
+#### Scenario: Oversize body after Fit
+- **WHEN** a notice exceeds the body bound after Fit
+- **THEN** the stored body stays within 256 KiB with cut text and dropped links and holds no secret
 
 ### Requirement: Order by sequence
 

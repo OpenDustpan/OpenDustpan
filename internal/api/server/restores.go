@@ -4,20 +4,20 @@ package server
 // restore, list the restores this installation ran, read one restore with its
 // manifest, and cancel a restore before its swap.
 //
-// POST /api/server/restores starts a restore in the background and answers
-// 202 with the restore ID. The body names the backup ID from the configured
-// target, whether to check only, and whether to cancel active work. Only one
-// restore runs at a time; a second start answers 409. A worker of any
-// instance runs the restore, and any instance answers its state. GET
-// /api/server/restores lists the rows of the restores table, newest first.
-// GET /api/server/restores/{id} answers the state (checking, applying,
-// succeeded or failed) and, when the restore succeeded, the manifest of the
-// restored backup. The backup taken before the apply appears in GET and List
-// only after the service takes it.
+// POST /api/dustpan/v1/restores starts a restore in the background and
+// answers 202 with the restore ID. The body names the backup ID from the
+// configured target, whether to check only, and whether to cancel active
+// work. Only one restore runs at a time; a second start answers 409. A worker
+// of any instance runs the restore, and any instance answers its state. GET
+// /api/dustpan/v1/restores lists the rows of the restores table, newest
+// first. GET /api/dustpan/v1/restores/{id} answers the state (checking,
+// applying, succeeded or failed) and, when the restore succeeded, the
+// manifest of the restored backup. The backup taken before the apply appears
+// in GET and List only after the service takes it.
 //
-// POST /api/server/restores/{id}/cancel stops a restore before its swap and
-// answers 202. A restore that a cancel already stopped answers 202 again. A
-// restore that swapped the data answers 409 with restore.swapped, a restore
+// POST /api/dustpan/v1/restores/{id}/cancel stops a restore before its swap
+// and answers 202. A restore that a cancel already stopped answers 202 again.
+// A restore that swapped the data answers 409 with restore.swapped, a restore
 // that ended answers 409 with restore.ended, and an unknown ID answers 404.
 //
 // All four need the action server:restore on the installation (@server).
@@ -41,6 +41,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
+// The paths of the restore routes.
+const (
+	restoresPath      = "/api/dustpan/v1/restores"
+	restorePath       = "/api/dustpan/v1/restores/{id}"
+	restoreCancelPath = "/api/dustpan/v1/restores/{id}/cancel"
+)
+
 // maxRestoreBodyBytes bounds the start-restore body, which holds only the
 // backup ID with the check-only and force flags.
 const maxRestoreBodyBytes = 4 << 10
@@ -54,7 +61,7 @@ type startRestoreRequest struct {
 }
 
 // startRestoreResponse answers a started restore: its ID. The restore runs
-// in the background; poll GET /api/server/restores/{id} until it leaves
+// in the background; poll GET /api/dustpan/v1/restores/{id} until it leaves
 // checking and applying, then read the backup taken before it there. The 202
 // never names a pre-backup ID: the service takes that backup only after the
 // checks pass, so a failed check must not name a backup that was never taken.
@@ -496,8 +503,8 @@ func findingsJSON(found *backup.BlobFindings) *blobFindingsJSON {
 }
 
 // cancelRestoreResponse answers an accepted cancel: the ID of the restore.
-// Poll GET /api/server/restores/{id} until the restore leaves checking and
-// applying.
+// Poll GET /api/dustpan/v1/restores/{id} until the restore leaves checking
+// and applying.
 type cancelRestoreResponse struct {
 	ID string `json:"id"`
 }

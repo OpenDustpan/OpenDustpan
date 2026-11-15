@@ -1,7 +1,7 @@
 package client
 
 // Backup subcommand of the installation API (ADR 30 decision 10): a client
-// of POST /api/server/backups and GET /api/server/backups/{id} (ADR 17).
+// of POST /api/dustpan/v1/backups and GET /api/dustpan/v1/backups/{id} (ADR 17).
 //
 //	opendustpan backup --server https://dustpan.example [--ca-file ca.pem]
 //
@@ -276,7 +276,7 @@ func backupAuth(req *http.Request, token string) {
 // startBackup starts a backup and answers its ID. A second start while one
 // runs gives the message of the server, which names the running backup.
 func startBackup(ctx context.Context, client *http.Client, server, token string) (string, error) {
-	endpoint := backupEndpoint(server, "/api/server/backups")
+	endpoint := backupEndpoint(server, "/api/dustpan/v1/backups")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, http.NoBody)
 	if err != nil {
@@ -325,7 +325,7 @@ func startBackup(ctx context.Context, client *http.Client, server, token string)
 func readBackup(
 	ctx context.Context, client *http.Client, server, token, id string,
 ) (BackupStatusResponse, error) {
-	endpoint := backupEndpoint(server, "/api/server/backups/"+url.PathEscape(id))
+	endpoint := backupEndpoint(server, "/api/dustpan/v1/backups/"+url.PathEscape(id))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {

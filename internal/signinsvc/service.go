@@ -681,6 +681,7 @@ func (s *Service) recordRemovalAlertFailure(
 		Kind: audit.KindSecurity, Outcome: audit.OutcomeFailure, RequestID: e.RequestID, ObjectID: "",
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
 		Reason: errcode.PrincipalRemovalAlertFailed,
+		Origin: nil,
 	}
 
 	_, err := s.cfg.Audit.AppendServer(ctx, entry)

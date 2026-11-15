@@ -2,76 +2,68 @@
 
 ### Requirement: Restore access setting default
 
-When the installation setting is off, the server SHALL refuse to replace the access tables on a restore by a caller without server:restore-access.
+While the installation setting is off, the server SHALL refuse to replace the access tables on a restore by a caller without server:restore-access.
 
 #### Scenario: Default off refusal
 - **WHEN** the setting is off and a caller with only server:restore restores a backup with access tables
-- **THEN** the server keeps the access tables unchanged and refuses the access-table part.
+- **THEN** the server keeps the access tables unchanged
 
-#### Scenario: Default off with access action
-- **WHEN** the setting is off and a caller with server:restore-access restores a backup with access tables
-- **THEN** the server replaces the access tables from the backup.
+### Requirement: Setting change writer rule
+
+When a caller with server:manage-settings plus server:restore-access changes the setting with a fresh session step, the server SHALL save the new value.
+
+#### Scenario: Allowed change saves
+- **WHEN** an allowed caller changes the setting with a fresh session step
+- **THEN** the server saves the new value
+
+#### Scenario: Refused change
+- **WHEN** a caller changes the setting without a fresh step or without both actions
+- **THEN** the server refuses, keeps the value and writes no setting-change entry
 
 ### Requirement: Setting change audit
 
-When an allowed caller changes the setting with a fresh authentication step, the server SHALL write an audit entry with the old and the new value.
+When a saved change of the setting commits, the server SHALL write an audit entry with the old and the new value.
 
 #### Scenario: Change recorded
-- **WHEN** an allowed caller changes the setting with a fresh authentication step
-- **THEN** the server writes an audit entry with the old and the new value.
-
-#### Scenario: Change without fresh step refused
-- **WHEN** a caller changes the setting without a fresh authentication step
-- **THEN** the server refuses the change with mfa.fresh-step-required, keeps the stored value, and writes no setting-change entry.
-
-#### Scenario: Change without action refused
-- **WHEN** a caller without the gated actions changes the setting
-- **THEN** the server refuses the change with 403, keeps the stored value, and writes no setting-change entry.
+- **WHEN** a saved change commits
+- **THEN** the audit entry holds the old and the new value
 
 ### Requirement: Restore with setting on
 
-When the setting is on, the server SHALL let a caller with server:restore replace the access tables on restore.
+While the setting is on at apply start, the server SHALL let a caller with server:restore replace the access tables on restore.
 
 #### Scenario: Widened restore
-- **WHEN** the setting is on and a caller with server:restore restores a backup
-- **THEN** the server replaces the access tables from the backup.
-
-#### Scenario: Snapshot kept mid-restore
-- **WHEN** the setting changes after a restore read its start value
-- **THEN** the server finishes the restore on the start value and ignores the later change.
+- **WHEN** the setting is on and a caller with server:restore restores
+- **THEN** the server replaces the access tables
 
 ### Requirement: Widened restore keeps two paths
 
 When a restore replaces the access tables, the server SHALL refuse a result with fewer than two working break-glass paths.
 
 #### Scenario: Last path refused
-- **WHEN** a widened restore leaves fewer than two working break-glass paths
-- **THEN** the server refuses the restore with 409 and changes nothing.
-
-#### Scenario: Concurrent disable serializes
-- **WHEN** a break-glass disable commits while a widened restore applies in the same write transaction
-- **THEN** one of the two writes refuses with 409 and the stored data keeps two working paths.
+- **WHEN** a widened restore leaves fewer than two paths
+- **THEN** the server refuses with 409 and changes nothing
 
 ### Requirement: Invalid stored value fails closed
 
-If the stored value of the setting is not true or false, then the server SHALL refuse to replace the access tables.
+If the stored value is not true or false, then the server SHALL refuse to replace the access tables.
 
 #### Scenario: Unknown value refused
-- **WHEN** the stored value of the setting is not true or false at restore apply time
-- **THEN** the server refuses the access-table part and changes nothing.
+- **WHEN** the stored value is not true or false at apply time
+- **THEN** the server changes nothing
 
 ### Requirement: Effective value visible
 
 When a permitted caller reads the installation settings, the server SHALL answer the stored value of the setting and its default.
 
 #### Scenario: Read shows value
-- **WHEN** a permitted caller reads the installation settings
-- **THEN** the server answers the stored value and its default.
+- **WHEN** a permitted caller reads the settings
+- **THEN** the answer holds the value and the default
 
-### Requirement: Widened state reported
+### Requirement: Widened restore audit
 
-When the setting is on, the server SHALL list the widened restore state in the admin access report.
+When a restore replaces the access tables because the setting is on, the server SHALL write a restore audit entry that names the widened path.
 
-#### Scenario: Report names widened restore
-- **WHEN** the setting is on and a permitted caller reads the admin access report
-- **THEN** the server lists the setting value and its last change.
+#### Scenario: Widened path recorded
+- **WHEN** a widened restore commits
+- **THEN** the restore entry names the widened path

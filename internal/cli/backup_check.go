@@ -1,7 +1,7 @@
 package cli
 
 // BackupCheckCommand answers the backup check row of the command table with
-// run: a client of GET /api/server/backups/{id}/check.
+// run: a client of GET /api/dustpan/v1/backups/{id}/check.
 func BackupCheckCommand(run RunFunc) Command {
 	return Command{
 		Path:     []string{commandBackup, commandCheck},

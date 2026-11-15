@@ -113,6 +113,7 @@ func newSealRig(t *testing.T, store EventSealStore) *sealRig {
 		Tokens: nil, Checkpoints: store, Events: store, Namespaces: nsSvc, Stacks: store,
 		Blobs: openCaseBlobsIn(t, t.TempDir()), Refusals: stacktest.NewRefusals(), Now: nil, Logger: nil,
 		MaxCheckpointBytes: 0, Journal: nil, Replayer: nil,
+		OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -138,7 +139,7 @@ func realItemSealer(t *testing.T, store EventSealStore) *secret.ItemKeySealer {
 		}
 	})
 
-	blobs, err := secret.NewItemKeyBlobs(dir, stacktest.NewRefusals())
+	blobs, err := secret.NewItemKeyBlobs(dir, stacktest.NewRefusals(), itemKeyNoRefusals{})
 	if err != nil {
 		t.Fatalf("item key blobs: %v", err)
 	}

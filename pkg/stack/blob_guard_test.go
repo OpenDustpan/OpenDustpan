@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -64,8 +65,9 @@ func TestCheckpointReplaceKeepsTheBlobWhileWorkRuns(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			guard := blobguardtest.NewGuard()
-			f := newUpdatesGuarded(t, newClock(), nil, nil, guard)
+			clk := newClock()
+			guard := blobguardtest.NewLeases(clk.Now)
+			f := newUpdatesGuarded(t, clk, nil, nil, guard)
 			s := f.started(t, stack.KindUpdate)
 			f.saveSeq(t, s, 1, `{"a":1}`)
 
@@ -112,8 +114,9 @@ func TestUpdateSweepKeepsOrphansWhileWorkRuns(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			guard := blobguardtest.NewGuard()
-			f := newUpdatesGuarded(t, newClock(), nil, nil, guard)
+			clk := newClock()
+			guard := blobguardtest.NewLeases(clk.Now)
+			f := newUpdatesGuarded(t, clk, nil, nil, guard)
 			orphan := f.orphanOfNewUpdate(t)
 
 			guard.Start(work)
@@ -198,8 +201,9 @@ func TestStackSweepKeepsOrphansWhileWorkRuns(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			guard := blobguardtest.NewGuard()
-			f := newUpdatesGuarded(t, newClock(), nil, nil, guard)
+			clk := newClock()
+			guard := blobguardtest.NewLeases(clk.Now)
+			f := newUpdatesGuarded(t, clk, nil, nil, guard)
 			orphan := f.orphanOfNewUpdate(t)
 
 			f.complete(t, orphan.update)
@@ -253,23 +257,25 @@ func (l *logBuffer) String() string {
 func TestSweepDeletesNothingWhenTheGuardCannotAnswer(t *testing.T) {
 	t.Parallel()
 
+	clk := newClock()
+
 	tests := []struct {
 		name  string
-		guard func() blobguard.Watch
+		guard func() blobguard.Leases
 	}{
-		{name: "a failed read", guard: func() blobguard.Watch {
-			g := blobguardtest.NewGuard()
+		{name: "a failed read", guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(clk.Now)
 			g.Fail(errRegistry)
 
 			return g
 		}},
-		{name: "an unknown kind", guard: func() blobguard.Watch {
-			g := blobguardtest.NewGuard()
+		{name: "an unknown kind", guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(clk.Now)
 			g.Start(blobguard.Work{Kind: "other", ID: "x-1"})
 
 			return g
 		}},
-		{name: "no guard", guard: func() blobguard.Watch { return nil }},
+		{name: "no guard", guard: func() blobguard.Leases { return nil }},
 	}
 
 	for _, tc := range tests {
@@ -358,7 +364,7 @@ func TestSweepsReadTheGuardAfterTheirReads(t *testing.T) {
 
 			clk := newClock()
 			spy := &orderSpy{memBlob: newMemBlob(clk), mu: sync.Mutex{}, events: nil}
-			guard := blobguardtest.NewGuard()
+			guard := blobguardtest.NewLeases(clk.Now)
 			guard.OnRead(func() { spy.record("guard") })
 
 			base := newUpdatesGuarded(t, clk, spy, nil, guard)
@@ -395,6 +401,30 @@ func TestSweepsReadTheGuardAfterTheirReads(t *testing.T) {
 	}
 }
 
+// requireWaitForWork fails the test unless err is a wait for work.
+func requireWaitForWork(t *testing.T, err error, name string, work blobguard.Work) {
+	t.Helper()
+
+	var wait *blobguard.WaitError
+	if !errors.Is(err, blobguard.ErrWait) || !errors.As(err, &wait) || wait.Work != work {
+		t.Fatalf("delete while %s runs: %v, want a WaitError for %v", name, err, work)
+	}
+}
+
+// requireLeaseReleased fails the test unless the delete asked for a lease and
+// no lease is live.
+func requireLeaseReleased(t *testing.T, guard *blobguardtest.Leases, when string) {
+	t.Helper()
+
+	if guard.Takes() == 0 {
+		t.Fatalf("the delete took no lease %s, want one take for each delete", when)
+	}
+
+	if live, err := guard.LiveLeases(t.Context()); err != nil || live != 0 {
+		t.Fatalf("live leases %s = %d, %v, want none", when, live, err)
+	}
+}
+
 // TestPurgeBlobDeleteWaitsForWork proves that DeleteStackBlobs deletes nothing
 // while a backup or a restore runs, returns an error that names the work and
 // matches blobguard.ErrWait, and deletes the blobs after the work ended.
@@ -405,18 +435,15 @@ func TestPurgeBlobDeleteWaitsForWork(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			guard := blobguardtest.NewGuard()
-			f := newUpdatesGuarded(t, newClock(), nil, nil, guard)
+			clk := newClock()
+			guard := blobguardtest.NewLeases(clk.Now)
+			f := newUpdatesGuarded(t, clk, nil, nil, guard)
 			orphan := f.orphanOfNewUpdate(t)
 
 			guard.Start(work)
 
-			err := f.svc.DeleteStackBlobs(t.Context(), f.nsID, "stk-test")
-
-			var wait *blobguard.WaitError
-			if !errors.Is(err, blobguard.ErrWait) || !errors.As(err, &wait) || wait.Work != work {
-				t.Fatalf("delete while %s runs: %v, want a WaitError for %v", name, err, work)
-			}
+			requireWaitForWork(t, f.svc.DeleteStackBlobs(t.Context(), f.nsID, "stk-test"), name, work)
+			requireLeaseReleased(t, guard, "while "+name+" runs")
 
 			if _, getErr := f.blobs.Get(t.Context(), orphan.key); getErr != nil {
 				t.Fatalf("blob while %s runs: %v, want it kept", name, getErr)
@@ -435,17 +462,188 @@ func TestPurgeBlobDeleteWaitsForWork(t *testing.T) {
 	}
 }
 
+// TestPurgeBlobDeleteReleasesTheLease proves that each delete of the purge
+// takes a lease and releases it: the blobs go, and no lease is live after the
+// call.
+func TestPurgeBlobDeleteReleasesTheLease(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	guard := blobguardtest.NewLeases(clk.Now)
+	f := newUpdatesGuarded(t, clk, nil, nil, guard)
+	orphan := f.orphanOfNewUpdate(t)
+
+	if err := f.svc.DeleteStackBlobs(t.Context(), f.nsID, "stk-test"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if left := updateBlobs(t, f, orphan.update.Update.ID); len(left) != 0 {
+		t.Fatalf("blobs after the delete = %d, want none", len(left))
+	}
+
+	requireLeaseReleased(t, guard, "after the delete")
+}
+
+// TestCheckpointReplaceTakesNoDeleteLease proves that a save which replaces a
+// checkpoint deletes nothing and takes no delete lease, also when the guard
+// ends a lease at once: both blobs stay, and the store marks the blob of the
+// row that the save replaces.
+func TestCheckpointReplaceTakesNoDeleteLease(t *testing.T) {
+	t.Parallel()
+
+	clk, guard := endedLeaseFixture()
+	f := newUpdatesGuarded(t, clk, nil, nil, guard)
+	s := f.started(t, stack.KindUpdate)
+	f.saveSeq(t, s, 1, `{"a":1}`)
+
+	f.saveSeq(t, s, 2, `{"a":2}`)
+
+	got := updateBlobs(t, f, s.Update.ID)
+	if len(got) != 2 {
+		t.Fatalf("blobs of the update after a replacement = %d, want both checkpoints", len(got))
+	}
+
+	if takes := guard.Takes(); takes != 0 {
+		t.Fatalf("delete lease takes = %d, want none: the save deletes no blob", takes)
+	}
+
+	marks, err := f.store.SupersededBlobs(t.Context(), "stk-test")
+	if err != nil || len(marks) != 1 || marks[0].Key != got[0].Key {
+		t.Fatalf("marks = %+v, %v, want one mark of %s", marks, err, got[0].Key)
+	}
+}
+
+// TestJournalBuildKeepsBatchBlobsWhenTheLeaseEnded proves that the build of
+// the checkpoint of a journaled update deletes no batch blob when the context
+// of the delete lease ended before the delete: the batch blobs stay.
+func TestJournalBuildKeepsBatchBlobsWhenTheLeaseEnded(t *testing.T) {
+	t.Parallel()
+
+	clk, guard := endedLeaseFixture()
+	f := newBuildFixtureGuarded(t, clk, pulumijournal.NewReplayer(clk.Now, ""), nil, guard)
+	s := f.startJournaled(t)
+	before := f.journalKeys(t, s.Update.ID)
+
+	if _, err := f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete journaled update: %v", err)
+	}
+
+	f.requireKept(t, before, "with an ended lease")
+	requireLeaseReleased(t, guard, "after the failed delete")
+}
+
+// stallingBlobs is a memory blob store whose delete would stall the test
+// forever. It fails at once instead, so a delete that ignores the lease
+// context cannot hold the test. It deletes nothing.
+type stallingBlobs struct {
+	*memBlob
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *stallingBlobs) Delete(context.Context, blob.Key) error {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+
+	return fmt.Errorf("delete blob: %w", context.Canceled)
+}
+
+// deletes returns the number of delete calls that reached the store.
+func (s *stallingBlobs) deletes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.calls
+}
+
+// endedLeaseFixture returns the clock of the fixture and its guard of the
+// blob deletes. Each take of the guard moves the clock forward by a lease
+// time, so the context of the delete lease ends between the read of the
+// start and the read of the elapsed time.
+func endedLeaseFixture() (*clock, *blobguardtest.Leases) {
+	clk := newClock()
+
+	guard := blobguardtest.NewLeases(func() time.Time {
+		clk.Advance(blobguard.LeaseTTL)
+
+		return clk.Now()
+	})
+
+	return clk, guard
+}
+
+// TestPurgeBlobDeleteStopsWhenTheLeaseEnded proves that a purge deletes
+// nothing when the context of the delete lease ended before the delete: the
+// blob stays, and the method reports it as not deleted.
+func TestPurgeBlobDeleteStopsWhenTheLeaseEnded(t *testing.T) {
+	t.Parallel()
+
+	clk, guard := endedLeaseFixture()
+	blobs := &stallingBlobs{memBlob: newMemBlob(clk), mu: sync.Mutex{}, calls: 0}
+	f := newUpdatesGuarded(t, clk, blobs, nil, guard)
+	orphan := f.orphanOfNewUpdate(t)
+
+	err := f.svc.DeleteStackBlobs(t.Context(), f.nsID, "stk-test")
+	if !errors.Is(err, stack.ErrBlobsRemain) {
+		t.Fatalf("delete with an ended lease: err = %v, want ErrBlobsRemain", err)
+	}
+
+	if _, getErr := f.blobs.Get(t.Context(), orphan.key); getErr != nil {
+		t.Fatalf("orphan blob: %v, want it kept", getErr)
+	}
+
+	if got := blobs.deletes(); got != 0 {
+		t.Fatalf("store deletes = %d, want 0: the delete stopped before its first attempt", got)
+	}
+
+	requireLeaseReleased(t, guard, "after the failed delete")
+}
+
+// TestStackSweepStopsWhenTheLeaseEnded proves the same for the sweep of a
+// stack: the orphan stays, and the sweep deletes nothing.
+func TestStackSweepStopsWhenTheLeaseEnded(t *testing.T) {
+	t.Parallel()
+
+	clk, guard := endedLeaseFixture()
+	blobs := &stallingBlobs{memBlob: newMemBlob(clk), mu: sync.Mutex{}, calls: 0}
+	f := newUpdatesGuarded(t, clk, blobs, nil, guard)
+	orphan := f.orphanOfNewUpdate(t)
+	f.complete(t, orphan.update)
+
+	// The start of the preview runs the sweep of the stack.
+	next, err := f.svc.Create(t.Context(), f.ref, stack.Plan{
+		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
+	})
+	if err != nil {
+		t.Fatalf("create preview: %v", err)
+	}
+
+	if _, err := f.svc.Start(t.Context(), f.ref, next.ID); err != nil {
+		t.Fatalf("start preview: %v", err)
+	}
+
+	if _, getErr := f.blobs.Get(t.Context(), orphan.key); getErr != nil {
+		t.Fatalf("orphan blob: %v, want it kept", getErr)
+	}
+
+	if got := blobs.deletes(); got != 0 {
+		t.Fatalf("store deletes = %d, want 0: the delete stopped before its first attempt", got)
+	}
+}
+
 // TestPurgeBlobDeleteFailsClosed proves that a failed guard read and a service
 // with no guard delete nothing and return an error that does not match
 // blobguard.ErrWait.
 func TestPurgeBlobDeleteFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	failing := blobguardtest.NewGuard()
+	failing := blobguardtest.NewLeases(newClock().Now)
 	failing.Fail(errRegistry)
 
 	tests := map[string]struct {
-		guard blobguard.Watch
+		guard blobguard.Leases
 		want  error
 	}{
 		"a failed read": {guard: failing, want: nil},
@@ -483,7 +681,7 @@ func TestJournalBuildKeepsBatchBlobsWhileWorkRuns(t *testing.T) {
 			t.Parallel()
 
 			clk := newClock()
-			guard := blobguardtest.NewGuard()
+			guard := blobguardtest.NewLeases(clk.Now)
 			f := newBuildFixtureGuarded(t, clk, pulumijournal.NewReplayer(clk.Now, ""), nil, guard)
 			s := f.startJournaled(t)
 			before := f.journalKeys(t, s.Update.ID)
@@ -548,7 +746,7 @@ func (f *buildFixture) requireGone(t *testing.T, keys []blob.Key, when string) {
 
 // restoreAtSecondRead makes the guard report a running restore from its second
 // read on: the first read, before the first delete, finds nothing running.
-func restoreAtSecondRead(guard *blobguardtest.Guard) {
+func restoreAtSecondRead(guard *blobguardtest.Leases) {
 	guard.OnRead(func() {
 		if guard.Calls() == 2 {
 			guard.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
@@ -562,10 +760,11 @@ func restoreAtSecondRead(guard *blobguardtest.Guard) {
 func TestPurgeLoopReadsTheGuardBeforeEachDelete(t *testing.T) {
 	t.Parallel()
 
-	guard := blobguardtest.NewGuard()
+	clk := newClock()
+	guard := blobguardtest.NewLeases(clk.Now)
 	restoreAtSecondRead(guard)
 
-	f := newUpdatesGuarded(t, newClock(), nil, nil, guard)
+	f := newUpdatesGuarded(t, clk, nil, nil, guard)
 	orphan := f.orphanOfNewUpdate(t)
 
 	err := f.svc.DeleteStackBlobs(t.Context(), f.nsID, "stk-test")
@@ -581,13 +780,14 @@ func TestPurgeLoopReadsTheGuardBeforeEachDelete(t *testing.T) {
 }
 
 // TestSweepLoopReadsTheGuardBeforeEachDelete proves the same for the sweep:
-// two orphans are due, a restore starts after the first delete, and the second
-// orphan stays.
+// the blob of the replaced checkpoint and two orphans are due, a restore
+// starts before the last delete, and that orphan stays.
 func TestSweepLoopReadsTheGuardBeforeEachDelete(t *testing.T) {
 	t.Parallel()
 
-	guard := blobguardtest.NewGuard()
-	f := newUpdatesGuarded(t, newClock(), nil, nil, guard)
+	clk := newClock()
+	guard := blobguardtest.NewLeases(clk.Now)
+	f := newUpdatesGuarded(t, clk, nil, nil, guard)
 	orphan := f.orphanOfNewUpdate(t)
 
 	second, err := blob.ParseKey(f.prefix + "stk-test/" + orphan.update.Update.ID.String() + "/98")
@@ -606,9 +806,10 @@ func TestSweepLoopReadsTheGuardBeforeEachDelete(t *testing.T) {
 
 	aged.ageAll(2 * time.Hour)
 
-	// The save reads the guard once for the replace of its previous checkpoint,
-	// then once before each delete of the sweep. The restore starts at the
-	// third read, so the first orphan goes and the second stays.
+	// The save deletes nothing, and its sweep reads the guard once before
+	// each delete: the blob of the replaced checkpoint, then each orphan. The
+	// restore starts at the third read, before the delete of the second
+	// orphan, so that orphan stays.
 	guard.OnRead(func() {
 		if guard.Calls() == 3 {
 			guard.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
@@ -636,7 +837,7 @@ func TestJournalBuildReadsTheGuardBeforeEachBatchDelete(t *testing.T) {
 	t.Parallel()
 
 	clk := newClock()
-	guard := blobguardtest.NewGuard()
+	guard := blobguardtest.NewLeases(clk.Now)
 	f := newBuildFixtureGuarded(t, clk, pulumijournal.NewReplayer(clk.Now, ""), nil, guard)
 	s := f.startJournaled(t)
 	keys := f.journalKeys(t, s.Update.ID)
@@ -669,5 +870,83 @@ func TestJournalBuildReadsTheGuardBeforeEachBatchDelete(t *testing.T) {
 
 	if kept != 1 {
 		t.Fatalf("batch blobs left after a restore started between two deletes = %d, want exactly one", kept)
+	}
+}
+
+// TestBlobDeleteWaitsAreCounted proves that each refused take of the stack
+// deletes counts once with its reason: the purge of a stack and the sweep
+// that a start runs. A canceled context counts nothing.
+func TestBlobDeleteWaitsAreCounted(t *testing.T) {
+	t.Parallel()
+
+	guardClock := newClock()
+
+	tests := []struct {
+		name   string
+		reason blobguard.WaitReason
+		guard  func() blobguard.Leases
+	}{
+		{name: "a backup", reason: blobguard.WaitBackup, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(guardClock.Now)
+			g.Start(blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"})
+
+			return g
+		}},
+		{name: "a restore", reason: blobguard.WaitRestore, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(guardClock.Now)
+			g.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
+
+			return g
+		}},
+		{name: "no guard", reason: blobguard.WaitNoGuard, guard: func() blobguard.Leases { return nil }},
+		{name: "a failed take", reason: blobguard.WaitGuardError, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(guardClock.Now)
+			g.Fail(errRegistry)
+
+			return g
+		}},
+		{name: "a canceled context", reason: "", guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(guardClock.Now)
+			g.Fail(context.Canceled)
+
+			return g
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var got []blobguard.WaitReason
+
+			want := []blobguard.WaitReason(nil)
+			if tc.reason != "" {
+				want = []blobguard.WaitReason{tc.reason}
+			}
+
+			clk := newClock()
+			f := newUpdatesWaiting(t, clk, tc.guard(), func(reason blobguard.WaitReason) {
+				got = append(got, reason)
+			})
+			orphan := f.orphanOfNewUpdate(t)
+
+			if err := f.svc.DeleteStackBlobs(t.Context(), f.nsID, "stk-test"); err == nil {
+				t.Fatal("the purge with a refused take: want an error")
+			}
+
+			if !slices.Equal(got, want) {
+				t.Fatalf("the purge counted %v, want %v", got, want)
+			}
+
+			// The sweep that a start runs reads the guard again, with the
+			// orphan of the purge left.
+			got = nil
+			f.complete(t, orphan.update)
+			f.started(t, stack.KindPreview)
+
+			if !slices.Equal(got, want) {
+				t.Fatalf("the sweep counted %v, want %v", got, want)
+			}
+		})
 	}
 }

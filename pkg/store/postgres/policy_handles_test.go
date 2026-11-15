@@ -169,5 +169,6 @@ func policyCaller() audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }

@@ -4,6 +4,8 @@ Status: accepted · 2026-11-02. The design is the proposal P1 of [RFC 21](../rfc
 Changed by:
 
 - ADR 332 changes decision 12: the group mapping is a rule for each provider, with explicit single mappings.
+- ADR 372 changes: a wording refinement, the name of signed-request
+  recovery in "Not decided here".
 
 
 Changes:
@@ -375,7 +377,7 @@ not say how a group value of an identity provider finds a group.
   its sign-in joins no group.
 - The design of each method: ADR 321.
 - SCIM, built-in MFA enrollment, WebAuthn, TOTP, recovery codes, IP
-  allowlists, mTLS, the token expiry email and break-glass mode 2. RFC 21
+  allowlists, mTLS, the token expiry email and signed-request recovery. RFC 21
   P7 to P12 and their later ADRs hold them.
 
 ## Consequences
@@ -403,3 +405,9 @@ not say how a group value of an identity provider finds a group.
   store then accepts the new values.
 - The settings resource adds `ldap.subjectFailureLimit`. A higher limit is a
   weaker setting (ADR 212 decision 3).
+
+## Changelog
+
+- 2026-11-14, wording refinement (ADR 372, on the owner's word): an item of
+  "Not decided here" said "break-glass mode 2". It now says "signed-request
+  recovery", the name of ADR 372 decision 1.

@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
@@ -161,16 +163,35 @@ func TestStoreSettingDeclarations(t *testing.T) {
 		{name: "migration timeout", key: postgres.SettingMigrationTimeout},
 	}
 
+	st, err := dustpan.OpenStore(t.Context(), "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open the SQLite store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close the SQLite store: %v", closeErr)
+		}
+	})
+
 	// A SQLite store declares no setting of its own, so no key of the
 	// PostgreSQL bounds appears.
-	if got := storeSettingDeclarations(sqliteStore{Store: nil}); len(got) != 0 {
+	if got := storeSettingDeclarations(st); len(got) != 0 {
 		t.Fatalf("the SQLite store declares %v, want no declaration", declarationKeys(got))
 	}
 
-	// A PostgreSQL store declares exactly the keys of
-	// postgres.SettingDeclarations().
-	got := declarationKeys(storeSettingDeclarations(postgresStore{Store: nil}))
-	want := declarationKeys(postgres.SettingDeclarations())
+	// A PostgreSQL store declares exactly these keys, in this order.
+	got := declarationKeys(postgres.SettingDeclarations())
+	want := []string{
+		postgres.SettingStatementTimeout,
+		postgres.SettingIdleInTransactionTimeout,
+		postgres.SettingClientConnectionCheckInterval,
+		postgres.SettingBackupStatementTimeout,
+		postgres.SettingBackupIdleInTransactionTimeout,
+		postgres.SettingSchemaChangeStatementTimeout,
+		postgres.SettingSchemaChangeIdleInTransactionTimeout,
+		postgres.SettingMigrationTimeout,
+	}
 
 	if !slices.Equal(got, want) {
 		t.Fatalf("the postgres store declares %v, want %v", got, want)
@@ -180,12 +201,12 @@ func TestStoreSettingDeclarations(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			postgresKeys := declarationKeys(storeSettingDeclarations(postgresStore{Store: nil}))
+			postgresKeys := declarationKeys(postgres.SettingDeclarations())
 			if !slices.Contains(postgresKeys, tt.key) {
 				t.Fatalf("the postgres store declares no %s, keys = %v", tt.key, postgresKeys)
 			}
 
-			sqliteKeys := declarationKeys(storeSettingDeclarations(sqliteStore{Store: nil}))
+			sqliteKeys := declarationKeys(storeSettingDeclarations(st))
 			if slices.Contains(sqliteKeys, tt.key) {
 				t.Fatalf("the SQLite store declares %s, keys = %v", tt.key, sqliteKeys)
 			}
