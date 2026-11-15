@@ -1974,6 +1974,8 @@
           "sink.conflict",
           "sink.delivery-not-found",
           "sink.delivery-not-redeliverable",
+          "sink.delivery-redeliver-limit",
+          "sink.delivery-too-soon",
           "sink.invalid",
           "sink.no-sender",
           "sink.no-url",
@@ -4390,6 +4392,18 @@
           "principal": {
             "type": "string"
           },
+          "redeliverableAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "redeliveriesRemaining": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "redeliveryLimit": {
+            "format": "int64",
+            "type": "integer"
+          },
           "sink": {
             "type": "string"
           },
@@ -4410,6 +4424,8 @@
           "nextAt",
           "notification",
           "principal",
+          "redeliveriesRemaining",
+          "redeliveryLimit",
           "sink",
           "state",
           "subscription",
