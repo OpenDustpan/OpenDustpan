@@ -183,7 +183,7 @@ func testNotFoundIsUniform(t *testing.T, h Harness) {
 			return h.Subscriptions.DeleteSubscription(t.Context(), id, fence, manage())
 		}},
 		{"Redeliver", "dlv-o", func(id string) error {
-			return h.Deliveries.Redeliver(t.Context(), id, fence, manage())
+			return h.Deliveries.Redeliver(t.Context(), id, now(), fence, manage())
 		}},
 		{"Record", "dlv-o", func(id string) error {
 			return h.Deliveries.Record(t.Context(), fence, attemptOf(id))

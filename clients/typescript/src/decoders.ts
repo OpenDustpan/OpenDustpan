@@ -28,6 +28,7 @@ import type {
   ApiDescription,
   ApprovalDefault,
   ApprovalRule,
+  ApproveJobRequest,
   Approvers,
   AuditChain,
   BackupCorruptError,
@@ -123,6 +124,7 @@ import type {
   JobLogEntry,
   JobPhase,
   JobPlan,
+  JobPlanBinding,
   JobPlanPart,
   JobStep,
   JobStepRecord,
@@ -449,6 +451,13 @@ export const decodeApprovalRule: Decoder<ApprovalRule> = object<ApprovalRule>("A
   version: optional(int64),
 });
 
+/** The validator of ApproveJobRequest. */
+export const decodeApproveJobRequest: Decoder<ApproveJobRequest> = object<ApproveJobRequest>("ApproveJobRequest", {
+  comment: string,
+  planBinding: nullable(ref(() => decodeJobPlanBinding)),
+  verdict: string,
+});
+
 /** The validator of Approvers. */
 export const decodeApprovers: Decoder<Approvers> = object<Approvers>("Approvers", {
   groups: array(string),
@@ -489,7 +498,7 @@ export const decodeBackupManifest: Decoder<BackupManifest> = object<BackupManife
   id: string,
   installationKind: string,
   primaryInstallations: array(string),
-  rowCounts: record(int64),
+  rowCounts: nullable(record(int64)),
   schemaVersion: int64,
   sqlFiles: array(ref(() => decodePortableFile)),
   sqlFormat: string,
@@ -617,7 +626,7 @@ export const decodeContextDocument: Decoder<ContextDocument> = object<ContextDoc
   deleted: optional(boolean),
   object: ref(() => decodeContextObject),
   schemaVersion: int64,
-  sections: record(ref(() => decodeContextAnswer)),
+  sections: nullable(record(ref(() => decodeContextAnswer))),
 });
 
 /** The validator of ContextEntry. */
@@ -700,15 +709,15 @@ export const decodeCreateCollectionRequest: Decoder<CreateCollectionRequest> = o
 
 /** The validator of CreateGitHostConnectionRequest. */
 export const decodeCreateGitHostConnectionRequest: Decoder<CreateGitHostConnectionRequest> = object<CreateGitHostConnectionRequest>("CreateGitHostConnectionRequest", {
-  apiAddress: nullable(string),
-  appID: nullable(string),
+  apiAddress: anyValue,
+  appID: anyValue,
   auth: nullable(string),
-  credential: nullable(string),
-  credentials: nullable(array(anyValue)),
-  eventSecret: nullable(string),
+  credential: anyValue,
+  credentials: anyValue,
+  eventSecret: anyValue,
   installationID: nullable(string),
   kind: nullable(string),
-  privateKey: nullable(string),
+  privateKey: anyValue,
   push: nullable(boolean),
 });
 
@@ -824,7 +833,7 @@ export const decodeDeletedUnitSweep: Decoder<DeletedUnitSweep> = object<DeletedU
 
 /** The validator of DevData. */
 export const decodeDevData: Decoder<DevData> = object<DevData>("DevData", {
-  classes: record(int64),
+  classes: nullable(record(int64)),
   principals: int64,
 });
 
@@ -1034,7 +1043,7 @@ export const decodeGitHostApp: Decoder<GitHostApp> = object<GitHostApp>("GitHost
 export const decodeGitHostCheck: Decoder<GitHostCheck> = object<GitHostCheck>("GitHostCheck", {
   account: ref(() => decodeGitHostAccount),
   capabilities: array(string),
-  missing: record(array(string)),
+  missing: nullable(record(array(string))),
 });
 
 /** The validator of GitHostConnection. */
@@ -1263,6 +1272,14 @@ export const decodeJobPlan: Decoder<JobPlan> = object<JobPlan>("JobPlan", {
   id: string,
   parts: array(ref(() => decodeJobPlanPart)),
   redactedAt: optional(dateTime),
+  stateVersion: string,
+});
+
+/** The validator of JobPlanBinding. */
+export const decodeJobPlanBinding: Decoder<JobPlanBinding> = object<JobPlanBinding>("JobPlanBinding", {
+  applySha256: string,
+  displaySha256: string,
+  plan: string,
   stateVersion: string,
 });
 
@@ -1642,6 +1659,9 @@ export const decodeNotificationDelivery: Decoder<NotificationDelivery> = object<
   nextAt: dateTime,
   notification: string,
   principal: string,
+  redeliverableAt: optional(dateTime),
+  redeliveriesRemaining: int64,
+  redeliveryLimit: int64,
   sink: string,
   state: string,
   subscription: string,
@@ -1880,6 +1900,7 @@ export const decodeProviderRelease: Decoder<ProviderRelease> = object<ProviderRe
   protocols: array(string),
   publishedAt: string,
   publishedBy: string,
+  served: boolean,
   version: string,
 });
 
@@ -2805,7 +2826,7 @@ export const decodeUnitSettingsStep: Decoder<UnitSettingsStep> = object<UnitSett
   allowFailure: boolean,
   args: array(string),
   dir: string,
-  env: record(string),
+  env: nullable(record(string)),
   name: string,
   outputs: array(ref(() => decodeUnitSettingsStepOutput)),
   phase: string,

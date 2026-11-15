@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -17,12 +16,7 @@ import (
 func committedPath(t *testing.T) string {
 	t.Helper()
 
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime caller holds no file")
-	}
-
-	return filepath.Join(filepath.Dir(file), "..", "..", "pkg", "preferences", "zones_gen.go")
+	return filepath.Join("..", "..", "pkg", "preferences", "zones_gen.go")
 }
 
 // archiveOf builds a zip archive with one empty file for each name.

@@ -13,6 +13,7 @@
 
 - [ ] 2.1 Extend the Toolset in internal/agent with the three tools. Check: The tests above pass.
 - [ ] 2.2 Add the user docs page at docs/user/dusty-comment-propose.md (NEW). Check: make docs-lint passes.
+- [ ] 2.3 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `agent.denied` in the NEW file `internal/errcode/testdata/catalog/agent.txt`; `change.not-draft` in the NEW file `internal/errcode/testdata/catalog/change.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Side effects (computed from main)
 

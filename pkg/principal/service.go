@@ -140,7 +140,21 @@ type Input struct {
 }
 
 // CreatePrincipal validates and stores a new principal, with the entry e.
+// It refuses the kind agent: the model connect request makes that record,
+// with its sponsors.
 func (s *Service) CreatePrincipal(ctx context.Context, e audit.Entry, in Input) (Principal, error) {
+	// Defense in depth: the HTTP create route of the principals refuses the
+	// kind agent too, and a later model connect request makes the agent
+	// record with its sponsors. This check stays so that a caller that skips
+	// the route cannot make an agent without its sponsors through this
+	// method.
+	if in.Kind == KindAgent {
+		return Principal{}, fmt.Errorf(
+			"%w: the kind %q comes from the model connect request, with its sponsors",
+			ErrInvalid, in.Kind,
+		)
+	}
+
 	displayName := in.DisplayName
 	if displayName == "" {
 		displayName = in.Subject
@@ -248,7 +262,7 @@ func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string,
 // DeletePrincipal ends the principal with the ID id and its memberships,
 // with the entry e. The store revokes its grants in the same transaction, so
 // the Guard checks that caller holds every action that they give. It
-// returns ErrLastBreakGlass when the principal is the last enabled
+// returns ErrNoWorkingBreakGlass when the principal is the last enabled
 // break-glass account. The delete of a principal of a namespace goes to the
 // audit log of the namespace, with its fence.
 func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller identity.Principal, id string) error {
@@ -306,7 +320,7 @@ func (s *Service) EnablePrincipal(
 // caller cannot lock out a principal with more rights than their own. The
 // check is a read and the write works in maintenance mode, as a revocation
 // does. It returns ErrNotFound when no such principal exists, ErrDisabled
-// when it is disabled, and ErrLastBreakGlass when it is the last enabled
+// when it is disabled, and ErrNoWorkingBreakGlass when it is the last enabled
 // break-glass account: the store refuses that in the same transaction as the
 // write.
 func (s *Service) DisablePrincipal(
