@@ -7,4 +7,4 @@
 
 ## 2. Definition of done
 
-- [ ] 2.1 Run the trimpath check and the local checks. Check: `GOFLAGS=-trimpath go test ./internal/zonegen/... ./internal/cli/... ./internal/pulumijournal/...` passes, `rg -n "runtime.Caller\(0\)" --glob '*_test.go'` finds no line, and `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 2.1 Run the trimpath check and the local checks. Check: `GOFLAGS=-trimpath go test ./internal/zonegen/... ./internal/cli/... ./internal/pulumijournal/...` passes, `rg -n "runtime.Caller\(0\)" --glob '*_test.go'` finds no line, and `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only). Evidence: CI of #3113 was green on its merge.
