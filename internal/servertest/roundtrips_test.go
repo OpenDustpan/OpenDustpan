@@ -1356,7 +1356,10 @@ func backupModel() costModel {
 // perOther counts 2 round trips for each table that a backup leaves out. An
 // emptied table that the restore only reads for its column check costs 1. So
 // the fixed part takes 1 off for passkey_challenges, the table of the open
-// passkey ceremonies, which a restore leaves empty.
+// passkey ceremonies, and 1 more for job_tokens, the table of the job tokens,
+// which a restore leaves empty.
+// The job token column check uses one statement, with no change in cost
+// when the token rows keep only IDs instead of names.
 //
 // The fixed part takes 2 off for each table of Tables that the dev strip never
 // counts, group_mappings and member_removals. The run makes 5 round trips for
@@ -1405,7 +1408,7 @@ func backupModel() costModel {
 // model gives a table.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 340 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+		fixed: 339 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips,
 		perTable:     7,

@@ -385,6 +385,8 @@ func auditKind(p identity.Principal) string {
 		return audit.PrincipalKindService
 	case identity.KindWorkload:
 		return audit.PrincipalKindWorkload
+	case identity.KindAgent:
+		return audit.PrincipalKindAgent
 	default:
 		return ""
 	}
