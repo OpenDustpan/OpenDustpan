@@ -21,6 +21,7 @@ import type {
   CreateNamespaceIssuerKeysInput,
   CreateNotificationSinkInput,
   CreateNotificationSubscriptionInput,
+  CreateOwnTokenInput,
   CreatePlacementRuleInput,
   CreateProfileInput,
   CreateProfileRevisionInput,
@@ -41,6 +42,7 @@ import type {
   DeleteNamespaceContextInput,
   DeleteNotificationSinkInput,
   DeleteNotificationSubscriptionInput,
+  DeleteOwnTokenInput,
   DeletePlacementRuleInput,
   DeletePrincipalGitHostLinkInput,
   DeleteProfileInput,
@@ -90,6 +92,7 @@ import type {
   GetNotificationSinkInput,
   GetNotificationSubscriptionInput,
   GetOutputSharingInput,
+  GetOwnAccessInput,
   GetPlacementRuleInput,
   GetPreferencesInput,
   GetProfileInput,
@@ -130,6 +133,9 @@ import type {
   ListNotificationDeliveriesInput,
   ListNotificationSinksInput,
   ListNotificationSubscriptionsInput,
+  ListOwnAccessObjectsInput,
+  ListOwnGrantsInput,
+  ListOwnTokensInput,
   ListPasskeysInput,
   ListPlacementRulesInput,
   ListProfileRevisionsInput,
@@ -168,6 +174,7 @@ import type {
   ResetUnitSettingsInput,
   RetireBlueprintVersionInput,
   RotateNamespaceIssuerKeysInput,
+  RotateOwnTokenInput,
   SetAccessLimitInput,
   SetApprovalDefaultInput,
   SetApprovalRuleInput,
@@ -206,6 +213,7 @@ import type {
   AccessCollectionUnitCapError,
   AccessCollectionUnitCapErrorArgs,
   AccessLimit,
+  AccessToken,
   AddRegistryKeyRequest,
   ApiDescription,
   ApprovalDefault,
@@ -251,6 +259,7 @@ import type {
   CreateLocalUserResponse,
   CreateNotificationSinkRequest,
   CreateNotificationSubscriptionRequest,
+  CreateOwnTokenRequest,
   CreateProfileRequest,
   CreateProfileRevisionRequest,
   CreateTrustRuleRequest,
@@ -327,6 +336,9 @@ import type {
   ListNotificationDeliveriesResponse,
   ListNotificationSinksResponse,
   ListNotificationSubscriptionsResponse,
+  ListOwnAccessObjectsResponse,
+  ListOwnGrantsResponse,
+  ListOwnTokensResponse,
   ListPasskeysResponse,
   ListPlacementRulesResponse,
   ListProfileRevisionsResponse,
@@ -363,6 +375,7 @@ import type {
   NamespaceIssuerExport,
   NamespaceIssuerKeys,
   NamespaceIssuerRotation,
+  NewAccessToken,
   NotificationDelivery,
   NotificationFilter,
   NotificationFilterRequest,
@@ -372,6 +385,14 @@ import type {
   OutputSharing,
   OutputSharingRequest,
   OverrideSwitches,
+  OwnAccess,
+  OwnAccessGrant,
+  OwnAccessObject,
+  OwnGrant,
+  OwnGrantVia,
+  OwnGrantedBy,
+  OwnMissingAction,
+  OwnTokenRotation,
   Passkey,
   PasskeyCreationOptions,
   PasskeyRequestOptions,
@@ -418,6 +439,7 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  RotateOwnTokenRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
@@ -620,6 +642,10 @@ export class Client {
     return execute(this.transport, operations.createNotificationSubscription, input);
   }
 
+  createOwnToken(input: CreateOwnTokenInput): Promise<Answer<NewAccessToken>> {
+    return execute(this.transport, operations.createOwnToken, input);
+  }
+
   createPlacementRule(input: CreatePlacementRuleInput): Promise<Answer<PlacementRule>> {
     return execute(this.transport, operations.createPlacementRule, input);
   }
@@ -698,6 +724,10 @@ export class Client {
 
   deleteNotificationSubscription(input: DeleteNotificationSubscriptionInput): Promise<Answer<void>> {
     return execute(this.transport, operations.deleteNotificationSubscription, input);
+  }
+
+  deleteOwnToken(input: DeleteOwnTokenInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.deleteOwnToken, input);
   }
 
   deletePlacementRule(input: DeletePlacementRuleInput): Promise<Answer<void>> {
@@ -896,6 +926,10 @@ export class Client {
     return execute(this.transport, operations.getOutputSharing, input);
   }
 
+  getOwnAccess(input: GetOwnAccessInput = {}): Promise<Answer<OwnAccess>> {
+    return execute(this.transport, operations.getOwnAccess, input);
+  }
+
   getPlacementRule(input: GetPlacementRuleInput): Promise<Answer<PlacementRule>> {
     return execute(this.transport, operations.getPlacementRule, input);
   }
@@ -1056,6 +1090,18 @@ export class Client {
     return execute(this.transport, operations.listNotificationSubscriptions, input);
   }
 
+  listOwnAccessObjects(input: ListOwnAccessObjectsInput = {}): Promise<Answer<ListOwnAccessObjectsResponse>> {
+    return execute(this.transport, operations.listOwnAccessObjects, input);
+  }
+
+  listOwnGrants(input: ListOwnGrantsInput = {}): Promise<Answer<ListOwnGrantsResponse>> {
+    return execute(this.transport, operations.listOwnGrants, input);
+  }
+
+  listOwnTokens(input: ListOwnTokensInput = {}): Promise<Answer<ListOwnTokensResponse>> {
+    return execute(this.transport, operations.listOwnTokens, input);
+  }
+
   listPasskeys(input: ListPasskeysInput = {}): Promise<Answer<ListPasskeysResponse>> {
     return execute(this.transport, operations.listPasskeys, input);
   }
@@ -1206,6 +1252,10 @@ export class Client {
 
   rotateNamespaceIssuerKeys(input: RotateNamespaceIssuerKeysInput): Promise<Answer<NamespaceIssuerRotation>> {
     return execute(this.transport, operations.rotateNamespaceIssuerKeys, input);
+  }
+
+  rotateOwnToken(input: RotateOwnTokenInput): Promise<Answer<OwnTokenRotation>> {
+    return execute(this.transport, operations.rotateOwnToken, input);
   }
 
   setAccessLimit(input: SetAccessLimitInput): Promise<Answer<AccessLimit>> {

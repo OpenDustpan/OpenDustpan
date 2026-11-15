@@ -35,9 +35,10 @@ package server
 // 52, decision 13): in the namespace of a namespace or unit export, in
 // @server for the installation. A failed append answers 500 with no rows.
 //
-// GET /api/dustpan/v1/me/access answers the access of the caller: on one
-// object (?object=), or the objects of one kind where it can do an action
-// (?type=&action=), paged. It needs caller:read only, so every signed-in
+// GET /api/dustpan/v1/me/access answers the access of the caller on one
+// object (?object=). GET /api/dustpan/v1/me/access/objects answers the
+// objects of one kind where it can do an action (?type=&action=), paged.
+// Both need caller:read only, so every signed-in
 // principal reads its own access. With type=principal, the default action
 // is principal:manage-tokens: the answer lists the service principals whose
 // tokens the caller can make. There, all=true means every service principal
@@ -74,8 +75,10 @@ var (
 	)
 	errExpandQuery       = errors.New(`invalid access review query: "expand" takes the value "members" only`)
 	errCallerAccessQuery = errors.New(
-		`invalid access query: provide "object=<object>", or "type=namespace|collection|unit|principal" ` +
-			`and an optional "action"`,
+		`invalid access query: provide "object=<object>"; to list objects by type, use /api/dustpan/v1/me/access/objects`,
+	)
+	errCallerObjectsQuery = errors.New(
+		`invalid access objects query: provide "type=namespace|collection|unit|principal" and an optional "action"`,
 	)
 	errCallerQuery = errors.New(
 		"invalid query: the names of this route are pageSize and pageToken; cursor and limit are not names of this route",
@@ -120,10 +123,11 @@ func callerPageOf(r *http.Request) (callerPage, error) {
 	return page, nil
 }
 
-// callerPageFault maps the error of a page of a caller list: a cursor that
-// no page gave answers the page token error.
-func callerPageFault(err error) error {
-	if errors.Is(err, access.ErrBadCursor) {
+// callerPageFault maps the error of a page of a caller list: when the
+// request sent a pageToken, the service refuses only that token, so the
+// invalid answer is the page token error.
+func callerPageFault(err error, page callerPage) error {
+	if page.token != "" && errors.Is(err, access.ErrInvalid) {
 		return errCallerPageToken
 	}
 
@@ -141,6 +145,8 @@ const (
 	principalReviewPath = "/api/server/principals/{principal}/access-review"
 	callerAccessPath    = "/api/dustpan/v1/me/access"
 	callerGrantsPath    = "/api/dustpan/v1/me/grants"
+	// callerObjectsPath lists, by kind, the objects where the caller can do an action.
+	callerObjectsPath = "/api/dustpan/v1/me/access/objects"
 )
 
 // reviewRowResponse is one row of an access-review export on the wire.
@@ -306,6 +312,18 @@ func (h *Handler) reviewRoutes() []Route {
 			ActionsFor:   nil,
 			OpaqueDenial: false,
 			Serve:        h.serveAccessRead(callerAccess),
+		},
+		{
+			Method: http.MethodGet,
+			Path:   callerObjectsPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionCallerRead,
+			},
+			Resolve:      resolveCaller,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveAccessRead(callerAccessObjects),
 		},
 		{
 			Method: http.MethodGet,
@@ -682,16 +700,25 @@ func callerAccess(
 	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	q := queryOf(r)
-	object, kind := q.Get("object"), q.Get("type")
 
-	switch {
-	case object != "" && kind == "":
-		return callerAccessOn(r, svc, c.p, object)
-	case object == "" && kind != "":
-		return callerAccessByType(r, svc, c.p, access.ObjectKind(kind))
-	default:
+	if q.Err() != nil || len(q.Undeclared()) > 0 || q.Get("object") == "" {
 		return failed(""), errCallerAccessQuery
 	}
+
+	return callerAccessOn(r, svc, c.p, q.Get("object"))
+}
+
+// callerAccessObjects serves GET /api/dustpan/v1/me/access/objects: one page
+// of the objects of one kind where the caller can do an action.
+func callerAccessObjects(
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
+) (principalResult, error) {
+	kind := queryOf(r).Get("type")
+	if kind == "" {
+		return failed(""), errCallerObjectsQuery
+	}
+
+	return callerAccessByType(r, svc, c.p, access.ObjectKind(kind))
 }
 
 // callerAccessOn answers the access of p on the object with the wire form
@@ -855,7 +882,7 @@ func callerAccessByType(
 		Kind: kind, Action: identity.Action(queryOf(r).Get("action")), Cursor: page.token, Limit: page.size,
 	})
 	if err != nil {
-		return failed(""), callerPageFault(err)
+		return failed(""), callerPageFault(err, page)
 	}
 
 	out := accessObjectsResponse{
@@ -888,7 +915,7 @@ func callerGrants(
 
 	got, err := svc.CallerGrants(r.Context(), c.p, access.CallerGrantsRequest{Cursor: page.token, Limit: page.size})
 	if err != nil {
-		return failed(""), callerPageFault(err)
+		return failed(""), callerPageFault(err, page)
 	}
 
 	wire, err := reviewPageOf(got)

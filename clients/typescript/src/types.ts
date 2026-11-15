@@ -23,6 +23,23 @@ export interface AccessLimit {
   readonly version?: number;
 }
 
+export interface AccessToken {
+  readonly createdAt: string;
+  readonly createdBy: string;
+  readonly disabledAt: string | null;
+  readonly expiresAt: string;
+  readonly expiresInDays: number | null;
+  readonly expiryWarning: string;
+  readonly id: string;
+  readonly kind: string;
+  readonly lastUsedAt: string | null;
+  readonly name: string;
+  readonly principalID: string;
+  readonly replacedBy: string;
+  readonly revokedAt: string | null;
+  readonly status: string;
+}
+
 export interface AddRegistryKeyRequest {
   readonly armoredPublicKey: string;
 }
@@ -340,6 +357,12 @@ export interface CreateNotificationSinkRequest {
 export interface CreateNotificationSubscriptionRequest {
   readonly filter?: NotificationFilterRequest;
   readonly sink: string;
+}
+
+export interface CreateOwnTokenRequest {
+  readonly expiresAt: string | null;
+  readonly name: string | null;
+  readonly principalID: string | null;
 }
 
 export interface CreateProfileRequest {
@@ -930,6 +953,29 @@ export interface ListNotificationSubscriptionsResponse {
   readonly subscriptions: ReadonlyArray<NotificationSubscription>;
 }
 
+export interface ListOwnAccessObjectsResponse {
+  readonly action: string;
+  readonly all: boolean;
+  readonly nextPageToken: string;
+  readonly objects: ReadonlyArray<OwnAccessObject>;
+  readonly total: number;
+  readonly type: string;
+}
+
+export interface ListOwnGrantsResponse {
+  readonly asOfMs: number | null;
+  readonly grants: ReadonlyArray<OwnGrant>;
+  readonly nextPageToken: string;
+  readonly total: number | null;
+}
+
+export interface ListOwnTokensResponse {
+  readonly maxLifetimeSeconds: number;
+  readonly nextPageToken: string;
+  readonly tokens: ReadonlyArray<AccessToken>;
+  readonly total: number;
+}
+
 export interface ListPasskeysResponse {
   readonly passkeys: ReadonlyArray<Passkey>;
 }
@@ -1153,6 +1199,24 @@ export interface NamespaceIssuerRotation {
   readonly promoted: boolean;
 }
 
+export interface NewAccessToken {
+  readonly createdAt: string;
+  readonly createdBy: string;
+  readonly disabledAt: string | null;
+  readonly expiresAt: string;
+  readonly expiresInDays: number | null;
+  readonly expiryWarning: string;
+  readonly id: string;
+  readonly kind: string;
+  readonly lastUsedAt: string | null;
+  readonly name: string;
+  readonly principalID: string;
+  readonly replacedBy: string;
+  readonly revokedAt: string | null;
+  readonly secret: string;
+  readonly status: string;
+}
+
 export interface NotificationDelivery {
   readonly attempts: number;
   readonly contact?: string;
@@ -1224,6 +1288,77 @@ export interface OutputSharingRequest {
 export interface OverrideSwitches {
   readonly allowForcedWrites: boolean;
   readonly allowUnlockedWrites: boolean;
+}
+
+export interface OwnAccess {
+  readonly actions: ReadonlyArray<string>;
+  readonly grants: ReadonlyArray<OwnAccessGrant>;
+  readonly missingActions: ReadonlyArray<OwnMissingAction>;
+  readonly object: string;
+}
+
+export interface OwnAccessGrant {
+  readonly createdAt: string;
+  readonly createdBy: string;
+  readonly id: string;
+  readonly object: string;
+  readonly role: string;
+  readonly subject: string;
+}
+
+export interface OwnAccessObject {
+  readonly kind: string;
+  readonly object: string;
+}
+
+export interface OwnGrant {
+  readonly canGrantAccess: boolean;
+  readonly effectiveFromMs: number | null;
+  readonly effectiveUntilMs: number | null;
+  readonly grantID: string;
+  readonly grantedAtMs: number | null;
+  readonly grantedBy: string;
+  readonly holder?: string;
+  readonly inheritedFrom: string;
+  readonly lastAccessAtMs?: number;
+  readonly lastAccessTracked?: boolean;
+  readonly memberCount?: number;
+  readonly object: string;
+  readonly objectState: string;
+  readonly revokedAtMs: number | null;
+  readonly revokedBy: string;
+  readonly role: string;
+  readonly rule?: string;
+  readonly source: string;
+  readonly subject: string;
+  readonly subjectName: string;
+  readonly via: OwnGrantVia | null;
+}
+
+export interface OwnGrantVia {
+  readonly group: string;
+  readonly member: string;
+  readonly memberFromMs: number;
+  readonly memberSource: string;
+  readonly memberSourceId: string;
+  readonly memberSubject: string;
+  readonly memberSuspended: boolean;
+  readonly memberUntilMs: number | null;
+}
+
+export interface OwnGrantedBy {
+  readonly builtInRoles: ReadonlyArray<string>;
+  readonly customRoles: ReadonlyArray<string>;
+}
+
+export interface OwnMissingAction {
+  readonly action: string;
+  readonly grantedBy: OwnGrantedBy;
+}
+
+export interface OwnTokenRotation {
+  readonly previous: AccessToken;
+  readonly token: NewAccessToken;
 }
 
 export interface Passkey {
@@ -1572,6 +1707,11 @@ export interface RestoreWarning {
 export interface RotateNamespaceIssuerKeysRequest {
   readonly emergency: boolean;
   readonly reason: string;
+}
+
+export interface RotateOwnTokenRequest {
+  readonly expiresAt: string | null;
+  readonly oldTokenEndsAt: string | null;
 }
 
 export interface SaveTriggerRequest {

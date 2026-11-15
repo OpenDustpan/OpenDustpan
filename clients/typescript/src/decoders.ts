@@ -24,6 +24,7 @@ import type {
   AccessCollectionUnitCapError,
   AccessCollectionUnitCapErrorArgs,
   AccessLimit,
+  AccessToken,
   AddRegistryKeyRequest,
   ApiDescription,
   ApprovalDefault,
@@ -69,6 +70,7 @@ import type {
   CreateLocalUserResponse,
   CreateNotificationSinkRequest,
   CreateNotificationSubscriptionRequest,
+  CreateOwnTokenRequest,
   CreateProfileRequest,
   CreateProfileRevisionRequest,
   CreateTrustRuleRequest,
@@ -145,6 +147,9 @@ import type {
   ListNotificationDeliveriesResponse,
   ListNotificationSinksResponse,
   ListNotificationSubscriptionsResponse,
+  ListOwnAccessObjectsResponse,
+  ListOwnGrantsResponse,
+  ListOwnTokensResponse,
   ListPasskeysResponse,
   ListPlacementRulesResponse,
   ListProfileRevisionsResponse,
@@ -181,6 +186,7 @@ import type {
   NamespaceIssuerExport,
   NamespaceIssuerKeys,
   NamespaceIssuerRotation,
+  NewAccessToken,
   NotificationDelivery,
   NotificationFilter,
   NotificationFilterRequest,
@@ -190,6 +196,14 @@ import type {
   OutputSharing,
   OutputSharingRequest,
   OverrideSwitches,
+  OwnAccess,
+  OwnAccessGrant,
+  OwnAccessObject,
+  OwnGrant,
+  OwnGrantVia,
+  OwnGrantedBy,
+  OwnMissingAction,
+  OwnTokenRotation,
   Passkey,
   PasskeyCreationOptions,
   PasskeyRequestOptions,
@@ -236,6 +250,7 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  RotateOwnTokenRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
@@ -424,6 +439,24 @@ export const decodeAccessLimit: Decoder<AccessLimit> = object<AccessLimit>("Acce
   id: optional(string),
   policy: string,
   version: optional(int64),
+});
+
+/** The validator of AccessToken. */
+export const decodeAccessToken: Decoder<AccessToken> = object<AccessToken>("AccessToken", {
+  createdAt: string,
+  createdBy: string,
+  disabledAt: nullable(string),
+  expiresAt: string,
+  expiresInDays: nullable(int64),
+  expiryWarning: string,
+  id: string,
+  kind: string,
+  lastUsedAt: nullable(string),
+  name: string,
+  principalID: string,
+  replacedBy: string,
+  revokedAt: nullable(string),
+  status: string,
 });
 
 /** The validator of AddRegistryKeyRequest. */
@@ -755,6 +788,13 @@ export const decodeCreateNotificationSinkRequest: Decoder<CreateNotificationSink
 export const decodeCreateNotificationSubscriptionRequest: Decoder<CreateNotificationSubscriptionRequest> = object<CreateNotificationSubscriptionRequest>("CreateNotificationSubscriptionRequest", {
   filter: optional(ref(() => decodeNotificationFilterRequest)),
   sink: string,
+});
+
+/** The validator of CreateOwnTokenRequest. */
+export const decodeCreateOwnTokenRequest: Decoder<CreateOwnTokenRequest> = object<CreateOwnTokenRequest>("CreateOwnTokenRequest", {
+  expiresAt: nullable(dateTime),
+  name: nullable(string),
+  principalID: nullable(string),
 });
 
 /** The validator of CreateProfileRequest. */
@@ -1405,6 +1445,32 @@ export const decodeListNotificationSubscriptionsResponse: Decoder<ListNotificati
   subscriptions: array(ref(() => decodeNotificationSubscription)),
 });
 
+/** The validator of ListOwnAccessObjectsResponse. */
+export const decodeListOwnAccessObjectsResponse: Decoder<ListOwnAccessObjectsResponse> = object<ListOwnAccessObjectsResponse>("ListOwnAccessObjectsResponse", {
+  action: string,
+  all: boolean,
+  nextPageToken: string,
+  objects: array(ref(() => decodeOwnAccessObject)),
+  total: int64,
+  type: string,
+});
+
+/** The validator of ListOwnGrantsResponse. */
+export const decodeListOwnGrantsResponse: Decoder<ListOwnGrantsResponse> = object<ListOwnGrantsResponse>("ListOwnGrantsResponse", {
+  asOfMs: nullable(int64),
+  grants: array(ref(() => decodeOwnGrant)),
+  nextPageToken: string,
+  total: nullable(int64),
+});
+
+/** The validator of ListOwnTokensResponse. */
+export const decodeListOwnTokensResponse: Decoder<ListOwnTokensResponse> = object<ListOwnTokensResponse>("ListOwnTokensResponse", {
+  maxLifetimeSeconds: int64,
+  nextPageToken: string,
+  tokens: array(ref(() => decodeAccessToken)),
+  total: int64,
+});
+
 /** The validator of ListPasskeysResponse. */
 export const decodeListPasskeysResponse: Decoder<ListPasskeysResponse> = object<ListPasskeysResponse>("ListPasskeysResponse", {
   passkeys: array(ref(() => decodePasskey)),
@@ -1652,6 +1718,25 @@ export const decodeNamespaceIssuerRotation: Decoder<NamespaceIssuerRotation> = o
   promoted: boolean,
 });
 
+/** The validator of NewAccessToken. */
+export const decodeNewAccessToken: Decoder<NewAccessToken> = object<NewAccessToken>("NewAccessToken", {
+  createdAt: string,
+  createdBy: string,
+  disabledAt: nullable(string),
+  expiresAt: string,
+  expiresInDays: nullable(int64),
+  expiryWarning: string,
+  id: string,
+  kind: string,
+  lastUsedAt: nullable(string),
+  name: string,
+  principalID: string,
+  replacedBy: string,
+  revokedAt: nullable(string),
+  secret: string,
+  status: string,
+});
+
 /** The validator of NotificationDelivery. */
 export const decodeNotificationDelivery: Decoder<NotificationDelivery> = object<NotificationDelivery>("NotificationDelivery", {
   attempts: int64,
@@ -1732,6 +1817,85 @@ export const decodeOutputSharingRequest: Decoder<OutputSharingRequest> = object<
 export const decodeOverrideSwitches: Decoder<OverrideSwitches> = object<OverrideSwitches>("OverrideSwitches", {
   allowForcedWrites: boolean,
   allowUnlockedWrites: boolean,
+});
+
+/** The validator of OwnAccess. */
+export const decodeOwnAccess: Decoder<OwnAccess> = object<OwnAccess>("OwnAccess", {
+  actions: array(string),
+  grants: array(ref(() => decodeOwnAccessGrant)),
+  missingActions: array(ref(() => decodeOwnMissingAction)),
+  object: string,
+});
+
+/** The validator of OwnAccessGrant. */
+export const decodeOwnAccessGrant: Decoder<OwnAccessGrant> = object<OwnAccessGrant>("OwnAccessGrant", {
+  createdAt: string,
+  createdBy: string,
+  id: string,
+  object: string,
+  role: string,
+  subject: string,
+});
+
+/** The validator of OwnAccessObject. */
+export const decodeOwnAccessObject: Decoder<OwnAccessObject> = object<OwnAccessObject>("OwnAccessObject", {
+  kind: string,
+  object: string,
+});
+
+/** The validator of OwnGrant. */
+export const decodeOwnGrant: Decoder<OwnGrant> = object<OwnGrant>("OwnGrant", {
+  canGrantAccess: boolean,
+  effectiveFromMs: nullable(int64),
+  effectiveUntilMs: nullable(int64),
+  grantID: string,
+  grantedAtMs: nullable(int64),
+  grantedBy: string,
+  holder: optional(string),
+  inheritedFrom: string,
+  lastAccessAtMs: optional(int64),
+  lastAccessTracked: optional(boolean),
+  memberCount: optional(int64),
+  object: string,
+  objectState: string,
+  revokedAtMs: nullable(int64),
+  revokedBy: string,
+  role: string,
+  rule: optional(string),
+  source: string,
+  subject: string,
+  subjectName: string,
+  via: nullable(ref(() => decodeOwnGrantVia)),
+});
+
+/** The validator of OwnGrantVia. */
+export const decodeOwnGrantVia: Decoder<OwnGrantVia> = object<OwnGrantVia>("OwnGrantVia", {
+  group: string,
+  member: string,
+  memberFromMs: int64,
+  memberSource: string,
+  memberSourceId: string,
+  memberSubject: string,
+  memberSuspended: boolean,
+  memberUntilMs: nullable(int64),
+});
+
+/** The validator of OwnGrantedBy. */
+export const decodeOwnGrantedBy: Decoder<OwnGrantedBy> = object<OwnGrantedBy>("OwnGrantedBy", {
+  builtInRoles: array(string),
+  customRoles: array(string),
+});
+
+/** The validator of OwnMissingAction. */
+export const decodeOwnMissingAction: Decoder<OwnMissingAction> = object<OwnMissingAction>("OwnMissingAction", {
+  action: string,
+  grantedBy: ref(() => decodeOwnGrantedBy),
+});
+
+/** The validator of OwnTokenRotation. */
+export const decodeOwnTokenRotation: Decoder<OwnTokenRotation> = object<OwnTokenRotation>("OwnTokenRotation", {
+  previous: ref(() => decodeAccessToken),
+  token: ref(() => decodeNewAccessToken),
 });
 
 /** The validator of Passkey. */
@@ -2094,6 +2258,12 @@ export const decodeRestoreWarning: Decoder<RestoreWarning> = object<RestoreWarni
 export const decodeRotateNamespaceIssuerKeysRequest: Decoder<RotateNamespaceIssuerKeysRequest> = object<RotateNamespaceIssuerKeysRequest>("RotateNamespaceIssuerKeysRequest", {
   emergency: boolean,
   reason: string,
+});
+
+/** The validator of RotateOwnTokenRequest. */
+export const decodeRotateOwnTokenRequest: Decoder<RotateOwnTokenRequest> = object<RotateOwnTokenRequest>("RotateOwnTokenRequest", {
+  expiresAt: nullable(dateTime),
+  oldTokenEndsAt: nullable(dateTime),
 });
 
 /** The validator of SaveTriggerRequest. */

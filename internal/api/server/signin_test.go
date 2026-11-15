@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
@@ -117,7 +118,7 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 
 	return newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: autoCreate, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil, failPolicyRead: nil,
+		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: false,
 	})
 }
 
@@ -145,6 +146,20 @@ type signInEnvOptions struct {
 	// failPolicyRead, when set, makes the read of the session policy fail
 	// with its error, as a store that is down does.
 	failPolicyRead func() error
+	// idempotency gives the handler the Idempotency-Key middleware.
+	idempotency bool
+}
+
+// keysOf returns the Idempotency-Key middleware over st, or nil when opts
+// asks for none.
+func keysOf(t *testing.T, st *sqlite.Store, opts signInEnvOptions) *idempotent.Middleware {
+	t.Helper()
+
+	if !opts.idempotency {
+		return nil
+	}
+
+	return newHostMiddleware(t, st)
 }
 
 // failingPolicyStore is a policy store whose read fails with the error that
@@ -282,6 +297,8 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	}
 	addPasswordProviders(signIn, opts.passwords, limiter)
 
+	keys := keysOf(t, st, opts)
+
 	handler, err := newCheckedHandler(t, &apiserver.Config{
 		Cursors:          testCursors(t),
 		LocalUsers:       nil,
@@ -289,7 +306,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		GitHostLinks:     nil,
 		Settings:         nil,
 		GitHost:          nil,
-		Idempotency:      nil,
+		Idempotency:      keys,
 		Workers:          nil,
 		TempAdmins:       nil,
 		Now:              nil,
@@ -751,8 +768,8 @@ func tokenTargets() []string {
 	return []string{
 		"/api/server/service-tokens",
 		"/api/server/service-tokens/" + testServiceTokenID + "/rotate",
-		"/api/server/caller/tokens",
-		"/api/server/caller/tokens/" + testServiceTokenID + "/rotate",
+		"/api/dustpan/v1/me/tokens",
+		"/api/dustpan/v1/me/tokens/" + testServiceTokenID + "/rotate",
 		principalTokens,
 		principalTokens + "/" + testServiceTokenID + "/rotate",
 	}
@@ -818,7 +835,7 @@ func TestSignInTokenFreshness(t *testing.T) {
 
 	e := newSignInEnv(t, true)
 
-	rec := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
+	rec := e.postWithSession(t, e.signIn(t), "/api/dustpan/v1/me/tokens", ownTokenBody())
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("own token from a fresh session = %d %s, want 201", rec.Code, rec.Body.String())
 	}
@@ -874,7 +891,7 @@ func TestSignInFreshSignIn(t *testing.T) {
 		t.Fatal("the fresh sign-in set no session cookie")
 	}
 
-	if rec := e.postWithSession(t, fresh, "/api/server/caller/tokens", ownTokenBody()); rec.Code != http.StatusCreated {
+	if rec := e.postWithSession(t, fresh, "/api/dustpan/v1/me/tokens", ownTokenBody()); rec.Code != http.StatusCreated {
 		t.Fatalf("own token after a fresh sign-in = %d %s, want 201", rec.Code, rec.Body.String())
 	}
 
@@ -945,7 +962,7 @@ func TestSignInFreshnessWindowZeroAsksEachTime(t *testing.T) {
 		t.Fatalf("set the window to 0: %v", err)
 	}
 
-	rec := e.postWithSession(t, fresh, "/api/server/caller/tokens", ownTokenBody())
+	rec := e.postWithSession(t, fresh, "/api/dustpan/v1/me/tokens", ownTokenBody())
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("own token with a window of 0 = %d %s, want 403", rec.Code, rec.Body.String())
 	}
@@ -1307,7 +1324,7 @@ func TestSignInSessionChangeRecordsTheConsoleChannel(t *testing.T) {
 	_, body := e.readSession(t, sess)
 	before := e.sessionChanges(t)
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/caller/tokens",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/me/tokens",
 		strings.NewReader(`{"name":"laptop"}`))
 	req.AddCookie(sess)
 	req.Header.Set(apiserver.CSRFHeader, body.CSRFToken)
@@ -1405,15 +1422,15 @@ func TestSignInFreshnessWithNoPolicyService(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: true, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil, failPolicyRead: nil,
+		hostile: nil, passwords: nil, failPolicyRead: nil, idempotency: false,
 	})
 
-	created := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
+	created := e.postWithSession(t, e.signIn(t), "/api/dustpan/v1/me/tokens", ownTokenBody())
 	if created.Code != http.StatusCreated {
 		t.Fatalf("own token from a fresh session = %d %s, want 201", created.Code, created.Body.String())
 	}
 
-	rec := e.postWithSession(t, e.staleSession(t), "/api/server/caller/tokens", ownTokenBody())
+	rec := e.postWithSession(t, e.staleSession(t), "/api/dustpan/v1/me/tokens", ownTokenBody())
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("own token from a stale session with no policy service = %d %s, want 403",
 			rec.Code, rec.Body.String())
@@ -1428,7 +1445,7 @@ func TestSignInTokenEntryNamesTheSession(t *testing.T) {
 
 	e := newSignInEnv(t, true)
 
-	created := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
+	created := e.postWithSession(t, e.signIn(t), "/api/dustpan/v1/me/tokens", ownTokenBody())
 	if created.Code != http.StatusCreated {
 		t.Fatalf("own token from a fresh session = %d %s, want 201", created.Code, created.Body.String())
 	}
@@ -1794,7 +1811,7 @@ func TestSignInCallbackRefusesAHostileAssertion(t *testing.T) {
 
 			e := newSignInEnvWith(t, signInEnvOptions{
 				autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil,
-				namespaces: nil, hostile: tc.change, passwords: nil, failPolicyRead: nil,
+				namespaces: nil, hostile: tc.change, passwords: nil, failPolicyRead: nil, idempotency: false,
 			})
 
 			binding, authURL := e.start(t, "/console/tokens")

@@ -62,7 +62,7 @@ func TestDelegationRoutesRefuse(t *testing.T) {
 	var service, personal tokenDoc
 	f.as(t, "admin", apiCall{http.MethodPost, deploy + "/tokens", `{"name":"ci"}`, http.StatusCreated}, &service)
 	f.as(t, "alice", apiCall{
-		http.MethodPost, "/api/server/caller/tokens", `{"name":"laptop"}`, http.StatusCreated,
+		http.MethodPost, "/api/dustpan/v1/me/tokens", `{"name":"laptop"}`, http.StatusCreated,
 	}, &personal)
 
 	for _, c := range []struct {
@@ -152,9 +152,9 @@ func TestTokenManagerReads(t *testing.T) {
 		{"bob", apiCall{http.MethodGet, deploy, "", http.StatusForbidden}},
 		{"tm", apiCall{http.MethodGet, "/api/server/principals/prn-alice/tokens", "", http.StatusBadRequest}},
 		{"admin", apiCall{http.MethodGet, "/api/server/principals/prn-none/tokens", "", http.StatusNotFound}},
-		{"ops", apiCall{http.MethodGet, "/api/server/caller/access?type=principal&action=unit:read", "", http.StatusBadRequest}},
+		{"ops", apiCall{http.MethodGet, "/api/dustpan/v1/me/access/objects?type=principal&action=unit:read", "", http.StatusBadRequest}},
 		{"tm", apiCall{
-			http.MethodGet, "/api/server/caller/access?type=principal&action=server:manage-access", "",
+			http.MethodGet, "/api/dustpan/v1/me/access/objects?type=principal&action=server:manage-access", "",
 			http.StatusBadRequest,
 		}},
 		{"bob", apiCall{http.MethodGet, "/api/server/principals/prn-none/tokens", "", http.StatusForbidden}},
@@ -172,7 +172,9 @@ func TestTokenManagerReads(t *testing.T) {
 		{"bob", nil, false},
 	} {
 		var got accessObjectsDoc
-		f.as(t, c.subject, apiCall{http.MethodGet, "/api/server/caller/access?type=principal", "", http.StatusOK}, &got)
+		f.as(t, c.subject, apiCall{
+			http.MethodGet, "/api/dustpan/v1/me/access/objects?type=principal", "", http.StatusOK,
+		}, &got)
 
 		objects := make([]string, 0, len(got.Objects))
 		for _, o := range got.Objects {
@@ -186,7 +188,7 @@ func TestTokenManagerReads(t *testing.T) {
 	}
 
 	var own limitedTokenListDoc
-	f.as(t, "bob", apiCall{http.MethodGet, "/api/server/caller/tokens", "", http.StatusOK}, &own)
+	f.as(t, "bob", apiCall{http.MethodGet, "/api/dustpan/v1/me/tokens", "", http.StatusOK}, &own)
 
 	if own.MaxLifetimeSeconds != year {
 		t.Fatalf("maximum lifetime of a person = %d, want %d", own.MaxLifetimeSeconds, year)
@@ -255,7 +257,7 @@ func TestNamespacePrincipalRoutes(t *testing.T) {
 
 // TestNoRouteMakesAPersonalTokenOfAnother proves that no route makes or
 // rotates a personal token of another person, for an administrator too:
-// the person makes its own under /api/server/caller/tokens. The list, the
+// the person makes its own under /api/dustpan/v1/me/tokens. The list, the
 // read and the revoke of every token stay.
 func TestNoRouteMakesAPersonalTokenOfAnother(t *testing.T) {
 	t.Parallel()
@@ -266,7 +268,7 @@ func TestNoRouteMakesAPersonalTokenOfAnother(t *testing.T) {
 	f.as(
 		t,
 		"alice",
-		apiCall{http.MethodPost, "/api/server/caller/tokens", `{"name":"laptop"}`, http.StatusCreated},
+		apiCall{http.MethodPost, "/api/dustpan/v1/me/tokens", `{"name":"laptop"}`, http.StatusCreated},
 		&own,
 	)
 

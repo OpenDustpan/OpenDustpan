@@ -138,7 +138,7 @@ func checkTokenNeedsFreshAuth(ctx context.Context, t *testing.T, env *e2e.Env, d
 	for _, step := range []principalStep{
 		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + deploy.ID + `","name":"refused"}`, 0},
 		{http.MethodPost, "/api/server/principals/" + deploy.ID + "/tokens", `{"name":"refused"}`, 0},
-		{http.MethodPost, "/api/server/caller/tokens", `{"name":"refused"}`, 0},
+		{http.MethodPost, "/api/dustpan/v1/me/tokens", `{"name":"refused"}`, 0},
 	} {
 		status, body, callErr := env.ServerAPIStatus(ctx, step.method, step.path, step.body)
 		if callErr != nil || status != http.StatusForbidden ||
@@ -411,7 +411,7 @@ func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 		http.MethodPost, "/api/server/service-tokens/" + personal.ID + "/rotate", `{}`, http.StatusForbidden,
 	}, nil)
 
-	own := "/api/server/caller/tokens"
+	own := "/api/dustpan/v1/me/tokens"
 	for _, step := range []principalStep{
 		{http.MethodGet, own, "", http.StatusForbidden},
 		{http.MethodPost, own, `{"name":"mine"}`, http.StatusForbidden},

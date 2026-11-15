@@ -5,6 +5,7 @@ import {
   decodeAccessCollectionUnitCapError,
   decodeAccessCollectionUnitCapErrorArgs,
   decodeAccessLimit,
+  decodeAccessToken,
   decodeAddRegistryKeyRequest,
   decodeApiDescription,
   decodeApprovalDefault,
@@ -50,6 +51,7 @@ import {
   decodeCreateLocalUserResponse,
   decodeCreateNotificationSinkRequest,
   decodeCreateNotificationSubscriptionRequest,
+  decodeCreateOwnTokenRequest,
   decodeCreateProfileRequest,
   decodeCreateProfileRevisionRequest,
   decodeCreateTrustRuleRequest,
@@ -126,6 +128,9 @@ import {
   decodeListNotificationDeliveriesResponse,
   decodeListNotificationSinksResponse,
   decodeListNotificationSubscriptionsResponse,
+  decodeListOwnAccessObjectsResponse,
+  decodeListOwnGrantsResponse,
+  decodeListOwnTokensResponse,
   decodeListPasskeysResponse,
   decodeListPlacementRulesResponse,
   decodeListProfileRevisionsResponse,
@@ -162,6 +167,7 @@ import {
   decodeNamespaceIssuerExport,
   decodeNamespaceIssuerKeys,
   decodeNamespaceIssuerRotation,
+  decodeNewAccessToken,
   decodeNotificationDelivery,
   decodeNotificationFilter,
   decodeNotificationFilterRequest,
@@ -171,6 +177,14 @@ import {
   decodeOutputSharing,
   decodeOutputSharingRequest,
   decodeOverrideSwitches,
+  decodeOwnAccess,
+  decodeOwnAccessGrant,
+  decodeOwnAccessObject,
+  decodeOwnGrant,
+  decodeOwnGrantVia,
+  decodeOwnGrantedBy,
+  decodeOwnMissingAction,
+  decodeOwnTokenRotation,
   decodePasskey,
   decodePasskeyCreationOptions,
   decodePasskeyRequestOptions,
@@ -217,6 +231,7 @@ import {
   decodeRestoreSwappedErrorArgs,
   decodeRestoreWarning,
   decodeRotateNamespaceIssuerKeysRequest,
+  decodeRotateOwnTokenRequest,
   decodeSaveTriggerRequest,
   decodeSchemaBinaryBelowMinimumError,
   decodeSchemaBinaryBelowMinimumErrorArgs,
@@ -347,6 +362,7 @@ import type {
   AccessCollectionUnitCapError,
   AccessCollectionUnitCapErrorArgs,
   AccessLimit,
+  AccessToken,
   AddRegistryKeyRequest,
   ApiDescription,
   ApprovalDefault,
@@ -392,6 +408,7 @@ import type {
   CreateLocalUserResponse,
   CreateNotificationSinkRequest,
   CreateNotificationSubscriptionRequest,
+  CreateOwnTokenRequest,
   CreateProfileRequest,
   CreateProfileRevisionRequest,
   CreateTrustRuleRequest,
@@ -468,6 +485,9 @@ import type {
   ListNotificationDeliveriesResponse,
   ListNotificationSinksResponse,
   ListNotificationSubscriptionsResponse,
+  ListOwnAccessObjectsResponse,
+  ListOwnGrantsResponse,
+  ListOwnTokensResponse,
   ListPasskeysResponse,
   ListPlacementRulesResponse,
   ListProfileRevisionsResponse,
@@ -504,6 +524,7 @@ import type {
   NamespaceIssuerExport,
   NamespaceIssuerKeys,
   NamespaceIssuerRotation,
+  NewAccessToken,
   NotificationDelivery,
   NotificationFilter,
   NotificationFilterRequest,
@@ -513,6 +534,14 @@ import type {
   OutputSharing,
   OutputSharingRequest,
   OverrideSwitches,
+  OwnAccess,
+  OwnAccessGrant,
+  OwnAccessObject,
+  OwnGrant,
+  OwnGrantVia,
+  OwnGrantedBy,
+  OwnMissingAction,
+  OwnTokenRotation,
   Passkey,
   PasskeyCreationOptions,
   PasskeyRequestOptions,
@@ -559,6 +588,7 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  RotateOwnTokenRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
@@ -827,6 +857,14 @@ export interface CreateNotificationSubscriptionInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation createOwnToken. */
+export interface CreateOwnTokenInput {
+  readonly body: CreateOwnTokenRequest;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation createPlacementRule. */
 export interface CreatePlacementRuleInput {
   readonly path: {
@@ -1049,6 +1087,14 @@ export interface DeleteNotificationSubscriptionInput {
   };
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation deleteOwnToken. */
+export interface DeleteOwnTokenInput {
+  readonly path: {
+    readonly id: string;
+  };
   readonly signal?: AbortSignal;
 }
 
@@ -1491,6 +1537,15 @@ export interface GetOutputSharingInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getOwnAccess. */
+export interface GetOwnAccessInput {
+  readonly query?: {
+    /** The object to answer for, for example @server or a namespace. */
+    readonly object?: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getPlacementRule. */
 export interface GetPlacementRuleInput {
   readonly path: {
@@ -1853,6 +1908,45 @@ export interface ListNotificationSinksInput {
 export interface ListNotificationSubscriptionsInput {
   readonly path: {
     readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listOwnAccessObjects. */
+export interface ListOwnAccessObjectsInput {
+  readonly query?: {
+    /** The action that the listed objects must allow. */
+    readonly action?: string;
+    /** The largest number of objects on the page. The default is 50 and the maximum is 200. */
+    readonly pageSize?: number;
+    /** The nextPageToken of the page before. */
+    readonly pageToken?: string;
+    /** The kind of the objects to list: namespace, collection, unit or principal. */
+    readonly type?: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listOwnGrants. */
+export interface ListOwnGrantsInput {
+  readonly query?: {
+    /** The largest number of grants on the page. The default is 50 and the maximum is 200. */
+    readonly pageSize?: number;
+    /** The nextPageToken of the page before. */
+    readonly pageToken?: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listOwnTokens. */
+export interface ListOwnTokensInput {
+  readonly query?: {
+    /** The largest number of tokens on the page. The default is 50 and the maximum is 200. */
+    readonly pageSize?: number;
+    /** The nextPageToken of the page before. */
+    readonly pageToken?: string;
+    /** Keep the tokens with this status: active, expiring or ended. */
+    readonly status?: string;
   };
   readonly signal?: AbortSignal;
 }
@@ -2266,6 +2360,15 @@ export interface RotateNamespaceIssuerKeysInput {
     readonly namespace: string;
   };
   readonly body: RotateNamespaceIssuerKeysRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation rotateOwnToken. */
+export interface RotateOwnTokenInput {
+  readonly path: {
+    readonly id: string;
+  };
+  readonly body: RotateOwnTokenRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -2867,6 +2970,23 @@ export const operations = {
     },
     ref(() => decodeNotificationSubscription),
   ),
+  createOwnToken: operation<NewAccessToken>(
+    {
+      id: "createOwnToken",
+      method: "POST",
+      path: "/api/dustpan/v1/me/tokens",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "optional",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [201],
+    },
+    ref(() => decodeNewAccessToken),
+  ),
   createPlacementRule: operation<PlacementRule>(
     {
       id: "createPlacementRule",
@@ -3199,6 +3319,23 @@ export const operations = {
       queryParameters: [],
       security: "caller",
       idempotencyKey: "optional",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  deleteOwnToken: operation<void>(
+    {
+      id: "deleteOwnToken",
+      method: "DELETE",
+      path: "/api/dustpan/v1/me/tokens/{id}",
+      pathParameters: ["id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
       ifMatch: "none",
       requiredQueryParameters: [],
       requestBody: undefined,
@@ -4040,6 +4177,23 @@ export const operations = {
     },
     ref(() => decodeOutputSharing),
   ),
+  getOwnAccess: operation<OwnAccess>(
+    {
+      id: "getOwnAccess",
+      method: "GET",
+      path: "/api/dustpan/v1/me/access",
+      pathParameters: [],
+      queryParameters: ["object"],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeOwnAccess),
+  ),
   getPlacementRule: operation<PlacementRule>(
     {
       id: "getPlacementRule",
@@ -4720,6 +4874,57 @@ export const operations = {
     },
     ref(() => decodeListNotificationSubscriptionsResponse),
   ),
+  listOwnAccessObjects: operation<ListOwnAccessObjectsResponse>(
+    {
+      id: "listOwnAccessObjects",
+      method: "GET",
+      path: "/api/dustpan/v1/me/access/objects",
+      pathParameters: [],
+      queryParameters: ["action", "pageSize", "pageToken", "type"],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListOwnAccessObjectsResponse),
+  ),
+  listOwnGrants: operation<ListOwnGrantsResponse>(
+    {
+      id: "listOwnGrants",
+      method: "GET",
+      path: "/api/dustpan/v1/me/grants",
+      pathParameters: [],
+      queryParameters: ["pageSize", "pageToken"],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListOwnGrantsResponse),
+  ),
+  listOwnTokens: operation<ListOwnTokensResponse>(
+    {
+      id: "listOwnTokens",
+      method: "GET",
+      path: "/api/dustpan/v1/me/tokens",
+      pathParameters: [],
+      queryParameters: ["pageSize", "pageToken", "status"],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListOwnTokensResponse),
+  ),
   listPasskeys: operation<ListPasskeysResponse>(
     {
       id: "listPasskeys",
@@ -5365,6 +5570,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeNamespaceIssuerRotation),
+  ),
+  rotateOwnToken: operation<OwnTokenRotation>(
+    {
+      id: "rotateOwnToken",
+      method: "POST",
+      path: "/api/dustpan/v1/me/tokens/{id}/rotate",
+      pathParameters: ["id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [201],
+    },
+    ref(() => decodeOwnTokenRotation),
   ),
   setAccessLimit: operation<AccessLimit>(
     {

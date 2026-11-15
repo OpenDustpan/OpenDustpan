@@ -246,9 +246,9 @@ var legacyFieldNames = map[string]string{
 		"as the catalog of error codes declares it, and the console reads it.",
 	"backupID": "The backup and restore API spells the ID of a backup backupID, and the CLI and the console read it.",
 	"principalID": "The access token routes spell the ID of the principal of a token principalID, " +
-		"and the CLI and the console read it.",
+		"because the tagliatelle goCamel rule of the linter demands it.",
 	"grantID": "The access review and the grants of the caller spell the ID of a grant grantID, " +
-		"and the CLI and the console read it.",
+		"because the tagliatelle goCamel rule of the linter demands it.",
 	"preBackupID": "The restore API spells the ID of the backup taken before the restore preBackupID, " +
 		"and the CLI and the console read it.",
 }

@@ -49,8 +49,8 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/idempotency"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
@@ -73,7 +73,7 @@ var (
 		"invalid pageSize: send a number from 1 to " + strconv.Itoa(audit.MaxPageSize) +
 			", or send no pageSize for " + strconv.Itoa(audit.DefaultPageSize),
 	)
-	errOwnTokenPageToken = errors.New("invalid pageToken: send the nextPageToken of the page before")
+	errOwnTokenPageToken  = errors.New("invalid pageToken: send the nextPageToken of the page before")
 	errPrincipalTokenBody = errors.New(
 		`invalid access token body: provide {"name":"...","expiresAt":"<RFC 3339 time>"}; ` +
 			`the path names the principal`,
@@ -628,7 +628,10 @@ func (h *Handler) serveOwnTokenCreate() RouteHandler {
 		err := h.idem.Handle(w, r, idempotent.Call{
 			Build: ownTokenCreatedAnswer,
 			SecretAnswer: func(result any) string {
-				t, _ := result.(accesstoken.Token)
+				t, isToken := result.(accesstoken.Token)
+				if !isToken {
+					return ""
+				}
 
 				return t.ID
 			},
@@ -747,7 +750,7 @@ func listOwnTokens(
 	}
 
 	page, err := svc.ListOwn(r.Context(), p, req)
-	if errors.Is(err, accesstoken.ErrBadCursor) {
+	if req.Cursor != "" && errors.Is(err, accesstoken.ErrInvalid) {
 		return failed(""), errOwnTokenPageToken
 	}
 
@@ -785,7 +788,9 @@ func ownTokenPageRequest(r *http.Request) (accesstoken.PageRequest, error) {
 		return accesstoken.PageRequest{}, errOwnTokenQuery
 	}
 
-	req := accesstoken.PageRequest{PrincipalID: "", Cursor: q.Get("pageToken"), Filter: filter, Limit: audit.DefaultPageSize}
+	req := accesstoken.PageRequest{
+		PrincipalID: "", Cursor: q.Get("pageToken"), Filter: filter, Limit: audit.DefaultPageSize,
+	}
 
 	if raw := q.Get("pageSize"); raw != "" {
 		n, err := strconv.Atoi(raw)

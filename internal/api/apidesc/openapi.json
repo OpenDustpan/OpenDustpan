@@ -3713,6 +3713,41 @@
         ],
         "type": "object"
       },
+      "ListOwnAccessObjectsResponse": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "all": {
+            "type": "boolean"
+          },
+          "nextPageToken": {
+            "type": "string"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/OwnAccessObject"
+            },
+            "type": "array"
+          },
+          "total": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "all",
+          "nextPageToken",
+          "objects",
+          "total",
+          "type"
+        ],
+        "type": "object"
+      },
       "ListOwnGrantsResponse": {
         "properties": {
           "asOfMs": {
@@ -4872,17 +4907,11 @@
       },
       "OwnAccess": {
         "properties": {
-          "action": {
-            "type": "string"
-          },
           "actions": {
             "items": {
               "type": "string"
             },
             "type": "array"
-          },
-          "all": {
-            "type": "boolean"
           },
           "grants": {
             "items": {
@@ -4896,37 +4925,15 @@
             },
             "type": "array"
           },
-          "nextPageToken": {
-            "type": "string"
-          },
           "object": {
-            "type": "string"
-          },
-          "objects": {
-            "items": {
-              "$ref": "#/components/schemas/OwnAccessObject"
-            },
-            "type": "array"
-          },
-          "total": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "type": {
             "type": "string"
           }
         },
         "required": [
-          "action",
           "actions",
-          "all",
           "grants",
           "missingActions",
-          "nextPageToken",
-          "object",
-          "objects",
-          "total",
-          "type"
+          "object"
         ],
         "type": "object"
       },
@@ -10423,18 +10430,56 @@
         "operationId": "getOwnAccess",
         "parameters": [
           {
-            "description": "The action that the listed objects must allow.",
+            "description": "The object to answer for, for example @server or a namespace.",
             "in": "query",
-            "name": "action",
+            "name": "object",
             "required": false,
             "schema": {
               "type": "string"
             }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnAccess"
+                }
+              }
+            },
+            "description": "The request succeeded."
           },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
           {
-            "description": "The object to answer for, for example @server or a namespace.",
+            "action": "caller:read",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/access/objects": {
+      "get": {
+        "operationId": "listOwnAccessObjects",
+        "parameters": [
+          {
+            "description": "The action that the listed objects must allow.",
             "in": "query",
-            "name": "object",
+            "name": "action",
             "required": false,
             "schema": {
               "type": "string"
@@ -10474,7 +10519,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OwnAccess"
+                  "$ref": "#/components/schemas/ListOwnAccessObjectsResponse"
                 }
               }
             },
@@ -11119,7 +11164,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {

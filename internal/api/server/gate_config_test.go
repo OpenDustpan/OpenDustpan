@@ -100,6 +100,7 @@ func newGateEnvWith(t *testing.T, authz identity.Authorizer, noEngine bool) gate
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate:     true,
+		idempotency:    false,
 		noPolicyRoutes: false,
 		noGateEngine:   noEngine,
 		stored:         nil,

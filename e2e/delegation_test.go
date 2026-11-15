@@ -234,7 +234,7 @@ func checkHolderReads(ctx context.Context, t *testing.T, env *e2e.Env, f *delega
 			http.StatusOK,
 		},
 		{nil, "/api/server/principals/" + f.other.ID + "/tokens", http.StatusForbidden},
-		{&e2eLimitedTokens{Tokens: nil, MaxLifetimeSeconds: 0}, "/api/server/caller/tokens", http.StatusOK},
+		{&e2eLimitedTokens{Tokens: nil, MaxLifetimeSeconds: 0}, "/api/dustpan/v1/me/tokens", http.StatusOK},
 	}
 
 	for _, read := range reads {
@@ -264,7 +264,7 @@ func checkHolderPrincipals(ctx context.Context, t *testing.T, env *e2e.Env, f *d
 	var managed e2eAccessObjects
 
 	status, body, err := env.ServerAPIStatusAs(ctx, f.opsToken.Secret, http.MethodGet,
-		"/api/server/caller/access?type=principal", "")
+		"/api/dustpan/v1/me/access/objects?type=principal", "")
 	if err != nil || status != http.StatusOK || json.Unmarshal([]byte(body), &managed) != nil {
 		t.Fatalf("principals that ops manages = %d, %v (%s); want 200", status, err, body)
 	}

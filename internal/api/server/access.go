@@ -817,7 +817,7 @@ func (h *Handler) serveRevokeGrantByID(
 // collection during the request 409, and a store with no access or review port 501.
 func classifyAccess(err error) (failure, bool) {
 	switch {
-	case errors.Is(err, errCallerQuery):
+	case errors.Is(err, errCallerQuery), errors.Is(err, errCallerObjectsQuery):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
 	case errors.Is(err, errCallerPageSize):
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestPageSizeInvalid), true
