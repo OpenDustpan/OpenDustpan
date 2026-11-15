@@ -189,7 +189,11 @@ func DaysUntil(expiresAt, now time.Time) int64 {
 		return 0
 	}
 
-	return int64((d + day - 1) / day)
+	n := d / day
+	if d%day != 0 {
+		n++
+	}
+	return int64(n)
 }
 
 // DaysLeft returns the started days left until the expiry of t at the time

@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -49,8 +50,8 @@ func sessionRoundTrip(t *testing.T, env *e2e.Env) {
 	finishReason := "finish-secret-reason-" + run.job
 
 	run.refusedBeforeTheStepBegan(t, step, chunk)
-	run.writesTheStep(t, step, chunk)
-	run.finishesTwice(t, finishReason)
+	run.writesTheStep(t.Context(), t, step, chunk)
+	run.finishesTwice(t.Context(), t, finishReason)
 
 	if env.InProcess() {
 		// The server log, the database and the blob directory of the stopped
@@ -168,10 +169,9 @@ func (r *launched) refusedBeforeTheStepBegan(t *testing.T, step string, chunk []
 // writesTheStep begins the step, refuses a chunk out of sequence, stores one
 // chunk, refuses an end with another hash, and ends the step with the right
 // count and hash.
-func (r *launched) writesTheStep(t *testing.T, step string, chunk []byte) {
+func (r *launched) writesTheStep(ctx context.Context, t *testing.T, step string, chunk []byte) {
 	t.Helper()
 
-	ctx := t.Context()
 	now := time.Now().UTC()
 	sum := hex.EncodeToString(sha256Of(chunk))
 
@@ -204,10 +204,9 @@ func (r *launched) writesTheStep(t *testing.T, step string, chunk []byte) {
 
 // finishesTwice finishes the phase, and then finishes it again: the second
 // finish gets claim-lost.
-func (r *launched) finishesTwice(t *testing.T, reason string) {
+func (r *launched) finishesTwice(ctx context.Context, t *testing.T, reason string) {
 	t.Helper()
 
-	ctx := t.Context()
 	finish := protocol.Finish{Succeeded: true, Message: reason}
 
 	wantNoContent(t, "finish the phase", func() (int, []byte) {

@@ -363,7 +363,8 @@ func (d *jobDomain) declareStateWrite(
 		Holder: w.Lock.Holder, LockID: w.Lock.ID, Lineage: lineage, Status: workspace.StatusPending,
 		Content: "", Outputs: nil, MD5: [16]byte{1, 2, 3}, Serial: serial, Size: 0, Force: false,
 		UnlockedWrite: false, Sealed: true, SensitiveMarks: nil, RestoredFrom: "", FenceBy: "",
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		ClientEncrypted: workspace.ClientEncryptedNo,
+		Origin:          identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	key := blob.Key("state-write/" + sv.ID.String())

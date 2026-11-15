@@ -10,7 +10,7 @@
 #   node 20.19 or later with npx, for openspec-validate (the CLI comes from npm at a pinned version)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check
+.PHONY: cover regenerate-baseline release-record-check ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint openspec-validate release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -190,6 +190,20 @@ else
 	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
 endif
 
+# The pull request body and the author email of each commit of the pull
+# request, one per line. They have no defaults: CI passes both files, and a
+# local run passes its own files. Not part of check: the check needs a pull
+# request, and a local run has none.
+# The recipe reads both paths from the environment, never from the command
+# text. make exports a variable that came from the environment or from the
+# command line, so a path that holds a quote, a space or a shell word stays one
+# word and cannot escape into the command. The empty check and the two reads
+# use "$$VAR", which the shell expands; no value is pasted into the command.
+export PR_BODY_FILE PR_COMMITS_FILE
+ai-pr-spec-check: ## Fail an AI-authored pull request that names no spec-ready OpenSpec change (needs PR_BODY_FILE and PR_COMMITS_FILE).
+	@if [ -z "$$PR_BODY_FILE" ] || [ -z "$$PR_COMMITS_FILE" ]; then echo "usage: make ai-pr-spec-check PR_BODY_FILE=<body-file> PR_COMMITS_FILE=<commits-file>" >&2; exit 1; fi
+	bash scripts/check-ai-pr-spec.sh "$$PR_BODY_FILE" "$$PR_COMMITS_FILE"
+
 # The PR body check reads the body from a file, so CI writes the body to a file
 # first. PR_BODY_FILE has no default: the target refuses to run without it.
 pr-body-check: ## Check that the PR body in PR_BODY_FILE names an issue or says No issue.
@@ -327,8 +341,8 @@ e2e-journal: ## Drive the real Pulumi CLI through the journal route on the recor
 upgrade-test: ## Restart the current binary on the same database and check data, secrets and the held lock survive (downloads CLIs; empty-database case without a v* tag, previous-tag case with one). Not part of check.
 	E2E_SERVER=binary go test -tags "e2e upgrade" $(RACE_TEST_FLAGS) -count=1 -v -timeout 20m ./e2e/ -run TestUpgrade
 
-mixed-version-test: ## Serve the current binary and the binary of each of the last 2 v* tags on one database and drive the real Pulumi CLI and OpenTofu through both (downloads CLIs; a second current process without a v* tag). Not part of check.
-	E2E_SERVER=binary go test -tags "e2e upgrade" $(RACE_TEST_FLAGS) -count=1 -v -timeout 30m ./e2e/ -run 'TestMixedVersion'
+mixed-version-test: ## Serve the current binary and the binary of each of the last 2 v* tags on one database and drive the real Pulumi CLI and OpenTofu through both (downloads CLIs; SQLite serves one binary at a time; a second current process without a v* tag; set DUSTPAN_TEST_POSTGRES_URL for the PostgreSQL matrix). Not part of check.
+	E2E_SERVER=binary go test -tags "e2e upgrade" $(RACE_TEST_FLAGS) -count=1 -v -timeout 45m ./e2e/ -run 'TestMixedVersion'
 
 crash-test: ## Stop the server binary with SIGKILL during a Pulumi checkpoint save, an OpenTofu upload and a lock, then check recovery on the same database and blobs (downloads CLIs; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check.
 	E2E_SERVER=binary go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -v -timeout 20m ./e2e/ -run TestBinaryCrash
