@@ -5,6 +5,8 @@ Status: accepted · 2026-10-17 · the sign-off of agent commits after the push o
 Changed by:
 
 - ADR 317 changes decisions 7 and 8: the identity of an agent commit and the trailer.
+- ADR 375 extends decision 2: an AI-authored pull request also names its
+  spec-ready OpenSpec change.
 
 ## Context
 

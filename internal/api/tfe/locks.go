@@ -219,7 +219,9 @@ func (h *Handler) unlockWorkspace(
 	ctx := r.Context()
 	id := workspace.ID(r.PathValue("id"))
 
-	unlocked, err := h.workspaces.Unlock(ctx, id, p.Subject)
+	// The job of a job token is the origin of the release: the state version
+	// that the release publishes records it.
+	unlocked, err := h.workspaces.Unlock(workspace.WithJob(ctx, p.JobTokenID()), id, p.Subject)
 	if err != nil {
 		if errors.Is(err, workspace.ErrLockedByOther) {
 			h.writeClassError(ctx, w, lockConflict(id, h.refusingHolder(ctx, id, err)))
@@ -360,7 +362,8 @@ func (h *Handler) forceUnlockWorkspace(
 	expect := workspace.Lock{LockedAt: time.Time{}, ID: attrs.LockID, Holder: attrs.LockHolder, Reason: ""}
 
 	unlocked, _, err := h.workspaces.ForceUnlockLock(
-		ctx, id, expect, p.Subject, allow, record, forceUnlockEntry(r, p, obj, attrs.Reason),
+		workspace.WithJob(ctx, p.JobTokenID()), id, expect, p.Subject, allow, record,
+		forceUnlockEntry(r, p, obj, attrs.Reason),
 	)
 	if err != nil {
 		h.rules().RecordOverrideRefusal(ctx, r, p, obj, err)

@@ -11,6 +11,8 @@ Changed by:
 - ADR 359 extends decision 15: the apply timing decides if an apply can run
   before the merge.
 - ADR 359 extends decision 25: the checks and the table in the plan comment.
+- ADR 368 changes decision 19: a closure test replaces the rule that a
+  replacement is never disjoint.
 
 Changes:
 

@@ -117,7 +117,9 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 		// limit and a gate refuse the person too.
 		if reason, ok := refusalReason(err); ok {
 			action, object := deniedTarget(err, req.Unit)
-			h.guard.Record(ctx, r, p, refusal.Denial{Action: action, Object: object, Reason: reason, Window: 0})
+			h.guard.Record(ctx, r, p, refusal.Denial{
+				Action: action, Object: object, Reason: reason, ReasonWithin: nil, Window: 0,
+			})
 		}
 
 		h.writeError(ctx, w, err)

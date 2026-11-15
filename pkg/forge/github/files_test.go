@@ -297,7 +297,7 @@ func rawFile(t *testing.T, body []byte) forgeBox {
 	pool.AddCert(srv.Certificate())
 
 	o, err := github.NewOpener(github.Config{
-		Rules: loopbackRules(t), RootCAs: pool, Now: nil, Prover: testProver{},
+		Rules: loopbackRules(t), RootCAs: pool, Now: nil, Prover: testProver{}, AppBudget: nil,
 	})
 	if err != nil {
 		t.Fatal(err)

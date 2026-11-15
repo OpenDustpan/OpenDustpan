@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -24,7 +25,11 @@ func newOpenTofuWorkspace(t *testing.T, ns namespace.Name, name string) workspac
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         workspace.Ref{Namespace: ns, Name: mustWorkspaceName(t, name)},
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 

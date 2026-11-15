@@ -67,6 +67,7 @@ func buildRecorderHarness(t *testing.T, db *memDB, keys *memKeyIndex, blobs blob
 			Claimer:    job.NewClaimer(db, db.durable, db, jobtest.NoGates{}),
 			Namespaces: db,
 			Domain:     db,
+			WriteState: nil,
 		},
 		Records:  db,
 		ItemKeys: keys,
@@ -520,7 +521,7 @@ func (m *memDB) gatePlan(ctx context.Context, pc job.PhaseClaim) (memGate, error
 		return memGate{}, err
 	}
 
-	checkErr := job.CheckPutPlan(&next, pc.Phase, m.states[next.Spec.Unit.UnitID()])
+	checkErr := job.CheckPutPlan(&next, pc.Phase, "")
 
 	switch {
 	case checkErr == nil:

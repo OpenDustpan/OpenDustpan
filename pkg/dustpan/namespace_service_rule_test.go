@@ -16,11 +16,8 @@ func (allowEverything) Authorize(context.Context, identity.Principal, identity.A
 	return nil
 }
 
-func (allowEverything) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
-	scope := identity.AdminScope(p)
-	scope.All = true
-
-	return scope, nil
+func (allowEverything) ListObjects(_ context.Context, _ identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.Every(), nil
 }
 
 // TestWiredAuthorizerKeepsTheNamespaceServiceRule wires an authorizer that

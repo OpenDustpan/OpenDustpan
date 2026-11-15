@@ -600,7 +600,7 @@ func endRestore(ctx context.Context, q *db.Queries, end backup.RestoreEnd) error
 	n, err := q.EndRestore(ctx, db.EndRestoreParams{
 		State:     string(end.State),
 		Error:     end.Error,
-		EndedAtMs: codec.OptionalMillis(end.EndedAt),
+		EndedAtMs: optionalMillis(end.EndedAt),
 		DevReport: report,
 		ID:        end.ID.String(),
 	})

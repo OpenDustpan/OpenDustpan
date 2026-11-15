@@ -98,6 +98,7 @@ func newIPAllowHandler(
 	signIn, sessions := signInOf(t, st)
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -290,6 +291,7 @@ func seedIPAllowlist(t *testing.T, st *sqlite.Store, ns namespace.Name, cidrs ..
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	fence := namespace.Fence{Namespace: ns, FailoverVersion: 1}
@@ -527,6 +529,13 @@ func (s refusalStore) SetNamespaceList(
 	return namespace.ErrNotFound
 }
 
+// NamespacesWithList implements ipallow.Store.
+func (s refusalStore) NamespacesWithList(context.Context) ([]namespace.Name, error) {
+	s.t.Errorf("denied request reached the store")
+
+	return nil, namespace.ErrNotFound
+}
+
 // TestIPAllowlistDeniedWithoutAction proves a principal without the action
 // gets 403 on all three methods and no store call happens.
 func TestIPAllowlistDeniedWithoutAction(t *testing.T) {
@@ -669,6 +678,11 @@ func (s failWriteStore) SetNamespaceList(
 	_ context.Context, _ namespace.Name, _ ipallow.List, _ namespace.Fence, _ audit.Entry,
 ) error {
 	return fmt.Errorf("append audit entry: %w", audit.ErrInvalidEntry)
+}
+
+// NamespacesWithList implements ipallow.Store.
+func (s failWriteStore) NamespacesWithList(ctx context.Context) ([]namespace.Name, error) {
+	return s.inner.NamespacesWithList(ctx)
 }
 
 // TestIPAllowlistAuditFailureClosed proves a store that fails the audit

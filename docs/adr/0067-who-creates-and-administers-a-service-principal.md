@@ -10,6 +10,8 @@ Changed by:
   rule authors.
 - ADR 210 changes: the route paths and the server: action names.
 - ADR 215 changes decision 7: persons, workloads and groups of a namespace.
+- ADR 369 extends decisions 1 and 6: a service principal from an external
+  identity system, keyed by its external ID, with a named owner.
 
 ## Context
 

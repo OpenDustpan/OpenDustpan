@@ -133,11 +133,31 @@ A good sign-in answers `204` with the session cookie. The session records the
 provider `local`.
 
 Each failure answers `401` with the error code `local-user.sign-in-failed`
-and the text "the user name or the password is wrong": for an unknown user
+and the text "The user name or the password is wrong.": for an unknown user
 name, a wrong password, a user with no password and a disabled person. The
 answer does not tell which. The audit entry `sign-in.password-failed`
 records the real reason. Each failure spends one unit of the password budget
 of the source address.
+
+The server refuses a sign-in that another site can send, so that a page of
+another site cannot sign your browser in to an account of the attacker. The
+request must have the media type `application/json`. When the browser sends
+an `Origin` header, it must be one of the allowed origins of the console.
+When the browser sends `Sec-Fetch-Site`, it must not be `cross-site`. A
+request that fails this check gets the same `401` answer before the server
+reads the store, and spends no unit of the password budget. A client that is
+not a browser, for example curl, sends neither header and passes with the
+JSON media type.
+
+The server refuses a sign-in that another site can send, so that a page of
+another site cannot sign your browser in to an account of the attacker. The
+request must have the media type `application/json`. When the browser sends
+an `Origin` header, it must be one of the allowed origins of the console.
+When the browser sends `Sec-Fetch-Site`, it must not be `cross-site`. A
+request that fails this check gets the same `401` answer before the server
+reads the store, and spends no unit of the password budget. A client that is
+not a browser, for example curl, sends neither header and passes with the
+JSON media type.
 
 The password budget is separate from the budget of the other sign-ins. The
 password sign-in, the use of a set-up or reset code, and the change of the

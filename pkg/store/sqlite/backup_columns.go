@@ -134,6 +134,8 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"journal_closed",
 				"token_id",
 				"journal_records_changed",
+				backupColJobID,
+				"git_head",
 			},
 		},
 		{
@@ -420,6 +422,7 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 				"sensitive_marks",
 				"fenced_by",
 				"unlocked_write",
+				"origin_job",
 			},
 		},
 	}
@@ -453,6 +456,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteSelfServiceBackupTables(),
 		sqliteQuotaBackupTables(),
 		sqliteTrustRuleBackupTables(),
+		sqliteBreakGlassReviewBackupTables(),
 	)
 }
 
@@ -541,7 +545,8 @@ func sqliteControlTables() []sqliteBackupTable {
 	}
 
 	return slices.Concat(
-		core, sqliteRevocationControlTables(), sqliteRunnerControlTables(), sqliteNameLockControlTables(),
+		core, sqliteRevocationControlTables(), sqliteBlobDeleteLeaseControlTables(), sqliteRunnerControlTables(),
+		sqliteNameLockControlTables(),
 	)
 }
 
@@ -597,6 +602,18 @@ func sqliteRevocationControlTables() []sqliteBackupTable {
 	}
 }
 
+// sqliteBlobDeleteLeaseControlTables lists the columns of the blob delete
+// lease rows. The swap keeps the live rows, so the restore waits for the
+// deleters that run now.
+func sqliteBlobDeleteLeaseControlTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table:   backup.TableBlobDeleteLeases,
+			columns: []string{backupColHolder, backupColExpiresAtMs},
+		},
+	}
+}
+
 // sqliteEmptiedTables lists the column list of every table of
 // backup.EmptiedTables. CheckCoverage compares each list with the live schema.
 func sqliteEmptiedTables() []sqliteBackupTable {
@@ -623,6 +640,13 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 		{
 			table:   backup.TablePasskeyChallenges,
 			columns: sqlitePasskeyChallengeColumns(),
+		},
+		{
+			table: backup.TableUnitState,
+			columns: []string{
+				backupColUnitID, backupColNamespaceID, "version_id", "final_version_id", "final_commit",
+				"final_job", "final_at_ms",
+			},
 		},
 	}
 }
@@ -733,6 +757,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
 				backupColDeletedAtMs,
+				"closed_to_identity_provider",
 			},
 		},
 		{

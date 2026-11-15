@@ -91,6 +91,11 @@ func wireSignIn(
 		principals: principals, store: cfg.namespaceStore, sessions: deps.signIn.Sessions, audit: serverAudit,
 		logger: cfg.logger, onAuditFailure: deps.observed.IncAuditAppendFailure, removals: wiring.service,
 	})
+	if err != nil {
+		return err
+	}
+
+	deps.signIn.PasswordProviders, err = passwordProviders(cfg, settingsSvc)
 
 	return err
 }
@@ -273,7 +278,8 @@ func newLocalUserService(
 }
 
 // reachConfig returns the reach config of the store. A store that keeps no
-// grants gives an empty config, and each reset then fails closed.
+// grants gives an empty config: a reset of a person and a token change then
+// fail closed.
 func reachConfig(cfg *settings) (access.ReachConfig, error) {
 	none := access.ReachConfig{Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil}
 
@@ -298,7 +304,7 @@ func reachConfig(cfg *settings) (access.ReachConfig, error) {
 // and the password sign-in then fails closed.
 func identityProviders(cfg *settings, signIn *serverapi.SignIn) func(ctx context.Context) (bool, error) {
 	return func(ctx context.Context) (bool, error) {
-		if len(cfg.oidcProviders) > 0 {
+		if len(cfg.oidcProviders) > 0 || len(cfg.ldapProviders) > 0 {
 			return true, nil
 		}
 

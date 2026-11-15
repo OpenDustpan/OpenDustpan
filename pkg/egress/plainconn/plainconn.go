@@ -29,7 +29,8 @@ func SettingDeclarations() []setting.Declaration {
 	return []setting.Declaration{
 		{
 			Key: SettingAllowPlainConnections, Level: setting.LevelInstallation, Kind: setting.KindBool,
-			Default: textFalse, Secret: false, Database: true, Apply: setting.ApplyLive, Check: nil,
+			Default: textFalse, Secret: false, Database: true, StaticCredentialHost: false,
+			Apply: setting.ApplyLive, Check: nil,
 			// A change from off to on lets an LDAP bind or an SMTP login send
 			// its password with no encryption. A value that is not a bool
 			// reduces security too, so the caller fails closed.

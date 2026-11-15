@@ -209,6 +209,7 @@ func entry(ns namespace.Name) audit.Entry {
 		FenceVersion: 0, Reason: "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

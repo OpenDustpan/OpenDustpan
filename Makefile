@@ -69,12 +69,18 @@ vuln: ## Known vulnerabilities in the code paths we call (reads the database at 
 # The second scan runs the local rules in .semgrep. It ignores .semgrepignore
 # files and the Semgrep default ignores, which skip test files, because the
 # rules in .semgrep are about test files.
+#
+# The third command runs the test cases of the rule
+# tests-no-wall-clock-assertion: each ruleid line must match and each ok line
+# must not.
 semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and secrets.
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--config p/golang --config p/dockerfile --config p/github-actions --config p/secrets \
 		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--x-ignore-semgrepignore-files --config .semgrep .
+	semgrep --test --metrics=off --disable-version-check \
+		--config .semgrep/tests-no-wall-clock-assertion.yml .semgrep/tests-no-wall-clock-assertion.go
 
 # The vulnerability database and the misconfiguration checks come from
 # mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is an
@@ -157,6 +163,7 @@ docs-lint: ## ASD-STE100 structural rules, banned words and the Repowise decisio
 	$(ADR_DECISIONS) --check
 	python3 -I scripts/adr-index.py --selftest
 	$(ADR_INDEX) --check
+	@if grep -rn '^TBD' openspec/specs; then echo 'openspec/specs: a Purpose is a placeholder. Write a real Purpose.'; exit 1; fi
 
 adr-decisions: ## Write .repowise/decisions.yaml, the accepted decisions for Repowise, from docs/adr. docs-lint fails when the file is not current.
 	$(ADR_DECISIONS)

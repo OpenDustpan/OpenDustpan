@@ -134,6 +134,7 @@ func newIPAllowlistServerWith(
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	fence := namespace.Fence{Namespace: nsName, FailoverVersion: 1}

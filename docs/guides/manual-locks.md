@@ -128,7 +128,8 @@ shows the lock on the stack or workspace.
 A manual lock is on one stack, one workspace, one collection or one namespace.
 
 - A lock on a stack or workspace covers that stack or workspace. A rename keeps
-  the lock.
+  the lock. A job phase that started before the lock passes it after a rename
+  of its unit.
 - A lock on a collection covers each stack and workspace that is in the
   collection now. A stack or workspace that joins the collection is covered from
   that moment. One that leaves the collection is not covered any more.

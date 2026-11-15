@@ -40,9 +40,17 @@ func keyTxCases() []recorderCase {
 func recordingKey(after error) job.NewItemKeyFunc {
 	return func(ctx context.Context, tx secret.ItemKeyTx, ref secret.ItemRef, _ namespace.Fence) (secret.ItemKey, error) {
 		k, err := tx.CreateItemKey(ctx, secret.ItemKey{
-			CreatedAt: time.Now().UTC(), ShreddedAt: time.Time{}, Ref: ref, ID: secret.NewItemKeyID(),
-			WrapperID: "kek-1",
-			Blob:      secret.ItemKeyBlobInfo{MD5: [16]byte{1}, Size: keyBlobSize, Version: 1},
+			CreatedAt:  time.Now().UTC(),
+			ShreddedAt: time.Time{},
+			Ref:        ref,
+			ID:         secret.NewItemKeyID(),
+			WrapperID:  "kek-1",
+			Blob: secret.ItemKeyBlobInfo{
+				MD5:     [16]byte{1},
+				Size:    keyBlobSize,
+				Version: 1,
+				Attempt: "abcdefghij0123456789",
+			},
 		})
 		if err != nil {
 			return secret.ItemKey{}, err

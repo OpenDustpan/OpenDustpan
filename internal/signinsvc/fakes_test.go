@@ -238,7 +238,7 @@ func (w *world) service(t *testing.T) *signinsvc.Service {
 
 	svc, err := signinsvc.New(signinsvc.Config{
 		Principals: w, Disabler: w, Generations: w, Sessions: w, Audit: w, TempAdmins: w, Groups: groups,
-		Removals: removals, States: nil, Logger: slog.New(w.logs),
+		Removals: removals, States: nil, Locks: nil, NameKeys: nil, Logger: slog.New(w.logs),
 		OnAuditFailure: func() { w.auditFailed++ },
 	})
 	if err != nil {
@@ -269,6 +269,7 @@ func callerEntry() audit.Entry {
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test",
 		Channel: audit.ChannelConsole, Kind: "", Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "",
 		Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 }
 
