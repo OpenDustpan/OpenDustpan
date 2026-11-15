@@ -13,7 +13,7 @@ func TestNamespaceOverrideEmptyBodyChangesNothing(t *testing.T) {
 	t.Parallel()
 
 	handler := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
-	path := "/api/server/namespaces/" + testNamespace + "/override-switches"
+	path := "/api/dustpan/v1/namespaces/" + testNamespace + "/override-switches"
 
 	put := httptest.NewRequestWithContext(t.Context(), http.MethodPut, path, http.NoBody)
 	put.Header.Set("Authorization", "Bearer test-token")
@@ -59,7 +59,7 @@ func TestNamespaceOverrideBodyNeedsBothSwitches(t *testing.T) {
 			t.Parallel()
 
 			handler := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
-			path := "/api/server/namespaces/" + testNamespace + "/override-switches"
+			path := "/api/dustpan/v1/namespaces/" + testNamespace + "/override-switches"
 
 			put := httptest.NewRequestWithContext(t.Context(), http.MethodPut, path, strings.NewReader(tt.body))
 			put.Header.Set("Authorization", "Bearer test-token")
@@ -93,7 +93,7 @@ func TestNamespaceOverrideBothSwitchesSets(t *testing.T) {
 	t.Parallel()
 
 	handler := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
-	path := "/api/server/namespaces/" + testNamespace + "/override-switches"
+	path := "/api/dustpan/v1/namespaces/" + testNamespace + "/override-switches"
 
 	put := httptest.NewRequestWithContext(t.Context(), http.MethodPut, path,
 		strings.NewReader(`{"allowForcedWrites":true,"allowUnlockedWrites":false}`))

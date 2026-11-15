@@ -1,1 +1,2 @@
 store.failover-setting-invalid setting:identifier
+store.server-version-unsupported

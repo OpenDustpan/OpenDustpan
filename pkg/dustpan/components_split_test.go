@@ -44,7 +44,7 @@ func TestSplitTopologyWorkerFinishesWhatAPIStarted(t *testing.T) {
 	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
 	wantMaintenance(t, st, maintenance.StateMaintenance)
 
-	if status, body := api.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusAccepted {
+	if status, body := api.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status != http.StatusAccepted {
 		t.Fatalf("approve through the api process: %d %s, want 202", status, body)
 	}
 
@@ -82,7 +82,7 @@ func TestSplitTopologyWorkerFinishesWhatAPIStarted(t *testing.T) {
 	}
 
 	// The worker listens for the probes and the metrics only.
-	if status, _ := worker.do(t, http.MethodGet, "/api/server/audit/chain"); status != http.StatusNotFound {
+	if status, _ := worker.do(t, http.MethodGet, "/api/dustpan/v1/audit/chain"); status != http.StatusNotFound {
 		t.Fatalf("installation API on the worker process: %d, want 404", status)
 	}
 }
@@ -153,7 +153,7 @@ func TestWorkerBeatsWhileItRunsAChainMigration(t *testing.T) {
 	)
 	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
 
-	if status, body := api.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusAccepted {
+	if status, body := api.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status != http.StatusAccepted {
 		t.Fatalf("approve through the api process: %d %s, want 202", status, body)
 	}
 

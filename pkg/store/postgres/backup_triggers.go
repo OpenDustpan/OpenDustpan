@@ -20,7 +20,7 @@ func pgCopyTriggerTables() []pgCopyTable {
 			table: "triggers",
 			columns: []string{
 				pgColNamespaceID, "id", "unit_tool", pgColUnitID, pgColKind, "preset", "cron", "source_namespace",
-				"source_tool", "source_unit_id", "enabled", "last_saver_subject",
+				"source_tool", "source_unit_id", pgColEnabled, "last_saver_subject",
 				"last_saver_id", pgColCreatedAtMs, pgColUpdatedAtMs, "next_slot_ms",
 			},
 			orderBy: []string{pgColNamespaceID, "id"},
