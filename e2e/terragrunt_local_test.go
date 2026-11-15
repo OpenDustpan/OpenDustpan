@@ -276,6 +276,25 @@ func tgLocalNotFound(ctx context.Context, t *testing.T, cli e2e.Install, store e
 		t.Fatalf("missing workspace error code = %q, want workspace.not-found: %s", got, body)
 	}
 
+	// The TFE-compatible API also exposes a workspace by its stable ID. A
+	// caller that holds the ID of a workspace that does not exist gets the
+	// same 404 with the workspace.not-found code. The ID is well formed, so
+	// the read fails on the lookup, not on the shape.
+	const missingID = "ws-00000000000000000000"
+
+	status, body, err = env.TFEStatus(ctx, token, http.MethodGet, "/api/v2/workspaces/"+missingID, "")
+	if err != nil {
+		t.Fatalf("read the missing workspace by ID: %v", err)
+	}
+
+	if status != http.StatusNotFound {
+		t.Fatalf("read of the missing workspace by ID answers %d, want 404: %s", status, body)
+	}
+
+	if got := tgLocalErrorCode(t, body); got != "workspace.not-found" {
+		t.Fatalf("missing workspace by ID error code = %q, want workspace.not-found: %s", got, body)
+	}
+
 	status, body, err = env.TFEStatus(ctx, token, http.MethodGet, tgLocalHistoryPath(tgLocalNamespace, missing), "")
 	if err != nil {
 		t.Fatalf("list state versions of the missing workspace: %v", err)
