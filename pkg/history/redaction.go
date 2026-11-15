@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -167,8 +166,8 @@ func ValidateReason(reason string) error {
 		return fmt.Errorf("%w: the reason is longer than %d characters", ErrInvalidReason, MaxReasonLength)
 	}
 
-	if strings.ContainsFunc(reason, unicode.IsControl) {
-		return fmt.Errorf("%w: the reason holds a control character", ErrInvalidReason)
+	if ident.HasHidden(reason) {
+		return fmt.Errorf("%w: the reason holds a control, format or separator character", ErrInvalidReason)
 	}
 
 	return nil
