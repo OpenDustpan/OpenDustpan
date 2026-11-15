@@ -609,7 +609,7 @@ func (s *Service) createEntry(e audit.Entry, r *trustrule.Rule) audit.Entry {
 		{Key: "audience", Old: nil, New: r.Audience, Layer: "", TakesEffect: ""},
 		{Key: "keySource", Old: nil, New: string(r.Keys), Layer: "", TakesEffect: ""},
 		{Key: "principal", Old: nil, New: r.PrincipalID, Layer: "", TakesEffect: ""},
-		{Key: "spiffeIDPattern", Old: nil, New: r.SpiffeIDPattern, Layer: "", TakesEffect: ""},
+		{Key: "spiffePattern", Old: nil, New: r.SpiffeIDPattern, Layer: "", TakesEffect: ""},
 		{Key: "bundle", Old: nil, New: r.Bundle, Layer: "", TakesEffect: ""},
 		{Key: "conditions", Old: nil, New: formatConditions(r.Conditions), Layer: "", TakesEffect: ""},
 		{Key: "staticKeys", Old: nil, New: staticKeysDigest(r.StaticKeys), Layer: "", TakesEffect: ""},

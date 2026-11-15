@@ -135,12 +135,12 @@ func TestUpdateAuditNamesEachChangedField(t *testing.T) {
 			check: checkStaticKeysChange(t, oldStatic, newStatic),
 		},
 		{
-			name:   "spiffeIDPattern only",
+			name:   "spiffePattern only",
 			stored: seededRule(),
 			change: func(in *trustrulesvc.UpdateInput) {
 				in.SpiffeIDPattern = new("spiffe://example.org/ns/acme/sa/deploy")
 			},
-			key:   "spiffeIDPattern",
+			key:   "spiffePattern",
 			check: checkSpiffeIDPatternChange,
 		},
 		{
@@ -246,7 +246,7 @@ func checkSpiffeIDPatternChange(t *testing.T, c audit.Change) {
 	t.Helper()
 
 	if c.Old == nil || *c.Old != "" || c.New != "spiffe://example.org/ns/acme/sa/deploy" {
-		t.Errorf("spiffeIDPattern change = %+v, want the old and new pattern", c)
+		t.Errorf("spiffePattern change = %+v, want the old and new pattern", c)
 	}
 }
 
@@ -284,9 +284,9 @@ func TestCreateAuditNamesBundleAndPattern(t *testing.T) {
 
 	e := f.store.entries[0]
 
-	pattern := changeOf(e, "spiffeIDPattern")
+	pattern := changeOf(e, "spiffePattern")
 	if pattern == nil || pattern.New != in.SpiffeIDPattern || pattern.Old != nil {
-		t.Errorf("spiffeIDPattern change = %+v, want the new pattern", pattern)
+		t.Errorf("spiffePattern change = %+v, want the new pattern", pattern)
 	}
 
 	bundle := changeOf(e, "bundle")

@@ -2390,6 +2390,16 @@ export interface RotateNamespaceIssuerKeysInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation rotateTrustBundle. */
+export interface RotateTrustBundleInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly bundle: string;
+  };
+  readonly body: RotateTrustBundleRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation saveNamespaceProxyRules. */
 export interface SaveNamespaceProxyRulesInput {
   readonly path: {
@@ -2398,6 +2408,15 @@ export interface SaveNamespaceProxyRulesInput {
   readonly body: SaveProxyRuleSetRequest;
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation saveTrustBundle. */
+export interface SaveTrustBundleInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly body: SaveTrustBundleRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -2410,25 +2429,6 @@ export interface SaveUnitProxyRulesInput {
   readonly body: SaveProxyRuleSetRequest;
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch?: string;
-  readonly signal?: AbortSignal;
-}
-
-/** The input of the operation rotateTrustBundle. */
-export interface RotateTrustBundleInput {
-  readonly path: {
-    readonly namespace: string;
-    readonly bundle: string;
-  };
-  readonly body: RotateTrustBundleRequest;
-  readonly signal?: AbortSignal;
-}
-
-/** The input of the operation saveTrustBundle. */
-export interface SaveTrustBundleInput {
-  readonly path: {
-    readonly namespace: string;
-  };
-  readonly body: SaveTrustBundleRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -5709,23 +5709,6 @@ export const operations = {
     },
     ref(() => decodeTrustBundle),
   ),
-  saveTrustBundle: operation<TrustBundle>(
-    {
-      id: "saveTrustBundle",
-      method: "POST",
-      path: "/api/dustpan/v1/namespaces/{namespace}/trust-bundles",
-      pathParameters: ["namespace"],
-      queryParameters: [],
-      security: "caller",
-      idempotencyKey: "none",
-      ifMatch: "none",
-      requiredQueryParameters: [],
-      requestBody: "application/json",
-      requestBodyRequired: true,
-      statuses: [201],
-    },
-    ref(() => decodeTrustBundle),
-  ),
   saveNamespaceProxyRules: operation<ProxyRuleSet>(
     {
       id: "saveNamespaceProxyRules",
@@ -5742,6 +5725,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeProxyRuleSet),
+  ),
+  saveTrustBundle: operation<TrustBundle>(
+    {
+      id: "saveTrustBundle",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/trust-bundles",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [201],
+    },
+    ref(() => decodeTrustBundle),
   ),
   saveUnitProxyRules: operation<ProxyRuleSet>(
     {

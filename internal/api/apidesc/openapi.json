@@ -1311,7 +1311,7 @@
           "principal": {
             "type": "string"
           },
-          "spiffeIDPattern": {
+          "spiffePattern": {
             "type": "string"
           },
           "staticKeys": {
@@ -5988,20 +5988,6 @@
         ],
         "type": "object"
       },
-      "SaveProxyRuleSetRequest": {
-        "properties": {
-          "rules": {
-            "items": {
-              "$ref": "#/components/schemas/ProxyRule"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "rules"
-        ],
-        "type": "object"
-      },
       "RotateTrustBundleRequest": {
         "properties": {
           "overlapSeconds": {
@@ -6014,6 +6000,20 @@
         },
         "required": [
           "pem"
+        ],
+        "type": "object"
+      },
+      "SaveProxyRuleSetRequest": {
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ProxyRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
         ],
         "type": "object"
       },
@@ -7972,7 +7972,7 @@
             "format": "int64",
             "type": "integer"
           },
-          "spiffeIDPattern": {
+          "spiffePattern": {
             "type": "string"
           },
           "staticKeys": {
@@ -7992,7 +7992,7 @@
           "namespace",
           "principal",
           "revision",
-          "spiffeIDPattern",
+          "spiffePattern",
           "staticKeys"
         ],
         "type": "object"
@@ -8929,7 +8929,7 @@
           "principal": {
             "type": "string"
           },
-          "spiffeIDPattern": {
+          "spiffePattern": {
             "type": "string"
           },
           "staticKeys": {

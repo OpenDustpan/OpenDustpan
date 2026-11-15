@@ -178,8 +178,8 @@ import type {
   RetireBlueprintVersionInput,
   RotateNamespaceIssuerKeysInput,
   RotateTrustBundleInput,
-  SaveTrustBundleInput,
   SaveNamespaceProxyRulesInput,
+  SaveTrustBundleInput,
   SaveUnitProxyRulesInput,
   SetAccessLimitInput,
   SetApprovalDefaultInput,
@@ -1279,12 +1279,12 @@ export class Client {
     return execute(this.transport, operations.rotateTrustBundle, input);
   }
 
-  saveTrustBundle(input: SaveTrustBundleInput): Promise<Answer<TrustBundle>> {
-    return execute(this.transport, operations.saveTrustBundle, input);
-  }
-
   saveNamespaceProxyRules(input: SaveNamespaceProxyRulesInput): Promise<Answer<ProxyRuleSet>> {
     return execute(this.transport, operations.saveNamespaceProxyRules, input);
+  }
+
+  saveTrustBundle(input: SaveTrustBundleInput): Promise<Answer<TrustBundle>> {
+    return execute(this.transport, operations.saveTrustBundle, input);
   }
 
   saveUnitProxyRules(input: SaveUnitProxyRulesInput): Promise<Answer<ProxyRuleSet>> {

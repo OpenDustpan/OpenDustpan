@@ -808,7 +808,7 @@ export const decodeCreateTrustRuleRequest: Decoder<CreateTrustRuleRequest> = obj
   keySource: ref(() => decodeTrustRuleKeySource),
   name: string,
   principal: string,
-  spiffeIDPattern: optional(string),
+  spiffePattern: optional(string),
   staticKeys: optional(string),
 });
 
@@ -2182,15 +2182,15 @@ export const decodeRotateNamespaceIssuerKeysRequest: Decoder<RotateNamespaceIssu
   reason: string,
 });
 
-/** The validator of SaveProxyRuleSetRequest. */
-export const decodeSaveProxyRuleSetRequest: Decoder<SaveProxyRuleSetRequest> = object<SaveProxyRuleSetRequest>("SaveProxyRuleSetRequest", {
-  rules: array(ref(() => decodeProxyRule)),
-});
-
 /** The validator of RotateTrustBundleRequest. */
 export const decodeRotateTrustBundleRequest: Decoder<RotateTrustBundleRequest> = object<RotateTrustBundleRequest>("RotateTrustBundleRequest", {
   overlapSeconds: optional(int64),
   pem: string,
+});
+
+/** The validator of SaveProxyRuleSetRequest. */
+export const decodeSaveProxyRuleSetRequest: Decoder<SaveProxyRuleSetRequest> = object<SaveProxyRuleSetRequest>("SaveProxyRuleSetRequest", {
+  rules: array(ref(() => decodeProxyRule)),
 });
 
 /** The validator of SaveTriggerRequest. */
@@ -2796,7 +2796,7 @@ export const decodeTrustRule: Decoder<TrustRule> = object<TrustRule>("TrustRule"
   namespace: string,
   principal: string,
   revision: int64,
-  spiffeIDPattern: string,
+  spiffePattern: string,
   staticKeys: string,
 });
 
@@ -3090,7 +3090,7 @@ export const decodeUpdateTrustRuleRequest: Decoder<UpdateTrustRuleRequest> = obj
   keySource: optional(ref(() => decodeTrustRuleKeySource)),
   name: optional(string),
   principal: optional(string),
-  spiffeIDPattern: optional(string),
+  spiffePattern: optional(string),
   staticKeys: optional(string),
 });
 

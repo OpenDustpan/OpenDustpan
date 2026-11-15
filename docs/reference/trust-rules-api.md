@@ -115,13 +115,13 @@ $ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 `PATCH .../trust-rules/{rule_id}` needs the action `namespace:manage-trust-rules`
 and the header `If-Match` with the `ETag` of a read of the rule. The body holds
 only the fields to change. A field that is missing keeps its value. The fields
-are those of a create, with `spiffeIDPattern` and `bundle`. The answer is 200
+are those of a create, with `spiffePattern` and `bundle`. The answer is 200
 with the rule and its new `ETag`. A change of `principal` also needs
 `principal:manage-tokens` on the new principal. Each update writes the audit
 entry `trust-rule:update`.
 
 A rule can name a `bundle`, the ID of the trust bundle of the namespace, and a
-`spiffeIDPattern` of at most 512 bytes, in the form
+`spiffePattern` of at most 512 bytes, in the form
 `spiffe://<trust-domain>/<path>`. The path can end in `/*`, which matches one
 path segment. A `*` in another place matches only itself. A `bundle` that is
 not the bundle of the namespace fails with `trust-rule.bundle-invalid`. A rule

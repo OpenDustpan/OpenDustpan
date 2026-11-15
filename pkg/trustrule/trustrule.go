@@ -402,7 +402,7 @@ func checkBundleCA(cert *x509.Certificate, now time.Time, index int) error {
 // fixed segment before it, so "spiffe://td/*" is refused. The pattern must
 // not end with a slash.
 func ValidateSpiffePattern(pattern string) error {
-	if err := checkText("spiffeIDPattern", pattern, MaxSpiffePatternLength); err != nil {
+	if err := checkText("spiffePattern", pattern, MaxSpiffePatternLength); err != nil {
 		return err
 	}
 

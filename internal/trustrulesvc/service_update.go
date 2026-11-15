@@ -175,7 +175,7 @@ func (s *Service) updateEntry(e audit.Entry, old, r *trustrule.Rule) audit.Entry
 	change("audience", old.Audience, r.Audience)
 	change("keySource", string(old.Keys), string(r.Keys))
 	change("principal", old.PrincipalID, r.PrincipalID)
-	change("spiffeIDPattern", old.SpiffeIDPattern, r.SpiffeIDPattern)
+	change("spiffePattern", old.SpiffeIDPattern, r.SpiffeIDPattern)
 	change("bundle", old.Bundle, r.Bundle)
 	change("conditions", formatConditions(old.Conditions), formatConditions(r.Conditions))
 	change("staticKeys", staticKeysDigest(old.StaticKeys), staticKeysDigest(r.StaticKeys))

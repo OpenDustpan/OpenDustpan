@@ -371,7 +371,7 @@ export interface CreateTrustRuleRequest {
   readonly keySource: TrustRuleKeySource;
   readonly name: string;
   readonly principal: string;
-  readonly spiffeIDPattern?: string;
+  readonly spiffePattern?: string;
   readonly staticKeys?: string;
 }
 
@@ -1634,13 +1634,13 @@ export interface RotateNamespaceIssuerKeysRequest {
   readonly reason: string;
 }
 
-export interface SaveProxyRuleSetRequest {
-  readonly rules: ReadonlyArray<ProxyRule>;
-}
-
 export interface RotateTrustBundleRequest {
   readonly overlapSeconds?: number;
   readonly pem: string;
+}
+
+export interface SaveProxyRuleSetRequest {
+  readonly rules: ReadonlyArray<ProxyRule>;
 }
 
 export interface SaveTriggerRequest {
@@ -2237,7 +2237,7 @@ export interface TrustRule {
   readonly namespace: string;
   readonly principal: string;
   readonly revision: number;
-  readonly spiffeIDPattern: string;
+  readonly spiffePattern: string;
   readonly staticKeys: string;
 }
 
@@ -2506,7 +2506,7 @@ export interface UpdateTrustRuleRequest {
   readonly keySource?: TrustRuleKeySource;
   readonly name?: string;
   readonly principal?: string;
-  readonly spiffeIDPattern?: string;
+  readonly spiffePattern?: string;
   readonly staticKeys?: string;
 }
 

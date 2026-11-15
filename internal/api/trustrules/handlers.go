@@ -63,7 +63,7 @@ type ruleDocument struct {
 	Conditions []conditionDocument `json:"conditions"`
 	// SpiffeIDPattern and Bundle are empty for a rule that sets none. Revision
 	// is the revision that an update sends in If-Match.
-	SpiffeIDPattern string `json:"spiffeIDPattern"`
+	SpiffeIDPattern string `json:"spiffePattern"`
 	Bundle          string `json:"bundle"`
 	Revision        int64  `json:"revision"`
 }
@@ -85,7 +85,7 @@ type createRequest struct {
 	Principal  *string              `dustpan:"required" json:"principal"`
 	Conditions *[]conditionDocument `dustpan:"required" json:"conditions"`
 
-	SpiffeIDPattern *string `dustpan:"optional" json:"spiffeIDPattern"`
+	SpiffeIDPattern *string `dustpan:"optional" json:"spiffePattern"`
 	Bundle          *string `dustpan:"optional" json:"bundle"`
 }
 
@@ -99,7 +99,7 @@ type updateRequest struct {
 	StaticKeys      *string              `dustpan:"optional" json:"staticKeys"`
 	Principal       *string              `dustpan:"optional" json:"principal"`
 	Conditions      *[]conditionDocument `dustpan:"optional" json:"conditions"`
-	SpiffeIDPattern *string              `dustpan:"optional" json:"spiffeIDPattern"`
+	SpiffeIDPattern *string              `dustpan:"optional" json:"spiffePattern"`
 	Bundle          *string              `dustpan:"optional" json:"bundle"`
 }
 
