@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 9
 ---
 
 Issue: #1157.
@@ -47,7 +47,7 @@ Out of scope:
 
 Depends on:
 
-- add-job-service-routes-start
+- add-job-service-routes-start-1
 - several-approval-requirements-one-change
 - gate-evaluation-must-apply-dev
 

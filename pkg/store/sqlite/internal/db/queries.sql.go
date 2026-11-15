@@ -1083,6 +1083,20 @@ func (q *Queries) CountImportLedger(ctx context.Context, arg CountImportLedgerPa
 	return count, err
 }
 
+const countLiveBlobDeleteLeases = `-- name: CountLiveBlobDeleteLeases :one
+SELECT COUNT(*) FROM blob_delete_leases
+WHERE expires_at_ms > CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+`
+
+// The number of lease rows that end after the database clock. A restore waits
+// for zero of them before it applies the data.
+func (q *Queries) CountLiveBlobDeleteLeases(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countLiveBlobDeleteLeases)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLiveCollectionMembers = `-- name: CountLiveCollectionMembers :one
 SELECT COUNT(*)
 FROM collection_members AS m
@@ -6607,7 +6621,7 @@ func (q *Queries) GetIssuerSettings(ctx context.Context, namespaceID string) (Ge
 
 const getItemKey = `-- name: GetItemKey :one
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = ?1 AND k.scope_id = ?2 AND k.kind = ?3
@@ -6633,6 +6647,7 @@ type GetItemKeyRow struct {
 	BlobVersion  int64
 	BlobSize     int64
 	BlobMd5      []byte
+	BlobAttempt  string
 }
 
 func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItemKeyRow, error) {
@@ -6655,6 +6670,7 @@ func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItem
 		&i.BlobVersion,
 		&i.BlobSize,
 		&i.BlobMd5,
+		&i.BlobAttempt,
 	)
 	return i, err
 }
@@ -10870,12 +10886,13 @@ func (q *Queries) InsertIssuerKey(ctx context.Context, arg InsertIssuerKeyParams
 
 const insertItemKey = `-- name: InsertItemKey :execrows
 INSERT INTO item_keys (
-    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
+    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5,
+    blob_attempt
 )
 VALUES (
     ?1, (SELECT n.id FROM namespaces AS n WHERE n.name = ?2),
     ?3, ?4, ?5, ?6, ?7, 0,
-    ?8, ?9, ?10
+    ?8, ?9, ?10, ?11
 )
 ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING
 `
@@ -10891,6 +10908,7 @@ type InsertItemKeyParams struct {
 	BlobVersion int64
 	BlobSize    int64
 	BlobMd5     []byte
+	BlobAttempt string
 }
 
 // The caller checks the fence in the same transaction. A record for the same
@@ -10907,6 +10925,7 @@ func (q *Queries) InsertItemKey(ctx context.Context, arg InsertItemKeyParams) (i
 		arg.BlobVersion,
 		arg.BlobSize,
 		arg.BlobMd5,
+		arg.BlobAttempt,
 	)
 	if err != nil {
 		return 0, err
@@ -15039,7 +15058,7 @@ func (q *Queries) ListItemKeyWrapperIDs(ctx context.Context) ([]string, error) {
 
 const listItemKeys = `-- name: ListItemKeys :many
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = ?1 AND k.scope_id = ?2 AND k.id > ?3
@@ -15066,6 +15085,7 @@ type ListItemKeysRow struct {
 	BlobVersion  int64
 	BlobSize     int64
 	BlobMd5      []byte
+	BlobAttempt  string
 }
 
 func (q *Queries) ListItemKeys(ctx context.Context, arg ListItemKeysParams) ([]ListItemKeysRow, error) {
@@ -15094,6 +15114,7 @@ func (q *Queries) ListItemKeys(ctx context.Context, arg ListItemKeysParams) ([]L
 			&i.BlobVersion,
 			&i.BlobSize,
 			&i.BlobMd5,
+			&i.BlobAttempt,
 		); err != nil {
 			return nil, err
 		}
@@ -19867,6 +19888,17 @@ func (q *Queries) RejoinRunner(ctx context.Context, arg RejoinRunnerParams) erro
 	return err
 }
 
+const releaseBlobDeleteLease = `-- name: ReleaseBlobDeleteLease :exec
+DELETE FROM blob_delete_leases
+WHERE holder = ?
+`
+
+// Deletes the lease row of one holder. A holder with no row is not an error.
+func (q *Queries) ReleaseBlobDeleteLease(ctx context.Context, holder string) error {
+	_, err := q.db.ExecContext(ctx, releaseBlobDeleteLease, holder)
+	return err
+}
+
 const removeGroupMember = `-- name: RemoveGroupMember :execrows
 UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL
@@ -21859,6 +21891,37 @@ type SweepIdempotencyRecordsParams struct {
 // it, for tests.
 func (q *Queries) SweepIdempotencyRecords(ctx context.Context, arg SweepIdempotencyRecordsParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, sweepIdempotencyRecords, arg.NowOverrideMs, arg.RecordTtlMs, arg.PendingTtlMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const takeBlobDeleteLease = `-- name: TakeBlobDeleteLease :execrows
+INSERT INTO blob_delete_leases (holder, expires_at_ms)
+SELECT ?1,
+       CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+           + CAST(?2 AS INTEGER)
+WHERE NOT EXISTS (
+    SELECT 1 FROM backups WHERE state = 'running'
+    UNION ALL
+    SELECT 1 FROM restores WHERE state IN ('checking', 'applying')
+)
+ON CONFLICT (holder) DO UPDATE SET expires_at_ms = excluded.expires_at_ms
+`
+
+type TakeBlobDeleteLeaseParams struct {
+	Holder string
+	TtlMs  int64
+}
+
+// Writes the lease of holder, ending at the database clock plus ttl_ms, in
+// one statement, and reports one changed row. While a backup runs or a
+// restore checks or applies, it writes nothing and reports no changed row:
+// the caller then reads the running work in the same transaction. A take for
+// a holder with a row replaces that row.
+func (q *Queries) TakeBlobDeleteLease(ctx context.Context, arg TakeBlobDeleteLeaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, takeBlobDeleteLease, arg.Holder, arg.TtlMs)
 	if err != nil {
 		return 0, err
 	}

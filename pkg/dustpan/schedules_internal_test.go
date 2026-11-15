@@ -153,6 +153,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		nameLocks:        nameLockPrune{locks: nil},
 		issuer:           nil,
 		handler:          nil,
+		closeBuiltin:     nil,
 		started:          nil,
 		ungated:          nil,
 		mounted:          nil,

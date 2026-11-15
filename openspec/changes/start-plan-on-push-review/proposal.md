@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Issue: #1213.
@@ -89,6 +89,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Conflict: none.
 
 ## Open questions
+
+none
 
 Questions considered and answered:
 

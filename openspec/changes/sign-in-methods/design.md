@@ -22,6 +22,8 @@ The sign-in service holds an unexported `methodSet` that only `newMethodSet` can
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
 | Boundary check | Adapters check signature, audience, time, `sub` and peer address. | TestAdapterHostileInputs |
+| SAML, header, CAS and OAuth adapters | Each adapter in internal/signin checks its own input. | TestSamlRefusals, TestTrustedHeaderProxyGate, TestCasHostileInputs, TestOAuthHostileInputs |
+| One-time ID store | Unique key, expiry and size bound; fail closed. | TestOneTimeIdStoreBound |
 | Service use check | One order; fail closed on store failure. | TestServiceHostile |
 | HTTP containment | Declared fields only; CR and LF removed; one audit entry. | TestHandlerHostile |
 

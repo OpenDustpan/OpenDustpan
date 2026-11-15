@@ -19,7 +19,7 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Run `make adr-index` (`Makefile`); this change adds no ADR. Check: `make adr-index` leaves the tree clean. Confirmed by: the driver's gates.
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 

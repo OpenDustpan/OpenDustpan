@@ -14,5 +14,5 @@
 ## 3. Definition of done
 
 - [ ] 3.1 Wire the sweep to the worker. No route changes. The e2e step starts two real server processes on one database and reads GET /api/dustpan/v1/settings with an access token of a site administrator. Check: make e2e (NEW step in e2e/). Confirmed by: CI (the agent writes the e2e test).
-- [ ] 3.2 Add the docs page for retention of decision records and check that its commands run. Check: make docs-lint
+- [ ] 3.2 Add the docs page for retention of decision records and check that its commands run (NEW file docs/guides/retention-of-decision-records.md). Check: make docs-lint
 - [ ] 3.3 Run the full check. Check: make check. Confirmed by: CI (the agent runs the fast checks only).

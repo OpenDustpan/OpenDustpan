@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #1201.
@@ -20,7 +20,7 @@ Errors the person may hit, and the one command that helps:
 | --- | --- | --- |
 | Finish check fails with `backup.corrupt` when a file is missing or truncated. | Finish failed because the target is missing or truncated. Run the check route to see which file failed, then run the backup again. | `GET /api/server/backups/{id}/check` |
 | Finish refuses with fenced-token mismatch when the manifest attempt differs from the claim. | Finish refused because the manifest attempt differs from the live claim. Run the backup again to make a new attempt. | `GET /api/server/backups/{id}/check` |
-| Cleanup stops without deletes when the claim fencing token moved. | Cleanup skipped because the claim moved. No action is needed; the live holder or retention expiry deletes the prefix. | `GET /api/server/backups/{id}/check` |
+| Cleanup stops without deletes when the claim fencing token moved. | Cleanup skipped because the claim moved. No action is needed; the live holder deletes the prefix. | `GET /api/server/backups/{id}/check` |
 
 Evidence for the claims above:
 
@@ -46,7 +46,7 @@ Out of scope:
 Where the path still costs the person time or surprises them:
 
 - Operator sees one extra path segment in the target; `opendustpan backup check` output stays the same.
-- Stale prefixes cost storage until the live holder or retention expiry deletes them; the docs page names the cleanup step.
+- Stale prefixes cost storage until the live holder deletes them; the docs page names the cleanup step.
 
 ## What main already does
 

@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 ## Why
@@ -22,7 +22,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Main serves unit routes scoped to one namespace. Proof: GET /api/dustpan/v1/namespaces/{}/units
-- Main has a unit lifecycle helper on the server. Proof: pkg/dustpan/dustpan.go:2807 (func unitLifecycles)
+- Main has a unit lifecycle helper on the server. Proof: pkg/dustpan/dustpan.go:2841 (func unitLifecycles)
 - A unit never moves between namespaces and export plus import is the way out. Proof: docs/adr/0047-soft-delete-and-units-stay-in-their-namespace.md decisions 5 and 7
 
 ## What Changes
@@ -54,7 +54,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main serves unit lifecycles through the server helper. (`pkg/dustpan/dustpan.go:2807 (func unitLifecycles)`)
+- Main serves unit lifecycles through the server helper. (`pkg/dustpan/dustpan.go:2841 (func unitLifecycles)`)
 - Main tests the stack lifecycle. (`pkg/dustpan/dustpan_test.go:154 (func TestStackLifecycle)`)
 - Main tests unit query paging. (`pkg/store/storetest/unit_query.go:443 (func testQueryUnitsUnitPages)`)
 

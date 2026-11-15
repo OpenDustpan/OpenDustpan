@@ -15,7 +15,7 @@
 
 - [ ] 3.1 Resolve the namespace ID in `internal/subscriptionsvc/subscriptionsvc.go` and pass it to every port. Check: the subscriptions API tests pass.
 - [ ] 3.2 Add `TestRecreatedNamespaceListsNoSinks` (NEW) in the NEW file `internal/api/notifications/recreated_test.go`. Check: the new namespace lists no sink and no subscription.
-- [ ] 3.3 Add `TestCanReadUsesTheScopeID` (NEW) in the NEW file `pkg/notify/reader_test.go` with the first production `notify.Reader` implementation. Check: a principal of the new namespace cannot read a notification of the old ID.
+- [ ] 3.3 Add the first production `notify.Reader` (pkg/notify/route.go:737) in the NEW file pkg/dustpan/notify_reader.go, the wiring layer, which may import pkg/identity, pkg/principal and pkg/notify (a domain package may not, by depguard). It is the type and constructor of the section Contract of proposal.md. Add `TestCanReadUsesTheScopeID` (NEW) and a hostile table (unknown principal, disabled principal, an authorizer error, @server without server:observe, a unit of another collection) in the NEW file pkg/dustpan/notify_reader_internal_test.go. Check: a principal of the new namespace cannot read a notification of the old ID; `go test ./pkg/dustpan/ -run 'TestCanRead' -count=1` passes.
 
 ## 4. Documentation and verification
 

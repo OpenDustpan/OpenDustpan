@@ -54,15 +54,15 @@ When a provider archive holds terraform-registry-manifest.json, the server SHALL
 
 ### Requirement: Protocols without manifest
 
-When a provider archive lacks terraform-registry-manifest.json, the server SHALL refuse stated protocols with 400 registry.invalid.
+When a provider archive lacks terraform-registry-manifest.json, the server SHALL refuse the publish with 400 registry.invalid, with or without stated protocols.
 
 #### Scenario: Stated protocols without manifest refused
 - **WHEN** a publisher states protocols and the archive holds no terraform-registry-manifest.json.
 - **THEN** the server refuses the request with 400 registry.invalid and stores no release.
 
-#### Scenario: No manifest and no protocols stored empty
+#### Scenario: No manifest and no protocols refused
 - **WHEN** the archive holds no manifest and the publisher states no protocols.
-- **THEN** the stored release holds an empty protocol list.
+- **THEN** the server refuses the request with 400 registry.invalid and stores no release, as the store refuses a release with no protocol.
 
 ### Requirement: Malformed manifest
 
@@ -111,14 +111,6 @@ When the server compares a republished release with the stored release, the serv
 #### Scenario: Same bytes republish accepted
 - **WHEN** a republish carries the same H1 and the same manifest protocols.
 - **THEN** the server accepts the republish as identical.
-
-### Requirement: Missing H1 of old release
-
-Where the stored release lacks H1, the server SHALL compare by SHA256 and backfill H1 on identical republish.
-
-#### Scenario: Old release same bytes accepted
-- **WHEN** the stored release lacks H1 and the republish carries the same SHA256.
-- **THEN** the server accepts the republish as identical and backfills the H1 digest.
 
 ### Requirement: Concurrent republish same bytes
 

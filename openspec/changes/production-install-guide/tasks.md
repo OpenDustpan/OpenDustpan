@@ -4,7 +4,7 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing persona path test in NEW file internal/e2e/production_install_test.go that uses the shared runner on docs run-marked fixture blocks. It calls route ANY /api/server/backups with an access token. BLOCKED by the missing route declaration file and adapter file on main, which this change must name after it reads main. Check: NEW TestProductionInstallPersonaPath fails on main, passes after fixtures land, and runs through the shared runner from docs-commands-run-in-tests. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.1 Add failing persona path test in NEW file internal/e2e/production_install_test.go that uses the shared runner on docs run-marked fixture blocks. It calls route ANY /api/server/backups with an access token. Check: NEW TestProductionInstallPersonaPath fails on main, passes after fixtures land, and runs through the shared runner from docs-commands-run-in-tests. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 1.2 Add failing test in NEW file cmd/opendustpan/production_install_test.go for missing TLS file refusal. Check: NEW TestProductionInstallMissingTLSFiles fails on main.
 - [ ] 1.3 Add failing test in NEW file cmd/opendustpan/production_install_test.go for missing proxy header refusal. Check: NEW TestProductionInstallProxyHeaders fails on main.
 - [ ] 1.4 Add failing test in NEW file cmd/opendustpan/production_install_test.go for forged proxy headers from outside the NEW allowlist. Check: NEW TestProductionInstallProxySpoof fails on main.

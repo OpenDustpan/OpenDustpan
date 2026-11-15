@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -95,6 +96,10 @@ func restoreWorkerCases() []restoreCase {
 			test: testWorkerDeleterInFlight,
 		},
 		{
+			name: "a restore waits for a live blob delete lease before the after-apply check",
+			test: testWorkerKeepsBlobDeleteLease,
+		},
+		{
 			name: "a restore that starts in the maintenance mode of an operator leaves it in maintenance mode",
 			test: testWorkerOperatorMaintenance,
 		},
@@ -113,6 +118,7 @@ func restoreWorkerCases() []restoreCase {
 type restoreWorkerStore interface {
 	RestoreStore
 	backup.RestoreLive
+	blobguard.Leases
 	maintenance.Store
 	secret.KeyStore
 	secret.ItemKeyStore
@@ -266,7 +272,7 @@ func (r *workerRig) service(t *testing.T, w workerService) *backup.RestoreServic
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live: w.live, Operations: w.ops, Backups: r.backups, Maintenance: w.maint, Blobs: w.blobs,
-		Target: r.target, Key: r.key, Installation: "local", AfterApply: w.afterApply, Admit: nil,
+		Leases: r.st, Target: r.target, Key: r.key, Installation: "local", AfterApply: w.afterApply, Admit: nil,
 		AllowDevBackups: false, AllowDevHint: "", Owner: w.owner, Lease: workerLease,
 		CleanupLockWait: w.lockWait, RetryBase: time.Millisecond, Now: nil, Logger: nil,
 	})
@@ -1263,6 +1269,87 @@ func testWorkerDeleterInFlight(t *testing.T, newStore RestoreFactory) {
 	<-aDone
 
 	r.mustRestoredOnce(t, id, restoredCheck{areas: true})
+}
+
+// testWorkerKeepsBlobDeleteLease proves that a restore waits for a blob
+// deleter that holds a live lease before the restore starts: the swap keeps
+// the lease row, the after-apply step defers while the lease is live, and the
+// restore ends only after the release. A swap that dropped the lease would
+// leave the restore to run while the deleter still runs.
+func testWorkerKeepsBlobDeleteLease(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	r := newWorkerRig(t, newStore)
+
+	const holder = "deleter-a"
+
+	// The deleter takes its lease before the restore starts.
+	if _, held, err := r.st.TakeLease(t.Context(), holder, blobguard.LeaseTTL); err != nil || held {
+		t.Fatalf("take the lease of %s: held = %v, err = %v", holder, held, err)
+	}
+
+	a := r.service(
+		t,
+		workerService{owner: "instance-a", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
+	)
+
+	id := r.start(t, a, false, false)
+
+	// The restore runs to the after-apply step and defers: the live lease
+	// holds it back before it checks the named blobs. A swap that dropped the
+	// lease lets the restore finish here.
+	runUntilDeferred(t, a)
+
+	op := r.opOf(t, id)
+
+	if op.State.Terminal() {
+		t.Fatalf("operation of restore %s = %q with a live lease, want the restore to wait", id, op.State)
+	}
+
+	if _, done := op.Step(backup.RestoreStepAfterApply); done {
+		t.Fatalf("restore %s recorded the after-apply step with a live lease, want a deferral", id)
+	}
+
+	if _, done := op.Step(backup.RestoreStepSwap); !done {
+		t.Fatalf("restore %s did not reach the swap step with a live lease", id)
+	}
+
+	if err := r.st.ReleaseLease(t.Context(), holder); err != nil {
+		t.Fatalf("release the lease of %s: %v", holder, err)
+	}
+
+	r.driveToEnd(t, a, id)
+	r.mustRestoredOnce(t, id, restoredCheck{areas: true})
+}
+
+// runUntilDeferred runs the restore worker until its operation defers on a
+// step, as a live blob delete lease makes the after-apply step do. It fails
+// the case when the restore finishes or never defers.
+func runUntilDeferred(t *testing.T, restores *backup.RestoreService) {
+	t.Helper()
+
+	deadline := time.Now().Add(StuckTestLimit)
+
+	for {
+		runErr := restores.RunOnce(t.Context())
+		if errors.Is(runErr, durable.ErrDeferred) {
+			return
+		}
+
+		if runErr == nil {
+			t.Fatal("the restore finished, want a deferral")
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("the restore never deferred: %v", runErr)
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("run the restore worker: %v", t.Context().Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 func testWorkerOperatorMaintenance(t *testing.T, newStore RestoreFactory) {

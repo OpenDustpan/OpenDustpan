@@ -14,12 +14,12 @@
 ## 2. implementation
 
 - [ ] 2.1 Implement the store, matching and fact producer in NEW pkg/gate/pathset.go. Check: `go test ./pkg/gate/... -count=1`
-- [ ] 2.2 Wire the new path set routes at each scope with authorization actions and audit entries. Declare them in internal/api/apidesc/openapi.json and write the adapter in NEW internal/api/route/pathsets.go. Check: `go test ./internal/api/route/... -count=1`
+- [ ] 2.2 Wire the new path set routes at each scope with authorization actions and audit entries. Declare them in the route table of the adapter package (`make generate` then writes internal/api/apidesc/openapi.json; never edit it by hand) and write the adapter in NEW internal/api/route/pathsets.go. Check: `go test ./internal/api/route/... -count=1`
 - [ ] 2.3 Add the new docs page NEW docs/path-sets.md with glob samples that a test in NEW pkg/gate/pathset_samples_test.go runs. Check: `go test ./pkg/gate/ -run TestPathSetGlobSamples -count=1`
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. definition of done
 

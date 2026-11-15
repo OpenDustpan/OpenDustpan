@@ -6,6 +6,9 @@ The grant check reads stored grants at each request. This change adds proof and 
 
 1. **Read stored grants at each request.** The service reads the live grant and membership rows. No allow is cached, so a revoked grant fails on the next request.
 
+
+**The discovery routes of the TFE-compatible API (ADR 374 decision 1).** Only GET .../entitlement-set and the workspace list GET .../organizations/{organization}/workspaces answer a holder of a grant inside the namespace. The list filters its items to what the caller can read (decision 1.2). The show route GET .../workspaces/{workspace} stays out of discovery: a holder of a grant on that workspace passes its own read check, and each other caller gets the same 404 as for an unknown workspace, with the same body (decision 1.3: "Each other caller gets the same 404 as for an unknown namespace, with the same body. The answer is no existence oracle."). A discovery rule on the show route would answer 403 or 200 for a workspace of another collection, which tells that it exists. Main has no route for the organization read of decision 1; the CLI reads the entitlement set.
+
 ## Structure
 
 Keep the one existing reach function in pkg/access as the only place that decides reach, so the write path and the export cannot diverge. Add no new exported type.

@@ -1,12 +1,12 @@
 ## Context
 
-The adapter turns gate.Engine calls into service calls. Protocol faults give gate.ErrUnavailable. Format, save fallback, access-limit split and CI image wait for the owner. No code lands before those decisions.
+The adapter turns gate.Engine calls into service calls. Protocol faults give gate.ErrUnavailable. ADR 377 decides the format, the save fallback, the access-limit split and the CI image. The format has two paths, `evaluate` and `check`. Each request carries a request ID and the version of the policy set. Each answer echoes both.
 
 ## Decisions
 
 1. **Service adapter behind gate.Engine.** Add an unexported externalEngine with a constructor that takes endpoint, CA, credential and timeout and exposes only gate.Engine.
 2. **Strict answer check.** Check TLS, credential, no redirect, timeout, answer size, both echoed IDs, unknown and extra policy IDs and unit mismatch. Each fault gives gate.ErrUnavailable.
-3. **Outage behavior.** Start when the service is unreachable. Enforce gates fail closed. A save follows ADR 224 decision 8: with no answer from the service, a save that switches a gate to `evaluate`, removes it or sets `onError: skip` goes on with the linked validator only, with an audit entry that says so; every other save fails with `gate.ErrUnavailable`. The access-limit rule during an outage waits for the owner (open question 5).
+3. **Outage behavior.** Start when the service is unreachable. Enforce gates fail closed. A save follows ADR 224 decision 8: with no answer from the service, a save that switches a gate to `evaluate`, removes it or sets `onError: skip` goes on with the linked validator only, with an audit entry that says so; every other save fails with `gate.ErrUnavailable`. Access limits always use the linked adapter (ADR 377 decision 3, ADR 224 decision 9): "Access limits (ADR 223) always use the linked adapter, so an outage of the service never refuses every API call."
 
 ## Structure
 
@@ -14,10 +14,8 @@ Unexported type externalEngine with constructor NewExternalEngine; only the cons
 
 ## Risks
 
-- The request and answer format is open.
-- The save fallback is open.
-- The access-limit split is open.
-- The CI image is open.
+- A third-party service needs a small bridge to speak the format of ADR 377 decision 1.
+- CI runs the official Rust cedar CLI from an image pinned by digest (ADR 377 decision 2).
 
 ## Layers (defense in depth)
 
@@ -25,7 +23,7 @@ Unexported type externalEngine with constructor NewExternalEngine; only the cons
 | --- | --- | --- |
 | transport | https only, no redirect, configured CA, credential, 5 s timeout, 1 MB limit, address check at dial. | Wrong CA, missing credential, redirect, oversize and slow answers each give gate.ErrUnavailable. |
 | protocol | Echo of request ID and policy-set version, unknown and extra IDs refused. | Wrong ID, wrong version and extra policy ID each give gate.ErrUnavailable. |
-| save | Local parse and type check first; the service check follows the owner decision. | Stop the test service at save; the result follows the decided fallback and the record names the miss. |
+| save | Local parse and type check first; the service check follows ADR 224 decision 8 and ADR 377 decision 3. | Stop the test service at save; the result follows ADR 224 decision 8 and the record names the miss. |
 
 ## Diagrams
 
