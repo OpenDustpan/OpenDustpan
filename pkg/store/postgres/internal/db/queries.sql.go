@@ -349,7 +349,8 @@ UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
 UNION ALL
-SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text AS content_key,
+SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text
+       || '-' || k.blob_attempt AS content_key,
        k.blob_size AS size, k.blob_md5 AS md5, FALSE AS sealed
 FROM item_keys AS k
 WHERE k.shredded_at_ms = 0
@@ -447,6 +448,31 @@ func (q *Queries) BackupWrapperIDs(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const blobKeyNamed = `-- name: BlobKeyNamed :one
+SELECT EXISTS (
+    SELECT 1 FROM checkpoints AS c
+    WHERE c.stack_id = $1 AND c.blob_key = $2
+    UNION ALL
+    SELECT 1 FROM update_journal AS j
+    WHERE j.stack_id = $1 AND j.blob_key = $2
+) AS named
+`
+
+type BlobKeyNamedParams struct {
+	StackID string
+	BlobKey string
+}
+
+// Reports whether a checkpoint row or a journal batch row of the stack names
+// the blob key. The sweep reads it in the transaction that drops a mark, so a
+// row that still names the key keeps the blob.
+func (q *Queries) BlobKeyNamed(ctx context.Context, arg BlobKeyNamedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, blobKeyNamed, arg.StackID, arg.BlobKey)
+	var named bool
+	err := row.Scan(&named)
+	return named, err
 }
 
 const bumpFailoverVersions = `-- name: BumpFailoverVersions :execrows
@@ -1445,6 +1471,20 @@ type CountImportLedgerParams struct {
 // cannot plan again.
 func (q *Queries) CountImportLedger(ctx context.Context, arg CountImportLedgerParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countImportLedger, arg.NamespaceID, arg.ImportID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countLiveBlobDeleteLeases = `-- name: CountLiveBlobDeleteLeases :one
+SELECT COUNT(*) FROM blob_delete_leases
+WHERE expires_at_ms > FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+`
+
+// The number of lease rows that end after the database clock. A restore waits
+// for zero of them before it applies the data.
+func (q *Queries) CountLiveBlobDeleteLeases(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countLiveBlobDeleteLeases)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -4351,6 +4391,26 @@ func (q *Queries) DeleteStateVersionsOfWorkspace(ctx context.Context, workspaceI
 	return err
 }
 
+const deleteSupersededMark = `-- name: DeleteSupersededMark :execrows
+DELETE FROM checkpoint_supersedes
+WHERE stack_id = $1 AND blob_key = $2
+`
+
+type DeleteSupersededMarkParams struct {
+	StackID string
+	BlobKey string
+}
+
+// Deletes the mark of the blob key of the stack. A missing mark deletes no
+// row, which is not an error.
+func (q *Queries) DeleteSupersededMark(ctx context.Context, arg DeleteSupersededMarkParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSupersededMark, arg.StackID, arg.BlobKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteTempAdmin = `-- name: DeleteTempAdmin :execrows
 DELETE FROM temp_admins WHERE principal_id = $1
 `
@@ -7176,7 +7236,7 @@ func (q *Queries) GetIssuerSettings(ctx context.Context, namespaceID string) (Ge
 
 const getItemKey = `-- name: GetItemKey :one
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = $1 AND k.scope_id = $2 AND k.kind = $3
@@ -7202,6 +7262,7 @@ type GetItemKeyRow struct {
 	BlobVersion  int64
 	BlobSize     int64
 	BlobMd5      []byte
+	BlobAttempt  string
 }
 
 func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItemKeyRow, error) {
@@ -7224,6 +7285,7 @@ func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItem
 		&i.BlobVersion,
 		&i.BlobSize,
 		&i.BlobMd5,
+		&i.BlobAttempt,
 	)
 	return i, err
 }
@@ -9630,7 +9692,8 @@ func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (Te
 
 const getTrigger = `-- name: GetTrigger :one
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.id = $2
@@ -9657,6 +9720,7 @@ type GetTriggerRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTriggerRow, error) {
@@ -9678,6 +9742,7 @@ func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTrig
 		&i.LastSaverID,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.NextSlotMs,
 	)
 	return i, err
 }
@@ -11378,12 +11443,13 @@ func (q *Queries) InsertIssuerKey(ctx context.Context, arg InsertIssuerKeyParams
 
 const insertItemKey = `-- name: InsertItemKey :execrows
 INSERT INTO item_keys (
-    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
+    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5,
+    blob_attempt
 )
 VALUES (
     $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
     $3, $4, $5, $6, $7, 0,
-    $8, $9, $10
+    $8, $9, $10, $11
 )
 ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING
 `
@@ -11399,6 +11465,7 @@ type InsertItemKeyParams struct {
 	BlobVersion int64
 	BlobSize    int64
 	BlobMd5     []byte
+	BlobAttempt string
 }
 
 // The caller checks the fence in the same transaction. A record for the same
@@ -11415,6 +11482,7 @@ func (q *Queries) InsertItemKey(ctx context.Context, arg InsertItemKeyParams) (i
 		arg.BlobVersion,
 		arg.BlobSize,
 		arg.BlobMd5,
+		arg.BlobAttempt,
 	)
 	if err != nil {
 		return 0, err
@@ -13662,7 +13730,8 @@ func (q *Queries) ListDurableSteps(ctx context.Context, ids []string) ([]Durable
 
 const listEnabledFollowTriggers = `-- name: ListEnabledFollowTriggers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
@@ -13685,6 +13754,7 @@ type ListEnabledFollowTriggersRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace string) ([]ListEnabledFollowTriggersRow, error) {
@@ -13712,6 +13782,7 @@ func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace strin
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -15409,7 +15480,7 @@ func (q *Queries) ListItemKeyWrapperIDs(ctx context.Context) ([]string, error) {
 
 const listItemKeys = `-- name: ListItemKeys :many
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = $1 AND k.scope_id = $2 AND k.id > $3
@@ -15436,6 +15507,7 @@ type ListItemKeysRow struct {
 	BlobVersion  int64
 	BlobSize     int64
 	BlobMd5      []byte
+	BlobAttempt  string
 }
 
 func (q *Queries) ListItemKeys(ctx context.Context, arg ListItemKeysParams) ([]ListItemKeysRow, error) {
@@ -15464,6 +15536,7 @@ func (q *Queries) ListItemKeys(ctx context.Context, arg ListItemKeysParams) ([]L
 			&i.BlobVersion,
 			&i.BlobSize,
 			&i.BlobMd5,
+			&i.BlobAttempt,
 		); err != nil {
 			return nil, err
 		}
@@ -18030,6 +18103,112 @@ func (q *Queries) ListStoreChecks(ctx context.Context) ([]StoreCheck, error) {
 	return items, nil
 }
 
+const listSupersededBlobs = `-- name: ListSupersededBlobs :many
+SELECT CAST(COALESCE(m.blob_key, '') AS TEXT) AS blob_key,
+       CAST(COALESCE(m.size, 0) AS BIGINT) AS size,
+       CAST(COALESCE(m.superseded_at_ms, 0) AS BIGINT) AS superseded_at_ms
+FROM stacks AS st
+LEFT JOIN checkpoint_supersedes AS m ON m.stack_id = st.id
+WHERE st.id = $1 AND st.deleted_at_ms IS NULL
+ORDER BY 1
+`
+
+type ListSupersededBlobsRow struct {
+	BlobKey        string
+	Size           int64
+	SupersededAtMs int64
+}
+
+// Every mark of one live stack, ordered by blob key: the blob that a later
+// save of the same update replaced, with the size of the stored blob and the
+// time of the save that replaced it. The stack is the driving table, so one
+// statement tells a stack without marks (one row with an empty key) from a
+// stack that is missing or soft-deleted (no row), and the read needs no
+// transaction.
+func (q *Queries) ListSupersededBlobs(ctx context.Context, stackID string) ([]ListSupersededBlobsRow, error) {
+	rows, err := q.db.Query(ctx, listSupersededBlobs, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSupersededBlobsRow
+	for rows.Next() {
+		var i ListSupersededBlobsRow
+		if err := rows.Scan(&i.BlobKey, &i.Size, &i.SupersededAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSupersededMarks = `-- name: ListSupersededMarks :many
+SELECT m.stack_id, n.id AS namespace_id, m.blob_key, m.size,
+       CAST(m.superseded_at_ms AS BIGINT) AS superseded_at_ms
+FROM checkpoint_supersedes AS m
+JOIN stacks AS st ON st.id = m.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE st.deleted_at_ms IS NULL
+  AND m.superseded_at_ms < $1
+  AND (m.stack_id COLLATE "C" > $2
+    OR (m.stack_id = $2 AND m.blob_key COLLATE "C" > $3))
+ORDER BY m.stack_id COLLATE "C", m.blob_key COLLATE "C"
+LIMIT $4
+`
+
+type ListSupersededMarksParams struct {
+	OlderThanMs  int64
+	AfterStackID string
+	AfterBlobKey string
+	PageLimit    int32
+}
+
+type ListSupersededMarksRow struct {
+	StackID        string
+	NamespaceID    string
+	BlobKey        string
+	Size           int64
+	SupersededAtMs int64
+}
+
+// One page of the marks of every live stack whose save replaced the blob
+// before the given time, ordered by stack ID and blob key. The read starts
+// after the cursor, so a sweep goes page by page. A soft-deleted stack has no
+// marks in the result.
+func (q *Queries) ListSupersededMarks(ctx context.Context, arg ListSupersededMarksParams) ([]ListSupersededMarksRow, error) {
+	rows, err := q.db.Query(ctx, listSupersededMarks,
+		arg.OlderThanMs,
+		arg.AfterStackID,
+		arg.AfterBlobKey,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSupersededMarksRow
+	for rows.Next() {
+		var i ListSupersededMarksRow
+		if err := rows.Scan(
+			&i.StackID,
+			&i.NamespaceID,
+			&i.BlobKey,
+			&i.Size,
+			&i.SupersededAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTempAdmins = `-- name: ListTempAdmins :many
 SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
 FROM temp_admins ORDER BY expires_at_ms, principal_id
@@ -18105,7 +18284,8 @@ func (q *Queries) ListTempAdminsAwaitingReview(ctx context.Context) ([]TempAdmin
 
 const listTriggerFollowers = `-- name: ListTriggerFollowers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
@@ -18137,6 +18317,7 @@ type ListTriggerFollowersRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollowersParams) ([]ListTriggerFollowersRow, error) {
@@ -18169,6 +18350,7 @@ func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollo
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -18182,7 +18364,8 @@ func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollo
 
 const listTriggersOfUnit = `-- name: ListTriggersOfUnit :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.unit_tool = $2 AND t.unit_id = $3
@@ -18211,6 +18394,7 @@ type ListTriggersOfUnitRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnitParams) ([]ListTriggersOfUnitRow, error) {
@@ -18238,6 +18422,7 @@ func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnit
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -18650,6 +18835,32 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 	return items, nil
 }
 
+const lockBlobDeleteLeaseExclusive = `-- name: LockBlobDeleteLeaseExclusive :exec
+SELECT pg_advisory_xact_lock($1::int, hashtext(current_schema()))
+`
+
+// Takes the exclusive form of the blob delete lease lock for this
+// transaction. It waits for every take of a lease in flight and holds every
+// later take back until this transaction ends, so the take of a lease and the
+// write of a running backup or restore row cannot interleave.
+func (q *Queries) LockBlobDeleteLeaseExclusive(ctx context.Context, class int32) error {
+	_, err := q.db.Exec(ctx, lockBlobDeleteLeaseExclusive, class)
+	return err
+}
+
+const lockBlobDeleteLeaseShared = `-- name: LockBlobDeleteLeaseShared :exec
+SELECT pg_advisory_xact_lock_shared($1::int, hashtext(current_schema()))
+`
+
+// Takes the shared form of the blob delete lease lock for this transaction.
+// The take of a lease runs as a later statement, so its READ COMMITTED
+// snapshot is newer than the lock: a backup or a restore that committed its
+// running row before the lock is visible to the take.
+func (q *Queries) LockBlobDeleteLeaseShared(ctx context.Context, class int32) error {
+	_, err := q.db.Exec(ctx, lockBlobDeleteLeaseShared, class)
+	return err
+}
+
 const lockDurableOperation = `-- name: LockDurableOperation :one
 SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
@@ -19027,6 +19238,39 @@ func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyi
 	return result.RowsAffected(), nil
 }
 
+const markSupersededCheckpoint = `-- name: MarkSupersededCheckpoint :exec
+INSERT INTO checkpoint_supersedes (blob_key, stack_id, update_id, size, superseded_at_ms)
+SELECT c.blob_key, c.stack_id, c.update_id, COALESCE(c.blob_size, 0),
+       FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+FROM checkpoints AS c
+WHERE c.stack_id = $1 AND c.update_id = $2
+  AND c.blob_key <> $3 AND c.blob_key = $4
+ON CONFLICT (blob_key) DO NOTHING
+`
+
+type MarkSupersededCheckpointParams struct {
+	StackID  string
+	UpdateID string
+	BlobKey  string
+	ReadKey  string
+}
+
+// Marks the checkpoint blob that a save of the update replaces, with the time
+// of the database clock, from the same expression as the checkpoint upsert.
+// It marks only the row that still names the key that the sequence check read:
+// the row is not locked, and a concurrent attempt can replace it between the
+// read and the mark. The mark names the blob of that row and the size of the
+// stored blob, and a mark of an earlier save stays as it is.
+func (q *Queries) MarkSupersededCheckpoint(ctx context.Context, arg MarkSupersededCheckpointParams) error {
+	_, err := q.db.Exec(ctx, markSupersededCheckpoint,
+		arg.StackID,
+		arg.UpdateID,
+		arg.BlobKey,
+		arg.ReadKey,
+	)
+	return err
+}
+
 const markTempAdminReviewOpened = `-- name: MarkTempAdminReviewOpened :execrows
 UPDATE temp_admins SET review_opened_at_ms = $1::bigint
 WHERE principal_id = $2 AND ended_at_ms IS NOT NULL AND review_opened_at_ms IS NULL
@@ -19196,6 +19440,39 @@ func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestPa
 		arg.NamespaceID,
 		arg.ID,
 		arg.Base,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const moveTriggerNextSlot = `-- name: MoveTriggerNextSlot :execrows
+UPDATE triggers
+SET next_slot_ms = $1::bigint
+WHERE triggers.id = $2
+  AND triggers.kind = 'schedule' AND triggers.enabled = 1
+  AND triggers.next_slot_ms = $3::bigint
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $4)
+`
+
+type MoveTriggerNextSlotParams struct {
+	NextSlotMs    int64
+	ID            string
+	OldNextSlotMs int64
+	Namespace     string
+}
+
+// Moves the next slot of a schedule trigger from the value that the caller read
+// to the value after the claim. The compare on the old value is a layer of its
+// own: the transaction of the caller already serializes the writes of the
+// namespace, and this statement still changes no row when the slot moved.
+func (q *Queries) MoveTriggerNextSlot(ctx context.Context, arg MoveTriggerNextSlotParams) (int64, error) {
+	result, err := q.db.Exec(ctx, moveTriggerNextSlot,
+		arg.NextSlotMs,
+		arg.ID,
+		arg.OldNextSlotMs,
+		arg.Namespace,
 	)
 	if err != nil {
 		return 0, err
@@ -20329,6 +20606,17 @@ func (q *Queries) RejoinRunner(ctx context.Context, arg RejoinRunnerParams) erro
 		arg.LastSeenAtMs,
 		arg.ID,
 	)
+	return err
+}
+
+const releaseBlobDeleteLease = `-- name: ReleaseBlobDeleteLease :exec
+DELETE FROM blob_delete_leases
+WHERE holder = $1
+`
+
+// Deletes the lease row of one holder. A holder with no row is not an error.
+func (q *Queries) ReleaseBlobDeleteLease(ctx context.Context, holder string) error {
+	_, err := q.db.Exec(ctx, releaseBlobDeleteLease, holder)
 	return err
 }
 
@@ -21986,6 +22274,17 @@ func (q *Queries) SetStackVersion(ctx context.Context, arg SetStackVersionParams
 	return err
 }
 
+const setTransactionTimeout = `-- name: SetTransactionTimeout :exec
+SELECT set_config('transaction_timeout', $1::text, true)
+`
+
+// The attempt deadline of an item key transaction, on the clock of the
+// database. The setting ends with the transaction. The value is milliseconds.
+func (q *Queries) SetTransactionTimeout(ctx context.Context, timeoutMs string) error {
+	_, err := q.db.Exec(ctx, setTransactionTimeout, timeoutMs)
+	return err
+}
+
 const setWorkspaceCurrent = `-- name: SetWorkspaceCurrent :exec
 UPDATE workspaces
 SET current_state_version_id = $1, updated_at_ms = $2
@@ -22281,6 +22580,51 @@ func (q *Queries) SweepIdempotencyRecords(ctx context.Context, arg SweepIdempote
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const takeBlobDeleteLease = `-- name: TakeBlobDeleteLease :one
+WITH running AS (
+    SELECT kind, id
+    FROM (
+        SELECT 'backup'::text AS kind, id FROM backups WHERE state = 'running'
+        UNION ALL
+        SELECT 'restore'::text AS kind, id FROM restores WHERE state IN ('checking', 'applying')
+    ) AS running_work
+    ORDER BY kind, id
+    LIMIT 1
+), written AS (
+    INSERT INTO blob_delete_leases (holder, expires_at_ms)
+    SELECT $1::text,
+           FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + $2::bigint
+    WHERE NOT EXISTS (SELECT 1 FROM running)
+    ON CONFLICT (holder) DO UPDATE SET expires_at_ms = EXCLUDED.expires_at_ms
+    RETURNING holder
+)
+SELECT COALESCE((SELECT kind FROM running), '')::text AS kind,
+       COALESCE((SELECT id FROM running), '')::text AS id
+`
+
+type TakeBlobDeleteLeaseParams struct {
+	Holder string
+	TtlMs  int64
+}
+
+type TakeBlobDeleteLeaseRow struct {
+	Kind string
+	ID   string
+}
+
+// Writes the lease of holder, ending at the database clock plus ttl_ms, in
+// one statement. While a backup runs or a restore checks or applies, it
+// writes nothing and answers that work instead, so a deleter that read the
+// guard before a restore started cannot take a lease after it. A take for a
+// holder with a row replaces that row. An empty kind and an empty ID are the
+// answer of a written lease.
+func (q *Queries) TakeBlobDeleteLease(ctx context.Context, arg TakeBlobDeleteLeaseParams) (TakeBlobDeleteLeaseRow, error) {
+	row := q.db.QueryRow(ctx, takeBlobDeleteLease, arg.Holder, arg.TtlMs)
+	var i TakeBlobDeleteLeaseRow
+	err := row.Scan(&i.Kind, &i.ID)
+	return i, err
 }
 
 const takePasskeyChallenge = `-- name: TakePasskeyChallenge :one
@@ -23659,19 +24003,20 @@ func (q *Queries) UpsertSettingsRevision(ctx context.Context, arg UpsertSettings
 const upsertTrigger = `-- name: UpsertTrigger :execrows
 INSERT INTO triggers (
     namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
-    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms, next_slot_ms
 )
 SELECT
     n.id, $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10::bigint,
-    $11, $12, $13::bigint, $14::bigint
+    $11, $12, $13::bigint, $14::bigint,
+    $15::bigint
 FROM namespaces AS n
-WHERE n.name = $15
+WHERE n.name = $16
 ON CONFLICT (namespace_id, id) DO UPDATE SET
     preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
     source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
     last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
-    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms)
+    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms), next_slot_ms = excluded.next_slot_ms
 `
 
 type UpsertTriggerParams struct {
@@ -23689,6 +24034,7 @@ type UpsertTriggerParams struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 	Namespace        string
 }
 
@@ -23710,6 +24056,7 @@ func (q *Queries) UpsertTrigger(ctx context.Context, arg UpsertTriggerParams) (i
 		arg.LastSaverID,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.NextSlotMs,
 		arg.Namespace,
 	)
 	if err != nil {

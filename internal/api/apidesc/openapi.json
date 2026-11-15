@@ -220,6 +220,35 @@
         ],
         "type": "object"
       },
+      "AuditChain": {
+        "properties": {
+          "changedAt": {
+            "type": "string"
+          },
+          "changedBy": {
+            "type": "string"
+          },
+          "migrating": {
+            "type": "boolean"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "setting": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "migrating",
+          "pending",
+          "setting",
+          "state"
+        ],
+        "type": "object"
+      },
       "BackupCorruptError": {
         "description": "The error answer with the code backup.corrupt.",
         "properties": {
@@ -1153,6 +1182,49 @@
         ],
         "type": "object"
       },
+      "DeletedUnitSweep": {
+        "properties": {
+          "failed": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "finishedBlobPurges": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "pendingBlobPurges": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "purged": {
+            "items": {
+              "$ref": "#/components/schemas/SweptUnit"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "waitingBlobPurges": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "waitingFor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "failed",
+          "finishedBlobPurges",
+          "pendingBlobPurges",
+          "purged",
+          "skipped",
+          "waitingBlobPurges",
+          "waitingFor"
+        ],
+        "type": "object"
+      },
       "DriftCheck": {
         "properties": {
           "jobId": {
@@ -1618,6 +1690,9 @@
           "runner.token-used",
           "schema.binary-below-minimum",
           "secret.console-session",
+          "secret.item-key-attempt-expired",
+          "secret.item-key-blob-clock-skew",
+          "secret.item-key-blob-mismatch",
           "secret.key-not-configured",
           "secret.not-decrypted",
           "secret.too-large",
@@ -4048,6 +4123,21 @@
         },
         "required": [
           "newUnitDefault"
+        ],
+        "type": "object"
+      },
+      "OverrideSwitches": {
+        "properties": {
+          "allowForcedWrites": {
+            "type": "boolean"
+          },
+          "allowUnlockedWrites": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "allowForcedWrites",
+          "allowUnlockedWrites"
         ],
         "type": "object"
       },
@@ -6556,6 +6646,29 @@
         ],
         "type": "object"
       },
+      "SweptUnit": {
+        "properties": {
+          "namespace": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "unitID": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace",
+          "reference",
+          "tool",
+          "unitID"
+        ],
+        "type": "object"
+      },
       "TerminalSchemes": {
         "properties": {
           "dark": {
@@ -7944,6 +8057,80 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/dustpan/v1/audit/chain": {
+      "get": {
+        "operationId": "getAuditChain",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditChain"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "audit"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:read-audit",
+            "object": "server"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "approveAuditChain",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditChain"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "audit"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:set-audit-chain",
+            "object": "server"
+          },
+          {
+            "action": "server:disable-audit-chain",
+            "object": "server"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/capabilities": {
       "get": {
         "operationId": "getCapabilities",
@@ -8007,6 +8194,42 @@
         "x-dustpan-actions": [
           {
             "action": "server:observe",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/deleted-units/sweep": {
+      "post": {
+        "operationId": "sweepDeletedUnits",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedUnitSweep"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "deleted-units"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:maintenance",
             "object": "server"
           }
         ]
@@ -12438,6 +12661,106 @@
         "x-dustpan-actions": [
           {
             "action": "unit:manage-sharing",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/override-switches": {
+      "get": {
+        "operationId": "getNamespaceOverrideSwitches",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideSwitches"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "namespaces"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "setNamespaceOverrideSwitches",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideSwitches"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverrideSwitches"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "namespaces"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:set-overrides",
             "object": "namespace"
           }
         ]
@@ -18245,6 +18568,9 @@
       "name": "approvals"
     },
     {
+      "name": "audit"
+    },
+    {
       "name": "capabilities"
     },
     {
@@ -18252,6 +18578,9 @@
     },
     {
       "name": "context"
+    },
+    {
+      "name": "deleted-units"
     },
     {
       "name": "description"
@@ -18282,6 +18611,9 @@
     },
     {
       "name": "locks"
+    },
+    {
+      "name": "namespaces"
     },
     {
       "name": "notification-sinks"

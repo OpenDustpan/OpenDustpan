@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 6
 ---
 
 ## Why
@@ -61,7 +61,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - Main checks the key-encryption key in the upgrade check. (`internal/api/server/upgrade_test.go:382 (func TestUpgradeCheckAnswersKeyEncryptionKey)`)
 - Main converts audit entries in the audit HTTP adapter. (`internal/api/audit/audit.go:173 (func toAuditEntry)`)
 - Main keeps the audit port with audit-read and tool-operation kinds. (`pkg/audit/audit.go:69 (kind audit-read)`)
-- Main tests access-token rotation behavior. (`pkg/accesstoken/accesstoken_test.go:584 (func TestRotate)`)
+- Main tests access-token rotation behavior. (`pkg/accesstoken/accesstoken_test.go:585 (func TestRotate)`)
 
 ## ADR check
 

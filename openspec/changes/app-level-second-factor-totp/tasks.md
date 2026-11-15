@@ -15,10 +15,14 @@
 - [ ] 2.3 Add the installation setting and the enrollment-code issue route with audit entries in NEW file internal/mfasvc/enrollcode.go Check: `PATCH /api/dustpan/v1/settings` sets require-second-factor-for-plain-oauth with action server:manage-sign-in
 - [ ] 2.4 Cover restore with an undecryptable factor seal and re-enrollment in internal/mfasvc/service_test.go Check: `go test ./internal/mfasvc -run TestRestoreLeavesFactorsUnreadable -count=1` (NEW test) passes on SQLite and PostgreSQL
 
+- [ ] 2.5 SECURITY. Add the boundary check for factor type, base32 TOTP secret shape and WebAuthn origin and RP ID in NEW file internal/mfasvc/boundary.go Check: `go test ./internal/mfasvc -run TestBoundaryRejectsHostileInput -count=1` (NEW test) passes
+- [ ] 2.6 SECURITY. Add hostile test TestBoundaryRejectsHostileInput in NEW file internal/mfasvc/boundary_test.go that sends an unknown factor type, a malformed secret and a cross-origin response straight to the handler Check: `go test ./internal/mfasvc -run TestBoundaryRejectsHostileInput -count=1` (NEW test) expects 400 and no state change
+- [ ] 2.7 SECURITY. Add hostile test TestFreshStepOfOtherSignInRefused in NEW file internal/mfasvc/freshstep_test.go that creates a token with the fresh step of another sign-in Check: `go test ./internal/mfasvc -run TestFreshStepOfOtherSignInRefused -count=1` (NEW test) expects 403 with error code mfa.fresh-step-required
+
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `internal/db` (`make generate`, sqlc); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`); `internal/db` (`make generate`, sqlc). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

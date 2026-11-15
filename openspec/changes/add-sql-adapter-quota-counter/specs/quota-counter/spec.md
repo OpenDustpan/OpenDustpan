@@ -56,9 +56,13 @@ When Record runs, the server SHALL count only submits inside the last window of 
 - **WHEN** Record runs while in-window submits already reach max
 - **THEN** the server returns quota.ErrExceeded and stores no submit
 
-#### Scenario: expired reservations leave with Reserve
+#### Scenario: expired reservations do not count and their rows stay
 - **WHEN** Reserve runs while expired reservations exist for the key
-- **THEN** usage excludes them and no expired row remains for the counted keys
+- **THEN** usage excludes them, and each expired row stays until a release or the reconcile
+
+#### Scenario: release of an expired reservation is idempotent
+- **WHEN** release runs for a reservation past its endsAt, and runs again
+- **THEN** both calls return no error, and usage does not change
 
 #### Scenario: old submits are pruned inline
 - **WHEN** Record runs while submits older than the window exist for the key
@@ -108,9 +112,17 @@ When a reservation is released, expires, settles, or gets a new end time, the se
 - **WHEN** SetEnd runs for a reservation
 - **THEN** the new endsAt controls expiry
 
-#### Scenario: release of a missing row succeeds
-- **WHEN** release or settle runs for an unknown or already expired reservation
-- **THEN** the server returns success and changes no row
+#### Scenario: release or settle of an unknown reservation is ErrNotFound
+- **WHEN** release or settle runs for a reservation ID that the counter has no row for
+- **THEN** the counter returns an error that wraps `quota.ErrNotFound` and changes no row
+
+#### Scenario: release of a settled or settle of a released reservation is ErrEnded
+- **WHEN** release runs for a settled reservation, or settle runs for a released reservation
+- **THEN** the counter returns an error that wraps `quota.ErrEnded` and changes no row
+
+#### Scenario: a repeat release or settle changes nothing
+- **WHEN** release runs again for a released reservation, or settle runs again for a settled reservation
+- **THEN** the counter returns no error and changes no row
 
 ### Requirement: rollback-stores-nothing
 
@@ -119,3 +131,11 @@ If the guarded transaction rolls back, then the server SHALL store no reservatio
 #### Scenario: rolled back reserve leaves no count
 - **WHEN** the guarded transaction rolls back after Reserve
 - **THEN** usage is unchanged and no reservation row remains
+
+### Requirement: reserve-keys-are-checked
+
+When Reserve receives a reservation with a key that is not the key of one of its checks, the server SHALL refuse the reservation with `quota.ErrInvalid` and store nothing.
+
+#### Scenario: a key without a check
+- **WHEN** Reserve runs with a reservation of two keys and checks for one of them
+- **THEN** the counter returns an error that wraps `quota.ErrInvalid`, stores no reservation, and changes no usage

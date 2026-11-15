@@ -291,12 +291,16 @@ type Config struct {
 	Sealer Sealer
 	// Logger receives sweep failures; nil discards them.
 	Logger *slog.Logger
-	// BlobGuard tells whether a backup or a restore runs. The delete of the
-	// state blobs of a purged workspace asks it after the commit of the purge
-	// and runs only when nothing runs. Nil is a guard that never lets a
+	// BlobGuard holds the leases of the blob deletes. The delete of the
+	// state blobs of a purged workspace takes a lease after the commit of the
+	// purge and runs only when nothing runs. Nil is a guard that never lets a
 	// delete run: the blobs stay for the retention sweep.
-	BlobGuard blobguard.Watch
-	Now       func() time.Time
+	BlobGuard blobguard.Leases
+	// OnDeleteWait receives the reason of each refused take of BlobGuard, so
+	// an operator can see the blob deletes that wait. A nil hook counts
+	// nothing.
+	OnDeleteWait blobguard.WaitCounter
+	Now          func() time.Time
 	// MaxStateBytes bounds one state version; zero means DefaultMaxStateBytes.
 	MaxStateBytes int64
 	// MaxPendingVersions bounds the pending state versions of one
@@ -346,21 +350,22 @@ const lockStripes = 64
 // workspaces, locking, and state versions uploaded through single-use
 // capabilities.
 type Service struct {
-	workspaces Store
-	states     StateStore
-	blobs      *stateBlobs
-	namespaces *namespace.Service
-	sealer     Sealer
-	logger     *slog.Logger
-	guard      blobguard.Watch
-	now        func() time.Time
-	maxState   int64
-	maxPending int
-	retention  time.Duration
-	manual     ManualLocks
-	stateAt    StateAtReader
-	names      inventory.HistoryReader
-	stripes    [lockStripes]sync.Mutex
+	workspaces   Store
+	states       StateStore
+	blobs        *stateBlobs
+	namespaces   *namespace.Service
+	sealer       Sealer
+	logger       *slog.Logger
+	guard        blobguard.Leases
+	onDeleteWait blobguard.WaitCounter
+	now          func() time.Time
+	maxState     int64
+	maxPending   int
+	retention    time.Duration
+	manual       ManualLocks
+	stateAt      StateAtReader
+	names        inventory.HistoryReader
+	stripes      [lockStripes]sync.Mutex
 }
 
 // attachOptionalReaders sets the optional reads of the state store. A store
@@ -396,21 +401,22 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	s := &Service{
-		workspaces: cfg.Workspaces,
-		states:     cfg.States,
-		blobs:      &stateBlobs{store: cfg.Blobs, refusals: cfg.OutOfScope},
-		namespaces: cfg.Namespaces,
-		sealer:     cfg.Sealer,
-		logger:     cfg.Logger,
-		guard:      cfg.BlobGuard,
-		now:        cfg.Now,
-		maxState:   cfg.MaxStateBytes,
-		maxPending: cfg.MaxPendingVersions,
-		retention:  cfg.Retention,
-		manual:     cfg.ManualLocks,
-		stateAt:    nil,
-		names:      nil,
-		stripes:    [lockStripes]sync.Mutex{},
+		workspaces:   cfg.Workspaces,
+		states:       cfg.States,
+		blobs:        &stateBlobs{store: cfg.Blobs, refusals: cfg.OutOfScope},
+		namespaces:   cfg.Namespaces,
+		sealer:       cfg.Sealer,
+		logger:       cfg.Logger,
+		guard:        cfg.BlobGuard,
+		onDeleteWait: cfg.OnDeleteWait,
+		now:          cfg.Now,
+		maxState:     cfg.MaxStateBytes,
+		maxPending:   cfg.MaxPendingVersions,
+		retention:    cfg.Retention,
+		manual:       cfg.ManualLocks,
+		stateAt:      nil,
+		names:        nil,
+		stripes:      [lockStripes]sync.Mutex{},
 	}
 
 	attachOptionalReaders(s, cfg.States)
@@ -653,18 +659,29 @@ func (s *Service) DeletePurgedBlobs(ctx context.Context, ns namespace.ID, id ID)
 
 	err := s.blobs.walk(ctx, ns, id, func(page []blob.Object) error {
 		for _, obj := range page {
-			// The guard comes after the commit of the purge and before each
+			// The lease comes after the commit of the purge and before each
 			// delete: a restore that starts during the walk keeps the blobs
 			// that are left. A backup or a restore that runs, or a failed
 			// read, stops the walk. The error keeps the blob purge record,
-			// and the retention sweep tries again.
-			if holdErr := blobguard.Hold(ctx, s.guard); holdErr != nil {
+			// and the retention sweep tries again. The holder is new for each
+			// delete, so the lease row names the delete that holds it.
+			leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
+			if holdErr != nil {
+				s.onDeleteWait.Count(holdErr)
+
 				guardErr = holdErr
 
 				return holdErr
 			}
 
-			if deleteErr := s.blobs.deleteRetried(ctx, ns, id, obj.Key); deleteErr != nil {
+			deleteErr := s.blobs.deleteRetried(leaseCtx, ns, id, obj.Key)
+
+			if releaseErr := release(ctx); releaseErr != nil {
+				s.logger.WarnContext(ctx, "blob delete lease not released",
+					slog.String("workspace_id", id.String()), slog.String("error", releaseErr.Error()))
+			}
+
+			if deleteErr != nil {
 				failed++
 			}
 		}
@@ -1281,7 +1298,7 @@ type pendingDeclare struct {
 func forcedRefusal() error {
 	return NewOverrideRefusedError(OverrideForced, fmt.Sprintf(
 		"%s: a forced write needs the forced-write switch on for the namespace "+
-			"(`PUT /api/server/namespaces/{namespace}/override-switches`) and for the workspace "+
+			"(`PUT /api/dustpan/v1/namespaces/{namespace}/override-switches`) and for the workspace "+
 			"(`PUT /api/v2/workspaces/{id}/override-switches`), "+
 			"and the permission to write forced state (`unit:write-forced`)",
 		ErrOverrideRefused,
@@ -1297,7 +1314,7 @@ func unlockedRefusal(lockErr error) error {
 
 	return NewOverrideRefusedError(OverrideUnlocked, fmt.Sprintf(
 		"%s: a write without the lock needs the unlocked-write switch on for the namespace "+
-			"(`PUT /api/server/namespaces/{namespace}/override-switches`) and for the workspace "+
+			"(`PUT /api/dustpan/v1/namespaces/{namespace}/override-switches`) and for the workspace "+
 			"(`PUT /api/v2/workspaces/{id}/override-switches`), "+
 			"and the permission to write without the lock (`unit:write-unlocked`)",
 		lockErr,

@@ -8,10 +8,10 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
 - [ ] 3.1 Wire the draft and the confirm-draft through changeorder.Service with the distinct NEW confirm-draft route and NEW action changeorder:confirm-draft; write draft and confirm-draft audit entries through every-step-audited. Check: BLOCKED by the missing NEW draft and NEW confirm-draft routes and their actions
-- [ ] 3.2 Write the docs page for confirm-draft in the NEW file docs/guides/dusty-confirm-draft.md and check the user path. Check: usability check from the docs page alone. A person's step.
+- [ ] 3.2 Write the docs page for confirm-draft in the NEW file docs/guides/dusty-confirm-draft.md and check the user path. Check: usability check from the docs page alone. A person's step. `make docs-lint` passes on each edited guide.
 - [ ] 3.3 Run the full check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

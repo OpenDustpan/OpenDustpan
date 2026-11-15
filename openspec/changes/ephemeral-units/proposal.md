@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:367` (Ephemeral units).
@@ -66,10 +66,10 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Dev ephemeral test leaves no file. (`cmd/opendustpan/dev_test.go:476 (TestDevEphemeralLeavesNoFile)`)
 - Unit client-encrypted error code is defined. (`internal/errcode/catalog_unit.go:7 (unit.client-encrypted)`)
-- Access test covers unit read without outputs. (`pkg/access/access_test.go:1787 (TestCustomRoleWithUnitReadOnlyDoesNotReadOutputs)`)
+- Access test covers unit read without outputs. (`pkg/access/access_test.go:1788 (TestCustomRoleWithUnitReadOnlyDoesNotReadOutputs)`)
 - Webhook sink refuses blocked URL. (`pkg/logsink/webhook/webhook_test.go:52 (TestWebhookSinkRefusesBlockedURL)`)
 - Scheduler waits first delay before first claim. (`pkg/durable/scheduler_test.go:175 (TestSchedulerWaitsTheFirstDelayBeforeItsFirstClaim)`)
-- Blueprint read refuses hostile rows. (`pkg/store/postgres/self_service_blueprints_internal_test.go:93 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
+- Blueprint read refuses hostile rows. (`pkg/store/postgres/self_service_blueprints_internal_test.go:94 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
 
 ## ADR check
 

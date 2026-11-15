@@ -10,9 +10,14 @@
 
 - [ ] 2.1 Build the reader by extending the existing file internal/unmanaged/report.go in place. Add the encrypted stream write in the new file internal/unmanaged/report_store.go and the findings store in the new file internal/unmanaged/findings.go. Add the routes with their actions. Declare the routes in the new file internal/api/apidesc/findings.go and write the adapter in the new file internal/api/runnerapi/sweepreport.go. Keep NEW for new behavior only. Check: `go test ./internal/api/runnerapi -run TestSweepReport`
 
+- [ ] 2.2 SECURITY. Build the authorize layer in the file internal/api/runnerapi/sweepreport.go. Check the session proof and the live sweep claim on upload. Check the namespace:manage-sweeps action on list and triage in the adapter of the findings routes. Check: `go test ./internal/api/runnerapi -run TestSweepReportRefusesJobClaimAndBadProof`
+- [ ] 2.3 SECURITY. Build the fail-closed layer in the file internal/api/runnerapi/sweepreport.go. On any error, delete the staged blob, fail the sweep once and store no findings. Check: `go test ./internal/api/runnerapi -run TestSweepReportFailsClosedOnCutStream`
+- [ ] 2.4 SECURITY. Write the hostile test TestSweepReportRefusesJobClaimAndBadProof in the new file internal/api/runnerapi/sweepreport_authz_test.go. It sends a job claim, a bad proof and a caller without the action straight to the layer. Check: `go test ./internal/api/runnerapi -run TestSweepReportRefusesJobClaimAndBadProof`
+- [ ] 2.5 SECURITY. Write the hostile test TestSweepReportFailsClosedOnCutStream in the new file internal/api/runnerapi/sweepreport_failclosed_test.go. It cuts the stream and checks that no findings exist and the staged blob is deleted. Check: `go test ./internal/api/runnerapi -run TestSweepReportFailsClosedOnCutStream`
+
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

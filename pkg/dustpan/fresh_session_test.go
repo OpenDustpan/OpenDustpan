@@ -171,6 +171,7 @@ func loginFor(t *testing.T, st consoleBackend, person string, now func() time.Ti
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelConsole, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	_, secret, err := sessions.Start(t.Context(), entry, session.Start{
@@ -250,6 +251,7 @@ func seedConsoleAdmin(t *testing.T, st consoleBackend) {
 		Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	person := principal.Principal{
@@ -284,7 +286,7 @@ func seedConsoleAdmin(t *testing.T, st consoleBackend) {
 func needsConsole(method, path string) bool {
 	switch method {
 	case http.MethodPost:
-		return path == "/api/server/audit/chain"
+		return path == "/api/dustpan/v1/audit/chain"
 	case http.MethodPut, http.MethodDelete:
 		return len(path) > len("/ip-allowlist") && path[len(path)-len("/ip-allowlist"):] == "/ip-allowlist"
 	default:

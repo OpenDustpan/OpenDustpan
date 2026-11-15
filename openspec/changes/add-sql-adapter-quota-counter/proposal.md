@@ -1,8 +1,12 @@
 ---
-version: 3
+version: 4
 ---
 
-Issue: #1030.
+Issue: #1030. Also: #3158 (Reserve checks that each key of a reservation has a check).
+
+Waits for: #2847
+
+The SQLite counter, the tables of both dialects and the shared suite. The PostgreSQL counter is the change add-postgres-quota-counter.
 
 ## Why
 

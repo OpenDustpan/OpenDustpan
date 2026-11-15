@@ -4,15 +4,15 @@
 
 ## 1. Regression tests
 
-- [ ] 1.1 Test that a Pulumi checkpoint and an OpenTofu finalize each set the current version. Write the test in the NEW file pkg/store/sqlite/unit_state_versions_test.go, which tests publishUnitState (pkg/store/sqlite/unit_state.go:97). Check: go test ./pkg/store/... -run TestStateWriteSetsCurrentVersion -count=1
-- [ ] 1.2 Test that a final write sets the final version and closes an awaiting job. Write the test in the NEW file pkg/store/sqlite/unit_state_versions_test.go. Check: go test ./pkg/store/... -run TestFinalWriteClosesAwaitingJob -count=1
-- [ ] 1.3 Test a duplicate final write and a rollback. Write the test in the NEW file pkg/store/sqlite/unit_state_versions_test.go. Check: go test ./pkg/store/... -run 'TestDuplicateFinalIdempotent|TestFinalWriteRollback' -count=1
+- [ ] 1.1 Test that a Pulumi checkpoint and an OpenTofu finalize each set the current version. Write the test in the NEW file pkg/store/sqlite/unit_state_versions_test.go and the same test for PostgreSQL in the NEW file pkg/store/postgres/state_version_write_test.go (it runs against DUSTPAN_TEST_POSTGRES_URL), so that each store behavior is tested on both dialects, which tests publishUnitState (pkg/store/sqlite/unit_state.go:97). Check: go test -timeout 60m ./pkg/store/... -run TestStateWriteSetsCurrentVersion -count=1
+- [ ] 1.2 Test that a final write sets the final version and closes an awaiting job. Write the test in the NEW file pkg/store/sqlite/unit_state_versions_test.go and the same test for PostgreSQL in the NEW file pkg/store/postgres/state_version_write_test.go (it runs against DUSTPAN_TEST_POSTGRES_URL), so that each store behavior is tested on both dialects. Check: go test -timeout 60m ./pkg/store/... -run TestFinalWriteClosesAwaitingJob -count=1
+- [ ] 1.3 Test a duplicate final write and a rollback. Write the test in the NEW file pkg/store/sqlite/unit_state_versions_test.go and the same test for PostgreSQL in the NEW file pkg/store/postgres/state_version_write_test.go (it runs against DUSTPAN_TEST_POSTGRES_URL), so that each store behavior is tested on both dialects. Check: go test -timeout 60m ./pkg/store/... -run 'TestDuplicateFinalIdempotent|TestFinalWriteRollback' -count=1
 
 ## 2. Side effects (computed from main)
 
 - [ ] 2.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
 - [ ] 2.2 Check the callers that type-assert on `Store`: `internal/api/server/server.go`, `pkg/access/accesstest/accesstest.go`, `pkg/access/accesstest/caller_grants.go`, `pkg/access/accesstest/check.go`, `pkg/access/accesstest/fence.go`, `pkg/access/accesstest/holders.go`, `pkg/access/accesstest/moves.go`, `pkg/access/accesstest/review.go`. Check: the named files change in the same pull request
-- [ ] 2.3 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 2.3 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 

@@ -55,6 +55,19 @@ separate bug; this change covers only the namespace-ID half.
 - **Guard: the API resolves the ID.** Test `TestRecreatedNamespaceListsNoSinks` in `internal/api/notifications`. Mutation: pass the path namespace name to the service; the new namespace lists the old sinks.
 - **Guard: the answers keep the name.** Test `TestSinkDocumentKeepsTheNamespaceName` in `internal/api/notifications` and `TestWebhookUsesTheNamespaceName` in `pkg/notify/webhook`. Mutation: use the ID in the answer or the payload; the tests fail.
 
+## Contract
+
+The production notify.Reader (pkg/dustpan/notify_reader.go, NEW):
+
+- `type notifyReader struct` (NEW, unexported fields: the principal service and the authorizer).
+- `func newNotifyReader(principals *principal.Service, authz identity.Authorizer) (*notifyReader, error)` (NEW): returns an error when either argument is nil.
+- `func (r *notifyReader) CanRead(ctx context.Context, id string, n notify.Notification) (bool, error)` (NEW), the method of `notify.Reader`:
+  - reads the principal by its stable ID through `principal.Service.GetPrincipal` (pkg/principal/service.go:174) and builds the `identity.Principal` as pkg/dustpan/triggers.go:280 does;
+  - an unknown or a disabled principal: `false, nil`;
+  - for each action of `notify.ScopeActions(n)` (pkg/notify/route.go:722): the object is `identity.ServerObject()` when n.Scope is the server scope (`audit.ServerScope`), else `identity.NamespaceObject(n.Scope)`; for a unit notification, also the read action of the unit through `identity.UnitObject`;
+  - an authorizer answer that wraps `identity.ErrDenied`: `false, nil`; any other error: `false, err`, so the caller sends nothing (fail closed).
+- The actions are those of main (pkg/notify/route.go:698-735), not new ones: `namespace:read`; `namespace:read-cost` for a cost or budget notification; `namespace:manage-notifications` for a settings notification; `server:observe` for the server scope; and `server:manage-notifications` for a settings notification of the server scope.
+
 ## ADR check
 
 **ADR 145 decisions 1, 9, 12, 14 and 15 (not owner-tagged).** Decision 1: "a scope (a namespace or `@server`)". Decision 9: "each scope has its own sequence." Decision 12: "Each write carries a fence of the scope of its row." Decision 14: "A subscription routes the notifications of its scope that match its filter." Decision 15: the creator check through `notify.Reader`. Changed by ADR 248 (decision 9), ADR 146 (decision 5), ADR 149 (decisions 15 and 24), ADR 197 (decision 5), ADR 203 (decision 5), ADR 204 (decision 5), ADR 210, ADR 234, ADR 241, ADR 262, ADR 315 and ADR 334. The current rule is this ADR with those. The fix keeps the model and changes the stored key from the name to the ID. No conflict.

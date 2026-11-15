@@ -22,6 +22,7 @@ Unexported claimLease type with constructor newClaimLease that checks pool, owne
 | --- | --- | --- |
 | HTTP adapter | Handler checks Dustpan-Proof signature, time window, nonce cache and Dustpan-Release header before any state read. | Replay a poll proof and a stale proof; both get bad-proof and no claim. |
 | service | Service checks join-token hash, expiry, prior use and pool match; checks claim owner on renew; checks runner live on each claim use. | Join twice with one token; second join gets token-used. Renew a claim from another runner; request is refused. |
+| runner package | pkg/runner builds the one-transaction join, the conditional claim write and the renew owner check. | Send a foreign renew and a conflicting claim write straight to pkg/runner; both are refused. |
 | port adapter | Store consumes token and inserts runner in one transaction; claim insert uses conditional write on lease owner and expiry. | Run two concurrent joins with one token; one wins and the other gets token-used. |
 
 ## Diagrams

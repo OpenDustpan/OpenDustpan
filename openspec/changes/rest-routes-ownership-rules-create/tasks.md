@@ -11,13 +11,13 @@
 
 - [ ] 2.1 Add the shared weakens function in the NEW file pkg/gate/weakens.go (the function is NEW), with a test in pkg/gate/weakens_test.go for each direction and for undecidable expressions failing closed. Check: `go test ./pkg/gate/... -count=1` passes.
 - [ ] 2.2 Add the ownership-rule routes in the NEW file internal/api/ownership/handler.go, with the route declaration in the NEW file internal/api/ownership/routes.go, with actions, objects, ETag handling and audit entries. Check: The route test passes and reports no route without an action.
-- [ ] 2.3 Wire the shared weakens check into the existing approval-rule and approval-default routes in pkg/gate/service.go with no change to their shapes. Check: `go test ./internal/api/... -run TestGateWeakenWiring -count=1` passes.
+- [ ] 2.3 Wire the shared weakens check into the existing approval-rule and approval-default routes in pkg/gate/service.go with no change to their shapes. The task adds the NEW top-level test `TestGateWeakenWiring` in a `_test.go` file of `internal/api`, so that the Check runs it. Check: `go test ./internal/api/... -run TestGateWeakenWiring -count=1` passes.
 - [ ] 2.4 Publish the routes in the API description in internal/api/apidesc/openapi.json (generated; never edit by hand). Check: `make clients-check` passes.
 - [ ] 2.5 Add the NEW user documentation page docs/user/ownership-rules.md for ownership rule routes and access-token writes. Check: `make docs-lint` passes.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

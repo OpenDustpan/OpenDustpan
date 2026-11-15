@@ -162,6 +162,7 @@ func entry(id string, when time.Time) audit.Entry {
 		Reason:        "",
 		PrincipalKind: audit.PrincipalKindPerson,
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

@@ -13,11 +13,11 @@
 ## 2. Implementation after ADR 368 and ADR 369
 
 - [ ] 2.1 Add in NEW file internal/cli/localclaim/wait.go the wrapper wait, retry, new plan on the new base, timeout flag wired to the values of ADR 368 decision 5, and progress output Check: go test -race ./... -run TestLocalClaimRetry
-- [ ] 2.2 Wire the wrapper command in NEW file internal/cli/localclaim/register.go to the claim register route. BLOCKED by the claim register route of two-disjoint-claims Check: `dustpan tofu apply` against a dev server on PostgreSQL. Confirmed by: CI (an e2e step in the NEW file e2e/local_run_two_cases_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 2.2 Wire the wrapper command in NEW file internal/cli/localclaim/register.go to the claim register route. BLOCKED by the claim register route of two-disjoint-claims Check: `dustpan tofu apply` against a dev server on PostgreSQL. Confirmed by: CI (an e2e step in the NEW file e2e/local_run_two_cases_test.go runs `dustpan tofu apply` with the real binary against the e2e test server, through the claim register route of two-disjoint-claims, with an access token).
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

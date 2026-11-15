@@ -14,12 +14,12 @@
 ## 2. Implementation
 
 - [ ] 2.1 Add the cover proof, the checks, the flag record and its end rule in pkg/access/service.go, pkg/principal/service.go (AddMember, line 496) and pkg/accesstoken. Check: go test ./pkg/access/... ./pkg/principal/... ./pkg/accesstoken/... passes
-- [ ] 2.2 Map the sentinels in internal/api/server/tokens.go and add the NEW flag routes with their actions and the API description. Declare the routes in the NEW file internal/api/server/flagged_edges.go and the declaration in the route table of internal/api/server (`make generate` then writes internal/api/apidesc/openapi.json; never edit it by hand). Join the new apidesc labels into joinLabels in internal/api/server/operations.go (:187-198), the one join point of the labels. Check: go test ./internal/api/server/... passes
+- [ ] 2.2 Map the sentinels in internal/api/server/tokens.go and add the NEW flag routes with their actions and the API description. Declare the routes in the NEW file internal/api/server/flagged_edges.go and the declaration in the route table of internal/api/server (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand). Join the new apidesc labels into joinLabels in internal/api/server/operations.go (:187-198), the one join point of the labels. Check: go test ./internal/api/server/... passes
 
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

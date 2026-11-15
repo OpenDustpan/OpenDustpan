@@ -18,10 +18,13 @@
 - [ ] 2.4 Add operator docs page NEW file `docs/operations/key-rotation.md` for rotation with tested curl commands for each NEW route: stage new key, start, show progress, resume after stop, abort, finish, remove old key. Check: Docs page commands run as written in a test, with one curl command for each NEW route: start, show, resume, abort, and finish. Confirmed by: CI (an e2e step in the NEW file e2e/key_encryption_key_rotation_docs_test.go runs each command of the docs page against the e2e test server).
 - [ ] 2.5 Add restore test in NEW file `pkg/secret/rotation_restore_test.go` for a pre-rotation backup with the wrapping key staged and for rejection mid-rotation; BLOCKED by NEW rotation service. Check: `TestRestoreOldBackupAcrossRotation` fails on main then passes; BLOCKED by NEW rotation service.
 - [ ] 2.6 Add audit fail-closed test in NEW file `internal/api/server/rotation_audit_test.go` for start and finish and upgrade-check health for rotation state. Check: `TestRotationAuditFailClosed` passes; upgrade-check reports rotation state during rotation.
-
+- [ ] 2.7 SECURITY. Build the boundary check in `pkg/secret/rotation.go` (NEW file of task 2.1): accept only a staged 32-byte base64 key from the configured file or variable, derive the wrapper ID by HMAC, and reject key bytes in the request body before any rewrap. Check: `TestRotationBoundaryRejectsBodyKey` passes.
+- [ ] 2.8 SECURITY. Add hostile test in NEW file `internal/api/server/rotation_boundary_test.go` that sends key bytes, a shell string, and a short key in the body of the start route. Check: `TestRotationBoundaryHostileBody` passes and shows rejection with no rewrap and no audit entry.
+- [ ] 2.9 SECURITY. Build the encode or contain layer in `pkg/secret/rotation.go` (NEW file of task 2.1): store wrapper IDs as values and never write key bytes to logs or audit entries. Check: `TestRotationLogsHoldNoKeyBytes` passes.
+- [ ] 2.10 SECURITY. Add hostile test in NEW file `pkg/secret/rotation_logs_test.go` that captures the logs during a rotation and searches them for key bytes. Check: `TestRotationLogsHostileCapture` passes and finds no key bytes.
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

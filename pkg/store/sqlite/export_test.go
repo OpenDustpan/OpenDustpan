@@ -8,8 +8,12 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
+	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
+	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
 // DB returns the database handle of s, so a test can read or change rows
@@ -36,6 +40,30 @@ func RemoveInternalTemplates() error {
 // SetSetting makes before it opens a transaction.
 func CheckSettingFence(ns namespace.Name, fence namespace.Fence) error {
 	return settingFenceBinds(ns, fence)
+}
+
+// MarkSupersededCheckpointInTx runs the mark of the replaced checkpoint in its
+// own transaction. cp names the write, and readKey is the key that the sequence
+// check read.
+func MarkSupersededCheckpointInTx(
+	ctx context.Context, s *Store, stackID stack.ID, cp stack.Checkpoint, readKey blob.Key,
+) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		return markSuperseded(ctx, q, cp, stackID.String(), readKey)
+	})
+}
+
+// AgeSupersededMarks moves every mark of the stack before at, with a direct
+// SQL update. The cases of the superseded sweep need marks older than the
+// grace period without a wait.
+func (s *Store) AgeSupersededMarks(ctx context.Context, stackID stack.ID, at time.Time) error {
+	const stmt = `UPDATE checkpoint_supersedes SET superseded_at_ms = ? WHERE stack_id = ?`
+
+	if _, err := s.conn.ExecContext(ctx, stmt, at.UnixMilli(), stackID.String()); err != nil {
+		return fmt.Errorf("age superseded marks: %w", err)
+	}
+
+	return nil
 }
 
 // SettingWrite is the input of WriteSettingInTx.
@@ -137,4 +165,28 @@ func CountRunnerControlRows(ctx context.Context, s *Store) (map[string]int64, er
 	}
 
 	return counts, nil
+}
+
+// SetItemKeyAttemptDeadline makes the attempt deadline of each item key
+// transaction that starts after the call d after its start, for the late
+// commit cases of the conformance suite.
+func SetItemKeyAttemptDeadline(s *Store, d time.Duration) {
+	s.attemptDeadline = func(_ context.Context, start time.Time) time.Time {
+		return start.Add(d)
+	}
+}
+
+// SetNowForTest replaces the clock of the item key attempt code of s.
+func SetNowForTest(s *Store, now func() time.Time) {
+	s.now = now
+}
+
+// JobWrite runs fn in one write transaction of the job stores of s.
+func JobWrite(ctx context.Context, s *Store, fence namespace.Fence, fn func(jobstore.Tx) error) error {
+	return jobRunner{s: s}.Write(ctx, fence, fn)
+}
+
+// JobRead runs fn in one read transaction of the job stores of s.
+func JobRead(ctx context.Context, s *Store, fn func(jobstore.Tx) error) error {
+	return jobRunner{s: s}.Read(ctx, fn)
 }

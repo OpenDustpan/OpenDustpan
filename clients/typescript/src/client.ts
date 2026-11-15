@@ -5,6 +5,7 @@ import type { Answer } from "./execute.js";
 import { operations } from "./operations.js";
 import type {
   AddRegistryKeyInput,
+  ApproveAuditChainInput,
   BeginPasskeyRegistrationInput,
   BeginPasskeySignInInput,
   BulkReplaceUnitSettingsInput,
@@ -58,6 +59,7 @@ import type {
   GetApiDescriptionInput,
   GetApprovalDefaultInput,
   GetApprovalRuleInput,
+  GetAuditChainInput,
   GetBlueprintDraftInput,
   GetBlueprintVersionInput,
   GetCapabilitiesInput,
@@ -79,6 +81,7 @@ import type {
   GetNamespaceContextInput,
   GetNamespaceIssuerInput,
   GetNamespaceLockInput,
+  GetNamespaceOverrideSwitchesInput,
   GetNamespaceSettingsInput,
   GetNotificationSinkInput,
   GetNotificationSubscriptionInput,
@@ -164,6 +167,7 @@ import type {
   SetCollectionAccessLimitInput,
   SetCollectionGateInput,
   SetGateInput,
+  SetNamespaceOverrideSwitchesInput,
   SetOutputSharingInput,
   SetSourceFilterInput,
   SetUnitAccessLimitInput,
@@ -174,6 +178,7 @@ import type {
   StartDriftCheckInput,
   StartJobInput,
   StartStoreCheckInput,
+  SweepDeletedUnitsInput,
   TestNotificationSinkInput,
   UnlockCollectionInput,
   UnlockLocalUserInput,
@@ -197,6 +202,7 @@ import type {
   ApprovalDefault,
   ApprovalRule,
   Approvers,
+  AuditChain,
   BackupCorruptError,
   BackupCorruptErrorArgs,
   BackupTooManyUnverifiedError,
@@ -236,6 +242,7 @@ import type {
   CreateViewRequest,
   CreatedNotificationSink,
   DeletedUnit,
+  DeletedUnitSweep,
   DriftCheck,
   DriftCheckLocation,
   DriftResource,
@@ -340,6 +347,7 @@ import type {
   NotificationSubscription,
   OutputSharing,
   OutputSharingRequest,
+  OverrideSwitches,
   Passkey,
   PasskeyCreationOptions,
   PasskeyRequestOptions,
@@ -445,6 +453,7 @@ import type {
   StoreCheckReport,
   StoreFailoverSettingInvalidError,
   StoreFailoverSettingInvalidErrorArgs,
+  SweptUnit,
   TerminalSchemes,
   TerminalSchemesPatch,
   Trigger,
@@ -513,6 +522,10 @@ export class Client {
 
   addRegistryKey(input: AddRegistryKeyInput): Promise<Answer<RegistryKey>> {
     return execute(this.transport, operations.addRegistryKey, input);
+  }
+
+  approveAuditChain(input: ApproveAuditChainInput = {}): Promise<Answer<AuditChain>> {
+    return execute(this.transport, operations.approveAuditChain, input);
   }
 
   beginPasskeyRegistration(input: BeginPasskeyRegistrationInput = {}): Promise<Answer<PasskeyCreationOptions>> {
@@ -727,6 +740,10 @@ export class Client {
     return execute(this.transport, operations.getApprovalRule, input);
   }
 
+  getAuditChain(input: GetAuditChainInput = {}): Promise<Answer<AuditChain>> {
+    return execute(this.transport, operations.getAuditChain, input);
+  }
+
   getBlueprintDraft(input: GetBlueprintDraftInput): Promise<Answer<SelfServiceDraft>> {
     return execute(this.transport, operations.getBlueprintDraft, input);
   }
@@ -809,6 +826,10 @@ export class Client {
 
   getNamespaceLock(input: GetNamespaceLockInput): Promise<Answer<ManualLock>> {
     return execute(this.transport, operations.getNamespaceLock, input);
+  }
+
+  getNamespaceOverrideSwitches(input: GetNamespaceOverrideSwitchesInput): Promise<Answer<OverrideSwitches>> {
+    return execute(this.transport, operations.getNamespaceOverrideSwitches, input);
   }
 
   getNamespaceSettings(input: GetNamespaceSettingsInput): Promise<Answer<Settings>> {
@@ -1151,6 +1172,10 @@ export class Client {
     return execute(this.transport, operations.setGate, input);
   }
 
+  setNamespaceOverrideSwitches(input: SetNamespaceOverrideSwitchesInput): Promise<Answer<OverrideSwitches>> {
+    return execute(this.transport, operations.setNamespaceOverrideSwitches, input);
+  }
+
   setOutputSharing(input: SetOutputSharingInput): Promise<Answer<OutputSharing>> {
     return execute(this.transport, operations.setOutputSharing, input);
   }
@@ -1189,6 +1214,10 @@ export class Client {
 
   startStoreCheck(input: StartStoreCheckInput): Promise<Answer<StartStoreCheckResponse>> {
     return execute(this.transport, operations.startStoreCheck, input);
+  }
+
+  sweepDeletedUnits(input: SweepDeletedUnitsInput = {}): Promise<Answer<DeletedUnitSweep>> {
+    return execute(this.transport, operations.sweepDeletedUnits, input);
   }
 
   testNotificationSink(input: TestNotificationSinkInput): Promise<Answer<NotificationSinkTest>> {

@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 ## Why
@@ -23,16 +23,17 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - The audit Entry has no agent fields Proof: pkg/audit/audit.go:232 Entry, as the roadmap step states
-- ComputeHash covers no agent field Proof: pkg/audit/audit.go:408 (func ComputeHash); test TestComputeHashIsStableAndCoversTheFields at pkg/audit/audit_test.go:99
+- ComputeHash covers no agent field Proof: pkg/audit/audit.go:416 (func ComputeHash); test TestComputeHashIsStableAndCoversTheFields at pkg/audit/audit_test.go:100
 - The job start writes the agent as a change key and Actor has only Agent string Proof: pkg/job/service_start.go:623 and pkg/job/job.go:381, as the roadmap step states
 - The API converts an entry in one function Proof: internal/api/audit/audit.go:173 (func toAuditEntry)
 
 ## What Changes
 
-- pkg/audit Entry gets one NEW field `Origin`, a pointer to the NEW value type `audit.Origin` that holds the six fields agentRun, agentSession, tool, argsDigest, breakGlass and secretStage; nil for an ordinary entry. The channels agent, mcp and mcp-proxy.
-- The portable backup column list of audit_entries gets the six columns.
-- ComputeHash writes the agent/1 block only when Entry.Origin is not nil, in the fixed order of ADR 126 decision 10.
-- The baseline of each SQL dialect gets the six columns, edited in place in name order.
+- pkg/audit Entry gets one NEW field `Origin`, a pointer to the NEW value type `audit.Origin` that holds the seven fields agentRun, agentSession, tool, argsDigest, breakGlass, secretStage and delegationID; nil for an ordinary entry. The channels agent, mcp and mcp-proxy.
+- The portable backup column list of audit_entries gets the seven columns.
+- ComputeHash writes the agent/1 block only when Entry.Origin is not nil, in the fixed order of ADR 126 decision 10 with ADR 380.
+- The store read paths (`fromAuditRow` and its callers in the audit, chain, entries and feed files of each dialect) read the seven columns and refuse a partial set. The store backup lists of audit_entries get the seven columns. The revoke entry of a grant keeps the Origin of its step.
+- The baseline of each SQL dialect gets the seven columns, edited in place in name order.
 - The API entry gets an agent block and toAuditEntry fills it.
 - pkg/job replaces Actor.Agent string with job.AgentRef, and the job entries write the block instead of a change key. For a job entry, tool, argsDigest and secretStage are empty.
 
@@ -40,7 +41,6 @@ Out of scope:
 
 - The agent-tool audit kind and the tool call entries.
 - The audit list filters channel, agentRun and tool, and the CEF mapping.
-- The delegation in the hash block.
 - The agent runs, the MCP endpoint and the model connection.
 
 ## Usability
@@ -53,10 +53,10 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- ComputeHash exists and covers the current fields only (`pkg/audit/audit.go:408 (func ComputeHash)`)
+- ComputeHash exists and covers the current fields only (`pkg/audit/audit.go:416 (func ComputeHash)`)
 - The API converts a stored entry in one function (`internal/api/audit/audit.go:173 (func toAuditEntry)`)
-- A test covers the hash stability (`pkg/audit/audit_test.go:99 (TestComputeHashIsStableAndCoversTheFields)`)
-- The channel is normalized to api for unknown values (`pkg/audit/audit_test.go:81 (TestNormalizeChannelMapsUnknownValuesToAPI)`)
+- A test covers the hash stability (`pkg/audit/audit_test.go:100 (TestComputeHashIsStableAndCoversTheFields)`)
+- The channel is normalized to api for unknown values (`pkg/audit/audit_test.go:82 (TestNormalizeChannelMapsUnknownValuesToAPI)`)
 
 ## ADR check
 
@@ -65,12 +65,24 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 126: Every agent tool call writes an audit entry** (not owner-tagged).
 
 - Decisions that apply: 2 (current), 9 (current), 10 (current).
-- Changed by: ADR 129 extends decisions 6 and 7. Chain to the end: ADR 129, ADR 210, ADR 247, ADR 286.
-- Current rule: this ADR, with ADR 129.
+- Changed by: ADR 129 extends decisions 6 and 7; ADR 380 changes decision 10. Chain to the end: ADR 129, ADR 210, ADR 247, ADR 286, ADR 380.
+- Current rule: this ADR, with ADR 129 and ADR 380 (decision 10).
 - Quote: "`pkg/audit` gets the kind, the three channels and the six fields. Each SQL store gets the columns."
 - Quote: "An entry with all six fields empty (and `breakGlass` false) writes no block."
 - Quote: "the length-prefixed text `agent/1`, then the six fields in a fixed order (`agentRun`, `agentSession`, `tool`, `argsDigest`, `breakGlass` as `true` or `false`, `secretStage`), each length-prefixed, with an empty value when it is not set. Inside the block no field is optional."
-- Effect: The change adds the six fields and channels, the store columns, and the hash block exactly as decision 10 says: the text agent/1, then agentRun, agentSession, tool, argsDigest, breakGlass as true or false, secretStage, each length-prefixed, no field optional inside the block.
+- Effect: The change adds the seven fields and channels, the store columns, and the hash block as decision 10 with ADR 380 says: the text agent/1, then agentRun, agentSession, tool, argsDigest, breakGlass as true or false, secretStage, delegationID, each length-prefixed, no field optional inside the block.
+- Conflict: none.
+
+**ADR 380: The delegation in the agent block of an audit entry** (owner-tagged: "Decided by the project owner", 2026-11-15).
+
+- Decisions that apply: 1, 2, 3 (current).
+- Changed by: -. It changes ADR 126 decision 10.
+- Current rule: this ADR.
+- Quote, decision 1: "The agent block of ADR 126 decision 10 holds seven fields in this fixed order: `agentRun`, `agentSession`, `tool`, `argsDigest`, `breakGlass` as `true` or `false`, `secretStage`, and `delegationID`."
+- Quote, decision 1: "`delegationID` is the stable ID of the delegation of ADR 354 under which the agent acted (ADR 362), and it is empty when the step had no delegation."
+- Quote, decision 2: "An entry with all seven fields empty (and `breakGlass` false) writes no block."
+- Quote, decision 3: "The block keeps the text `agent/1`."
+- Effect: the block holds seven fields, with the delegation ID last; there is no block version and no path for old entries, because no tag shipped.
 - Conflict: none.
 
 **ADR 128: Agents in the job model and the history model** (not owner-tagged).
@@ -99,8 +111,8 @@ none
 
 Questions considered and answered:
 
-- Does the hash block hold the delegation? No. ADR 126 decision 10 fixes six fields and ADR 354 does not change the block. A later agent/2 block needs an owner decision.
-- Do old chains still pass? Yes. ADR 126 decision 10 says an entry with all six fields empty hashes the same. A chain-check test of a stored chain proves it.
+- Does the hash block hold the delegation? Yes, as its seventh field `delegationID` (ADR 380 decisions 1 and 3, owner).
+- Do old chains need a path? No. No tag shipped an audit chain, so ADR 380 decision 3 keeps no path for old entries.
 - Is a numbered migration needed? No. The baseline of each dialect is edited in place, as the rules for the schema say.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

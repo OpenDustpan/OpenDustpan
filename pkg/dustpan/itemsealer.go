@@ -48,7 +48,7 @@ func newItemSealerOf(in *itemSealerInputs) (*secret.ItemKeySealer, error) {
 		return nil, fmt.Errorf("item key blobs: %w", err)
 	}
 
-	blobs, err := secret.NewItemKeyBlobs(in.blobs, refusals)
+	blobs, err := secret.NewItemKeyBlobs(in.blobs, refusals, refusals)
 	if err != nil {
 		return nil, fmt.Errorf("item key blobs: %w", err)
 	}

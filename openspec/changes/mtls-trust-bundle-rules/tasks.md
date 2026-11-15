@@ -4,8 +4,8 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing tests for bundle save checks, rotation and active delete in pkg/trustrule Check: go test ./pkg/trustrule/... -run TestBundleSaveRefusesBadPEM|TestBundleRotate|TestBundleDeleteActive fails on main
-- [ ] 1.2 Write failing tests for rule create, update, delete, reach and fresh session in internal/trustrulesvc Check: go test ./internal/trustrulesvc/... -run TestRuleCreate|TestRuleUpdateNeedsETag|TestRuleDelete|TestTokenAloneRefused fails on main
+- [ ] 1.1 Write failing tests for bundle save checks, rotation and active delete in pkg/trustrule. The task adds the NEW top-level tests `TestBundleSaveRefusesBadPEM`, `TestBundleRotate`, `TestBundleDeleteActive` in a `_test.go` file of `pkg/trustrule`, so that the Check runs them. Check: go test ./pkg/trustrule/... -run TestBundleSaveRefusesBadPEM|TestBundleRotate|TestBundleDeleteActive fails on main
+- [ ] 1.2 Write failing tests for rule create, update, delete, reach and fresh session in internal/trustrulesvc. The task adds the NEW top-level tests `TestRuleCreate`, `TestRuleUpdateNeedsETag`, `TestRuleDelete`, `TestTokenAloneRefused` in a `_test.go` file of `internal/trustrulesvc`, so that the Check runs them. Check: go test ./internal/trustrulesvc/... -run TestRuleCreate|TestRuleUpdateNeedsETag|TestRuleDelete|TestTokenAloneRefused fails on main
 
 ## 2. Build
 
@@ -14,7 +14,7 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

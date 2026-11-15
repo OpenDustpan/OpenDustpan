@@ -70,7 +70,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Catalog request body-invalid error code exists (`internal/errcode/catalog_request.go:7 (func body-invalid)`)
 - Catalog request body-too-large error code exists (`internal/errcode/catalog_request.go:9 (func body-too-large)`)
-- Access request cache test exists (`pkg/access/access_test.go:1256 (func TestRequestCache)`)
+- Access request cache test exists (`pkg/access/access_test.go:1257 (func TestRequestCache)`)
 - Rolling upgrade test exists (`pkg/dustpan/workerwatch_internal_test.go:240 (func TestRollingUpgradeGivesNoRefusal)`)
 
 ## ADR check

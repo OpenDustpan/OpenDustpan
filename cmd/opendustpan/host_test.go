@@ -433,6 +433,7 @@ func hostPolicyEntry() audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

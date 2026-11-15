@@ -34,6 +34,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
@@ -281,6 +282,12 @@ type Store struct {
 	// stepTxBound is the longest time that a step transaction of a durable
 	// operation stays open before it rolls back.
 	stepTxBound time.Duration
+	// attemptDeadline gives the attempt deadline of an item key transaction.
+	// It is secret.AttemptDeadline. An internal test sets a shorter one.
+	attemptDeadline func(ctx context.Context, start time.Time) time.Time
+	// now gives the current time of the item key attempt code. Tests
+	// replace it.
+	now func() time.Time
 }
 
 var (
@@ -416,6 +423,8 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		lastTruncateSuccess: time.Now(),
 		busyWarned:          false,
 		keepAccessHook:      nil,
+		attemptDeadline:     secret.AttemptDeadline,
+		now:                 time.Now,
 		beforeLockDelete:    nil,
 		betweenPageReads:    nil,
 		binaryVersion:       "",

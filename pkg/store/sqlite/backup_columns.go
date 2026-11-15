@@ -157,6 +157,16 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "checkpoint_supersedes",
+			columns: []string{
+				backupColBlobKey,
+				backupColStackID,
+				backupColUpdateID,
+				backupColSize,
+				"superseded_at_ms",
+			},
+		},
+		{
 			table: "update_events",
 			columns: []string{
 				backupColStackID,
@@ -544,7 +554,8 @@ func sqliteControlTables() []sqliteBackupTable {
 	}
 
 	return slices.Concat(
-		core, sqliteRevocationControlTables(), sqliteRunnerControlTables(), sqliteNameLockControlTables(),
+		core, sqliteRevocationControlTables(), sqliteBlobDeleteLeaseControlTables(), sqliteRunnerControlTables(),
+		sqliteNameLockControlTables(),
 	)
 }
 
@@ -596,6 +607,18 @@ func sqliteRevocationControlTables() []sqliteBackupTable {
 				"id", backupColTarget, backupColState, "requested_by", backupColStartedAtMs, backupColEndedAtMs,
 				backupColError, "report",
 			},
+		},
+	}
+}
+
+// sqliteBlobDeleteLeaseControlTables lists the columns of the blob delete
+// lease rows. The swap keeps the live rows, so the restore waits for the
+// deleters that run now.
+func sqliteBlobDeleteLeaseControlTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table:   backup.TableBlobDeleteLeases,
+			columns: []string{backupColHolder, backupColExpiresAtMs},
 		},
 	}
 }
