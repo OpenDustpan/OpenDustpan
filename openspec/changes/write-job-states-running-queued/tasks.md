@@ -12,7 +12,7 @@
 ## 2. Implementation
 
 - [ ] 2.1 Implement job-model writes in pkg/job/unit_states.go (NEW) and the stack-package write of failed in pkg/stack/unit_states.go (NEW) with fence check, change identity, server-time ordering, tie break, divergent-end, single-end, terminal-end and reconcile rules. Check: go test ./pkg/job/... ./pkg/stack/... -count=1 passes
-- [ ] 2.2 Expose stored state facts in pkg/inventory/unit_states.go (NEW) through the internal states provider that the states slice reads, with unit:read on each unit, and include the new table in the backup table list. Check: go test ./pkg/inventory/... -run TestStoredUnitStates -count=1 passes
+- [ ] 2.2 Expose stored state facts in pkg/inventory/unit_states.go (NEW) through the internal states provider that the states slice reads, with unit:read on each unit, and include the new table in the backup table list. The task adds the NEW top-level test `TestStoredUnitStates` in a `_test.go` file of `pkg/inventory`, so that the Check runs it. Check: go test ./pkg/inventory/... -run TestStoredUnitStates -count=1 passes
 
 ## 3. Side effects (computed from main)
 
