@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"strings"
 	"testing"
@@ -21,12 +22,20 @@ import (
 func testCA(t *testing.T, validity time.Duration) string {
 	t.Helper()
 
+	return testCert(t, true, x509.KeyUsageCertSign|x509.KeyUsageDigitalSignature,
+		bundleTestNow().Add(-time.Hour), bundleTestNow().Add(validity))
+}
+
+// testCert returns one self-signed certificate in PEM form with the given
+// CA flag, key usage and validity, built at run time so the source holds no
+// certificate text.
+func testCert(t *testing.T, isCA bool, usage x509.KeyUsage, notBefore, notAfter time.Time) string {
+	t.Helper()
+
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-
-	notAfter := bundleTestNow().Add(validity)
 
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
@@ -37,11 +46,11 @@ func testCA(t *testing.T, validity time.Duration) string {
 
 	tmpl.SerialNumber = serial
 	tmpl.Subject.CommonName = "test CA"
-	tmpl.NotBefore = bundleTestNow().Add(-time.Hour)
+	tmpl.NotBefore = notBefore
 	tmpl.NotAfter = notAfter
-	tmpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature
+	tmpl.KeyUsage = usage
 	tmpl.BasicConstraintsValid = true
-	tmpl.IsCA = true
+	tmpl.IsCA = isCA
 
 	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -63,37 +72,104 @@ func TestBundleSaveRefusesBadPEM(t *testing.T) {
 	t.Parallel()
 
 	now := bundleTestNow()
-
-	if _, err := trustrule.ParseBundle("not pem at all", now); err == nil {
-		t.Error("malformed PEM: ParseBundle = nil, want ErrBundle")
-	}
-
-	expired := testCA(t, -time.Hour)
-	if _, err := trustrule.ParseBundle(expired, now); err == nil {
-		t.Error("expired CA: ParseBundle = nil, want ErrBundle")
-	}
-
-	if _, err := trustrule.ParseBundle("", now); err == nil {
-		t.Error("empty bundle: ParseBundle = nil, want ErrBundle")
-	}
-
-	many := strings.Repeat(testCA(t, 24*time.Hour), trustrule.MaxBundleCAs+1)
-	if _, err := trustrule.ParseBundle(many, now); err == nil {
-		t.Error("11 CAs: ParseBundle = nil, want ErrBundle")
-	}
-
-	oversize := strings.Repeat("a", trustrule.MaxBundleBytes+1)
-	if _, err := trustrule.ParseBundle(oversize, now); err == nil {
-		t.Error("oversize bundle: ParseBundle = nil, want ErrBundle")
-	}
-
-	if _, err := trustrule.ParseBundle("-----BEGIN FOO-----\nZm9v\n-----END FOO-----\n", now); err == nil {
-		t.Error("non-certificate block: ParseBundle = nil, want ErrBundle")
-	}
-
 	good := testCA(t, 24*time.Hour)
+	leaf := testCert(t, false, x509.KeyUsageDigitalSignature, now.Add(-time.Hour), now.Add(24*time.Hour))
+	noSign := testCert(t, true, x509.KeyUsageDigitalSignature, now.Add(-time.Hour), now.Add(24*time.Hour))
+	early := testCert(t, true, x509.KeyUsageCertSign, now.Add(24*time.Hour), now.Add(48*time.Hour))
+	headered := strings.Replace(good, "-----BEGIN CERTIFICATE-----\n",
+		"-----BEGIN CERTIFICATE-----\nHdr: v\n\n", 1)
+
+	cases := []struct {
+		name string
+		pem  string
+	}{
+		{"malformed PEM", "not pem at all"},
+		{"empty bundle", ""},
+		{"too many CAs", strings.Repeat(good, trustrule.MaxBundleCAs+1)},
+		{"oversize bundle", strings.Repeat("a", trustrule.MaxBundleBytes+1)},
+		{"non-certificate block", "-----BEGIN FOO-----\nZm9v\n-----END FOO-----\n"},
+		{"self-signed leaf", leaf},
+		{"CA without cert sign", noSign},
+		{"CA not yet valid", early},
+		{"text before block", "garbage text here\n" + good},
+		{"text between blocks", good + "garbage text here\n" + good},
+		{"PEM headers", headered},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := trustrule.ParseBundle(tc.pem, now); !errors.Is(err, trustrule.ErrBundle) {
+				t.Fatalf("ParseBundle = %v, want ErrBundle", err)
+			}
+
+			if _, err := trustrule.ParseStoredBundle(tc.pem, now); !errors.Is(err, trustrule.ErrBundle) {
+				t.Fatalf("ParseStoredBundle = %v, want ErrBundle", err)
+			}
+		})
+	}
+
+	t.Run("expired CA", func(t *testing.T) {
+		t.Parallel()
+
+		expired := testCA(t, -time.Hour)
+		if _, err := trustrule.ParseBundle(expired, now); !errors.Is(err, trustrule.ErrBundle) {
+			t.Fatalf("ParseBundle = %v, want ErrBundle", err)
+		}
+
+		if _, err := trustrule.ParseStoredBundle(expired, now); err != nil {
+			t.Fatalf("ParseStoredBundle = %v, want nil", err)
+		}
+	})
+
 	if _, err := trustrule.ParseBundle(good, now); err != nil {
 		t.Errorf("valid CA: ParseBundle = %v, want nil", err)
+	}
+
+	if _, err := trustrule.ParseStoredBundle(good, now); err != nil {
+		t.Errorf("valid CA: ParseStoredBundle = %v, want nil", err)
+	}
+}
+
+// TestValidateSpiffePattern checks the allowlist of the SPIFFE ID pattern:
+// each bad pattern is refused with ErrInvalid, as if every other check had
+// failed.
+func TestValidateSpiffePattern(t *testing.T) {
+	t.Parallel()
+
+	for _, pattern := range []string{
+		"spiffe://*/a",
+		"spiffe://TD/a",
+		"spiffe://td:8080/a",
+		"spiffe://td/",
+		"spiffe://td/a/../b",
+		"spiffe://td/a%2F*",
+		"spiffe://td/a%00",
+		"spiffe://td/*/x/*",
+		"spiffe://td/*",
+	} {
+		t.Run(pattern, func(t *testing.T) {
+			t.Parallel()
+
+			if err := trustrule.ValidateSpiffePattern(pattern); !errors.Is(err, trustrule.ErrInvalid) {
+				t.Fatalf("ValidateSpiffePattern(%q) = %v, want ErrInvalid", pattern, err)
+			}
+		})
+	}
+
+	for _, pattern := range []string{
+		"spiffe://td/a",
+		"spiffe://example.org/ns/acme",
+		"spiffe://example.org/ns/acme/*",
+	} {
+		t.Run("accept "+pattern, func(t *testing.T) {
+			t.Parallel()
+
+			if err := trustrule.ValidateSpiffePattern(pattern); err != nil {
+				t.Fatalf("ValidateSpiffePattern(%q) = %v, want nil", pattern, err)
+			}
+		})
 	}
 }
 

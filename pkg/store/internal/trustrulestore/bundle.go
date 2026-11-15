@@ -196,7 +196,7 @@ func Bundle(row BundleRow, vs []VersionRow) (trustrule.Bundle, error) {
 	found := false
 
 	for i := range vs {
-		certs, err := trustrule.ParseStoredBundle(vs[i].PEM)
+		certs, err := trustrule.ParseStoredBundle(vs[i].PEM, time.UnixMilli(vs[i].CreatedAtMs).UTC())
 		if err != nil {
 			return trustrule.Bundle{}, fmt.Errorf("%w: version %d: %w", ErrCorrupt, vs[i].Version, err)
 		}

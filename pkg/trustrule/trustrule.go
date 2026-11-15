@@ -15,7 +15,6 @@
 package trustrule
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/hex"
@@ -278,12 +277,14 @@ type BundleFields struct {
 
 // ParseBundle checks the PEM text of a bundle save and returns its CA
 // certificates: each certificate in the order of its block, with the index
-// for error text. It refuses input outside the size bounds, a block that is
-// not a certificate, a certificate that fails to parse, an expired CA and
-// more than MaxBundleCAs certificates. Now is the clock that expiry is
-// checked against.
+// for error text. It refuses input outside the size bounds, text outside a
+// certificate block, a block that is not a certificate, a certificate that
+// fails to parse, a certificate that is not a CA, and more than MaxBundleCAs
+// certificates. A CA needs BasicConstraintsValid and IsCA, KeyUsageCertSign,
+// NotBefore at or before now, and NotAfter after now. Now is the clock that
+// validity is checked against.
 func ParseBundle(pemText string, now time.Time) ([]*x509.Certificate, error) {
-	certs, err := decodeBundle(pemText)
+	certs, err := decodeBundle(pemText, now)
 	if err != nil {
 		return nil, err
 	}
@@ -301,35 +302,25 @@ func ParseBundle(pemText string, now time.Time) ([]*x509.Certificate, error) {
 // ParseStoredBundle checks the PEM text of a stored bundle version like
 // ParseBundle, but it does not check expiry: a stored version stays readable
 // after one of its CAs expires, and the exchange refuses an expired CA when
-// it builds a chain.
-func ParseStoredBundle(pemText string) ([]*x509.Certificate, error) {
-	return decodeBundle(pemText)
+// it builds a chain. It still refuses a certificate that is not a CA and a
+// CA that is not yet valid at now.
+func ParseStoredBundle(pemText string, now time.Time) ([]*x509.Certificate, error) {
+	return decodeBundle(pemText, now)
 }
 
-func decodeBundle(pemText string) ([]*x509.Certificate, error) {
+func decodeBundle(pemText string, now time.Time) ([]*x509.Certificate, error) {
 	if pemText == "" || len(pemText) > MaxBundleBytes {
 		return nil, fmt.Errorf("%w: the bundle is 1 to %d bytes, got %d", ErrBundle, MaxBundleBytes, len(pemText))
 	}
 
-	rest := []byte(pemText)
+	rest := strings.TrimSpace(pemText)
 
 	var out []*x509.Certificate
 
-	for i := 0; len(rest) > 0; i++ {
-		var block *pem.Block
-
-		block, rest = pem.Decode(bytes.TrimSpace(rest))
-		if block == nil {
-			return nil, fmt.Errorf("%w: CA %d is not PEM", ErrBundle, i)
-		}
-
-		if block.Type != "CERTIFICATE" {
-			return nil, fmt.Errorf("%w: CA %d is a %s block, not a certificate", ErrBundle, i, block.Type)
-		}
-
-		cert, err := x509.ParseCertificate(block.Bytes)
+	for rest != "" {
+		cert, next, err := decodeBundleBlock(rest, now, len(out))
 		if err != nil {
-			return nil, fmt.Errorf("%w: CA %d does not parse: %w", ErrBundle, i, err)
+			return nil, err
 		}
 
 		out = append(out, cert)
@@ -337,6 +328,8 @@ func decodeBundle(pemText string) ([]*x509.Certificate, error) {
 		if len(out) > MaxBundleCAs {
 			return nil, fmt.Errorf("%w: the bundle holds more than %d CAs", ErrBundle, MaxBundleCAs)
 		}
+
+		rest = strings.TrimSpace(next)
 	}
 
 	if len(out) == 0 {
@@ -346,12 +339,68 @@ func decodeBundle(pemText string) ([]*x509.Certificate, error) {
 	return out, nil
 }
 
+// decodeBundleBlock decodes the first PEM block of rest and checks the CA at
+// index. It returns the certificate and the text after the block.
+func decodeBundleBlock(rest string, now time.Time, index int) (*x509.Certificate, string, error) {
+	if !strings.HasPrefix(rest, "-----BEGIN CERTIFICATE-----") {
+		return nil, "", fmt.Errorf("%w: CA %d is not PEM", ErrBundle, index)
+	}
+
+	block, next := pem.Decode([]byte(rest))
+	if block == nil {
+		return nil, "", fmt.Errorf("%w: CA %d is not PEM", ErrBundle, index)
+	}
+
+	// Defense in depth: the prefix check above already requires a
+	// CERTIFICATE block, and the handler checks the shape again; this
+	// check stays so that a new caller cannot skip it.
+	if block.Type != "CERTIFICATE" {
+		return nil, "", fmt.Errorf("%w: CA %d is a %s block, not a certificate", ErrBundle, index, block.Type)
+	}
+
+	if len(block.Headers) > 0 {
+		return nil, "", fmt.Errorf("%w: CA %d holds PEM headers", ErrBundle, index)
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: CA %d does not parse: %w", ErrBundle, index, err)
+	}
+
+	if err := checkBundleCA(cert, now, index); err != nil {
+		return nil, "", err
+	}
+
+	return cert, string(next), nil
+}
+
+// checkBundleCA returns ErrBundle when cert is not a usable CA at index:
+// not a CA, without KeyUsageCertSign, or not yet valid at now.
+func checkBundleCA(cert *x509.Certificate, now time.Time, index int) error {
+	if !cert.BasicConstraintsValid || !cert.IsCA {
+		return fmt.Errorf("%w: CA %d is not a CA", ErrBundle, index)
+	}
+
+	if cert.KeyUsage&x509.KeyUsageCertSign == 0 {
+		return fmt.Errorf("%w: CA %d cannot sign certificates", ErrBundle, index)
+	}
+
+	if now.Before(cert.NotBefore) {
+		return fmt.Errorf("%w: CA %d is not valid before %s", ErrBundle, index,
+			cert.NotBefore.UTC().Format(time.RFC3339))
+	}
+
+	return nil
+}
+
 // ValidateSpiffePattern returns ErrInvalid when pattern is not a usable
 // SPIFFE ID pattern: empty, longer than MaxSpiffePatternLength bytes, or
-// not of the form "spiffe://<trust-domain>/<path>" where the trust domain
-// is a host and the path may hold one trailing "/*" wildcard for one path
-// segment only. A "*" elsewhere matches only itself: matching is exact
-// except for a trailing "/*".
+// not of the form "spiffe://<trust-domain>/<path>". The trust domain is
+// lowercase [a-z0-9._-] with no port and no wildcard. Each path segment is
+// [A-Za-z0-9._-], not empty, not "." or "..", with no percent. A "*" is
+// allowed only as the whole last segment, and a pattern needs at least one
+// fixed segment before it, so "spiffe://td/*" is refused. The pattern must
+// not end with a slash.
 func ValidateSpiffePattern(pattern string) error {
 	if err := checkText("spiffeIDPattern", pattern, MaxSpiffePatternLength); err != nil {
 		return err
@@ -363,8 +412,90 @@ func ValidateSpiffePattern(pattern string) error {
 			ErrInvalid, ident.Echo(pattern))
 	}
 
-	if strings.Contains(u.Path, "*") && !strings.HasSuffix(u.Path, "/*") {
-		return fmt.Errorf("%w: the SPIFFE ID pattern %s holds * outside a trailing /*",
+	rest := strings.TrimPrefix(pattern, "spiffe://")
+
+	slash := strings.Index(rest, "/")
+	if slash < 0 {
+		return fmt.Errorf("%w: the SPIFFE ID pattern %s is not spiffe://<trust-domain>/<path>",
+			ErrInvalid, ident.Echo(pattern))
+	}
+
+	domain, rawPath := rest[:slash], rest[slash:]
+
+	if !validSpiffeDomain(domain) {
+		return fmt.Errorf("%w: the SPIFFE ID pattern %s holds a trust domain outside [a-z0-9._-]",
+			ErrInvalid, ident.Echo(pattern))
+	}
+
+	if u.Host != domain || u.Port() != "" {
+		return fmt.Errorf("%w: the SPIFFE ID pattern %s holds a port or an escaped trust domain",
+			ErrInvalid, ident.Echo(pattern))
+	}
+
+	if err := checkSpiffePath(rawPath, pattern); err != nil {
+		return err
+	}
+
+	return checkSpiffeSegments(strings.Split(rawPath, "/")[1:], pattern)
+}
+
+// checkSpiffePath returns ErrInvalid when the raw path of a SPIFFE ID
+// pattern ends with a slash or holds a percent escape.
+func checkSpiffePath(rawPath, pattern string) error {
+	if strings.HasSuffix(rawPath, "/") {
+		return fmt.Errorf("%w: the SPIFFE ID pattern %s ends with a slash",
+			ErrInvalid, ident.Echo(pattern))
+	}
+
+	if strings.Contains(rawPath, "%") {
+		return fmt.Errorf("%w: the SPIFFE ID pattern %s holds an escape",
+			ErrInvalid, ident.Echo(pattern))
+	}
+
+	return nil
+}
+
+// checkSpiffeSegments returns ErrInvalid when a path segment is not usable:
+// a "*" is allowed only as the whole last segment after at least one fixed
+// segment, and any other segment is [A-Za-z0-9._-], not empty, not "." and
+// not "..".
+func checkSpiffeSegments(segments []string, pattern string) error {
+	if len(segments) == 0 {
+		return fmt.Errorf("%w: the SPIFFE ID pattern %s holds no path",
+			ErrInvalid, ident.Echo(pattern))
+	}
+
+	for i := range segments {
+		if err := checkSpiffeSegment(segments, i, pattern); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// checkSpiffeSegment returns ErrInvalid when the segment at index i of a
+// SPIFFE ID pattern path is not usable.
+func checkSpiffeSegment(segments []string, i int, pattern string) error {
+	seg := segments[i]
+	last := i == len(segments)-1
+
+	if seg == "*" {
+		if !last || len(segments) < 2 {
+			return fmt.Errorf("%w: the SPIFFE ID pattern %s holds * outside a trailing /* after a fixed segment",
+				ErrInvalid, ident.Echo(pattern))
+		}
+
+		return nil
+	}
+
+	if seg == "" || seg == "." || seg == ".." {
+		return fmt.Errorf("%w: the SPIFFE ID pattern %s holds an empty, dot or dot-dot segment",
+			ErrInvalid, ident.Echo(pattern))
+	}
+
+	if !validSpiffeSegment(seg) {
+		return fmt.Errorf("%w: the SPIFFE ID pattern %s holds a segment outside [A-Za-z0-9._-]",
 			ErrInvalid, ident.Echo(pattern))
 	}
 
@@ -382,6 +513,42 @@ func spiffeShape(u *url.URL) bool {
 	}
 
 	return strings.HasPrefix(u.Path, "/")
+}
+
+// validSpiffeDomain reports whether d is a trust domain: lowercase
+// [a-z0-9._-], with no port and no wildcard.
+func validSpiffeDomain(d string) bool {
+	if d == "" {
+		return false
+	}
+
+	for _, c := range d {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '.' || c == '_' || c == '-':
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+// validSpiffeSegment reports whether s is a fixed path segment:
+// [A-Za-z0-9._-], not empty, not "." or "..".
+func validSpiffeSegment(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+
+	for _, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.' || c == '_' || c == '-':
+		default:
+			return false
+		}
+	}
+
+	return true
 }
 
 // CheckBundleRef returns ErrBundle when bundle is set but is not a bundle
