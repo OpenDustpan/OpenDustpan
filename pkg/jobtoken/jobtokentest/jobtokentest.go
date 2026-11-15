@@ -45,13 +45,15 @@ type Harness struct {
 	// namespace returns ErrNotFound.
 	DeleteNamespace func(t *testing.T, ns namespace.Name)
 	// RenameNamespace changes the name of the namespace ns to newName. The
-	// stable ID of the namespace stays. A read of a token of the namespace
-	// returns ErrNotFound when the current name differs from the namespace of
-	// the unit of the record.
+	// namespace and its units keep their stable IDs.
 	RenameNamespace func(t *testing.T, ns namespace.Name, newName string)
 	// Unit makes the unit of the tool called name in the namespace ns, and
 	// returns its reference with the stable unit ID set.
 	Unit func(t *testing.T, ns, tool, name string) identity.Object
+	// DeleteUnit marks unit as deleted. A read of its token returns ErrNotFound.
+	DeleteUnit func(t *testing.T, unit identity.Object)
+	// PurgeUnit removes the unit row. A read of its token returns ErrNotFound.
+	PurgeUnit func(t *testing.T, unit identity.Object)
 	// Principal makes the principal with the subject subject.
 	Principal func(t *testing.T, subject string) Starter
 	// Disable disables the principal s.
@@ -82,6 +84,10 @@ type Harness struct {
 	// WriteRaw writes tok straight into the store with no check, as a
 	// restored row arrives.
 	WriteRaw func(t *testing.T, tok jobtoken.Token)
+	// WriteRawInNamespace writes tok straight into the store with no check,
+	// as a restored row arrives, with the namespace ID of the namespace
+	// called ns. The unit ID stays as tok carries it.
+	WriteRawInNamespace func(t *testing.T, tok jobtoken.Token, ns namespace.Name)
 	// Audit returns the audit entries of a namespace, oldest first.
 	Audit func(t *testing.T, ns namespace.Name) []audit.Entry
 }
@@ -122,6 +128,7 @@ func cases() []suiteCase {
 	out := make([]suiteCase, 0, caseCount)
 	out = append(out, issueCases()...)
 	out = append(out, readCases()...)
+	out = append(out, identityReadCases()...)
 
 	return out
 }
@@ -138,7 +145,7 @@ const (
 	// oneMillisecond is one millisecond.
 	oneMillisecond = time.Millisecond
 	// caseCount is the number of cases of the suite.
-	caseCount = 37
+	caseCount = 61
 )
 
 // issueTime returns the time of the cases.

@@ -153,13 +153,14 @@ func callerOf(r *http.Request, p identity.Principal) *service.Caller {
 		UserAgent: audit.TruncateUserAgent(userAgent(r)), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: string(p.Kind),
-		JobID: p.JobID,
+		JobID:  p.JobID,
+		Origin: nil,
 	}
 
 	// The audit log refuses a kind it does not know, so an unknown kind is
 	// recorded as no kind.
 	switch p.Kind {
-	case identity.KindPerson, identity.KindService, identity.KindWorkload:
+	case identity.KindPerson, identity.KindService, identity.KindWorkload, identity.KindAgent:
 	default:
 		by.PrincipalKind = ""
 	}

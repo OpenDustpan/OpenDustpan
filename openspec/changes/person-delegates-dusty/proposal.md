@@ -1,0 +1,99 @@
+Roadmap: `docs/roadmap.md:769` (A person delegates to Dusty).
+
+## Why
+
+**Persona: developer.** A developer wants to let Dusty work for them without handing over a personal token. The developer creates one delegation with a narrow scope and a short expiry, checks it in a list, and revokes it when the work ends.
+
+The user path this change must make work:
+
+1. **Docs page.** Read the delegation docs page and copy the create command.
+2. **API.** Create one delegation to dusty for one namespace with level suggest and expiry 7 days.
+3. **Console.** List own delegations and open the new row in the console.
+4. **E2e.** Revoke the delegation and confirm the list shows it revoked.
+
+Errors the person may hit, and the one command that helps:
+
+| Error | What the answer says | The command that helps |
+| --- | --- | --- |
+| Create with expiry in the past or more than 30 days after creation | 422 with the NEW error code delegation.invalid-expiry and no new row. | `POST /api/dustpan/v1/delegations` |
+| Read of an unknown delegation id | 404 with the NEW error code delegation.not-found. | `GET /api/dustpan/v1/delegations/{id}` |
+| List when the caller holds no delegation | 200 with an empty list. | `GET /api/dustpan/v1/delegations` |
+
+Evidence for the claims above:
+
+- No delegation record exists on main; keyword Dusty has no e2e, no guide and no code in the pack. Proof: keywords Dusty e2e_count 0 with e2e [], guides [], code []
+- Main already pins delegation-scoped grant checks and revoke checks on objects. Proof: pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly) and pkg/access/access_test.go:1098 (TestRevokeChecksTheObject)
+- Milestone exit test needs one stored delegation with holder, scope, creator and time, listable and revocable. Proof: roadmap step: Pass: 1 delegation is a stored record with a holder, a scope, a creator and a time.
+
+## What Changes
+
+- Make the NEW agent principal dusty of the NEW kind agent on model connect with stable ID dusty.
+- Store one delegation record per delegation with holder dusty, scope namespace id, level, creator, created time, expiry and revoked time.
+- The person's own rows follow the pattern of the own access tokens (`token:manage-own` on `CallerObject`, pkg/identity/identity.go:367-371, held by every authenticated person through `identity.SelfAllowed` at pkg/dustpan/dustpan.go:925-928, and family `FamilySelf` at pkg/access/access.go:221): the NEW action `caller:manage-delegations` on `CallerObject`, family `FamilySelf`, added to that `SelfAllowed` list. No new object kind.
+  - NEW route POST /api/dustpan/v1/delegations creates one delegation with holder dusty and creator equal to the caller (`caller:manage-delegations` on `@caller`).
+  - NEW route GET /api/dustpan/v1/delegations lists the caller's own delegations (`caller:manage-delegations` on `@caller`).
+  - NEW route GET /api/dustpan/v1/delegations/{id} reads one of the caller's own delegations (`caller:manage-delegations` on `@caller`; a row of another creator answers 404).
+  - NEW route POST /api/dustpan/v1/delegations/{id}/revoke revokes one of the caller's own delegations, idempotent on repeat (`caller:manage-delegations` on `@caller`).
+- Every delegation, for an administrator (RFC 121 decision 17): NEW route GET /api/server/delegations lists every delegation, and NEW route POST /api/server/delegations/{id}/revoke revokes any one, both with `server:manage-access` on the installation (`ServerObject`).
+- Console delegation views call the same list and read routes with a session credential.
+- Audit entries for delegation create and revoke that name holder dusty, creator and revoker.
+
+Out of scope:
+
+- Dusty run loop, model connection and tool catalog
+- Enforcement of delegation scope, level and agent ceiling at call time
+- Change orders, confirmations and approvals
+- Audit entry shape for agent steps
+- Outside-vendor agents and MCP endpoint
+
+Depends on:
+
+- agent-shapes-before-first-tag (its task 2.5 adds the principal kind `agent` in the NEW file pkg/principal/kind.go)
+
+## Usability
+
+Where the path still costs the person time or surprises them:
+
+- The person copies the delegation id from the create answer into the read and revoke commands on the same page.
+- Level words look, suggest and operate show with the expiry in each read answer.
+
+## What main already does
+
+Each fact names its file, line and function on main. The change specifies only the difference.
+
+- Grants on a principal take delegation actions only in a pin test. (`pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly)`)
+- Revoke checks the object before it revokes. (`pkg/access/access_test.go:1098 (TestRevokeChecksTheObject)`)
+- Token scopes fit the principal kind. (`pkg/accesstoken/accesstoken_test.go:905 (TestScopesFitTheKind)`)
+
+## ADR check
+
+Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+
+**ADR 354: Agent principals, delegation and the kind agent** (owner-tagged (all decisions)).
+
+- Decisions that apply: 1 (current).
+- Changed by: -. Chain to the end: none.
+- Current rule: this ADR.
+- Quote: "The person who delegated (Alice) may confirm a change that her own agent proposed, by default."
+- Effect: The change stores the delegation that ADR 354 decision 1 assumes: a person delegates to Dusty and may later confirm what the agent proposed.
+- Conflict: none.
+
+**RFC 121, accepted by ADR 354 decision 6 (owner, 2026-11-07):** "Decisions 1 to 52 of the \"Proposal\" of the RFC apply."
+
+- Quote, decision 11: "a creator (always the person)".
+- Quote, decision 17: "The person lists their delegations, with the delegated work and the standing objects made under each one, and revokes each one. An administrator with `server:manage-access` lists and revokes every delegation, and the access review exports them."
+- Effect: the person's own rows use a self action on `CallerObject`, as the own access tokens do; every row, for an administrator, uses `server:manage-access` on the installation.
+- Conflict: none.
+
+## Open questions
+
+none
+
+Questions considered and answered:
+
+- Does this step enforce delegated calls? No. This step stores, lists and revokes the record only. Enforcement ships with the later steps that start runs and tools.
+- May a person delegate for another person? No. Creator is the person, holder is the dusty agent principal. A person delegates only for self.
+- May the person who delegated later confirm? Yes, by default per ADR 354 decision 1. A two-person rule needs a later approval change, out of scope here.
+- Is the 30-day expiry a setting? Fixed 30-day maximum per row in this step; a setting comes later.
+
+Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

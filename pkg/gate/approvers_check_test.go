@@ -22,7 +22,7 @@ func TestCheckUserNameRefusesANameThatIsNotUTF8(t *testing.T) {
 		{"a valid name", "alice", ""},
 		{"a byte that is not UTF-8", "\xff", "not UTF-8"},
 		{"a truncated sequence", "ab\xc3", "not UTF-8"},
-		{"a control character", "a\x07b", "control or format character"},
+		{"a control character", "a\x07b", "control, format or separator character"},
 	}
 
 	for _, tt := range tests {

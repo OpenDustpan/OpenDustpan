@@ -1,18 +1,23 @@
 package server_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -1001,5 +1006,181 @@ func TestReviewFailsClosedWithoutItsEntry(t *testing.T) {
 		if _, ok := answer["grants"]; ok {
 			t.Fatalf("%s with a failed audit entry = %v, want no rows", path, answer)
 		}
+	}
+}
+
+// reviewEntryCase is one request of TestReviewFailureWritesAnAuditEntry and
+// the read-access entries that the request must write.
+type reviewEntryCase struct {
+	name        string
+	entries     func(st *sqlite.Store) auditStore
+	path        string
+	wantStatus  int
+	wantEntries int
+	wantOutcome audit.Outcome
+	wantObject  string
+	// wantBodyWithout is text that the answer body must not hold.
+	wantBodyWithout string
+	// wantLogText is text that the handler log must hold, when set.
+	wantLogText string
+}
+
+// TestReviewFailureWritesAnAuditEntry checks the audit entry of an export
+// that fails: one entry of kind read-access with the failure outcome and
+// the object of the export, as a success writes one with the success
+// outcome. An export that fails and whose entry also fails answers the
+// status of the error of the export.
+func TestReviewFailureWritesAnAuditEntry(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, time.October, 20, 12, 0, 0, 0, time.UTC)
+	clock := &envClock{mu: sync.Mutex{}, now: at}
+
+	tests := []reviewEntryCase{
+		{
+			name:       "a failed export writes one failure entry",
+			entries:    nil,
+			path:       "/api/server/access-review?cursor=" + handMadeCursor(),
+			wantStatus: http.StatusBadRequest, wantEntries: 1,
+			wantOutcome: audit.OutcomeFailure, wantObject: "access-review @server snapshot",
+			wantBodyWithout: "", wantLogText: "",
+		},
+		{
+			name:       "a successful export writes one success entry",
+			entries:    nil,
+			path:       "/api/server/access-review",
+			wantStatus: http.StatusOK, wantEntries: 1,
+			wantOutcome:     audit.OutcomeSuccess,
+			wantObject:      "access-review @server snapshot asOf=" + strconv.FormatInt(at.UnixMilli(), 10),
+			wantBodyWithout: "", wantLogText: "",
+		},
+		{
+			name:       "a failed export whose entry fails answers the export error",
+			entries:    func(*sqlite.Store) auditStore { return failingAudit{} },
+			path:       "/api/server/access-review?cursor=" + handMadeCursor(),
+			wantStatus: http.StatusBadRequest, wantEntries: 0,
+			wantOutcome: "", wantObject: "",
+			wantBodyWithout: errAuditDown.Error(), wantLogText: errAuditDown.Error(),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			entries := tc.entries
+			if entries == nil {
+				entries = func(st *sqlite.Store) auditStore { return st }
+			}
+
+			var logBuf bytes.Buffer
+
+			logger := slog.New(slog.DiscardHandler)
+			if tc.wantLogText != "" {
+				logger = slog.New(slog.NewTextHandler(&logBuf, nil))
+			}
+
+			f := newAccessFixtureClock(t, entries, clock.Now, logger)
+
+			var body json.RawMessage
+			f.as(t, "ann", apiCall{http.MethodGet, tc.path, "", tc.wantStatus}, &body)
+
+			if tc.wantBodyWithout != "" && strings.Contains(string(body), tc.wantBodyWithout) {
+				t.Fatalf("body = %s, want no text %q", body, tc.wantBodyWithout)
+			}
+
+			if tc.wantLogText != "" && !strings.Contains(logBuf.String(), tc.wantLogText) {
+				t.Fatalf("log = %q, want text %q", logBuf.String(), tc.wantLogText)
+			}
+
+			checkReviewEntry(t, f, tc, at)
+		})
+	}
+}
+
+// checkReviewEntry checks the read-access entries that the request of tc
+// wrote in @server.
+func checkReviewEntry(t *testing.T, f accessFixture, tc reviewEntryCase, at time.Time) {
+	t.Helper()
+
+	listing, err := f.store.List(
+		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
+	)
+	if err != nil {
+		t.Fatalf("list server entries: %v", err)
+	}
+
+	got := make([]audit.Entry, 0, 1)
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Kind == audit.KindReadAccess {
+			got = append(got, listing.Entries[i])
+		}
+	}
+
+	if len(got) != tc.wantEntries {
+		t.Fatalf("read-access entries = %+v, want %d", got, tc.wantEntries)
+	}
+
+	if tc.wantEntries == 0 {
+		return
+	}
+
+	e := got[0]
+	if e.Outcome != tc.wantOutcome || e.Subject != "ann" ||
+		e.Action != string(identity.ActionServerReadAccess) ||
+		e.Object != tc.wantObject || !e.At.Equal(at) {
+		t.Fatalf("entry = %+v, want %s by ann %q at %s", e, tc.wantOutcome, tc.wantObject, at)
+	}
+}
+
+// The errors of TestReviewExportErrorKeepsTheAuditErrorOutOfItsText.
+var (
+	errReviewDown   = errors.New("read the review: the store is down")
+	errAuditRefused = errors.New("the audit entry was refused")
+)
+
+// TestReviewExportErrorKeepsTheAuditErrorOutOfItsText proves that the error
+// of an export that failed and whose audit entry also failed names the
+// export error only: its text is the text of the export error, it holds no
+// text of the audit error, and errors.Is finds the export error.
+func TestReviewExportErrorKeepsTheAuditErrorOutOfItsText(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		export error
+		audit  error
+	}{
+		{
+			name:   "an invalid request",
+			export: fmt.Errorf("%w: the cursor is of another export", access.ErrInvalid),
+			audit:  errAuditDown,
+		},
+		{
+			name:   "a review that failed",
+			export: errReviewDown,
+			audit:  errAuditRefused,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := apiserver.ReviewExportErrorForTest(tc.export, tc.audit)
+
+			if err.Error() != tc.export.Error() {
+				t.Fatalf("Error() = %q, want %q", err.Error(), tc.export.Error())
+			}
+
+			if !errors.Is(err, tc.export) {
+				t.Fatal("errors.Is(err, export) = false, want true")
+			}
+
+			if strings.Contains(err.Error(), tc.audit.Error()) {
+				t.Fatalf("Error() = %q holds the audit error %q", err.Error(), tc.audit.Error())
+			}
+		})
 	}
 }

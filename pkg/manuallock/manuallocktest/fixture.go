@@ -122,6 +122,7 @@ func auditFor(fence namespace.Fence) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

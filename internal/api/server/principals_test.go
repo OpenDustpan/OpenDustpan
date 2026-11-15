@@ -128,7 +128,7 @@ func newLimitedPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) 
 
 	grants, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"}, LimitGroups: limitgroups.New(st, st),
+		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: limitgroups.New(st, st),
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
@@ -922,6 +922,135 @@ func refusalCases(aliceID, groupID string) []refusalCase {
 			},
 		},
 	}
+}
+
+// TestCreatePrincipalRefusesAgentAndUnknownKinds proves that the create route
+// makes a person, a service and a workload only: an agent record needs its
+// sponsors and comes from the model connect request, and a kind that the
+// server does not know is refused. Each refusal answers 400 principal.invalid
+// and stores no row.
+func TestCreatePrincipalRefusesAgentAndUnknownKinds(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		subject string
+		kind    string
+	}{
+		{"agent", "new-agent", `"agent"`},
+		{"unknown kind", "new-robot", `"robot"`},
+		{"upper case", "new-agent-upper", `"Agent"`},
+		{"empty kind", "new-empty", `""`},
+		{"agent with a newline", "new-agent-newline", `"agent\n"`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			principals := newTestPrincipals(t)
+			handler := newPrincipalHandler(t, principals)
+
+			status, body := createPrincipalAsSession(t, handler,
+				`{"subject":"`+tc.subject+`","kind":`+tc.kind+`}`)
+			if status != http.StatusBadRequest {
+				t.Fatalf("create of the kind %s answers %d, want 400 (%s)", tc.kind, status, body)
+			}
+
+			if !strings.Contains(body, `"errorCode":"principal.invalid"`) {
+				t.Fatalf("create of the kind %s = %s, want the code principal.invalid", tc.kind, body)
+			}
+
+			// The refusal stores no row. The only row is the person "tester",
+			// made by the sign-in.
+			page, err := principals.ListPrincipals(
+				t.Context(), principal.PageRequest{Prefix: "", Cursor: "", Limit: 0}, "",
+			)
+			if err != nil {
+				t.Fatalf("list principals: %v", err)
+			}
+
+			if page.Total != 1 {
+				t.Fatalf("the store holds %d principals, want only the person tester", page.Total)
+			}
+		})
+	}
+}
+
+// TestCreatePrincipalRefusesAgentKindNamesTheListingRoute proves that the
+// refusal of an agent names the route that helps: the route that lists the
+// principals of one kind, which a caller can read for the agent records that
+// the server makes.
+func TestCreatePrincipalRefusesAgentKindNamesTheListingRoute(t *testing.T) {
+	t.Parallel()
+
+	handler := newPrincipalHandler(t, newTestPrincipals(t))
+
+	status, body := createPrincipalAsSession(t, handler, `{"subject":"new-agent","kind":"agent"}`)
+	if status != http.StatusBadRequest || !strings.Contains(body, `"errorCode":"principal.invalid"`) {
+		t.Fatalf("create of an agent = %d %s, want 400 principal.invalid", status, body)
+	}
+
+	if !strings.Contains(body, "GET /api/server/principals?kind=agent") {
+		t.Fatalf("create of an agent = %s, want the answer to name GET /api/server/principals?kind=agent", body)
+	}
+}
+
+// TestListPrincipalsFiltersByKind proves that the list route filters by the
+// kind: the kind agent keeps the agent records that the server makes, and a
+// kind that the server does not know answers 400 principal.invalid.
+func TestListPrincipalsFiltersByKind(t *testing.T) {
+	t.Parallel()
+
+	svc, st := newTestPrincipalStore(t)
+	handler := newPrincipalHandler(t, svc)
+
+	// The create route makes no agent, so the test seeds the record that the
+	// server makes from the model connect request.
+	at := time.Date(2026, time.November, 15, 12, 0, 0, 0, time.UTC)
+	agent := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{},
+		ID: "prn-agent", Subject: "agent-bot", DisplayName: "", Kind: principal.KindAgent,
+		Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
+	}
+	if err := st.CreatePrincipal(t.Context(), agent, storetest.ServerChange(at, "principal:prn-agent")); err != nil {
+		t.Fatalf("seed the agent record: %v", err)
+	}
+
+	var agents struct {
+		Principals []principalDoc `json:"principals"`
+		Total      int64          `json:"total"`
+	}
+	mustCall(t, handler, apiCall{http.MethodGet, "/api/server/principals?kind=agent", "", http.StatusOK}, &agents)
+
+	if agents.Total != 1 || len(agents.Principals) != 1 || agents.Principals[0].Subject != "agent-bot" ||
+		agents.Principals[0].Kind != "agent" {
+		t.Fatalf("the list of the kind agent = %+v, want only agent-bot of the kind agent", agents)
+	}
+
+	status, body := call(t, handler, apiCall{
+		http.MethodGet, "/api/server/principals?kind=robot", "", http.StatusBadRequest,
+	})
+	if status != http.StatusBadRequest || !strings.Contains(body, `"errorCode":"principal.invalid"`) {
+		t.Fatalf("the list of the kind robot = %d %s, want 400 principal.invalid", status, body)
+	}
+}
+
+// createPrincipalAsSession sends one principal create with a fresh console
+// session of "tester", the credential of a site administrator, and returns
+// the status and the body.
+func createPrincipalAsSession(t *testing.T, h testHandler, body string) (int, string) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(
+		t.Context(), http.MethodPost, "/api/server/principals", strings.NewReader(body),
+	)
+	startSession(t, h, req, 0)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	return rec.Code, rec.Body.String()
 }
 
 // TestPrincipalRoutesWithoutStore answers 501 that names the cause when the

@@ -1,15 +1,32 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing tests for GET on both scopes, and a namespace-authorization refusal test. Check: TestSettingsGetEffectiveSourceLockedRevision and TestNamespaceSettingsRefuseWithoutAction
-- [ ] 1.2 Write failing tests for PATCH atomic, null, unknown key, file-only key, locked key, invalid value, stale revision and audit failure. Check: TestSettingsPatchRefusals, TestSettingsPatchAtomic and TestSettingsPatchAuditFailure
-- [ ] 1.3 Write failing tests for the fresh step, including a mixed patch, and for idempotency replay, missing key and replay during the first request. Check: TestSettingsPatchFreshStep, TestSettingsPatchMixedDirections and TestSettingsPatchIdempotency
-- [ ] 1.4 Write failing tests for the session limit: default cap, token policy cap, new records only, bad stored value, host reset option, valid fresh step with invalid value, stale revision on the limit key, reload audit with source change, and a creation during a PATCH. Check: TestTempAdminSessionLimit, TestHostResetSessionLimit and TestSettingsReloadMovesRevision
+- [ ] 1.1 Write failing tests for GET on both scopes and a namespace refusal in the NEW file internal/api/server/settings_get_test.go. Check: TestSettingsGetEffectiveSourceLockedRevision
+- [ ] 1.2 Write failing tests for PATCH refusals, atomic apply, stale revision, masked audit and audit failure in the NEW file internal/api/server/settings_patch_test.go; TestSettingsPatchRefusals exists on main in internal/api/server/settings_test.go, so extend it there. Check: TestSettingsPatchRefusals and TestSettingsPatchAtomic
+- [ ] 1.3 Write failing tests for the fresh step, the token refusal and idempotent replay in the NEW file internal/api/server/settings_fresh_test.go. Check: TestSettingsPatchFreshStep and TestSettingsPatchIdempotency
+- [ ] 1.4 Write failing tests for the session limit, the create audit entry and the host reset in the NEW file pkg/tempadmin/session_limit_test.go. Check: TestTempAdminSessionLimit, TestTempAdminCreateAuditNamesLimit and TestHostResetSessionLimit
+- [ ] 1.5 Add the NEW catalog code settings.revision-stale to internal/errcode/catalog_settings.go, and make the settings routes answer a stale revision with 412 and this code in place of request.precondition-failed (internal/api/server/settings.go, the If-Match check of the patch). Write the NEW test TestPatchStaleRevisionAnswersRevisionStale in the NEW file internal/api/server/settings_stale_test.go. Check: the NEW test TestPatchStaleRevisionAnswersRevisionStale fails on main.
+- [ ] 1.6 In internal/api/server/settings.go, keep the statuses of main for a body that is not valid: 400 with settings.key-unknown for an undeclared key and 400 with settings.value-invalid for a value outside its range, as the tool-neutral API decides (a key that is not valid answers 400). Write the NEW test TestPatchRefusesUnknownKeyWith400 in the NEW file internal/api/server/settings_unknown_test.go. Check: the NEW test TestPatchRefusesUnknownKeyWith400 passes on main.
 
-## 2. Definition of done
+- [ ] 1.7 SECURITY. Build ParseTempAdminLimit in the NEW file pkg/tempadmin/session_limit.go. It checks the range of 1 millisecond to 24 hours and refuses a value outside it. Check: TestParseTempAdminLimitRange passes.
+- [ ] 1.8 SECURITY. Build the host reset of the stored session limit in the NEW file pkg/tempadmin/session_limit_reset.go. It needs a reason, refuses in recovery mode 3 and writes an audit entry with the reason. Check: TestHostResetSessionLimit passes.
+- [ ] 1.9 SECURITY. Build the idempotency-key replay in internal/api/server/settings.go. A replay with the same body answers the stored result. The same key with another body is refused. Check: TestSettingsPatchIdempotency passes.
+- [ ] 1.10 SECURITY. Write a hostile test that sends a value of 48 hours, a non-numeric value and a negative value straight to ParseTempAdminLimit, in the NEW file pkg/tempadmin/session_limit_parse_test.go. Check: TestParseTempAdminLimitHostile refuses each value.
+- [ ] 1.11 SECURITY. Write a hostile test that calls the host reset with no reason and in recovery mode 3, in the NEW file pkg/tempadmin/session_limit_reset_test.go. Check: TestHostResetSessionLimitHostile refuses both calls and the stored limit stays.
+- [ ] 1.12 SECURITY. Write a hostile test that sends the same Idempotency-Key with another body straight to the settings handler, in the NEW file internal/api/server/settings_replay_test.go. Check: TestSettingsPatchKeyReuseHostile refuses the request and changes nothing.
 
-- [ ] 2.1 Wire the routes with actions installation:manage-settings and namespace:manage-settings, and audit entries. Check: The route policy test lists both routes with their actions and none is public.
-- [ ] 2.2 Add an e2e step for a settings read and write against the real server, and CLIs that still work. Check: make e2e step settings passes
-- [ ] 2.3 Check that the API description serves what the console settings page needs: locked flag, source, revision and the refusal text. Record the console page work in the console repository. Check: The API description test lists each field, and the console issue links this change.
-- [ ] 2.4 Write the docs page for the settings resource and the session limit. Check: make docs-lint passes
-- [ ] 2.5 Run the usability check from the docs page alone. Check: Each error names the one command that helps.
-- [ ] 2.6 Run the full gate. Check: make check with zero findings
+## 2. Side effects (computed from main)
+
+- [x] 2.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
+
+## 3. Definition of done
+
+- [ ] 3.1 Wire both routes with actions installation:manage-settings and namespace:manage-settings. Check: The route policy test lists both routes with their actions.
+- [ ] 3.2 Add the proposed amendment text of ADR 245 decision 10 for the owner in the NEW file docs/adr/245-amendment-decision-10.md. Check: The pull request lists the text and the owner confirmation.
+- [ ] 3.3 Add an e2e step in the existing file e2e/settings_test.go (extend it in place) on `PATCH /api/dustpan/v1/settings` with a console session cookie that holds a fresh step, and the same weaker patch with an access token that is refused. BLOCKED by the missing e2e helper that makes a console session cookie with a fresh step; the step adds it. Then run the real Pulumi CLI and OpenTofu with a token. Check: make e2e step settings passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.4 Write the docs page in the NEW file docs/guides/settings.md. Check: make docs-lint passes
+- [ ] 3.5 Run the usability check from the docs page alone. Check: Each error names the one command that helps. A person's step.
+- [ ] 3.6 Run the full gate. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

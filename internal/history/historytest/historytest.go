@@ -118,6 +118,7 @@ func changeEntry(item history.ItemRef) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

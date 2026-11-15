@@ -220,7 +220,7 @@ func TestReviewLastAccessReadsOncePerPage(t *testing.T) {
 			Collections: f.units, Units: f.store,
 		},
 		Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
+		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)

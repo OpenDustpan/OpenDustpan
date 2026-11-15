@@ -156,9 +156,10 @@ type settings struct {
 	// stackRefusals records the refusals of the stack blob scope. newServices
 	// builds it once.
 	stackRefusals scopeaudit.Recorder
-	// blobGuard tells the blob deleters whether a backup or a restore runs.
-	// newUpdateService attaches it.
-	blobGuard       blobguard.Watch
+	// blobGuard holds the leases of the blob deletes: the namespace store,
+	// which reads the backups table and the restores table. newUpdateService
+	// attaches it.
+	blobGuard       blobguard.Leases
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore
@@ -266,6 +267,9 @@ type settings struct {
 	devSignIn        *devsignin.Config
 	// instanceStore keeps the instance version rows. See WithInstanceStore.
 	instanceStore installation.InstanceStore
+	// builtinStore is the built-in SQLite or PostgreSQL store. See WithSQLite,
+	// WithPostgreSQL and WithBuiltinStore.
+	builtinStore builtinStoreSettings
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
 	// durableStore keeps the durable operations and the job schedules, or
@@ -297,6 +301,10 @@ type settings struct {
 	// watch reads the worker state. assemble sets it before it builds the
 	// adapters.
 	watch *workerWatch
+	// observed is the metrics of the server. NewServer creates it before the
+	// services, so each deleter of a blob counts the takes that it refuses on
+	// it.
+	observed *metrics.ServerMetrics
 }
 
 // Option configures a Server.
@@ -533,6 +541,9 @@ func WithCheckpointDeltaCutoff(n int) Option {
 // Server is a configured OpenDustpan server.
 type Server struct {
 	handler http.Handler
+	// closeBuiltin closes the store that NewServer opened, or is nil when the
+	// caller opened the store or no built-in store exists.
+	closeBuiltin *builtinStoreCloser
 	// started records that Start succeeded. The gate in front of handler
 	// reads it.
 	started *startState
@@ -612,6 +623,10 @@ type Server struct {
 	// the schedule job.artifact-sweep. It is nil without the ports that it
 	// needs.
 	artifactSweeper *job.ArtifactSweeper
+	// supersededSweeper deletes the marked checkpoint blobs that a later save
+	// replaced: the schedule stack.superseded-checkpoint-sweep. It is nil
+	// without the update service.
+	supersededSweeper supersededSweeper
 	// nameLocks holds the counts of the lockout by name: the schedule
 	// name-lock-prune deletes the counts that can no longer change a lock.
 	// It is nil when the store keeps no such counts.
@@ -760,6 +775,11 @@ func defaultSettings() *settings {
 		components:              AllComponents(),
 		operationLease:          0,
 		watch:                   nil,
+		builtinStore: builtinStoreSettings{
+			source: builtinStoreNone, path: "", dsn: "", config: defaultStoreConfig(), handle: nil,
+			open: nil, close: nil,
+		},
+		observed: nil,
 	}
 }
 
@@ -778,6 +798,30 @@ func NewServer(opts ...Option) (*Server, error) {
 		opt(cfg)
 	}
 
+	if err := applyBuiltinStore(cfg); err != nil {
+		return nil, err
+	}
+
+	closeStore := cfg.builtinStore.closeFunc()
+
+	srv, err := buildServer(cfg)
+	if err != nil {
+		if closeStore == nil {
+			return nil, err
+		}
+
+		return nil, errors.Join(err, closeStore())
+	}
+
+	if closeStore != nil {
+		srv.closeBuiltin = &builtinStoreCloser{mu: sync.Mutex{}, close: closeStore}
+	}
+
+	return srv, nil
+}
+
+// buildServer wires the server from settings that have their built-in store.
+func buildServer(cfg *settings) (*Server, error) {
 	base, err := checkSettings(cfg)
 	if err != nil {
 		return nil, err
@@ -812,6 +856,10 @@ func NewServer(opts ...Option) (*Server, error) {
 	}
 
 	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
+
+	// The metrics exist before the services, so each deleter of a blob can
+	// count the takes that it refuses.
+	cfg.observed = metrics.NewServerMetrics(cfg.version, cfg.now())
 
 	svc, err := newServices(cfg, tokens, ports.authorizer)
 	if err != nil {
@@ -981,19 +1029,6 @@ func newTempAdminService(cfg *settings) (*tempadmin.Service, error) {
 	return svc, nil
 }
 
-// newServerMetrics returns the metrics of the server, and gives the recorder of
-// the refused dev sign-ins the namespace reader and the failure counter.
-func newServerMetrics(cfg *settings, svc services) (*metrics.ServerMetrics, error) {
-	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
-
-	err := cfg.devRefusal.bind(cfg, svc.namespaces, func() { observed.IncAuditAppendFailure() })
-	if err != nil {
-		return nil, err
-	}
-
-	return observed, nil
-}
-
 // assemble mounts the adapters and routes around the services and the parts
 // that NewServer built before it.
 func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyParts) (*Server, error) {
@@ -1057,10 +1092,10 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		kind:             newKindState(cfg), instances: newInstanceState(cfg),
 		durable:      cfg.durableStore,
 		durableOwner: durableOwner(cfg),
-		reconciler:   reconciler, artifactSweeper: artifactSweeper, issuer: svc.issuer,
+		reconciler:   reconciler, artifactSweeper: artifactSweeper, supersededSweeper: svc.updates, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
-		components: cfg.components, nameLocks: nameLocksOf(cfg),
+		components: cfg.components, nameLocks: nameLocksOf(cfg), closeBuiltin: nil,
 		watch: cfg.watch, auditChainEvery: cfg.auditChainInterval, stateWrite: newStateWriteStart(cfg, svc),
 	}
 
@@ -1069,13 +1104,15 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 	return srv, nil
 }
 
-// prepareBackground builds the metrics, the worker watch, the sweeper of
-// deleted units and the audit shipper, and sets them in cfg and svc, and builds the issuer. One
-// registry holds every metric family: the request, runtime and build families,
-// and the readiness failure counter of the probe.
+// prepareBackground binds the recorder of the refused dev sign-ins and builds
+// the worker watch, the sweeper of deleted units and the audit shipper, and
+// sets them in cfg and svc, and builds the issuer. One registry holds every
+// metric family: the request, runtime and build families, and the readiness
+// failure counter of the probe.
 func prepareBackground(cfg *settings, svc *services) (*metrics.ServerMetrics, *audit.Shipper, error) {
-	observed, err := newServerMetrics(cfg, *svc)
-	if err != nil {
+	observed := cfg.observed
+
+	if err := cfg.devRefusal.bind(cfg, svc.namespaces, func() { observed.IncAuditAppendFailure() }); err != nil {
 		return nil, nil, err
 	}
 
@@ -1762,6 +1799,7 @@ func newWorkspaceService(
 		Retention:          cfg.softDeleteRetention,
 		ManualLocks:        locks,
 		BlobGuard:          cfg.blobGuard,
+		OnDeleteWait:       blobDeleteWait(cfg.observed),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("workspace service: %w", err)
@@ -1821,6 +1859,7 @@ func newUpdateService(
 		Replayer:           pulumijournal.NewReplayer(clockOf(cfg), ""),
 		ManualLocks:        locks,
 		BlobGuard:          cfg.blobGuard,
+		OnDeleteWait:       blobDeleteWait(cfg.observed),
 		Sealer:             sealer,
 	})
 	if err != nil {
@@ -2287,6 +2326,7 @@ func (s *Server) sweepTempAdminsOnce(ctx context.Context) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	})
 
 	switch {
@@ -3171,7 +3211,8 @@ func unitCollections(cfg *settings) (access.UnitCollections, error) {
 // namespace store, or returns nil when the store keeps no roles and grants.
 // The service checks escalation with the grant model, so it uses the
 // configured authorizer when that is an access.Authorizer, and its own one
-// otherwise.
+// otherwise. It reads the cap of the export of a collection from the settings
+// service when the server keeps one.
 func newAccessService(cfg *settings) (*access.Service, error) {
 	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
@@ -3195,6 +3236,11 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		}
 	}
 
+	var settings access.Settings
+	if settingsSvc := newSettingService(cfg, cfg.namespaceStore); settingsSvc != nil {
+		settings = settingsSvc
+	}
+
 	reach, reachErr := reachConfig(cfg)
 	if reachErr != nil {
 		return nil, fmt.Errorf("access service: %w", reachErr)
@@ -3209,7 +3255,7 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz,
 		Reach: reach, Now: nil, NewID: nil,
-		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), LimitGroups: limits,
+		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), Settings: settings, LimitGroups: limits,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access service: %w", err)
