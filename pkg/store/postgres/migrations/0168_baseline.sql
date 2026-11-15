@@ -1562,6 +1562,9 @@ ALTER TABLE ONLY collections
     ADD CONSTRAINT collections_id_key UNIQUE (id);
 
 ALTER TABLE ONLY collections
+    ADD CONSTRAINT collections_namespace_id_key UNIQUE (namespace, id);
+
+ALTER TABLE ONLY collections
     ADD CONSTRAINT collections_pkey PRIMARY KEY (namespace, name_key);
 
 ALTER TABLE ONLY drift_results
@@ -2234,7 +2237,7 @@ ALTER TABLE ONLY person_preferences
     ADD CONSTRAINT person_preferences_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);
 
 ALTER TABLE ONLY placement_rules
-    ADD CONSTRAINT placement_rules_collection_id_fkey FOREIGN KEY (collection_id) REFERENCES collections(id);
+    ADD CONSTRAINT placement_rules_namespace_collection_id_fkey FOREIGN KEY (namespace, collection_id) REFERENCES collections(namespace, id);
 
 ALTER TABLE ONLY placement_rules
     ADD CONSTRAINT placement_rules_namespace_fkey FOREIGN KEY (namespace) REFERENCES namespaces(name);

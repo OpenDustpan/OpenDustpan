@@ -59,7 +59,9 @@ func (s *Store) CreatePlacementRule(
 			return fmt.Errorf("place rule: %w", err)
 		}
 
-		// Defense in depth: the foreign key checks existence, not namespace.
+		// Defense in depth: the foreign key ties the rule to a collection of
+		// the same namespace. This read stays so that a caller cannot skip
+		// it, and it tells the user which collection is missing.
 		_, idErr := q.GetPlacementCollection(ctx, db.GetPlacementCollectionParams{
 			Namespace: r.Namespace.String(), ID: r.CollectionID,
 		})
@@ -119,7 +121,9 @@ func (s *Store) UpdatePlacementRule(
 			return fmt.Errorf("place rule: %w", err)
 		}
 
-		// Defense in depth: the foreign key checks existence, not namespace.
+		// Defense in depth: the foreign key ties the rule to a collection of
+		// the same namespace. This read stays so that a caller cannot skip
+		// it, and it tells the user which collection is missing.
 		_, idErr := q.GetPlacementCollection(ctx, db.GetPlacementCollectionParams{
 			Namespace: r.Namespace.String(), ID: r.CollectionID,
 		})

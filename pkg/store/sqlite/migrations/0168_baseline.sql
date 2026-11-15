@@ -345,7 +345,8 @@ CREATE TABLE collections (
     name_key      TEXT    NOT NULL,
     name          TEXT    NOT NULL,
     created_at_ms INTEGER NOT NULL,
-    PRIMARY KEY (namespace, name_key)
+    PRIMARY KEY (namespace, name_key),
+    UNIQUE (namespace, id)
 ) STRICT;
 
 CREATE TABLE collection_members (
@@ -1346,7 +1347,7 @@ CREATE TABLE placement_rules (
     collection_id  TEXT    NOT NULL,
     created_by     TEXT    NOT NULL,
     created_at_ms  INTEGER NOT NULL,
-    FOREIGN KEY (collection_id) REFERENCES collections (id)
+    FOREIGN KEY (namespace, collection_id) REFERENCES collections (namespace, id)
 ) STRICT;
 
 CREATE TABLE local_users (
