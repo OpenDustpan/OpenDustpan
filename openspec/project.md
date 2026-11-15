@@ -60,8 +60,14 @@ names the ADRs to read.
 
 A change lives in `openspec/changes/<change-name>/`. It has `proposal.md`,
 `design.md`, `tasks.md` and one delta spec for each capability it touches in
-`specs/<capability>/spec.md`. Agent work starts from a change that has no open
-questions. The pull request links the change and its issue.
+`specs/<capability>/spec.md`. A change is for a new or changed capability.
+Agent work on a capability starts from a change that has no open questions.
+The pull request links the change and its issue.
+
+A bug fix, a flaky test, a test fake or fixture, tooling, CI, lint and a
+refactor with no change of behavior need no change. A test fake is not product
+behavior: no spec names it. The pull request body gives the failure, the fix
+and the check, with the log or the command output as evidence.
 
 ### Proposal
 
@@ -84,7 +90,7 @@ questions. The pull request links the change and its issue.
 3. **Open questions.** Every proposal has a section "Open questions". A change
    may be implemented only when that section reads "none" (the spec-ready
    gate). Each open question names who decides it.
-4. **Short form.** A bug or a tech-debt change may use a short proposal:
+4. **Short form.** A small change of a capability may use a short proposal:
    problem, evidence, fix boundary, check and "Open questions: none". It still
    has an ADR check, but it can be one line when no ADR is touched.
 5. **Evidence for each claim.** Every negative claim carries its proof inline.
