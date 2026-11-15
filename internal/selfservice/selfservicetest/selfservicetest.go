@@ -229,6 +229,7 @@ func entry(action identity.Action, object string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

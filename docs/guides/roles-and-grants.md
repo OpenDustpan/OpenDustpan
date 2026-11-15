@@ -169,8 +169,30 @@ must also hold the read action of that object. A caller without the read
 action gets `404`, not `403`. A revoke answers `204`. The grant is ended, and
 the history keeps it.
 
+A revoke takes effect on the next request. The server reads the stored grant
+for each request and keeps no allow, so a personal access token whose only
+grant ended gets `403` on the next CLI command. To see which grants a token
+still holds, read `GET /api/server/principals/{principal}/grants`.
+
+```sh
+curl -s -X DELETE -H "Authorization: Bearer $TOKEN" \
+  https://dustpan.example.com/api/server/grants/grt-...
+```
+
 The revoke of the last site administrator is refused with `409` and the code
 `access.last-site-administrator`.
+
+A grant on one collection reaches only that collection and its units. A writer
+on collection A that writes a unit of collection B gets `403` and nothing
+changes. A viewer reads the state with `pulumi stack export` or
+`tofu state pull`, but a write such as `pulumi up` or `tofu apply` gets `403`
+and nothing changes. When a command is refused, read the access review of the
+collection to find the missing grant:
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://dustpan.example.com/api/server/namespaces/acme/collections/payments/access-review?limit=100"
+```
 
 ## Ask why an action is allowed or denied
 

@@ -161,6 +161,7 @@ func Entry(r *http.Request, p identity.Principal, obj identity.Object, detail De
 		Reason:        detail.Reason,
 		PrincipalKind: string(p.Kind),
 		JobID:         p.JobID,
+		Origin:        nil,
 	}
 }
 

@@ -641,6 +641,7 @@ func (s *ArtifactSweeper) record(ctx context.Context, at time.Time, res *Artifac
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "",
 		Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: "",
 		Reason: reason,
+		Origin: nil,
 	}
 
 	if _, err := s.audit.AppendServer(ctx, entry); err != nil {

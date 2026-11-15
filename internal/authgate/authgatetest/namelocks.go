@@ -518,6 +518,7 @@ func clearEntry() audit.Entry {
 		Channel: audit.ChannelConsole, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "the person called",
 		PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 }
 

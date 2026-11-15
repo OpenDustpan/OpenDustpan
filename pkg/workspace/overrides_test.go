@@ -236,6 +236,7 @@ func forceEntry() audit.Entry {
 		Reason:        "the run crashed",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

@@ -356,6 +356,7 @@ func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace)
 		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 
 	for i, query := range []savedview.Query{
@@ -432,6 +433,7 @@ func seedBackupBreakGlass(t *testing.T, s BackupStore, acme namespace.Namespace)
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	// The pending review carries a notice step that is due, so the round trip
@@ -553,7 +555,12 @@ func seedBackupItemKeys(t *testing.T, s BackupStore, acme namespace.Namespace) {
 			Ref:        ref,
 			ID:         secret.NewItemKeyID(),
 			WrapperID:  "kek-1",
-			Blob:       secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}},
+			Blob: secret.ItemKeyBlobInfo{
+				Version: 1,
+				Size:    60,
+				MD5:     [16]byte{1, 2, 3},
+				Attempt: "abcdefghij0123456789",
+			},
 		}
 		if _, err = keys.CreateItemKey(t.Context(), k, acme.Fence()); err != nil {
 			t.Fatalf("create item key %d: %v", i, err)
@@ -588,6 +595,7 @@ func seedBackupGitHost(t *testing.T, s BackupStore, acme namespace.Namespace) {
 			UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 			RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "",
 			JobID: "", Reason: "",
+			Origin: nil,
 		}
 	}
 
@@ -656,6 +664,7 @@ func seedBackupSinks(t *testing.T, s BackupStore, acme namespace.Namespace) {
 		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 
 	chat := notify.Sink{
@@ -1189,6 +1198,7 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -1351,6 +1361,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Reason:        "",
 			PrincipalKind: "",
 			JobID:         "",
+			Origin:        nil,
 		})
 		if err != nil {
 			t.Fatalf("append audit entry %d: %v", i, err)
