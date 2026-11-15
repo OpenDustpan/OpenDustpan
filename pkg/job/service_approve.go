@@ -33,17 +33,15 @@ import (
 // The store records the verdict, and the event that follows from it, in one
 // transaction with the audit entry. A second approval by one subject is
 // recorded and counts once (Gate.Status). Group membership is checked by ID.
-//
-//nolint:revive // argument-limit: the signature is the one of job.Service.
 func (s *service) Approve(
-	ctx context.Context, a Actor, id ID, v Verdict, plan PlanBinding, comment string,
+	ctx context.Context, a Actor, id ID, req ApproveRequest,
 ) (Job, error) {
 	err := ctx.Err()
 	if err != nil {
 		return Job{}, fmt.Errorf("approve job: %w", err)
 	}
 
-	err = checkVerdict(v, comment)
+	err = checkVerdict(req.Verdict, req.Comment)
 	if err != nil {
 		return Job{}, err
 	}
@@ -60,14 +58,14 @@ func (s *service) Approve(
 
 	now := s.now().UTC()
 	ap := Approval{
-		Gate: GateApproval, Subject: a.Principal.Subject, Agent: a.Agent, Verdict: v, Comment: comment,
-		Plan: nil, At: now, Auth: "", AuthAt: time.Time{},
+		Gate: GateApproval, Subject: a.Principal.Subject, Agent: a.Agent, Verdict: req.Verdict,
+		Comment: req.Comment, Plan: nil, At: now, Auth: "", AuthAt: time.Time{},
 	}
 
-	if v == VerdictApprove {
+	if req.Verdict == VerdictApprove {
 		// The binding of the caller. checkPlan checks it, and drops it when no
 		// plan phase comes before.
-		ap.Plan = &plan
+		ap.Plan = &req.Plan
 
 		err = s.checkApproval(ctx, &j, a, gates, &ap)
 		if err != nil {
@@ -75,7 +73,7 @@ func (s *service) Approve(
 		}
 	}
 
-	return s.record(ctx, &j, a, &ap, mfaOf(&j, v))
+	return s.record(ctx, &j, a, &ap, mfaOf(&j, req.Verdict))
 }
 
 // checkApproval runs the checks that only an approval needs. ap.Plan holds the

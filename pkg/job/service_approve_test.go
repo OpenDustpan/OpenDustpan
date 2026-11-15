@@ -198,7 +198,8 @@ func TestApproveRecordsTheVerdict(t *testing.T) {
 			r := approveRig(t, openPolicy())
 			seeded := r.seed(tc.mod)
 
-			_, err := r.svc.Approve(t.Context(), tc.actor, approveID, tc.verdict, r.binding(), "looks right")
+			_, err := r.svc.Approve(t.Context(), tc.actor, approveID,
+				job.ApproveRequest{Verdict: tc.verdict, Plan: r.binding(), Comment: "looks right"})
 			if err != nil {
 				t.Fatalf("Approve = %v", err)
 			}
@@ -409,7 +410,8 @@ func TestApproveRefusesAndWritesNothing(t *testing.T) {
 			// The principal bob can read and approve nothing.
 			r.authz.denied = "bob"
 
-			_, err := r.svc.Approve(t.Context(), tc.actor, approveID, tc.verdict, bound, tc.comment)
+			_, err := r.svc.Approve(t.Context(), tc.actor, approveID,
+				job.ApproveRequest{Verdict: tc.verdict, Plan: bound, Comment: tc.comment})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Approve = %v, want %v", err, tc.want)
 			}
@@ -452,7 +454,8 @@ func TestApproveDestroyNeedsAFreshMFAStep(t *testing.T) {
 			actor.Principal.Credential = identity.CredentialSession
 			actor.ConfirmAuth, actor.AuthAt = tc.auth, r.now.Add(-tc.age)
 
-			_, err := r.svc.Approve(t.Context(), actor, approveID, job.VerdictApprove, r.binding(), "")
+			_, err := r.svc.Approve(t.Context(), actor, approveID,
+				job.ApproveRequest{Verdict: job.VerdictApprove, Plan: r.binding(), Comment: ""})
 
 			if tc.ok && err != nil {
 				t.Fatalf("Approve = %v, want nil", err)
@@ -480,7 +483,8 @@ func TestApproveRejectionOfADestroyNeedsNoMFAStep(t *testing.T) {
 	r := approveRig(t, openPolicy())
 	r.seed(func(j *job.Job) { j.Spec.Operation = job.OperationDestroy })
 
-	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, job.VerdictReject, noBinding(), "")
+	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID,
+		job.ApproveRequest{Verdict: job.VerdictReject, Plan: noBinding(), Comment: ""})
 	if err != nil {
 		t.Fatalf("Approve = %v, want nil", err)
 	}
@@ -500,7 +504,8 @@ func TestApproveRefusesAPrincipalWithoutTheAction(t *testing.T) {
 	// The principal may read the job, so it knows that the job exists: the
 	// answer is a denial of the action, not ErrNotFound.
 	for _, v := range []job.Verdict{job.VerdictApprove, job.VerdictReject} {
-		_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, v, r.binding(), "")
+		_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID,
+			job.ApproveRequest{Verdict: v, Plan: r.binding(), Comment: ""})
 
 		denied, ok := errors.AsType[*job.DeniedError](err)
 		if !ok || !errors.Is(err, identity.ErrDenied) || denied.Action != job.ActionJobApprove {
@@ -520,7 +525,8 @@ func TestApproveFailsClosedWhenTheAuthorizerFails(t *testing.T) {
 	r.authz.fail[string(job.ActionJobApprove)+" "+r.unit.String()] = errApproveGrants
 	r.seed(nil)
 
-	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, job.VerdictApprove, r.binding(), "")
+	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID,
+		job.ApproveRequest{Verdict: job.VerdictApprove, Plan: r.binding(), Comment: ""})
 
 	denied, ok := errors.AsType[*job.DeniedError](err)
 	if !ok || !errors.Is(err, identity.ErrDenied) || !errors.Is(err, errApproveGrants) {
@@ -542,7 +548,8 @@ func TestApproveWithNoPolicyNeverOpensTheGate(t *testing.T) {
 	r := approveRig(t, nil)
 	r.seed(func(j *job.Job) { j.Phases[1].Approvals = []job.Approval{approvedBy("dave")} })
 
-	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, job.VerdictApprove, r.binding(), "")
+	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID,
+		job.ApproveRequest{Verdict: job.VerdictApprove, Plan: r.binding(), Comment: ""})
 	if !errors.Is(err, identity.ErrDenied) {
 		t.Fatalf("Approve = %v, want a denial", err)
 	}
@@ -561,7 +568,8 @@ func TestApproveRefusesAnUnknownOrForeignJobID(t *testing.T) {
 	r.seed(nil)
 
 	for _, id := range []job.ID{"", "x", "job-missing", "../job-approve"} {
-		_, err := r.svc.Approve(t.Context(), actorOf("carol"), id, job.VerdictApprove, r.binding(), "")
+		_, err := r.svc.Approve(t.Context(), actorOf("carol"), id,
+			job.ApproveRequest{Verdict: job.VerdictApprove, Plan: r.binding(), Comment: ""})
 		if !errors.Is(err, job.ErrNotFound) {
 			t.Errorf("Approve(%q) = %v, want ErrNotFound", id, err)
 		}
@@ -581,7 +589,8 @@ func TestApproveStopsOnACanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	_, err := r.svc.Approve(ctx, actorOf("carol"), approveID, job.VerdictApprove, r.binding(), "")
+	_, err := r.svc.Approve(ctx, actorOf("carol"), approveID,
+		job.ApproveRequest{Verdict: job.VerdictApprove, Plan: r.binding(), Comment: ""})
 	if !errors.Is(err, context.Canceled) || len(r.store.applies) != 0 {
 		t.Fatalf("Approve = %v with %d changes, want context.Canceled and none", err, len(r.store.applies))
 	}

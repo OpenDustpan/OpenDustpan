@@ -159,7 +159,8 @@ func (h *Handler) approveJob(w http.ResponseWriter, r *http.Request, p identity.
 
 	actor := job.Actor{Principal: p, Agent: "", Mode: "", ConfirmAuth: "", AuthAt: time.Time{}}
 
-	j, err := h.starter.Approve(ctx, actor, t.job.ID, verdict, bound, body.Comment)
+	j, err := h.starter.Approve(ctx, actor, t.job.ID,
+		job.ApproveRequest{Verdict: verdict, Plan: bound, Comment: body.Comment})
 	if err != nil {
 		h.recordApprovalRefusal(r, p, t, err)
 		h.writeError(ctx, w, err)

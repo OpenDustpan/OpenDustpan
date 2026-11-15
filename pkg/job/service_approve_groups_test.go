@@ -142,7 +142,8 @@ func checkGroupCase(t *testing.T, tc *groupCase) {
 	r := approveRigWithGroups(t, openPolicy(), port)
 	r.seed(groupGate(tc.names, tc.ids))
 
-	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID, tc.verdict, r.binding(), "")
+	_, err := r.svc.Approve(t.Context(), actorOf("carol"), approveID,
+		job.ApproveRequest{Verdict: tc.verdict, Plan: r.binding(), Comment: ""})
 	if !errors.Is(err, tc.want) {
 		t.Fatalf("Approve = %v, want %v", err, tc.want)
 	}

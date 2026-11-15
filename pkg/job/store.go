@@ -410,6 +410,15 @@ type StartRequest struct {
 	RequestID string
 }
 
+// ApproveRequest is what a caller gives to record a verdict on a job: the
+// verdict, the plan binding that the approver saw, and the comment of the
+// audit entry. A rejection needs no plan binding.
+type ApproveRequest struct {
+	Verdict Verdict
+	Plan    PlanBinding
+	Comment string
+}
+
 // Service is what a caller uses to start and drive a job. The REST API
 // adapter and every feature of the server that starts a job call it. Dusty
 // runs in the server, as an agent loop on durable operations, and calls it
@@ -451,12 +460,13 @@ type Service interface {
 	// ErrDelivered for a write-back job whose change is in git for good.
 	Cancel(ctx context.Context, a Actor, id ID, reason string) (Job, error)
 	// Approve records the verdict of a on the gate of the current phase.
-	// plan is the binding of the plans that the approver saw. It returns
+	// req holds the verdict, the comment and the plan binding that the
+	// approver saw. It returns
 	// ErrTransition when the job does not wait for approval,
 	// ErrAgentDenied for an approval that an agent records (an agent can
 	// record a rejection), ErrSelfApproval for an approval by the starter
 	// that the gate does not allow, also when the starter used an agent,
-	// ErrPlanChanged when plan is not the binding of the stored plans,
+	// ErrPlanChanged when req.Plan is not the binding of the stored plans,
 	// ErrPlanStale for plans older than the maximum plan age, and
 	// ErrFinished for a job that ended.
 	//
@@ -471,7 +481,7 @@ type Service interface {
 	// (EventApprovalRecorded). The approval that opens every gate moves it to
 	// queued (EventApproved), and a rejection ends it rejected. Each verdict
 	// and its audit entry commit together.
-	Approve(ctx context.Context, a Actor, id ID, v Verdict, plan PlanBinding, comment string) (Job, error)
+	Approve(ctx context.Context, a Actor, id ID, req ApproveRequest) (Job, error)
 	// Confirm records the verdict of the person who asked the agent, on the
 	// confirmation gate of the current phase. It needs the start action of
 	// the job on its unit, not job:approve. The request must come from the

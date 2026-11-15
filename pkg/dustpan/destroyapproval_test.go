@@ -152,7 +152,8 @@ func TestDestroyApprovalNeedsFreshStep(t *testing.T) {
 			a.Agent, a.ConfirmAuth, a.AuthAt = tc.agent, tc.auth, at.Add(-tc.age)
 
 			var binding job.PlanBinding
-			_, err := r.service.Approve(t.Context(), a, r.store.current.ID, job.VerdictApprove, binding, "")
+			_, err := r.service.Approve(t.Context(), a, r.store.current.ID,
+				job.ApproveRequest{Verdict: job.VerdictApprove, Plan: binding, Comment: ""})
 			checkDestroyApprovalResult(t, r.store, a.AuthAt, tc.want, err)
 		})
 	}
@@ -186,7 +187,8 @@ func TestDestroyApprovalServiceRefusesTokenAndStaleProof(t *testing.T) {
 			// The handler is not called, and the store allows every write.
 			// Only the service can refuse these approvals.
 			var binding job.PlanBinding
-			_, err := r.service.Approve(t.Context(), a, r.store.current.ID, job.VerdictApprove, binding, "")
+			_, err := r.service.Approve(t.Context(), a, r.store.current.ID,
+				job.ApproveRequest{Verdict: job.VerdictApprove, Plan: binding, Comment: ""})
 			if !errors.Is(err, job.ErrAuthStale) {
 				t.Errorf("Approve = %v; want ErrAuthStale", err)
 			}
@@ -222,7 +224,8 @@ func TestDestroyApprovalRefusesMalformedSessionProof(t *testing.T) {
 			a.ConfirmAuth, a.AuthAt = job.ConfirmAuthMFA, at
 			tc.edit(&a)
 			var binding job.PlanBinding
-			_, err := r.service.Approve(t.Context(), a, r.store.current.ID, job.VerdictApprove, binding, "")
+			_, err := r.service.Approve(t.Context(), a, r.store.current.ID,
+				job.ApproveRequest{Verdict: job.VerdictApprove, Plan: binding, Comment: ""})
 			checkDestroyApprovalResult(t, r.store, a.AuthAt, job.ErrAuthStale, err)
 		})
 	}

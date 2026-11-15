@@ -41,14 +41,13 @@ type fakeApprover struct {
 	err   error
 }
 
-//nolint:revive // argument-limit: the signature is the one of job.Service.
 func (f *fakeApprover) Approve(
-	_ context.Context, a job.Actor, id job.ID, v job.Verdict, plan job.PlanBinding, comment string,
+	_ context.Context, a job.Actor, id job.ID, req job.ApproveRequest,
 ) (job.Job, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.calls = append(f.calls, approveCall{actor: a, id: id, verdict: v, plan: plan, comment: comment})
+	f.calls = append(f.calls, approveCall{actor: a, id: id, verdict: req.Verdict, plan: req.Plan, comment: req.Comment})
 
 	if f.err != nil {
 		return job.Job{}, f.err
