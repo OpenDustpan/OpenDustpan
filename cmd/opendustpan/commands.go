@@ -29,7 +29,7 @@ func commandTable() cli.Table {
 		cli.BackupCheckCommand(client.BackupCheck),
 		cli.StoreCheckCommand(client.StoreCheck),
 		cli.ServeCommand(func(ctx context.Context, args []string, _, stderr io.Writer) error {
-			return serve(ctx, args, stderr)
+			return serveCommand(ctx, args, stderr)
 		}),
 		cli.DevCommand(func(ctx context.Context, args []string, _, stderr io.Writer) error {
 			return dev(ctx, args, stderr)
