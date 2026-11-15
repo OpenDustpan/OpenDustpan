@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,6 +29,9 @@ const (
 	mixedMinimum = "v1.0.0"
 	// mixedBelow is a binary version below mixedMinimum.
 	mixedBelow = "v0.9.0"
+	// mixedCurrentTwice is the label of the peer that is a second process of
+	// the current binary, for a repository before its first release tag.
+	mixedCurrentTwice = "current-twice"
 )
 
 // sqliteGuardMessage is the text of the process guard of the SQLite store.
@@ -44,10 +48,12 @@ func mixedAllowedRefusals() map[string]string {
 	return map[string]string{}
 }
 
-// lastMixedTags returns the newest mixedReleases tags of all, in version
-// order. With fewer tags it returns every tag.
-func lastMixedTags(all []string) []string {
-	return all[max(0, len(all)-mixedReleases):]
+// mixedPeer is one peer binary of the matrix: the release tag it was built
+// from, or the current binary when the repository has no release tag. The
+// label names the peer in the output.
+type mixedPeer struct {
+	label string
+	bin   string
 }
 
 // mixedRun groups what one mixed-version run on one store needs.
@@ -60,17 +66,46 @@ type mixedRun struct {
 	store   e2e.Store
 }
 
+// mixedReleaseTags returns the newest mixedReleases release tags that are
+// ancestors of HEAD, in version order. The matrix ignores non-release tags
+// and tags that are not ancestors of HEAD. A shallow clone that shows no
+// tag fails with the fetch guidance: the empty list is an incomplete fetch,
+// not a repository before its first tag.
+func mixedReleaseTags(t *testing.T) []string {
+	t.Helper()
+
+	ctx := t.Context()
+	all := e2e.ReleaseTags(ctx, t)
+
+	ancestors := make(map[string]bool)
+
+	for _, tag := range e2e.AncestorReleaseTags(ctx, t) {
+		ancestors[tag] = true
+	}
+
+	tags := e2e.MixedTagChoice(all, mixedReleases, func(tag string) bool { return ancestors[tag] })
+
+	if len(tags) == 0 {
+		if err := e2e.MixedTagFetchError(e2e.RepositoryFetch(ctx, t)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return tags
+}
+
 // TestMixedVersion checks that the current binary and the binary of each of
-// the last two release tags serve on one database at the same time. The
-// current binary starts on a new database, the real Pulumi CLI and OpenTofu
-// write state through it, and then the peer binary starts on the same
-// database. The real CLIs read the state of the current binary and write
-// through the peer, and the current binary reads what the peer wrote. A peer
-// that the schema minimum refuses is allowed only when it prints the schema
-// refusal. With no release tag the peer is a second process of the current
-// binary, and the test logs that it ran over 0 tags, so it never skips
-// silently. Run it with `make mixed-version-test`; it is not part of
-// `make check`.
+// the last two release tags serve on one database. The current binary starts
+// on a new database, the real Pulumi CLI and OpenTofu write state through
+// it, and then a peer binary serves on the same database. The real CLIs read
+// the state of the current binary and write through the peer, and the
+// current binary reads what the peer wrote. A peer that the schema minimum
+// refuses is allowed only when it prints the schema refusal. With no release
+// tag the peer is a second process of the current binary, and the test logs
+// that it ran over 0 tags, so it never skips silently. One PostgreSQL
+// database also runs the reverse start order: the old binary first, the
+// current binary second. Run it with `make mixed-version-test`; it is not
+// part of `make check`.
 func TestMixedVersion(t *testing.T) {
 	t.Parallel()
 
@@ -84,20 +119,10 @@ func TestMixedVersion(t *testing.T) {
 		t.Fatal("the mixed-version test needs E2E_SERVER=binary (run make mixed-version-test)")
 	}
 
-	tags := lastMixedTags(listReleaseTags(t))
+	ctx := t.Context()
+	tags := mixedReleaseTags(t)
 
-	t.Logf("mixed-version matrix ran over %d tags: %s", len(tags), strings.Join(tags, ", "))
-
-	if len(tags) == 0 {
-		t.Log("no v* tag is reachable from HEAD: the peer is a second process of the current binary")
-		// A workflow command at the start of a line, so GitHub shows the warning on the run.
-		const annotation = "::warning title=Mixed-version matrix::ran over 0 tags: " +
-			"no v* tag is reachable from HEAD, so the peer is a second process of the current binary"
-
-		if _, err := fmt.Fprintln(os.Stdout, annotation); err != nil {
-			t.Logf("write the warning annotation: %v", err)
-		}
-	}
+	mixedReportTags(t, tags)
 
 	fetcher := sharedFetcher(t)
 
@@ -107,27 +132,132 @@ func TestMixedVersion(t *testing.T) {
 	}
 
 	tools := installUpgradeTools(t, fetcher)
-	newBin := e2e.BuildCurrentBinary(t.Context(), t, t.TempDir())
-	peers := map[string]string{"current-twice": newBin}
+	newBin := e2e.BuildCurrentBinary(ctx, t, t.TempDir())
+
+	peers := mixedBuildPeers(ctx, t, tags, newBin)
+
+	matrix := mixedMatrix{
+		tags:      tags,
+		peers:     peers,
+		databases: databases,
+		newBin:    newBin,
+		tools:     tools,
+	}
+
+	mixedRunMatrix(t, matrix)
+	mixedRunReverse(t, matrix)
+}
+
+// mixedReportTags logs the release tags that the matrix runs, and writes the
+// warning annotation of a run without a release tag, so a workflow shows the
+// run on one line and the step never skips silently.
+func mixedReportTags(t *testing.T, tags []string) {
+	t.Helper()
+
+	t.Log(e2e.MixedTagReport(tags))
 
 	if len(tags) > 0 {
-		delete(peers, "current-twice")
+		return
 	}
+
+	// A workflow command at the start of a line, so GitHub shows the warning on the run.
+	annotation := "::warning title=Mixed-version matrix::" + e2e.MixedTagReport(nil)
+
+	if _, err := fmt.Fprintln(os.Stdout, annotation); err != nil {
+		t.Logf("write the warning annotation: %v", err)
+	}
+}
+
+// mixedBuildPeers builds the peer binary of each release tag, or the current
+// binary when the repository has no release tag. A tag that cannot run fails
+// the run and names itself, and the other tags still build, so one working
+// tag never hides a broken one and an incomplete fetch never falls back to
+// the 0-tag report.
+func mixedBuildPeers(ctx context.Context, t *testing.T, tags []string, newBin string) []mixedPeer {
+	t.Helper()
+
+	return mixedBuildTagPeers(ctx, t, tags, newBin, func(ctx context.Context, tag string) (string, error) {
+		return mixedTagPeer(ctx, t, tag)
+	})
+}
+
+// mixedTagPeer builds the peer of one release tag. A tag without the minimum
+// binary version check gives no refusal signal, so it fails without a build
+// attempt and the error names the tag.
+func mixedTagPeer(ctx context.Context, t *testing.T, tag string) (string, error) {
+	t.Helper()
+
+	if !e2e.TagHasMinimumCheck(ctx, t, tag) {
+		return "", e2e.MixedMinimumTagError(tag)
+	}
+
+	return e2e.MixedBuildTag(ctx, t, tag, t.TempDir())
+}
+
+// mixedBuildReporter reports what the peer build loop does: the failure of a
+// tag that cannot run, and the log line of a tag that builds. A case can
+// record the failures and check the loop without failing its own run.
+type mixedBuildReporter interface {
+	Helper()
+	Error(args ...any)
+	Logf(format string, args ...any)
+}
+
+// mixedBuildTagPeers builds one peer per tag with build. It reports the
+// failure of each tag that cannot run and keeps building the other tags, so
+// the run fails with every broken tag named and one working tag never hides a
+// broken one. With no tag the peer is a second process of the current binary.
+func mixedBuildTagPeers(ctx context.Context, rep mixedBuildReporter, tags []string, newBin string,
+	build func(ctx context.Context, tag string) (string, error),
+) []mixedPeer {
+	rep.Helper()
+
+	if len(tags) == 0 {
+		return []mixedPeer{{label: mixedCurrentTwice, bin: newBin}}
+	}
+
+	peers := make([]mixedPeer, 0, len(tags))
 
 	for _, tag := range tags {
-		peers[tag] = e2e.BuildTagBinary(t.Context(), t, tag, t.TempDir())
-		t.Logf("built tag %s at %s and the current binary at %s", tag, peers[tag], newBin)
+		bin, err := build(ctx, tag)
+		if err != nil {
+			rep.Error(err)
+
+			continue
+		}
+
+		rep.Logf("built the release tag %s at %s and the current binary at %s", tag, bin, newBin)
+
+		peers = append(peers, mixedPeer{label: tag, bin: bin})
 	}
 
-	for label, peerBin := range peers {
-		for _, db := range databases {
-			t.Run(label+"/"+string(db), func(t *testing.T) {
+	return peers
+}
+
+// mixedMatrix groups what one full matrix run needs: the release tags that
+// run, the peer binaries to serve, the databases to run on, the current
+// binary and the CLIs that drive both.
+type mixedMatrix struct {
+	tags      []string
+	peers     []mixedPeer
+	databases []e2e.Store
+	newBin    string
+	tools     upgradeTools
+}
+
+// mixedRunMatrix runs one mixed-version subtest for each peer and store.
+func mixedRunMatrix(t *testing.T, in mixedMatrix) {
+	t.Helper()
+
+	for _, peer := range in.peers {
+		for _, db := range in.databases {
+			t.Run(peer.label+"/"+string(db), func(t *testing.T) {
 				t.Parallel()
 				mixedOnStore(t, mixedRun{
-					label:   label,
-					peerBin: peerBin,
-					newBin:  newBin,
-					tools:   tools,
+					label:   peer.label,
+					peerBin: peer.bin,
+					newBin:  in.newBin,
+					tools:   in.tools,
 					store:   db,
 				})
 			})
@@ -135,8 +265,45 @@ func TestMixedVersion(t *testing.T) {
 	}
 }
 
-// mixedOnStore writes state through the current binary, starts the peer on
-// the same database, and checks the CLIs against both servers.
+// mixedRunReverse starts the old binary before the current binary on one
+// PostgreSQL database. The start order does not matter, so the reverse order
+// runs too, when a release tag and the PostgreSQL store are in the matrix.
+func mixedRunReverse(t *testing.T, in mixedMatrix) {
+	t.Helper()
+
+	if len(in.tags) == 0 || !slices.Contains(in.databases, e2e.StorePostgres) {
+		t.Log("the reverse start order needs a release tag and the PostgreSQL store: " +
+			"set DUSTPAN_TEST_POSTGRES_URL to run it")
+
+		return
+	}
+
+	tag := in.tags[len(in.tags)-1]
+
+	for _, peer := range in.peers {
+		if peer.label != tag {
+			continue
+		}
+
+		t.Run("reverse/"+tag+"/"+string(e2e.StorePostgres), func(t *testing.T) {
+			t.Parallel()
+			mixedReverseOnStore(t, mixedRun{
+				label:   tag,
+				peerBin: peer.bin,
+				newBin:  in.newBin,
+				tools:   in.tools,
+				store:   e2e.StorePostgres,
+			})
+		})
+
+		return
+	}
+}
+
+// mixedOnStore writes state through the current binary, serves the peer on
+// the same database, and checks the CLIs against both servers. SQLite serves
+// one process at a time, so there the current binary stops before the peer
+// takes the file.
 func mixedOnStore(t *testing.T, in mixedRun) {
 	t.Helper()
 
@@ -148,7 +315,7 @@ func mixedOnStore(t *testing.T, in mixedRun) {
 	env := e2e.NewEnv(ctx, t, in.tools.pulumi, in.store)
 	wsID := writeUpgradeState(ctx, t, env, in.tools.tofu)
 
-	t.Logf("starting %s next to the current binary on the same %s database", in.label, in.store)
+	t.Logf("serving %s next to the current binary on the same %s database", in.label, in.store)
 
 	res := env.TryPeer(ctx, t, in.peerBin)
 	if err := peerVerdict(in.store, in.label, res); err != nil {
@@ -156,8 +323,8 @@ func mixedOnStore(t *testing.T, in mixedRun) {
 	}
 
 	if in.store == e2e.StoreSQLite {
-		t.Logf("peer %s is refused on SQLite, as a SQLite file serves one process", in.label)
-		checkUpgradeSurvived(ctx, t, env, in.tools, wsID)
+		t.Logf("the peer %s is refused while the current binary holds the SQLite file", in.label)
+		mixedPeerAlone(ctx, t, env, in, wsID)
 
 		return
 	}
@@ -177,6 +344,61 @@ func mixedOnStore(t *testing.T, in mixedRun) {
 	env.Step(ctx, t, step("current reads peer stack", contains(`"deployment"`),
 		"stack", "export", "--stack", fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, mixedPeerStack)))
 	checkUpgradeSurvived(ctx, t, env, in.tools, wsID)
+
+	peer.StopServer(ctx, t)
+	checkUpgradeSurvived(ctx, t, env, in.tools, wsID)
+}
+
+// mixedPeerAlone serves the peer alone on one SQLite file: the current
+// binary stops, the peer takes the file, the real CLIs write through it, and
+// the current binary starts again. Two servers never hold the file at the
+// same time, because a SQLite file serves one process.
+func mixedPeerAlone(ctx context.Context, t *testing.T, env *e2e.Env, in mixedRun, wsID string) {
+	t.Helper()
+
+	env.StopServer(ctx, t)
+
+	env.SetServerBinary(in.peerBin)
+	env.StartServer(ctx, t)
+
+	t.Logf("serving the peer %s alone on the SQLite file", in.label)
+
+	checkPeerServes(ctx, t, env, in.tools, wsID)
+
+	env.StopServer(ctx, t)
+	env.SetServerBinary(in.newBin)
+	env.StartServer(ctx, t)
+
+	checkUpgradeSurvived(ctx, t, env, in.tools, wsID)
+}
+
+// mixedReverseOnStore starts the old binary on a new PostgreSQL database,
+// writes state through it, starts the current binary on the same database,
+// and checks that the tool steps against the old binary still complete while
+// the current binary serves.
+func mixedReverseOnStore(t *testing.T, in mixedRun) {
+	t.Helper()
+
+	if e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	env := e2e.NewEnvWithBinary(ctx, t, in.tools.pulumi, in.store, in.peerBin)
+	wsID := writeUpgradeState(ctx, t, env, in.tools.tofu)
+
+	t.Logf("the old binary %s started first on a new %s database", in.label, in.store)
+
+	peer := env.StartPeer(ctx, t, in.newBin)
+
+	t.Logf("the current binary started second on the same %s database", in.store)
+
+	checkPeerServes(ctx, t, peer, in.tools, wsID)
+	checkUpgradeSurvived(ctx, t, env, in.tools, wsID)
+
+	env.SetCLI(in.tools.pulumi)
+	env.Step(ctx, t, step("old binary up after the current binary started", nil,
+		"up", "--yes", "--non-interactive"))
 
 	peer.StopServer(ctx, t)
 	checkUpgradeSurvived(ctx, t, env, in.tools, wsID)
@@ -287,9 +509,11 @@ func checkMinimumRefusal(t *testing.T, env *e2e.Env, db e2e.Store, below, atMini
 }
 
 // peerVerdict judges how a peer ended. On SQLite the peer must stop with the
-// process guard message of the store. On PostgreSQL the peer must start,
-// unless the label has a reason in mixedAllowedRefusals and the peer printed
-// the schema refusal. It returns nil when the result is allowed.
+// process guard message of the store: a SQLite file serves one process, so
+// the matrix serves the peer alone and no two servers share the file. On
+// PostgreSQL the peer must start, unless the label has a reason in
+// mixedAllowedRefusals and the peer printed the schema refusal. It returns
+// nil when the result is allowed.
 func peerVerdict(store e2e.Store, label string, res e2e.BinaryResult) error {
 	output := res.Stdout + res.Stderr
 
