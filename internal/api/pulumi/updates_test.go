@@ -680,6 +680,7 @@ func newUpdateFixtureWithAuthenticator(
 		Journal:            journalWriterFor(t, blobs, mem, limit),
 		Replayer:           replayer,
 		Tokens:             checker,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -2921,6 +2922,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Journal:            nil,
 		Replayer:           nil,
 		Tokens:             nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)

@@ -78,6 +78,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
