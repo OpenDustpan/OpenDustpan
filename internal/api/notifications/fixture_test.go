@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apinotifications "opendustpan.org/opendustpan/internal/api/notifications"
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
 	"opendustpan.org/opendustpan/internal/subscriptionsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -203,6 +204,14 @@ func (c *testClock) Now() time.Time {
 	return c.now
 }
 
+// advance moves the clock by d.
+func (c *testClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.now = c.now.Add(d)
+}
+
 // newFixture returns a handler over a real SQLite store, with the signed
 // webhook kind served by a recording sender.
 func newFixture(t *testing.T, deny ...identity.Action) fixture {
@@ -306,6 +315,27 @@ func newFixtureWithSenders(t *testing.T, extra ...notify.Sender) fixture {
 	return buildFixtureFull(t, keyMiddleware, nil, extra)
 }
 
+// newFixtureWithCounter is newFixture with the counter of the shared test
+// limits, built by makeCounter over the fixture clock.
+func newFixtureWithCounter(
+	t *testing.T, makeCounter func(now func() time.Time) authgate.FailureCounter,
+) fixture {
+	t.Helper()
+
+	return buildFixtureParts(t, fixtureParts{middleware: keyMiddleware, wrap: nil, extra: nil, counter: makeCounter})
+}
+
+// fixtureParts holds the parts of a fixture: the middleware of the
+// Idempotency-Key header, the double in front of the sink store, the senders
+// beside the recording sender, and the factory of the counter of the shared
+// test limits. A nil part takes the default of buildFixtureParts.
+type fixtureParts struct {
+	middleware func(*testing.T, *sqlite.Store, *testClock) *idempotent.Middleware
+	wrap       func(*sqlite.Store, notify.SinkStore) notify.SinkStore
+	extra      []notify.Sender
+	counter    func(now func() time.Time) authgate.FailureCounter
+}
+
 // buildFixtureFull is buildFixtureWith with the senders extra.
 func buildFixtureFull(
 	t *testing.T, middleware func(*testing.T, *sqlite.Store, *testClock) *idempotent.Middleware,
@@ -313,23 +343,37 @@ func buildFixtureFull(
 ) fixture {
 	t.Helper()
 
+	return buildFixtureParts(t, fixtureParts{middleware: middleware, wrap: wrap, extra: extra, counter: nil}, deny...)
+}
+
+// buildFixtureParts is buildFixtureFull with the parts of a fixture.
+func buildFixtureParts(t *testing.T, parts fixtureParts, deny ...identity.Action) fixture {
+	t.Helper()
+
 	store, secrets, namespaces := openStore(t)
 	hook := &recordingSender{kind: notify.SinkWebhook, mu: sync.Mutex{}, err: nil, sent: nil}
 
 	sinkStore := store.NotificationSinks()
-	if wrap != nil {
-		sinkStore = wrap(store, sinkStore)
+	if parts.wrap != nil {
+		sinkStore = parts.wrap(store, sinkStore)
 	}
 
 	clock := &testClock{mu: sync.Mutex{}, now: time.Now()}
+
+	makeCounter := parts.counter
+	if makeCounter == nil {
+		makeCounter = func(now func() time.Time) authgate.FailureCounter {
+			return authgatetest.NewMemory(now)
+		}
+	}
 
 	svc, err := sinks.NewService(sinks.Config{
 		Store:      sinkStore,
 		Sealer:     notify.SinkSealer{Namespaces: secrets, Installation: nil},
 		Namespaces: namespaces,
-		Senders:    append([]notify.Sender{hook}, extra...),
+		Senders:    append([]notify.Sender{hook}, parts.extra...),
 		Ports:      egress.Ports{},
-		Counter:    authgatetest.NewMemory(clock.Now),
+		Counter:    makeCounter(clock.Now),
 		Now:        nil,
 	})
 	if err != nil {
@@ -365,8 +409,9 @@ func buildFixtureFull(
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,
-		Idempotency:    middleware(t, store, clock),
+		Idempotency:    parts.middleware(t, store, clock),
 		Logger:         slog.New(slog.NewTextHandler(logs, nil)),
+		Now:            clock.Now,
 	}
 
 	handler, err := apinotifications.NewHandler(cfg)

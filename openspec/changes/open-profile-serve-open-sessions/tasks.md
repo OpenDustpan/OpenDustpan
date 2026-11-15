@@ -11,7 +11,7 @@
 ## 2. Build
 
 - [ ] 2.1 Implement NEW Service.Open in NEW file pkg/profile/open.go, the save fix in pkg/profile/document_check.go, mode refusal and provider refusal. Check: `go test ./pkg/profile/... -count=1`
-- [ ] 2.2 Add NEW SQL adapters for the NEW Sessions port in both dialects, in NEW files pkg/store/sqlite/profile_sessions.go and pkg/store/postgres/profile_sessions.go, sealed with the root key, out of backups (pkg/backup/coverage.go:76), with Sweep. Check: `go test ./pkg/store/... -count=1` and TestFrozenMigrations pass
+- [ ] 2.2 Add NEW SQL adapters for the NEW Sessions port in both dialects, in NEW files pkg/store/sqlite/profile_sessions.go and pkg/store/postgres/profile_sessions.go, sealed with the root key, out of backups (pkg/backup/coverage.go:76), with Sweep. Check: `go test -timeout 60m ./pkg/store/... -count=1` and TestFrozenMigrations pass
 - [ ] 2.3 Wire both NEW routes with actions and replay. The declaration file is the existing file internal/api/profile/routes.go, which this task extends with the two NEW routes. The adapter file is NEW file internal/api/profile/open.go. Check: `go test ./internal/api/profile/... -run TestRoutes -count=1` with %2F cases
 - [ ] 2.4 Write the access audit entry for each open and refused open, with the NEW kind access in pkg/audit/audit.go. Check: `go test ./pkg/audit/... -count=1`
 
