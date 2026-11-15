@@ -25,6 +25,6 @@
 
 - [ ] 4.1 Wire the host command with its authorization actions Check: route test and `opendustpan host step-up-bootstrap --help`
 - [ ] 4.2 Add an e2e step in NEW e2e/stepup_bootstrap_test.go that runs the host command of the real binary, then reads the marker with GET /api/dustpan/v1/settings and the access token of a site administrator Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Write the NEW docs page docs/guides/step-up-bootstrap.md with the sole-key recovery and the restore note Check: a test runs each command of the page
+- [ ] 4.3 Write the NEW docs page docs/guides/step-up-bootstrap.md with the sole-key recovery and the restore note Check: a test runs each command of the page. `make docs-lint` passes on each edited guide.
 - [ ] 4.4 Usability check from the docs page alone Check: each error names one command. A person's step.
 - [ ] 4.5 Run all checks Check: `make check` has zero findings. Confirmed by: CI (the agent runs the fast checks only).

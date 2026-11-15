@@ -63,6 +63,7 @@ func auditBy(subject string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

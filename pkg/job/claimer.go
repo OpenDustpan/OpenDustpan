@@ -749,6 +749,7 @@ func (c *DurableClaimer) claimEntry(op *durable.Operation, j *Job, outcome audit
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: outcome, RequestID: "", ObjectID: unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: string(j.ID), Reason: reason,
+		Origin: nil,
 	}
 }
 

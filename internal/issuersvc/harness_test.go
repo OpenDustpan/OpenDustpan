@@ -297,6 +297,7 @@ func auditBy(subject string) audit.Entry {
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
 		Channel: audit.ChannelAPI, Kind: "", Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "",
 		Sequence: 0, FenceVersion: 0, PrincipalKind: audit.PrincipalKindPerson, JobID: "", Reason: "",
+		Origin: nil,
 	}
 }
 

@@ -356,6 +356,7 @@ func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace)
 		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 
 	for i, query := range []savedview.Query{
@@ -432,6 +433,7 @@ func seedBackupBreakGlass(t *testing.T, s BackupStore, acme namespace.Namespace)
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	// The pending review carries a notice step that is due, so the round trip
@@ -593,6 +595,7 @@ func seedBackupGitHost(t *testing.T, s BackupStore, acme namespace.Namespace) {
 			UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 			RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "",
 			JobID: "", Reason: "",
+			Origin: nil,
 		}
 	}
 
@@ -661,6 +664,7 @@ func seedBackupSinks(t *testing.T, s BackupStore, acme namespace.Namespace) {
 		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 
 	chat := notify.Sink{
@@ -1194,6 +1198,7 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -1356,6 +1361,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Reason:        "",
 			PrincipalKind: "",
 			JobID:         "",
+			Origin:        nil,
 		})
 		if err != nil {
 			t.Fatalf("append audit entry %d: %v", i, err)

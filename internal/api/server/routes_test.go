@@ -2063,6 +2063,7 @@ func seedRouteLocalUser(t *testing.T, st *sqlite.Store) {
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	// A store of another fixture holds no person testPrincipalID: it gets no

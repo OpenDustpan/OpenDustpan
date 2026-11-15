@@ -13,7 +13,7 @@
 
 - [ ] 2.1 Add flag and list keys with CIDR parsing and audit entries in NEW file pkg/dustpan/ipallow.go. Check: PATCH settings returns 200 and GET shows the effective value.
 - [ ] 2.2 Wire the checker into sign-in and token authentication. Call the NEW checker newAllowChecker from NEW file pkg/dustpan/ipallow.go. Check: A denied address gets 403 with ip-allowlist.denied.
-- [ ] 2.3 Update docs/guides/ip-allowlists.md. Check: Each command on the page runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/ip_allowlists_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 2.3 Update docs/guides/ip-allowlists.md. Check: Each command on the page runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/ip_allowlists_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 
