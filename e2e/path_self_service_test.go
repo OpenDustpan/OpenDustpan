@@ -6,6 +6,9 @@
 // submits the form. A runner applies the new unit into payments, and the
 // inventory names pg version 1 for it.
 //
+// The publish step runs now. The other five steps wait for routes and pages
+// that main does not have.
+//
 // User-visible end checks: the self-service docs page, the 422 body that names
 // the size field, the job and revision that the submit makes, the inventory
 // row of the unit in payments, and the form page of the console.
@@ -13,6 +16,7 @@
 package e2e_test
 
 import (
+	"net/http"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
@@ -21,10 +25,10 @@ import (
 // selfServiceTest is the name of this test, used in the names of skipped steps.
 const selfServiceTest = "TestPathSelfService"
 
-// TestPathSelfService runs the self-service steps on each store. Main builds
-// the Blueprint drafts and versions behind a store that no server wires in,
-// and no form route exists, so each step is skipped with the reason that
-// names what it waits for.
+// TestPathSelfService runs the self-service steps on each store. The publish
+// step runs against the Blueprint routes of the server. No form route exists
+// yet, so each of the other five steps is skipped with the reason that names
+// what it waits for.
 func TestPathSelfService(t *testing.T) {
 	t.Parallel()
 
@@ -53,10 +57,7 @@ func runSelfServiceOnStore(t *testing.T, store e2e.Store) {
 	env := e2e.NewEnv(t.Context(), t, e2e.NoCLI(), store)
 
 	t.Run("publish_pg_v1", func(t *testing.T) {
-		selfServiceBlocked(t, env, "publish_pg_v1",
-			"blocked: the server serves no Blueprint route in a running installation: "+
-				"neither the binary nor the e2e harness sets the WithSelfServiceBlueprints "+
-				"option, which only the SDK and one SDK test use")
+		publishPGV1(t, env)
 	})
 
 	t.Run("check_returns_422", func(t *testing.T) {
@@ -91,4 +92,49 @@ func selfServiceBlocked(t *testing.T, env *e2e.Env, name, reason string) {
 
 	env.SkipScenario(t, selfServiceTest+"/"+name, reason)
 	t.Skip(reason)
+}
+
+// pgDraft is the draft of the Blueprint pg that Priya publishes.
+const pgDraft = `{
+	"schemaVersion": 1, "name": "pg", "title": "PostgreSQL", "tool": "opentofu",
+	"program": {"module": {"source": "registry.example.com/platform/database/aws", "version": "1.2.3"}},
+	"unitName": "'databases/' + request.name",
+	"inputs": [
+		{"name": "size", "type": "integer", "maps": "size", "validate": [
+			{"rule": "value >= 1", "message": "Give at least 1."},
+			{"rule": "value <= 10", "message": "Give at most 10."}]}
+	],
+	"delivery": {"homes": ["opendustpan"], "default": "opendustpan"}
+}`
+
+// pgBase is the route prefix of the Blueprint pg in the e2e namespace.
+const pgBase = blueprintListPath + "/pg"
+
+// publishPGV1 writes the draft of pg, publishes draft version 1 and reads
+// version 1 back.
+func publishPGV1(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
+		UserAgent: blueprintAgent,
+		Name:      "write the draft of pg",
+		Method:    http.MethodPut, Path: pgBase + "/draft", Body: pgDraft,
+		Want: http.StatusOK, Scheme: "token", Check: blueprintAnswer(`"version":1`),
+	}, map[string]string{"If-Match": `"0"`, "Content-Type": "application/json"})
+
+	env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
+		UserAgent: blueprintAgent,
+		Name:      "publish draft version 1 of pg",
+		Method:    http.MethodPost, Path: pgBase + "/versions", Body: `{"draftVersion": 1}`,
+		Want: http.StatusCreated, Scheme: "token", Check: blueprintAnswer(`"draftVersion":1`),
+	}, map[string]string{"Content-Type": "application/json"})
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: blueprintAgent,
+		Name:      "read version 1 of pg",
+		Method:    http.MethodGet, Path: pgBase + "/versions/1", Body: "",
+		Want: http.StatusOK, Scheme: "token", Check: blueprintAnswer(`"draftVersion":1`),
+	})
 }
