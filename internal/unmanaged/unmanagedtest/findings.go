@@ -89,10 +89,12 @@ func matchingScan(
 	for _, ev := range steps {
 		s, err = h.Scans.AdvanceScan(
 			t.Context(),
-			f.Namespace,
-			s.ID,
-			ev,
-			unmanaged.ScanUpdate{Scopes: scopes, Counts: nil, Reason: ""},
+			unmanaged.ScanAdvance{
+				Namespace: f.Namespace,
+				ID:        s.ID,
+				Event:     ev,
+				Update:    unmanaged.ScanUpdate{Scopes: scopes, Counts: nil, Reason: ""},
+			},
 			f,
 			auditOf(ns, "namespace:start-sweep"),
 		)
@@ -196,10 +198,12 @@ func testRecordLater(t *testing.T, h Harness) {
 
 	ended, err := h.Scans.AdvanceScan(
 		t.Context(),
-		"acme",
-		first.ID,
-		unmanaged.ScanEventMatched,
-		unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		unmanaged.ScanAdvance{
+			Namespace: "acme",
+			ID:        first.ID,
+			Event:     unmanaged.ScanEventMatched,
+			Update:    unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		},
 		f,
 		auditOf("acme", "namespace:start-sweep"),
 	)
@@ -266,10 +270,12 @@ func testRecordResolves(t *testing.T, h Harness) {
 
 	_, err = h.Scans.AdvanceScan(
 		t.Context(),
-		"acme",
-		s.ID,
-		unmanaged.ScanEventMatched,
-		unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		unmanaged.ScanAdvance{
+			Namespace: "acme",
+			ID:        s.ID,
+			Event:     unmanaged.ScanEventMatched,
+			Update:    unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		},
 		f,
 		auditOf("acme", "namespace:start-sweep"),
 	)
@@ -471,10 +477,12 @@ func testResolveUnseen(t *testing.T, h Harness) {
 
 	_, err := h.Scans.AdvanceScan(
 		t.Context(),
-		"acme",
-		first.ID,
-		unmanaged.ScanEventMatched,
-		unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		unmanaged.ScanAdvance{
+			Namespace: "acme",
+			ID:        first.ID,
+			Event:     unmanaged.ScanEventMatched,
+			Update:    unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""},
+		},
 		f,
 		auditOf("acme", "namespace:start-sweep"),
 	)
@@ -511,13 +519,15 @@ func testResolveUnseen(t *testing.T, h Harness) {
 	for _, ev := range []unmanaged.ScanEvent{unmanaged.ScanEventDispatch, unmanaged.ScanEventClaim, unmanaged.ScanEventUploaded} {
 		second, err = h.Scans.AdvanceScan(
 			t.Context(),
-			"acme",
-			second.ID,
-			ev,
-			unmanaged.ScanUpdate{Scopes: []unmanaged.ReportScope{
-				{Provider: "aws", Scope: "111111111111", Complete: true, Error: "", Regions: nil},
-				{Provider: "aws", Scope: "222222222222", Error: "access denied", Regions: nil, Complete: false},
-			}, Counts: nil, Reason: ""},
+			unmanaged.ScanAdvance{
+				Namespace: "acme",
+				ID:        second.ID,
+				Event:     ev,
+				Update: unmanaged.ScanUpdate{Scopes: []unmanaged.ReportScope{
+					{Provider: "aws", Scope: "111111111111", Complete: true, Error: "", Regions: nil},
+					{Provider: "aws", Scope: "222222222222", Error: "access denied", Regions: nil, Complete: false},
+				}, Counts: nil, Reason: ""},
+			},
 			f,
 			auditOf("acme", "namespace:start-sweep"),
 		)
@@ -653,13 +663,15 @@ func endScan(t *testing.T, h Harness, f namespace.Fence, s unmanaged.Scan) {
 
 	_, err := h.Scans.AdvanceScan(
 		t.Context(),
-		f.Namespace,
-		s.ID,
-		unmanaged.ScanEventMatched,
-		unmanaged.ScanUpdate{
-			Scopes: nil,
-			Counts: nil,
-			Reason: "",
+		unmanaged.ScanAdvance{
+			Namespace: f.Namespace,
+			ID:        s.ID,
+			Event:     unmanaged.ScanEventMatched,
+			Update: unmanaged.ScanUpdate{
+				Scopes: nil,
+				Counts: nil,
+				Reason: "",
+			},
 		},
 		f,
 		auditOf(f.Namespace.String(), "namespace:start-sweep"),

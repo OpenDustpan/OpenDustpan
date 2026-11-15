@@ -1,7 +1,7 @@
 package client
 
 // Restore subcommand of the installation API (ADR 38, ADR 39): a client of
-// POST /api/server/restores and GET /api/server/restores/{id} (ADR 17).
+// POST /api/dustpan/v1/restores and GET /api/dustpan/v1/restores/{id} (ADR 17).
 //
 //	opendustpan restore --server https://dustpan.example --backup bkp-aaa [--check-only] [--force] [--ca-file ca.pem]
 //
@@ -79,7 +79,7 @@ const restoreCorruptHelp = "run opendustpan backup check --server %s --backup %s
 // the database comes back, so a second run is not needed. The operator reads
 // the state of the restore instead.
 const restoreResumeHelp = "the server resumes restore %s on its own and it needs no second run: " +
-	"read its state with GET %s/api/server/restores/%s"
+	"read its state with GET %s/api/dustpan/v1/restores/%s"
 
 // restoreDamagedHelp names the one command that helps after a restore that
 // stopped at live blobs whose bytes do not match their records or do not
@@ -343,7 +343,7 @@ func startRestore(ctx context.Context, params startRestoreParams) (restoreStartR
 	server := params.server
 	id := params.backupID
 
-	endpoint := backupEndpoint(server, "/api/server/restores")
+	endpoint := backupEndpoint(server, "/api/dustpan/v1/restores")
 
 	data, err := json.Marshal(RestoreStartRequest{
 		BackupID:  params.backupID,
@@ -440,7 +440,7 @@ type restoreReadParams struct {
 
 // readRestore reads one restore row.
 func readRestore(ctx context.Context, params restoreReadParams) (RestoreStatusResponse, error) {
-	endpoint := backupEndpoint(params.server, "/api/server/restores/"+url.PathEscape(params.restoreID))
+	endpoint := backupEndpoint(params.server, "/api/dustpan/v1/restores/"+url.PathEscape(params.restoreID))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
@@ -651,7 +651,7 @@ func writeRestoreReport(stdout io.Writer, doc RestoreStatusResponse, checkOnly b
 }
 
 // backupKindResponse holds the one field that the notice reads from the
-// answer of GET /api/server/backups/{id}.
+// answer of GET /api/dustpan/v1/backups/{id}.
 type backupKindResponse struct {
 	Manifest *backupKindManifest `json:"manifest"`
 }
@@ -664,7 +664,7 @@ type backupKindManifest struct {
 // warnDevBackup prints the notice about a dev backup when the manifest of the
 // backup says dev. A failed read prints nothing: the restore reports it.
 func warnDevBackup(ctx context.Context, params restoreReadParams, stderr io.Writer) {
-	endpoint := backupEndpoint(params.server, "/api/server/backups/"+url.PathEscape(params.backupID))
+	endpoint := backupEndpoint(params.server, "/api/dustpan/v1/backups/"+url.PathEscape(params.backupID))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
