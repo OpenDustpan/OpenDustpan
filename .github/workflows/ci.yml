@@ -208,6 +208,19 @@ jobs:
         run: make docs-lint
       - name: The release record checks pass
         run: make release-record-check
+      # The files check reads the files that the change adds against the merge
+      # base with main. It runs on pull requests and in the merge queue, so
+      # every change that reaches main is checked. An earlier step can have
+      # fetched main with its history already; a second --unshallow fails.
+      - name: No large or binary file
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            git fetch --no-tags --unshallow origin +refs/heads/main:refs/remotes/origin/main
+          else
+            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          fi
+          make files-check FILES_BASE=origin/main
       # A failed job saves too: its build cache is still valid. The key is the
       # one that the restore step computed.
       - &go-cache-save
