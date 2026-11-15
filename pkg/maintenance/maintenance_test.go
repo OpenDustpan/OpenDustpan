@@ -298,6 +298,10 @@ func (fakeCheckpoints) ReferencedBlobKeys(context.Context, stack.ID) ([]blob.Key
 	return nil, nil
 }
 
+func (fakeCheckpoints) SupersededBlobs(context.Context, stack.ID) ([]stack.SupersededBlob, error) {
+	return nil, nil
+}
+
 // newTestBlobs opens a blob store in a fresh directory that the test closes
 // at cleanup. The cancel path writes no checkpoint, so it stays empty.
 func newTestBlobs(t *testing.T) *fs.Store {
@@ -597,6 +601,7 @@ func newFixtureWith(
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -616,6 +621,7 @@ func newFixtureWith(
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)
@@ -763,6 +769,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -782,6 +789,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)
