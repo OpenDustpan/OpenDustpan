@@ -39,6 +39,36 @@ const RegistryFileSectionVersion = 1
 // file-backed release unavailable.
 const WarnRegistryFilesAbsent RestoreWarningCode = "registry-files-absent"
 
+// MaxRegistryFileBytes is the size limit of one registry file, at backup and
+// at restore. A larger file stops the backup or the restore.
+const MaxRegistryFileBytes int64 = 512 << 20
+
+// MaxRegistryFilesTotalBytes is the size limit of all registry files of one
+// namespace, at backup and at restore. The restore holds the files of one
+// namespace in memory, so the total stays bounded.
+const MaxRegistryFilesTotalBytes int64 = 2 << 30
+
+// checkRegistryFileSize refuses a size that is negative, above the limit of
+// one file, or that makes the running total pass the limit of a namespace.
+func checkRegistryFileSize(size, total int64) error {
+	switch {
+	case size < 0:
+		return fmt.Errorf("size %d is negative: %w", size, ErrCorrupt)
+	case size > MaxRegistryFileBytes:
+		return fmt.Errorf(
+			"size %d is above the limit of %d bytes for one file: %w",
+			size, MaxRegistryFileBytes, ErrCorrupt,
+		)
+	case total > MaxRegistryFilesTotalBytes-size:
+		return fmt.Errorf(
+			"the total is above the limit of %d bytes for one namespace: %w",
+			MaxRegistryFilesTotalBytes, ErrCorrupt,
+		)
+	}
+
+	return nil
+}
+
 // registrySHA256RE allows only a SHA-256 in 64 lowercase hex characters, so a
 // hostile hash with a separator never becomes part of a blob key.
 var registrySHA256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -80,20 +110,22 @@ type RegistryFileCollector struct {
 	namespaceID string
 	entries     []RegistryFileEntry
 	seen        map[string]struct{}
+	total       int64
 }
 
 // NewRegistryFileCollector builds a collector for the namespace with the
 // given ID. It returns an error that names the namespace ID when the ID is
 // empty.
 func NewRegistryFileCollector(namespaceID string) (*RegistryFileCollector, error) {
-	if namespaceID == "" {
-		return nil, fmt.Errorf("registry file collector: namespace ID is empty: %w", ErrCorrupt)
+	if _, err := namespace.ParseID(namespaceID); err != nil {
+		return nil, fmt.Errorf("registry file collector: namespace ID %q is not valid: %w", namespaceID, ErrCorrupt)
 	}
 
 	return &RegistryFileCollector{
 		namespaceID: namespaceID,
 		entries:     nil,
 		seen:        make(map[string]struct{}),
+		total:       0,
 	}, nil
 }
 
@@ -123,6 +155,13 @@ func (c *RegistryFileCollector) AddRelease(
 			)
 		}
 
+		// Limit layer: the backup refuses a file above the limits, so the
+		// restore limits are not the only ones.
+		if err := checkRegistryFileSize(size, c.total); err != nil {
+			return fmt.Errorf("registry file of release %q version %q: %w", release, version, err)
+		}
+
+		c.total += size
 		c.seen[hash] = struct{}{}
 		c.entries = append(c.entries, RegistryFileEntry{
 			SHA256:  hash,
@@ -170,8 +209,10 @@ func VerifyRegistryFileContent(hash string, content []byte) error {
 // namespace with the given ID. It validates the hash first and never joins
 // raw input into a path.
 func RegistryFileBlobKey(namespaceID, hash string) (string, error) {
-	if namespaceID == "" {
-		return "", fmt.Errorf("registry file key: namespace ID is empty: %w", ErrCorrupt)
+	// Defense in depth: the callers check the namespace ID too. This check
+	// stays so that no caller can build a key outside a namespace root.
+	if _, err := namespace.ParseID(namespaceID); err != nil {
+		return "", fmt.Errorf("registry file key: namespace ID %q is not valid: %w", namespaceID, ErrCorrupt)
 	}
 
 	if !ValidRegistryFileHash(hash) {
@@ -217,10 +258,12 @@ func RestoreRegistryFiles(
 		return RestoreWarning{Code: "", Text: ""}, err
 	}
 
-	if targetNamespaceID == "" {
+	// Defense in depth: the restore step checks the section keys too. This
+	// check stays so that an SDK caller cannot write outside a namespace root.
+	if _, err := namespace.ParseID(targetNamespaceID); err != nil {
 		return RestoreWarning{Code: "", Text: ""}, fmt.Errorf(
-			"restore registry files: namespace ID is empty: %w",
-			ErrCorrupt,
+			"restore registry files: namespace ID %q is not valid: %w",
+			targetNamespaceID, ErrCorrupt,
 		)
 	}
 
@@ -489,6 +532,8 @@ func (s *RestoreService) readRegistryFiles(
 	// layer, whatever a later change does to the checks of the restore.
 	files := make(map[string][]byte, len(section.Files))
 
+	var total int64
+
 	for _, e := range section.Files {
 		if !ValidRegistryFileHash(e.SHA256) {
 			return nil, fmt.Errorf(
@@ -504,9 +549,22 @@ func (s *RestoreService) readRegistryFiles(
 			return nil, fmt.Errorf("restore %s: the registry file key %q: %w", in.ID, raw, err)
 		}
 
-		content, err := readAllKey(ctx, s.target, key)
+		if sizeErr := checkRegistryFileSize(e.Size, total); sizeErr != nil {
+			return nil, fmt.Errorf("restore %s: registry file %q of namespace %s: %w", in.ID, e.SHA256, nsID, sizeErr)
+		}
+
+		total += e.Size
+
+		content, err := readLimitedKey(ctx, s.target, key, e.Size)
 		if err != nil {
 			return nil, fmt.Errorf("restore %s: registry file %q of namespace %s: %w", in.ID, e.SHA256, nsID, err)
+		}
+
+		if int64(len(content)) != e.Size {
+			return nil, fmt.Errorf(
+				"restore %s: registry file %q of namespace %s: length %d differs from the manifest size %d: %w",
+				in.ID, e.SHA256, nsID, len(content), e.Size, ErrCorrupt,
+			)
 		}
 
 		files[e.SHA256] = content
@@ -517,6 +575,12 @@ func (s *RestoreService) readRegistryFiles(
 
 // readAllKey returns the bytes that the store holds under key.
 func readAllKey(ctx context.Context, store blob.Store, key blob.Key) ([]byte, error) {
+	return readLimitedKey(ctx, store, key, MaxRegistryFileBytes)
+}
+
+// readLimitedKey returns the bytes that the store holds under key. It reads
+// at most size+1 bytes and refuses a longer file.
+func readLimitedKey(ctx context.Context, store blob.Store, key blob.Key, size int64) ([]byte, error) {
 	reader, err := store.Get(ctx, key)
 	if err != nil {
 		if errors.Is(err, blob.ErrNotFound) {
@@ -526,11 +590,15 @@ func readAllKey(ctx context.Context, store blob.Store, key blob.Key) ([]byte, er
 		return nil, fmt.Errorf("read %q: %w", key, err)
 	}
 
-	content, readErr := io.ReadAll(reader)
+	content, readErr := io.ReadAll(io.LimitReader(reader, size+1))
 	closeErr := reader.Close()
 
 	if readErr != nil {
 		return nil, fmt.Errorf("read %q: %w", key, readErr)
+	}
+
+	if int64(len(content)) > size {
+		return nil, fmt.Errorf("read %q: more than %d bytes: %w", key, size, ErrCorrupt)
 	}
 
 	if closeErr != nil {
@@ -557,12 +625,17 @@ func (s liveRegistryFileStore) Has(ctx context.Context, key string) (bool, error
 		return false, err
 	}
 
-	if _, err = s.blobs.Get(ctx, parsed); err != nil {
+	reader, err := s.blobs.Get(ctx, parsed)
+	if err != nil {
 		if errors.Is(err, blob.ErrNotFound) {
 			return false, nil
 		}
 
 		return false, fmt.Errorf("read registry file %q: %w", key, err)
+	}
+
+	if closeErr := reader.Close(); closeErr != nil {
+		return false, fmt.Errorf("close registry file %q: %w", key, closeErr)
 	}
 
 	return true, nil
