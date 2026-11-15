@@ -131,6 +131,7 @@ import type {
   JobTrigger,
   JobUnit,
   JobUnitRequest,
+  JoinedProxyRule,
   ListAccessLimitsResponse,
   ListApprovalRulesResponse,
   ListBackupsResponse,
@@ -210,6 +211,8 @@ import type {
   ProfileRevision,
   ProviderRelease,
   ProviderReleaseFile,
+  ProxyRule,
+  ProxyRuleSet,
   PublishFile,
   PublishModuleReleaseRequest,
   PublishProviderReleaseRequest,
@@ -221,6 +224,7 @@ import type {
   RegistryKey,
   RegistryModule,
   RegistryProvider,
+  RenderedProxyRules,
   ReplaceNotificationSinkRequest,
   ReplaceNotificationSubscriptionRequest,
   RequestBodyTooLargeError,
@@ -236,6 +240,7 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  SaveProxyRuleSetRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
@@ -331,6 +336,7 @@ import type {
   UnitNoStateErrorArgs,
   UnitOutputEntry,
   UnitOutputs,
+  UnitProxyRules,
   UnitSettings,
   UnitSettingsBoolField,
   UnitSettingsCodeLocation,
@@ -1330,6 +1336,12 @@ export const decodeJobUnitRequest: Decoder<JobUnitRequest> = object<JobUnitReque
   tool: string,
 });
 
+/** The validator of JoinedProxyRule. */
+export const decodeJoinedProxyRule: Decoder<JoinedProxyRule> = object<JoinedProxyRule>("JoinedProxyRule", {
+  rule: ref(() => decodeProxyRule),
+  scope: string,
+});
+
 /** The validator of ListAccessLimitsResponse. */
 export const decodeListAccessLimitsResponse: Decoder<ListAccessLimitsResponse> = object<ListAccessLimitsResponse>("ListAccessLimitsResponse", {
   accessLimits: array(ref(() => decodeAccessLimit)),
@@ -1916,6 +1928,28 @@ export const decodeProviderReleaseFile: Decoder<ProviderReleaseFile> = object<Pr
   size: optional(int64),
 });
 
+/** The validator of ProxyRule. */
+export const decodeProxyRule: Decoder<ProxyRule> = object<ProxyRule>("ProxyRule", {
+  clientCertificate: optional(string),
+  credential: optional(string),
+  host: string,
+  id: string,
+  methods: optional(array(string)),
+  mode: string,
+  operations: array(string),
+  paths: optional(array(string)),
+  port: int64,
+  serverTrust: string,
+});
+
+/** The validator of ProxyRuleSet. */
+export const decodeProxyRuleSet: Decoder<ProxyRuleSet> = object<ProxyRuleSet>("ProxyRuleSet", {
+  digest: string,
+  rules: array(ref(() => decodeProxyRule)),
+  updatedAt: int64,
+  version: int64,
+});
+
 /** The validator of PublishFile. */
 export const decodePublishFile: Decoder<PublishFile> = object<PublishFile>("PublishFile", {
   name: string,
@@ -1986,6 +2020,12 @@ export const decodeRegistryModule: Decoder<RegistryModule> = object<RegistryModu
 export const decodeRegistryProvider: Decoder<RegistryProvider> = object<RegistryProvider>("RegistryProvider", {
   name: string,
   namespace: string,
+});
+
+/** The validator of RenderedProxyRules. */
+export const decodeRenderedProxyRules: Decoder<RenderedProxyRules> = object<RenderedProxyRules>("RenderedProxyRules", {
+  operation: string,
+  rules: array(ref(() => decodeJoinedProxyRule)),
 });
 
 /** The validator of ReplaceNotificationSinkRequest. */
@@ -2094,6 +2134,11 @@ export const decodeRestoreWarning: Decoder<RestoreWarning> = object<RestoreWarni
 export const decodeRotateNamespaceIssuerKeysRequest: Decoder<RotateNamespaceIssuerKeysRequest> = object<RotateNamespaceIssuerKeysRequest>("RotateNamespaceIssuerKeysRequest", {
   emergency: boolean,
   reason: string,
+});
+
+/** The validator of SaveProxyRuleSetRequest. */
+export const decodeSaveProxyRuleSetRequest: Decoder<SaveProxyRuleSetRequest> = object<SaveProxyRuleSetRequest>("SaveProxyRuleSetRequest", {
+  rules: array(ref(() => decodeProxyRule)),
 });
 
 /** The validator of SaveTriggerRequest. */
@@ -2777,6 +2822,15 @@ export const decodeUnitOutputs: Decoder<UnitOutputs> = object<UnitOutputs>("Unit
   stateId: string,
   tool: string,
   unitId: string,
+});
+
+/** The validator of UnitProxyRules. */
+export const decodeUnitProxyRules: Decoder<UnitProxyRules> = object<UnitProxyRules>("UnitProxyRules", {
+  digest: string,
+  joined: array(ref(() => decodeJoinedProxyRule)),
+  rules: array(ref(() => decodeProxyRule)),
+  updatedAt: int64,
+  version: int64,
 });
 
 /** The validator of UnitSettings. */

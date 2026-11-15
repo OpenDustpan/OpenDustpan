@@ -10,6 +10,7 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/jobproxysvc"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/mfasvc"
 	"opendustpan.org/opendustpan/internal/storecheck"
@@ -65,6 +66,7 @@ type serverHandlerInputs struct {
 	// The parts that the assembly builds after the principals.
 	principals   *principal.Service
 	gates        *gate.ConfigService
+	proxyRules   *jobproxysvc.Service
 	forgeService *forge.Service
 	idempotency  *idempotent.Middleware
 	extras       serverExtras
@@ -126,6 +128,7 @@ func newServerHandler(in serverHandlerInputs) (http.Handler, error) {
 		Settings:         in.extras.settings,
 		InstallationKind: in.installationKind, StateWriteGates: in.stateWrite,
 		Instances: in.instances, StoreChecks: in.checks, Cursors: in.cursors,
+		ProxyRules: in.proxyRules,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)

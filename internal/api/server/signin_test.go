@@ -17,6 +17,7 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/jobproxysvc"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -258,6 +259,13 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		t.Fatalf("gate config service: %v", err)
 	}
 
+	proxyRules, err := jobproxysvc.New(jobproxysvc.Config{
+		Store: st.ProxyRules(), Namespaces: namespaces, Units: st, Now: clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("proxy rule service: %v", err)
+	}
+
 	grants, allowlists := newSignInAccess(t, st, namespaces, clock)
 
 	signIn := &apiserver.SignIn{
@@ -315,6 +323,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		AuditChain:       newFakeAuditChain(audit.ChainOn),
 		IPAllowlists:     allowlists,
 		Gates:            gates,
+		ProxyRules:       proxyRules,
 		SessionPolicy:    policyRoutes,
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},

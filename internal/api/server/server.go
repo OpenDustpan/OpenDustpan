@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/forgelinksvc"
+	"opendustpan.org/opendustpan/internal/jobproxysvc"
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/storecheck"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -194,6 +195,10 @@ type Config struct {
 	// cursor does not name a namespace to the caller. Nil makes the list fail
 	// closed: it answers an error, never an unsealed cursor.
 	Cursors secret.Wrapper
+	// ProxyRules keeps the proxy rule sets of the namespaces and the units.
+	// Nil means the store keeps none: the proxy rule routes are not mounted.
+	// Both SQL adapters keep them.
+	ProxyRules *jobproxysvc.Service
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -260,6 +265,7 @@ type Handler struct {
 	instances     installation.InstanceStore
 	storeChecks   *storecheck.Service
 	cursors       secret.Wrapper
+	proxyRules    *jobproxysvc.Service
 	mux           *patternMux
 	routes        []Route
 }
@@ -341,8 +347,9 @@ func newHandlerFields(cfg *Config, signIn *signInState, guard *denials.Recorder)
 		gitHost:   cfg.GitHost,
 		idem:      cfg.Idempotency,
 		instances: cfg.Instances, storeChecks: cfg.StoreChecks, cursors: cfg.Cursors,
-		mux:    newPatternMux(),
-		routes: nil,
+		proxyRules: cfg.ProxyRules,
+		mux:        newPatternMux(),
+		routes:     nil,
 	}
 
 	if h.now == nil {
@@ -699,7 +706,7 @@ func classifyIdentity(err error) (failure, bool) {
 func classify(err error) failure {
 	for _, try := range []func(error) (failure, bool){
 		classifyStoreCheck, classifyMaintenance, classifyBodyTooLarge, classifyNamespace, classifyBackup, classifyPrincipal, classifyReview, classifyIdentity, classifyWorker,
-		classifyIPAllowlist, classifyGateConfig, classifySessionPolicy, classifySignIn, classifyProviders,
+		classifyIPAllowlist, classifyGateConfig, classifyProxyRules, classifySessionPolicy, classifySignIn, classifyProviders,
 		classifyGitHost, classifyInstance, classifyRequest,
 	} {
 		if f, ok := try(err); ok {

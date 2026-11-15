@@ -471,6 +471,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteTrustRuleBackupTables(),
 		sqliteUnmanagedBackupTables(),
 		sqliteBreakGlassReviewBackupTables(),
+		sqliteProxyRuleBackupTables(),
 	)
 }
 

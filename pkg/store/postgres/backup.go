@@ -143,6 +143,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyTrustRuleTables()...)
 	tables = append(tables, pgCopyBreakGlassReviewTables()...)
 	tables = append(tables, pgCopyUnmanagedTables()...)
+	tables = append(tables, pgCopyProxyRuleTables()...)
 
 	return tables
 }

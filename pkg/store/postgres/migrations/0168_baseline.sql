@@ -1040,6 +1040,19 @@ CREATE TABLE profiles (
     CONSTRAINT profiles_latest_check CHECK ((latest >= 1))
 );
 
+CREATE TABLE proxy_rule_sets (
+    namespace_id text NOT NULL,
+    scope_kind text NOT NULL,
+    unit_id text NOT NULL,
+    document text NOT NULL,
+    digest text NOT NULL,
+    version bigint NOT NULL,
+    updated_at_ms bigint NOT NULL,
+    CONSTRAINT proxy_rule_sets_check CHECK ((((scope_kind = 'namespace'::text) AND (unit_id = ''::text)) OR ((scope_kind = 'unit'::text) AND (unit_id <> ''::text)))),
+    CONSTRAINT proxy_rule_sets_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['namespace'::text, 'unit'::text]))),
+    CONSTRAINT proxy_rule_sets_version_check CHECK ((version >= 1))
+);
+
 CREATE TABLE quota_keys (
     namespace_id text NOT NULL,
     blueprint text NOT NULL,
@@ -1890,6 +1903,9 @@ ALTER TABLE ONLY profile_revisions
 ALTER TABLE ONLY profiles
     ADD CONSTRAINT profiles_pkey PRIMARY KEY (namespace_id, id);
 
+ALTER TABLE ONLY proxy_rule_sets
+    ADD CONSTRAINT proxy_rule_sets_pkey PRIMARY KEY (namespace_id, scope_kind, unit_id);
+
 ALTER TABLE ONLY quota_keys
     ADD CONSTRAINT quota_keys_pkey PRIMARY KEY (namespace_id, blueprint, kind, scope);
 
@@ -2381,6 +2397,9 @@ ALTER TABLE ONLY principal_session_generations
 
 ALTER TABLE ONLY profile_revisions
     ADD CONSTRAINT profile_revisions_namespace_id_profile_id_fkey FOREIGN KEY (namespace_id, profile_id) REFERENCES profiles(namespace_id, id);
+
+ALTER TABLE ONLY proxy_rule_sets
+    ADD CONSTRAINT proxy_rule_sets_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
 ALTER TABLE ONLY quota_keys
     ADD CONSTRAINT quota_keys_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
