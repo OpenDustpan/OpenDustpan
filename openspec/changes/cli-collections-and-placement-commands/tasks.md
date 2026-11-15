@@ -1,6 +1,6 @@
 ## 1. Failing tests
 
-- [ ] 1.1 Write table tests for the five commands in the NEW file `internal/cli/collection_test.go` and the NEW file `internal/cli/placement_test.go` against an `httptest` server: the request of each command, the token from `DUSTPAN_ADMIN_TOKEN` and `DUSTPAN_ADMIN_TOKEN_FILE`, a missing token, a bad `<namespace>/<name>`, an unknown collection name, and the server errors printed with their code. Check: the tests fail on main
+- [x] 1.1 Write table tests for the five commands in the NEW file `internal/cli/collection_test.go` and the NEW file `internal/cli/placement_test.go` against an `httptest` server: the request of each command, the token from `DUSTPAN_ADMIN_TOKEN` and `DUSTPAN_ADMIN_TOKEN_FILE`, a missing token, a bad `<namespace>/<name>`, an unknown collection name, and the server errors printed with their code. Check: the tests fail on main
 
 ## 2. Build
 
