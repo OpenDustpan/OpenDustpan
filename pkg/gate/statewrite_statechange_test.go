@@ -233,6 +233,14 @@ func TestStateChangeHostileInputIsRefused(t *testing.T) {
 			&gate.StateChange{Current: "sv-1\nx", Resources: 1, Removed: nil, Unavailable: ""}, gate.ErrInvalid,
 		},
 		{
+			"a current version with a format character", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1\u202ex", Resources: 1, Removed: nil, Unavailable: ""}, gate.ErrInvalid,
+		},
+		{
+			"a current version with a line separator", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1\u2028x", Resources: 1, Removed: nil, Unavailable: ""}, gate.ErrInvalid,
+		},
+		{
 			"a negative resource count", gate.OperationRollback,
 			&gate.StateChange{Current: "sv-1", Resources: -1, Removed: nil, Unavailable: ""}, gate.ErrInvalid,
 		},

@@ -74,6 +74,7 @@ var warningTexts = map[RestoreWarningCode]string{
 	WarnBlobsNotHeld: "This backup holds no copy of some blobs that its data names, because the backup before an " +
 		"earlier restore found them missing or damaged. The restore leaves those live keys as they are. The " +
 		"answer names the first keys.",
+	WarnRegistryFilesAbsent: registryFilesAbsentText,
 }
 
 // WarningFor returns the warning of code, and false for an unknown code.

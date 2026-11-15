@@ -284,7 +284,7 @@ func (m *Method) userFilterFor(userName string) (string, error) {
 // never reaches the directory.
 func (m *Method) checkFilter(f string) (string, error) {
 	// Defense in depth: EscapeFilter escapes each special byte, and the
-	// boundary check refuses control characters. This check stays so that a
+	// boundary check refuses hidden characters. This check stays so that a
 	// change of the escape cannot add an item to the filter.
 	if !sameShape(f, m.filterNodes) {
 		return "", fmt.Errorf("%w: the user name changes the structure of the filter", session.ErrMethodInput)

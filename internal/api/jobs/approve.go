@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -208,7 +209,7 @@ func checkApproveBody(b *approveBody) (job.Verdict, job.PlanBinding, error) {
 	if pb := b.PlanBinding; pb != nil {
 		for _, field := range []string{pb.Plan, pb.DisplaySHA256, pb.ApplySHA256, pb.StateVersion} {
 			if len(field) > maxBindingField || !utf8.ValidString(field) ||
-				strings.ContainsFunc(field, audit.IsHiddenRune) {
+				strings.ContainsFunc(field, ident.IsHiddenRune) {
 				return "", job.PlanBinding{}, fmt.Errorf(
 					"%w: a text of planBinding is too long or holds a hidden character",
 					errUnprocessable,

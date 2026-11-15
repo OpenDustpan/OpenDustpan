@@ -19,7 +19,6 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -150,7 +149,7 @@ func validateReferences(refs []string, ns namespace.Name) error {
 		// accepts a hidden character (control, format, line or paragraph
 		// separator). A view is stored text that the server later logs and
 		// shows, so this check stays and does not rely on the parser.
-		if !utf8.ValidString(ref) || hasHidden(ref) {
+		if !utf8.ValidString(ref) || ident.HasHidden(ref) {
 			return fmt.Errorf("%w: reference %d: use a unit reference", ErrInvalid, i+1)
 		}
 
@@ -217,10 +216,10 @@ func ValidOwner(s string) bool {
 }
 
 // validName reports whether s is a view name: 1 to MaxNameLen characters of
-// valid UTF-8, with no hidden character (see audit.IsHiddenRune) and no space
+// valid UTF-8, with no hidden character (see ident.IsHiddenRune) and no space
 // at either end.
 func validName(s string) bool {
-	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > MaxNameLen || hasHidden(s) {
+	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > MaxNameLen || ident.HasHidden(s) {
 		return false
 	}
 
@@ -228,10 +227,4 @@ func validName(s string) bool {
 	last, _ := utf8.DecodeLastRuneInString(s)
 
 	return !unicode.IsSpace(first) && !unicode.IsSpace(last)
-}
-
-// hasHidden reports whether s holds a control, format, line separator or
-// paragraph separator character: the set that the audit log refuses.
-func hasHidden(s string) bool {
-	return strings.ContainsFunc(s, audit.IsHiddenRune)
 }
