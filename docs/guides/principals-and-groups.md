@@ -144,7 +144,7 @@ Disabling works during maintenance mode.
 | --- | --- | --- |
 | Disable a principal that is already disabled | `409` | `principal.disabled` |
 | Enable a principal that is not disabled | `409` | `principal.not-disabled` |
-| Disable the last enabled break-glass account | `409` | `principal.last-break-glass` |
+| Disable the last enabled break-glass account | `409` | `principal.no-working-break-glass` |
 
 An enable restores the grants of the principal. The caller must therefore hold
 every action that those grants give. A caller that lacks one gets `403`.
@@ -159,7 +159,7 @@ The delete is refused in these cases:
 
 | Case | Status | Code |
 | --- | --- | --- |
-| The last enabled break-glass account | `409` | `principal.last-break-glass` |
+| The last enabled break-glass account | `409` | `principal.no-working-break-glass` |
 | The last site administrator | `409` | `access.last-site-administrator` |
 | A namespace service subject | `400` | `principal.reserved-subject` |
 

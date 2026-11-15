@@ -26,7 +26,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -58,12 +57,14 @@ var (
 	// ErrBreakGlassKind reports a break-glass account that is not a person.
 	// Only a person can be a break-glass account.
 	ErrBreakGlassKind = errors.New("break-glass account must be a person")
-	// ErrLastBreakGlass reports a disable or a delete of the last enabled
-	// break-glass account of the installation. An installation keeps one
-	// enabled break-glass account at least, as an emergency way in.
-	ErrLastBreakGlass = errors.New(
-		"cannot remove the last enabled break-glass account: keep a second enabled break-glass account first",
-	)
+	// ErrNoWorkingBreakGlass reports a change that leaves too few working
+	// break-glass accounts. An installation keeps its floors of break-glass
+	// accounts, as an emergency way in.
+	ErrNoWorkingBreakGlass = errors.New("the change leaves too few working break-glass accounts")
+	// ErrBreakGlassUnavailable reports that the store cannot count the
+	// working break-glass accounts. A caller that cannot count refuses the
+	// change (fail closed).
+	ErrBreakGlassUnavailable = errors.New("break-glass account count unavailable")
 	// ErrBreakGlassPassword reports a write that sets the break-glass flag on
 	// a person who has a local password. A break-glass account signs in with
 	// a passkey or a hardware key only, so the password goes first.
@@ -505,14 +506,12 @@ func validateText(field, s string, maxLen int) error {
 		return fmt.Errorf("%w: %s starts or ends with white space", ErrInvalid, field)
 	}
 
-	for _, c := range s {
-		if unicode.IsControl(c) {
-			return fmt.Errorf("%w: %s holds a control character", ErrInvalid, field)
-		}
-
-		if unicode.Is(unicode.Cf, c) {
-			return fmt.Errorf("%w: %s holds the format character %U", ErrInvalid, field, c)
-		}
+	// Defense in depth: the principal and group routes in internal/api/server
+	// refuse a hidden character in the display name and the description before
+	// they call the service. This check does not rely on them, so that a new
+	// caller of the domain cannot skip it.
+	if r, found := ident.FirstHidden(s); found {
+		return fmt.Errorf("%w: %s holds the control, format or separator character %U", ErrInvalid, field, r)
 	}
 
 	return nil

@@ -151,6 +151,37 @@ func TestGitHostAppRefusesAKeyThatTheAdapterCannotUse(t *testing.T) {
 	wantHost(t, e.send(t, http.MethodGet, hostAppPath, ""), http.StatusNotFound)
 }
 
+// TestGitHostAppInvalidKeyAnswerHoldsTheReasonOnly sends a refusal of the key
+// that the adapter and the service wrapped, and checks that the answer holds
+// the sentence of the refusal and the reason of the adapter, and no name of an
+// internal step.
+func TestGitHostAppInvalidKeyAnswerHoldsTheReasonOnly(t *testing.T) {
+	t.Parallel()
+
+	const reason = "the key is not a PEM block"
+
+	e := newHostEnv(t, hostAllowAll())
+	e.opener.setOpenErr(fmt.Errorf("the adapter read the key: %w",
+		fmt.Errorf("the parse step: %w", fmt.Errorf("%w: %s", forge.ErrInvalid, reason))))
+
+	r := e.send(t, http.MethodPut, hostAppPath, hostAppBody())
+	wantHost(t, r, http.StatusBadRequest)
+
+	if !strings.Contains(r.body, forge.ErrInvalid.Error()) {
+		t.Fatalf("answer = %s, want the sentence of the refusal", r.body)
+	}
+
+	if !strings.Contains(r.body, reason) {
+		t.Fatalf("answer = %s, want the reason %q", r.body, reason)
+	}
+
+	for _, step := range []string{"the adapter read the key", "the parse step", "the private key"} {
+		if strings.Contains(r.body, step) {
+			t.Fatalf("answer = %s, want no name of the step %q", r.body, step)
+		}
+	}
+}
+
 func TestGitHostAppNeverAnswersAnyOfItsSecrets(t *testing.T) {
 	t.Parallel()
 
@@ -450,7 +481,8 @@ func TestGitHostIfMatchInvalidCodes(t *testing.T) {
 }
 
 // TestGitHostConnectionTakesNothingThatTheOperatorOwns sends each field that
-// only the operator sets, straight to the create route.
+// only the operator sets, straight to the create route, with a value and with
+// null. A request that holds none of them makes a connection.
 func TestGitHostConnectionTakesNothingThatTheOperatorOwns(t *testing.T) {
 	t.Parallel()
 
@@ -458,29 +490,49 @@ func TestGitHostConnectionTakesNothingThatTheOperatorOwns(t *testing.T) {
 	e.register(t)
 
 	//nolint:gosec // The strings are fields of a request that the route refuses, not credentials.
-	for name, field := range map[string]string{
-		"an API address":     `"apiAddress":"https://evil.example.com"`,
-		"an app ID":          `"appID":"777"`,
-		"a private key":      `"privateKey":"` + hostKeyCanary + `"`,
-		"an event secret":    `"eventSecret":"` + hostSecretCanary + `"`,
-		"a credential":       `"credential":"token"`,
-		"a list of sets":     `"credentials":[]`,
-		"a field of nothing": `"other":"x"`,
-	} {
+	owns := map[string]string{
+		"an API address":          `"apiAddress":"https://evil.example.com"`,
+		"an API address of null":  `"apiAddress":null`,
+		"an app ID":               `"appID":"777"`,
+		"an app ID of null":       `"appID":null`,
+		"a private key":           `"privateKey":"` + hostKeyCanary + `"`,
+		"a private key of null":   `"privateKey":null`,
+		"an event secret":         `"eventSecret":"` + hostSecretCanary + `"`,
+		"an event secret of null": `"eventSecret":null`,
+		"a credential":            `"credential":"token"`,
+		"a credential of null":    `"credential":null`,
+		"a list of sets":          `"credentials":[]`,
+		"a list of sets of null":  `"credentials":null`,
+	}
+
+	for name, field := range owns {
 		body := `{"kind":"github","auth":"app","installationID":"101",` + field + `}`
 
 		r := e.send(t, http.MethodPost, hostConnectionsPath, body)
 		wantHost(t, r, http.StatusBadRequest)
+
+		if !strings.Contains(r.body, "the operator sets them") {
+			t.Fatalf("the refusal of %s = %s, want the sentence of an operator-owned field", name, r.body)
+		}
 
 		if strings.Contains(r.body, hostKeyCanary) || strings.Contains(r.body, hostSecretCanary) {
 			t.Fatalf("the refusal of %s echoes the secret: %s", name, r.body)
 		}
 	}
 
+	// A field that the operator does not own, and that no route takes, fails
+	// with the sentence of the body.
+	unknown := e.send(t, http.MethodPost, hostConnectionsPath,
+		`{"kind":"github","auth":"app","installationID":"101","other":"x"}`)
+	wantHost(t, unknown, http.StatusBadRequest)
+
 	list := decodeHost[connectionsDoc](t, e.send(t, http.MethodGet, hostConnectionsPath, ""))
 	if len(list.Connections) != 0 {
 		t.Fatalf("list = %+v, want no connection after refused creates", list)
 	}
+
+	// The same request without a field of the operator makes a connection.
+	wantHost(t, e.send(t, http.MethodPost, hostConnectionsPath, createBody("101")), http.StatusCreated)
 }
 
 func TestGitHostConnectionRefusesInputThatIsNotValid(t *testing.T) {
