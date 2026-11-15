@@ -300,3 +300,103 @@ func assertDrainingAnswer(t *testing.T, probe *readiness, path string) {
 		t.Errorf("GET %s while draining = %d %s, want 503 %s", path, rec.Code, got, want)
 	}
 }
+
+// TestReadiness503DuringDrainHasRetryAfter proves that GET /health/ready
+// during the drain answers 503 with the body of main (failed: draining) and
+// a Retry-After header.
+func TestReadiness503DuringDrainHasRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	api, err := ParseComponents("api")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocked := stubPinger{err: nil, block: true}
+	logger := slog.New(slog.DiscardHandler)
+	builders := map[string]func(*metrics.Registry) *readiness{
+		"without components": func(registry *metrics.Registry) *readiness {
+			rd, ok := newReadinessHandler(
+				blocked,
+				blocked,
+				time.Minute,
+				registry.NewCounter(readinessFailuresName, "Failed readiness probes.", nil, 0),
+				logger,
+			).(*readiness)
+			if !ok {
+				t.Fatal("newReadinessHandler does not return a readiness")
+			}
+
+			rd.drainPeriod = DefaultDrainPeriod
+
+			return rd
+		},
+		"with components": func(registry *metrics.Registry) *readiness {
+			probe := newComponentReadiness(readinessSettings{
+				streamStop:  nil,
+				components:  api,
+				store:       blocked,
+				blobs:       blocked,
+				watch:       nil,
+				chainAdmits: nil,
+				minimum:     nil,
+				writable:    nil,
+				timeout:     time.Minute,
+				failures: registry.NewCounter(
+					readinessFailuresName,
+					"Failed readiness probes.",
+					nil,
+					0,
+				),
+				logger: logger,
+			})
+			probe.drainPeriod = DefaultDrainPeriod
+
+			return probe
+		},
+	}
+
+	for name, build := range builders {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			probe := build(metrics.NewRegistry())
+			probe.drain()
+
+			for _, path := range []string{"/health/ready", "/health/ready/api"} {
+				assertDrainingRetryAfter(t, probe, path)
+			}
+		})
+	}
+}
+
+// assertDrainingRetryAfter sends one GET to probe while it drains and fails
+// the test unless the answer is the 503 of a draining process with a
+// Retry-After header.
+func assertDrainingRetryAfter(t *testing.T, probe *readiness, path string) {
+	t.Helper()
+
+	const wantBody = `{"status":"unavailable","failed":["draining"]}`
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
+	req.SetPathValue("component", "api")
+
+	rec := httptest.NewRecorder()
+	if path == "/health/ready" {
+		probe.ServeHTTP(rec, req)
+	} else {
+		probe.ServeOne(rec, req)
+	}
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET %s while draining = %d, want 503", path, rec.Code)
+	}
+
+	if got := strings.TrimSpace(rec.Body.String()); got != wantBody {
+		t.Fatalf("GET %s while draining body = %s, want %s", path, got, wantBody)
+	}
+
+	if got := rec.Header().Get("Retry-After"); got == "" {
+		t.Fatalf("GET %s while draining has no Retry-After header", path)
+	}
+}

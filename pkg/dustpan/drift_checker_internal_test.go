@@ -157,6 +157,26 @@ func newDriftCheckerHarness(t *testing.T, b checkerBackend) drifttest.Harness {
 func newDriftChecker(t *testing.T, b checkerBackend, now func() time.Time) *driftsvc.Service {
 	t.Helper()
 
+	starter := newCheckerStarter(t, b, now)
+
+	checker, err := driftsvc.NewService(starter.Starter, now)
+	if err != nil {
+		t.Fatalf("drift service: %v", err)
+	}
+
+	return checker
+}
+
+// checkerStarter holds the job service that newCheckerStarter builds.
+type checkerStarter struct {
+	job.Starter
+}
+
+// newCheckerStarter builds the job service as the server does, over the stores
+// of b, with the clock now.
+func newCheckerStarter(t *testing.T, b checkerBackend, now func() time.Time) checkerStarter {
+	t.Helper()
+
 	cfg := defaultSettings()
 	cfg.namespaceStore = b.store
 	cfg.jobStore = b.jobs
@@ -199,12 +219,7 @@ func newDriftChecker(t *testing.T, b checkerBackend, now func() time.Time) *drif
 		t.Fatalf("job service: %v, %v", starter, err)
 	}
 
-	checker, err := driftsvc.NewService(starter, now)
-	if err != nil {
-		t.Fatalf("drift service: %v", err)
-	}
-
-	return checker
+	return checkerStarter{Starter: starter}
 }
 
 // driftActor returns an administrator who starts a drift check.

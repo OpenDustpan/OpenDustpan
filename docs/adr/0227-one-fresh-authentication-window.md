@@ -11,6 +11,8 @@ Changed by:
 - ADR 339 extends decision 6: the first administrator is made by a one-time code and a fresh authentication.
 - ADR 354 extends: an agent never has a fresh authentication.
 - ADR 373 extends decision 1: the proof of a break-glass pass.
+- ADR 385 changes decision 3: the setting `freshAuthEnabled` turns the check off.
+- ADR 385 extends decision 2: the one window applies only when `freshAuthEnabled` is on.
 .
 ## Context
 

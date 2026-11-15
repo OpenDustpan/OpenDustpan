@@ -69,6 +69,7 @@ func newMetricsHandler(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,

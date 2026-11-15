@@ -70,6 +70,27 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 
 			return probe(h, http.MethodPost, approvalsURL(testJob), goodApprove)
 		},
+		"cancelJob": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			r := newCancelRig(t, holdsCancel()...)
+
+			return probe(r.h, http.MethodPost, cancelURL(testJob), `{}`)
+		},
+		"confirmJob": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			r := newActionsRig(t, holdsBoth()...)
+
+			return probe(r.h, http.MethodPost, confirmURL(testJob), goodConfirm)
+		},
+		"redactJobLog": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			r := newActionsRig(t, holdsRedact()...)
+
+			return probe(r.h, http.MethodPost, redactURL(), goodRedact)
+		},
 	}
 
 	h := newStartHandler(t, newAuthorizer(), newFakeJobs(), newFakeStarter(t), nil)

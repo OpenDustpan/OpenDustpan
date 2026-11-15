@@ -125,7 +125,7 @@ func TestFirstTofuLockWithNoRuleIsRefused(t *testing.T) {
 		t.Fatalf("LOCK answers %d (%s), want 422", status, body)
 	}
 
-	if !strings.Contains(body, "placement-rules") {
+	if !strings.Contains(body, "opendustpan placement add") {
 		t.Fatalf("LOCK body %q does not name the placement rule route", body)
 	}
 
@@ -148,7 +148,7 @@ func TestTFEWorkspaceCreateUsesPlacementRules(t *testing.T) {
 
 	status, text := tofuDoPath(t, f, http.MethodPost, path, body)
 	if status != http.StatusUnprocessableEntity || !strings.Contains(text, "placement.no-match") ||
-		!strings.Contains(text, "placement-rules") {
+		!strings.Contains(text, "opendustpan placement add") {
 		t.Fatalf("create with no rule = %d %s, want 422 placement.no-match naming the rule route", status, text)
 	}
 

@@ -152,7 +152,7 @@ func newService(t *testing.T, rows []notify.Delivery) *subscriptionsvc.Service {
 
 	svc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
 		Subscriptions: fakeSubs{nil}, Deliveries: fakeDeliveries{Deliveries: nil, rows: rows, countErr: nil},
-		Namespaces: fakeNamespaces{}, Audit: &redeliverAudit{Store: nil, entries: nil, err: nil}, Now: at,
+		Namespaces: fakeNamespaces{}, Now: at,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -369,7 +369,7 @@ func TestHistoryReturnsTheCountError(t *testing.T) {
 			svc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
 				Subscriptions: fakeSubs{nil},
 				Deliveries:    fakeDeliveries{Deliveries: nil, rows: historyRows(at(), 1, 5), countErr: errCount},
-				Namespaces:    fakeNamespaces{}, Audit: &redeliverAudit{Store: nil, entries: nil, err: nil}, Now: at,
+				Namespaces:    fakeNamespaces{}, Now: at,
 			})
 			if err != nil {
 				t.Fatalf("new service: %v", err)
@@ -405,7 +405,7 @@ func TestNewServiceNeedsItsPorts(t *testing.T) {
 	t.Parallel()
 
 	_, err := subscriptionsvc.NewService(subscriptionsvc.Config{
-		Subscriptions: nil, Deliveries: nil, Namespaces: nil, Audit: nil, Now: nil,
+		Subscriptions: nil, Deliveries: nil, Namespaces: nil, Now: nil,
 	})
 	if !errors.Is(err, subscriptionsvc.ErrMissingDependency) {
 		t.Fatalf("NewService = %v, want ErrMissingDependency", err)
