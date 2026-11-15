@@ -235,6 +235,26 @@ address from a host name that does not resolve. Both give the class
 for example a literal private address or a port that is not allowed, gives the
 class `refused`.
 
+## Send a delivery again
+
+`POST /api/dustpan/v1/namespaces/<namespace>/deliveries/<delivery_id>/redeliver`
+makes a stopped delivery pending again. Only a delivery in `delivered`,
+`abandoned` or `skipped` can be sent again, and only while its subscription is
+active, sends to the destination of the delivery, and has the principal of the
+delivery as `createdBy`.
+
+A delivery allows at most 15 manual redeliveries. The wait after each
+redelivery follows the retry schedule of the server: 30 seconds after the
+first, doubled for each further redelivery, up to 1 hour. The delivery resource
+shows `redeliveriesRemaining`, `redeliveryLimit` and, while a redelivery is
+possible, `redeliverableAt`.
+
+A redelivery before `redeliverableAt` answers 429
+`sink.delivery-too-soon`. The `Retry-After` header gives the wait in seconds,
+at most 3600. The server writes no audit entry for this refusal. A redelivery
+with no redeliveries left answers 409 `sink.delivery-redeliver-limit`, and the
+server writes an audit entry of the refusal.
+
 ## Audit entries
 
 Each create, change and delete writes one audit entry of the kind `change` in

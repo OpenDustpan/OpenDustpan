@@ -222,7 +222,7 @@ func (s *Service) subjectDisabled(ctx context.Context, req *Request) error {
 	}
 
 	if disableErr := s.disable(ctx, e, &p); disableErr != nil {
-		if errors.Is(disableErr, principal.ErrLastBreakGlass) ||
+		if errors.Is(disableErr, principal.ErrNoWorkingBreakGlass) ||
 			errors.Is(disableErr, access.ErrLastSiteAdministrator) {
 			// The server keeps the last administrator. The sign-in is refused
 			// as every other refusal is.

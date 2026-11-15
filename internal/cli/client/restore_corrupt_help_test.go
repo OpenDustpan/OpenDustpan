@@ -93,8 +93,9 @@ func TestRestoreOfCorruptDataNamesTheBackupCheck(t *testing.T) {
 // that stopped at damaged or missing live blobs prints the text of the
 // server, which names the keys, and the help for the live blob store, and not
 // the check of the backup, which is not at fault. A key in the text that
-// holds the words of the other refusal does not change the help. The test
-// sets the admin token, so it cannot run in parallel.
+// holds the words of the other refusal does not change the help. It covers
+// the refusal that would leave too few working break-glass accounts too. The
+// test sets the admin token, so it cannot run in parallel.
 func TestRestoreStoppedAtLiveBlobsNamesTheRepair(t *testing.T) {
 	t.Setenv(client.AdminTokenEnvVar, "test-token")
 
@@ -102,6 +103,7 @@ func TestRestoreStoppedAtLiveBlobsNamesTheRepair(t *testing.T) {
 		"restore --server %s --backup bkp-aaa again"
 	missingHelp := "run opendustpan store check --server %s --target blobs to check the blob store setting of the " +
 		"server, then run opendustpan restore --server %s --backup bkp-aaa again"
+	breakGlassHelp := "restore a backup that holds at least 2 working break-glass accounts"
 
 	for _, tc := range []struct {
 		name    string
@@ -126,6 +128,11 @@ func TestRestoreStoppedAtLiveBlobsNamesTheRepair(t *testing.T) {
 			errText: `the backup before the restore found 11 of 11 live blobs missing, first ` +
 				`"namespaces/ns-a/live blobs do not match their records": too many live blobs are missing: ` +
 				`backup data is corrupt`,
+		},
+		{
+			name: "too few working break-glass accounts", code: "principal.no-working-break-glass", help: breakGlassHelp,
+			errText: `restore leaves too few working break-glass accounts: the change leaves too few working ` +
+				`break-glass accounts`,
 		},
 	} {
 		srv := serveCodedRestore(t, tc.errText, tc.code)
