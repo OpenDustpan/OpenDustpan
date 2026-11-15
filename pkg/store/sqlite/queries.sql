@@ -5453,7 +5453,7 @@ VALUES (
     sqlc.arg(id), sqlc.arg(namespace), sqlc.arg(name), sqlc.arg(issuer), sqlc.arg(audience),
     sqlc.arg(key_source), sqlc.arg(static_keys), sqlc.arg(conditions_json), sqlc.arg(principal_id),
     sqlc.arg(created_by), sqlc.arg(created_at_ms), sqlc.arg(revision), sqlc.arg(spiffe_id_pattern),
-    sqlc.arg(bundle_id)
+    CAST(NULLIF(sqlc.arg(bundle_id), '') AS TEXT)
 )
 ON CONFLICT DO NOTHING;
 
@@ -5471,13 +5471,13 @@ WHERE id = sqlc.arg(id);
 -- The namespace is part of the key: a rule of another namespace reads as no
 -- row.
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms, revision, spiffe_id_pattern, bundle_id
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS TEXT) AS bundle_id
 FROM trust_rules
 WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
 
 -- name: ListTrustRulesOfNamespace :many
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms, revision, spiffe_id_pattern, bundle_id
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS TEXT) AS bundle_id
 FROM trust_rules
 WHERE namespace = sqlc.arg(namespace)
 ORDER BY name, id;
@@ -5495,7 +5495,7 @@ UPDATE trust_rules SET
     key_source = sqlc.arg(key_source), static_keys = sqlc.arg(static_keys),
     conditions_json = sqlc.arg(conditions_json), principal_id = sqlc.arg(principal_id),
     revision = sqlc.arg(revision), spiffe_id_pattern = sqlc.arg(spiffe_id_pattern),
-    bundle_id = sqlc.arg(bundle_id)
+    bundle_id = CAST(NULLIF(sqlc.arg(bundle_id), '') AS TEXT)
 WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id) AND revision = sqlc.arg(stored_revision);
 
 -- name: CountTrustRulesNamedInNamespace :one

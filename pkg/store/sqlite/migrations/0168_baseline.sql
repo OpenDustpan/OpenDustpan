@@ -1163,7 +1163,8 @@ CREATE TABLE trust_bundles (
     namespace      TEXT    NOT NULL UNIQUE,
     active_version INTEGER NOT NULL CHECK (active_version >= 1),
     revision       INTEGER NOT NULL CHECK (revision >= 1),
-    created_at_ms  INTEGER NOT NULL
+    created_at_ms  INTEGER NOT NULL,
+    UNIQUE (namespace, id)
 ) STRICT;
 
 CREATE TABLE trust_rules (
@@ -1180,7 +1181,8 @@ CREATE TABLE trust_rules (
     created_at_ms     INTEGER NOT NULL,
     revision          INTEGER NOT NULL CHECK (revision >= 1),
     spiffe_id_pattern TEXT    NOT NULL,
-    bundle_id         TEXT    NOT NULL
+    bundle_id         TEXT,
+    FOREIGN KEY (namespace, bundle_id) REFERENCES trust_bundles (namespace, id)
 ) STRICT;
 
 CREATE TABLE self_service_blueprints (

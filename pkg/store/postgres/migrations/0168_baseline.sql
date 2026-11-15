@@ -1442,7 +1442,7 @@ CREATE TABLE trust_rules (
     created_at_ms bigint NOT NULL,
     revision bigint NOT NULL,
     spiffe_id_pattern text NOT NULL,
-    bundle_id text NOT NULL,
+    bundle_id text,
     CONSTRAINT trust_rules_key_source_check CHECK ((key_source = ANY (ARRAY['discovery'::text, 'static'::text]))),
     CONSTRAINT trust_rules_revision_check CHECK ((revision >= 1))
 );
@@ -2034,6 +2034,9 @@ ALTER TABLE ONLY trust_bundles
     ADD CONSTRAINT trust_bundles_namespace_key UNIQUE (namespace);
 
 ALTER TABLE ONLY trust_bundles
+    ADD CONSTRAINT trust_bundles_namespace_id_key UNIQUE (namespace, id);
+
+ALTER TABLE ONLY trust_bundles
     ADD CONSTRAINT trust_bundles_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY trust_rules
@@ -2493,6 +2496,10 @@ ALTER TABLE ONLY trust_bundle_versions
 
 ALTER TABLE ONLY trust_rules
     ADD CONSTRAINT trust_rules_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);
+
+ALTER TABLE ONLY trust_rules
+    ADD CONSTRAINT trust_rules_namespace_bundle_id_fkey FOREIGN KEY (namespace, bundle_id)
+    REFERENCES trust_bundles(namespace, id);
 
 ALTER TABLE ONLY unit_defaults
     ADD CONSTRAINT unit_defaults_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);

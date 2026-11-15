@@ -1356,7 +1356,7 @@ type TrustRule struct {
 	CreatedAtMs     int64
 	Revision        int64
 	SpiffeIDPattern string
-	BundleID        string
+	BundleID        pgtype.Text
 }
 
 type UnitDefault struct {

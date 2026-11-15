@@ -88,7 +88,7 @@ func (t TrustRules) Get(ctx context.Context, ns namespace.Name, id trustrule.ID)
 		return trustrule.Rule{}, fmt.Errorf("select trust rule: %w", err)
 	}
 
-	r, err := trustrulestore.Rule(trustRuleRow(&row))
+	r, err := trustrulestore.Rule(trustRuleRow(row))
 	if err != nil {
 		return trustrule.Rule{}, trustrule.ErrNotFound
 	}
@@ -119,7 +119,7 @@ func (t TrustRules) List(ctx context.Context, ns namespace.Name) ([]trustrule.Ru
 	out := make([]trustrule.Rule, 0, len(rows))
 
 	for i := range rows {
-		r, ruleErr := trustrulestore.Rule(trustRuleRow(&rows[i]))
+		r, ruleErr := trustrulestore.Rule(trustRuleListRow(rows[i]))
 		// Defense in depth: the query matched the namespace. This check stays
 		// so that a change of the query cannot list a rule of another
 		// namespace.
@@ -286,8 +286,19 @@ func checkRuleBundle(ctx context.Context, q *db.Queries, bundleID string, ns nam
 	return nil
 }
 
-// trustRuleRow returns the shared form of a stored row.
-func trustRuleRow(r *db.TrustRule) trustrulestore.Row {
+// trustRuleRow returns the shared form of a stored row. The selects read the
+// nullable bundle ID with COALESCE, so it is never NULL here.
+func trustRuleRow(r db.GetTrustRuleRow) trustrulestore.Row {
+	return trustrulestore.Row{
+		ID: r.ID, Namespace: r.Namespace, Name: r.Name, Issuer: r.Issuer, Audience: r.Audience,
+		KeySource: r.KeySource, StaticKeys: r.StaticKeys, ConditionsJSON: r.ConditionsJson,
+		PrincipalID: r.PrincipalID, CreatedBy: r.CreatedBy, CreatedAtMs: r.CreatedAtMs,
+		Revision: r.Revision, SpiffeIDPattern: r.SpiffeIDPattern, BundleID: r.BundleID,
+	}
+}
+
+// trustRuleListRow returns the shared form of a stored row of a list.
+func trustRuleListRow(r db.ListTrustRulesOfNamespaceRow) trustrulestore.Row {
 	return trustrulestore.Row{
 		ID: r.ID, Namespace: r.Namespace, Name: r.Name, Issuer: r.Issuer, Audience: r.Audience,
 		KeySource: r.KeySource, StaticKeys: r.StaticKeys, ConditionsJSON: r.ConditionsJson,
@@ -319,7 +330,7 @@ func (t TrustRules) RecordExchange(
 			return fmt.Errorf("select the trust rule of the exchange: %w", err)
 		}
 
-		if ruleErr := trustrulestore.CheckExchangeRule(trustRuleRow(&row), x.Token.PrincipalID); ruleErr != nil {
+		if ruleErr := trustrulestore.CheckExchangeRule(trustRuleRow(row), x.Token.PrincipalID); ruleErr != nil {
 			return ruleErr
 		}
 

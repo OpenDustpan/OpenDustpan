@@ -10365,7 +10365,7 @@ func (q *Queries) GetTrustBundleOfNamespace(ctx context.Context, namespace strin
 
 const getTrustRule = `-- name: GetTrustRule :one
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms, revision, spiffe_id_pattern, bundle_id
+    created_by, created_at_ms, revision, spiffe_id_pattern, COALESCE(bundle_id, '') AS bundle_id
 FROM trust_rules
 WHERE namespace = $1 AND id = $2
 `
@@ -10375,11 +10375,28 @@ type GetTrustRuleParams struct {
 	ID        string
 }
 
+type GetTrustRuleRow struct {
+	ID              string
+	Namespace       string
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	CreatedBy       string
+	CreatedAtMs     int64
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        string
+}
+
 // The namespace is part of the key: a rule of another namespace reads as no
 // row.
-func (q *Queries) GetTrustRule(ctx context.Context, arg GetTrustRuleParams) (TrustRule, error) {
+func (q *Queries) GetTrustRule(ctx context.Context, arg GetTrustRuleParams) (GetTrustRuleRow, error) {
 	row := q.db.QueryRow(ctx, getTrustRule, arg.Namespace, arg.ID)
-	var i TrustRule
+	var i GetTrustRuleRow
 	err := row.Scan(
 		&i.ID,
 		&i.Namespace,
@@ -13448,7 +13465,7 @@ VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8, $9,
     $10, $11, $12, $13,
-    $14
+    NULLIF($14, '')
 )
 ON CONFLICT DO NOTHING
 `
@@ -13467,7 +13484,7 @@ type InsertTrustRuleParams struct {
 	CreatedAtMs     int64
 	Revision        int64
 	SpiffeIDPattern string
-	BundleID        string
+	BundleID        interface{}
 }
 
 // The caller checks the fence and the principal in the same transaction. A
@@ -19526,21 +19543,38 @@ func (q *Queries) ListTrustBundleVersions(ctx context.Context, bundleID string) 
 
 const listTrustRulesOfNamespace = `-- name: ListTrustRulesOfNamespace :many
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms, revision, spiffe_id_pattern, bundle_id
+    created_by, created_at_ms, revision, spiffe_id_pattern, COALESCE(bundle_id, '') AS bundle_id
 FROM trust_rules
 WHERE namespace = $1
 ORDER BY name COLLATE "C", id COLLATE "C"
 `
 
-func (q *Queries) ListTrustRulesOfNamespace(ctx context.Context, namespace string) ([]TrustRule, error) {
+type ListTrustRulesOfNamespaceRow struct {
+	ID              string
+	Namespace       string
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	CreatedBy       string
+	CreatedAtMs     int64
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        string
+}
+
+func (q *Queries) ListTrustRulesOfNamespace(ctx context.Context, namespace string) ([]ListTrustRulesOfNamespaceRow, error) {
 	rows, err := q.db.Query(ctx, listTrustRulesOfNamespace, namespace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []TrustRule
+	var items []ListTrustRulesOfNamespaceRow
 	for rows.Next() {
-		var i TrustRule
+		var i ListTrustRulesOfNamespaceRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Namespace,
@@ -25022,7 +25056,7 @@ UPDATE trust_rules SET
     key_source = $4, static_keys = $5,
     conditions_json = $6, principal_id = $7,
     revision = $8, spiffe_id_pattern = $9,
-    bundle_id = $10
+    bundle_id = NULLIF($10, '')
 WHERE namespace = $11 AND id = $12 AND revision = $13
 `
 
@@ -25036,7 +25070,7 @@ type UpdateTrustRuleParams struct {
 	PrincipalID     string
 	Revision        int64
 	SpiffeIDPattern string
-	BundleID        string
+	BundleID        interface{}
 	Namespace       string
 	ID              string
 	StoredRevision  int64

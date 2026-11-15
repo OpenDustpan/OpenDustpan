@@ -155,7 +155,11 @@ func (s *Service) checkUpdatedIssuer(ctx context.Context, r *trustrule.Rule, in 
 }
 
 // updateEntry is the entry of an update of a rule, with a change for each
-// field that changed.
+// field that changed: name, issuer, audience, key source, principal, SPIFFE
+// ID pattern, bundle, conditions and static keys. The conditions are
+// recorded as their old and new text; the static keys are recorded as a
+// SHA-256 hex digest or the key IDs of the old and new keys, never as the
+// key text.
 func (s *Service) updateEntry(e audit.Entry, old, r *trustrule.Rule) audit.Entry {
 	out := s.entry(e, r.Namespace, r.ID, ActionUpdate)
 
@@ -173,6 +177,8 @@ func (s *Service) updateEntry(e audit.Entry, old, r *trustrule.Rule) audit.Entry
 	change("principal", old.PrincipalID, r.PrincipalID)
 	change("spiffeIDPattern", old.SpiffeIDPattern, r.SpiffeIDPattern)
 	change("bundle", old.Bundle, r.Bundle)
+	change("conditions", formatConditions(old.Conditions), formatConditions(r.Conditions))
+	change("staticKeys", staticKeysDigest(old.StaticKeys), staticKeysDigest(r.StaticKeys))
 
 	return out
 }

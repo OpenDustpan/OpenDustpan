@@ -7,6 +7,8 @@ package trustrulesvc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -594,15 +596,34 @@ func (s *Service) requireFresh(ctx context.Context) error {
 }
 
 // createEntry is the entry of the create of r, with a change for each field
-// that decides which tokens the rule accepts. The static keys are public,
-// but long, so the entry names the key source and not the keys.
+// that decides which tokens the rule accepts: name, issuer, audience, key
+// source, principal, SPIFFE ID pattern, bundle, conditions and static keys.
+// The static keys can be long, so the entry records the SHA-256 hex digest
+// of the keys, never the keys.
 func (s *Service) createEntry(e audit.Entry, r *trustrule.Rule) audit.Entry {
 	out := s.entry(e, r.Namespace, r.ID, ActionCreate)
 
-	// Each value is quoted, so a value that holds the separator ", " still
-	// reads as one value.
-	conds := make([]string, 0, len(r.Conditions))
-	for _, c := range r.Conditions {
+	out.Changes = []audit.Change{
+		{Key: "name", Old: nil, New: r.Name, Layer: "", TakesEffect: ""},
+		{Key: "issuer", Old: nil, New: r.Issuer, Layer: "", TakesEffect: ""},
+		{Key: "audience", Old: nil, New: r.Audience, Layer: "", TakesEffect: ""},
+		{Key: "keySource", Old: nil, New: string(r.Keys), Layer: "", TakesEffect: ""},
+		{Key: "principal", Old: nil, New: r.PrincipalID, Layer: "", TakesEffect: ""},
+		{Key: "spiffeIDPattern", Old: nil, New: r.SpiffeIDPattern, Layer: "", TakesEffect: ""},
+		{Key: "bundle", Old: nil, New: r.Bundle, Layer: "", TakesEffect: ""},
+		{Key: "conditions", Old: nil, New: formatConditions(r.Conditions), Layer: "", TakesEffect: ""},
+		{Key: "staticKeys", Old: nil, New: staticKeysDigest(r.StaticKeys), Layer: "", TakesEffect: ""},
+	}
+
+	return out
+}
+
+// formatConditions returns the conditions as text: the claim with the quoted
+// values of each condition, in claim order. Each value is quoted, so a value
+// that holds the separator ", " still reads as one value.
+func formatConditions(cs []trustrule.Condition) string {
+	conds := make([]string, 0, len(cs))
+	for _, c := range cs {
 		quoted := make([]string, 0, len(c.Values))
 		for _, v := range c.Values {
 			quoted = append(quoted, strconv.Quote(v))
@@ -611,14 +632,13 @@ func (s *Service) createEntry(e audit.Entry, r *trustrule.Rule) audit.Entry {
 		conds = append(conds, c.Claim+" in ["+strings.Join(quoted, ", ")+"]")
 	}
 
-	out.Changes = []audit.Change{
-		{Key: "name", Old: nil, New: r.Name, Layer: "", TakesEffect: ""},
-		{Key: "issuer", Old: nil, New: r.Issuer, Layer: "", TakesEffect: ""},
-		{Key: "audience", Old: nil, New: r.Audience, Layer: "", TakesEffect: ""},
-		{Key: "keySource", Old: nil, New: string(r.Keys), Layer: "", TakesEffect: ""},
-		{Key: "principal", Old: nil, New: r.PrincipalID, Layer: "", TakesEffect: ""},
-		{Key: "conditions", Old: nil, New: strings.Join(conds, "; "), Layer: "", TakesEffect: ""},
-	}
+	return strings.Join(conds, "; ")
+}
 
-	return out
+// staticKeysDigest returns the SHA-256 hex digest of the static keys, so the
+// audit entry names the key set without recording its text.
+func staticKeysDigest(keys string) string {
+	sum := sha256.Sum256([]byte(keys))
+
+	return hex.EncodeToString(sum[:])
 }
