@@ -91,7 +91,7 @@ export interface BackupManifest {
   readonly id: string;
   readonly installationKind: string;
   readonly primaryInstallations: ReadonlyArray<string>;
-  readonly rowCounts: Readonly<Record<string, number>>;
+  readonly rowCounts: Readonly<Record<string, number>> | null;
   readonly schemaVersion: number;
   readonly sqlFiles: ReadonlyArray<PortableFile>;
   readonly sqlFormat: string;
@@ -206,7 +206,7 @@ export interface ContextDocument {
   readonly deleted?: boolean;
   readonly object: ContextObject;
   readonly schemaVersion: number;
-  readonly sections: Readonly<Record<string, ContextAnswer>>;
+  readonly sections: Readonly<Record<string, ContextAnswer>> | null;
 }
 
 export interface ContextEntry {
@@ -294,15 +294,21 @@ export interface CreateCollectionRequest {
 }
 
 export interface CreateGitHostConnectionRequest {
-  readonly apiAddress: string | null;
-  readonly appID: string | null;
+  /** Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused. */
+  readonly apiAddress: unknown;
+  /** Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused. */
+  readonly appID: unknown;
   readonly auth: string | null;
-  readonly credential: string | null;
-  readonly credentials: ReadonlyArray<unknown> | null;
-  readonly eventSecret: string | null;
+  /** Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused. */
+  readonly credential: unknown;
+  /** Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused. */
+  readonly credentials: unknown;
+  /** Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused. */
+  readonly eventSecret: unknown;
   readonly installationID: string | null;
   readonly kind: string | null;
-  readonly privateKey: string | null;
+  /** Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused. */
+  readonly privateKey: unknown;
   readonly push: boolean | null;
 }
 
@@ -405,7 +411,7 @@ export interface DeletedUnitSweep {
 }
 
 export interface DevData {
-  readonly classes: Readonly<Record<string, number>>;
+  readonly classes: Readonly<Record<string, number>> | null;
   readonly principals: number;
 }
 
@@ -607,7 +613,7 @@ export interface GitHostApp {
 export interface GitHostCheck {
   readonly account: GitHostAccount;
   readonly capabilities: ReadonlyArray<string>;
-  readonly missing: Readonly<Record<string, ReadonlyArray<string>>>;
+  readonly missing: Readonly<Record<string, ReadonlyArray<string>>> | null;
 }
 
 export interface GitHostConnection {
@@ -1382,6 +1388,7 @@ export interface ProviderRelease {
   readonly protocols: ReadonlyArray<string>;
   readonly publishedAt: string;
   readonly publishedBy: string;
+  readonly served: boolean;
   readonly version: string;
 }
 
@@ -2279,7 +2286,7 @@ export interface UnitSettingsStep {
   readonly allowFailure: boolean;
   readonly args: ReadonlyArray<string>;
   readonly dir: string;
-  readonly env: Readonly<Record<string, string>>;
+  readonly env: Readonly<Record<string, string>> | null;
   readonly name: string;
   readonly outputs: ReadonlyArray<UnitSettingsStepOutput>;
   readonly phase: string;
