@@ -519,6 +519,29 @@ func TestReadsPassThrough(t *testing.T) {
 	}
 }
 
+func TestManuallockNamespaceCover(t *testing.T) {
+	t.Parallel()
+
+	held := manuallock.Lock{
+		Since: fixedNow(), Target: manuallock.NamespaceTarget("acme"), Holder: "alice", Reason: "incident",
+	}
+	store := newStore()
+	store.held = held
+	svc := newService(t, store)
+
+	got, err := svc.Covering(t.Context(), webUnit())
+	if err != nil || got.Holder != "alice" || got.Reason != "incident" {
+		t.Fatalf("Covering of a unit in a locked namespace = %+v, %v; want the namespace lock", got, err)
+	}
+
+	store.held = manuallock.Lock{Since: time.Time{}, Target: zeroTarget(), Holder: "", Reason: ""}
+	store.getErr = manuallock.ErrNotLocked
+
+	if _, err := svc.Covering(t.Context(), webUnit()); !errors.Is(err, manuallock.ErrNotLocked) {
+		t.Fatalf("Covering of a unit in an unlocked namespace: err = %v, want ErrNotLocked", err)
+	}
+}
+
 func TestLockedErrorNamesTheHolderAndTheReason(t *testing.T) {
 	t.Parallel()
 
@@ -805,7 +828,7 @@ func (errAuthorizer) Authorize(context.Context, identity.Principal, identity.Act
 func TestLockedTextHasNoTerminalControls(t *testing.T) {
 	t.Parallel()
 
-	hostile := "ok\x1b[2J\x1b]0;owned\x07\r\nforged: line\u202eevil\u2028\u200b\x00\xff"
+	hostile := "ok\x1b[2J\x1b]0;owned\x07\r\nforged: line\xe2\x80\xaeevil\xe2\x80\xa8\xe2\x80\x8b\x00\xff"
 
 	cases := []struct {
 		name   string
@@ -854,13 +877,17 @@ func TestSafeText(t *testing.T) {
 
 	cases := []struct{ name, in, want string }{
 		{name: "plain", in: "freeze for audit", want: "freeze for audit"},
-		{name: "unicode letters", in: "gel \u00e9t\u00e9 \u65e5\u672c", want: "gel \u00e9t\u00e9 \u65e5\u672c"},
+		{
+			name: "unicode letters",
+			in:   "gel \xc3\xa9t\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac",
+			want: "gel \xc3\xa9t\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac",
+		},
 		{name: "escape", in: "a\x1bb", want: "a\\u001Bb"},
-		{name: "bidi override", in: "a\u202eb", want: "a\\u202Eb"},
-		{name: "line separator", in: "a\u2028b", want: "a\\u2028b"},
-		{name: "paragraph separator", in: "a\u2029b", want: "a\\u2029b"},
-		{name: "next line control", in: "a\u0085b", want: "a\\u0085b"},
-		{name: "bad bytes", in: "a\xffb", want: "a\ufffdb"},
+		{name: "bidi override", in: "a\xe2\x80\xaeb", want: "a\\u202Eb"},
+		{name: "line separator", in: "a\xe2\x80\xa8b", want: "a\\u2028b"},
+		{name: "paragraph separator", in: "a\xe2\x80\xa9b", want: "a\\u2029b"},
+		{name: "next line control", in: "a\xc2\x85b", want: "a\\u0085b"},
+		{name: "bad bytes", in: "a\xffb", want: "a\xef\xbf\xbdb"},
 	}
 
 	for _, tc := range cases {
