@@ -317,8 +317,8 @@ func TestLegacyFieldNamesAreExactlyTheKnownOnes(t *testing.T) {
 
 	got := slices.Sorted(maps.Keys(apidesc.LegacyFieldNames()))
 	want := []string{
-		"appID", "backupID", "effectiveIssuerURL", "hookID", "installationID", "issuerURL", "objectID", "poolID",
-		"preBackupID", "setID", "unitID", "versionID",
+		"appID", "backupID", "collectionID", "effectiveIssuerURL", "hookID", "installationID", "issuerURL", "objectID",
+		"poolID", "preBackupID", "setID", "unitID", "versionID",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("LegacyFieldNames() = %v, want %v", got, want)

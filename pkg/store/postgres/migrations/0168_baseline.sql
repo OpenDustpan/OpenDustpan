@@ -977,7 +977,7 @@ CREATE TABLE placement_rules (
     tool text NOT NULL,
     project text NOT NULL,
     stack text NOT NULL,
-    collection_key text NOT NULL,
+    collection_id text NOT NULL,
     created_by text NOT NULL,
     created_at_ms bigint NOT NULL,
     CONSTRAINT placement_rules_position_check CHECK (("position" >= 1))
@@ -1653,6 +1653,9 @@ ALTER TABLE ONLY collection_members
 
 ALTER TABLE ONLY collections
     ADD CONSTRAINT collections_id_key UNIQUE (id);
+
+ALTER TABLE ONLY collections
+    ADD CONSTRAINT collections_namespace_id_key UNIQUE (namespace, id);
 
 ALTER TABLE ONLY collections
     ADD CONSTRAINT collections_pkey PRIMARY KEY (namespace, name_key);
@@ -2372,7 +2375,7 @@ ALTER TABLE ONLY person_preferences
     ADD CONSTRAINT person_preferences_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);
 
 ALTER TABLE ONLY placement_rules
-    ADD CONSTRAINT placement_rules_namespace_collection_key_fkey FOREIGN KEY (namespace, collection_key) REFERENCES collections(namespace, name_key);
+    ADD CONSTRAINT placement_rules_namespace_collection_id_fkey FOREIGN KEY (namespace, collection_id) REFERENCES collections(namespace, id);
 
 ALTER TABLE ONLY placement_rules
     ADD CONSTRAINT placement_rules_namespace_fkey FOREIGN KEY (namespace) REFERENCES namespaces(name);
