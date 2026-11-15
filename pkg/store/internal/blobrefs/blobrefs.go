@@ -84,6 +84,17 @@ type Collector struct {
 	refs       []backup.BlobRef
 	added      map[string]struct{}
 	unverified map[string]struct{}
+	// regFiles holds one registry file entry per unique SHA-256 content key,
+	// so the backup manifest can name the copied files by content key while
+	// the MD5 references above keep the streamed copy path unchanged.
+	regFiles     []backup.RegistryFileEntry
+	seenRegFiles map[string]struct{}
+}
+
+// RegistryFiles returns one entry per unique registry file content hash, in
+// the order added.
+func (c *Collector) RegistryFiles() []backup.RegistryFileEntry {
+	return slices.Clone(c.regFiles)
 }
 
 // Refs returns the references that the backup copies, in the order added.
@@ -184,6 +195,13 @@ func (c *Collector) Release(row ReleaseRow) error {
 	}
 
 	for _, hash := range row.Release.FileHashes() {
+		if !backup.ValidRegistryFileHash(hash) {
+			return fmt.Errorf(
+				"%w: registry file of release %q version %q: hash %q is not valid",
+				ErrRow, row.Release.Address.Name, row.Release.Version, hash,
+			)
+		}
+
 		key, err := registry.BlobKey(namespace.ID(row.NamespaceID), hash)
 		if err != nil {
 			return fmt.Errorf("%w: registry file key: %w", ErrRow, err)
@@ -202,9 +220,30 @@ func (c *Collector) Release(row ReleaseRow) error {
 		}
 
 		c.add(key.String(), row.Release.Files[i].Size, sum[:])
+		c.addRegistryFile(hash, row.Release.Files[i].Size, row)
 	}
 
 	return nil
+}
+
+// addRegistryFile records one manifest entry per unique SHA-256 content key,
+// keeping the first release and version that names a shared key.
+func (c *Collector) addRegistryFile(hash string, size int64, row ReleaseRow) {
+	if _, dup := c.seenRegFiles[hash]; dup {
+		return
+	}
+
+	if c.seenRegFiles == nil {
+		c.seenRegFiles = make(map[string]struct{})
+	}
+
+	c.seenRegFiles[hash] = struct{}{}
+	c.regFiles = append(c.regFiles, backup.RegistryFileEntry{
+		SHA256:  hash,
+		Size:    size,
+		Release: row.Release.Address.Name,
+		Version: row.Release.Version,
+	})
 }
 
 // list adds key to the keys that the backup does not copy.

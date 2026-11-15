@@ -395,6 +395,44 @@ func TestCollectorReleaseHostile(t *testing.T) {
 	assertCollected(t, &c, collected{keys: nil, unverified: nil})
 }
 
+// TestCollectorReleaseFiles checks the SHA-256 manifest entries: one entry
+// per unique content key with release, version and size, and refusal that
+// names the release and version for a hostile hash.
+func TestCollectorReleaseFiles(t *testing.T) {
+	t.Parallel()
+
+	stored := registry.StoredFile{SHA256: hashA, Size: 5, MD5: md5Hex}
+
+	var c blobrefs.Collector
+
+	for range 2 {
+		row := blobrefs.ReleaseRow{NamespaceID: nsID, Release: release([]registry.StoredFile{stored})}
+		if err := c.Release(row); err != nil {
+			t.Fatalf("Release = %v", err)
+		}
+	}
+
+	entries := c.RegistryFiles()
+	if len(entries) != 1 {
+		t.Fatalf("len(RegistryFiles) = %d, want 1 (shared key stored once)", len(entries))
+	}
+
+	if entries[0].SHA256 != hashA || entries[0].Size != 5 || entries[0].Release != "net" ||
+		entries[0].Version != "1.0.0" {
+		t.Fatalf("entry = %+v, want hash %q size 5 release net version 1.0.0", entries[0], hashA)
+	}
+
+	var hostile blobrefs.Collector
+
+	rel := release(nil)
+	rel.SumsSHA256 = "../escape"
+
+	err := hostile.Release(blobrefs.ReleaseRow{NamespaceID: nsID, Release: rel})
+	if err == nil || !strings.Contains(err.Error(), `"net"`) || !strings.Contains(err.Error(), `"1.0.0"`) {
+		t.Fatalf("Release hostile = %v, want error naming the release and version", err)
+	}
+}
+
 // assertCollected checks the keys of the references and the keys listed as not
 // copied.
 func assertCollected(t *testing.T, c *blobrefs.Collector, want collected) {
