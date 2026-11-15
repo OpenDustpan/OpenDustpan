@@ -54,7 +54,9 @@ func runSelfServiceOnStore(t *testing.T, store e2e.Store) {
 
 	t.Run("publish_pg_v1", func(t *testing.T) {
 		selfServiceBlocked(t, env, "publish_pg_v1",
-			"blocked: the server serves no Blueprint route: no caller on main wires the Blueprint store into a server")
+			"blocked: the server serves no Blueprint route in a running installation: "+
+				"neither the binary nor the e2e harness sets the WithSelfServiceBlueprints "+
+				"option, which only the SDK and one SDK test use")
 	})
 
 	t.Run("check_returns_422", func(t *testing.T) {
