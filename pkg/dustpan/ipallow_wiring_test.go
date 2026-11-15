@@ -134,6 +134,7 @@ func newIPAllowlistServerWith(
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	fence := namespace.Fence{Namespace: nsName, FailoverVersion: 1}
@@ -179,7 +180,7 @@ func serveNamespaceRead(t *testing.T, srv *dustpan.Server, remote string) (int, 
 	req := httptest.NewRequestWithContext(
 		t.Context(),
 		http.MethodGet,
-		"/api/server/namespaces/acme/override-switches",
+		"/api/dustpan/v1/namespaces/acme/override-switches",
 		nil,
 	)
 	req.RemoteAddr = remote

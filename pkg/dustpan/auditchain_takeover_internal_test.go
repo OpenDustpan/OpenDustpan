@@ -111,6 +111,7 @@ func appendTakeoverEntry(t *testing.T, chain *auditChain, ns namespace.Namespace
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	})
 	if appendErr != nil {
 		t.Fatalf("append audit entry: %v", appendErr)

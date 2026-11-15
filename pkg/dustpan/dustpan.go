@@ -301,6 +301,10 @@ type settings struct {
 	// watch reads the worker state. assemble sets it before it builds the
 	// adapters.
 	watch *workerWatch
+	// observed is the metrics of the server. NewServer creates it before the
+	// services, so each deleter of a blob counts the takes that it refuses on
+	// it.
+	observed *metrics.ServerMetrics
 }
 
 // Option configures a Server.
@@ -619,6 +623,10 @@ type Server struct {
 	// the schedule job.artifact-sweep. It is nil without the ports that it
 	// needs.
 	artifactSweeper *job.ArtifactSweeper
+	// supersededSweeper deletes the marked checkpoint blobs that a later save
+	// replaced: the schedule stack.superseded-checkpoint-sweep. It is nil
+	// without the update service.
+	supersededSweeper supersededSweeper
 	// nameLocks holds the counts of the lockout by name: the schedule
 	// name-lock-prune deletes the counts that can no longer change a lock.
 	// It is nil when the store keeps no such counts.
@@ -771,6 +779,7 @@ func defaultSettings() *settings {
 			source: builtinStoreNone, path: "", dsn: "", config: defaultStoreConfig(), handle: nil,
 			open: nil, close: nil,
 		},
+		observed: nil,
 	}
 }
 
@@ -847,6 +856,10 @@ func buildServer(cfg *settings) (*Server, error) {
 	}
 
 	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
+
+	// The metrics exist before the services, so each deleter of a blob can
+	// count the takes that it refuses.
+	cfg.observed = metrics.NewServerMetrics(cfg.version, cfg.now())
 
 	svc, err := newServices(cfg, tokens, ports.authorizer)
 	if err != nil {
@@ -1016,19 +1029,6 @@ func newTempAdminService(cfg *settings) (*tempadmin.Service, error) {
 	return svc, nil
 }
 
-// newServerMetrics returns the metrics of the server, and gives the recorder of
-// the refused dev sign-ins the namespace reader and the failure counter.
-func newServerMetrics(cfg *settings, svc services) (*metrics.ServerMetrics, error) {
-	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
-
-	err := cfg.devRefusal.bind(cfg, svc.namespaces, func() { observed.IncAuditAppendFailure() })
-	if err != nil {
-		return nil, err
-	}
-
-	return observed, nil
-}
-
 // assemble mounts the adapters and routes around the services and the parts
 // that NewServer built before it.
 func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyParts) (*Server, error) {
@@ -1092,7 +1092,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		kind:             newKindState(cfg), instances: newInstanceState(cfg),
 		durable:      cfg.durableStore,
 		durableOwner: durableOwner(cfg),
-		reconciler:   reconciler, artifactSweeper: artifactSweeper, issuer: svc.issuer,
+		reconciler:   reconciler, artifactSweeper: artifactSweeper, supersededSweeper: svc.updates, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
 		components: cfg.components, nameLocks: nameLocksOf(cfg), closeBuiltin: nil,
@@ -1104,13 +1104,15 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 	return srv, nil
 }
 
-// prepareBackground builds the metrics, the worker watch, the sweeper of
-// deleted units and the audit shipper, and sets them in cfg and svc, and builds the issuer. One
-// registry holds every metric family: the request, runtime and build families,
-// and the readiness failure counter of the probe.
+// prepareBackground binds the recorder of the refused dev sign-ins and builds
+// the worker watch, the sweeper of deleted units and the audit shipper, and
+// sets them in cfg and svc, and builds the issuer. One registry holds every
+// metric family: the request, runtime and build families, and the readiness
+// failure counter of the probe.
 func prepareBackground(cfg *settings, svc *services) (*metrics.ServerMetrics, *audit.Shipper, error) {
-	observed, err := newServerMetrics(cfg, *svc)
-	if err != nil {
+	observed := cfg.observed
+
+	if err := cfg.devRefusal.bind(cfg, svc.namespaces, func() { observed.IncAuditAppendFailure() }); err != nil {
 		return nil, nil, err
 	}
 
@@ -1797,6 +1799,7 @@ func newWorkspaceService(
 		Retention:          cfg.softDeleteRetention,
 		ManualLocks:        locks,
 		BlobGuard:          cfg.blobGuard,
+		OnDeleteWait:       blobDeleteWait(cfg.observed),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("workspace service: %w", err)
@@ -1856,6 +1859,7 @@ func newUpdateService(
 		Replayer:           pulumijournal.NewReplayer(clockOf(cfg), ""),
 		ManualLocks:        locks,
 		BlobGuard:          cfg.blobGuard,
+		OnDeleteWait:       blobDeleteWait(cfg.observed),
 		Sealer:             sealer,
 	})
 	if err != nil {
@@ -2322,6 +2326,7 @@ func (s *Server) sweepTempAdminsOnce(ctx context.Context) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	})
 
 	switch {

@@ -5,7 +5,7 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Add failing corpus test in e2e/docs_commands_test.go (NEW) that lists each fenced sh, bash and shell block with page path and block index. Check: TestDocsCommandsCorpusListsBlocks fails on main: no corpus test exists. BLOCKED by no server route: the corpus test lists shell text only with no authorization gate and no credential. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 1.2 Add failing runner test in e2e/docs_commands_test.go (NEW) that runs each listed block text unchanged in a per-page directory. Check: TestDocsCommandRunsAsWritten fails on main: guide blocks do not run as written. BLOCKED by no server route: the runner test runs shell text only with no authorization gate and no credential. Confirmed by: CI (an e2e step in the NEW file e2e/docs_commands_run_in_tests_docs_test.go runs each command of the docs page against the e2e test server). Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.2 Add failing runner test in e2e/docs_commands_test.go (NEW) that runs each listed block text unchanged in a per-page directory. Check: TestDocsCommandRunsAsWritten fails on main: guide blocks do not run as written. BLOCKED by no server route: the runner test runs shell text only with no authorization gate and no credential. Confirmed by: CI (the agent writes the e2e test; it runs the shell blocks of the guides, not routes of the e2e test server). Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. Build
 

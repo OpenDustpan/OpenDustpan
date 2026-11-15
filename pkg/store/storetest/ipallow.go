@@ -92,6 +92,7 @@ func ipAllowlistEntry(ns namespace.Name) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
