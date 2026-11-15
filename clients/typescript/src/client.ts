@@ -398,6 +398,8 @@ import type {
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
   RedeemLocalUserCodeRequest,
+  RegistryFileEntry,
+  RegistryFileSection,
   RegistryKey,
   RegistryModule,
   RegistryProvider,

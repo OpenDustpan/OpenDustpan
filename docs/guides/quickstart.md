@@ -198,3 +198,4 @@ OpenTofu makes the workspace `web` in the namespace `acme` at the first `tofu in
 - [S3-compatible object storage](s3-blobs.md) explains the S3 settings.
 - [Kubernetes](kubernetes.md) shows the Helm chart.
 - [Backup, restore and upgrade](backup-restore-upgrade.md) shows how to protect the data.
+- [Terragrunt](terragrunt.md) shows the local run-all path for teams that already use Terragrunt.

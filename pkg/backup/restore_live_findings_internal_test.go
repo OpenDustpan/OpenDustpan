@@ -84,7 +84,7 @@ func testManifest(t *testing.T, blobs []ManifestBlob, damaged []DamagedBlob) Man
 		SQLSHA256: hex.EncodeToString(sha[:]),
 		Format:    FormatVersion, SchemaVersion: BaselineSchemaVersion, SQLSize: size, RowCounts: counts,
 		SQLFormat: PortableFormat, SQLFiles: files, InstallationKind: installation.KindProduction, Unverified: nil,
-		Damaged: damaged,
+		Damaged: damaged, RegistryFiles: nil,
 	}
 }
 
@@ -556,7 +556,7 @@ func TestBackupCopyBlobsRecordsMissingAndDamagedBlobs(t *testing.T) {
 
 	s := backupService(source, target, nil)
 
-	stored, entries, err := s.copyBlobs(t.Context(), refs, recordDamage)
+	stored, entries, err := s.copyBlobs(t.Context(), refs, recordDamage, nil)
 	if err != nil {
 		t.Fatalf("copyBlobs = %v", err)
 	}
@@ -580,7 +580,7 @@ func TestBackupCopyBlobsRecordsMissingAndDamagedBlobs(t *testing.T) {
 
 	strict := backupService(source, newMapStore(true, nil), nil)
 
-	if _, _, err := strict.copyBlobs(t.Context(), refs, stopAtDamage); err == nil {
+	if _, _, err := strict.copyBlobs(t.Context(), refs, stopAtDamage, nil); err == nil {
 		t.Fatal("copyBlobs of a backup that does not record damage = nil, want the error of the damaged blob")
 	}
 }
@@ -593,7 +593,7 @@ func TestBackupCopyBlobsStopsAtAReadError(t *testing.T) {
 
 	s := backupService(errStore{mapStore: newMapStore(true, nil)}, newMapStore(true, nil), nil)
 
-	_, _, err := s.copyBlobs(t.Context(), []BlobRef{blobRef(liveKey, wantBytes(), false)}, recordDamage)
+	_, _, err := s.copyBlobs(t.Context(), []BlobRef{blobRef(liveKey, wantBytes(), false)}, recordDamage, nil)
 	if err == nil || !strings.Contains(err.Error(), "throttled") {
 		t.Fatalf("copyBlobs = %v, want the read error", err)
 	}
@@ -632,7 +632,7 @@ func TestBackupCopyBlobsClassifiesSealedErrors(t *testing.T) {
 		s := backupService(source, newMapStore(true, nil), fakeOpener{err: tc.err, source: source})
 		ref := blobRef(liveKey, wantBytes(), true)
 
-		_, entries, err := s.copyBlobs(t.Context(), []BlobRef{ref}, recordDamage)
+		_, entries, err := s.copyBlobs(t.Context(), []BlobRef{ref}, recordDamage, nil)
 		mustSealedEntry(t, tc.name, entries, err, tc.want)
 	}
 }

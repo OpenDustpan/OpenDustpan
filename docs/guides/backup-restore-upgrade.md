@@ -26,13 +26,16 @@ Start a backup with the backup command. It calls the server and waits until the 
 opendustpan backup --server https://dustpan.example --ca-file ca.pem
 ```
 
-The command takes only `--server` and `--ca-file`. The command prints the backup ID, the state, and the SQL size. It then prints two warnings. Against a local server the output reads, for example:
+The command takes only `--server` and `--ca-file`. The command prints the backup ID, the state, the SQL size, and the count of copied registry release files with their total bytes. It then prints two warnings. Against a local server the output reads, for example:
 
 ```text
 backup bkp-opx3krqgb4d7iqglf5gq succeeded (SQL 163840 bytes)
+registry files: 3 files, 1024 bytes
 A backup cannot decrypt secrets without DUSTPAN_KEY_ENCRYPTION_KEY.
 A backup holds OpenTofu state that the server encrypted: protect the target.
 ```
+
+A backup of an installation with no registry release prints `registry files: 0 files, 0 bytes`.
 
 The two warnings name two risks. Without the key-encryption key, the backup keeps secrets unreadable. It holds OpenTofu state that the server encrypted, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
 
@@ -58,11 +61,13 @@ A backup is a set of objects under the target:
 
 The manifest records the backup format (`format`: 3) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the primary installations and the wrapper IDs. It records the kind of the installation that wrote the backup (`installationKind`: `dev` or `production`). The server reads the kind from its own database. A backup of another format number is not valid, and neither is a manifest with no kind or with an unknown kind.
 
-For each table file, the manifest has one entry in `sqlFiles`. The entry names the file, its columns, its row count, its size and its SHA-256. The manifest also records each blob with its key, size and MD5. The backup copies each file of a release with its size and MD5.
+For each table file, the manifest has one entry in `sqlFiles`. The entry names the file, its columns, its row count, its size and its SHA-256. The manifest also records each blob with its key, size and MD5. The backup copies each file of a release under `blobs/namespaces/<namespace ID>/registry/sha256/<hash>`. The manifest names each copied file in a `registryFiles` part for its namespace. Each part holds a `version` field and one entry per unique file. An entry names the SHA-256 key, the size in bytes, and the release and the version that name the file. Two releases that name the same file share one entry and one stored copy. The backup checks the SHA-256 of each file after the copy.
 
 The publish path limits each file of an upload to 512 MiB and the sum of the files of one release to 2 GiB. These values are fixed in the server.
 
 The server copies a blob only when the SQL data holds its size and its MD5. It checks the copy against these values. A row can name a blob without them, for example a row that an earlier version of the server wrote. The server does not copy that blob. It lists the key in the optional `unverified` list of the manifest and writes a warning to the server log.
+
+Registry release files follow a stricter rule. A published release that names a file its row holds no size and MD5 of stops the backup. A file hash outside 64 lowercase hex characters stops it too. The error names the release, the version and the SHA-256 key. A file that the blob store cannot read stops the backup the same way. A copy whose bytes do not match its SHA-256 key stops it too. The failed backup writes no manifest, so no partial backup stays. Fix the blob store or the row, then run `opendustpan backup` again.
 
 A restore accepts a backup only when the `unverified` list names every blob that the SQL data names without these values. A backup that does not list such a blob lost its content. The restore then stops with the text `backup is incomplete: the data names <number> blobs that the backup does not hold`. The live data stays as it was.
 
@@ -143,7 +148,11 @@ For each blob of the backup, the restore does one of these:
 - The key holds the bytes of the manifest: the blob stays as it is.
 - The key holds other bytes: the restore stops and writes nothing over them. These bytes matched their live row, so they are live data that is newer or different. The restore then fails with the text `backup data is corrupt`, and the audit log holds an entry that names the key. `--force` does not change this.
 
+Each registry release file of the backup goes through the same write-once rule, keyed by its SHA-256 content key. The restore reads every named file from the backup target and checks each copy against its SHA-256 key before any registry file becomes visible. A file that the backup does not hold, or whose bytes do not match its key, stops the restore before it writes any registry file. The error names the SHA-256 key and the command `opendustpan backup`. A live blob that already holds the key with other bytes stops the restore, as for every other blob.
+
 A restore that went on after the backup before restore found missing blobs succeeds with the warning `missing-live-blobs`. The answer of `GET /api/dustpan/v1/restores/{id}` has `preBackupFound`. It holds the count of blobs that the live data names (`named`), the counts `missing` and `damaged`, and the first 10 keys (`keys`). A restore that stopped at the live blobs has `preBackupFound` too.
+
+A backup whose manifest holds no `registryFiles` part restores the registry rows without the release files. The restore then ends with the warning `registry-files-absent`: the registry serves no file of the restored releases. Run `opendustpan backup` again on the source installation, then restore the new backup.
 
 A backup before restore that has a `damaged` list stays restorable, so that it can undo the restore. Only a backup that a restore of this installation started can have this list. `opendustpan backup check` and a restore refuse any other backup with a `damaged` list as corrupt. `opendustpan backup check` checks the objects that it holds. The backup holds no copy of the blobs of the `damaged` list. So a restore of it writes nothing to those keys and leaves them as they are. That restore succeeds with the warning `blobs-not-held`, and its answer has `notHeld` with the counts and the first keys.
 
@@ -485,6 +494,53 @@ A recorded minimum is always `vMAJOR.MINOR.PATCH`. Older binaries refuse a minim
 For several nodes, start one new node first. The first new node migrates the database. An older node that still runs does not stop. Its next start fails only when the new schema raised the minimum above its version. Then start the other new nodes.
 
 The project supports no downgrade. There are no down migrations. To go back, restore the backup made before the upgrade through the API. Then start the older binary. When the older binary is below the minimum binary version of the schema, it refuses to start. The error names the binary version and the minimum.
+
+## Run the mixed-version matrix
+
+A rolling deploy runs the new binary and the binaries of the last releases on
+one database. The matrix proves that the new schema serves them: the last 2
+release tags that are ancestors of HEAD run next to the new binary, and the
+real Pulumi CLI and OpenTofu write through each old binary.
+
+Run the matrix before a release:
+
+```sh
+make mixed-version-test
+```
+
+The matrix runs on SQLite and on PostgreSQL. Set `DUSTPAN_TEST_POSTGRES_URL`
+to add the PostgreSQL runs. On SQLite one binary serves the file at a time:
+the current binary stops, the old binary takes the file, the CLIs write
+through it, and the current binary starts again. On PostgreSQL the old binary
+and the new binary serve at the same time, and one database also starts the
+old binary first, to prove both start orders.
+
+The matrix prints the tags that ran, with their count:
+
+```text
+mixed-version matrix ran over 2 tags: v0.1.0, v0.2.0
+```
+
+Before the first tag no release tag exists. The matrix then reports zero old
+binaries, writes a warning to the workflow run, and runs the same steps
+against a second process of the current binary. It never skips the step
+silently.
+
+Each release tag must hold the minimum binary version check. A tag without
+the check gives no refusal signal, so the matrix fails and names the tag.
+
+A shallow clone hides the tags. When the clone is shallow and shows no
+release tag, the matrix fails instead of reporting zero old binaries. Run
+`git fetch --tags` before the run.
+
+### Errors of the matrix
+
+| Error | What the answer says | The command that helps |
+| --- | --- | --- |
+| An old binary refuses its writes on the new schema. | The old binary read a higher minimum row and refused its own writes with error code `schema.binary-below-minimum`. Rebuild the binaries and run the matrix again. | `make mixed-version-test` |
+| No release tag is reachable, and the clone is shallow. | The harness fails loudly and names the missing tags, because a shallow clone can hide a tag that exists. | `git fetch --tags` |
+| No ancestor v* tag exists. | The matrix reports zero old binaries and runs the same steps against a second process of the current binary. Run `git fetch --tags` with full history before the run, to prove that no tag exists. | `git fetch --tags` |
+| A release tag does not build or does not start. | The failure names the tag and the log line that explains it. | `make mixed-version-test` |
 
 ## Release checklist
 
