@@ -1029,7 +1029,7 @@ func TestFetchRefusesCacheArchiveWithoutMember(t *testing.T) {
 	}
 
 	err = e2e.CheckToolCache(cacheDir, tool, fakeVersion, name, hex.EncodeToString(sum[:]))
-	if !errors.Is(err, e2e.ErrCacheMismatch) {
+	if err == nil || !errors.Is(err, e2e.ErrCacheMismatch) {
 		t.Fatalf("check cache: got %v, want ErrCacheMismatch", err)
 	}
 
