@@ -493,3 +493,17 @@ func TestChainCheckFailsOnChangedAgentField(t *testing.T) {
 		t.Fatal("stored hash equals the entry hash for different changes text")
 	}
 }
+
+// TestValidateRefusesEmptyOrigin proves that Entry.Validate refuses an entry
+// whose Origin is a non-nil value that NewOrigin did not build: the zero
+// value holds no run and no session.
+func TestValidateRefusesEmptyOrigin(t *testing.T) {
+	t.Parallel()
+
+	e := testEntry()
+	e.Origin = new(audit.Origin)
+
+	if err := e.Validate(); !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("Validate with an empty origin = %v, want audit.ErrInvalidEntry", err)
+	}
+}

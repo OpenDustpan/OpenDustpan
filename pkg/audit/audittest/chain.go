@@ -100,6 +100,7 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "each namespace entry holds its failover version under the hash", test: testChainFenceVersion},
 		{name: "a stored chain from before the change passes the check", test: testChainCheckPassesOldChain},
 		{name: "a chain of entries without a block passes the check", test: testChainCheckPassesEntriesWithoutBlock},
+		{name: "a stored row with a partial origin is refused on read", test: testStoreRefusesPartialOriginRow},
 		{name: "a stale fence refuses a start entry", test: testChainStaleFence},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
@@ -657,6 +658,23 @@ func testChainFenceVersion(t *testing.T, ts ChainTestStore) {
 
 	if res := check(t, ts.Store, tl.ns.Name); res.Valid || res.BadSequence != 1 {
 		t.Fatalf("check after a changed fence version: got %+v, want invalid at 1", res)
+	}
+}
+
+// testStoreRefusesPartialOriginRow proves that a stored row with a tool but
+// no agent run and no agent session does not read back as an entry: the
+// read refuses it with ErrInvalidOrigin, in the list and in the check.
+func testStoreRefusesPartialOriginRow(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.append(2)
+
+	ts.TamperEntry(t, tl.ns.Name, 1, "tool", "read")
+
+	_, err := ts.Store.List(t.Context(), tl.ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if !errors.Is(err, audit.ErrInvalidOrigin) {
+		t.Fatalf("list with a partial origin row = %v, want audit.ErrInvalidOrigin", err)
 	}
 }
 
