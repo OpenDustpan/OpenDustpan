@@ -401,8 +401,8 @@ func (f accessFixture) sessionPost(t *testing.T, subject, path, body string) *ht
 
 // TestStalePasswordSessionGetsNoStartLink proves that a change that needs a
 // fresh authentication, from a session of the password sign-in with an old
-// sign-in, answers 401 with no link to a start route: the password
-// sign-in has none to open.
+// sign-in, answers 403 with the code of a refused step and no link to a start
+// route: the password sign-in has none to open.
 func TestStalePasswordSessionGetsNoStartLink(t *testing.T) {
 	t.Parallel()
 
@@ -440,9 +440,10 @@ func TestStalePasswordSessionGetsNoStartLink(t *testing.T) {
 	rec := httptest.NewRecorder()
 	f.handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusUnauthorized || strings.Contains(rec.Body.String(), "reauthenticate") ||
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "mfa.fresh-step-required") ||
+		strings.Contains(rec.Body.String(), "reauthenticate") ||
 		!strings.Contains(rec.Body.String(), "with the password") {
-		t.Fatalf("stale password session = %d %s, want 401 with no start link", rec.Code, rec.Body)
+		t.Fatalf("stale password session = %d %s, want 403 with the code and no start link", rec.Code, rec.Body)
 	}
 }
 
