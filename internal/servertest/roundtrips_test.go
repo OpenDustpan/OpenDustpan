@@ -861,20 +861,17 @@ func requestFlows() []requestFlow {
 			h.measure(func() { h.save(run, 1) })
 			h.complete(run)
 		}},
-		// The budget is 76. The second save replaces the previous checkpoint
-		// blob, so it holds a blob delete lease while it deletes the blob: 9
-		// round trips. The take is a transaction of 5 round trips: begin, the
-		// schema check, the shared lock, the insert and commit. The release is
-		// a transaction of 4: begin, the schema check, the delete and commit.
-		// A backup or a restore that starts while the lease is live waits for
-		// it, so it cannot lose the blob. The transaction of the create writes
+		// The budget is 68. The second save replaces the previous checkpoint
+		// blob without a delete: the save holds no delete lease, which held 9
+		// round trips, and the mark of the replaced blob holds 1.
+		// The transaction of the create writes
 		// the record of the item key of the update, which seals its event
 		// payloads at rest: a read of the record, a read of the namespace, the
 		// insert and a read back. The item key transaction also arms its
 		// attempt deadline with one set_config: one more round trip. The start
 		// reads the stack one time, so that the manual lock check matches the
 		// lock by the stable ID of the stack, not by its name.
-		{"pulumi update cycle", 76, func(h *rtHarness) {
+		{"pulumi update cycle", 68, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()
@@ -1392,10 +1389,15 @@ func backupModel() costModel {
 //
 // The fixed part also holds unitStateTrips: the restore derives the state
 // version of each unit from the restored rows.
+//
+// The fixed part also holds checkpointSupersedesTrips: the table holds no
+// marks in the run, so the restore makes 2 round trips fewer for it than the
+// model gives a table.
 func restoreModel() costModel {
 	return costModel{
 		fixed: 342 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
-			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips,
+			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
+			checkpointSupersedesTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1461,6 +1463,16 @@ const stagedTriggerClockTrips = 1
 // restore reads the staged rows of the table once more, to refuse an alert
 // marker after the time of the restore, which adds 1 round trip.
 const removalAlertTrips = -2 + 1
+
+// checkpointSupersedesTrips is the number of round trips that the
+// checkpoint_supersedes table takes off the model. The restore makes 5 round
+// trips for the table, 2 fewer than the cost of a table in the model: the dev
+// strip does not count its rows, because it counts only the tables of the dev
+// classes, so the counts of the strip and of the swap check are absent. The
+// other statements are the two column checks and the export read of the
+// backup, the column read before the staging load, and the row count of the
+// staged table.
+const checkpointSupersedesTrips = 5 - 7
 
 // checkCount fails the test when the count is not the count of the model,
 // and shows the statement list of the run.
