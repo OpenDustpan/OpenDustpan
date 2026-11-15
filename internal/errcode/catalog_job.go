@@ -7,8 +7,6 @@ const (
 	JobAgentDenied = "job.agent-denied"
 	// JobAlreadyApproved means that the caller approved this phase already.
 	JobAlreadyApproved = "job.already-approved"
-	// JobAuthStale means that the approval of a destroy has no fresh MFA step.
-	JobAuthStale = "job.auth-stale"
 	// JobConflict means that the job changed since the caller read it.
 	JobConflict = "job.conflict"
 	// JobFinished means that the job ended already.
@@ -39,28 +37,30 @@ const (
 )
 
 // jobSpecs are the codes of a request to start a job that the job
-// service refuses.
+// service refuses. No code of the area has arguments.
 func jobSpecs() []Spec {
-	return []Spec{
-		{Code: JobAgentDenied, Meaning: "the rules of the agent refuse the job", Args: nil},
-		{Code: JobAlreadyApproved, Meaning: "the caller approved this phase already", Args: nil},
-		{Code: JobAuthStale, Meaning: "the approval of a destroy has no fresh MFA step", Args: nil},
-		{Code: JobConflict, Meaning: "the job changed since the caller read it", Args: nil},
-		{Code: JobFinished, Meaning: "the job ended already", Args: nil},
-		{Code: JobFrozen, Meaning: "a freeze stops the job", Args: nil},
-		{Code: JobGateEnforced, Meaning: "an enforced gate refuses the job", Args: nil},
-		{Code: JobInvalid, Meaning: "the request to start the job is not valid", Args: nil},
-		{Code: JobLimit, Meaning: "the job is over a limit of the job service", Args: nil},
-		{
-			Code:    JobNotFound,
-			Meaning: "the job does not exist in the namespace, or the caller cannot read it",
-			Args:    nil,
-		},
-		{Code: JobNotAwaitingApproval, Meaning: "the job waits for no approval", Args: nil},
-		{Code: JobPlanChanged, Meaning: "the plan of the approval is not the stored plan", Args: nil},
-		{Code: JobPlanStale, Meaning: "the stored plan is too old, or was redacted", Args: nil},
-		{Code: JobPolicyDenied, Meaning: "the policy refuses the job", Args: nil},
-		{Code: JobSelfApproval, Meaning: "the person who started the job cannot approve it", Args: nil},
-		{Code: JobUnsupported, Meaning: "the server cannot run this kind of job", Args: nil},
+	meanings := [][2]string{
+		{JobAgentDenied, "the rules of the agent refuse the job"},
+		{JobAlreadyApproved, "the caller approved this phase already"},
+		{JobConflict, "the job changed since the caller read it"},
+		{JobFinished, "the job ended already"},
+		{JobFrozen, "a freeze stops the job"},
+		{JobGateEnforced, "an enforced gate refuses the job"},
+		{JobInvalid, "the request to start the job is not valid"},
+		{JobLimit, "the job is over a limit of the job service"},
+		{JobNotFound, "the job does not exist in the namespace, or the caller cannot read it"},
+		{JobNotAwaitingApproval, "the job waits for no approval"},
+		{JobPlanChanged, "the plan of the approval is not the stored plan"},
+		{JobPlanStale, "the stored plan is too old, or was redacted"},
+		{JobPolicyDenied, "the policy refuses the job"},
+		{JobSelfApproval, "the person who started the job cannot approve it"},
+		{JobUnsupported, "the server cannot run this kind of job"},
 	}
+
+	out := make([]Spec, 0, len(meanings))
+	for _, m := range meanings {
+		out = append(out, Spec{Code: m[0], Meaning: m[1], Args: nil})
+	}
+
+	return out
 }

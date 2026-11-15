@@ -1490,7 +1490,6 @@
           "issuer.not-configured",
           "job.agent-denied",
           "job.already-approved",
-          "job.auth-stale",
           "job.conflict",
           "job.finished",
           "job.frozen",

@@ -90,6 +90,7 @@ func testDestroyApprovalFresh(t *testing.T, h Harness) {
 		{"stale proof", func(ap *job.Approval) { ap.AuthAt = ap.At.Add(-time.Hour) }},
 		{"future proof", func(ap *job.Approval) { ap.AuthAt = ap.At.Add(time.Hour) }},
 		{"unknown proof", func(ap *job.Approval) { ap.Auth = "unknown" }},
+		{"unknown verdict with MFA proof", func(ap *job.Approval) { ap.Verdict = "unknown" }},
 		{"SSO proof", func(ap *job.Approval) { ap.Auth = job.ConfirmAuthSSO }},
 		{"agent proof", func(ap *job.Approval) { ap.Agent = "agent" }},
 		{"expired before write", func(ap *job.Approval) {

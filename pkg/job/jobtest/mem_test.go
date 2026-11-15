@@ -958,7 +958,9 @@ func checkDestroyProof(j *job.Job, ap *job.Approval, now time.Time) error {
 		return nil
 	}
 
-	if ap.Agent != "" || ap.Auth != job.ConfirmAuthMFA || ap.AuthAt.IsZero() ||
+	// Defense in depth: the handler and service check the verdict too.
+	// Keep this check so that a direct store caller cannot skip it.
+	if ap.Verdict != job.VerdictApprove || ap.Agent != "" || ap.Auth != job.ConfirmAuthMFA || ap.AuthAt.IsZero() ||
 		ap.AuthAt.After(ap.At) || ap.At.After(now) || now.Sub(ap.AuthAt) > job.ConfirmFreshness {
 		return job.ErrAuthStale
 	}
