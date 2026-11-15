@@ -27,8 +27,7 @@ that a caller can repeat goes through the shared denial limiter.
   recorder `internal/api/refusal` (`Recorder.Record`, `refusal.go:210`). The
   notifications adapter already holds a recorder with that limiter
   (`internal/api/notifications/notifications.go:117`).
-- The change redeliver-too-soon-audited records the too-soon refusal through
-  the same recorder.
+- The too-soon refusal records through the same recorder (no separate change).
 
 ## Fix boundary
 
@@ -66,6 +65,4 @@ none. Considered: keep the service append and add a limiter there
 (refused: the shared limiter and its recorder exist, and one place should
 record the refusals of the adapter).
 
-Depends on:
-
-- redeliver-too-soon-audited
+Depends on: none.

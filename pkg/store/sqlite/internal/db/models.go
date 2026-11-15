@@ -772,6 +772,7 @@ type NotificationDelivery struct {
 	Principal      string
 	State          string
 	Attempts       int64
+	CreatedAtMs    int64
 	Redeliveries   int64
 	NextAtMs       int64
 	LastError      string
@@ -889,15 +890,15 @@ type PersonPreference struct {
 }
 
 type PlacementRule struct {
-	ID            string
-	Namespace     string
-	Position      int64
-	Tool          string
-	Project       string
-	Stack         string
-	CollectionKey string
-	CreatedBy     string
-	CreatedAtMs   int64
+	ID           string
+	Namespace    string
+	Position     int64
+	Tool         string
+	Project      string
+	Stack        string
+	CollectionID string
+	CreatedBy    string
+	CreatedAtMs  int64
 }
 
 type Principal struct {

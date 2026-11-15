@@ -175,7 +175,8 @@ func seedCatchAllPlacement(t *testing.T, st *sqlite.Store, ns namespace.Name) {
 
 	created := entry(identity.ActionCollectionCreate, "collection:"+ns.String()+"/"+name)
 
-	if _, err = collections.Create(t.Context(), collection.Ref{Namespace: ns, Name: name}, created); err != nil {
+	c, err := collections.Create(t.Context(), collection.Ref{Namespace: ns, Name: name}, created)
+	if err != nil {
 		t.Fatalf("create collection: %v", err)
 	}
 
@@ -184,7 +185,7 @@ func seedCatchAllPlacement(t *testing.T, st *sqlite.Store, ns namespace.Name) {
 		t.Fatalf("placement service: %v", err)
 	}
 
-	in := collection.RuleInput{Tool: "pulumi", Project: "*", Stack: "*", Collection: name, Position: 0}
+	in := collection.RuleInput{Tool: "pulumi", Project: "*", Stack: "*", CollectionID: c.ID, Position: 0}
 	ruled := entry(identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
 
 	if _, err = rules.Create(t.Context(), ns, in, ruled); err != nil {

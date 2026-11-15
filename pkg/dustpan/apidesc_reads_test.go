@@ -36,12 +36,20 @@ var undescribedQueryReads = map[string][]string{
 // Get, Has and All of apidesc.Query is a constant, and that a label of the
 // package declares it. A typo or a missing WithQuery fails here, with no test
 // request, and not only when a test reaches the branch of the read.
+//
+// The adapters share most of their imports, so one source importer
+// type-checks each imported package one time for all of them. The importer is
+// not safe for concurrent use, so the reads of each adapter come before its
+// parallel subtest.
 func TestQueryReadsNameDeclaredQueries(t *testing.T) {
 	t.Parallel()
 
 	srv := newEveryModuleServer(t)
 	packages := srv.HandlerPackages()
 	served := srv.Operations()
+
+	fset := token.NewFileSet()
+	imp := importer.ForCompiler(fset, "source", nil)
 
 	checked := 0
 
@@ -52,11 +60,12 @@ func TestQueryReadsNameDeclaredQueries(t *testing.T) {
 
 		allowed := append(declaredQueryNames(served, source.Patterns), undescribedQueryReads[packages[source.Name]]...)
 		pkgPath := packages[source.Name]
+		reads := queryReads(t, fset, imp, pkgPath)
 
 		t.Run(source.Name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, read := range queryReads(t, pkgPath) {
+			for _, read := range reads {
 				if problem := read.problem(allowed, pkgPath); problem != "" {
 					t.Error(problem)
 				}
@@ -114,9 +123,10 @@ func (q queryRead) problem(allowed []string, pkgPath string) string {
 		"add it with WithQuery, then run %s", q.pos, q.method, *q.name, pkgPath, apidesc.FixCommand)
 }
 
-// queryReads type-checks the non-test source of the package and returns the
-// calls of Get, Has and All on apidesc.Query.
-func queryReads(t *testing.T, pkgPath string) []queryRead {
+// queryReads type-checks the non-test source of the package with the importer
+// imp, which reads its sources into fset, and returns the calls of Get, Has and
+// All on apidesc.Query.
+func queryReads(t *testing.T, fset *token.FileSet, imp types.Importer, pkgPath string) []queryRead {
 	t.Helper()
 
 	dir := filepath.Join("..", "..", strings.TrimPrefix(pkgPath, modulePath))
@@ -126,7 +136,6 @@ func queryReads(t *testing.T, pkgPath string) []queryRead {
 		t.Fatalf("read the package %s: %v", pkgPath, err)
 	}
 
-	fset := token.NewFileSet()
 	files := make([]*ast.File, 0, len(bp.GoFiles))
 
 	for _, name := range bp.GoFiles {
@@ -144,7 +153,7 @@ func queryReads(t *testing.T, pkgPath string) []queryRead {
 		Selections: map[*ast.SelectorExpr]*types.Selection{},
 	}
 	//nolint:exhaustruct_v5 // The other fields of the configuration keep their defaults.
-	conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil), Error: func(error) {}}
+	conf := types.Config{Importer: imp, Error: func(error) {}}
 
 	if _, checkErr := conf.Check(pkgPath, fset, files, info); checkErr != nil {
 		t.Fatalf("type-check %s: %v", pkgPath, checkErr)

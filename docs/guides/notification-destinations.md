@@ -251,7 +251,8 @@ possible, `redeliverableAt`.
 
 A redelivery before `redeliverableAt` answers 429
 `sink.delivery-too-soon`. The `Retry-After` header gives the wait in seconds,
-at most 3600. The server writes no audit entry for this refusal. A redelivery
+at most 3600. The server writes a denied audit entry for this refusal.
+Repeated refusals in one minute write one entry with a count. A redelivery
 with no redeliveries left answers 409 `sink.delivery-redeliver-limit`, and the
 server writes an audit entry of the refusal.
 

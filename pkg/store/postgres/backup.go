@@ -309,7 +309,7 @@ func pgCopyCollectionTables() []pgCopyTable {
 		{
 			table: "placement_rules",
 			columns: []string{
-				"id", pgColNamespace, pgColPosition, pgColTool, pgColProject, "stack", "collection_key",
+				"id", pgColNamespace, pgColPosition, pgColTool, pgColProject, "stack", "collection_id",
 				"created_by", pgColCreatedAtMs,
 			},
 			orderBy: []string{pgColNamespace, pgColPosition, "id"},

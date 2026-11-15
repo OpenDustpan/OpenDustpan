@@ -368,6 +368,9 @@ How-to guides:
   connect a Slack incoming webhook to a namespace and send a test message.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
+- [Install from the container image](docs/guides/install.md): pull the
+  v0.1.0 image by tag or by digest, make the two Secrets, and install the
+  chart.
 - [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
 - [Run several instances](docs/guides/several-instances.md): the settings
   that each instance shares, for the target design.
