@@ -159,7 +159,7 @@ func RunObjectSensitive(t *testing.T) {
 
 // ListCheck is one case of CheckListWithinAuthorize: the authorizer, the
 // principal and the action, and Every, the objects that the test can name,
-// which a scope with All set must all allow.
+// which a scope that covers every object must all allow.
 type ListCheck struct {
 	Authorizer identity.Authorizer
 	Principal  identity.Principal
@@ -169,8 +169,8 @@ type ListCheck struct {
 
 // CheckListWithinAuthorize fails the test unless Authorize allows the
 // principal of c the action of c on each object that ListObjects lists for
-// them, both called with ctx. For a scope with All set, it checks each
-// object of c.Every. Run it against each Authorizer and each decorator,
+// them, both called with ctx. For a scope that covers every object, it checks
+// each object of c.Every. Run it against each Authorizer and each decorator,
 // with the grants of the test, so a list never shows an object that a
 // check of that object denies.
 func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
@@ -184,7 +184,7 @@ func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
 	}
 
 	listed := slices.Concat(scope.Namespaces, scope.Collections, scope.Units, scope.Principals)
-	if scope.All {
+	if scope.CoversEveryObject() {
 		listed = append(listed, every...)
 	}
 
@@ -198,12 +198,12 @@ func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
 
 // CheckExactScope fails the test when the authorizer of c says that its scope
 // is exact (identity.HasExactScope) and Authorize denies an object that its
-// scope holds. A scope with All set holds each object of c.Every. It passes
-// for an authorizer that does not say so: the callers of such an authorizer
-// check each object. Run it against each authorizer with a principal that is
-// not an administrator and, where the authorizer can give one, a scope with
-// All set, so that a decorator cannot claim an exact scope that it does not
-// have.
+// scope holds. A scope that covers every object holds each object of c.Every.
+// It passes for an authorizer that does not say so: the callers of such an
+// authorizer check each object. Run it against each authorizer with a
+// principal that is not an administrator and, where the authorizer can give
+// one, a scope that covers every object, so that a decorator cannot claim an
+// exact scope that it does not have.
 func CheckExactScope(ctx context.Context, t *testing.T, c ListCheck) {
 	t.Helper()
 
@@ -306,7 +306,12 @@ func (a *PolicyAuthorizer) ListObjects(
 
 		switch {
 		case obj.IsServer():
-			out.All = true
+			every := identity.Every()
+			every.Namespaces = out.Namespaces
+			every.Collections = out.Collections
+			every.Units = out.Units
+			every.Principals = out.Principals
+			out = every
 		case obj.IsPrincipal():
 			out.Principals = append(out.Principals, obj)
 		case obj.IsUnit():
@@ -701,7 +706,7 @@ func testAdminListsAll(t *testing.T, authz identity.Authorizer) {
 			t.Fatalf("admin list %s: %v", action, err)
 		}
 
-		if !scope.All {
+		if !scope.CoversEveryObject() {
 			t.Fatalf("admin list %s: all = false, want true", action)
 		}
 	}
@@ -773,8 +778,9 @@ func testListUnitGrant(t *testing.T) {
 		t.Fatalf("alice list unit:read: %v", err)
 	}
 
-	if scope.All || len(scope.Namespaces) != 0 || len(scope.Collections) != 0 || len(scope.Principals) != 0 ||
-		len(scope.Units) != 1 || scope.Units[0].String() != unitA.String() {
+	if scope.CoversEveryObject() || len(scope.Namespaces) != 0 || len(scope.Collections) != 0 ||
+		len(scope.Principals) != 0 || len(scope.Units) != 1 ||
+		scope.Units[0].String() != unitA.String() {
 		t.Fatalf("alice list unit:read = %+v, want unit %q only", scope, unitA.String())
 	}
 
@@ -819,7 +825,8 @@ func testListNamespaceGrant(t *testing.T) {
 		t.Fatalf("alice list unit:read: %v", err)
 	}
 
-	if scope.All || len(scope.Units) != 0 || len(scope.Namespaces) != 1 || scope.Namespaces[0].Namespace() != acme {
+	if scope.CoversEveryObject() || len(scope.Units) != 0 || len(scope.Namespaces) != 1 ||
+		scope.Namespaces[0].Namespace() != acme {
 		t.Fatalf("alice list unit:read = %+v, want namespace %q only", scope, acme)
 	}
 

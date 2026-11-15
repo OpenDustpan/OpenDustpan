@@ -11,7 +11,7 @@
 # scripts/smoke-image.sh builds with a local test tarball instead.
 
 # Go stage: static binary with the version stamp of issue #91.
-FROM golang:1.27.3-bookworm AS build
+FROM golang:1.27.4-bookworm AS build
 WORKDIR /src
 ARG TARGETARCH
 ARG VERSION=dev
@@ -40,7 +40,7 @@ RUN mkdir -p /out/data
 # are placeholders for its first tag. A build without explicit CONSOLE_URL and
 # CONSOLE_SHA256 fails at the download step. When the first console release
 # lands, pin its tag and SHA-256 here.
-FROM golang:1.27.3-bookworm AS console
+FROM golang:1.27.4-bookworm AS console
 ARG CONSOLE_URL=https://github.com/OpenDustpan/console/releases/download/v0.1.0/console.tar.gz
 ARG CONSOLE_SHA256=0000000000000000000000000000000000000000000000000000000000000000
 COPY . /src

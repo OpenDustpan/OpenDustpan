@@ -78,6 +78,7 @@ func entryAt(ns namespace.Name, action string, when time.Time) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

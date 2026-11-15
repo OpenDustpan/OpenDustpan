@@ -814,6 +814,7 @@ func (s *Service) cancelOne(ctx context.Context, u activeUnit, actor string) (st
 		Reason:        cancelReason(actor),
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	if _, _, err := s.workspaces.ForceUnlock(ctx, u.workspaceID, maintenanceSubject, none, nil, entry); err != nil {

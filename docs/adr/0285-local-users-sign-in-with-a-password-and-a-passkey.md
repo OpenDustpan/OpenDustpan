@@ -14,6 +14,7 @@ Changed by:
 - ADR 333 changes decision 16: a ceiling of lock alerts for each installation and hour.
 - ADR 333 extends decision 23: the audit kind sign-in.name-lock-ended.
 - ADR 333 extends decision 20: the passkey challenge is a sealed cookie.
+- ADR 372 changes decision 17: a temporary administrator of a recovery resets the factors of a person with no fresh authentication.
 
 ## Context
 

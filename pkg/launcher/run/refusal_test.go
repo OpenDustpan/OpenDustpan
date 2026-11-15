@@ -5,8 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/launcher"
+	"opendustpan.org/opendustpan/pkg/launcher/session"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
 
@@ -76,6 +79,306 @@ func TestHostileStepsNeverStart(t *testing.T) {
 
 			if _, err := os.Stat(marker); err == nil {
 				t.Fatal("the program of a refused step started")
+			}
+		})
+	}
+}
+
+// TestToolStepCredentialsFailClosed checks that a tool step whose assignment
+// names a profile fails closed: this release cannot deliver the credentials
+// of the profile, so the step fails the phase before its program starts. A
+// tool step with no profile needs no credentials, and it runs.
+func TestToolStepCredentialsFailClosed(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		profile string
+		refused bool
+		reason  string
+	}{
+		{
+			"a profile", "prod", true,
+			`this launcher release cannot deliver the credentials of profile "prod"`,
+		},
+		{
+			"a profile with a line feed", "pro\nd", true,
+			`this launcher release cannot deliver the credentials of profile "prod"`,
+		},
+		{
+			"a profile with a carriage return", "pro\rd", true,
+			`this launcher release cannot deliver the credentials of profile "prod"`,
+		},
+		{"no profile", "", false, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			marker := filepath.Join(t.TempDir(), "started")
+
+			s := step("plan", "touch", marker)
+			s.Role = string(job.RoleTool)
+
+			f := newFake(s)
+			f.assignment.Profile = tc.profile
+			wantExit(t, config(t, f), launcher.ExitOK)
+
+			if tc.refused {
+				checkRefusedToolStep(t, f, marker, tc.reason)
+			} else {
+				checkToolStepRan(t, f, marker)
+			}
+		})
+	}
+}
+
+// checkRefusedToolStep checks the failed phase of a tool step that the
+// launcher refused before its program started.
+func checkRefusedToolStep(t *testing.T, f *fakeServer, marker, reason string) {
+	t.Helper()
+
+	if f.finish == nil || f.finish.Succeeded || f.finish.Message != "step plan: "+reason {
+		t.Fatalf("finish = %+v, want failed with %q", f.finish, reason)
+	}
+
+	if strings.ContainsAny(f.finish.Message, "\r\n") {
+		t.Fatalf("the reason holds CR or LF: %q", f.finish.Message)
+	}
+
+	if got := f.log("plan"); got != "dustpan-launcher: "+reason+"\n" {
+		t.Fatalf("log = %q, want the note of the refusal", got)
+	}
+
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the program of the tool step started")
+	}
+}
+
+// checkToolStepRan checks that the tool step started and that the phase
+// reports the exit code of its program.
+func checkToolStepRan(t *testing.T, f *fakeServer, marker string) {
+	t.Helper()
+
+	if f.finish == nil || !f.finish.Succeeded {
+		t.Fatalf("finish = %+v, want the phase of the tool step to succeed", f.finish)
+	}
+
+	if end := f.ends["plan"]; end.ExitCode != 0 {
+		t.Fatalf("end = %+v, want the exit code 0", end)
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("the program of the tool step did not start: %v", err)
+	}
+}
+
+// TestUnsupportedStepFeaturesFailClosed checks the fail-closed rule for a
+// declared output: a step with an output that a later phase of the job
+// needs fails the phase before its program starts, because this release
+// uploads no output. A step whose declared outputs no later phase reads
+// runs, and its log holds the note that this release uploads no output.
+func TestUnsupportedStepFeaturesFailClosed(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		outputs []protocol.Output
+		refused bool
+		reason  string
+	}{
+		{
+			"an output that a later phase needs",
+			[]protocol.Output{{Kind: "plan-apply", Path: "tfplan", Needed: true}},
+			true,
+			`this launcher release cannot upload output "plan-apply" that a later phase needs`,
+		},
+		{
+			"an output whose kind holds a line feed",
+			[]protocol.Output{{Kind: "plan\napply", Path: "tfplan", Needed: true}},
+			true,
+			`this launcher release cannot upload output "planapply" that a later phase needs`,
+		},
+		{
+			"an output whose kind holds a carriage return",
+			[]protocol.Output{{Kind: "plan\rapply", Path: "tfplan", Needed: true}},
+			true,
+			`this launcher release cannot upload output "planapply" that a later phase needs`,
+		},
+		{
+			"an output that no later phase needs",
+			[]protocol.Output{{Kind: "plan-display", Path: "tfplan.json", Needed: false}},
+			false,
+			"",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			marker := filepath.Join(t.TempDir(), "started")
+
+			s := step("bad", "touch", marker)
+			s.Outputs = tc.outputs
+
+			f := newFake(s)
+			wantExit(t, config(t, f), launcher.ExitOK)
+
+			if tc.refused {
+				checkRefusedOutputStep(t, f, marker, tc.reason)
+
+				return
+			}
+
+			checkOutputStepRan(t, f, marker)
+		})
+	}
+}
+
+// checkRefusedOutputStep checks the failed phase of a step that the
+// launcher refused because a later phase of the job needs one of its
+// outputs.
+func checkRefusedOutputStep(t *testing.T, f *fakeServer, marker, reason string) {
+	t.Helper()
+
+	if f.finish == nil || f.finish.Succeeded || f.finish.Message != "step bad: "+reason {
+		t.Fatalf("finish = %+v, want failed with %q", f.finish, reason)
+	}
+
+	if got := f.log("bad"); got != "dustpan-launcher: "+reason+"\n" {
+		t.Fatalf("log = %q, want the note of the refusal", got)
+	}
+
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the program of the refused step started")
+	}
+}
+
+// checkOutputStepRan checks that a step whose declared outputs no later
+// phase reads started, that the phase reports the exit code 0, and that the
+// log holds the note that the launcher uploads no output.
+func checkOutputStepRan(t *testing.T, f *fakeServer, marker string) {
+	t.Helper()
+
+	if f.finish == nil || !f.finish.Succeeded {
+		t.Fatalf("finish = %+v, want the phase of the step to succeed", f.finish)
+	}
+
+	if end := f.ends["bad"]; end.ExitCode != 0 {
+		t.Fatalf("end = %+v, want the exit code 0", end)
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("the program of the step did not start: %v", err)
+	}
+
+	if !strings.Contains(f.log("bad"), "this launcher release does not upload declared outputs") {
+		t.Fatalf("log = %q, want the note that the launcher uploads no output", f.log("bad"))
+	}
+}
+
+// cancelDuringBegin sets f to answer every renewal with a cancel, and to
+// answer the begin of the step only after the renewal loop recorded the
+// cancel.
+func cancelDuringBegin(f *fakeServer, _ runConfig) {
+	delivered := make(chan struct{})
+	f.begin = func(string) *session.Response {
+		<-delivered
+
+		return nil
+	}
+	f.renew = func(n int) *session.Response {
+		if n >= 2 {
+			select {
+			case delivered <- struct{}{}:
+			default:
+			}
+		}
+
+		return answer(200, &protocol.RenewResponse{ExpiresAt: time.Time{}, Canceled: true, SessionOpen: false})
+	}
+}
+
+// loseClaimAtTheBeginCall sets f to answer the begin call of the step with a
+// lost claim. The step ends at that call, before the checks that refuse a
+// step before its start run: this case covers the begin call, not the check
+// of a lost claim in refuseStep.
+func loseClaimAtTheBeginCall(f *fakeServer, _ runConfig) {
+	f.begin = func(string) *session.Response {
+		return refusal(409, protocol.ErrorClaimLost)
+	}
+}
+
+// stopBeforeTheRun closes cfg.Stop before the run.
+func stopBeforeTheRun(_ *fakeServer, cfg runConfig) {
+	stop := make(chan struct{})
+	close(stop)
+	cfg.Stop = stop
+}
+
+// TestStopBeforeProcessStart checks that a cancel, a lost claim or a stop
+// that arrives before a step starts stops the phase without starting the
+// program.
+func TestStopBeforeProcessStart(t *testing.T) {
+	t.Parallel()
+
+	marker := filepath.Join(t.TempDir(), "started")
+
+	cases := []struct {
+		name    string
+		change  func(f *fakeServer, cfg runConfig)
+		code    launcher.ExitCode
+		message string
+	}{
+		{
+			"cancel during the begin of the step",
+			cancelDuringBegin,
+			launcher.ExitOK,
+			"step bad: the job was canceled",
+		},
+		{
+			"claim loss at the begin call",
+			loseClaimAtTheBeginCall,
+			launcher.ExitClaimLost,
+			"",
+		},
+		{
+			"stop closed before the run",
+			stopBeforeTheRun,
+			launcher.ExitOK,
+			"step bad: the launcher got a stop signal",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The program does not exist. A launcher that starts the step
+			// anyway fails at the start, so the reason of the phase differs
+			// from the refusal and the test fails deterministically.
+			f := newFake(step("bad", "dustpan-no-such-program", marker))
+			cfg := config(t, f)
+			tc.change(f, cfg)
+
+			wantExit(t, cfg, tc.code)
+
+			if _, err := os.Stat(marker); err == nil {
+				t.Fatal("the program of the stopped step started")
+			}
+
+			if tc.message == "" {
+				if f.finishes != 0 {
+					t.Fatalf("finishes = %d, want no report after a lost claim", f.finishes)
+				}
+
+				return
+			}
+
+			if f.finish == nil || f.finish.Succeeded || f.finish.Message != tc.message {
+				t.Fatalf("finish = %+v, want failed with %q", f.finish, tc.message)
 			}
 		})
 	}

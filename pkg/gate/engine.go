@@ -120,6 +120,14 @@ type Engine interface {
 	// use. An external adapter returns ErrUnavailable when the service does
 	// not answer or its answer does not authenticate.
 	Check(ctx context.Context, schema Schema, policies []Policy) ([]Diagnostic, error)
+	// CheckLimitMembership checks the text of an access limit before Check
+	// does. It returns an error that wraps ErrLimitMembership for a text
+	// whose membership test of principal names a value that is not a named
+	// group and not a set of named groups: the server cannot tell which
+	// group such a limit names, so the save refuses the text and a group
+	// guard refuses a change that the text could make it lift. It returns
+	// nil for any other text, which Check then refuses with a diagnostic.
+	CheckLimitMembership(ctx context.Context, text string) error
 	// Evaluate evaluates set for each request, and returns one answer for
 	// each request in request order. An error of one policy, also a policy
 	// that does not compile, is a diagnostic of each answer, never an error

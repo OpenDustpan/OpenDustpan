@@ -43,7 +43,7 @@ func (h *Handler) capabilitiesRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: capabilitiesPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
-			ActionsFor: nil, Serve: h.capabilities,
+			ActionsFor: nil, OpaqueDenial: false, Serve: h.capabilities,
 		},
 	}
 }

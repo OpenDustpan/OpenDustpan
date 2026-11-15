@@ -6,6 +6,7 @@ import (
 	"opendustpan.org/opendustpan/internal/devcode"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/installation"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting/settingtest"
 )
 
@@ -15,7 +16,22 @@ import (
 func newEveryModuleServer(t *testing.T) *dustpan.Server {
 	t.Helper()
 
-	return newModuleServer(t)
+	return newModuleServer(t, dustpan.WithLDAPProvider(describedLDAPProvider()))
+}
+
+// describedLDAPProvider is an LDAP provider that mounts the route of the
+// password sign-in of a provider. The server checks its settings and opens no
+// connection until a sign-in.
+func describedLDAPProvider() dustpan.LDAPProvider {
+	return dustpan.LDAPProvider{
+		RootCAs: nil, AllowedRanges: nil, ID: "corp-ldap", DisplayName: "Corp", URL: "ldaps://ldap.example.org",
+		BindDN: "cn=dustpan,ou=services,dc=example,dc=org", BindPassword: session.NewPassword("service-password"),
+		BaseDN: "ou=people,dc=example,dc=org", UserFilter: "(&(objectClass=person)(uid={user}))",
+		UserNameAttribute: "uid", EmailAttribute: "mail", NameAttribute: "cn", Subject: "entryUUID",
+		DisabledAttribute: "", Groups: "off", GroupBaseDN: "", GroupFilter: "", GroupMemberAttribute: "",
+		GroupMemberOfAttribute: "", GroupNameAttribute: "", DisabledValues: nil, DisabledMask: 0, StartTLS: false,
+		AutoCreate: true,
+	}
 }
 
 // newDevModuleServer builds the server of newEveryModuleServer with the

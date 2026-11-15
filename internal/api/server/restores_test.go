@@ -149,6 +149,8 @@ func newRestoreFixtureWorkers(
 	aud := newTestAudit()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -620,6 +622,8 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	}
 
 	denied, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -838,6 +842,8 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -984,6 +990,8 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1121,6 +1129,8 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1214,12 +1224,13 @@ func checkAuditEntryNamesAccessMode(t *testing.T, stores backupStores, id, want 
 			continue
 		}
 
-		if !strings.Contains(entry.Object, id) || !strings.Contains(entry.Object, want) {
-			t.Fatalf("restore audit object = %q, want restore %s with %q",
-				entry.Object, id, want)
+		if !strings.Contains(entry.Object, id) {
+			continue
 		}
 
-		return
+		if strings.Contains(entry.Object, want) {
+			return
+		}
 	}
 
 	t.Fatalf("no audit entry names restore %s with %q", id, want)

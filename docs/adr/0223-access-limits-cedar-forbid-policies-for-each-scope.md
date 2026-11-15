@@ -4,6 +4,7 @@ Status: accepted · 2026-10-18. Part of ADR 222. Supersedes ADR 52 decision 9. E
 
 Changed by:
 
+- ADR 362 changes decisions 4 and 11: a Cedar entity for a group uses the stable ID of the group, not its name.
 - ADR 240 changes decision 4: the principal kind takes person, service and
   workload.
 - ADR 313 extends: grant conditions.

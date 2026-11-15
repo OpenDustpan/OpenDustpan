@@ -234,5 +234,6 @@ func (c *operation) entry(outcome audit.Outcome) audit.Entry {
 		PrincipalKind: string(p.Kind),
 		JobID:         p.JobID,
 		Reason:        string(c.op),
+		Origin:        nil,
 	}
 }

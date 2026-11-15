@@ -58,15 +58,20 @@ type listBackupsResponse struct {
 }
 
 // getBackupResponse answers one backup: its row and, when the backup
-// succeeded, the manifest the backup wrote last.
+// succeeded, the manifest the backup wrote last. UnverifiedKeyLimit is the
+// bound on the unverified keys of a backup as this server applies it.
+// UnverifiedKeyCount is the count of the unverified keys of the manifest, and
+// 0 for a backup without one.
 type getBackupResponse struct {
-	ID        string           `json:"id"`
-	State     string           `json:"state"`
-	StartedAt string           `json:"startedAt"`
-	EndedAt   string           `json:"endedAt,omitempty"`
-	Target    string           `json:"target"`
-	Error     string           `json:"error,omitempty"`
-	Manifest  *backup.Manifest `json:"manifest,omitempty"`
+	ID                 string           `json:"id"`
+	State              string           `json:"state"`
+	StartedAt          string           `json:"startedAt"`
+	EndedAt            string           `json:"endedAt,omitempty"`
+	Target             string           `json:"target"`
+	Error              string           `json:"error,omitempty"`
+	Manifest           *backup.Manifest `json:"manifest,omitempty"`
+	UnverifiedKeyLimit int              `json:"unverifiedKeyLimit"`
+	UnverifiedKeyCount int              `json:"unverifiedKeyCount"`
 }
 
 // startBackup starts a backup in the background and answers 202 with its ID.
@@ -141,13 +146,15 @@ func (h *Handler) getBackup(w http.ResponseWriter, r *http.Request, _ identity.P
 	}
 
 	doc := getBackupResponse{
-		ID:        record.ID.String(),
-		State:     string(record.State),
-		StartedAt: formatBackupTime(record.StartedAt),
-		EndedAt:   "",
-		Target:    record.Target,
-		Error:     record.Error,
-		Manifest:  nil,
+		ID:                 record.ID.String(),
+		State:              string(record.State),
+		StartedAt:          formatBackupTime(record.StartedAt),
+		EndedAt:            "",
+		Target:             record.Target,
+		Error:              record.Error,
+		Manifest:           nil,
+		UnverifiedKeyLimit: h.backups.UnverifiedKeyLimit(),
+		UnverifiedKeyCount: 0,
 	}
 
 	if !record.EndedAt.IsZero() {
@@ -178,6 +185,7 @@ func (h *Handler) getBackup(w http.ResponseWriter, r *http.Request, _ identity.P
 	}
 
 	doc.Manifest = &manifest
+	doc.UnverifiedKeyCount = len(manifest.Unverified)
 
 	h.writeJSON(ctx, w, http.StatusOK, doc)
 }

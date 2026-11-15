@@ -38,7 +38,8 @@ function kindOf(value: unknown): string {
   if (Array.isArray(value)) {
     return "an array";
   }
-  return `a ${typeof value}`;
+  const kind = typeof value;
+  return `${/^[aeiou]/.test(kind) ? "an" : "a"} ${kind}`;
 }
 
 function wrong(path: string, want: string, value: unknown): never {

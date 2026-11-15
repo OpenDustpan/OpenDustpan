@@ -99,6 +99,14 @@ type Config struct {
 	// PollInterval is the time between two tries of a claim in a long poll.
 	// Zero takes five seconds.
 	PollInterval time.Duration
+	// Plans stores the plan of a plan phase. Without it, the upload and the
+	// commit of a plan answer not-found. Plans needs Jobs: NewHandler refuses
+	// the one without the other.
+	Plans job.PlanRecorder
+	// Artifacts opens the parts of the plan that an apply phase applies.
+	// Without it, the read of a plan part answers not-found. Artifacts needs
+	// Jobs too.
+	Artifacts job.ArtifactReader
 }
 
 // JobReader is the part of job.Store that the session exchange needs.
@@ -136,6 +144,8 @@ type Handler struct {
 	polls               sync.Map
 	mux                 *patternMux
 	routes              []Route
+	plans               job.PlanRecorder
+	artifacts           job.ArtifactReader
 }
 
 // validate returns ErrMissingDependency when cfg lacks a required dependency.
@@ -168,10 +178,24 @@ func (cfg Config) validate() error {
 	return nil
 }
 
+// validatePlans returns ErrMissingDependency when cfg has a plan dependency and
+// no job reader: a plan call would not check its phase.
+func (cfg Config) validatePlans() error {
+	if (cfg.Plans != nil || cfg.Artifacts != nil) && cfg.Jobs == nil {
+		return fmt.Errorf("%w: job reader, which the plan calls need", ErrMissingDependency)
+	}
+
+	return nil
+}
+
 // NewHandler returns a Handler. Every Config field except Claimer, Sweeps,
 // Operations, Recorder, Jobs, Sessions, Now and PollInterval is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	if err := cfg.validatePlans(); err != nil {
 		return nil, err
 	}
 
@@ -226,6 +250,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		polls:               sync.Map{},
 		mux:                 newPatternMux(),
 		routes:              nil,
+		plans:               cfg.Plans,
+		artifacts:           cfg.Artifacts,
 	}
 
 	h.routes = h.buildRoutes()

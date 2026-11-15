@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -17,25 +19,108 @@ import (
 var _ secret.ItemKeyStore = (*Store)(nil)
 
 // itemKeyTx is the item key part of one open fenced transaction of the store.
-// Its fence is the fence that opened the transaction.
+// Its fence is the fence that opened the transaction. attempt is the attempt
+// deadline of the transaction: every transaction that makes an itemKeyTx
+// that can write arms one at its start.
 type itemKeyTx struct {
-	q     *db.Queries
-	fence namespace.Fence
+	q       *db.Queries
+	fence   namespace.Fence
+	attempt *itemKeyAttempt
 }
 
-var _ secret.ItemKeyTx = itemKeyTx{q: nil, fence: namespace.Fence{Namespace: "", FailoverVersion: 0}}
+var _ secret.ItemKeyTx = itemKeyTx{q: nil, fence: namespace.Fence{Namespace: "", FailoverVersion: 0}, attempt: nil}
+
+// itemKeyAttempt is the attempt deadline of one transaction that can write an
+// item key record. The writer puts the wrapped key blob inside the
+// transaction, before the record, so the reaper rule holds only when the
+// transaction commits before the deadline. wrote reports that the transaction
+// wrote a record.
+type itemKeyAttempt struct {
+	deadline time.Time
+	wrote    bool
+	// now gives the current time of the attempt. newAttempt takes it from
+	// the store. Tests replace it.
+	now func() time.Time
+}
+
+// newAttempt returns the attempt of a transaction that starts now under ctx.
+func (s *Store) newAttempt(ctx context.Context) *itemKeyAttempt {
+	return &itemKeyAttempt{deadline: s.attemptDeadline(ctx, s.now()), wrote: false, now: s.now}
+}
+
+// beforeCommit refuses the commit of a transaction that wrote an item key
+// record after its deadline. A transaction that wrote no record passes.
+func (a *itemKeyAttempt) beforeCommit() error {
+	if a == nil || !a.wrote {
+		return nil
+	}
+
+	return secret.CheckAttemptDeadline(a.deadline, a.now())
+}
+
+// attemptError returns secret.ErrItemKeyAttemptExpired, with no text of the
+// driver, when the database ended the transaction at its transaction_timeout,
+// or when the transaction wrote a record and failed after its deadline. It
+// returns err for any other error.
+func (a *itemKeyAttempt) attemptError(err error) error {
+	if err == nil || a == nil || errors.Is(err, secret.ErrItemKeyAttemptExpired) {
+		return err
+	}
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == transactionTimeoutCode {
+		return fmt.Errorf("%w: the database ended the transaction at its deadline", secret.ErrItemKeyAttemptExpired)
+	}
+
+	if a.wrote && !a.now().Before(a.deadline) {
+		return fmt.Errorf("%w: the transaction failed after its deadline", secret.ErrItemKeyAttemptExpired)
+	}
+
+	return err
+}
+
+// transactionTimeoutCode is the SQLSTATE of a transaction that the database
+// ended at its transaction_timeout.
+const transactionTimeoutCode = "25P04"
 
 // InItemKeyTx implements secret.ItemKeyStore. The transaction checks fence
-// first, and fn writes the item row and the record in it.
+// first, and fn writes the item row and the record in it. The transaction ends
+// at its attempt deadline: the database ends it with transaction_timeout, on
+// its own clock, and a check before the commit refuses a late commit.
 func (s *Store) InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(secret.ItemKeyTx) error) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		return fn(itemKeyTx{q: q, fence: fence})
+	attempt := s.newAttempt(ctx)
+
+	err := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		if err := q.SetTransactionTimeout(ctx, transactionTimeoutMs(attempt.deadline, s.now())); err != nil {
+			return fmt.Errorf("set the attempt deadline: %w", err)
+		}
+
+		if err := fn(itemKeyTx{q: q, fence: fence, attempt: attempt}); err != nil {
+			return err
+		}
+
+		// Defense in depth: the database ends the transaction at the
+		// deadline too. This check stays so that a late commit fails on the
+		// clock of the server as well, whatever the setting of the database.
+		return secret.CheckAttemptDeadline(attempt.deadline, s.now())
 	})
+
+	return attempt.attemptError(err)
+}
+
+// transactionTimeoutMs returns the time from now to deadline, in whole
+// milliseconds, as the value of transaction_timeout. It is at least 1, because
+// 0 turns the timeout off.
+func transactionTimeoutMs(deadline, now time.Time) string {
+	return strconv.FormatInt(max(deadline.Sub(now).Milliseconds(), 1), 10)
 }
 
 // CreateItemKey implements secret.ItemKeyTx. It stores k unless a record for
 // its item exists, and returns the stored record either way, so two writers of
-// the first save of one item agree on one key.
+// the first save of one item agree on one key. It refuses a write after the
+// attempt deadline of the transaction, and it arms transaction_timeout for the
+// rest of the transaction, so the database ends a late commit on its own
+// clock.
 func (t itemKeyTx) CreateItemKey(ctx context.Context, k secret.ItemKey) (secret.ItemKey, error) {
 	// Defense in depth: the transaction checked the failover version of the
 	// namespace of the fence only. This check stays so that a record of one
@@ -44,12 +129,16 @@ func (t itemKeyTx) CreateItemKey(ctx context.Context, k secret.ItemKey) (secret.
 		return secret.ItemKey{}, err
 	}
 
+	if err := t.armAttempt(ctx); err != nil {
+		return secret.ItemKey{}, err
+	}
+
 	row := codec.ToItemKeyRow(k)
 
 	_, err := t.q.InsertItemKey(ctx, db.InsertItemKeyParams{
 		ID: row.ID, Namespace: row.Namespace, ScopeID: row.ScopeID, Kind: row.Kind, Item: row.Item,
 		WrapperID: row.WrapperID, CreatedAtMs: row.CreatedAtMs, BlobVersion: row.BlobVersion,
-		BlobSize: row.BlobSize, BlobMd5: row.BlobMd5,
+		BlobSize: row.BlobSize, BlobMd5: row.BlobMd5, BlobAttempt: row.BlobAttempt,
 	})
 	if err != nil {
 		return secret.ItemKey{}, fmt.Errorf("insert item key: %w", err)
@@ -75,6 +164,30 @@ func (t itemKeyTx) GetNamespace(ctx context.Context, name namespace.Name) (names
 // GetItemKey implements secret.ItemKeyTx.
 func (t itemKeyTx) GetItemKey(ctx context.Context, ref secret.ItemRef) (secret.ItemKey, error) {
 	return shreddedAsError(itemKeyOf(ctx, t.q, ref))
+}
+
+// armAttempt checks the attempt deadline before a record write, and arms
+// transaction_timeout at the deadline. A transaction with no attempt writes
+// no record (fail closed).
+func (t itemKeyTx) armAttempt(ctx context.Context) error {
+	if t.attempt == nil {
+		return fmt.Errorf("%w: the transaction has no attempt deadline", secret.ErrItemKeyAttemptExpired)
+	}
+
+	// Defense in depth: the check before the commit and transaction_timeout
+	// stop a late commit too. This check stays so that a write that starts
+	// after the deadline never reaches the database.
+	if err := secret.CheckAttemptDeadline(t.attempt.deadline, t.attempt.now()); err != nil {
+		return err
+	}
+
+	if err := t.q.SetTransactionTimeout(ctx, transactionTimeoutMs(t.attempt.deadline, t.attempt.now())); err != nil {
+		return fmt.Errorf("set the attempt deadline: %w", err)
+	}
+
+	t.attempt.wrote = true
+
+	return nil
 }
 
 // shreddedAsError turns a shredded record into secret.ErrShredded, with the
@@ -116,7 +229,9 @@ func (s *Store) CreateItemKey(ctx context.Context, k secret.ItemKey, fence names
 
 // GetItemKey implements secret.ItemKeyIndex.
 func (s *Store) GetItemKey(ctx context.Context, ref secret.ItemRef) (secret.ItemKey, error) {
-	return itemKeyTx{q: s.queries, fence: namespace.Fence{Namespace: "", FailoverVersion: 0}}.GetItemKey(ctx, ref)
+	return itemKeyTx{
+		q: s.queries, fence: namespace.Fence{Namespace: "", FailoverVersion: 0}, attempt: nil,
+	}.GetItemKey(ctx, ref)
 }
 
 // itemKeyOf reads the record of ref, shredded or not. It returns
