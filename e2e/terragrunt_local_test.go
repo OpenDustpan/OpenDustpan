@@ -38,8 +38,9 @@ const tgLocalNamespace = "terragrunt-local"
 
 // sharedNameAttempts bounds the retries of the shared name landing run: two
 // units that name one workspace share its lock, so the run-all at parallelism
-// 3 with no lock timeout refuses the unit that loses the lock race, and each
-// retry lands the refused unit.
+// 3 with no lock timeout refuses the unit that loses the lock race. The loop
+// retries the same run until the one chain holds a state version of each
+// unit.
 const sharedNameAttempts = 6
 
 // tgLocalUnits returns the three units of the run, each with its own
@@ -474,10 +475,14 @@ func tgLocalSharedName(ctx context.Context, t *testing.T, cli, tg e2e.Install, s
 
 	// Both writes land in the one workspace chain, at the same parallelism 3
 	// with no lock timeout. The two units still share the one workspace
-	// lock, so a run lands one unit and can refuse the unit that loses the
-	// lock race. Each retry is the same run-all at parallelism 3 with no
-	// lock timeout: it retries the refused unit, and the run that lands the
-	// last write ends the loop.
+	// lock, so a run lands the unit that wins the lock race and refuses the
+	// unit that loses it; a later run of the same command lands the refused
+	// unit. Every apply adds one state version to the one chain, so a run
+	// writes one version or two: the loop ends when the chain holds a state
+	// version of each unit, not at a fixed count.
+	shared := []string{"shared-a", "shared-b"}
+	writers := map[string]bool{}
+
 	for attempt := 1; attempt <= sharedNameAttempts; attempt++ {
 		res, err := runner.runAllResult(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
 			"--", "apply", "-input=false", "-auto-approve", "-lock-timeout=0s")
@@ -485,16 +490,31 @@ func tgLocalSharedName(ctx context.Context, t *testing.T, cli, tg e2e.Install, s
 			t.Fatalf("terragrunt run --all attempt %d: %v", attempt, err)
 		}
 
-		if got := tgLocalVersionTotal(ctx, t, env, token, unit); got >= 2 {
+		writers = tgLocalStateWriters(ctx, t, env, unit, shared)
+
+		if tgLocalSharedLanded(writers, shared) {
 			break
 		}
 
 		t.Logf("shared run attempt %d exits %d; retry the refused unit:\n%s", attempt, res.ExitCode, res.Stderr)
 	}
 
-	if got := tgLocalVersionTotal(ctx, t, env, token, unit); got != 2 {
-		t.Fatalf("shared workspace holds %d state versions, want 2 in one chain", got)
+	if !tgLocalSharedLanded(writers, shared) {
+		t.Fatalf("the shared workspace holds no state version of each unit in %d attempts: %v",
+			sharedNameAttempts, writers)
 	}
+}
+
+// tgLocalSharedLanded reports whether the one chain holds a state version of
+// every shared unit directory.
+func tgLocalSharedLanded(writers map[string]bool, dirs []string) bool {
+	for _, dir := range dirs {
+		if !writers[dir] {
+			return false
+		}
+	}
+
+	return true
 }
 
 // tgLocalRefusedSharedApply proves that the second shared unit, at
@@ -851,6 +871,49 @@ func tgLocalVersionTotal(ctx context.Context, t *testing.T, env *e2e.Env, token,
 	}
 
 	return tgLocalDataLen(t, body)
+}
+
+// tgLocalStateWriters returns the unit directories that wrote a state version
+// of the workspace. Every unit writes its own directory name as the "unit"
+// output, so the state of a version names its writer. A workspace that two
+// unit directories share therefore names both directories across its state
+// versions. It reads as token A, the principal of the shared name scenario.
+func tgLocalStateWriters(
+	ctx context.Context,
+	t *testing.T,
+	env *e2e.Env,
+	name string,
+	dirs []string,
+) map[string]bool {
+	t.Helper()
+
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, tgLocalHistoryPath(name), "")
+	if err != nil {
+		t.Fatalf("list state versions of %s: %v", name, err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("list state versions of %s answers %d, want 200: %s", name, status, body)
+	}
+
+	doc, err := decodeStateVersionList(body)
+	if err != nil {
+		t.Fatalf("decode the state version list of %s: %v", name, err)
+	}
+
+	writers := make(map[string]bool, len(dirs))
+
+	for _, version := range doc.Data {
+		state := downloadStateVersion(ctx, t, env, version.ID)
+
+		for _, dir := range dirs {
+			if strings.Contains(state, `"`+dir+`"`) {
+				writers[dir] = true
+			}
+		}
+	}
+
+	return writers
 }
 
 // tgLocalCheckOneVersion proves that a workspace holds one state version and
