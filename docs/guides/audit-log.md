@@ -151,6 +151,63 @@ An entry holds these fields:
    the block still passes `GET /api/audit/check`. A check that finds a hash
    that does not match an entry returns the first entry that fails.
 
+## Job entries of an agent
+
+When an agent starts a job for a person, the start entry of the job holds
+the agent in its `agent` block. `subject` names the person. The block names
+the agent that acted for that person. The entry has no top-level agent field,
+and its `changes` hold no `agent` key.
+
+An example of the start entry of a job that the built-in agent started
+for `ada`. The entry shows only the fields that matter here:
+
+```json
+{
+  "sequence": 12,
+  "subject": "ada",
+  "action": "unit:run",
+  "channel": "agent",
+  "changes": [
+    { "key": "job", "new": "job-7f3a" },
+    { "key": "source", "new": "agent" },
+    { "key": "operation", "new": "plan" }
+  ],
+  "agent": {
+    "agentRun": "run-41",
+    "agentSession": "run-41",
+    "tool": "",
+    "argsDigest": "",
+    "breakGlass": false,
+    "secretStage": "",
+    "delegationID": ""
+  }
+}
+```
+
+To find who acted for whom:
+
+1. Run `GET /api/audit/entries?organization=acme`, or read one entry with
+   `GET /api/audit/entries/12?organization=acme`.
+2. Open the entry whose `action` starts the job.
+3. Read `agent`. An entry with no `agent` has no agent data: the subject
+   acted alone.
+
+The server refuses an agent reference that is longer than 256 bytes, that is
+not valid UTF-8, or that holds a hidden character. The start fails, and the
+server writes no job and no entry. The job and its entry go to the store in
+one transaction, so a failed write of the entry rolls the job back.
+
+Start entries that an earlier build wrote hold the agent as an `agent` key in
+`changes`. The read API returns that value as the `agent` block, with the
+value as `agentRun` and `agentSession`. When an entry holds both, the block
+wins. `GET /api/audit/check` verifies both shapes in one chain, and it finds
+one changed byte of the block or of the key.
+
+If the server answers `audit.entry-not-found`, the namespace holds no entry
+at that sequence: run `GET /api/audit/entries` and open a sequence from the
+list. If the check answers `audit.entry-read-unavailable`, the store could not
+read an entry: run `GET /api/audit/check` again.
+
 ## Force-unlock entries
 
 Each force-unlock of an OpenTofu workspace writes one entry of the kind
