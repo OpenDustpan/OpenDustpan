@@ -77,6 +77,12 @@ func TestPathTeamAccess(t *testing.T) {
 		t.Skip("the team access path signs a person in through LDAP: the steps run against the in-process server")
 	}
 
+	if runtime.GOOS != "linux" {
+		// The Pulumi CLI logs in to the HTTPS test server and must trust its
+		// certificate, and Go honors SSL_CERT_FILE only on Linux.
+		t.Skipf("the team access path needs Linux, not %s", runtime.GOOS)
+	}
+
 	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
