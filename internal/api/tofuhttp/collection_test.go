@@ -72,7 +72,7 @@ func TestFirstRequestWithoutAPlacerOrRuleIsRefused(t *testing.T) {
 		{
 			"no rule matches",
 			&tofuunit.Placer{Rules: fixedRules{none: true}, Collections: fixedCollections{missing: false}},
-			http.StatusUnprocessableEntity, "placement-rules",
+			http.StatusUnprocessableEntity, "opendustpan placement add",
 		},
 		{
 			"the rule names a collection that is gone",

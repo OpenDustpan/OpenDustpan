@@ -35,7 +35,9 @@ func TestUsageGroupsByIntent(t *testing.T) {
 		{"Try out", []string{"dev"}},
 		{"Run in production", []string{"serve", "key generate", "doctor"}},
 		{"Operate", []string{
-			"health", "namespace create", "host create-temp-admin", "audit-chain status", "audit-chain approve",
+			"health", "namespace create", "collection create", "collection list",
+			"placement add", "placement list", "placement delete",
+			"host create-temp-admin", "audit-chain status", "audit-chain approve",
 			"store check",
 		}},
 		{"Back up", []string{"backup", "backup check", "restore"}},
@@ -130,6 +132,11 @@ func TestHelpExitsZero(t *testing.T) {
 		{"-h"},
 		{"serve", "-h"},
 		{"namespace", "create", "-h"},
+		{"collection", "create", "--help"},
+		{"collection", "list", "--help"},
+		{"placement", "add", "--help"},
+		{"placement", "list", "--help"},
+		{"placement", "delete", "--help"},
 		{"host", "create-temp-admin", "-h"},
 		{"backup", "check", "--help"},
 	} {
