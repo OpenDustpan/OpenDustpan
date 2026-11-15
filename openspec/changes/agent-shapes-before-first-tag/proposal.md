@@ -24,7 +24,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Principal domain package exists on main. Proof: pkg/principal where pkg/principal
-- Audit domain package exists on main with an audit-read kind and hash coverage test. Proof: pkg/audit where pkg/audit; audit kind audit-read where pkg/audit/audit.go:69; test TestComputeHashIsStableAndCoversTheFields where pkg/audit/audit_test.go:99
+- Audit domain package exists on main with an audit-read kind and hash coverage test. Proof: pkg/audit where pkg/audit; audit kind audit-read where pkg/audit/audit.go:69; test TestComputeHashIsStableAndCoversTheFields where pkg/audit/audit_test.go:100
 - Principal and audit routes exist on main. Proof: routes ANY /api/server/principals, ANY /api/server/principals/{}, ANY /api/audit/entries, ANY /api/audit/entries/{}
 - Principal and audit error catalogs exist on main. Proof: error codes principal.invalid at internal/errcode/catalog_principal.go:11 and audit.reason-invalid at internal/errcode/catalog_audit.go:17
 - Main proves no agent kind because the pack states identity kinds are person, service, and workload with no agent kind. Proof: RFC 121 excerpt states identity.Kind has person, service and workload, and no agent kind
@@ -55,7 +55,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Audit HTTP adapter converts stored entries to API output. (`internal/api/audit/audit.go:173 (func toAuditEntry)`)
-- Audit hash computation has a stable coverage test. (`pkg/audit/audit_test.go:99 (func TestComputeHashIsStableAndCoversTheFields)`)
+- Audit hash computation has a stable coverage test. (`pkg/audit/audit_test.go:100 (func TestComputeHashIsStableAndCoversTheFields)`)
 - Route declarations have a hook test that fails on unknown shapes. (`pkg/dustpan/route_declarations_hook_internal_test.go:17 (func TestRouteHookFailsOnAnUnknownShape)`)
 - Job token test helper builds an audit entry for token actions. (`pkg/jobtoken/jobtokentest/jobtokentest.go:204 (func auditEntry)`)
 

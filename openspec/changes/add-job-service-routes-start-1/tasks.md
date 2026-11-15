@@ -10,14 +10,14 @@
 ## 2. Implementation
 
 - [ ] 2.1 Implement the five methods in pkg/job/service.go (func at line 357 and its neighbors) Check: `go test ./pkg/job -count=1` passes
-- [ ] 2.2 Declare the routes in NEW file internal/api/jobs/actions.go and register them in the existing adapter of internal/api/jobs Check: `go test ./internal/api/jobs -run TestJobActionRoutes -count=1` passes
+- [ ] 2.2 Declare the routes in NEW file internal/api/jobs/actions.go and register them in the existing adapter of internal/api/jobs. The task adds the NEW top-level test `TestJobActionRoutes` in a `_test.go` file of `internal/api/jobs`, so that the Check runs it. Check: `go test ./internal/api/jobs -run TestJobActionRoutes -count=1` passes
 - [ ] 2.3 Add the NEW error code job.wrong-state to internal/errcode/catalog_job.go (next to job.unsupported), with its message and the one command that helps, and its row in internal/errcode/catalog_test.go. Check: `go test ./internal/errcode/...`
 - [ ] 2.4 Approve records one verdict on the gate of a job in the state awaiting-approval. Add the NEW event approval-recorded (awaiting-approval to awaiting-approval) in `pkg/job/state.go`; every other state refuses it. Add the NEW fields `Approvers` (nil is the closed policy: it counts no signature, so it never opens a gate) and NEW `MaxPlanAge` (default job.DefaultMaxPlanAge, 24 hours, `pkg/job/artifact.go:20`) to ServiceConfig (`pkg/job/service.go:104`), and pass the policy from `pkg/dustpan/jobservice.go`. The NEW route is POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals with the action job:approve on the unit, called with an access token, declared in internal/api/jobs/actions.go (NEW, task 2.2) and served by the adapter of internal/api/jobs; a caller without job:read gets the same 404 as for an unknown job. The checks fail closed in this order: the verdict and the comment, job:read then job:approve, the state, the plan age. Two distinct approvers, approval defaults and signature carry-over stay out of scope (several-approval-requirements-one-change and approval-defaults-take-effect-live); the fresh step of a destroy approval stays with policy-approvals. Check: `go test ./pkg/job/... ./internal/api/jobs/...` passes, with a hostile case for each check
 
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

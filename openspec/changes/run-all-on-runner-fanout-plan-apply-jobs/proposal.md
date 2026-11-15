@@ -56,7 +56,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Main runs an operation started with its runner claim. (`pkg/durable/runner_claimed_test.go:16 (func TestRunnerRunsAnOperationStartedWithItsClaim)`)
 - Main keeps discovery during maintenance. (`pkg/dustpan/maintenance_test.go:257 (func TestMaintenanceKeepsDiscovery)`)
-- Main ships every audit entry in order and moves the cursors. (`pkg/audit/ship_test.go:257 (func TestShipOnceCopiesEveryEntryInOrderAndMovesTheCursors)`)
+- Main ships every audit entry in order and moves the cursors. (`pkg/audit/ship_test.go:258 (func TestShipOnceCopiesEveryEntryInOrderAndMovesTheCursors)`)
 
 ## ADR check
 

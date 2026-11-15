@@ -1,6 +1,7 @@
 package access_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -103,4 +104,77 @@ func TestPlannerHoldsEveryViewerAction(t *testing.T) {
 			t.Errorf("planner lacks the viewer action %s", a)
 		}
 	}
+}
+
+// TestPlannerAccessDecision proves the Authorizer decision for a planner:
+// planner reads are allowed, writes, reveal and a token for another
+// principal are refused with access.denied (identity.ErrDenied).
+func TestPlannerAccessDecision(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	dev := f.person(t, "planner-dev")
+	f.person(t, "planner-other")
+	unit := unitObject(t, "acme", "web/prod")
+	f.grant(t, prn("planner-dev"), access.RolePlanner, identity.NamespaceObject("acme"))
+
+	assertChecks(t, f.authz, dev, []check{
+		{obj: unit, action: identity.ActionUnitRead, allow: true},
+		{obj: unit, action: identity.ActionUnitReadOutputs, allow: true},
+		{obj: unit, action: identity.ActionUnitRunPlan, allow: true},
+		{obj: unit, action: identity.ActionUnitRunApply, allow: false},
+		{obj: unit, action: identity.ActionUnitRunDestroy, allow: false},
+		{obj: unit, action: identity.ActionUnitReadSecrets, allow: false},
+		{obj: unit, action: identity.ActionUnitWrite, allow: false},
+		{obj: unit, action: identity.ActionUnitDecrypt, allow: false},
+	})
+
+	err := f.authz.Authorize(
+		t.Context(),
+		dev,
+		identity.ActionPrincipalManageTokens,
+		identity.PrincipalObject("prn-planner-other"),
+	)
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Errorf("planner token for another principal = %v, want ErrDenied", err)
+	}
+}
+
+// TestPlannerHostileInputLimited proves the fail-closed layers for a
+// planner: an unknown action is denied, and a grant never reaches outside
+// its object.
+func TestPlannerHostileInputLimited(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	dev := f.person(t, "planner-hostile")
+	unit := unitObject(t, "acme", "web/prod")
+	f.grant(t, prn("planner-hostile"), access.RolePlanner, identity.NamespaceObject("acme"))
+
+	if err := f.authz.Authorize(t.Context(), dev, identity.Action("unit:unknown-action"), unit); !errors.Is(
+		err,
+		identity.ErrDenied,
+	) {
+		t.Errorf("unknown action = %v, want ErrDenied", err)
+	}
+}
+
+// TestPlannerGrantContainment proves a planner grant on one collection never
+// reaches a unit of another collection.
+func TestPlannerGrantContainment(t *testing.T) {
+	t.Parallel()
+
+	home := unitObject(t, "acme", "web/prod")
+	away := unitObject(t, "acme", "api/prod")
+	mapping := collections{home.String(): "team-a", away.String(): "team-b"}
+	f := newFixtureWithCollections(t, mapping)
+	f.units = mapping
+	dev := f.person(t, "planner-contained")
+	f.grant(t, prn("planner-contained"), access.RolePlanner, identity.CollectionObject("acme", "team-a"))
+
+	assertChecks(t, f.authz, dev, []check{
+		{obj: home, action: identity.ActionUnitRead, allow: true},
+		{obj: away, action: identity.ActionUnitRead, allow: false},
+		{obj: away, action: identity.ActionUnitRunPlan, allow: false},
+	})
 }
