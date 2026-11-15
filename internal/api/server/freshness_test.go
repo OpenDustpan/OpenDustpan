@@ -2,13 +2,16 @@ package server_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -18,6 +21,9 @@ import (
 
 // freshErrorCode is the errorCode of a change that has no fresh authentication.
 const freshErrorCode = "mfa.fresh-step-required"
+
+// errPolicyStoreDown is the error of a policy store that cannot answer.
+var errPolicyStoreDown = errors.New("the policy store is down")
 
 // freshRoute is a route that needs a fresh authentication. setup runs once
 // before the requests and returns the path to use, or "" for path. want is
@@ -374,9 +380,9 @@ func checkFreshAuthRoute(t *testing.T, route freshRoute) {
 	rec := e.sendWithSession(t, route.method, e.staleSession(t), path, body)
 
 	got := decodeErrorBody(t, rec)
-	if rec.Code != http.StatusUnauthorized || got.ErrorCode != freshErrorCode ||
+	if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode ||
 		!strings.HasPrefix(got.Reauthenticate, "/api/server/sign-in/corp?fresh=1") {
-		t.Errorf("stale session = %d %s, want 401 with errorCode %s and a path of a new sign-in", rec.Code,
+		t.Errorf("stale session = %d %s, want 403 with errorCode %s and a path of a new sign-in", rec.Code,
 			rec.Body.String(), freshErrorCode)
 	}
 
@@ -471,9 +477,9 @@ func TestFreshAuthGitHostRoutes(t *testing.T) {
 			rec := sendHostSession(t, e, route, hostStaleSignInAge)
 
 			got := decodeErrorBody(t, rec)
-			if rec.Code != http.StatusUnauthorized || got.ErrorCode != freshErrorCode ||
+			if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode ||
 				!strings.HasPrefix(got.Reauthenticate, "/api/server/sign-in/corp?fresh=1") {
-				t.Errorf("stale session = %d %s, want 401 with errorCode %s and a path of a new sign-in", rec.Code,
+				t.Errorf("stale session = %d %s, want 403 with errorCode %s and a path of a new sign-in", rec.Code,
 					rec.Body.String(), freshErrorCode)
 			}
 
@@ -541,9 +547,9 @@ func TestFreshAuthRefusesASignInAfterNow(t *testing.T) {
 	rec = e.sendWithSession(t, http.MethodPatch, sess, "/api/server/session-policy", `{"idleSeconds":900}`)
 
 	got := decodeErrorBody(t, rec)
-	if rec.Code != http.StatusUnauthorized || got.ErrorCode != freshErrorCode ||
+	if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode ||
 		!strings.HasPrefix(got.Reauthenticate, "/api/server/sign-in/corp?fresh=1") {
-		t.Fatalf("change from a sign-in after now = %d %s, want 401 with the path of a new sign-in", rec.Code,
+		t.Fatalf("change from a sign-in after now = %d %s, want 403 with the path of a new sign-in", rec.Code,
 			rec.Body.String())
 	}
 }
@@ -609,8 +615,8 @@ func TestFreshAuthRefusalWritesAFailureEntry(t *testing.T) {
 			}
 
 			rec = e.sendWithSession(t, w.method, e.staleSession(t), w.path, w.body)
-			if rec.Code != http.StatusUnauthorized {
-				t.Fatalf("stale session = %d %s, want 401", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("stale session = %d %s, want 403", rec.Code, rec.Body.String())
 			}
 
 			if got := failureEntries(t, e, w.scope, w.action); got != 2 {
@@ -628,4 +634,227 @@ type freshWrite struct {
 	body   string
 	scope  namespace.Name
 	action identity.Action
+}
+
+// TestFreshWindowZeroAsksEachTime proves that a window of 0 asks for a fresh
+// authentication at each guarded step: the create of an own token refuses a
+// session whose sign-in is fresh, and refuses a session with an old sign-in,
+// each with 403, the code and the path of a new sign-in.
+func TestFreshWindowZeroAsksEachTime(t *testing.T) {
+	t.Parallel()
+
+	e := newProviderEnv(t)
+	sess := e.freshSignIn(t)
+
+	_, err := e.store.UpdateSessionPolicy(t.Context(), func(old session.Policy) (session.Policy, audit.Entry, error) {
+		old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = 0, false, e.clock.Now()
+
+		return old, policyChangeEntry(e.clock.Now()), nil
+	})
+	if err != nil {
+		t.Fatalf("set the window to 0: %v", err)
+	}
+
+	// The step at age 0: the sign-in of the session is fresh, and the window
+	// of 0 refuses it.
+	rec := e.postWithSession(t, sess, "/api/server/caller/tokens", ownTokenBody())
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), freshErrorCode) ||
+		!strings.Contains(rec.Body.String(), "/api/server/sign-in/corp?fresh=1") {
+		t.Fatalf("own token at age 0 = %d %s, want 403 with the code and the path of a new sign-in",
+			rec.Code, rec.Body.String())
+	}
+
+	// The step with an old sign-in: the session stays active, and the refusal
+	// is the same.
+	stale := e.staleSession(t)
+
+	rec = e.postWithSession(t, stale, "/api/server/caller/tokens", ownTokenBody())
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), freshErrorCode) ||
+		!strings.Contains(rec.Body.String(), "/api/server/sign-in/corp?fresh=1") {
+		t.Fatalf("own token with an old sign-in = %d %s, want 403 with the code and the path of a new sign-in",
+			rec.Code, rec.Body.String())
+	}
+}
+
+// TestStaleErrorNamesSignInPath proves that the 403 of a step with no fresh
+// authentication holds the code mfa.fresh-step-required and the path of a new
+// sign-in: a valid session with a stale sign-in, and a valid session under a
+// window of 0, each get it. Each refused change stores no token.
+func TestStaleErrorNamesSignInPath(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+
+	// A valid session whose sign-in is older than the window.
+	checkStaleNamesSignInPath(t, e, e.staleSession(t))
+
+	// A valid session whose sign-in is fresh, under a window of 0.
+	fresh := e.signIn(t)
+
+	_, err := e.store.UpdateSessionPolicy(t.Context(), func(old session.Policy) (session.Policy, audit.Entry, error) {
+		old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = 0, false, e.clock.Now()
+
+		return old, policyChangeEntry(e.clock.Now()), nil
+	})
+	if err != nil {
+		t.Fatalf("set the window to 0: %v", err)
+	}
+
+	checkStaleNamesSignInPath(t, e, fresh)
+}
+
+// checkStaleNamesSignInPath sends the create of an own token with the session
+// cookie and fails unless the answer is 403 with the code
+// mfa.fresh-step-required and the path of a new sign-in, and the refused
+// change stores no token.
+func checkStaleNamesSignInPath(t *testing.T, e signInEnv, sess *http.Cookie) {
+	t.Helper()
+
+	const reauthenticate = "/api/server/sign-in/corp?fresh=1"
+
+	before := e.sendWithSession(t, http.MethodGet, sess, "/api/server/caller/tokens", "")
+	if before.Code != http.StatusOK {
+		t.Fatalf("list the tokens = %d %s, want 200", before.Code, before.Body.String())
+	}
+
+	rec := e.postWithSession(t, sess, "/api/server/caller/tokens", ownTokenBody())
+
+	got := decodeErrorBody(t, rec)
+	if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode ||
+		got.Reauthenticate != reauthenticate {
+		t.Fatalf("refusal = %d %s, want 403 with errorCode %s and reauthenticate %q", rec.Code,
+			rec.Body.String(), freshErrorCode, reauthenticate)
+	}
+
+	after := e.sendWithSession(t, http.MethodGet, sess, "/api/server/caller/tokens", "")
+	if after.Code != http.StatusOK || after.Body.String() != before.Body.String() {
+		t.Fatalf("tokens after the refusal = %d %s, want the list from before: %s", after.Code,
+			after.Body.String(), before.Body.String())
+	}
+}
+
+// TestFreshAuthRefusesAForgedFreshTimeHeader proves that no header can make
+// a stale session fresh: the fresh time comes only from the sealed session
+// cookie, so a request with a stale session and a header that claims a fresh
+// sign-in still gets 403 with the code and the path of a new sign-in.
+func TestFreshAuthRefusesAForgedFreshTimeHeader(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+	sess := e.staleSession(t)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/caller/tokens",
+		strings.NewReader(ownTokenBody()))
+	req.AddCookie(sess)
+
+	_, s := e.readSession(t, sess)
+	req.Header.Set(apiserver.CSRFHeader, s.CSRFToken)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	// The header claims a sign-in now. The server reads no fresh time from a
+	// header: it ignores this one, like each other header.
+	req.Header.Set("X-Dustpan-Auth-Time", e.clock.Now().UTC().Format(time.RFC3339))
+
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	got := decodeErrorBody(t, rec)
+	if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode ||
+		got.Reauthenticate != "/api/server/sign-in/corp?fresh=1" {
+		t.Fatalf("stale session with a forged fresh-time header = %d %s, want 403 with the code and the path",
+			rec.Code, rec.Body.String())
+	}
+}
+
+// TestFreshAuthRefusesAnOutOfRangeStoredWindow proves that a stored window
+// outside 0 and 60 to 900 seconds cannot extend the window or turn the check
+// off: the step refuses the session like a window of 0 does, with 403 and the
+// path of a new sign-in.
+func TestFreshAuthRefusesAnOutOfRangeStoredWindow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		d    time.Duration
+	}{
+		{"30 seconds", 30 * time.Second},
+		{"59 seconds", 59 * time.Second},
+		{"901 seconds", 901 * time.Second},
+		{"1000 seconds", 1000 * time.Second},
+		{"100000 seconds", 100000 * time.Second},
+		{"negative", -time.Second},
+		{"fraction of a second", 61*time.Second + time.Millisecond},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newSignInEnv(t, true)
+			sess := e.signIn(t)
+
+			_, err := e.store.UpdateSessionPolicy(t.Context(),
+				func(old session.Policy) (session.Policy, audit.Entry, error) {
+					old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = tc.d, false, e.clock.Now()
+
+					return old, policyChangeEntry(e.clock.Now()), nil
+				})
+			if err != nil {
+				t.Fatalf("store an out-of-range window: %v", err)
+			}
+
+			rec := e.postWithSession(t, sess, "/api/server/caller/tokens", ownTokenBody())
+
+			got := decodeErrorBody(t, rec)
+			if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode ||
+				got.Reauthenticate != "/api/server/sign-in/corp?fresh=1" {
+				t.Fatalf("own token with window %s = %d %s, want 403 with the code and the path",
+					tc.d, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestFreshAuthFailsClosedWhenThePolicyReadFails proves that a store that
+// cannot read the session policy refuses a guarded step: the server fails
+// closed with the 403 of a step with no fresh authentication, and the refusal
+// names the path of a new sign-in.
+func TestFreshAuthFailsClosedWhenThePolicyReadFails(t *testing.T) {
+	t.Parallel()
+
+	// The first reads answer the sign-in and the read of the session of the
+	// harness; each later read fails, as a store that is down does.
+	var down atomic.Bool
+
+	e := newSignInEnvWith(t, signInEnvOptions{
+		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
+		hostile: nil, passwords: nil,
+		failPolicyRead: func() error {
+			if down.Load() {
+				return errPolicyStoreDown
+			}
+
+			return nil
+		},
+	})
+
+	sess := e.signIn(t)
+
+	_, s := e.readSession(t, sess)
+	down.Store(true)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/caller/tokens",
+		strings.NewReader(ownTokenBody()))
+	req.AddCookie(sess)
+	req.Header.Set(apiserver.CSRFHeader, s.CSRFToken)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	got := decodeErrorBody(t, rec)
+	if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode ||
+		got.Reauthenticate != "/api/server/sign-in/corp?fresh=1" {
+		t.Fatalf("own token with a failed policy read = %d %s, want 403 with the code and the path",
+			rec.Code, rec.Body.String())
+	}
 }

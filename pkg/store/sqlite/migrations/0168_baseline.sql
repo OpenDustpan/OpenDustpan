@@ -123,7 +123,7 @@ CREATE TABLE state_versions (
     lock_id               TEXT    NOT NULL DEFAULT '',
     created_at_ms         INTEGER NOT NULL,
     finalized_at_ms       INTEGER NOT NULL DEFAULT 0
-, restored_from TEXT NOT NULL DEFAULT '', sealed INTEGER NOT NULL DEFAULT 0, sensitive_marks BLOB, fenced_by TEXT NOT NULL DEFAULT '', unlocked_write INTEGER NOT NULL DEFAULT 0, origin_job TEXT NOT NULL DEFAULT '') STRICT;
+, restored_from TEXT NOT NULL DEFAULT '', sealed INTEGER NOT NULL DEFAULT 0, sensitive_marks BLOB, fenced_by TEXT NOT NULL DEFAULT '', unlocked_write INTEGER NOT NULL DEFAULT 0, origin_job TEXT NOT NULL DEFAULT '', client_encrypted INTEGER) STRICT;
 
 CREATE TABLE backups (
     id            TEXT    NOT NULL PRIMARY KEY,

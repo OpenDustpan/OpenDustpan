@@ -345,7 +345,8 @@ func pendingStateWrite(t *testing.T, w workspace.Workspace, jobID string) worksp
 		// The store does not check the MD5 of a state version, so a fixed value is enough.
 		MD5: [16]byte{1, 2, 3}, Serial: 1, Size: 0, Force: false, UnlockedWrite: true,
 		Sealed: true, SensitiveMarks: nil, RestoredFrom: "", FenceBy: "",
-		Origin: identity.StateOrigin{Job: jobID, Commit: ""},
+		ClientEncrypted: workspace.ClientEncryptedNo,
+		Origin:          identity.StateOrigin{Job: jobID, Commit: ""},
 	}
 }
 
@@ -363,6 +364,7 @@ func finalizeStateWrite(
 
 	sv.Status = workspace.StatusFinalized
 	sv.FinalizedAt = time.UnixMilli(stateWriteAtMs + 1000).UTC()
+	sv.ClientEncrypted = workspace.ClientEncryptedNo
 	sv.Content = blob.Key("namespaces/" + ns.ID.String() + "/tofu/" + sv.Workspace.String() + "/" +
 		sv.ID.String() + "/a1")
 	sv.Size = int64(len(stateWriteContent))

@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 )
@@ -41,7 +42,11 @@ func checkForm(password string) (string, error) {
 		return "", fmt.Errorf("%w: the password is not valid UTF-8", localuser.ErrPasswordForm)
 	}
 
-	if strings.ContainsFunc(password, unicode.IsControl) {
+	// A password may hold a format character (U+200D joins the parts of an
+	// emoji), so this check refuses control characters only and stays as
+	// strict as the old password check. Every other text that the server
+	// keeps refuses all hidden runes.
+	if strings.ContainsFunc(password, ident.IsControlRune) {
 		return "", fmt.Errorf("%w: the password holds a control character", localuser.ErrPasswordForm)
 	}
 

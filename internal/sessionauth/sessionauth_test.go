@@ -385,7 +385,7 @@ func TestOnDevRefused(t *testing.T) {
 
 // TestFresh proves the freshness rule of a sign-in: the age is at most the
 // window, a sign-in after now has a negative age and is never fresh, and a
-// window of 0 turns the check off.
+// window of 0 asks at each step, so no sign-in passes.
 func TestFresh(t *testing.T) {
 	t.Parallel()
 
@@ -405,7 +405,7 @@ func TestFresh(t *testing.T) {
 		{name: "one millisecond after now", authTime: now.Add(time.Millisecond), window: window, want: false},
 		{name: "an hour after now", authTime: now.Add(time.Hour), window: window, want: false},
 		{name: "a zero sign-in time", authTime: time.Time{}, window: window, want: false},
-		{name: "window of 0 passes an old sign-in", authTime: now.Add(-24 * time.Hour), window: 0, want: true},
+		{name: "window of 0 refuses an old sign-in", authTime: now.Add(-24 * time.Hour), window: 0, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -414,5 +414,44 @@ func TestFresh(t *testing.T) {
 				t.Fatalf("Fresh(now, %v, %v) = %v, want %v", tc.authTime, tc.window, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestFreshWindowZeroAsksEachTime proves that a window of 0 refuses each
+// sign-in: one that happened now, and one that is a day old. No value turns
+// the check off.
+func TestFreshWindowZeroAsksEachTime(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.October, 21, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		name     string
+		authTime time.Time
+	}{
+		{name: "a sign-in at age 0", authTime: now},
+		{name: "a sign-in of one day", authTime: now.Add(-24 * time.Hour)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if sessionauth.Fresh(now, tc.authTime, 0) {
+				t.Fatalf("Fresh(now, %v, 0) = true, want false: a window of 0 asks at each step", tc.authTime)
+			}
+		})
+	}
+}
+
+// TestFreshBoundaryEqualsWindow proves that a sign-in whose age is exactly
+// the window is fresh: the window is inclusive.
+func TestFreshBoundaryEqualsWindow(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.October, 21, 12, 0, 0, 0, time.UTC)
+
+	for _, window := range []time.Duration{time.Minute, 15 * time.Minute, time.Hour} {
+		if !sessionauth.Fresh(now, now.Add(-window), window) {
+			t.Fatalf("Fresh(now, now-%s, %s) = false, want true: the age of the window is fresh", window, window)
+		}
 	}
 }

@@ -487,6 +487,7 @@ func portableSpec() []PortableTable {
 				{Name: "fenced_by", Kind: KindText},
 				{Name: "unlocked_write", Kind: KindBool},
 				{Name: "origin_job", Kind: KindText},
+				{Name: "client_encrypted", Kind: KindBool},
 			},
 		},
 		{

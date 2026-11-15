@@ -2,10 +2,9 @@ package job
 
 import (
 	"fmt"
-	"strings"
 	"unicode/utf8"
 
-	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
@@ -42,7 +41,7 @@ func (r *TriggerRef) Validate() error {
 	switch {
 	case r.Saver == "" || len(r.Saver) > MaxTriggerSaverBytes:
 		return fmt.Errorf("%w: the saver of a trigger has 1 to %d bytes", ErrInvalid, MaxTriggerSaverBytes)
-	case !utf8.ValidString(r.Saver) || strings.ContainsFunc(r.Saver, audit.IsHiddenRune):
+	case !utf8.ValidString(r.Saver) || ident.HasHidden(r.Saver):
 		return fmt.Errorf("%w: the saver of a trigger has a byte that is not allowed", ErrInvalid)
 	case identity.IsNamespaceServiceSubject(r.Saver):
 		return fmt.Errorf("%w: a namespace service principal cannot be the saver of a trigger", ErrInvalid)

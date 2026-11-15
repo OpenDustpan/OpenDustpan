@@ -20,7 +20,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -465,16 +464,17 @@ func (e Entry) MarshalJSON() ([]byte, error) {
 }
 
 // validText reports whether s is valid UTF-8 within maxBytes, with no
-// control character.
+// control, format or separator character.
 func validText(s string, maxBytes int) bool {
-	return validRunes(s, maxBytes, unicode.IsControl)
+	return validRunes(s, maxBytes, ident.IsHiddenRune)
 }
 
 // validMultilineText reports whether s is valid UTF-8 within maxBytes, with
-// no control character other than a line feed and a tab.
+// no control, format or separator character other than a line feed and a
+// tab.
 func validMultilineText(s string, maxBytes int) bool {
 	return validRunes(s, maxBytes, func(r rune) bool {
-		return unicode.IsControl(r) && r != '\n' && r != '\t'
+		return ident.IsHiddenRuneExcept(r, '\n', '\t')
 	})
 }
 

@@ -1281,6 +1281,7 @@ type StateVersion struct {
 	FencedBy          string
 	UnlockedWrite     bool
 	OriginJob         string
+	ClientEncrypted   sql.NullInt64
 }
 
 type StoreCheck struct {

@@ -440,7 +440,8 @@ func (h *Handler) applySettings(
 // change that reduces security. An installation with no console sign-in has
 // no authentication step to ask for, so the change needs none. Otherwise a
 // request with an access token answers 403 with mfa.fresh-step-required, and
-// a console session whose sign-in is too old answers 401.
+// a console session whose sign-in is too old answers the same 403 with the
+// path of a new sign-in.
 func (h *Handler) requireFreshStep(r *http.Request) error {
 	if h.signIn == nil {
 		return nil
@@ -473,7 +474,7 @@ func (h *Handler) refuseSettings(
 	coded, ok := errors.AsType[*codedError](err)
 	refused := ok && coded.status < http.StatusInternalServerError && coded.status != http.StatusPreconditionFailed
 
-	// A sign-in that is too old refuses the change with 401, and it is a
+	// A sign-in that is too old refuses the change with 403, and it is a
 	// refusal of the caller as well.
 	if refused || errors.Is(err, errReauthenticate) {
 		h.appendObjectChange(r, p, obj, serverChange{
