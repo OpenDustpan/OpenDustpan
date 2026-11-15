@@ -140,7 +140,7 @@ and the error kind, and the next run tries again.
 When an expiry run purges units, the server logs one line with the count and the
 oldest purge time among them.
 
-`POST /api/server/deleted-units/sweep` runs the retention expiry now. It needs the action
+`POST /api/dustpan/v1/deleted-units/sweep` runs the retention expiry now. It needs the action
 `server:maintenance` on the installation. Each purge writes its audit entry
 with you as the subject. While another expiry run continues on the server, the route
 answers 409 at once. Try again later. The answer names each purged unit and

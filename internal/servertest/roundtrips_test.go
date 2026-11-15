@@ -1395,6 +1395,9 @@ func backupModel() costModel {
 // The fixed part also holds unitStateTrips: the restore derives the state
 // version of each unit from the restored rows.
 //
+// The fixed part also holds serverAuditLockTrips: the swap transaction takes
+// the advisory lock of the server audit scope.
+//
 // The fixed part also holds checkpointSupersedesTrips: the table holds no
 // marks in the run, so the restore makes 2 round trips fewer for it than the
 // model gives a table.
@@ -1402,7 +1405,7 @@ func restoreModel() costModel {
 	return costModel{
 		fixed: 334 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
-			checkpointSupersedesTrips,
+			serverAuditLockTrips + checkpointSupersedesTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1419,6 +1422,11 @@ func restoreModel() costModel {
 // tables of state versions are gone. The measured runs at 3 and at 30 units
 // both hold these 5 round trips, so the count does not grow with the units.
 const unitStateTrips = 5
+
+// serverAuditLockTrips is the number of round trips of the advisory lock of the
+// server audit scope in the swap transaction: one statement, once for each
+// attempt of the swap step. It does not grow with the units or the tables.
+const serverAuditLockTrips = 1
 
 // forgeStripClassTrips is the number of round trips of the two classes of the
 // Git host links that the dev strip counts for each principal class: the links

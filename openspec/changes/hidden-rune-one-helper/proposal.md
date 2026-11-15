@@ -4,7 +4,9 @@ version: 1
 
 Issue: #3164.
 
-Short form: tech debt. Owner lane: the lane that holds #2584 (branch `arch/f1-hidden-runes`). Starts when #2584 is on main.
+Short form: tech debt. Owner lane: D2.
+
+Waits for: #2584
 
 ## Problem
 
