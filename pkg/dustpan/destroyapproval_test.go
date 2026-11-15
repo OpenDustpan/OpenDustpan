@@ -158,6 +158,47 @@ func TestDestroyApprovalNeedsFreshStep(t *testing.T) {
 	}
 }
 
+func TestDestroyApprovalServiceRefusesTokenAndStaleProof(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		edit func(*job.Actor)
+	}{
+		{"access token", func(a *job.Actor) { a.Principal.Credential = identity.CredentialAccessToken }},
+		{"agent credential", func(a *job.Actor) { a.Agent = "agent" }},
+		{"stale proof", func(a *job.Actor) { a.AuthAt = a.AuthAt.Add(-job.ConfirmFreshness - time.Millisecond) }},
+		{"no fresh step", func(a *job.Actor) { a.ConfirmAuth, a.AuthAt = "", time.Time{} }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			at := time.Date(2026, time.November, 14, 12, 0, 0, 0, time.UTC)
+			r := destroyApprovalService(t, at)
+			var a job.Actor
+			a.Principal.Subject, a.Principal.Admin = "approver", true
+			a.Principal.Kind, a.Principal.Credential = identity.KindPerson, identity.CredentialSession
+			a.ConfirmAuth, a.AuthAt = job.ConfirmAuthMFA, at
+			tc.edit(&a)
+
+			// The handler is not called, and the store allows every write.
+			// Only the service can refuse these approvals.
+			var binding job.PlanBinding
+			_, err := r.service.Approve(t.Context(), a, r.store.current.ID, job.VerdictApprove, binding, "")
+			if !errors.Is(err, job.ErrAuthStale) {
+				t.Errorf("Approve = %v; want ErrAuthStale", err)
+			}
+
+			approvals := len(r.store.current.Phases[0].Approvals)
+			if r.store.writes != 0 || approvals != 0 {
+				t.Errorf("writes = %d, approvals = %d; want no write or approval", r.store.writes, approvals)
+			}
+		})
+	}
+}
+
 func TestDestroyApprovalRefusesMalformedSessionProof(t *testing.T) {
 	t.Parallel()
 
