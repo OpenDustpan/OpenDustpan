@@ -34,6 +34,7 @@ docs/guides/quickstart.md
 docs/guides/roles-and-grants.md
 docs/guides/s3-blobs.md
 docs/guides/saved-views.md
+docs/guides/settings.md
 docs/guides/several-instances.md
 docs/guides/slack-notifications.md
 docs/guides/soak.md
