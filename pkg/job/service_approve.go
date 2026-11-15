@@ -436,5 +436,6 @@ func (s *service) approvalEntry(j *Job, a Actor, ap *Approval, auth ConfirmAuth,
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: j.Spec.Unit.UnitID(),
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: string(a.Principal.Kind), JobID: "",
 		Reason: ap.Comment,
+		Origin: nil,
 	}
 }

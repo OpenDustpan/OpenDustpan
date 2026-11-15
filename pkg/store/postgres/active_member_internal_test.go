@@ -17,6 +17,7 @@ func activeMemberEntry() audit.Entry {
 		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "active-member-test",
 		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 }
 
