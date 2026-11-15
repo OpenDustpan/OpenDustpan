@@ -529,7 +529,45 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 	env.write(tb, filepath.Join(env.project, "Pulumi.yaml"), pulumiProject)
 	env.writeTofuFiles(tb, proxy)
 
+	// The installation API made the first namespace, and it adds no
+	// catch-all placement rule, so the harness adds the rule that the
+	// in-process server gets from the API create. The check reads the rule
+	// list first: an old binary that predates the placement routes places
+	// every unit without a rule, so it gets no seed.
+	if placementRoutesServed(ctx, tb, env, Namespace) {
+		env.SeedCatchAllPlacement(ctx, tb, Namespace)
+	}
+
 	return env
+}
+
+// placementRoutesServed reports whether the serving binary answers the
+// placement rule list of ns. A caller seeds the catch-all rule only when it
+// does. A binary that predates the placement routes places every unit
+// without a rule, so the seed is left out and the test says so. Any other
+// status fails the test: the run cannot judge the binary from it.
+func placementRoutesServed(ctx context.Context, tb testing.TB, env *Env, ns string) bool {
+	tb.Helper()
+
+	path := "/api/dustpan/v1/namespaces/" + ns + "/placement-rules"
+
+	status, body, err := env.serverStatus(ctx, env.token, http.MethodGet, path, "")
+	if err != nil {
+		tb.Fatalf("GET %s: %v", path, err)
+	}
+
+	switch status {
+	case http.StatusOK:
+		return true
+	case http.StatusNotFound:
+		tb.Logf("the binary answers %d for %s: it predates the placement routes", status, path)
+
+		return false
+	default:
+		tb.Fatalf("GET %s answers %d, want %d or %d (%s)", path, status, http.StatusOK, http.StatusNotFound, body)
+
+		return false
+	}
 }
 
 // SetServerBinary switches the binary the next StartServer and RunBinary
