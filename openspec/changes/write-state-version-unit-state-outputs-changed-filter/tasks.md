@@ -5,7 +5,7 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Add a failing dispatcher test in NEW file pkg/trigger/upstream_outputs_changed_test.go: unchanged outputs skip, changed outputs start, missing prior starts, mixed when values, retry replays the same pair. It drives Dispatcher.Upstream in process. BLOCKED by no route: the test calls the port with no credential. Check: `go test ./pkg/trigger/... -run TestUpstreamOutputsChangedSkipsWhenDigestMatches` fails on main.
-- [ ] 1.2 Add a failing store test in NEW file pkg/store/sqlite/unit_state_outputs_digest_test.go: publishUnitState stores the digest without secret values for both tool shapes, with the secret-mark flip case. In process; no route or credential. Check: `go test ./pkg/store/... -run TestPublishUnitStateStoresRootOutputsDigest` fails on main.
+- [ ] 1.2 Add a failing store test in NEW file pkg/store/sqlite/unit_state_outputs_digest_test.go and the same test in NEW file pkg/store/postgres/unit_state_outputs_digest_test.go (publishUnitState is in both dialects): publishUnitState stores the digest without secret values for both tool shapes, with the secret-mark flip case. In process; no route or credential. Check: `go test ./pkg/store/... -run TestPublishUnitStateStoresRootOutputsDigest` fails on main.
 - [ ] 1.3 Add a failing trigger save test in NEW file internal/servertest/trigger_when_test.go through `PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` with a personal access token: unknown when refused, default applied, change reads back. Check: `go test ./pkg/trigger/... -run TestSaveTriggerWhenValue` fails on main.
 
 ## 2. Build
@@ -16,7 +16,7 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 

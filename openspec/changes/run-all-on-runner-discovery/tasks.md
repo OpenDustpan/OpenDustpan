@@ -15,6 +15,9 @@
 - [ ] 2.2 Write audit entries for discovery start, complete, failed, and refused in NEW file pkg/audit/discovery.go through ANY /api/audit/entries with an access token passing the audit read gate. Check: Read ANY /api/audit/entries with an access token and check the start and complete entries.
 - [ ] 2.3 Add repeat check on the idempotency key for the discovery record in NEW file pkg/runner/discovery_idempotency.go through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: Run discovery twice with the same Idempotency-Key header and check one discovery record.
 
+- [ ] 2.4 SECURITY. Build the launcher sandbox path containment in NEW file pkg/launcher/discovery_path.go. The code cleans the path, resolves symlinks and `..` segments, and denies a path outside the working directory before any read. Check: a discovery path with `..` or a symlink to a place outside the working directory returns the NEW error code `run.discovery-refused` and no file is read.
+- [ ] 2.5 SECURITY. Add a hostile test sent straight to the launcher in NEW file pkg/launcher/discovery_path_test.go. Check: TestLauncherRefusesEscapingDiscoveryPath calls the launcher function directly with a `..` path and a symlinked include that points outside the working directory, and the launcher refuses both.
+
 ## 3. Definition of done
 
 - [ ] 3.1 Add e2e step against the real runner and the real directory over 3 units in NEW file e2e/run_all_on_runner_discovery_test.go through ANY /runner/v1 with a runner token passing the runner authorization gate. Check: Real runner claims a wrapper job over 3 Terragrunt units through ANY /runner/v1 with a runner token and the preview lists 3 unit references with no state version. Confirmed by: CI (the agent writes the e2e test).

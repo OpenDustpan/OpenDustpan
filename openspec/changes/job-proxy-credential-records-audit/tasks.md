@@ -15,6 +15,9 @@
 - [ ] 2.4 Write phase aggregation and the idempotent audit entry (finish-phase) in NEW file pkg/audit/proxyphase.go. Check: `go test ./pkg/audit/... -run TestProxyPhaseAudit -count=1` passes.
 - [ ] 2.5 Enforce the plan-phase block with method-based write check in NEW file pkg/jobproxy/planblock.go (NEW planEffectiveRules and NEW newPlanEffectiveRules). Check: `go test ./pkg/jobproxy/... -run TestPlanPhaseWriteBlock -count=1` passes.
 
+- [ ] 2.6 SECURITY. Build the header strip and the per-redirect host check in NEW file pkg/jobproxy/requestcheck.go. The proxy removes job credential headers and checks each redirect host against the effective rule set. Check: `go test ./pkg/jobproxy/... -run TestRequestCheckHostile -count=1` passes.
+- [ ] 2.7 SECURITY. Add a hostile test in NEW file pkg/jobproxy/requestcheck_test.go, test name TestRequestCheckHostile. The test sends a forged Authorization header and a redirect to an unlisted host straight to the request check. Check: `go test ./pkg/jobproxy/... -run TestRequestCheckHostile -count=1` passes and the test fails when the strip or the redirect check is removed.
+
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.

@@ -17,9 +17,14 @@
 - [ ] 2.4 Replace every old admin path under the runners prefix (runnerAPIPrefix) with the new path under /api/dustpan/v1/namespaces/{namespace} in pkg/dustpan/maintenance.go:68 (runnerAPIPrefix), pkg/dustpan/maintenance.go:232, pkg/dustpan/dustpan.go:3694 and the error text at pkg/dustpan/jobservice.go:666. The /runner/v1 protocol does not move. Check: `rg -n 'api/runners' pkg internal` finds no old admin path
 - [ ] 2.5 Update the tests that name the old paths: pkg/dustpan/maintenance_reducing_internal_test.go, pkg/dustpan/runners_maintenance_test.go, pkg/dustpan/route_actions_test.go, pkg/dustpan/apidesc_classes_test.go, internal/servertest/job_pool_roundtrip_test.go and the tests in internal/api/runnerapi that name the old paths. Run the acceptance path with the existing route GET /api/runners/{}/pools before the move and the NEW route GET /api/dustpan/v1/namespaces/{namespace}/runner-pools after it, with a personal token that holds namespace:read-runners. Check: `go test ./pkg/dustpan/... ./internal/servertest/... ./internal/api/runnerapi/...` passes
 
+- [ ] 2.6 SECURITY. Add the grant check at the point of use in the service in pkg/runner/coordinator.go for each pool, runner and join-token change. The check refuses a denied grant before any write and before any audit entry. Check: `go test ./pkg/runner/...` passes
+- [ ] 2.7 SECURITY. Write each pool change with the namespace fence in the same transaction in the store of pool rows in pkg/store/internal/runnerstore/runnerstore.go (NEW file). A write for another namespace changes no row. Check: `go test ./pkg/store/...` passes on both dialects
+- [ ] 2.8 SECURITY. Add a hostile service-level test in NEW file pkg/runner/pool_routes_service_test.go. Name TestPoolService_DeniedGrantChangesNothing as NEW. It calls the coordinator with a denied grant and checks that no pool row and no audit entry persist. Check: TestPoolService_DeniedGrantChangesNothing passes
+- [ ] 2.9 SECURITY. Add a hostile store test in NEW file pkg/store/internal/runnerstore/runnerstore_fence_test.go. Name TestPoolStore_CrossNamespaceWriteRefused as NEW. It attempts a cross-namespace pool write on both dialects and checks refusal with no row change. Check: TestPoolStore_CrossNamespaceWriteRefused passes on both dialects
+
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
