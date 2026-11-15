@@ -224,13 +224,24 @@ func (h *Handler) updatePlacementRule(
 	h.writeJSON(ctx, w, http.StatusOK, placementRuleOf(&rule))
 }
 
+// writePlacementWriteRefusal answers a failed write of a placement rule. It
+// records a denial only when the failure is a refusal that a caller can
+// repeat: a rule that names a collection that the namespace does not hold, a
+// body with no collection ID, and a collection ID of an invalid form. A
+// repeatable refusal goes through the shared denial limiter. Every other
+// error (a body that fails to decode, a rule that does not exist, an internal
+// error) gets only the error answer, with no denial record.
 func (h *Handler) writePlacementWriteRefusal(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, err error,
 ) {
-	h.guard.Record(r.Context(), r, p, refusal.Denial{
-		Action: identity.ActionNamespaceManagePlacementRules, Object: obj, Reason: "placement rule write failed",
-		ReasonWithin: nil, Window: 0,
-	})
+	if errors.Is(err, collection.ErrPlacementCollectionMissing) ||
+		errors.Is(err, errPlacementCollectionIDRequired) || errors.Is(err, errPlacementCollectionID) {
+		h.guard.Record(r.Context(), r, p, refusal.Denial{
+			Action: identity.ActionNamespaceManagePlacementRules, Object: obj, Reason: "placement rule write failed",
+			ReasonWithin: nil, Window: 0,
+		})
+	}
+
 	h.writeError(r.Context(), w, err)
 }
 

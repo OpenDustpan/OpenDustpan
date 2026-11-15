@@ -22,12 +22,15 @@ import (
 )
 
 // memPlacements is a PlacementStore in memory. It knows the collections
-// payments and sandbox, and it keeps the audit entries of its writes.
+// payments and sandbox, and it keeps the audit entries of its writes. A set
+// createErr fails every create, to test a write that fails for no reason a
+// sentinel names.
 type memPlacements struct {
-	mu      sync.Mutex
-	rules   []collection.Rule
-	entries []audit.Entry
-	denials *testAudit
+	mu        sync.Mutex
+	rules     []collection.Rule
+	entries   []audit.Entry
+	denials   *testAudit
+	createErr error
 }
 
 func (m *memPlacements) CreatePlacementRule(
@@ -38,6 +41,10 @@ func (m *memPlacements) CreatePlacementRule(
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.createErr != nil {
+		return m.createErr
+	}
 
 	if r.CollectionID != "col-payments" && r.CollectionID != "col-sandbox" {
 		return collection.ErrPlacementCollectionMissing
@@ -173,7 +180,7 @@ func newPlacementRouteHandler(t *testing.T, authz identity.Authorizer) (testHand
 	seedNamespace(t, nsStore)
 
 	log := newTestAudit()
-	store := &memPlacements{mu: sync.Mutex{}, rules: nil, entries: nil, denials: log}
+	store := &memPlacements{mu: sync.Mutex{}, rules: nil, entries: nil, denials: log, createErr: nil}
 
 	svc, err := collection.NewPlacementService(collection.PlacementConfig{Store: store, Namespaces: nsStore, Now: nil})
 	if err != nil {
