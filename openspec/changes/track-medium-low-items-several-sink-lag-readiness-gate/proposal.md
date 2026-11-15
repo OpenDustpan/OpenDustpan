@@ -11,7 +11,7 @@ Issue: #718.
 The user path this change must make work:
 
 1. **Server start.** Start two instances on one PostgreSQL database with DUSTPAN_TEST_POSTGRES_URL
-2. **API.** Run restore to swap through ANY /api/server/restores/{} with access token, then watch drop-old-live step retry on held lock
+2. **API.** Run restore to swap through ANY /api/dustpan/v1/restores/{} with access token, then watch drop-old-live step retry on held lock
 3. **API.** Query readiness while sink lags; read reason for not ready
 4. **Docs page.** Follow guide for restore swap waits and readiness gate
 

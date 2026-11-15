@@ -55,7 +55,7 @@ func (e *expiryWarner) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	e.once.Do(func() {
-		days := int(expiresAt.Sub(e.now()) / hoursPerDay)
+		days := accesstoken.DaysUntil(expiresAt, e.now())
 
 		//nolint:errcheck // A lost warning on stderr does not change the result of the command.
 		fmt.Fprintf(e.out,
@@ -66,9 +66,6 @@ func (e *expiryWarner) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	return resp, nil
 }
-
-// hoursPerDay is one day, for the count of days of the warning.
-const hoursPerDay = 24 * time.Hour
 
 // parseExpiry reads the RFC 3339 time of the expiry header.
 func parseExpiry(raw string) (time.Time, bool) {

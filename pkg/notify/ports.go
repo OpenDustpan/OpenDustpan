@@ -242,9 +242,10 @@ func ValidDeliveryID(id string) bool {
 // target of the sink. Principal is the principal whose access decides the
 // delivery: the creator of the subscription, or the recipient of a notice.
 // The dispatcher checks it again before each attempt (BeforeAttempt).
-// LastError holds the Class of the error of the last attempt, and nothing
-// else. Owner and LeaseUntil are the claim of the delivery: the store sets
-// them in Claim and clears them in Record.
+// Redeliveries is the count of manual redeliveries, and Attempts is the
+// count of automatic attempts. LastError holds the Class of the error of the
+// last attempt, and nothing else. Owner and LeaseUntil are the claim of the
+// delivery: the store sets them in Claim and clears them in Record.
 // Deliveries are not ordered: a receiver orders notifications by their
 // scope and sequence.
 type Delivery struct {
@@ -257,6 +258,7 @@ type Delivery struct {
 	Principal    string
 	State        DeliveryState
 	Attempts     int
+	Redeliveries int
 	NextAt       time.Time
 	LastError    string
 	DeliveredAt  time.Time
@@ -267,8 +269,8 @@ type Delivery struct {
 
 // Validate returns ErrInvalid for a delivery with no ID of the prefix
 // DeliveryIDPrefix, no notification ID of the prefix IDPrefix, no scope, no
-// principal, an unknown state, neither a subscription nor a contact, or a
-// LastError that is not empty or a Class.
+// principal, an unknown state, neither a subscription nor a contact, a
+// negative count of redeliveries, or a LastError that is not empty or a Class.
 func (d Delivery) Validate() error {
 	switch {
 	case !ValidDeliveryID(d.ID) || !strings.HasPrefix(d.Notification, IDPrefix):
@@ -278,6 +280,8 @@ func (d Delivery) Validate() error {
 		return fmt.Errorf("%w: a delivery needs a scope and a principal", ErrInvalid)
 	case d.Subscription == "" && d.Contact == "":
 		return fmt.Errorf("%w: a delivery needs a subscription or a contact", ErrInvalid)
+	case d.Redeliveries < 0:
+		return fmt.Errorf("%w: the redeliveries of a delivery are not negative", ErrInvalid)
 	case !validState(d.State):
 		return fmt.Errorf("%w: unknown delivery state %q", ErrInvalid, d.State)
 	case !validClass(d.LastError):
@@ -406,16 +410,22 @@ type Deliveries interface {
 	CountBefore(ctx context.Context, scope namespace.Name, id string, after *DeliveryCursor, maxCount int) (int, error)
 	// Redeliver makes the delivery id pending again with no attempts and
 	// no claim, and appends e. Only a stopped delivery (delivered,
-	// abandoned or skipped) can be sent again. A delivery of a
-	// subscription can be sent again only while the subscription exists,
-	// is active, sends to the sink of the delivery, and has the principal
-	// of the delivery as its CreatedBy. So a delivery from before a change
-	// of the sink or of the subscription never goes to the new place. It
-	// returns ErrNotFound for an unknown delivery or a delivery of another
-	// scope than fence; ErrConflict for a pending delivery, which a claim
-	// can hold, and for a delivery whose subscription fails these
-	// conditions; namespace.ErrFenced and namespace.ErrNotFound.
-	Redeliver(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
+	// abandoned or skipped) can be sent again. now is the time of the
+	// call. A delivery of a subscription can be sent again only while the
+	// subscription exists, is active, sends to the sink of the delivery,
+	// and has the principal of the delivery as its CreatedBy. So a
+	// delivery from before a change of the sink or of the subscription
+	// never goes to the new place. It returns ErrRedeliverLimit when the
+	// stored delivery has at least MaxAttempts manual redeliveries. The
+	// limit check comes before the too-soon check. It then appends no entry
+	// and changes no row. It returns ErrTooSoon, as a *TooSoonError with the
+	// wait, when now is before RedeliverableAt of the stored delivery; it
+	// then appends no entry and changes no row. It returns ErrNotFound for an
+	// unknown delivery or a delivery of another scope than fence;
+	// ErrConflict for a pending delivery, which a claim can hold, and for a
+	// delivery whose subscription fails these conditions;
+	// namespace.ErrFenced and namespace.ErrNotFound.
+	Redeliver(ctx context.Context, id string, now time.Time, fence namespace.Fence, e audit.Entry) error
 }
 
 // DeliveryCursor names one delivery of the history of a subscription: the

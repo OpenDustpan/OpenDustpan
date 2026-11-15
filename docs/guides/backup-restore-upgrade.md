@@ -360,8 +360,8 @@ restore applies. These writes run, each with its audit entry:
   until an administrator enables it again. The check of a disable in normal
   operation stays in force: the caller holds every action that the grants of
   the principal give. The server refuses the disable of the last enabled
-  break-glass account with 409 and the error code `principal.last-break-glass`,
-  also in maintenance mode. Keep a second enabled break-glass account first
+  break-glass account with 409 and the error code
+  `principal.no-working-break-glass`, also in maintenance mode. Keep a second enabled break-glass account first
   (see [Keep a break-glass account](break-glass-accounts.md)).
 - the expiry of a temporary administrator, which ends the record, disables the
   principal, revokes its grants and tokens and ends its group memberships.
@@ -393,8 +393,11 @@ kind that the server does not know, or a target that is not an ID) changes
 nothing and gets an entry with the outcome `denied`. The restore skips a
 disable that would leave the restored data with no enabled break-glass
 account. It keeps that account enabled and writes an entry with the outcome
-`denied` and the reason `principal.last-break-glass` (see
-[Keep a break-glass account](break-glass-accounts.md)).
+`denied` and the reason `principal.no-working-break-glass` (see
+[Keep a break-glass account](break-glass-accounts.md)). The restore stops
+with the code `principal.no-working-break-glass` when it lowers the count of
+working break-glass accounts and leaves fewer than two
+(see [Other paths](break-glass-accounts.md#other-paths)).
 
 The server records only the revocations of the current stay in maintenance mode. A
 new enter starts a new stay. A revocation that you made in normal
@@ -482,6 +485,53 @@ A recorded minimum is always `vMAJOR.MINOR.PATCH`. Older binaries refuse a minim
 For several nodes, start one new node first. The first new node migrates the database. An older node that still runs does not stop. Its next start fails only when the new schema raised the minimum above its version. Then start the other new nodes.
 
 The project supports no downgrade. There are no down migrations. To go back, restore the backup made before the upgrade through the API. Then start the older binary. When the older binary is below the minimum binary version of the schema, it refuses to start. The error names the binary version and the minimum.
+
+## Run the mixed-version matrix
+
+A rolling deploy runs the new binary and the binaries of the last releases on
+one database. The matrix proves that the new schema serves them: the last 2
+release tags that are ancestors of HEAD run next to the new binary, and the
+real Pulumi CLI and OpenTofu write through each old binary.
+
+Run the matrix before a release:
+
+```sh
+make mixed-version-test
+```
+
+The matrix runs on SQLite and on PostgreSQL. Set `DUSTPAN_TEST_POSTGRES_URL`
+to add the PostgreSQL runs. On SQLite one binary serves the file at a time:
+the current binary stops, the old binary takes the file, the CLIs write
+through it, and the current binary starts again. On PostgreSQL the old binary
+and the new binary serve at the same time, and one database also starts the
+old binary first, to prove both start orders.
+
+The matrix prints the tags that ran, with their count:
+
+```text
+mixed-version matrix ran over 2 tags: v0.1.0, v0.2.0
+```
+
+Before the first tag no release tag exists. The matrix then reports zero old
+binaries, writes a warning to the workflow run, and runs the same steps
+against a second process of the current binary. It never skips the step
+silently.
+
+Each release tag must hold the minimum binary version check. A tag without
+the check gives no refusal signal, so the matrix fails and names the tag.
+
+A shallow clone hides the tags. When the clone is shallow and shows no
+release tag, the matrix fails instead of reporting zero old binaries. Run
+`git fetch --tags` before the run.
+
+### Errors of the matrix
+
+| Error | What the answer says | The command that helps |
+| --- | --- | --- |
+| An old binary refuses its writes on the new schema. | The old binary read a higher minimum row and refused its own writes with error code `schema.binary-below-minimum`. Rebuild the binaries and run the matrix again. | `make mixed-version-test` |
+| No release tag is reachable, and the clone is shallow. | The harness fails loudly and names the missing tags, because a shallow clone can hide a tag that exists. | `git fetch --tags` |
+| No ancestor v* tag exists. | The matrix reports zero old binaries and runs the same steps against a second process of the current binary. Run `git fetch --tags` with full history before the run, to prove that no tag exists. | `git fetch --tags` |
+| A release tag does not build or does not start. | The failure names the tag and the log line that explains it. | `make mixed-version-test` |
 
 ## Release checklist
 

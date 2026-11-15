@@ -105,8 +105,11 @@ func TestWriteErrorTokenAndPrincipalCodes(t *testing.T) {
 			errcode.AccessLastSiteAdministrator, nil, "",
 		},
 		{
-			"last break-glass account", principal.ErrLastBreakGlass, http.StatusConflict,
-			errcode.PrincipalLastBreakGlass, nil, "",
+			"too few working break-glass accounts", principal.ErrNoWorkingBreakGlass, http.StatusConflict,
+			errcode.PrincipalNoWorkingBreakGlass, nil,
+			"The change leaves too few working break-glass accounts. " +
+				"Add or enable a working break-glass account, then try again. " +
+				"See the break-glass accounts guide.",
 		},
 		{"principal not found", principal.ErrNotFound, http.StatusNotFound, errcode.PrincipalNotFound, nil, ""},
 		{

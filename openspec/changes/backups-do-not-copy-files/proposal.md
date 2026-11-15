@@ -71,7 +71,7 @@ none
 Questions considered and answered:
 
 - Shall a namespace restore fail when a registry release file named by the backup is missing? Decided: the restore fails. A restored registry that names missing files breaks installs without a clear cause, so fail closed.
-- How shall a restore handle a backup made before file copy? No such backup exists: no tag shipped the earlier backup shape, so there is no legacy path (no data, no tag). How do backup and restore run? Through the installation-wide API of main, POST/GET /api/server/backups and /api/server/restores, with server:backup and server:restore (PM decision, 14 Nov 2026, rule 16: follow the code on main, ADR 42); RestoreRegistryFiles runs inside the installation restore for each namespace in the backup.
+- How shall a restore handle a backup made before file copy? No such backup exists: no tag shipped the earlier backup shape, so there is no legacy path (no data, no tag). How do backup and restore run? Through the installation-wide API of main, POST/GET /api/dustpan/v1/backups and /api/dustpan/v1/restores, with server:backup and server:restore (PM decision, 14 Nov 2026, rule 16: follow the code on main, ADR 42); RestoreRegistryFiles runs inside the installation restore for each namespace in the backup.
 - Does any ADR govern registry backups? No. The pack names no ADR and the keyword search shows no ADR text on registry backups.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
