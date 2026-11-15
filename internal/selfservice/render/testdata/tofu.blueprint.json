@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "postgres",
+  "title": "PostgreSQL database",
+  "tool": "opentofu",
+  "program": {
+    "module": { "source": "registry.example.com/platform/postgres/aws", "version": "2.4.1" }
+  },
+  "unitName": "request.name",
+  "inputs": [
+    { "name": "size", "type": "string", "default": "small", "maps": "instance_size" },
+    { "name": "network", "type": "string", "required": true, "maps": "network_id" },
+    { "name": "storageGb", "type": "integer", "default": 20, "maps": "storage_gb" }
+  ],
+  "platform": { "values": { "backup_retention_days": 14 } },
+  "delivery": { "homes": ["opendustpan"], "default": "opendustpan" }
+}

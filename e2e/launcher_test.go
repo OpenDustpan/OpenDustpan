@@ -4,7 +4,6 @@ package e2e_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,17 +69,7 @@ func onePhase(t *testing.T, env *e2e.Env, bin string) {
 	t.Helper()
 
 	c := claimAPhase(t, env)
-
-	// On a failure, print the stored log of the init step, so that the CI log
-	// shows why the step ended. The read stops the server, so it runs last.
-	t.Cleanup(func() {
-		if !t.Failed() || env.InProcess() {
-			return
-		}
-
-		ctx := context.WithoutCancel(t.Context())
-		t.Logf("stored log of init:\n%s", env.JobStepLog(ctx, t, e2e.Namespace, c.job, "init"))
-	})
+	env.LogJobStepsOnFailure(t, e2e.Namespace, c.job, c.handoff)
 
 	code, stderr := runLauncher(t, env, bin, c.handoff)
 	if code != int(launcher.ExitOK) {

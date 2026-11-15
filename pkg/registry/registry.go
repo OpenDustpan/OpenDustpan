@@ -160,6 +160,53 @@ func (a Address) Label() string {
 	return "provider/" + a.Name
 }
 
+// CompareAddresses orders a and b by name, then by system, by code point.
+func CompareAddresses(a, b Address) int {
+	if a.Name != b.Name {
+		return strings.Compare(a.Name, b.Name)
+	}
+
+	return strings.Compare(a.System, b.System)
+}
+
+// AddressKey returns the key of a in a page cursor: the name for a provider,
+// and the name and the system joined by a slash for a module. A name and a
+// system never hold a slash, so a key names one address.
+func AddressKey(a Address) string {
+	if a.Kind == KindModule {
+		return a.Name + "/" + a.System
+	}
+
+	return a.Name
+}
+
+// ParseAddressKey reads the page cursor key of kind in ns. An empty key is
+// the first page: it returns an address with an empty name. It returns
+// ErrInvalid for a key that does not hold the name and the system of an
+// address of kind.
+func ParseAddressKey(ns namespace.Name, kind Kind, key string) (Address, error) {
+	addr := Address{Namespace: ns, Kind: kind, Name: key, System: ""}
+
+	if key == "" {
+		return addr, nil
+	}
+
+	if kind == KindModule {
+		name, system, ok := strings.Cut(key, "/")
+		if !ok {
+			return Address{}, fmt.Errorf("%w: cursor %q holds no system", ErrInvalid, key)
+		}
+
+		addr.Name, addr.System = name, system
+	}
+
+	if err := addr.Validate(); err != nil {
+		return Address{}, err
+	}
+
+	return addr, nil
+}
+
 // validSlug reports whether s is in the registry-safe subset.
 func validSlug(s string) bool {
 	return len(s) <= MaxNameLength && slugRE.MatchString(s)

@@ -32,6 +32,17 @@ func (p *passStore) CreateWorkspace(ctx context.Context, w workspace.Workspace, 
 	return p.memStore.CreateWorkspace(ctx, w, fence)
 }
 
+// CreateWorkspacePlaced keeps the lock pass of ctx, then creates w.
+func (p *passStore) CreateWorkspacePlaced(
+	ctx context.Context, w workspace.Workspace, pl workspace.Placement, fence namespace.Fence,
+) error {
+	p.mu.Lock()
+	p.passes = append(p.passes, workspace.LockPassFrom(ctx))
+	p.mu.Unlock()
+
+	return p.memStore.CreateWorkspacePlaced(ctx, w, pl, fence)
+}
+
 // serviceOver returns a service over the stores of f, with store for the
 // workspaces and locks for the manual locks. locks may be nil.
 func serviceOver(t *testing.T, f fixture, store workspace.Store, locks workspace.ManualLocks) *workspace.Service {
@@ -105,7 +116,7 @@ func TestCreateRefusedByANamespaceLock(t *testing.T) {
 			svc := serviceOver(t, f, store, locks)
 			ref := freshRef(t)
 
-			_, err := svc.Create(workspace.WithJob(t.Context(), tc.jobID), ref)
+			_, err := svc.Create(workspace.WithJob(t.Context(), tc.jobID), ref, memPlacement(ref.Namespace))
 			if tc.want == nil {
 				if err != nil {
 					t.Fatalf("Create = %v, want nil", err)
@@ -130,7 +141,7 @@ func TestCreateRefusedWhenTheLockReadFails(t *testing.T) {
 	svc := serviceOver(t, f, store, failing(errManualLockRead))
 	ref := freshRef(t)
 
-	if _, err := svc.Create(t.Context(), ref); !errors.Is(err, errManualLockRead) {
+	if _, err := svc.Create(t.Context(), ref, memPlacement(ref.Namespace)); !errors.Is(err, errManualLockRead) {
 		t.Fatalf("Create = %v, want the read error of the manual lock", err)
 	}
 
@@ -206,7 +217,7 @@ func TestCreateSetsItsOwnLockPass(t *testing.T) {
 			svc := serviceOver(t, f, store, locks)
 
 			ctx := workspace.WithLockPass(workspace.WithJob(t.Context(), tc.jobID), forged)
-			if _, err := svc.Create(ctx, freshRef(t)); err != nil {
+			if _, err := svc.Create(ctx, freshRef(t), memPlacement("acme")); err != nil {
 				t.Fatalf("Create = %v, want nil", err)
 			}
 

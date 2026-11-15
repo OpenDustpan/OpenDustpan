@@ -9,9 +9,14 @@ import (
 // holds server:restore-access. The constants give every list one source:
 // AccessTables, Tables and the portable spec share them.
 const (
-	TablePrincipals        = "principals"
-	TablePrincipalGroups   = "principal_groups"
-	TableGroupMembers      = "group_members"
+	TablePrincipals      = "principals"
+	TablePrincipalGroups = "principal_groups"
+	TableGroupMembers    = "group_members"
+	// TableGroupMappings holds the explicit mappings from the group values of
+	// an identity provider to groups. A mapping decides who joins a group, so
+	// a restore without server:restore-access keeps the current rows. Each row
+	// names a group by a foreign key, so the table moves with the groups.
+	TableGroupMappings     = "group_mappings"
 	TableTempAdmins        = "temp_admins"
 	TableAccessTokens      = "access_tokens"
 	TableRoles             = "roles"
@@ -83,6 +88,7 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TablePrincipals,
 	TablePrincipalGroups,
 	TableGroupMembers,
+	TableGroupMappings,
 	TableAccessTokens,
 	TableRoles,
 	TableGrants,

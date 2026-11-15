@@ -56,8 +56,9 @@ person can have 10 requests at one time that are not accepted and not expired.
 Every person that signs in holds `caller:manage-git-host-links` with no grant.
 The four routes that change or show a request or a link accept a console
 session only. An access token gets 403 with the code
-`git-host.link-person-required`. This holds for the token of an agent too. A
-break-glass account cannot make a link.
+`git-host.link-person-required`, except on the accept, which answers
+`mfa.fresh-step-required` because it needs a recent sign-in. This holds for
+the token of an agent too. A break-glass account cannot make a link.
 
 The token is in the body of the request and never in the URL, so no access log
 holds it.
@@ -128,6 +129,10 @@ does not know.
 
 `replacedPrincipal` is absent when the accept replaced no link.
 
+An accept needs a recent sign-in: a console session whose sign-in is older
+than the token freshness window answers 401 with the code
+`mfa.fresh-step-required`, so sign in again and accept.
+
 A link never replaces another link silently. When the account has a link and
 `previousPrincipal` is missing or names another principal, the answer is 409
 with the code `git-host.link-conflict`, and nothing changes. Show the request
@@ -181,7 +186,8 @@ told. The server sends no notice yet, because the notification type does not
 exist, so the entry is the only record of the loss.
 
 A refused change writes an entry with the outcome `failure`, or `denied` for a
-caller that is not a person in a console session.
+caller that is not a person in a console session. A refused accept writes
+`failure` also for an access token: the fresh check refuses it.
 
 A link goes away when its principal is deleted. A link of a principal that is
 disabled does not work. The server also leaves links and requests out of a

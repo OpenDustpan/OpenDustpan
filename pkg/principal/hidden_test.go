@@ -35,6 +35,8 @@ func TestGroupValidateRefusesHiddenRunesInDescription(t *testing.T) {
 				Description: "a" + string(tc.r) + "b",
 				Source:      principal.SourceLocal,
 				MemberCount: 0,
+
+				ClosedToIdentityProvider: false,
 			}
 
 			if err := g.Validate(); !errors.Is(err, principal.ErrInvalid) {

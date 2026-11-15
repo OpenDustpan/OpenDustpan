@@ -32,7 +32,7 @@ the handler has the gate.
 ### What `Start` does, in order
 
 From `pkg/dustpan/start.go` (`startSteps`) and `pkg/dustpan/dustpan.go` on
-`main` at d0f008a:
+`main` at ecc7da8:
 
 1. `startUp`: the claim of the installation kind (ADR 237), the warning for
    dev principals, and the key check (`secret.CheckWrapper` and
@@ -137,7 +137,7 @@ and `Metrics`. A `Start` that fails returns nil and the error. A second
   The order is visible in the code of the embedder.
 - What breaks: the signature of `Start`, and the three accessors move. No
   embedder exists. These call sites in this repository change, on `main` at
-  d0f008a:
+  ecc7da8:
   - 31 calls of the accessors in 11 test files of `pkg/dustpan`. Search:
     `rg -n '\.(Workspaces|Backups|Restores)\(\)' pkg/dustpan -g '*_test.go'`.
   - 6 calls of `Server.Start` in 3 test files of `pkg/dustpan`

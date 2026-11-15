@@ -9,9 +9,9 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check check fmt lint subtestcheck nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: cover regenerate-baseline release-record-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check
 
-check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
+check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -25,11 +25,18 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	python3 -I scripts/runner-deps-guard.py
 	python3 -I scripts/module-age-gate.py --selftest
 	python3 -I scripts/module-age-gate.py
+	go test -count=1 ./internal/adrnumbers
 	python3 -I scripts/cover-summary.py --selftest
 	golangci-lint run ./...
 
 subtestcheck: ## Report a t.Error or t.Fatal that follows a parallel t.Run and reads a variable that the subtest writes.
 	go run ./cmd/subtestcheck .
+
+# The ref that nolint-check compares the branch with.
+BASE ?= origin/main
+
+nolint-check: ## Fail when the lines added since BASE (default origin/main) carry a suppression marker. Not part of check: CI skips it for the label nolint-approved.
+	./scripts/check-nolint.sh '$(BASE)'
 
 # Extra flags for golangci-lint, for example LINT_FLAGS=--timeout=15m in CI.
 LINT_FLAGS ?=
@@ -62,12 +69,18 @@ vuln: ## Known vulnerabilities in the code paths we call (reads the database at 
 # The second scan runs the local rules in .semgrep. It ignores .semgrepignore
 # files and the Semgrep default ignores, which skip test files, because the
 # rules in .semgrep are about test files.
+#
+# The third command runs the test cases of the rule
+# tests-no-wall-clock-assertion: each ruleid line must match and each ok line
+# must not.
 semgrep: ## Semgrep registry rules for Go, the Dockerfile, the workflows and secrets.
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--config p/golang --config p/dockerfile --config p/github-actions --config p/secrets \
 		--exclude-rule go.lang.security.audit.crypto.use_of_weak_crypto.use-of-md5 .
 	semgrep scan --error --metrics=off --disable-version-check --quiet \
 		--x-ignore-semgrepignore-files --config .semgrep .
+	semgrep --test --metrics=off --disable-version-check \
+		--config .semgrep/tests-no-wall-clock-assertion.yml .semgrep/tests-no-wall-clock-assertion.go
 
 # The vulnerability database and the misconfiguration checks come from
 # mirror.gcr.io on each run. No telemetry is sent. Each accepted finding is an
@@ -106,16 +119,18 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 
 # Scans the commits that HEAD reaches, not the uncommitted files. Each
 # candidate is sent to its provider for verification. "unknown" is a candidate
-# that could not be verified (for example, the provider did not answer), so a
-# network failure can fail this target. Exit code 183 means a secret was found.
+# that could not be verified (for example, the provider did not answer).
+# Exit code 1 means a verified secret, or an unknown result after three runs.
 # .trufflehog-exclude-paths.txt lists files that are known false positives,
 # one regular expression per line. Each entry needs the owner's approval.
 # Each entry stays only because an old commit holds a fake credential in that
 # path. A test builds a fake credential with internal/fakecred, and a raw one
 # carries a trufflehog:ignore tag with a reason. Do not add a path.
 # Scan only the history reachable from HEAD, so a commit on another branch cannot fail this scan.
+# An unknown result gets up to two more runs, and a verified result fails at once.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
-	trufflehog git file://. --branch=HEAD --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
+	python3 -I scripts/trufflehog-gate.py --selftest
+	python3 -I scripts/trufflehog-gate.py scan -- trufflehog git file://. --branch=HEAD --results=verified,unknown --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
 # The same platform pairs as scripts/release-build.sh. The release archives
 # and the container image ship these files (third_party_licenses/).
@@ -148,6 +163,7 @@ docs-lint: ## ASD-STE100 structural rules, banned words and the Repowise decisio
 	$(ADR_DECISIONS) --check
 	python3 -I scripts/adr-index.py --selftest
 	$(ADR_INDEX) --check
+	@if grep -rn '^TBD' openspec/specs; then echo 'openspec/specs: a Purpose is a placeholder. Write a real Purpose.'; exit 1; fi
 
 adr-decisions: ## Write .repowise/decisions.yaml, the accepted decisions for Repowise, from docs/adr. docs-lint fails when the file is not current.
 	$(ADR_DECISIONS)
@@ -162,6 +178,16 @@ ifeq ($(origin VERSION),command line)
 	./scripts/check-release-record.sh '$(VERSION)'
 else
 	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
+endif
+
+# The PR body check reads the body from a file, so CI writes the body to a file
+# first. PR_BODY_FILE has no default: the target refuses to run without it.
+pr-body-check: ## Check that the PR body in PR_BODY_FILE names an issue or says No issue.
+ifeq ($(strip $(PR_BODY_FILE)),)
+	@echo "usage: make pr-body-check PR_BODY_FILE=<file with the PR body>" >&2
+	@exit 1
+else
+	./scripts/check-pr-body.sh '$(PR_BODY_FILE)'
 endif
 
 adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.
@@ -311,10 +337,21 @@ soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one serve
 
 BASELINE_REF ?= origin/main
 
+pin-frozen: ## Fail when DocumentVersion, info.version or the version line of openapi.pin changes before the first tag.
+	go test ./internal/api/apidesc -run TestPinFrozen -count=1
+
+FILES_BASE ?= origin/main
+
+files-check: ## Refuse a branch that adds a file over 1 MiB or a binary file outside testdata/ without an allowlist line (base FILES_BASE, default origin/main).
+	./scripts/check-files.sh $(FILES_BASE)
+
 regenerate-baseline: ## Write the baseline migration of each dialect from the migrations of BASELINE_REF (default origin/main); needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Not part of check.
 	./scripts/regenerate-baseline.sh $(BASELINE_REF)
 
-generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
+zones-generate: ## Regenerate pkg/preferences/zones_gen.go, the list of zone names, from the time zone archive of the Go toolchain. Run it after a Go upgrade.
+	go run ./cmd/zonegen -out pkg/preferences/zones_gen.go
+
+generate: zones-generate ## Regenerate sqlc query code after editing queries.sql or migrations, the zone list after a Go upgrade, and the settings reference after editing the CLI declarations.
 	sqlc generate
 	$(CLIENTGEN)
 	go test ./internal/cli/ -run TestConfigurationReference -update -count=1

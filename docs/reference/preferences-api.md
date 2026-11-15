@@ -64,7 +64,11 @@ a preference has no stored row, and `updatedAt` is `null`.
 
 The server checks the shape of a language tag and of a scheme ID. The console
 has the list of languages and of schemes, so a new one needs no server
-release. The server checks a time zone against its time zone database.
+release. The server checks a time zone against a list of zone names that is
+part of the server binary. The match is exact and case-sensitive, for example
+`Europe/Berlin` and not `europe/berlin`, and it is the same on every host.
+The list follows the time zone data of the Go version that built the server,
+so a zone that IANA adds needs a server release.
 `resolvedLanguage` is the language that the console chose. The console sets
 it, and the server stores it without a decision of its own. For the rules of
 `language`, `formattingLocale` and `digits`, see

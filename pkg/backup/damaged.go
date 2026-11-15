@@ -213,9 +213,9 @@ func sourceMissing(err error) bool {
 const MaxReportedBlobKeys = 10
 
 // BlobFindings is what one backup found at the live blobs that its data
-// names: the count of blobs that the data names, the count of those that the
-// live store did not hold, the count of those whose bytes did not match their
-// records, and the first keys of both, in key order.
+// names: the count of the keys that the data names, the count of those that
+// the live store did not hold, the count of those whose bytes did not match
+// their records, and the first keys of both, in key order.
 type BlobFindings struct {
 	Named   int      `json:"named"`
 	Missing int      `json:"missing"`
@@ -227,10 +227,25 @@ type BlobFindings struct {
 func (f BlobFindings) Empty() bool { return f.Missing == 0 && f.Damaged == 0 }
 
 // findingsOf returns the findings of manifest. Every blob that its data names
-// is in Blobs, in Damaged or in Unverified.
+// is in Blobs, in Damaged or in Unverified. A key that more than one list
+// names counts once.
 func findingsOf(manifest Manifest) BlobFindings {
+	named := make(map[string]bool, len(manifest.Blobs)+len(manifest.Damaged)+len(manifest.Unverified))
+
+	for _, ref := range manifest.Blobs {
+		named[ref.Key] = true
+	}
+
+	for _, key := range manifest.Unverified {
+		named[key] = true
+	}
+
+	for _, entry := range manifest.Damaged {
+		named[entry.Key] = true
+	}
+
 	out := BlobFindings{
-		Named:   len(manifest.Blobs) + len(manifest.Damaged) + len(manifest.Unverified),
+		Named:   len(named),
 		Missing: 0, Damaged: 0, Keys: []string{},
 	}
 

@@ -17,7 +17,7 @@ func pgCopyItemKeyTables() []pgCopyTable {
 			table: "item_keys",
 			columns: []string{
 				"id", pgColNamespaceID, pgColScopeID, pgColKind, "item", pgColWrapperID, pgColCreatedAtMs,
-				"shredded_at_ms", "blob_version", "blob_size", "blob_md5",
+				"shredded_at_ms", "blob_version", "blob_size", "blob_md5", "blob_attempt",
 			},
 			orderBy: []string{"id"},
 		},
@@ -75,7 +75,7 @@ func checkStagedItemKeys(ctx context.Context, pool pgQuerier, staging string) er
 		return err
 	}
 
-	query := "SELECT k.id, n.name, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms, k.blob_version, k.blob_size, k.blob_md5 FROM " +
+	query := "SELECT k.id, n.name, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms, k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt FROM " +
 		stagingTable(
 			staging,
 			"item_keys",
@@ -99,7 +99,7 @@ func checkStagedItemKeys(ctx context.Context, pool pgQuerier, staging string) er
 		)
 
 		scanErr := rows.Scan(&row.ID, &namespace, &row.ScopeID, &row.Kind, &row.Item, &row.WrapperID,
-			&row.CreatedAtMs, &row.ShreddedAtMs, &row.BlobVersion, &row.BlobSize, &row.BlobMd5)
+			&row.CreatedAtMs, &row.ShreddedAtMs, &row.BlobVersion, &row.BlobSize, &row.BlobMd5, &row.BlobAttempt)
 		if scanErr != nil {
 			return fmt.Errorf("read staged item keys: %w", backup.ErrExportRead)
 		}

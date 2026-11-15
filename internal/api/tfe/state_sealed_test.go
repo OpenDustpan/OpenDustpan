@@ -22,6 +22,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -103,7 +104,7 @@ func sealedTestHandler(t *testing.T) sealedTestEnv {
 	secrets := sealedTestSecrets(t, store, namespaces)
 	blobs := sealedTestBlobs(t)
 	workspaces := sealedTestWorkspaces(t, store, namespaces, secrets, blobs)
-	ws := sealedTestWorkspace(t, workspaces)
+	ws := sealedTestWorkspace(t, store, namespaces, workspaces)
 
 	return sealedTestEnv{
 		handler: newWriteHandler(t, workspaces, baseurl.Resolver{}),
@@ -217,7 +218,9 @@ func sealedTestWorkspaces(
 
 // sealedTestWorkspace creates the acme/web workspace locked by the test
 // principal.
-func sealedTestWorkspace(t *testing.T, workspaces *workspace.Service) workspace.Workspace {
+func sealedTestWorkspace(
+	t *testing.T, store *sqlite.Store, namespaces *namespace.Service, workspaces *workspace.Service,
+) workspace.Workspace {
 	t.Helper()
 
 	ctx := t.Context()
@@ -232,7 +235,16 @@ func sealedTestWorkspace(t *testing.T, workspaces *workspace.Service) workspace.
 		t.Fatalf("parse name: %v", err)
 	}
 
-	ws, err := workspaces.Create(ctx, workspace.Ref{Namespace: ns, Name: name})
+	acme, err := namespaces.Get(ctx, ns)
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	ws, err := workspaces.Create(
+		ctx,
+		workspace.Ref{Namespace: ns, Name: name},
+		placementtest.Workspace(t, store, acme.Fence()),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}

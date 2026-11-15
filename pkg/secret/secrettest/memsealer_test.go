@@ -68,6 +68,12 @@ func TestMemorySealerRoundTrip(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 
+	defer func() {
+		if closeErr := opened.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
 	if got, readErr := io.ReadAll(opened); readErr != nil || string(got) != "plain text" {
 		t.Fatalf("opened = %q, %v; want the plain text", got, readErr)
 	}

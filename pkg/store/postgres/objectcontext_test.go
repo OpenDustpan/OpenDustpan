@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
@@ -63,7 +64,7 @@ func contextUnit(t *testing.T, s *postgres.Store, u graph.Unit) {
 		ID:          workspace.ID(u.ID),
 		Ref:         workspace.Ref{Namespace: n.Name, Name: name},
 		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-		Revision:    1,
+		Revision:    1, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if err = s.CreateWorkspace(t.Context(), w, n.Fence()); err != nil {
@@ -95,6 +96,7 @@ func contextPurge(t *testing.T, s *postgres.Store, u graph.Unit) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 	d := inventory.Deletion{Entry: e, PurgeAfter: e.At}
 	ref := workspace.Ref{Namespace: n.Name, Name: name}
@@ -139,6 +141,7 @@ func contextHarness(s *postgres.Store) objectcontexttest.Harness {
 				Reason:        "",
 				PrincipalKind: "",
 				JobID:         "",
+				Origin:        nil,
 			}
 
 			if err := s.CreateCollection(t.Context(), c, n.Fence(), e); err != nil {
@@ -234,6 +237,7 @@ func TestObjectContextOwnerRows(t *testing.T) {
 			Reason:        "",
 			PrincipalKind: "",
 			JobID:         "",
+			Origin:        nil,
 		}
 
 		got, err := s.SetAPI(t.Context(), ref, p, "user:ada", fence, e)

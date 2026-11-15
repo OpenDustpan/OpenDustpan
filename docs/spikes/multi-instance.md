@@ -1,7 +1,7 @@
 # Spike: single-instance assumptions in the server
 
 Status: spike, 2026-10-19. Documents only, no code. The product manager
-asked for it. It audits `main` at commit `8a31541` for each assumption
+asked for it. It audits `main` at commit `b89b1c1` for each assumption
 that breaks when 2 or more instances of `opendustpan serve` run on one
 PostgreSQL database and one object store. The proposals have the label
 "(product manager)". [RFC 87](../rfc/0087-components-of-the-server-process.md)
@@ -59,7 +59,7 @@ Severity:
 - **Low**: duplicate work or a small window, with no wrong data.
 - **Safe**: no wrong result with 2 or more instances today.
 
-Line numbers are on `8a31541`.
+Line numbers are on `b89b1c1`.
 
 | ID | Item: file and symbol | Today | With 2+ instances on one PostgreSQL | Fix pattern | ADR 72 | Severity |
 | --- | --- | --- | --- | --- | --- | --- |

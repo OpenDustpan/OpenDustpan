@@ -146,7 +146,7 @@ func runMode(args *launcher.Args, log *slog.Logger) launcher.ExitCode {
 
 	return run.Run(context.Background(), &run.Config{
 		Client: client, Handoff: handoff, WorkDir: args.WorkDir, Path: os.Getenv("PATH"), Logger: log, Stop: stop,
-		Grace: nil, RenewEvery: 0, ChunkSize: 0, FlushEvery: 0, Retry: 0,
+		Grace: nil, RenewEvery: 0, ChunkSize: 0, FlushEvery: 0, Retry: 0, Sleep: nil,
 	})
 }
 

@@ -15,12 +15,14 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -410,7 +412,7 @@ func (r *blobDeleteRig) newStackCase(t *testing.T) *stackCase {
 
 	st := mustCreateStack(t, r.store, r.ns, "dev")
 	u, err := r.updates.Create(t.Context(), st.Ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create update: %v", err)
@@ -530,7 +532,7 @@ func (r *blobDeleteRig) startPreview(t *testing.T, c *stackCase) {
 	t.Helper()
 
 	u, err := r.updates.Create(t.Context(), c.ref, stack.Plan{
-		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create preview: %v", err)
@@ -576,7 +578,7 @@ func testBlobDeleteJournalBuild(t *testing.T, r *blobDeleteRig) {
 	u, err := r.updates.Create(
 		ctx,
 		base.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 	)
 	if err != nil {
 		t.Fatalf("create journaled update: %v", err)
@@ -748,7 +750,14 @@ func (r *blobDeleteRig) seedWorkspace(t *testing.T) (workspace.Workspace, []blob
 		t.Fatalf("workspace name: %v", err)
 	}
 
-	w, err := r.workspaces.Create(ctx, workspace.Ref{Namespace: r.ns.Name, Name: name})
+	cols, ok := r.store.(collection.Store)
+	if !ok {
+		t.Fatalf("store %T does not keep collections", r.store)
+	}
+
+	w, err := r.workspaces.Create(
+		ctx, workspace.Ref{Namespace: r.ns.Name, Name: name}, placementtest.Workspace(t, cols, r.ns.Fence()),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}

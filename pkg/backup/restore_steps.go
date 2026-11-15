@@ -29,6 +29,13 @@ import (
 // backup and no unit directory lists it.
 const tempKeyPrefix = "restore-tmp"
 
+// ErrLiveBlobDeletes reports that a blob deleter holds a live lease: the
+// after-apply step waits for zero live leases before it checks the named
+// blobs. The durable runner releases the claim and runs the step again, and
+// the wait counts no attempt. A failed read of the leases fails the step:
+// it cannot tell whether a deleter is in flight.
+var ErrLiveBlobDeletes = errors.New("blob deletes are in flight")
+
 // restoreCopyConcurrency is the count of blobs that one restore copies at the
 // same time.
 const restoreCopyConcurrency = 8
@@ -183,6 +190,10 @@ func (s *RestoreService) guarded(body restoreStepFunc) durable.StepFunc {
 			// A takeover or a retry found the domain write of this step
 			// committed. The runner reads the stored result.
 			return nil, nil
+		case errors.Is(err, ErrLiveBlobDeletes):
+			// The step waits for the blob deletes. The runner releases the
+			// claim and runs the step again, and the wait counts no attempt.
+			return nil, err
 		case permanentRestoreError(err) || sc.Operation.Failures+1 >= durable.DefaultMaxAttempts:
 			return nil, s.failRestore(ctx, sc, in, err)
 		default:
@@ -582,7 +593,9 @@ func (s *RestoreService) stageInput(
 	// setting, only detect.
 	stage := RestoreStageInput{
 		Open: portableOpener(ctx, s.target, in.BackupID), Want: restoreWant(manifest, wantBlobs),
-		Files: manifest.SQLFiles, Options: StageOptions{BackupKind: pinned.kind, AllowDev: s.allowDev},
+		Files: manifest.SQLFiles, Options: StageOptions{
+			BackupKind: pinned.kind, AllowDev: s.allowDev, RestoreAt: s.now().UTC(),
+		},
 		Strip: dev.production(), StripMode: DevStripDetect,
 	}
 
@@ -918,6 +931,17 @@ func (s *RestoreService) stepCopyBlobs(ctx context.Context, sc durable.StepConte
 		return nil, err
 	}
 
+	// The bound stops a new backup. A manifest above it stays restorable: an
+	// earlier version of the server wrote it, and the restore records the
+	// count and the bound in the audit log before it copies the first blob.
+	limit := s.unverifiedLimit()
+
+	if count := len(manifest.Unverified); count > limit {
+		if recErr := s.recordUnverifiedOverLimit(ctx, sc.Fence, in, count, limit); recErr != nil {
+			return nil, recErr
+		}
+	}
+
 	return nil, s.copyManifestBlobs(ctx, sc.Fence, in, manifest)
 }
 
@@ -1041,6 +1065,10 @@ func (s *RestoreService) stepAfterApply(ctx context.Context, sc durable.StepCont
 		return nil, nil
 	}
 
+	if err := s.waitForBlobDeletes(ctx, in); err != nil {
+		return nil, err
+	}
+
 	if err := s.afterApplyChecks(ctx, sc, in); err != nil {
 		return nil, err
 	}
@@ -1068,6 +1096,28 @@ func (s *RestoreService) stepAfterApply(ctx context.Context, sc durable.StepCont
 
 		return encodeAfterApply(afterApplyResult{AuditFailed: true}), nil
 	}
+}
+
+// waitForBlobDeletes reports ErrLiveBlobDeletes while a blob deleter holds a
+// lease. A deleter takes its lease before each delete and releases it after,
+// so the check of the named blobs waits for every delete that is in flight.
+// A deleter that read the guard of the blob deletes before the restore
+// started holds the restore back here until it releases its lease or the
+// lease ends, and the check then finds a blob that the deleter removed and
+// copies it again from the pinned backup. A failed read of the leases fails
+// the step: it cannot tell whether a deleter is in flight, so the step checks
+// nothing and finishes nothing.
+func (s *RestoreService) waitForBlobDeletes(ctx context.Context, in restoreInput) error {
+	live, err := s.leases.LiveLeases(ctx)
+	if err != nil {
+		return fmt.Errorf("read the live blob delete leases of restore %s: %w", in.ID, err)
+	}
+
+	if live > 0 {
+		return fmt.Errorf("restore %s waits for %d live blob delete leases: %w", in.ID, live, ErrLiveBlobDeletes)
+	}
+
+	return nil
 }
 
 // afterApplyChecks runs the after-apply hook and checks that each blob that
@@ -1319,7 +1369,8 @@ func (w restoreWriter) SetStateIf(ctx context.Context, expected, next maintenanc
 // reports durable.ErrClaimLost unless the claim of the fence still holds it.
 // Then it stores the cancel of unit as an audit event of the restore, under
 // the fence, so the record exists before the cancel and survives the swap and
-// a takeover.
+// a takeover, and writes the log line of the attempt. Every attempt gets this
+// line, also one that cancels nothing.
 func (w restoreWriter) Check(ctx context.Context, unit string) error {
 	op, err := w.s.operations.Get(ctx, w.fence.Operation)
 	if err != nil {
@@ -1339,6 +1390,9 @@ func (w restoreWriter) Check(ctx context.Context, unit string) error {
 		return fmt.Errorf("record the cancel of %s for restore %s: %w", unit, w.id, err)
 	}
 
+	w.s.logger.WarnContext(ctx, "restore attempted to cancel the active work", slog.String("restore_id", w.id.String()),
+		slog.Int64("token", w.fence.Token), slog.String("unit", unit))
+
 	return nil
 }
 
@@ -1347,17 +1401,21 @@ func (w restoreWriter) Actor() string {
 	return "restore " + w.id.String() + " claim token " + strconv.FormatInt(w.fence.Token, 10)
 }
 
-// logCanceled writes the log line of the work that an enter of the restore
-// canceled, with the restore ID and the claim token. The audit entry of each
-// cancel comes from the audit event that the writer stored before the
+// logCanceled writes one log line for each unit of work that an enter of the
+// restore canceled and confirmed, with the restore ID, the claim token and
+// the unit name. The writer writes the line of every attempt, before the
+// cancel, so this line names only the confirmed cancels. The audit entry of
+// each cancel comes from the audit event that the writer stored before the
 // cancel.
 func (s *RestoreService) logCanceled(ctx context.Context, in restoreInput, fence durable.StepFence, units []string) {
 	if len(units) == 0 {
 		return
 	}
 
-	s.logger.WarnContext(ctx, "restore canceled the active work", slog.String("restore_id", in.ID.String()),
-		slog.Int64("token", fence.Token), slog.Int("units", len(units)))
+	for _, unit := range units {
+		s.logger.WarnContext(ctx, "restore canceled the active work", slog.String("restore_id", in.ID.String()),
+			slog.Int64("token", fence.Token), slog.String("unit", unit))
+	}
 }
 
 // differingBlobAuditObject names the refusal to overwrite the live key by
@@ -1414,11 +1472,13 @@ func writtenDiffersAuditObject(in restoreInput, key string) string {
 		" and its bytes failed the check after the write, backup " + in.BackupID.String()
 }
 
-// canceledAuditObject names the cancel of one unit of active work by the
-// enter of restore id with the claim token, for its audit entry.
+// canceledAuditObject names the attempt to cancel one unit of active work by
+// the enter of restore id with the claim token, for its audit entry. The
+// writer stores the entry before the cancel runs, so the text names an
+// attempt, not a result.
 func canceledAuditObject(id RestoreID, token int64, unit string) string {
 	return "restore " + id.String() + " claim token " + strconv.FormatInt(token, 10) +
-		" canceled the active work: " + unit
+		" attempted to cancel the active work: " + unit
 }
 
 // endBeforeSwapAuditObject names the end of restore in before its swap, for
@@ -1475,6 +1535,7 @@ func (s *RestoreService) restoreAuditEntry(in restoreInput, object string) audit
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

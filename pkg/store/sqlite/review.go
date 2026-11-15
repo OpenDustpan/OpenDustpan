@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -215,9 +216,17 @@ func reviewRows(rows []db.ReviewGrantsRow) ([]access.ReviewRow, error) {
 		}
 
 		if r.MemberID != "" {
+			// Defense in depth: the write path validates the source too; this check stays so that
+			// a row written by another version or by hand cannot show as a known source.
+			source, parseErr := principal.ParseMembershipSource(r.MemberSource)
+			if parseErr != nil {
+				return nil, fmt.Errorf("%w: group %q", access.ErrStoredSource, r.SubjectID)
+			}
+
 			row.Via = &access.Membership{
 				AddedAt: codec.FromMillis(r.MemberAddedAtMs), RemovedAt: optionalTime(r.MemberRemovedAtMs),
 				PrincipalID: r.MemberID, PrincipalSubject: r.MemberSubject,
+				Source: string(source), SourceID: r.MemberSourceID, Suspended: r.MemberSuspended != 0,
 			}
 		}
 

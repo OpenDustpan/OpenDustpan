@@ -62,6 +62,10 @@ func (itemKeyNoRefusals) RecordOutOfScope(context.Context, namespace.ID, string,
 	return nil
 }
 
+func (itemKeyNoRefusals) RecordMismatch(context.Context, namespace.ID, string) error {
+	return nil
+}
+
 // RunItemKeyBackup proves that a backup copies the wrapped item key blobs and a
 // restore brings them back. It backs up one store, then restores the backup
 // into a second store with an empty live blob store, as after the loss of a
@@ -221,7 +225,15 @@ func checkRestoredItemKeys(t *testing.T, dest *ItemKeyBackupRig, wrapper secret.
 		t.Error("the restore brought back the blob of a shredded key")
 	}
 
-	_, openErr := sealer.OpenContent(t.Context(), seed.shreddedRef, seed.binding, strings.NewReader("x"))
+	rd, openErr := sealer.OpenContent(t.Context(), seed.shreddedRef, seed.binding, strings.NewReader("x"))
+	if rd != nil {
+		// The open should fail. When it does not, close the reader, so that
+		// the failed case does not also keep a key.
+		if closeErr := rd.Close(); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}
+
 	if !errors.Is(openErr, secret.ErrShredded) {
 		t.Errorf("open with the shredded key err = %v, want ErrShredded", openErr)
 	}
@@ -234,7 +246,7 @@ func itemKeySealerOf(
 ) (*secret.ItemKeySealer, *secret.ItemKeyBlobs) {
 	t.Helper()
 
-	blobs, err := secret.NewItemKeyBlobs(rig.Live, itemKeyNoRefusals{})
+	blobs, err := secret.NewItemKeyBlobs(rig.Live, itemKeyNoRefusals{}, itemKeyNoRefusals{})
 	if err != nil {
 		t.Fatalf("item key blobs: %v", err)
 	}
@@ -298,7 +310,7 @@ func newItemKeyIn(
 func itemKeyBlobKey(t *testing.T, blobs *secret.ItemKeyBlobs, ns namespace.ID, k secret.ItemKey) blob.Key {
 	t.Helper()
 
-	key, err := blobs.Key(ns, k.ID, k.Blob.Version)
+	key, err := blobs.Key(ns, k.ID, k.Blob.Version, k.Blob.Attempt)
 	if err != nil {
 		t.Fatalf("blob key of %s: %v", k.ID, err)
 	}
@@ -333,7 +345,7 @@ func openAll(t *testing.T, s secret.ItemSealer, ref secret.ItemRef, binding, sea
 	}
 
 	out, err := io.ReadAll(rd)
-	if err != nil {
+	if err = errors.Join(err, rd.Close()); err != nil {
 		return nil, fmt.Errorf("read opened content: %w", err)
 	}
 

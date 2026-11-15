@@ -24,7 +24,7 @@ The background is in the research note
 and its [verdicts](../architecture-reviews/2026-10-16-verdicts.md) are a
 second input. This RFC cites their findings by ID (for example "review B1").
 Findings that a test or a second reading verified have their own issue, and
-this RFC cites that issue as a fact. Code references are at commit 6909035.
+this RFC cites that issue as a fact. Code references are at commit 4d0e64c.
 
 ## Problem
 

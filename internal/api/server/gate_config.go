@@ -286,7 +286,7 @@ func (h *Handler) gateConfigRoutes() []Route {
 	row := func(method, path string, actions []identity.Action, serve RouteHandler) Route {
 		return Route{
 			Method: method, Path: path, Scope: ScopeAuthorized, Actions: actions,
-			Resolve: resolveNamespacePath, ActionsFor: nil, Serve: serve,
+			Resolve: resolveNamespacePath, ActionsFor: nil, OpaqueDenial: false, Serve: serve,
 		}
 	}
 
@@ -664,14 +664,14 @@ func classifyGateConfig(err error) (failure, bool) {
 			errcode.GateVersionConflict), true
 	case errors.Is(err, gate.ErrFinal):
 		return failCoded(http.StatusConflict, err.Error(), errcode.GateFinal), true
-	case errors.Is(err, errHiddenApprover):
-		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateApproversUserInvalid), true
-	case errors.Is(err, errApproversUnmet):
-		return failCoded(http.StatusUnprocessableEntity, errApproversUnmet.Error(), errcode.GateApproversUnmet), true
+	case errors.Is(err, errHiddenApprover), errors.Is(err, errApproversUnmet):
+		return classifyGateApproverRefusal(err)
 	case errors.Is(err, gate.ErrApprovers):
 		return classifyApprovers(err)
 	case errors.Is(err, gate.ErrLimit):
 		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateLimit), true
+	case errors.Is(err, gate.ErrLimitGroupReach), errors.Is(err, gate.ErrLimitMembership):
+		return classifyGateLimitMembership(err)
 	case errors.Is(err, gate.ErrInvalid):
 		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateInvalid), true
 	case errors.Is(err, gate.ErrUnavailable):
@@ -680,6 +680,26 @@ func classifyGateConfig(err error) (failure, bool) {
 	default:
 		return fail(0, ""), false
 	}
+}
+
+// classifyGateLimitMembership maps the refusal of the group names of an
+// access limit to its status and its code.
+func classifyGateLimitMembership(err error) (failure, bool) {
+	if errors.Is(err, gate.ErrLimitGroupReach) {
+		return failCoded(http.StatusForbidden, gate.ErrLimitGroupReach.Error(), errcode.GateLimitGroupReach), true
+	}
+
+	return failCoded(http.StatusBadRequest, gate.ErrLimitMembership.Error(), errcode.GateLimitMembership), true
+}
+
+// classifyGateApproverRefusal maps an invalid approver user name and an
+// approver list that no one can meet to their status and their code.
+func classifyGateApproverRefusal(err error) (failure, bool) {
+	if errors.Is(err, errHiddenApprover) {
+		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.GateApproversUserInvalid), true
+	}
+
+	return failCoded(http.StatusUnprocessableEntity, errApproversUnmet.Error(), errcode.GateApproversUnmet), true
 }
 
 // errApproversUnmet is the answer to a caller who may not read the principals

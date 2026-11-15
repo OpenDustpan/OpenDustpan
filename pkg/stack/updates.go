@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -198,12 +199,12 @@ type UpdatesConfig struct {
 	// each event of the update with it. Required: no event is stored as the
 	// CLI sent it.
 	Sealer secret.ItemSealer
-	// BlobGuard tells whether a backup or a restore runs. Every delete of a
-	// blob that a backup snapshot or restored data can name asks it after the
-	// commit that removed the last row that names the blob, and runs only
+	// BlobGuard holds the leases of the blob deletes. Every delete of a blob
+	// that a backup snapshot or restored data can name takes a lease after
+	// the commit that removed the last row that names the blob, and runs only
 	// when nothing runs. Nil is a guard that never lets a delete run: the
 	// blobs stay for a later sweep.
-	BlobGuard blobguard.Watch
+	BlobGuard blobguard.Leases
 }
 
 // ManualLocks is the read side of the manual locks of the shared core. The
@@ -215,7 +216,7 @@ type ManualLocks interface {
 	// by a job whose phase started before the lock passes. It returns
 	// manuallock.ErrNotLocked when no manual lock covers the unit for the
 	// request.
-	CoveringFor(ctx context.Context, unit collection.UnitRef, jobID string) (manuallock.Lock, error)
+	CoveringFor(ctx context.Context, unit manuallock.Unit, jobID string) (manuallock.Lock, error)
 	// NamespaceLock returns the manual lock of the namespace, or
 	// manuallock.ErrNotLocked. The restore of a deleted unit asks it: a deleted
 	// unit has no inventory entry, so CoveringFor cannot find the lock of its
@@ -241,7 +242,7 @@ type Updates struct {
 	journal        *JournalEntries
 	replayer       JournalReplayer
 	manual         ManualLocks
-	guard          blobguard.Watch
+	guard          blobguard.Leases
 	sealer         secret.ItemSealer
 	skipMu         sync.Mutex
 	skipLogged     string
@@ -374,7 +375,12 @@ func (s *Updates) Create(ctx context.Context, ref Ref, plan Plan) (Update, error
 		Version:        0,
 		Revision:       1,
 		// Sizes come from the checkpoint rows on read.
-		CreatedBy:       plan.CreatedBy,
+		CreatedBy: plan.CreatedBy,
+		// The job whose token starts the update comes later, with the start.
+		JobID: "",
+		// GitHead comes from the body of the create: no later request of the
+		// update carries it.
+		GitHead:         plan.GitHead,
 		RestoredFrom:    plan.RestoredFrom,
 		CheckpointBytes: 0,
 	}
@@ -459,6 +465,7 @@ func (s *Updates) StartBy(
 
 	u.JournalVersion = journalVersion
 	u.TokenID = by.TokenID
+	u.JobID = by.JobID
 
 	u, err = s.updates.StartUpdate(ctx, u, fence)
 	if err != nil {
@@ -507,6 +514,9 @@ type checkpointSave struct {
 	digest  [sha256.Size]byte
 	prev    *Checkpoint
 	key     blob.Key
+	// origin is the writer of the state version that the save publishes: the
+	// one of the update.
+	origin identity.StateOrigin
 	// blobs is the scoped blob access of the namespace of this save.
 	blobs *scopedBlobs
 }
@@ -575,7 +585,7 @@ func (s *Updates) SaveCheckpoint(
 
 	return s.storeNewCheckpoint(ctx, checkpointSave{
 		ref: ref, id: id, stackID: st.ID, fence: ns.Fence(), lease: u.Lease.Digest,
-		in: in, digest: digest, prev: prev, key: key, blobs: bl,
+		in: in, digest: digest, prev: prev, key: key, origin: u.Origin(), blobs: bl,
 	})
 }
 
@@ -601,18 +611,27 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.ID, stackID
 	var guardErr error
 
 	err = blob.Walk(ctx, bl, bl.stackPrefix(stackID), func(obj blob.Object) error {
-		// The guard comes after the commit of the purge and before each
+		// The lease comes after the commit of the purge and before each
 		// delete: a restore that starts during the walk keeps the blobs that
 		// are left. A backup or a restore that runs, or a failed read, stops
 		// the walk. The error keeps the blob purge record, and the retention
-		// sweep tries again.
-		if holdErr := blobguard.Hold(ctx, s.guard); holdErr != nil {
+		// sweep tries again. The holder is new for each delete, so the lease
+		// row names the delete that holds it.
+		leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
+		if holdErr != nil {
 			guardErr = holdErr
 
 			return holdErr
 		}
 
-		if blobErr := s.deleteBlobRetried(ctx, bl, obj.Key); blobErr != nil {
+		blobErr := s.deleteBlobRetried(leaseCtx, bl, obj.Key)
+
+		if releaseErr := release(ctx); releaseErr != nil {
+			s.logger.WarnContext(ctx, "blob delete lease not released",
+				slog.String("stack_id", stackID.String()), slog.String("error", releaseErr.Error()))
+		}
+
+		if blobErr != nil {
 			failed++
 		}
 
@@ -764,7 +783,11 @@ func (s *Updates) Import(ctx context.Context, ref Ref, subject string, in Checkp
 		return Update{}, err
 	}
 
-	u, err := s.Create(ctx, ref, Plan{Kind: KindImport, DryRun: false, CreatedBy: subject, RestoredFrom: 0})
+	u, err := s.Create(
+		ctx,
+		ref,
+		Plan{Kind: KindImport, DryRun: false, CreatedBy: subject, RestoredFrom: 0, GitHead: ""},
+	)
 	if err != nil {
 		return Update{}, err
 	}
@@ -805,7 +828,11 @@ func (s *Updates) Restore(ctx context.Context, ref Ref, version int64, subject s
 		return Update{}, err
 	}
 
-	u, err := s.Create(ctx, ref, Plan{Kind: KindRestore, DryRun: false, CreatedBy: subject, RestoredFrom: version})
+	u, err := s.Create(
+		ctx,
+		ref,
+		Plan{Kind: KindRestore, DryRun: false, CreatedBy: subject, RestoredFrom: version, GitHead: ""},
+	)
 	if err != nil {
 		return Update{}, err
 	}
@@ -1030,6 +1057,20 @@ func (s *Updates) History(ctx context.Context, ref Ref, page Page) ([]Update, er
 		return nil, fmt.Errorf("history of %s: %w", ref, err)
 	}
 
+	if len(list) == 0 {
+		// The stack can be deleted between the two reads above. The store
+		// answers an empty list for a stack that does not exist, so an empty
+		// list reads the stack again.
+		//
+		// Defense in depth: the route reads the stack before it calls History,
+		// so it answers with the error of the stack route. This check stays
+		// for the same reason as the read above: a new caller cannot read an
+		// empty history for a stack that is missing.
+		if _, stackErr := s.stacks.GetStack(ctx, ref); stackErr != nil {
+			return nil, fmt.Errorf("history of %s: %w", ref, stackErr)
+		}
+	}
+
 	return list, nil
 }
 
@@ -1150,6 +1191,7 @@ func (s *Updates) commitCheckpointRow(
 		BlobKey:       save.key,
 		BlobSize:      size,
 		BlobMD5:       sum,
+		Origin:        save.origin,
 
 		AttemptStartedAt: started,
 	}
@@ -1162,25 +1204,44 @@ func (s *Updates) commitCheckpointRow(
 // failure never fails the save, and the rows stay for the next sweep. No log
 // line names a blob key.
 func (s *Updates) afterCheckpointSave(ctx context.Context, save checkpointSave) {
-	// The guard comes after the commit of the new row. A running backup or
+	// The lease comes after the commit of the new row. A running backup or
 	// restore keeps the previous blob. It is then an orphan of the update, and
 	// the next sweep deletes it when nothing runs.
-	if save.prev != nil && save.prev.BlobKey != save.key && !s.deletesHeld(ctx, "checkpoint replace", save.ref) {
-		// The key comes from a row. It must name a save of this update in this
-		// stack, so the access is narrowed to the directory of the update.
-		own := save.blobs.narrow(save.blobs.updatePrefix(save.stackID, save.id))
-
-		if err := s.deleteBlobRetried(ctx, own, save.prev.BlobKey); err != nil {
-			s.logger.WarnContext(
-				ctx,
-				"delete superseded checkpoint blob",
-				slog.String("stack", save.ref.String()),
-				slog.String("update", save.id.String()),
-			)
-		}
+	if save.prev != nil && save.prev.BlobKey != save.key {
+		s.deleteSupersededBlob(ctx, save)
 	}
 
 	s.sweepUpdateBlobs(ctx, save.blobs, save.ref, save.stackID, save.id)
+}
+
+// deleteSupersededBlob deletes the blob of the previous checkpoint of save,
+// with the lease of one blob delete around it. save.prev is not nil. The key
+// comes from a row. It must name a save of this update in this stack, so the
+// access is narrowed to the directory of the update.
+func (s *Updates) deleteSupersededBlob(ctx context.Context, save checkpointSave) {
+	leaseCtx, release, ok := s.takeDeleteLease(ctx, "checkpoint replace", save.ref)
+	if !ok {
+		return
+	}
+
+	own := save.blobs.narrow(save.blobs.updatePrefix(save.stackID, save.id))
+
+	delErr := s.deleteBlobRetried(leaseCtx, own, save.prev.BlobKey)
+
+	if releaseErr := release(ctx); releaseErr != nil {
+		s.logger.WarnContext(ctx, "blob delete lease not released",
+			slog.String("stack", save.ref.String()), slog.String("update", save.id.String()),
+			slog.String("error", releaseErr.Error()))
+	}
+
+	if delErr != nil {
+		s.logger.WarnContext(
+			ctx,
+			"delete superseded checkpoint blob",
+			slog.String("stack", save.ref.String()),
+			slog.String("update", save.id.String()),
+		)
+	}
 }
 
 // previousCheckpoint returns the checkpoint the update saved before, or nil
@@ -1250,8 +1311,14 @@ func (s *Updates) storedLimit() int64 {
 
 // deleteBlobRetried removes the object under key, retrying a transient
 // failure after a short backoff (blob.DeleteRetried). Deleting a missing key
-// is not an error.
+// is not an error. A context that ended deletes nothing: the check comes
+// before the first attempt, and blob.DeleteRetried watches the context before
+// each retry.
 func (s *Updates) deleteBlobRetried(ctx context.Context, bl *scopedBlobs, key blob.Key) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("delete blob: %w", err)
+	}
+
 	if err := blob.DeleteRetried(ctx, bl, key); err != nil {
 		return fmt.Errorf("delete blob: %w", err)
 	}
@@ -1269,16 +1336,22 @@ func sweepDeleter(id UpdateID) string {
 	return "stack sweep"
 }
 
-// deletesHeld reports whether a blob delete of deleter must not run now. It is
-// true when a backup or a restore runs, and when the guard fails or is not
-// set: every case but "nothing runs" fails closed. The blobs stay, and a later
-// sweep deletes them. The first skip for each running backup or restore logs
-// at INFO and the next ones at DEBUG, because a checkpoint save asks on each
-// save. No log line names a blob key.
-func (s *Updates) deletesHeld(ctx context.Context, deleter string, ref Ref) bool {
-	err := blobguard.Hold(ctx, s.guard)
+// takeDeleteLease takes the lease of one blob delete of deleter and returns
+// the context of the delete and the function that releases it, or nil
+// contexts and false when the delete must not run now. The delete runs only
+// under the returned context, and it deletes nothing more once that context
+// ends. It fails closed: a backup or a restore that runs, a guard that
+// fails and a guard that is not set all keep the blob. The blobs stay, and a
+// later sweep deletes them. The holder is new for each delete, so the lease
+// row names the delete that holds it. The first skip for each running backup
+// or restore logs at INFO and the next ones at DEBUG, because a checkpoint
+// save asks on each save. No log line names a blob key.
+func (s *Updates) takeDeleteLease(
+	ctx context.Context, deleter string, ref Ref,
+) (context.Context, func(context.Context) error, bool) {
+	leaseCtx, release, err := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 	if err == nil {
-		return false
+		return leaseCtx, release, true
 	}
 
 	wait, isWait := errors.AsType[*blobguard.WaitError](err)
@@ -1287,7 +1360,7 @@ func (s *Updates) deletesHeld(ctx context.Context, deleter string, ref Ref) bool
 			slog.String("deleter", deleter), slog.String("stack", ref.String()),
 			slog.String("error_kind", inventory.ErrorKind(err)))
 
-		return true
+		return nil, nil, false
 	}
 
 	level := slog.LevelDebug
@@ -1305,7 +1378,7 @@ func (s *Updates) deletesHeld(ctx context.Context, deleter string, ref Ref) bool
 		slog.String("deleter", deleter), slog.String("stack", ref.String()),
 		slog.String("running", wait.Work.String()))
 
-	return true
+	return nil, nil, false
 }
 
 // sweepUpdateBlobs deletes the blobs of one update that no row names and that
@@ -1445,17 +1518,26 @@ func (s *Updates) sweepOrphans(
 	failed := 0
 
 	for _, obj := range doomed {
-		// The guard comes after the listing and after the read of the named
+		// The lease comes after the listing and after the read of the named
 		// keys. A blob that is unnamed here lost its last name in a commit
 		// before that read, so a backup that the guard does not see cannot name
-		// it. The guard is read again before each delete, so a restore that
+		// it. A lease is taken again before each delete, so a restore that
 		// starts during the loop keeps the blobs that are left. A running
 		// backup or restore keeps them for the next sweep.
-		if s.deletesHeld(ctx, sweepDeleter(id), ref) {
+		leaseCtx, release, ok := s.takeDeleteLease(ctx, sweepDeleter(id), ref)
+		if !ok {
 			return
 		}
 
-		if blobErr := s.deleteBlobRetried(ctx, bl, obj.Key); blobErr != nil {
+		blobErr := s.deleteBlobRetried(leaseCtx, bl, obj.Key)
+
+		if releaseErr := release(ctx); releaseErr != nil {
+			s.logger.WarnContext(ctx, "blob delete lease not released",
+				slog.String("deleter", sweepDeleter(id)), slog.String("stack", ref.String()),
+				slog.String("error", releaseErr.Error()))
+		}
+
+		if blobErr != nil {
 			failed++
 		}
 	}
@@ -1918,20 +2000,34 @@ func (s *Updates) cancelJournaled(ctx context.Context, ref Ref, id UpdateID) (Up
 // a manual lock covers it. The error matches ErrUpdateConflict and
 // manuallock.ErrLocked, and names the holder and the reason of the manual lock.
 func (s *Updates) checkManualLock(ctx context.Context, ref Ref, jobID string) error {
-	return refuseManualLock(ctx, s.manual, ref, jobID)
+	if s.manual == nil {
+		return nil
+	}
+
+	st, err := s.stacks.GetStack(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("read stack %s: %w", ref, err)
+	}
+
+	return refuseManualLock(ctx, s.manual, st, jobID)
 }
 
 // refuseManualLock returns an error that matches ErrUpdateConflict and
-// manuallock.ErrLocked while a manual lock covers the stack ref, and nil when
+// manuallock.ErrLocked while a manual lock covers the stack st, and nil when
 // locks is nil or no lock covers the stack for the request. A lock that cannot
 // be read refuses the request: the check fails closed.
-func refuseManualLock(ctx context.Context, locks ManualLocks, ref Ref, jobID string) error {
+func refuseManualLock(ctx context.Context, locks ManualLocks, st Stack, jobID string) error {
 	if locks == nil {
 		return nil
 	}
 
-	unit := collection.UnitRef{
-		Namespace: ref.Namespace, Tool: InventoryTool, Name: ref.Project.String() + "/" + ref.Stack.String(),
+	unit := manuallock.Unit{
+		Ref: collection.UnitRef{
+			Namespace: st.Ref.Namespace, Tool: InventoryTool,
+			Name: st.Ref.Project.String() + "/" + st.Ref.Stack.String(),
+		},
+		NamespaceID: st.NamespaceID,
+		UnitID:      st.ID.String(),
 	}
 
 	l, err := locks.CoveringFor(ctx, unit, jobID)
@@ -1940,10 +2036,10 @@ func refuseManualLock(ctx context.Context, locks ManualLocks, ref Ref, jobID str
 	}
 
 	if err != nil {
-		return fmt.Errorf("read manual lock of %s: %w", ref, err)
+		return fmt.Errorf("read manual lock of %s: %w", st.Ref, err)
 	}
 
 	return fmt.Errorf("%w: %w", ErrUpdateConflict, &manuallock.LockedError{
-		Lock: l, Unit: unit, Noun: "stack", Name: ref.String(),
+		Lock: l, Unit: unit.Ref, Noun: "stack", Name: st.Ref.String(),
 	})
 }

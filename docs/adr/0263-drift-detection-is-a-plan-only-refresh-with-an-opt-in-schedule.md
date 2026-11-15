@@ -5,6 +5,8 @@ Status: accepted · 2026-10-20. Records decisions 25.4 and 25.5 of the owner of 
 Changed by:
 
 - ADR 354 extends: triggers and drift schedules carry the delegation.
+- ADR 358 extends decision 7: automatic remediation (auto-dedrift) is opt-in, and a namespace can always opt out.
+- ADR 366 changes decision 12: a wording refinement, the server reads no state for a drift check.
 .
 ## Context
 
@@ -89,8 +91,8 @@ The product manager decided decisions 8 to 20 under the owner's delegation of
     versions. A status that becomes `unknown` after missed periods comes with
     the schedule. Benchmark: keep the last assessment and show that the check
     failed.
-12. **The runner reduces the plan to addresses and kinds.** The server reads
-    no state. A spike must prove that a unit with client-side encryption still
+12. **The runner reduces the plan to addresses and kinds.** For a drift
+    check, the server reads no state. A spike must prove that a unit with client-side encryption still
     gives the addresses.
 13. **OpenTofu first, then the Pulumi CLI.** The Pulumi CLI path starts after
     a separate e2e spike on the latest CLI.
@@ -131,3 +133,12 @@ The product manager decided decisions 8 to 20 under the owner's delegation of
   and **Drift schedule**.
 - A feature that a user can see ships with its docs page (ADR 214). Each
   slice of RFC 25 carries its page.
+
+## Changelog
+
+- 2026-11-13, wording refinement (ADR 366): decision 12 said "The server
+  reads no state." It now says "For a drift check, the server reads no
+  state." Decision 12 is about the drift check: the runner reduces the plan
+  to addresses and kinds. ADR 41 decision 1 lets the server read the state
+  that it stores, and ADR 49 decision 8, ADR 127 decision 4 and ADR 160
+  decision 7 read outputs from the state.

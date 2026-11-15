@@ -38,6 +38,23 @@ func commitOn(branch, base, job string, changes ...forge.FileChange) forge.Commi
 	}
 }
 
+// anyDelivery is a delivery with the trailer and the base, on main, with the
+// changes of one file. A case uses it for a call that must fail before the
+// forge checks a proof.
+func anyDelivery(trailer, base string) forge.Delivery {
+	return forge.Delivery{
+		Trailer: trailer, Base: base, Branch: "main",
+		Changes: forge.ChangesDigest([]forge.FileChange{writeFile("a.txt", "1")}),
+	}
+}
+
+// withTrailer returns d with the trailer line trailer.
+func withTrailer(d forge.Delivery, trailer string) forge.Delivery {
+	d.Trailer = trailer
+
+	return d
+}
+
 // anyBase is a full commit ID that no repository of a case has. A case uses it
 // for a call that must fail before the forge reads the base.
 const anyBase = "0123456789abcdef0123456789abcdef01234567"
@@ -72,9 +89,11 @@ func caseCommitLands(t *testing.T, h Harness) {
 	ctx := t.Context()
 	head := mainHead(t, h)
 
-	got, err := h.Forge.Commit(ctx, h.Repo, commitOn(
+	req := commitOn(
 		"main", head.ID, "j-1", writeFile("stacks/prod.yaml", "a: 1\n"), writeFile("stacks/dev.yaml", "a: 2\n"),
-	))
+	)
+
+	got, err := h.Forge.Commit(ctx, h.Repo, req)
 	if err != nil {
 		t.Fatalf("Commit = %v", err)
 	}
@@ -100,7 +119,7 @@ func caseCommitLands(t *testing.T, h Harness) {
 		ctx,
 		h.Repo,
 		"main",
-		forge.Delivery{Trailer: jobTrailer("j-1"), Base: head.ID},
+		forge.DeliveryOf(req),
 		head.Time,
 	)
 	if err != nil || found.ID != got.ID {
@@ -379,7 +398,7 @@ func hostileCommits(base string) map[string]forge.CommitRequest {
 	requests := map[string]forge.CommitRequest{
 		"a path with ..":           onPath("../a.txt"),
 		"a path that leaves":       onPath("stacks/../../a.txt"),
-		"an absolute path":         onPath("/etc/passwd"),
+		"an absolute path":         onPath("/etc/hosts"),
 		"a path with a NUL":        onPath("a\x00b"),
 		"a path with a new line":   onPath("a\nb"),
 		"a path with a backslash":  onPath(`a\b`),
@@ -493,7 +512,9 @@ func caseFindCommit(t *testing.T, h Harness) {
 	ctx := t.Context()
 	head := mainHead(t, h)
 
-	first, err := h.Forge.Commit(ctx, h.Repo, commitOn("main", head.ID, "j-11", writeFile("a.txt", "1")))
+	firstReq := commitOn("main", head.ID, "j-11", writeFile("a.txt", "1"))
+
+	first, err := h.Forge.Commit(ctx, h.Repo, firstReq)
 	if err != nil {
 		t.Fatalf("Commit = %v", err)
 	}
@@ -503,7 +524,7 @@ func caseFindCommit(t *testing.T, h Harness) {
 		ctx,
 		h.Repo,
 		"main",
-		forge.Delivery{Trailer: jobTrailer("j-11"), Base: head.ID},
+		forge.DeliveryOf(firstReq),
 		head.Time,
 	)
 	if err != nil || found.ID != first.ID {
@@ -515,30 +536,31 @@ func caseFindCommit(t *testing.T, h Harness) {
 	}
 
 	// Commits of other jobs do not hide it, and the newest commit of a trailer wins.
-	other, err := h.Forge.Commit(ctx, h.Repo, commitOn("main", first.ID, "j-12", writeFile("a.txt", "2")))
+	otherReq := commitOn("main", first.ID, "j-12", writeFile("a.txt", "2"))
+
+	other, err := h.Forge.Commit(ctx, h.Repo, otherReq)
 	if err != nil {
 		t.Fatalf("Commit of another job = %v", err)
 	}
 
-	again, err := h.Forge.Commit(ctx, h.Repo, commitOn("main", other.ID, "j-11", writeFile("a.txt", "3")))
+	againReq := commitOn("main", other.ID, "j-11", writeFile("a.txt", "3"))
+
+	again, err := h.Forge.Commit(ctx, h.Repo, againReq)
 	if err != nil {
 		t.Fatalf("Commit of the first job again = %v", err)
 	}
 
 	// Each commit of a trailer is found with the base of its own request.
-	for _, tt := range []struct{ trailer, base, want string }{
-		{jobTrailer("j-12"), first.ID, other.ID},
-		{jobTrailer("j-11"), other.ID, again.ID},
+	for _, tt := range []struct {
+		d    forge.Delivery
+		want string
+	}{
+		{forge.DeliveryOf(otherReq), other.ID},
+		{forge.DeliveryOf(againReq), again.ID},
 	} {
-		got, findErr := h.Forge.FindCommit(
-			ctx,
-			h.Repo,
-			"main",
-			forge.Delivery{Trailer: tt.trailer, Base: tt.base},
-			head.Time,
-		)
+		got, findErr := h.Forge.FindCommit(ctx, h.Repo, "main", tt.d, head.Time)
 		if findErr != nil || got.ID != tt.want {
-			t.Errorf("FindCommit of %q = %+v, %v; want %q", tt.trailer, got, findErr, tt.want)
+			t.Errorf("FindCommit of %q = %+v, %v; want %q", tt.d.Trailer, got, findErr, tt.want)
 		}
 	}
 }
@@ -549,7 +571,9 @@ func caseFindCommitSince(t *testing.T, h Harness) {
 	ctx := t.Context()
 	head := mainHead(t, h)
 
-	got, err := h.Forge.Commit(ctx, h.Repo, commitOn("main", head.ID, "j-13", writeFile("a.txt", "1")))
+	req := commitOn("main", head.ID, "j-13", writeFile("a.txt", "1"))
+
+	got, err := h.Forge.Commit(ctx, h.Repo, req)
 	if err != nil {
 		t.Fatalf("Commit = %v", err)
 	}
@@ -559,7 +583,7 @@ func caseFindCommitSince(t *testing.T, h Harness) {
 		ctx,
 		h.Repo,
 		"main",
-		forge.Delivery{Trailer: jobTrailer("j-13"), Base: head.ID},
+		forge.DeliveryOf(req),
 		got.Time,
 	)
 	if err != nil || found.ID != got.ID {
@@ -568,7 +592,7 @@ func caseFindCommitSince(t *testing.T, h Harness) {
 
 	// After it: not found.
 	_, err = h.Forge.FindCommit(
-		ctx, h.Repo, "main", forge.Delivery{Trailer: jobTrailer("j-13"), Base: head.ID}, got.Time.Add(time.Hour),
+		ctx, h.Repo, "main", forge.DeliveryOf(req), got.Time.Add(time.Hour),
 	)
 	if !errors.Is(err, forge.ErrNotFound) {
 		t.Fatalf("FindCommit since an hour after the commit = %v, want ErrNotFound", err)
@@ -594,7 +618,9 @@ func caseFindCommitNoTrailer(t *testing.T, h Harness) {
 		jobTrailer("j-15"), // a line in the text, not in the trailers
 		jobTrailer("j-1"),  // a prefix of no trailer
 	} {
-		got, err := h.Forge.FindCommit(ctx, h.Repo, "main", forge.Delivery{Trailer: trailer, Base: head.ID}, head.Time)
+		got, err := h.Forge.FindCommit(
+			ctx, h.Repo, "main", withTrailer(forge.DeliveryOf(quoting), trailer), head.Time,
+		)
 		if !errors.Is(err, forge.ErrNotFound) {
 			t.Errorf("FindCommit of %q = %+v, %v; want ErrNotFound", trailer, got, err)
 		}
@@ -604,9 +630,10 @@ func caseFindCommitNoTrailer(t *testing.T, h Harness) {
 func caseFindCommitMissingRef(t *testing.T, h Harness) {
 	t.Helper()
 
-	_, err := h.Forge.FindCommit(
-		t.Context(), h.Repo, "no-such-ref", forge.Delivery{Trailer: jobTrailer("j-1"), Base: anyBase}, time.Unix(0, 0),
-	)
+	d := anyDelivery(jobTrailer("j-1"), anyBase)
+	d.Branch = "no-such-ref"
+
+	_, err := h.Forge.FindCommit(t.Context(), h.Repo, "no-such-ref", d, time.Unix(0, 0))
 	if !errors.Is(err, forge.ErrNotFound) {
 		t.Fatalf("FindCommit on a missing ref = %v, want ErrNotFound", err)
 	}
@@ -626,7 +653,7 @@ func caseFindCommitInvalid(t *testing.T, h Harness) {
 			ctx,
 			h.Repo,
 			"main",
-			forge.Delivery{Trailer: trailer, Base: anyBase},
+			anyDelivery(trailer, anyBase),
 			time.Unix(0, 0),
 		)
 		if !errors.Is(err, forge.ErrInvalid) {
@@ -639,7 +666,7 @@ func caseFindCommitInvalid(t *testing.T, h Harness) {
 			ctx,
 			h.Repo,
 			ref,
-			forge.Delivery{Trailer: jobTrailer("j-1"), Base: anyBase},
+			anyDelivery(jobTrailer("j-1"), anyBase),
 			time.Unix(0, 0),
 		)
 		if !errors.Is(err, forge.ErrInvalid) {
@@ -653,7 +680,7 @@ func caseFindCommitInvalid(t *testing.T, h Harness) {
 			ctx,
 			h.Repo,
 			"main",
-			forge.Delivery{Trailer: jobTrailer("j-1"), Base: base},
+			anyDelivery(jobTrailer("j-1"), base),
 			time.Unix(0, 0),
 		)
 		if !errors.Is(err, forge.ErrInvalid) {
@@ -662,17 +689,61 @@ func caseFindCommitInvalid(t *testing.T, h Harness) {
 	}
 
 	_, err := h.Forge.FindCommit(
-		ctx, h.Repo, "main", forge.Delivery{Trailer: "Dustpan-Proof: abc", Base: anyBase}, time.Unix(0, 0),
+		ctx, h.Repo, "main", anyDelivery("Dustpan-Proof: abc", anyBase), time.Unix(0, 0),
 	)
 	if !errors.Is(err, forge.ErrInvalid) {
 		t.Errorf("FindCommit with the key of the proof = %v, want ErrInvalid", err)
 	}
 
 	_, err = h.Forge.FindCommit(
-		ctx, "acme/../infra", "main", forge.Delivery{Trailer: jobTrailer("j-1"), Base: anyBase}, time.Unix(0, 0),
+		ctx, "acme/../infra", "main", anyDelivery(jobTrailer("j-1"), anyBase), time.Unix(0, 0),
 	)
 	if !errors.Is(err, forge.ErrInvalid) {
 		t.Errorf("FindCommit in a bad repository path = %v, want ErrInvalid", err)
+	}
+
+	if after := callCount(ctx, t, h); after != before {
+		t.Fatalf("an invalid FindCommit made %d calls to the forge, want none", after-before)
+	}
+}
+
+// caseFindCommitInvalidDelivery checks that FindCommit refuses a delivery
+// whose branch is not a branch name or whose changes are not a digest, before
+// any call.
+func caseFindCommitInvalidDelivery(t *testing.T, h Harness) {
+	t.Helper()
+
+	ctx := t.Context()
+	before := callCount(ctx, t, h)
+
+	// The branch of the delivery is a branch name, and its changes are a digest.
+	for _, branch := range []string{"", "refs/heads/main", "a..b", "a b", "a\x00b", "-x", "a/", ".hidden"} {
+		d := anyDelivery(jobTrailer("j-1"), anyBase)
+		d.Branch = branch
+
+		if _, err := h.Forge.FindCommit(ctx, h.Repo, "main", d, time.Unix(0, 0)); !errors.Is(err, forge.ErrInvalid) {
+			t.Errorf("FindCommit with the branch %q = %v, want ErrInvalid", branch, err)
+		}
+	}
+
+	// The search is on the branch of the delivery, never on another ref.
+	for _, ref := range []string{"dustpan/j-1", "main2", "Main"} {
+		_, err := h.Forge.FindCommit(ctx, h.Repo, ref, anyDelivery(jobTrailer("j-1"), anyBase), time.Unix(0, 0))
+		if !errors.Is(err, forge.ErrInvalid) {
+			t.Errorf("FindCommit on the ref %q for a delivery of main = %v, want ErrInvalid", ref, err)
+		}
+	}
+
+	for _, changes := range []string{
+		"", "sha256:", "sha256:" + strings.Repeat("a", 63), "sha256:" + strings.Repeat("A", 64),
+		"sha1:" + strings.Repeat("a", 40), strings.Repeat("a", 64), "sha256:" + strings.Repeat("a", 64) + "\x00",
+	} {
+		d := anyDelivery(jobTrailer("j-1"), anyBase)
+		d.Changes = changes
+
+		if _, err := h.Forge.FindCommit(ctx, h.Repo, "main", d, time.Unix(0, 0)); !errors.Is(err, forge.ErrInvalid) {
+			t.Errorf("FindCommit with the changes %q = %v, want ErrInvalid", changes, err)
+		}
 	}
 
 	if after := callCount(ctx, t, h); after != before {

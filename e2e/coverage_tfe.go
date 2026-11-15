@@ -26,6 +26,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Sessions:       nil,
 		SessionPolicy:  nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         nil,
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
 		AddressGate:    nil,
@@ -63,7 +64,11 @@ func (coverageWorkspaces) Delete(_ context.Context, _ workspace.Ref, _ audit.Ent
 	return workspace.ErrNotFound
 }
 
-func (coverageWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+func (coverageWorkspaces) Create(
+	_ context.Context,
+	_ workspace.Ref,
+	_ workspace.Placement,
+) (workspace.Workspace, error) {
 	var none workspace.Workspace
 
 	return none, workspace.ErrNotFound

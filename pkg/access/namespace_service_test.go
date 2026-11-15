@@ -248,7 +248,8 @@ func assertNoScope(t *testing.T, authz *access.Authorizer, p identity.Principal)
 			t.Fatalf("ListObjects(%s) = %v", action, err)
 		}
 
-		if scope.All || len(scope.Namespaces)+len(scope.Collections)+len(scope.Units)+len(scope.Principals) != 0 {
+		if scope.CoversEveryObject() ||
+			len(scope.Namespaces)+len(scope.Collections)+len(scope.Units)+len(scope.Principals) != 0 {
 			t.Fatalf("ListObjects(%s) = %+v, want an empty scope", action, scope)
 		}
 	}

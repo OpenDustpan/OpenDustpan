@@ -133,7 +133,7 @@ func checkTagDir(t *testing.T, dir string) {
 	for _, entry := range entries {
 		name := entry.Name()
 
-		if entry.IsDir() {
+		if !entry.Type().IsRegular() {
 			continue
 		}
 
@@ -381,6 +381,67 @@ func checkCountTagCopies(t *testing.T, files, dirs []string, want int) {
 
 	if got != want {
 		t.Errorf("countTagCopies() = %d, want %d", got, want)
+	}
+}
+
+// TestCheckTagDirSkipsNonRegularEntries proves that checkTagDir skips an entry
+// that is not a regular file. A symlink named like a copy or like a hash file
+// does not count as a copy and does not fail the check.
+func TestCheckTagDirSkipsNonRegularEntries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		link   string
+		target string
+	}{
+		{
+			name:   "a symlink named like a copy",
+			link:   "0002_link.sql",
+			target: "0001_baseline.sql",
+		},
+		{
+			name:   "a symlink named like a hash file",
+			link:   "0002_link.sql.sha256",
+			target: "0001_baseline.sql.sha256",
+		},
+		{
+			name:   "a dangling symlink named like a copy",
+			link:   "0003_gone.sql",
+			target: "gone.sql",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			writeTagCopy(t, dir, "0001_baseline.sql", "select 1;")
+
+			if err := os.Symlink(tt.target, filepath.Join(dir, tt.link)); err != nil {
+				t.Fatal(err)
+			}
+
+			checkTagDir(t, dir)
+		})
+	}
+}
+
+// writeTagCopy writes one tag migration copy into dir with the hash file that
+// checkTagCopy expects next to it.
+func writeTagCopy(t *testing.T, dir, name, data string) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sum := sha256.Sum256([]byte(data))
+	hash := []byte(hex.EncodeToString(sum[:]) + "\n")
+
+	if err := os.WriteFile(filepath.Join(dir, name+".sha256"), hash, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

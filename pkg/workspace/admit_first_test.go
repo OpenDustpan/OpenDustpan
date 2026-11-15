@@ -179,7 +179,10 @@ func TestCreatePassesTheJobPhaseToTheStore(t *testing.T) {
 
 			ctx := workspace.WithJob(t.Context(), tc.jobID)
 
-			if _, err := svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name}); err != nil {
+			ref := workspace.Ref{Namespace: "acme", Name: name}
+
+			_, err = svc.Create(ctx, ref, memPlacement("acme"))
+			if err != nil {
 				t.Fatalf("Create: %v", err)
 			}
 

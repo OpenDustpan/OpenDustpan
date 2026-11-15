@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "namespace": "payments",
+  "name": "orders-site",
+  "blueprint": { "name": "webapp", "version": 1 },
+  "ensure": "present",
+  "inputs": { "size": "large", "tags": ["a", "b"] }
+}

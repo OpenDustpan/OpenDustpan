@@ -88,7 +88,7 @@ each query parameter in each dialect, although the two types are often equal.
 
 ## Measured state
 
-Measured on `main` at 48f4e31 (2026-10-22), on the files that are not tests.
+Measured on `main` at 00b31b4 (2026-10-22), on the files that are not tests.
 A "line" is a line that is not blank and not a comment.
 
 ### How it was measured
@@ -807,6 +807,12 @@ times the number.
 | 24 | Stack updates, the journal, item keys, state at | 1,460 | **high**: the Pulumi CLI hot path | 3, #1435, #1450, #1454, #1458, #1489 |
 | 25 | Backup and restore engines: the shared order of the steps in `sqlstore`, the engines stay in each dialect | 1,500 | **high** | 6, 7, #1485 |
 | 26 | Delete the empty helpers. Update `CLAUDE.md`, `GLOSSARY.md` and `.golangci.yml` | small | low | all |
+
+A third engine adds an ongoing cost to CI. It needs an additional real-server
+conformance job. The current CI starts real database servers as job services:
+for example, a PostgreSQL job starts a `postgres:18` image
+(`.github/workflows/ci.yml:183-188`). The new engine adds an additional job of
+this kind. That job needs runner and server resources.
 
 The order puts the core first (1 to 7), because each area needs it. Step 3
 changes no behavior: it moves the checks into one function, and each dialect

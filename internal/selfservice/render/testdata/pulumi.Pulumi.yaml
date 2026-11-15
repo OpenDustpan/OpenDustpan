@@ -1,0 +1,22 @@
+name: "webapp"
+runtime: yaml
+packages:
+  "webapp":
+    source: "webapp"
+    version: "1.2.0"
+config:
+  "replicas":
+    type: integer
+  "size":
+    type: string
+  "tags":
+    type: array
+    items:
+      type: string
+resources:
+  main:
+    type: "webapp:index:Site"
+    properties:
+      "replicas": "${replicas}"
+      "size": "${size}"
+      "tags": "${tags}"

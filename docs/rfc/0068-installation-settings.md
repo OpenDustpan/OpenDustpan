@@ -30,7 +30,7 @@ this RFC says "installation setting" for a setting that applies to the whole
 installation, and "instance setting" only for a value that each server
 process can hold differently.
 
-Facts from the code on `main` (commit `5f1292c`):
+Facts from the code on `main` (commit `8de1d21`):
 
 - Every server setting is a flag with an environment variable, declared once
   in `internal/cli/settings.go`. The secrets (the key-encryption key, the
