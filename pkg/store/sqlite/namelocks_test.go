@@ -31,6 +31,11 @@ func TestNameLockConformance(t *testing.T) {
 
 				ageNameLocks(t, s, d)
 			},
+			Place: func(t *testing.T, scope, name, sub string, offset time.Duration) {
+				t.Helper()
+
+				placeNameLocks(t, s, nameCount{scope: scope, name: name, sub: sub}, offset)
+			},
 			Broken: func(t *testing.T) authgate.NameLockCounter {
 				t.Helper()
 
@@ -115,5 +120,45 @@ func ageNameLocks(t *testing.T, s *sqlite.Store, d time.Duration) {
 		d.Milliseconds(), d.Milliseconds(), d.Milliseconds())
 	if err != nil {
 		t.Fatalf("age the name counts: %v", err)
+	}
+}
+
+// nameCount names one stored name count: its scope, its name and its
+// sub-key.
+type nameCount struct {
+	scope, name, sub string
+}
+
+// placeNameLocks moves each time column of one name count of s, the count
+// that k names, to the time of the clock of the store plus offset, so a case
+// fixes the time of a count without a wait. A time of 0, a count with no
+// lock or no end, stays 0.
+func placeNameLocks(t *testing.T, s *sqlite.Store, k nameCount, offset time.Duration) {
+	t.Helper()
+
+	now, err := s.DatabaseNow(t.Context())
+	if err != nil {
+		t.Fatalf("read the clock of the store: %v", err)
+	}
+
+	at := now.UnixMilli() + offset.Milliseconds()
+
+	res, err := sqlite.DB(s).ExecContext(t.Context(), `UPDATE name_locks SET
+		locked_until_ms  = CASE WHEN locked_until_ms <> 0 THEN ? ELSE 0 END,
+		last_failure_ms  = CASE WHEN last_failure_ms <> 0 THEN ? ELSE 0 END,
+		last_lock_end_ms = CASE WHEN last_lock_end_ms <> 0 THEN ? ELSE 0 END
+		WHERE scope = ? AND name = ? AND sub = ?`,
+		at, at, at, k.scope, k.name, k.sub)
+	if err != nil {
+		t.Fatalf("place the name count: %v", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		t.Fatalf("count the changed rows of the name count %s, %s, %s: %v", k.scope, k.name, k.sub, err)
+	}
+
+	if rows != 1 {
+		t.Fatalf("the update of the name count %s, %s, %s changed %d rows; want 1", k.scope, k.name, k.sub, rows)
 	}
 }

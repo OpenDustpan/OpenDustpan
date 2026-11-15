@@ -131,3 +131,11 @@ If the guarded transaction rolls back, then the server SHALL store no reservatio
 #### Scenario: rolled back reserve leaves no count
 - **WHEN** the guarded transaction rolls back after Reserve
 - **THEN** usage is unchanged and no reservation row remains
+
+### Requirement: reserve-keys-are-checked
+
+When Reserve receives a reservation with a key that is not the key of one of its checks, the server SHALL refuse the reservation with `quota.ErrInvalid` and store nothing.
+
+#### Scenario: a key without a check
+- **WHEN** Reserve runs with a reservation of two keys and checks for one of them
+- **THEN** the counter returns an error that wraps `quota.ErrInvalid`, stores no reservation, and changes no usage

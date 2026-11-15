@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/stack"
 )
 
 // DurableStore keeps the durable operations, the job schedules and the
@@ -133,6 +134,13 @@ func (s *Server) jobSchedules() []durable.ScheduleSpec {
 		})
 	}
 
+	if s.supersededSweeper != nil {
+		specs = append(specs, durable.ScheduleSpec{
+			Name: stack.SupersededSweepName, Kind: stack.KindSupersededSweep, Version: stack.SupersededSweepVersion,
+			Interval: stack.SupersededSweepInterval, Input: nil,
+		})
+	}
+
 	return append(specs, s.issuerRotateSchedule()...)
 }
 
@@ -171,6 +179,10 @@ func (s *Server) jobKinds() []durable.KindSpec {
 
 	if s.artifactSweeper != nil {
 		kinds = append(kinds, s.artifactSweepKind())
+	}
+
+	if s.supersededSweeper != nil {
+		kinds = append(kinds, s.supersededSweepKind())
 	}
 
 	return append(kinds, s.issuerRotateKindSpec()...)
@@ -226,6 +238,53 @@ func (s *Server) artifactSweepKind() durable.KindSpec {
 				out, err := json.Marshal(res)
 				if err != nil {
 					return nil, fmt.Errorf("job artifact sweep: encode the result: %w", err)
+				}
+
+				return out, nil
+			}},
+		},
+	}
+}
+
+// supersededSweeper is the sweep of the marked checkpoint blobs that a later
+// save replaced.
+type supersededSweeper interface {
+	// SweepSuperseded deletes the marked checkpoint blobs that no row names.
+	// It returns the counts of the run so far with an error when the run stops
+	// before it ends.
+	SweepSuperseded(ctx context.Context) (stack.SupersededSweepResult, error)
+}
+
+// supersededSweepKind returns the runner kind of the schedule of the sweep of
+// superseded checkpoint blobs. Its step returns the error of a run, so the
+// runner counts a failed run as a failed attempt. The output of the step is
+// the result of the run in JSON: its counts. The step writes one log line: an
+// info line when the run ends, and a warning line with the counts of what the
+// run did when it stops with an error.
+func (s *Server) supersededSweepKind() durable.KindSpec {
+	return durable.KindSpec{
+		Kind:       stack.KindSupersededSweep,
+		Version:    stack.SupersededSweepVersion,
+		MinVersion: stack.SupersededSweepVersion,
+		Steps: []durable.Step{
+			{Name: jobStepName, Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+				res, err := s.supersededSweeper.SweepSuperseded(ctx)
+				if err != nil {
+					s.logger.WarnContext(ctx, "superseded checkpoint sweep: stopped with an error",
+						slog.String("error", err.Error()),
+						slog.Int("deleted", res.Deleted), slog.Int64("deleted_bytes", res.DeletedBytes),
+						slog.Int("kept", res.Kept), slog.Int("failed", res.Failed))
+
+					return nil, fmt.Errorf("superseded checkpoint sweep: %w", err)
+				}
+
+				s.logger.InfoContext(ctx, "superseded checkpoint sweep: deleted the marked blobs that no row names",
+					slog.Int("deleted", res.Deleted), slog.Int64("deleted_bytes", res.DeletedBytes),
+					slog.Int("kept", res.Kept), slog.Int("failed", res.Failed))
+
+				out, err := json.Marshal(res)
+				if err != nil {
+					return nil, fmt.Errorf("superseded checkpoint sweep: encode the result: %w", err)
 				}
 
 				return out, nil

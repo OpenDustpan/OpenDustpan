@@ -472,6 +472,71 @@ LEFT JOIN (
 WHERE st.id = @stack_id AND st.deleted_at_ms IS NULL
 ORDER BY 1;
 
+-- name: BlobKeyNamed :one
+-- Reports whether a checkpoint row or a journal batch row of the stack names
+-- the blob key. The sweep reads it in the transaction that drops a mark, so a
+-- row that still names the key keeps the blob.
+SELECT EXISTS (
+    SELECT 1 FROM checkpoints AS c
+    WHERE c.stack_id = sqlc.arg(stack_id) AND c.blob_key = sqlc.arg(blob_key)
+    UNION ALL
+    SELECT 1 FROM update_journal AS j
+    WHERE j.stack_id = sqlc.arg(stack_id) AND j.blob_key = sqlc.arg(blob_key)
+) AS named;
+
+-- name: DeleteSupersededMark :execrows
+-- Deletes the mark of the blob key of the stack. A missing mark deletes no
+-- row, which is not an error.
+DELETE FROM checkpoint_supersedes
+WHERE stack_id = sqlc.arg(stack_id) AND blob_key = sqlc.arg(blob_key);
+
+-- name: ListSupersededBlobs :many
+-- Every mark of one live stack, ordered by blob key: the blob that a later
+-- save of the same update replaced, with the size of the stored blob and the
+-- time of the save that replaced it. The stack is the driving table, so one
+-- statement tells a stack without marks (one row with an empty key) from a
+-- stack that is missing or soft-deleted (no row), and the read needs no
+-- transaction.
+SELECT CAST(COALESCE(m.blob_key, '') AS TEXT) AS blob_key,
+       CAST(COALESCE(m.size, 0) AS BIGINT) AS size,
+       CAST(COALESCE(m.superseded_at_ms, 0) AS BIGINT) AS superseded_at_ms
+FROM stacks AS st
+LEFT JOIN checkpoint_supersedes AS m ON m.stack_id = st.id
+WHERE st.id = @stack_id AND st.deleted_at_ms IS NULL
+ORDER BY 1;
+
+-- name: ListSupersededMarks :many
+-- One page of the marks of every live stack whose save replaced the blob
+-- before the given time, ordered by stack ID and blob key. The read starts
+-- after the cursor, so a sweep goes page by page. A soft-deleted stack has no
+-- marks in the result.
+SELECT m.stack_id, n.id AS namespace_id, m.blob_key, m.size,
+       CAST(m.superseded_at_ms AS BIGINT) AS superseded_at_ms
+FROM checkpoint_supersedes AS m
+JOIN stacks AS st ON st.id = m.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE st.deleted_at_ms IS NULL
+  AND m.superseded_at_ms < sqlc.arg(older_than_ms)
+  AND (m.stack_id COLLATE "C" > sqlc.arg(after_stack_id)
+    OR (m.stack_id = sqlc.arg(after_stack_id) AND m.blob_key COLLATE "C" > sqlc.arg(after_blob_key)))
+ORDER BY m.stack_id COLLATE "C", m.blob_key COLLATE "C"
+LIMIT sqlc.arg(page_limit);
+
+-- name: MarkSupersededCheckpoint :exec
+-- Marks the checkpoint blob that a save of the update replaces, with the time
+-- of the database clock, from the same expression as the checkpoint upsert.
+-- It marks only the row that still names the key that the sequence check read:
+-- the row is not locked, and a concurrent attempt can replace it between the
+-- read and the mark. The mark names the blob of that row and the size of the
+-- stored blob, and a mark of an earlier save stays as it is.
+INSERT INTO checkpoint_supersedes (blob_key, stack_id, update_id, size, superseded_at_ms)
+SELECT c.blob_key, c.stack_id, c.update_id, COALESCE(c.blob_size, 0),
+       FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+FROM checkpoints AS c
+WHERE c.stack_id = @stack_id AND c.update_id = @update_id
+  AND c.blob_key <> @blob_key AND c.blob_key = @read_key
+ON CONFLICT (blob_key) DO NOTHING;
+
 -- name: SoftDeleteStack :execrows
 -- Moves the name to deleted_name and frees it (ADR 47). A stack name cannot
 -- hold ":", so "deleted:" and the ID never match a lookup by name.
