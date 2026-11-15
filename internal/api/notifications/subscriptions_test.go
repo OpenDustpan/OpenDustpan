@@ -1149,18 +1149,30 @@ func checkRefusalOtherNamespace(t *testing.T, kind redeliverRefusal) {
 		checkDeniedRefusal(t, added[0], kind, "admin")
 	}
 
-	// stateOf reads the history of the namespace acme only.
 	if state := f.stateOf(t, inAcme); state != "delivered" {
-		t.Errorf("delivery state after refusals = %q, want delivered", state)
+		t.Errorf("delivery state of %s after refusals = %q, want delivered", inAcme.ID, state)
+	}
+
+	if state := f.stateOfIn(t, "other", inOther); state != "delivered" {
+		t.Errorf("delivery state of %s after refusals = %q, want delivered", inOther.ID, state)
 	}
 }
 
 // stateOf returns the state that the history of the subscription of d gives
-// for d.
+// for d. d must be in the namespace acme.
 func (f fixture) stateOf(t *testing.T, d notify.Delivery) string {
 	t.Helper()
 
-	history := decode[historyWire](t, f.do(t, get("admin", subscriptionsBase+"/"+d.Subscription+"/deliveries")))
+	return f.stateOfIn(t, "acme", d)
+}
+
+// stateOfIn returns the state that the history of the subscription of d gives
+// for d, read in the namespace ns.
+func (f fixture) stateOfIn(t *testing.T, ns namespace.Name, d notify.Delivery) string {
+	t.Helper()
+
+	target := "/api/dustpan/v1/namespaces/" + ns.String() + "/subscriptions/" + d.Subscription + "/deliveries"
+	history := decode[historyWire](t, f.do(t, get("admin", target)))
 
 	for i := range history.Deliveries {
 		if history.Deliveries[i].ID == d.ID {

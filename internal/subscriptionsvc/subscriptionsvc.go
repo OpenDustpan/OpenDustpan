@@ -66,11 +66,6 @@ type Config struct {
 	Subscriptions notify.Subscriptions
 	Deliveries    notify.Deliveries
 	Namespaces    Namespaces
-	// Audit is not used. The service writes no entry of a refused redeliver:
-	// the adapter records each refusal through the denial limiter. The field
-	// stays only so that the callers in pkg/dustpan and e2e still compile;
-	// remove it together with their Audit arguments.
-	Audit audit.Store
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 }

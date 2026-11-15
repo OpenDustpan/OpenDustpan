@@ -410,7 +410,7 @@ func buildFixtureParts(t *testing.T, parts fixtureParts, deny ...identity.Action
 	}
 
 	subscriptionSvc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
-		Subscriptions: subscriptions, Deliveries: store.Notifications(), Namespaces: namespaces, Audit: nil,
+		Subscriptions: subscriptions, Deliveries: store.Notifications(), Namespaces: namespaces,
 		Now: clock.Now,
 	})
 	if err != nil {

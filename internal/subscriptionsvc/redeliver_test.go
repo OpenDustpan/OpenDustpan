@@ -65,7 +65,7 @@ func redeliverWith(t *testing.T, in error) error {
 
 	svc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
 		Subscriptions: fakeSubs{nil}, Deliveries: redeliverDeliveries{Deliveries: nil, err: in},
-		Namespaces: fakeNamespaces{}, Audit: nil, Now: at,
+		Namespaces: fakeNamespaces{}, Now: at,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
