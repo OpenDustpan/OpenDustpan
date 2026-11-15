@@ -243,13 +243,21 @@ func loadIssueWorld(ctx context.Context, q *db.Queries, tok jobtoken.Token) (iss
 // loadIssueNamespaces reads into w the stable namespace ID of the namespace
 // of tok and the stable namespace ID of the live unit row that its unit ID
 // names, for the namespace checks of checkIssueLive. A name with no namespace
-// row and a unit ID with no live unit row give an empty ID, which no
-// comparison accepts.
+// row refuses the issue with ErrNotLive. A unit ID with no live unit row
+// gives an empty ID, which the namespace checks of checkIssueLive refuse.
 func loadIssueNamespaces(
 	ctx context.Context, q *db.Queries, tok jobtoken.Token, w *issueWorld,
 ) error {
 	nsID, err := q.GetNamespaceID(ctx, tok.Namespace.String())
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Defense in depth: fencedTx refuses a namespace with no row before
+		// this read runs, and the namespace checks of checkIssueLive refuse
+		// an empty ID too; this check stays so that this read alone refuses
+		// the issue.
+		return fmt.Errorf("%w: the namespace of the token does not exist", jobtoken.ErrNotLive)
+	}
+
+	if err != nil {
 		return fmt.Errorf("select namespace ID: %w", err)
 	}
 
@@ -269,8 +277,8 @@ func loadIssueNamespaces(
 }
 
 // checkIssueLive refuses an issue whose starter is not the job starter, whose
-// claim or job is not live, or whose job or unit row is not in the namespace
-// of the token.
+// claim or job is not live, whose namespace ID is empty, or whose job or
+// unit row is not in the namespace of the token.
 func checkIssueLive(tok jobtoken.Token, w *issueWorld, at time.Time) error {
 	// Defense in depth: Service.Issue checks the starter against the job too;
 	// this check stays so that a caller that skips the service cannot issue a
@@ -282,16 +290,23 @@ func checkIssueLive(tok jobtoken.Token, w *issueWorld, at time.Time) error {
 	// Defense in depth: the namespace check of GetByDigest refuses a read of
 	// such a record; this check stays so that the write layer stops an issue
 	// whose unit row is not a live row in the namespace of the fence, with no
-	// help from the read path.
-	if w.unitNamespaceID != w.namespaceID {
+	// help from the read path. The refusal of an empty namespace ID has no
+	// help from fencedTx or from loadIssueNamespaces, which refuse a
+	// namespace with no row: this check alone stops an empty ID, on either
+	// side of the comparison.
+	if w.namespaceID == "" || w.unitNamespaceID != w.namespaceID {
 		return jobtoken.ErrNotLive
 	}
 
 	// Defense in depth: the namespace check of GetByDigest refuses a read of
 	// such a record; this check stays so that the write layer stops an issue
 	// whose job is in another namespace than the fence, with no help from the
-	// read path.
-	if w.job.NamespaceID != w.namespaceID {
+	// read path. The refusal of an empty namespace ID has no help from
+	// fencedTx or from loadIssueNamespaces, which refuse a namespace with no
+	// row, and no help from the jobs table, which keeps a namespace ID on
+	// every row: this check alone stops an empty ID, on either side of the
+	// comparison.
+	if w.namespaceID == "" || w.job.NamespaceID != w.namespaceID {
 		return jobtoken.ErrNotLive
 	}
 

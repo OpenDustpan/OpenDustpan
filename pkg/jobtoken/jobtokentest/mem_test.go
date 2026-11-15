@@ -226,22 +226,28 @@ func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audi
 }
 
 // checkIssueNamespaces refuses an issue whose unit row or job is not in the
-// namespace of the fence. The caller holds the lock.
+// namespace of the fence, or whose namespace ID is empty. The caller holds
+// the lock.
 func (m *memWorld) checkIssueNamespaces(tok jobtoken.Token, namespaceID string) error {
 	// Defense in depth: the namespace check of GetByDigest refuses a read of
 	// such a record; this check stays so that the write layer stops an issue
 	// whose unit row is not a live row in the namespace of the fence, with no
-	// help from the read path.
+	// help from the read path. The refusal of an empty namespace ID has no
+	// help from issueLocked, which refuses a namespace with no row: this
+	// check alone stops an empty ID, on either side of the comparison.
 	unit, ok := m.units[tok.Unit.UnitID()]
-	if !ok || unit.Tool() != tok.Unit.Tool() || m.nsByName[unit.Namespace()] != namespaceID {
+	if namespaceID == "" || !ok || unit.Tool() != tok.Unit.Tool() ||
+		m.nsByName[unit.Namespace()] != namespaceID {
 		return jobtoken.ErrNotLive
 	}
 
 	// Defense in depth: the namespace check of GetByDigest refuses a read of
 	// such a record; this check stays so that the write layer stops an issue
-	// whose job is in another namespace than the fence, with no help from the
-	// read path.
-	if m.jobNamespaces[tok.JobID] != namespaceID {
+	// whose job is in another namespace than the fence, with no help from
+	// the read path. The refusal of an empty namespace ID has no help from
+	// issueLocked, which refuses a namespace with no row: this check alone
+	// stops an empty ID, on either side of the comparison.
+	if namespaceID == "" || m.jobNamespaces[tok.JobID] != namespaceID {
 		return jobtoken.ErrNotLive
 	}
 
