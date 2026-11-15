@@ -774,6 +774,7 @@ func loadEntry(ns namespace.Name, action identity.Action, object string) audit.E
 		SourceIP: "", UserAgent: "load-harness", Channel: "api", Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0,
 		PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 }
 

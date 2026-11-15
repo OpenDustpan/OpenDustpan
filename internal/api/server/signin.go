@@ -571,6 +571,7 @@ func signInEntry(r *http.Request, subject, action string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

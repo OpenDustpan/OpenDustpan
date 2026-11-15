@@ -502,11 +502,6 @@ func TestActionsWithoutRoutesAreUnclassified(t *testing.T) {
 		identity.ActionUnitRunDestroy,
 		identity.ActionUnitWriteBack,
 		identity.ActionUnitDefineSteps,
-		identity.ActionJobRead,
-		identity.ActionJobReadLogs,
-		identity.ActionJobReadPlans,
-		identity.ActionJobCancel,
-		identity.ActionJobApprove,
 		identity.ActionNamespaceManageFreezes,
 		identity.ActionNamespaceBreakFreeze,
 		identity.ActionNamespaceManageRunners,
@@ -1227,6 +1222,7 @@ func testEntry() audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

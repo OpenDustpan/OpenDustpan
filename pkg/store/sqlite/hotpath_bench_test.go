@@ -282,6 +282,7 @@ func BenchmarkAuditAppend(b *testing.B) {
 		PrincipalKind: audit.PrincipalKindPerson,
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 
 	b.ResetTimer()

@@ -15,7 +15,7 @@
 
 - [ ] 2.1 Run `TestDocsRoutesAreServed` in `cmd/opendustpan/docs_routes_test.go` (NEW) and record each unserved route that it
   names. Check: the output lists each route with `path:line`.
-- [ ] 2.2 In `docs/reference/self-service-api.md` and `docs/guides/publish-a-blueprint.md`, mark with the docs' marker `(not available yet)` only a route that main serves under no option at all (a route behind an option is mounted by task 1.2 and gets no marker).
+- [ ] 2.2 In `docs/reference/self-service-api.md` and `docs/guides/publish-a-blueprint.md`, mark with the docs' marker `(not available yet)` only a route that main serves under no option at all (a route behind an option is mounted by task 1.2 and gets no marker). `make docs-lint` passes on each edited guide.
   The six blueprint rows of `docs/reference/self-service-api.md:18-23` get no
   marker: `dustpan.WithSelfServiceBlueprints` mounts them in task 1.2. Change
   no route and serve no new route. Check: the test passes, and its output lists

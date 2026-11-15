@@ -101,6 +101,7 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 			Reason:        "",
 			PrincipalKind: "",
 			JobID:         "",
+			Origin:        nil,
 		}
 	}
 

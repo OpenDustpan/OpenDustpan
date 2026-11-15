@@ -569,6 +569,7 @@ func auditEntry(
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

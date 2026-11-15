@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"runtime"
 	"slices"
@@ -1158,6 +1159,13 @@ type backupSize struct {
 func TestRoundTripsOfBackup(t *testing.T) {
 	t.Parallel()
 
+	// This test measures the round trips of a backup and of a restore on
+	// PostgreSQL. It skips before it registers the cleanup, because the cleanup
+	// checks the runs of its subtests, and a skipped subtest writes no run.
+	if os.Getenv(servertest.EnvURL) == "" {
+		t.Skipf("set %s to run the multi-instance tests", servertest.EnvURL)
+	}
+
 	sizes := backupSizes()
 	runs := make([]measuredRun, len(sizes))
 
@@ -1384,12 +1392,16 @@ func backupModel() costModel {
 // The fixed part also holds stagedPrincipalCheckTrips: the staged checks of
 // the grants and the memberships of principals of a namespace.
 //
+// The fixed part also holds stagedTriggerClockTrips: the staged check of the
+// trigger rows reads the clock of the store in one statement, once for each
+// restore.
+//
 // The fixed part also holds unitStateTrips: the restore derives the state
 // version of each unit from the restored rows.
 func restoreModel() costModel {
 	return costModel{
 		fixed: 342 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
-			removalAlertTrips + stagedPrincipalCheckTrips + unitStateTrips,
+			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1442,6 +1454,12 @@ const stagedJobCheckTrips = 1
 // query, once for each restore. The count is fixed: it does not grow with the
 // units or the tables.
 const stagedPrincipalCheckTrips = 2
+
+// stagedTriggerClockTrips is the number of round trips that the staged check of
+// the trigger rows adds for the clock: it reads the clock of the store in one
+// statement, once for each restore. It does not grow with the units or the
+// tables.
+const stagedTriggerClockTrips = 1
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer

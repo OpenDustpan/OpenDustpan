@@ -165,6 +165,7 @@ func newEntry(ns namespace.Name, subject, requestID string, at time.Time) audit.
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
