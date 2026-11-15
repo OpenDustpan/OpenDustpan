@@ -15,7 +15,7 @@ and the expiry warning of the CLI. For a token with a far expiry, the count is
 negative.
 
 `DaysUntil` in `pkg/accesstoken/accesstoken.go` rounds a duration up with
-`int64((d + day - 1) / day)`. `time.Time.Sub` saturates at about 292 years.
+`int64((d + day - 1)` divided by `day)`. `time.Time.Sub` saturates at about 292 years.
 For a far expiry, `d + day - 1` wraps to a negative value. Input: now
 2026-11-15, expiry `9999-12-31T23:59:59Z`. Answer: `-106750`.
 
@@ -36,19 +36,19 @@ passed).
   `pkg/accesstoken/accesstoken.go:182` (comment) and `:186` (function), and the
   test `TestDaysUntil` with six rows, the last one `past_expiry_answers_0`
   at `now.Add(-time.Millisecond)`. So the change waits for #3055.
-- The wrong line is `return int64((d + day - 1) / day)` on that branch.
+- The wrong line is `return int64((d + day - 1)` divided by `day)` on that branch.
 
 ## Fix boundary
 
 Work in `pkg/accesstoken/accesstoken.go` and `pkg/accesstoken/accesstoken_test.go`
 only, after #3055 is on `main`.
 
-- Round up without the addition: `n := d / day; if d%day != 0 { n++ }`, then
+- Round up without the addition: `n` = `d` divided by `day`, plus 1 when `d%day != 0`, then
   `return int64(n)`. The rule stays "started days, at least 1 while the expiry
   is ahead, 0 once it passed".
 - Add to `TestDaysUntil` a row for a far expiry (`9999-12-31T23:59:59Z`, with
   `now` as in the test) that expects a count above 100000. `time.Duration`
-  saturates at `math.MaxInt64` ns, so the count is `ceil(MaxInt64 / day)`,
+  saturates at `math.MaxInt64` ns, so the count is `MaxInt64` divided by `day`, rounded up,
   106752. The row checks "positive and above 100000", not the exact value.
 - Add a row for an expiry 2 days in the past that expects 0. A row 1 ms in the
   past stays.
@@ -57,7 +57,7 @@ only, after #3055 is on `main`.
 ## Check
 
 - `go test ./pkg/accesstoken/ -run TestDaysUntil -v` passes.
-- Mutation 1: restore `int64((d + day - 1) / day)`. The far-expiry row fails
+- Mutation 1: restore `int64((d + day - 1)` divided by `day)`. The far-expiry row fails
   with a negative count.
 - Mutation 2: remove the `d <= 0` branch. The row 2 days in the past fails
   (the count is `-2`, or the rounded value of a negative duration, not 0).
