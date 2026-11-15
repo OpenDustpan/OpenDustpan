@@ -40,7 +40,7 @@
 
 ## 5. The action family
 
-- [ ] 5.1 Add `FamilyRedaction` and `identity.ActionUnitRedact: FamilyRedaction` to `pkg/access/access.go`, and add `Actions(FamilyRedaction)` to the `RoleAdmin` case of `builtInActions` in `pkg/access/roles.go` only. This task edits `pkg/identity/identity.go` only if the action list needs it. Change `pkg/access/access_test.go`: take `ActionUnitRedact` out of the "no family" list, and add a table of role tests (`admin` holds it; `viewer`, `writer`, `maintainer`, `planner`, `account-administrator`, `site-administrator`, `installation-operator` and `token-manager` do not). Add a test that no action of `FamilyRedaction` is in the set of any built-in role but `admin`.
+- [ ] 5.1 Add `identity.ActionUnitRedact: FamilyData` to `families`. This task edits `pkg/identity/identity.go` only if the action list needs it, and it names `pkg/access/access.go` as the registry file. Change `pkg/access/access_test.go`: take `ActionUnitRedact` out of the "no family" list, and add role tests (`admin` holds it, `viewer`, `writer`, `maintainer`, `planner` do not).
   - Check: `go test -race ./pkg/access/...`
   - Confirmed by: CI
   - OpenDustpan: `pkg/access/access.go`, `pkg/access/access_test.go`, `pkg/identity/identity.go`
