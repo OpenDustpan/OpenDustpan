@@ -63,3 +63,9 @@ A retired version stays in the history. A publish after a retire is allowed.
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" \
   "$SERVER/api/dustpan/v1/self-service/blueprints/$NAMESPACE/database/versions/1/retire"
 ```
+
+## Related guides
+
+Profiles and blueprints stay the recommended path for new setups, including
+for teams that already use Terragrunt. See [Why profiles and blueprints stay
+the recommended path](../explanation/profiles-and-blueprints.md).
