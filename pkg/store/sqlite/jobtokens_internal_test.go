@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/jobtoken"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
@@ -113,6 +114,10 @@ func TestCheckIssueLiveRefusesEmptyAndForeignNamespaceIDs(t *testing.T) {
 			"an empty namespace ID with a live unit row and a live job in one namespace",
 			"", "ns-acme", "ns-acme", true,
 		},
+		{
+			"a live namespace ID and a live job with no live unit row",
+			"ns-acme", "", "ns-acme", true,
+		},
 		{"a unit row in another namespace", "ns-acme", "ns-globex", "ns-acme", true},
 		{"a job in another namespace", "ns-acme", "ns-acme", "ns-globex", true},
 		{"a live unit row and a live job in the namespace of the token", "ns-acme", "ns-acme", "ns-acme", false},
@@ -157,5 +162,56 @@ func TestLoadIssueNamespacesRefusesAMissingNamespaceRow(t *testing.T) {
 
 	if errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("loadIssueNamespaces returned the error of the driver: %v", err)
+	}
+}
+
+// TestLoadIssueNamespacesToleratesAMissingUnitRow proves that the read alone
+// gives no error for a token whose unit ID names no live unit row: the read
+// leaves the unit namespace ID empty, and the world of that read refuses the
+// issue with ErrNotLive and no error of the driver.
+func TestLoadIssueNamespacesToleratesAMissingUnitRow(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+	at := time.UnixMilli(1_700_000_000_000).UTC()
+	tok := newIssueToken(t, at)
+
+	ns := namespace.Namespace{
+		ID:                  "ns-acme",
+		CreatedAt:           at,
+		Name:                tok.Namespace,
+		PrimaryInstallation: "eu-west",
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	if err := s.CreateNamespace(t.Context(), ns); err != nil {
+		t.Fatalf("create namespace %s: %v", tok.Namespace, err)
+	}
+
+	// The world holds a live job in the namespace of the row, so that only
+	// the unit guard decides. loadIssueNamespaces writes the two namespace
+	// fields of the world, as the issue path does.
+	w := newIssueWorld(tok, "", "", "ns-acme")
+
+	if err := loadIssueNamespaces(t.Context(), s.queries, tok, &w); err != nil {
+		t.Fatalf("loadIssueNamespaces with a unit ID that has no row = %v, want nil", err)
+	}
+
+	if w.namespaceID != "ns-acme" {
+		t.Fatalf("loaded namespace ID = %q, want %q", w.namespaceID, "ns-acme")
+	}
+
+	if w.unitNamespaceID != "" {
+		t.Fatalf("loaded unit namespace ID = %q, want empty", w.unitNamespaceID)
+	}
+
+	err := checkIssueLive(tok, &w, at)
+	if !errors.Is(err, jobtoken.ErrNotLive) {
+		t.Fatalf("checkIssueLive with no live unit row = %v, want ErrNotLive", err)
+	}
+
+	if errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("checkIssueLive returned the error of the driver: %v", err)
 	}
 }

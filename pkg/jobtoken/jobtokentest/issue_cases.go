@@ -43,6 +43,10 @@ func issueCases() []suiteCase {
 			name: "issue with a job of another namespace returns not live and writes nothing",
 			test: testJobOfAnotherNamespace,
 		},
+		{
+			name: "issue after the unit row was purged returns not live and writes nothing",
+			test: testPurgedUnit,
+		},
 		{name: "issue with a disabled starter returns not live", test: testDisabledStarter},
 		{name: "issue with a deleted starter returns not live", test: testDeletedStarter},
 		{
@@ -402,6 +406,28 @@ func testJobOfAnotherNamespace(t *testing.T, h Harness) {
 
 	if err := tryIssue(t, h, tok, fence); !errors.Is(err, jobtoken.ErrNotLive) {
 		t.Fatalf("Issue with a job of another namespace = %v, want ErrNotLive", err)
+	}
+
+	wantNothing(t, h, tok.Digest, fence.Namespace)
+}
+
+// testPurgedUnit sends a token for a live job of a unit whose row was
+// removed. The read of the unit namespace finds no live unit row, so the
+// unit guard alone refuses the issue.
+func testPurgedUnit(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-purged-unit")
+	j := h.Job(t, unit, starter, op)
+	tok := liveToken(t, unit, starter, j.ID, op)
+
+	h.PurgeUnit(t, unit)
+
+	if err := tryIssue(t, h, tok, fence); !errors.Is(err, jobtoken.ErrNotLive) {
+		t.Fatalf("Issue after the unit row was purged = %v, want ErrNotLive", err)
 	}
 
 	wantNothing(t, h, tok.Digest, fence.Namespace)

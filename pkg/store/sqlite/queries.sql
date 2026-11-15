@@ -4836,6 +4836,17 @@ JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND l.job_id = sqlc.arg(job_id) AND c.confirmed = 1
 ORDER BY c.blob_key;
 
+-- name: InsertJobToken :exec
+INSERT INTO job_tokens (
+    digest, namespace_id, starter_id, job_id, unit_tool, unit_id, claim_operation,
+    claim_token, expires_at_ms, created_at_ms
+) VALUES (
+    sqlc.arg(digest), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(starter_id), sqlc.arg(job_id), sqlc.arg(unit_tool), sqlc.arg(unit_id),
+    sqlc.arg(claim_operation), sqlc.arg(claim_token), sqlc.arg(expires_at_ms),
+    sqlc.arg(created_at_ms)
+);
+
 -- name: GetJobToken :one
 SELECT t.digest, n.name AS namespace, u.namespace AS unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
        CAST(u.name AS TEXT) AS unit_name,
@@ -4878,17 +4889,6 @@ WHERE n.name = (
     SELECT w.namespace
     FROM workspaces AS w
     WHERE w.id = sqlc.arg(unit_id) AND w.deleted_at_ms IS NULL AND CAST(sqlc.arg(unit_tool) AS TEXT) = 'opentofu'
-);
-
--- name: InsertJobToken :exec
-INSERT INTO job_tokens (
-    digest, namespace_id, starter_id, job_id, unit_tool, unit_id, claim_operation,
-    claim_token, expires_at_ms, created_at_ms
-) VALUES (
-    sqlc.arg(digest), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
-    sqlc.arg(starter_id), sqlc.arg(job_id), sqlc.arg(unit_tool), sqlc.arg(unit_id),
-    sqlc.arg(claim_operation), sqlc.arg(claim_token), sqlc.arg(expires_at_ms),
-    sqlc.arg(created_at_ms)
 );
 
 -- name: UpsertInstanceVersion :exec
