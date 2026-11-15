@@ -24,12 +24,14 @@ import {
   decodeBulkUnitSettingsRequest,
   decodeBulkUnitSettingsResult,
   decodeBulkUnitSettingsUnit,
+  decodeCancelJobRequest,
   decodeCancelRestoreResponse,
   decodeCapabilities,
   decodeChangeOwnPasswordRequest,
   decodeCheckBackupResponse,
   decodeCollection,
   decodeComponents,
+  decodeConfirmJobRequest,
   decodeContextAnswer,
   decodeContextDocument,
   decodeContextEntry,
@@ -103,6 +105,7 @@ import {
   decodeJobLocationRequest,
   decodeJobLog,
   decodeJobLogEntry,
+  decodeJobLogSubstitution,
   decodeJobPhase,
   decodeJobPlan,
   decodeJobPlanBinding,
@@ -196,6 +199,8 @@ import {
   decodePublishProviderReleaseRequest,
   decodePutGitHostAppRequest,
   decodePutGitHostInstallationRequest,
+  decodeRedactJobLogRequest,
+  decodeRedactJobLogResponse,
   decodeRedeemLocalUserCodeRequest,
   decodeRegistryFileEntry,
   decodeRegistryFileSection,
@@ -366,12 +371,14 @@ import type {
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelJobRequest,
   CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
   CheckBackupResponse,
   Collection,
   Components,
+  ConfirmJobRequest,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -445,6 +452,7 @@ import type {
   JobLocationRequest,
   JobLog,
   JobLogEntry,
+  JobLogSubstitution,
   JobPhase,
   JobPlan,
   JobPlanBinding,
@@ -538,6 +546,8 @@ import type {
   PublishProviderReleaseRequest,
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
+  RedactJobLogRequest,
+  RedactJobLogResponse,
   RedeemLocalUserCodeRequest,
   RegistryFileEntry,
   RegistryFileSection,
@@ -732,6 +742,16 @@ export interface BulkReplaceUnitSettingsInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation cancelJob. */
+export interface CancelJobInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly job_id: string;
+  };
+  readonly body: CancelJobRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation cancelRestore. */
 export interface CancelRestoreInput {
   readonly path: {
@@ -768,6 +788,16 @@ export interface CheckNamespaceIssuerCopyInput {
   readonly path: {
     readonly namespace: string;
   };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation confirmJob. */
+export interface ConfirmJobInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly job_id: string;
+  };
+  readonly body: ConfirmJobRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -2133,6 +2163,16 @@ export interface PutGitHostInstallationInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation redactJobLog. */
+export interface RedactJobLogInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly job_id: string;
+  };
+  readonly body: RedactJobLogRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation redeemLocalUserCode. */
 export interface RedeemLocalUserCodeInput {
   readonly body: RedeemLocalUserCodeRequest;
@@ -2680,6 +2720,23 @@ export const operations = {
     },
     ref(() => decodeBulkUnitSettingsResult),
   ),
+  cancelJob: operation<Job>(
+    {
+      id: "cancelJob",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/cancel",
+      pathParameters: ["namespace", "job_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeJob),
+  ),
   cancelRestore: operation<CancelRestoreResponse>(
     {
       id: "cancelRestore",
@@ -2764,6 +2821,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeIssuerCopyCheck),
+  ),
+  confirmJob: operation<Job>(
+    {
+      id: "confirmJob",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/confirmations",
+      pathParameters: ["namespace", "job_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [201],
+    },
+    ref(() => decodeJob),
   ),
   createCollection: operation<Collection>(
     {
@@ -5144,6 +5218,23 @@ export const operations = {
       statuses: [200, 201],
     },
     ref(() => decodeGitHostInstallation),
+  ),
+  redactJobLog: operation<RedactJobLogResponse>(
+    {
+      id: "redactJobLog",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/log-redactions",
+      pathParameters: ["namespace", "job_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeRedactJobLogResponse),
   ),
   redeemLocalUserCode: operation<void>(
     {

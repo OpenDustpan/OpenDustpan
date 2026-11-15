@@ -156,6 +156,32 @@ func (h *Handler) buildRoutes() []Route {
 			Reads: []identity.Action{identity.ActionJobRead}, Actions: []identity.Action{identity.ActionJobApprove},
 			Filters: nil, Writes: nil,
 			IdempotencyKey: false, ETag: true, Resolve: h.resolveJob, Serve: h.approveJob,
+		}, Route{
+			// The service checks job:read and job:cancel on the unit again, and
+			// the state of the job.
+			Method: http.MethodPost, Path: cancelPath, Scope: ScopeAuthorized,
+			Reads: []identity.Action{identity.ActionJobRead}, Actions: []identity.Action{identity.ActionJobCancel},
+			Filters: nil, Writes: nil,
+			IdempotencyKey: false, ETag: true, Resolve: h.resolveJob, Serve: h.cancelJob,
+		}, Route{
+			// The start action of the job depends on its operation and executor, so
+			// the service picks it after it read the job. It checks job:read and
+			// that action again, the state, the requester, the fresh step and the
+			// plan.
+			Method: http.MethodPost, Path: confirmationsPath, Scope: ScopeAuthorized,
+			Reads: []identity.Action{identity.ActionJobRead}, Actions: nil, Filters: nil,
+			Writes: []identity.Action{
+				identity.ActionUnitRunPlan, identity.ActionUnitRunApply, identity.ActionUnitRunDestroy,
+				identity.ActionUnitWriteBack,
+			},
+			IdempotencyKey: false, ETag: true, Resolve: h.resolveJob, Serve: h.confirmJob,
+		}, Route{
+			// The service checks job:read and unit:redact on the unit again, and the
+			// log version.
+			Method: http.MethodPost, Path: redactPath, Scope: ScopeAuthorized,
+			Reads: []identity.Action{identity.ActionJobRead}, Actions: []identity.Action{identity.ActionUnitRedact},
+			Filters: nil, Writes: nil,
+			IdempotencyKey: false, ETag: false, Resolve: h.resolveJob, Serve: h.redactLog,
 		})
 	}
 
