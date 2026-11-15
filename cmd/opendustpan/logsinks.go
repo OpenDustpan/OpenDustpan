@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/logsink/file"
 	"opendustpan.org/opendustpan/pkg/logsink/slogsink"
@@ -46,6 +48,13 @@ type appLog struct {
 	files    []*file.Sink
 }
 
+// sinkEnv holds what a log sink reads beyond its item: the variables of its
+// secrets and headers, and the egress ranges that the operator allows.
+type sinkEnv struct {
+	lookup func(string) (string, bool)
+	ranges []netip.Prefix
+}
+
 // newAppLog builds the application logger from the --log-sink items. No
 // item writes to stderr, as serve always did.
 // An item is [<name>=]<sink>: stderr, stdout, file:<path>,
@@ -54,9 +63,7 @@ type appLog struct {
 // labels the drop metric; without one, the kind is the name. Each sink
 // other than a stream is best effort: a slow or failed sink drops records
 // and never holds a request. On error it closes every sink it opened.
-func newAppLog(
-	items []string, level slog.Level, format string, stderr io.Writer, lookup func(string) (string, bool),
-) (appLog, error) {
+func newAppLog(items []string, level slog.Level, format string, stderr io.Writer, env sinkEnv) (appLog, error) {
 	out := appLog{logger: nil, drops: newDropCounter(), handlers: nil, sinks: nil, files: nil}
 
 	var handlers []slog.Handler
@@ -87,7 +94,7 @@ func newAppLog(
 		default:
 		}
 
-		h, err := out.openSinkHandler(named, level, lookup, seen)
+		h, err := out.openSinkHandler(named, level, env, seen)
 		if err != nil {
 			return appLog{}, errors.Join(err, out.close(context.Background()))
 		}
@@ -110,7 +117,7 @@ func newAppLog(
 // openSinkHandler opens the sink of one item and wraps it in a queued
 // handler that counts its drops under the name of the item.
 func (a *appLog) openSinkHandler(
-	named sinkItem, level slog.Level, lookup func(string) (string, bool), seen map[string]bool,
+	named sinkItem, level slog.Level, env sinkEnv, seen map[string]bool,
 ) (*slogsink.Handler, error) {
 	name := named.name
 	if name == "" {
@@ -127,12 +134,14 @@ func (a *appLog) openSinkHandler(
 	sink, _, err := openSink(named.spec, sinkConfig{
 		setting:        errLogSink,
 		blobs:          nil,
-		lookup:         lookup,
+		lookup:         env.lookup,
 		secretEnv:      logWebhookSecretEnvVar,
 		secretFileEnv:  logWebhookSecretFileEnvVar,
 		headersEnv:     logOTLPHeadersEnvVar,
 		headersFileEnv: logOTLPHeadersFileEnvVar,
 		facility:       syslog.FacilityLocal0,
+		rules:          sinkRules(env.ranges),
+		options:        egresshttp.Options{RootCAs: nil, Resolver: nil},
 	})
 	if err != nil {
 		return nil, err

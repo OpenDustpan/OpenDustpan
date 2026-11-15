@@ -39,7 +39,7 @@ func (q *Queries) AbandonIdempotencyRecord(ctx context.Context, arg AbandonIdemp
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version, u.token_id,
+       u.created_by, u.restored_from, u.journal_version, u.token_id, u.job_id, u.git_head,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 JOIN stacks AS st ON st.id = u.stack_id
@@ -71,6 +71,8 @@ type ActiveUpdateRow struct {
 	RestoredFrom     int64
 	JournalVersion   int64
 	TokenID          string
+	JobID            string
+	GitHead          string
 	CheckpointBytes  int64
 }
 
@@ -96,6 +98,8 @@ func (q *Queries) ActiveUpdate(ctx context.Context, arg ActiveUpdateParams) (Act
 		&i.RestoredFrom,
 		&i.JournalVersion,
 		&i.TokenID,
+		&i.JobID,
+		&i.GitHead,
 		&i.CheckpointBytes,
 	)
 	return i, err
@@ -345,7 +349,8 @@ UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
 UNION ALL
-SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text AS content_key,
+SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text
+       || '-' || k.blob_attempt AS content_key,
        k.blob_size AS size, k.blob_md5 AS md5, FALSE AS sealed
 FROM item_keys AS k
 WHERE k.shredded_at_ms = 0
@@ -1474,6 +1479,20 @@ func (q *Queries) CountImportLedger(ctx context.Context, arg CountImportLedgerPa
 	return count, err
 }
 
+const countLiveBlobDeleteLeases = `-- name: CountLiveBlobDeleteLeases :one
+SELECT COUNT(*) FROM blob_delete_leases
+WHERE expires_at_ms > FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+`
+
+// The number of lease rows that end after the database clock. A restore waits
+// for zero of them before it applies the data.
+func (q *Queries) CountLiveBlobDeleteLeases(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countLiveBlobDeleteLeases)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLiveCollectionMembers = `-- name: CountLiveCollectionMembers :one
 SELECT COUNT(*)
 FROM collection_members AS m
@@ -2511,19 +2530,20 @@ func (q *Queries) CreateGrant(ctx context.Context, arg CreateGrantParams) (int64
 }
 
 const createGroup = `-- name: CreateGroup :execrows
-INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO principal_groups (id, name, name_key, description, source, created_at_ms, updated_at_ms, closed_to_identity_provider)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING
 `
 
 type CreateGroupParams struct {
-	ID          string
-	Name        string
-	NameKey     string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
+	ID                       string
+	Name                     string
+	NameKey                  string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
 }
 
 func (q *Queries) CreateGroup(ctx context.Context, arg CreateGroupParams) (int64, error) {
@@ -2535,6 +2555,7 @@ func (q *Queries) CreateGroup(ctx context.Context, arg CreateGroupParams) (int64
 		arg.Source,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.ClosedToIdentityProvider,
 	)
 	if err != nil {
 		return 0, err
@@ -3065,9 +3086,9 @@ const createStateVersion = `-- name: CreateStateVersion :exec
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+    restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
 )
 `
 
@@ -3093,6 +3114,7 @@ type CreateStateVersionParams struct {
 	SensitiveMarks    []byte
 	FencedBy          string
 	UnlockedWrite     bool
+	OriginJob         string
 }
 
 func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersionParams) error {
@@ -3118,6 +3140,7 @@ func (q *Queries) CreateStateVersion(ctx context.Context, arg CreateStateVersion
 		arg.SensitiveMarks,
 		arg.FencedBy,
 		arg.UnlockedWrite,
+		arg.OriginJob,
 	)
 	return err
 }
@@ -3184,8 +3207,8 @@ const createUpdate = `-- name: CreateUpdate :exec
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
     lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms,
-    created_by, restored_from, token_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+    created_by, restored_from, token_id, job_id, git_head
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 `
 
 type CreateUpdateParams struct {
@@ -3204,6 +3227,8 @@ type CreateUpdateParams struct {
 	CreatedBy        string
 	RestoredFrom     int64
 	TokenID          string
+	JobID            string
+	GitHead          string
 }
 
 func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) error {
@@ -3223,6 +3248,8 @@ func (q *Queries) CreateUpdate(ctx context.Context, arg CreateUpdateParams) erro
 		arg.CreatedBy,
 		arg.RestoredFrom,
 		arg.TokenID,
+		arg.JobID,
+		arg.GitHead,
 	)
 	return err
 }
@@ -4776,6 +4803,68 @@ func (q *Queries) DisableSignInProvider(ctx context.Context, arg DisableSignInPr
 	return result.RowsAffected(), nil
 }
 
+const dueBreakGlassReviews = `-- name: DueBreakGlassReviews :many
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews
+WHERE state = 'pending' AND next_notice_at_ms <> 0 AND next_notice_at_ms <= $1::bigint
+ORDER BY next_notice_at_ms, id
+LIMIT $2::bigint
+`
+
+type DueBreakGlassReviewsParams struct {
+	NowMs   int64
+	MaxRows int64
+}
+
+// The pending reviews with a notice due at or before now, oldest first.
+func (q *Queries) DueBreakGlassReviews(ctx context.Context, arg DueBreakGlassReviewsParams) ([]BreakGlassReview, error) {
+	rows, err := q.db.Query(ctx, dueBreakGlassReviews, arg.NowMs, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BreakGlassReview
+	for rows.Next() {
+		var i BreakGlassReview
+		if err := rows.Scan(
+			&i.ID,
+			&i.UseKind,
+			&i.UseRef,
+			&i.UseScope,
+			&i.UseObject,
+			&i.UseSubject,
+			&i.UsePeople,
+			&i.UseReason,
+			&i.UseAtMs,
+			&i.UseUntilMs,
+			&i.State,
+			&i.CreatedAtMs,
+			&i.DueAtMs,
+			&i.Calendar,
+			&i.CalendarFromNamespace,
+			&i.CalendarFromGroup,
+			&i.Step,
+			&i.NextNoticeAtMs,
+			&i.VerdictReviewer,
+			&i.VerdictNote,
+			&i.VerdictAuth,
+			&i.VerdictAuthAtMs,
+			&i.VerdictReviewedAtMs,
+			&i.VerdictActAs,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const durableStepExists = `-- name: DurableStepExists :one
 SELECT EXISTS (SELECT 1 FROM durable_steps WHERE operation_id = $1 AND name = $2) AS done
 `
@@ -5204,6 +5293,43 @@ func (q *Queries) FailEndedStoreChecks(ctx context.Context, arg FailEndedStoreCh
 	return result.RowsAffected(), nil
 }
 
+const finalizeReleasedUnitState = `-- name: FinalizeReleasedUnitState :one
+UPDATE unit_state
+SET final_version_id = version_id, final_commit = $1, final_job = $2,
+    final_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $3)
+  AND unit_id = $4 AND version_id <> final_version_id
+RETURNING version_id, final_at_ms
+`
+
+type FinalizeReleasedUnitStateParams struct {
+	FinalCommit string
+	FinalJob    string
+	Namespace   string
+	UnitID      string
+}
+
+type FinalizeReleasedUnitStateRow struct {
+	VersionID string
+	FinalAtMs int64
+}
+
+// Make the current state version of the unit final, with the origin of a
+// release, and do nothing when the unit has no state version row or its
+// current version is final already. It returns the version and the time that
+// the database clock gives it.
+func (q *Queries) FinalizeReleasedUnitState(ctx context.Context, arg FinalizeReleasedUnitStateParams) (FinalizeReleasedUnitStateRow, error) {
+	row := q.db.QueryRow(ctx, finalizeReleasedUnitState,
+		arg.FinalCommit,
+		arg.FinalJob,
+		arg.Namespace,
+		arg.UnitID,
+	)
+	var i FinalizeReleasedUnitStateRow
+	err := row.Scan(&i.VersionID, &i.FinalAtMs)
+	return i, err
+}
+
 const finalizeStateVersion = `-- name: FinalizeStateVersion :execrows
 UPDATE state_versions
 SET serial = $1, lineage = $2, md5 = $3, outputs = $4, status = 'finalized', finalized_at_ms = $5, size = $6
@@ -5243,6 +5369,45 @@ func (q *Queries) FinalizeStateVersion(ctx context.Context, arg FinalizeStateVer
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const finalizeUnitState = `-- name: FinalizeUnitState :one
+INSERT INTO unit_state (unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    '', '', $3, $4, FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+)
+ON CONFLICT (unit_id) DO UPDATE SET final_version_id = unit_state.version_id,
+    final_commit = excluded.final_commit, final_job = excluded.final_job, final_at_ms = excluded.final_at_ms
+RETURNING version_id, final_at_ms
+`
+
+type FinalizeUnitStateParams struct {
+	UnitID      string
+	Namespace   string
+	FinalCommit string
+	FinalJob    string
+}
+
+type FinalizeUnitStateRow struct {
+	VersionID string
+	FinalAtMs int64
+}
+
+// Make the current state version of the unit final, with the origin of the
+// write that ends it, at the time of the database clock. A unit with no state
+// version row gets a row with the empty version as final. It returns the final
+// version and its time.
+func (q *Queries) FinalizeUnitState(ctx context.Context, arg FinalizeUnitStateParams) (FinalizeUnitStateRow, error) {
+	row := q.db.QueryRow(ctx, finalizeUnitState,
+		arg.UnitID,
+		arg.Namespace,
+		arg.FinalCommit,
+		arg.FinalJob,
+	)
+	var i FinalizeUnitStateRow
+	err := row.Scan(&i.VersionID, &i.FinalAtMs)
+	return i, err
 }
 
 const findGateRefusal = `-- name: FindGateRefusal :one
@@ -5700,6 +5865,93 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 	return i, err
 }
 
+const getBreakGlassReview = `-- name: GetBreakGlassReview :one
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews WHERE id = $1
+`
+
+func (q *Queries) GetBreakGlassReview(ctx context.Context, id string) (BreakGlassReview, error) {
+	row := q.db.QueryRow(ctx, getBreakGlassReview, id)
+	var i BreakGlassReview
+	err := row.Scan(
+		&i.ID,
+		&i.UseKind,
+		&i.UseRef,
+		&i.UseScope,
+		&i.UseObject,
+		&i.UseSubject,
+		&i.UsePeople,
+		&i.UseReason,
+		&i.UseAtMs,
+		&i.UseUntilMs,
+		&i.State,
+		&i.CreatedAtMs,
+		&i.DueAtMs,
+		&i.Calendar,
+		&i.CalendarFromNamespace,
+		&i.CalendarFromGroup,
+		&i.Step,
+		&i.NextNoticeAtMs,
+		&i.VerdictReviewer,
+		&i.VerdictNote,
+		&i.VerdictAuth,
+		&i.VerdictAuthAtMs,
+		&i.VerdictReviewedAtMs,
+		&i.VerdictActAs,
+		&i.Version,
+	)
+	return i, err
+}
+
+const getBreakGlassReviewByUse = `-- name: GetBreakGlassReviewByUse :one
+SELECT id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+FROM break_glass_reviews WHERE use_kind = $1 AND use_ref = $2
+`
+
+type GetBreakGlassReviewByUseParams struct {
+	UseKind string
+	UseRef  string
+}
+
+// The review of the kind and the reference of a use, for an open that runs
+// again after a crash. The unique index makes at most one row match.
+func (q *Queries) GetBreakGlassReviewByUse(ctx context.Context, arg GetBreakGlassReviewByUseParams) (BreakGlassReview, error) {
+	row := q.db.QueryRow(ctx, getBreakGlassReviewByUse, arg.UseKind, arg.UseRef)
+	var i BreakGlassReview
+	err := row.Scan(
+		&i.ID,
+		&i.UseKind,
+		&i.UseRef,
+		&i.UseScope,
+		&i.UseObject,
+		&i.UseSubject,
+		&i.UsePeople,
+		&i.UseReason,
+		&i.UseAtMs,
+		&i.UseUntilMs,
+		&i.State,
+		&i.CreatedAtMs,
+		&i.DueAtMs,
+		&i.Calendar,
+		&i.CalendarFromNamespace,
+		&i.CalendarFromGroup,
+		&i.Step,
+		&i.NextNoticeAtMs,
+		&i.VerdictReviewer,
+		&i.VerdictNote,
+		&i.VerdictAuth,
+		&i.VerdictAuthAtMs,
+		&i.VerdictReviewedAtMs,
+		&i.VerdictActAs,
+		&i.Version,
+	)
+	return i, err
+}
+
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
 SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features, c.saved_at_ms,
@@ -6047,7 +6299,7 @@ const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks, sv.fenced_by, unlocked_write
+       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1
@@ -6080,6 +6332,7 @@ func (q *Queries) GetCurrentStateVersion(ctx context.Context, id string) (StateV
 		&i.SensitiveMarks,
 		&i.FencedBy,
 		&i.UnlockedWrite,
+		&i.OriginJob,
 	)
 	return i, err
 }
@@ -6657,19 +6910,20 @@ func (q *Queries) GetGrant(ctx context.Context, id string) (GetGrantRow, error) 
 }
 
 const getGroup = `-- name: GetGroup :one
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g WHERE g.id = $1 AND g.deleted_at_ms IS NULL
 `
 
 type GetGroupRow struct {
-	ID          string
-	Name        string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	MemberCount int64
+	ID                       string
+	Name                     string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
+	MemberCount              int64
 }
 
 func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) {
@@ -6682,6 +6936,7 @@ func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) 
 		&i.Source,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.ClosedToIdentityProvider,
 		&i.MemberCount,
 	)
 	return i, err
@@ -7027,7 +7282,7 @@ func (q *Queries) GetIssuerSettings(ctx context.Context, namespaceID string) (Ge
 
 const getItemKey = `-- name: GetItemKey :one
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = $1 AND k.scope_id = $2 AND k.kind = $3
@@ -7053,6 +7308,7 @@ type GetItemKeyRow struct {
 	BlobVersion  int64
 	BlobSize     int64
 	BlobMd5      []byte
+	BlobAttempt  string
 }
 
 func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItemKeyRow, error) {
@@ -7075,12 +7331,13 @@ func (q *Queries) GetItemKey(ctx context.Context, arg GetItemKeyParams) (GetItem
 		&i.BlobVersion,
 		&i.BlobSize,
 		&i.BlobMd5,
+		&i.BlobAttempt,
 	)
 	return i, err
 }
 
 const getJob = `-- name: GetJob :one
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -7091,6 +7348,7 @@ WHERE j.id = $1
 type GetJobRow struct {
 	ID               string
 	Namespace        string
+	NamespaceID      string
 	UnitID           string
 	Seq              int64
 	State            string
@@ -7112,6 +7370,7 @@ func (q *Queries) GetJob(ctx context.Context, id string) (GetJobRow, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.Namespace,
+		&i.NamespaceID,
 		&i.UnitID,
 		&i.Seq,
 		&i.State,
@@ -7130,7 +7389,7 @@ func (q *Queries) GetJob(ctx context.Context, id string) (GetJobRow, error) {
 }
 
 const getJobByKey = `-- name: GetJobByKey :one
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -7146,6 +7405,7 @@ type GetJobByKeyParams struct {
 type GetJobByKeyRow struct {
 	ID               string
 	Namespace        string
+	NamespaceID      string
 	UnitID           string
 	Seq              int64
 	State            string
@@ -7167,6 +7427,7 @@ func (q *Queries) GetJobByKey(ctx context.Context, arg GetJobByKeyParams) (GetJo
 	err := row.Scan(
 		&i.ID,
 		&i.Namespace,
+		&i.NamespaceID,
 		&i.UnitID,
 		&i.Seq,
 		&i.State,
@@ -9395,7 +9656,7 @@ func (q *Queries) GetStackWithTags(ctx context.Context, arg GetStackWithTagsPara
 const getStateVersion = `-- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 FROM state_versions
 WHERE id = $1
 `
@@ -9425,6 +9686,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 		&i.SensitiveMarks,
 		&i.FencedBy,
 		&i.UnlockedWrite,
+		&i.OriginJob,
 	)
 	return i, err
 }
@@ -9622,6 +9884,35 @@ func (q *Queries) GetUnitCollection(ctx context.Context, unitID string) (string,
 	return name, err
 }
 
+const getUnitCollectionByName = `-- name: GetUnitCollectionByName :one
+SELECT i.unit_id, c.name AS collection_name
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = $1 AND i.tool = $2 AND i.name = $3
+`
+
+type GetUnitCollectionByNameParams struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+type GetUnitCollectionByNameRow struct {
+	UnitID         string
+	CollectionName pgtype.Text
+}
+
+// The ID and the collection of one live unit by its name, in one statement.
+// The collection is NULL when the unit is in no collection. No row means that
+// the namespace holds no live unit with the name.
+func (q *Queries) GetUnitCollectionByName(ctx context.Context, arg GetUnitCollectionByNameParams) (GetUnitCollectionByNameRow, error) {
+	row := q.db.QueryRow(ctx, getUnitCollectionByName, arg.Namespace, arg.Tool, arg.Name)
+	var i GetUnitCollectionByNameRow
+	err := row.Scan(&i.UnitID, &i.CollectionName)
+	return i, err
+}
+
 const getUnitDefaults = `-- name: GetUnitDefaults :one
 SELECT n.name AS namespace, d.pool, d.version, d.updated_at_ms
 FROM unit_defaults AS d
@@ -9644,37 +9935,6 @@ func (q *Queries) GetUnitDefaults(ctx context.Context, namespace string) (GetUni
 		&i.Pool,
 		&i.Version,
 		&i.UpdatedAtMs,
-	)
-	return i, err
-}
-
-const getUnitFinalVersion = `-- name: GetUnitFinalVersion :one
-SELECT unit_id, version_id, commit_id, job_id, at_ms FROM unit_final_versions
-WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND unit_id = $2
-`
-
-type GetUnitFinalVersionParams struct {
-	Namespace string
-	UnitID    string
-}
-
-type GetUnitFinalVersionRow struct {
-	UnitID    string
-	VersionID string
-	CommitID  string
-	JobID     string
-	AtMs      int64
-}
-
-func (q *Queries) GetUnitFinalVersion(ctx context.Context, arg GetUnitFinalVersionParams) (GetUnitFinalVersionRow, error) {
-	row := q.db.QueryRow(ctx, getUnitFinalVersion, arg.Namespace, arg.UnitID)
-	var i GetUnitFinalVersionRow
-	err := row.Scan(
-		&i.UnitID,
-		&i.VersionID,
-		&i.CommitID,
-		&i.JobID,
-		&i.AtMs,
 	)
 	return i, err
 }
@@ -9733,21 +9993,35 @@ func (q *Queries) GetUnitSettings(ctx context.Context, arg GetUnitSettingsParams
 	return i, err
 }
 
-const getUnitStateVersion = `-- name: GetUnitStateVersion :one
-SELECT version_id FROM unit_state_versions
+const getUnitState = `-- name: GetUnitState :one
+SELECT version_id, final_version_id, final_commit, final_job, final_at_ms FROM unit_state
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1) AND unit_id = $2
 `
 
-type GetUnitStateVersionParams struct {
+type GetUnitStateParams struct {
 	Namespace string
 	UnitID    string
 }
 
-func (q *Queries) GetUnitStateVersion(ctx context.Context, arg GetUnitStateVersionParams) (string, error) {
-	row := q.db.QueryRow(ctx, getUnitStateVersion, arg.Namespace, arg.UnitID)
-	var version_id string
-	err := row.Scan(&version_id)
-	return version_id, err
+type GetUnitStateRow struct {
+	VersionID      string
+	FinalVersionID string
+	FinalCommit    string
+	FinalJob       string
+	FinalAtMs      int64
+}
+
+func (q *Queries) GetUnitState(ctx context.Context, arg GetUnitStateParams) (GetUnitStateRow, error) {
+	row := q.db.QueryRow(ctx, getUnitState, arg.Namespace, arg.UnitID)
+	var i GetUnitStateRow
+	err := row.Scan(
+		&i.VersionID,
+		&i.FinalVersionID,
+		&i.FinalCommit,
+		&i.FinalJob,
+		&i.FinalAtMs,
+	)
+	return i, err
 }
 
 const getUnmanagedScan = `-- name: GetUnmanagedScan :one
@@ -9830,7 +10104,7 @@ func (q *Queries) GetUnmanagedTarget(ctx context.Context, arg GetUnmanagedTarget
 const getUpdate = `-- name: GetUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version, u.token_id,
+       u.created_by, u.restored_from, u.journal_version, u.token_id, u.job_id, u.git_head,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 JOIN stacks AS st ON st.id = u.stack_id
@@ -9862,6 +10136,8 @@ type GetUpdateRow struct {
 	RestoredFrom     int64
 	JournalVersion   int64
 	TokenID          string
+	JobID            string
+	GitHead          string
 	CheckpointBytes  int64
 }
 
@@ -9892,6 +10168,8 @@ func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (GetUpdate
 		&i.RestoredFrom,
 		&i.JournalVersion,
 		&i.TokenID,
+		&i.JobID,
+		&i.GitHead,
 		&i.CheckpointBytes,
 	)
 	return i, err
@@ -10169,6 +10447,63 @@ func (q *Queries) GrantsOfSubject(ctx context.Context, arg GrantsOfSubjectParams
 	return items, nil
 }
 
+const grantsOfSubjects = `-- name: GrantsOfSubjects :many
+SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject = ANY($1::text[]) AND revoked_at_ms IS NULL
+ORDER BY subject, target, role
+`
+
+type GrantsOfSubjectsRow struct {
+	ID          string
+	Subject     string
+	SubjectKind string
+	SubjectID   string
+	Role        string
+	Object      string
+	Target      string
+	ObjectKind  string
+	Namespace   string
+	Condition   pgtype.Text
+	CreatedAtMs int64
+	CreatedBy   string
+}
+
+// The current grants of each subject of the list, in one query. The unique
+// index grants_current starts with the subject, so each subject is one seek.
+func (q *Queries) GrantsOfSubjects(ctx context.Context, subjects []string) ([]GrantsOfSubjectsRow, error) {
+	rows, err := q.db.Query(ctx, grantsOfSubjects, subjects)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GrantsOfSubjectsRow
+	for rows.Next() {
+		var i GrantsOfSubjectsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.Role,
+			&i.Object,
+			&i.Target,
+			&i.ObjectKind,
+			&i.Namespace,
+			&i.Condition,
+			&i.CreatedAtMs,
+			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const grantsOn = `-- name: GrantsOn :many
 SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
 FROM grants
@@ -10415,6 +10750,82 @@ func (q *Queries) InsertBlobPurge(ctx context.Context, arg InsertBlobPurgeParams
 		arg.PurgedAtMs,
 	)
 	return err
+}
+
+const insertBreakGlassReview = `-- name: InsertBreakGlassReview :execrows
+INSERT INTO break_glass_reviews (
+  id, use_kind, use_ref, use_scope, use_object, use_subject, use_people, use_reason, use_at_ms, use_until_ms,
+  state, created_at_ms, due_at_ms, calendar, calendar_from_namespace, calendar_from_group, step, next_notice_at_ms,
+  verdict_reviewer, verdict_note, verdict_auth, verdict_auth_at_ms, verdict_reviewed_at_ms, verdict_act_as, version
+) VALUES (
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+  $24, $25
+) ON CONFLICT DO NOTHING
+`
+
+type InsertBreakGlassReviewParams struct {
+	ID                    string
+	UseKind               string
+	UseRef                string
+	UseScope              string
+	UseObject             string
+	UseSubject            string
+	UsePeople             string
+	UseReason             string
+	UseAtMs               int64
+	UseUntilMs            int64
+	State                 string
+	CreatedAtMs           int64
+	DueAtMs               int64
+	Calendar              string
+	CalendarFromNamespace string
+	CalendarFromGroup     string
+	Step                  int64
+	NextNoticeAtMs        int64
+	VerdictReviewer       string
+	VerdictNote           string
+	VerdictAuth           string
+	VerdictAuthAtMs       int64
+	VerdictReviewedAtMs   int64
+	VerdictActAs          string
+	Version               int64
+}
+
+// Inserts the review of a new use. The unique index on (use_kind, use_ref)
+// keeps one review for each use and the primary key keeps one for each ID,
+// so a repeated open stores no second review.
+func (q *Queries) InsertBreakGlassReview(ctx context.Context, arg InsertBreakGlassReviewParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertBreakGlassReview,
+		arg.ID,
+		arg.UseKind,
+		arg.UseRef,
+		arg.UseScope,
+		arg.UseObject,
+		arg.UseSubject,
+		arg.UsePeople,
+		arg.UseReason,
+		arg.UseAtMs,
+		arg.UseUntilMs,
+		arg.State,
+		arg.CreatedAtMs,
+		arg.DueAtMs,
+		arg.Calendar,
+		arg.CalendarFromNamespace,
+		arg.CalendarFromGroup,
+		arg.Step,
+		arg.NextNoticeAtMs,
+		arg.VerdictReviewer,
+		arg.VerdictNote,
+		arg.VerdictAuth,
+		arg.VerdictAuthAtMs,
+		arg.VerdictReviewedAtMs,
+		arg.VerdictActAs,
+		arg.Version,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertDeletedInventory = `-- name: InsertDeletedInventory :exec
@@ -11176,12 +11587,13 @@ func (q *Queries) InsertIssuerKey(ctx context.Context, arg InsertIssuerKeyParams
 
 const insertItemKey = `-- name: InsertItemKey :execrows
 INSERT INTO item_keys (
-    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
+    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5,
+    blob_attempt
 )
 VALUES (
     $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
     $3, $4, $5, $6, $7, 0,
-    $8, $9, $10
+    $8, $9, $10, $11
 )
 ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING
 `
@@ -11197,6 +11609,7 @@ type InsertItemKeyParams struct {
 	BlobVersion int64
 	BlobSize    int64
 	BlobMd5     []byte
+	BlobAttempt string
 }
 
 // The caller checks the fence in the same transaction. A record for the same
@@ -11213,6 +11626,7 @@ func (q *Queries) InsertItemKey(ctx context.Context, arg InsertItemKeyParams) (i
 		arg.BlobVersion,
 		arg.BlobSize,
 		arg.BlobMd5,
+		arg.BlobAttempt,
 	)
 	if err != nil {
 		return 0, err
@@ -13065,7 +13479,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 }
 
 const listAwaitingJobsOfUnit = `-- name: ListAwaitingJobsOfUnit :many
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -13083,6 +13497,7 @@ type ListAwaitingJobsOfUnitParams struct {
 type ListAwaitingJobsOfUnitRow struct {
 	ID               string
 	Namespace        string
+	NamespaceID      string
 	UnitID           string
 	Seq              int64
 	State            string
@@ -13110,6 +13525,7 @@ func (q *Queries) ListAwaitingJobsOfUnit(ctx context.Context, arg ListAwaitingJo
 		if err := rows.Scan(
 			&i.ID,
 			&i.Namespace,
+			&i.NamespaceID,
 			&i.UnitID,
 			&i.Seq,
 			&i.State,
@@ -13776,7 +14192,7 @@ func (q *Queries) ListExpiredInventoryAfter(ctx context.Context, arg ListExpired
 const listExpiredPendingStateVersions = `-- name: ListExpiredPendingStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC
@@ -13820,6 +14236,7 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 			&i.SensitiveMarks,
 			&i.FencedBy,
 			&i.UnlockedWrite,
+			&i.OriginJob,
 		); err != nil {
 			return nil, err
 		}
@@ -13895,6 +14312,50 @@ func (q *Queries) ListGateObjects(ctx context.Context, arg ListGateObjectsParams
 	for rows.Next() {
 		var i ListGateObjectsRow
 		if err := rows.Scan(&i.ID, &i.Version, &i.Body); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGateObjectsOfKind = `-- name: ListGateObjectsOfKind :many
+SELECT namespace_id, scope_key, unit_id, id, version, body
+FROM gate_objects
+WHERE kind = $1
+ORDER BY scope_key COLLATE "C", id COLLATE "C"
+`
+
+type ListGateObjectsOfKindRow struct {
+	NamespaceID string
+	ScopeKey    string
+	UnitID      string
+	ID          string
+	Version     int64
+	Body        string
+}
+
+// Every object of one kind, of every scope, ordered by scope key and ID.
+func (q *Queries) ListGateObjectsOfKind(ctx context.Context, kind string) ([]ListGateObjectsOfKindRow, error) {
+	rows, err := q.db.Query(ctx, listGateObjectsOfKind, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListGateObjectsOfKindRow
+	for rows.Next() {
+		var i ListGateObjectsOfKindRow
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.ScopeKey,
+			&i.UnitID,
+			&i.ID,
+			&i.Version,
+			&i.Body,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -14372,7 +14833,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 }
 
 const listGroups = `-- name: ListGroups :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g
 WHERE g.deleted_at_ms IS NULL
@@ -14391,13 +14852,14 @@ type ListGroupsParams struct {
 }
 
 type ListGroupsRow struct {
-	ID          string
-	Name        string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	MemberCount int64
+	ID                       string
+	Name                     string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
+	MemberCount              int64
 }
 
 func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListGroupsRow, error) {
@@ -14421,6 +14883,7 @@ func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListG
 			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.ClosedToIdentityProvider,
 			&i.MemberCount,
 		); err != nil {
 			return nil, err
@@ -14434,7 +14897,7 @@ func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListG
 }
 
 const listGroupsOfPrincipal = `-- name: ListGroupsOfPrincipal :many
-SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
+SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms, g.closed_to_identity_provider,
   (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = $1 AND m.removed_at_ms IS NULL
@@ -14454,13 +14917,14 @@ type ListGroupsOfPrincipalParams struct {
 }
 
 type ListGroupsOfPrincipalRow struct {
-	ID          string
-	Name        string
-	Description string
-	Source      string
-	CreatedAtMs int64
-	UpdatedAtMs int64
-	MemberCount int64
+	ID                       string
+	Name                     string
+	Description              string
+	Source                   string
+	CreatedAtMs              int64
+	UpdatedAtMs              int64
+	ClosedToIdentityProvider bool
+	MemberCount              int64
 }
 
 func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPrincipalParams) ([]ListGroupsOfPrincipalRow, error) {
@@ -14485,6 +14949,7 @@ func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPri
 			&i.Source,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.ClosedToIdentityProvider,
 			&i.MemberCount,
 		); err != nil {
 			return nil, err
@@ -15240,7 +15705,7 @@ func (q *Queries) ListItemKeyWrapperIDs(ctx context.Context) ([]string, error) {
 
 const listItemKeys = `-- name: ListItemKeys :many
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = $1 AND k.scope_id = $2 AND k.id > $3
@@ -15267,6 +15732,7 @@ type ListItemKeysRow struct {
 	BlobVersion  int64
 	BlobSize     int64
 	BlobMd5      []byte
+	BlobAttempt  string
 }
 
 func (q *Queries) ListItemKeys(ctx context.Context, arg ListItemKeysParams) ([]ListItemKeysRow, error) {
@@ -15295,6 +15761,7 @@ func (q *Queries) ListItemKeys(ctx context.Context, arg ListItemKeysParams) ([]L
 			&i.BlobVersion,
 			&i.BlobSize,
 			&i.BlobMd5,
+			&i.BlobAttempt,
 		); err != nil {
 			return nil, err
 		}
@@ -16288,7 +16755,7 @@ func (q *Queries) ListObjectContext(ctx context.Context, arg ListObjectContextPa
 }
 
 const listOrphanJobs = `-- name: ListOrphanJobs :many
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms,
        d.state AS op_state
@@ -16305,6 +16772,7 @@ LIMIT $1
 type ListOrphanJobsRow struct {
 	ID               string
 	Namespace        string
+	NamespaceID      string
 	UnitID           string
 	Seq              int64
 	State            string
@@ -16335,6 +16803,7 @@ func (q *Queries) ListOrphanJobs(ctx context.Context, maxRows int32) ([]ListOrph
 		if err := rows.Scan(
 			&i.ID,
 			&i.Namespace,
+			&i.NamespaceID,
 			&i.UnitID,
 			&i.Seq,
 			&i.State,
@@ -17766,7 +18235,7 @@ func (q *Queries) ListStateContentKeys(ctx context.Context, id string) ([]string
 const listStateVersions = `-- name: ListStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -17812,6 +18281,7 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 			&i.SensitiveMarks,
 			&i.FencedBy,
 			&i.UnlockedWrite,
+			&i.OriginJob,
 		); err != nil {
 			return nil, err
 		}
@@ -18289,7 +18759,7 @@ func (q *Queries) ListUnmanagedTargets(ctx context.Context, namespace string) ([
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version, u.token_id,
+       u.created_by, u.restored_from, u.journal_version, u.token_id, u.job_id, u.git_head,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -18322,6 +18792,8 @@ type ListUpdatesRow struct {
 	RestoredFrom     int64
 	JournalVersion   int64
 	TokenID          string
+	JobID            string
+	GitHead          string
 	CheckpointBytes  int64
 }
 
@@ -18351,6 +18823,8 @@ func (q *Queries) ListUpdates(ctx context.Context, arg ListUpdatesParams) ([]Lis
 			&i.RestoredFrom,
 			&i.JournalVersion,
 			&i.TokenID,
+			&i.JobID,
+			&i.GitHead,
 			&i.CheckpointBytes,
 		); err != nil {
 			return nil, err
@@ -18602,6 +19076,32 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockBlobDeleteLeaseExclusive = `-- name: LockBlobDeleteLeaseExclusive :exec
+SELECT pg_advisory_xact_lock($1::int, hashtext(current_schema()))
+`
+
+// Takes the exclusive form of the blob delete lease lock for this
+// transaction. It waits for every take of a lease in flight and holds every
+// later take back until this transaction ends, so the take of a lease and the
+// write of a running backup or restore row cannot interleave.
+func (q *Queries) LockBlobDeleteLeaseExclusive(ctx context.Context, class int32) error {
+	_, err := q.db.Exec(ctx, lockBlobDeleteLeaseExclusive, class)
+	return err
+}
+
+const lockBlobDeleteLeaseShared = `-- name: LockBlobDeleteLeaseShared :exec
+SELECT pg_advisory_xact_lock_shared($1::int, hashtext(current_schema()))
+`
+
+// Takes the shared form of the blob delete lease lock for this transaction.
+// The take of a lease runs as a later statement, so its READ COMMITTED
+// snapshot is newer than the lock: a backup or a restore that committed its
+// running row before the lock is visible to the take.
+func (q *Queries) LockBlobDeleteLeaseShared(ctx context.Context, class int32) error {
+	_, err := q.db.Exec(ctx, lockBlobDeleteLeaseShared, class)
+	return err
 }
 
 const lockDurableOperation = `-- name: LockDurableOperation :one
@@ -19157,6 +19657,34 @@ func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestPa
 	return result.RowsAffected(), nil
 }
 
+const namespacesWithList = `-- name: NamespacesWithList :many
+SELECT name
+FROM namespaces
+WHERE ip_allowlist <> ''
+ORDER BY name
+`
+
+// Lists the namespaces that have an IP allowlist.
+func (q *Queries) NamespacesWithList(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, namespacesWithList)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const nextJobSeq = `-- name: NextJobSeq :one
 SELECT (COALESCE(MAX(j.seq), 0) + 1)::bigint AS seq
 FROM jobs AS j
@@ -19645,6 +20173,44 @@ func (q *Queries) PruneUsedTickets(ctx context.Context, untilMs int64) (int64, e
 	return result.RowsAffected(), nil
 }
 
+const publishUnitState = `-- name: PublishUnitState :exec
+INSERT INTO unit_state (unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms)
+VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    $3, $4, $5, $6, $7
+)
+ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id,
+    final_version_id = CASE WHEN $8::boolean THEN excluded.final_version_id ELSE unit_state.final_version_id END,
+    final_commit = CASE WHEN $8::boolean THEN excluded.final_commit ELSE unit_state.final_commit END,
+    final_job = CASE WHEN $8::boolean THEN excluded.final_job ELSE unit_state.final_job END,
+    final_at_ms = CASE WHEN $8::boolean THEN excluded.final_at_ms ELSE unit_state.final_at_ms END
+`
+
+type PublishUnitStateParams struct {
+	UnitID         string
+	Namespace      string
+	VersionID      string
+	FinalVersionID string
+	FinalCommit    string
+	FinalJob       string
+	FinalAtMs      int64
+	Final          bool
+}
+
+func (q *Queries) PublishUnitState(ctx context.Context, arg PublishUnitStateParams) error {
+	_, err := q.db.Exec(ctx, publishUnitState,
+		arg.UnitID,
+		arg.Namespace,
+		arg.VersionID,
+		arg.FinalVersionID,
+		arg.FinalCommit,
+		arg.FinalJob,
+		arg.FinalAtMs,
+		arg.Final,
+	)
+	return err
+}
+
 const purgeStack = `-- name: PurgeStack :execrows
 DELETE FROM stacks
 WHERE namespace = $1 AND id = $2 AND deleted_at_ms IS NOT NULL
@@ -19779,63 +20345,6 @@ func (q *Queries) PutGroupMapping(ctx context.Context, arg PutGroupMappingParams
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const putUnitFinalVersion = `-- name: PutUnitFinalVersion :exec
-INSERT INTO unit_final_versions (unit_id, namespace_id, version_id, commit_id, job_id, at_ms)
-VALUES (
-    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
-    $3, $4, $5, $6
-)
-ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, commit_id = excluded.commit_id,
-    job_id = excluded.job_id, at_ms = excluded.at_ms
-`
-
-type PutUnitFinalVersionParams struct {
-	UnitID    string
-	Namespace string
-	VersionID string
-	CommitID  string
-	JobID     string
-	AtMs      int64
-}
-
-func (q *Queries) PutUnitFinalVersion(ctx context.Context, arg PutUnitFinalVersionParams) error {
-	_, err := q.db.Exec(ctx, putUnitFinalVersion,
-		arg.UnitID,
-		arg.Namespace,
-		arg.VersionID,
-		arg.CommitID,
-		arg.JobID,
-		arg.AtMs,
-	)
-	return err
-}
-
-const putUnitStateVersion = `-- name: PutUnitStateVersion :exec
-INSERT INTO unit_state_versions (unit_id, namespace_id, version_id, updated_at_ms)
-VALUES (
-    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
-    $3, $4
-)
-ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, updated_at_ms = excluded.updated_at_ms
-`
-
-type PutUnitStateVersionParams struct {
-	UnitID      string
-	Namespace   string
-	VersionID   string
-	UpdatedAtMs int64
-}
-
-func (q *Queries) PutUnitStateVersion(ctx context.Context, arg PutUnitStateVersionParams) error {
-	_, err := q.db.Exec(ctx, putUnitStateVersion,
-		arg.UnitID,
-		arg.Namespace,
-		arg.VersionID,
-		arg.UpdatedAtMs,
-	)
-	return err
 }
 
 const queryGateRecords = `-- name: QueryGateRecords :many
@@ -20289,6 +20798,17 @@ func (q *Queries) RejoinRunner(ctx context.Context, arg RejoinRunnerParams) erro
 		arg.LastSeenAtMs,
 		arg.ID,
 	)
+	return err
+}
+
+const releaseBlobDeleteLease = `-- name: ReleaseBlobDeleteLease :exec
+DELETE FROM blob_delete_leases
+WHERE holder = $1
+`
+
+// Deletes the lease row of one holder. A holder with no row is not an error.
+func (q *Queries) ReleaseBlobDeleteLease(ctx context.Context, holder string) error {
+	_, err := q.db.Exec(ctx, releaseBlobDeleteLease, holder)
 	return err
 }
 
@@ -21127,9 +21647,9 @@ UPDATE updates
 SET status = $1, version = $2, revision = $3,
     lease_digest = $4, lease_expires_at_ms = $5,
     started_at_ms = $6, ended_at_ms = $7,
-    journal_version = $8, token_id = $9
-WHERE stack_id = $10 AND id = $11
-  AND revision = $12
+    journal_version = $8, token_id = $9, job_id = $10
+WHERE stack_id = $11 AND id = $12
+  AND revision = $13
 `
 
 type SaveUpdateParams struct {
@@ -21142,6 +21662,7 @@ type SaveUpdateParams struct {
 	EndedAtMs        int64
 	JournalVersion   int64
 	TokenID          string
+	JobID            string
 	StackID          string
 	ID               string
 	ExpectedRevision int64
@@ -21160,6 +21681,7 @@ func (q *Queries) SaveUpdate(ctx context.Context, arg SaveUpdateParams) (int64, 
 		arg.EndedAtMs,
 		arg.JournalVersion,
 		arg.TokenID,
+		arg.JobID,
 		arg.StackID,
 		arg.ID,
 		arg.ExpectedRevision,
@@ -21944,6 +22466,17 @@ func (q *Queries) SetStackVersion(ctx context.Context, arg SetStackVersionParams
 	return err
 }
 
+const setTransactionTimeout = `-- name: SetTransactionTimeout :exec
+SELECT set_config('transaction_timeout', $1::text, true)
+`
+
+// The attempt deadline of an item key transaction, on the clock of the
+// database. The setting ends with the transaction. The value is milliseconds.
+func (q *Queries) SetTransactionTimeout(ctx context.Context, timeoutMs string) error {
+	_, err := q.db.Exec(ctx, setTransactionTimeout, timeoutMs)
+	return err
+}
+
 const setWorkspaceCurrent = `-- name: SetWorkspaceCurrent :exec
 UPDATE workspaces
 SET current_state_version_id = $1, updated_at_ms = $2
@@ -22241,6 +22774,51 @@ func (q *Queries) SweepIdempotencyRecords(ctx context.Context, arg SweepIdempote
 	return result.RowsAffected(), nil
 }
 
+const takeBlobDeleteLease = `-- name: TakeBlobDeleteLease :one
+WITH running AS (
+    SELECT kind, id
+    FROM (
+        SELECT 'backup'::text AS kind, id FROM backups WHERE state = 'running'
+        UNION ALL
+        SELECT 'restore'::text AS kind, id FROM restores WHERE state IN ('checking', 'applying')
+    ) AS running_work
+    ORDER BY kind, id
+    LIMIT 1
+), written AS (
+    INSERT INTO blob_delete_leases (holder, expires_at_ms)
+    SELECT $1::text,
+           FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + $2::bigint
+    WHERE NOT EXISTS (SELECT 1 FROM running)
+    ON CONFLICT (holder) DO UPDATE SET expires_at_ms = EXCLUDED.expires_at_ms
+    RETURNING holder
+)
+SELECT COALESCE((SELECT kind FROM running), '')::text AS kind,
+       COALESCE((SELECT id FROM running), '')::text AS id
+`
+
+type TakeBlobDeleteLeaseParams struct {
+	Holder string
+	TtlMs  int64
+}
+
+type TakeBlobDeleteLeaseRow struct {
+	Kind string
+	ID   string
+}
+
+// Writes the lease of holder, ending at the database clock plus ttl_ms, in
+// one statement. While a backup runs or a restore checks or applies, it
+// writes nothing and answers that work instead, so a deleter that read the
+// guard before a restore started cannot take a lease after it. A take for a
+// holder with a row replaces that row. An empty kind and an empty ID are the
+// answer of a written lease.
+func (q *Queries) TakeBlobDeleteLease(ctx context.Context, arg TakeBlobDeleteLeaseParams) (TakeBlobDeleteLeaseRow, error) {
+	row := q.db.QueryRow(ctx, takeBlobDeleteLease, arg.Holder, arg.TtlMs)
+	var i TakeBlobDeleteLeaseRow
+	err := row.Scan(&i.Kind, &i.ID)
+	return i, err
+}
+
 const takePasskeyChallenge = `-- name: TakePasskeyChallenge :one
 DELETE FROM passkey_challenges WHERE digest = $1 RETURNING digest, kind, principal_id, pending_id, session_id, source, source_group, created_at_ms, expires_at_ms
 `
@@ -22529,6 +23107,80 @@ func (q *Queries) UnlockSweep(ctx context.Context, class int32) (bool, error) {
 	return unlocked, err
 }
 
+const updateBreakGlassReviewStep = `-- name: UpdateBreakGlassReviewStep :execrows
+UPDATE break_glass_reviews
+SET step = $1, next_notice_at_ms = $2, version = $3
+WHERE id = $4 AND version = $5
+`
+
+type UpdateBreakGlassReviewStepParams struct {
+	Step           int64
+	NextNoticeAtMs int64
+	Version        int64
+	ID             string
+	PrevVersion    int64
+}
+
+// Stores the notice step of a review. It changes no row when the stored
+// version is not the one that the caller read.
+func (q *Queries) UpdateBreakGlassReviewStep(ctx context.Context, arg UpdateBreakGlassReviewStepParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateBreakGlassReviewStep,
+		arg.Step,
+		arg.NextNoticeAtMs,
+		arg.Version,
+		arg.ID,
+		arg.PrevVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateBreakGlassReviewVerdict = `-- name: UpdateBreakGlassReviewVerdict :execrows
+UPDATE break_glass_reviews
+SET state = $1, verdict_reviewer = $2,
+  verdict_note = $3, verdict_auth = $4,
+  verdict_auth_at_ms = $5,
+  verdict_reviewed_at_ms = $6, verdict_act_as = $7,
+  next_notice_at_ms = 0, version = $8
+WHERE id = $9 AND version = $10
+`
+
+type UpdateBreakGlassReviewVerdictParams struct {
+	State               string
+	VerdictReviewer     string
+	VerdictNote         string
+	VerdictAuth         string
+	VerdictAuthAtMs     int64
+	VerdictReviewedAtMs int64
+	VerdictActAs        string
+	Version             int64
+	ID                  string
+	PrevVersion         int64
+}
+
+// Stores the verdict of a review and clears the next notice. It changes no
+// row when the stored version is not the one that the caller read.
+func (q *Queries) UpdateBreakGlassReviewVerdict(ctx context.Context, arg UpdateBreakGlassReviewVerdictParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateBreakGlassReviewVerdict,
+		arg.State,
+		arg.VerdictReviewer,
+		arg.VerdictNote,
+		arg.VerdictAuth,
+		arg.VerdictAuthAtMs,
+		arg.VerdictReviewedAtMs,
+		arg.VerdictActAs,
+		arg.Version,
+		arg.ID,
+		arg.PrevVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateExists = `-- name: UpdateExists :one
 SELECT EXISTS (
     SELECT 1 FROM updates WHERE stack_id = $1 AND id = $2
@@ -22682,16 +23334,17 @@ func (q *Queries) UpdateGitHostRegistration(ctx context.Context, arg UpdateGitHo
 }
 
 const updateGroup = `-- name: UpdateGroup :execrows
-UPDATE principal_groups SET name = $1, name_key = $2, description = $3, updated_at_ms = $4
-WHERE id = $5 AND deleted_at_ms IS NULL
+UPDATE principal_groups SET name = $1, name_key = $2, description = $3, closed_to_identity_provider = $4, updated_at_ms = $5
+WHERE id = $6 AND deleted_at_ms IS NULL
 `
 
 type UpdateGroupParams struct {
-	Name        string
-	NameKey     string
-	Description string
-	UpdatedAtMs int64
-	ID          string
+	Name                     string
+	NameKey                  string
+	Description              string
+	ClosedToIdentityProvider bool
+	UpdatedAtMs              int64
+	ID                       string
 }
 
 func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (int64, error) {
@@ -22699,6 +23352,7 @@ func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (int64
 		arg.Name,
 		arg.NameKey,
 		arg.Description,
+		arg.ClosedToIdentityProvider,
 		arg.UpdatedAtMs,
 		arg.ID,
 	)

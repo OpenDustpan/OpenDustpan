@@ -25,11 +25,14 @@ const (
 	routeNewPassword = "copper-meadow-quiet-47-lantern"
 )
 
-// publicPost sends a POST with no credential and returns the answer.
+// publicPost sends a POST of a JSON body with no credential and returns the
+// answer.
 func publicPost(t *testing.T, f accessFixture, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
 	rec := httptest.NewRecorder()
 	f.handler.ServeHTTP(rec, req)
 
@@ -414,6 +417,7 @@ func TestStalePasswordSessionGetsNoStartLink(t *testing.T) {
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelConsole, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	_, secret, err := f.sessions.Start(t.Context(), e, session.Start{

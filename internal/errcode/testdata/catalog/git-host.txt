@@ -1,3 +1,4 @@
+git-host.app-budget-spent
 git-host.link-account-invalid
 git-host.link-body-invalid
 git-host.link-body-too-large

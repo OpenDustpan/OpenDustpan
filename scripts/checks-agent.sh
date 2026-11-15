@@ -14,7 +14,7 @@
 #                              a container and export its URL for the run)
 set -euo pipefail
 
-export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.3}"
+export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.27.4}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1

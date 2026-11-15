@@ -11,6 +11,7 @@ Changed by:
 - ADR 212 extends decision 11: the SMTP settings of the expiry email.
 - ADR 237 changes decision 9: no retire prompt while the kind is dev.
 - ADR 354 extends: delegated tokens, their lifetime and rotation.
+- ADR 373 extends: the answer to an ended access token.
 .
 ## Context
 

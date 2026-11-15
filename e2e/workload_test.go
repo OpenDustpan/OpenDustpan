@@ -42,7 +42,7 @@ func TestWorkloadTokenExchange(t *testing.T) {
 		t.Skip("the fake issuer is on the loopback, which only the in-process server may reach")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -52,17 +52,17 @@ func TestWorkloadTokenExchange(t *testing.T) {
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	pulumiVersions, tofuVersions := e2e.Pulumi().Versions(), e2e.OpenTofu().Versions()
-	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+	pulumiVersion, tofuVersion := e2e.Pulumi().Single(), e2e.OpenTofu().Single()
+	if pulumiVersion == "" || tofuVersion == "" {
 		t.Fatal("each tool needs at least one version in its matrix")
 	}
 
-	pulumi, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersions[0])
+	pulumi, err := fetcher.Install(installCtx, e2e.Pulumi(), pulumiVersion)
 	if err != nil {
 		t.Fatalf("install the Pulumi CLI: %v", err)
 	}
 
-	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersions[0])
+	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersion)
 	if err != nil {
 		t.Fatalf("install OpenTofu: %v", err)
 	}

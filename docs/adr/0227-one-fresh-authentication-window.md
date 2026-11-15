@@ -10,6 +10,7 @@ Changed by:
   authentication for each method, bound to the person of the session.
 - ADR 339 extends decision 6: the first administrator is made by a one-time code and a fresh authentication.
 - ADR 354 extends: an agent never has a fresh authentication.
+- ADR 373 extends decision 1: the proof of a break-glass pass.
 .
 ## Context
 

@@ -618,6 +618,18 @@ _Avoid_: Shared admin account, emergency account
 The recovery path through the host command `host create-temp-admin`: the operator makes a temporary administrator with a reason, straight through the database. The inactivity disable never ends a temporary administrator that still works, and only the fixed expiry ends it. The command refuses when the recovery mode is `none` or when `DUSTPAN_DISABLE_HOST_RECOVERY` turns it off (ADR 245).
 _Avoid_: Break-glass, backdoor
 
+**Bootstrap recovery**:
+The break-glass recovery mode `bootstrap` of the setting `--recovery-mode`, and the default. The operator recovers through the bootstrap administrator or the host command (ADR 57, ADR 372).
+_Avoid_: Mode 1
+
+**Signed-request recovery**:
+The break-glass recovery mode `signed-request` of the setting `--recovery-mode`. The operator signs a recovery request offline with the offline operator key and sends it to a route of the server. The route makes a temporary administrator (ADR 295, ADR 372). "Over the network" describes the route, not the mode.
+_Avoid_: Mode 2, break-glass mode 2
+
+**Trust bundle**:
+The set of offline operator public keys that signed-request recovery trusts. Each key is an `ssh-ed25519` public key with a stable key ID and a SHA-256 fingerprint. The bundle holds 1 to 4 keys, and a site administrator adds and deletes them (ADR 295).
+_Avoid_: Key ring, key set
+
 **Service token**:
 An access token that belongs to a principal that is not a person, for a machine that cannot sign in to the console. Workload identity is the first choice for machines (ADR 54).
 _Avoid_: API key, robot token, machine token
@@ -786,6 +798,11 @@ _Avoid_: Snapshot, revision, checkpoint
 **Sensitive marks**:
 The value paths that the `json-state` rendering of one state version marks in `sensitive_values`. The server keeps only these paths, never a value from the rendering (ADR 41, decision 9). A masked state read masks each marked path.
 _Avoid_: Sensitive values (that is the field of the rendering)
+
+**Apply claim**:
+The reservation of the resource instances that one saved plan changes and reads. A runner job or the local `dustpan` wrapper registers it before the apply (ADR 302, ADR 368). The server refuses an apply claim that overlaps a live one before anything runs. An apply claim has a lease, and an upload under an ended apply claim fails. Under a live apply claim, the server assigns the serial of the merged state version.
+_Avoid_: Claim (alone: a claim is also the durable claim of a phase, the claim of a runner and the job-ID claim), resource lock, reservation
+_Copy says_: "claim" on a page that is only about applies.
 
 **Lineage**:
 The identifier that all state versions of one state history share.
@@ -1806,7 +1823,7 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Lock** names the workspace lock of OpenTofu and the unit lock of the inventory. Code also says "stack lock" for the hold that a mutating Pulumi update has on its stack. Do not call a lease a lock.
 - **Delta** and **diff** are different. A delta upload saves a checkpoint. A state diff compares two versions.
 - **Version** is ambiguous between a stack's update number, a state version and a software release. Name which one.
-- **Break-glass** has four meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor (the setting `--recovery-mode`). Host recovery is the path of the host command, not a break-glass account. A break-glass of a job starts a job during an active freeze (ADR 103). A break-glass for gates in error passes the gates whose result is `error` for one change (ADR 224 decision 13). Name which one.
+- **Break-glass** has four meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor (the setting `--recovery-mode`). The modes are bootstrap recovery, signed-request recovery and no break-glass (`none`). Host recovery is the path of the host command, not a break-glass account. A break-glass of a job starts a job during an active freeze (ADR 103). A break-glass for gates in error passes the gates whose result is `error` for one change (ADR 224 decision 13). Name which one.
 - **Sweep** names the Sweep feature only: a cloud sweep or a state check. The task that purges deleted units is the retention expiry. The delete of key blobs with no record is the orphan cleanup (ADR 151). The Go name `inventory.Sweeper` is older than this rule.
 - **Source** has two meanings. The term **Source** is the backend of a unit before an import. A source snapshot and the source filter name the code of a commit for a runner job (ADR 135). The unit setting that names that code is the code location (ADR 100). Never write "source" alone for the code.
 - **Snapshot** is the source snapshot only (ADR 135). Do not use it for state, a backup, a checkpoint or a state version.

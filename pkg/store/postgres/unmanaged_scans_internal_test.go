@@ -66,6 +66,7 @@ func unmanagedEntry(ns namespace.Name, action string) audit.Entry {
 		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "", Channel: audit.ChannelAPI,
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "",
 		Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 }
 

@@ -10,6 +10,8 @@ Changed by:
   open-time probe.
 - ADR 281 changes decision 7: the blobtest case of one winner for a parallel
   put.
+- ADR 376 changes decision 8: a wording refinement with the owner's word,
+  the owner said yes to RustFS 1.x in CI, pinned by digest.
 
 ## Context
 
@@ -74,10 +76,11 @@ This ADR accepts the S3-compatible part of RFC 32 with the scope below.
    of a reader does not leak. A fake server tests the error mappings, the
    retries, the probe and the signature.
 8. **CI.** CI runs the S3 suite on a service container of an S3-compatible
-   server. The planned image is RustFS, pinned by digest. This is a new test
-   tool in CI, so it waits for the project owner's yes (CLAUDE.md, ADR 27).
-   Until then, a developer runs the suite on a local server, and CI skips it. A
-   container needs no GitHub Action.
+   server. The image is RustFS 1.x, pinned by digest. This is a new test
+   tool in CI. The project owner said yes on 14 November 2026 (owner,
+   2026-11-14). The work checks the digest again when it starts. Until the
+   work lands, a developer runs the suite on a local server, and CI skips it.
+   A container needs no GitHub Action.
 9. **Moving blobs.** The project adds no command to copy blobs between stores.
    An operator moves blobs with a backup and a restore (ADR 30).
 
@@ -112,3 +115,15 @@ This ADR accepts the S3-compatible part of RFC 32 with the scope below.
   at start with a clear error. On Linux, on SQLite and on PostgreSQL, the
   OpenTofu e2e scenario and the backup and restore scenario of ADR 30 pass with
   the blobs on an S3-compatible server.
+
+## Changelog
+
+- 2026-11-14, wording refinement (ADR 376), with the owner's word ("5. A"):
+  decision 8 said "The planned image is RustFS, pinned by digest. This is a
+  new test tool in CI, so it waits for the project owner's yes (CLAUDE.md,
+  ADR 27). Until then, a developer runs the suite on a local server, and CI
+  skips it." It now says "The image is RustFS 1.x, pinned by digest. This is
+  a new test tool in CI. The project owner said yes on 14 November 2026
+  (owner, 2026-11-14). The work checks the digest again when it starts. Until
+  the work lands, a developer runs the suite on a local server, and CI skips
+  it." The yes that the decision waited for is given.

@@ -233,7 +233,9 @@ func (h *Handler) viewCaller(
 			audited.Kind = ""
 		}
 
-		h.guard.Record(ctx, r, audited, refusal.Denial{Action: action, Object: obj, Reason: reason, Window: 0})
+		h.guard.Record(ctx, r, audited, refusal.Denial{
+			Action: action, Object: obj, Reason: reason, ReasonWithin: nil, Window: 0,
+		})
 
 		return nil, savedview.ErrNotPerson
 	}
@@ -273,6 +275,7 @@ func viewAuditTemplate(r *http.Request) audit.Entry {
 		UserAgent: audit.TruncateUserAgent(userAgent(r)), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 }
 

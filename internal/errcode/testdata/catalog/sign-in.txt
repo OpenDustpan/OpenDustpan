@@ -1,1 +1,3 @@
 sign-in.refused
+sign-in.failed
+sign-in.unavailable

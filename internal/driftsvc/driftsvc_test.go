@@ -39,28 +39,28 @@ func (r *recordingStarter) Start(_ context.Context, a job.Actor, req job.StartRe
 // startedJob returns the job that the starter makes. Only its ID matters.
 func startedJob() job.Job {
 	return job.Job{
-		ID: "job-started", Spec: emptySpec(), State: job.StateQueued, Wait: job.WaitNone, Reason: "", Phases: nil,
-		Current: 0, StartedBy: "", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil, Delivery: nil,
-		Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "", Version: 1,
-		Trigger:   nil,
-		CreatedAt: time.Time{}, UpdatedAt: time.Time{},
+		ID: "job-started", NamespaceID: "", Spec: emptySpec(), State: job.StateQueued, Wait: job.WaitNone,
+		Reason: "", Phases: nil, Current: 0, StartedBy: "", Source: job.SourceAPI, Agent: "", AgentMode: "",
+		BreakGlass: nil, Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "",
+		RequestHash: "", Version: 1, Trigger: nil, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 		StateChangedAt: time.Time{},
 	}
 }
 
 func emptySpec() job.Spec {
 	return job.Spec{
-		Unit:      identity.Object{},
-		Operation: job.OperationRefresh,
-		Purpose:   job.PurposeDriftCheck,
-		Executor:  job.ExecutorRunner,
-		Location:  noLocation(),
-		Steps:     nil,
-		Pool:      "",
-		Profile:   "",
-		Edits:     nil,
-		Delivery:  "",
-		Defaulted: nil,
+		Unit:           identity.Object{},
+		Operation:      job.OperationRefresh,
+		Purpose:        job.PurposeDriftCheck,
+		Executor:       job.ExecutorRunner,
+		Location:       noLocation(),
+		LocationSource: "",
+		Steps:          nil,
+		Pool:           "",
+		Profile:        "",
+		Edits:          nil,
+		Delivery:       "",
+		Defaulted:      nil,
 	}
 }
 

@@ -98,6 +98,7 @@ func signInEntry() audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
