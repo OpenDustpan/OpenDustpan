@@ -399,11 +399,11 @@ func (f accessFixture) sessionPost(t *testing.T, subject, path, body string) *ht
 	return rec
 }
 
-// TestStalePasswordSessionGetsNoStartLink proves that a change that needs a
+// TestStalePasswordSessionGetsThePasswordRoute proves that a change that needs a
 // fresh authentication, from a session of the password sign-in with an old
-// sign-in, answers 403 with the code of a refused step and no link to a start
-// route: the password sign-in has none to open.
-func TestStalePasswordSessionGetsNoStartLink(t *testing.T) {
+// sign-in, answers 403 with the code of a refused step and the password
+// route as the path of a new sign-in: the password sign-in has no start route.
+func TestStalePasswordSessionGetsThePasswordRoute(t *testing.T) {
 	t.Parallel()
 
 	f := newAccessFixture(t)
@@ -441,9 +441,9 @@ func TestStalePasswordSessionGetsNoStartLink(t *testing.T) {
 	f.handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "mfa.fresh-step-required") ||
-		strings.Contains(rec.Body.String(), "reauthenticate") ||
+		!strings.Contains(rec.Body.String(), `"reauthenticate":"/api/dustpan/v1/sign-in/password"`) ||
 		!strings.Contains(rec.Body.String(), "with the password") {
-		t.Fatalf("stale password session = %d %s, want 403 with the code and no start link", rec.Code, rec.Body)
+		t.Fatalf("stale password session = %d %s, want 403 with the code and the password route", rec.Code, rec.Body)
 	}
 }
 

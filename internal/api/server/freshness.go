@@ -21,32 +21,33 @@ import (
 var errReauthenticate = errors.New("the sign-in of this console session is too old for this change")
 
 // reauthenticateError is the refusal of a token change from a console
-// session whose sign-in is older than window. URL starts a sign-in that
-// asks the identity provider for a new authentication. The console adds
-// the query parameter return. A session of the password sign-in has no
-// such URL: the person signs in again with the password, through POST
-// /api/dustpan/v1/sign-in/password, which is no page to open.
+// session whose sign-in is older than window. URL is the path of a new
+// sign-in. For an identity provider it starts a sign-in that asks the
+// provider for a new authentication, and the console adds the query
+// parameter return. A session of the password sign-in has no start route:
+// its URL is the password route (POST /api/dustpan/v1/sign-in/password),
+// which is no page to open.
 type reauthenticateError struct {
 	url    string
 	window time.Duration
 }
 
 func (e reauthenticateError) Error() string {
-	if e.url == "" {
+	if e.url == localSignInPath {
 		return fmt.Sprintf("the sign-in of this console session is older than %s, so sign in again with the "+
-			"password before this change", e.window)
+			"password through POST %s before this change", e.window, localSignInPath)
 	}
 
 	return fmt.Sprintf("the sign-in of this console session is older than %s, so sign in again at the identity "+
 		"provider before this change", e.window)
 }
 
-// reauthenticateURL returns the URL that starts a new authentication at the
-// identity provider of a session, and empty for the password sign-in: its
-// provider has no start route.
+// reauthenticateURL returns the path of a new sign-in for the provider of a
+// session: the start path with ?fresh=1 for an identity provider, and the
+// password route for the password sign-in, which has no start route.
 func reauthenticateURL(provider string) string {
 	if provider == localuser.ProviderID {
-		return ""
+		return localSignInPath
 	}
 
 	return sessionauth.SignInStartPrefix + url.PathEscape(provider) + "?fresh=1"

@@ -311,6 +311,10 @@ token. For a plain OAuth 2.0 provider, see "Plain OAuth 2.0 providers":
 the window then counts from the last sign-in round trip. Under a window
 of 0, each step asks again, also after a new sign-in.
 
+A session of the password sign-in has no start route. Its `reauthenticate`
+field is `/api/dustpan/v1/sign-in/password`: the person signs in again with
+the password, through a `POST` to that path.
+
 The same rule holds for these changes:
 
 - the session policy and the sign-in providers
