@@ -44,7 +44,7 @@ Out of scope:
 
 Depends on:
 
-- none
+- job-token-authenticator-chain (task 4.2 checks that the job token reaches its own unit and is refused on another unit through that chain)
 
 Builds on (not a change):
 

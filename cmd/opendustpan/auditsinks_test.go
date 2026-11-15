@@ -651,6 +651,7 @@ func newOneEntryShipper(t *testing.T, sink logsink.Sink) *audit.Shipper {
 			PrincipalKind: "",
 			JobID:         "",
 			Reason:        "",
+			Origin:        nil,
 		},
 	}
 

@@ -693,5 +693,6 @@ func (run *reconcileRun) entry(j *Job, action identity.Action, why string) audit
 		PrincipalKind: audit.PrincipalKindService,
 		JobID:         string(j.ID),
 		Reason:        ReconcileName + ": " + why,
+		Origin:        nil,
 	}
 }

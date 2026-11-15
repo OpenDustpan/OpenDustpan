@@ -60,6 +60,7 @@ func TestTheTrustRuleServiceAsksTheIssuer(t *testing.T) {
 		FenceVersion:  0,
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 
 	if _, err := st.Issuer().PutIssuerSettings(t.Context(), set, 0, ns.Fence(), []audit.Entry{entry}); err != nil {

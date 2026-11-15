@@ -10,11 +10,11 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
 - [ ] 3.1 Wire the e2e step with test CA, SPIFFE ID certificate, trust bundle, and trust rule fixtures against POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange and the exchanged token (kind `mtls-exchange`, credential `trust-token`). BLOCKED by mtls-trust-bundle-rules and mtls-mtls-exchange-token until they merge. Check: make e2e MTLS=1 runs the new steps against the real binary over TLS. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 3.2 Write the mTLS docs page in docs/guides/mtls.md (NEW) with bundle, rule, exchange, CLI use, safe transport, and TLS proxy rule. Check: Each shell block of the docs page runs as written on a new install. Confirmed by: CI (an e2e step in the NEW file e2e/mtls_mtls_proof_docs_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 3.2 Write the mTLS docs page in docs/guides/mtls.md (NEW) with bundle, rule, exchange, CLI use, safe transport, and TLS proxy rule. Check: Each shell block of the docs page runs as written on a new install. Confirmed by: CI (an e2e step in the NEW file e2e/mtls_mtls_proof_docs_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 3.3 Run a usability check and record where the path costs time. Check: The persona reaches both CLI runs from the docs page alone. A person's step.
 - [ ] 3.4 Pass the definition of done for POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange with the exchanged token (kind `mtls-exchange`, credential `trust-token`): wiring, route actions unchanged, e2e step, docs page, usability check. BLOCKED by mtls-mtls-exchange-token until it merges. Check: make check reports zero findings and make e2e passes. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

@@ -45,6 +45,7 @@ Depends on:
 
 - person-delegates-dusty
 - audit-entry-has-no-agent
+- audit-agent-block
 
 ## Usability
 
@@ -57,7 +58,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Context writes are audited on main. (`pkg/dustpan/context_test.go:746 (TestContextWritesAreAudited)`)
+- Context writes are audited on main. (`pkg/dustpan/context_test.go:747 (TestContextWritesAreAudited)`)
 - Audit chain families are tested on main. (`pkg/access/audit_chain_families_test.go:11 (TestAuditChainFamilies)`)
 - User-agent truncation for audit entries is tested on main. (`pkg/audit/user_agent_test.go:14 (TestTruncateUserAgentKeepsRunes)`)
 - The audit kind audit-read is defined on main. (`pkg/audit/audit.go:69 (audit-read)`)
@@ -66,6 +67,18 @@ Each fact names its file, line and function on main. The change specifies only t
 ## ADR check
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+
+**ADR 380: The delegation in the agent block of an audit entry** (owner-tagged: "Decided by the project owner", 2026-11-15).
+
+- Decisions that apply: 1, 2, 3 (current).
+- Changed by: -. It changes ADR 126 decision 10.
+- Current rule: this ADR.
+- Quote, decision 1: "The agent block of ADR 126 decision 10 holds seven fields in this fixed order: `agentRun`, `agentSession`, `tool`, `argsDigest`, `breakGlass` as `true` or `false`, `secretStage`, and `delegationID`."
+- Quote, decision 1: "`delegationID` is the stable ID of the delegation of ADR 354 under which the agent acted (ADR 362), and it is empty when the step had no delegation."
+- Quote, decision 2: "An entry with all seven fields empty (and `breakGlass` false) writes no block."
+- Quote, decision 3: "The block keeps the text `agent/1`."
+- Effect: the block holds seven fields, with the delegation ID last; there is no block version and no path for old entries, because no tag shipped.
+- Conflict: none.
 
 **ADR 120: Dusty, the built-in agent, runs on durable operations** (not owner-tagged).
 

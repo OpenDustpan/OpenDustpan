@@ -13,14 +13,14 @@
 ## 2. Implementation
 
 - [ ] 2.1 Implement the resolver in NEW file internal/api/tfe/placement_resolver.go and wire it into the Pulumi and TFE create paths (internal/api/pulumi, internal/api/tfe) Check: NEW `TestPlacementResolver` passes
-- [ ] 2.2 Add the opt-out field to the existing namespace create route, in its declaration file and its adapter file in internal/api/tfe, and run `make generate` for internal/api/apidesc/openapi.json, and store the default in the create transaction Check: NEW `TestNamespaceDefaultPlacement` passes
+- [ ] 2.2 Add the opt-out field to the existing namespace create route, in its declaration file and its adapter file in internal/api/tfe, and run `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` for internal/api/apidesc/openapi.json, and store the default in the create transaction Check: NEW `TestNamespaceDefaultPlacement` passes
 - [ ] 2.3 Add the foreign keys to the baseline migration of each dialect, in the store packages pkg/store/sqlite and pkg/store/postgres Check: `make check` passes and the store conformance suite refuses a delete of a named collection. Confirmed by: CI (the agent runs the fast checks only).
 - [ ] 2.4 Write the audit entries for placements, rule changes and refusals in NEW file internal/api/tfe/placement_audit.go Check: NEW test `TestPlacementAudit` passes
 - [ ] 2.5 Add e2e steps in e2e/placement_test.go. With an admin access token, call `POST /api/dustpan/v1/namespaces/{namespace}/collections` and the namespace create route with and without the opt-out. Then run `pulumi stack init` and `tofu init` with a developer access token, including the TFE project path Check: `make e2e` runs the steps with the real CLIs on SQLite and PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

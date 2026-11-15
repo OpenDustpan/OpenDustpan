@@ -87,6 +87,7 @@ func approver() audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -126,6 +127,7 @@ func createServicePrincipal(t *testing.T, chain *auditChain, subject string) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	if err := st.CreatePrincipal(t.Context(), p, e); err != nil {
@@ -656,6 +658,7 @@ func pendingTestEntry() audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

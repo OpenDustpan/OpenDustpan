@@ -114,6 +114,7 @@ func hashEntryWithRealHash(subject, object, userAgent, requestID string) audit.E
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	e.Hash = audit.ComputeHash(e, e.PrevHash)
@@ -246,6 +247,7 @@ func checkShippedHash(t *testing.T, body []byte) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	if got := audit.ComputeStoredHash(rebuilt, prevHash, changesText); got != hash {
