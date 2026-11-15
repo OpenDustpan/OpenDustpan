@@ -133,13 +133,13 @@ func checkText(req *StartRequest) error {
 // person, a schedule or a feature of the server.
 func sourceOf(a Actor, given SourceKind) (SourceKind, error) {
 	switch {
-	case given == "" && a.Agent != "":
+	case given == "" && !a.Agent.IsZero():
 		return SourceAgent, nil
 	case given == "":
 		return SourceAPI, nil
 	case !given.Valid():
 		return "", fmt.Errorf("%w: %q is not a source kind", ErrInvalid, given)
-	case a.Agent != "" && given != SourceAgent:
+	case !a.Agent.IsZero() && given != SourceAgent:
 		return "", fmt.Errorf("%w: the start of an agent has the source kind %s, not %s", ErrInvalid, SourceAgent,
 			given)
 	default:
@@ -154,7 +154,7 @@ func checkBreakGlass(a Actor, bg *BreakGlass) error {
 		return nil
 	}
 
-	if a.Agent != "" {
+	if !a.Agent.IsZero() {
 		return fmt.Errorf("%w: an agent cannot ask for break-glass", ErrAgentDenied)
 	}
 
@@ -368,7 +368,8 @@ func (s *service) create(
 	}
 
 	decision, err := s.decider.Decide(ctx, DecisionInput{
-		Principal: a.Principal, Agent: a.Agent, AgentMode: a.Mode, Source: source, Spec: spec, Keys: editKeys(&spec),
+		Principal: a.Principal, Agent: string(a.Agent), AgentMode: a.Mode, Source: source, Spec: spec,
+		Keys: editKeys(&spec),
 	})
 	if err != nil {
 		return Job{}, false, fmt.Errorf("policy: %w", err)
@@ -406,7 +407,7 @@ func (s *service) create(
 // checkAgent applies the agent mode with the switches of the user.
 func (s *service) checkAgent(ctx context.Context, a Actor, spec *Spec) (bool, error) {
 	var sw DirectSwitches
-	if a.Agent != "" && s.switches != nil {
+	if !a.Agent.IsZero() && s.switches != nil {
 		sw = s.switches(ctx, spec.Unit.Namespace(), a.Principal.Subject)
 	}
 
@@ -462,7 +463,7 @@ func (s *service) newJob(a Actor, c *decided) Job {
 	j := Job{
 		ID: s.newID(), NamespaceID: "", Spec: c.spec, State: StateQueued, Wait: WaitNone, Reason: "",
 		Phases: make([]Phase, len(c.kinds)), Current: 0, StartedBy: a.Principal.Subject, Source: c.source,
-		Agent: a.Agent, AgentMode: a.Mode, BreakGlass: c.bg, Trigger: copyTrigger(c.req.Trigger), Delivery: nil,
+		Agent: string(a.Agent), AgentMode: a.Mode, BreakGlass: c.bg, Trigger: copyTrigger(c.req.Trigger), Delivery: nil,
 		Closed:       nil,
 		Verification: VerificationNone, IdempotencyKey: scopedKey(a.Principal.Subject, c.req.IdempotencyKey),
 		RequestHash: requestHash(c.source, c.req), Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
@@ -596,18 +597,55 @@ func (s *service) entry(a Actor, req *StartRequest, j *Job) (audit.Entry, error)
 		channel = audit.ChannelAPI
 	}
 
+	origin, err := audit.NewOrigin(audit.OriginArgs{
+		Run:         agentRunOf(a.Agent, channel),
+		Session:     agentSessionOf(a.Agent, channel),
+		Tool:        "",
+		ArgsDigest:  "",
+		BreakGlass:  j.BreakGlass != nil,
+		SecretStage: "",
+	})
+	if err != nil {
+		return audit.Entry{}, err
+	}
+
 	return audit.Entry{
 		At: s.now().UTC(), Namespace: j.Spec.Unit.Namespace(), Subject: a.Principal.Subject, IDPSubject: "",
 		TokenID: a.Principal.TokenID, Action: string(actions[0].Action), Object: j.Spec.Unit.String(), Version: "",
-		ValuePath: "", ValueCount: nil, Changes: startChanges(a, j), SourceIP: req.SourceIP,
+		ValuePath: "", ValueCount: nil, Changes: startChanges(j), SourceIP: req.SourceIP,
 		UserAgent: req.UserAgent, Channel: channel, Kind: kind, Outcome: audit.OutcomeSuccess,
 		RequestID: req.RequestID, ObjectID: j.Spec.Unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: string(a.Principal.Kind), JobID: "", Reason: reason,
+		Origin: origin,
 	}, nil
 }
 
-// startChanges returns the changes of the audit entry of a start.
-func startChanges(a Actor, j *Job) []audit.Change {
+// agentRunOf answers the agent run of the audit entry of a start: the run
+// ID of a call of the built-in agent, and empty for a call of an outside
+// agent, which names its MCP session instead. A start with no agent has no
+// run.
+func agentRunOf(ref AgentRef, channel audit.Channel) string {
+	if ref.IsZero() || channel == audit.ChannelMCP || channel == audit.ChannelMCPProxy {
+		return ""
+	}
+
+	return string(ref)
+}
+
+// agentSessionOf answers the agent session of the audit entry of a start:
+// the MCP session ID of an outside agent, or the run ID of the built-in
+// agent. A start with no agent has no session.
+func agentSessionOf(ref AgentRef, _ audit.Channel) string {
+	if ref.IsZero() {
+		return ""
+	}
+
+	return string(ref)
+}
+
+// startChanges returns the changes of the audit entry of a start. The agent
+// of the start lives in the agent block of the entry, never in a change key.
+func startChanges(j *Job) []audit.Change {
 	changes := []audit.Change{
 		{Key: "job", Old: nil, New: string(j.ID), Layer: "", TakesEffect: ""},
 		{Key: "source", Old: nil, New: string(j.Source), Layer: "", TakesEffect: ""},
@@ -618,10 +656,6 @@ func startChanges(a Actor, j *Job) []audit.Change {
 		changes = append(changes, audit.Change{
 			Key: "purpose", Old: nil, New: string(j.Spec.Purpose), Layer: "", TakesEffect: "",
 		})
-	}
-
-	if a.Agent != "" {
-		changes = append(changes, audit.Change{Key: "agent", Old: nil, New: a.Agent, Layer: "", TakesEffect: ""})
 	}
 
 	if j.BreakGlass != nil {

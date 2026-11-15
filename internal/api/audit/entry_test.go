@@ -266,3 +266,87 @@ func newReaderHandler(t *testing.T, reader audit.EntryReader) http.Handler {
 
 	return handler
 }
+
+// TestToAuditEntryAgentBlock proves that GET /api/audit/entries answers the
+// agent block of an entry with agent data, and no block for an entry
+// without it.
+func TestToAuditEntryAgentBlock(t *testing.T) {
+	t.Parallel()
+
+	handler, store := newEnforcingHandler(t, &recordingAuthorizer{calls: nil})
+
+	seedEntry(t, store, "acme", "alice")
+
+	agent := audit.Entry{
+		At: changeTime(), Namespace: "acme", Subject: "ada", IDPSubject: "", TokenID: "", Action: "unit:run",
+		Object: "unit:acme/web", Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAgent, Kind: audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "req-ada",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		Reason:        "",
+		PrincipalKind: "",
+		JobID:         "",
+		Origin:        mustAgentOrigin(t, "run-1", "run-1"),
+	}
+	if _, err := store.Append(t.Context(), namespace.Fence{Namespace: "acme", FailoverVersion: 1}, agent); err != nil {
+		t.Fatalf("seed agent entry: %v", err)
+	}
+
+	var list struct {
+		Entries []map[string]any `json:"entries"`
+	}
+
+	if status := getJSON(t, handler, "/api/audit/entries?organization=acme", &list); status != http.StatusOK {
+		t.Fatalf("list answers %d", status)
+	}
+
+	if len(list.Entries) != 2 {
+		t.Fatalf("entries = %v, want 2 entries", list.Entries)
+	}
+
+	newest := list.Entries[0]
+	block, ok := newest["agent"].(map[string]any)
+	if !ok {
+		t.Fatalf("newest entry = %v, want an agent block", newest)
+	}
+
+	checkAgentBlock(t, block)
+
+	if _, ok := list.Entries[1]["agent"]; ok {
+		t.Fatalf("oldest entry = %v, want no agent block", list.Entries[1])
+	}
+}
+
+// mustAgentOrigin builds the agent origin of a test entry and fails the
+// test when its fields are not valid.
+func mustAgentOrigin(t *testing.T, run, session string) *audit.Origin {
+	t.Helper()
+
+	origin, err := audit.NewOrigin(audit.OriginArgs{
+		Run: run, Session: session, Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "",
+	})
+	if err != nil {
+		t.Fatalf("new origin: %v", err)
+	}
+
+	return origin
+}
+
+// checkAgentBlock proves that block holds the agent block of the start.
+func checkAgentBlock(t *testing.T, block map[string]any) {
+	t.Helper()
+
+	if block["agentRun"] != "run-1" || block["agentSession"] != "run-1" || block["tool"] != "" ||
+		block["argsDigest"] != "" || block["secretStage"] != "" {
+		t.Fatalf("agent block = %v, want the block of the start", block)
+	}
+
+	if breakGlass, ok := block["breakGlass"].(bool); ok && breakGlass {
+		t.Fatalf("agent block = %v, want no break glass", block)
+	}
+}

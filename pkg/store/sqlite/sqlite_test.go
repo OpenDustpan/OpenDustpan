@@ -436,6 +436,11 @@ func tamperAuditColumn(field string) (string, bool) {
 		"source_ip",
 		"user_agent",
 		"channel",
+		"agent_run",
+		"agent_session",
+		"args_digest",
+		"secret_stage",
+		"tool",
 		"request_id",
 		"reason":
 		return field, true

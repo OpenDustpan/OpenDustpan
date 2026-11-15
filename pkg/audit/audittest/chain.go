@@ -98,6 +98,7 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a second migration to the same state writes no entry", test: testChainMigrateTwice},
 		{name: "concurrent end entries write one entry", test: testChainConcurrentEnds},
 		{name: "each namespace entry holds its failover version under the hash", test: testChainFenceVersion},
+		{name: "a stored chain from before the change passes the check", test: testChainCheckPassesOldChain},
 		{name: "a stale fence refuses a start entry", test: testChainStaleFence},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
@@ -658,6 +659,40 @@ func testChainFenceVersion(t *testing.T, ts ChainTestStore) {
 	}
 }
 
+// testChainCheckPassesOldChain proves that a chain stored before the agent
+// block existed still passes the check: entries with no agent data hash
+// exactly as before, and the check covers entries with and without the
+// block in one chain.
+func testChainCheckPassesOldChain(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+
+	old := tl.append(2)
+	for i := range old {
+		if old[i].HasAgentBlock() {
+			t.Fatalf("entry %d without agent data has an agent block", old[i].Sequence)
+		}
+	}
+
+	withAgent := newEntry(tl.ns.Name, "admin", "req-agent", tl.tick())
+	withAgent.Channel = audit.ChannelAgent
+	withAgent.Origin = mustOrigin(
+		t,
+		audit.OriginArgs{Run: "run-1", Session: "run-1", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: ""},
+	)
+	appendEntry(t, ts.Store, tl.ns.Fence(), withAgent)
+
+	wantValid(t, check(t, ts.Store, tl.ns.Name))
+
+	got := listScope(t, ts.Store, tl.ns.Name)
+	if len(got) != 3 {
+		t.Fatalf("entries: got %d, want 3", len(got))
+	}
+
+	checkValidChain(t, got)
+}
+
 func testChainStaleFence(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
@@ -1044,6 +1079,7 @@ func approvalCaller() audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

@@ -167,11 +167,32 @@ type auditEntry struct {
 	// JobID is the job whose token acted. It is omitted for every other
 	// credential.
 	JobID string `json:"jobID,omitempty"`
+	// Agent holds the agent block of the entry: the agent that acted for
+	// the subject. It is omitted for an entry without agent data.
+	Agent *auditAgentBlock `json:"agent,omitempty"`
+}
+
+// auditAgentBlock is the wire shape of the agent data of an entry: the run
+// of a call of the built-in agent, the MCP session ID of a call of an
+// outside agent or the run ID, the tool of the call, the digest of its
+// arguments, the break-glass flag and the closed secret stage. A job entry
+// of an agent leaves the tool, the digest and the stage empty.
+//
+// Contract: never remove or rename these fields. The console reads only this
+// API, and it ships on its own schedule, so a released console keeps working
+// only while every field stays.
+type auditAgentBlock struct {
+	AgentRun     string `json:"agentRun"`
+	AgentSession string `json:"agentSession"`
+	Tool         string `json:"tool"`
+	ArgsDigest   string `json:"argsDigest"`
+	BreakGlass   bool   `json:"breakGlass"`
+	SecretStage  string `json:"secretStage"`
 }
 
 // toAuditEntry maps one domain entry to its wire shape.
 func toAuditEntry(e audit.Entry) auditEntry {
-	return auditEntry{
+	entry := auditEntry{
 		AtMs:          e.AtMs(),
 		Sequence:      e.Sequence,
 		Subject:       e.Subject,
@@ -196,7 +217,21 @@ func toAuditEntry(e audit.Entry) auditEntry {
 		Reason:        e.Reason,
 		PrincipalKind: e.PrincipalKind,
 		JobID:         e.JobID,
+		Agent:         nil,
 	}
+
+	if o := e.Origin; o != nil {
+		entry.Agent = &auditAgentBlock{
+			AgentRun:     o.Run(),
+			AgentSession: o.Session(),
+			Tool:         o.Tool(),
+			ArgsDigest:   o.ArgsDigest(),
+			BreakGlass:   o.BreakGlass(),
+			SecretStage:  o.SecretStage(),
+		}
+	}
+
+	return entry
 }
 
 // auditChange is the wire shape of one change of an entry: the key, the old

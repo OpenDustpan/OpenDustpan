@@ -371,6 +371,20 @@ func (s *Spec) Changes() bool {
 	return s.Executor == ExecutorWriteBack || s.Operation != OperationPlan
 }
 
+// AgentRef names the agent that acts for the principal of a request: the
+// run ID of a call of the built-in agent, or the MCP session ID of a call
+// of an outside agent. The empty value names no agent: the principal acts
+// itself. The channel of the call travels in the request, and the audit
+// entry of a start records the run and the session in its agent block. The
+// job, its approvals and its decision input record the reference as one
+// string.
+type AgentRef string
+
+// IsZero reports whether r names no agent.
+func (r AgentRef) IsZero() bool {
+	return r == ""
+}
+
 // Actor is who asks for a change to a job: the principal of the request,
 // and the agent that acts for it, if any. An agent such as Dusty runs in the
 // server and acts as the user who asked, through an act-as edge. The
@@ -378,11 +392,11 @@ func (s *Spec) Changes() bool {
 // entries record both.
 type Actor struct {
 	Principal identity.Principal
-	// Agent names the agent that acts for Principal, or is empty when the
+	// Agent names the agent that acts for Principal, or is zero when the
 	// principal acts itself.
-	Agent string
+	Agent AgentRef
 	// Mode is the agent mode that the user set for Agent. It is empty when
-	// Agent is empty. An agent with an empty mode works in
+	// Agent is zero. An agent with an empty mode works in
 	// AgentModeApproveFirst.
 	Mode AgentMode
 	// ConfirmAuth is the fresh authentication that the server can ask of

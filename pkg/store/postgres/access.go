@@ -881,6 +881,7 @@ func subjectRevokeEntry(e audit.Entry, g access.Grant, endedBy string) audit.Ent
 		Reason:        "",
 		PrincipalKind: e.PrincipalKind,
 		JobID:         e.JobID,
+		Origin:        e.Origin,
 	}
 }
 

@@ -5222,7 +5222,7 @@ func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow
 
 const getAuditEntry = `-- name: GetAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence = ?
@@ -5252,6 +5252,12 @@ func (q *Queries) GetAuditEntry(ctx context.Context, arg GetAuditEntryParams) (A
 		&i.SourceIp,
 		&i.UserAgent,
 		&i.Channel,
+		&i.AgentRun,
+		&i.AgentSession,
+		&i.ArgsDigest,
+		&i.BreakGlass,
+		&i.SecretStage,
+		&i.Tool,
 		&i.Kind,
 		&i.Outcome,
 		&i.RequestID,
@@ -9833,9 +9839,9 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+    at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
     fence_version, reason, principal_kind, job_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertAuditEntryParams struct {
@@ -9852,6 +9858,12 @@ type InsertAuditEntryParams struct {
 	SourceIp      string
 	UserAgent     string
 	Channel       string
+	AgentRun      string
+	AgentSession  string
+	ArgsDigest    string
+	BreakGlass    int64
+	SecretStage   string
+	Tool          string
 	Kind          string
 	Outcome       string
 	RequestID     string
@@ -9881,6 +9893,12 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.SourceIp,
 		arg.UserAgent,
 		arg.Channel,
+		arg.AgentRun,
+		arg.AgentSession,
+		arg.ArgsDigest,
+		arg.BreakGlass,
+		arg.SecretStage,
+		arg.Tool,
 		arg.Kind,
 		arg.Outcome,
 		arg.RequestID,
@@ -12243,7 +12261,7 @@ func (q *Queries) LastAuditChainStartSequence(ctx context.Context, namespace str
 
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
@@ -12270,6 +12288,12 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.SourceIp,
 		&i.UserAgent,
 		&i.Channel,
+		&i.AgentRun,
+		&i.AgentSession,
+		&i.ArgsDigest,
+		&i.BreakGlass,
+		&i.SecretStage,
+		&i.Tool,
 		&i.Kind,
 		&i.Outcome,
 		&i.RequestID,
@@ -12475,7 +12499,7 @@ func (q *Queries) ListAuditChainMarks(ctx context.Context) ([]AuditChainMark, er
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
@@ -12516,6 +12540,12 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.SourceIp,
 			&i.UserAgent,
 			&i.Channel,
+			&i.AgentRun,
+			&i.AgentSession,
+			&i.ArgsDigest,
+			&i.BreakGlass,
+			&i.SecretStage,
+			&i.Tool,
 			&i.Kind,
 			&i.Outcome,
 			&i.RequestID,
@@ -12544,7 +12574,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
@@ -12583,6 +12613,12 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.SourceIp,
 			&i.UserAgent,
 			&i.Channel,
+			&i.AgentRun,
+			&i.AgentSession,
+			&i.ArgsDigest,
+			&i.BreakGlass,
+			&i.SecretStage,
+			&i.Tool,
 			&i.Kind,
 			&i.Outcome,
 			&i.RequestID,
