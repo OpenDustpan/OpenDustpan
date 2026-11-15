@@ -54,9 +54,9 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 
 // AppendServer implements audit.ServerStore: it reads the last hash of
 // audit.ServerScope and writes the entry in one transaction, so the appends
-// of the scope form one sequence. A transaction-scoped advisory lock orders
-// appends that run at the same time, as the namespace row lock does for a
-// namespace.
+// of the scope form one sequence. The transaction takes the advisory lock of
+// the scope first, as every transaction that appends an entry of @server
+// does, and that lock orders appends that run at the same time.
 // An entry records what happened, for example a refusal or a sign-in, so
 // this append has no installation state check: maintenance mode must never
 // drop it. The change that an entry describes keeps its own check.
@@ -67,14 +67,10 @@ func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, e
 
 	var stored audit.Entry
 
-	txErr := s.inControlTx(ctx, func(q *db.Queries) error {
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
+	txErr := runServerAuditTx(ctx, s.inControlTx, func(tx serverAuditTx) error {
 		var err error
 
-		stored, err = appendAuditEntry(ctx, q, e)
+		stored, err = appendServerEntry(ctx, tx, e)
 
 		return err
 	})
@@ -85,34 +81,68 @@ func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, e
 	return stored, nil
 }
 
+// serverAuditTx holds the queries of a transaction that took the advisory
+// lock of the scope @server as its first statement. Only runServerAuditTx
+// makes one, so an append of an entry of @server that needs one cannot run
+// outside such a transaction.
+type serverAuditTx struct {
+	q *db.Queries
+}
+
+// runServerAuditTx opens a transaction with run and, as its first statement,
+// takes the advisory lock of the scope @server, before fn runs and before
+// the transaction writes any other row. run opens a new transaction, for
+// example s.inTx, s.inControlTx or s.inMinimumTx, so no caller can take a
+// row before the lock. fn receives the locked transaction.
+//
+// Only this function makes a serverAuditTx. appendServerEntry needs one, so
+// an append of an entry of @server that runs without the lock does not
+// compile.
+func runServerAuditTx(ctx context.Context, run txRunner, fn func(tx serverAuditTx) error) error {
+	return run(ctx, func(q *db.Queries) error {
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock server audit scope: %w", err)
+		}
+
+		return fn(serverAuditTx{q: q})
+	})
+}
+
+// inServerAuditTx runs fn in a write transaction of the store that takes the
+// advisory lock of the scope @server first. A writer of an entry of @server
+// uses it. A writer that must run on another transaction kind passes its
+// runner to runServerAuditTx directly.
+func (s *Store) inServerAuditTx(ctx context.Context, fn func(tx serverAuditTx) error) error {
+	return runServerAuditTx(ctx, s.inTx, fn)
+}
+
 // inAuditedTx runs fn and appends e in the scope @server in one
 // transaction: the change and its audit entry commit together, or neither
 // does (ADR 60, fail closed). An entry that fails validation changes
 // nothing. The transaction takes the advisory lock of the scope first, so
 // the appends form one sequence and no lock order can deadlock.
 func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Queries) error) error {
-	return s.inAuditedTxOf(ctx, &e, fn)
+	return s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error { return fn(tx.q) })
 }
 
 // inAuditedTxOf is inAuditedTx with an entry that fn may change before the
-// append, for example to add changes that only the transaction can read. It
-// checks the entry again after fn.
-func (s *Store) inAuditedTxOf(ctx context.Context, e *audit.Entry, fn func(q *db.Queries) error) error {
+// append, for example to add changes that only the transaction can read, and
+// with the locked transaction that fn can hand to a helper that appends more
+// than one entry of @server. It checks the entry again after fn.
+func (s *Store) inAuditedTxOf(ctx context.Context, e *audit.Entry, fn func(tx serverAuditTx) error) error {
 	if err := validServerEntry(*e); err != nil {
 		return err
 	}
 
-	return s.inTx(ctx, func(q *db.Queries) error {
-		// This lock comes before fn on purpose. It also serializes the writes
-		// that count other rows in the same transaction: the delete of a
-		// principal checks the last site administrator and the last enabled
-		// break-glass account. Under READ COMMITTED, two such writes without
-		// it both pass the check. Do not move it after fn.
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		if err := fn(q); err != nil {
+	// The lock of the scope @server comes before fn on purpose. It also
+	// serializes the writes that count other rows in the same transaction:
+	// the delete of a principal checks the last site administrator and the
+	// last enabled break-glass account. Under READ COMMITTED, two such
+	// writes without it both pass the check. runServerAuditTx takes it as
+	// the first statement of the transaction, before fn. Do not move it
+	// after fn.
+	return runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
+		if err := fn(tx); err != nil {
 			return err
 		}
 
@@ -120,7 +150,7 @@ func (s *Store) inAuditedTxOf(ctx context.Context, e *audit.Entry, fn func(q *db
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, *e); err != nil {
+		if _, err := appendServerEntry(ctx, tx, *e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -174,20 +204,16 @@ func (s *Store) inLockedFencedAuditedTx(
 		return err
 	}
 
-	return s.inTx(ctx, func(q *db.Queries) error {
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		if err := checkFenceForUpdate(ctx, q, fence); err != nil {
+	return runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
+		if err := checkFenceForUpdate(ctx, tx.q, fence); err != nil {
 			return err
 		}
 
-		if err := fn(q); err != nil {
+		if err := fn(tx.q); err != nil {
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendAuditEntry(ctx, tx.q, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -225,18 +251,65 @@ func validServerEntry(e audit.Entry) error {
 	return nil
 }
 
-// appendAuditEntry reads the stored chain state and the last entry of the
-// scope of e in the same transaction, then inserts e as the next one, with
-// its sequence, previous hash and hash. An entry with no ObjectID gets the
-// stable ID of the live unit that its Object names. The caller runs it in a
-// transaction that orders the appends of the scope. An append computes the
-// hash (hashLink) only when the chain of its scope is open. The chain is
-// open when the stored state is on. No row also counts as on. The scope
-// has no entries, or its last entry holds a hash and is not an end entry
-// (Action == audit.ActionEndChain). Otherwise the append writes no hash
-// (hashNone). An append in a scope whose chain is closed stays unhashed
-// until a start entry. The digest of the start entry covers it.
+// appendAuditEntry appends an entry of a namespace: it refuses an entry of
+// the scope @server with audit.ErrInvalidEntry and stores nothing. An entry
+// of @server goes through appendServerEntry, which needs the locked
+// transaction. The refusal is a defense-in-depth layer: the type
+// serverAuditTx is the first layer, because only a locked transaction has
+// one. This check stays so that a new caller that passes a *db.Queries
+// cannot skip the lock.
 func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
+	if e.Namespace == audit.ServerScope {
+		return audit.Entry{}, fmt.Errorf(
+			"%w: an entry of the scope %q goes through appendServerEntry",
+			audit.ErrInvalidEntry, audit.ServerScope,
+		)
+	}
+
+	return appendEntry(ctx, q, e)
+}
+
+// appendServerEntry appends an entry of the scope @server in the locked
+// transaction tx. It refuses an entry of another scope with
+// audit.ErrInvalidEntry and stores nothing.
+func appendServerEntry(ctx context.Context, tx serverAuditTx, e audit.Entry) (audit.Entry, error) {
+	if err := validServerEntry(e); err != nil {
+		return audit.Entry{}, err
+	}
+
+	return appendEntry(ctx, tx.q, e)
+}
+
+// appendAnyEntry appends e in the transaction of q, which holds the lock of
+// the audit scope @server when srv is not nil. A caller that names the scope
+// of its entry only at run time passes that lock, or nil for an entry of a
+// namespace. A nil lock sends the entry to appendAuditEntry, which refuses an
+// entry of the scope @server, so an entry of that scope reaches the log only
+// through the locked transaction.
+func appendAnyEntry(
+	ctx context.Context, q *db.Queries, srv *serverAuditTx, e audit.Entry,
+) (audit.Entry, error) {
+	if srv == nil {
+		return appendAuditEntry(ctx, q, e)
+	}
+
+	return appendServerEntry(ctx, *srv, e)
+}
+
+// appendEntry reads the stored chain state and the last entry of the scope
+// of e in the same transaction, then inserts e as the next one, with its
+// sequence, previous hash and hash. An entry with no ObjectID gets the
+// stable ID of the live unit that its Object names. The caller holds the
+// lock that orders the appends of the scope: the advisory lock of @server
+// for an entry of that scope, and the namespace row lock for an entry of a
+// namespace. An append computes the hash (hashLink) only when the chain of
+// its scope is open. The chain is open when the stored state is on. No row
+// also counts as on. The scope has no entries, or its last entry holds a
+// hash and is not an end entry (Action == audit.ActionEndChain). Otherwise
+// the append writes no hash (hashNone). An append in a scope whose chain is
+// closed stays unhashed until a start entry. The digest of the start entry
+// covers it.
+func appendEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
 	rec, err := readChainRecord(ctx, q)
 	if err != nil {
 		return audit.Entry{}, err
@@ -725,12 +798,8 @@ func updateServerSetting[T any](
 ) (T, error) {
 	var stored T
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		old, err := read(q)
+	err := runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
+		old, err := read(tx.q)
 		if err != nil {
 			return err
 		}
@@ -744,11 +813,11 @@ func updateServerSetting[T any](
 			return err
 		}
 
-		if err := write(q, value); err != nil {
+		if err := write(tx.q, value); err != nil {
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendServerEntry(ctx, tx, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
