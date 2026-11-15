@@ -125,7 +125,8 @@ func newSinksHandler(svc services, cfg *settings, onFailure func()) (http.Handle
 	}
 
 	subscriptionService, err := subscriptionsvc.NewService(subscriptionsvc.Config{
-		Subscriptions: subscriptions, Deliveries: deliveries, Namespaces: svc.namespaces, Now: cfg.now,
+		Subscriptions: subscriptions, Deliveries: deliveries, Namespaces: svc.namespaces, Audit: entries,
+		Now: cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("subscription service: %w", err)

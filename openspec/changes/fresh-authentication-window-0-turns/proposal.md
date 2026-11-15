@@ -20,6 +20,23 @@ A window of 0 turns the fresh check off, and the stale error omits the sign-in p
 - requireFresh in internal/api/server/freshness.go asks each time for a window of 0, also at age 0.
 - The stale 403 names the path of a new sign-in.
 - The fresh() function has a comment that names mfa.fresh-step-required.
+- The fix is at the shared layer. Fresh in internal/sessionauth/sessionauth.go is the one function that the TFE, issuer, profile and Pulumi paths call. A window of 0 there asks each time, so no caller can skip it.
+- A request with a valid console session whose sign-in is too old, or whose window is 0, answers 403 with mfa.fresh-step-required and the path of a new sign-in. Today the classifier in internal/api/server/signin.go answers 401 for it.
+- A session that is not valid at all (missing or expired) is not a fresh-step refusal. Its 401 path (the unauthenticated answer in internal/api/server/server.go) stays as it is, and this change does not touch it.
+
+## Files
+
+- internal/sessionauth/sessionauth.go: Fresh (:312) refuses a window of 0.
+- internal/sessionauth/sessionauth_test.go: TestFresh, TestFreshWindowZeroAsksEachTime, TestFreshBoundaryEqualsWindow.
+- pkg/session/policy.go: ValidTokenFreshness (:35) accepts 0 or 60 to 900 seconds.
+- pkg/session/policy_test.go: TestValidTokenFreshness, TestFreshWindowConstructorRefusesOutOfRange.
+- internal/api/server/freshness.go: checkTokenFreshness and the comment of fresh().
+- internal/api/server/signin.go: the classifier case for errReauthenticate (:743) answers 403.
+- internal/api/server/server.go: problemFor (:604-606) keeps the code and the path for this 403.
+- internal/api/server/freshness_test.go: TestStaleErrorNamesSignInPath and the stale-session tests that expect 401 today.
+- internal/api/server/signin_test.go: the sign-in tests that expect 401 for a stale session.
+- pkg/breakglass/breakglass.go: the comment of fresh() (:339).
+- docs/guides/console-sign-in.md: the 403 text and the window values.
 
 Out of scope:
 
@@ -59,7 +76,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR, with ADR 301, 320, 339, 354.
 - Quote: "0 asks every time (owner, 2026-10-18). A window of 0 asks for a fresh authentication at each step. No value turns the check off."
 - Quote: "Errors. A step with no fresh authentication answers `403` with the error code `mfa.fresh-step-required` and changes nothing (ADR 212 decision 3). The error names the path of a new sign-in."
-- Effect: The change makes 0 ask each time and names the sign-in path in the 403.
+- Effect: The change makes 0 ask each time and names the sign-in path in the 403. A valid session with no fresh authentication gets the same 403 as an access token, with the same error code.
 - Conflict: none.
 
 **ADR 297: Console sessions are sealed cookies, not stored sessions** (owner-tagged (all decisions)).
@@ -87,7 +104,7 @@ Each question below has a provisional answer by the PM decision rule (a benchmar
 Questions considered and answered:
 
 - Does a window of 0 turn the check off? No. ADR 227 decision 3 says no value turns the check off.
-- Must the 403 name the sign-in path? Yes. ADR 227 decision 6 says the error names it.
+- Must the 403 name the sign-in path? Yes. ADR 227 decision 6 says the error names it. For a session of a local user the path is the route that takes the password, `POST /api/dustpan/v1/sign-in/password`: a password sign-in has no start route (`reauthenticateURL` in `internal/api/server/freshness.go:47` returns an empty string for it today), and a text that only says "sign in again with the password" names no path. The provider-based sessions keep the start path with `?fresh=1`. (Answered after a finding of the driver of #3076, 15 Nov.)
 - Is a refusal audited here? No new rule. ADR 227 decision 6 says a refused step changes nothing.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

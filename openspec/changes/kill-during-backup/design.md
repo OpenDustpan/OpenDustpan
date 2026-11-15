@@ -29,12 +29,12 @@ participant B as Instance B
 participant D as database
 S->>P: start backup with at least 500 MB blobs
 P->>A: claim backup operation
-S->>P: read ANY /api/server/backups/{} to find holder
+S->>P: read ANY /api/dustpan/v1/backups/{} to find holder
 S->>A: SIGKILL holder
 D->>D: claim expires after lease period
 B->>D: claim with new fencing token
 B->>D: finish copy and commit succeeded
-S->>P: ANY /api/server/backups/{}/check reports complete
+S->>P: ANY /api/dustpan/v1/backups/{}/check reports complete
 ```
 
 States and transitions after this change:

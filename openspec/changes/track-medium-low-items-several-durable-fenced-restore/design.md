@@ -37,7 +37,7 @@ participant O as Operator
 participant A as api
 participant D as durable store
 participant W as worker
-O->>A: ANY /api/server/restores
+O->>A: ANY /api/dustpan/v1/restores
 A->>D: start restore row with staging name
 W->>D: claim restore after expiry
 W->>D: copy with fencing token

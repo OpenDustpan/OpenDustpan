@@ -68,9 +68,10 @@ const (
 // block with the lease tables, but a restore keeps its live rows: see
 // ControlTables.
 const (
+	TableDurableHeartbeats    = "durable_heartbeats"
 	TableIdempotencyRecords   = "idempotency_records"
 	TableIdempotencyServerKey = "idempotency_server_key"
-	TableDurableHeartbeats    = "durable_heartbeats"
+	TableJobTokens            = "job_tokens"
 	TableLocalUserResets      = "local_user_resets"
 	TablePasskeyChallenges    = "passkey_challenges"
 	// TableBlobDeleteLeases holds the lease of a blob deleter that runs now.
@@ -212,6 +213,10 @@ var Tables = []string{
 	"settings_state",
 	"self_service_blueprints",
 	"self_service_blueprint_versions",
+	"quota_keys",
+	"quota_reservations",
+	"quota_reservation_keys",
+	"quota_requests",
 	TableTrustRules,
 	"unmanaged_targets",
 	"unmanaged_scans",
@@ -304,6 +309,13 @@ type Summary struct {
 	WrapperIDs           []string
 	RowCounts            map[string]int64
 	Blobs                []BlobRef
+	// RegistryFiles holds the registry file entries of each namespace, keyed
+	// by the stable namespace ID: the SHA-256 content key, the size, and the
+	// release and version that name each file. The manifest carries them as
+	// its registryFiles section, so a restore can check each named file
+	// against its content key before it writes it. An export of this change
+	// always sets the map, also when no namespace holds a registry release.
+	RegistryFiles map[string][]RegistryFileEntry
 	// Unverified holds the keys of the blobs that rows name and that the
 	// backup does not copy, because the rows hold no size and MD5 of the
 	// stored bytes (a row from an earlier version of the server). It is

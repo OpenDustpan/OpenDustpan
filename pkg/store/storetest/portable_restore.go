@@ -408,10 +408,10 @@ func testRestoreJournalBlob(t *testing.T, newStore RestoreFactory) {
 
 // testRestoreRoundTrip restores a portable export and exports the restored
 // store again: every table holds the rows it held, and every table file except
-// the namespaces file and the audit sink cursors is byte-identical. The
-// namespaces file changes, because the apply moves every namespace to a new
-// failover version. The apply resets the audit sink cursors, so the restored
-// store holds none (ADR 60 decision 13).
+// the namespaces file, the audit sink cursors and the tables that a restore
+// normalizes is byte-identical. The namespaces file changes, because the apply
+// moves every namespace to a new failover version. The apply resets the audit
+// sink cursors, so the restored store holds none (ADR 60 decision 13).
 func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
@@ -459,11 +459,13 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 	}
 
 	requireTablesRestored(t, sink, again)
+	requireSeededDelivery(t, ps.dst, seed.acme.Name)
 }
 
 // requireTablesRestored proves that every table of the second export holds the
 // rows of the first export. The namespaces table and the sink cursors differ by
-// design.
+// design. A table whose rows a restore normalizes is compared with the
+// normalization applied to both sides.
 func requireTablesRestored(t *testing.T, sink, again *portableSink) {
 	t.Helper()
 
@@ -477,14 +479,16 @@ func requireTablesRestored(t *testing.T, sink, again *portableSink) {
 		want := sink.files[path].Bytes()
 		got := again.files[path].Bytes()
 
-		// A restore releases the workspace locks, so the two tables that
-		// hold them are compared with the locks of the export cleared.
-		if table == "workspaces" || table == "inventory" {
-			wantRows := releaseWorkspaceLocks(readPortableLines(t, path, want))
-			gotRows := releaseWorkspaceLocks(readPortableLines(t, path, got))
+		// A restore normalizes some tables: it releases the workspace locks,
+		// and it clears the client-encryption bit of a state version, a cache
+		// that a reader derives again from the state blob. Such a table is
+		// compared row by row after the same normalization on both sides.
+		if restoredTableNormalized(table) {
+			wantRows := normalizedRestoredRows(table, readPortableLines(t, path, want))
+			gotRows := normalizedRestoredRows(table, readPortableLines(t, path, got))
 
 			if !reflect.DeepEqual(gotRows, wantRows) {
-				t.Fatalf("table %q after the restore = %v, want %v with the workspace locks released",
+				t.Fatalf("table %q after the restore = %v, want %v after the normalization of the restore",
 					table, gotRows, wantRows)
 			}
 
@@ -495,6 +499,27 @@ func requireTablesRestored(t *testing.T, sink, again *portableSink) {
 			t.Fatalf("table %q after the restore differs from the export: %d bytes, want %d",
 				table, len(got), len(want))
 		}
+	}
+}
+
+// restoredTableNormalized reports whether a restore normalizes the rows of the
+// table, so the round trip compares its rows after the normalization instead of
+// its bytes.
+func restoredTableNormalized(table string) bool {
+	return table == "workspaces" || table == "inventory" || table == "state_versions"
+}
+
+// normalizedRestoredRows returns the rows of a table with the normalization
+// that a restore applies: a workspace lock is released, and the
+// client-encryption bit of a state version is cleared.
+func normalizedRestoredRows(table string, rows []map[string]any) []map[string]any {
+	switch table {
+	case "workspaces", "inventory":
+		return releaseWorkspaceLocks(rows)
+	case "state_versions":
+		return clearClientEncryption(rows)
+	default:
+		return rows
 	}
 }
 
@@ -699,6 +724,22 @@ func releaseWorkspaceLocks(rows []map[string]any) []map[string]any {
 			cleared["lock_since_ms"] = nil
 			cleared["lock_operation"] = nil
 		}
+
+		out = append(out, cleared)
+	}
+
+	return out
+}
+
+// clearClientEncryption returns the state version rows with the
+// client-encryption bit cleared: a restore loads NULL for the column, since a
+// reader derives the bit again from the state blob.
+func clearClientEncryption(rows []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(rows))
+
+	for _, row := range rows {
+		cleared := maps.Clone(row)
+		cleared["client_encrypted"] = nil
 
 		out = append(out, cleared)
 	}

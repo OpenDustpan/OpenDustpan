@@ -4,8 +4,8 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing e2e step for rolling deploy with mixed version pool in NEW file e2e/ha_rolling_deploy_test.go that calls ANY /api/server/instances with access token and passes the authorization gate. Check: `go test ./e2e -run TestHARollingDeploy -v` fails on main with missing step. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 1.2 Add failing check that old binary writes get schema.binary-below-minimum during fake migration in NEW file e2e/ha_rolling_deploy_refusal_test.go that calls ANY /api/server/instances with access token and passes the authorization gate. Check: `go test ./e2e -run TestHARollingDeployMixedVersionRefusal -v` fails on main with missing check. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.1 Add failing e2e step for rolling deploy with mixed version pool in NEW file e2e/ha_rolling_deploy_test.go that calls ANY /api/server/instances with access token and passes the authorization gate. Check: `go test -tags e2e ./e2e -run TestHARollingDeploy -v` fails on main with missing step. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.2 Add failing check that old binary writes get schema.binary-below-minimum during fake migration in NEW file e2e/ha_rolling_deploy_refusal_test.go that calls ANY /api/server/instances with access token and passes the authorization gate. Check: `go test -tags e2e ./e2e -run TestHARollingDeployMixedVersionRefusal -v` fails on main with missing check. Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. Test step
 

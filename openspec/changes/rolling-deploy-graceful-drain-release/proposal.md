@@ -4,6 +4,8 @@ version: 4
 
 Roadmap: `docs/roadmap.md:466` (Drain instances with 503 and release claims.).
 
+Issue: #2027.
+
 ## Why
 
 **Persona: operator.** Operator replaces each instance with a newer build while teams run work. Without a clean drain the proxy still sends requests to the leaving instance and background work stalls until a lease expires. This change lets in-flight work drain before the instance leaves the pool and releases claims for takeover.

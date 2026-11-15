@@ -6,7 +6,6 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/pulumijournal/internal/gen"
@@ -18,14 +17,11 @@ import (
 //nolint:gochecknoglobals // A test flag is read once; passing it as a parameter adds nothing.
 var update = flag.Bool("update", false, "rewrite the generated file instead of comparing with it")
 
-// testDir answers the directory of this test file.
+// testDir answers the directory of this test package,
+// the working directory of go test.
 func testDir(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime caller holds no file")
-	}
-	return filepath.Dir(file)
+	return "."
 }
 
 // inputBytes reads the pinned upstream copy.
@@ -41,7 +37,7 @@ func inputBytes(t *testing.T) []byte {
 // outputPath answers the path of the generated file.
 func outputPath(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(filepath.Dir(filepath.Dir(testDir(t))), "entry_gen.go")
+	return filepath.Join(testDir(t), "..", "..", "entry_gen.go")
 }
 
 // TestGenerateMatchesCommittedFile checks that the committed file matches the generator output.

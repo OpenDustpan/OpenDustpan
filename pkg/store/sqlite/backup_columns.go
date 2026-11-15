@@ -435,6 +435,7 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 				"fenced_by",
 				"unlocked_write",
 				"origin_job",
+				"client_encrypted",
 			},
 		},
 	}
@@ -466,6 +467,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteSettingBackupTables(),
 		sqlitePlacementBackupTables(),
 		sqliteSelfServiceBackupTables(),
+		sqliteQuotaBackupTables(),
 		sqliteTrustRuleBackupTables(),
 		sqliteUnmanagedBackupTables(),
 		sqliteBreakGlassReviewBackupTables(),
@@ -652,6 +654,14 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 		{
 			table:   backup.TablePasskeyChallenges,
 			columns: sqlitePasskeyChallengeColumns(),
+		},
+		{
+			table: backup.TableJobTokens,
+			columns: []string{
+				backupColDigest, backupColNamespaceID, "starter_id", backupColJobID, "unit_tool",
+				backupColUnitID, "claim_operation", "claim_token", backupColExpiresAtMs,
+				backupColCreatedAtMs,
+			},
 		},
 		{
 			table: backup.TableUnitState,

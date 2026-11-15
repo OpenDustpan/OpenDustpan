@@ -204,6 +204,14 @@ func (c *testClock) Now() time.Time {
 	return c.now
 }
 
+// Set moves the clock to at. A test calls it while no request runs.
+func (c *testClock) Set(at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.now = at
+}
+
 // advance moves the clock by d.
 func (c *testClock) advance(d time.Duration) {
 	c.mu.Lock()
@@ -386,7 +394,8 @@ func buildFixtureParts(t *testing.T, parts fixtureParts, deny ...identity.Action
 	}
 
 	subscriptionSvc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
-		Subscriptions: subscriptions, Deliveries: store.Notifications(), Namespaces: namespaces, Now: nil,
+		Subscriptions: subscriptions, Deliveries: store.Notifications(), Namespaces: namespaces, Audit: store,
+		Now: clock.Now,
 	})
 	if err != nil {
 		t.Fatalf("subscription service: %v", err)

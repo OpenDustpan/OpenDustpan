@@ -1002,7 +1002,7 @@ INSERT INTO state_versions (
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE id = $1;
 
@@ -1011,7 +1011,7 @@ WHERE id = $1;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -1090,7 +1090,7 @@ WHERE w.id = $1;
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -1122,7 +1122,7 @@ WHERE id = $2;
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job
+       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job, sv.client_encrypted
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1;
@@ -1132,11 +1132,11 @@ WHERE w.id = $1;
 -- matches only the recorded content key, so a superseded attempt reports no
 -- change instead of finalizing over a newer one; a finalized version also
 -- matches no row, so a retry reports no change. It also sets the declared
--- serial, lineage, MD5 and outputs: a streamed write declares them only after
--- its content is read (ADR 49, decision 7), and its row holds placeholders
--- until then.
+-- serial, lineage, MD5 and outputs, and the client-encryption bit of the
+-- document: a streamed write declares them only after its content is read
+-- and its row holds placeholders until then.
 UPDATE state_versions
-SET serial = @serial, lineage = @lineage, md5 = @md5, outputs = @outputs, status = 'finalized', finalized_at_ms = @finalized_at_ms, size = @size
+SET serial = @serial, lineage = @lineage, md5 = @md5, outputs = @outputs, status = 'finalized', finalized_at_ms = @finalized_at_ms, size = @size, client_encrypted = @client_encrypted
 WHERE id = @id AND status = 'pending' AND content_key = @content_key;
 
 -- name: SetWorkspaceCurrent :exec
@@ -1615,6 +1615,50 @@ WHERE deleted_at_ms IS NULL
   AND (@kind::text = '' OR kind = @kind::text)
   AND (@namespace::text = '' OR namespace = @namespace::text);
 
+-- name: CountWorkingBreakGlassPrincipals :one
+-- The working break-glass accounts of the installation: an enabled local
+-- person of the installation with a passkey that is not suspended, and a
+-- current grant without a condition of an administration role on the
+-- installation, directly or through an active membership of a group that
+-- exists. An installation-level IP allowlist must join this count when one
+-- exists; the current allowlists are per namespace and do not apply to
+-- installation sign-in.
+SELECT COUNT(*) FROM principals p
+WHERE p.break_glass
+  AND p.kind = 'person'
+  AND p.namespace = ''
+  AND p.deleted_at_ms IS NULL
+  AND p.disabled_at_ms IS NULL
+  AND p.source = 'local'
+  AND p.created_at_ms <= @at_ms::bigint
+  AND EXISTS (
+    SELECT 1 FROM passkeys pk
+    WHERE pk.principal_id = p.id AND pk.suspended_at_ms = 0
+      AND pk.created_at_ms <= @at_ms::bigint
+  )
+  AND EXISTS (
+    SELECT 1 FROM grants g
+    WHERE g.object_kind = 'installation'
+      AND g.role IN ('site-administrator', 'account-administrator')
+      AND g.revoked_at_ms IS NULL
+      AND g.condition IS NULL
+      AND g.created_at_ms <= @at_ms::bigint
+      AND (
+        (g.subject_kind = 'principal' AND g.subject_id = p.id)
+        OR (g.subject_kind = 'group' AND EXISTS (
+          SELECT 1 FROM group_members m
+          JOIN principal_groups pg ON pg.id = m.group_id
+          WHERE m.group_id = g.subject_id
+            AND m.principal_id = p.id
+            AND m.removed_at_ms IS NULL
+            AND m.state = 'active'
+            AND pg.deleted_at_ms IS NULL
+            AND m.added_at_ms <= @at_ms::bigint
+            AND pg.created_at_ms <= @at_ms::bigint
+        ))
+      )
+  );
+
 -- name: GetPrincipalNamespace :one
 -- The namespace of a current principal: empty for a principal of the
 -- installation. A grant write reads it in its own transaction.
@@ -1766,6 +1810,16 @@ FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
   AND g.name_key COLLATE "C" >= @low::text
   AND (@high::text = '' OR g.name_key COLLATE "C" < @high::text);
+
+-- name: CountActiveMembershipsInGroups :one
+-- The memberships of a principal that are in effect in the given groups: not ended, state active, group not deleted.
+-- Defense in depth: DeleteGroup ends the memberships of the group too. The filter on the group row stays so that a
+-- membership row that outlives its group gives no rights. The caller checks that the principal is enabled.
+SELECT COUNT(*)
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL AND m.state = 'active'
+  AND g.deleted_at_ms IS NULL
+  AND m.group_id = ANY(@group_ids::text[]);
 
 -- name: LockNamespaceCreatesShared :exec
 -- A create of a workspace takes this lock, in the shared form, before it reads
@@ -5017,11 +5071,12 @@ WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AN
 
 -- name: SkipPendingNotificationDeliveriesOfSubscription :exec
 UPDATE notification_deliveries
-SET state = 'skipped', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
+SET state = 'skipped', delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '', lease_until_ms = 0,
+    version = notification_deliveries.version + 1
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
 
 -- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = sqlc.arg(id);
@@ -5033,11 +5088,11 @@ WHERE scope = sqlc.arg(scope) AND notification_id = sqlc.arg(notification_id)
 
 -- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
     last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     sqlc.arg(id), sqlc.arg(scope), sqlc.arg(notification_id), sqlc.arg(subscription_id), sqlc.arg(sink_id),
-    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
+    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
 );
 
 -- name: ListDueNotificationDeliveryScopes :many
@@ -5060,7 +5115,7 @@ WHERE notification_deliveries.id IN (
     LIMIT sqlc.arg(max_rows)
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
           last_error, delivered_at_ms, owner, lease_until_ms, version;
 
 -- name: RecordNotificationAttempt :execrows
@@ -5091,7 +5146,7 @@ SELECT COUNT(*) FROM (
 ) AS within_bound;
 
 -- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
@@ -5103,7 +5158,7 @@ LIMIT sqlc.arg(max_rows);
 -- time, delivery ID): the rows with an older next time, or with the same next
 -- time and a smaller ID, in byte order (COLLATE "C"), as the order of the
 -- query. The bound on next_at_ms lets the index scan start at the cursor.
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
@@ -5114,10 +5169,13 @@ LIMIT sqlc.arg(max_rows);
 
 -- name: RedeliverNotificationDelivery :execrows
 UPDATE notification_deliveries
-SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,
-    version = notification_deliveries.version + 1
+SET state = 'pending', attempts = 0, redeliveries = notification_deliveries.redeliveries + 1,
+    last_error = '', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
-  AND notification_deliveries.state <> 'pending';
+  AND notification_deliveries.state <> 'pending'
+  -- Defense in depth: the adapter checks the limit before the update; this predicate stays so that two
+  -- redelivers at the same time cannot pass the limit.
+  AND notification_deliveries.redeliveries < sqlc.arg(max_redeliveries);
 
 -- name: UpsertTrigger :execrows
 -- The caller checks the fence in the same transaction. A row that exists keeps
@@ -5359,6 +5417,61 @@ JOIN job_logs AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id
 JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND l.job_id = sqlc.arg(job_id) AND c.confirmed = 1
 ORDER BY c.blob_key;
+
+-- name: InsertJobToken :exec
+INSERT INTO job_tokens (
+    digest, namespace_id, starter_id, job_id, unit_tool, unit_id, claim_operation,
+    claim_token, expires_at_ms, created_at_ms
+) VALUES (
+    sqlc.arg(digest), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(starter_id), sqlc.arg(job_id), sqlc.arg(unit_tool), sqlc.arg(unit_id),
+    sqlc.arg(claim_operation), sqlc.arg(claim_token), sqlc.arg(expires_at_ms),
+    sqlc.arg(created_at_ms)
+);
+
+-- name: GetJobToken :one
+SELECT t.digest, n.name AS namespace, u.namespace AS unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
+       CAST(u.name AS TEXT) AS unit_name,
+       t.claim_operation, t.claim_token, t.expires_at_ms, t.created_at_ms,
+       o.state AS operation_state, o.claim_token AS operation_claim_token,
+       o.claim_expires_at_ms AS operation_claim_expires_at_ms,
+       j.id AS job_record_id, j.state AS job_state, j.current_operation AS job_operation,
+       j.unit_id AS job_unit_id, jn.name AS job_namespace, js.id AS job_starter_id,
+       s.id AS starter_record_id, s.subject AS starter_subject, s.display_name AS starter_display_name,
+       s.kind AS starter_kind, s.disabled_at_ms AS starter_disabled_at_ms
+FROM job_tokens AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+-- Defense in depth: the service checks the unit ID too. Resolve only a live
+-- unit row so that a restored token cannot reach a removed unit by name.
+JOIN (
+    SELECT id, 'pulumi' AS tool, namespace, project || '/' || name AS name
+    FROM stacks WHERE deleted_at_ms IS NULL
+    UNION ALL
+    SELECT id, 'opentofu' AS tool, namespace, name
+    FROM workspaces WHERE deleted_at_ms IS NULL
+) AS u ON u.id = t.unit_id AND u.tool = t.unit_tool
+JOIN durable_operations AS o ON o.id = t.claim_operation
+JOIN jobs AS j ON j.id = t.job_id
+JOIN namespaces AS jn ON jn.id = j.namespace_id
+JOIN principals AS js ON js.subject COLLATE "C" = (j.body::jsonb ->> 'startedBy') AND js.deleted_at_ms IS NULL
+JOIN principals AS s ON s.id = t.starter_id AND s.deleted_at_ms IS NULL
+WHERE t.digest = sqlc.arg(digest);
+
+-- name: GetJobTokenUnitNamespace :one
+-- The stable namespace ID of the live unit row that a job token names, by
+-- tool and stable unit ID. The issue of a job token reads it to refuse a
+-- token whose unit row is in another namespace.
+SELECT n.id
+FROM namespaces AS n
+WHERE n.name = (
+    SELECT s.namespace
+    FROM stacks AS s
+    WHERE s.id = sqlc.arg(unit_id) AND s.deleted_at_ms IS NULL AND sqlc.arg(unit_tool)::text = 'pulumi'
+    UNION ALL
+    SELECT w.namespace
+    FROM workspaces AS w
+    WHERE w.id = sqlc.arg(unit_id) AND w.deleted_at_ms IS NULL AND sqlc.arg(unit_tool)::text = 'opentofu'
+);
 
 -- name: UpsertInstanceVersion :exec
 -- Writes the version row of one server process. A row with the same ID is
@@ -5653,6 +5766,106 @@ UPDATE self_service_blueprint_versions
 SET expr_version = sqlc.arg(expr_version)
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
   AND self_service_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
+
+-- name: AddQuotaSettled :exec
+-- Moves one unit of the key from reserved to settled, in the transaction of
+-- the settle of its reservation.
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), 1
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope)
+DO UPDATE SET settled_count = quota_keys.settled_count + 1;
+
+-- name: CountQuotaRequests :one
+-- The requests of the key in the window that ends at at_ms: after
+-- at_ms - window_ms, and not after at_ms.
+SELECT COUNT(*) FROM quota_requests
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND blueprint = sqlc.arg(blueprint) AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope)
+  AND at_ms > sqlc.arg(after_ms) AND at_ms <= sqlc.arg(at_ms);
+
+-- name: CountQuotaReserved :one
+-- The open reservations of the key that end after at_ms.
+SELECT COUNT(*) FROM quota_reservation_keys AS k
+JOIN quota_reservations AS r ON r.namespace_id = k.namespace_id AND r.id = k.reservation_id
+WHERE k.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND k.blueprint = sqlc.arg(blueprint) AND k.kind = sqlc.arg(kind) AND k.scope = sqlc.arg(scope)
+  AND r.state = 'open' AND r.ends_at_ms > sqlc.arg(at_ms);
+
+-- name: GetQuotaReservation :one
+-- The state and the times of the reservation id of a namespace.
+SELECT r.id, r.state, r.at_ms, r.ends_at_ms
+FROM quota_reservations AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.id = sqlc.arg(id);
+
+-- name: GetQuotaSettled :one
+-- The settled count of the key. No row means the counter does not know the key.
+SELECT settled_count FROM quota_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND blueprint = sqlc.arg(blueprint) AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope);
+
+-- name: InsertQuotaRequest :exec
+-- One request of the key, recorded at at_ms.
+INSERT INTO quota_requests (id, namespace_id, blueprint, kind, scope, at_ms)
+VALUES (
+    sqlc.arg(id),
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), sqlc.arg(at_ms)
+);
+
+-- name: InsertQuotaReservation :exec
+-- One reservation of a namespace, open at at_ms.
+INSERT INTO quota_reservations (namespace_id, id, state, at_ms, ends_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(id), sqlc.arg(state), sqlc.arg(at_ms), sqlc.arg(ends_at_ms)
+);
+
+-- name: InsertQuotaReservationKey :exec
+-- One key that the reservation holds.
+INSERT INTO quota_reservation_keys (namespace_id, reservation_id, blueprint, kind, scope)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(reservation_id), sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope)
+);
+
+-- name: ListQuotaReservationKeys :many
+-- Every key of the reservation, by name.
+SELECT blueprint, kind, scope
+FROM quota_reservation_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND reservation_id = sqlc.arg(reservation_id)
+ORDER BY blueprint, kind, scope;
+
+-- name: SetQuotaReservationEnd :execrows
+-- Moves the end time of the open reservation id. A reservation that ended
+-- matches no row.
+UPDATE quota_reservations
+SET ends_at_ms = sqlc.arg(ends_at_ms)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND quota_reservations.id = sqlc.arg(id) AND state = 'open';
+
+-- name: SetQuotaReservationState :execrows
+-- Ends the open reservation id, settled or released. A reservation that ended
+-- matches no row.
+UPDATE quota_reservations
+SET state = sqlc.arg(state)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND quota_reservations.id = sqlc.arg(id) AND state = 'open';
+
+-- name: SetQuotaSettled :exec
+-- Writes the settled count of the key, as the reconcile of the inventory
+-- counts it.
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), sqlc.arg(settled_count)
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope)
+DO UPDATE SET settled_count = excluded.settled_count;
 
 -- name: GetNamespaceByID :one
 -- The namespace with the stable ID id.

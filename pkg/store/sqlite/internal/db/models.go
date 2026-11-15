@@ -628,6 +628,19 @@ type JobPlan struct {
 	CreatedAtMs int64
 }
 
+type JobToken struct {
+	Digest         string
+	NamespaceID    string
+	StarterID      string
+	JobID          string
+	UnitTool       string
+	UnitID         string
+	ClaimOperation string
+	ClaimToken     int64
+	ExpiresAtMs    int64
+	CreatedAtMs    int64
+}
+
 type LocalUser struct {
 	ID              string
 	PrincipalID     string
@@ -752,6 +765,7 @@ type NotificationDelivery struct {
 	Principal      string
 	State          string
 	Attempts       int64
+	Redeliveries   int64
 	NextAtMs       int64
 	LastError      string
 	DeliveredAtMs  int64
@@ -932,6 +946,39 @@ type ProfileRevision struct {
 	Author         string
 	CreatedAtMs    int64
 	Reason         string
+}
+
+type QuotaKey struct {
+	NamespaceID  string
+	Blueprint    string
+	Kind         string
+	Scope        string
+	SettledCount int64
+}
+
+type QuotaRequest struct {
+	ID          string
+	NamespaceID string
+	Blueprint   string
+	Kind        string
+	Scope       string
+	AtMs        int64
+}
+
+type QuotaReservation struct {
+	NamespaceID string
+	ID          string
+	State       string
+	AtMs        int64
+	EndsAtMs    int64
+}
+
+type QuotaReservationKey struct {
+	NamespaceID   string
+	ReservationID string
+	Blueprint     string
+	Kind          string
+	Scope         string
 }
 
 type RegistryKey struct {
@@ -1227,6 +1274,7 @@ type StateVersion struct {
 	FencedBy          string
 	UnlockedWrite     bool
 	OriginJob         string
+	ClientEncrypted   sql.NullInt64
 }
 
 type StoreCheck struct {
