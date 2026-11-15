@@ -4279,3 +4279,16 @@ decisions:
   accepted_artifact: "docs/adr/0381-agent-sign-off-until-the-first-tag.md"
   evidence:
   - "docs/adr/0381-agent-sign-off-until-the-first-tag.md"
+- id: "adr-0382"
+  title: "ADR 382: A repeatable domain refusal goes through the shared denial limiter"
+  decision: "1. **A repeatable domain refusal goes through the shared denial limiter (owner, 2026-11-15).** A domain refusal that the same caller can repeat, for example a redeliver that comes too soon or a redeliver at its limit, goes through the shared denial limiter. The first refusal of a key in a window writes the audit entry. The limiter counts the later identical refusals, and the next entry of the key reports the count.\n2. **No refusal leaves the count (owner, 2026-11-15).** The limiter drops no refusal from the count. The audit log shows the first refusal and the count of the others, so ADR 250 decision 3 holds.\n3. **New domain refusals use the limiter by default (owner, 2026-11-15).** A new domain refusal that a caller can repeat records its audit entry through the shared denial limiter."
+  reason: "ADR 250 decision 3 (owner) says, in its layer \"Fail closed and record\": \"Every denial and every use of a privilege goes to the audit log.\" The redeliver route of notification deliveries refuses a redeliver that comes too soon (429) and a redeliver of a delivery at its limit (409). Each refusal writes one denied audit entry. A script that repeats the call writes one entry for each call, with no bound. The caller can fill the audit log of the namespace with entries that say the same thing."
+  scope:
+  - "internal/api/refusal"
+  - "internal/denylimit"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-15"
+  accepted_artifact: "docs/adr/0382-a-repeatable-domain-refusal-goes-through-the-shared-denial-limiter.md"
+  evidence:
+  - "docs/adr/0382-a-repeatable-domain-refusal-goes-through-the-shared-denial-limiter.md"
