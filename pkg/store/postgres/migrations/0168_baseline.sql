@@ -174,6 +174,14 @@ CREATE TABLE checkpoints (
     CONSTRAINT checkpoints_blob_key_check CHECK ((blob_key <> ''::text))
 );
 
+CREATE TABLE checkpoint_supersedes (
+    blob_key text NOT NULL,
+    stack_id text NOT NULL,
+    update_id text NOT NULL,
+    size bigint NOT NULL,
+    superseded_at_ms bigint NOT NULL
+);
+
 CREATE TABLE collection_members (
     unit_id text NOT NULL,
     namespace text NOT NULL,
@@ -1575,6 +1583,9 @@ ALTER TABLE ONLY break_glass_reviews
 ALTER TABLE ONLY checkpoints
     ADD CONSTRAINT checkpoints_pkey PRIMARY KEY (stack_id, update_id);
 
+ALTER TABLE ONLY checkpoint_supersedes
+    ADD CONSTRAINT checkpoint_supersedes_pkey PRIMARY KEY (blob_key);
+
 ALTER TABLE ONLY collection_members
     ADD CONSTRAINT collection_members_pkey PRIMARY KEY (unit_id);
 
@@ -1976,6 +1987,8 @@ CREATE INDEX break_glass_reviews_due ON break_glass_reviews USING btree (state, 
 
 CREATE UNIQUE INDEX break_glass_reviews_use ON break_glass_reviews USING btree (use_kind, use_ref);
 
+CREATE INDEX checkpoint_supersedes_age ON checkpoint_supersedes USING btree (stack_id, superseded_at_ms);
+
 CREATE INDEX collection_members_collection ON collection_members USING btree (namespace, collection_key);
 
 CREATE UNIQUE INDEX drift_results_job ON drift_results USING btree (job_id);
@@ -2158,6 +2171,15 @@ CREATE INDEX used_tickets_until ON used_tickets USING btree (until_ms);
 
 CREATE INDEX workspace_resource_changes_address ON workspace_resource_changes USING btree (workspace_id, address, ordinal DESC);
 
+-- The partial index holds the live rows alone (deleted_at_ms IS NULL), so the
+-- deleted workspaces are not in it. A list of the live workspaces of a
+-- namespace walks the index in name order, and the offset pagination of the
+-- list skips index entries and reads no deleted row. The unique constraint on
+-- (namespace, name) has no predicate, so it covers the deleted rows too. A
+-- soft delete moves the name to deleted_name and sets name to "deleted:" plus
+-- the ID, so the deleted row keeps an entry in that index. That index holds
+-- the deleted entries with the live ones, so a walk of it reads the deleted
+-- rows to skip them. It cannot give the same live-only walk.
 CREATE INDEX workspaces_live_name ON workspaces USING btree (namespace, name) WHERE (deleted_at_ms IS NULL);
 
 ALTER TABLE ONLY access_tokens
@@ -2168,6 +2190,12 @@ ALTER TABLE ONLY checkpoints
 
 ALTER TABLE ONLY checkpoints
     ADD CONSTRAINT checkpoints_update_fkey FOREIGN KEY (stack_id, update_id) REFERENCES updates(stack_id, id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY checkpoint_supersedes
+    ADD CONSTRAINT checkpoint_supersedes_stack_id_fkey FOREIGN KEY (stack_id) REFERENCES stacks(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY checkpoint_supersedes
+    ADD CONSTRAINT checkpoint_supersedes_update_fkey FOREIGN KEY (stack_id, update_id) REFERENCES updates(stack_id, id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY collection_members
     ADD CONSTRAINT collection_members_namespace_collection_key_fkey FOREIGN KEY (namespace, collection_key) REFERENCES collections(namespace, name_key);

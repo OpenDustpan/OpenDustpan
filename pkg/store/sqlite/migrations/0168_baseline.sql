@@ -500,6 +500,16 @@ CREATE TABLE "checkpoints" (
     FOREIGN KEY (stack_id, update_id) REFERENCES updates (stack_id, id) ON DELETE CASCADE
 ) STRICT;
 
+CREATE TABLE "checkpoint_supersedes" (
+    blob_key         TEXT    NOT NULL PRIMARY KEY,
+    stack_id         TEXT    NOT NULL REFERENCES stacks (id) ON DELETE CASCADE,
+    update_id        TEXT    NOT NULL,
+    size             INTEGER NOT NULL,
+    superseded_at_ms INTEGER NOT NULL,
+    FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE,
+    FOREIGN KEY (stack_id, update_id) REFERENCES updates (stack_id, id) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE sign_in_failures (
     source TEXT NOT NULL,
     window_end_ms INTEGER NOT NULL,
@@ -1553,6 +1563,8 @@ WHERE status = 'running' AND dry_run = 0 AND kind <> 'preview';
 CREATE INDEX updates_history ON updates (stack_id, version)
 WHERE status <> 'not started' AND dry_run = 0 AND kind <> 'preview';
 
+CREATE INDEX checkpoint_supersedes_age ON checkpoint_supersedes (stack_id, superseded_at_ms);
+
 CREATE INDEX inventory_unit_id ON inventory (unit_id);
 
 CREATE INDEX state_versions_workspace_id ON state_versions (workspace_id);
@@ -1704,6 +1716,15 @@ CREATE INDEX inventory_namespace_unit_id ON inventory (namespace, unit_id);
 
 CREATE INDEX inventory_labels_value ON inventory_labels (namespace, label_key, label_value, unit_id);
 
+-- The partial index holds the live rows alone (deleted_at_ms IS NULL), so the
+-- deleted workspaces are not in it. A list of the live workspaces of a
+-- namespace walks the index in name order, and the offset pagination of the
+-- list skips index entries and reads no deleted row. The unique constraint on
+-- (namespace, name) has no predicate, so it covers the deleted rows too. A
+-- soft delete moves the name to deleted_name and sets name to "deleted:" plus
+-- the ID, so the deleted row keeps an entry in that index. That index holds
+-- the deleted entries with the live ones, so a walk of it reads the deleted
+-- rows to skip them. It cannot give the same live-only walk.
 CREATE INDEX workspaces_live_name ON workspaces (namespace, name) WHERE deleted_at_ms IS NULL;
 
 CREATE INDEX triggers_unit ON triggers (namespace_id, unit_tool, unit_id);

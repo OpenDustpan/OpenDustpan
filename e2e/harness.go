@@ -835,6 +835,19 @@ func profileStoreOptions(st serverStore, wrapper secret.Wrapper) []dustpan.Optio
 	}
 }
 
+// blueprintStoreOptions returns the option that gives the in-process server the
+// self-service blueprint store of st, as the built-in stores of the binary do.
+func blueprintStoreOptions(st serverStore) []dustpan.Option {
+	switch s := st.(type) {
+	case *sqlite.Store:
+		return []dustpan.Option{dustpan.WithSelfServiceBlueprints(s.SelfServiceBlueprints())}
+	case *postgres.Store:
+		return []dustpan.Option{dustpan.WithSelfServiceBlueprints(s.SelfServiceBlueprints())}
+	default:
+		return nil
+	}
+}
+
 // ipAllowlistOptions adds the IP allowlist options to opts when args turns
 // the feature on, so the in-process server checks the lists of every
 // namespace, including for the bootstrap admin token.
@@ -861,6 +874,7 @@ func storeOptions(st serverStore, wrapper secret.Wrapper, args serverArgs) []dus
 		jobStoreOptions(st),
 		claimerOptions(st, args.claimers),
 		savedViewStoreOptions(st),
+		blueprintStoreOptions(st),
 		settingStoreOptions(st), trustRuleStoreOptions(st, args.issuer), registryStoreOptions(st),
 		sinkStoreOptions(st),
 		publicURLOptions(args.publicURL),

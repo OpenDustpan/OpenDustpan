@@ -408,16 +408,12 @@ func (s *Store) CreateNamespaceWithGrant(
 		return err
 	}
 
-	return s.inTx(ctx, func(q *db.Queries) error {
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		if err := insertNamespaceRow(ctx, q, row); err != nil {
+	return runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
+		if err := insertNamespaceRow(ctx, tx.q, row); err != nil {
 			return err
 		}
 
-		return appendCreatorGrantEntries(ctx, q, g, e, grantEntry)
+		return appendCreatorGrantEntries(ctx, tx, g, e, grantEntry)
 	})
 }
 
@@ -472,34 +468,34 @@ func insertNamespaceRow(ctx context.Context, q *db.Queries, row codec.NamespaceR
 	return nil
 }
 
-// appendCreatorGrantEntries stores the entries of CreateNamespaceWithGrant.
-// With no grant (g.ID empty) it appends only the create entry e. With a
-// grant it inserts the grant, appends e in @server, and appends the grant
-// entry in the new namespace chain.
+// appendCreatorGrantEntries stores the entries of CreateNamespaceWithGrant in
+// the locked transaction tx. With no grant (g.ID empty) it appends only the
+// create entry e. With a grant it inserts the grant, appends e in @server,
+// and appends the grant entry in the new namespace chain.
 func appendCreatorGrantEntries(
 	ctx context.Context,
-	q *db.Queries,
+	tx serverAuditTx,
 	g access.Grant,
 	e audit.Entry,
 	grantEntry audit.Entry,
 ) error {
 	if g.ID == "" {
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendServerEntry(ctx, tx, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
 		return nil
 	}
 
-	if err := insertGrant(ctx, q, g); err != nil {
+	if err := insertGrant(ctx, tx.q, g); err != nil {
 		return err
 	}
 
-	if _, err := appendAuditEntry(ctx, q, e); err != nil {
+	if _, err := appendServerEntry(ctx, tx, e); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 
-	if _, err := appendAuditEntry(ctx, q, grantEntry); err != nil {
+	if _, err := appendAuditEntry(ctx, tx.q, grantEntry); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 

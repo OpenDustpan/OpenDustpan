@@ -112,6 +112,7 @@ type pgCopyTable struct {
 // new table in backup.Tables breaks loudly until its columns land here.
 func pgCopyTables() []pgCopyTable {
 	tables := append([]pgCopyTable{}, pgCopyStackTables()...)
+	tables = append(tables, pgCopyUpdateTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
 	tables = append(tables, pgCopyCollectionTables()...)
 	tables = append(tables, pgCopyGateTables()...)
@@ -181,6 +182,13 @@ func pgCopyStackTables() []pgCopyTable {
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},
+	}
+}
+
+// pgCopyUpdateTables holds the COPY columns of the update, checkpoint and
+// journal tables, in foreign-key order.
+func pgCopyUpdateTables() []pgCopyTable {
+	return []pgCopyTable{
 		{
 			table: "checkpoints",
 			columns: []string{
@@ -189,6 +197,13 @@ func pgCopyStackTables() []pgCopyTable {
 				pgColBlobKey, pgColSize, "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
+		},
+		{
+			table: "checkpoint_supersedes",
+			columns: []string{
+				pgColBlobKey, pgColStackID, pgColUpdateID, pgColSize, "superseded_at_ms",
+			},
+			orderBy: []string{pgColStackID, pgColBlobKey},
 		},
 		{
 			table:   "update_events",

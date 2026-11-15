@@ -10,6 +10,7 @@ import {
   decodeApprovalDefault,
   decodeApprovalRule,
   decodeApprovers,
+  decodeAuditChain,
   decodeBackupCorruptError,
   decodeBackupCorruptErrorArgs,
   decodeBackupTooManyUnverifiedError,
@@ -49,6 +50,7 @@ import {
   decodeCreateViewRequest,
   decodeCreatedNotificationSink,
   decodeDeletedUnit,
+  decodeDeletedUnitSweep,
   decodeDriftCheck,
   decodeDriftCheckLocation,
   decodeDriftResource,
@@ -153,6 +155,7 @@ import {
   decodeNotificationSubscription,
   decodeOutputSharing,
   decodeOutputSharingRequest,
+  decodeOverrideSwitches,
   decodePasskey,
   decodePasskeyCreationOptions,
   decodePasskeyRequestOptions,
@@ -258,6 +261,7 @@ import {
   decodeStoreCheckReport,
   decodeStoreFailoverSettingInvalidError,
   decodeStoreFailoverSettingInvalidErrorArgs,
+  decodeSweptUnit,
   decodeTerminalSchemes,
   decodeTerminalSchemesPatch,
   decodeTrigger,
@@ -325,6 +329,7 @@ import type {
   ApprovalDefault,
   ApprovalRule,
   Approvers,
+  AuditChain,
   BackupCorruptError,
   BackupCorruptErrorArgs,
   BackupTooManyUnverifiedError,
@@ -364,6 +369,7 @@ import type {
   CreateViewRequest,
   CreatedNotificationSink,
   DeletedUnit,
+  DeletedUnitSweep,
   DriftCheck,
   DriftCheckLocation,
   DriftResource,
@@ -468,6 +474,7 @@ import type {
   NotificationSubscription,
   OutputSharing,
   OutputSharingRequest,
+  OverrideSwitches,
   Passkey,
   PasskeyCreationOptions,
   PasskeyRequestOptions,
@@ -573,6 +580,7 @@ import type {
   StoreCheckReport,
   StoreFailoverSettingInvalidError,
   StoreFailoverSettingInvalidErrorArgs,
+  SweptUnit,
   TerminalSchemes,
   TerminalSchemesPatch,
   Trigger,
@@ -639,6 +647,11 @@ export interface AddRegistryKeyInput {
   readonly body: AddRegistryKeyRequest;
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation approveAuditChain. */
+export interface ApproveAuditChainInput {
   readonly signal?: AbortSignal;
 }
 
@@ -1169,6 +1182,11 @@ export interface GetApprovalRuleInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getAuditChain. */
+export interface GetAuditChainInput {
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getBlueprintDraft. */
 export interface GetBlueprintDraftInput {
   readonly path: {
@@ -1345,6 +1363,14 @@ export interface GetNamespaceIssuerInput {
 
 /** The input of the operation getNamespaceLock. */
 export interface GetNamespaceLockInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getNamespaceOverrideSwitches. */
+export interface GetNamespaceOverrideSwitchesInput {
   readonly path: {
     readonly namespace: string;
   };
@@ -2218,6 +2244,15 @@ export interface SetGateInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation setNamespaceOverrideSwitches. */
+export interface SetNamespaceOverrideSwitchesInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly body: OverrideSwitches;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation setOutputSharing. */
 export interface SetOutputSharingInput {
   readonly path: {
@@ -2311,6 +2346,11 @@ export interface StartJobInput {
 /** The input of the operation startStoreCheck. */
 export interface StartStoreCheckInput {
   readonly body: StartStoreCheckRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation sweepDeletedUnits. */
+export interface SweepDeletedUnitsInput {
   readonly signal?: AbortSignal;
 }
 
@@ -2445,6 +2485,23 @@ export const operations = {
       statuses: [201],
     },
     ref(() => decodeRegistryKey),
+  ),
+  approveAuditChain: operation<AuditChain>(
+    {
+      id: "approveAuditChain",
+      method: "POST",
+      path: "/api/dustpan/v1/audit/chain",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [202],
+    },
+    ref(() => decodeAuditChain),
   ),
   beginPasskeyRegistration: operation<PasskeyCreationOptions>(
     {
@@ -3347,6 +3404,23 @@ export const operations = {
     },
     ref(() => decodeApprovalRule),
   ),
+  getAuditChain: operation<AuditChain>(
+    {
+      id: "getAuditChain",
+      method: "GET",
+      path: "/api/dustpan/v1/audit/chain",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeAuditChain),
+  ),
   getBlueprintDraft: operation<SelfServiceDraft>(
     {
       id: "getBlueprintDraft",
@@ -3703,6 +3777,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeManualLock),
+  ),
+  getNamespaceOverrideSwitches: operation<OverrideSwitches>(
+    {
+      id: "getNamespaceOverrideSwitches",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/override-switches",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeOverrideSwitches),
   ),
   getNamespaceSettings: operation<Settings>(
     {
@@ -5149,6 +5240,23 @@ export const operations = {
     },
     ref(() => decodeGate),
   ),
+  setNamespaceOverrideSwitches: operation<OverrideSwitches>(
+    {
+      id: "setNamespaceOverrideSwitches",
+      method: "PUT",
+      path: "/api/dustpan/v1/namespaces/{namespace}/override-switches",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeOverrideSwitches),
+  ),
   setOutputSharing: operation<OutputSharing>(
     {
       id: "setOutputSharing",
@@ -5318,6 +5426,23 @@ export const operations = {
       statuses: [202],
     },
     ref(() => decodeStartStoreCheckResponse),
+  ),
+  sweepDeletedUnits: operation<DeletedUnitSweep>(
+    {
+      id: "sweepDeletedUnits",
+      method: "POST",
+      path: "/api/dustpan/v1/deleted-units/sweep",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeDeletedUnitSweep),
   ),
   testNotificationSink: operation<NotificationSinkTest>(
     {
