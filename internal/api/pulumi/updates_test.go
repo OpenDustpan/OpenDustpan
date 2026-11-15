@@ -1688,6 +1688,33 @@ func TestCheckpointCycle(t *testing.T) {
 	}
 }
 
+// TestExportWithoutState proves that a stack with no saved checkpoint exports
+// the schema version 3 with a null deployment.
+func TestExportWithoutState(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	f.mintStarted(t)
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/export", ""))
+	if status != http.StatusOK {
+		t.Fatalf("export answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var exported struct {
+		Deployment json.RawMessage `json:"deployment"`
+		Version    int             `json:"version"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &exported); err != nil {
+		t.Fatalf("decode export: %v (%s)", err, body)
+	}
+
+	if exported.Version != 3 || string(exported.Deployment) != "null" {
+		t.Fatalf("export = version %d %s, want version 3 with a null deployment", exported.Version, exported.Deployment)
+	}
+}
+
 // TestCheckpointPreviewRejected proves a preview saves no checkpoint.
 func TestCheckpointPreviewRejected(t *testing.T) {
 	t.Parallel()
