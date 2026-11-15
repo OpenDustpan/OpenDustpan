@@ -8,6 +8,8 @@ on the unit gets the same 404 as for an unknown job.
 | --- | --- | --- |
 | `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals` | `job:approve` | the unit of the job |
 | `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/cancel` | `job:cancel` | the unit of the job |
+| `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/confirmations` | the run action of the job operation | the unit of the job |
+| `POST /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/log-redactions` | `unit:redact` | the unit of the job |
 
 ## Cancel a job
 
@@ -38,3 +40,15 @@ A caller with `job:read` but without `job:cancel` gets 403 with the code
 Send the verdict and the plan revision that the caller saw. A job that waits
 for approval and has a newer plan revision answers 409. See
 [approval rules](approval-rules.md) for the rules that open a gate.
+
+## Confirm a job
+
+A job that waits at a confirmation gate continues after one confirmation. The
+caller needs the run action for the operation of the job. A job that does not
+wait at a confirmation gate answers 409 with the code `job.wrong-state`.
+
+## Redact a log
+
+A caller with `unit:redact` on the unit removes a secret from the log of a job
+with a post to the `log-redactions` route. A log that is in the wrong state
+answers 409 with the code `job.wrong-state`.
