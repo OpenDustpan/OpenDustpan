@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -240,4 +241,55 @@ func fileSHA(content []byte) string {
 	sum := sha256.Sum256(content)
 
 	return hex.EncodeToString(sum[:])
+}
+
+// endlessStore returns a reader that never ends and counts the bytes read.
+type endlessStore struct {
+	blob.Store
+
+	read   int64
+	closed bool
+}
+
+type endlessReader struct {
+	store *endlessStore
+}
+
+func (r *endlessReader) Read(p []byte) (int, error) {
+	r.store.read += int64(len(p))
+
+	return len(p), nil
+}
+
+func (r *endlessReader) Close() error {
+	r.store.closed = true
+
+	return nil
+}
+
+func (s *endlessStore) Get(context.Context, blob.Key) (io.ReadCloser, error) {
+	return &endlessReader{store: s}, nil
+}
+
+// TestReadLimitedKeyBoundsMemory sends an endless stream straight to the read
+// layer. The limit alone must stop the read, before the later length check.
+func TestReadLimitedKeyBoundsMemory(t *testing.T) {
+	t.Parallel()
+
+	const size = 1024
+
+	store := &endlessStore{Store: nil, read: 0, closed: false}
+
+	content, err := readLimitedKey(t.Context(), store, blob.Key("namespaces/ns-a/registry/sha256/x"), size)
+	if !errors.Is(err, ErrCorrupt) || content != nil {
+		t.Fatalf("readLimitedKey(endless) = %d bytes, %v, want ErrCorrupt", len(content), err)
+	}
+
+	if store.read > size+1 {
+		t.Fatalf("readLimitedKey read %d bytes, want at most %d", store.read, size+1)
+	}
+
+	if !store.closed {
+		t.Fatal("readLimitedKey did not close the reader")
+	}
 }
