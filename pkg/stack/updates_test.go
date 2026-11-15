@@ -66,8 +66,11 @@ type memUpdates struct {
 	stacks       map[stack.Ref]stack.Stack
 	stackVersion map[stack.Ref]int64
 	checkpoints  map[stack.UpdateID]stack.Checkpoint
-	events       map[stack.UpdateID][]stack.Event
-	mu           sync.Mutex
+	// marks holds the mark of each checkpoint blob that a later save of the
+	// same update replaced, by stack ID, in the order the saves wrote them.
+	marks  map[stack.ID][]stack.SupersededBlob
+	events map[stack.UpdateID][]stack.Event
+	mu     sync.Mutex
 	// saves counts SaveUpdate calls, so tests prove that a retried end
 	// writes nothing.
 	saves int
@@ -95,6 +98,7 @@ func newMemUpdates() *memUpdates {
 		stacks:       map[stack.Ref]stack.Stack{},
 		stackVersion: map[stack.Ref]int64{},
 		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
+		marks:        map[stack.ID][]stack.SupersededBlob{},
 		events:       map[stack.UpdateID][]stack.Event{},
 		mu:           sync.Mutex{},
 		saves:        0,
@@ -349,7 +353,7 @@ func (m *memUpdates) ListUpdates(_ context.Context, ref stack.Ref, _ stack.Page)
 	return list, nil
 }
 
-func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, fence namespace.Fence) (bool, error) {
+func (m *memUpdates) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -381,6 +385,8 @@ func (m *memUpdates) PutCheckpoint(_ context.Context, cp stack.Checkpoint, fence
 			case cp.Sequence == last.Sequence:
 				return false, stack.ErrCheckpointConflict
 			}
+
+			m.markSuperseded(ctx, last, cp)
 		}
 	}
 
@@ -475,6 +481,127 @@ func (m *memUpdates) ReferencedBlobKeys(
 	slices.Sort(out)
 
 	return out, nil
+}
+
+// SupersededBlobs implements stack.CheckpointStore.
+func (m *memUpdates) SupersededBlobs(
+	_ context.Context, stackID stack.ID,
+) ([]stack.SupersededBlob, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.refOfLocked(stackID); !ok {
+		return nil, stack.ErrNotFound
+	}
+
+	out := slices.Clone(m.marks[stackID])
+
+	slices.SortFunc(out, func(a, b stack.SupersededBlob) int {
+		return strings.Compare(string(a.Key), string(b.Key))
+	})
+
+	return out, nil
+}
+
+// SupersededMarks implements stack.CheckpointStore.
+func (m *memUpdates) SupersededMarks(
+	_ context.Context, after stack.SupersededCursor, olderThan time.Time, limit int,
+) ([]stack.SupersededMark, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	live := make(map[stack.ID]struct{}, len(m.stacks))
+
+	for ref := range m.stacks {
+		live[m.stacks[ref].ID] = struct{}{}
+	}
+
+	var out []stack.SupersededMark
+
+	for id, marks := range m.marks {
+		if _, ok := live[id]; !ok {
+			continue
+		}
+
+		out = append(out, marksAfter(id, marks, m.nsID, after, olderThan)...)
+	}
+
+	slices.SortFunc(out, compareSupersededMarks)
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out, nil
+}
+
+// marksAfter returns the marks of id that are before olderThan and after the
+// cursor.
+func marksAfter(
+	id stack.ID, marks []stack.SupersededBlob, nsID namespace.ID,
+	after stack.SupersededCursor, olderThan time.Time,
+) []stack.SupersededMark {
+	var out []stack.SupersededMark
+
+	for _, mark := range marks {
+		if !mark.At.Before(olderThan) {
+			continue
+		}
+
+		if id < after.StackID || (id == after.StackID && mark.Key <= after.Key) {
+			continue
+		}
+
+		out = append(out, stack.SupersededMark{
+			StackID: id, NamespaceID: nsID, Key: mark.Key, Size: mark.Size, At: mark.At,
+		})
+	}
+
+	return out
+}
+
+// compareSupersededMarks orders marks by stack ID and then blob key.
+func compareSupersededMarks(a, b stack.SupersededMark) int {
+	if order := strings.Compare(string(a.StackID), string(b.StackID)); order != 0 {
+		return order
+	}
+
+	return strings.Compare(string(a.Key), string(b.Key))
+}
+
+// DropSupersededMark implements stack.CheckpointStore. A missing mark reports
+// keep true, because another sweep dropped it and owns the delete.
+func (m *memUpdates) DropSupersededMark(
+	_ context.Context, stackID stack.ID, key blob.Key,
+) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	marks := m.marks[stackID]
+
+	index := slices.IndexFunc(marks, func(mark stack.SupersededBlob) bool { return mark.Key == key })
+	if index < 0 {
+		return true, nil
+	}
+
+	m.marks[stackID] = slices.Delete(marks, index, index+1)
+
+	ref, ok := m.refOfLocked(stackID)
+	if !ok {
+		return false, nil
+	}
+
+	for id := range m.checkpoints {
+		if cp := m.checkpoints[id]; cp.Ref == ref && cp.BlobKey == key {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func (m *memUpdates) AppendEvents(_ context.Context, batch stack.EventBatch, _ namespace.Fence) error {
@@ -713,7 +840,7 @@ func newUpdatesWaiting(
 // newUpdatesWrapped is newUpdatesWith with a wrap of the checkpoint store: a
 // nil wrap uses the in-memory store itself.
 func newUpdatesWrapped(
-	t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger, wrap func(*memUpdates) stack.CheckpointStore,
+	t *testing.T, clk *clock, blobs blob.Store, wrap func(*memUpdates) stack.CheckpointStore,
 ) updatesFixture {
 	t.Helper()
 
@@ -721,7 +848,7 @@ func newUpdatesWrapped(
 		t,
 		clk,
 		blobs,
-		logger,
+		nil,
 		updatesFixtureOptions{guard: blobguardtest.None{}, wait: nil, wrap: wrap},
 	)
 }
@@ -2042,6 +2169,32 @@ func (m *failBlob) Delete(ctx context.Context, key blob.Key) error {
 // SetOverrides is not used by this fake.
 func (*memUpdates) SetOverrides(context.Context, namespace.Name, namespace.Overrides, namespace.Fence) error {
 	return nil
+}
+
+// markSuperseded records the mark of the checkpoint row that cp replaces: the
+// blob of the row is superseded when the new write names another key. The
+// callers decide which writes mark: a sequenced save of the running update
+// and a built checkpoint both do. Callers hold m.mu.
+func (m *memUpdates) markSuperseded(ctx context.Context, last, cp stack.Checkpoint) {
+	if last.BlobKey == "" || last.BlobKey == cp.BlobKey {
+		return
+	}
+
+	mark := stack.SupersededBlob{Key: last.BlobKey, Size: last.BlobSize, At: m.markTime(ctx)}
+	m.marks[m.stacks[cp.Ref].ID] = append(m.marks[m.stacks[cp.Ref].ID], mark)
+}
+
+// markTime returns the time of a mark: the clock of the database. The SQL
+// stores take that time inside the insert, so a failed read of the clock never
+// fails a save. This store keeps the behavior: the failed read leaves the zero
+// time.
+func (m *memUpdates) markTime(ctx context.Context) time.Time {
+	at, err := m.DatabaseNow(ctx)
+	if err != nil {
+		return time.Time{}
+	}
+
+	return at
 }
 
 // withScope fills the namespace ID and the stack ID of a checkpoint that a

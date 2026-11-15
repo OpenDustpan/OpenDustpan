@@ -57,6 +57,8 @@ const (
 	backupColExpiresAtMs = "expires_at_ms"
 	backupColSeq         = "seq"
 	backupColJobID       = "job_id"
+	backupColPoolID      = "pool_id"
+	backupColEnabled     = "enabled"
 )
 
 // sqliteBackupTable is the column list of one backup table: the columns of the
@@ -154,6 +156,16 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColSize,
 				"blob_size",
 				"blob_md5",
+			},
+		},
+		{
+			table: "checkpoint_supersedes",
+			columns: []string{
+				backupColBlobKey,
+				backupColStackID,
+				backupColUpdateID,
+				backupColSize,
+				"superseded_at_ms",
 			},
 		},
 		{
@@ -455,6 +467,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqlitePlacementBackupTables(),
 		sqliteSelfServiceBackupTables(),
 		sqliteTrustRuleBackupTables(),
+		sqliteUnmanagedBackupTables(),
 		sqliteBreakGlassReviewBackupTables(),
 	)
 }
@@ -702,7 +715,7 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 				"client_secret",
 				"scopes",
 				"auto_create",
-				"enabled",
+				backupColEnabled,
 				backupColCreatedAtMs,
 				"updated_at_ms",
 				"version",

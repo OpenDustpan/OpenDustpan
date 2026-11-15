@@ -29,13 +29,15 @@ var _ setting.Store = SettingStore{s: nil}
 
 // settingTx is the SQL of a change of settings inside a transaction. The
 // rules are in setting.Change. entryScope is the audit scope that an entry of
-// the transaction must name.
+// the transaction must name. srv is the locked transaction that appends an
+// entry of the scope @server, and it is nil for an entry of a namespace.
 type settingTx struct {
 	q          *db.Queries
+	srv        *serverAuditTx
 	entryScope namespace.Name
 }
 
-var _ setting.Tx = settingTx{q: nil, entryScope: ""}
+var _ setting.Tx = settingTx{q: nil, srv: nil, entryScope: ""}
 
 // serverScopeID is the scope_id of the settings of the installation.
 const serverScopeID = string(audit.ServerScope)
@@ -151,7 +153,8 @@ func (t settingTx) SetDigest(ctx context.Context, digest string, revision int64)
 	return nil
 }
 
-// Append implements setting.Tx.
+// Append implements setting.Tx. A transaction that holds no lock sends the
+// entry to appendAuditEntry, which refuses an entry of the scope @server.
 func (t settingTx) Append(ctx context.Context, e audit.Entry) error {
 	if err := e.Validate(); err != nil {
 		return fmt.Errorf("audit entry: %w", err)
@@ -164,7 +167,7 @@ func (t settingTx) Append(ctx context.Context, e audit.Entry) error {
 		return fmt.Errorf("%w: entry names %q, want the scope %q", audit.ErrInvalidEntry, e.Namespace, t.entryScope)
 	}
 
-	if _, err := appendAuditEntry(ctx, t.q, e); err != nil {
+	if _, err := appendAnyEntry(ctx, t.q, t.srv, e); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 
@@ -190,26 +193,32 @@ func (st SettingStore) Update(
 
 	var result setting.Result
 
-	// The lock order is the one of every audited write that must be ordered
-	// with the writes of the installation: the advisory lock of the server
-	// audit scope first, then the namespace row. No transaction takes the
-	// scope lock after a namespace row, so two writes cannot deadlock.
-	err = st.s.inTx(ctx, func(q *db.Queries) error {
-		if lockErr := q.LockServerAuditScope(ctx); lockErr != nil {
-			return fmt.Errorf("lock server audit scope: %w", lockErr)
-		}
-
+	change := func(q *db.Queries, srv *serverAuditTx) error {
 		if !scope.IsInstallation() {
 			if fenceErr := checkFenceForUpdate(ctx, q, fence); fenceErr != nil {
 				return fenceErr
 			}
 		}
 
-		res, changeErr := setting.Change(ctx, settingTx{q: q, entryScope: entryScope}, scope, in)
+		res, changeErr := setting.Change(ctx, settingTx{q: q, srv: srv, entryScope: entryScope}, scope, in)
 		result = res
 
 		return changeErr
-	})
+	}
+
+	// The lock order is the one of every audited write: an entry of the scope
+	// @server takes the advisory lock of that scope first. No transaction
+	// takes the scope lock after a namespace row, so two writes cannot
+	// deadlock.
+	if entryScope == audit.ServerScope {
+		err = runServerAuditTx(ctx, st.s.inTx, func(tx serverAuditTx) error {
+			return change(tx.q, &tx)
+		})
+	} else {
+		err = st.s.inTx(ctx, func(q *db.Queries) error {
+			return change(q, nil)
+		})
+	}
 	if err != nil {
 		return none, err
 	}
@@ -257,14 +266,12 @@ func (st SettingStore) Sync(ctx context.Context, digest string) (int64, bool, er
 		changed  bool
 	)
 
-	err := st.s.inTx(ctx, func(q *db.Queries) error {
-		if lockErr := q.LockServerAuditScope(ctx); lockErr != nil {
-			return fmt.Errorf("lock server audit scope: %w", lockErr)
-		}
-
+	err := runServerAuditTx(ctx, st.s.inTx, func(tx serverAuditTx) error {
 		var syncErr error
 
-		revision, changed, syncErr = setting.Sync(ctx, settingTx{q: q, entryScope: audit.ServerScope}, digest)
+		revision, changed, syncErr = setting.Sync(
+			ctx, settingTx{q: tx.q, srv: &tx, entryScope: audit.ServerScope}, digest,
+		)
 
 		return syncErr
 	})
