@@ -7,10 +7,16 @@
 - [ ] 1.1 Add failing audit append race test in pkg/audit/audittest/chain.go:615 (func testChainConcurrentEnds) through AppendChain (NEW method on the audit store port) with two claims on one head. Check: `go test ./pkg/audit/... -run TestChainConcurrent -count=1` fails on main and passes after
 - [ ] 1.2 Add failing shared clock test in pkg/store/storetest/attempt_deadline.go:286 (func testDatabaseClock) for IsExpired (NEW func) on lease, session, and sign-in expiry with a skewed process clock. Check: `go test ./pkg/store/... -run TestDatabaseClock -count=1` fails on main and passes after
 
+- [ ] 1.3 SECURITY. Add hostile test TestChainAppendWithoutGrant in pkg/audit/audittest/chain.go. It calls AppendChain without the grant on the namespace. Check: `go test ./pkg/audit/... -run TestChainAppendWithoutGrant -count=1` shows a refusal and no head move
+- [ ] 1.4 SECURITY. Add hostile test TestChainAppendEntryTooLarge in pkg/audit/audittest/chain.go. It calls AppendChain with an entry above the size bound. Check: `go test ./pkg/audit/... -run TestChainAppendEntryTooLarge -count=1` shows a refusal before the chain write and no head move
+
 ## 2. Change
 
 - [ ] 2.1 Change audit append in pkg/audit/chain.go to conditional UPDATE on the expected head with the fence check and change expiry reads to the database clock. Check: `go test ./pkg/store/storetest/... -count=1` with `DUSTPAN_TEST_POSTGRES_URL` set passes on both dialects
 - [ ] 2.2 Wire the mismatch error with the new head and the 503 clock gap in the API error shape in pkg/audit/chain.go. Check: `go test ./pkg/audit/... -count=1` passes
+
+- [ ] 2.3 SECURITY. Add the grant check at point of use to audit append in pkg/audit/chain.go, in the same transaction as the head check. Check: `go test ./pkg/audit/... -run TestChainAppendWithoutGrant -count=1` passes
+- [ ] 2.4 SECURITY. Add the entry size bound to audit append in pkg/audit/chain.go, applied before the chain write. Check: `go test ./pkg/audit/... -run TestChainAppendEntryTooLarge -count=1` passes
 
 ## 3. Side effects (computed from main)
 

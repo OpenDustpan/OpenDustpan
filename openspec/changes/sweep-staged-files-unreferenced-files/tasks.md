@@ -9,12 +9,16 @@
 - [ ] 1.3 Write the test for a takeover that resumes and a stale fencing token in `pkg/registry/sweep_test.go` (NEW). Check: TestRegistrySweepTakeoverResumes fails on main
 - [ ] 1.4 Write the tests for a publish that starts before any mark exists, a publish that meets a live mark, a moved staged file, a stale mark, a failed store delete and a failed mark removal in `pkg/registry/sweep_test.go` (NEW). Check: TestRegistrySweepPublishRace, TestRegistrySweepPublishBeforeMark, TestRegistrySweepMovedStagedKept, TestRegistrySweepStaleMarkExpires, TestRegistrySweepDeleteFailureRetries and TestRegistrySweepMarkRemovalFailure fail on main
 - [ ] 1.5 Write the tests for a staged key with no row, a staged row with the new creation time, maintenance mode, a restore that writes a blob, a listing error and an unknown fresh key in `pkg/registry/sweep_test.go` (NEW). Check: TestRegistrySweepStagedNoRow, TestRegistrySweepStagedCreatedAt, TestRegistrySweepMaintenancePause, TestRegistrySweepKeepsRestoredBlob, TestRegistrySweepStoreErrorRetries and TestRegistrySweepKeepsFreshUnknownKey fail on main
+- [ ] 1.7 SECURITY. Write the hostile test that sends a key outside the registry prefix straight to the blob delete and the key listing of the port adapter, in `pkg/registry/sweep_test.go` (NEW). Check: TestRegistrySweepRefusesForeignPrefix fails on main
+- [ ] 1.8 SECURITY. Write the hostile test that runs the delete step with a stale fencing token straight against the service layer, in `pkg/registry/sweep_test.go` (NEW). Check: TestRegistrySweepStaleTokenDeletesNothing fails on main
 - [ ] 1.6 Write the conformance test with a blob store that lists many keys in `pkg/registry/sweep_conformance_test.go` (NEW). Check: TestRegistrySweepManyKeysConformance fails on main
 
 ## 2. Implementation
 
 - [ ] 2.1 Edit the baseline of each dialect (`pkg/store/<dialect>/migrations/<NNNN>_baseline.sql`): staged created_at_ms and moved flag, content-key row table, mark table and cursor table. Check: `go test ./pkg/store/... -run TestFrozenMigrations -count=1` passes with the new baseline hash
 - [ ] 2.2 Implement the schedule row, the durable run, the paged listing and the publish lock in `pkg/registry/sweep.go` (NEW). Check: `go test ./pkg/registry/... -run TestRegistrySweep -count=1` passes
+- [ ] 2.4 SECURITY. Build the prefix guard of the port adapter in `pkg/registry/sweep.go` (NEW). The blob delete and the key listing accept only keys of the registry prefix. Check: `go test ./pkg/registry/... -run TestRegistrySweepRefusesForeignPrefix -count=1` passes
+- [ ] 2.5 SECURITY. Build the fencing token check of the delete step in `pkg/registry/sweep.go` (NEW). The check runs in the delete transaction. Check: `go test ./pkg/registry/... -run TestRegistrySweepStaleTokenDeletesNothing -count=1` passes
 - [ ] 2.3 Expose the metric with installation counters in `pkg/registry/sweep_metrics.go` (NEW). Check: NEW metrics series registry_sweep_* appear in the server metrics output, checked by a metrics test
 
 ## 3. Side effects (computed from main)

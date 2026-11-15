@@ -8,10 +8,17 @@
 - [ ] 1.2 Add failing audit tests for population from auth context, canonical encoding, hash coverage, absent block compatibility, subject and reason limits, delegation grammar, and atomic principal audit write. Check: TestAuditAgentBlockCoveredByHash in pkg/audit fails on main, passes after.
 - [ ] 1.3 Add failing job token tests in NEW file pkg/jobtoken/agentkey_test.go for Mint (NEW agent key support) with agent key round trip, existence check, malformed key rejection, and legacy tokens without a key. Check: TestJobTokenAgentKeyRoundTrip in job token suite fails on main, passes after.
 
+## 1b. Hostile tests (SECURITY)
+
+- [ ] 1.4 SECURITY. Add a hostile test that sends the unknown kind robot straight to the principal service. Add it in the NEW file pkg/principal/kind_hostile_test.go with test name TestCreateRejectsUnknownKind. Check: the test sees the error code principal.kind-invalid and no stored row, and it fails on main.
+- [ ] 1.5 SECURITY. Add a hostile test that sends an audit agent reason with CR, LF and other control characters straight to the audit append. Add it in the NEW file pkg/audit/agent_reason_hostile_test.go with test name TestAppendRejectsControlCharactersInAgentReason. Check: the test sees the error code audit.agent-invalid and no stored entry, and it fails on main.
+
 ## 2. Build the shapes
 
 - [ ] 2.1 Edit the baseline of each dialect in place for the three additive fields with defaults that keep current rows valid. Edit the baseline files under pkg/store (one per dialect). Check: Baseline builds for both dialects and `sqlc diff` is clean after `make generate`. Confirmed by: the driver's gates.
 - [ ] 2.2 Wire kind and agent fields through the existing principal, audit, and token paths with allowlist checks in pkg/principal, pkg/audit, and pkg/jobtoken. Change the audit adapter at internal/api/audit/audit.go:173 (func toAuditEntry). Check: Route test TestRouteHookFailsOnAnUnknownShape still passes and changed routes declare authorization actions.
+- [ ] 2.5 SECURITY. Build the kind allowlist in the NEW file pkg/principal/kind.go with the constructor parsePrincipalKind. It accepts only person, service and agent. It returns the NEW error code principal.kind-invalid for other values. Check: TestCreateRejectsUnknownKind passes.
+- [ ] 2.6 SECURITY. Build the reason check in the NEW file pkg/audit/agent.go with the constructor parseAuditAgent. It rejects control characters except space and reasons over 1024 characters. It returns the NEW error code audit.agent-invalid. Check: TestAppendRejectsControlCharactersInAgentReason passes.
 - [ ] 2.3 Update the body types of the API description (the Go source in internal/api/apidesc) for the new stored fields with no new routes. Check: API description build passes and lists kind, agent block, and agent key fields.
 - [ ] 2.4 Add e2e coverage against the real directory for create, read, and audit read in NEW file internal/servertest/agent_shapes_test.go. Check: e2e step calls ANY /api/server/principals/{} and ANY /api/audit/entries/{} with a session credential, passes the existing read gates, and reads back kind and agent block. Confirmed by: CI (the agent writes the e2e test).
 
