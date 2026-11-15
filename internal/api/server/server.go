@@ -606,7 +606,7 @@ func problemFor(err error) (problem.Problem, bool) {
 		p.Reauthenticate = fresh.url
 	}
 
-	p.RetryAfter = retryAfter(err)
+	p.RetryAfter = max(retryAfter(err), f.retryAfter)
 
 	return p, true
 }
@@ -624,6 +624,8 @@ func forbiddenCode(f failure, err error) string {
 
 // retryAfter returns the wait that the answer to err names in Retry-After: a
 // refusal of maintenance mode names maintenanceRetryAfter, any other error 0.
+// A failure with its own wait, for example the refusal of a drain, names that
+// wait through failure.retryAfter.
 func retryAfter(err error) time.Duration {
 	if errors.Is(err, maintenance.ErrInMaintenance) || errors.Is(err, maintenance.ErrBusy) {
 		return maintenanceRetryAfter

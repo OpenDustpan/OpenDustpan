@@ -2,6 +2,8 @@ package server_test
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,8 +33,8 @@ func TestDurableStartsRefusedWhileDraining(t *testing.T) {
 		stores := openBackupDeps(t)
 		fix := newBackupFixtureWorkers(t, stores, stores.registry, nil, workers())
 
-		status, body := serveBackup(t, fix.handler, http.MethodPost, "/api/dustpan/v1/backups")
-		checkDrainingAnswer(t, status, body)
+		rec := serveRecorded(t, fix.handler, http.MethodPost, "/api/dustpan/v1/backups", "")
+		checkDrainingAnswer(t, rec)
 	})
 
 	t.Run("restore", func(t *testing.T) {
@@ -41,10 +43,10 @@ func TestDurableStartsRefusedWhileDraining(t *testing.T) {
 		stores := openBackupDeps(t)
 		fix := newRestoreFixtureWorkers(t, stores, stores.target, nil, workers())
 
-		status, body := serveRestore(
+		rec := serveRecorded(
 			t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-missing000000000001"}`,
 		)
-		checkDrainingAnswer(t, status, body)
+		checkDrainingAnswer(t, rec)
 	})
 
 	t.Run("audit chain", func(t *testing.T) {
@@ -53,8 +55,12 @@ func TestDurableStartsRefusedWhileDraining(t *testing.T) {
 		namespaces := newTestNamespaces(t)
 		handler := newAuditChainHandlerDraining(t, namespaces, workers())
 
-		status, body := approveAuditChain(t, handler)
-		checkDrainingAnswer(t, status, body)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/audit/chain", http.NoBody)
+		startSession(t, handler, req, 0)
+
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		checkDrainingAnswer(t, rec)
 	})
 
 	t.Run("store check", func(t *testing.T) {
@@ -62,8 +68,8 @@ func TestDurableStartsRefusedWhileDraining(t *testing.T) {
 
 		f := newStoreCheckFixture(t, workers())
 
-		status, body := f.post(t, `{"target":"blobs"}`)
-		checkDrainingAnswer(t, status, body)
+		rec := serveRecorded(t, f.handler, http.MethodPost, "/api/dustpan/v1/store-checks", `{"target":"blobs"}`)
+		checkDrainingAnswer(t, rec)
 	})
 }
 
@@ -79,13 +85,35 @@ func newAuditChainHandlerDraining(
 	return newAuditChainHandlerWorkers(t, namespaces, newFakeAuditChain(audit.ChainOff), workers)
 }
 
-// checkDrainingAnswer fails unless status and body are the 503 answer of a
-// start that draining refused: the code instance.draining.
-func checkDrainingAnswer(t *testing.T, status int, body string) {
+// serveRecorded sends one request and returns the recorded answer, with its
+// headers. It sends the bearer token of the installation API.
+func serveRecorded(
+	t *testing.T, handler testHandler, method, path, body string,
+) *httptest.ResponseRecorder {
 	t.Helper()
 
-	if status != http.StatusServiceUnavailable {
-		t.Fatalf("start while draining = %d %s, want 503", status, body)
+	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// checkDrainingAnswer fails unless rec is the 503 answer of a start that
+// draining refused: the code instance.draining and the Retry-After header of
+// the drain period of 10 seconds.
+func checkDrainingAnswer(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+
+	body := rec.Body.String()
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("start while draining = %d %s, want 503", rec.Code, body)
+	}
+
+	if got := rec.Header().Get("Retry-After"); got != "10" {
+		t.Errorf("Retry-After = %q, want %q", got, "10")
 	}
 
 	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusServiceUnavailable, []byte(body),
