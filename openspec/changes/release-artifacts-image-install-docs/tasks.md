@@ -11,7 +11,7 @@
 
 - [ ] 2.1 Add the NEW script `scripts/release-build-image.sh` with VERSION input, buildx, QEMU, and console hash check. Check: `scripts/release-build-image.sh 0.1.0-test` builds local multi-arch image with no push.
 - [ ] 2.2 Add the NEW file `.github/workflows/release-image.yml`. It is a workflow that starts on v tag and reuses binary archive outputs without push. Check: Workflow file pins both setup actions by SHA with version tag comment and holds no push step. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
-- [ ] 2.3 Add the NEW Make target `make image-smoke` in the NEW file `Makefile.image` (NEW, included by the existing `Makefile`) with artifact install test step for the built image and the part 1 binary archive. Check: `make image-smoke VERSION=0.1.0-test` starts image and passes health and console checks.
+- [ ] 2.3 Extend the existing file `Makefile` with the NEW Make target `make image-smoke`, with artifact install test step for the built image and the part 1 binary archive. Check: `make image-smoke VERSION=0.1.0-test` starts image and passes health and console checks.
 - [ ] 2.4 Add the NEW file `docs/install-from-artifacts.md` as an install-from-artifacts docs page with image install, binary archive install, and verify steps. Check: Docs page runs each command as written in test.
 
 ## 3. Side effects (computed from main)
@@ -21,6 +21,6 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Wire image tag to server --version stamp via ldflags. Check: Image exposes no new route; route test unchanged and no API description change.
-- [ ] 4.2 Add e2e step for install from built image against the existing route with a session credential. Check: e2e step calls the existing route `ANY/GET /api/dustpan/v1/git-host-installations`, passes the authorization gate, with a session credential. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Add e2e step for install from built image in the existing file `e2e/release_artifact_install_test.go` against the existing route with a session credential. Check: e2e step calls the existing route `ANY/GET /api/dustpan/v1/git-host-installations`, passes the authorization gate, with a session credential. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Run usability check of install-from-artifacts page. Check: Operator follows docs page alone and completes install from image. A person's step.
 - [ ] 4.4 Run full checks and fix findings. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

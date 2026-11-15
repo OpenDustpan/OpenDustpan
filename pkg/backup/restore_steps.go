@@ -29,6 +29,13 @@ import (
 // backup and no unit directory lists it.
 const tempKeyPrefix = "restore-tmp"
 
+// ErrLiveBlobDeletes reports that a blob deleter holds a live lease: the
+// after-apply step waits for zero live leases before it checks the named
+// blobs. The durable runner releases the claim and runs the step again, and
+// the wait counts no attempt. A failed read of the leases fails the step:
+// it cannot tell whether a deleter is in flight.
+var ErrLiveBlobDeletes = errors.New("blob deletes are in flight")
+
 // restoreCopyConcurrency is the count of blobs that one restore copies at the
 // same time.
 const restoreCopyConcurrency = 8
@@ -183,6 +190,10 @@ func (s *RestoreService) guarded(body restoreStepFunc) durable.StepFunc {
 			// A takeover or a retry found the domain write of this step
 			// committed. The runner reads the stored result.
 			return nil, nil
+		case errors.Is(err, ErrLiveBlobDeletes):
+			// The step waits for the blob deletes. The runner releases the
+			// claim and runs the step again, and the wait counts no attempt.
+			return nil, err
 		case permanentRestoreError(err) || sc.Operation.Failures+1 >= durable.DefaultMaxAttempts:
 			return nil, s.failRestore(ctx, sc, in, err)
 		default:
@@ -1054,6 +1065,10 @@ func (s *RestoreService) stepAfterApply(ctx context.Context, sc durable.StepCont
 		return nil, nil
 	}
 
+	if err := s.waitForBlobDeletes(ctx, in); err != nil {
+		return nil, err
+	}
+
 	if err := s.afterApplyChecks(ctx, sc, in); err != nil {
 		return nil, err
 	}
@@ -1081,6 +1096,28 @@ func (s *RestoreService) stepAfterApply(ctx context.Context, sc durable.StepCont
 
 		return encodeAfterApply(afterApplyResult{AuditFailed: true}), nil
 	}
+}
+
+// waitForBlobDeletes reports ErrLiveBlobDeletes while a blob deleter holds a
+// lease. A deleter takes its lease before each delete and releases it after,
+// so the check of the named blobs waits for every delete that is in flight.
+// A deleter that read the guard of the blob deletes before the restore
+// started holds the restore back here until it releases its lease or the
+// lease ends, and the check then finds a blob that the deleter removed and
+// copies it again from the pinned backup. A failed read of the leases fails
+// the step: it cannot tell whether a deleter is in flight, so the step checks
+// nothing and finishes nothing.
+func (s *RestoreService) waitForBlobDeletes(ctx context.Context, in restoreInput) error {
+	live, err := s.leases.LiveLeases(ctx)
+	if err != nil {
+		return fmt.Errorf("read the live blob delete leases of restore %s: %w", in.ID, err)
+	}
+
+	if live > 0 {
+		return fmt.Errorf("restore %s waits for %d live blob delete leases: %w", in.ID, live, ErrLiveBlobDeletes)
+	}
+
+	return nil
 }
 
 // afterApplyChecks runs the after-apply hook and checks that each blob that

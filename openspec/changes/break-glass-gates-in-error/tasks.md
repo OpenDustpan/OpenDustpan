@@ -4,7 +4,7 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write the failing tests of the scenarios in the NEW file `pkg/gate/breakglass_test.go`. Check: TestBreakGlassErrorPassesOnce, TestBreakGlassReplayRefuses, TestBreakGlassExpiryRefuses, TestBreakGlassBadReasonRefuses, TestBreakGlassDenyStillRefuses, TestBreakGlassWrongUnitOrKindRefuses and TestBreakGlassChangeFailsClosed fail on main.
+- [ ] 1.1 Write the failing tests of the scenarios in the NEW file `pkg/gate/breakglass_test.go`; TestBreakGlassChangeFailsClosed exists on main in `pkg/gate/statewrite_test.go`: extend it there, and when it passes on main from the start, the pull request body says so. Check: TestBreakGlassErrorPassesOnce, TestBreakGlassReplayRefuses, TestBreakGlassExpiryRefuses, TestBreakGlassBadReasonRefuses, TestBreakGlassDenyStillRefuses, TestBreakGlassWrongUnitOrKindRefuses and TestBreakGlassChangeFailsClosed fail on main.
 
 ## 2. Implementation
 

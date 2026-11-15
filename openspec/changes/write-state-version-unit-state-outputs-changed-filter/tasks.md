@@ -10,7 +10,7 @@
 
 ## 2. Build
 
-- [ ] 2.1 Write the digest in publishUnitState (pkg/store/sqlite/unit_state.go:97) and compare in Dispatcher.Upstream (pkg/trigger/ports.go) against the immediate prior digest. BLOCKED by no route: both run in process on the store and the dispatcher, with no credential. The baseline of each dialect holds the new column. Check: `go test ./pkg/trigger/... ./pkg/store/...` passes.
+- [ ] 2.1 Write the digest in publishUnitState (pkg/store/sqlite/unit_state.go:97) and compare in Dispatcher.Upstream (pkg/trigger/ports.go) against the immediate prior digest. BLOCKED by no route: both run in process on the store and the dispatcher, with no credential. The baseline of each dialect holds the new column. Add the new column to the backup column list in pkg/backup/portable_tables.go, because a backup holds every column. Check: `go test ./pkg/trigger/... ./pkg/store/...` passes.
 - [ ] 2.2 Add when outputs-changed to trigger create and replace with validation in NEW file internal/servertest/trigger_when_test.go (test) and in the trigger validation of pkg/trigger/ports.go. Name the route declaration file and its adapter file in design.md before the edit. Check: `PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` with a personal access token and when outputs-changed returns 200.
 
 ## 3. Side effects (computed from main)
@@ -20,7 +20,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step with real CLI binaries: apply A twice, once with a changed output, then read `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` with a personal access token. Check: `make e2e` runs the step over TLS on SQLite and PostgreSQL and shows one follower plan only after the changed output. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Add the docs page for the when field. Check: `make docs-lint` passes and the triggers page documents when outputs-changed.
+- [ ] 4.1 Add an e2e step in NEW file e2e/trigger_outputs_changed_test.go with real CLI binaries: apply A twice, once with a changed output, then read `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` with a personal access token. Check: `make e2e` runs the step over TLS on SQLite and PostgreSQL and shows one follower plan only after the changed output. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Add the docs page for the when field in NEW file docs/guides/trigger-when-outputs-changed.md. Check: `make docs-lint` passes and the triggers page documents when outputs-changed.
 - [ ] 4.3 Run the usability check of the path. Check: Developer follows the docs page alone and names the one command that explains a skipped start. A person's step.
 - [ ] 4.4 Run the full check. The route `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` keeps its action, tested with a personal access token. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

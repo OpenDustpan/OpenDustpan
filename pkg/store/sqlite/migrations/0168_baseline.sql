@@ -327,6 +327,11 @@ CREATE TABLE access_token_policy (
     updated_at_ms       INTEGER NOT NULL
 , exchange_lifetime_ms INTEGER NOT NULL DEFAULT 3600000) STRICT;
 
+CREATE TABLE blob_delete_leases (
+    holder        TEXT    NOT NULL PRIMARY KEY,
+    expires_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE blob_purges (
     tool          TEXT    NOT NULL,
     unit_id       TEXT    NOT NULL,
