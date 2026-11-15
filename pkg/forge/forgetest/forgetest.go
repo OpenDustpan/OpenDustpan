@@ -233,6 +233,11 @@ func cases() []testCase {
 		{"find commit on a missing ref is not found", forge.CapCommit, caseFindCommitMissingRef},
 		{"find commit with a bad trailer or ref is invalid and makes no call", forge.CapCommit, caseFindCommitInvalid},
 		{
+			"find commit with a bad branch or changes digest is invalid and makes no call",
+			forge.CapCommit,
+			caseFindCommitInvalidDelivery,
+		},
+		{
 			"find commit never returns a pushed commit that has the trailer",
 			forge.CapCommit,
 			caseFindCommitIgnoresPushedTrailer,

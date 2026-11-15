@@ -22,7 +22,6 @@ func claimerCases() []suiteCase {
 		{"claimer: a request with no owner, no kind or no lease is ErrInvalid", testClaimerInvalid},
 		{"claimer: a claim takes only the kinds that it asks for", testClaimerKinds},
 		{"claimer: a phase above MaxVersions stays unclaimed", testClaimerMaxVersions},
-		{"claimer: the claim of a plan phase records the state version", testClaimerPlanVersion},
 		{"claimer: the claim returns the fence that the namespace has now", testClaimerFence},
 		{"claimer: parallel claims of one phase give one winner", testClaimerOneWinner},
 		{"claimer: parallel claims of several phases give each phase once", testClaimerEachOnce},
@@ -69,6 +68,11 @@ const (
 	// enough that a slow store cannot expire it before the renew, and the
 	// case waits for its end after the renew.
 	firstLease = expiryWait
+	// renewFirstLease is the lease of the first claim of the renew case. The
+	// case waits for the end of the first lease, so half of firstLease keeps
+	// the case short, and it is long enough that a slow store cannot expire
+	// the claim before the renew.
+	renewFirstLease = firstLease / 2
 )
 
 // request returns a claim request of owner for the kinds ks.
@@ -324,6 +328,10 @@ func checkAssigned(t *testing.T, h Harness, a *job.Assignment) {
 			a.Job.State, a.Job.Phases[0].Claims, a.Job.Phases[0].Executor, a.Plan)
 	}
 
+	if a.Profile == "" || a.Profile != a.Job.Spec.Profile {
+		t.Fatalf("assignment profile = %q, want the profile %q of the job", a.Profile, a.Job.Spec.Profile)
+	}
+
 	if got := jobOf(t, h, a.Claim.Job); got.State != job.StateRunning || got.Version != a.Job.Version {
 		t.Fatalf("stored job = %s, version %d; want running, version %d", got.State, got.Version, a.Job.Version)
 	}
@@ -445,15 +453,13 @@ func testClaimerPlanVersion(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := setUp(t, h)
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	first := writeState(t, h, f, false)
 
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationApply, steps: nil})
 
 	a := claim(t, h, runnerOne, longRenew, runnerKind(&j))
-	if a.Job.Phases[0].StateVersion != svOne {
-		t.Fatalf("plan phase state version = %q, want %s", a.Job.Phases[0].StateVersion, svOne)
+	if a.Job.Phases[0].StateVersion != first {
+		t.Fatalf("plan phase state version = %q, want %s", a.Job.Phases[0].StateVersion, first)
 	}
 }
 
@@ -575,7 +581,7 @@ func testRenew(t *testing.T, h Harness) {
 
 	f := setUp(t, h)
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationPlan, steps: nil})
-	a := claim(t, h, runnerOne, firstLease, runnerKind(&j))
+	a := claim(t, h, runnerOne, renewFirstLease, runnerKind(&j))
 
 	got, err := h.Claimer.Renew(t.Context(), a.Claim, longRenew)
 	if err != nil {

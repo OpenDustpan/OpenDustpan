@@ -10,6 +10,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/forgelink"
 )
 
+func gh(id string) forgelink.Account {
+	return forgelink.Account{Kind: forge.KindGitHub, Host: "github.com", ID: id}
+}
+
 func TestAccountValidate(t *testing.T) {
 	t.Parallel()
 

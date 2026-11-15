@@ -190,7 +190,7 @@ func (denyEverything) Authorize(context.Context, identity.Principal, identity.Ac
 }
 
 func (denyEverything) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 // TestLimiterEntriesPassTheStores writes the entries of the flood limit (the

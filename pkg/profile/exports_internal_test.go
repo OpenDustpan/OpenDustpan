@@ -3,6 +3,7 @@ package profile
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -149,5 +150,28 @@ func TestCheckSecretTarget(t *testing.T) {
 				t.Fatalf("checkSecretTarget(%s) = %v, want ok %v", tc.path, err, tc.ok)
 			}
 		})
+	}
+}
+
+// TestEveryExportKeyIsRouted checks that RoutingChanges follows the reads of
+// every export key that a consumer gets. A new export key in consumerKeys
+// fails this test until routedExportKeys follows it, so a value never reaches
+// a consumer without the routing review.
+func TestEveryExportKeyIsRouted(t *testing.T) {
+	t.Parallel()
+
+	routed := routedExportKeys()
+
+	for _, consumer := range []Consumer{ConsumerLauncher, ConsumerJobProxy} {
+		keys, ok := consumerKeys(consumer)
+		if !ok || len(keys) == 0 {
+			t.Fatalf("consumer %s has no export keys", consumer)
+		}
+
+		for _, key := range keys {
+			if !slices.Contains(routed, key) {
+				t.Errorf("consumer %s gets exports.%s, and RoutingChanges does not follow its reads", consumer, key)
+			}
+		}
 	}
 }

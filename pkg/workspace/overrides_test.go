@@ -155,9 +155,7 @@ func TestForceUnlockClientEncryptedWithForcedOverride(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	const encrypted = `{"encrypted_data":"c2VjcmV0"}`
-
-	if err := f.push(t, newState("lin-old", 1, encrypted), encrypted); err != nil {
+	if err := f.push(t, newState("lin-old", 1, envelope), envelope); err != nil {
 		t.Fatalf("push encrypted state: %v", err)
 	}
 
@@ -238,6 +236,7 @@ func forceEntry() audit.Entry {
 		Reason:        "the run crashed",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -270,9 +269,7 @@ func TestForceUnlockStopsWhenItsAuditEntryFails(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	const encrypted = `{"encrypted_data":"c2VjcmV0"}`
-
-	if err := f.push(t, newState("lin-old", 1, encrypted), encrypted); err != nil {
+	if err := f.push(t, newState("lin-old", 1, envelope), envelope); err != nil {
 		t.Fatalf("push encrypted state: %v", err)
 	}
 

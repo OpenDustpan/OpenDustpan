@@ -3,11 +3,21 @@ package postgres //nolint:testpackage // The unexported write path of the settin
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
+	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
 )
+
+// Pool returns the connection pool of s, so a test can read or change rows
+// with direct SQL.
+func Pool(s *Store) *pgxpool.Pool {
+	return s.pool
+}
 
 // CheckSettingFence runs the comparison of the fence and the namespace that
 // SetSetting makes before it opens a transaction.
@@ -77,6 +87,22 @@ func SeedRunnerControlRows(ctx context.Context, s *Store) error {
 	return nil
 }
 
+// SeedHeartbeatRow writes one durable_heartbeats row with exactly the given
+// time and lease, as the upsert of Beat writes it. It is a test hook for the
+// ordering cases of the heartbeat suite, which cannot wait on the clock of
+// the store.
+func SeedHeartbeatRow(ctx context.Context, s *Store, owner string, at time.Time, lease time.Duration) error {
+	const stmt = `INSERT INTO durable_heartbeats (owner, at_ms, lease_ms)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (owner) DO UPDATE SET at_ms = excluded.at_ms, lease_ms = excluded.lease_ms`
+
+	if _, err := s.pool.Exec(ctx, stmt, owner, at.UnixMilli(), lease.Milliseconds()); err != nil {
+		return fmt.Errorf("seed heartbeat row: %w", err)
+	}
+
+	return nil
+}
+
 // CountRunnerControlRows returns the number of rows in each control table of
 // the runner protocol.
 func CountRunnerControlRows(ctx context.Context, s *Store) (map[string]int64, error) {
@@ -92,4 +118,28 @@ func CountRunnerControlRows(ctx context.Context, s *Store) (map[string]int64, er
 	}
 
 	return counts, nil
+}
+
+// SetItemKeyAttemptDeadline makes the attempt deadline of each item key
+// transaction that starts after the call d after its start, for the late
+// commit cases of the conformance suite.
+func SetItemKeyAttemptDeadline(s *Store, d time.Duration) {
+	s.attemptDeadline = func(_ context.Context, start time.Time) time.Time {
+		return start.Add(d)
+	}
+}
+
+// SetNowForTest replaces the clock of the item key attempt code of s.
+func SetNowForTest(s *Store, now func() time.Time) {
+	s.now = now
+}
+
+// JobWrite runs fn in one write transaction of the job stores of s.
+func JobWrite(ctx context.Context, s *Store, fence namespace.Fence, fn func(jobstore.Tx) error) error {
+	return jobRunner{s: s}.Write(ctx, fence, fn)
+}
+
+// JobRead runs fn in one read transaction of the job stores of s.
+func JobRead(ctx context.Context, s *Store, fn func(jobstore.Tx) error) error {
+	return jobRunner{s: s}.Read(ctx, fn)
 }

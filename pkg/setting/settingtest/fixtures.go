@@ -76,8 +76,9 @@ func turnedOff(old, next string) bool { return old == "true" && next == "false" 
 // database returns an installation setting that the database layer can hold.
 func database(key string, kind setting.Kind, def string, apply setting.Apply) setting.Declaration {
 	return setting.Declaration{
-		Key: key, Level: setting.LevelInstallation, Kind: kind, Default: def, Secret: false, Database: true,
-		Apply: apply, Check: nil, ReducesSecurity: nil, Doc: "A setting of the test suite.",
+		Key: key, Level: setting.LevelInstallation, Kind: kind, Default: def, Secret: false,
+		Database: true, StaticCredentialHost: false, Apply: apply, Check: nil, ReducesSecurity: nil,
+		Doc: "A setting of the test suite.",
 	}
 }
 
@@ -109,6 +110,7 @@ func entry(scope setting.Scope) audit.Entry {
 		SourceIP: "192.0.2.1", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 }
 

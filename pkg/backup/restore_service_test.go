@@ -17,6 +17,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
@@ -592,14 +593,17 @@ func sortRestoreIDs(ids []backup.RestoreID) {
 
 // restoreServiceMaintenance is a fake backup.RestoreMaintenance with an
 // injected enter error and hold. It records each enter in order, when set.
+// cancelScript, when set, is the active work of a forced enter: EnterWith
+// runs its cancel sequence through the writer before it writes the state.
 type restoreServiceMaintenance struct {
-	mu       sync.Mutex
-	enterErr error
-	enters   int
-	leaves   int
-	order    *orderLog
-	state    maintenance.State
-	held     bool
+	mu           sync.Mutex
+	enterErr     error
+	enters       int
+	leaves       int
+	order        *orderLog
+	state        maintenance.State
+	held         bool
+	cancelScript *cancelScript
 }
 
 // setEnterErr sets the injected enter error under the lock: Enter reads it on
@@ -609,6 +613,15 @@ func (m *restoreServiceMaintenance) setEnterErr(err error) {
 	defer m.mu.Unlock()
 
 	m.enterErr = err
+}
+
+// setCancelScript sets the active work of the next forced enter under the
+// lock: EnterWith reads it on the restore goroutine.
+func (m *restoreServiceMaintenance) setCancelScript(script *cancelScript) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cancelScript = script
 }
 
 // stubBackupExporter is a fake backup.Exporter for the pre-backup service.
@@ -657,7 +670,7 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 	order := &orderLog{mu: sync.Mutex{}, events: nil}
 	maint := &restoreServiceMaintenance{
 		mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order, state: maintenance.StateNormal,
-		held: false,
+		held: false, cancelScript: nil,
 	}
 	blobs := newMemStore()
 	live := newRestoreServiceLive(setup.live, regs)
@@ -694,6 +707,7 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 		Backups:         backups,
 		Maintenance:     maint,
 		Blobs:           blobs,
+		Leases:          blobguardtest.None{},
 		Target:          setup.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -873,6 +887,7 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          setup.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -916,13 +931,14 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 }
 
 // mutatingTarget serves the objects of an inner blob store, but answers the
-// manifest with tampered bytes from the third manifest read on, emulating a
-// backup target mutated after the restore checks passed.
+// manifest with tampered bytes from the manifest read at from on, emulating a
+// backup target mutated after the pin.
 type mutatingTarget struct {
 	inner     *memStore
 	tampered  []byte
 	mu        sync.Mutex
 	manifests int
+	from      int
 }
 
 func (m *mutatingTarget) Put(ctx context.Context, key blob.Key, r io.Reader) error {
@@ -934,7 +950,7 @@ func (m *mutatingTarget) Get(ctx context.Context, key blob.Key) (io.ReadCloser, 
 		m.mu.Lock()
 		m.manifests++
 
-		if m.manifests >= 3 {
+		if m.manifests >= m.from {
 			data := m.tampered
 			m.mu.Unlock()
 
@@ -983,7 +999,7 @@ func TestRestoreMutatedTargetCannotApply(t *testing.T) {
 		t.Fatalf("encode tampered manifest: %v", err)
 	}
 
-	proxy := &mutatingTarget{inner: setup.target, tampered: tampered, mu: sync.Mutex{}, manifests: 0}
+	proxy := &mutatingTarget{inner: setup.target, tampered: tampered, mu: sync.Mutex{}, manifests: 0, from: 3}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live:            setup.live,
@@ -991,6 +1007,7 @@ func TestRestoreMutatedTargetCannotApply(t *testing.T) {
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          proxy,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1219,6 +1236,7 @@ func TestRestoreFailureLogsCauseWithoutDriverDetail(t *testing.T) {
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          setup.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1319,6 +1337,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 	backupRegs := newFakeRegistry()
 	maint := &restoreServiceMaintenance{
 		mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: nil, state: maintenance.StateNormal, held: false,
+		cancelScript: nil,
 	}
 	blobs := newMemStore()
 	live := newRestoreServiceLive(check.live, regs)
@@ -1352,6 +1371,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		Backups:         backups,
 		Maintenance:     maint,
 		Blobs:           blobs,
+		Leases:          blobguardtest.None{},
 		Target:          check.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1438,6 +1458,7 @@ func restoreServiceWithHook(
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          setup.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1474,6 +1495,7 @@ func restoreServiceAdmitting(
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          setup.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1654,7 +1676,7 @@ func TestRestoreRefusesForeignDescriptorPath(t *testing.T) {
 	}
 
 	proxy := &foreignManifestTarget{
-		&mutatingTarget{inner: setup.target, tampered: tampered, mu: sync.Mutex{}, manifests: 0},
+		&mutatingTarget{inner: setup.target, tampered: tampered, mu: sync.Mutex{}, manifests: 0, from: 3},
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
@@ -1663,6 +1685,7 @@ func TestRestoreRefusesForeignDescriptorPath(t *testing.T) {
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          proxy,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1754,7 +1777,7 @@ func TestRestoreRefusesOtherFormat(t *testing.T) {
 	}
 
 	proxy := &foreignManifestTarget{
-		&mutatingTarget{inner: setup.target, tampered: other, mu: sync.Mutex{}, manifests: 0},
+		&mutatingTarget{inner: setup.target, tampered: other, mu: sync.Mutex{}, manifests: 0, from: 3},
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
@@ -1763,6 +1786,7 @@ func TestRestoreRefusesOtherFormat(t *testing.T) {
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          proxy,
 		Key:             testWrapper(),
 		Installation:    "eu-west",

@@ -174,6 +174,10 @@ func TestExportCEFKeepsKeysApart(t *testing.T) {
 		{"line separator", "curl\u2028x", `requestClientApplication=curl\u2028x cn1=1`},
 		{"paragraph separator", "curl\u2029x", `requestClientApplication=curl\u2029x cn1=1`},
 		{"literal escape text", `curl\u0000`, `requestClientApplication=curl\\u0000 cn1=1`},
+		// The escape is lossy for a byte that is not valid UTF-8: the range
+		// over the value reads the byte as utf8.RuneError, and isCEFControl
+		// writes that as \uFFFD. The byte itself is gone.
+		{"curlxffx", "curl\xffx", `requestClientApplication=curl\uFFFDx cn1=1 cn1Label=sequence`},
 	}
 
 	for _, tt := range tests {

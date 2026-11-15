@@ -283,7 +283,9 @@ func (r *outputShareRig) unit(
 			t.Fatalf("workspace name %q: %v", name, err)
 		}
 
-		ws, err := r.svc.Workspaces.Create(t.Context(), workspace.Ref{Namespace: ns, Name: parsed})
+		ws, err := r.svc.Workspaces.Create(
+			t.Context(), workspace.Ref{Namespace: ns, Name: parsed}, placeWorkspace(t, r.store, ns),
+		)
 		if err != nil {
 			t.Fatalf("create workspace %s: %v", name, err)
 		}
@@ -295,7 +297,7 @@ func (r *outputShareRig) unit(
 			t.Fatalf("stack ref %q: %v", name, err)
 		}
 
-		st, err := r.svc.Stacks.Create(t.Context(), ref, nil)
+		st, err := r.svc.Stacks.CreatePlaced(t.Context(), ref, nil, placeStack(t, r.store, ns))
 		if err != nil {
 			t.Fatalf("create stack %s: %v", name, err)
 		}
@@ -498,6 +500,7 @@ func (r *outputShareRig) deleteUnit(t *testing.T, unit outputshare.Placement) {
 		Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	switch unit.Unit.Tool() {

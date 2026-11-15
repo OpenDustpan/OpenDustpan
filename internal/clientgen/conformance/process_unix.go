@@ -11,11 +11,18 @@ import (
 )
 
 // prepareGroup puts the adapter in a process group of its own, so that a kill
-// reaches the processes that the adapter starts.
-func prepareGroup(cmd *exec.Cmd) {
+// reaches the processes that the adapter starts. A stop after the post-exit
+// step has ended the group sends no signal.
+func prepareGroup(cmd *exec.Cmd, a *ProcessAdapter) {
 	cmd.SysProcAttr = new(syscall.SysProcAttr)
 	cmd.SysProcAttr.Setpgid = true
-	cmd.Cancel = func() error { return killGroup(cmd.Process) }
+	cmd.Cancel = func() error {
+		if a.groupEnded.Load() {
+			return nil
+		}
+
+		return killGroup(cmd.Process)
+	}
 }
 
 // killGroup stops the process group of the adapter. The group ID is the

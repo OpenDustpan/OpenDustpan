@@ -235,5 +235,6 @@ func auditEntry(r *http.Request, p identity.Principal, t target) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }

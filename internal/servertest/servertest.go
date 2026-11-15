@@ -287,9 +287,14 @@ func (c *Cluster) RestoreDatabase(t *testing.T, i int) {
 }
 
 // authScheme returns the Authorization scheme of the API that serves path.
+// The tool-neutral API accepts "Bearer " on every route; some of its routes
+// accept only that scheme. The Pulumi Cloud-compatible API accepts only
+// "token ".
 func authScheme(path string) string {
-	if strings.HasPrefix(path, "/api/server/") || strings.HasPrefix(path, "/api/v2/") {
-		return "Bearer "
+	for _, prefix := range []string{"/api/server/", "/api/v2/", "/api/dustpan/v1/"} {
+		if strings.HasPrefix(path, prefix) {
+			return "Bearer "
+		}
 	}
 
 	return "token "
@@ -547,7 +552,7 @@ func serverOptions(
 		dustpan.WithTrustRules(store.TrustRules()),
 		dustpan.WithJobStore(store.Jobs()),
 		dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
-			return job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store, g)
+			return job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store, g, job.WithClaimerLogger(logger))
 		}),
 		dustpan.WithTriggerStore(store.Triggers()),
 		dustpan.WithUnitSettingsStore(store.UnitSettings()),

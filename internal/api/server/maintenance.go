@@ -3,11 +3,11 @@ package server
 // Maintenance routes of the installation API (ADR 38 decision 4): read the
 // installation state, enter maintenance mode, and leave it.
 //
-// GET /api/server/maintenance answers the state (normal or maintenance).
-// POST /api/server/maintenance/enter moves to maintenance mode: while an
+// GET /api/dustpan/v1/maintenance answers the state (normal or maintenance).
+// POST /api/dustpan/v1/maintenance/enter moves to maintenance mode: while an
 // update or a run is active it answers 409 naming each one, unless the body
 // sets force, which cancels them first and names them in the answer.
-// POST /api/server/maintenance/leave moves back to normal operation.
+// POST /api/dustpan/v1/maintenance/leave moves back to normal operation.
 //
 // All three need the action server:maintenance on the installation (@server).
 // The restore of a later issue enters and leaves through the same service,
@@ -25,6 +25,13 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+)
+
+// Paths of the maintenance routes of the installation API.
+const (
+	maintenancePath      = "/api/dustpan/v1/maintenance"
+	maintenanceEnterPath = "/api/dustpan/v1/maintenance/enter"
+	maintenanceLeavePath = "/api/dustpan/v1/maintenance/leave"
 )
 
 // errInvalidBody reports a request body that is not valid JSON. classify maps

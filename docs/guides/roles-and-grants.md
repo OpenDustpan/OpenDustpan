@@ -44,7 +44,7 @@ server does not store them, and an operator cannot change them.
 | `maintainer` | Everything in `writer`, plus manage, move, restore and lock units. It also manages collections and their units. It reads and uses the git host connections and the placement rules. |
 | `admin` | Every action of the data family. This includes the management of access on the namespace. |
 | `installation-operator` | Every action of the operator family for the installation. |
-| `account-administrator` | The administration family, except the sign-in management and the access restore, plus the data family and the delegation family. |
+| `account-administrator` | The administration family, except the sign-in management and the access restore, plus the data family and the delegation family. It makes the tokens of each service principal whose reach is inside its own reach. |
 | `site-administrator` | The operator, administration, data and delegation families. It holds every action except the actions of the caller's own access. |
 | `token-manager` | The action `principal:manage-tokens`, which issues service tokens. |
 
@@ -145,6 +145,9 @@ Some rules apply to a create:
 - A role with operator or administration actions goes on the installation only.
 - A grant on a service principal names a service principal, and it takes only
   delegation roles.
+- A grant of a delegation role, such as `token-manager`, on a service principal
+  needs a caller that holds the reach of that principal. Otherwise the answer is
+  `403`. See [Access tokens](access-tokens.md) for the reach.
 - The caller must hold every action of the role on that object. Otherwise the
   answer is `403`.
 - A current grant with the same subject, role and object gets `409`.
@@ -166,8 +169,30 @@ must also hold the read action of that object. A caller without the read
 action gets `404`, not `403`. A revoke answers `204`. The grant is ended, and
 the history keeps it.
 
+A revoke takes effect on the next request. The server reads the stored grant
+for each request and keeps no allow, so a personal access token whose only
+grant ended gets `403` on the next CLI command. To see which grants a token
+still holds, read `GET /api/server/principals/{principal}/grants`.
+
+```sh
+curl -s -X DELETE -H "Authorization: Bearer $TOKEN" \
+  https://dustpan.example.com/api/server/grants/grt-...
+```
+
 The revoke of the last site administrator is refused with `409` and the code
 `access.last-site-administrator`.
+
+A grant on one collection reaches only that collection and its units. A writer
+on collection A that writes a unit of collection B gets `403` and nothing
+changes. A viewer reads the state with `pulumi stack export` or
+`tofu state pull`, but a write such as `pulumi up` or `tofu apply` gets `403`
+and nothing changes. When a command is refused, read the access review of the
+collection to find the missing grant:
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://dustpan.example.com/api/server/namespaces/acme/collections/payments/access-review?limit=100"
+```
 
 ## Ask why an action is allowed or denied
 

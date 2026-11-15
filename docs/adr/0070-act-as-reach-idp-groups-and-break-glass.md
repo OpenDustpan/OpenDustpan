@@ -21,6 +21,10 @@ Changed by:
 - ADR 321 extends decision 19: an LDAP sync applies a disabled entry at once. A search that misses more persons than a bound waits for a site administrator.
 - ADR 332 extends decisions 12, 14, 16 and 22: a claim rule records its rule. The rules are a sensitive setting.
 - ADR 354 changes decision 13: a delegation is a new edge kind.
+- ADR 369 changes decision 9: a trust rule in person mode needs
+  `server:manage-principals`.
+- ADR 372 changes: a wording refinement, the names of the recovery modes in
+  "Not decided here".
 .
 ## Context
 
@@ -387,7 +391,8 @@ parts of this ADR come from product practice, not from a standard.
 - How a fresh MFA step works with an SSO identity provider (ADR 56, "Not
   decided here"), for decisions 16 and 17. The step should not depend on the
   identity provider.
-- How the host token of decision 27 relates to ADR 57 modes 1 and 2.
+- How the host token of decision 27 relates to bootstrap recovery and
+  signed-request recovery of ADR 57.
 - Whether the access tables of decision 7 also hold the sign-in settings and
   the break-glass accounts. How a restore keeps rows that name units or
   namespaces that the backup does not hold.
@@ -430,3 +435,10 @@ parts of this ADR come from product practice, not from a standard.
   configuration. The literature review advises against trust for such a
   group. The admin access report shows these choices, and the break-glass
   accounts stay outside them.
+
+## Changelog
+
+- 2026-11-14, wording refinement (ADR 372, on the owner's word): an item of
+  "Not decided here" said "ADR 57 modes 1 and 2". It now says "bootstrap
+  recovery and signed-request recovery of ADR 57", the names of ADR 372
+  decision 1.

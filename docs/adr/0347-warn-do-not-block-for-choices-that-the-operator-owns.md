@@ -6,6 +6,10 @@ Changes:
 
 - Extends ADR 200 decision 10: the personas stay equal, and a risky choice of the operator gets a warning, not a block.
 
+Changed by:
+
+- ADR 351 extends decision 4: the integrity of the served bytes is a security control. The meaning of provenance is not.
+
 ## Context
 
 ADR 200 decision 10 asks for worked examples for a homelab user, a small team and a platform team. It says that all personas are equal. RFC 9 asks if "warn, do not block" becomes a project-wide principle. A block that protects a regulated enterprise stops a homelab user from a choice that is theirs. A warning alone does not fit a regulated enterprise.

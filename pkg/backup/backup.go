@@ -56,17 +56,27 @@ const (
 	TableAuditChainMark    = "audit_chain_mark"
 	TableNameLocks         = "name_locks"
 	TableNameLockKey       = "name_lock_key"
+	// TableUsedTickets holds the records of the CAS tickets that a server used.
+	// A restore keeps the live rows: a backup that brought back older rows
+	// would let a ticket that a server used after the backup work again.
+	TableUsedTickets = "used_tickets"
 )
 
 // The tables of the replay records of the Idempotency-Key header, the server
-// key of their fingerprints, and the heartbeats of the workers. See
-// EmptiedTables.
+// key of their fingerprints, the heartbeats of the workers, and the state
+// version of each unit. See EmptiedTables. TableBlobDeleteLeases stays in this
+// block with the lease tables, but a restore keeps its live rows: see
+// ControlTables.
 const (
 	TableIdempotencyRecords   = "idempotency_records"
 	TableIdempotencyServerKey = "idempotency_server_key"
 	TableDurableHeartbeats    = "durable_heartbeats"
 	TableLocalUserResets      = "local_user_resets"
 	TablePasskeyChallenges    = "passkey_challenges"
+	// TableBlobDeleteLeases holds the lease of a blob deleter that runs now.
+	// The swap keeps the live rows, so the restore waits for the deleters.
+	TableBlobDeleteLeases = "blob_delete_leases"
+	TableUnitState        = "unit_state"
 )
 
 // The control tables that a backup leaves out and a restore keeps, besides
@@ -136,6 +146,8 @@ var Tables = []string{
 	TablePrincipalGroups,
 	TableGroupMembers,
 	TableGroupMappings,
+	"member_removal_alerts",
+	"member_removals",
 	TableTempAdmins,
 	TableAccessTokens,
 	TableSessions,
@@ -162,8 +174,6 @@ var Tables = []string{
 	"runners",
 	"jobs",
 	"job_freezes",
-	"unit_state_versions",
-	"unit_final_versions",
 	"job_plans",
 	"job_logs",
 	"job_log_chunks",
@@ -202,6 +212,7 @@ var Tables = []string{
 	"self_service_blueprints",
 	"self_service_blueprint_versions",
 	TableTrustRules,
+	"break_glass_reviews",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

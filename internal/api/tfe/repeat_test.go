@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
@@ -59,7 +60,7 @@ func (repeatSealer) SealState(context.Context, namespace.Name, string, string, i
 	return nil, errRepeatNoSeal
 }
 
-func (repeatSealer) OpenState(context.Context, namespace.Name, string, string, io.Reader) (io.Reader, error) {
+func (repeatSealer) OpenState(context.Context, namespace.Name, string, string, io.Reader) (io.ReadCloser, error) {
 	return nil, errRepeatNoSeal
 }
 
@@ -134,7 +135,8 @@ func newTFERepeatEnv(t *testing.T) tfeRepeatEnv {
 		t.Fatalf("namespaces: %v", err)
 	}
 
-	if _, createErr := namespaces.Create(t.Context(), namespace.Name("acme")); createErr != nil {
+	acme, createErr := namespaces.Create(t.Context(), namespace.Name("acme"))
+	if createErr != nil {
 		t.Fatalf("create namespace: %v", createErr)
 	}
 
@@ -148,7 +150,9 @@ func newTFERepeatEnv(t *testing.T) tfeRepeatEnv {
 		t.Fatalf("workspaces: %v", err)
 	}
 
-	ws, err := workspaces.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: "web"})
+	ws, err := workspaces.Create(
+		t.Context(), workspace.Ref{Namespace: "acme", Name: "web"}, placementtest.Workspace(t, store, acme.Fence()),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
@@ -158,7 +162,7 @@ func newTFERepeatEnv(t *testing.T) tfeRepeatEnv {
 		Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Workspaces: workspaces,
 		OutputChecker: newTestOutputChecker(t, allowAll(), workspaces), BaseURL: baseurl.Resolver{},
 		Audit: newTestAudit(), Gate: nil, MaxStateBytes: 0, OnAuditFailure: nil, DenialLimiter: nil,
-		Sessions: nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions: nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"), Placer: testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

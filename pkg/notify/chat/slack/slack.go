@@ -18,7 +18,9 @@
 // and a bare host name into a link or a mention. So every mrkdwn object sets
 // verbatim to true, and Slack shows the text as it is. The fallback text has
 // no such switch, so the renderer puts a zero-width space after @, #, a dot
-// and a colon in it, and no automatic link or mention starts there.
+// and a colon in it, after their ideographic, fullwidth, halfwidth and small
+// forms, after the one dot leader and after the fullwidth solidus, and no
+// automatic link or mention starts there.
 //
 // A URL goes only in the url field of a button, and never in text. The button
 // has a fixed label, so no text of a person is in a plain_text object, where
@@ -292,12 +294,24 @@ func encode(s string, limit int, encodeOne func(r rune, rs []rune, i int) string
 }
 
 // encodeFallbackRune returns the form of rs[i] in the fallback text: the
-// mrkdwn form, and a zero-width space after @, #, a dot and a colon, so that
-// @here, #general, evil.example and https://evil.example are not links or
-// mentions.
+// mrkdwn form, and a zero-width space after @, #, a dot and a colon, after
+// their ideographic, fullwidth, halfwidth and small forms, after the one dot
+// leader and after the fullwidth solidus, so that @here, #general,
+// evil.example and https://evil.example are not links or mentions.
 func encodeFallbackRune(r rune, rs []rune, i int) string {
 	switch r {
-	case '@', '#', '.', ':':
+	case '@', '#', '.', ':',
+		'\u3002', // ideographic full stop
+		'\uFF0E', // fullwidth full stop
+		'\uFF61', // halfwidth ideographic full stop
+		'\uFF20', // fullwidth commercial at
+		'\uFF03', // fullwidth number sign
+		'\uFE52', // small full stop
+		'\u2024', // one dot leader
+		'\uFE6B', // small commercial at
+		'\uFE5F', // small number sign
+		'\uFF1A', // fullwidth colon
+		'\uFF0F': // fullwidth solidus
 		return string(r) + zeroWidthSpace
 	default:
 		return encodeRune(r, rs, i)

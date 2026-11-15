@@ -89,6 +89,7 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_signin_failure_counter_errors_total` | `operation` |
 | `dustpan_blob_purge_pending` | (none) |
 | `dustpan_blob_purge_oldest_age_seconds` | (none) |
+| `dustpan_blob_purge_read_errors_total` | (none) |
 
 The route label holds the registered pattern, never the path.
 A request that matches no pattern uses `unmatched`.
@@ -171,9 +172,11 @@ Both gauges count every namespace. They have no label.
 The sweep deletes the blobs of a record only after a grace period of 24 hours.
 So an age of up to one day is normal. An age that keeps growing past one day
 shows that the sweep does not finish the records.
-Each scrape reads the store. Both gauges share one read, which is at most 2
-seconds old. A failed read exports 0 for both gauges, so a store outage hides
-the backlog. The worker gauges behave the same way.
+Each scrape reads the store. Both gauges share one read. The read stays valid
+for 2 seconds after it completes, so a slow read still supplies both gauges.
+A failed read exports 0 for both gauges. The worker gauges behave the same way.
+`dustpan_blob_purge_read_errors_total` counts the failed reads of the two blob
+purge gauges, so an alert on it shows a store outage that the two gauges hide.
 
 ## Request log
 

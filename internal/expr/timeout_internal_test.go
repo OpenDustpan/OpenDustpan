@@ -12,13 +12,15 @@ import (
 	"opendustpan.org/opendustpan/internal/selfservice"
 )
 
-// TestTimeLayer checks that a run past the time limit returns ErrRuleFailed
-// at the limit, and not when the run ends.
+// TestTimeLayer checks that the time limit ends the run. The limit is 1 ns,
+// so the run cannot finish first, and the error names the deadline. This
+// test does not prove that the caller gets control back while the program
+// still runs; TestUncountedWorkEndsWithinTheLimit proves that.
 func TestTimeLayer(t *testing.T) {
 	t.Parallel()
 
 	e := mustNew(t, NewLimiter())
-	e.timeout = time.Microsecond
+	e.timeout = time.Nanosecond
 
 	env := &selfservice.Env{
 		Value:   nil,
@@ -28,15 +30,9 @@ func TestTimeLayer(t *testing.T) {
 		Request: schema().Request,
 	}
 
-	start := time.Now()
-
 	got, err := e.Bool(t.Context(), "inputs.big matches '^(a|b|ab|ba)*c$'", env)
-	if got || !errors.Is(err, selfservice.ErrRuleFailed) {
-		t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed", got, err)
-	}
-
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Fatalf("Bool() returned after %v, want about the limit of %v", elapsed, e.timeout)
+	if got || !errors.Is(err, selfservice.ErrRuleFailed) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Bool() = %v, %v, want false, ErrRuleFailed from the time limit", got, err)
 	}
 }
 
@@ -49,7 +45,10 @@ func TestNewTimeLimit(t *testing.T) {
 }
 
 // TestWorkLayer checks the work budget alone: the time limit is a minute, the
-// environment is under its limit, and the run still ends at the budget.
+// environment is under its limit, and the run still ends at the budget. The
+// error proves which layer ended the run: errWork comes only from the meter,
+// and the time limit of a minute cannot end it first. The test reads no wall
+// clock, so the load of the machine cannot change its result.
 func TestWorkLayer(t *testing.T) {
 	t.Parallel()
 
@@ -65,16 +64,14 @@ func TestWorkLayer(t *testing.T) {
 	}
 	env.Request.Requester.Groups = make([]string, selfservice.MaxEnvGroups)
 
-	start := time.Now()
-
 	_, err := e.run(t.Context(), "none(request.requester.groups, {inputs.big matches '^(a|b|ab|ba)*c$'})",
 		selfservice.ResultBool, env)
 	if !errors.Is(err, errWork) || !errors.Is(err, selfservice.ErrRuleFailed) {
 		t.Fatalf("run() = %v, want the work budget error", err)
 	}
 
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("run() took %v, want less than 1s", elapsed)
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errAlive) {
+		t.Fatalf("run() = %v, want the work budget and not the time limit to end the run", err)
 	}
 }
 

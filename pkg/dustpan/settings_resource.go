@@ -2,9 +2,38 @@ package dustpan
 
 import (
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/setting"
 )
+
+// drainPeriodKey is the key of the drain period in the settings resource.
+const drainPeriodKey = "server.drainPeriod"
+
+// drainPeriodDeclaration returns the declaration of the drain period: the
+// time between the stop signal and the start of the shutdown. The value is
+// the drain that WithDrainPeriod set. The setting is read only: no database
+// layer holds it, and no flag, variable or file key sets it.
+func drainPeriodDeclaration(period time.Duration) setting.Declaration {
+	return setting.Declaration{
+		Key: drainPeriodKey, Level: setting.LevelInstallation, Kind: setting.KindString, Default: period.String(),
+		Secret: false, Database: false, StaticCredentialHost: false, Apply: setting.ApplyRestart, Check: nil,
+		ReducesSecurity: nil,
+		Doc: "The time between the stop signal and the start of the shutdown. In it, GET /health/ready " +
+			"answers 503 and the server serves all other requests, so a load balancer takes the instance " +
+			"out of its pool.",
+	}
+}
+
+// settingDeclarations returns the declarations of the settings resource: the
+// declarations of WithSettings and the settings that the server declares
+// itself.
+func settingDeclarations(cfg *settings) []setting.Declaration {
+	out := make([]setting.Declaration, 0, len(cfg.settingsConfig.declarations)+1)
+	out = append(out, cfg.settingsConfig.declarations...)
+
+	return append(out, drainPeriodDeclaration(cfg.drainPeriod))
+}
 
 // settingsConfig holds what WithSettings sets.
 type settingsConfig struct {
@@ -35,7 +64,7 @@ func checkSettingDeclarations(cfg *settings) error {
 		return nil
 	}
 
-	if _, err := setting.NewRegistry(cfg.settingsConfig.declarations); err != nil {
+	if _, err := setting.NewRegistry(settingDeclarations(cfg)); err != nil {
 		return fmt.Errorf("settings: %w", err)
 	}
 
@@ -50,7 +79,7 @@ func newSettingService(cfg *settings, namespaces setting.Namespaces) *setting.Se
 		return nil
 	}
 
-	registry, err := setting.NewRegistry(cfg.settingsConfig.declarations)
+	registry, err := setting.NewRegistry(settingDeclarations(cfg))
 	if err != nil {
 		// Defense in depth: NewServer checks the declarations before it builds
 		// the service. A set of declarations that fails here gives no service,

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -300,7 +301,16 @@ func (h *Handler) createWorkspace(
 	// applies to the create: the phase of a job that started before the lock
 	// passes it, as on the OpenTofu HTTP backend. Any other token passes no
 	// job.
-	ws, err := h.workspaces.Create(workspace.WithJob(ctx, p.JobTokenID()), ref)
+	placement, err := h.placer.Place(ctx, tofuunit.PlaceRequest{
+		Request: r, Principal: p, Ref: ref, Guard: h.guard, Namespaces: h.namespaces, Workspaces: h.workspaces,
+	})
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	ws, err := h.workspaces.Create(workspace.WithJob(ctx, p.JobTokenID()), ref, placement)
 	if err != nil {
 		if errors.Is(err, workspace.ErrAlreadyExists) {
 			h.writeClassError(ctx, w, errorClass{
@@ -404,9 +414,10 @@ func (h *Handler) readsEveryUnit(ctx context.Context, p identity.Principal, ns n
 
 	// Defense in depth: the authorizer says that its scope is exact, and the
 	// route authorizes namespace:read first. This check of unit:read on the
-	// namespace stays so that a scope with All set, or an authorizer that
-	// refuses the units of ns, cannot take the store path and show the count
-	// of the store. A refusal sends the caller to the check of each workspace.
+	// namespace stays so that a scope that covers every object, or an
+	// authorizer that refuses the units of ns, cannot take the store path and
+	// show the count of the store. A refusal sends the caller to the check of
+	// each workspace.
 	authErr := h.authz.Authorize(ctx, p, identity.ActionUnitRead, identity.NamespaceObject(ns))
 	if authErr != nil {
 		if errors.Is(authErr, identity.ErrDenied) {
@@ -421,7 +432,7 @@ func (h *Handler) readsEveryUnit(ctx context.Context, p identity.Principal, ns n
 		return false, fmt.Errorf("list readable units: %w", err)
 	}
 
-	if scope.All {
+	if scope.CoversEveryObject() {
 		return true, nil
 	}
 

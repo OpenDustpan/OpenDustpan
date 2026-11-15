@@ -2,7 +2,10 @@ package accesstest
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +52,12 @@ func reachCases() []struct {
 		{name: "reach of each operator action", test: testReachOperators},
 		{name: "reach covers holds each action on each object", test: testReachCovers},
 		{name: "reach stops on a cycle", test: testReachCycle},
+		{name: "the protected check of a group", test: testGroupProtected},
+		{
+			name: "an action that no family classifies fails the protected check closed",
+			test: testGroupProtectedUnknownAction,
+		},
+		{name: "a reach config without a required port fails closed", test: testReachConfigPorts},
 	}
 }
 
@@ -154,7 +163,7 @@ func mustCreateMemberGroup(t *testing.T, s reachStore, id, name, principalID str
 
 	g := principal.Group{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: id, Name: name, Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := s.CreateGroup(ctx, g, entry()); err != nil {
 		t.Fatalf("create group %q: %v", name, err)
@@ -651,11 +660,18 @@ func mustCreateWorkspace(t *testing.T, s access.Store, ws interface {
 
 	w := workspace.Workspace{
 		NamespaceID: "",
-		CreatedAt:   at(0), UpdatedAt: at(0),
+		CreatedAt:   at(0),
+		UpdatedAt:   at(0),
 		Lock:        workspace.Lock{LockedAt: at(0), ID: "", Holder: "", Reason: ""},
 		LastRelease: workspace.NoRelease(),
-		ID:          workspace.ID(id), Ref: workspace.Ref{Namespace: "acme", Name: parsed},
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		ID:          workspace.ID(id),
+		Ref:         workspace.Ref{Namespace: "acme", Name: parsed},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Revision: 1,
+		Origin:   identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if err := ws.CreateWorkspace(t.Context(), w, fenceOf(t, s, "acme")); err != nil {
@@ -705,9 +721,11 @@ func (f disabledAs) GetPrincipal(ctx context.Context, id string) (principal.Prin
 	return f.PrincipalNamespaces.GetPrincipal(ctx, id)
 }
 
-// testReachDisabled checks that a disabled principal is no act-as target: a
-// holder of principal:manage-tokens on it gets none of its grants. The
-// disabled principal itself keeps its own grants.
+// testReachDisabled checks that a disabled principal is no act-as target of
+// ReachOf: a holder of principal:manage-tokens on it gets none of its
+// grants. The disabled principal itself keeps its own grants. The protected
+// check counts an act-as right on a disabled principal of the installation:
+// the server can enable it again, and the right then works.
 func testReachDisabled(t *testing.T, s access.Store) {
 	t.Helper()
 
@@ -723,6 +741,18 @@ func testReachDisabled(t *testing.T, s access.Store) {
 		identity.PrincipalObject("prn-deploy"),
 	))
 	mustCreateGrant(t, rs, newGrant("grt-viewer", principalSubject("prn-deploy"), access.RoleViewer, acme))
+
+	// The group holds an act-as right on the disabled principal. The other
+	// group holds an act-as right on a principal that does not exist.
+	disabledGroup := mustCreateMemberGroup(t, rs, "grp-disabled", "grp-disabled", "prn-holder")
+	mustCreateGrant(t, rs, newGrant(
+		"grt-group-manage", disabledGroup, access.RoleTokenManager, identity.PrincipalObject("prn-deploy"),
+	))
+
+	goneGroup := mustCreateMemberGroup(t, rs, "grp-gone", "grp-gone", "prn-holder")
+	mustCreateGrant(t, rs, newGrant(
+		"grt-group-gone", goneGroup, access.RoleTokenManager, identity.PrincipalObject("prn-gone"),
+	))
 
 	rec, err := rs.GetPrincipal(ctx, "prn-deploy")
 	if err != nil {
@@ -762,6 +792,20 @@ func testReachDisabled(t *testing.T, s access.Store) {
 	if got := reachHas(t, target, identity.ActionNamespaceRead, acme); !got {
 		t.Errorf("reach of the disabled principal holds %s on %q = %t, want true",
 			identity.ActionNamespaceRead, acme.String(), got)
+	}
+
+	// The protected check counts an act-as right on a disabled principal of
+	// the installation: the server can enable it again, and the right then
+	// works.
+	if got := protectedOf(t, cfg, disabledGroup.ID); !got {
+		t.Errorf("protected of group %q with the act-as right on the disabled principal = %t, want true",
+			disabledGroup.ID, got)
+	}
+
+	// A principal that does not exist gives no protection.
+	if got := protectedOf(t, cfg, goneGroup.ID); got {
+		t.Errorf("protected of group %q with the act-as right on the deleted principal = %t, want false",
+			goneGroup.ID, got)
 	}
 }
 
@@ -953,5 +997,665 @@ func testReachCycle(t *testing.T, s access.Store) {
 	if !reachCovers(t, left, right) || !reachCovers(t, right, left) {
 		t.Errorf("the two sides of a cycle cover each other = %t, %t; want true, true",
 			reachCovers(t, left, right), reachCovers(t, right, left))
+	}
+}
+
+// protectedCase is one row of the protected check of a group.
+type protectedCase struct {
+	name  string
+	group string
+	want  bool
+}
+
+// groupReachOf returns the reach of the group id.
+func groupReachOf(t *testing.T, s reachStore, id string) access.Reach {
+	t.Helper()
+
+	r, err := access.GroupReachOf(t.Context(), reachConfig(s), id)
+	if err != nil {
+		t.Fatalf("reach of group %q: %v", id, err)
+	}
+
+	return r
+}
+
+// protectedOf returns the protected check of the group id, and fails t on an
+// error.
+func protectedOf(t *testing.T, cfg access.ReachConfig, id string) bool {
+	t.Helper()
+
+	protected, err := access.Protected(t.Context(), cfg, id)
+	if err != nil {
+		t.Fatalf("protected of group %q: %v", id, err)
+	}
+
+	return protected
+}
+
+// failingGrants fails each read of the grants of a subject.
+type failingGrants struct {
+	access.GrantLookups
+
+	err error
+}
+
+// errGrantsDown is the error of failingGrants.
+var errGrantsDown = errors.New("grant store is down")
+
+func (f failingGrants) GrantsOf(context.Context, access.Subject) ([]access.Grant, error) {
+	return nil, f.err
+}
+
+func (f failingGrants) GrantsOfSubjects(context.Context, []access.Subject) ([]access.Grant, error) {
+	return nil, f.err
+}
+
+// failingGrantsOfOne answers the batch read of the grants and fails each
+// read of the grants of one subject, so that the walk of a group fails after
+// its seed.
+type failingGrantsOfOne struct {
+	access.GrantLookups
+
+	err error
+}
+
+func (f failingGrantsOfOne) GrantsOf(context.Context, access.Subject) ([]access.Grant, error) {
+	return nil, f.err
+}
+
+// strayGrants adds to the batch read of the grants one grant of a subject
+// that the read did not ask for.
+type strayGrants struct {
+	access.GrantLookups
+}
+
+func (f strayGrants) GrantsOfSubjects(ctx context.Context, subjects []access.Subject) ([]access.Grant, error) {
+	grants, err := f.GrantLookups.GrantsOfSubjects(ctx, subjects)
+	if err != nil {
+		return nil, err
+	}
+
+	stray := newGrant("grt-stray", access.Subject{Kind: access.SubjectGroup, ID: "grp-stray"},
+		access.RoleInstallationOperator, identity.ServerObject())
+
+	return append(grants, stray), nil
+}
+
+// failingGrantsAfterSeed answers the first read of the grants and fails
+// each later read, so that the seed of a group succeeds and the walker then
+// fails.
+type failingGrantsAfterSeed struct {
+	access.GrantLookups
+
+	err  error
+	seen int
+}
+
+func (f *failingGrantsAfterSeed) GrantsOf(ctx context.Context, subject access.Subject) ([]access.Grant, error) {
+	f.seen++
+	if f.seen > 1 {
+		return nil, f.err
+	}
+
+	return f.GrantLookups.GrantsOf(ctx, subject)
+}
+
+// failingCollections fails each read of the stable ID of a collection.
+type failingCollections struct {
+	access.UnitCollections
+
+	err error
+}
+
+// errCollectionsDown is the error of failingCollections.
+var errCollectionsDown = errors.New("collection store is down")
+
+func (f failingCollections) CollectionID(context.Context, identity.Object) (string, bool, error) {
+	return "", false, f.err
+}
+
+// sensitiveGroupCases stores one group per sensitive action, with a custom
+// role that holds only that action on the installation, and returns the rows
+// of the protected check. A new sensitive action joins the list with no other
+// change.
+func sensitiveGroupCases(t *testing.T, s reachStore, server identity.Object) []protectedCase {
+	t.Helper()
+
+	actions := access.SensitiveActions()
+
+	out := make([]protectedCase, 0, len(actions))
+
+	for i := range actions {
+		action := actions[i]
+		id := fmt.Sprintf("grp-sensitive-%d", i)
+		role := newRole("rol-"+id, "rol-"+id, action)
+
+		mustCreateRole(t, s, role)
+		mustCreateMemberGroup(t, s, id, id, "prn-member")
+		mustCreateGrant(
+			t,
+			s,
+			newGrant("grt-"+id, access.Subject{Kind: access.SubjectGroup, ID: id}, role.ID, server),
+		)
+
+		out = append(out, protectedCase{
+			name: "the group holds " + string(action) + " on the installation", group: id, want: true,
+		})
+	}
+
+	return out
+}
+
+// readOnlyServerGroupCases stores one group per read-only server action,
+// with a custom role that holds only that action on the installation, and
+// returns the rows of the protected check. A read-only action cannot raise
+// a privilege, so the group is not protected.
+func readOnlyServerGroupCases(t *testing.T, s reachStore, server identity.Object) []protectedCase {
+	t.Helper()
+
+	actions := []identity.Action{
+		identity.ActionServerReadPrincipals,
+		identity.ActionServerReadAccess,
+		identity.ActionServerReadTokens,
+		identity.ActionServerReadAudit,
+		identity.ActionServerReadSettings,
+		identity.ActionServerReadInstances,
+		identity.ActionServerReadGitHost,
+	}
+
+	out := make([]protectedCase, 0, len(actions))
+
+	for i := range actions {
+		id := fmt.Sprintf("grp-read-only-%d", i)
+		role := newRole("rol-"+id, "rol-"+id, actions[i])
+
+		mustCreateRole(t, s, role)
+		mustCreateMemberGroup(t, s, id, id, "prn-member")
+		mustCreateGrant(
+			t,
+			s,
+			newGrant("grt-"+id, access.Subject{Kind: access.SubjectGroup, ID: id}, role.ID, server),
+		)
+
+		out = append(out, protectedCase{
+			name: "the group holds " + string(actions[i]) + " on the installation", group: id, want: false,
+		})
+	}
+
+	return out
+}
+
+// mustCreateSensitiveGrantOn stores a custom role that holds one operator
+// action and one data action and grants it to the group on obj. The Service
+// refuses that grant, because the object holds no operator action: the store
+// writes it to prove that the protected check reads the object too.
+func mustCreateSensitiveGrantOn(t *testing.T, s reachStore, group access.Subject, obj identity.Object) {
+	t.Helper()
+
+	id := "rol-operator-" + group.ID
+	role := newRole(id, id, identity.ActionServerBackup, identity.ActionNamespaceRead)
+
+	mustCreateRole(t, s, role)
+	mustCreateGrant(t, s, newGrant("grt-"+id, group, role.ID, obj))
+}
+
+// checkGroupProtectedObjects proves that the objects inside one namespace
+// leave a group unprotected while their grants are live: the reach of the
+// group holds the data action of the same role on each object, and the walker
+// records no operator action there.
+func checkGroupProtectedObjects(t *testing.T, s reachStore, groups []protectedObjectCase) {
+	t.Helper()
+
+	for i := range groups {
+		tc := &groups[i]
+		r := groupReachOf(t, s, tc.group)
+
+		if got := reachHas(t, r, identity.ActionNamespaceRead, tc.obj); !got {
+			t.Errorf("reach of group %q holds %s on %q = %t, want true: the grant is live",
+				tc.group, identity.ActionNamespaceRead, tc.obj.String(), got)
+		}
+
+		if got := reachHas(t, r, identity.ActionServerBackup, tc.obj); got {
+			t.Errorf("reach of group %q holds %s on %q = %t, want false: the walker records no sensitive action there",
+				tc.group, identity.ActionServerBackup, tc.obj.String(), got)
+		}
+	}
+}
+
+// protectedObjectCase is one object that holds a grant of the protected
+// cases: the group and the object.
+type protectedObjectCase struct {
+	obj   identity.Object
+	group string
+}
+
+// checkGroupProtectedEdges proves that an act-as edge gives the group the
+// operator action of the service principal, that the same delegation on a
+// service principal with no grant does not, and that a delegation on a
+// disabled service principal of the installation still makes the group
+// protected: the server can enable the principal again.
+func checkGroupProtectedEdges(t *testing.T, s reachStore, server identity.Object) {
+	t.Helper()
+
+	ctx := t.Context()
+	actAs, ofServer := "grp-act-as", "grp-principal"
+
+	if got := reachHas(t, groupReachOf(t, s, actAs), identity.ActionServerBackup, server); !got {
+		t.Errorf("reach of group %q holds %s on %q = %t, want true through the act-as edge",
+			actAs, identity.ActionServerBackup, server.String(), got)
+	}
+
+	if got := reachHas(t, groupReachOf(t, s, ofServer), identity.ActionServerBackup, server); got {
+		t.Errorf("reach of group %q holds %s on %q = %t, want false with no act-as edge",
+			ofServer, identity.ActionServerBackup, server.String(), got)
+	}
+
+	// The member keeps its own reach: the group rows above read no grant of
+	// the member.
+	if got := reachHas(t, reachOf(t, s, "prn-member"), identity.ActionServerBackup, server); !got {
+		t.Errorf("reach of the member holds %s on %q = %t, want true",
+			identity.ActionServerBackup, server.String(), got)
+	}
+
+	rec, err := s.GetPrincipal(ctx, "prn-other")
+	if err != nil {
+		t.Fatalf("get principal: %v", err)
+	}
+
+	rec.DisabledAt = at(3)
+
+	disabled := reachConfig(s)
+	disabled.Principals = disabledAs{PrincipalNamespaces: s, id: "prn-other", rec: rec}
+
+	if got := protectedOf(t, disabled, actAs); !got {
+		t.Errorf("protected of group %q with the service principal disabled = %t, want true: "+
+			"the server can enable the principal again", actAs, got)
+	}
+}
+
+// checkProtectedGroups reads the protected flag of every group of cases
+// with one ProtectedGroups call, and checks that it answers the flag that
+// Protected answers for each group alone.
+func checkProtectedGroups(t *testing.T, cfg access.ReachConfig, cases []protectedCase) {
+	t.Helper()
+
+	ids := make([]string, 0, len(cases))
+	for i := range cases {
+		ids = append(ids, cases[i].group)
+	}
+
+	got, err := access.ProtectedGroups(t.Context(), cfg, ids)
+	if err != nil {
+		t.Fatalf("protected groups: %v", err)
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+
+		flag, ok := got[tc.group]
+		if !ok || flag != tc.want {
+			t.Errorf("%s: protected groups answers %t (present %t) for group %q, want %t",
+				tc.name, flag, ok, tc.group, tc.want)
+		}
+	}
+}
+
+// checkProtectedGroupsErrors proves that ProtectedGroups fails closed as
+// Protected does: an invalid group ID, a list that is too long, a failed
+// batch read, a failed read of the walk after the seed, a failed read of a
+// collection, and a grant of a subject that the batch read did not ask for
+// each answer an error and no flag.
+func checkProtectedGroupsErrors(t *testing.T, s reachStore) {
+	t.Helper()
+
+	ctx := t.Context()
+	cfg := reachConfig(s)
+
+	tooMany := make([]string, principal.MaxLimit+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("grp-%05d", i)
+	}
+
+	failing := cfg
+	failing.Grants = failingGrants{GrantLookups: s, err: errGrantsDown}
+
+	walk := cfg
+	walk.Grants = failingGrantsOfOne{GrantLookups: s, err: errGrantsDown}
+
+	collections := cfg
+	collections.Collections = failingCollections{UnitCollections: testCollections(), err: errCollectionsDown}
+
+	stray := cfg
+	stray.Grants = strayGrants{GrantLookups: s}
+
+	cases := []struct {
+		name string
+		cfg  access.ReachConfig
+		ids  []string
+		want error
+	}{
+		{"an empty group ID", cfg, []string{"grp-none", ""}, access.ErrInvalid},
+		{"a malformed group ID", cfg, []string{"grp bad"}, access.ErrInvalid},
+		{"an overlong group ID", cfg, []string{"grp-" + strings.Repeat("g", 64)}, access.ErrInvalid},
+		{"more groups than one page", cfg, tooMany, access.ErrInvalid},
+		{"a failed batch read of the grants", failing, []string{"grp-none"}, errGrantsDown},
+		{"a failed read of the walk after the seed", walk, []string{"grp-none", "grp-act-as"}, errGrantsDown},
+		{"a failed read of a collection", collections, []string{"grp-collection"}, errCollectionsDown},
+		{"a grant of a subject that the read did not ask for", stray, []string{"grp-none"}, access.ErrInvalid},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+
+		got, err := access.ProtectedGroups(ctx, tc.cfg, tc.ids)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("protected groups with %s = %v, want %v", tc.name, err, tc.want)
+		}
+
+		if got != nil {
+			t.Errorf("protected groups with %s = %v with an error, want no flags", tc.name, got)
+		}
+	}
+}
+
+// checkGroupProtectedErrors proves that an empty, a malformed and an
+// overlong group ID answer an error, and that a failed read at each step of
+// the walk answers an error: the seed of the group, the walker, and the
+// finish. Protected answers false with the error, never a false flag. The
+// caller stores the groups grp-act-as and grp-collection with their grants.
+func checkGroupProtectedErrors(t *testing.T, s reachStore) {
+	t.Helper()
+
+	ctx := t.Context()
+	cfg := reachConfig(s)
+
+	for _, id := range []string{"", "grp bad", "grp-" + strings.Repeat("g", 64)} {
+		protected, err := access.Protected(ctx, cfg, id)
+
+		if !errors.Is(err, access.ErrInvalid) {
+			t.Errorf("protected of group ID %q = %v, want access.ErrInvalid", id, err)
+		}
+
+		if protected {
+			t.Errorf("protected of group ID %q = true with an error, want false", id)
+		}
+
+		if _, err := access.GroupReachOf(ctx, cfg, id); !errors.Is(err, access.ErrInvalid) {
+			t.Errorf("reach of group ID %q = %v, want access.ErrInvalid", id, err)
+		}
+	}
+
+	broken := errGrantsDown
+	failing := cfg
+	failing.Grants = failingGrants{GrantLookups: s, err: broken}
+
+	protected, err := access.Protected(ctx, failing, "grp-none")
+	if !errors.Is(err, broken) {
+		t.Errorf("protected of a group over a failed grant read = %v, want the read error", err)
+	}
+
+	if protected {
+		t.Error("protected of a group over a failed grant read = true with an error, want false")
+	}
+
+	// The walker fails after the seed of the group: the check fails closed.
+	later := cfg
+	later.Grants = &failingGrantsAfterSeed{GrantLookups: s, err: broken, seen: 0}
+
+	protected, err = access.Protected(ctx, later, "grp-act-as")
+	if !errors.Is(err, broken) {
+		t.Errorf("protected of a group over a walker read that fails = %v, want the read error", err)
+	}
+
+	if protected {
+		t.Error("protected of a group over a walker read that fails = true with an error, want false")
+	}
+
+	// The finish fails on the read of a collection: the check fails closed.
+	collections := cfg
+	collections.Collections = failingCollections{
+		UnitCollections: testCollections(), err: errCollectionsDown,
+	}
+
+	protected, err = access.Protected(ctx, collections, "grp-collection")
+	if !errors.Is(err, errCollectionsDown) {
+		t.Errorf("protected of a group over a failed collection read = %v, want the read error", err)
+	}
+
+	if protected {
+		t.Error("protected of a group over a failed collection read = true with an error, want false")
+	}
+}
+
+// testGroupProtected checks the protected check of a group: the group is
+// protected when the reach of the group alone holds a sensitive action on the
+// installation or on a principal of the installation. A grant inside one
+// namespace, a grant on a principal of one namespace, and the grants of a
+// member as a person leave the group unprotected.
+func testGroupProtected(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	server := identity.ServerObject()
+	acme := identity.NamespaceObject("acme")
+	payments := identity.CollectionObject("acme", "payments").WithCollectionID("col-payments")
+
+	mustCreatePerson(t, rs, "prn-outsider", "outsider")
+	mustCreatePerson(t, rs, "prn-member", "member")
+	mustCreateService(t, rs, "prn-deploy", "ci-deploy")
+	mustCreateService(t, rs, "prn-other", "ci-other")
+	mustCreateBot(t, rs, "prn-bot-beta", "ci-beta", "beta")
+
+	// The member holds an operator grant as a person. The grant is not one
+	// of the group.
+	mustCreateGrant(t, rs, newGrant(
+		"grt-member", principalSubject("prn-member"), access.RoleInstallationOperator, server,
+	))
+
+	none := mustCreateMemberGroup(t, rs, "grp-none", "grp-none", "prn-outsider")
+	member := mustCreateMemberGroup(t, rs, "grp-member", "grp-member", "prn-member")
+	data := mustCreateMemberGroup(t, rs, "grp-data", "grp-data", "prn-outsider")
+	inNamespace := mustCreateMemberGroup(t, rs, "grp-namespace", "grp-namespace", "prn-outsider")
+	collection := mustCreateMemberGroup(t, rs, "grp-collection", "grp-collection", "prn-outsider")
+	ofServer := mustCreateMemberGroup(t, rs, "grp-principal", "grp-principal", "prn-outsider")
+	ofNamespace := mustCreateMemberGroup(t, rs, "grp-bot", "grp-bot", "prn-outsider")
+	actAs := mustCreateMemberGroup(t, rs, "grp-act-as", "grp-act-as", "prn-outsider")
+
+	mustCreateGrant(t, rs, newGrant("grt-data", data, access.RoleViewer, server))
+	mustCreateGrant(t, rs, newGrant(
+		"grt-principal", ofServer, access.RoleTokenManager, identity.PrincipalObject("prn-deploy"),
+	))
+	mustCreateGrant(t, rs, newGrant(
+		"grt-bot", ofNamespace, access.RoleTokenManager, identity.PrincipalObject("prn-bot-beta"),
+	))
+	mustCreateGrant(t, rs, newGrant(
+		"grt-act-as", actAs, access.RoleTokenManager, identity.PrincipalObject("prn-other"),
+	))
+	mustCreateGrant(t, rs, newGrant(
+		"grt-other", principalSubject("prn-other"), access.RoleInstallationOperator, server,
+	))
+	mustCreateSensitiveGrantOn(t, rs, inNamespace, acme)
+	mustCreateSensitiveGrantOn(t, rs, collection, payments)
+
+	// A namespace-wide act-as edge reaches each service principal of the
+	// namespace. One of them holds a sensitive action on the installation,
+	// so the group is protected through the edge alone. A restored backup
+	// can hold such a grant: the suite writes the grant before the
+	// principal, so that the store does not refuse it for the namespace of
+	// the principal.
+	namespaceWide := mustCreateMemberGroup(t, rs, "grp-namespace-wide", "grp-namespace-wide", "prn-outsider")
+	nsTokens := newRole("rol-namespace-wide", "rol-namespace-wide", identity.ActionNamespaceManagePrincipalTokens)
+	mustCreateRole(t, rs, nsTokens)
+	mustCreateGrant(t, rs, newGrant("grt-namespace-wide", namespaceWide, nsTokens.ID, acme))
+
+	botRole := newRole("rol-bot-acme", "rol-bot-acme", identity.ActionServerManagePrincipals)
+	mustCreateRole(t, rs, botRole)
+	mustCreateGrant(t, rs, newGrant("grt-bot-acme", principalSubject("prn-bot-acme"), botRole.ID, server))
+
+	mustCreateBot(t, rs, "prn-bot-acme", "ci-acme", "acme")
+
+	named := []protectedCase{
+		{name: "a group with no grant is not protected", group: none.ID, want: false},
+		{name: "an operator grant of a member as a person does not protect its group", group: member.ID, want: false},
+		{name: "a data action on the installation is not sensitive", group: data.ID, want: false},
+		{name: "an operator action on a namespace is not sensitive", group: inNamespace.ID, want: false},
+		{name: "an operator action on a collection is not sensitive", group: collection.ID, want: false},
+		{name: "a delegation action on a principal of the installation is sensitive", group: ofServer.ID, want: true},
+		{
+			name:  "a delegation action on a principal of a namespace is not sensitive",
+			group: ofNamespace.ID,
+			want:  false,
+		},
+		{name: "an act-as edge reaches the operator action of the service principal", group: actAs.ID, want: true},
+		{
+			name:  "a namespace-wide act-as edge reaches a service principal that holds a sensitive action",
+			group: namespaceWide.ID, want: true,
+		},
+		{name: "an unknown group is not protected", group: "grp-missing", want: false},
+	}
+
+	// One row per sensitive action, and one row per read-only server
+	// action: a read-only action cannot raise a privilege.
+	actions := sensitiveGroupCases(t, rs, server)
+	readOnly := readOnlyServerGroupCases(t, rs, server)
+
+	cases := make([]protectedCase, 0, len(named)+len(actions)+len(readOnly))
+	cases = append(cases, named...)
+	cases = append(cases, actions...)
+	cases = append(cases, readOnly...)
+
+	cfg := reachConfig(rs)
+
+	for i := range cases {
+		tc := &cases[i]
+
+		if got := protectedOf(t, cfg, tc.group); got != tc.want {
+			t.Errorf("%s: protected of group %q = %t, want %t", tc.name, tc.group, got, tc.want)
+		}
+	}
+
+	checkProtectedGroups(t, cfg, cases)
+
+	checkGroupProtectedObjects(t, rs, []protectedObjectCase{
+		{group: inNamespace.ID, obj: acme}, {group: collection.ID, obj: payments},
+	})
+	checkGroupProtectedEdges(t, rs, server)
+	checkGroupProtectedErrors(t, rs)
+	checkProtectedGroupsErrors(t, rs)
+
+	// The delegation grant on a principal of a namespace is live: the object
+	// of the grant keeps the group unprotected, not the grant itself.
+	bot := groupReachOf(t, rs, ofNamespace.ID)
+	holds := reachHas(t, bot, identity.ActionPrincipalManageTokens, identity.PrincipalObject("prn-bot-beta"))
+
+	if !holds {
+		t.Errorf("reach of group %q holds %s on %q = %t, want true: the grant is live",
+			ofNamespace.ID, identity.ActionPrincipalManageTokens, "principal:prn-bot-beta", holds)
+	}
+}
+
+// testGroupProtectedUnknownAction checks that a group whose grant holds an
+// action that no family classifies fails the protected check closed: the
+// check answers an error, never a false flag.
+func testGroupProtectedUnknownAction(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	ctx := t.Context()
+
+	mustCreatePerson(t, rs, "prn-member", "member")
+	mustCreateMemberGroup(t, rs, "grp-unknown", "grp-unknown", "prn-member")
+
+	unknown := identity.Action("future:read-installation")
+	mustCreateRole(t, rs, newRole("rol-unknown", "rol-unknown", unknown))
+	mustCreateGrant(t, rs, newGrant(
+		"grt-unknown", access.Subject{Kind: access.SubjectGroup, ID: "grp-unknown"}, "rol-unknown",
+		identity.ServerObject(),
+	))
+
+	protected, err := access.Protected(ctx, reachConfig(rs), "grp-unknown")
+	if !errors.Is(err, access.ErrUnknownAction) {
+		t.Errorf("protected of a group with an unclassified action = %v, want access.ErrUnknownAction", err)
+	}
+
+	if protected {
+		t.Error("protected of a group with an unclassified action = true with an error, want false")
+	}
+
+	flags, err := access.ProtectedGroups(ctx, reachConfig(rs), []string{"grp-unknown"})
+	if !errors.Is(err, access.ErrUnknownAction) || flags != nil {
+		t.Errorf("protected groups with an unclassified action = %v, %v; want access.ErrUnknownAction and no flags",
+			flags, err)
+	}
+}
+
+// testReachConfigPorts checks that ReachOf, GroupReachOf and Protected
+// refuse a config that lacks a required port, one port at a time.
+func testReachConfigPorts(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	full := reachConfig(rs)
+
+	cases := []struct {
+		name string
+		cfg  access.ReachConfig
+	}{
+		{
+			name: "grants",
+			cfg: access.ReachConfig{
+				Grants: nil, Roles: full.Roles, Callers: full.Callers, Principals: full.Principals,
+				Collections: full.Collections, Units: full.Units,
+			},
+		},
+		{
+			name: "roles",
+			cfg: access.ReachConfig{
+				Grants: full.Grants, Roles: nil, Callers: full.Callers, Principals: full.Principals,
+				Collections: full.Collections, Units: full.Units,
+			},
+		},
+		{
+			name: "callers",
+			cfg: access.ReachConfig{
+				Grants: full.Grants, Roles: full.Roles, Callers: nil, Principals: full.Principals,
+				Collections: full.Collections, Units: full.Units,
+			},
+		},
+		{
+			name: "principals",
+			cfg: access.ReachConfig{
+				Grants: full.Grants, Roles: full.Roles, Callers: full.Callers, Principals: nil,
+				Collections: full.Collections, Units: full.Units,
+			},
+		},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+
+		if _, err := access.ReachOf(t.Context(), tc.cfg, "prn-member"); !errors.Is(err, access.ErrMissingDependency) {
+			t.Errorf("reach of a config without %s = %v, want access.ErrMissingDependency", tc.name, err)
+		}
+
+		_, err := access.GroupReachOf(t.Context(), tc.cfg, "grp-none")
+		if !errors.Is(err, access.ErrMissingDependency) {
+			t.Errorf("group reach of a config without %s = %v, want access.ErrMissingDependency", tc.name, err)
+		}
+
+		protected, err := access.Protected(t.Context(), tc.cfg, "grp-none")
+		if !errors.Is(err, access.ErrMissingDependency) {
+			t.Errorf("protected of a config without %s = %v, want access.ErrMissingDependency", tc.name, err)
+		}
+
+		flags, err := access.ProtectedGroups(t.Context(), tc.cfg, []string{"grp-none"})
+		if !errors.Is(err, access.ErrMissingDependency) || flags != nil {
+			t.Errorf("protected groups of a config without %s = %v, %v; want access.ErrMissingDependency",
+				tc.name, flags, err)
+		}
+
+		if protected {
+			t.Errorf("protected of a config without %s = true with an error, want false", tc.name)
+		}
 	}
 }

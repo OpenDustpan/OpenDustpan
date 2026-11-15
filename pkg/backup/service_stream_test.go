@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -156,13 +157,14 @@ func restoreStreamedBackup(
 	regs := newRestoreServiceRegistry()
 	order := &orderLog{mu: sync.Mutex{}, events: nil}
 	maint := &restoreServiceMaintenance{
-		mu:       sync.Mutex{},
-		enterErr: nil,
-		enters:   0,
-		leaves:   0,
-		order:    order,
-		state:    maintenance.StateNormal,
-		held:     false,
+		mu:           sync.Mutex{},
+		enterErr:     nil,
+		enters:       0,
+		leaves:       0,
+		order:        order,
+		state:        maintenance.StateNormal,
+		held:         false,
+		cancelScript: nil,
 	}
 	backupRegs := newFakeRegistry()
 	blobs := newMemStore()
@@ -196,6 +198,7 @@ func restoreStreamedBackup(
 		Backups:         backups,
 		Maintenance:     maint,
 		Blobs:           blobs,
+		Leases:          blobguardtest.None{},
 		Target:          target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",

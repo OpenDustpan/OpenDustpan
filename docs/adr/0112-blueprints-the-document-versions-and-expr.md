@@ -12,6 +12,8 @@ Changed by:
   both uses.
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
+- ADR 360 extends: a request upgrades by three paths, and a time to live is a
+  unit setting.
 
 ## Context
 

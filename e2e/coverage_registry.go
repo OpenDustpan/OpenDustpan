@@ -70,8 +70,8 @@ func coverageRegistryRoutes(tb testing.TB) []RouteRef {
 
 	svc, err := registryservice.New(registryservice.Config{
 		Store: store, Keys: keys, Verifier: verifier, Inspector: verifier, Blobs: struct{ blob.Store }{nil},
-		Namespaces: coverageRegistryNamespaces{}, Now: nil, MaxArchiveBytes: 0, MaxReleaseBytes: 0,
-		MaxModuleArchiveBytes: 0,
+		Namespaces: coverageRegistryNamespaces{}, Audit: coverageAuditStore{}, Logger: slog.New(slog.DiscardHandler),
+		OnAuditFailure: func() {}, Now: nil, MaxArchiveBytes: 0, MaxReleaseBytes: 0, MaxModuleArchiveBytes: 0,
 	})
 	if err != nil {
 		tb.Fatalf("registry service: %v", err)
@@ -83,7 +83,7 @@ func coverageRegistryRoutes(tb testing.TB) []RouteRef {
 		Authorizer:     coverageAuthorizer{},
 		MaxUploadBytes: registryservice.DefaultMaxArchiveBytes,
 		Audit:          coverageAuditStore{},
-		Namespaces:     nil,
+		Namespaces:     coverageRegistryNamespaces{},
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,
@@ -108,6 +108,11 @@ func coverageRegistryRoutes(tb testing.TB) []RouteRef {
 type coverageRegistryNamespaces struct{}
 
 func (coverageRegistryNamespaces) GetNamespace(context.Context, namespace.Name) (namespace.Namespace, error) {
+	return namespace.Namespace{}, namespace.ErrNotFound
+}
+
+// Get answers the namespace read of the refusal recorder. It finds no namespace.
+func (coverageRegistryNamespaces) Get(context.Context, namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{}, namespace.ErrNotFound
 }
 

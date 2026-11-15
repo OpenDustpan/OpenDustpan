@@ -55,8 +55,33 @@ func (f Filter) Ref() OutputRef {
 // Operand is the value of a filter: the answer of the input Input, or the
 // fixed JSON scalar Value. Exactly one of the two is set.
 type Operand struct {
-	Input string          `json:"input,omitempty"`
-	Value json.RawMessage `json:"value,omitempty"`
+	Input string      `json:"input,omitempty"`
+	Value ScalarValue `json:"value,omitempty"`
+}
+
+// ScalarValue is the JSON of a fixed filter value. Its JSON is the JSON of
+// json.RawMessage. The server accepts a string, a number or a boolean only:
+// Filter.validate refuses the others. The type exists so that the description
+// of the API can name the scalar form.
+type ScalarValue json.RawMessage
+
+// MarshalJSON writes the JSON of s, as json.RawMessage does.
+func (s ScalarValue) MarshalJSON() ([]byte, error) {
+	data, err := json.RawMessage(s).MarshalJSON()
+	if err != nil {
+		return nil, fmt.Errorf("marshal a scalar value: %w", err)
+	}
+
+	return data, nil
+}
+
+// UnmarshalJSON reads the JSON into s, as json.RawMessage does.
+func (s *ScalarValue) UnmarshalJSON(data []byte) error {
+	if err := (*json.RawMessage)(s).UnmarshalJSON(data); err != nil {
+		return fmt.Errorf("unmarshal a scalar value: %w", err)
+	}
+
+	return nil
 }
 
 // Outputs returns the output names that s reads.
@@ -120,7 +145,7 @@ func (f Filter) validate(self string) error {
 		return fmt.Errorf("%w: a filter equals one input or one value", ErrInvalid)
 	case f.Equals.Input == self:
 		return fmt.Errorf("%w: input %s depends on itself", ErrChoiceCycle, self)
-	case len(f.Equals.Value) > 0 && !isScalar(f.Equals.Value):
+	case len(f.Equals.Value) > 0 && !isScalar(json.RawMessage(f.Equals.Value)):
 		return fmt.Errorf("%w: a filter value is a string, a number or a boolean", ErrInvalid)
 	default:
 		return nil
@@ -279,7 +304,7 @@ func optionOf(src *Source, row *UnitOutputs, answers map[string]json.RawMessage,
 	}
 
 	for _, f := range src.Where {
-		want := f.Equals.Value
+		want := json.RawMessage(f.Equals.Value)
 		if f.Equals.Input != "" {
 			want = answers[f.Equals.Input]
 		}
