@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -104,6 +105,53 @@ func TestCheckStagedTriggers(t *testing.T) {
 	}
 }
 
+// TestCheckStagedTriggersRefusesANextSlotInTheFuture proves the restore check:
+// an enabled hourly trigger whose next slot is in 2100 would never be due, so
+// the schedule would stop. The staged row is corrupt.
+func TestCheckStagedTriggersRefusesANextSlotInTheFuture(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+	seedTriggers(t, s)
+
+	next := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+
+	_, err := s.conn.ExecContext(t.Context(),
+		`UPDATE triggers SET preset = '', cron = '0 * * * *', next_slot_ms = ? WHERE id = 's1'`, next)
+	if err != nil {
+		t.Fatalf("change the row: %v", err)
+	}
+
+	err = checkStagedTriggers(t.Context(), s.conn)
+	if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, triggerstore.ErrCorrupt) {
+		t.Fatalf("check = %v, want ErrCorrupt of the backup and of the store", err)
+	}
+}
+
+// TestCheckStagedTriggersReadsTheClockOfTheStore proves the layer of the clock:
+// the restore check takes its time from the store, through the read of
+// DatabaseNowMs, and not from the clock of the process. A canceled context
+// fails the read of the clock of the store; the clock of the process never
+// fails.
+func TestCheckStagedTriggersReadsTheClockOfTheStore(t *testing.T) {
+	t.Parallel()
+
+	s := openInternalTemplated(t)
+	seedTriggers(t, s)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := checkStagedTriggers(ctx, s.conn)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("check = %v, want the canceled context of the clock read", err)
+	}
+
+	if !strings.Contains(fmt.Sprint(err), "read the clock of the store") {
+		t.Fatalf("check = %v, want the refusal of the clock read", err)
+	}
+}
+
 // TestCheckStagedTriggersRefusesAMissingNamespace proves that a trigger whose
 // namespace the backup does not hold is corrupt. An inner join would skip such a
 // row, and the restore would bring it in.
@@ -163,7 +211,7 @@ func TestScanStagedTriggerReturnsTheZeroRowOnError(t *testing.T) {
 	}{
 		"no namespace": {
 			query: `SELECT NULL, 'f1', 'opentofu', 'b', 'follows', '', '', 'acme', 'opentofu', 'a', 1,
-'user:ada', 'prn-user:ada', 1, 2`,
+'user:ada', 'prn-user:ada', 1, 2, 0`,
 			want: backup.ErrCorrupt,
 		},
 		"a row with too few columns": {query: `SELECT 'acme', 'f1'`, want: backup.ErrExportRead},

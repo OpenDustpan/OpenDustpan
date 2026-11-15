@@ -15,11 +15,11 @@
 - [ ] 2.4 Change the reducing-route list in pkg/maintenance/reducing.go:73 so that the Pattern "/api/server/caller/tokens/{id}" becomes DELETE /api/dustpan/v1/me/tokens/{id}. Its declaration is in pkg/dustpan/dustpan.go (mountV1 at :3636) and its adapter is in internal/api/server/tokens.go. The routes GET and POST /api/dustpan/v1/me/tokens use the same declaration and adapter files. Change the error text in pkg/accesstoken/scope.go:51, :130 and :169 to name /api/dustpan/v1/me/tokens. Check: `go test ./internal/api/server -run 'TestReductionShapedRoutesAreOnTheList|TestReducingListMatchesRoutes|TestReducingRoutesAnswerInMaintenanceMode'`
 - [ ] 2.5 Change the old caller paths in the tests: internal/api/server/revocations_test.go, token_kind_text_test.go:26, routes_test.go, opaque_denial_test.go, signin_test.go, freshness_test.go, delegation_test.go, review_test.go and fresh_session_test.go. Check: `go test ./internal/api/server`
 - [ ] 2.2 Move the coverage rows of /api/server/caller/tokens and /api/server/caller/tokens/{id}, and of the access and grants routes, in e2e/coverage.go to the /api/dustpan/v1/me paths, called with an access token of the caller. Update the docs. Check: `rg -n -F 'caller/' docs e2e internal pkg` returns no hit for the old caller paths
-- [ ] 2.3 Declare the 404, 401, 400 and conflict codes with arguments in internal/api/server/tokens.go, with Declare (internal/api/apidesc/body.go:156). Check: `go test ./internal/errcode -run TestCallerCodes`
+- [ ] 2.3 Declare the 404, 401, 400 and conflict codes with arguments in internal/api/server/tokens.go, with Declare (internal/api/apidesc/body.go:156). The task adds the NEW top-level test `TestCallerCodes` in a `_test.go` file of `internal/errcode`, so that the Check runs it. Check: `go test ./internal/errcode -run TestCallerCodes`
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
