@@ -288,6 +288,21 @@ func seedWrappedKey(t *testing.T, st keySeedStore, key []byte) {
 	}
 }
 
+// serve runs the serve subcommand as the binary does, except with no drain
+// period: the server shuts down at once after the stop. The binary waits
+// dustpan.DefaultDrainPeriod first, and no test of this package checks the
+// drain, so the tests do not wait 10 seconds at each stop.
+func serve(ctx context.Context, args []string, stderr io.Writer) error {
+	return serveWith(ctx, args, stderr, isTerminalWriter(stderr), 0)
+}
+
+// serveWithIO runs serve with an explicit terminal flag for stderr, so tests
+// drive the trial hint of the refusals with a fake terminal. It has no drain
+// period, as serve.
+func serveWithIO(ctx context.Context, args []string, stderr io.Writer, terminal bool) error {
+	return serveWith(ctx, args, stderr, terminal, 0)
+}
+
 // serveDatabase runs serve against the SQLite database at path and reports
 // its error. Refusals answer before the server starts; a started server
 // would block, so only refusal cases use this.
