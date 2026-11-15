@@ -49,6 +49,7 @@ func newRule(ns namespace.Name, name, principalID string) trustrule.Rule {
 		StaticKeys:  "",
 		PrincipalID: principalID,
 		CreatedBy:   subjectAlice,
+		Revision:    1,
 		Conditions: []trustrule.Condition{
 			{Claim: "repository", Values: []string{"acme/infra", "acme/apps"}},
 			{Claim: "sub", Values: []string{testSubject}},

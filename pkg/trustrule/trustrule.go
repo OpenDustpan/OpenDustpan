@@ -241,9 +241,9 @@ func BundleRef(id BundleID) string {
 // the time of the save. OverlapEndsAt is the end of the rotation overlap of
 // a rotated version, and zero for the first save.
 type BundleVersion struct {
-	Number       int64
-	Certificates []*x509.Certificate
-	CreatedAt    time.Time
+	Number        int64
+	Certificates  []*x509.Certificate
+	CreatedAt     time.Time
 	OverlapEndsAt time.Time
 }
 
@@ -281,6 +281,18 @@ type BundleFields struct {
 // more than MaxBundleCAs certificates. Now is the clock that expiry is
 // checked against.
 func ParseBundle(pemText string, now time.Time) ([]*x509.Certificate, error) {
+	return parseBundle(pemText, now, true)
+}
+
+// ParseStoredBundle checks the PEM text of a stored bundle version like
+// ParseBundle, but it does not check expiry: a stored version stays readable
+// after one of its CAs expires, and the exchange refuses an expired CA when
+// it builds a chain.
+func ParseStoredBundle(pemText string) ([]*x509.Certificate, error) {
+	return parseBundle(pemText, time.Time{}, false)
+}
+
+func parseBundle(pemText string, now time.Time, checkExpiry bool) ([]*x509.Certificate, error) {
 	if len(pemText) == 0 || len(pemText) > MaxBundleBytes {
 		return nil, fmt.Errorf("%w: the bundle is 1 to %d bytes, got %d", ErrBundle, MaxBundleBytes, len(pemText))
 	}
@@ -306,7 +318,7 @@ func ParseBundle(pemText string, now time.Time) ([]*x509.Certificate, error) {
 			return nil, fmt.Errorf("%w: CA %d does not parse: %v", ErrBundle, i, err)
 		}
 
-		if now.After(cert.NotAfter) {
+		if checkExpiry && now.After(cert.NotAfter) {
 			return nil, fmt.Errorf("%w: CA %d expired at %s", ErrBundle, i,
 				cert.NotAfter.UTC().Format(time.RFC3339))
 		}

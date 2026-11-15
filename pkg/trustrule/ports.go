@@ -23,6 +23,8 @@ type Store interface {
 	// principal, and is a principal of the namespace r.Namespace. It returns:
 	//   - ErrInvalid when r.Validate fails.
 	//   - ErrPrincipal when the principal fails the check above.
+	//   - ErrBundle when r names a bundle that is not the bundle of the
+	//     namespace.
 	//   - ErrExists when the ID is taken, or when the namespace has a rule
 	//     with the same name, compared exactly.
 	//   - ErrLimit when the namespace holds MaxPerNamespace rules.
@@ -47,11 +49,17 @@ type Store interface {
 	// Update stores r over the rule id of the namespace ns when its revision
 	// is one past the stored revision, and appends e in the transaction. The
 	// name, the issuer, the audience, the key source, the conditions, the
-	// SPIFFE ID pattern and the bundle may change; the principal, the
-	// namespace and the creation time never change. It returns:
+	// principal, the SPIFFE ID pattern and the bundle may change; the
+	// namespace, the creator and the creation time never change. In the
+	// transaction it checks the principal as Create does, and that a bundle
+	// that r names is the bundle of the namespace. It returns:
 	//   - ErrNotFound for an unknown rule and for a rule of another
 	//     namespace, and ErrInvalid for an ID or a namespace that fails
 	//     validation, or for a rule that fails validation.
+	//   - ErrPrincipal when the principal fails the check of Create.
+	//   - ErrBundle when r names a bundle that is not the bundle of the
+	//     namespace.
+	//   - ErrExists when another rule of the namespace has the name.
 	//   - ErrStale when the revision of r is not one past the stored
 	//     revision.
 	//   - namespace.ErrFenced when the fence is stale or belongs to another

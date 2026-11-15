@@ -34,6 +34,7 @@ func trustRuleHarness(t *testing.T) trustruletest.Harness {
 
 	return trustruletest.Harness{
 		Store:            s.TrustRules(),
+		Bundles:          s.TrustRules(),
 		Exchanges:        s.TrustRules(),
 		Token:            trustRuleToken(s),
 		DisablePrincipal: trustRuleDisable(s),
