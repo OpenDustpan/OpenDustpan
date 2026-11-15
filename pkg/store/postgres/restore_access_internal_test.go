@@ -275,6 +275,10 @@ func placementDecodeRuleRows(
 			t.Fatalf("decode a placement rule row: %v", err)
 		}
 
+		if row == nil {
+			t.Fatal("a placement rule row is null")
+		}
+
 		row["namespace"] = json.RawMessage(`"` + to + `"`)
 		rows = append(rows, row)
 	}
