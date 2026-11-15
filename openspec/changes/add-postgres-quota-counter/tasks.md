@@ -9,4 +9,4 @@
 
 ## 2. Definition of done
 
-- [ ] 2.1 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 2.1 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only). CI run 43718417379 on head 85e796d: all 21 checks passed.
