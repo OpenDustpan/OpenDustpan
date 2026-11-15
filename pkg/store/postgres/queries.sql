@@ -1002,7 +1002,7 @@ INSERT INTO state_versions (
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE id = $1;
 
@@ -1011,7 +1011,7 @@ WHERE id = $1;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -1090,7 +1090,7 @@ WHERE w.id = $1;
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -1122,7 +1122,7 @@ WHERE id = $2;
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job
+       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job, sv.client_encrypted
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1;
@@ -1132,11 +1132,11 @@ WHERE w.id = $1;
 -- matches only the recorded content key, so a superseded attempt reports no
 -- change instead of finalizing over a newer one; a finalized version also
 -- matches no row, so a retry reports no change. It also sets the declared
--- serial, lineage, MD5 and outputs: a streamed write declares them only after
--- its content is read (ADR 49, decision 7), and its row holds placeholders
--- until then.
+-- serial, lineage, MD5 and outputs, and the client-encryption bit of the
+-- document: a streamed write declares them only after its content is read
+-- and its row holds placeholders until then.
 UPDATE state_versions
-SET serial = @serial, lineage = @lineage, md5 = @md5, outputs = @outputs, status = 'finalized', finalized_at_ms = @finalized_at_ms, size = @size
+SET serial = @serial, lineage = @lineage, md5 = @md5, outputs = @outputs, status = 'finalized', finalized_at_ms = @finalized_at_ms, size = @size, client_encrypted = @client_encrypted
 WHERE id = @id AND status = 'pending' AND content_key = @content_key;
 
 -- name: SetWorkspaceCurrent :exec
@@ -5794,12 +5794,32 @@ WHERE k.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg
   AND k.blueprint = sqlc.arg(blueprint) AND k.kind = sqlc.arg(kind) AND k.scope = sqlc.arg(scope)
   AND r.state = 'open' AND r.ends_at_ms > sqlc.arg(at_ms);
 
+-- name: EnsureQuotaKey :exec
+-- Makes the row of a key, so that the counter can lock it. The row holds no
+-- unit yet.
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), 0
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope) DO NOTHING;
+
 -- name: GetQuotaReservation :one
 -- The state and the times of the reservation id of a namespace.
 SELECT r.id, r.state, r.at_ms, r.ends_at_ms
 FROM quota_reservations AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND r.id = sqlc.arg(id);
+
+-- name: GetQuotaReservationForUpdate :one
+-- The state and the times of the reservation id of a namespace, with the row
+-- locked until the commit, so two ends of one reservation wait for each
+-- other.
+SELECT r.id, r.state, r.at_ms, r.ends_at_ms
+FROM quota_reservations AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.id = sqlc.arg(id)
+FOR UPDATE OF r;
 
 -- name: GetQuotaSettled :one
 -- The settled count of the key. No row means the counter does not know the key.
@@ -5839,6 +5859,14 @@ FROM quota_reservation_keys
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
   AND reservation_id = sqlc.arg(reservation_id)
 ORDER BY blueprint, kind, scope;
+
+-- name: LockQuotaKey :one
+-- Locks the row of the key until the commit, so the writes of one key wait
+-- for each other and two writes never both pass a limit.
+SELECT settled_count FROM quota_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND blueprint = sqlc.arg(blueprint) AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope)
+FOR UPDATE;
 
 -- name: SetQuotaReservationEnd :execrows
 -- Moves the end time of the open reservation id. A reservation that ended

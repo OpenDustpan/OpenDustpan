@@ -1007,7 +1007,8 @@ func openSnapshot(ctx context.Context, path string) (*sql.DB, error) {
 
 // summarizeConn reads the backup summary of an open database: the dialect,
 // the schema version, the primary installations, the wrapper IDs, the row count of
-// each table in backup.Tables, and the blob references. Callers pass a
+// each table in backup.Tables, the blob references, and the registry file
+// entries of each namespace. Callers pass a
 // snapshot, never the live database, so the counts and the references
 // describe one consistent view.
 func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
@@ -1046,7 +1047,7 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 		counts[table] = n
 	}
 
-	blobs, unverified, err := blobRefs(ctx, conn)
+	refs, err := blobRefs(ctx, conn)
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -1056,8 +1057,9 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 		PrimaryInstallations: installations,
 		WrapperIDs:           wrappers,
 		RowCounts:            counts,
-		Blobs:                blobs,
-		Unverified:           unverified,
+		Blobs:                refs.Refs,
+		RegistryFiles:        refs.RegistryFiles,
+		Unverified:           refs.Unverified,
 		SchemaVersion:        int(version),
 	}, nil
 }
@@ -1128,8 +1130,10 @@ func countRows(ctx context.Context, conn *sql.DB, table string) (int64, error) {
 // those of the plain bytes, as the state version stores them; sealed versions
 // mark their references sealed, so the backup opens them to check and stores
 // the sealed bytes. A pending version has no committed content, so the backup
-// leaves pending rows out.
-func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, []string, error) {
+// leaves pending rows out. The registry file entries of each namespace travel
+// with the references, so the manifest can name each copied file by its
+// SHA-256 content key.
+func blobRefs(ctx context.Context, conn *sql.DB) (blobrefs.BackupRefs, error) {
 	const query = `SELECT content_key, size, md5, sealed FROM state_versions WHERE content_key <> '' AND status = 'finalized'
 		UNION ALL
 		SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM checkpoints
@@ -1143,7 +1147,7 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, []string, er
 
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read backup blob references: %w", err)
+		return blobrefs.BackupRefs{}, fmt.Errorf("read backup blob references: %w", err)
 	}
 
 	defer func() {
@@ -1163,11 +1167,11 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, []string, er
 		)
 
 		if scanErr := rows.Scan(&key, &size, &raw, &sealed); scanErr != nil {
-			return nil, nil, fmt.Errorf("read backup blob references: %w", scanErr)
+			return blobrefs.BackupRefs{}, fmt.Errorf("read backup blob references: %w", scanErr)
 		}
 
 		if len(raw) != md5.Size {
-			return nil, nil, fmt.Errorf(
+			return blobrefs.BackupRefs{}, fmt.Errorf(
 				"%w: blob with key %q has an MD5 of %d bytes",
 				codec.ErrCorruptRow,
 				key,
@@ -1182,18 +1186,19 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, []string, er
 	}
 
 	if iterErr := rows.Err(); iterErr != nil {
-		return nil, nil, fmt.Errorf("read backup blob references: %w", iterErr)
+		return blobrefs.BackupRefs{}, fmt.Errorf("read backup blob references: %w", iterErr)
 	}
 
 	collector := &blobrefs.Collector{}
 	if addErr := addStoredBlobRefs(ctx, conn, collector); addErr != nil {
-		return nil, nil, addErr
+		return blobrefs.BackupRefs{}, addErr
 	}
 
-	out = append(out, collector.Refs()...)
-	slices.SortFunc(out, func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) })
+	gathered := collector.BackupRefs()
+	gathered.Refs = append(out, gathered.Refs...)
+	slices.SortFunc(gathered.Refs, func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) })
 
-	return out, collector.Unverified(), nil
+	return gathered, nil
 }
 
 // snapshotPath reserves a new file name for a VACUUM INTO target in dir: it

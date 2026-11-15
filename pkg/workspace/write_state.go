@@ -273,6 +273,9 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 	sv.Serial = meta.Serial
 	sv.Lineage = meta.Lineage
 	sv.Outputs = outputs.stored
+	// The bit is read from the streamed document, so Latest answers from the
+	// row and never streams the blob again.
+	sv.ClientEncrypted = NewClientEncrypted(meta.ClientEncrypted)
 
 	if finErr := s.finalizeStream(ctx, sw, sv); finErr != nil {
 		return StateVersion{}, finErr
@@ -374,6 +377,8 @@ func (s *Service) declarePlaceholder(
 		SensitiveMarks:  nil,
 		FenceBy:         "",
 		Origin:          originFrom(ctx),
+		// The placeholder holds no bit yet: the finalize writes it.
+		ClientEncrypted: ClientEncryptedUnknown,
 	}
 
 	if createErr := s.states.CreateStateVersion(ctx, sv, fence, s.maxPending); createErr != nil {

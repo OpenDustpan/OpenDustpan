@@ -100,7 +100,7 @@ func (r TempAdmin) Validate() error {
 		return fmt.Errorf("%w: missing creator", ErrInvalid)
 	}
 
-	if strings.ContainsFunc(r.CreatedBy, audit.IsHiddenRune) {
+	if ident.HasHidden(r.CreatedBy) {
 		return fmt.Errorf("%w: the creator holds a control or format character", ErrInvalid)
 	}
 
@@ -140,7 +140,7 @@ func ValidateReason(reason string) error {
 		return fmt.Errorf("%w: the reason is longer than %d characters", ErrInvalidReason, audit.MaxReasonLen)
 	}
 
-	if strings.ContainsFunc(reason, audit.IsHiddenRune) {
+	if ident.HasHidden(reason) {
 		return fmt.Errorf("%w: the reason holds a control or format character", ErrInvalidReason)
 	}
 

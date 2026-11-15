@@ -294,6 +294,8 @@ func TestPortableManifestFormat(t *testing.T) {
 		InstallationKind: installation.KindProduction,
 		Unverified:       nil,
 		Damaged:          nil,
+		// A nil section is the manifest of a backup from before file copy.
+		RegistryFiles: nil,
 	}
 
 	raw, err := json.Marshal(manifest)
@@ -534,5 +536,79 @@ func TestReadPortableSourceFilter(t *testing.T) {
 				t.Fatalf("read: %d rows reached the caller, want none", rows)
 			}
 		})
+	}
+}
+
+// stateVersionsTable returns the portable state versions table.
+func stateVersionsTable(t *testing.T) backup.PortableTable {
+	t.Helper()
+
+	for _, candidate := range backup.PortableTables() {
+		if candidate.Table == "state_versions" {
+			return candidate
+		}
+	}
+
+	t.Fatal("portable tables have no state_versions table")
+
+	return backup.PortableTable{Table: "", OrderBy: nil, Columns: nil}
+}
+
+// TestReadPortableClearsTheClientEncryptionBit proves the import clears the
+// client-encryption bit of a state version, so a restored row never carries a
+// bit that a tampered or an inconsistent backup could have set wrong. A reader
+// then streams the state blob to decide.
+func TestReadPortableClearsTheClientEncryptionBit(t *testing.T) {
+	t.Parallel()
+
+	table := stateVersionsTable(t)
+
+	var buf bytes.Buffer
+
+	tw, err := backup.NewTableWriter(&buf, table)
+	if err != nil {
+		t.Fatalf("new table writer: %v", err)
+	}
+
+	// The row claims the client encrypted the state; every other column is
+	// null, which is a value the schema accepts.
+	row := make([]any, len(table.Columns))
+
+	for i, column := range table.Columns {
+		if column.Name == "client_encrypted" {
+			row[i] = true
+		}
+	}
+
+	if writeErr := tw.WriteRow(row); writeErr != nil {
+		t.Fatalf("write row: %v", writeErr)
+	}
+
+	file, err := tw.Close()
+	if err != nil {
+		t.Fatalf("close table writer: %v", err)
+	}
+
+	open := func(string) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(buf.Bytes())), nil
+	}
+
+	var got any
+
+	err = backup.ReadPortableTable(t.Context(), open, file, table, func(values []any) error {
+		for i, column := range table.Columns {
+			if column.Name == "client_encrypted" {
+				got = values[i]
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	if got != nil {
+		t.Fatalf("client_encrypted after the import = %v, want null", got)
 	}
 }

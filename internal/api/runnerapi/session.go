@@ -13,9 +13,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -659,16 +659,17 @@ func (h *Handler) finish(w http.ResponseWriter, r *http.Request, c *call) {
 }
 
 // checkFinishMessage checks the reason of a failed phase: valid text of at
-// most maxFinishMessage bytes with no control character but a line feed or a
-// tab. The server never writes the reason to its log or to a header; the line
-// feed stays because a reason can have more than one line.
+// most maxFinishMessage bytes with no control, format or separator character
+// but a line feed or a tab. The server never writes the reason to its log or
+// to a header; the line feed stays because a reason can have more than one
+// line.
 func checkFinishMessage(m string) error {
 	if len(m) > maxFinishMessage || !utf8.ValidString(m) {
 		return fmt.Errorf("%w: the reason is at most %d bytes of text", runner.ErrInvalid, maxFinishMessage)
 	}
 
-	if strings.ContainsFunc(m, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\t' }) {
-		return fmt.Errorf("%w: the reason has a control character", runner.ErrInvalid)
+	if strings.ContainsFunc(m, func(r rune) bool { return ident.IsHiddenRuneExcept(r, '\n', '\t') }) {
+		return fmt.Errorf("%w: the reason has a control, format or separator character", runner.ErrInvalid)
 	}
 
 	return nil

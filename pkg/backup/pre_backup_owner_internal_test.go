@@ -163,7 +163,7 @@ type checkLive struct {
 func (checkLive) ExportPortable(context.Context, PortableSink) (Summary, []PortableFile, error) {
 	return Summary{
 		Dialect: DialectSQLite, PrimaryInstallations: nil, WrapperIDs: nil, RowCounts: nil, Blobs: nil,
-		Unverified: nil, SchemaVersion: BaselineSchemaVersion,
+		RegistryFiles: nil, Unverified: nil, SchemaVersion: BaselineSchemaVersion,
 	}, nil, nil
 }
 

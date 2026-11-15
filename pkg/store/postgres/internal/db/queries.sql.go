@@ -5388,6 +5388,34 @@ func (q *Queries) EnsureNotificationSequence(ctx context.Context, scope string) 
 	return err
 }
 
+const ensureQuotaKey = `-- name: EnsureQuotaKey :exec
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1),
+    $2, $3, $4, 0
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope) DO NOTHING
+`
+
+type EnsureQuotaKeyParams struct {
+	Namespace string
+	Blueprint string
+	Kind      string
+	Scope     string
+}
+
+// Makes the row of a key, so that the counter can lock it. The row holds no
+// unit yet.
+func (q *Queries) EnsureQuotaKey(ctx context.Context, arg EnsureQuotaKeyParams) error {
+	_, err := q.db.Exec(ctx, ensureQuotaKey,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+	)
+	return err
+}
+
 const expireRunnerClaims = `-- name: ExpireRunnerClaims :exec
 UPDATE durable_operations
 SET claim_owner = NULL, claim_expires_at_ms = 0
@@ -5544,28 +5572,29 @@ func (q *Queries) FinalizeReleasedUnitState(ctx context.Context, arg FinalizeRel
 
 const finalizeStateVersion = `-- name: FinalizeStateVersion :execrows
 UPDATE state_versions
-SET serial = $1, lineage = $2, md5 = $3, outputs = $4, status = 'finalized', finalized_at_ms = $5, size = $6
-WHERE id = $7 AND status = 'pending' AND content_key = $8
+SET serial = $1, lineage = $2, md5 = $3, outputs = $4, status = 'finalized', finalized_at_ms = $5, size = $6, client_encrypted = $7
+WHERE id = $8 AND status = 'pending' AND content_key = $9
 `
 
 type FinalizeStateVersionParams struct {
-	Serial        int64
-	Lineage       string
-	Md5           []byte
-	Outputs       []byte
-	FinalizedAtMs int64
-	Size          int64
-	ID            string
-	ContentKey    string
+	Serial          int64
+	Lineage         string
+	Md5             []byte
+	Outputs         []byte
+	FinalizedAtMs   int64
+	Size            int64
+	ClientEncrypted pgtype.Bool
+	ID              string
+	ContentKey      string
 }
 
 // Marks one pending version finalized with its recorded attempt. The write
 // matches only the recorded content key, so a superseded attempt reports no
 // change instead of finalizing over a newer one; a finalized version also
 // matches no row, so a retry reports no change. It also sets the declared
-// serial, lineage, MD5 and outputs: a streamed write declares them only after
-// its content is read (ADR 49, decision 7), and its row holds placeholders
-// until then.
+// serial, lineage, MD5 and outputs, and the client-encryption bit of the
+// document: a streamed write declares them only after its content is read
+// and its row holds placeholders until then.
 func (q *Queries) FinalizeStateVersion(ctx context.Context, arg FinalizeStateVersionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, finalizeStateVersion,
 		arg.Serial,
@@ -5574,6 +5603,7 @@ func (q *Queries) FinalizeStateVersion(ctx context.Context, arg FinalizeStateVer
 		arg.Outputs,
 		arg.FinalizedAtMs,
 		arg.Size,
+		arg.ClientEncrypted,
 		arg.ID,
 		arg.ContentKey,
 	)
@@ -6511,7 +6541,7 @@ const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job
+       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job, sv.client_encrypted
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1
@@ -6545,6 +6575,7 @@ func (q *Queries) GetCurrentStateVersion(ctx context.Context, id string) (StateV
 		&i.FencedBy,
 		&i.UnlockedWrite,
 		&i.OriginJob,
+		&i.ClientEncrypted,
 	)
 	return i, err
 }
@@ -8978,6 +9009,41 @@ func (q *Queries) GetQuotaReservation(ctx context.Context, arg GetQuotaReservati
 	return i, err
 }
 
+const getQuotaReservationForUpdate = `-- name: GetQuotaReservationForUpdate :one
+SELECT r.id, r.state, r.at_ms, r.ends_at_ms
+FROM quota_reservations AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = $1 AND r.id = $2
+FOR UPDATE OF r
+`
+
+type GetQuotaReservationForUpdateParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetQuotaReservationForUpdateRow struct {
+	ID       string
+	State    string
+	AtMs     int64
+	EndsAtMs int64
+}
+
+// The state and the times of the reservation id of a namespace, with the row
+// locked until the commit, so two ends of one reservation wait for each
+// other.
+func (q *Queries) GetQuotaReservationForUpdate(ctx context.Context, arg GetQuotaReservationForUpdateParams) (GetQuotaReservationForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getQuotaReservationForUpdate, arg.Namespace, arg.ID)
+	var i GetQuotaReservationForUpdateRow
+	err := row.Scan(
+		&i.ID,
+		&i.State,
+		&i.AtMs,
+		&i.EndsAtMs,
+	)
+	return i, err
+}
+
 const getQuotaSettled = `-- name: GetQuotaSettled :one
 SELECT settled_count FROM quota_keys
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
@@ -10048,7 +10114,7 @@ func (q *Queries) GetStackWithTags(ctx context.Context, arg GetStackWithTagsPara
 const getStateVersion = `-- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE id = $1
 `
@@ -10079,6 +10145,7 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 		&i.FencedBy,
 		&i.UnlockedWrite,
 		&i.OriginJob,
+		&i.ClientEncrypted,
 	)
 	return i, err
 }
@@ -14718,7 +14785,7 @@ func (q *Queries) ListExpiredInventoryAfter(ctx context.Context, arg ListExpired
 const listExpiredPendingStateVersions = `-- name: ListExpiredPendingStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC
@@ -14763,6 +14830,7 @@ func (q *Queries) ListExpiredPendingStateVersions(ctx context.Context, arg ListE
 			&i.FencedBy,
 			&i.UnlockedWrite,
 			&i.OriginJob,
+			&i.ClientEncrypted,
 		); err != nil {
 			return nil, err
 		}
@@ -18803,7 +18871,7 @@ func (q *Queries) ListStateContentKeys(ctx context.Context, id string) ([]string
 const listStateVersions = `-- name: ListStateVersions :many
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -18850,6 +18918,7 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 			&i.FencedBy,
 			&i.UnlockedWrite,
 			&i.OriginJob,
+			&i.ClientEncrypted,
 		); err != nil {
 			return nil, err
 		}
@@ -19910,6 +19979,34 @@ func (q *Queries) LockPersonPreferences(ctx context.Context, id string) (LockPer
 	var i LockPersonPreferencesRow
 	err := row.Scan(&i.ID, &i.Document, &i.UpdatedAtMs)
 	return i, err
+}
+
+const lockQuotaKey = `-- name: LockQuotaKey :one
+SELECT settled_count FROM quota_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
+  AND blueprint = $2 AND kind = $3 AND scope = $4
+FOR UPDATE
+`
+
+type LockQuotaKeyParams struct {
+	Namespace string
+	Blueprint string
+	Kind      string
+	Scope     string
+}
+
+// Locks the row of the key until the commit, so the writes of one key wait
+// for each other and two writes never both pass a limit.
+func (q *Queries) LockQuotaKey(ctx context.Context, arg LockQuotaKeyParams) (int64, error) {
+	row := q.db.QueryRow(ctx, lockQuotaKey,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+	)
+	var settled_count int64
+	err := row.Scan(&settled_count)
+	return settled_count, err
 }
 
 const lockRunnerHandoffToken = `-- name: LockRunnerHandoffToken :one

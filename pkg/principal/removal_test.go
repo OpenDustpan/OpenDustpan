@@ -84,6 +84,11 @@ func TestRemovalValidate(t *testing.T) {
 			want: principal.ErrInvalid,
 		},
 		{
+			name: "a source ID with a format character",
+			edit: func(r *principal.Removal) { r.Source.ID = "idp-\u202e1" },
+			want: principal.ErrInvalid,
+		},
+		{
 			name: "a source ID that is not valid UTF-8",
 			edit: func(r *principal.Removal) { r.Source.ID = "idp-\xff" },
 			want: principal.ErrInvalid,
@@ -101,6 +106,11 @@ func TestRemovalValidate(t *testing.T) {
 		{
 			name: "a group ID with a control character",
 			edit: func(r *principal.Removal) { r.GroupID = "grp-\x00eng" },
+			want: principal.ErrInvalid,
+		},
+		{
+			name: "a group ID with a line separator",
+			edit: func(r *principal.Removal) { r.GroupID = "grp-\u2028eng" },
 			want: principal.ErrInvalid,
 		},
 		{

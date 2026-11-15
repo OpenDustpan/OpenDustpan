@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -716,7 +717,7 @@ func exchangeEntry(
 }
 
 // clean returns s with each character that the audit log refuses (see
-// audit.IsHiddenRune) replaced by its escape, cut to at most n characters, so
+// ident.IsHiddenRune) replaced by its escape, cut to at most n characters, so
 // a claim never adds a line to a log and a reason never passes the limit of
 // the audit log. Bytes that are not UTF-8 become U+FFFD.
 func clean(s string, n int) string {
@@ -727,7 +728,7 @@ func clean(s string, n int) string {
 
 	for _, c := range s {
 		piece := string(c)
-		if audit.IsHiddenRune(c) {
+		if ident.IsHiddenRune(c) {
 			piece = strconv.QuoteRune(c)
 		}
 

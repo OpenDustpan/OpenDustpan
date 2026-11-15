@@ -47,6 +47,16 @@ var (
 	// ErrUnsealedState reports a state version that is not sealed. Every
 	// stored version is sealed, so an import with a plain row fails.
 	ErrUnsealedState = errors.New("state version is not sealed")
+	// ErrStateBitUnknown reports a finalize of a state version whose
+	// client-encryption bit is unknown. A version that finalizes always holds
+	// the bit from the document that made it; only a version stored before the
+	// bit was kept reads back unknown.
+	ErrStateBitUnknown = errors.New("state version has no client-encryption bit")
+	// ErrStateNotPending reports a create of a state version whose status is
+	// not pending. The store creates pending versions only; a finalized
+	// version goes through the finalize, which requires the client-encryption
+	// bit. So no finalized row enters through the create path with no bit.
+	ErrStateNotPending = errors.New("state version is not pending")
 	// ErrClientEncrypted reports a state version the client encrypted: the
 	// server keeps the envelope but cannot read the resources inside it. The
 	// resource routes answer 409, while the outputs list still works. It is a
@@ -95,6 +105,45 @@ const (
 	// StatusFinalized is a version whose content was uploaded and verified.
 	StatusFinalized StateStatus = "finalized"
 )
+
+// ClientEncrypted is the client-encryption bit of a state version: whether the
+// client encrypted the content. The zero value reports unknown, the bit of a
+// version the server stored before it kept one. A reader of an unknown version
+// streams the content to decide; a version that finalizes always holds a known
+// bit.
+type ClientEncrypted uint8
+
+// The client-encryption bits of a state version.
+const (
+	// ClientEncryptedUnknown is the bit of a version stored before the server
+	// kept it, or of a version that has not finalized yet. Its content must be
+	// streamed to decide.
+	ClientEncryptedUnknown ClientEncrypted = iota
+	// ClientEncryptedNo is the bit of a version whose content is plaintext.
+	ClientEncryptedNo
+	// ClientEncryptedYes is the bit of a version whose content the client
+	// encrypted.
+	ClientEncryptedYes
+)
+
+// NewClientEncrypted returns the client-encryption bit of a finalized version
+// from the document the client uploaded. The result is always known, so a
+// version that finalizes holds the bit and a reader never streams it again.
+func NewClientEncrypted(encrypted bool) ClientEncrypted {
+	return map[bool]ClientEncrypted{false: ClientEncryptedNo, true: ClientEncryptedYes}[encrypted]
+}
+
+// Known reports whether the bit is known. A known bit is ClientEncryptedNo or
+// ClientEncryptedYes.
+func (c ClientEncrypted) Known() bool {
+	return c == ClientEncryptedNo || c == ClientEncryptedYes
+}
+
+// Encrypted reports whether the client encrypted the content. It is false when
+// the bit is unknown.
+func (c ClientEncrypted) Encrypted() bool {
+	return c == ClientEncryptedYes
+}
 
 const (
 	// DefaultStatePageSize is the page size when the caller passes a
@@ -150,6 +199,10 @@ type StateVersion struct {
 	// sealed with the data key of the workspace scope. Every stored
 	// version is sealed.
 	Sealed bool
+	// ClientEncrypted is the client-encryption bit of the version, kept in the
+	// state version row. ClientEncryptedUnknown reports a version stored
+	// before the server kept the bit: a reader streams its content to decide.
+	ClientEncrypted ClientEncrypted
 	// SensitiveMarks holds the secret paths of the version, by resource
 	// instance address: each entry names the JSON Pointer paths, relative to
 	// the attributes of that instance, that the json-state rendering of the

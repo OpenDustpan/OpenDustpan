@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/driftsvc"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -290,7 +291,7 @@ func (h *Handler) startRequest(r *http.Request, t *target, b *startBody, key str
 	// The wire form of the tool is its lowercase code, as in the document of
 	// a job. The label of the glossary reads as well: OpenTofu.
 	unit, err := identity.UnitObject(strings.ToLower(b.Unit.Tool), t.ns.Name, b.Unit.Name)
-	if err != nil || strings.ContainsFunc(b.Unit.Name, audit.IsHiddenRune) || !utf8.ValidString(b.Unit.Name) {
+	if err != nil || ident.HasHidden(b.Unit.Name) || !utf8.ValidString(b.Unit.Name) {
 		return job.StartRequest{}, fmt.Errorf("%w: %s", job.ErrInvalid, "the tool or the name of the unit is not valid")
 	}
 

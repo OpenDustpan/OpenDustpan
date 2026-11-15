@@ -217,6 +217,8 @@ import type {
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
   RedeemLocalUserCodeRequest,
+  RegistryFileEntry,
+  RegistryFileSection,
   RegistryKey,
   RegistryModule,
   RegistryProvider,
@@ -499,6 +501,7 @@ export const decodeBackupManifest: Decoder<BackupManifest> = object<BackupManife
   id: string,
   installationKind: string,
   primaryInstallations: array(string),
+  registryFiles: nullable(record(ref(() => decodeRegistryFileSection))),
   rowCounts: nullable(record(int64)),
   schemaVersion: int64,
   sqlFiles: array(ref(() => decodePortableFile)),
@@ -1954,6 +1957,20 @@ export const decodePutGitHostInstallationRequest: Decoder<PutGitHostInstallation
 export const decodeRedeemLocalUserCodeRequest: Decoder<RedeemLocalUserCodeRequest> = object<RedeemLocalUserCodeRequest>("RedeemLocalUserCodeRequest", {
   oneTimeCode: string,
   password: string,
+});
+
+/** The validator of RegistryFileEntry. */
+export const decodeRegistryFileEntry: Decoder<RegistryFileEntry> = object<RegistryFileEntry>("RegistryFileEntry", {
+  release: string,
+  sha256: string,
+  size: int64,
+  version: string,
+});
+
+/** The validator of RegistryFileSection. */
+export const decodeRegistryFileSection: Decoder<RegistryFileSection> = object<RegistryFileSection>("RegistryFileSection", {
+  files: array(ref(() => decodeRegistryFileEntry)),
+  version: int64,
 });
 
 /** The validator of RegistryKey. */

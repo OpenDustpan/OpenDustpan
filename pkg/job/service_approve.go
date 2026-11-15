@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -148,7 +149,7 @@ func clip(s string) string {
 	s = strings.ToValidUTF8(s, "?")
 
 	return strings.Map(func(r rune) rune {
-		if audit.IsHiddenRune(r) {
+		if ident.IsHiddenRune(r) {
 			return '?'
 		}
 

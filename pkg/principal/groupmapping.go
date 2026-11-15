@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 )
 
@@ -55,9 +55,9 @@ const (
 
 // ValidateGroupValue returns ErrInvalid unless v is a group value that an
 // identity provider may send: 1 to MaxGroupClaimValueBytes bytes of valid
-// UTF-8 with no control character. The check is an allowlist on the form:
-// it rejects a value and never changes it. A hostile value is kept out of
-// the error text.
+// UTF-8 with no control, format or separator character. The check is an
+// allowlist on the form: it rejects a value and never changes it. A hostile
+// value is kept out of the error text.
 func ValidateGroupValue(v string) error {
 	return validateClaimText("group value", v, MaxGroupClaimValueBytes)
 }
@@ -65,7 +65,7 @@ func ValidateGroupValue(v string) error {
 // ValidateGroupSource returns ErrInvalid unless source can hold the
 // memberships or the mappings of an identity provider (not local), and
 // sourceID names the provider: 1 to MaxGroupSourceIDBytes bytes of valid
-// UTF-8 with no control character.
+// UTF-8 with no control, format or separator character.
 func ValidateGroupSource(source MembershipSource, sourceID string) error {
 	parsed, err := ParseMembershipSource(string(source))
 	if err != nil {
@@ -80,7 +80,7 @@ func ValidateGroupSource(source MembershipSource, sourceID string) error {
 }
 
 // validateClaimText returns ErrInvalid unless s is 1 to limit bytes of valid
-// UTF-8 with no control character.
+// UTF-8 with no control, format or separator character.
 func validateClaimText(what, s string, limit int) error {
 	switch {
 	case s == "":
@@ -92,8 +92,8 @@ func validateClaimText(what, s string, limit int) error {
 	}
 
 	for _, r := range s {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("%w: %s has a control character", ErrInvalid, what)
+		if ident.IsHiddenRune(r) {
+			return fmt.Errorf("%w: %s has a control, format or separator character", ErrInvalid, what)
 		}
 	}
 
