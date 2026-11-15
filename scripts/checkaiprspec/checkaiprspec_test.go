@@ -317,6 +317,33 @@ func TestCheckAIPRSpec(t *testing.T) {
 			wantPass:  true,
 			want:      "demo-ready is spec-ready",
 		},
+		{
+			name:      "link inside a single-line HTML comment fails",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\n<!-- Change: openspec/changes/demo-ready -->\n",
+			commits:   "someone@example.com\n",
+			wantPass:  false,
+			want:      "add a line",
+		},
+		{
+			name:      "link inside a multi-line HTML comment fails",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\n<!--\nChange: openspec/changes/demo-ready\n-->\n",
+			commits:   "someone@example.com\n",
+			wantPass:  false,
+			want:      "add a line",
+		},
+		{
+			name:      "link outside a closed HTML comment passes",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\n<!-- an old link: openspec/changes/demo-missing -->\nChange: openspec/changes/demo-ready\n",
+			commits:   "someone@example.com\n",
+			wantPass:  true,
+			want:      "demo-ready is spec-ready",
+		},
 	}
 
 	for _, tt := range tests {
@@ -526,5 +553,47 @@ func TestCheckAIPRSpecRefusedIDIsBounded(t *testing.T) {
 	}
 	if len(quoted) > 64 {
 		t.Errorf("the refused id holds %d bytes, want at most 64:\n%q", len(quoted), out)
+	}
+}
+
+// TestMakeAIPRSpecCheckQuoteInValue proves that the Makefile target hands the
+// two paths to the script as environment variables, so a quote in a path
+// cannot escape into the command line. The body and the commit file live in a
+// directory whose name holds a single quote. A recipe that put the value in
+// single quotes would let that quote escape and break the command.
+func TestMakeAIPRSpecCheckQuoteInValue(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skipf("make is not on PATH: %v", err)
+	}
+
+	dir := filepath.Join(t.TempDir(), "body's dir")
+	writeFile(t, dir, filepath.Join("openspec", "changes", "demo-ready", "proposal.md"), readyProposal())
+	writeFile(t, dir, "body.md", "Tool: test harness\n\nChange: openspec/changes/demo-ready\n")
+	writeFile(t, dir, "commits.txt", "someone@example.com\n")
+
+	cmd := exec.CommandContext(
+		t.Context(),
+		"make",
+		"--no-print-directory",
+		"-C", "../..",
+		"ai-pr-spec-check",
+	)
+	// The two paths and the change tree go through the environment, so a
+	// single quote in a path cannot escape into the command line. The rest of
+	// the environment (PATH) comes from the test process.
+	cmd.Env = append(os.Environ(),
+		"PR_BODY_FILE="+filepath.Join(dir, "body.md"),
+		"PR_COMMITS_FILE="+filepath.Join(dir, "commits.txt"),
+		"AI_PR_ROOT="+dir,
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the check failed, want a pass: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "demo-ready is spec-ready") {
+		t.Errorf("the check said:\n%s\nwant a spec-ready pass", out)
 	}
 }

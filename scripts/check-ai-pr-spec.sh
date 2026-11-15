@@ -13,9 +13,9 @@
 # with "Tool:" or "AI tool:". Any other pull request is a person's pull
 # request and passes with no link.
 #
-# A link is a line of the body, outside a fenced code block, that names
-# openspec/changes/<id>, where <id> holds only lowercase letters, digits
-# and hyphens. The link counts when openspec/changes/<id>/proposal.md
+# A link is a line of the body, outside a fenced code block and outside an
+# HTML comment (<!-- ... -->), that names openspec/changes/<id>, where <id>
+# holds only lowercase letters, digits and hyphens. The link counts when openspec/changes/<id>/proposal.md
 # exists, or when an archived change openspec/changes/archive/YYYY-MM-DD-<id>/
 # proposal.md exists, and its "Open questions" section reads "none".
 # At least one link must count.
@@ -80,12 +80,13 @@ if [[ "$ai_by_body" -eq 0 && "$ai_by_commit" -eq 0 ]]; then
   exit 0
 fi
 
-# Collect candidate ids from lines outside fenced code blocks. A fence line
-# starts with ``` or ~~~ (with an optional language tag). The id on a link
-# line is the text after openspec/changes/ up to a space, a quote, a bracket,
-# a paren or an angle bracket. The awk removes one sentence mark at the end
-# of the token only when a space or the end of the line follows it, so
-# "openspec/changes/demo-ready." gives "demo-ready" and
+# Collect candidate ids from lines outside fenced code blocks and outside HTML
+# comments. A fence line starts with ``` or ~~~ (with an optional language
+# tag). A comment starts with <!-- and ends with -->, and it may span lines.
+# The id on a link line is the text after openspec/changes/ up to a space, a
+# quote, a bracket, a paren or an angle bracket. The awk removes one sentence
+# mark at the end of the token only when a space or the end of the line follows
+# it, so "openspec/changes/demo-ready." gives "demo-ready" and
 # "openspec/changes/demo-ready..x" keeps its dots. The script then validates
 # the token as the body wrote it, and the allowlist refuses the rest. The
 # read loop avoids mapfile, which the bash of macOS lacks.
@@ -93,10 +94,37 @@ link_ids=()
 while IFS= read -r link_id; do
   link_ids+=("$link_id")
 done < <(awk '
-  /^(```|~~~)/ { in_fence = !in_fence; next }
-  in_fence { next }
   {
     line = $0
+    # Inside a fence the text is literal, so a comment marker has no effect and
+    # only a fence line ends the fence.
+    if (in_fence) {
+      if (line ~ /^(```|~~~)/) { in_fence = 0 }
+      next
+    }
+    # A comment opened on an earlier line ends at the first -->. The text
+    # before the marker on this line is already gone; the rest is visible.
+    if (in_comment) {
+      cend = index(line, "-->")
+      if (cend == 0) { next }
+      line = substr(line, cend + 3)
+      in_comment = 0
+    }
+    # Remove each <!-- ... --> region. A region may close on a later line.
+    visible = ""
+    while (1) {
+      copen = index(line, "<!--")
+      if (copen == 0) { visible = visible line; break }
+      visible = visible substr(line, 1, copen - 1)
+      line = substr(line, copen + 4)
+      cend = index(line, "-->")
+      if (cend == 0) { in_comment = 1; break }
+      line = substr(line, cend + 3)
+    }
+    # A fence line toggles the fence. The check runs on the visible text, so a
+    # marker inside a comment does not open a fence.
+    if (visible ~ /^(```|~~~)/) { in_fence = 1; next }
+    line = visible
     while (match(line, /openspec\/changes\/[^[:space:]"\x27`()<>]*/)) {
       hit = substr(line, RSTART, RLENGTH)
       id = substr(hit, length("openspec/changes/") + 1)
