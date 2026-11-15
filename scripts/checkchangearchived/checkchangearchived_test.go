@@ -14,7 +14,7 @@ import (
 func gitIn(t *testing.T, dir string, args ...string) {
 	t.Helper()
 
-	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...) //nolint:gosec // The test passes fixed git arguments to a throwaway repository.
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
@@ -65,7 +65,7 @@ func run(t *testing.T, dir, path string, args ...string) (int, string) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.CommandContext(t.Context(), "bash", append([]string{script}, args...)...)
+	cmd := exec.CommandContext(t.Context(), "bash", append([]string{script}, args...)...) //nolint:gosec // The test runs the script under test with hostile arguments on purpose, as an argument list and not through a shell.
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PATH="+path)
 
