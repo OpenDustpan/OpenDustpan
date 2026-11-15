@@ -45,8 +45,11 @@ func testBreakGlassInMaintenance(t *testing.T, s RevocationStore) {
 	before := revAuditTotal(t, s)
 
 	err := s.DisablePrincipal(ctx, "prn-bg2", revEntry(principal.Ref("prn-bg2"), revAt(11)))
-	if !errors.Is(err, principal.ErrLastBreakGlass) {
-		t.Fatalf("disable of the last break-glass account in maintenance mode: err = %v, want ErrLastBreakGlass", err)
+	if !errors.Is(err, principal.ErrNoWorkingBreakGlass) {
+		t.Fatalf(
+			"disable of the last break-glass account in maintenance mode: err = %v, want ErrNoWorkingBreakGlass",
+			err,
+		)
 	}
 
 	if got := revAuditTotal(t, s); got != before {
@@ -71,7 +74,7 @@ func testBreakGlassInMaintenance(t *testing.T, s RevocationStore) {
 // restore replaces the data with the backup, which holds no C, and replays
 // both disables. The replay skips the second one: B stays enabled, and the
 // audit log holds one entry with the outcome denied and the reason
-// principal.last-break-glass.
+// principal.no-working-break-glass.
 func testRestoreKeepsOneBreakGlass(t *testing.T, s RevocationStore) {
 	t.Helper()
 
@@ -111,10 +114,10 @@ func testRestoreKeepsOneBreakGlass(t *testing.T, s RevocationStore) {
 		t.Fatalf("entry of the disable that applied = %+v, want success with no reason", applied)
 	}
 
-	if kept.Outcome != audit.OutcomeDenied || kept.Reason != maintenance.ReasonLastBreakGlass ||
+	if kept.Outcome != audit.OutcomeDenied || kept.Reason != maintenance.ReasonNoWorkingBreakGlass ||
 		kept.Object != principal.Ref("prn-bg-b") {
 		t.Fatalf("entry of the skipped disable = outcome %q, reason %q, object %q; want denied, %q, %q",
-			kept.Outcome, kept.Reason, kept.Object, maintenance.ReasonLastBreakGlass, principal.Ref("prn-bg-b"))
+			kept.Outcome, kept.Reason, kept.Object, maintenance.ReasonNoWorkingBreakGlass, principal.Ref("prn-bg-b"))
 	}
 }
 

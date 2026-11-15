@@ -6,6 +6,7 @@ import { operations } from "./operations.js";
 import type {
   AddRegistryKeyInput,
   ApproveAuditChainInput,
+  ApproveJobInput,
   BeginPasskeyRegistrationInput,
   BeginPasskeySignInInput,
   BulkReplaceUnitSettingsInput,
@@ -209,6 +210,7 @@ import type {
   ApiDescription,
   ApprovalDefault,
   ApprovalRule,
+  ApproveJobRequest,
   Approvers,
   AuditChain,
   BackupCorruptError,
@@ -304,6 +306,7 @@ import type {
   JobLogEntry,
   JobPhase,
   JobPlan,
+  JobPlanBinding,
   JobPlanPart,
   JobStep,
   JobStepRecord,
@@ -553,6 +556,10 @@ export class Client {
 
   approveAuditChain(input: ApproveAuditChainInput = {}): Promise<Answer<AuditChain>> {
     return execute(this.transport, operations.approveAuditChain, input);
+  }
+
+  approveJob(input: ApproveJobInput): Promise<Answer<Job>> {
+    return execute(this.transport, operations.approveJob, input);
   }
 
   beginPasskeyRegistration(input: BeginPasskeyRegistrationInput = {}): Promise<Answer<PasskeyCreationOptions>> {

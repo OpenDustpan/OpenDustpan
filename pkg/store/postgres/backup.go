@@ -139,6 +139,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyItemKeyTables()...)
 	tables = append(tables, pgCopySettingTables()...)
 	tables = append(tables, pgCopySelfServiceTables()...)
+	tables = append(tables, pgCopyQuotaTables()...)
 	tables = append(tables, pgCopyTrustRuleTables()...)
 	tables = append(tables, pgCopyBreakGlassReviewTables()...)
 	tables = append(tables, pgCopyUnmanagedTables()...)
@@ -564,6 +565,14 @@ func pgEmptiedTables() []pgCopyTable {
 			table:   backup.TablePasskeyChallenges,
 			columns: pgPasskeyChallengeColumns(),
 			orderBy: []string{pgColDigest},
+		},
+		{
+			table: backup.TableJobTokens,
+			columns: []string{
+				pgColDigest, pgColNamespaceID, "starter_id", pgColJobID, "unit_tool",
+				pgColUnitID, "claim_operation", "claim_token", pgColExpiresAtMs, pgColCreatedAtMs,
+			},
+			orderBy: []string{"digest"},
 		},
 		{
 			table: backup.TableUnitState,

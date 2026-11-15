@@ -21,6 +21,7 @@ Order: this change lands before run-triggers, add-schedule-triggers-due-claim, s
 - [ ] 2.3 SECURITY. Each housekeeping service takes its principal and authorizes before it acts, starting in `pkg/job/artifactsweep.go:617`. Check: 1.2 and 1.3 pass; removing the authorize call of one service makes 1.3 fail (mutation list in the pull request).
 - [ ] 2.4 SECURITY. Refuse credentials and out-of-purpose grants in `pkg/access/service.go:1610`. Check: 1.4 passes.
 - [ ] 2.5 Update `GLOSSARY.md` (file on main; path `GLOSSARY.md`): remove "Namespace service principal", add "Housekeeping principal". Check: `make docs-lint` passes.
+- [ ] 2.6 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `principal.housekeeping` in `internal/errcode/testdata/catalog/principal.txt`; `access.grant-out-of-purpose` in `internal/errcode/testdata/catalog/access.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Definition of done
 
