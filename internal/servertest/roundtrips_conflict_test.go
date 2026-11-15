@@ -21,10 +21,11 @@ import (
 // counts the rows of each class of the dev strip once, so a new class adds
 // one statement. The 47 statements of the first form count the eleven classes
 // that were there before the Git host links; the two Git host classes add
-// forgeStripClassTrips more. The check of the working break-glass accounts
-// reads the clock and counts the live data before the swap fails, which adds
-// breakGlassFloorRetryTrips.
-const swapRetryTrips = 47 + forgeStripClassTrips + breakGlassFloorRetryTrips
+// forgeStripClassTrips more. Each attempt takes the advisory lock of the
+// server audit scope first, so it adds serverAuditLockTrips more. The check of
+// the working break-glass accounts reads the clock and counts the live data
+// before the swap fails, which adds breakGlassFloorRetryTrips.
+const swapRetryTrips = 47 + forgeStripClassTrips + serverAuditLockTrips + breakGlassFloorRetryTrips
 
 // breakGlassFloorRetryTrips is the number of round trips of the check of the
 // working break-glass accounts in a failed attempt of the swap step: the read
