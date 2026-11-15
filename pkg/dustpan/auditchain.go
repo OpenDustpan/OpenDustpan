@@ -469,7 +469,8 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 }
 
 // checkApprovalGate refuses an approval while the migration loop stops,
-// by a service principal for a change to off, or without a fresh MFA step.
+// by a caller that is not a person for a change to off, or without a fresh
+// MFA step.
 func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) error {
 	if c.runsMigrations && !c.migrationsRunning.Load() {
 		return audit.ErrChainMigrationsStopped
@@ -479,7 +480,7 @@ func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) 
 		return nil
 	}
 
-	if err := c.refuseServiceCaller(ctx, caller.Subject); err != nil {
+	if err := c.refuseNonPersonCaller(ctx, caller.Subject); err != nil {
 		return err
 	}
 
@@ -546,10 +547,18 @@ func auditChainRetryKey() string {
 	return auditChainKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
-// refuseServiceCaller refuses an approval of a change to off when subject
-// belongs to a service principal. A subject with no principal row is a
-// person and passes.
-func (c *auditChain) refuseServiceCaller(ctx context.Context, subject string) error {
+// refuseNonPersonCaller refuses an approval of a change to off unless
+// subject is a person. A subject with no principal row is a person and
+// passes. Only a person may approve turning the chain off, so the check
+// allows the kind person only and refuses every other kind: a service
+// principal, a workload, an agent and an unknown kind. A workload passed
+// this check before it became an allowlist, when the check refused only the
+// kind service; a workload is not a person, so it is refused now.
+//
+// Defense in depth: the HTTP handler checks the actions of the caller and
+// the fresh MFA step too. This check stays so that a new caller cannot skip
+// it, and it does not rely on those checks.
+func (c *auditChain) refuseNonPersonCaller(ctx context.Context, subject string) error {
 	if c.principals == nil {
 		return nil
 	}
@@ -563,7 +572,7 @@ func (c *auditChain) refuseServiceCaller(ctx context.Context, subject string) er
 		return fmt.Errorf("read principal: %w", err)
 	}
 
-	if got.Kind == principal.KindService {
+	if got.Kind != principal.KindPerson {
 		return audit.ErrChainNeedsPerson
 	}
 

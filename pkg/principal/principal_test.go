@@ -239,6 +239,33 @@ func TestPaging(t *testing.T) {
 	}
 }
 
+// TestCreatePrincipalRefusesKindAgent proves that CreatePrincipal refuses
+// the kind agent, which the model connect request makes with its sponsors,
+// and stores no record.
+func TestCreatePrincipalRefusesKindAgent(t *testing.T) {
+	t.Parallel()
+
+	svc := newServiceOverStore(t)
+
+	_, err := svc.CreatePrincipal(t.Context(), testEntry(), principal.Input{
+		Subject: "new-agent", DisplayName: "", Kind: principal.KindAgent,
+	})
+	if !errors.Is(err, principal.ErrInvalid) {
+		t.Fatalf("create principal of the kind agent = %v, want ErrInvalid", err)
+	}
+
+	page, listErr := svc.ListPrincipals(
+		t.Context(), principal.PageRequest{Prefix: "", Cursor: "", Limit: 0}, principal.KindAgent,
+	)
+	if listErr != nil {
+		t.Fatalf("list: %v", listErr)
+	}
+
+	if len(page.Items) != 0 || page.Total != 0 {
+		t.Fatalf("principals after a refused create = %+v, want none", page)
+	}
+}
+
 func TestListByKind(t *testing.T) {
 	t.Parallel()
 

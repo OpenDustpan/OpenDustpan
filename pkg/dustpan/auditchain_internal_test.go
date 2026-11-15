@@ -91,9 +91,9 @@ func approver() audit.Entry {
 	}
 }
 
-// createServicePrincipal stores a service principal with subject in the
-// store behind chain.
-func createServicePrincipal(t *testing.T, chain *auditChain, subject string) {
+// createPrincipalOfKind stores a principal with the given kind and subject
+// in the store behind chain.
+func createPrincipalOfKind(t *testing.T, chain *auditChain, subject string, kind principal.Kind) {
 	t.Helper()
 
 	st, ok := chain.namespaces.(principal.RecordStore)
@@ -110,7 +110,7 @@ func createServicePrincipal(t *testing.T, chain *auditChain, subject string) {
 		ID:          "prn-" + subject,
 		Subject:     subject,
 		DisplayName: subject,
-		Kind:        principal.KindService,
+		Kind:        kind,
 		Source:      principal.SourceLocal,
 		Namespace:   "",
 		GroupCount:  0,
@@ -131,7 +131,7 @@ func createServicePrincipal(t *testing.T, chain *auditChain, subject string) {
 	}
 
 	if err := st.CreatePrincipal(t.Context(), p, e); err != nil {
-		t.Fatalf("create service principal %q: %v", subject, err)
+		t.Fatalf("create %s principal %q: %v", kind, subject, err)
 	}
 }
 
@@ -143,7 +143,7 @@ func TestApproveOffRefusesServicePrincipal(t *testing.T) {
 	t.Parallel()
 
 	off := newTestAuditChain(t, audit.ChainOff)
-	createServicePrincipal(t, off, "svc-ci")
+	createPrincipalOfKind(t, off, "svc-ci", principal.KindService)
 
 	caller := approver()
 	caller.Subject = "svc-ci"
@@ -161,10 +161,58 @@ func TestApproveOffRefusesServicePrincipal(t *testing.T) {
 	}
 
 	on := newTestAuditChain(t, audit.ChainOn)
-	createServicePrincipal(t, on, "svc-ci")
+	createPrincipalOfKind(t, on, "svc-ci", principal.KindService)
 
 	if err := on.Approve(t.Context(), caller); err != nil {
 		t.Fatalf("approve on as a service principal: %v", err)
+	}
+}
+
+// TestApproveOffKindsAllowlist proves that the check on a change to off is
+// an allowlist: a person with a principal row may approve it, and the kind
+// service, the kind workload (which passed before the check became an
+// allowlist) and the kind agent are refused. A refused approval writes no
+// operation.
+func TestApproveOffKindsAllowlist(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		kind    principal.Kind
+		refused bool
+	}{
+		{"person", principal.KindPerson, false},
+		{"service", principal.KindService, true},
+		{"workload", principal.KindWorkload, true},
+		{"agent", principal.KindAgent, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			off := newTestAuditChain(t, audit.ChainOff)
+			createPrincipalOfKind(t, off, "caller-"+tc.name, tc.kind)
+
+			caller := approver()
+			caller.Subject = "caller-" + tc.name
+
+			err := off.Approve(t.Context(), caller)
+
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("approve off as a %s principal: %v", tc.name, err)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, audit.ErrChainNeedsPerson) {
+				t.Fatalf("approve off as a %s principal: %v, want ErrChainNeedsPerson", tc.name, err)
+			}
+
+			if got := migrationOpCount(t, off); got != 0 {
+				t.Fatalf("operations after a refused approval = %d, want none", got)
+			}
+		})
 	}
 }
 
