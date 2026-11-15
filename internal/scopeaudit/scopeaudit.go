@@ -229,7 +229,7 @@ func (a *Audit) append(ctx context.Context, ns namespace.ID, action, reason stri
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        reason,
-    Origin:        nil,
+		Origin:        nil,
 	}
 
 	if _, err := a.entries.AppendServer(ctx, entry); err != nil {
