@@ -7,6 +7,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -175,7 +176,11 @@ func createWorkspace(t *testing.T, s Store, ns namespace.Namespace, name string)
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Ref:         workspace.Ref{Namespace: ns.Name, Name: mustWorkspaceName(t, name)},
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {

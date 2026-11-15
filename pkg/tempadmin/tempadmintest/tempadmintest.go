@@ -472,7 +472,7 @@ func mustGroupMember(t *testing.T, s Store, id, principalID string) {
 
 	g := principal.Group{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: id, Name: "Group " + id, Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 
 	if err := s.CreateGroup(t.Context(), g, entry(principal.GroupRef(id))); err != nil {

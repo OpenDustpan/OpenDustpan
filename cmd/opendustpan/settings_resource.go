@@ -28,22 +28,24 @@ func (f *serveFlags) staticLayer() *cli.StaticLayer {
 	return f.layer
 }
 
-// settingsWiring returns the settings wiring for st, or the zero value when
-// st keeps no settings.
+// settingsWiring returns the settings wiring for st.
 func (f *serveFlags) settingsWiring(st store) (settingsWiring, error) {
-	switch s := st.(type) {
-	case sqliteStore:
-		return f.wireSettings(s.SettingStore())
-	case postgresStore:
-		return f.wireSettings(s.SettingStore())
-	default:
-		return settingsWiring{options: nil, sync: nil}, nil
-	}
+	builtin := st.builtin()
+
+	return f.wireSettings(builtin.SettingStore(), storeSettingDeclarations(builtin)...)
 }
 
-// wireSettings builds the wiring over the settings store ss.
-func (f *serveFlags) wireSettings(ss setting.Store) (settingsWiring, error) {
-	declarations := cli.SettingDeclarations()
+// storeSettingDeclarations returns the declarations of the settings of the
+// store itself: the bounds of a PostgreSQL store, and none for a SQLite
+// store.
+func storeSettingDeclarations(b *dustpan.BuiltinStore) []setting.Declaration {
+	return b.SettingDeclarations()
+}
+
+// wireSettings builds the wiring over the settings store ss. extra holds the
+// declarations of the settings of the store itself, when the store has any.
+func (f *serveFlags) wireSettings(ss setting.Store, extra ...setting.Declaration) (settingsWiring, error) {
+	declarations := append(cli.SettingDeclarations(), extra...)
 
 	registry, err := setting.NewRegistry(declarations)
 	if err != nil {

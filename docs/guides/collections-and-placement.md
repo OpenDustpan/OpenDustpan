@@ -125,6 +125,35 @@ CLI sends no collection, and you do not set one.
 - A server that keeps no placement rules makes no stack. The answer is `501`
   with the code `placement.unavailable`.
 
+### A new OpenTofu workspace
+
+OpenTofu makes a workspace on first use, for example with `tofu init` or with
+the first lock of a workspace. The server puts the new workspace in a collection
+with the same rules. A workspace has no project, so the server matches the rules
+with the project `*`. A rule for a workspace has the `tool` `opentofu`. The
+`stack` pattern of the rule matches the name of the workspace.
+
+```sh
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"tool":"opentofu","project":"*","stack":"*","collection":"platform"}' \
+  https://dustpan.example.com/api/dustpan/v1/namespaces/acme/placement-rules
+```
+
+The refusals are the same as for a stack. The caller needs
+`collection:create-unit` on the collection (`403` without it). When no rule
+matches, the answer is `422` with the code `placement.no-match`, and the server
+makes no workspace. A server that keeps no placement rules answers `501` with the
+code `placement.unavailable`.
+
+### A unit in no collection
+
+A stack or a workspace that is in no collection takes no new write. The server
+refuses the first lock and the state write of such a workspace with `409` and
+the code `unit.no-collection`. The message names the command that moves the
+unit into a collection: `PUT /api/inventory/unit-collection`. After the move,
+repeat the request.
+
 ### Routes and actions
 
 | Route | Action | Answer |

@@ -20,8 +20,9 @@ var errObjectLock = errors.New("access denied: object lock")
 
 // hostilePrefixes are prefixes that a check must never write under or
 // delete. Each layer of the containment gets each of them directly, as if
-// every other layer had failed. The last entry stands for the prefix of a
-// real check of another start: see withForeign.
+// every other layer had failed. OWN stands for the prefix of the check that
+// the layer scopes, and FOREIGN for the prefix of a real check of another
+// start: see concrete and withForeign.
 func hostilePrefixes() []string {
 	return []string{
 		"",
@@ -31,7 +32,7 @@ func hostilePrefixes() []string {
 		"store-checks/",
 		"store-checks/../namespaces/",
 		"store-checks/other-check/",
-		"store-checks/<check ID>/../../backups/",
+		"store-checks/OWN/../../backups/",
 		"store-checks/FOREIGN/",
 	}
 }
@@ -62,7 +63,12 @@ type foreignChecks struct {
 	running storecheck.ID
 }
 
-func concrete(prefix string, foreign storecheck.ID) string {
+// concrete replaces the OWN and FOREIGN placeholders of a hostile prefix
+// with real check IDs: own is the check that the layer scopes, foreign is the
+// running check of another start.
+func concrete(prefix string, own, foreign storecheck.ID) string {
+	prefix = strings.ReplaceAll(prefix, "OWN", own.String())
+
 	return strings.ReplaceAll(prefix, "FOREIGN", foreign.String())
 }
 
@@ -77,7 +83,7 @@ func TestServiceRefusesAHostilePrefix(t *testing.T) {
 			r, a, b := f.rig, f.ended, f.running
 			before := r.blobs.callCount()
 
-			view, err := r.svc.Scope(t.Context(), storecheck.TargetBlobs, a, concrete(prefix, b))
+			view, err := r.svc.Scope(t.Context(), storecheck.TargetBlobs, a, concrete(prefix, a, b))
 			if !errors.Is(err, storecheck.ErrPrefixRefused) || view != nil {
 				t.Fatalf("Scope(%q) = %v, %v; want nil and ErrPrefixRefused", prefix, view, err)
 			}
@@ -135,7 +141,7 @@ func TestScopedViewStopsAWriteOutsideThePrefix(t *testing.T) {
 				t.Fatalf("Scope: %v", err)
 			}
 
-			hostile := concrete(prefix, b)
+			hostile := concrete(prefix, a, b)
 			before := r.blobs.callCount()
 
 			checkViewRefuses(t, view, hostile)
@@ -212,7 +218,7 @@ func TestScopedViewStopsAHostileAfterKey(t *testing.T) {
 
 			before := r.blobs.callCount()
 
-			checkViewRefusesAfter(t, view, a.Prefix(), concrete(prefix, b))
+			checkViewRefusesAfter(t, view, a.Prefix(), concrete(prefix, a, b))
 
 			if got := r.blobs.callCount(); got != before {
 				t.Fatalf("the store got %d calls for an After key outside the prefix", got-before)
@@ -235,10 +241,15 @@ func TestPrefixReaperRefusesAHostilePrefix(t *testing.T) {
 				b.Prefix() + "x", a.Prefix() + "left",
 			}
 			r.blobs.seed(seeded...)
+			before := r.blobs.callCount()
 
-			_, err := r.svc.ReapPrefix(t.Context(), storecheck.TargetBlobs, a, concrete(prefix, b))
+			_, err := r.svc.ReapPrefix(t.Context(), storecheck.TargetBlobs, a, concrete(prefix, a, b))
 			if !errors.Is(err, storecheck.ErrPrefixRefused) {
 				t.Fatalf("ReapPrefix(%q) err = %v, want ErrPrefixRefused", prefix, err)
+			}
+
+			if got := r.blobs.callCount(); got != before {
+				t.Fatalf("the store got %d calls for a refused prefix", got-before)
 			}
 
 			if got := len(r.blobs.keys()); got != len(seeded) {

@@ -40,6 +40,55 @@
       }
     },
     "schemas": {
+      "AccessCollectionUnitCapError": {
+        "description": "The error answer with the code access.collection-unit-cap.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/AccessCollectionUnitCapErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "access.collection-unit-cap"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "AccessCollectionUnitCapErrorArgs": {
+        "description": "The arguments of the text of the error with the code access.collection-unit-cap.",
+        "properties": {
+          "cap": {
+            "type": "integer"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cap",
+          "count",
+          "key"
+        ],
+        "type": "object"
+      },
       "AccessLimit": {
         "properties": {
           "id": {
@@ -369,6 +418,51 @@
         ],
         "type": "object"
       },
+      "BackupTooManyUnverifiedError": {
+        "description": "The error answer with the code backup.too-many-unverified.",
+        "properties": {
+          "code": {
+            "description": "The HTTP status.",
+            "type": "integer"
+          },
+          "errorArgs": {
+            "$ref": "#/components/schemas/BackupTooManyUnverifiedErrorArgs"
+          },
+          "errorCode": {
+            "enum": [
+              "backup.too-many-unverified"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "description": "A text for a person.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "errorCode",
+          "errorArgs"
+        ],
+        "type": "object"
+      },
+      "BackupTooManyUnverifiedErrorArgs": {
+        "description": "The arguments of the text of the error with the code backup.too-many-unverified.",
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "limit"
+        ],
+        "type": "object"
+      },
       "BulkUnitSettingsError": {
         "properties": {
           "code": {
@@ -551,6 +645,20 @@
           "createdAt",
           "name",
           "namespace"
+        ],
+        "type": "object"
+      },
+      "Components": {
+        "properties": {
+          "components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "components"
         ],
         "type": "object"
       },
@@ -1359,11 +1467,58 @@
         ],
         "type": "object"
       },
+      "DueSchedule": {
+        "properties": {
+          "lateSeconds": {
+            "format": "double",
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lateSeconds",
+          "name"
+        ],
+        "type": "object"
+      },
+      "EnterMaintenanceRequest": {
+        "properties": {
+          "force": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "force"
+        ],
+        "type": "object"
+      },
+      "EnterMaintenanceResponse": {
+        "properties": {
+          "canceled": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "canceled",
+          "state"
+        ],
+        "type": "object"
+      },
       "ErrorAnswer": {
         "description": "An error answer, by errorCode. A code that carries arguments has its own schema, with typed errorArgs. Any other code, also a code that a client does not know, has the shape of ErrorResponse.",
         "discriminator": {
           "mapping": {
+            "access.collection-unit-cap": "#/components/schemas/AccessCollectionUnitCapError",
             "backup.corrupt": "#/components/schemas/BackupCorruptError",
+            "backup.too-many-unverified": "#/components/schemas/BackupTooManyUnverifiedError",
             "context.field-from-code": "#/components/schemas/ContextFieldFromCodeError",
             "gate.approvers-count-above": "#/components/schemas/GateApproversCountAboveError",
             "lock.locked": "#/components/schemas/LockLockedError",
@@ -1393,7 +1548,13 @@
         },
         "oneOf": [
           {
+            "$ref": "#/components/schemas/AccessCollectionUnitCapError"
+          },
+          {
             "$ref": "#/components/schemas/BackupCorruptError"
+          },
+          {
+            "$ref": "#/components/schemas/BackupTooManyUnverifiedError"
           },
           {
             "$ref": "#/components/schemas/ContextFieldFromCodeError"
@@ -1474,6 +1635,7 @@
       },
       "ErrorCode": {
         "enum": [
+          "access.collection-unit-cap",
           "access.denied",
           "access.ip-not-allowed",
           "access.last-site-administrator",
@@ -1485,6 +1647,7 @@
           "auth.rate-limited",
           "auth.unauthenticated",
           "backup.corrupt",
+          "backup.too-many-unverified",
           "collection.already-exists",
           "collection.changed",
           "collection.invalid-name",
@@ -1507,11 +1670,14 @@
           "gate.final",
           "gate.invalid",
           "gate.limit",
+          "gate.limit-group-reach",
+          "gate.limit-membership",
           "gate.limited",
           "gate.not-found",
           "gate.rule-failed",
           "gate.unavailable",
           "gate.version-conflict",
+          "git-host.app-budget-spent",
           "git-host.app-not-registered",
           "git-host.installation-not-assigned",
           "git-host.link-account-invalid",
@@ -1630,6 +1796,9 @@
           "principal.managed-by-directory",
           "principal.not-disabled",
           "principal.not-found",
+          "principal.removal-alert-failed",
+          "principal.removal-alert-marker-invalid",
+          "principal.removal-alert-unrecorded",
           "principal.reserved-subject",
           "principal.unsupported",
           "profile.conflict",
@@ -1686,6 +1855,9 @@
           "runner.token-used",
           "schema.binary-below-minimum",
           "secret.console-session",
+          "secret.item-key-attempt-expired",
+          "secret.item-key-blob-clock-skew",
+          "secret.item-key-blob-mismatch",
           "secret.key-not-configured",
           "secret.not-decrypted",
           "secret.too-large",
@@ -1708,7 +1880,9 @@
           "settings.static-only",
           "settings.unavailable",
           "settings.value-invalid",
+          "sign-in.failed",
           "sign-in.refused",
+          "sign-in.unavailable",
           "sink.access-token",
           "sink.conflict",
           "sink.delivery-not-found",
@@ -1759,6 +1933,7 @@
           "token.invalid",
           "token.kind-has-none",
           "token.not-found",
+          "token.outside-reach",
           "token.requires-sign-in",
           "token.unsupported",
           "token.wrong-kind",
@@ -2786,6 +2961,9 @@
           },
           "revision": {
             "type": "string"
+          },
+          "source": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -3214,6 +3392,10 @@
       },
       "ListJobsResponse": {
         "properties": {
+          "damaged": {
+            "format": "int64",
+            "type": "integer"
+          },
           "jobs": {
             "items": {
               "$ref": "#/components/schemas/Job"
@@ -3225,6 +3407,7 @@
           }
         },
         "required": [
+          "damaged",
           "jobs"
         ],
         "type": "object"
@@ -3768,6 +3951,17 @@
         "required": [
           "canceledCount",
           "workCount"
+        ],
+        "type": "object"
+      },
+      "MaintenanceState": {
+        "properties": {
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
         ],
         "type": "object"
       },
@@ -5756,7 +5950,12 @@
             "type": "string"
           },
           "value": {
-            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array."
+            "description": "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array.",
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
           }
         },
         "type": "object"
@@ -7235,6 +7434,30 @@
         ],
         "type": "object"
       },
+      "UnclaimedOperation": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "seconds": {
+            "format": "double",
+            "type": "number"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "seconds",
+          "state"
+        ],
+        "type": "object"
+      },
       "Unit": {
         "properties": {
           "collection": {
@@ -8033,6 +8256,42 @@
         },
         "type": "object"
       },
+      "UpgradeCheck": {
+        "properties": {
+          "appliedMigrations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "keyEncryptionKey": {
+            "type": "boolean"
+          },
+          "minimumBinaryVersion": {
+            "type": "string"
+          },
+          "runningJournaledUpdates": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "schemaVersion": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "appliedMigrations",
+          "keyEncryptionKey",
+          "minimumBinaryVersion",
+          "runningJournaledUpdates",
+          "schemaVersion",
+          "version"
+        ],
+        "type": "object"
+      },
       "View": {
         "properties": {
           "createdAt": {
@@ -8093,6 +8352,53 @@
         "required": [
           "labels",
           "references"
+        ],
+        "type": "object"
+      },
+      "WorkerReport": {
+        "properties": {
+          "components": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "leaseSeconds": {
+            "format": "double",
+            "type": "number"
+          },
+          "oldestUnclaimedSeconds": {
+            "format": "double",
+            "type": "number"
+          },
+          "operations": {
+            "items": {
+              "$ref": "#/components/schemas/UnclaimedOperation"
+            },
+            "type": "array"
+          },
+          "schedules": {
+            "items": {
+              "$ref": "#/components/schemas/DueSchedule"
+            },
+            "type": "array"
+          },
+          "silentSeconds": {
+            "format": "double",
+            "type": "number"
+          },
+          "stuck": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "components",
+          "leaseSeconds",
+          "oldestUnclaimedSeconds",
+          "operations",
+          "schedules",
+          "silentSeconds",
+          "stuck"
         ],
         "type": "object"
       },
@@ -8386,6 +8692,42 @@
           "capabilities"
         ],
         "x-dustpan-actions": []
+      }
+    },
+    "/api/dustpan/v1/components": {
+      "get": {
+        "operationId": "getComponents",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Components"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:observe",
+            "object": "server"
+          }
+        ]
       }
     },
     "/api/dustpan/v1/git-host-apps/{kind}": {
@@ -9023,6 +9365,124 @@
         "x-dustpan-actions": [
           {
             "action": "server:manage-sign-in",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/maintenance": {
+      "get": {
+        "operationId": "getMaintenance",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceState"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:maintenance",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/maintenance/enter": {
+      "post": {
+        "operationId": "enterMaintenance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnterMaintenanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnterMaintenanceResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:maintenance",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/maintenance/leave": {
+      "post": {
+        "operationId": "leaveMaintenance",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintenanceState"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:maintenance",
             "object": "server"
           }
         ]
@@ -18409,6 +18869,51 @@
         "x-dustpan-actions": []
       }
     },
+    "/api/dustpan/v1/sign-in/providers/{provider}/password": {
+      "post": {
+        "operationId": "signInWithProviderPassword",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "security": [],
+        "tags": [
+          "sign-in"
+        ],
+        "x-dustpan-actions": []
+      }
+    },
     "/api/dustpan/v1/store-checks": {
       "get": {
         "operationId": "listStoreChecks",
@@ -18534,6 +19039,78 @@
           }
         ]
       }
+    },
+    "/api/dustpan/v1/upgrade-check": {
+      "get": {
+        "operationId": "getUpgradeCheck",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeCheck"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:observe",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/worker": {
+      "get": {
+        "operationId": "getWorker",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerReport"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "installation"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:observe",
+            "object": "server"
+          }
+        ]
+      }
     }
   },
   "security": [
@@ -18585,6 +19162,9 @@
       "name": "git-host-links"
     },
     {
+      "name": "installation"
+    },
+    {
       "name": "issuer"
     },
     {
@@ -18628,6 +19208,9 @@
     },
     {
       "name": "settings"
+    },
+    {
+      "name": "sign-in"
     },
     {
       "name": "source-filter"

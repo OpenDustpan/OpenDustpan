@@ -54,10 +54,12 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "rename to a taken group name is ErrAlreadyExists", test: testRenameGroupTaken},
 		{name: "rename of a group to another case of its own name", test: testRenameGroupCase},
 		{name: "update of a missing group is ErrNotFound", test: testUpdateMissingGroup},
+		{name: "a group records the identity-provider switch", test: testGroupIdentityProviderSwitch},
 		{name: "delete group removes its memberships", test: testDeleteGroup},
 		{name: "delete of a missing group is ErrNotFound", test: testDeleteMissingGroup},
 		{name: "member round trip", test: testMemberRoundTrip},
 		{name: "a principal can be in more than one group", test: testManyGroups},
+		{name: "list active group names of a principal", test: testActiveGroupNames},
 		{name: "duplicate membership is ErrAlreadyExists", test: testDuplicateMember},
 		{name: "membership needs the group and the principal", test: testMemberMissing},
 		{name: "remove of a missing membership is ErrNotFound", test: testRemoveMissingMember},
@@ -166,13 +168,14 @@ func newPrincipal(id, subject string, kind principal.Kind) principal.Principal {
 
 func newGroup(id, name string) principal.Group {
 	return principal.Group{
-		CreatedAt:   at(0),
-		UpdatedAt:   at(0),
-		ID:          id,
-		Name:        name,
-		Description: "The " + name + " group",
-		Source:      principal.SourceLocal,
-		MemberCount: 0,
+		CreatedAt:                at(0),
+		UpdatedAt:                at(0),
+		ID:                       id,
+		Name:                     name,
+		Description:              "The " + name + " group",
+		Source:                   principal.SourceLocal,
+		MemberCount:              0,
+		ClosedToIdentityProvider: false,
 	}
 }
 
@@ -189,6 +192,33 @@ func mustCreateGroup(t *testing.T, s principal.Store, g principal.Group) {
 
 	if err := s.CreateGroup(t.Context(), g, entry()); err != nil {
 		t.Fatalf("create group %q: %v", g.Name, err)
+	}
+}
+
+func mustGroup(t *testing.T, s principal.Store, id string) principal.Group {
+	t.Helper()
+
+	g, err := s.GetGroup(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get the group %q: %v", id, err)
+	}
+
+	return g
+}
+
+func mustUpdateGroup(t *testing.T, s principal.Store, g principal.Group) {
+	t.Helper()
+
+	if err := s.UpdateGroup(t.Context(), g, entry()); err != nil {
+		t.Fatalf("update the group %q: %v", g.Name, err)
+	}
+}
+
+func mustDeleteGroup(t *testing.T, s principal.Store, id string) {
+	t.Helper()
+
+	if err := s.DeleteGroup(t.Context(), id, entry()); err != nil {
+		t.Fatalf("delete the group %q: %v", id, err)
 	}
 }
 
@@ -629,6 +659,62 @@ func testUpdateMissingGroup(t *testing.T, s principal.Store) {
 	wantErr(t, "update a missing group", err, principal.ErrNotFound)
 }
 
+// testGroupIdentityProviderSwitch proves that the switch that closes a group
+// to the identity provider round trips: a new group is open, a create stores
+// the switch, a change closes it, a rename keeps it and a change opens it
+// again. A change of a deleted or an unknown group is ErrNotFound.
+func testGroupIdentityProviderSwitch(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	g := newGroup("grp-1", "ops")
+	mustCreateGroup(t, s, g)
+
+	if mustGroup(t, s, g.ID).ClosedToIdentityProvider {
+		t.Fatal("a new group is closed to the identity provider")
+	}
+
+	closedAtCreate := newGroup("grp-2", "engineering")
+	closedAtCreate.ClosedToIdentityProvider = true
+	mustCreateGroup(t, s, closedAtCreate)
+	equalGroup(t, mustGroup(t, s, closedAtCreate.ID), closedAtCreate)
+
+	closed := g
+	closed.ClosedToIdentityProvider = true
+	closed.UpdatedAt = at(7)
+
+	renamed := closed
+	renamed.Name = "operations"
+	renamed.UpdatedAt = at(8)
+
+	open := renamed
+	open.ClosedToIdentityProvider = false
+	open.UpdatedAt = at(9)
+
+	again := open
+	again.UpdatedAt = at(10)
+
+	// Each change is stored, and the rename between them keeps the switch.
+	steps := []principal.Group{closed, renamed, open, again}
+	for i := range steps {
+		mustUpdateGroup(t, s, steps[i])
+		equalGroup(t, mustGroup(t, s, steps[i].ID), steps[i])
+	}
+
+	missing := newGroup("grp-missing", "dev")
+	missing.ClosedToIdentityProvider = true
+
+	err := s.UpdateGroup(t.Context(), missing, entry())
+	wantErr(t, "update an unknown group", err, principal.ErrNotFound)
+
+	mustDeleteGroup(t, s, g.ID)
+
+	deleted := open
+	deleted.UpdatedAt = at(11)
+
+	err = s.UpdateGroup(t.Context(), deleted, entry())
+	wantErr(t, "update a deleted group", err, principal.ErrNotFound)
+}
+
 func testDeleteGroup(t *testing.T, s principal.Store) {
 	t.Helper()
 
@@ -719,6 +805,79 @@ func testManyGroups(t *testing.T, s principal.Store) {
 	}
 
 	equalStrings(t, "groups", groupNames(groups), []string{"Dev", "ops"})
+}
+
+func testActiveGroupNames(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
+	mustCreateGroup(t, s, newGroup("grp-ops", "Ops"))
+	mustCreateGroup(t, s, newGroup("grp-alpha", "alpha"))
+	mustCreateGroup(t, s, newGroup("grp-suspended", "Suspended"))
+	mustCreateGroup(t, s, newGroup("grp-removed", "Removed"))
+	mustCreateGroup(t, s, newGroup("grp-deleted", "Deleted"))
+
+	mustAddMember(t, s, "grp-ops", "prn-1")
+	mustAddMember(t, s, "grp-alpha", "prn-1")
+
+	suspended := principal.Membership{
+		AddedAt: at(2), SuspendedAt: at(3), GroupID: "grp-suspended", PrincipalID: "prn-1",
+		Source: principal.MembershipSourceLocal, SourceID: "",
+		State: principal.MembershipStateSuspended, Pinned: false,
+	}
+	if err := s.AddMember(ctx, suspended, entry(), nil); err != nil {
+		t.Fatalf("add a suspended member: %v", err)
+	}
+
+	mustAddMember(t, s, "grp-removed", "prn-1")
+
+	if err := s.RemoveMember(ctx, "grp-removed", "prn-1", entry()); err != nil {
+		t.Fatalf("remove the member: %v", err)
+	}
+
+	mustAddMember(t, s, "grp-deleted", "prn-1")
+
+	if err := s.DeleteGroup(ctx, "grp-deleted", entry()); err != nil {
+		t.Fatalf("delete the group: %v", err)
+	}
+
+	cases := []struct {
+		name        string
+		principalID string
+		want        []string
+		wantErr     error
+	}{
+		{
+			"active memberships in name order without regard to case", "prn-1",
+			[]string{"alpha", "Ops"},
+			nil,
+		},
+		{"a missing principal", "prn-missing", nil, principal.ErrNotFound},
+	}
+
+	for _, tc := range cases {
+		got, err := s.ListActiveGroupNamesOf(ctx, tc.principalID)
+		if tc.wantErr != nil {
+			wantErr(t, tc.name, err, tc.wantErr)
+
+			continue
+		}
+
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+
+		equalStrings(t, tc.name, got, tc.want)
+	}
+
+	if err := s.DeletePrincipal(ctx, "prn-1", entry()); err != nil {
+		t.Fatalf("delete the principal: %v", err)
+	}
+
+	_, err := s.ListActiveGroupNamesOf(ctx, "prn-1")
+	wantErr(t, "a deleted principal", err, principal.ErrNotFound)
 }
 
 func testDuplicateMember(t *testing.T, s principal.Store) {

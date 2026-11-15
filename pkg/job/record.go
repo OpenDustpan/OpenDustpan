@@ -186,7 +186,10 @@ type RecordStore interface {
 	// version of the unit is another one, it fails the phase in the same
 	// transaction (with the end of the claim) and returns ErrPlanStale. It
 	// returns ErrInvalid for a phase that is not a plan phase, and ErrConflict
-	// for a phase that has a plan.
+	// for a phase that has a plan. A second reserve of the same plan ID by the
+	// same job, before the parts exist, checks the claim again and returns the
+	// reserved plan with no second item key. A reserve of the ID of a plan of
+	// another job, or of a plan that has parts, returns ErrConflict.
 	ReservePlan(ctx context.Context, pc PhaseClaim, np *NewPlan) (PlanRef, error)
 	// PutPlan stores p, with its parts, as the plan of the plan phase of pc
 	// that ReservePlan recorded, with the state version of the phase, and

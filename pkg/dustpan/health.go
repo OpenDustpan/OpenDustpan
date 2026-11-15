@@ -369,6 +369,12 @@ type componentsDoc struct {
 
 func (rd *readiness) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
+
+	// A cache must not keep a 503 answer, or a load balancer sees the old state.
+	if status == http.StatusServiceUnavailable {
+		w.Header().Set("Cache-Control", "no-store")
+	}
+
 	w.WriteHeader(status)
 
 	if err := json.NewEncoder(w).Encode(body); err != nil {

@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -49,29 +50,19 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/instance"
-	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	blobs3 "opendustpan.org/opendustpan/pkg/blob/s3"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/egress"
-	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
-	"opendustpan.org/opendustpan/pkg/inventory"
-	"opendustpan.org/opendustpan/pkg/ipallow"
-	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
-	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/schema"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
-	"opendustpan.org/opendustpan/pkg/tempadmin"
-	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 var (
@@ -136,9 +127,6 @@ var (
 	errNoDatabase = errors.New(
 		"no database is set: set --database (DUSTPAN_DATABASE), for example sqlite:/var/lib/opendustpan/dustpan.db",
 	)
-	// errNoDatabaseTrial is errNoDatabase for a person who most likely wants a
-	// trial.
-	errNoDatabaseTrial = errors.New("no database is set. For a trial, run: opendustpan dev")
 	// errDevEnvironment reports serve in a shell that holds DUSTPAN_DEV.
 	errDevEnvironment error = &refusalError{
 		text:  "DUSTPAN_DEV is set. The dev.env file of opendustpan dev sets it. Start serve in a new shell.",
@@ -299,11 +287,13 @@ type serveFlags struct {
 	oidcClientID                 string
 	oidcScopes                   string
 	oidcNoAutoCreate             bool
+	ldap                         ldapFlags
 	trustedProxies               string
 	trustedProxyHeader           string
 	ipAllowlists                 bool
 	ipAllowlistsIncludeBootstrap bool
 	gitHostAllowedRanges         string
+	allowPlainConnections        bool
 	blobDir                      string
 	blobStore                    string
 	s3Endpoint                   string
@@ -335,6 +325,8 @@ type serveFlags struct {
 	planRetention, jobLogRetention string
 	jobRetention                   history.RetentionSettings
 	auditSinks                     []string
+	auditSinkAllowedRanges         string
+	auditSinkRanges                []netip.Prefix
 	// destinationPorts holds the ports, besides 443, that a notification
 	// destination may use.
 	destinationPorts string
@@ -412,6 +404,13 @@ func (f *serveFlags) check() error {
 	if _, err := egress.ParseAllowedRanges(splitList(f.gitHostAllowedRanges)); err != nil {
 		return fmt.Errorf("invalid --git-host-allowed-ranges: %w", err)
 	}
+
+	ranges, parseErr := egress.ParseAllowedRanges(splitList(f.auditSinkAllowedRanges))
+	if parseErr != nil {
+		return fmt.Errorf("invalid --audit-sink-allowed-ranges: %w", parseErr)
+	}
+
+	f.auditSinkRanges = ranges
 
 	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
 }
@@ -494,6 +493,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag(cli.UnsafeAllowDevBackupsFlag).Bool(fs, &f.allowDevBackups)
 	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
 	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
+	cli.ByFlag("audit-sink-allowed-ranges").String(fs, &f.auditSinkAllowedRanges)
 	cli.ByFlag("destination-ports").String(fs, &f.destinationPorts)
 	cli.ByFlag("audit-checkpoints").Bool(fs, &f.auditCheckpoints)
 	cli.ByFlag("audit-signing-key-file").String(fs, &f.auditSigningKeyFile)
@@ -529,12 +529,14 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("ip-allowlists").Bool(fs, &f.ipAllowlists)
 	cli.ByFlag("ip-allowlists-include-bootstrap").Bool(fs, &f.ipAllowlistsIncludeBootstrap)
 	cli.ByFlag("git-host-allowed-ranges").String(fs, &f.gitHostAllowedRanges)
+	cli.ByFlag("allow-plain-connections").Bool(fs, &f.allowPlainConnections)
 	cli.ByFlag("oidc-issuer").String(fs, &f.oidcIssuer)
 	cli.ByFlag("oidc-provider").String(fs, &f.oidcProvider)
 	cli.ByFlag("oidc-display-name").String(fs, &f.oidcDisplayName)
 	cli.ByFlag("oidc-client-id").String(fs, &f.oidcClientID)
 	cli.ByFlag("oidc-scopes").String(fs, &f.oidcScopes)
 	cli.ByFlag("oidc-no-auto-create").Bool(fs, &f.oidcNoAutoCreate)
+	f.ldap.register(fs)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -743,7 +745,9 @@ func hasValue(lookup cli.LookupFunc, name string) bool {
 // no database, in this order, and reports only the first. Serve stops before
 // it opens the database. Each error names one command that helps. A person at
 // a terminal who set no setting of serve most likely wants a trial, so the
-// error names the dev command.
+// error for a missing key names the dev command. The error for a missing
+// database never does: the code reaches the database check only with a key,
+// and a key is a setting of serve.
 func (f *serveFlags) requireDecisions(terminal bool, lookup cli.LookupFunc) error {
 	trial := terminal && f.noSettings(lookup)
 
@@ -756,10 +760,6 @@ func (f *serveFlags) requireDecisions(terminal bool, lookup cli.LookupFunc) erro
 	}
 
 	if strings.TrimSpace(f.database) == "" {
-		if trial {
-			return errNoDatabaseTrial
-		}
-
 		return errNoDatabase
 	}
 
@@ -917,7 +917,7 @@ func (f *serveFlags) serveWithStores(
 		defer closeTargetStore(ctx, logger, backupTarget)
 	}
 
-	sinks, err := openAuditSinks(f.auditSinks, blobs, os.LookupEnv)
+	sinks, err := openAuditSinks(f.auditSinks, blobs, os.LookupEnv, f.auditSinkRanges)
 	if err != nil {
 		return err
 	}
@@ -1070,7 +1070,7 @@ func (f *serveFlags) serverOptions(
 		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
 	}
 
-	signIn, signInErr := f.signInOptions()
+	signIn, signInErr := f.signInOptions(os.LookupEnv)
 	if signInErr != nil {
 		return nil, signInErr
 	}
@@ -1088,17 +1088,8 @@ func (f *serveFlags) serverOptions(
 
 	opts := append([]dustpan.Option{
 		dustpan.WithInstallation(namespace.InstallationName(f.installation)),
-		dustpan.WithNamespaceStore(st),
-		dustpan.WithStackStore(st),
-		dustpan.WithUpdateStore(st),
-		dustpan.WithCheckpointStore(st),
-		dustpan.WithEventStore(st),
-		dustpan.WithSecretKeyStore(st),
 		dustpan.WithSecretWrapper(wrapper),
-		dustpan.WithWorkspaceStore(st),
-		dustpan.WithStateStore(st),
 		dustpan.WithBlobStore(blobs),
-		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
 		dustpan.WithListenAddr(f.listen),
@@ -1123,13 +1114,15 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithRetention(f.jobRetention),
 		dustpan.WithIPAllowlists(f.ipAllowlists),
 		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
-		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithInstanceID(f.instanceID),
 	}, append(signIn, checkpoints...)...)
 
-	tail, tailErr := f.storeOptions(st, wrapper)
+	tail, tailErr := f.storeOptions(st)
+	if tailErr != nil {
+		return nil, tailErr
+	}
 
-	return append(opts, tail...), tailErr
+	return append(append(opts, tail...), builtinStoreOption(st)), nil
 }
 
 // gitHostOptions returns the option of the address ranges that a connection to
@@ -1144,10 +1137,9 @@ func (f *serveFlags) gitHostOptions() ([]dustpan.Option, error) {
 	return []dustpan.Option{dustpan.WithGitHostAllowedRanges(ranges...)}, nil
 }
 
-// storeOptions returns the options of the components and of the stores that
-// the store may or may not keep: the durable operations, the runners and the
-// profiles.
-func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.Option, error) {
+// storeOptions returns the options of the components, the Git host ranges,
+// the settings resource, the sink ports and the installation kind.
+func (f *serveFlags) storeOptions(st store) ([]dustpan.Option, error) {
 	set, err := dustpan.ParseComponents(f.components)
 	if err != nil {
 		return nil, fmt.Errorf("--components: %w", err)
@@ -1159,14 +1151,6 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 	}
 
 	opts := append([]dustpan.Option{dustpan.WithComponents(set)}, gitHostOpts...)
-	opts = append(opts, durableStoreOption(st)...)
-	opts = append(opts, runnerStoreOption(st)...)
-	opts = append(opts, sourceFilterStoreOption(st)...)
-	opts = append(opts, trustRuleStoreOption(st)...)
-	opts = append(opts, jobStoreOption(st)...)
-	opts = append(opts, triggerStoreOption(st)...)
-	opts = append(opts, unitSettingsStoreOption(st)...)
-	opts = append(opts, savedViewStoreOption(st)...)
 
 	wiring, wireErr := f.settingsWiring(st)
 	if wireErr != nil {
@@ -1175,19 +1159,19 @@ func (f *serveFlags) storeOptions(st store, wrapper secret.Wrapper) ([]dustpan.O
 
 	opts = append(opts, wiring.options...)
 	f.settingsSync = wiring.sync
-	opts = append(opts, driftStoreOption(st)...)
-	opts = append(opts, gitHostStoreOption(st)...)
-	opts = append(opts, registryStoreOption(st)...)
-	opts = append(opts, sinkStoreOption(st)...)
 
 	ports, err := f.sinkPorts()
 	if err != nil {
 		return nil, err
 	}
-	opts = append(opts, dustpan.WithSinkPorts(ports), dustpan.WithInstallationKind(f.kind()),
-		dustpan.WithInstallationKindStore(st), dustpan.WithInstanceStore(st))
+	opts = append(opts, dustpan.WithSinkPorts(ports), dustpan.WithInstallationKind(f.kind()))
 
-	return append(opts, profileStoreOption(st, wrapper)...), nil
+	return opts, nil
+}
+
+// builtinStoreOption sets every store option from the opened store st.
+func builtinStoreOption(st store) dustpan.Option {
+	return dustpan.WithBuiltinStore(st.builtin())
 }
 
 // errDestinationPorts reports a --destination-ports item that is no port.
@@ -1219,195 +1203,6 @@ func parseSinkPorts(value string) (egress.Ports, error) {
 	}
 
 	return ports, nil
-}
-
-// durableStoreOption returns the durable schedule store option for st, or nil
-// when st keeps no durable schedules.
-func durableStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithDurableStore(s.DurableOperations())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithDurableStore(s.DurableOperations())}
-	default:
-		return nil
-	}
-}
-
-// runnerStoreOption returns the option of the runner stores for st, or nil
-// when st keeps no runners.
-func runnerStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithRunners(s.Runners())}
-	default:
-		return nil
-	}
-}
-
-// sourceFilterStoreOption returns the option of the source filter store for st,
-// or nil when st keeps no source filter.
-func sourceFilterStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithSourceFilters(s.SourceFilters())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithSourceFilters(s.SourceFilters())}
-	default:
-		return nil
-	}
-}
-
-// trustRuleStoreOption returns the option of the trust rule store for st, or
-// nil when st keeps no trust rules.
-func trustRuleStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithTrustRules(s.TrustRules())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithTrustRules(s.TrustRules())}
-	default:
-		return nil
-	}
-}
-
-// jobStoreOption returns the options of the job store and of the job claimer
-// for st, or nil when st keeps no jobs. The claimer takes the phases of the
-// jobs as durable operations, so a poll of a runner of a pool for jobs finds
-// work.
-func jobStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{
-			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
-				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
-			}),
-		}
-	case postgresStore:
-		return []dustpan.Option{
-			dustpan.WithJobStore(s.Jobs()),
-			dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
-				return job.NewClaimer(s.Jobs(), s.DurableOperationsPort(), s.Store, g)
-			}),
-		}
-	default:
-		return nil
-	}
-}
-
-// triggerStoreOption returns the option of the run trigger store for st, or nil
-// when st keeps no triggers.
-func triggerStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithTriggerStore(s.Triggers())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithTriggerStore(s.Triggers())}
-	default:
-		return nil
-	}
-}
-
-// unitSettingsStoreOption returns the option of the unit settings store for
-// st, or nil when st keeps no unit settings.
-func unitSettingsStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithUnitSettingsStore(s.UnitSettings())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithUnitSettingsStore(s.UnitSettings())}
-	default:
-		return nil
-	}
-}
-
-// savedViewStoreOption returns the option of the saved view store for st, or
-// nil when st keeps no saved views.
-func savedViewStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithSavedViewStore(s.SavedViews())}
-	default:
-		return nil
-	}
-}
-
-// driftStoreOption returns the option of the drift result store for st, or nil
-// when st keeps no drift results.
-func driftStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithDriftStore(s.DriftResults())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithDriftStore(s.DriftResults())}
-	default:
-		return nil
-	}
-}
-
-// gitHostStoreOption returns the option of the Git host store for st, or nil
-// when st keeps no Git host connections.
-func gitHostStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithGitHostStore(s.GitHost())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithGitHostStore(s.GitHost())}
-	default:
-		return nil
-	}
-}
-
-// registryStoreOption returns the option of the registry stores for st, or nil
-// when st keeps no registry.
-func registryStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithRegistry(s.Registry(), s.RegistryKeys())}
-	default:
-		return nil
-	}
-}
-
-// sinkStoreOption returns the option of the notification sink store for st,
-// or nil when st keeps no sinks.
-func sinkStoreOption(st store) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{dustpan.WithSinkStore(s.NotificationSinks())}
-	case postgresStore:
-		return []dustpan.Option{dustpan.WithSinkStore(s.NotificationSinks())}
-	default:
-		return nil
-	}
-}
-
-// profileStoreOption returns the profile store option for st, or nil when st
-// keeps no profiles. wrapper seals the server key of the replay records.
-func profileStoreOption(st store, wrapper secret.Wrapper) []dustpan.Option {
-	switch s := st.(type) {
-	case sqliteStore:
-		return []dustpan.Option{
-			dustpan.WithProfileStore(s.Profiles()),
-			dustpan.WithIssuerStore(s.Issuer()),
-			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
-		}
-	case postgresStore:
-		return []dustpan.Option{
-			dustpan.WithProfileStore(s.Profiles()),
-			dustpan.WithIssuerStore(s.Issuer()),
-			dustpan.WithIdempotencyStore(s.Idempotency(wrapper)),
-		}
-	default:
-		return nil
-	}
 }
 
 // blobOpenConfig holds the live blob store settings of serve.
@@ -1771,48 +1566,32 @@ func (f *serveFlags) appLogFor(stderr io.Writer) (appLog, error) {
 		return appLog{}, err
 	}
 
-	return newAppLog(f.logSinks, logLevelOf(f.logLevel), f.logFormat, stderr, os.LookupEnv)
+	return newAppLog(f.logSinks, logLevelOf(f.logLevel), f.logFormat, stderr, sinkEnv{
+		lookup: os.LookupEnv, ranges: f.auditSinkRanges,
+	})
 }
 
-// store is the persistence adapter chosen by --database.
-//
-//nolint:interfacebloat // The binary needs every persistence port in one adapter.
+// store is the opened built-in store chosen by --database.
 type store interface {
-	namespace.Store
-	stack.Store
-	stack.UpdateStore
-	stack.CheckpointStore
-	stack.EventStore
-	secret.KeyStore
-	workspace.Store
-	workspace.StateStore
-	inventory.Reader
-	ipallow.Store
-	audit.ServerStore
-	principal.Store
-	accesstoken.Store
-	accesstoken.HostStore
-	tempadmin.Store
-	installation.KindStore
-	installation.InstanceStore
-	// gate.Store is here so that opendustpan serve always runs with the
-	// state.write gates on: a store wrapper that does not keep gates does not
-	// compile.
-	gate.Store
+	dustpan.StorePorts
 	close()
+	builtin() *dustpan.BuiltinStore
 }
 
-type sqliteStore struct{ *sqlite.Store }
+// openedStore wraps the built-in store with the close of the binary.
+type openedStore struct {
+	*dustpan.BuiltinStore
+}
 
-func (s sqliteStore) close() {
+// close closes the store and writes a warning when the close fails.
+func (s openedStore) close() {
 	if err := s.Close(); err != nil {
 		slog.New(slog.NewTextHandler(os.Stderr, nil)).Warn("close database", slog.String("error", err.Error()))
 	}
 }
 
-type postgresStore struct{ *postgres.Store }
-
-func (s postgresStore) close() { s.Close() }
+// builtin answers the handle that the server options need.
+func (s openedStore) builtin() *dustpan.BuiltinStore { return s.BuiltinStore }
 
 // openMode says whether openStore applies the pending migrations.
 type openMode int
@@ -1842,76 +1621,32 @@ const (
 var openStore = func(
 	ctx context.Context, database string, logger *slog.Logger, mode openMode, kind installation.Kind,
 ) (store, error) {
-	switch {
-	case strings.HasPrefix(database, "sqlite:"):
-		opts := []sqlite.Option{
-			sqlite.WithLogger(logger), sqlite.WithBinaryVersion(version), sqlite.WithInstallationKind(kind),
-		}
-		if mode == openNoMigrate {
-			opts = append(opts, sqlite.WithoutMigrate())
-		}
+	opts := []dustpan.StoreOption{
+		dustpan.WithStoreLogger(logger),
+		dustpan.WithStoreBinaryVersion(version),
+		dustpan.WithStoreInstallationKind(kind),
+	}
+	if mode == openNoMigrate {
+		opts = append(opts, dustpan.WithoutStoreMigrate())
+	}
 
-		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"), opts...)
-		if err != nil {
-			return nil, fmt.Errorf("open sqlite store: %w", err)
-		}
-
-		warnDevBuild(ctx, logger, s)
-
-		return sqliteStore{s}, nil
-	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
-		opts := []postgres.Option{
-			postgres.WithLogger(logger), postgres.WithBinaryVersion(version), postgres.WithInstallationKind(kind),
-		}
-		if mode == openNoMigrate {
-			opts = append(opts, postgres.WithoutMigrate())
-		}
-
-		s, err := postgres.Open(ctx, database, opts...)
+	opened, err := dustpan.OpenStore(ctx, database, opts...)
+	if err != nil {
 		if errors.Is(err, postgres.ErrFailoverSetting) {
 			return nil, fmt.Errorf("open postgres store: %s: %w", errcode.StoreFailoverSettingInvalid, err)
 		}
 
-		if err != nil {
-			return nil, fmt.Errorf("open postgres store: %w", err)
-		}
-
-		warnDevBuild(ctx, logger, s)
-		logFailoverSettings(ctx, logger, s.FailoverSettings())
-
-		return postgresStore{s}, nil
-	default:
-		return nil, errUnknownBackend
-	}
-}
-
-// logFailoverSettings writes the effective failover settings of the pool
-// once at the start: each value and where it came from. The record holds no
-// host, user or password.
-func logFailoverSettings(ctx context.Context, logger *slog.Logger, settings postgres.FailoverSettings) {
-	// One group for each setting, then the check, the deadline and the three
-	// server timeouts.
-	const extraAttrs = 5
-
-	attrs := make([]any, 0, len(settings.Settings)+extraAttrs)
-
-	for _, setting := range settings.Settings {
-		attrs = append(attrs, slog.Group(setting.Name,
-			slog.String("value", setting.Value), slog.String("from", setting.Source)))
+		return nil, err
 	}
 
-	attrs = append(attrs, slog.String("connect_check", settings.ConnectCheck),
-		slog.Duration("statement_deadline", settings.StatementDeadline),
-		slog.Duration("statement_timeout", settings.ServerStatementTimeout),
-		slog.Duration("idle_in_transaction_session_timeout", settings.ServerIdleInTransactionTimeout),
-		slog.Duration("client_connection_check_interval", settings.ClientConnectionCheckInterval))
+	warnDevBuild(ctx, logger, opened)
 
-	logger.InfoContext(ctx, "database failover settings", attrs...)
+	return openedStore{opened}, nil
 }
 
-// appliedMigrationsReader reads the applied migrations of an open store.
+// appliedMigrationsReader reads the minimum binary versions of an open store.
 type appliedMigrationsReader interface {
-	AppliedMigrations(ctx context.Context) ([]schema.AppliedMigration, error)
+	AppliedMinimumBinaryVersions(ctx context.Context) ([]string, error)
 }
 
 // warnDevBuild logs a warning when a dev build opens a schema that records a
@@ -1922,17 +1657,12 @@ func warnDevBuild(ctx context.Context, logger *slog.Logger, s appliedMigrationsR
 		return
 	}
 
-	applied, err := s.AppliedMigrations(ctx)
+	minimums, err := s.AppliedMinimumBinaryVersions(ctx)
 	if err != nil {
 		logger.WarnContext(ctx, "read the minimum binary version of the database schema",
 			slog.String("error", err.Error()))
 
 		return
-	}
-
-	minimums := make([]string, 0, len(applied))
-	for _, m := range applied {
-		minimums = append(minimums, m.MinBinaryVersion)
 	}
 
 	minimum, err := schema.HighestMinimum(minimums)

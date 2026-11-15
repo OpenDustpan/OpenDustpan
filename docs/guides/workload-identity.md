@@ -45,6 +45,11 @@ so a stream of malformed tokens cannot hide it. A successful exchange
 writes an entry with the principal, the issuer, the `sub` and the `jti` of the
 token, the ID of the access token and its expiry. No entry holds a token.
 
+The server does not keep the `jti` of an exchanged token. So the same token
+can be exchanged again until its `exp`, and each exchange issues a new access
+token. The audit entries of the exchanges hold the `jti`, so an operator can
+find each exchange that used a token.
+
 The server reads the discovery document and the keys of an issuer through its
 outbound address rules: it never connects to a loopback, private, link-local
 or cloud metadata address, and follows no redirect. It keeps the keys for 5

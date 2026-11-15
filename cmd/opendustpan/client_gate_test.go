@@ -68,7 +68,7 @@ func TestNonServeCommandsOpenNoStore(t *testing.T) {
 		http.StatusCreated,
 		`{"name":"acme","primaryInstallation":"test","failoverVersion":1,"createdAt":"2026-10-11T12:00:00Z"}`,
 	)
-	upgrade := newCheckFakeServer(t, "/api/server/upgrade-check", http.StatusOK, upgradeCheckBody(t, nil))
+	upgrade := newCheckFakeServer(t, "/api/dustpan/v1/upgrade-check", http.StatusOK, upgradeCheckBody(t, nil))
 
 	const backupID = "bkp-test00000000000001"
 

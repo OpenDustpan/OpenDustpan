@@ -186,8 +186,8 @@ func (f *sessionJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 
 	spec := job.Spec{
 		Unit: unit, Operation: job.OperationPlan, Purpose: "", Executor: job.ExecutorRunner,
-		Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""}, Steps: steps,
-		Pool: "", Profile: "", Edits: nil, Delivery: "", Defaulted: nil,
+		Location:       job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
+		LocationSource: "", Steps: steps, Pool: "", Profile: "prf-default", Edits: nil, Delivery: "", Defaulted: nil,
 	}
 	phase := job.Phase{
 		Kind: job.PhasePlan, Operation: string(id), Claims: 1, Executor: "", Steps: records, StateVersion: "",
@@ -195,9 +195,9 @@ func (f *sessionJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 	}
 
 	return job.Job{
-		ID: id, Spec: spec, State: "", Wait: "", Reason: "", Phases: []job.Phase{phase}, Current: 0, StartedBy: "",
-		Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil, Closed: nil,
-		Verification: "", IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{},
+		ID: id, NamespaceID: "", Spec: spec, State: "", Wait: "", Reason: "", Phases: []job.Phase{phase}, Current: 0,
+		StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil,
+		Closed: nil, Verification: "", IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{},
 		UpdatedAt: time.Time{}, StateChangedAt: time.Time{},
 	}, nil
 }

@@ -2,11 +2,12 @@
 # SQLite, once each night on main. The ci.yml e2e job runs the suite with the
 # in-process server. This run shows that the shipped binary works with each
 # CLI. It is slower, so pull requests do not run it.
-# The run has two jobs: "pinned" runs the pinned CLI versions and "latest" runs
-# the newest release of each CLI, which the run downloads each time. A red
-# "latest" job with a green "pinned" job means that a new CLI release changed
-# something. It does not mean that the server broke, and it does not block a
-# release.
+# The suite has two matrix rows: "pinned" runs the pinned CLI versions and
+# "latest" runs the newest release of each CLI, which the run downloads each
+# time. The upgrade-latest job runs the upgrade test with the newest releases.
+# A red "latest" row or upgrade-latest job with a green "pinned" row means that
+# a new CLI release changed something. It does not mean that the server broke,
+# and it does not block a release.
 # Read the contract.md part of the job summary: it lists what the new release
 # reads that the newest contract file does not have.
 # The step summary shows summary.md and contract.md of the report directory.
@@ -60,13 +61,24 @@ jobs:
       # The CLI archives are kept in two cache entries. A cache key is written
       # only once, so each entry has a key that changes when its content must
       # change. The pinned versions are in e2e/tool.go, so that entry has the
-      # hash of the file in its key and leaves out the "latest" versions. The
-      # "latest" entry has the newest versions in its key, so each new release
-      # is downloaded once.
+      # hash of the file in its key. The pinned row caches the whole directory.
+      # The latest row keeps the latest versions out of the pinned entry, as
+      # today. The "latest" entry has the newest versions in its key, so each
+      # new release is downloaded once. The pinned row does not look up the
+      # newest versions, so it never asks for a release that has no pinned sum.
       - name: Find the newest CLI versions
         id: latest-clis
+        if: ${{ matrix.set == 'latest' }}
         run: scripts/e2e-latest-clis.sh >> "$GITHUB_OUTPUT"
-      - name: Cache the pinned CLI archives
+      - name: Cache the pinned CLI archives (pinned row)
+        if: ${{ matrix.set == 'pinned' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/opendustpan-e2e
+          key: e2e-clis-pinned-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('e2e/tool.go') }}
+      - name: Cache the pinned CLI archives (latest row)
+        if: ${{ matrix.set == 'latest' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -75,6 +87,7 @@ jobs:
             !~/.cache/opendustpan-e2e/tofu_${{ steps.latest-clis.outputs.tofu }}_*
           key: e2e-clis-pinned-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('e2e/tool.go') }}
       - name: Cache the latest CLI archives
+        if: ${{ matrix.set == 'latest' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -88,6 +101,81 @@ jobs:
           E2E_PULUMI_VERSIONS: ${{ matrix.set }}
           E2E_TOFU_VERSIONS: ${{ matrix.set }}
         run: make e2e
+      - name: Show the report
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f e2e/report/summary.md ]; then
+            cat e2e/report/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f e2e/report/contract.md ]; then
+            cat e2e/report/contract.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # The upgrade test with the newest CLI releases. It proves that the current
+  # server binary keeps its data, secrets and locks across an upgrade driven by
+  # a new CLI release, as the upgrade-test job of ci.yml proves for the pinned
+  # releases. A red run does not mean that the server broke, and it does not
+  # block a release.
+  upgrade-latest:
+    name: upgrade-latest
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        # The Go test cache does not see the image. The digest makes sure that
+        # the image changes only in a commit, not under cached test results.
+        image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_PASSWORD: postgres
+        # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
+        # so go test can use cached results. Each job has its own runner, so
+        # the port is free.
+        ports: [ "5432:5432" ]
+        # A parallel query keeps its shared memory in /dev/shm, and the Docker
+        # default of 64 MiB is too small for the tests.
+        options: >-
+          --shm-size=1g
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      # The upgrade test reads the v* tags, so fetch all of the history.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The newest Go caches of the upgrade-test job of ci.yml. This job only
+      # restores them and saves no entry of its own.
+      - name: Restore the Go caches
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-upgrade-test-0-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-${{ runner.os }}-upgrade-test-0-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-${{ runner.os }}-upgrade-test-0-
+      - name: Find the newest CLI versions
+        id: latest-clis
+        run: scripts/e2e-latest-clis.sh >> "$GITHUB_OUTPUT"
+      - name: Cache the latest CLI archives
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/opendustpan-e2e/pulumi-v${{ steps.latest-clis.outputs.pulumi }}-*
+            ~/.cache/opendustpan-e2e/tofu_${{ steps.latest-clis.outputs.tofu }}_*
+          key: e2e-clis-latest-${{ runner.os }}-${{ runner.arch }}-pulumi-${{ steps.latest-clis.outputs.pulumi }}-tofu-${{ steps.latest-clis.outputs.tofu }}
+      - name: Upgrade test with the newest CLI releases
+        env:
+          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
+          E2E_PULUMI_VERSIONS: latest
+          E2E_TOFU_VERSIONS: latest
+        run: make upgrade-test
       - name: Show the report
         if: ${{ !cancelled() }}
         run: |

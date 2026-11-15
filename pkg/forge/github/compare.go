@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/forge"
 )
@@ -322,7 +323,13 @@ func addPatch(patch *bytes.Buffer, file comparedFile, changed forge.ChangedFile,
 	}
 
 	if room > 0 {
-		patch.Write(text.Bytes()[:room])
+		// The cut stays at a rune boundary, so that the patch stays valid UTF-8.
+		cut := room
+		for cut > 0 && !utf8.RuneStart(text.Bytes()[cut]) {
+			cut--
+		}
+
+		patch.Write(text.Bytes()[:cut])
 	}
 
 	return true

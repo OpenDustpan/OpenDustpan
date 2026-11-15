@@ -18,6 +18,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -433,7 +434,11 @@ func testDeleteWorkspaceKeepsKey(t *testing.T, s Store) {
 		Ref:         workspace.Ref{Namespace: ns.Name, Name: name},
 		ID:          workspace.ID(ident.NewID("ws-")),
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if err := s.CreateWorkspace(t.Context(), w, ns.Fence()); err != nil {

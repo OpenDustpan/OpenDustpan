@@ -131,7 +131,7 @@ func devReset(ctx context.Context, args []string, stderr io.Writer, proc devProc
 	}
 
 	app, err := newAppLog( //nolint:contextcheck // The log writers outlive this call; close bounds them.
-		nil, slog.LevelInfo, "text", stderr, proc.lookup,
+		nil, slog.LevelInfo, "text", stderr, sinkEnv{lookup: proc.lookup, ranges: nil},
 	)
 	if err != nil {
 		return err

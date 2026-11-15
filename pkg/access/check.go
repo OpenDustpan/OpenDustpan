@@ -2,12 +2,46 @@ package access
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
 
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
+
+// principalReader reads one principal in the transaction of a write.
+type principalReader interface {
+	GetPrincipal(ctx context.Context, id string) (principal.Principal, error)
+}
+
+// errNoPrincipalReadInWrite marks a principal read that the transaction of a
+// write cannot do.
+var errNoPrincipalReadInWrite = errors.New("no principal read in the write")
+
+// writePrincipals is the principal port of an Authorizer inside the
+// transaction of a write. It reads one principal in that transaction, and
+// never on another connection. With no reader, each read fails, so the check
+// denies. A grant check lists no principal of a namespace, so a list fails.
+type writePrincipals struct {
+	reader principalReader
+}
+
+func (p writePrincipals) GetPrincipal(ctx context.Context, id string) (principal.Principal, error) {
+	if p.reader == nil {
+		return principal.Principal{}, fmt.Errorf("%w: principal %q", errNoPrincipalReadInWrite, id)
+	}
+
+	return p.reader.GetPrincipal(ctx, id)
+}
+
+func (writePrincipals) ListNamespacePrincipals(
+	_ context.Context, ns namespace.Name, _ principal.Query,
+) ([]principal.Principal, int64, error) {
+	return nil, 0, fmt.Errorf("%w: principals of namespace %q", errNoPrincipalReadInWrite, ns.String())
+}
 
 // readsStore is the Store of an Authorizer inside the transaction of a
 // write. It reads the grants, the roles and where a role is granted with
@@ -70,19 +104,24 @@ func (s readsStore) RoleGrantedOnPrincipal(ctx context.Context, role string) (bo
 	return on, nil
 }
 
-// within returns a copy of s that reads the grants, the roles and the
-// subjects of callers with reads, in the transaction of a write, and a
-// context with no request cache: a change that committed after the request
-// read them is visible. The copy reads the chain of obj from chain, which
-// the Service read before the write: the copy reads no unit, collection or
-// principal record, so the write uses no connection other than its own.
+// within returns a copy of s that reads the grants, the roles, the subjects
+// of callers and the namespace of a principal with reads, in the transaction
+// of a write, and a context with no request cache: a change that committed
+// after the request read them is visible. The copy reads the chain of obj
+// from chain, which the Service read before the write: the copy reads no unit
+// or collection record, so the write uses no connection other than its own.
 func (s *Service) within(
 	ctx context.Context, reads GrantReads, obj identity.Object, chain []identity.Object,
 ) (*Service, context.Context) {
 	st := readsStore{Store: s.store, reads: reads}
 
+	principals := writePrincipals{reader: nil}
+	if reader, ok := reads.(principalReader); ok {
+		principals.reader = reader
+	}
+
 	authz := &Authorizer{
-		store: st, callers: reads, collections: nil, units: nil, principals: nil,
+		store: st, callers: reads, collections: nil, units: nil, principals: principals,
 		chains: map[string][]identity.Object{obj.String(): chain},
 	}
 

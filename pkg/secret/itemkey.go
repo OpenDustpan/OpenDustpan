@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +22,66 @@ var (
 	ErrShredded = errors.New("item key is shredded")
 	// ErrInvalidItemRef reports an item reference that fails validation.
 	ErrInvalidItemRef = errors.New("invalid item reference")
+	// ErrItemKeyBlobMismatch reports a wrapped item key blob whose size or
+	// MD5 is not the size or the MD5 that its record names. The store
+	// replaced the object, or someone changed it. The server does not unwrap
+	// such a blob.
+	ErrItemKeyBlobMismatch = errors.New("item key blob does not match its record")
+	// ErrItemKeyAttemptExpired reports an item key transaction that did not
+	// commit before its attempt deadline. The transaction rolls back, and its
+	// blob stays for the reaper.
+	ErrItemKeyAttemptExpired = errors.New("item key write passed its attempt deadline")
+	// ErrItemKeyBlobClockSkew reports that the clock of the blob store and
+	// the clock of the server differ by more than ItemKeyBlobClockSkew, ahead
+	// or behind. The reaper deletes nothing in that run.
+	ErrItemKeyBlobClockSkew = errors.New(
+		"the blob store clock differs from the server clock by more than the allowed skew",
+	)
 )
+
+// ItemKeyAttemptDeadline is the longest time from the start of an item key
+// transaction to its commit. The writer makes the blob key and puts the
+// wrapped key blob inside the transaction, so the time from the put to the
+// commit is shorter. A blob that no committed record names becomes garbage
+// only after ItemKeyBlobGracePeriod, which is longer than this deadline plus
+// ItemKeyBlobClockSkew, so the reaper never deletes the blob of a write that
+// can still commit.
+const ItemKeyAttemptDeadline = 30 * time.Minute
+
+// ItemKeyBlobClockSkew is the largest difference between the clock of the
+// server and the clock of the blob store that the reaper rule allows. The
+// reaper reads the age of a blob from the time of the store, so each run
+// measures the difference with a probe blob first, and a larger difference
+// in either direction fails the run.
+const ItemKeyBlobClockSkew = 15 * time.Minute
+
+// AttemptDeadline returns the attempt deadline of an item key transaction
+// that starts at start under ctx: the earlier of the deadline of ctx and
+// start plus ItemKeyAttemptDeadline.
+func AttemptDeadline(ctx context.Context, start time.Time) time.Time {
+	deadline := start.Add(ItemKeyAttemptDeadline)
+
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		return d
+	}
+
+	return deadline
+}
+
+// CheckAttemptDeadline returns ErrItemKeyAttemptExpired when now is not
+// before deadline. A store calls it after the function of an item key
+// transaction and before the commit.
+func CheckAttemptDeadline(deadline, now time.Time) error {
+	if !now.Before(deadline) {
+		return fmt.Errorf(
+			"%w: the commit is %s late",
+			ErrItemKeyAttemptExpired,
+			now.Sub(deadline).Round(time.Millisecond),
+		)
+	}
+
+	return nil
+}
 
 // ItemKind names what one item key seals. The kinds are the same for
 // every tool.
@@ -116,11 +176,18 @@ func ParseItemKeyID(s string) (ItemKeyID, error) {
 	return ItemKeyID(s), nil
 }
 
-// ItemKeyBlobInfo describes the wrapped key blob that a record names: its version,
-// and the size and MD5 of its bytes, so that a backup copies and checks it
-// like every other blob. The MD5 is a checksum for integrity only. The AEAD
-// tag of the wrapped key authenticates the bytes.
+// ItemKeyBlobInfo describes the wrapped key blob that a record names: its
+// version, the attempt part of its key, and the size and MD5 of its bytes, so
+// that a backup copies and checks it like every other blob, and a read checks
+// the bytes before it unwraps them. The MD5 is a checksum for integrity only.
+// The AEAD tag of the wrapped key authenticates the bytes.
+//
+// Attempt is the attempt part of the blob key. Each write of a wrapped key
+// makes a new attempt part, so two writes never share a key, and a store that
+// replaces an object on a second write never replaces a key that a record
+// names.
 type ItemKeyBlobInfo struct {
+	Attempt string
 	MD5     [16]byte
 	Size    int64
 	Version int
@@ -128,7 +195,7 @@ type ItemKeyBlobInfo struct {
 
 // ItemKey is the record of one item key, as SQL keeps it. The wrapped
 // key itself is not part of the record: it is the blob that ItemKeyBlobs.Key
-// names with Blob.Version. ShreddedAt is the zero time while the key exists.
+// names with Blob.Version and Blob.Attempt. ShreddedAt is the zero time while the key exists.
 type ItemKey struct {
 	CreatedAt  time.Time
 	ShreddedAt time.Time
@@ -212,6 +279,11 @@ type ItemKeyStore interface {
 	// It commits when fn returns nil and rolls back otherwise. It returns
 	// namespace.ErrFenced when the fence is stale. fn must not start another
 	// transaction of the store.
+	//
+	// The transaction has the deadline that AttemptDeadline gives for the
+	// start of the call. When the deadline passes before the commit, the
+	// transaction rolls back and InItemKeyTx returns
+	// ErrItemKeyAttemptExpired.
 	InItemKeyTx(ctx context.Context, fence namespace.Fence, fn func(ItemKeyTx) error) error
 }
 
@@ -243,8 +315,11 @@ type ItemSealer interface {
 	// binding. It reads the record before any blob, so it returns
 	// ErrShredded at once after a shred on any instance. It returns
 	// ErrKeyNotFound when ref has no item key, and ErrDecrypt for a
-	// stream of another item or binding, or a changed stream.
-	OpenContent(ctx context.Context, ref ItemRef, binding []byte, r io.Reader) (io.Reader, error)
+	// stream of another item, record or binding, or a changed stream. The
+	// reader can hold the raw item key until it reads the stream header. The
+	// caller closes the reader: Close clears the key, also when the reader
+	// was never read, and a Read after Close returns ErrStreamClosed.
+	OpenContent(ctx context.Context, ref ItemRef, binding []byte, r io.Reader) (io.ReadCloser, error)
 	// SealContents seals the Data of each part with the item key of ref and
 	// the Binding of the part, as SealContent does, and opens the key one
 	// time for all of them. It returns the sealed bytes in the order of
@@ -265,14 +340,62 @@ type ContentPart struct {
 	Data    []byte
 }
 
-// itemAADLabel starts the associated data of an item key and of the content
-// that it seals. It differs from aadLabel, so no item ciphertext opens as
-// the value of a scope, and no value of a scope opens as an item.
-const itemAADLabel = "opendustpan/item/v1"
+// itemKeyAADLabel starts the associated data of a wrapped item key, and
+// itemContentAADLabel starts the associated data of each chunk of the content
+// that an item key seals. Each purpose has its own label, so a wrapped key
+// never opens as content and content never opens as a wrapped key. Both
+// differ from aadLabel, so no item ciphertext opens as the value of a scope,
+// and no value of a scope opens as an item. Both differ from streamKeyInfo,
+// the HKDF info of a stream key.
+const (
+	itemKeyAADLabel     = "opendustpan/item-key/v1"
+	itemContentAADLabel = "opendustpan/item-content/v1"
+)
 
-// aad is the associated data that binds a wrapped item key and its content
-// to the scope, the kind and the item ID of the reference.
-func (r ItemRef) aad() []byte {
-	return []byte(itemAADLabel + "\x00" + r.Scope.Namespace.String() + "\x00" + r.Scope.ID + "\x00" +
-		string(r.Kind) + "\x00" + r.Item)
+// itemAADLengthBase is the base of the length before each part of itemAAD.
+const itemAADLengthBase = 10
+
+// itemAAD is the associated data of one purpose, label, for the item ref and
+// the item key record id. Each part has its length before it, in decimal
+// digits and then a colon, so the encoding alone keeps the parts apart: no
+// value of one part, a zero byte or a colon included, can move bytes into the
+// next part.
+//
+// Defense in depth: NewItemRef and ParseItemKeyID refuse a part with a zero
+// byte. The length prefix stays so that the encoding does not rely on them.
+func itemAAD(label string, ref ItemRef, id ItemKeyID) []byte {
+	parts := []string{
+		label, ref.Scope.Namespace.String(), ref.Scope.ID, string(ref.Kind), ref.Item, string(id),
+	}
+
+	var aad []byte
+
+	for _, p := range parts {
+		aad = strconv.AppendInt(aad, int64(len(p)), itemAADLengthBase)
+		aad = append(aad, ':')
+		aad = append(aad, p...)
+	}
+
+	return aad
+}
+
+// itemKeyAAD is the associated data that binds a wrapped item key to the
+// scope, the kind and the item ID of ref, and to the ID of its record. A
+// wrapped key that is put under another record does not unwrap.
+func itemKeyAAD(ref ItemRef, id ItemKeyID) []byte {
+	return itemAAD(itemKeyAADLabel, ref, id)
+}
+
+// itemContent is the aadSource of the content that one item key seals: the
+// reference of the item and the ID of its key record.
+type itemContent struct {
+	ref ItemRef
+	id  ItemKeyID
+}
+
+// aad binds each chunk of the content to the scope, the kind and the item ID
+// of the reference, and to the ID of the key record. Content that is put
+// under another record does not open.
+func (c itemContent) aad() []byte {
+	return itemAAD(itemContentAADLabel, c.ref, c.id)
 }
