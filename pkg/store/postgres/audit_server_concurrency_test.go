@@ -34,10 +34,13 @@ func serverAuditAt() time.Time {
 	return time.Date(2026, time.November, 14, 12, 0, 0, 0, time.UTC)
 }
 
-// TestServerAuditConcurrentWriters starts 16 writers of one caller family at
-// the same time. Each write must succeed, and the chain of @server must
-// check: the store holds the scope lock for each append, so two appends
-// never read the same last entry.
+// TestServerAuditConcurrentWriters starts 16 writers at the same time. Most
+// cases run writers of one caller family, and one case runs passkey
+// regressions against locked provider config writers, so a regression entry
+// that skips the lock of @server breaks the chain or fails with a duplicate
+// key. Each write must succeed, and the chain of @server must check: the
+// store holds the scope lock for each append, so two appends never read the
+// same last entry.
 func TestServerAuditConcurrentWriters(t *testing.T) {
 	t.Parallel()
 
@@ -53,6 +56,11 @@ func TestServerAuditConcurrentWriters(t *testing.T) {
 	}{
 		{name: "provider configs", setup: nil, write: writeServerProviderConfig},
 		{name: "passkey use with a counter regression", setup: setServerPasskeys, write: writeServerPasskeyUse},
+		{
+			name:  "passkey regressions against provider configs",
+			setup: setServerPasskeys,
+			write: writeServerPasskeyOrProvider,
+		},
 		{name: "generation bump", setup: setServerGenerationPersons, write: writeServerGenerationBump},
 		{name: "name locks", setup: nil, write: writeServerNameLockClear},
 		{name: "access tokens", setup: setServerTokenPerson, write: writeServerAccessToken},
@@ -217,6 +225,18 @@ func writeServerPasskeyUse(ctx context.Context, s *postgres.Store, i int) error 
 	}
 
 	return err
+}
+
+// writeServerPasskeyOrProvider records a use of the passkey i for an even i,
+// and creates the sign-in provider config i for an odd i. The provider
+// config writes hold the lock of @server, so a regression append that skips
+// the lock breaks the chain or fails with a duplicate key.
+func writeServerPasskeyOrProvider(ctx context.Context, s *postgres.Store, i int) error {
+	if i%2 == 0 {
+		return writeServerPasskeyUse(ctx, s, i)
+	}
+
+	return writeServerProviderConfig(ctx, s, i)
 }
 
 // serverGenerationPersonID returns the ID of the person i of the generation
