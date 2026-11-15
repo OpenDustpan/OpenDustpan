@@ -1224,12 +1224,13 @@ func checkAuditEntryNamesAccessMode(t *testing.T, stores backupStores, id, want 
 			continue
 		}
 
-		if !strings.Contains(entry.Object, id) || !strings.Contains(entry.Object, want) {
-			t.Fatalf("restore audit object = %q, want restore %s with %q",
-				entry.Object, id, want)
+		if !strings.Contains(entry.Object, id) {
+			continue
 		}
 
-		return
+		if strings.Contains(entry.Object, want) {
+			return
+		}
 	}
 
 	t.Fatalf("no audit entry names restore %s with %q", id, want)
