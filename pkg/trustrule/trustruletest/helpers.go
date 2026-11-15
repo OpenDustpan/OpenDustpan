@@ -128,6 +128,7 @@ func auditEntry(ns namespace.Name, action string, id trustrule.ID) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 }
 

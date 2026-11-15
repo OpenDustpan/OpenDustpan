@@ -199,5 +199,6 @@ func (s *Service) serverEntry(ns namespace.Name, why string, changes []audit.Cha
 		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: audit.PrincipalKindService,
 		JobID: "", Reason: scheduleReason + why,
+		Origin: nil,
 	}
 }

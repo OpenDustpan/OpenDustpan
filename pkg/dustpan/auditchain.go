@@ -993,6 +993,7 @@ func epochEntry(epoch int64, at time.Time) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

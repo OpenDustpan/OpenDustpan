@@ -20,5 +20,5 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Run full check with PostgreSQL cases against DUSTPAN_TEST_POSTGRES_URL Check: `make check` with zero findings and PostgreSQL cases run against DUSTPAN_TEST_POSTGRES_URL. Confirmed by: CI (the agent runs the fast checks only).
-- [ ] 4.2 Extend the existing guide docs/guides/backup-restore-upgrade.md with the matrix, the zero-tag report and the refusal error. Check: the page runs as written and the stale-write error names the one command. Confirmed by: CI (an e2e step in the NEW file e2e/run_new_schema_against_last_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.2 Extend the existing guide docs/guides/backup-restore-upgrade.md with the matrix, the zero-tag report and the refusal error. Check: the page runs as written and the stale-write error names the one command. Confirmed by: CI (an e2e step in the NEW file e2e/run_new_schema_against_last_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 4.3 Run usability check from the docs page alone Check: an Operator completes the matrix from docs/guides/backup-restore-upgrade.md alone and each error names the one helping command. A person's step.

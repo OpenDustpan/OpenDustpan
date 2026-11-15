@@ -87,6 +87,7 @@ func breakGlassAuditEntry(scope namespace.Name) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
