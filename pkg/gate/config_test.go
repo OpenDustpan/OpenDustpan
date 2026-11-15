@@ -182,6 +182,7 @@ func callerEntry() audit.Entry {
 		UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindReadAccess, Outcome: audit.OutcomeDenied,
 		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "",
 		JobID: "", Reason: "",
+		Origin: nil,
 	}
 }
 

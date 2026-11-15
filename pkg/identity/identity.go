@@ -139,6 +139,19 @@ func (p Principal) ActsAsPerson() bool {
 	return p.Kind == "" || p.Kind == KindPerson
 }
 
+// StateOrigin names the writer of a state version: the job whose token made
+// the write, and the commit that the tool reported with it. Both are empty
+// for a write that no job made, for example from a laptop or from a restore.
+type StateOrigin struct {
+	// Job is the job whose token made the write. It is empty for every
+	// other credential.
+	Job string
+	// Commit is the commit that the tool reported with the write. It is
+	// never an authenticated claim, and no decision may trust it. It is
+	// empty when the tool reported none.
+	Commit string
+}
+
 // Action is something a principal wants to do.
 type Action string
 
@@ -1110,7 +1123,8 @@ func HasExactScope(a Authorizer) bool {
 }
 
 // Scope is the set of objects of one kind where a principal may perform one
-// action. All is true when the principal may perform it on every object. A
+// action. A scope covers every object through Every. A consumer reads that
+// case only through CoversEveryObject or Contains. Otherwise a
 // unit is in the scope when it, its collection or its namespace is in a
 // set. A principal object is in the scope when it is in Principals.
 type Scope struct {
@@ -1118,12 +1132,86 @@ type Scope struct {
 	Collections []Object
 	Units       []Object
 	Principals  []Object
-	All         bool
+	every       everyObject
+}
+
+// everyObject is the case of a scope that covers every object, except the
+// objects of the namespaces in except.
+type everyObject struct {
+	set    bool
+	except []namespace.Name
+}
+
+// Every returns a scope that covers every object, except the objects of the
+// named namespaces. It keeps each name once, in sorted order. The explicit
+// sets are nil.
+func Every(except ...namespace.Name) Scope {
+	names := slices.Clone(except)
+	slices.Sort(names)
+	names = slices.Compact(names)
+
+	return Scope{
+		Namespaces: nil, Collections: nil, Units: nil, Principals: nil,
+		every: everyObject{set: true, except: names},
+	}
+}
+
+// CoversEveryObject reports whether s covers every object and leaves out no
+// namespace. A consumer that cannot apply the left-out namespaces uses this
+// method; when the scope leaves out a namespace it reports false, so that the
+// consumer uses the explicit sets and fails closed.
+func (s Scope) CoversEveryObject() bool {
+	return s.every.set && len(s.every.except) == 0
+}
+
+// Contains reports whether s holds o. In the every-object case it reports
+// false for a namespace, collection or unit object of a namespace that s
+// leaves out, and true for every other object. Otherwise it compares the wire
+// forms: a namespace object is in Namespaces; a collection object is in
+// Collections or its namespace is in Namespaces; a unit object is in Units or
+// its namespace is in Namespaces; a principal object is in Principals. A unit
+// that the scope holds only through a collection gives false, because an
+// Object does not carry the collections of a unit. This is fail closed.
+func (s Scope) Contains(o Object) bool {
+	if s.every.set {
+		ns := o.Namespace()
+		if ns == "" {
+			return true
+		}
+
+		return !slices.Contains(s.every.except, ns)
+	}
+
+	switch {
+	case o.IsNamespace():
+		return containsObject(s.Namespaces, o)
+	case o.IsCollection():
+		return containsObject(s.Collections, o) ||
+			containsObject(s.Namespaces, NamespaceObject(o.Namespace()))
+	case o.IsUnit():
+		return containsObject(s.Units, o) ||
+			containsObject(s.Namespaces, NamespaceObject(o.Namespace()))
+	case o.IsPrincipal():
+		return containsObject(s.Principals, o)
+	default:
+		return false
+	}
+}
+
+// containsObject reports whether objs holds an object with the wire form of o.
+func containsObject(objs []Object, o Object) bool {
+	for i := range objs {
+		if objs[i].String() == o.String() {
+			return true
+		}
+	}
+
+	return false
 }
 
 // IsEmpty reports whether the scope holds no object.
 func (s Scope) IsEmpty() bool {
-	return !s.All && len(s.Namespaces) == 0 && len(s.Collections) == 0 && len(s.Units) == 0 &&
+	return !s.every.set && len(s.Namespaces) == 0 && len(s.Collections) == 0 && len(s.Units) == 0 &&
 		len(s.Principals) == 0
 }
 
@@ -1131,7 +1219,17 @@ func (s Scope) IsEmpty() bool {
 // only: every object for an administrator, and no object for any other
 // principal.
 func AdminScope(p Principal) Scope {
-	return Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: p.Admin}
+	if p.Admin {
+		return Every()
+	}
+
+	return Scope{
+		Namespaces:  nil,
+		Collections: nil,
+		Units:       nil,
+		Principals:  nil,
+		every:       everyObject{set: false, except: nil},
+	}
 }
 
 // StaticToken authenticates exactly one token as one administrator. It exists
@@ -1353,8 +1451,15 @@ func (s SelfAllowed) Authorize(ctx context.Context, p Principal, action Action, 
 func (s SelfAllowed) ListObjects(ctx context.Context, p Principal, action Action) (Scope, error) {
 	scope, err := s.Next.ListObjects(ctx, p, action)
 	if err != nil {
-		return Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, fmt.Errorf(
-			"list objects: %w", err,
+		return Scope{
+			Namespaces:  nil,
+			Collections: nil,
+			Units:       nil,
+			Principals:  nil,
+			every:       everyObject{set: false, except: nil},
+		}, fmt.Errorf(
+			"list objects: %w",
+			err,
 		)
 	}
 

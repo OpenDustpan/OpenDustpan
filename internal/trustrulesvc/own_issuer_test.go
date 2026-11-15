@@ -30,18 +30,21 @@ func ownFixture(t *testing.T, own trustrulesvc.OwnIssuer) fixture {
 	t.Helper()
 
 	store := &fakeStore{created: nil, entries: nil, deleted: nil}
-	authz := &grants{allow: []identity.Action{identity.ActionPrincipalManageTokens}, checked: nil}
+	authz := &grants{allow: []identity.Action{identity.ActionPrincipalManageTokens}, checked: nil, err: nil}
 	people := fakePrincipals{"prn-worker": principalOf("prn-worker", principal.KindService, "acme")}
+
+	reach := &fakeReach{checked: nil, err: nil}
 
 	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz,
+		Reach:            reach,
 		InstallationURLs: []string{"https://dustpan.example.com"}, OwnIssuer: own, CheckURL: nil, Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
 
-	return fixture{svc: svc, store: store, authz: authz}
+	return fixture{svc: svc, store: store, authz: authz, reach: reach}
 }
 
 // TestCheckOwnIssuerAsksTheIssuerService checks the layers of the own-issuer

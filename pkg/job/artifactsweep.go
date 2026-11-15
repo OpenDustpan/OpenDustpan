@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -97,9 +98,9 @@ type ArtifactSweeperConfig struct {
 	Blobs *ArtifactBlobs
 	// Namespaces gives the ID of the namespace of a job.
 	Namespaces NamespaceReader
-	// Guard tells whether a backup or a restore runs. The sweep deletes
-	// nothing while one runs.
-	Guard blobguard.Watch
+	// Guard holds the leases of the blob deletes. The sweep deletes nothing
+	// while a backup or a restore runs.
+	Guard blobguard.Leases
 	// Clock reads the clock of the database. The sweep takes now from it.
 	Clock blob.DatabaseClock
 	// Operations reads the durable operation of a plan phase, to tell whether
@@ -184,7 +185,7 @@ type ArtifactSweeper struct {
 	names      ArtifactKeyStore
 	blobs      *ArtifactBlobs
 	namespaces NamespaceReader
-	guard      blobguard.Watch
+	guard      blobguard.Leases
 	clock      blob.DatabaseClock
 	operations PhaseOperations
 	audit      audit.ServerStore
@@ -342,35 +343,24 @@ func (s *ArtifactSweeper) sweepOne(ctx context.Context, j *Job, now time.Time, r
 }
 
 // sweepPass sweeps each job that f selects, at most maxArtifactSweepPages
-// pages of them.
+// pages of them. A damaged row holds no readable job, so there is nothing to
+// sweep: the pass reports it and goes on.
 func (s *ArtifactSweeper) sweepPass(ctx context.Context, now time.Time, f Filter, res *ArtifactSweepResult) error {
 	for range maxArtifactSweepPages {
-		// The query reads one row more than a page. That row tells whether a
-		// job is left after this page, so no second query is needed.
-		read := f
-		read.Limit = f.Limit + 1
-
-		jobs, err := s.jobs.List(ctx, read)
+		page, err := s.jobs.List(ctx, f)
 		if err != nil {
 			return fmt.Errorf("list jobs: %w", err)
 		}
 
-		more := len(jobs) > f.Limit
+		for i := range page.Damaged {
+			s.logger.WarnContext(ctx, "sweep job artifact blobs skipped a damaged job row",
+				slog.String("job", string(page.Damaged[i].ID)), slog.String("reason", page.Damaged[i].Reason))
+		}
 
-		// last is the ID of the last job of this page: the next page starts
-		// after it.
-		var last ID
-
-		for i := range jobs {
-			if i == f.Limit {
-				break
-			}
-
-			last = jobs[i].ID
-
+		for i := range page.Jobs {
 			var one ArtifactSweepResult
 
-			sweepErr := s.sweepOne(ctx, &jobs[i], now, &one)
+			sweepErr := s.sweepOne(ctx, &page.Jobs[i], now, &one)
 			res.Jobs++
 			res.merge(&one)
 
@@ -380,21 +370,22 @@ func (s *ArtifactSweeper) sweepPass(ctx context.Context, now time.Time, f Filter
 			case sweepErr != nil:
 				res.Failed++
 
-				s.logger.WarnContext(ctx, "sweep job artifact blobs", slog.String("job", string(jobs[i].ID)),
+				s.logger.WarnContext(ctx, "sweep job artifact blobs", slog.String("job", string(page.Jobs[i].ID)),
 					slog.String("error", sweepErr.Error()))
 			default:
 			}
 		}
 
-		if !more {
+		// An empty cursor means that the page reached the end of the list.
+		if page.After == "" {
 			return nil
 		}
 
-		f.After = last
+		f.After = page.After
 	}
 
-	// The pass stopped at the page cap and the last read held a row after the
-	// page, so the result reports that jobs are left.
+	// The pass stopped at the page cap and a row is left after the last page,
+	// so the result reports that jobs are left.
 	res.Capped = true
 
 	return nil
@@ -469,20 +460,40 @@ func (s *ArtifactSweeper) sweepPage(
 			continue
 		}
 
-		// The guard comes after the listing and after the read of the names.
-		// A blob that is unnamed here lost its row, or never had one, before
-		// that read, so a backup that the guard does not see cannot name it.
-		// The guard is read again before each delete, so a restore that starts
-		// during the loop keeps the blobs that are left.
-		if holdErr := blobguard.Hold(ctx, s.guard); holdErr != nil {
-			return fmt.Errorf("%w: %w", errHeld, holdErr)
-		}
-
-		if delErr := s.blobs.DeleteJobBlob(ctx, at.nsID, at.job, b.Rel); delErr != nil {
-			return fmt.Errorf("delete an artifact blob: %w", delErr)
+		if delErr := s.deleteUnderLease(ctx, at, b.Rel); delErr != nil {
+			return delErr
 		}
 
 		res.add("namespaces/" + at.nsID.String() + "/" + b.Rel)
+	}
+
+	return nil
+}
+
+// deleteUnderLease deletes the artifact blob rel of the job of at, with the
+// lease of one blob delete around it. The lease comes after the listing and
+// after the read of the names: a blob that is unnamed here lost its row, or
+// never had one, before that read, so a backup that the guard does not see
+// cannot name it. A lease is taken again before each delete, so a restore
+// that starts during the loop keeps the blobs that are left. The holder is new
+// for each delete, so the lease row names the delete that holds it. The delete
+// runs only under the context of the lease, so it deletes nothing once that
+// context ends.
+func (s *ArtifactSweeper) deleteUnderLease(ctx context.Context, at sweepAt, rel string) error {
+	leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
+	if holdErr != nil {
+		return fmt.Errorf("%w: %w", errHeld, holdErr)
+	}
+
+	delErr := s.blobs.DeleteJobBlob(leaseCtx, at.nsID, at.job, rel)
+
+	if releaseErr := release(ctx); releaseErr != nil {
+		s.logger.WarnContext(ctx, "blob delete lease not released",
+			slog.String("job_id", string(at.job)), slog.String("error", releaseErr.Error()))
+	}
+
+	if delErr != nil {
+		return fmt.Errorf("delete an artifact blob: %w", delErr)
 	}
 
 	return nil
@@ -630,6 +641,7 @@ func (s *ArtifactSweeper) record(ctx context.Context, at time.Time, res *Artifac
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "",
 		Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: "",
 		Reason: reason,
+		Origin: nil,
 	}
 
 	if _, err := s.audit.AppendServer(ctx, entry); err != nil {

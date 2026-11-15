@@ -22,7 +22,6 @@ func claimerCases() []suiteCase {
 		{"claimer: a request with no owner, no kind or no lease is ErrInvalid", testClaimerInvalid},
 		{"claimer: a claim takes only the kinds that it asks for", testClaimerKinds},
 		{"claimer: a phase above MaxVersions stays unclaimed", testClaimerMaxVersions},
-		{"claimer: the claim of a plan phase records the state version", testClaimerPlanVersion},
 		{"claimer: the claim returns the fence that the namespace has now", testClaimerFence},
 		{"claimer: parallel claims of one phase give one winner", testClaimerOneWinner},
 		{"claimer: parallel claims of several phases give each phase once", testClaimerEachOnce},
@@ -454,15 +453,13 @@ func testClaimerPlanVersion(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := setUp(t, h)
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	first := writeState(t, h, f, false)
 
 	j := dispatched(t, h, f, plannedJob{unit: "", op: job.OperationApply, steps: nil})
 
 	a := claim(t, h, runnerOne, longRenew, runnerKind(&j))
-	if a.Job.Phases[0].StateVersion != svOne {
-		t.Fatalf("plan phase state version = %q, want %s", a.Job.Phases[0].StateVersion, svOne)
+	if a.Job.Phases[0].StateVersion != first {
+		t.Fatalf("plan phase state version = %q, want %s", a.Job.Phases[0].StateVersion, first)
 	}
 }
 

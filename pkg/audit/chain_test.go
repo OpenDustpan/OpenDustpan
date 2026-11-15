@@ -130,6 +130,7 @@ func walkEntry(seq int64) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

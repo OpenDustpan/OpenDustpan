@@ -623,5 +623,6 @@ func (m *Manager) entry(
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: info.RequestID, ObjectID: t.Unit.ID,
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: string(caller.Kind), JobID: "",
 		Reason: reason,
+		Origin: nil,
 	}
 }

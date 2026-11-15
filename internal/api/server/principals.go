@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -50,9 +51,11 @@ var (
 	)
 	errPrincipalChangeBody = errors.New(`invalid principal change body: provide {"displayName":"..."}`)
 	errGroupBody           = errors.New(`invalid group body: provide {"name":"...","description":"..."}`)
-	errGroupChangeBody     = errors.New(`invalid group change body: provide {"name":"..."} or {"description":"..."}`)
-	errMemberBody          = errors.New(`invalid member body: provide {"principalID":"prn-..."}`)
-	errPageQuery           = errors.New("invalid page: limit is a number from 1 to 1000")
+	errGroupChangeBody     = errors.New(
+		`invalid group change body: provide {"name":"..."}, {"description":"..."} or {"closedToIdentityProvider":true}`,
+	)
+	errMemberBody = errors.New(`invalid member body: provide {"principalID":"prn-..."}`)
+	errPageQuery  = errors.New("invalid page: limit is a number from 1 to 1000")
 )
 
 // errNoPrincipalStore reports a server whose store keeps no principals.
@@ -109,7 +112,10 @@ type groupResponse struct {
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
 	MemberCount int64  `json:"memberCount"`
-	Protected   bool   `json:"protected"`
+	// ClosedToIdentityProvider is true when the identity provider may not
+	// add members to the group.
+	ClosedToIdentityProvider bool `json:"closedToIdentityProvider"`
+	Protected                bool `json:"protected"`
 }
 
 // memberResponse is one member of a group on the wire.
@@ -161,10 +167,12 @@ type createGroupRequest struct {
 }
 
 // changeGroupRequest is the body of a group change. A missing field keeps
-// its value.
+// its value. ClosedToIdentityProvider sets the switch of the group: true
+// closes the group to the identity provider.
 type changeGroupRequest struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
+	Name                     *string `json:"name"`
+	Description              *string `json:"description"`
+	ClosedToIdentityProvider *bool   `json:"closedToIdentityProvider"`
 }
 
 // addMemberRequest is the body of a member add.
@@ -290,14 +298,15 @@ func markTempAdminMembers(
 // groupOf returns one group on the wire with its protected flag.
 func groupOf(g principal.Group, protected bool) groupResponse {
 	return groupResponse{
-		ID:          g.ID,
-		Name:        g.Name,
-		Description: g.Description,
-		Source:      string(g.Source),
-		CreatedAt:   wireTime(g.CreatedAt),
-		UpdatedAt:   wireTime(g.UpdatedAt),
-		MemberCount: g.MemberCount,
-		Protected:   protected,
+		ID:                       g.ID,
+		Name:                     g.Name,
+		Description:              g.Description,
+		Source:                   string(g.Source),
+		CreatedAt:                wireTime(g.CreatedAt),
+		UpdatedAt:                wireTime(g.UpdatedAt),
+		MemberCount:              g.MemberCount,
+		ClosedToIdentityProvider: g.ClosedToIdentityProvider,
+		Protected:                protected,
 	}
 }
 
@@ -313,22 +322,61 @@ func (h *Handler) protectedGroupOf(ctx context.Context, g principal.Group) (grou
 	return groupOf(g, protected), nil
 }
 
+// storedGroupOf returns one stored group on the wire with its protected
+// flag. The write is stored, so the answer must match the stored state: a
+// failed check answers protected, the fail-closed value of access.Protected.
+func (h *Handler) storedGroupOf(ctx context.Context, g principal.Group) groupResponse {
+	body, err := h.protectedGroupOf(ctx, g)
+	if err != nil {
+		// The cause is the error type only: the text of a store error can hold
+		// driver text, and the log must not carry it.
+		h.logger.WarnContext(ctx, "the protected check of a stored group failed",
+			slog.String("group", g.ID), slog.String("cause", causeType(err)))
+
+		return groupOf(g, true)
+	}
+
+	return body
+}
+
 // protectedGroupsOf returns one page of groups on the wire with the
-// protected flag of each. A failed check of one group answers its error.
+// protected flag of each. It checks the whole page with one ProtectedGroups
+// call. A failed check of one group answers its error, so the route answers
+// an error, never a false flag.
 func (h *Handler) protectedGroupsOf(
 	ctx context.Context, page principal.Page[principal.Group],
 ) (groupListResponse, error) {
+	ids := make([]string, 0, len(page.Items))
+	for i := range page.Items {
+		ids = append(ids, page.Items[i].ID)
+	}
+
+	flags, err := access.ProtectedGroups(ctx, h.reach, ids)
+	if err != nil {
+		return groupListResponse{}, err
+	}
+
+	return groupsWithFlags(page, flags)
+}
+
+// groupsWithFlags returns page on the wire with the flag of each group from
+// flags. A group with no flag answers an error, never a false flag.
+func groupsWithFlags(page principal.Page[principal.Group], flags map[string]bool) (groupListResponse, error) {
 	out := groupListResponse{
 		Groups: make([]groupResponse, 0, len(page.Items)), NextCursor: page.NextCursor, Total: page.Total,
 	}
 
-	for _, g := range page.Items {
-		res, err := h.protectedGroupOf(ctx, g)
-		if err != nil {
-			return groupListResponse{}, err
+	for i := range page.Items {
+		// Defense in depth: ProtectedGroups answers a flag for each ID or an
+		// error. This check stays so that a missing flag never shows as false.
+		g := &page.Items[i]
+
+		protected, ok := flags[g.ID]
+		if !ok {
+			return groupListResponse{}, fmt.Errorf("protected flag of group %q: %w", g.ID, access.ErrInvalid)
 		}
 
-		out.Groups = append(out.Groups, res)
+		out.Groups = append(out.Groups, groupOf(*g, protected))
 	}
 
 	return out, nil
@@ -365,7 +413,7 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: none}); ok {
+		if res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: none}); err == nil {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
@@ -373,44 +421,45 @@ func (h *Handler) servePrincipalRead(op principalOp) RouteHandler {
 
 // servePrincipalChange adapts a change to a route handler. The Service
 // writes the success entry in the transaction of the change. A refused
-// change writes one failure entry here, best effort.
+// change writes one failure entry here, best effort, with the missing
+// actions of a reach refusal.
 func (h *Handler) servePrincipalChange(action identity.Action, op principalOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
-		res, ok := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
+		res, err := h.runPrincipalOp(w, r, op, &call{p: p, obj: identity.Object{}, e: callerEntry(r, p, action)})
 
-		if !ok && res.object != "" && h.principals != nil {
-			h.appendServerChange(r, p, serverChange{
+		if err != nil && res.object != "" && h.principals != nil {
+			h.appendServerChangeReason(r, p, serverChange{
 				at: h.principals.Now(), action: action, object: res.object, outcome: audit.OutcomeFailure,
-			})
+			}, reachReason(err))
 		}
 
-		if ok {
+		if err == nil {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
 }
 
-// runPrincipalOp runs op and writes its error. It reports whether op
-// succeeded, with the result in both cases.
+// runPrincipalOp runs op and writes its error. It answers the result in both
+// cases, and the error of the operation.
 func (h *Handler) runPrincipalOp(
 	w http.ResponseWriter, r *http.Request, op principalOp, c *call,
-) (principalResult, bool) {
+) (principalResult, error) {
 	ctx := r.Context()
 
 	if h.principals == nil {
 		h.writeError(ctx, w, errNoPrincipalStore)
 
-		return principalResult{body: nil, object: "", status: 0}, false
+		return principalResult{body: nil, object: "", status: 0}, errNoPrincipalStore
 	}
 
 	res, err := op(w, r, h.principals, c.e, c.p)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
-		return res, false
+		return res, err
 	}
 
-	return res, true
+	return res, nil
 }
 
 // writePrincipalResult writes the status and the body of a success. A body
@@ -449,63 +498,22 @@ func (h *Handler) principalRoutes() []Route {
 	manage := []identity.Action{identity.ActionServerManagePrincipals}
 
 	return []Route{
-		{
-			Method:  http.MethodPost,
-			Path:    principalsPath,
-			Scope:   ScopeAuthorized,
-			Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, createPrincipal),
-		},
-		{
-			Method: http.MethodGet, Path: principalsPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(listPrincipals),
-		},
-		{
-			Method: http.MethodGet, Path: principalPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(getPrincipal),
-		},
-		{
-			Method:  http.MethodPatch,
-			Path:    principalPath,
-			Scope:   ScopeAuthorized,
-			Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, changePrincipal),
-		},
-		{
-			Method:  http.MethodDelete,
-			Path:    principalPath,
-			Scope:   ScopeAuthorized,
-			Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, deletePrincipal),
-		},
-		{
-			Method:     http.MethodGet,
-			Path:       principalPath + "/groups",
-			Scope:      ScopeAuthorized,
-			Actions:    read,
-			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve:      h.servePrincipalRead(h.listGroupsOfPrincipal),
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    principalPath + "/enable",
-			Scope:   ScopeAuthorized,
-			Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, enablePrincipal),
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    principalPath + "/disable",
-			Scope:   ScopeAuthorized,
-			Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, disablePrincipal),
-		},
+		authorizedRoute(http.MethodPost, principalsPath, manage, resolveServer,
+			h.servePrincipalChange(identity.ActionServerManagePrincipals, createPrincipal)),
+		authorizedRoute(http.MethodGet, principalsPath, read, resolveServer,
+			h.servePrincipalRead(listPrincipals)),
+		authorizedRoute(http.MethodGet, principalPath, read, resolveServer,
+			h.servePrincipalRead(getPrincipal)),
+		authorizedRoute(http.MethodPatch, principalPath, manage, resolveServer,
+			h.servePrincipalChange(identity.ActionServerManagePrincipals, changePrincipal)),
+		authorizedRoute(http.MethodDelete, principalPath, manage, resolveServer,
+			h.servePrincipalChange(identity.ActionServerManagePrincipals, deletePrincipal)),
+		authorizedRoute(http.MethodGet, principalPath+"/groups", read, resolveServer,
+			h.servePrincipalRead(h.listGroupsOfPrincipal)),
+		authorizedRoute(http.MethodPost, principalPath+"/enable", manage, resolveServer,
+			h.servePrincipalChange(identity.ActionServerManagePrincipals, enablePrincipal)),
+		authorizedRoute(http.MethodPost, principalPath+"/disable", manage, resolveServer,
+			h.servePrincipalChange(identity.ActionServerManagePrincipals, disablePrincipal)),
 	}
 }
 
@@ -515,70 +523,25 @@ func (h *Handler) groupRoutes() []Route {
 	manage := []identity.Action{identity.ActionServerManageGroups}
 
 	return []Route{
-		{
-			Method:  http.MethodPost,
-			Path:    groupsPath,
-			Scope:   ScopeAuthorized,
-			Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.servePrincipalChange(identity.ActionServerManageGroups, h.createGroup),
-		},
-		{
-			Method: http.MethodGet, Path: groupsPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(h.listGroups),
-		},
-		{
-			Method: http.MethodGet, Path: groupPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(h.getGroup),
-		},
-		{
-			Method:  http.MethodPatch,
-			Path:    groupPath,
-			Scope:   ScopeAuthorized,
-			Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.servePrincipalChange(identity.ActionServerManageGroups, h.changeGroup),
-		},
-		{
-			Method:     http.MethodDelete,
-			Path:       groupPath,
-			Scope:      ScopeAuthorized,
-			Actions:    manage,
-			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve: h.fresh(
-				identity.ActionServerManageGroups,
-				h.servePrincipalChange(identity.ActionServerManageGroups, deleteGroup),
-			),
-		},
-		{
-			Method: http.MethodGet, Path: membersPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(listMembers),
-		},
-		{
-			Method:     http.MethodPost,
-			Path:       membersPath,
-			Scope:      ScopeAuthorized,
-			Actions:    manage,
-			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve: h.fresh(
-				identity.ActionServerManageGroups,
-				h.servePrincipalChange(identity.ActionServerManageGroups, addMember),
-			),
-		},
-		{
-			Method:     http.MethodDelete,
-			Path:       membersPath + "/{principal}",
-			Scope:      ScopeAuthorized,
-			Actions:    manage,
-			Resolve:    resolveServer,
-			ActionsFor: nil,
-			Serve: h.fresh(
-				identity.ActionServerManageGroups,
-				h.servePrincipalChange(identity.ActionServerManageGroups, removeMember),
-			),
-		},
+		authorizedRoute(http.MethodPost, groupsPath, manage, resolveServer,
+			h.servePrincipalChange(identity.ActionServerManageGroups, h.createGroup)),
+		authorizedRoute(http.MethodGet, groupsPath, read, resolveServer,
+			h.servePrincipalRead(h.listGroups)),
+		authorizedRoute(http.MethodGet, groupPath, read, resolveServer,
+			h.servePrincipalRead(h.getGroup)),
+		authorizedRoute(http.MethodPatch, groupPath, manage, resolveServer,
+			h.servePrincipalChange(identity.ActionServerManageGroups, h.changeGroup)),
+		authorizedRoute(http.MethodDelete, groupPath, manage, resolveServer,
+			h.fresh(identity.ActionServerManageGroups,
+				h.servePrincipalChange(identity.ActionServerManageGroups, deleteGroup))),
+		authorizedRoute(http.MethodGet, membersPath, read, resolveServer,
+			h.servePrincipalRead(listMembers)),
+		authorizedRoute(http.MethodPost, membersPath, manage, resolveServer,
+			h.fresh(identity.ActionServerManageGroups,
+				h.servePrincipalChange(identity.ActionServerManageGroups, addMember))),
+		authorizedRoute(http.MethodDelete, membersPath+"/{principal}", manage, resolveServer,
+			h.fresh(identity.ActionServerManageGroups,
+				h.servePrincipalChange(identity.ActionServerManageGroups, removeMember))),
 	}
 }
 
@@ -893,12 +856,7 @@ func (h *Handler) createGroup(
 		return failed("groups"), err
 	}
 
-	body, err := h.protectedGroupOf(r.Context(), g)
-	if err != nil {
-		return failed(principal.GroupRef(g.ID)), err
-	}
-
-	return ok(http.StatusCreated, body, principal.GroupRef(g.ID)), nil
+	return ok(http.StatusCreated, h.storedGroupOf(r.Context(), g), principal.GroupRef(g.ID)), nil
 }
 
 // listGroups serves GET /api/server/groups: one page, ordered by name, with
@@ -943,35 +901,34 @@ func (h *Handler) getGroup(
 }
 
 // changeGroup serves PATCH /api/server/groups/{id}: it renames the group,
-// changes its description or both, and answers 200 with the stored group
-// and its protected flag.
+// changes its description, closes or opens it to the identity provider, or
+// combines those, and answers 200 with the stored group and its protected
+// flag.
 func (h *Handler) changeGroup(
-	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
+	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	var req changeGroupRequest
 
 	object := principal.GroupRef(r.PathValue("id"))
-	empty := func() bool { return req.Name == nil && req.Description == nil }
+	empty := func() bool {
+		return req.Name == nil && req.Description == nil && req.ClosedToIdentityProvider == nil
+	}
 
 	err := decodeChange(w, r, &req, errGroupChangeBody, empty)
 	if err != nil {
 		return failed(object), err
 	}
 
-	g, err := svc.UpdateGroup(r.Context(), e, r.PathValue("id"), principal.GroupChange{
-		Name:        req.Name,
-		Description: req.Description,
+	g, err := svc.UpdateGroup(r.Context(), e, caller, r.PathValue("id"), principal.GroupUpdate{
+		Name:                     req.Name,
+		Description:              req.Description,
+		ClosedToIdentityProvider: req.ClosedToIdentityProvider,
 	})
 	if err != nil {
 		return failed(object), err
 	}
 
-	body, err := h.protectedGroupOf(r.Context(), g)
-	if err != nil {
-		return failed(object), err
-	}
-
-	return ok(http.StatusOK, body, object), nil
+	return ok(http.StatusOK, h.storedGroupOf(r.Context(), g), object), nil
 }
 
 // deleteGroup serves DELETE /api/server/groups/{id}: it ends the group and

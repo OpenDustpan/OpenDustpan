@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/gatetest"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -398,6 +399,7 @@ func gateEntry(ns namespace.Name, action string) audit.Entry {
 		Object: ns.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
 		Reason: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 }
 
@@ -460,7 +462,7 @@ func (d gateDomain) CreateUnit(
 			ID:          workspace.ID(ident.NewID("ws-")),
 			Ref:         workspace.Ref{Namespace: ns, Name: wname},
 			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
-			Revision:    1,
+			Revision:    1, Origin: identity.StateOrigin{Job: "", Commit: ""},
 		}
 		if err = d.s.CreateWorkspace(ctx, w, n.Fence()); err != nil {
 			return fmt.Errorf("create workspace %s: %w", name, err)
@@ -555,7 +557,7 @@ func (d gateDomain) RenameUnit(ctx context.Context, ns namespace.Name, tool, nam
 		return fmt.Errorf("parse stack name: %w", err)
 	}
 
-	if err = d.s.RenameStack(ctx, ref, newName, n.Fence()); err != nil {
+	if err = d.s.RenameStack(ctx, ref, newName, n.Fence(), renameEntry(ns, ref)); err != nil {
 		return fmt.Errorf("rename stack %s: %w", name, err)
 	}
 
@@ -1288,7 +1290,7 @@ func testGateRenameStack(t *testing.T, s GateStore) {
 		t.Fatalf("ParseName() = %v", err)
 	}
 
-	if err = s.RenameStack(t.Context(), ref, live, fence); err != nil {
+	if err = s.RenameStack(t.Context(), ref, live, fence, renameEntry(ref.Namespace, ref)); err != nil {
 		t.Fatalf("RenameStack() = %v", err)
 	}
 
@@ -1351,7 +1353,7 @@ func testGateRenameToUsedName(t *testing.T, s GateStore) {
 		t.Fatalf("ParseRef() = %v", err)
 	}
 
-	if err = s.RenameStack(t.Context(), third, "other", fence); err != nil {
+	if err = s.RenameStack(t.Context(), third, "other", fence, renameEntry(third.Namespace, third)); err != nil {
 		t.Fatalf("RenameStack(to the name of a deleted unit) = %v", err)
 	}
 

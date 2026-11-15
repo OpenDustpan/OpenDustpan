@@ -47,7 +47,7 @@ func seedReviewMembers(t *testing.T, s access.Store, members []principal.Members
 	ctx := t.Context()
 	group := principal.Group{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "grp-ops", Name: "ops", Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := ps.CreateGroup(ctx, group, entry()); err != nil {
 		t.Fatalf("create group: %v", err)
@@ -364,7 +364,7 @@ func seedTeam(t *testing.T, ps principal.Store) {
 	for _, g := range [][2]string{{"grp-team", "team"}, {"grp-empty", "empty"}} {
 		grp := principal.Group{
 			CreatedAt: at(0), UpdatedAt: at(0), ID: g[0], Name: g[1], Description: "",
-			Source: principal.SourceLocal, MemberCount: 0,
+			Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 		}
 		if err := ps.CreateGroup(ctx, grp, entry()); err != nil {
 			t.Fatalf("create group: %v", err)

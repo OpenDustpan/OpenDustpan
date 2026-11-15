@@ -141,6 +141,41 @@ func TestOTLPHeadersParse(t *testing.T) {
 	}
 }
 
+func TestOTLPHeadersRefuseControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	const canary = "canary-value"
+
+	cases := map[string]string{
+		"CR in value":     "X-A=" + canary + "%0D",
+		"LF in value":     "X-A=" + canary + "%0AX-B:1",
+		"NUL in value":    "X-A=" + canary + "%00",
+		"DEL in value":    "X-A=" + canary + "%7F",
+		"tab in name":     "X-\tA=" + canary,
+		"escape in name":  "X-\x1bA=" + canary,
+		"after good item": "X-A=1,X-B=" + canary + "%0D%0A",
+	}
+
+	for name, text := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := otlpHeadersFrom(
+				envOf(map[string]string{otlpHeadersEnvVar: text}),
+				otlpHeadersEnvVar,
+				otlpHeadersFileEnvVar,
+			)
+			if err == nil || !errors.Is(err, errSecretControlChar) {
+				t.Fatalf("otlpHeadersFrom = %v, %v; want %v", got, err, errSecretControlChar)
+			}
+
+			if strings.Contains(err.Error(), canary) {
+				t.Fatalf("the error repeats a value: %v", err)
+			}
+		})
+	}
+}
+
 func TestOTLPHeadersComeFromAPrivateFile(t *testing.T) {
 	t.Parallel()
 

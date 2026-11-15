@@ -177,6 +177,7 @@ func (r Revocation) ReplayEntry(invalid error) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 
 	if invalid == nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strconv"
 	"time"
@@ -80,6 +81,9 @@ type Config struct {
 	OnRefused func(reason string)
 	// CheckLimits bounds the Check calls. Nil means DefaultCheckLimits.
 	CheckLimits *CheckLimits
+	// Logger receives the warnings of the service. Nil means a logger that
+	// discards.
+	Logger *slog.Logger
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 }
@@ -102,6 +106,7 @@ type Service struct {
 	onAuditErr func()
 	checks     *checkLimiter
 	now        func() time.Time
+	logger     *slog.Logger
 }
 
 // NewService returns a Service. It returns ErrMissingDependency when a
@@ -141,10 +146,16 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("check limits: %w", err)
 	}
 
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+
 	return &Service{
 		checks: newCheckLimiter(limits),
 		store:  cfg.Store, namespaces: cfg.Namespaces, secrets: cfg.Secrets, audit: cfg.Audit, openers: openers,
 		checkURL: cfg.CheckURL, onRefused: cfg.OnRefused, onAuditErr: cfg.OnAuditFailure, now: now,
+		logger: logger,
 	}, nil
 }
 
@@ -373,8 +384,9 @@ func (s *Service) Open(ctx context.Context, e audit.Entry, ns namespace.Name, id
 // account, the capabilities and what each consumer misses. It returns the
 // errors of Open and of the adapter: ErrAuth for a credential that the Git host
 // refuses, and ErrUnavailable. It returns ErrRateLimited, with no call to the
-// Git host, when the connection or its installation was checked too often. The
-// result is audited, best effort.
+// Git host, when the connection or its installation was checked too often.
+// The adapter refuses a call over the budget of the signed calls of the app
+// (see AppBudget) with ErrUnavailable. The result is audited, best effort.
 func (s *Service) Check(ctx context.Context, e audit.Entry, ns namespace.Name, id string) (CheckResult, error) {
 	rec, err := s.connectionRecord(ctx, ns, id)
 	if err != nil {
@@ -394,6 +406,8 @@ func (s *Service) Check(ctx context.Context, e audit.Entry, ns namespace.Name, i
 	s.recordCheck(ctx, e, ns, id, checkErr)
 
 	if checkErr != nil {
+		s.warnAppBudget(ctx, ns, id, checkErr)
+
 		return CheckResult{}, fmt.Errorf("check connection: %w", checkErr)
 	}
 
@@ -405,6 +419,23 @@ func (s *Service) Check(ctx context.Context, e audit.Entry, ns namespace.Name, i
 	}
 
 	return CheckResult{Account: account, Capabilities: caps, Needs: needs}, nil
+}
+
+// warnAppBudget writes one warning when err reports that the app used its
+// budget of signed calls. The warning names the namespace, the connection and
+// the wait that the error holds.
+func (s *Service) warnAppBudget(ctx context.Context, ns namespace.Name, id string, err error) {
+	if !errors.Is(err, ErrAppBudget) {
+		return
+	}
+
+	attrs := []any{slog.String("namespace", ns.String()), slog.String("connection", id)}
+	if wait, ok := RetryAfter(err); ok {
+		attrs = append(attrs, slog.Duration("wait", wait))
+	}
+
+	s.logger.WarnContext(ctx,
+		"The GitHub App used its budget of signed calls. The server refused the check of the connection.", attrs...)
 }
 
 func (s *Service) validateInput(in ConnectionInput) error {

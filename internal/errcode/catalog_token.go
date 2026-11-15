@@ -15,6 +15,8 @@ const (
 	TokenCallerNotPerson = "token.caller-not-person"
 	// TokenNotFound means that the access token does not exist.
 	TokenNotFound = "token.not-found"
+	// TokenReachExceeded means that the reach of the principal of the token is not inside the reach of the caller.
+	TokenReachExceeded = "token.outside-reach"
 	// TokenRequiresSignIn means that the request needs a console sign-in, and an access token cannot do it.
 	TokenRequiresSignIn = "token.requires-sign-in"
 	// TokenUnsupported means that the store of the server keeps no access tokens.
@@ -32,6 +34,11 @@ func tokenSpecs() []Spec {
 		{Code: TokenKindHasNone, Meaning: "the kind of the principal gets no access token", Args: nil},
 		{Code: TokenCallerNotPerson, Meaning: "the caller is not a person with a principal record", Args: nil},
 		{Code: TokenNotFound, Meaning: "the access token does not exist", Args: nil},
+		{
+			Code:    TokenReachExceeded,
+			Meaning: "the reach of the principal of the token is not inside the reach of the caller",
+			Args:    nil,
+		},
 		{
 			Code:    TokenRequiresSignIn,
 			Meaning: "the request needs a console sign-in, and an access token cannot do it",
