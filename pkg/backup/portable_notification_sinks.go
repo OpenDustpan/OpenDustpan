@@ -130,6 +130,7 @@ func portableDeliveryTables() []PortableTable {
 				{Name: portColState, Kind: KindText},
 				{Name: "attempts", Kind: KindInteger},
 				{Name: "created_at_ms", Kind: KindInteger},
+				{Name: "redeliveries", Kind: KindInteger},
 				{Name: "next_at_ms", Kind: KindInteger},
 				{Name: "last_error", Kind: KindText},
 				{Name: "delivered_at_ms", Kind: KindInteger},

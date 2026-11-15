@@ -766,6 +766,7 @@ type NotificationDelivery struct {
 	State          string
 	Attempts       int64
 	CreatedAtMs    int64
+	Redeliveries   int64
 	NextAtMs       int64
 	LastError      string
 	DeliveredAtMs  int64
@@ -946,6 +947,39 @@ type ProfileRevision struct {
 	Author         string
 	CreatedAtMs    int64
 	Reason         string
+}
+
+type QuotaKey struct {
+	NamespaceID  string
+	Blueprint    string
+	Kind         string
+	Scope        string
+	SettledCount int64
+}
+
+type QuotaRequest struct {
+	ID          string
+	NamespaceID string
+	Blueprint   string
+	Kind        string
+	Scope       string
+	AtMs        int64
+}
+
+type QuotaReservation struct {
+	NamespaceID string
+	ID          string
+	State       string
+	AtMs        int64
+	EndsAtMs    int64
+}
+
+type QuotaReservationKey struct {
+	NamespaceID   string
+	ReservationID string
+	Blueprint     string
+	Kind          string
+	Scope         string
 }
 
 type RegistryKey struct {

@@ -94,6 +94,7 @@ func sqliteOutboxBackupTables() []sqliteBackupTable {
 				backupColState,
 				"attempts",
 				backupColCreatedAtMs,
+				"redeliveries",
 				"next_at_ms",
 				"last_error",
 				"delivered_at_ms",
