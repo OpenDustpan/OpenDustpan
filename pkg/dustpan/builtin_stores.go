@@ -393,6 +393,7 @@ func sqliteStoreOptions(cfg *settings, st *sqlite.Store) []Option {
 		WithProfileStore(st.Profiles()),
 		WithIssuerStore(st.Issuer()),
 		WithIdempotencyStore(st.Idempotency(cfg.secretWrapper)),
+		WithSelfServiceBlueprints(st.SelfServiceBlueprints()),
 	)
 }
 
@@ -408,5 +409,6 @@ func postgresStoreOptions(cfg *settings, st *postgres.Store) []Option {
 		WithProfileStore(st.Profiles()),
 		WithIssuerStore(st.Issuer()),
 		WithIdempotencyStore(st.Idempotency(cfg.secretWrapper)),
+		WithSelfServiceBlueprints(st.SelfServiceBlueprints()),
 	)
 }

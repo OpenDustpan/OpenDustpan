@@ -241,7 +241,7 @@ func checkIPAllowlistRefusesOutside(ctx context.Context, t *testing.T, env *e2e.
 	for _, step := range []ipAllowlistStep{
 		{
 			step:   "read the locked namespace from outside",
-			method: http.MethodGet, path: "/api/server/namespaces/locked/override-switches", body: "",
+			method: http.MethodGet, path: "/api/dustpan/v1/namespaces/locked/override-switches", body: "",
 			want: http.StatusForbidden,
 		},
 		{
@@ -350,7 +350,7 @@ func checkIPAllowlistAdmitsInside(ctx context.Context, t *testing.T, env *e2e.En
 
 	ipAllowlistCallFrom(ctx, t, env, ipAllowlistSource, ipAllowlistStep{
 		step:   "read the locked namespace from inside",
-		method: http.MethodGet, path: "/api/server/namespaces/locked/override-switches", body: "",
+		method: http.MethodGet, path: "/api/dustpan/v1/namespaces/locked/override-switches", body: "",
 		want: http.StatusOK,
 	})
 }
@@ -367,7 +367,7 @@ func checkIPAllowlistLeavesOpenAlone(ctx context.Context, t *testing.T, env *e2e
 	})
 	ipAllowlistCall(ctx, t, env, ipAllowlistStep{
 		step:   "read the open namespace from the default source",
-		method: http.MethodGet, path: "/api/server/namespaces/open/override-switches", body: "",
+		method: http.MethodGet, path: "/api/dustpan/v1/namespaces/open/override-switches", body: "",
 		want: http.StatusOK,
 	})
 }
@@ -384,7 +384,7 @@ func checkIPAllowlistDelete(ctx context.Context, t *testing.T, env *e2e.Env) {
 	})
 	ipAllowlistCall(ctx, t, env, ipAllowlistStep{
 		step:   "read the unlocked namespace from the default source",
-		method: http.MethodGet, path: "/api/server/namespaces/locked/override-switches", body: "",
+		method: http.MethodGet, path: "/api/dustpan/v1/namespaces/locked/override-switches", body: "",
 		want: http.StatusOK,
 	})
 }
