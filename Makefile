@@ -10,7 +10,7 @@
 #   node 20.19 or later with npx, for openspec-validate (the CLI comes from npm at a pinned version)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check change-archived-check
+.PHONY: cover regenerate-baseline release-record-check release-build release-verify ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check change-archived-check
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint openspec-validate release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -189,6 +189,22 @@ ifeq ($(origin VERSION),command line)
 else
 	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
 endif
+
+# The release archives of one version: make release-build VERSION=v0.1.0. The
+# archives and SHA256SUMS go to RELEASE_DIR. The script refuses a version that
+# the release record does not list. The version goes to the script through the
+# environment, so that a shell never reads it as code.
+RELEASE_DIR ?= /var/tmp/opendustpan-release/$(VERSION)
+
+release-build: export RELEASE_VERSION := $(VERSION)
+release-build: export RELEASE_OUT := $(RELEASE_DIR)
+release-build: ## Build the four release archives and SHA256SUMS: VERSION=vX.Y.Z, in RELEASE_DIR.
+	./scripts/release-build.sh "$$RELEASE_VERSION" "$$RELEASE_OUT"
+
+release-verify: export RELEASE_VERSION := $(VERSION)
+release-verify: export RELEASE_OUT := $(RELEASE_DIR)
+release-verify: ## Check the archives and SHA256SUMS of one version: VERSION=vX.Y.Z, in RELEASE_DIR.
+	./scripts/release-verify.sh "$$RELEASE_VERSION" "$$RELEASE_OUT"
 
 # The pull request body and the author email of each commit of the pull
 # request, one per line. They have no defaults: CI passes both files, and a

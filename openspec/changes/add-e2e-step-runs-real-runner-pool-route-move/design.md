@@ -10,7 +10,7 @@ Runner management moves to resource paths under one namespace. The runner protoc
 
 ## Structure
 
-Domain types in pkg/runner stay unchanged; a thin HTTP adapter in internal/api/runnerapi passes the audit entry to the store. No new service layer and no new store package. No new tool and no custom analyzer.
+Domain types in pkg/runner stay unchanged; a thin HTTP adapter in the new package internal/api/runnerpools passes the audit entry to the store. The `/runner/v1` protocol code stays in internal/api/runnerapi with its own wire format, so the forbidigo rule `through apidesc` can list the management adapter without listing the protocol (lead decision, 2026-11-15). No new service layer and no new store package. No new tool and no custom analyzer.
 
 ## Risks
 
