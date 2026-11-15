@@ -554,6 +554,8 @@ comes before the exit test of each of milestones 1 to 7 passes. Its gate:
   it: the meaning of `principal.kind`, the agent block in the audit hash
   chain, and the `agent` key in the `sub` of the job identity token. If RFC 121
   is not accepted by then, this is an open item of the gate.
+- [ ] Agent sign-off rule settled
+  ([ADR 381](adr/0381-agent-sign-off-until-the-first-tag.md)).
 - [ ] Install docs, with TLS from files and a reverse proxy
   ([ADR 283](adr/0283-packaging-for-v0-1-0.md)).
 - [ ] Release workflows for the binaries, the image and the console tarball
