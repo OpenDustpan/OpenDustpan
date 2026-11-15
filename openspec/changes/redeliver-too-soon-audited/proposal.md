@@ -6,6 +6,8 @@ Issue: #3160.
 
 Short form: bug (SECURITY). Owner lane: F4 (it holds #2899).
 
+Waits for: #2899
+
 ## Problem
 
 **Persona: namespace administrator.** The administrator reads the audit log
