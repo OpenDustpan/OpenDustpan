@@ -57,6 +57,7 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	backup.KeyPeeker
 	backup.Registry
 	blobguard.Watch
+	blobguard.Leases
 	// GetRestore and ListRestores read the restores table, as
 	// backup.RestoreOperations does. The cases that write restore rows
 	// assert the store to the restore operation ports.
@@ -115,6 +116,10 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "the table list names every table of the schema", test: testBackupTablesCoverSchema},
 		{name: "column lists cover every column of the schema", test: testBackupColumnsCoverSchema},
 		{name: "backups table creates, finishes, gets and lists", test: testBackupRegistry},
+		{
+			name: "a row that is not ended stores NULL, a row that is ended stores its time",
+			test: testBackupEndedShape,
+		},
 		{name: "one backup runs at a time", test: testBackupOneRunning},
 		{name: "starting a backup stores the row and the operation together", test: testBackupStart},
 		{name: "a refused start leaves no operation", test: testBackupStartRefused},
@@ -138,6 +143,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "the running work read returns none when every backup ended", test: testRunningEnded},
 		{name: "a takeover leaves the backup row running", test: testRunningTakeover},
 		{name: "a refused start gives no running work", test: testRunningRefusedStart},
+		{name: "a lease take writes one live lease and a release deletes it", test: testRunningLease},
 	}
 
 	for _, tc := range cases {
@@ -305,6 +311,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupDrift(t, s, acme)
 	seedBackupGitHost(t, s, acme)
 	seedBackupSinks(t, s, acme)
+	seedBackupDelivery(t, s, acme, seedDeliveryRedeliveries)
 	seedBackupTriggers(t, s, acme)
 	seedBackupItemKeys(t, s, acme)
 	seedBackupBreakGlass(t, s, acme)
@@ -350,6 +357,7 @@ func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace)
 		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 
 	for i, query := range []savedview.Query{
@@ -426,6 +434,7 @@ func seedBackupBreakGlass(t *testing.T, s BackupStore, acme namespace.Namespace)
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	// The pending review carries a notice step that is due, so the round trip
@@ -547,7 +556,12 @@ func seedBackupItemKeys(t *testing.T, s BackupStore, acme namespace.Namespace) {
 			Ref:        ref,
 			ID:         secret.NewItemKeyID(),
 			WrapperID:  "kek-1",
-			Blob:       secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}},
+			Blob: secret.ItemKeyBlobInfo{
+				Version: 1,
+				Size:    60,
+				MD5:     [16]byte{1, 2, 3},
+				Attempt: "abcdefghij0123456789",
+			},
 		}
 		if _, err = keys.CreateItemKey(t.Context(), k, acme.Fence()); err != nil {
 			t.Fatalf("create item key %d: %v", i, err)
@@ -582,6 +596,7 @@ func seedBackupGitHost(t *testing.T, s BackupStore, acme namespace.Namespace) {
 			UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 			RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "",
 			JobID: "", Reason: "",
+			Origin: nil,
 		}
 	}
 
@@ -650,6 +665,7 @@ func seedBackupSinks(t *testing.T, s BackupStore, acme namespace.Namespace) {
 		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 
 	chat := notify.Sink{
@@ -685,6 +701,138 @@ func seedBackupSinks(t *testing.T, s BackupStore, acme namespace.Namespace) {
 
 	chat.Version, chat.SecretRefs = 1, []string{"itm-seedchat2"}
 	put(chat, "https://hooks.slack.com/services/T0/B0/seed-two")
+}
+
+// The seeded notification delivery and its subscription, and the count of
+// manual redeliveries that the round trip carries.
+const (
+	seedDeliveryID           = "dlv-seed1"
+	seedSubscriptionID       = "sub-seed1"
+	seedDeliveryRedeliveries = 3
+)
+
+// seedBackupDelivery writes a subscription and a delivery with the given
+// count of manual redeliveries in the namespace acme, so the round trip
+// carries the count. A store with no notification port skips it: the fake of
+// this package's own tests is one.
+func seedBackupDelivery(t *testing.T, s BackupStore, acme namespace.Namespace, count int) {
+	t.Helper()
+
+	keeper, ok := s.(interface{ NotificationSinks() notify.SinkStore })
+	if !ok {
+		return
+	}
+
+	notifications, ok := keeper.NotificationSinks().(notify.Subscriptions)
+	if !ok {
+		return
+	}
+
+	deliveries, ok := keeper.NotificationSinks().(notify.Deliveries)
+	if !ok {
+		return
+	}
+
+	ctx := t.Context()
+
+	entry := func(action string, at time.Time) audit.Entry {
+		return audit.Entry{
+			At: at, Namespace: acme.Name, Subject: "alice", IDPSubject: "", TokenID: "", Action: action,
+			Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+			SourceIP: "192.0.2.1", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+			Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+			FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "", Origin: nil,
+		}
+	}
+
+	sub := notify.Subscription{
+		ID: seedSubscriptionID, Scope: acme.Name, Sink: "snk-seedhook",
+		Filter: notify.Filter{Types: []string{"job.*"}, Objects: nil, MinSeverity: 0},
+		State:  notify.SubscriptionStateActive, Reason: "", CreatedBy: "alice", Version: 0,
+	}
+
+	if err := notifications.PutSubscription(ctx, sub, acme.Fence(), entry("subscription:create", now())); err != nil {
+		t.Fatalf("put subscription %s: %v", sub.ID, err)
+	}
+
+	d := notify.Delivery{
+		ID: seedDeliveryID, Notification: "ntf-seed1", Scope: acme.Name, Subscription: seedSubscriptionID,
+		Sink: "snk-seedhook", Contact: "", Principal: "alice", State: notify.DeliveryPending,
+		Attempts: 0, Redeliveries: 0, NextAt: now(), LastError: "", DeliveredAt: time.Time{},
+		Owner: "", LeaseUntil: time.Time{}, Version: 0,
+	}
+
+	if err := deliveries.Enqueue(ctx, acme.Fence(), []notify.Delivery{d}); err != nil {
+		t.Fatalf("enqueue delivery %s: %v", d.ID, err)
+	}
+
+	stop := func(at time.Time) {
+		t.Helper()
+
+		got, err := deliveries.Claim(ctx, acme.Fence(), notify.ClaimRequest{
+			Scope: acme.Name, Owner: "backup-seed", Now: at, Lease: time.Minute, Limit: 10,
+		})
+		if err != nil {
+			t.Fatalf("claim delivery %s: %v", d.ID, err)
+		}
+
+		i := slices.IndexFunc(got, func(c notify.Delivery) bool { return c.ID == d.ID })
+		if i < 0 {
+			t.Fatalf("claim = %+v, want %s", got, d.ID)
+		}
+
+		a := notify.Attempt{
+			ID: got[i].ID, Owner: got[i].Owner, Version: got[i].Version, Now: at,
+			State: notify.DeliveryDone, Attempts: 1, NextAt: time.Time{}, LastError: "", DeliveredAt: at,
+		}
+
+		if err := deliveries.Record(ctx, acme.Fence(), a); err != nil {
+			t.Fatalf("record delivery %s: %v", d.ID, err)
+		}
+	}
+
+	at := now()
+
+	for n := 1; n <= count; n++ {
+		stop(at)
+
+		at = at.Add(notify.RetryWait(n))
+		if err := deliveries.Redeliver(ctx, d.ID, at, acme.Fence(), entry("notification:redeliver", at)); err != nil {
+			t.Fatalf("redeliver delivery %s: %v", d.ID, err)
+		}
+	}
+}
+
+// requireSeededDelivery checks that s holds the seeded delivery with the
+// number of manual redeliveries that it had before the backup. A store with
+// no delivery port skips it.
+func requireSeededDelivery(t *testing.T, s BackupStore, acme namespace.Name) {
+	t.Helper()
+
+	keeper, ok := s.(interface{ NotificationSinks() notify.SinkStore })
+	if !ok {
+		return
+	}
+
+	deliveries, ok := keeper.NotificationSinks().(notify.Deliveries)
+	if !ok {
+		return
+	}
+
+	got, err := deliveries.History(t.Context(), acme, seedSubscriptionID, nil, 10)
+	if err != nil {
+		t.Fatalf("history of the seeded delivery: %v", err)
+	}
+
+	i := slices.IndexFunc(got, func(d notify.Delivery) bool { return d.ID == seedDeliveryID })
+	if i < 0 {
+		t.Fatalf("history of %s holds no delivery %s: %+v", seedSubscriptionID, seedDeliveryID, got)
+	}
+
+	if got[i].Redeliveries != seedDeliveryRedeliveries {
+		t.Fatalf("redeliveries of the restored delivery = %d, want %d",
+			got[i].Redeliveries, seedDeliveryRedeliveries)
+	}
 }
 
 // DriftSeeder is the capability of a backup store that can write a drift result
@@ -1183,6 +1331,7 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -1345,6 +1494,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Reason:        "",
 			PrincipalKind: "",
 			JobID:         "",
+			Origin:        nil,
 		})
 		if err != nil {
 			t.Fatalf("append audit entry %d: %v", i, err)
@@ -1880,6 +2030,29 @@ func newBackupRecord(id backup.ID, startedAt time.Time) backup.Record {
 		Error:     "",
 		State:     backup.StateRunning,
 	}
+}
+
+// testBackupEndedShape proves the stored shape of ended_at_ms: a running row
+// stores NULL and a finished row stores its end time. It reads the column
+// with the raw reader of the store, not through the domain record.
+func testBackupEndedShape(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+
+	witness, ok := s.(NullEndedWitness)
+	if !ok {
+		t.Skip("store has no raw end-time reader")
+	}
+
+	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	requireNotEndedStored(t, witness, backup.TableBackups, running.ID.String())
+
+	endedAt := now().Add(time.Hour)
+	mustFinishBackup(t, s, backupFinish{
+		ID: running.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt,
+	})
+	requireEndedStored(t, witness, backup.TableBackups, running.ID.String(), endedAt)
 }
 
 // testBackupRegistry covers the backups table: create a running row, finish

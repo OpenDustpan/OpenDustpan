@@ -1,7 +1,25 @@
 package backup
 
+import (
+	"slices"
+	"strings"
+)
+
 // portColAddedAtMs is the column that holds the time a trusted key was registered.
 const portColAddedAtMs = "added_at_ms"
+
+// RegistryFileSectionName is the name of the registry file section of a
+// namespace backup manifest: one entry per unique release file by SHA-256.
+const RegistryFileSectionName = "registry_files"
+
+// SortRegistryFileEntries sorts entries by SHA-256 key so the manifest section
+// is deterministic across runs.
+func SortRegistryFileEntries(entries []RegistryFileEntry) []RegistryFileEntry {
+	out := slices.Clone(entries)
+	slices.SortFunc(out, func(a, b RegistryFileEntry) int { return strings.Compare(a.SHA256, b.SHA256) })
+
+	return out
+}
 
 // portableRegistryTables is the portable description of the registry release
 // table, in the order of Tables.

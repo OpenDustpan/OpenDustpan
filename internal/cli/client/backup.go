@@ -1,7 +1,7 @@
 package client
 
 // Backup subcommand of the installation API (ADR 30 decision 10): a client
-// of POST /api/server/backups and GET /api/server/backups/{id} (ADR 17).
+// of POST /api/dustpan/v1/backups and GET /api/dustpan/v1/backups/{id} (ADR 17).
 //
 //	opendustpan backup --server https://dustpan.example [--ca-file ca.pem]
 //
@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/backup"
 )
 
 const (
@@ -104,10 +105,13 @@ type backupStartResponse struct {
 	ID string `json:"id"`
 }
 
-// BackupManifest holds the manifest fields the command prints: the SQL
-// size of the backup.
+// BackupManifest holds the manifest fields the command prints: the SQL size
+// of the backup, and the registry release files of each namespace.
 type BackupManifest struct {
 	SQLSize int64 `json:"sqlSize"`
+	// RegistryFiles holds the registry file section of each namespace. A
+	// missing section (null) is a backup from before registry file copy.
+	RegistryFiles map[string]backup.RegistryFileSection `json:"registryFiles"`
 }
 
 // BackupStatusResponse answers one backup: its state and, when the backup
@@ -276,7 +280,7 @@ func backupAuth(req *http.Request, token string) {
 // startBackup starts a backup and answers its ID. A second start while one
 // runs gives the message of the server, which names the running backup.
 func startBackup(ctx context.Context, client *http.Client, server, token string) (string, error) {
-	endpoint := backupEndpoint(server, "/api/server/backups")
+	endpoint := backupEndpoint(server, "/api/dustpan/v1/backups")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, http.NoBody)
 	if err != nil {
@@ -325,7 +329,7 @@ func startBackup(ctx context.Context, client *http.Client, server, token string)
 func readBackup(
 	ctx context.Context, client *http.Client, server, token, id string,
 ) (BackupStatusResponse, error) {
-	endpoint := backupEndpoint(server, "/api/server/backups/"+url.PathEscape(id))
+	endpoint := backupEndpoint(server, "/api/dustpan/v1/backups/"+url.PathEscape(id))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {
@@ -433,14 +437,34 @@ func backupSizeText(doc BackupStatusResponse) string {
 	return fmt.Sprintf(" (SQL %d bytes)", doc.Manifest.SQLSize)
 }
 
-// writeBackupReport prints the ID, the state and, when the manifest is
-// present, the size of the backup. It then prints that a backup cannot
+// backupRegistryFilesText answers the registry file report of a backup row:
+// the count of copied registry release files and their total bytes. A
+// manifest with no registry file section answers the same report of zero,
+// because the backup copied no release file.
+func backupRegistryFilesText(doc BackupStatusResponse) string {
+	if doc.Manifest == nil {
+		return ""
+	}
+
+	report := backup.RegistryFileReportOf(doc.Manifest.RegistryFiles)
+
+	return fmt.Sprintf("registry files: %d files, %d bytes", report.Count, report.TotalBytes)
+}
+
+// writeBackupReport prints the ID, the state, the SQL size and the registry
+// file report of the backup. It then prints that a backup cannot
 // decrypt secrets without the key-encryption key and that a backup holds
 // sealed OpenTofu state, so the operator protects the target and keeps the
 // key apart from it (ADR 41 decision 10).
 func writeBackupReport(stdout io.Writer, doc BackupStatusResponse) error {
 	if _, err := fmt.Fprintf(stdout, "backup %s %s%s\n", doc.ID, doc.State, backupSizeText(doc)); err != nil {
 		return fmt.Errorf("write output: %w", err)
+	}
+
+	if line := backupRegistryFilesText(doc); line != "" {
+		if _, err := fmt.Fprintln(stdout, line); err != nil {
+			return fmt.Errorf("write output: %w", err)
+		}
 	}
 
 	warnings := []string{

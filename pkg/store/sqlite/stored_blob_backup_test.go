@@ -19,8 +19,18 @@ import (
 // direct SQL on a second handle, as the rows of an earlier version hold them.
 type storedDigestEraser struct{ path string }
 
-// EraseStoredDigests implements storetest.StoredDigestEraser.
-func (e storedDigestEraser) EraseStoredDigests(ctx context.Context) error {
+// EraseLogChunkDigests implements storetest.StoredDigestEraser.
+func (e storedDigestEraser) EraseLogChunkDigests(ctx context.Context) error {
+	return e.erase(ctx, `UPDATE job_log_chunks SET stored_size = 0, stored_md5 = X''`)
+}
+
+// EraseRegistryReleaseFiles implements storetest.StoredDigestEraser.
+func (e storedDigestEraser) EraseRegistryReleaseFiles(ctx context.Context) error {
+	return e.erase(ctx, `UPDATE registry_releases SET stored_files_json = ''`)
+}
+
+// erase runs stmt on a second handle of the database.
+func (e storedDigestEraser) erase(ctx context.Context, stmt string) error {
 	conn, err := sql.Open("sqlite", "file:"+e.path+"?_pragma=busy_timeout(10000)")
 	if err != nil {
 		return fmt.Errorf("open the database: %w", err)
@@ -32,13 +42,8 @@ func (e storedDigestEraser) EraseStoredDigests(ctx context.Context) error {
 		}
 	}()
 
-	for _, stmt := range []string{
-		`UPDATE job_log_chunks SET stored_size = 0, stored_md5 = X''`,
-		`UPDATE registry_releases SET stored_files_json = ''`,
-	} {
-		if _, execErr := conn.ExecContext(ctx, stmt); execErr != nil {
-			return fmt.Errorf("erase stored digests: %w", execErr)
-		}
+	if _, execErr := conn.ExecContext(ctx, stmt); execErr != nil {
+		return fmt.Errorf("erase stored digests: %w", execErr)
 	}
 
 	return nil
@@ -79,7 +84,7 @@ func newStoredBlobRig(t *testing.T, in storetest.StoredBlobBackupInput) *storete
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live: st, Operations: st.DurableOperationsPort(), Backups: backups,
-		Maintenance: storetest.StateMaintenance{State: st, Hold: false}, Blobs: live,
+		Maintenance: storetest.StateMaintenance{State: st, Hold: false}, Blobs: live, Leases: st,
 		Target: in.Target, Key: in.Key, Installation: "test", AfterApply: nil, Admit: nil, AllowDevBackups: false,
 		AllowDevHint: "", Owner: "", Lease: 0, CleanupLockWait: 0, RetryBase: time.Millisecond, Now: nil, Logger: nil,
 	})
@@ -121,4 +126,16 @@ func TestStoredBlobBackupUnverified(t *testing.T) {
 	t.Parallel()
 
 	storetest.RunStoredBlobBackupUnverified(t, newStoredBlobRig)
+}
+
+func TestStoredBlobBackupRegistryMissing(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunStoredBlobBackupRegistryMissing(t, newStoredBlobRig)
+}
+
+func TestStoredBlobBackupRegistryFiles(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunStoredBlobBackupRegistryFiles(t, newStoredBlobRig)
 }

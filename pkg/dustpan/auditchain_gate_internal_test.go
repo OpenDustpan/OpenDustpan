@@ -138,8 +138,11 @@ func gateRefused() []gateRoute {
 		{method: http.MethodGet, path: "/tofu/state/x"},
 		{method: http.MethodGet, path: "/api/inventory/deleted-units/pulumi/unit-1"},
 		{method: http.MethodPost, path: "/runner/v1/claim"},
-		{method: http.MethodPut, path: "/api/server/audit/chain"},
-		{method: http.MethodGet, path: "/api/server/maintenancex"},
+		{method: http.MethodPut, path: "/api/dustpan/v1/audit/chain"},
+		{method: http.MethodGet, path: "/api/server/audit/chain"},
+		{method: http.MethodGet, path: "/api/dustpan/v1/audit/entries"},
+		{method: http.MethodGet, path: "/api/dustpan/v1/audit/chainx"},
+		{method: http.MethodGet, path: "/api/dustpan/v1/maintenancex"},
 	}
 }
 
@@ -148,10 +151,10 @@ func gatePassed() []gateRoute {
 	return []gateRoute{
 		{method: http.MethodGet, path: "/health/live"},
 		{method: http.MethodGet, path: "/api/server/metrics"},
-		{method: http.MethodGet, path: "/api/server/audit/chain"},
-		{method: http.MethodPost, path: "/api/server/audit/chain"},
-		{method: http.MethodGet, path: "/api/server/maintenance"},
-		{method: http.MethodPost, path: "/api/server/maintenance/enter"},
+		{method: http.MethodGet, path: "/api/dustpan/v1/audit/chain"},
+		{method: http.MethodPost, path: "/api/dustpan/v1/audit/chain"},
+		{method: http.MethodGet, path: "/api/dustpan/v1/maintenance"},
+		{method: http.MethodPost, path: "/api/dustpan/v1/maintenance/enter"},
 		{method: http.MethodGet, path: "/"},
 	}
 }

@@ -66,6 +66,8 @@ A purge of the scheduled retention expiry has the subject `@server`. The subject
 acted: a person, a service or a workload. A purge of an expiry run that a
 person starts through the API has that person as the subject.
 
+A stack rename writes one entry with the old and the new name in `changes`.
+
 Each request for an access-review export writes one
 entry with the kind `read-access`, the read-access action of the object and
 the object `access-review <object> <mode>`. The mode is `snapshot
@@ -178,6 +180,17 @@ outside the directory of the blob in the namespace, or outside the directory of
 the unit in the blob directory, for example
 `state blob get refused: key outside the namespace`. The entry never holds the
 blob key that the call used.
+
+The server also writes one entry of the kind `security` and the outcome
+`denied` when it refuses an item key blob because its bytes do not match its
+record. The record keeps the size and the MD5 of the blob. Before the server
+uses the key, it compares the blob with these two values. A blob that does not
+match is not used, and the read fails. The blob store, or a person with write access
+to it, replaced or changed the object. The action is `blob:mismatch`. The
+entry is in the installation log (`@server`), the subject is `server`, and the
+object is the ID of the namespace. The reason is
+`item key blob get refused: the size or the MD5 of the blob does not match its record`.
+The entry never holds the blob key or the bytes of the blob.
 
 For a Pulumi blob, the directory of the unit is the directory of one stack:
 `namespaces/<namespace ID>/pulumi/<stack ID>/`. A key in the directory of
@@ -422,7 +435,7 @@ When they agree, the server starts normally.
 
 When they differ, the server enters maintenance mode and changes nothing yet.
 A person approves the change in the console.
-The console calls `POST /api/server/audit/chain`.
+The console calls `POST /api/dustpan/v1/audit/chain`.
 The approval sets the chain to the setting of the server that receives it.
 
 Sign in to the console before maintenance mode starts.
@@ -799,10 +812,10 @@ The full entry stays in the server audit log, and the chain check on the server 
 ### Webhook
 
 The URL must use HTTPS.
-The server sends to any host that it can reach, internal addresses and cloud metadata endpoints included.
-Only the operator sets the URL.
-Check it as you check any outbound address of the server.
-If you can, block the metadata endpoints in your network.
+The server sends only to a public address and does not follow a redirect.
+The start fails when the URL names a blocked address, for example a loopback or metadata address.
+A connection to a blocked resolved address fails, and the sink status shows the failure.
+For a receiver on a private network, set `--audit-sink-allowed-ranges`.
 Set the signing key in `DUSTPAN_AUDIT_WEBHOOK_SECRET`, or in a file that `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` names.
 Only the owner of the file can read it.
 Each request carries two headers:
@@ -822,9 +835,10 @@ The URL is the base address of the receiver, for example `otlp:https://collector
 The server adds the path `/v1/logs`, unless the path of the URL already ends with it.
 A query in the URL stays.
 The URL must use HTTPS and must not hold a user name or a password.
-The server sends to any host that it can reach, internal addresses and cloud metadata endpoints included.
-Only the operator sets the URL.
-Check it as you check any outbound address of the server.
+The server sends only to a public address and does not follow a redirect.
+The start fails when the URL names a blocked address, for example a loopback or metadata address.
+A connection to a blocked resolved address fails, and the sink status shows the failure.
+For a receiver on a private network, set `--audit-sink-allowed-ranges`.
 
 Each request is one `ExportLogsServiceRequest` with the header `Content-Type: application/json`.
 It holds one resource with the attribute `service.name` set to `opendustpan`, and one log record for each entry:

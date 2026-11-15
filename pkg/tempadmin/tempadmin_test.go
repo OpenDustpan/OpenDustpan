@@ -247,6 +247,7 @@ func callerEntry() audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -819,6 +820,85 @@ func TestDecoratorLeavesOtherCallersAlone(t *testing.T) {
 
 	if len(audits.entries) != 0 {
 		t.Fatalf("sign-in entries = %d, want none", len(audits.entries))
+	}
+}
+
+// countingRecords counts the record reads that reach the store behind it.
+type countingRecords struct {
+	tempadmin.Reader
+
+	reads int
+}
+
+// GetTempAdminBySubject counts the read and asks the store behind it.
+func (c *countingRecords) GetTempAdminBySubject(ctx context.Context, subject string) (tempadmin.TempAdmin, error) {
+	c.reads++
+
+	return c.Reader.GetTempAdminBySubject(ctx, subject)
+}
+
+// TestDecoratorLeavesAJobTokenAlone proves that the marks of a temporary
+// administrator never reach a job token: the decorator passes the token
+// through and reads no record for it, also when the store holds a live record
+// of the subject of the starter. Defense in depth: the job token service
+// clears the marks too, and the authorization rule of a job token limits it to
+// the unit of its job. This check stays so that a record, or an adapter that
+// returns one, cannot widen a job token.
+func TestDecoratorLeavesAJobTokenAlone(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+
+	// The record of the subject of the starter holds the broadest reach that
+	// the store has. A decorator that read it would mark the job token.
+	in := tempadmin.Input{Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host", Reason: testReason}
+
+	if _, err := testService(store).Create(t.Context(), callerEntry(), in); err != nil {
+		t.Fatalf("create temporary administrator: %v", err)
+	}
+
+	audits := newFakeAudit()
+	records := &countingRecords{Reader: store, reads: 0}
+
+	starter := identity.Principal{
+		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
+		Credential: identity.CredentialJobToken, JobID: "job-1",
+	}
+
+	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
+		Next:       fakeAuthn{principal: starter},
+		Records:    records,
+		Principals: store,
+		Request:    nil,
+		Expirer:    store,
+		Audit:      audits,
+		Now:        func() time.Time { return baseTime().Add(time.Hour) },
+		Logger:     nil,
+	})
+	if err != nil {
+		t.Fatalf("new decorator: %v", err)
+	}
+
+	got, err := dec.AuthenticateToken(t.Context(), "good")
+	if err != nil {
+		t.Fatalf("job token use: %v", err)
+	}
+
+	if got.TemporaryAdministrator || !got.TemporaryExpiresAt.IsZero() {
+		t.Errorf("job token = %+v, want no temporary administrator mark", got)
+	}
+
+	if got != starter {
+		t.Errorf("job token = %+v, want it unchanged: %+v", got, starter)
+	}
+
+	if records.reads != 0 {
+		t.Errorf("the decorator read %d temporary administrator records, want 0", records.reads)
+	}
+
+	if len(audits.entries) != 0 {
+		t.Errorf("sign-in entries = %d, want none for a job token", len(audits.entries))
 	}
 }
 

@@ -148,7 +148,7 @@ type sweptUnitDoc struct {
 	Reference string `json:"reference"`
 }
 
-// sweepDoc is the answer of POST /api/server/deleted-units/sweep.
+// sweepDoc is the answer of POST /api/dustpan/v1/deleted-units/sweep.
 type sweepDoc struct {
 	Purged             []sweptUnitDoc `json:"purged"`
 	Failed             int            `json:"failed"`
@@ -157,7 +157,7 @@ type sweepDoc struct {
 }
 
 // sweepPath is the route that runs one retention sweep now.
-const sweepPath = "/api/server/deleted-units/sweep"
+const sweepPath = "/api/dustpan/v1/deleted-units/sweep"
 
 // sweepDeleted runs one retention sweep through the installation API.
 func sweepDeleted(ctx context.Context, env *e2e.Env) (sweepDoc, error) {

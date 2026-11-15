@@ -26,10 +26,13 @@ var (
 // svcStore is a job.Store that keeps what Create and Apply get. It fails the
 // first creates with the errors in createErrs, in order.
 type svcStore struct {
-	mu         sync.Mutex
-	creates    []createCall
-	applies    []job.Change
-	createErrs []error
+	mu      sync.Mutex
+	creates []createCall
+	applies []job.Change
+	// applyEntries holds the audit entries of each Apply, in the order of
+	// applies.
+	applyEntries [][]audit.Entry
+	createErrs   []error
 	// applyErr fails every Apply.
 	applyErr error
 	jobs     map[job.ID]job.Job
@@ -46,13 +49,14 @@ type createCall struct {
 
 func newSvcStore() *svcStore {
 	return &svcStore{
-		mu:         sync.Mutex{},
-		creates:    nil,
-		applies:    nil,
-		createErrs: nil,
-		applyErr:   nil,
-		jobs:       map[job.ID]job.Job{},
-		keys:       map[string]job.Job{},
+		mu:           sync.Mutex{},
+		creates:      nil,
+		applies:      nil,
+		applyEntries: nil,
+		createErrs:   nil,
+		applyErr:     nil,
+		jobs:         map[job.ID]job.Job{},
+		keys:         map[string]job.Job{},
 	}
 }
 
@@ -112,11 +116,12 @@ func (s *svcStore) Get(_ context.Context, id job.ID) (job.Job, error) {
 	return j, nil
 }
 
-func (s *svcStore) Apply(_ context.Context, c job.Change, _ namespace.Fence, _ []audit.Entry) (job.Job, error) {
+func (s *svcStore) Apply(_ context.Context, c job.Change, _ namespace.Fence, e []audit.Entry) (job.Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.applies = append(s.applies, c)
+	s.applyEntries = append(s.applyEntries, e)
 
 	if s.applyErr != nil {
 		return job.Job{}, s.applyErr
@@ -353,6 +358,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 						Directory:  "",
 						Revision:   "",
 					},
+					LocationSource: job.LocationSourceRequest,
 					Steps: []job.Step{
 						{
 							Name:             "plan",
@@ -402,9 +408,10 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		Gates:      r.gates,
 		Fences:     svcFences{err: nil},
 		Freezes:    nil, Switches: nil,
-		Now:   func() time.Time { return r.now },
-		NewID: func() job.ID { return job.ID("job-fixed") },
-		Log:   slog.New(slog.DiscardHandler),
+		Now:       func() time.Time { return r.now },
+		NewID:     func() job.ID { return job.ID("job-fixed") },
+		Log:       slog.New(slog.DiscardHandler),
+		Approvers: nil, MaxPlanAge: 0, Groups: nil,
 	}
 
 	for _, o := range opts {
@@ -738,8 +745,8 @@ func TestStartRefusesWhenPortsFail(t *testing.T) {
 			r.planner.spec = func(u identity.Object, _ *job.StartRequest) job.Spec {
 				return job.Spec{
 					Unit: u, Operation: job.OperationDestroy, Purpose: "", Executor: job.ExecutorRunner,
-					Location: emptyLocation(), Steps: nil, Pool: "p", Profile: "", Edits: nil, Delivery: "",
-					Defaulted: nil,
+					Location: emptyLocation(), LocationSource: "", Steps: nil, Pool: "p", Profile: "", Edits: nil,
+					Delivery: "", Defaulted: nil,
 				}
 			}
 		}},
@@ -1294,12 +1301,6 @@ func TestMethodsOfALaterVersion(t *testing.T) {
 		t.Errorf("Cancel = %v, want ErrUnsupported", err)
 	}
 
-	if _, err := r.svc.Approve(t.Context(), a, "job-1", job.VerdictApprove, emptyBinding(), ""); !errors.Is(
-		err, job.ErrUnsupported,
-	) {
-		t.Errorf("Approve = %v, want ErrUnsupported", err)
-	}
-
 	if _, err := r.svc.Confirm(t.Context(), a, "job-1", job.VerdictApprove, emptyBinding()); !errors.Is(
 		err, job.ErrUnsupported,
 	) {
@@ -1331,6 +1332,9 @@ func TestNewServiceRefusesAPartialConfig(t *testing.T) {
 			Now:        nil,
 			NewID:      nil,
 			Log:        slog.New(slog.DiscardHandler),
+			Approvers:  nil,
+			MaxPlanAge: 0,
+			Groups:     nil,
 		}
 	}
 
@@ -1604,6 +1608,7 @@ type fieldCase struct {
 
 func fieldCases() []fieldCase {
 	repo := job.Location{Connection: "", Repository: "acme/infra", Ref: "main", Directory: "", Revision: ""}
+	revisionOnly := job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: "abcdef0"}
 	none := emptyLocation()
 
 	return []fieldCase{
@@ -1613,6 +1618,10 @@ func fieldCases() []fieldCase {
 		{"both with both actions", "ci", repo, "", nil},
 		{"a pool without namespace:manage-runners", "ci", none, job.ActionNamespaceManageRunners, identity.ErrDenied},
 		{"a location without unit:define-steps", "", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
+		{
+			"a revision-only location without unit:define-steps", "", revisionOnly, job.ActionUnitDefineSteps,
+			identity.ErrDenied,
+		},
 		{"both without namespace:manage-runners", "ci", repo, job.ActionNamespaceManageRunners, identity.ErrDenied},
 		{"both without unit:define-steps", "ci", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
 		{"no fields without the action of the pool", "", none, job.ActionNamespaceManageRunners, nil},

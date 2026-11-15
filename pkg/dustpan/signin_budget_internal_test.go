@@ -65,6 +65,7 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 		ValueCount: nil, SourceIP: budgetAddress, UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
 		Outcome: "", RequestID: "", PrevHash: "", Hash: "", Sequence: 0, Changes: nil, ObjectID: "",
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	owner, err := principals.CreatePrincipal(t.Context(), entry,
@@ -84,7 +85,7 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 	cfg.authenticator, cfg.namespaceStore = refuseAll{}, st
 	cfg.logger, cfg.now = slog.New(slog.DiscardHandler), func() time.Time { return now }
 
-	chain, gates, err := gatedAuthenticator(cfg.authenticator, tokens, cfg.namespaceStore, cfg.logger, cfg.now)
+	chain, gates, err := gatedAuthenticator(cfg.authenticator, tokens, nil, newGateEnv(cfg))
 	if err != nil {
 		t.Fatalf("gated authenticator: %v", err)
 	}

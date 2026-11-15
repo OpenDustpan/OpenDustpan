@@ -93,6 +93,7 @@ func pgCopyOutboxTables() []pgCopyTable {
 				sinkColPrincipal,
 				pgColState,
 				"attempts",
+				"redeliveries",
 				"next_at_ms",
 				"last_error",
 				"delivered_at_ms",

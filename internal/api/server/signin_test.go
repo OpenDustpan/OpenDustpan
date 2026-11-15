@@ -259,6 +259,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	addPasswordProviders(signIn, opts.passwords, limiter)
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -896,6 +897,7 @@ func policyChangeEntry(at time.Time) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -1181,6 +1183,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -1656,7 +1659,7 @@ func newSignInAccess(
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Now: clock.Now, NewID: nil,
-		BootstrapAdmins: nil, LimitGroups: nil,
+		BootstrapAdmins: nil, Settings: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)

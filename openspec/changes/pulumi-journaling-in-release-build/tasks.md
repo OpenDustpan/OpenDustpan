@@ -1,0 +1,40 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" and each row of "Preconditions of ADR 43" in the proposal at its file and line on the current main. Record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+
+## 1. Failing tests first
+
+- [ ] 1.1 Add `TestStartByPreviewStoresJournalVersionZero` in the NEW file `pkg/stack/start_journal_test.go`: a preview and a dry run started with journal version 2 store and return journal version 0; a mutating update keeps 2. Check: the test fails on main and passes after the fix.
+- [ ] 1.2 Add `TestStartAnswersJournalVersionZeroForPreview` in `internal/api/pulumi/journal_internal_test.go` (or a NEW `_test.go` file next to it): a start of a preview with the `User-Agent` of v3.268.0 and an offer of 2 answers `journalVersion` 0. Check: the test fails on main (on the recording build) and passes after the fix.
+- [ ] 1.3 Add `TestJournalMatrixCoversGateBounds` in the NEW file `e2e/journal_matrix_test.go` (tag `e2e`): both values of `pulumi.VerifiedJournalCLIRange()` are in the `journal` label list of `e2e/tool.go`. Add a negative control that a list without the newest value fails. Check: the test fails on main (no `journal` label, no exported range) and passes after the change.
+- [ ] 1.4 Change `checkJournalingOn` in `e2e/journaling_test.go` as design decision 6 says. Check: `make e2e-journal` with the new matrix fails on main for the release build, because the on run of v3.250.0 answers 0.
+
+## 2. The switch
+
+- [ ] 2.1 Delete `internal/api/pulumi/journal_release.go` and `internal/api/pulumi/journal_recording.go`. Put `const maxSupportedJournalVersion = 2` in `internal/api/pulumi/journal.go` with a comment that names decision 2.2 as behavior, not by number. Add `VerifiedJournalCLIRange`. Check: `rg -n 'maxSupportedJournalVersion' internal/api/pulumi` shows one definition.
+- [ ] 2.2 Delete `pkg/dustpan/journal_release.go` and `pkg/dustpan/journal_recording.go`. Keep one `journalWriter` with the body of the recording build. Check: `go build ./...` passes and `rg -n journalrecording pkg internal cmd` prints nothing.
+- [ ] 2.3 In `pkg/stack/updates.go`, `StartBy` stores journal version 0 when `!u.Mutates()`. Check: 1.1 and 1.2 pass.
+- [ ] 2.4 Remove the `journalrecording` tag from every test file in `internal/api/pulumi/` and `e2e/`. Merge each release and recording pair (`journal_*_expect_test.go`, `journal_fixture_*_test.go`, `journal_rows_release_test.go`, `journal_*_internal_test.go`, `e2e/servertags_*.go`, `e2e/journaling_build_*_test.go`) into one file, or delete the pair where it only tested the split. Check: `rg -n journalrecording --glob '*.go' .` prints nothing, and `go test -race ./internal/api/pulumi/ ./pkg/dustpan/ ./pkg/stack/` passes.
+- [ ] 2.5 In `load/harness.go`, remove the tag check. Check: `rg -n journalrecording load` prints nothing and `go test ./load/...` passes.
+- [ ] 2.6 Remove `journalAllowEntries` from `e2e/coverage_pulumi.go` and its use. Check: the route coverage test of `make e2e` passes with the journal route reached by `TestPulumiJournalingBothModes`.
+
+## 3. Build targets and CI
+
+- [ ] 3.1 Workflow patch, in its own pull request through the managed computer with workflow rights, merged before this change: in `.github/workflows/ci.yml`, remove the `make journal-guard` step, the `golangci-lint-journal` job and the `journal-test` job, and keep the `e2e-journal` job. Put the same diff in this pull request body under "Workflow patch (apply locally)", and list it in `orchestration/workflow-patches.md`. Check: the workflow pull request is merged, and CI on its merge commit is green.
+- [ ] 3.2 In `Makefile`, remove `journal-guard`, `lint-journal-build` and `journal-test` and their entries in `check`. Change `e2e-journal` to `E2E_PULUMI_VERSIONS=journal go test -tags e2e ... -run 'TestPulumiJournalingBothModes|TestPulumiJournalingOn|TestPulumiJournalRefusalCancel|TestPulumiJournalStateMigration'`. Check: `make -n check` names none of the removed targets, and `rg -n journalrecording Makefile` prints nothing.
+- [ ] 3.3 Add the `journal` label to `e2e/tool.go` (3.250.0, 3.262.0, 3.268.0). Each version has a pinned SHA-256 for each archive that CI uses. Check: 1.3 passes, and `rg -c 'pulumi-v3.(250|262|268).0-' e2e/tool.go` counts 12 pinned archives.
+
+## 4. Docs
+
+- [ ] 4.1 `docs/reference/journaling.md`: replace "The release build does not offer journaling yet. It answers journal version 0 to every update, so the CLI saves checkpoints." with the default (on), the verified CLI range, and the cost of decision 5.2 (a newer CLI saves checkpoints). Change the "Setting" section so it applies to every build. Check: `make docs-lint` passes, and `rg -n 'release build|recording' docs/reference/journaling.md` prints nothing.
+- [ ] 4.2 `docs/guides/load.md`: remove the release build paragraph and the `-tags journalrecording` command. Check: `go run ./load -out /var/tmp/load-report.json` runs as written in the guide and reports `journal.supported` as `true`.
+- [ ] 4.3 Record the release gate in the first-tag checklist: in `docs/roadmap.md`, section "First tagged release: `v0.1.0`", add one open item: "Pulumi journaling is ready for a release ([ADR 43](adr/0043-pulumi-journaling-support.md), decision 2.4 and work item 19): the build of the checkpoint holds no full copy of the base and its memory bound is measured (#456), the build time bound is measured against the wait of the CLI at `complete` (#672), the nightly run covers journaling on and off (#419), and the recorded corpus covers each verified CLI release (#3207)." The item stays open until the four issues close. Check: `rg -n '#456.*#672.*#419.*#3207|#3207' docs/roadmap.md` shows the item in that section, and `make docs-lint` passes.
+- [ ] 4.4 Leave the "not yet checked" sentence of the build time row in `docs/reference/journal-limits.md` and `docs/reference/journaling.md` as it is; #672 changes it with its measurement. Check: the diff of this pull request does not touch that row.
+
+## 5. Definition of done
+
+- [ ] 5.1 `make e2e-journal` passes: each of v3.250.0, v3.262.0 and v3.268.0 runs with journaling on and off with equal normalized exports, on SQLite and PostgreSQL. Check: the CI job `e2e-journal` is green on the pull request. Confirmed by: CI.
+- [ ] 5.2 `make e2e` passes with the default matrix: v3.262.0 and v3.250.0 journal in the on run, v3.200.0 answers 0. Check: the CI job `e2e` is green on the pull request. Confirmed by: CI.
+- [ ] 5.3 Usability check: an operator follows `docs/reference/journaling.md` alone, turns journaling off with `DUSTPAN_DISABLE_PULUMI_JOURNALING=true`, restarts, and a `pulumi up` saves checkpoints. Check: `TestPulumiJournalingBothModes` covers the off run with that variable; the pull request body records the walk of the page. A person's step.
+- [ ] 5.4 `make check` passes with zero findings. Check: the CI jobs of `make check` are green. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 5.5 Close #2041 with the pull request. Keep #423 open until the first-tag item of 4.3 is ticked. Check: the pull request body has "Closes #2041" and "Part of #423".

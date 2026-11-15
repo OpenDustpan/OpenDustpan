@@ -90,6 +90,7 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_blob_purge_pending` | (none) |
 | `dustpan_blob_purge_oldest_age_seconds` | (none) |
 | `dustpan_blob_purge_read_errors_total` | (none) |
+| `dustpan_blob_deletes_waiting_total` | `reason` |
 
 The route label holds the registered pattern, never the path.
 A request that matches no pattern uses `unmatched`.
@@ -177,6 +178,18 @@ for 2 seconds after it completes, so a slow read still supplies both gauges.
 A failed read exports 0 for both gauges. The worker gauges behave the same way.
 `dustpan_blob_purge_read_errors_total` counts the failed reads of the two blob
 purge gauges, so an alert on it shows a store outage that the two gauges hide.
+
+`dustpan_blob_deletes_waiting_total` counts the blob deletes that did not run
+because the take of their lease was refused, with the label `reason`.
+`backup` counts a delete that waits for a running backup.
+`restore` counts a delete that waits for a running restore.
+`no-guard` counts a delete of a deleter that has no guard.
+`guard-error` counts a delete that a failed take or an unknown answer kept
+back.
+A take that stops because its caller was canceled, for example at shutdown,
+counts nothing.
+A counter that rises for a long time while no backup or restore runs means
+the deletes do not drain.
 
 ## Request log
 

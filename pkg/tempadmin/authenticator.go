@@ -193,19 +193,19 @@ func (s *signInScope) record(subject string) {
 }
 
 // AuthenticateToken resolves token with Next, then marks a temporary
-// administrator and writes its sign-in entry. A caller with no record, and
-// a bootstrap administrator, pass through unchanged. A record counts only
-// when it names the principal of the caller, so a new person with the
-// subject of an old one is not the old temporary administrator. A caller
-// whose record is not active is denied: the record stays as a tombstone,
-// so the deny holds for every later use too.
+// administrator and writes its sign-in entry. A caller with no record, a
+// bootstrap administrator and a job token pass through unchanged. A record
+// counts only when it names the principal of the caller, so a new person
+// with the subject of an old one is not the old temporary administrator. A
+// caller whose record is not active is denied: the record stays as a
+// tombstone, so the deny holds for every later use too.
 func (d *Decorator) AuthenticateToken(ctx context.Context, token string) (identity.Principal, error) {
 	p, err := d.next.AuthenticateToken(ctx, token)
 	if err != nil {
 		return identity.Principal{}, err
 	}
 
-	if p.Admin {
+	if passesThrough(p) {
 		return p, nil
 	}
 
@@ -250,6 +250,18 @@ func (d *Decorator) AuthenticateToken(ctx context.Context, token string) (identi
 	}
 
 	return p, nil
+}
+
+// passesThrough reports whether the decorator returns p with no mark. A
+// bootstrap administrator holds every action already. A job token never
+// receives a mark: its starter may be a temporary administrator, and the mark
+// would widen the token past the unit of its job before the rule of job tokens
+// reads it. Defense in depth: the job token service clears the marks too, and
+// the rule of job tokens clears them before it asks the Authorizer of an
+// embedder. This check stays so that a record cannot widen a job token, and so
+// that the decorator reads no record for one.
+func passesThrough(p identity.Principal) bool {
+	return p.Admin || p.JobTokenID() != ""
 }
 
 // ownsRecord reports whether rec names the principal of the caller with
@@ -303,6 +315,7 @@ func (d *Decorator) expire(ctx context.Context, rec TempAdmin) error {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}, now, Ref(rec.PrincipalID)))
 
 	switch {
@@ -350,6 +363,7 @@ func (d *Decorator) appendSignIn(
 		Reason:        "",
 		PrincipalKind: string(p.Kind),
 		JobID:         p.JobID,
+		Origin:        nil,
 	}
 
 	if _, err := d.audit.AppendServer(ctx, e); err != nil {

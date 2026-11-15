@@ -391,6 +391,30 @@ func (m *memUpdateStore) ReferencedBlobKeys(
 	return slices.Compact(out), nil
 }
 
+// SupersededBlobs implements stack.CheckpointStore. The fixture keeps no
+// marks: its saves replace the row of an update without a sequence number.
+func (m *memUpdateStore) SupersededBlobs(
+	_ context.Context, _ stack.ID,
+) ([]stack.SupersededBlob, error) {
+	return nil, nil
+}
+
+// SupersededMarks implements stack.CheckpointStore. The fixture keeps no
+// marks.
+func (m *memUpdateStore) SupersededMarks(
+	_ context.Context, _ stack.SupersededCursor, _ time.Time, _ int,
+) ([]stack.SupersededMark, error) {
+	return nil, nil
+}
+
+// DropSupersededMark implements stack.CheckpointStore. The fixture keeps no
+// marks.
+func (m *memUpdateStore) DropSupersededMark(
+	_ context.Context, _ stack.ID, _ blob.Key,
+) (bool, error) {
+	return false, nil
+}
+
 func (m *memUpdateStore) AppendEvents(
 	_ context.Context,
 	batch stack.EventBatch,
@@ -656,6 +680,7 @@ func newUpdateFixtureWithAuthenticator(
 		Journal:            journalWriterFor(t, blobs, mem, limit),
 		Replayer:           replayer,
 		Tokens:             checker,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -1660,6 +1685,33 @@ func TestCheckpointCycle(t *testing.T) {
 			exported.Version,
 			exported.Deployment,
 		)
+	}
+}
+
+// TestExportWithoutState proves that a stack with no saved checkpoint exports
+// the schema version 3 with a null deployment.
+func TestExportWithoutState(t *testing.T) {
+	t.Parallel()
+
+	f := newUpdateFixture(t, allowAll())
+	f.mintStarted(t)
+
+	status, body := f.doUpdate(t, accessRequest(http.MethodGet, "/api/stacks/acme/web/prod/export", ""))
+	if status != http.StatusOK {
+		t.Fatalf("export answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var exported struct {
+		Deployment json.RawMessage `json:"deployment"`
+		Version    int             `json:"version"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &exported); err != nil {
+		t.Fatalf("decode export: %v (%s)", err, body)
+	}
+
+	if exported.Version != 3 || string(exported.Deployment) != "null" {
+		t.Fatalf("export = version %d %s, want version 3 with a null deployment", exported.Version, exported.Deployment)
 	}
 }
 
@@ -2897,6 +2949,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Journal:            nil,
 		Replayer:           nil,
 		Tokens:             nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)

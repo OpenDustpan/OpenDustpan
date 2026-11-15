@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -202,8 +203,8 @@ func (s *service) unitOf(ctx context.Context, ref identity.Object) (identity.Obj
 
 	// Defense in depth: the handler of the API checks the name of the unit
 	// too. This check stays so that a feature of the server never puts a name
-	// with a control character in the audit entry of a job, or in a lookup.
-	if !utf8.ValidString(ref.UnitName()) || strings.ContainsFunc(ref.UnitName(), audit.IsHiddenRune) {
+	// with a hidden character in the audit entry of a job, or in a lookup.
+	if !utf8.ValidString(ref.UnitName()) || ident.HasHidden(ref.UnitName()) {
 		return identity.Object{}, fmt.Errorf("%w: the name of the unit has a character that it cannot have",
 			ErrInvalid)
 	}
@@ -603,6 +604,7 @@ func (s *service) entry(a Actor, req *StartRequest, j *Job) (audit.Entry, error)
 		UserAgent: req.UserAgent, Channel: channel, Kind: kind, Outcome: audit.OutcomeSuccess,
 		RequestID: req.RequestID, ObjectID: j.Spec.Unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: string(a.Principal.Kind), JobID: "", Reason: reason,
+		Origin: nil,
 	}, nil
 }
 

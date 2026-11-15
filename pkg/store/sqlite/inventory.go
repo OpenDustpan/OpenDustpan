@@ -582,7 +582,7 @@ func (s *Store) GetDeletedUnitFacts(
 	// it shared too, so it does not give a snapshot.
 	facts := inventory.DeletedFacts{Collection: "", Labels: map[string]string{}}
 
-	err := s.inReadTx(ctx, func(q *db.Queries) error {
+	err := s.inDeletedFactsReadTx(ctx, func(q *db.Queries) error {
 		if _, err := deletedUnit(ctx, q, ns, tool, unitID); err != nil {
 			return err
 		}
@@ -594,6 +594,10 @@ func (s *Store) GetDeletedUnitFacts(
 			return fmt.Errorf("select collection of deleted unit: %w", err)
 		default:
 			facts.Collection = name
+		}
+
+		if s.betweenDeletedFactsReads != nil {
+			s.betweenDeletedFactsReads(ctx)
 		}
 
 		tags, err := q.GetStackTags(ctx, unitID)

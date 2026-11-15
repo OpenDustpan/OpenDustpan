@@ -26,13 +26,16 @@ Start a backup with the backup command. It calls the server and waits until the 
 opendustpan backup --server https://dustpan.example --ca-file ca.pem
 ```
 
-The command takes only `--server` and `--ca-file`. The command prints the backup ID, the state, and the SQL size. It then prints two warnings. Against a local server the output reads, for example:
+The command takes only `--server` and `--ca-file`. The command prints the backup ID, the state, the SQL size, and the count of copied registry release files with their total bytes. It then prints two warnings. Against a local server the output reads, for example:
 
 ```text
 backup bkp-opx3krqgb4d7iqglf5gq succeeded (SQL 163840 bytes)
+registry files: 3 files, 1024 bytes
 A backup cannot decrypt secrets without DUSTPAN_KEY_ENCRYPTION_KEY.
 A backup holds OpenTofu state that the server encrypted: protect the target.
 ```
+
+A backup of an installation with no registry release prints `registry files: 0 files, 0 bytes`.
 
 The two warnings name two risks. Without the key-encryption key, the backup keeps secrets unreadable. It holds OpenTofu state that the server encrypted, so protect the target. Only one backup runs at a time. A second start while one runs answers 409.
 
@@ -58,11 +61,13 @@ A backup is a set of objects under the target:
 
 The manifest records the backup format (`format`: 3) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the primary installations and the wrapper IDs. It records the kind of the installation that wrote the backup (`installationKind`: `dev` or `production`). The server reads the kind from its own database. A backup of another format number is not valid, and neither is a manifest with no kind or with an unknown kind.
 
-For each table file, the manifest has one entry in `sqlFiles`. The entry names the file, its columns, its row count, its size and its SHA-256. The manifest also records each blob with its key, size and MD5. The backup copies each file of a release with its size and MD5.
+For each table file, the manifest has one entry in `sqlFiles`. The entry names the file, its columns, its row count, its size and its SHA-256. The manifest also records each blob with its key, size and MD5. The backup copies each file of a release under `blobs/namespaces/<namespace ID>/registry/sha256/<hash>`. The manifest names each copied file in a `registryFiles` part for its namespace. Each part holds a `version` field and one entry per unique file. An entry names the SHA-256 key, the size in bytes, and the release and the version that name the file. Two releases that name the same file share one entry and one stored copy. The backup checks the SHA-256 of each file after the copy.
 
 The publish path limits each file of an upload to 512 MiB and the sum of the files of one release to 2 GiB. These values are fixed in the server.
 
 The server copies a blob only when the SQL data holds its size and its MD5. It checks the copy against these values. A row can name a blob without them, for example a row that an earlier version of the server wrote. The server does not copy that blob. It lists the key in the optional `unverified` list of the manifest and writes a warning to the server log.
+
+Registry release files follow a stricter rule. A published release that names a file its row holds no size and MD5 of stops the backup. A file hash outside 64 lowercase hex characters stops it too. The error names the release, the version and the SHA-256 key. A file that the blob store cannot read stops the backup the same way. A copy whose bytes do not match its SHA-256 key stops it too. The failed backup writes no manifest, so no partial backup stays. Fix the blob store or the row, then run `opendustpan backup` again.
 
 A restore accepts a backup only when the `unverified` list names every blob that the SQL data names without these values. A backup that does not list such a blob lost its content. The restore then stops with the text `backup is incomplete: the data names <number> blobs that the backup does not hold`. The live data stays as it was.
 
@@ -118,7 +123,7 @@ process that runs a restore stops, another worker continues the restore after
 the lease ends. The [several instances guide](several-instances.md) gives the
 steps.
 
-The worker that runs a restore renews the claim of the restore while it works. During the swap on PostgreSQL, a renewal waits from the copy of the durable control tables to the end of the swap. That time grows with the size of the installation. On SQLite, a renewal waits for the whole swap. A renewal can fail, for example when the database does not answer. Then the worker stops the step and gives the claim back before the lease ends. The worker log then has a WARN entry `durable operation claim renewal failed`, with the operation ID, the kind `restore`, the attempt and the owner. When another worker took the claim, the entry is `durable operation claim lost; another instance can own the operation`. The restore keeps its state, for example `applying`, and `GET /api/server/restores/{id}` shows it. A worker then claims the restore again and runs the stopped step again from its start. The swap is one database transaction, so a stopped swap changes no data. Do not start the restore again.
+The worker that runs a restore renews the claim of the restore while it works. During the swap on PostgreSQL, a renewal waits from the copy of the durable control tables to the end of the swap. That time grows with the size of the installation. On SQLite, a renewal waits for the whole swap. A renewal can fail, for example when the database does not answer. Then the worker stops the step and gives the claim back before the lease ends. The worker log then has a WARN entry `durable operation claim renewal failed`, with the operation ID, the kind `restore`, the attempt and the owner. When another worker took the claim, the entry is `durable operation claim lost; another instance can own the operation`. The restore keeps its state, for example `applying`, and `GET /api/dustpan/v1/restores/{id}` shows it. A worker then claims the restore again and runs the stopped step again from its start. The swap is one database transaction, so a stopped swap changes no data. Do not start the restore again.
 
 Before the restore changes data, it takes a backup of the live data, the backup before restore. The worker that runs the restore also runs this backup, under a claim that the start of the backup takes. Another worker continues this backup only when that claim ends or expires. This backup checks each live blob against the size and MD5 in its own live row. When a live blob is absent, or its bytes have another size or MD5 than its row, the backup does not stop. It records the blob in the `damaged` list of its manifest. Each entry has the key, the state (`missing` or `damaged`) and the reason (`absent`, `size`, `checksum` or `sealed`). It also has the size and MD5 of the live row. The backup holds no copy of these blobs. Sealed OpenTofu state that does not open goes in the list too, with the reason `unopened`. Damaged bytes cause it, and so does a wrong key-encryption key. Every other read error stops the backup and the restore. When the backup finds missing or damaged blobs, the audit log holds one entry with the counts and the first keys.
 
@@ -129,13 +134,13 @@ Blobs are write-once. A restore adds keys and never writes over a live blob. So 
 
 `opendustpan restore` prints this text and the next step. It does not tell you to run the same restore again before you put the good bytes back or change the blob store setting.
 
-When the command cannot read a restore that started, for example while the database of the server is not available, it names the restore ID. The server resumes the restore on its own, so you do not run it again. Read its state with `GET /api/server/restores/{id}`.
+When the command cannot read a restore that started, for example while the database of the server is not available, it names the restore ID. The server resumes the restore on its own, so you do not run it again. Read its state with `GET /api/dustpan/v1/restores/{id}`.
 
 Each of these stops has an error code in the restore answer (`errorCode`): `restore.live-blobs-damaged` or `restore.live-blobs-missing`. `opendustpan restore` chooses its next step from the code.
 
 A restore always takes a new backup before restore. A pre-backup ID can name a backup that exists, or a backup that another restore started. Then the restore stops before any live change with the code `restore.pre-backup-foreign`. Run the restore again.
 
-No setting changes the bound. The answers of `POST /api/server/restores` and `GET /api/server/restores/{id}` show it as `missingBlobLimit`, with `count` (10), `percent` (20) and `percentAbove` (1).
+No setting changes the bound. The answers of `POST /api/dustpan/v1/restores` and `GET /api/dustpan/v1/restores/{id}` show it as `missingBlobLimit`, with `count` (10), `percent` (20) and `percentAbove` (1).
 
 For each blob of the backup, the restore does one of these:
 
@@ -143,7 +148,11 @@ For each blob of the backup, the restore does one of these:
 - The key holds the bytes of the manifest: the blob stays as it is.
 - The key holds other bytes: the restore stops and writes nothing over them. These bytes matched their live row, so they are live data that is newer or different. The restore then fails with the text `backup data is corrupt`, and the audit log holds an entry that names the key. `--force` does not change this.
 
-A restore that went on after the backup before restore found missing blobs succeeds with the warning `missing-live-blobs`. The answer of `GET /api/server/restores/{id}` has `preBackupFound`. It holds the count of blobs that the live data names (`named`), the counts `missing` and `damaged`, and the first 10 keys (`keys`). A restore that stopped at the live blobs has `preBackupFound` too.
+Each registry release file of the backup goes through the same write-once rule, keyed by its SHA-256 content key. The restore reads every named file from the backup target and checks each copy against its SHA-256 key before any registry file becomes visible. A file that the backup does not hold, or whose bytes do not match its key, stops the restore before it writes any registry file. The error names the SHA-256 key and the command `opendustpan backup`. A live blob that already holds the key with other bytes stops the restore, as for every other blob.
+
+A restore that went on after the backup before restore found missing blobs succeeds with the warning `missing-live-blobs`. The answer of `GET /api/dustpan/v1/restores/{id}` has `preBackupFound`. It holds the count of blobs that the live data names (`named`), the counts `missing` and `damaged`, and the first 10 keys (`keys`). A restore that stopped at the live blobs has `preBackupFound` too.
+
+A backup whose manifest holds no `registryFiles` part restores the registry rows without the release files. The restore then ends with the warning `registry-files-absent`: the registry serves no file of the restored releases. Run `opendustpan backup` again on the source installation, then restore the new backup.
 
 A backup before restore that has a `damaged` list stays restorable, so that it can undo the restore. Only a backup that a restore of this installation started can have this list. `opendustpan backup check` and a restore refuse any other backup with a `damaged` list as corrupt. `opendustpan backup check` checks the objects that it holds. The backup holds no copy of the blobs of the `damaged` list. So a restore of it writes nothing to those keys and leaves them as they are. That restore succeeds with the warning `blobs-not-held`, and its answer has `notHeld` with the counts and the first keys.
 
@@ -263,12 +272,12 @@ token that has the action `server:restore`:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
-  https://dustpan.example/api/server/restores/rst-aaa/cancel
+  https://dustpan.example/api/dustpan/v1/restores/rst-aaa/cancel
 ```
 
 | Answer | Meaning |
 | --- | --- |
-| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. The restore row can stay `checking` until the step that runs ends. In one test run this took about 6 seconds. Read `GET /api/server/restores/{id}` until its status is `failed`. |
+| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. The restore row can stay `checking` until the step that runs ends. In one test run this took about 6 seconds. Read `GET /api/dustpan/v1/restores/{id}` until its status is `failed`. |
 | 409 `restore.swapped` | The restore already swapped the data. It runs to its end. To undo it, restore the backup taken before it. |
 | 409 `restore.ended` | The restore already ended. |
 | 404 | No restore has this ID. |
@@ -360,8 +369,8 @@ restore applies. These writes run, each with its audit entry:
   until an administrator enables it again. The check of a disable in normal
   operation stays in force: the caller holds every action that the grants of
   the principal give. The server refuses the disable of the last enabled
-  break-glass account with 409 and the error code `principal.last-break-glass`,
-  also in maintenance mode. Keep a second enabled break-glass account first
+  break-glass account with 409 and the error code
+  `principal.no-working-break-glass`, also in maintenance mode. Keep a second enabled break-glass account first
   (see [Keep a break-glass account](break-glass-accounts.md)).
 - the expiry of a temporary administrator, which ends the record, disables the
   principal, revokes its grants and tokens and ends its group memberships.
@@ -393,8 +402,11 @@ kind that the server does not know, or a target that is not an ID) changes
 nothing and gets an entry with the outcome `denied`. The restore skips a
 disable that would leave the restored data with no enabled break-glass
 account. It keeps that account enabled and writes an entry with the outcome
-`denied` and the reason `principal.last-break-glass` (see
-[Keep a break-glass account](break-glass-accounts.md)).
+`denied` and the reason `principal.no-working-break-glass` (see
+[Keep a break-glass account](break-glass-accounts.md)). The restore stops
+with the code `principal.no-working-break-glass` when it lowers the count of
+working break-glass accounts and leaves fewer than two
+(see [Other paths](break-glass-accounts.md#other-paths)).
 
 The server records only the revocations of the current stay in maintenance mode. A
 new enter starts a new stay. A revocation that you made in normal
@@ -482,6 +494,53 @@ A recorded minimum is always `vMAJOR.MINOR.PATCH`. Older binaries refuse a minim
 For several nodes, start one new node first. The first new node migrates the database. An older node that still runs does not stop. Its next start fails only when the new schema raised the minimum above its version. Then start the other new nodes.
 
 The project supports no downgrade. There are no down migrations. To go back, restore the backup made before the upgrade through the API. Then start the older binary. When the older binary is below the minimum binary version of the schema, it refuses to start. The error names the binary version and the minimum.
+
+## Run the mixed-version matrix
+
+A rolling deploy runs the new binary and the binaries of the last releases on
+one database. The matrix proves that the new schema serves them: the last 2
+release tags that are ancestors of HEAD run next to the new binary, and the
+real Pulumi CLI and OpenTofu write through each old binary.
+
+Run the matrix before a release:
+
+```sh
+make mixed-version-test
+```
+
+The matrix runs on SQLite and on PostgreSQL. Set `DUSTPAN_TEST_POSTGRES_URL`
+to add the PostgreSQL runs. On SQLite one binary serves the file at a time:
+the current binary stops, the old binary takes the file, the CLIs write
+through it, and the current binary starts again. On PostgreSQL the old binary
+and the new binary serve at the same time, and one database also starts the
+old binary first, to prove both start orders.
+
+The matrix prints the tags that ran, with their count:
+
+```text
+mixed-version matrix ran over 2 tags: v0.1.0, v0.2.0
+```
+
+Before the first tag no release tag exists. The matrix then reports zero old
+binaries, writes a warning to the workflow run, and runs the same steps
+against a second process of the current binary. It never skips the step
+silently.
+
+Each release tag must hold the minimum binary version check. A tag without
+the check gives no refusal signal, so the matrix fails and names the tag.
+
+A shallow clone hides the tags. When the clone is shallow and shows no
+release tag, the matrix fails instead of reporting zero old binaries. Run
+`git fetch --tags` before the run.
+
+### Errors of the matrix
+
+| Error | What the answer says | The command that helps |
+| --- | --- | --- |
+| An old binary refuses its writes on the new schema. | The old binary read a higher minimum row and refused its own writes with error code `schema.binary-below-minimum`. Rebuild the binaries and run the matrix again. | `make mixed-version-test` |
+| No release tag is reachable, and the clone is shallow. | The harness fails loudly and names the missing tags, because a shallow clone can hide a tag that exists. | `git fetch --tags` |
+| No ancestor v* tag exists. | The matrix reports zero old binaries and runs the same steps against a second process of the current binary. Run `git fetch --tags` with full history before the run, to prove that no tag exists. | `git fetch --tags` |
+| A release tag does not build or does not start. | The failure names the tag and the log line that explains it. | `make mixed-version-test` |
 
 ## Release checklist
 

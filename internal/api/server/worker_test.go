@@ -54,11 +54,13 @@ func TestStartBackupNeedsAWorker(t *testing.T) {
 			t.Parallel()
 
 			stores := openBackupDeps(t)
-			fix := newBackupFixtureWorkers(t, stores, stores.registry, time.Now, tc.workers())
+			fix := newBackupFixtureWorkers(t, stores, stores.registry, time.Now, backupFixtureOptions{
+				workers: tc.workers(), authz: nil,
+			})
 
-			status, body := serveBackup(t, fix.handler, http.MethodPost, "/api/server/backups")
+			status, body := serveBackup(t, fix.handler, http.MethodPost, "/api/dustpan/v1/backups")
 			if status != tc.wantStatus {
-				t.Fatalf("POST /api/server/backups = %d %s, want %d", status, body, tc.wantStatus)
+				t.Fatalf("POST /api/dustpan/v1/backups = %d %s, want %d", status, body, tc.wantStatus)
 			}
 
 			records, err := stores.registry.ListBackups(t.Context())
@@ -128,13 +130,15 @@ func TestStartRestoreNeedsAWorker(t *testing.T) {
 			t.Parallel()
 
 			stores := openBackupDeps(t)
-			fix := newRestoreFixtureWorkers(t, stores, stores.target, nil, tc.workers())
+			fix := newRestoreFixtureWorkers(
+				t, stores, stores.target, nil, restoreFixtureOptions{workers: tc.workers(), authz: nil},
+			)
 
 			status, body := serveRestore(
-				t, fix.handler, http.MethodPost, "/api/server/restores", `{"backupID":"bkp-missing000000000001"}`,
+				t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-missing000000000001"}`,
 			)
 			if status != tc.wantStatus {
-				t.Fatalf("POST /api/server/restores = %d %s, want %d", status, body, tc.wantStatus)
+				t.Fatalf("POST /api/dustpan/v1/restores = %d %s, want %d", status, body, tc.wantStatus)
 			}
 
 			rows, err := fix.restores.List(t.Context())

@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-01. Decided by the project owner on 1 November 2026. The owner first proposed it in an earlier week, when the owner discussed GitHub as a sign-in provider
 
+Changed by:
+
+- ADR 372 changes decision 14: a temporary administrator of a recovery issues an enrollment code with no fresh authentication.
+
 Changes:
 
 - Changes ADR 46 decision 2: for two sign-in methods, OpenDustpan asks for its own factor at the fresh step.

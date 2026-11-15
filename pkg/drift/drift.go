@@ -18,9 +18,9 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -220,18 +220,21 @@ func validateText(text string) error {
 // character, a format character, a line separator or a paragraph separator.
 // It returns nil for a string with no such rune.
 func hiddenRuneError(what, s string) error {
-	for _, r := range s {
-		switch {
-		case unicode.Is(unicode.Zl, r):
-			return fmt.Errorf("%w: %s has a line separator", ErrInvalid, what)
-		case unicode.Is(unicode.Zp, r):
-			return fmt.Errorf("%w: %s has a paragraph separator", ErrInvalid, what)
-		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
-			return fmt.Errorf("%w: %s has a control or format character", ErrInvalid, what)
-		}
+	r, found := ident.FirstHidden(s)
+	if !found {
+		return nil
 	}
 
-	return nil
+	// U+2028 is the only line separator and U+2029 the only paragraph
+	// separator, so the value of the rune names its category.
+	switch r {
+	case '\u2028':
+		return fmt.Errorf("%w: %s has a line separator", ErrInvalid, what)
+	case '\u2029':
+		return fmt.Errorf("%w: %s has a paragraph separator", ErrInvalid, what)
+	default:
+		return fmt.Errorf("%w: %s has a control or format character", ErrInvalid, what)
+	}
 }
 
 // validJobID reports whether id has the prefix of a job ID and a body.

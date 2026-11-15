@@ -37,8 +37,9 @@ var errEventStore = errors.New("event store down")
 // that needs a blob store panics on it.
 func keyService(live RestoreLive) *RestoreService {
 	return &RestoreService{
-		live: live, operations: nil, canceler: nil, backups: nil, maintenance: nil, blobs: nil, target: nil,
-		key: nil, installation: "", afterApply: nil, admit: nil, allowDev: false, devHint: "", lease: 0,
+		live: live, operations: nil, canceler: nil, backups: nil, maintenance: nil, blobs: nil, leases: nil,
+		target: nil,
+		key:    nil, installation: "", afterApply: nil, admit: nil, allowDev: false, devHint: "", lease: 0,
 		lockWait: 0, now: nil, logger: nil, runner: nil,
 	}
 }
@@ -182,6 +183,6 @@ func manifestWith(blobs ...ManifestBlob) Manifest {
 	return Manifest{
 		CreatedAt: time.Time{}, ID: "bkp-1", Dialect: "", PrimaryInstallations: nil, WrapperIDs: nil, Blobs: blobs,
 		Version: "", SQLSHA256: "", Format: 0, SchemaVersion: 0, SQLSize: 0, RowCounts: nil, SQLFormat: "",
-		SQLFiles: nil, InstallationKind: "", Unverified: nil, Damaged: nil,
+		SQLFiles: nil, InstallationKind: "", Unverified: nil, Damaged: nil, RegistryFiles: nil,
 	}
 }

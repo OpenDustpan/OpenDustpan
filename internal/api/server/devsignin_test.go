@@ -130,7 +130,7 @@ func (d devDeps) accessFor(t *testing.T, parts devParts) *access.Service {
 			Reach: access.ReachConfig{
 				Grants: d.st, Roles: d.st, Callers: d.st, Principals: d.st, Collections: nil, Units: d.st,
 			},
-			Now: nil, NewID: nil, BootstrapAdmins: nil, LimitGroups: nil,
+			Now: nil, NewID: nil, BootstrapAdmins: nil, Settings: nil, LimitGroups: nil,
 		})
 		if err != nil {
 			t.Fatalf("failing access service: %v", err)
@@ -161,6 +161,7 @@ func (d devDeps) handler(t *testing.T, parts devParts) testHandler {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,

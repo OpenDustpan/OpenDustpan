@@ -63,16 +63,22 @@ type fakeData struct {
 	stackIDs         map[string]string
 	updates          map[string]map[string]stack.Update
 	checkpoints      map[string]map[string]stack.Checkpoint
-	events           map[string]map[string][]stack.Event
-	keys             map[string]secret.WrappedKey
-	entries          map[string]inventory.Entry
-	audit            map[string][]audit.Entry
-	workspaces       map[string]workspace.Workspace
-	workspaceIDs     map[string]string
-	states           map[string]workspace.StateVersion
-	current          map[string]string
-	backups          map[string]backup.Record
-	restores         map[string]backup.RestoreRecord
+	// marks holds the mark of each checkpoint blob that a later sequenced
+	// save of the same update replaced, by stack ID.
+	marks        map[string][]stack.SupersededBlob
+	events       map[string]map[string][]stack.Event
+	keys         map[string]secret.WrappedKey
+	entries      map[string]inventory.Entry
+	audit        map[string][]audit.Entry
+	workspaces   map[string]workspace.Workspace
+	workspaceIDs map[string]string
+	states       map[string]workspace.StateVersion
+	current      map[string]string
+	backups      map[string]backup.Record
+	restores     map[string]backup.RestoreRecord
+	// leases holds one row for each blob deleter that holds a lease, with the
+	// time it ends.
+	leases map[string]time.Time
 	// installation is the installation state. It starts normal, as the
 	// seeded row of the SQL adapters does.
 	installation maintenance.State
@@ -88,6 +94,7 @@ func newFakeData() *fakeData {
 		stackIDs:         map[string]string{},
 		updates:          map[string]map[string]stack.Update{},
 		checkpoints:      map[string]map[string]stack.Checkpoint{},
+		marks:            map[string][]stack.SupersededBlob{},
 		events:           map[string]map[string][]stack.Event{},
 		keys:             map[string]secret.WrappedKey{},
 		entries:          map[string]inventory.Entry{},
@@ -98,6 +105,7 @@ func newFakeData() *fakeData {
 		current:          map[string]string{},
 		backups:          map[string]backup.Record{},
 		restores:         map[string]backup.RestoreRecord{},
+		leases:           map[string]time.Time{},
 		installation:     maintenance.StateNormal,
 	}
 }
@@ -473,7 +481,7 @@ func (s *fakeBackupStore) UpdateStackTags(
 // RenameStack implements stack.Store. Children key on the stable stack ID,
 // so only the stack row and the inventory entry move.
 func (s *fakeBackupStore) RenameStack(
-	_ context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
+	_ context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, _ audit.Entry,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -771,6 +779,10 @@ func (s *fakeBackupStore) PutCheckpoint(
 		return true, nil
 	}
 
+	// A sequenced write above the stored one replaces the row of the update:
+	// the blob of the row is superseded when the key differs.
+	markSuperseded(s.data, stackID, byStack, cp)
+
 	if cp.BlobKey != "" {
 		// Rows with a blob key keep the metadata only, as the SQL adapters
 		// do: the content lives in blobs.
@@ -780,6 +792,22 @@ func (s *fakeBackupStore) PutCheckpoint(
 	byStack[cp.Update.String()] = cp
 
 	return false, nil
+}
+
+// markSuperseded records the mark of the checkpoint row that cp replaces: the
+// blob of the row is superseded when the key differs. Only a sequenced write
+// marks, and a write that names no blob marks nothing.
+func markSuperseded(
+	data *fakeData, stackID string, byStack map[string]stack.Checkpoint, cp stack.Checkpoint,
+) {
+	stored, ok := byStack[cp.Update.String()]
+	if !ok || cp.Sequence == 0 || stored.BlobKey == "" || stored.BlobKey == cp.BlobKey {
+		return
+	}
+
+	data.marks[stackID] = append(data.marks[stackID], stack.SupersededBlob{
+		Key: stored.BlobKey, Size: stored.BlobSize, At: fakeTime(),
+	})
 }
 
 // checkCheckpointSequence applies the sequence rules of PutCheckpoint to cp
@@ -926,6 +954,135 @@ func (s *fakeBackupStore) ReferencedBlobKeys(
 	slices.Sort(out)
 
 	return out, nil
+}
+
+// SupersededBlobs implements stack.CheckpointStore.
+func (s *fakeBackupStore) SupersededBlobs(
+	_ context.Context, id stack.ID,
+) ([]stack.SupersededBlob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	found := false
+
+	for key := range s.data.stacks {
+		found = found || s.data.stacks[key].ID == id
+	}
+
+	if !found {
+		return nil, stack.ErrNotFound
+	}
+
+	out := slices.Clone(s.data.marks[id.String()])
+
+	slices.SortFunc(out, func(a, b stack.SupersededBlob) int {
+		return strings.Compare(string(a.Key), string(b.Key))
+	})
+
+	return out, nil
+}
+
+// SupersededMarks implements stack.CheckpointStore.
+func (s *fakeBackupStore) SupersededMarks(
+	_ context.Context, after stack.SupersededCursor, olderThan time.Time, limit int,
+) ([]stack.SupersededMark, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return nil, errFakeClosed
+	}
+
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	var out []stack.SupersededMark
+
+	for stackID, marks := range s.data.marks {
+		ref, ok := s.data.stackIDs[stackID]
+		if !ok {
+			continue
+		}
+
+		nsID := s.data.namespaces[s.data.stacks[ref].Ref.Namespace.String()].ID
+		out = append(out, fakeMarksAfter(stack.ID(stackID), marks, nsID, after, olderThan)...)
+	}
+
+	slices.SortFunc(out, func(a, b stack.SupersededMark) int {
+		if order := strings.Compare(string(a.StackID), string(b.StackID)); order != 0 {
+			return order
+		}
+
+		return strings.Compare(string(a.Key), string(b.Key))
+	})
+
+	if len(out) > limit {
+		out = out[:limit]
+	}
+
+	return out, nil
+}
+
+// fakeMarksAfter returns the marks of id that are before olderThan and after
+// the cursor.
+func fakeMarksAfter(
+	id stack.ID, marks []stack.SupersededBlob, nsID namespace.ID,
+	after stack.SupersededCursor, olderThan time.Time,
+) []stack.SupersededMark {
+	var out []stack.SupersededMark
+
+	for _, mark := range marks {
+		if !mark.At.Before(olderThan) {
+			continue
+		}
+
+		if id < after.StackID || (id == after.StackID && mark.Key <= after.Key) {
+			continue
+		}
+
+		out = append(out, stack.SupersededMark{
+			StackID: id, NamespaceID: nsID, Key: mark.Key, Size: mark.Size, At: mark.At,
+		})
+	}
+
+	return out
+}
+
+// DropSupersededMark implements stack.CheckpointStore. The backup fake keeps
+// no journal rows. A missing mark reports keep true, because another sweep
+// dropped it and owns the delete.
+func (s *fakeBackupStore) DropSupersededMark(
+	_ context.Context, stackID stack.ID, key blob.Key,
+) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return false, errFakeClosed
+	}
+
+	id := stackID.String()
+	marks := s.data.marks[id]
+
+	index := slices.IndexFunc(marks, func(mark stack.SupersededBlob) bool { return mark.Key == key })
+	if index < 0 {
+		return true, nil
+	}
+
+	s.data.marks[id] = slices.Delete(marks, index, index+1)
+
+	for cpID := range s.data.checkpoints[id] {
+		if s.data.checkpoints[id][cpID].BlobKey == key {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // JournalBatches implements stack.JournalStore. The backup fake keeps no journal rows.
@@ -2232,6 +2389,66 @@ func (s *fakeBackupStore) Running(_ context.Context) (blobguard.Work, bool, erro
 	return blobguard.Work{Kind: "", ID: ""}, false, nil
 }
 
+// TakeLease implements blobguard.Leases: it writes the lease of holder only
+// while the guard finds nothing running.
+func (s *fakeBackupStore) TakeLease(
+	ctx context.Context,
+	holder string,
+	ttl time.Duration,
+) (blobguard.Work, bool, error) {
+	work, ok, err := s.Running(ctx)
+	if err != nil || ok {
+		return work, ok, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return blobguard.Work{Kind: "", ID: ""}, false, errFakeClosed
+	}
+
+	s.data.leases[holder] = fakeTime().Add(ttl)
+
+	return blobguard.Work{Kind: "", ID: ""}, false, nil
+}
+
+// ReleaseLease implements blobguard.Leases: a holder with no row is not an
+// error.
+func (s *fakeBackupStore) ReleaseLease(_ context.Context, holder string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	delete(s.data.leases, holder)
+
+	return nil
+}
+
+// LiveLeases implements blobguard.Leases: the number of lease rows that end
+// after the time of the fake.
+func (s *fakeBackupStore) LiveLeases(_ context.Context) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return 0, errFakeClosed
+	}
+
+	live := 0
+
+	for _, expires := range s.data.leases {
+		if expires.After(fakeTime()) {
+			live++
+		}
+	}
+
+	return live, nil
+}
+
 // FailEndedBackups implements backup.Registry. The noopFailEnded knob leaves
 // the rows alone on purpose. The failLive knob also fails the rows of
 // operations that run or wait.
@@ -2995,6 +3212,7 @@ func (s *fakeBackupStore) removeStack(ref stack.Ref, st stack.Stack) {
 	delete(s.data.stackIDs, st.ID.String())
 	delete(s.data.updates, st.ID.String())
 	delete(s.data.checkpoints, st.ID.String())
+	delete(s.data.marks, st.ID.String())
 	delete(s.data.events, st.ID.String())
 	delete(s.data.entries, inventoryKey(ref.Namespace, "pulumi", ref.Project.String()+"/"+ref.Stack.String()))
 

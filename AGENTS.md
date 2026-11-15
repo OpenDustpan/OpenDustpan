@@ -330,8 +330,9 @@ skill (ADR 14):
   operator configures, or keep them in the server.
 - AI-assisted changes follow `CONTRIBUTING.md` (ADR 76): disclose the tool,
   sign off each commit, understand all of it, and pass `make check`. Until
-  the push ends on 2026-10-22, an agent signs off with its own commit author
-  identity (`git commit -s`).
+  the first tag, an agent signs off with its own commit author identity
+  (`git commit -s`). After the first tag, it signs off with the identity of
+  the project owner.
 - An agent pastes the output of its checks into the description of each pull
   request that it opens (ADR 76).
 - Keep changes small and reviewable, with one concern per change.
@@ -347,6 +348,9 @@ skill (ADR 14):
   stops the change until the owner decides.
 - Prefer a code structure that makes a class of bug impossible over an added
   check or an added tool.
+- Prefer unexported fields with a constructor that checks the invariants. Put
+  a rule that visibility cannot express into the golangci-lint configuration.
+  Do not add a custom check or a new tool (ADR 364).
 - Use the stable ID for each stored reference to an entity that a user can
   rename, or remove and make again. A name is a label for people only
   (ADR 362).

@@ -2,14 +2,14 @@
 
 A job is work that the server asks an executor to do on one stack or workspace: a plan, an
 apply, a destroy or a refresh. The jobs API lets a person or a client start a
-plan job, list jobs, read a job, its phases and the records of its phases, and read
-the log of a phase.
+plan job, list jobs, read a job, its phases and the records of its phases, read
+the log of a phase, and approve or reject a job that waits for approval.
 
 This version starts plan jobs of OpenTofu workspaces on runners. It does not accept an
 apply or a destroy yet: a start with the operation `apply` or `destroy` fails with 422 and
 the code `job.unsupported`. The server defines the plan
 step of a Pulumi stack too, but no runner runs it yet. No route
-cancels or approves jobs yet. The [drift API](drift-api.md) starts a drift
+cancels jobs yet. The [drift API](drift-api.md) starts a drift
 check, which is a job with the operation `refresh` and the purpose `drift-check`.
 The job document has the field `purpose` for such a job.
 
@@ -22,6 +22,7 @@ access token or a console session.
 | Method and path | Action | Answer |
 | --- | --- | --- |
 | `POST /namespaces/{namespace}/jobs` | `namespace:read` on the namespace, and `unit:run-plan` on the workspace that the body names | The new job, with status 201 |
+| `POST /namespaces/{namespace}/jobs/{job_id}/approvals` | `namespace:read` on the namespace, and `job:read` and `job:approve` on the stack or workspace of the job | The job after the verdict, with status 201 |
 | `GET /namespaces/{namespace}/jobs` | `namespace:read` on the namespace. The server also checks `job:read` on the stack or workspace of each job | A page of jobs, newest first |
 | `GET /namespaces/{namespace}/jobs/{job_id}` | `namespace:read` on the namespace, and `job:read` on the stack or workspace of the job | One job |
 | `GET /namespaces/{namespace}/jobs/{job_id}/logs/{phase}` | `namespace:read` on the namespace, `job:read` on the stack or workspace of the job, and `job:read-logs` on the same object | The log of the phase, as a stream |
@@ -53,7 +54,7 @@ steps or the profile of a job. The server sets them.
 | `unit` | `tool` (`opentofu`) and `name`: the workspace to plan. The name has no control character. |
 | `operation` | `plan`. Any other operation fails with 422 and the code `job.unsupported`. |
 | `pool` | Optional. The name of a runner pool of the namespace. The pool runs jobs, not sweeps. With no pool, the server uses the only pool of the namespace that runs jobs. A namespace with no such pool, or with more than one, fails the start with 422 and the code `job.unsupported`. A request that names a pool also needs `namespace:manage-runners` on the namespace. |
-| `location` | Where the program and the config are in git. Give `repository` and `ref`. The fields `connection`, `directory` and `revision` are optional. The directory is relative and stays in the repository. The revision is a commit ID. The `repository` is a path such as `acme/infra`, or an `https://` URL with no user name, password, query or fragment. The host of the URL is a DNS name. An IP address such as `10.0.0.5` or `[fd00::1]`, a number such as `2130706433`, and `localhost` are refused. Any other form fails with 400 and the code `job.invalid`. The error does not repeat the value. Other forms include `ssh://`, `file://`, `git@host:r.git`, and an `https://` URL with a user name or a password. The credential helper of the runner pool gives the credentials for the code. A request with no location fails with 422 and the code `job.unsupported`, because the server keeps no code location of a workspace yet. A request that names a location also needs `unit:define-steps` on the workspace. A `connection` must belong to the namespace. The server keeps no connections in this version, so a request that names one gets the same 403 as a refused workspace. |
+| `location` | Where the program and the config are in git. Give `repository` and `ref`. The fields `connection`, `directory` and `revision` are optional. The directory is relative and stays in the repository. The revision is a commit ID. The `repository` is a path such as `acme/infra`, or an `https://` URL with no user name, password, query or fragment. The host of the URL is a DNS name. An IP address such as `10.0.0.5` or `[fd00::1]`, a number such as `2130706433`, and `localhost` are refused. Any other form fails with 400 and the code `job.invalid`. The error does not repeat the value. Other forms include `ssh://`, `file://`, `git@host:r.git`, and an `https://` URL with a user name or a password. The credential helper of the runner pool gives the credentials for the code. A request with no code location takes the code location of the settings of the unit. A unit with no code location in its settings fails with 422 and the code `job.unsupported`. A request that names a location, also one with only `revision`, needs `unit:define-steps` on the workspace. A caller without the permission gets 403 before the location check. A request with only `revision` then fails the location check with 400 and the code `job.invalid`, because it has no repository. A `connection` must belong to the namespace. The server keeps no connections in this version, so a request that names one gets the same 403 as a refused workspace. |
 | `reason` | Optional text for the audit entry. It has at most 500 characters and no control character. |
 
 The job service does these checks in this order, and fails closed at each one:
@@ -143,6 +144,102 @@ The `errorCode` is a stable code for a program.
 | 422 | `request.idempotency-key-reused` | The key names a job with another request |
 | 422 | `job.unsupported` | The operation or the tool is not available in this version. The namespace has no default pool, or has more than one. The request names no code location. |
 | 429 | `job.limit` | The workspace has 16 open jobs, or the namespace has 1,000 |
+
+## Approve or reject a job
+
+A job with a gate of type `approval` in front of its current phase waits in the
+state `awaiting-approval`. `POST /namespaces/{namespace}/jobs/{job_id}/approvals`
+records the verdict of the caller on that gate. The route takes no
+`Idempotency-Key` header. A request with the header fails with 400.
+
+The body is one JSON object. A field that is not in this table fails the request.
+
+| Field | Meaning |
+| --- | --- |
+| `verdict` | `approve` or `reject`. Any other value fails with 422 and the code `job.invalid`. |
+| `planBinding` | The plan that the caller saw. Send it with `approve` when a plan phase comes before the current phase. It has the fields `plan`, `displaySha256`, `applySha256` and `stateVersion`. Take them from the plan in the job document: its `id`, the `sha256` of its `plan-display` part, the `sha256` of its `plan-apply` part, and its `stateVersion`. A `reject` needs no binding. |
+| `comment` | Optional text, at most 500 characters, with no control character and no line break. The server keeps it in the approval and in the audit log. |
+
+The server applies these rules in this order. The first rule that fails ends
+the request, and the server writes nothing to the job.
+
+1. The caller needs `job:read` and `job:approve` on the stack or workspace of the job.
+   A caller who cannot read the job gets 404.
+2. The job must wait for approval. A job that ended answers 409 with the code `job.finished`.
+   A job in another state answers 409 with the code `job.not-awaiting-approval`.
+3. The approval of a `destroy` job needs a fresh MFA step of the caller, at most 15
+   minutes old. A rejection needs none.
+4. An agent cannot approve. An agent can reject.
+5. The person who started the job cannot approve it, also when an agent started it for that
+   person, unless the gate has `allowSelf`. That person can reject.
+6. A person who approved this phase already cannot approve it again. The server answers 409
+   with the code `job.already-approved`. A person who approved can still reject.
+7. If a gate names groups, the caller must be an enabled person with an active membership
+   in at least one of its groups. A suspended or ended membership does not count. The server compares the immutable ID of the group,
+   so a group that someone renamed still matches, and a group that someone made again with
+   the same name does not. A caller who is not a member, a server that cannot read the
+   membership, and a gate that names groups with no group IDs all answer 403 with the
+   code `access.denied`. A gate with no groups needs no membership.
+8. The plan binding must be the binding of the stored plan. Another plan answers 409
+   with the code `job.plan-changed`. A plan that is older than 24 hours, or that the
+   server redacted, answers 409 with the code `job.plan-stale`. A job that waits for a
+   plan that was never stored also answers `job.plan-stale`. If the state of the unit
+   changes after the plan, the server finds it when it dispatches the apply phase, and
+   the dispatch refuses the approvals then.
+
+One approval keeps the job in `awaiting-approval` until the gate has all the approvals
+that it needs from distinct people. The last approval moves the job to `queued`. A
+rejection moves the job to `rejected` at once. Any caller with `job:approve` on the unit
+can reject, also a caller who is not in the groups of the gate, because a rejection only
+stops the change. Each verdict adds one entry of the kind `change` to the audit log of the namespace. The
+entry has the caller, the verdict, the phase, the comment and the event that followed.
+
+A refusal with the code `access.denied`, `job.agent-denied`, `job.self-approval`,
+`job.already-approved`, `mfa.fresh-step-required`, `job.plan-changed` or `job.plan-stale` adds one entry with the outcome
+`denied` to the audit log. A request that is not valid, a job that does not wait, and a
+version conflict add none.
+
+This version cannot give the server the MFA step of a console session yet. So the
+server refuses the approval of a destroy with 403 and the code `mfa.fresh-step-required`, and
+changes nothing. A rejection of a destroy works.
+The refusal names the sign-in path and the ways to enroll the first factor.
+See [Destroy approval and the fresh step](../guides/approval-rules.md#destroy-approval-and-the-fresh-step).
+
+Example:
+
+```text
+POST /api/dustpan/v1/namespaces/acme/jobs/job-4kd9q2m7xw1ztr8bnhyc/approvals
+{
+  "verdict": "approve",
+  "planBinding": {
+    "plan": "pln-3fa7c1d0e9b24a68",
+    "displaySha256": "5d41402abc4b2a76b9719d911017c592a0f1a5d0cc66a4fbb4a47ab1d53f1c8e",
+    "applySha256": "7d793037a0760186574b0282f2f435e7b5e3b4d5a3c8c2a9f6c1e0d4b8a79f21",
+    "stateVersion": "sv-17"
+  },
+  "comment": "The plan adds two subnets and changes nothing else."
+}
+```
+
+The answer is the job document with status 201 and the header `ETag`.
+
+| Status | `errorCode` | Cause |
+| --- | --- | --- |
+| 400 | `request.body-invalid` | The body is not one JSON object, has an unknown field, or has an `Idempotency-Key` header |
+| 401 | `auth.unauthenticated` | The caller did not sign in |
+| 403 | `access.denied` | The caller lacks `job:approve` on the unit, or is not a member of a group of the gate |
+| 403 | `job.agent-denied` | An agent tried to approve |
+| 403 | `job.self-approval` | The person who started the job tried to approve it |
+| 403 | `mfa.fresh-step-required` | The approval of a destroy has no fresh MFA step |
+| 404 | `job.not-found` | The namespace or the job does not exist, or the caller cannot read it |
+| 409 | `job.already-approved` | The caller approved this phase already |
+| 409 | `job.not-awaiting-approval` | The job waits for no approval |
+| 409 | `job.finished` | The job ended |
+| 409 | `job.plan-changed` | The plan binding is not the binding of the stored plan |
+| 409 | `job.plan-stale` | The stored plan is too old, the server redacted it, or no plan exists |
+| 409 | `job.conflict` | The job changed while the request ran: read the job again |
+| 413 | `request.body-too-large` | The body has more than 16 KiB |
+| 422 | `job.invalid` | The verdict is not `approve` or `reject`, the comment is not valid, or a text of `planBinding` is too long |
 
 ## List jobs
 
@@ -262,11 +359,11 @@ schedule.
 | `state` | `queued`, `awaiting-approval`, `dispatched`, `running`, `canceling`, `awaiting-state`, `succeeded`, `failed`, `canceled`, `rejected` or `expired` |
 | `wait` | Why a queued job does not dispatch: `unit-busy`, `frozen` or `locked`. The field is not there when nothing holds the job. |
 | `reason` | Why a job that ended did end, or why a job that plans again did so. The field is not there for a job that runs. |
-| `location` | Where the program and the config of the stack or workspace are in git: `connection`, `repository`, `ref`, `directory` and `revision`. A stored `repository` that the server does not accept is answered empty, so the answer never holds credentials. |
+| `location` | Where the program and the config of the stack or workspace are in git: `connection`, `repository`, `ref`, `directory` and `revision`. The field `source` says where the effective location came from: `request`, `unit` or `namespace`. `namespace` means that the default connection of the namespace gave the connection. A stored `repository` that the server does not accept is answered empty, so the answer never holds credentials. |
 | `pool` | The name of the runner pool of a runner job. A start request takes the same value. The field is not there when the pool no longer exists. It is not there when the pool belongs to another namespace. A `POST` that made the job cannot always read the pool. Then the answer is 201 with no `pool`. The server writes a warning with the job ID to its log. A `GET` that cannot read the pool answers 500. |
 | `poolID` | The ID of the runner pool of a runner job. The field stays when the pool no longer exists. |
 | `profile` | The name of the profile that gives the secrets to a runner job. The field is not there when the job has no profile. |
-| `defaulted` | The values that the request did not give and that the server took by a rule. A `pool` comes from the only pool of the namespace that runs jobs. A `location` and a `profile` come from the settings of the unit. The list holds `pool`, `location` or `profile`, in that order. The field is not there when the request gave every value. The server fixes the list when the job starts. A later change of the settings changes neither the values nor the list. |
+| `defaulted` | The values that the request did not give and that the server took by a rule. A `pool` comes from the only pool of the namespace that runs jobs. A `location` and a `profile` come from the settings of the unit. The connection of a defaulted location can come from the default connection of the namespace. The list holds `pool`, `location` or `profile`, in that order. The field is not there when the request gave every value. The server fixes the list when the job starts. A later change of the settings changes neither the values nor the list. |
 | `steps` | The steps of a runner job. Each step has `name`, `role`, `phase` and `changesResources`. |
 | `phases` | The phases of the job, in order (see below) |
 | `current` | The index of the phase that runs or runs next. It equals the number of phases after the last phase. |

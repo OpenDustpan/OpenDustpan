@@ -155,7 +155,7 @@ func (stubStackStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([]sta
 }
 
 func (stubStackStore) RenameStack(
-	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence,
+	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence, _ audit.Entry,
 ) error {
 	return stack.ErrNotFound
 }
@@ -172,10 +172,12 @@ type taggedStack struct {
 	ref  stack.Ref
 }
 
-// renamedStack records one rename call: the old reference and the new name.
+// renamedStack records one rename call: the old reference, the new name and
+// the audit entry that the service passed to the store.
 type renamedStack struct {
-	old stack.Ref
-	new stack.Name
+	old   stack.Ref
+	new   stack.Name
+	entry audit.Entry
 }
 
 // recordingStackStore answers every Get with a stack for the requested
@@ -215,9 +217,13 @@ func (s *recordingStackStore) CreateStackPlaced(
 }
 
 func (s *recordingStackStore) RenameStack(
-	_ context.Context, oldRef stack.Ref, newName stack.Name, _ namespace.Fence,
+	_ context.Context, oldRef stack.Ref, newName stack.Name, _ namespace.Fence, e audit.Entry,
 ) error {
-	s.renamed = append(s.renamed, renamedStack{old: oldRef, new: newName})
+	if err := e.Validate(); err != nil {
+		return err
+	}
+
+	s.renamed = append(s.renamed, renamedStack{old: oldRef, new: newName, entry: e})
 
 	return nil
 }
@@ -1190,6 +1196,73 @@ func TestRenameStackThroughWrapper(t *testing.T) {
 	}
 }
 
+// testRenameEntry returns a valid audit entry for a rename of ref in ns.
+func testRenameEntry(ns namespace.Name, ref stack.Ref) audit.Entry {
+	return audit.Entry{
+		At:            time.UnixMilli(1_700_000_300_000).UTC(),
+		Namespace:     ns,
+		Subject:       "tester",
+		IDPSubject:    "",
+		TokenID:       "",
+		Action:        string(identity.ActionUnitManage),
+		Object:        "pulumi:" + ns.String() + "/" + ref.Project.String() + "/" + ref.Stack.String(),
+		Version:       "",
+		ValuePath:     "",
+		ValueCount:    nil,
+		Changes:       nil,
+		SourceIP:      "",
+		UserAgent:     "",
+		Channel:       audit.ChannelAPI,
+		Kind:          audit.KindChange,
+		Outcome:       audit.OutcomeSuccess,
+		RequestID:     "",
+		ObjectID:      "",
+		PrevHash:      "",
+		Hash:          "",
+		Sequence:      0,
+		FenceVersion:  0,
+		PrincipalKind: "",
+		JobID:         "",
+		Reason:        "",
+		Origin:        nil,
+	}
+}
+
+// TestRenameStackWritesAuditEntry proves the rename route passes one change
+// entry for unit:manage on the source unit to the service, with the time of
+// the rename.
+func TestRenameStackWritesAuditEntry(t *testing.T) {
+	t.Parallel()
+
+	handler, stores := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		"/api/stacks/acme/web/prod/rename",
+		strings.NewReader(`{"newName":"renamed","newProject":"web"}`),
+	)
+	req.Header.Set("Authorization", "token test-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename answers %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if len(stores.renamed) != 1 {
+		t.Fatalf("renamed %d stacks, want 1", len(stores.renamed))
+	}
+
+	got := stores.renamed[0].entry
+	if got.Kind != audit.KindChange || got.Action != string(identity.ActionUnitManage) ||
+		got.Object != "pulumi:acme/web/prod" || got.Namespace != "acme" ||
+		got.Subject != "tester" || got.Outcome != audit.OutcomeSuccess || got.At.IsZero() {
+		t.Fatalf("audit entry = %+v, want a timed change by unit:manage on pulumi:acme/web/prod", got)
+	}
+}
+
 // TestRenameStackThroughWrapperInvalid proves a rename rejects an invalid
 // body, an invalid name and a project change with 400 and renames nothing.
 func TestRenameStackThroughWrapperInvalid(t *testing.T) {
@@ -1616,6 +1689,27 @@ func (exportPanicsStore) ReferencedBlobKeys(
 	panic("delete must not read checkpoint keys")
 }
 
+// SupersededBlobs panics: the delete route must not read state.
+func (exportPanicsStore) SupersededBlobs(
+	_ context.Context, _ stack.ID,
+) ([]stack.SupersededBlob, error) {
+	panic("delete must not read checkpoint marks")
+}
+
+// SupersededMarks panics: the delete route must not read state.
+func (exportPanicsStore) SupersededMarks(
+	_ context.Context, _ stack.SupersededCursor, _ time.Time, _ int,
+) ([]stack.SupersededMark, error) {
+	panic("delete must not read checkpoint marks")
+}
+
+// DropSupersededMark panics: the delete route must not write state.
+func (exportPanicsStore) DropSupersededMark(
+	_ context.Context, _ stack.ID, _ blob.Key,
+) (bool, error) {
+	panic("delete must not drop a checkpoint mark")
+}
+
 // unusedStackResolver panics: routes that never save checkpoints never
 // resolve stacks.
 type unusedStackResolver struct{}
@@ -1687,6 +1781,7 @@ func newDeleteHandlerWithAudit(
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -2060,6 +2155,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -2112,6 +2208,24 @@ func (emptyCheckpointStore) ReferencedBlobKeys(
 	return nil, nil
 }
 
+func (emptyCheckpointStore) SupersededBlobs(
+	_ context.Context, _ stack.ID,
+) ([]stack.SupersededBlob, error) {
+	return nil, nil
+}
+
+func (emptyCheckpointStore) SupersededMarks(
+	_ context.Context, _ stack.SupersededCursor, _ time.Time, _ int,
+) ([]stack.SupersededMark, error) {
+	return nil, nil
+}
+
+func (emptyCheckpointStore) DropSupersededMark(
+	_ context.Context, _ stack.ID, _ blob.Key,
+) (bool, error) {
+	return false, nil
+}
+
 // newEnforcingUpdates returns an Updates service whose export finds no state,
 // for handlers whose tested routes delete stacks without resources.
 func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Updates {
@@ -2136,6 +2250,7 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)

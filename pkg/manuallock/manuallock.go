@@ -25,6 +25,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -73,6 +74,18 @@ const (
 	// KindNamespace is a lock on a namespace and on each unit in it.
 	KindNamespace Kind = "namespace"
 )
+
+// Unit names a unit for a lock request: the reference that the request carries
+// and the stable IDs that a phase check compares. A rename of the unit changes
+// the reference and not the IDs. UnitID is empty only for a unit that does not
+// exist yet. For such a unit, the phase clock matches the job by the namespace
+// ID, the tool and the name. An empty namespace ID matches no job, so a request
+// with an empty namespace ID never passes a lock.
+type Unit struct {
+	Ref         collection.UnitRef
+	NamespaceID namespace.ID
+	UnitID      string
+}
 
 // Target names the object of a manual lock: one unit, one collection or one
 // namespace. Only the field of its Kind is set.
@@ -179,14 +192,14 @@ func (l Lock) Detail() string {
 // U+FFFD. The result has no character that moves a cursor, ends a line or
 // changes the direction of the text.
 func SafeText(s string) string {
-	if utf8.ValidString(s) && !strings.ContainsFunc(s, audit.IsHiddenRune) {
+	if utf8.ValidString(s) && !ident.HasHidden(s) {
 		return s
 	}
 
 	var b strings.Builder
 
 	for _, r := range s {
-		if audit.IsHiddenRune(r) {
+		if ident.IsHiddenRune(r) {
 			fmt.Fprintf(&b, "\\u%04X", r)
 
 			continue

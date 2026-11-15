@@ -290,13 +290,13 @@ func (s *Store) UpdateStackTags(
 
 // RenameStack changes the stack name of oldRef, unless a fault fires first.
 func (s *Store) RenameStack(
-	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
+	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, e audit.Entry,
 ) error {
 	if err := s.before(ctx, "RenameStack"); err != nil {
 		return err
 	}
 
-	return s.inner.RenameStack(ctx, oldRef, newName, fence)
+	return s.inner.RenameStack(ctx, oldRef, newName, fence, e)
 }
 
 // CreateUpdate persists a new update, unless a fault fires first.
@@ -415,6 +415,38 @@ func (s *Store) ReferencedBlobKeys(ctx context.Context, stackID stack.ID) ([]blo
 	}
 
 	return s.inner.ReferencedBlobKeys(ctx, stackID)
+}
+
+// SupersededBlobs returns the marks of the superseded checkpoint blobs of the
+// stack ID, unless a fault fires first.
+func (s *Store) SupersededBlobs(ctx context.Context, stackID stack.ID) ([]stack.SupersededBlob, error) {
+	if err := s.before(ctx, "SupersededBlobs"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.SupersededBlobs(ctx, stackID)
+}
+
+// SupersededMarks returns the marks of the superseded checkpoint blobs of
+// every live stack, unless a fault fires first.
+func (s *Store) SupersededMarks(
+	ctx context.Context, after stack.SupersededCursor, olderThan time.Time, limit int,
+) ([]stack.SupersededMark, error) {
+	if err := s.before(ctx, "SupersededMarks"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.SupersededMarks(ctx, after, olderThan, limit)
+}
+
+// DropSupersededMark drops the mark of the blob key of the stack and reports
+// whether a row of the stack still names the key, unless a fault fires first.
+func (s *Store) DropSupersededMark(ctx context.Context, stackID stack.ID, key blob.Key) (bool, error) {
+	if err := s.before(ctx, "DropSupersededMark"); err != nil {
+		return false, err
+	}
+
+	return s.inner.DropSupersededMark(ctx, stackID, key)
 }
 
 // StateAt returns the update that held the state of the stack at a time,

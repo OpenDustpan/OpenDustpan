@@ -36,6 +36,13 @@ var operationLabels = map[string]apidesc.Label{
 		apidesc.Named[unitRequest]("JobUnitRequest"),
 		apidesc.Named[locationRequest]("JobLocationRequest"),
 	), jobSchema),
+	apidesc.Pattern(http.MethodPost, approvalsPath): apidesc.Name(
+		"approveJob",
+		"jobs",
+	).WithStatus(http.StatusCreated).WithETag().On(apidesc.KindUnit).WithBodies(apidesc.Typed[approveBody](
+		"ApproveJobRequest",
+		apidesc.Named[bindingBody]("JobPlanBinding"),
+	), jobSchema),
 }
 
 // jobDeclarations name the types inside the document of a job.

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -74,6 +75,12 @@ func (s *Store) ListRestores(ctx context.Context) ([]backup.RestoreRecord, error
 // restoreFromRow converts a restore row into a domain record. Unknown states
 // report a corrupt row: every writer validates the state first.
 func restoreFromRow(row db.GetRestoreRow) (backup.RestoreRecord, error) {
+	var endedAt time.Time
+
+	if row.EndedAtMs.Valid {
+		endedAt = codec.FromMillis(row.EndedAtMs.Int64)
+	}
+
 	return codec.FromRestoreRow(codec.RestoreRow{
 		ID:          row.ID,
 		State:       row.State,
@@ -82,7 +89,7 @@ func restoreFromRow(row db.GetRestoreRow) (backup.RestoreRecord, error) {
 		RequestedBy: row.RequestedBy,
 		Error:       row.Error,
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   codec.OptionalMillis(endedAt),
 		DevReport:   row.DevReport,
 	})
 }
@@ -324,8 +331,9 @@ func applyStagedFence(
 
 	// The staged access tables come from the backup. Apply again the
 	// revocations that ran in this stay in maintenance mode, so the swap does not
-	// bring back a session or a token that an operator ended.
-	if err := replayRevocations(ctx, tx); err != nil {
+	// bring back a session or a token that an operator ended. The swap must
+	// not lower the working break-glass count below the floor.
+	if err := replayStagedRevocations(ctx, tx); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 
@@ -508,6 +516,7 @@ var keepControlStatements = []string{
 	`DELETE FROM main.maintenance_revocations`,
 	`DELETE FROM main.instance_versions`,
 	`DELETE FROM main.store_checks`,
+	`DELETE FROM main.blob_delete_leases`,
 	`DELETE FROM main.name_locks`,
 	`DELETE FROM main.name_lock_key`,
 	`DELETE FROM main.used_tickets`,
@@ -542,6 +551,8 @@ var keepControlStatements = []string{
 		`SELECT id, binary_version, started_at_ms FROM live.instance_versions`,
 	`INSERT INTO main.store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report) ` +
 		`SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report FROM live.store_checks`,
+	`INSERT INTO main.blob_delete_leases (holder, expires_at_ms) ` +
+		`SELECT holder, expires_at_ms FROM live.blob_delete_leases`,
 	`INSERT INTO main.name_locks (` + nameLockColumns + `) SELECT ` + nameLockColumns + ` FROM live.name_locks`,
 	`INSERT INTO main.name_lock_key (id, key) SELECT id, key FROM live.name_lock_key`,
 	`INSERT INTO main.used_tickets (provider_id, ticket_digest, until_ms) ` +

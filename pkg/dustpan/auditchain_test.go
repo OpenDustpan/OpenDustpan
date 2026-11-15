@@ -122,7 +122,7 @@ func TestRestartWithStoredSettingKeepsOperatorMaintenance(t *testing.T) {
 	appendChainEntry(t, st, acme, "req-1")
 
 	on := runChainServer(t, st, audit.ChainOn)
-	if status, body := on.do(t, http.MethodPost, "/api/server/maintenance/enter"); status != http.StatusOK {
+	if status, body := on.do(t, http.MethodPost, "/api/dustpan/v1/maintenance/enter"); status != http.StatusOK {
 		t.Fatalf("enter maintenance mode: %d %s, want 200", status, body)
 	}
 
@@ -153,7 +153,7 @@ func wantWaitingChange(t *testing.T, c chainServer) {
 		t.Fatalf("tool API while the setting differs: %d, want 503", status)
 	}
 
-	status, body := c.do(t, http.MethodGet, "/api/server/audit/chain")
+	status, body := c.do(t, http.MethodGet, "/api/dustpan/v1/audit/chain")
 	if status != http.StatusOK || !strings.Contains(body, `"pending":true`) ||
 		!strings.Contains(body, `"setting":"off"`) {
 		t.Fatalf("chain status: %d %s, want 200 with a waiting change to off", status, body)
@@ -165,7 +165,7 @@ func wantWaitingChange(t *testing.T, c chainServer) {
 func approveAndWait(t *testing.T, st *sqlite.Store, c chainServer, state audit.ChainState) {
 	t.Helper()
 
-	if status, body := c.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusAccepted {
+	if status, body := c.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status != http.StatusAccepted {
 		t.Fatalf("approve %s: %d %s, want 202", state, status, body)
 	}
 
@@ -208,7 +208,9 @@ func TestAuditChainMismatchAfterAnotherApproval(t *testing.T) {
 		pauseChain(t)
 	}
 
-	for _, path := range []string{"/health/live", "/api/server/audit/chain", "/api/server/maintenance"} {
+	for _, path := range []string{
+		"/health/live", "/api/dustpan/v1/audit/chain", "/api/dustpan/v1/maintenance",
+	} {
 		if status, body := on.do(t, http.MethodGet, path); status == http.StatusServiceUnavailable {
 			t.Fatalf("%s while the setting differs: 503, want it served (%s)", path, body)
 		}
@@ -368,6 +370,7 @@ func appendChainEntry(t *testing.T, st *sqlite.Store, ns namespace.Namespace, re
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	})
 	if err != nil {
 		t.Fatalf("append audit entry: %v", err)

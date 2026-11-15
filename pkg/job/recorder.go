@@ -480,6 +480,7 @@ func deliveryEntry(j *Job, unit identity.Object, d *DeliveryResult, c PhaseClaim
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: string(j.ID), Reason: d.AuditReason(),
+		Origin: nil,
 	}
 }
 

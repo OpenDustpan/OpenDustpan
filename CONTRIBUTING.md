@@ -106,7 +106,8 @@ You can use AI tools to help you write code, tests and text. These rules
 apply:
 
 - **Say that you used AI.** In the pull request or the issue, name the tool
-  and say which parts it wrote.
+  and say which parts it wrote. An AI-authored pull request names its
+  OpenSpec change with the line `Change: openspec/changes/<id>`.
 - **Understand every change.** A human submits the change, understands all
   of it, and can explain what it does and how it works with the rest of the
   system, without the help of the tool. If you cannot do this, do not submit
@@ -135,10 +136,10 @@ trailer. The trailer names the agent tool. It never names a model or a model
 version. Do not put a model name in a commit message, a pull request title or
 a pull request body. Every change passes CI, a security review and a review
 by a second session before a merge. The rules above also apply to these
-agents. The `Co-Authored-By` trailer is their disclosure. Until 2026-10-22,
+agents. The `Co-Authored-By` trailer is their disclosure. Until the first tag,
 an agent signs off each commit
-with its own commit author identity. The project owner decides the rule for
-agent sign-off after that date. An agent pastes the output of its checks into
+with its own commit author identity. After the first tag, an agent commit
+carries the sign-off of the project owner. An agent pastes the output of its checks into
 the description of each pull request that it opens.
 
 ## Conduct and security

@@ -58,16 +58,17 @@ type editBody struct {
 }
 
 type specBody struct {
-	Unit      unitBody     `json:"unit"`
-	Operation string       `json:"operation"`
-	Purpose   string       `json:"purpose"`
-	Executor  string       `json:"executor"`
-	Location  locationBody `json:"location"`
-	Steps     []stepBody   `json:"steps"`
-	Pool      string       `json:"pool"`
-	Profile   string       `json:"profile"`
-	Edits     []editBody   `json:"edits"`
-	Delivery  string       `json:"delivery"`
+	Unit           unitBody     `json:"unit"`
+	Operation      string       `json:"operation"`
+	Purpose        string       `json:"purpose"`
+	Executor       string       `json:"executor"`
+	Location       locationBody `json:"location"`
+	LocationSource string       `json:"locationSource,omitempty"`
+	Steps          []stepBody   `json:"steps"`
+	Pool           string       `json:"pool"`
+	Profile        string       `json:"profile"`
+	Edits          []editBody   `json:"edits"`
+	Delivery       string       `json:"delivery"`
 	// Defaulted is absent from a body that an older server wrote and from a
 	// job whose request gave every value, and both decode to no list.
 	Defaulted []string `json:"defaulted,omitempty"`
@@ -233,8 +234,8 @@ func encodeSpec(s *job.Spec) specBody {
 	out := specBody{
 		Unit: encodeUnit(s.Unit), Operation: string(s.Operation), Purpose: string(s.Purpose),
 		Executor: string(s.Executor),
-		Location: locationBody(s.Location), Steps: nil, Pool: s.Pool, Profile: s.Profile, Edits: nil,
-		Delivery: string(s.Delivery), Defaulted: slices.Clone(s.Defaulted),
+		Location: locationBody(s.Location), LocationSource: string(s.LocationSource), Steps: nil, Pool: s.Pool,
+		Profile: s.Profile, Edits: nil, Delivery: string(s.Delivery), Defaulted: slices.Clone(s.Defaulted),
 	}
 
 	for i := range s.Steps {
@@ -268,8 +269,9 @@ func decodeSpec(b *specBody) (job.Spec, error) {
 	out := job.Spec{
 		Unit: unit, Operation: job.Operation(b.Operation), Purpose: job.Purpose(b.Purpose),
 		Executor: job.ExecutorKind(b.Executor),
-		Location: job.Location(b.Location), Steps: nil, Pool: b.Pool, Profile: b.Profile, Edits: nil,
-		Delivery: job.Delivery(b.Delivery), Defaulted: slices.Clone(b.Defaulted),
+		Location: job.Location(b.Location), LocationSource: job.LocationSource(b.LocationSource), Steps: nil,
+		Pool: b.Pool, Profile: b.Profile, Edits: nil, Delivery: job.Delivery(b.Delivery),
+		Defaulted: slices.Clone(b.Defaulted),
 	}
 
 	for i := range b.Steps {

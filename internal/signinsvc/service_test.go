@@ -213,6 +213,14 @@ func hostileRouteCases() []hostileCase {
 			"subject with a control character", signinsvc.ReasonAssertion, failed,
 		},
 		{
+			func(_ *signinsvc.Provider, a *session.Assertion) { a.Subject = "a\u202eb" },
+			"subject with a format character", signinsvc.ReasonAssertion, failed,
+		},
+		{
+			func(_ *signinsvc.Provider, a *session.Assertion) { a.Subject = "a\u2028b" },
+			"subject with a line separator", signinsvc.ReasonAssertion, failed,
+		},
+		{
 			func(_ *signinsvc.Provider, a *session.Assertion) { a.PrincipalID = "prn-other" },
 			"method names a principal", signinsvc.ReasonAssertion, failed,
 		},
@@ -429,6 +437,14 @@ func disabledCases() []disabledCase {
 		{
 			func(_ *world, a *session.Assertion) { a.Subject = "a\nb" },
 			"subject with a control character", signinsvc.ReasonAssertion, false, false,
+		},
+		{
+			func(_ *world, a *session.Assertion) { a.Subject = "a\u202eb" },
+			"subject with a format character", signinsvc.ReasonAssertion, false, false,
+		},
+		{
+			func(_ *world, a *session.Assertion) { a.Subject = "a\u2028b" },
+			"subject with a line separator", signinsvc.ReasonAssertion, false, false,
 		},
 		{
 			func(_ *world, a *session.Assertion) { a.PrincipalID = "prn-1" },
@@ -942,7 +958,7 @@ func checkCauseLogged(t *testing.T, w *world, cause error) {
 func TestCompleteDisableLastAdministrator(t *testing.T) {
 	t.Parallel()
 
-	for _, storeErr := range []error{access.ErrLastSiteAdministrator, principal.ErrLastBreakGlass} {
+	for _, storeErr := range []error{access.ErrLastSiteAdministrator, principal.ErrNoWorkingBreakGlass} {
 		w := newWorld()
 		w.disableErr = fmt.Errorf("disable: %w", storeErr)
 

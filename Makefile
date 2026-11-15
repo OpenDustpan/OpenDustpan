@@ -9,9 +9,9 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
+.PHONY: cover regenerate-baseline release-record-check ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check
 
-check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
+check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -163,6 +163,7 @@ docs-lint: ## ASD-STE100 structural rules, banned words and the Repowise decisio
 	$(ADR_DECISIONS) --check
 	python3 -I scripts/adr-index.py --selftest
 	$(ADR_INDEX) --check
+	@if grep -rn '^TBD' openspec/specs; then echo 'openspec/specs: a Purpose is a placeholder. Write a real Purpose.'; exit 1; fi
 
 adr-decisions: ## Write .repowise/decisions.yaml, the accepted decisions for Repowise, from docs/adr. docs-lint fails when the file is not current.
 	$(ADR_DECISIONS)
@@ -177,6 +178,30 @@ ifeq ($(origin VERSION),command line)
 	./scripts/check-release-record.sh '$(VERSION)'
 else
 	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
+endif
+
+# The pull request body and the author email of each commit of the pull
+# request, one per line. They have no defaults: CI passes both files, and a
+# local run passes its own files. Not part of check: the check needs a pull
+# request, and a local run has none.
+# The recipe reads both paths from the environment, never from the command
+# text. make exports a variable that came from the environment or from the
+# command line, so a path that holds a quote, a space or a shell word stays one
+# word and cannot escape into the command. The empty check and the two reads
+# use "$$VAR", which the shell expands; no value is pasted into the command.
+export PR_BODY_FILE PR_COMMITS_FILE
+ai-pr-spec-check: ## Fail an AI-authored pull request that names no spec-ready OpenSpec change (needs PR_BODY_FILE and PR_COMMITS_FILE).
+	@if [ -z "$$PR_BODY_FILE" ] || [ -z "$$PR_COMMITS_FILE" ]; then echo "usage: make ai-pr-spec-check PR_BODY_FILE=<body-file> PR_COMMITS_FILE=<commits-file>" >&2; exit 1; fi
+	bash scripts/check-ai-pr-spec.sh "$$PR_BODY_FILE" "$$PR_COMMITS_FILE"
+
+# The PR body check reads the body from a file, so CI writes the body to a file
+# first. PR_BODY_FILE has no default: the target refuses to run without it.
+pr-body-check: ## Check that the PR body in PR_BODY_FILE names an issue or says No issue.
+ifeq ($(strip $(PR_BODY_FILE)),)
+	@echo "usage: make pr-body-check PR_BODY_FILE=<file with the PR body>" >&2
+	@exit 1
+else
+	./scripts/check-pr-body.sh '$(PR_BODY_FILE)'
 endif
 
 adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.
@@ -306,8 +331,8 @@ e2e-journal: ## Drive the real Pulumi CLI through the journal route on the recor
 upgrade-test: ## Restart the current binary on the same database and check data, secrets and the held lock survive (downloads CLIs; empty-database case without a v* tag, previous-tag case with one). Not part of check.
 	E2E_SERVER=binary go test -tags "e2e upgrade" $(RACE_TEST_FLAGS) -count=1 -v -timeout 20m ./e2e/ -run TestUpgrade
 
-mixed-version-test: ## Serve the current binary and the binary of each of the last 2 v* tags on one database and drive the real Pulumi CLI and OpenTofu through both (downloads CLIs; a second current process without a v* tag). Not part of check.
-	E2E_SERVER=binary go test -tags "e2e upgrade" $(RACE_TEST_FLAGS) -count=1 -v -timeout 30m ./e2e/ -run 'TestMixedVersion'
+mixed-version-test: ## Serve the current binary and the binary of each of the last 2 v* tags on one database and drive the real Pulumi CLI and OpenTofu through both (downloads CLIs; SQLite serves one binary at a time; a second current process without a v* tag; set DUSTPAN_TEST_POSTGRES_URL for the PostgreSQL matrix). Not part of check.
+	E2E_SERVER=binary go test -tags "e2e upgrade" $(RACE_TEST_FLAGS) -count=1 -v -timeout 45m ./e2e/ -run 'TestMixedVersion'
 
 crash-test: ## Stop the server binary with SIGKILL during a Pulumi checkpoint save, an OpenTofu upload and a lock, then check recovery on the same database and blobs (downloads CLIs; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check.
 	E2E_SERVER=binary go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -v -timeout 20m ./e2e/ -run TestBinaryCrash
@@ -325,6 +350,14 @@ soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one serve
 	SOAK_DURATION=$(SOAK_DURATION) SOAK_PULUMI=$(SOAK_PULUMI) SOAK_TOFU=$(SOAK_TOFU) SOAK_REPORT_DIR=$(SOAK_REPORT_DIR) E2E_SERVER=binary go test -tags "e2e soak" $(RACE_TEST_FLAGS) -count=1 -v -timeout 60m ./e2e/ -run TestSoak
 
 BASELINE_REF ?= origin/main
+
+pin-frozen: ## Fail when DocumentVersion, info.version or the version line of openapi.pin changes before the first tag.
+	go test ./internal/api/apidesc -run TestPinFrozen -count=1
+
+FILES_BASE ?= origin/main
+
+files-check: ## Refuse a branch that adds a file over 1 MiB or a binary file outside testdata/ without an allowlist line (base FILES_BASE, default origin/main).
+	./scripts/check-files.sh $(FILES_BASE)
 
 regenerate-baseline: ## Write the baseline migration of each dialect from the migrations of BASELINE_REF (default origin/main); needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Not part of check.
 	./scripts/regenerate-baseline.sh $(BASELINE_REF)

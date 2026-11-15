@@ -46,8 +46,8 @@ func newBackupFakeServer(t *testing.T, token string, script backupScript) *backu
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/server/backups", fake.startHandler(t, token))
-	mux.HandleFunc("GET /api/server/backups/{id}", fake.readHandler(t, token))
+	mux.HandleFunc("POST /api/dustpan/v1/backups", fake.startHandler(t, token))
+	mux.HandleFunc("GET /api/dustpan/v1/backups/{id}", fake.readHandler(t, token))
 
 	fake.server = httptest.NewServer(mux)
 	t.Cleanup(fake.server.Close)
@@ -142,7 +142,12 @@ func succeededScript(sqlSize int64) backupScript {
 		startBody:   `{"id":"` + backupTestID + `"}`,
 		states: []backupStatusResponse{
 			{ID: backupTestID, State: "running", Error: "", Manifest: nil},
-			{ID: backupTestID, State: "succeeded", Error: "", Manifest: &backupManifest{SQLSize: sqlSize}},
+			{
+				ID:       backupTestID,
+				State:    "succeeded",
+				Error:    "",
+				Manifest: &backupManifest{SQLSize: sqlSize, RegistryFiles: nil},
+			},
 		},
 	}
 }

@@ -139,16 +139,40 @@ func newBackupFixture(
 ) backupFixture {
 	t.Helper()
 
-	return newBackupFixtureWorkers(t, stores, exporter, now, nil)
+	return newBackupFixtureWithAuthorizer(t, stores, exporter, now, nil)
 }
 
-// newBackupFixtureWorkers is newBackupFixture with the worker check of the
-// server.
-func newBackupFixtureWorkers(
+// newBackupFixtureWithAuthorizer is newBackupFixture with the authorizer the
+// caller names, so a test can deny the backup action. A nil authorizer allows
+// every action.
+func newBackupFixtureWithAuthorizer(
 	t *testing.T, stores backupStores, exporter backup.PortableExporter, now func() time.Time,
-	workers apiserver.WorkerSource,
+	authz identity.Authorizer,
 ) backupFixture {
 	t.Helper()
+
+	return newBackupFixtureWorkers(t, stores, exporter, now, backupFixtureOptions{workers: nil, authz: authz})
+}
+
+// backupFixtureOptions holds the optional parts of a backup fixture: the
+// worker source and the authorizer of the handler.
+type backupFixtureOptions struct {
+	workers apiserver.WorkerSource
+	authz   identity.Authorizer
+}
+
+// newBackupFixtureWorkers is newBackupFixture with the options of the caller:
+// the worker check of the handler and its authorizer.
+func newBackupFixtureWorkers(
+	t *testing.T, stores backupStores, exporter backup.PortableExporter, now func() time.Time,
+	opts backupFixtureOptions,
+) backupFixture {
+	t.Helper()
+
+	workers, authz := opts.workers, opts.authz
+	if authz == nil {
+		authz = selectiveAuthorizer{deny: map[identity.Action]bool{}}
+	}
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
@@ -189,6 +213,7 @@ func newBackupFixtureWorkers(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -202,7 +227,7 @@ func newBackupFixtureWorkers(
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Authorizer:       authz,
 		Logger:           slog.New(slog.DiscardHandler),
 		Namespaces:       namespaces,
 		Backups:          service,
@@ -303,7 +328,7 @@ type startBackupDoc struct {
 func startBackup(t *testing.T, handler testHandler) string {
 	t.Helper()
 
-	status, body := serveBackup(t, handler, http.MethodPost, "/api/server/backups")
+	status, body := serveBackup(t, handler, http.MethodPost, "/api/dustpan/v1/backups")
 	if status != http.StatusAccepted {
 		t.Fatalf("POST backups answers %d, want %d (%s)", status, http.StatusAccepted, body)
 	}
@@ -347,7 +372,7 @@ type backupManifest struct {
 func readBackup(t *testing.T, handler testHandler, id string) getBackupDoc {
 	t.Helper()
 
-	status, body := serveBackup(t, handler, http.MethodGet, "/api/server/backups/"+id)
+	status, body := serveBackup(t, handler, http.MethodGet, "/api/dustpan/v1/backups/"+id)
 	if status != http.StatusOK {
 		t.Fatalf("GET backup %s answers %d, want %d (%s)", id, status, http.StatusOK, body)
 	}
@@ -413,7 +438,7 @@ func TestBackupRoutesDeclareServerBackup(t *testing.T) {
 	var routes []apiserver.Route
 
 	for _, route := range handler.Routes() {
-		if strings.HasPrefix(route.Path, "/api/server/backups") {
+		if strings.HasPrefix(route.Path, "/api/dustpan/v1/backups") {
 			routes = append(routes, route)
 		}
 	}
@@ -505,7 +530,7 @@ func TestBackupSecondStartConflicts(t *testing.T) {
 	id := startBackup(t, fix.handler)
 	waitGateEntered(t, gate)
 
-	status, body := serveBackup(t, fix.handler, http.MethodPost, "/api/server/backups")
+	status, body := serveBackup(t, fix.handler, http.MethodPost, "/api/dustpan/v1/backups")
 	if status != http.StatusConflict {
 		t.Fatalf("second POST answers %d, want %d (%s)", status, http.StatusConflict, body)
 	}
@@ -531,10 +556,10 @@ func TestBackupNeedsToken(t *testing.T) {
 	paths := []struct {
 		method, path string
 	}{
-		{http.MethodPost, "/api/server/backups"},
-		{http.MethodGet, "/api/server/backups"},
-		{http.MethodGet, "/api/server/backups/" + string(testBackupID)},
-		{http.MethodGet, "/api/server/backups/" + string(testBackupID) + "/check"},
+		{http.MethodPost, "/api/dustpan/v1/backups"},
+		{http.MethodGet, "/api/dustpan/v1/backups"},
+		{http.MethodGet, "/api/dustpan/v1/backups/" + string(testBackupID)},
+		{http.MethodGet, "/api/dustpan/v1/backups/" + string(testBackupID) + "/check"},
 	}
 
 	for _, tc := range paths {
@@ -557,7 +582,7 @@ func TestBackupGetMissing(t *testing.T) {
 
 	fix := quickBackupFixture(t, nil)
 
-	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/server/backups/bkp-missing000000000001")
+	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/dustpan/v1/backups/bkp-missing000000000001")
 	if status != http.StatusNotFound {
 		t.Fatalf("GET missing backup answers %d, want %d (%s)", status, http.StatusNotFound, body)
 	}
@@ -594,7 +619,7 @@ func TestBackupListNewestFirst(t *testing.T) {
 	second := startBackup(t, fix.handler)
 	pollBackupSucceeded(t, fix.handler, second)
 
-	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/server/backups")
+	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/dustpan/v1/backups")
 	if status != http.StatusOK {
 		t.Fatalf("GET backups answers %d, want %d (%s)", status, http.StatusOK, body)
 	}
@@ -625,6 +650,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -672,10 +698,10 @@ func TestBackupWithoutTarget(t *testing.T) {
 	paths := []struct {
 		method, path string
 	}{
-		{http.MethodPost, "/api/server/backups"},
-		{http.MethodGet, "/api/server/backups"},
-		{http.MethodGet, "/api/server/backups/bkp-missing000000000001"},
-		{http.MethodGet, "/api/server/backups/bkp-missing000000000001/check"},
+		{http.MethodPost, "/api/dustpan/v1/backups"},
+		{http.MethodGet, "/api/dustpan/v1/backups"},
+		{http.MethodGet, "/api/dustpan/v1/backups/bkp-missing000000000001"},
+		{http.MethodGet, "/api/dustpan/v1/backups/bkp-missing000000000001/check"},
 	}
 
 	for _, tc := range paths {
@@ -690,5 +716,45 @@ func TestBackupWithoutTarget(t *testing.T) {
 			doc.Message != "no backup target is configured: set --backup-target" {
 			t.Fatalf("%s %s error = %+v, want the fixed no-target message", tc.method, tc.path, doc)
 		}
+	}
+}
+
+// TestBackupStartWithoutGrantAnswers403 proves POST /api/dustpan/v1/backups
+// answers 403 when the principal holds no server:backup on the installation,
+// with the one JSON error shape, and that the denied start writes no row.
+func TestBackupStartWithoutGrantAnswers403(t *testing.T) {
+	t.Parallel()
+
+	stores := openBackupDeps(t)
+	allowed := newBackupFixture(t, stores, stores.registry, nil)
+
+	denyBackup := selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionServerBackup: true}}
+	denied := newBackupFixtureWithAuthorizer(t, stores, stores.registry, nil, denyBackup)
+
+	status, body := serveBackup(t, denied.handler, http.MethodPost, "/api/dustpan/v1/backups")
+	if status != http.StatusForbidden {
+		t.Fatalf("POST backups without the grant answers %d, want %d (%s)",
+			status, http.StatusForbidden, body)
+	}
+
+	if doc := decodeError(t, body); doc.Code != http.StatusForbidden || doc.Message == "" {
+		t.Fatalf("POST backups error = %+v, want code 403 with a message", doc)
+	}
+
+	status, body = serveBackup(t, allowed.handler, http.MethodGet, "/api/dustpan/v1/backups")
+	if status != http.StatusOK {
+		t.Fatalf("GET backups answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var doc struct {
+		Backups []getBackupDoc `json:"backups"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode backup list %q: %v", body, err)
+	}
+
+	if len(doc.Backups) != 0 {
+		t.Fatalf("backup list holds %v after the denied start, want none", doc.Backups)
 	}
 }

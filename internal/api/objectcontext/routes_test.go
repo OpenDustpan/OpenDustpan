@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 	contextapi "opendustpan.org/opendustpan/internal/api/objectcontext"
 	"opendustpan.org/opendustpan/internal/api/route"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/drift"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -266,6 +267,23 @@ func newHandler(t *testing.T, authz identity.Authorizer, store *fakeStore) testH
 func newHandlerWithDrift(t *testing.T, authz identity.Authorizer, store *fakeStore, results drift.Store) testHandler {
 	t.Helper()
 
+	return newHandlerWithGuard(t, authz, store, results, guardOptions{records: newTestAudit(), limiter: nil})
+}
+
+// guardOptions sets the audit store and the limiter of the refusals of a
+// handler.
+type guardOptions struct {
+	records audit.Store
+	limiter *denylimit.Limiter
+}
+
+// newHandlerWithGuard is newHandlerWithDrift with the audit store and the
+// limiter of the refusals.
+func newHandlerWithGuard(
+	t *testing.T, authz identity.Authorizer, store *fakeStore, results drift.Store, guard guardOptions,
+) testHandler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: fakeNamespaces{}, Now: nil, Installation: "test-region"},
 	)
@@ -281,7 +299,7 @@ func newHandlerWithDrift(t *testing.T, authz identity.Authorizer, store *fakeSto
 	}
 
 	handler, err := contextapi.NewHandler(contextapi.Config{
-		Audit:          newTestAudit(),
+		Audit:          guard.records,
 		OnAuditFailure: nil,
 		Namespaces:     namespaces,
 		Units:          fakeUnits{},
@@ -294,7 +312,7 @@ func newHandlerWithDrift(t *testing.T, authz identity.Authorizer, store *fakeSto
 		Authorizer:     authz,
 		Sessions:       nil,
 		Logger:         slog.New(slog.DiscardHandler),
-		DenialLimiter:  nil,
+		DenialLimiter:  guard.limiter,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -528,8 +546,10 @@ func checkRoute(t *testing.T, rc *routeCase, held int) {
 	}
 
 	// The read document asks the same questions again for each layer of its
-	// chain, so a read route may repeat checks.
-	wantChecks := rc.checks[:min(held+1, len(rc.checks))]
+	// chain, so a read route may repeat checks. The namespace read of the path
+	// runs once for the address check, before the decision on the target, and
+	// once more with the other checks.
+	wantChecks := append([]string{rc.checks[0]}, rc.checks[:min(held+1, len(rc.checks))]...)
 	if got := authz.seen(); len(got) < len(wantChecks) || !slices.Equal(got[:len(wantChecks)], wantChecks) {
 		t.Errorf("checks = %q, want %q first, in order", got, wantChecks)
 	}
@@ -551,7 +571,8 @@ const unknownObjectText = "not found: no namespace or unit that you can read has
 
 // TestUnknownObjectsAnswerAlike proves an unknown namespace and an unknown
 // unit answer 404 with one text, which names the unit ID and the list route,
-// before any check of the caller runs for the object.
+// before any check of the caller runs for the object. Only the namespace read
+// runs, for the refusal of the IP allowlist.
 func TestUnknownObjectsAnswerAlike(t *testing.T) {
 	t.Parallel()
 
@@ -573,8 +594,10 @@ func TestUnknownObjectsAnswerAlike(t *testing.T) {
 		}
 	}
 
-	if got := authz.seen(); len(got) != 0 {
-		t.Errorf("checks = %q, want none for an object that does not exist", got)
+	if got := authz.seen(); slices.ContainsFunc(got, func(check string) bool {
+		return !strings.HasPrefix(check, string(identity.ActionNamespaceRead)+" ")
+	}) {
+		t.Errorf("checks = %q, want only namespace reads for an object that does not exist", got)
 	}
 }
 
@@ -623,12 +646,13 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 }
 
-// kindsOf returns the kind that the description gives to the object of each
-// check, by action. A check is written as "<action> <object>".
-func kindsOf(t *testing.T, checks []string) map[string]string {
+// kindsOf returns the action and the kind of the object of each check, as
+// "<action> <kind>". A check is written as "<action> <object>". Each pair
+// stays, so one action on two kinds gives two entries.
+func kindsOf(t *testing.T, checks []string) map[string]bool {
 	t.Helper()
 
-	out := map[string]string{}
+	out := map[string]bool{}
 
 	for _, check := range checks {
 		action, text, _ := strings.Cut(check, " ")
@@ -638,23 +662,94 @@ func kindsOf(t *testing.T, checks []string) map[string]string {
 			t.Fatalf("object of check %q: %v", check, err)
 		}
 
+		var kind string
+
 		switch {
 		case obj.IsUnit():
-			out[action] = apidesc.KindUnit
+			kind = apidesc.KindUnit
 		case obj.IsNamespace():
-			out[action] = apidesc.KindNamespace
+			kind = apidesc.KindNamespace
 		case obj.IsCollection():
-			out[action] = apidesc.KindCollection
+			kind = apidesc.KindCollection
 		case obj.IsCaller():
-			out[action] = apidesc.KindCaller
+			kind = apidesc.KindCaller
 		case obj.IsServer():
-			out[action] = apidesc.KindServer
+			kind = apidesc.KindServer
 		default:
 			t.Fatalf("check %q has an object of no kind in the description", check)
 		}
+
+		out[action+" "+kind] = true
 	}
 
 	return out
+}
+
+// describedKinds returns the action and the kind of the object that the
+// description gives to each action, as "<action> <kind>".
+func describedKinds(objects map[string]string) map[string]bool {
+	out := make(map[string]bool, len(objects))
+
+	for action, kind := range objects {
+		out[action+" "+kind] = true
+	}
+
+	return out
+}
+
+// TestKindsKeepEachActionKindPair proves that the comparison of the checks
+// with the description keeps every action-kind pair. One action that a route
+// checks on two kinds gives two pairs, and the kind that the description
+// leaves out fails the comparison in either order.
+func TestKindsKeepEachActionKindPair(t *testing.T) {
+	t.Parallel()
+
+	unit := "unit:read opentofu:acme/net"
+	namespaceCheck := "unit:read acme"
+	both := map[string]bool{
+		"unit:read " + apidesc.KindUnit:      true,
+		"unit:read " + apidesc.KindNamespace: true,
+	}
+
+	for name, tc := range map[string]struct {
+		checks  []string
+		objects map[string]string
+		checked map[string]bool
+		same    bool
+	}{
+		"unit check first, unit described": {
+			[]string{unit, namespaceCheck}, map[string]string{"unit:read": apidesc.KindUnit}, both, false,
+		},
+		"namespace check first, unit described": {
+			[]string{namespaceCheck, unit}, map[string]string{"unit:read": apidesc.KindUnit}, both, false,
+		},
+		"unit check first, namespace described": {
+			[]string{unit, namespaceCheck}, map[string]string{"unit:read": apidesc.KindNamespace}, both, false,
+		},
+		"namespace check first, namespace described": {
+			[]string{namespaceCheck, unit}, map[string]string{"unit:read": apidesc.KindNamespace}, both, false,
+		},
+		"the unit check twice, unit described": {
+			[]string{unit, unit},
+			map[string]string{"unit:read": apidesc.KindUnit},
+			map[string]bool{"unit:read " + apidesc.KindUnit: true},
+			true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := kindsOf(t, tc.checks)
+			if !maps.Equal(got, tc.checked) {
+				t.Fatalf("kinds = %v, want %v", got, tc.checked)
+			}
+
+			if same := maps.Equal(got, describedKinds(tc.objects)); same != tc.same {
+				t.Errorf("the checks %v and the description %v are equal = %t, want %t",
+					got, tc.objects, same, tc.same)
+			}
+		})
+	}
 }
 
 // TestDescriptionHoldsTheChecksOfEachRoute sends a request to each route with
@@ -691,8 +786,8 @@ func TestDescriptionHoldsTheChecksOfEachRoute(t *testing.T) {
 				t.Fatalf("the description has no operation for %s %s", rc.rt.Method, rc.rt.Path)
 			}
 
-			if !maps.Equal(got, op.ActionObjects) {
-				t.Errorf("the route checks %v, and the description lists %v", got, op.ActionObjects)
+			if want := describedKinds(op.ActionObjects); !maps.Equal(got, want) {
+				t.Errorf("the route checks %v, and the description lists %v", got, want)
 			}
 		})
 	}

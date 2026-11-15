@@ -411,6 +411,10 @@ func (a *ProcessAdapter) decode(line []byte, id int64, method string, out any) e
 // cuts a message that is longer than MaxRPCMessageBytes at a rune boundary.
 func rpcMessage(m string) string {
 	m = strings.Map(func(r rune) rune {
+		// This is the own copy of the client generator unit. The unit imports
+		// no server code, so it cannot call ident. The check below is the same
+		// set: control (Cc), format (Cf), line separator (Zl) and paragraph
+		// separator (Zp) characters.
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
 			return ' '
 		}

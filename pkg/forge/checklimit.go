@@ -8,7 +8,7 @@ import (
 )
 
 // ErrRateLimited reports a Check that the service refused because the
-// connection, or its installation, was checked too often. The Check made no
+// connection or its installation was checked too often. The Check made no
 // call to the Git host.
 var ErrRateLimited = errors.New("the connection was checked too often")
 
@@ -47,7 +47,13 @@ type CheckLimits struct {
 	// PerInstallation is the largest number of Checks of one installation in
 	// Window.
 	PerInstallation int
-	// Window is the time that PerInstallation counts in.
+	// PerApp is the largest number of calls that the key of one app signs in
+	// Window: each call of a Check, each installation token for a read or a
+	// write, and each read of the installation or of the app. All
+	// installations and all namespaces of the app share it. The adapter
+	// counts it (see AppBudget); the limiter of Check does not.
+	PerApp int
+	// Window is the time that PerInstallation and PerApp count in.
 	Window time.Duration
 }
 
@@ -60,6 +66,8 @@ func (l CheckLimits) Validate() error {
 		return fmt.Errorf("%w: the check interval of a connection must be positive", ErrInvalid)
 	case l.PerInstallation <= 0:
 		return fmt.Errorf("%w: the number of checks of an installation must be positive", ErrInvalid)
+	case l.PerApp <= 0:
+		return fmt.Errorf("%w: the number of signed calls of an app must be positive", ErrInvalid)
 	case l.Window <= 0:
 		return fmt.Errorf("%w: the window of the checks of an installation must be positive", ErrInvalid)
 	default:
@@ -67,11 +75,20 @@ func (l CheckLimits) Validate() error {
 	}
 }
 
-// Default limits of Check: one for each connection in 10 seconds, and 30 for
-// each installation in one minute.
+// Default limits of Check: one for each connection in 10 seconds and 30 for
+// each installation in one minute. The default budget of an app is 80 signed
+// calls in one minute: 4,800 in an hour for one instance, below the limit of
+// 5,000 calls in an hour that GitHub sets for the calls that the key of an app
+// signs. Each instance keeps its own budget, so several instances together can
+// pass the limit of GitHub: an operator who runs several instances sets a
+// lower PerApp, so that the sum of the instances stays below it. The budget
+// counts every signed call, so Checks and the installation tokens of
+// write-backs and reads share it, and no kind of call can leave the others
+// with nothing beyond the limit of GitHub.
 const (
 	DefaultCheckInterval        = 10 * time.Second
 	DefaultCheckPerInstallation = 30
+	DefaultCheckPerApp          = 80
 	DefaultCheckWindow          = time.Minute
 )
 
@@ -82,7 +99,8 @@ const maxLimiterKeys = 10_000
 // DefaultCheckLimits returns the default limits of Check.
 func DefaultCheckLimits() CheckLimits {
 	return CheckLimits{
-		PerConnection: DefaultCheckInterval, PerInstallation: DefaultCheckPerInstallation, Window: DefaultCheckWindow,
+		PerConnection: DefaultCheckInterval, PerInstallation: DefaultCheckPerInstallation, PerApp: DefaultCheckPerApp,
+		Window: DefaultCheckWindow,
 	}
 }
 
@@ -148,19 +166,24 @@ func (l *checkLimiter) prune(now time.Time) {
 		}
 	}
 
-	for key, times := range l.byInstallation {
-		keep := times[:0]
+	l.pruneWindow(l.byInstallation, now)
+}
 
-		for _, at := range times {
+// pruneWindow drops from times the times that left the window.
+func (l *checkLimiter) pruneWindow(times map[string][]time.Time, now time.Time) {
+	for key, list := range times {
+		keep := list[:0]
+
+		for _, at := range list {
 			if now.Sub(at) < l.limits.Window {
 				keep = append(keep, at)
 			}
 		}
 
 		if len(keep) == 0 {
-			delete(l.byInstallation, key)
+			delete(times, key)
 		} else {
-			l.byInstallation[key] = keep
+			times[key] = keep
 		}
 	}
 }

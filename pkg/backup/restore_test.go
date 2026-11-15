@@ -164,6 +164,9 @@ func writeRestoreManifest(
 		InstallationKind: installation.KindProduction,
 		Unverified:       nil,
 		Damaged:          nil,
+		// An empty section is a backup of this change with no registry file,
+		// so no restore warning names absent registry files.
+		RegistryFiles: map[string]backup.RegistryFileSection{},
 	}
 
 	data, err := json.Marshal(manifest)

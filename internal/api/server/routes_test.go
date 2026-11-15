@@ -347,6 +347,7 @@ func newServiceBackedHandlerOf(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Workers:          nil,
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
@@ -641,7 +642,7 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Now: nil, NewID: nil,
-		BootstrapAdmins: nil, LimitGroups: nil,
+		BootstrapAdmins: nil, Settings: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -755,13 +756,13 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 //
 //nolint:gochecknoglobals,gosec // A constant table of request bodies; G101 reads "token" in the paths.
 var routeBodies = map[string]string{
-	"PUT /api/server/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
-	"PUT /api/server/namespaces/{namespace}/ip-allowlist":      `{"cidrs":["10.0.0.0/8"]}`,
-	"POST /api/server/namespaces":                              `{"name":"acme"}`,
-	"POST /api/dustpan/v1/store-checks":                        `{"target":"blobs"}`,
-	"POST /api/dustpan/v1/local-users":                         `{"userName":"routeuser","displayName":"","reason":"route test"}`,
-	"POST /api/dustpan/v1/local-users/unlock":                  `{"principal":"` + testPrincipalID + `","reason":"route test"}`,
-	"POST /api/server/restores": `{"backupID":"` + string(
+	"PUT /api/dustpan/v1/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
+	"PUT /api/server/namespaces/{namespace}/ip-allowlist":          `{"cidrs":["10.0.0.0/8"]}`,
+	"POST /api/server/namespaces":                                  `{"name":"acme"}`,
+	"POST /api/dustpan/v1/store-checks":                            `{"target":"blobs"}`,
+	"POST /api/dustpan/v1/local-users":                             `{"userName":"routeuser","displayName":"","reason":"route test"}`,
+	"POST /api/dustpan/v1/local-users/unlock":                      `{"principal":"` + testPrincipalID + `","reason":"route test"}`,
+	"POST /api/dustpan/v1/restores": `{"backupID":"` + string(
 		testBackupID,
 	) + `"}`,
 	"POST /api/server/principals":                                             `{"subject":"bob","kind":"person"}`,
@@ -884,6 +885,7 @@ func newRouteTestRestores(
 		Backups:         service,
 		Maintenance:     storetest.StateMaintenance{State: st, Hold: false},
 		Blobs:           live,
+		Leases:          st,
 		Target:          target,
 		Key:             nil,
 		Installation:    "test",
@@ -1101,7 +1103,7 @@ func probeRoute(t *testing.T, handler testHandler, route apiserver.Route) {
 // check for a route of that family, and an empty text for any other route.
 func seededOperationID(path string) string {
 	switch {
-	case strings.HasPrefix(path, "/api/server/restores"):
+	case strings.HasPrefix(path, "/api/dustpan/v1/restores"):
 		return string(testRestoreID)
 	case strings.HasPrefix(path, "/api/dustpan/v1/store-checks"):
 		return string(testStoreCheckID)
@@ -1299,7 +1301,7 @@ func freshAuthRoutes() []string {
 		"POST /api/server/groups/{id}/members",
 		"DELETE /api/server/groups/{id}/members/{principal}",
 		"DELETE /api/server/groups/{id}",
-		"POST /api/server/audit/chain",
+		"POST /api/dustpan/v1/audit/chain",
 		"PUT /api/server/namespaces/{namespace}/ip-allowlist",
 		"DELETE /api/server/namespaces/{namespace}/ip-allowlist",
 		"POST /api/dustpan/v1/local-users/reset",
@@ -1309,10 +1311,11 @@ func freshAuthRoutes() []string {
 
 // wantSuccessStatus answers the success status of route: a route in
 // freshAuthRoutes answers 403 to an access token, POST
-// /api/server/backups and POST /api/server/restores start work in the
-// background and answer 202, POST /api/server/restores/{id}/cancel answers 202
-// for the seed restore that a cancel already stopped, POST /api/server/namespaces creates a namespace
-// and answers 201, every other route answers 200.
+// /api/dustpan/v1/backups and POST /api/dustpan/v1/restores start work in the
+// background and answer 202, POST /api/dustpan/v1/restores/{id}/cancel
+// answers 202 for the seed restore that a cancel already stopped, POST
+// /api/server/namespaces creates a namespace and answers 201, every other
+// route answers 200.
 func wantSuccessStatus(route apiserver.Route) int {
 	if slices.Contains(freshAuthRoutes(), route.Method+" "+route.Path) {
 		// An access token never gives a fresh authentication.
@@ -1326,7 +1329,7 @@ func wantSuccessStatus(route apiserver.Route) int {
 // the background and answers 202.
 func startsInBackground(path string) bool {
 	return slices.Contains([]string{
-		"/api/server/backups", "/api/server/restores", "/api/server/restores/{id}/cancel",
+		"/api/dustpan/v1/backups", "/api/dustpan/v1/restores", "/api/dustpan/v1/restores/{id}/cancel",
 		"/api/dustpan/v1/store-checks",
 	}, path)
 }
@@ -1643,6 +1646,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1818,6 +1822,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1867,6 +1872,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -2058,6 +2064,7 @@ func seedRouteLocalUser(t *testing.T, st *sqlite.Store) {
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	// A store of another fixture holds no person testPrincipalID: it gets no

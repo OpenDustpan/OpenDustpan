@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/idempotent"
@@ -209,8 +210,9 @@ func classifyGitHostRequest(err error) (failure, bool) {
 	case errors.Is(err, forge.ErrConnectionNotFound), errors.Is(err, forge.ErrAssignmentNotFound),
 		errors.Is(err, forge.ErrNoRegistration):
 		return fail(http.StatusNotFound, rootText(err)), true
-	case errors.Is(err, forge.ErrInvalid),
-		errors.Is(err, errGitHostAppBody),
+	case errors.Is(err, forge.ErrInvalid):
+		return fail(http.StatusBadRequest, invalidText(err)), true
+	case errors.Is(err, errGitHostAppBody),
 		errors.Is(err, errGitHostInstallationBody),
 		errors.Is(err, errGitHostConnectionBody),
 		errors.Is(err, errGitHostOperatorOwns),
@@ -222,11 +224,25 @@ func classifyGitHostRequest(err error) (failure, bool) {
 		return fail(http.StatusTooManyRequests, "the connection was checked too often: try again later"), true
 	case errors.Is(err, forge.ErrAuth):
 		return fail(http.StatusUnprocessableEntity, "GitHub refused the credential of the connection"), true
+	case errors.Is(err, forge.ErrAppBudget):
+		return failCoded(http.StatusServiceUnavailable, appBudgetText(err), errcode.GitHostAppBudgetSpent), true
 	case errors.Is(err, forge.ErrUnavailable):
 		return fail(http.StatusServiceUnavailable, "GitHub did not answer: try again later"), true
 	default:
 		return fail(0, ""), false
 	}
+}
+
+// appBudgetText returns the message of a refusal by the budget of the signed
+// calls of the GitHub App, with the wait that Retry-After gives.
+func appBudgetText(err error) string {
+	const text = "the GitHub App used its budget of signed calls"
+
+	if seconds, ok := retryAfterSeconds(err); ok {
+		return text + ": try again in " + seconds + " seconds"
+	}
+
+	return text + ": try again later"
 }
 
 // rootText returns the sentence of the domain sentinel in err, without the
@@ -242,6 +258,19 @@ func rootText(err error) string {
 	}
 
 	return "request refused"
+}
+
+// invalidText returns the sentence of the domain sentinel in err and the
+// reason of the check that refused the input, without the names of the steps
+// that wrapped them. The reason follows the last sentence in the chain.
+func invalidText(err error) string {
+	sentinel := forge.ErrInvalid.Error()
+
+	if i := strings.LastIndex(err.Error(), sentinel); i >= 0 {
+		return err.Error()[i:]
+	}
+
+	return sentinel
 }
 
 // maxRetryAfterSeconds caps the Retry-After header of the Git host routes. A

@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -148,6 +149,37 @@ func TestGitHostAppRefusesAKeyThatTheAdapterCannotUse(t *testing.T) {
 
 	wantHost(t, e.send(t, http.MethodPut, hostAppPath, hostAppBody()), http.StatusBadRequest)
 	wantHost(t, e.send(t, http.MethodGet, hostAppPath, ""), http.StatusNotFound)
+}
+
+// TestGitHostAppInvalidKeyAnswerHoldsTheReasonOnly sends a refusal of the key
+// that the adapter and the service wrapped, and checks that the answer holds
+// the sentence of the refusal and the reason of the adapter, and no name of an
+// internal step.
+func TestGitHostAppInvalidKeyAnswerHoldsTheReasonOnly(t *testing.T) {
+	t.Parallel()
+
+	const reason = "the key is not a PEM block"
+
+	e := newHostEnv(t, hostAllowAll())
+	e.opener.setOpenErr(fmt.Errorf("the adapter read the key: %w",
+		fmt.Errorf("the parse step: %w", fmt.Errorf("%w: %s", forge.ErrInvalid, reason))))
+
+	r := e.send(t, http.MethodPut, hostAppPath, hostAppBody())
+	wantHost(t, r, http.StatusBadRequest)
+
+	if !strings.Contains(r.body, forge.ErrInvalid.Error()) {
+		t.Fatalf("answer = %s, want the sentence of the refusal", r.body)
+	}
+
+	if !strings.Contains(r.body, reason) {
+		t.Fatalf("answer = %s, want the reason %q", r.body, reason)
+	}
+
+	for _, step := range []string{"the adapter read the key", "the parse step", "the private key"} {
+		if strings.Contains(r.body, step) {
+			t.Fatalf("answer = %s, want no name of the step %q", r.body, step)
+		}
+	}
 }
 
 func TestGitHostAppNeverAnswersAnyOfItsSecrets(t *testing.T) {
@@ -449,7 +481,8 @@ func TestGitHostIfMatchInvalidCodes(t *testing.T) {
 }
 
 // TestGitHostConnectionTakesNothingThatTheOperatorOwns sends each field that
-// only the operator sets, straight to the create route.
+// only the operator sets, straight to the create route, with a value and with
+// null. A request that holds none of them makes a connection.
 func TestGitHostConnectionTakesNothingThatTheOperatorOwns(t *testing.T) {
 	t.Parallel()
 
@@ -457,29 +490,49 @@ func TestGitHostConnectionTakesNothingThatTheOperatorOwns(t *testing.T) {
 	e.register(t)
 
 	//nolint:gosec // The strings are fields of a request that the route refuses, not credentials.
-	for name, field := range map[string]string{
-		"an API address":     `"apiAddress":"https://evil.example.com"`,
-		"an app ID":          `"appID":"777"`,
-		"a private key":      `"privateKey":"` + hostKeyCanary + `"`,
-		"an event secret":    `"eventSecret":"` + hostSecretCanary + `"`,
-		"a credential":       `"credential":"token"`,
-		"a list of sets":     `"credentials":[]`,
-		"a field of nothing": `"other":"x"`,
-	} {
+	owns := map[string]string{
+		"an API address":          `"apiAddress":"https://evil.example.com"`,
+		"an API address of null":  `"apiAddress":null`,
+		"an app ID":               `"appID":"777"`,
+		"an app ID of null":       `"appID":null`,
+		"a private key":           `"privateKey":"` + hostKeyCanary + `"`,
+		"a private key of null":   `"privateKey":null`,
+		"an event secret":         `"eventSecret":"` + hostSecretCanary + `"`,
+		"an event secret of null": `"eventSecret":null`,
+		"a credential":            `"credential":"token"`,
+		"a credential of null":    `"credential":null`,
+		"a list of sets":          `"credentials":[]`,
+		"a list of sets of null":  `"credentials":null`,
+	}
+
+	for name, field := range owns {
 		body := `{"kind":"github","auth":"app","installationID":"101",` + field + `}`
 
 		r := e.send(t, http.MethodPost, hostConnectionsPath, body)
 		wantHost(t, r, http.StatusBadRequest)
+
+		if !strings.Contains(r.body, "the operator sets them") {
+			t.Fatalf("the refusal of %s = %s, want the sentence of an operator-owned field", name, r.body)
+		}
 
 		if strings.Contains(r.body, hostKeyCanary) || strings.Contains(r.body, hostSecretCanary) {
 			t.Fatalf("the refusal of %s echoes the secret: %s", name, r.body)
 		}
 	}
 
+	// A field that the operator does not own, and that no route takes, fails
+	// with the sentence of the body.
+	unknown := e.send(t, http.MethodPost, hostConnectionsPath,
+		`{"kind":"github","auth":"app","installationID":"101","other":"x"}`)
+	wantHost(t, unknown, http.StatusBadRequest)
+
 	list := decodeHost[connectionsDoc](t, e.send(t, http.MethodGet, hostConnectionsPath, ""))
 	if len(list.Connections) != 0 {
 		t.Fatalf("list = %+v, want no connection after refused creates", list)
 	}
+
+	// The same request without a field of the operator makes a connection.
+	wantHost(t, e.send(t, http.MethodPost, hostConnectionsPath, createBody("101")), http.StatusCreated)
 }
 
 func TestGitHostConnectionRefusesInputThatIsNotValid(t *testing.T) {
@@ -549,26 +602,66 @@ func TestGitHostCheckAnswersTheAccountAndTheCapabilities(t *testing.T) {
 func TestGitHostCheckAnswersWhatTheGitHostSaid(t *testing.T) {
 	t.Parallel()
 
-	e := newHostEnv(t, hostAllowAll())
-	e.register(t)
+	budget := fmt.Errorf("%w: %w", forge.ErrAppBudget, forge.Unavailable(30*time.Second, "budget"))
 
-	id := e.connect(t, "101")
-	target := hostConnectionsPath + "/" + id + "/check"
+	for _, tc := range []struct {
+		err        error
+		name       string
+		text       string
+		retryAfter string
+		status     int
+		code       string
+	}{
+		{
+			err: forge.ErrAuth, name: "a refused credential", text: "GitHub refused the credential of the connection",
+			retryAfter: "", status: http.StatusUnprocessableEntity, code: "",
+		},
+		{
+			err: forge.Unavailable(30*time.Second, "rate limit"), name: "no answer with a wait",
+			text: "GitHub did not answer: try again later", retryAfter: "30", status: http.StatusServiceUnavailable,
+			code: "",
+		},
+		{
+			err: forge.ErrUnavailable, name: "no answer", text: "GitHub did not answer: try again later",
+			retryAfter: "", status: http.StatusServiceUnavailable, code: "",
+		},
+		{
+			err: budget, name: "a spent budget of the app",
+			text:       "the GitHub App used its budget of signed calls: try again in 30 seconds",
+			retryAfter: "30", status: http.StatusServiceUnavailable, code: errcode.GitHostAppBudgetSpent,
+		},
+		{
+			err: forge.ErrAppBudget, name: "a spent budget with no wait",
+			text:       "the GitHub App used its budget of signed calls: try again later",
+			retryAfter: "", status: http.StatusServiceUnavailable, code: errcode.GitHostAppBudgetSpent,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	e.opener.setCheckErr(forge.ErrAuth)
-	wantHost(t, e.send(t, http.MethodPost, target, ""), http.StatusUnprocessableEntity)
+			e := newHostEnv(t, hostAllowAll())
+			e.register(t)
 
-	e.opener.setCheckErr(forge.Unavailable(30e9, "rate limit"))
+			id := e.connect(t, "101")
+			e.opener.setCheckErr(tc.err)
 
-	limited := e.send(t, http.MethodPost, target, "")
-	wantHost(t, limited, http.StatusServiceUnavailable)
+			r := e.send(t, http.MethodPost, hostConnectionsPath+"/"+id+"/check", "")
+			wantHost(t, r, tc.status)
 
-	if got := limited.header.Get("Retry-After"); got != "30" {
-		t.Fatalf("Retry-After = %q, want 30", got)
+			if got := r.header.Get("Retry-After"); got != tc.retryAfter {
+				t.Errorf("Retry-After = %q, want %q", got, tc.retryAfter)
+			}
+
+			if !strings.Contains(r.body, `"`+tc.text+`"`) {
+				t.Errorf("answer = %s, want the message %q", r.body, tc.text)
+			}
+
+			if tc.code != "" {
+				errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tc.status, []byte(r.body),
+					errcodetest.Want{Code: tc.code, Args: nil, RequestBody: nil})
+			}
+		})
 	}
-
-	e.opener.setCheckErr(forge.ErrUnavailable)
-	wantHost(t, e.send(t, http.MethodPost, target, ""), http.StatusServiceUnavailable)
 }
 
 func TestGitHostCheckFailsClosedAfterTheOperatorMovesTheInstallation(t *testing.T) {

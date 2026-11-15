@@ -63,6 +63,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/forgelinksvc"
 	"opendustpan.org/opendustpan/internal/issuersvc"
+	"opendustpan.org/opendustpan/internal/jobunits"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -85,6 +86,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -156,9 +158,10 @@ type settings struct {
 	// stackRefusals records the refusals of the stack blob scope. newServices
 	// builds it once.
 	stackRefusals scopeaudit.Recorder
-	// blobGuard tells the blob deleters whether a backup or a restore runs.
-	// newUpdateService attaches it.
-	blobGuard       blobguard.Watch
+	// blobGuard holds the leases of the blob deletes: the namespace store,
+	// which reads the backups table and the restores table. newUpdateService
+	// attaches it.
+	blobGuard       blobguard.Leases
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore
@@ -180,11 +183,17 @@ type settings struct {
 	// issuerStore keeps the signing keys and the settings of the OIDC issuer
 	// of each namespace, or is nil. issuerBaseURL is the host of the issuer URL,
 	// and issuerOutbox receives its notices.
-	issuerStore          profile.IssuerStore
-	issuerBaseURL        string
-	issuerOutbox         notify.Outbox
-	sinks                sinkSettings
-	jobStore             job.Store
+	issuerStore   profile.IssuerStore
+	issuerBaseURL string
+	issuerOutbox  notify.Outbox
+	sinks         sinkSettings
+	jobStore      job.Store
+	// jobTokenStore keeps the job tokens that the server issues to the runner
+	// sessions of a job, or is nil when the server issues none. With a store,
+	// the authenticator chain resolves a job token behind its own failure
+	// budget, and the authorizer chain bounds every action of the principal to
+	// the unit of its job.
+	jobTokenStore        jobtoken.Store
 	triggerStore         trigger.Store
 	unitSettingsStore    unitsettings.Store
 	driftStore           drift.Store
@@ -266,6 +275,9 @@ type settings struct {
 	devSignIn        *devsignin.Config
 	// instanceStore keeps the instance version rows. See WithInstanceStore.
 	instanceStore installation.InstanceStore
+	// builtinStore is the built-in SQLite or PostgreSQL store. See WithSQLite,
+	// WithPostgreSQL and WithBuiltinStore.
+	builtinStore builtinStoreSettings
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
 	// durableStore keeps the durable operations and the job schedules, or
@@ -297,6 +309,10 @@ type settings struct {
 	// watch reads the worker state. assemble sets it before it builds the
 	// adapters.
 	watch *workerWatch
+	// observed is the metrics of the server. NewServer creates it before the
+	// services, so each deleter of a blob counts the takes that it refuses on
+	// it.
+	observed *metrics.ServerMetrics
 }
 
 // Option configures a Server.
@@ -533,6 +549,9 @@ func WithCheckpointDeltaCutoff(n int) Option {
 // Server is a configured OpenDustpan server.
 type Server struct {
 	handler http.Handler
+	// closeBuiltin closes the store that NewServer opened, or is nil when the
+	// caller opened the store or no built-in store exists.
+	closeBuiltin *builtinStoreCloser
 	// started records that Start succeeded. The gate in front of handler
 	// reads it.
 	started *startState
@@ -612,6 +631,10 @@ type Server struct {
 	// the schedule job.artifact-sweep. It is nil without the ports that it
 	// needs.
 	artifactSweeper *job.ArtifactSweeper
+	// supersededSweeper deletes the marked checkpoint blobs that a later save
+	// replaced: the schedule stack.superseded-checkpoint-sweep. It is nil
+	// without the update service.
+	supersededSweeper supersededSweeper
 	// nameLocks holds the counts of the lockout by name: the schedule
 	// name-lock-prune deletes the counts that can no longer change a lock.
 	// It is nil when the store keeps no such counts.
@@ -702,6 +725,7 @@ func defaultSettings() *settings {
 		issuerOutbox:            nil,
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
+		jobTokenStore:           nil,
 		triggerStore:            nil,
 		unitSettingsStore:       nil,
 		driftStore:              nil,
@@ -760,6 +784,11 @@ func defaultSettings() *settings {
 		components:              AllComponents(),
 		operationLease:          0,
 		watch:                   nil,
+		builtinStore: builtinStoreSettings{
+			source: builtinStoreNone, path: "", dsn: "", config: defaultStoreConfig(), handle: nil,
+			open: nil, close: nil,
+		},
+		observed: nil,
 	}
 }
 
@@ -778,6 +807,30 @@ func NewServer(opts ...Option) (*Server, error) {
 		opt(cfg)
 	}
 
+	if err := applyBuiltinStore(cfg); err != nil {
+		return nil, err
+	}
+
+	closeStore := cfg.builtinStore.closeFunc()
+
+	srv, err := buildServer(cfg)
+	if err != nil {
+		if closeStore == nil {
+			return nil, err
+		}
+
+		return nil, errors.Join(err, closeStore())
+	}
+
+	if closeStore != nil {
+		srv.closeBuiltin = &builtinStoreCloser{mu: sync.Mutex{}, close: closeStore}
+	}
+
+	return srv, nil
+}
+
+// buildServer wires the server from settings that have their built-in store.
+func buildServer(cfg *settings) (*Server, error) {
 	base, err := checkSettings(cfg)
 	if err != nil {
 		return nil, err
@@ -812,6 +865,10 @@ func NewServer(opts ...Option) (*Server, error) {
 	}
 
 	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
+
+	// The metrics exist before the services, so each deleter of a blob can
+	// count the takes that it refuses.
+	cfg.observed = metrics.NewServerMetrics(cfg.version, cfg.now())
 
 	svc, err := newServices(cfg, tokens, ports.authorizer)
 	if err != nil {
@@ -867,18 +924,25 @@ type authPorts struct {
 // inside out, is:
 //
 //  1. the configured authenticator, then the stored access tokens behind
-//     their failure gate;
+//     their failure gate, then the job tokens of the runner sessions behind
+//     the failure gate of their own kind;
 //  2. the marks of the temporary administrators;
 //  3. the refusal of dev subjects on an installation that is not dev;
 //  4. the refusal of the subjects of namespace service principals.
 //
 // The authorizer chain, from the inside out, is the configured authorizer,
-// the self actions, the namespace service rule and the IP allowlist gate.
-// Each step is one statement here, in this order.
+// the self actions, the namespace service rule, the IP allowlist gate and,
+// when the server issues job tokens, the rule of job tokens. Each step is one
+// statement here, in this order.
 func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error) {
 	var none authPorts
 
-	authn, gates, err := gatedAuthenticator(cfg.authenticator, tokens, cfg.namespaceStore, cfg.logger, cfg.now)
+	jobs, units, err := jobTokenPorts(cfg)
+	if err != nil {
+		return none, err
+	}
+
+	authn, gates, err := gatedAuthenticator(cfg.authenticator, tokens, jobs, newGateEnv(cfg))
 	if err != nil {
 		return none, err
 	}
@@ -893,6 +957,14 @@ func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error)
 			identity.ActionCallerManageGitHostLinks,
 		},
 	}}, cfg.ipAllowlists)
+
+	// The rule of job tokens wraps the whole chain of an embedder, so no
+	// Authorizer of an embedder can widen a job token: the rule decides
+	// before every other rule, and it asks them only for the unit of the job
+	// of the token. A server that issues no job token keeps the chain it had.
+	if units != nil {
+		authz = identity.JobTokenRule{Next: authz, Units: units}
+	}
 
 	marks, marked, err := tempAdminDecorator(authn, cfg.namespaceStore, cfg.now, cfg.logger)
 	if err != nil {
@@ -917,6 +989,29 @@ func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error)
 	}
 
 	return authPorts{authenticator: authn, authorizer: authz, gates: gates}, nil
+}
+
+// jobTokenPorts returns the service of the job tokens and the reader of the
+// unit of a job when the server issues job tokens, and no port when it does
+// not: then the chains have no member and no rule for a job token.
+//
+// A server that issues job tokens keeps the job store too. The rule of job
+// tokens reads the unit of the job of every request, so a build without a job
+// store fails here: a rule that cannot read the unit of a job must never fall
+// back to a wider reach.
+func jobTokenPorts(cfg *settings) (*jobtoken.Service, *jobunits.Service, error) {
+	if cfg.jobTokenStore == nil {
+		return nil, nil, nil
+	}
+
+	jobs := jobtoken.NewService(cfg.jobTokenStore, cfg.now)
+
+	units, err := jobunits.New(cfg.jobStore)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the reader of the unit of a job: %w", err)
+	}
+
+	return jobs, units, nil
 }
 
 // tempAdminDecorator marks the temporary administrators among the callers
@@ -979,19 +1074,6 @@ func newTempAdminService(cfg *settings) (*tempadmin.Service, error) {
 	}
 
 	return svc, nil
-}
-
-// newServerMetrics returns the metrics of the server, and gives the recorder of
-// the refused dev sign-ins the namespace reader and the failure counter.
-func newServerMetrics(cfg *settings, svc services) (*metrics.ServerMetrics, error) {
-	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
-
-	err := cfg.devRefusal.bind(cfg, svc.namespaces, func() { observed.IncAuditAppendFailure() })
-	if err != nil {
-		return nil, err
-	}
-
-	return observed, nil
 }
 
 // assemble mounts the adapters and routes around the services and the parts
@@ -1057,10 +1139,10 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		kind:             newKindState(cfg), instances: newInstanceState(cfg),
 		durable:      cfg.durableStore,
 		durableOwner: durableOwner(cfg),
-		reconciler:   reconciler, artifactSweeper: artifactSweeper, issuer: svc.issuer,
+		reconciler:   reconciler, artifactSweeper: artifactSweeper, supersededSweeper: svc.updates, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
-		components: cfg.components, nameLocks: nameLocksOf(cfg),
+		components: cfg.components, nameLocks: nameLocksOf(cfg), closeBuiltin: nil,
 		watch: cfg.watch, auditChainEvery: cfg.auditChainInterval, stateWrite: newStateWriteStart(cfg, svc),
 	}
 
@@ -1069,13 +1151,15 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 	return srv, nil
 }
 
-// prepareBackground builds the metrics, the worker watch, the sweeper of
-// deleted units and the audit shipper, and sets them in cfg and svc, and builds the issuer. One
-// registry holds every metric family: the request, runtime and build families,
-// and the readiness failure counter of the probe.
+// prepareBackground binds the recorder of the refused dev sign-ins and builds
+// the worker watch, the sweeper of deleted units and the audit shipper, and
+// sets them in cfg and svc, and builds the issuer. One registry holds every
+// metric family: the request, runtime and build families, and the readiness
+// failure counter of the probe.
 func prepareBackground(cfg *settings, svc *services) (*metrics.ServerMetrics, *audit.Shipper, error) {
-	observed, err := newServerMetrics(cfg, *svc)
-	if err != nil {
+	observed := cfg.observed
+
+	if err := cfg.devRefusal.bind(cfg, svc.namespaces, func() { observed.IncAuditAppendFailure() }); err != nil {
 		return nil, nil, err
 	}
 
@@ -1762,6 +1846,7 @@ func newWorkspaceService(
 		Retention:          cfg.softDeleteRetention,
 		ManualLocks:        locks,
 		BlobGuard:          cfg.blobGuard,
+		OnDeleteWait:       blobDeleteWait(cfg.observed),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("workspace service: %w", err)
@@ -1821,6 +1906,7 @@ func newUpdateService(
 		Replayer:           pulumijournal.NewReplayer(clockOf(cfg), ""),
 		ManualLocks:        locks,
 		BlobGuard:          cfg.blobGuard,
+		OnDeleteWait:       blobDeleteWait(cfg.observed),
 		Sealer:             sealer,
 	})
 	if err != nil {
@@ -2287,6 +2373,7 @@ func (s *Server) sweepTempAdminsOnce(ctx context.Context) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	})
 
 	switch {
@@ -2878,6 +2965,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
 		reach:  reach,
 		tokens: deps.services.tokens, deleted: deps.services.deleted, stateWrite: deps.services.stateWrite.effective(),
+		cursors: cfg.secretWrapper,
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
 		principals: principals, gates: gates, forgeService: gitHost, idempotency: idem, extras: extras,
@@ -3170,7 +3258,8 @@ func unitCollections(cfg *settings) (access.UnitCollections, error) {
 // namespace store, or returns nil when the store keeps no roles and grants.
 // The service checks escalation with the grant model, so it uses the
 // configured authorizer when that is an access.Authorizer, and its own one
-// otherwise.
+// otherwise. It reads the cap of the export of a collection from the settings
+// service when the server keeps one.
 func newAccessService(cfg *settings) (*access.Service, error) {
 	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
@@ -3194,6 +3283,11 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		}
 	}
 
+	var settings access.Settings
+	if settingsSvc := newSettingService(cfg, cfg.namespaceStore); settingsSvc != nil {
+		settings = settingsSvc
+	}
+
 	reach, reachErr := reachConfig(cfg)
 	if reachErr != nil {
 		return nil, fmt.Errorf("access service: %w", reachErr)
@@ -3208,7 +3302,7 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 	svc, err := access.NewService(access.ServiceConfig{
 		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz,
 		Reach: reach, Now: nil, NewID: nil,
-		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), LimitGroups: limits,
+		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), Settings: settings, LimitGroups: limits,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access service: %w", err)

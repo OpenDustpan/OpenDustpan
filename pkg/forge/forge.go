@@ -30,6 +30,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // Sentinel errors returned by the port. An adapter wraps one of them with
@@ -966,8 +968,8 @@ func ValidateComment(req CommentRequest) error {
 	}
 
 	for _, r := range req.Body {
-		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
-			return fmt.Errorf("%w: the comment text has a control character", ErrInvalid)
+		if ident.IsHiddenRuneExcept(r, '\n', '\r', '\t') {
+			return fmt.Errorf("%w: the comment text has a control, format or separator character", ErrInvalid)
 		}
 	}
 
@@ -1089,15 +1091,15 @@ func ValidateStatus(s Status) error {
 }
 
 // validateStatusText checks one line of text: at most limit bytes, valid
-// UTF-8 and no control character.
+// UTF-8 and no control, format or separator character.
 func validateStatusText(text string, limit int) error {
 	switch {
 	case len(text) > limit:
 		return fmt.Errorf("%w: the text has more than %d bytes", ErrTooLarge, limit)
 	case !utf8.ValidString(text):
 		return fmt.Errorf("%w: the text is not valid UTF-8", ErrInvalid)
-	case strings.ContainsFunc(text, func(r rune) bool { return unicode.IsControl(r) || r == '\u2028' || r == '\u2029' }):
-		return fmt.Errorf("%w: the text has a control character", ErrInvalid)
+	case ident.HasHidden(text):
+		return fmt.Errorf("%w: the text has a control, format or separator character", ErrInvalid)
 	}
 
 	return nil
@@ -1117,7 +1119,7 @@ func validateStatusURL(raw string) error {
 
 	switch {
 	case err != nil, u.Scheme != "https", u.Host == "", u.User != nil, u.Fragment != "",
-		strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }):
+		strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsSpace(r) || ident.IsHiddenRune(r) }):
 		return fmt.Errorf("%w: the status address must be an https address with a host", ErrInvalid)
 	}
 
@@ -1180,8 +1182,8 @@ func ValidateReviewRequest(req ReviewRequest) error {
 }
 
 // validateReviewTitle checks the title of a review request: one line of valid
-// UTF-8 that is not empty and has no control character. A title above
-// MaxReviewTitleBytes is ErrTooLarge.
+// UTF-8 that is not empty and has no control, format or separator character. A
+// title above MaxReviewTitleBytes is ErrTooLarge.
 func validateReviewTitle(text string) error {
 	switch {
 	case len(text) > MaxReviewTitleBytes:
@@ -1190,16 +1192,17 @@ func validateReviewTitle(text string) error {
 		return fmt.Errorf("%w: the text is not valid UTF-8", ErrInvalid)
 	case strings.TrimSpace(text) == "":
 		return fmt.Errorf("%w: the text is empty", ErrInvalid)
-	case strings.ContainsFunc(text, unicode.IsControl):
-		return fmt.Errorf("%w: the text has a control character", ErrInvalid)
+	case ident.HasHidden(text):
+		return fmt.Errorf("%w: the text has a control, format or separator character", ErrInvalid)
 	}
 
 	return nil
 }
 
 // validateReviewBody checks the description of a review request: valid UTF-8
-// with no control character, except the line break and the tab. A description
-// above MaxReviewBodyBytes is ErrTooLarge.
+// with no control, format or separator character, except the line break, the
+// carriage return and the tab. A description above MaxReviewBodyBytes is
+// ErrTooLarge.
 func validateReviewBody(text string) error {
 	switch {
 	case len(text) > MaxReviewBodyBytes:
@@ -1209,8 +1212,8 @@ func validateReviewBody(text string) error {
 	}
 
 	for _, r := range text {
-		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
-			return fmt.Errorf("%w: the text has a control character", ErrInvalid)
+		if ident.IsHiddenRuneExcept(r, '\n', '\r', '\t') {
+			return fmt.Errorf("%w: the text has a control, format or separator character", ErrInvalid)
 		}
 	}
 

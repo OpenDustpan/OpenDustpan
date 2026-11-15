@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -69,6 +70,7 @@ func streamSummary(refs ...backup.BlobRef) backup.Summary {
 		WrapperIDs:           []string{"kek-1"},
 		RowCounts:            map[string]int64{"namespaces": 1},
 		Blobs:                refs,
+		RegistryFiles:        nil,
 		SchemaVersion:        backup.BaselineSchemaVersion,
 		Unverified:           nil,
 	}
@@ -142,6 +144,7 @@ func restoreStreamedBackup(
 			WrapperIDs:           nil,
 			RowCounts:            map[string]int64{},
 			Blobs:                nil,
+			RegistryFiles:        nil,
 			SchemaVersion:        backup.BaselineSchemaVersion,
 			Unverified:           nil,
 		},
@@ -197,6 +200,7 @@ func restoreStreamedBackup(
 		Backups:         backups,
 		Maintenance:     maint,
 		Blobs:           blobs,
+		Leases:          blobguardtest.None{},
 		Target:          target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",

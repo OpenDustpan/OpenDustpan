@@ -174,12 +174,25 @@ func (h *unitStateLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 // WithGroup implements slog.Handler.
 func (h *unitStateLogHandler) WithGroup(string) slog.Handler { return h }
 
-// count returns the number of records that the handler collected.
-func (h *unitStateLogHandler) count() int {
+// damagedCount returns the number of collected records that report the
+// damaged job row of a state write. The store shares the logger with the
+// write-ahead log guard, so a guard warning or debug under another load can
+// reach the same handler; only the damaged-row record counts here.
+func (h *unitStateLogHandler) damagedCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	return len(h.records)
+	n := 0
+
+	for i := range h.records {
+		r := &h.records[i]
+		if r.Level == slog.LevelWarn &&
+			r.Message == "the job of a state write is unreadable: the commit stays empty" {
+			n++
+		}
+	}
+
+	return n
 }
 
 // openUnitStateStoreWithLogger opens a fresh store whose handler receives the
@@ -250,8 +263,8 @@ func TestDamagedJobRowGivesAnEmptyCommit(t *testing.T) {
 		t.Fatalf("final commit = %q, want the empty commit", got.Commit)
 	}
 
-	if handler.count() != 1 {
-		t.Fatalf("log records = %d, want 1", handler.count())
+	if handler.damagedCount() != 1 {
+		t.Fatalf("damaged-row log records = %d, want 1", handler.damagedCount())
 	}
 }
 
@@ -507,6 +520,7 @@ func finalizeStateWriteExpecting(
 
 	sv.Status = workspace.StatusFinalized
 	sv.FinalizedAt = time.UnixMilli(unitStateWriteAtMs + 1000).UTC()
+	sv.ClientEncrypted = workspace.ClientEncryptedNo
 	sv.Content = blob.Key("namespaces/" + ns.ID.String() + "/tofu/" + sv.Workspace.String() + "/" +
 		sv.ID.String() + "/a1")
 	sv.Size = int64(len(stateWriteContent))

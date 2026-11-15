@@ -417,6 +417,17 @@ var Settings = []*Setting{
 		"(none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit`",
 	).WithFile("audit-sink").WithStaticCredentialHost().WithSensitive(),
 	stringSetting(
+		"audit-sink-allowed-ranges", "DUSTPAN_AUDIT_SINK_ALLOWED_RANGES", "",
+		"comma-separated CIDRs that an audit or log sink may reach, in addition to public addresses "+
+			"(DUSTPAN_AUDIT_SINK_ALLOWED_RANGES)",
+		"(none: a sink reaches public addresses only). Set the range of a receiver on a private network, "+
+			"for example `10.20.0.0/16`. A range opens private-network addresses only. These are RFC 1918 and "+
+			"unique local addresses. An IPv4 range has at least 8 bits, and an IPv6 range has at least 32 bits. "+
+			"The server always refuses loopback, link-local, cloud metadata, unspecified and multicast addresses, "+
+			"also inside a range. It checks this at the start and at each connection. The setting applies to "+
+			"`--audit-sink` and `--log-sink`.",
+	).WithFile("audit-sink-allowed-ranges"),
+	stringSetting(
 		"audit-verify-keys-file", "DUSTPAN_AUDIT_VERIFY_KEYS_FILE", "",
 		"file of base64 Ed25519 public keys, one on each line, that may verify audit checkpoints "+
 			"but never sign them, for example the key before a key change (DUSTPAN_AUDIT_VERIFY_KEYS_FILE)",

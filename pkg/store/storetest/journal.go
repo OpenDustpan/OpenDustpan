@@ -1082,7 +1082,7 @@ func testJournalKeysFollowRename(t *testing.T, f fixture) {
 	// A rename waits until the update ends.
 	f.end(t, u, stack.StatusSucceeded)
 
-	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence); err != nil {
+	if err := f.s.RenameStack(t.Context(), f.ref, "renamed", f.fence, renameEntry(f.ref.Namespace, f.ref)); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
 

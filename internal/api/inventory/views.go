@@ -228,7 +228,7 @@ func (h *Handler) viewCaller(
 		audited := p
 
 		switch p.Kind {
-		case identity.KindPerson, identity.KindService, identity.KindWorkload:
+		case identity.KindPerson, identity.KindService, identity.KindWorkload, identity.KindAgent:
 		default:
 			audited.Kind = ""
 		}
@@ -275,6 +275,7 @@ func viewAuditTemplate(r *http.Request) audit.Entry {
 		UserAgent: audit.TruncateUserAgent(userAgent(r)), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 }
 

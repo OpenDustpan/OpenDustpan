@@ -28,11 +28,13 @@ import (
 	// Registers the "sqlite" database/sql driver.
 	_ "modernc.org/sqlite"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
@@ -247,6 +249,11 @@ type Store struct {
 	// inside the read transaction. Tests write there to prove that both
 	// statements read one snapshot. Nil in production.
 	betweenPageReads func(ctx context.Context)
+	// betweenDeletedFactsReads, when set, runs in GetDeletedUnitFacts after
+	// the collection select and before the labels select, inside the
+	// read-only transaction. Tests commit there to prove that both selects
+	// read one snapshot. Nil in production.
+	betweenDeletedFactsReads func(ctx context.Context)
 	// guardCancel stops the write-ahead log guard; guardDone closes when the
 	// guard ends. Close waits for the guard before it closes the connection,
 	// so no checkpoint runs on a closed handle.
@@ -280,6 +287,12 @@ type Store struct {
 	// stepTxBound is the longest time that a step transaction of a durable
 	// operation stays open before it rolls back.
 	stepTxBound time.Duration
+	// attemptDeadline gives the attempt deadline of an item key transaction.
+	// It is secret.AttemptDeadline. An internal test sets a shorter one.
+	attemptDeadline func(ctx context.Context, start time.Time) time.Time
+	// now gives the current time of the item key attempt code. Tests
+	// replace it.
+	now func() time.Time
 }
 
 var (
@@ -400,29 +413,32 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 // newStore returns the store on conn, before the options and the migration.
 func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 	s := &Store{
-		conn:                conn,
-		queries:             db.New(conn),
-		path:                path,
-		mu:                  sync.RWMutex{},
-		sweepMu:             sync.Mutex{},
-		enterGate:           newWriteGate(),
-		enterWait:           maxEnterWait,
-		stagingMu:           sync.Mutex{},
-		stagingPath:         "",
-		guardCancel:         nil,
-		guardDone:           nil,
-		logger:              slog.New(slog.DiscardHandler),
-		lastTruncateSuccess: time.Now(),
-		busyWarned:          false,
-		keepAccessHook:      nil,
-		beforeLockDelete:    nil,
-		betweenPageReads:    nil,
-		binaryVersion:       "",
-		kind:                "",
-		noMigrate:           false,
-		processGuard:        guard,
-		stepTxBound:         DefaultStepTransactionBound,
-		gate:                nil,
+		conn:                     conn,
+		queries:                  db.New(conn),
+		path:                     path,
+		mu:                       sync.RWMutex{},
+		sweepMu:                  sync.Mutex{},
+		enterGate:                newWriteGate(),
+		enterWait:                maxEnterWait,
+		stagingMu:                sync.Mutex{},
+		stagingPath:              "",
+		guardCancel:              nil,
+		guardDone:                nil,
+		logger:                   slog.New(slog.DiscardHandler),
+		lastTruncateSuccess:      time.Now(),
+		busyWarned:               false,
+		keepAccessHook:           nil,
+		attemptDeadline:          secret.AttemptDeadline,
+		now:                      time.Now,
+		beforeLockDelete:         nil,
+		betweenPageReads:         nil,
+		betweenDeletedFactsReads: nil,
+		binaryVersion:            "",
+		kind:                     "",
+		noMigrate:                false,
+		processGuard:             guard,
+		stepTxBound:              DefaultStepTransactionBound,
+		gate:                     nil,
 	}
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 
@@ -683,7 +699,11 @@ func (s *Store) CreateStackPlaced(
 			return err
 		}
 
-		return setUnitCollection(ctx, q, placementMove(st, p), e)
+		if err := setUnitCollection(ctx, q, placementMove(st, p), e); err != nil {
+			return placementCollectionError(p.Collection.Name, err)
+		}
+
+		return nil
 	})
 }
 
@@ -849,25 +869,45 @@ func stackTags(ctx context.Context, q *db.Queries, id string) (map[string]string
 	return tags, nil
 }
 
+// stackNameChangeKey is the audit change key of a stack name.
+const stackNameChangeKey = "name"
+
 // RenameStack implements stack.Store. It renames the stack without moving its
 // history, checkpoint or events: child rows key on the stable stack ID. The
 // inventory keeps one entry for the same stack ID, under the new name, in the
-// same transaction. It returns ErrNotFound if no live stack has oldRef, and
-// ErrUpdateConflict while a mutating update of the stack runs.
+// same transaction. It appends the audit entry e in that transaction, with the
+// stable stack ID and the old and the new name. It returns ErrNotFound if no
+// live stack has oldRef, and ErrUpdateConflict while a mutating update of the
+// stack runs.
 func (s *Store) RenameStack(
-	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
+	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, e audit.Entry,
 ) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		if newName == oldRef.Stack {
-			return confirmStackPresent(ctx, q, oldRef)
-		}
-
-		if err := refuseRename(ctx, q, oldRef, newName); err != nil {
+	if newName == oldRef.Stack {
+		// Defense in depth: the service builds a valid entry too; this check
+		// stays so that a new caller cannot skip it.
+		if err := checkFencedEntry(fence, e); err != nil {
 			return err
 		}
+
+		return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+			return confirmStackPresent(ctx, q, oldRef)
+		})
+	}
+
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+		stackID, err := refuseRename(ctx, q, oldRef, newName)
+		if err != nil {
+			return err
+		}
+
+		oldName := oldRef.Stack.String()
+		e.ObjectID = stackID
+		e.Changes = []audit.Change{{
+			Key: stackNameChangeKey, Old: &oldName, New: newName.String(), Layer: "", TakesEffect: "",
+		}}
 
 		n, err := q.RenameStack(ctx, db.RenameStackParams{
 			Name:      newName.String(),
@@ -911,18 +951,23 @@ func (s *Store) RenameStack(
 // ErrAlreadyExists when newName names a stack of the same project. A running
 // update addresses the stack by its name. A rename under it would leave the
 // update with a name that no stack has: its checkpoint saves would fail and
-// the stack would stay locked by the update.
-func refuseRename(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) error {
+// the stack would stay locked by the update. On success it returns the stable
+// ID of the stack.
+func refuseRename(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) (string, error) {
 	stackID, err := stackIDFor(ctx, q, oldRef)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if runErr := refuseRunningStack(ctx, q, stackID); runErr != nil {
-		return runErr
+		return "", runErr
 	}
 
-	return rejectTakenName(ctx, q, oldRef, newName)
+	if takenErr := rejectTakenName(ctx, q, oldRef, newName); takenErr != nil {
+		return "", takenErr
+	}
+
+	return stackID, nil
 }
 
 // confirmStackPresent returns nil when ref exists and ErrNotFound otherwise.
@@ -1429,6 +1474,35 @@ func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) erro
 	}
 
 	return nil
+}
+
+// inDeletedFactsReadTx runs fn in one read-only transaction and ends the
+// transaction before it returns, on every path: success, error and panic. Only
+// GetDeletedUnitFacts calls it, so the deferred close stays on the
+// deleted-unit facts read path. The transaction begins as DEFERRED, not
+// IMMEDIATE, so it takes no write lock, and every read of fn sees one snapshot.
+//
+// A failed read keeps its own error: the close reports a rollback error only
+// when the read did not fail, so the caller sees the error of the failed read
+// and no partial facts.
+func (s *Store) inDeletedFactsReadTx(ctx context.Context, fn func(q *db.Queries) error) (err error) {
+	tx, beginErr := s.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
+	if beginErr != nil {
+		return fmt.Errorf("begin read transaction: %w", beginErr)
+	}
+
+	// Defense in depth: the read transaction must end on every path, and the
+	// error of a failed read must stay the error of the call. The explicit
+	// branch on the rollback error keeps the read error and reports its own
+	// error only when no read error would hide it. This defer does not rely on
+	// the paths of fn, so a panic in fn still ends the transaction.
+	defer func() {
+		if rbErr := rollback(tx); rbErr != nil && err == nil {
+			err = rbErr
+		}
+	}()
+
+	return fn(s.queries.WithTx(tx))
 }
 
 // inFencedTx runs fn in a write transaction that first checks the

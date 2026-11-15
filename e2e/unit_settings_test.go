@@ -311,7 +311,7 @@ func (fx *unitSettingsFixture) jobUsesTheLocation(ctx context.Context, t *testin
 	fx.env.APIStepA(ctx, t, e2e.APIStepSpec{
 		UserAgent: unitSettingsAgent, Name: "read the job", Method: http.MethodGet, Path: jobs + "/" + jobID, Body: "",
 		Want: http.StatusOK, Scheme: "token",
-		Check: inDoc(`"location":{"repository":"acme/infra","ref":"main","directory":"stacks/web"}`,
+		Check: inDoc(`"location":{"repository":"acme/infra","ref":"main","directory":"stacks/web","source":"unit"}`,
 			`"poolID":"`+fx.pool+`"`, `"defaulted":["pool","location"]`),
 	})
 }

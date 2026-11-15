@@ -177,12 +177,24 @@ func (h *unitStateLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 // WithGroup implements slog.Handler.
 func (h *unitStateLogHandler) WithGroup(string) slog.Handler { return h }
 
-// count returns the number of records that the handler collected.
-func (h *unitStateLogHandler) count() int {
+// damagedCount returns the number of collected records that report the
+// damaged job row of a state write. The store shares the logger with other
+// background work, so only the damaged-row record counts here.
+func (h *unitStateLogHandler) damagedCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	return len(h.records)
+	n := 0
+
+	for i := range h.records {
+		r := &h.records[i]
+		if r.Level == slog.LevelWarn &&
+			r.Message == "the job of a state write is unreadable: the commit stays empty" {
+			n++
+		}
+	}
+
+	return n
 }
 
 // openUnitStateStoreWithLogger opens a store of the test database whose
@@ -228,6 +240,7 @@ func stateWriteJob(t *testing.T, s *postgres.Store, fence namespace.Fence, unit 
 			Location: job.Location{
 				Connection: "", Repository: "", Ref: "", Directory: "", Revision: unitStateWriteRevision,
 			},
+			LocationSource: job.LocationSourceRequest,
 			Steps: []job.Step{{
 				Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"}, Env: nil,
 				Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,
@@ -296,8 +309,8 @@ func TestDamagedJobRowGivesAnEmptyCommit(t *testing.T) {
 		t.Fatalf("final commit = %q, want the empty commit", got.Commit)
 	}
 
-	if handler.count() != 1 {
-		t.Fatalf("log records = %d, want 1", handler.count())
+	if handler.damagedCount() != 1 {
+		t.Fatalf("damaged-row log records = %d, want 1", handler.damagedCount())
 	}
 }
 
@@ -566,6 +579,7 @@ func unitStateFinalize(
 
 	sv.Status = workspace.StatusFinalized
 	sv.FinalizedAt = time.UnixMilli(unitStateWriteAtMs + 1000).UTC()
+	sv.ClientEncrypted = workspace.ClientEncryptedNo
 	sv.Content = blob.Key("namespaces/" + ns.ID.String() + "/tofu/" + sv.Workspace.String() + "/" +
 		sv.ID.String() + "/a1")
 	sv.Size = int64(len(unitStateContent))
@@ -838,6 +852,7 @@ func unitStatePending(t *testing.T, w workspace.Workspace) workspace.StateVersio
 		Holder: "ci", LockID: "", Lineage: "l1", Status: workspace.StatusPending, Content: "", Outputs: nil,
 		MD5: [16]byte{1, 2, 3}, Serial: 1, Size: 0, Force: false, UnlockedWrite: true,
 		Sealed: true, SensitiveMarks: nil, RestoredFrom: "", FenceBy: "",
-		Origin: identity.StateOrigin{Job: "", Commit: ""},
+		ClientEncrypted: workspace.ClientEncryptedNo,
+		Origin:          identity.StateOrigin{Job: "", Commit: ""},
 	}
 }

@@ -36,11 +36,11 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -681,6 +681,7 @@ func (s *Service) recordRemovalAlertFailure(
 		Kind: audit.KindSecurity, Outcome: audit.OutcomeFailure, RequestID: e.RequestID, ObjectID: "",
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
 		Reason: errcode.PrincipalRemovalAlertFailed,
+		Origin: nil,
 	}
 
 	_, err := s.cfg.Audit.AppendServer(ctx, entry)
@@ -795,8 +796,8 @@ func change(key, value string) audit.Change {
 	return audit.Change{Key: key, Old: nil, New: value, Layer: "", TakesEffect: ""}
 }
 
-// validText reports whether v is UTF-8 with no control character and has min
-// to max bytes.
+// validText reports whether v is UTF-8 with no control, format or separator
+// character and has min to max bytes.
 func validText(v string, minLen, maxLen int) bool {
-	return len(v) >= minLen && len(v) <= maxLen && utf8.ValidString(v) && !strings.ContainsFunc(v, unicode.IsControl)
+	return len(v) >= minLen && len(v) <= maxLen && utf8.ValidString(v) && !ident.HasHidden(v)
 }

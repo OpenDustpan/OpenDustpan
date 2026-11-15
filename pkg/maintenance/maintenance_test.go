@@ -208,7 +208,7 @@ func (*fakeStacks) UpdateStackTags(
 	return stack.ErrNotFound
 }
 
-func (*fakeStacks) RenameStack(context.Context, stack.Ref, stack.Name, namespace.Fence) error {
+func (*fakeStacks) RenameStack(context.Context, stack.Ref, stack.Name, namespace.Fence, audit.Entry) error {
 	return stack.ErrNotFound
 }
 
@@ -296,6 +296,22 @@ func (fakeCheckpoints) CheckpointByUpdate(context.Context, stack.Ref, stack.Upda
 
 func (fakeCheckpoints) ReferencedBlobKeys(context.Context, stack.ID) ([]blob.Key, error) {
 	return nil, nil
+}
+
+func (fakeCheckpoints) SupersededBlobs(context.Context, stack.ID) ([]stack.SupersededBlob, error) {
+	return nil, nil
+}
+
+func (fakeCheckpoints) SupersededMarks(
+	context.Context, stack.SupersededCursor, time.Time, int,
+) ([]stack.SupersededMark, error) {
+	return nil, nil
+}
+
+// DropSupersededMark implements stack.CheckpointStore. The fake holds no mark,
+// so every drop is a missing mark that keeps the blob.
+func (fakeCheckpoints) DropSupersededMark(context.Context, stack.ID, blob.Key) (bool, error) {
+	return true, nil
 }
 
 // newTestBlobs opens a blob store in a fresh directory that the test closes
@@ -597,6 +613,7 @@ func newFixtureWith(
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -616,6 +633,7 @@ func newFixtureWith(
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)
@@ -763,6 +781,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -782,6 +801,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)
@@ -1041,14 +1061,15 @@ func TestEnterForceLeavesClientEncryptedWorkspaceLocked(t *testing.T) {
 				0x64, 0x20, 0xd9, 0x71, 0x90, 0x04, 0x23, 0xf8,
 				0x43, 0x33, 0x65, 0x89, 0xb9, 0xb1, 0x95, 0x80,
 			},
-			Serial:         1,
-			Size:           65,
-			Force:          false,
-			Sealed:         false,
-			RestoredFrom:   "",
-			SensitiveMarks: nil,
-			FenceBy:        "",
-			UnlockedWrite:  false, Origin: identity.StateOrigin{Job: "", Commit: ""},
+			Serial:          1,
+			Size:            65,
+			Force:           false,
+			Sealed:          false,
+			ClientEncrypted: workspace.ClientEncryptedYes,
+			RestoredFrom:    "",
+			SensitiveMarks:  nil,
+			FenceBy:         "",
+			UnlockedWrite:   false, Origin: identity.StateOrigin{Job: "", Commit: ""},
 		},
 	}
 

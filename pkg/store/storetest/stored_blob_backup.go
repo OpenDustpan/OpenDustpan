@@ -42,17 +42,21 @@ type StoredBlobBackupRig struct {
 	}
 	Backups  *backup.Service
 	Restores *backup.RestoreService
-	// Eraser removes the stored size and MD5 of every log chunk and every
-	// registry release, as the rows of an earlier version of the server hold
-	// them.
+	// Eraser removes the stored size and MD5 of every log chunk, and the
+	// stored files of every registry release, as the rows of an earlier
+	// version of the server hold them.
 	Eraser StoredDigestEraser
 }
 
 // StoredDigestEraser clears the check values of the rows that name a blob.
 type StoredDigestEraser interface {
-	// EraseStoredDigests clears the stored size and the stored MD5 of every
-	// log chunk, and the stored files of every registry release.
-	EraseStoredDigests(ctx context.Context) error
+	// EraseLogChunkDigests clears the stored size and the stored MD5 of every
+	// log chunk.
+	EraseLogChunkDigests(ctx context.Context) error
+	// EraseRegistryReleaseFiles clears the stored files of every registry
+	// release, so a release row names its file hashes without the size and
+	// the MD5 of the stored bytes.
+	EraseRegistryReleaseFiles(ctx context.Context) error
 }
 
 // StoredBlobBackupInput is what a rig takes from the cases: the
@@ -153,7 +157,11 @@ func RunStoredBlobBackupUnverified(t *testing.T, newRig StoredBlobBackupFactory)
 	source := newRig(t, in)
 	seed := seedStoredBlobs(t, source, in.Key)
 
-	if err := source.Eraser.EraseStoredDigests(t.Context()); err != nil {
+	// Only the log chunks lose their check values: a registry release that
+	// names a file its row holds no size and MD5 of stops the backup, so the
+	// unverified path covers the chunks alone (see
+	// RunStoredBlobBackupRegistryMissing for the release).
+	if err := source.Eraser.EraseLogChunkDigests(t.Context()); err != nil {
 		t.Fatalf("erase the stored digests: %v", err)
 	}
 
@@ -206,15 +214,152 @@ func RunStoredBlobBackupUnverified(t *testing.T, newRig StoredBlobBackupFactory)
 	}
 }
 
+// RunStoredBlobBackupRegistryMissing proves the rule for a registry release
+// that names a file its row holds no size and MD5 of: the backup stops with an
+// error that names the release, the version and the SHA-256 key, and writes
+// no manifest, so no partial backup stays.
+func RunStoredBlobBackupRegistryMissing(t *testing.T, newRig StoredBlobBackupFactory) {
+	t.Helper()
+
+	in := newStoredBlobInput(t)
+	source := newRig(t, in)
+	seed := seedStoredBlobs(t, source, in.Key)
+
+	if err := source.Eraser.EraseRegistryReleaseFiles(t.Context()); err != nil {
+		t.Fatalf("erase the stored files of the releases: %v", err)
+	}
+
+	backupID := backup.ID(ident.NewID("bkp-"))
+
+	_, runErr := source.Backups.Run(t.Context(), backupID)
+	if runErr == nil {
+		t.Fatal("run backup of a release that names a file its row holds no values of: want an error")
+	}
+
+	hash := seed.releaseKey[strings.LastIndex(seed.releaseKey, "/")+1:]
+
+	for _, want := range []string{`"net"`, `"1.0.0"`, hash} {
+		if !strings.Contains(runErr.Error(), want) {
+			t.Errorf("backup error %q lacks %q", runErr.Error(), want)
+		}
+	}
+
+	if _, readErr := source.Backups.ReadManifest(t.Context(), backupID); readErr == nil {
+		t.Error("the failed backup wrote a manifest, want none")
+	}
+}
+
+// RunStoredBlobBackupRegistryFiles proves the three rules of the registry file
+// copy: the manifest reports the count and the bytes of the copied files, a
+// restore refuses a backup that names a registry file the backup does not
+// hold, and a backup refuses a release file whose live bytes do not match
+// their key.
+func RunStoredBlobBackupRegistryFiles(t *testing.T, newRig StoredBlobBackupFactory) {
+	t.Helper()
+
+	in := newStoredBlobInput(t)
+	source := newRig(t, in)
+	seed := seedStoredBlobs(t, source, in.Key)
+	backupID := backup.ID(ident.NewID("bkp-"))
+
+	if _, err := source.Backups.Run(t.Context(), backupID); err != nil {
+		t.Fatalf("run backup: %v", err)
+	}
+
+	manifest, err := source.Backups.ReadManifest(t.Context(), backupID)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+
+	report := backup.RegistryFileReportOf(manifest.RegistryFiles)
+	if report.Count != 1 || report.TotalBytes != int64(len(registryFileBody)) {
+		t.Errorf("registry file report = %+v, want 1 file and %d bytes", report, len(registryFileBody))
+	}
+
+	// The backup loses the copy of the registry file: a restore must refuse it
+	// and write nothing.
+	fileKey := mustBlobKey(t, "blobs/"+seed.releaseKey)
+	if delErr := in.Target.Delete(t.Context(), fileKey); delErr != nil {
+		t.Fatalf("remove the copy of the registry file: %v", delErr)
+	}
+
+	dest := newRig(t, in)
+	restoreID := backup.RestoreID(ident.NewID("rst-"))
+
+	if err = dest.Restores.Start(t.Context(), restoreID, restoreRequest(backupID)); err != nil {
+		t.Fatalf("start restore: %v", err)
+	}
+
+	waitRestoreFailed(t, dest.Restores, restoreID)
+
+	// The live bytes of the file change, so they no longer match the SHA-256
+	// key. A new backup refuses them and writes no manifest.
+	liveKey := mustBlobKey(t, seed.releaseKey)
+	if delErr := source.Recorder.Blobs.Delete(t.Context(), liveKey); delErr != nil {
+		t.Fatalf("remove the live registry file: %v", delErr)
+	}
+
+	if putErr := source.Recorder.Blobs.Put(t.Context(), liveKey, strings.NewReader("other bytes")); putErr != nil {
+		t.Fatalf("overwrite the live registry file: %v", putErr)
+	}
+
+	badID := backup.ID(ident.NewID("bkp-"))
+	if _, runErr := source.Backups.Run(t.Context(), badID); runErr == nil {
+		t.Error("backup of a release file with other bytes than its key: want an error")
+	}
+
+	if _, readErr := source.Backups.ReadManifest(t.Context(), badID); readErr == nil {
+		t.Error("the refused backup wrote a manifest, want none")
+	}
+}
+
+// waitRestoreFailed runs the restore operation until the restore ends, and
+// fails the case unless it ended as failed.
+func waitRestoreFailed(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) {
+	t.Helper()
+
+	deadline := time.Now().Add(StuckTestLimit)
+
+	for {
+		row, err := restores.Get(t.Context(), id)
+		if err != nil {
+			t.Fatalf("get restore: %v", err)
+		}
+
+		switch row.State {
+		case backup.RestoreFailed:
+			return
+		case backup.RestoreSucceeded:
+			t.Fatalf("restore %s succeeded, want a refusal of the backup without its registry file", id)
+		case backup.RestoreChecking, backup.RestoreApplying:
+			// Still running: the worker below moves it on.
+		default:
+			t.Fatalf("restore %s has the unknown state %q", id, row.State)
+		}
+
+		runRestoreWorker(t, restores)
+
+		if time.Now().After(deadline) {
+			t.Fatalf("restore %s never ended", id)
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("restore %s: %v", id, t.Context().Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 // checkNotCopied checks the backup of rows without check values: the manifest
-// lists the log chunks and the registry file, the target holds none of them,
-// and the target holds the plan parts, whose values are in the plan document.
-// It returns the keys that the manifest lists.
+// lists the log chunks, the target holds none of them, and the target holds
+// the plan parts, whose values are in the plan document, and the registry
+// file, whose row kept its values. It returns the keys that the manifest lists.
 func checkNotCopied(t *testing.T, in StoredBlobBackupInput, manifest backup.Manifest, seed storedBlobSeed) []string {
 	t.Helper()
 
 	notCopied := slices.DeleteFunc(append(slices.Clone(seed.jobKeys), seed.releaseKey), func(key string) bool {
-		return strings.Contains(key, "/plan/")
+		return strings.Contains(key, "/plan/") || strings.Contains(key, "/registry/")
 	})
 	slices.Sort(notCopied)
 
@@ -237,6 +382,8 @@ func checkNotCopied(t *testing.T, in StoredBlobBackupInput, manifest backup.Mani
 			_ = readBlob(t, in.Target, "blobs/"+key)
 		}
 	}
+
+	_ = readBlob(t, in.Target, "blobs/"+seed.releaseKey)
 
 	return notCopied
 }
@@ -404,6 +551,7 @@ func publishModule(t *testing.T, rig *StoredBlobBackupRig, ns namespace.Namespac
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	if err = rig.Registry.Publish(ctx, rel, ns.Fence(), entry); err != nil {

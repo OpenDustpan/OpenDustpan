@@ -41,7 +41,7 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 		ID:          row.ID,
 		State:       row.State,
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   optionalMillis(r.EndedAt),
 		Target:      row.Target,
 		Error:       row.Error,
 	})
@@ -185,7 +185,7 @@ func startBackupTx(
 		ID:          row.ID,
 		State:       string(backup.StateRunning),
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   optionalMillis(r.EndedAt),
 		Target:      row.Target,
 		Error:       "",
 	})
@@ -290,7 +290,7 @@ func finishRow(
 	n, err := q.FinishBackup(ctx, db.FinishBackupParams{
 		State:     string(state),
 		Error:     errText,
-		EndedAtMs: codec.OptionalMillis(endedAt),
+		EndedAtMs: optionalMillis(endedAt),
 		ID:        id.String(),
 	})
 	if err != nil {
@@ -319,7 +319,7 @@ func (s *Store) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, e
 	n, err := s.queries.FailEndedBackups(ctx, db.FailEndedBackupsParams{
 		Prefix:    backup.OperationKeyPrefix,
 		Fallback:  backup.EndedWithoutFinishText,
-		EndedAtMs: codec.Millis(endedAt),
+		EndedAtMs: optionalMillis(endedAt),
 		Kind:      string(backup.OperationKind),
 	})
 	if err != nil {
@@ -332,14 +332,30 @@ func (s *Store) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, e
 // backupFromRow converts a backup row into a domain record. Unknown states
 // report a corrupt row: every writer validates the state first.
 func backupFromRow(row db.Backup) (backup.Record, error) {
+	var endedAt time.Time
+
+	if row.EndedAtMs.Valid {
+		endedAt = codec.FromMillis(row.EndedAtMs.Int64)
+	}
+
 	return codec.FromBackupRow(codec.BackupRow{
 		ID:          row.ID,
 		State:       row.State,
 		Target:      row.Target,
 		Error:       row.Error,
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   codec.OptionalMillis(endedAt),
 	})
+}
+
+// optionalMillis encodes t as a nullable Unix millisecond column. The zero
+// time is NULL: the row has no end time.
+func optionalMillis(t time.Time) sql.NullInt64 {
+	if t.IsZero() {
+		return sql.NullInt64{Int64: 0, Valid: false}
+	}
+
+	return sql.NullInt64{Int64: codec.Millis(t), Valid: true}
 }
 
 // CheckCoverage implements backup.Coverage: it compares the column list of
@@ -991,7 +1007,8 @@ func openSnapshot(ctx context.Context, path string) (*sql.DB, error) {
 
 // summarizeConn reads the backup summary of an open database: the dialect,
 // the schema version, the primary installations, the wrapper IDs, the row count of
-// each table in backup.Tables, and the blob references. Callers pass a
+// each table in backup.Tables, the blob references, and the registry file
+// entries of each namespace. Callers pass a
 // snapshot, never the live database, so the counts and the references
 // describe one consistent view.
 func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
@@ -1030,7 +1047,7 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 		counts[table] = n
 	}
 
-	blobs, unverified, err := blobRefs(ctx, conn)
+	refs, err := blobRefs(ctx, conn)
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -1040,8 +1057,9 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 		PrimaryInstallations: installations,
 		WrapperIDs:           wrappers,
 		RowCounts:            counts,
-		Blobs:                blobs,
-		Unverified:           unverified,
+		Blobs:                refs.Refs,
+		RegistryFiles:        refs.RegistryFiles,
+		Unverified:           refs.Unverified,
 		SchemaVersion:        int(version),
 	}, nil
 }
@@ -1112,21 +1130,24 @@ func countRows(ctx context.Context, conn *sql.DB, table string) (int64, error) {
 // those of the plain bytes, as the state version stores them; sealed versions
 // mark their references sealed, so the backup opens them to check and stores
 // the sealed bytes. A pending version has no committed content, so the backup
-// leaves pending rows out.
-func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, []string, error) {
+// leaves pending rows out. The registry file entries of each namespace travel
+// with the references, so the manifest can name each copied file by its
+// SHA-256 content key.
+func blobRefs(ctx context.Context, conn *sql.DB) (blobrefs.BackupRefs, error) {
 	const query = `SELECT content_key, size, md5, sealed FROM state_versions WHERE content_key <> '' AND status = 'finalized'
 		UNION ALL
 		SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM checkpoints
 		UNION ALL
 		SELECT blob_key AS content_key, size AS size, md5 AS md5, 0 AS sealed FROM update_journal
 		UNION ALL
-		SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || CAST(blob_version AS TEXT) AS content_key,
+		SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || CAST(blob_version AS TEXT)
+			|| '-' || blob_attempt AS content_key,
 			blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM item_keys WHERE shredded_at_ms = 0
 		ORDER BY content_key`
 
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
-		return nil, nil, fmt.Errorf("read backup blob references: %w", err)
+		return blobrefs.BackupRefs{}, fmt.Errorf("read backup blob references: %w", err)
 	}
 
 	defer func() {
@@ -1146,11 +1167,11 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, []string, er
 		)
 
 		if scanErr := rows.Scan(&key, &size, &raw, &sealed); scanErr != nil {
-			return nil, nil, fmt.Errorf("read backup blob references: %w", scanErr)
+			return blobrefs.BackupRefs{}, fmt.Errorf("read backup blob references: %w", scanErr)
 		}
 
 		if len(raw) != md5.Size {
-			return nil, nil, fmt.Errorf(
+			return blobrefs.BackupRefs{}, fmt.Errorf(
 				"%w: blob with key %q has an MD5 of %d bytes",
 				codec.ErrCorruptRow,
 				key,
@@ -1165,18 +1186,19 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, []string, er
 	}
 
 	if iterErr := rows.Err(); iterErr != nil {
-		return nil, nil, fmt.Errorf("read backup blob references: %w", iterErr)
+		return blobrefs.BackupRefs{}, fmt.Errorf("read backup blob references: %w", iterErr)
 	}
 
 	collector := &blobrefs.Collector{}
 	if addErr := addStoredBlobRefs(ctx, conn, collector); addErr != nil {
-		return nil, nil, addErr
+		return blobrefs.BackupRefs{}, addErr
 	}
 
-	out = append(out, collector.Refs()...)
-	slices.SortFunc(out, func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) })
+	gathered := collector.BackupRefs()
+	gathered.Refs = append(out, gathered.Refs...)
+	slices.SortFunc(gathered.Refs, func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) })
 
-	return out, collector.Unverified(), nil
+	return gathered, nil
 }
 
 // snapshotPath reserves a new file name for a VACUUM INTO target in dir: it
@@ -1258,8 +1280,8 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
-// the notification sinks, the triggers, the self-service blueprints, the trust rules and the
-// break-glass reviews.
+// the notification sinks, the triggers, the self-service blueprints, the trust rules, the
+// break-glass reviews, the sweep targets and the sweeps.
 func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 	if err := checkStagedDriftResults(ctx, conn); err != nil {
 		return err
@@ -1301,9 +1323,19 @@ func checkStagedFeatureRows(ctx context.Context, conn *sql.DB) error {
 		return err
 	}
 
-	if err := checkStagedBreakGlassReviews(ctx, conn); err != nil {
+	if err := checkStagedBreakGlassAndUnmanaged(ctx, conn); err != nil {
 		return err
 	}
 
 	return checkStagedForgeLinks(ctx, conn)
+}
+
+// checkStagedBreakGlassAndUnmanaged checks the rows of the staged break-glass
+// reviews and of the unmanaged resource sweeps.
+func checkStagedBreakGlassAndUnmanaged(ctx context.Context, conn *sql.DB) error {
+	if err := checkStagedBreakGlassReviews(ctx, conn); err != nil {
+		return err
+	}
+
+	return checkStagedUnmanaged(ctx, conn)
 }

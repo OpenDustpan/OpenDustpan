@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -24,7 +25,19 @@ const (
 	oldServeTimeout = 15 * time.Second
 	// gitTimeout bounds a read-only git lookup of the repository.
 	gitTimeout = 30 * time.Second
+	// releaseTagPrefix is the prefix of a release tag. The mixed-version
+	// matrix runs these tags only.
+	releaseTagPrefix = "v"
+	// minimumCheckSentinel names the source value that a release needs to
+	// give a refusal signal: the store refuses a write below the minimum
+	// binary version of the schema with it. A release tag without it
+	// predates the check, so the matrix fails for the tag.
+	minimumCheckSentinel = "ErrBinaryBelowMinimum"
 )
+
+// errMixedMatrix is the base error of the mixed-version matrix. Each failure
+// of the matrix wraps it and names the tag or the fetch that failed.
+var errMixedMatrix = errors.New("mixed-version matrix")
 
 // BuildCurrentBinary builds cmd/opendustpan from the working tree into dir
 // and returns its path, with the same flags the environments use.
@@ -41,18 +54,45 @@ func BuildCurrentBinary(ctx context.Context, tb testing.TB, dir string) string {
 func BuildTagBinary(ctx context.Context, tb testing.TB, tag, dir string) string {
 	tb.Helper()
 
+	out, err := MixedBuildTag(ctx, tb, tag, dir)
+	if err != nil {
+		tb.Fatalf("%v", err)
+	}
+
+	return out
+}
+
+// MixedBuildTag builds cmd/opendustpan at tag into dir and returns its path.
+// The error names the tag and holds the log line of the failure, so a tag
+// that does not build fails the matrix with its name. It exports the tag
+// with `git archive` into a temporary directory, so the working tree and the
+// index never change.
+func MixedBuildTag(ctx context.Context, tb testing.TB, tag, dir string) (string, error) {
+	tb.Helper()
+
+	if !strings.HasPrefix(tag, releaseTagPrefix) {
+		// Defense in depth: MixedTagChoice keeps release tags only; this
+		// check stays so that a new caller cannot build another tag name.
+		return "", fmt.Errorf("%w: %q is not a release tag", errMixedMatrix, tag)
+	}
+
 	srcDir := filepath.Join(dir, "src")
 
 	if err := os.MkdirAll(srcDir, dirMode); err != nil {
-		tb.Fatalf("create tag source dir: %v", err)
+		return "", fmt.Errorf("%w: create the source directory of tag %s: %w", errMixedMatrix, tag, err)
 	}
 
-	exportTag(ctx, tb, tag, srcDir)
+	if err := exportTag(ctx, tb, tag, srcDir); err != nil {
+		return "", fmt.Errorf("%w: the source of release tag %s did not export: %w", errMixedMatrix, tag, err)
+	}
 
 	out := filepath.Join(dir, "opendustpan-prev")
-	compileTagSource(ctx, tb, srcDir, out)
 
-	return out
+	if err := compileTagSource(ctx, tb, tag, srcDir, out); err != nil {
+		return "", fmt.Errorf("%w: %w", errMixedMatrix, err)
+	}
+
+	return out, nil
 }
 
 // GitTopLevel returns the top level of the repository the test runs in.
@@ -73,11 +113,211 @@ func GitTopLevel(ctx context.Context, tb testing.TB) string {
 	return strings.TrimSpace(string(out))
 }
 
+// ReleaseTags returns every tag of the repository in version order, whether
+// or not it names a release and whether or not it is an ancestor of HEAD. It
+// returns nothing when the repository has no tag. MixedTagChoice narrows the
+// list to the tags that the matrix runs.
+func ReleaseTags(ctx context.Context, tb testing.TB) []string {
+	tb.Helper()
+
+	runCtx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, "git", "tag", "--list", "--sort=version:refname")
+	cmd.Dir = GitTopLevel(ctx, tb)
+
+	out, err := cmd.Output()
+	if err != nil {
+		tb.Fatalf("git tag --list: %v", err)
+	}
+
+	return tagLines(out)
+}
+
+// AncestorReleaseTags returns the release tags that are ancestors of HEAD,
+// in version order. A tag that is not an ancestor of HEAD is not in the
+// list, and neither is a tag that does not name a release.
+func AncestorReleaseTags(ctx context.Context, tb testing.TB) []string {
+	tb.Helper()
+
+	runCtx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, "git", "tag", "--merged", "HEAD", "--list", releaseTagPrefix+"*",
+		"--sort=version:refname")
+	cmd.Dir = GitTopLevel(ctx, tb)
+
+	out, err := cmd.Output()
+	if err != nil {
+		tb.Fatalf("git tag --merged HEAD: %v", err)
+	}
+
+	return tagLines(out)
+}
+
+// tagLines splits the output of `git tag` into its tag names without their
+// spaces.
+func tagLines(out []byte) []string {
+	tags := []string{}
+
+	for raw := range strings.Lines(strings.TrimSpace(string(out))) {
+		if tag := strings.TrimSpace(raw); tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+
+	return tags
+}
+
+// FetchState names the fetch state of the clone that the tag list came from.
+type FetchState int
+
+const (
+	// FetchFull is a full clone: git fetched every tag, so an empty tag list
+	// means that the repository has no release tag.
+	FetchFull FetchState = iota
+	// FetchShallow is a shallow clone: git may hold a tag that the clone does
+	// not show, so an empty tag list is an incomplete fetch.
+	FetchShallow
+)
+
+// RepositoryFetch reports the fetch state of the clone. A shallow clone can
+// hide a release tag that the repository holds, so an empty tag list needs
+// this answer.
+func RepositoryFetch(ctx context.Context, tb testing.TB) FetchState {
+	tb.Helper()
+
+	runCtx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, "git", "rev-parse", "--is-shallow-repository")
+	cmd.Dir = GitTopLevel(ctx, tb)
+
+	out, err := cmd.Output()
+	if err != nil {
+		return FetchFull
+	}
+
+	if strings.TrimSpace(string(out)) == "true" {
+		return FetchShallow
+	}
+
+	return FetchFull
+}
+
+// MixedTagFetchError returns the error that the harness fails with when a
+// clone shows no release tag, or nil when the fetch is complete. A shallow
+// clone fetched no tag, so its empty list is an incomplete fetch and not a
+// repository before its first tag.
+func MixedTagFetchError(fetch FetchState) error {
+	if fetch != FetchShallow {
+		return nil
+	}
+
+	return fmt.Errorf("%w: no release tag is reachable from HEAD and the clone is shallow: "+
+		"fetch every tag with `git fetch --tags` and full history, then run the test again", errMixedMatrix)
+}
+
+// MixedTagChoice returns the newest count release tags of all that are
+// ancestors of HEAD, in the version order of all. It keeps the order of all,
+// ignores a tag without the release prefix, and ignores a tag that isAncestor
+// reports as no ancestor of HEAD.
+func MixedTagChoice(all []string, count int, isAncestor func(tag string) bool) []string {
+	kept := make([]string, 0, len(all))
+
+	for _, tag := range all {
+		if !strings.HasPrefix(tag, releaseTagPrefix) {
+			continue
+		}
+
+		if !isAncestor(tag) {
+			continue
+		}
+
+		kept = append(kept, tag)
+	}
+
+	if count <= 0 {
+		return []string{}
+	}
+
+	if len(kept) <= count {
+		return kept
+	}
+
+	return kept[len(kept)-count:]
+}
+
+// MixedTagReport returns the log line that the matrix prints for the release
+// tags it runs: the count and the names. With no tag it says that the peer
+// is a second process of the current binary, so the run never skips a
+// missing tag silently.
+func MixedTagReport(tags []string) string {
+	if len(tags) == 0 {
+		return "mixed-version matrix ran over 0 tags: no release tag is reachable from HEAD, " +
+			"so the peer is a second process of the current binary"
+	}
+
+	return fmt.Sprintf("mixed-version matrix ran over %d tags: %s", len(tags), strings.Join(tags, ", "))
+}
+
+// MixedMinimumTagError returns the error that fails the matrix when the
+// release at tag predates the minimum binary version check of the schema: a
+// tag without the check gives no refusal signal, so the matrix cannot show
+// that the tag refuses a raised minimum.
+func MixedMinimumTagError(tag string) error {
+	return fmt.Errorf("%w: the release tag %s predates the minimum binary version check "+
+		"of the database schema, so it gives no refusal signal", errMixedMatrix, tag)
+}
+
+// TagHasMinimumCheck reports whether the release at tag holds the minimum
+// binary version check of the schema: the value of a write below the
+// minimum. A release without the check gives no refusal signal, so the
+// matrix fails for it.
+func TagHasMinimumCheck(ctx context.Context, tb testing.TB, tag string) bool {
+	tb.Helper()
+
+	if !strings.HasPrefix(tag, releaseTagPrefix) {
+		// Defense in depth: MixedTagChoice keeps release tags only; this
+		// check stays so that a new caller cannot pass a name that git reads
+		// as an option.
+		return false
+	}
+
+	return RefHasMinimumCheck(ctx, tb, tag)
+}
+
+// RefHasMinimumCheck reports whether the tree of ref holds the minimum binary
+// version check of the schema. The ref is any revision that git reads: the
+// tag of a release, or a tree of the repository. It reads with `git grep`, so
+// the working tree and the index never change.
+func RefHasMinimumCheck(ctx context.Context, tb testing.TB, ref string) bool {
+	tb.Helper()
+
+	if ref == "" || strings.HasPrefix(ref, "-") {
+		// Defense in depth: callers pass release tags and HEAD trees only;
+		// this check stays so that a hostile ref cannot become an option of
+		// the git grep command.
+		return false
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, gitTimeout)
+	defer cancel()
+
+	// The ref joins the argument list of the command, so the command name
+	// stays the fixed "git" of this suite.
+	cmd := exec.CommandContext(runCtx, "git")
+	cmd.Args = append(cmd.Args, "grep", "-q", "-e", minimumCheckSentinel, ref)
+	cmd.Dir = GitTopLevel(ctx, tb)
+
+	return cmd.Run() == nil
+}
+
 // exportTag writes `git archive <tag>` into srcDir. Archive never touches
 // the working tree or the index. It runs at the top level of the
 // repository: the test binary runs in the package directory, and from there
 // `git archive` would export only that directory.
-func exportTag(ctx context.Context, tb testing.TB, tag, srcDir string) {
+func exportTag(ctx context.Context, tb testing.TB, tag, srcDir string) error {
 	tb.Helper()
 
 	buildCtx, cancel := context.WithTimeout(ctx, binaryBuildTimeout)
@@ -93,7 +333,7 @@ func exportTag(ctx context.Context, tb testing.TB, tag, srcDir string) {
 	archive.Stderr = &exported
 
 	if err := archive.Run(); err != nil {
-		tb.Fatalf("git archive %s: %v\n%s", tag, err, exported.String())
+		return fmt.Errorf("git archive: %w\n%s", err, exported.String())
 	}
 
 	//nolint:gosec // Tar extracts the archive exported above into a temporary directory.
@@ -106,12 +346,15 @@ func exportTag(ctx context.Context, tb testing.TB, tag, srcDir string) {
 	untar.Stderr = &untarOut
 
 	if err := untar.Run(); err != nil {
-		tb.Fatalf("extract tag %s: %v\n%s", tag, err, untarOut.String())
+		return fmt.Errorf("extract the tag: %w\n%s", err, untarOut.String())
 	}
+
+	return nil
 }
 
-// compileTagSource compiles the exported source at srcDir into out.
-func compileTagSource(ctx context.Context, tb testing.TB, srcDir, out string) {
+// compileTagSource compiles the exported source at srcDir into out. The
+// error names the release tag and holds the build output.
+func compileTagSource(ctx context.Context, tb testing.TB, tag, srcDir, out string) error {
 	tb.Helper()
 
 	buildCtx, cancel := context.WithTimeout(ctx, binaryBuildTimeout)
@@ -134,8 +377,10 @@ func compileTagSource(ctx context.Context, tb testing.TB, srcDir, out string) {
 	cmd.Stderr = &buildOut
 
 	if err := cmd.Run(); err != nil {
-		tb.Fatalf("build server binary at tag: %v\n%s", err, buildOut.String())
+		return fmt.Errorf("the server of release tag %s did not build: %w\n%s", tag, err, buildOut.String())
 	}
+
+	return nil
 }
 
 // NewEnvWithBinary starts the server binary at binPath on a fresh database
@@ -164,6 +409,7 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 		rec:                    rec,
 		deltaCutoff:            0,
 		sinkSenders:            nil,
+		auditSinks:             nil,
 		issuer:                 nil,
 		ldap:                   nil,
 		disableJournaling:      false,
@@ -290,7 +536,45 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 	env.write(tb, filepath.Join(env.project, "Pulumi.yaml"), pulumiProject)
 	env.writeTofuFiles(tb, proxy)
 
+	// The installation API made the first namespace, and it adds no
+	// catch-all placement rule, so the harness adds the rule that the
+	// in-process server gets from the API create. The check reads the rule
+	// list first: an old binary that predates the placement routes places
+	// every unit without a rule, so it gets no seed.
+	if placementRoutesServed(ctx, tb, env, Namespace) {
+		env.SeedCatchAllPlacement(ctx, tb, Namespace)
+	}
+
 	return env
+}
+
+// placementRoutesServed reports whether the serving binary answers the
+// placement rule list of ns. A caller seeds the catch-all rule only when it
+// does. A binary that predates the placement routes places every unit
+// without a rule, so the seed is left out and the test says so. Any other
+// status fails the test: the run cannot judge the binary from it.
+func placementRoutesServed(ctx context.Context, tb testing.TB, env *Env, ns string) bool {
+	tb.Helper()
+
+	path := "/api/dustpan/v1/namespaces/" + ns + "/placement-rules"
+
+	status, body, err := env.serverStatus(ctx, env.token, http.MethodGet, path, "")
+	if err != nil {
+		tb.Fatalf("GET %s: %v", path, err)
+	}
+
+	switch status {
+	case http.StatusOK:
+		return true
+	case http.StatusNotFound:
+		tb.Logf("the binary answers %d for %s: it predates the placement routes", status, path)
+
+		return false
+	default:
+		tb.Fatalf("GET %s answers %d, want %d or %d (%s)", path, status, http.StatusOK, http.StatusNotFound, body)
+
+		return false
+	}
 }
 
 // SetServerBinary switches the binary the next StartServer and RunBinary

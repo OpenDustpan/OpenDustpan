@@ -165,6 +165,7 @@ func newEntry(ns namespace.Name, subject, requestID string, at time.Time) audit.
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -1024,7 +1025,7 @@ func testPrincipalKindRefused(t *testing.T, ts TestStore) {
 	ns := newNamespace(t, s)
 
 	e := newEntry(ns.Name, "admin", "req-1", now())
-	e.PrincipalKind = "agent"
+	e.PrincipalKind = "robot"
 
 	if _, err := s.Append(t.Context(), ns.Fence(), e); !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Fatalf("append with an unknown principal kind: error = %v, want ErrInvalidEntry", err)

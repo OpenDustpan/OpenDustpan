@@ -26,9 +26,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -132,6 +132,7 @@ const (
 	PrincipalKindPerson   = "person"
 	PrincipalKindService  = "service"
 	PrincipalKindWorkload = "workload"
+	PrincipalKindAgent    = "agent"
 )
 
 // MaxJobIDLen caps the job ID of an entry, in bytes.
@@ -180,20 +181,11 @@ func ValidateReason(reason string) error {
 		return fmt.Errorf("%w: longer than %d characters", ErrInvalidReason, MaxReasonLen)
 	}
 
-	if strings.ContainsFunc(reason, IsHiddenRune) {
-		return fmt.Errorf("%w: holds a control character", ErrInvalidReason)
+	if ident.HasHidden(reason) {
+		return fmt.Errorf("%w: holds a hidden character", ErrInvalidReason)
 	}
 
 	return nil
-}
-
-// IsHiddenRune reports whether r is a control character (Cc), a format
-// character (Cf, for example U+202E), a line separator (Zl, U+2028) or a
-// paragraph separator (Zp, U+2029). Text that holds such a character can
-// look different from its bytes, so a stored text that the server shows or
-// logs refuses it.
-func IsHiddenRune(r rune) bool {
-	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
 // Entry is one append-only record of an action in a namespace. Namespace and
@@ -226,9 +218,11 @@ func IsHiddenRune(r rune) bool {
 // free text that a person gave for the action, for example for a force-unlock,
 // at most MaxReasonLen Unicode code points with no control characters; it
 // stays empty when the action had none. PrincipalKind is the kind of the
-// principal record that acted: "person", "service" or "workload", and empty
-// when the server cannot name the kind. JobID is the job whose token acted,
-// and empty for every other credential.
+// principal record that acted: "person", "service", "workload" or "agent",
+// and empty when the server cannot name the kind. JobID is the job whose
+// token acted, and empty for every other credential. Origin is the agent
+// block of an entry that an agent run made; nil means an ordinary entry
+// with no agent block.
 type Entry struct {
 	At            time.Time
 	Namespace     namespace.Name
@@ -255,7 +249,13 @@ type Entry struct {
 	PrincipalKind string
 	JobID         string
 	Reason        string
+	Origin        *Origin
 }
+
+// Origin is the agent block of an audit entry: it names the agent run that
+// made the entry. It holds no values yet, and no code reads it yet: ComputeHash
+// and the stores do not encode it.
+type Origin struct{}
 
 // AtMs returns the time of the entry in Unix milliseconds, as stored.
 func (e Entry) AtMs() int64 {
@@ -297,12 +297,12 @@ func (e Entry) validateWhat() error {
 		return fmt.Errorf("%w: missing action", ErrInvalidEntry)
 	case e.Object == "":
 		return fmt.Errorf("%w: missing object", ErrInvalidEntry)
-	case strings.ContainsFunc(e.Object, IsHiddenRune):
+	case ident.HasHidden(e.Object):
 		// Defense in depth: the adapters parse and clean the reference before
 		// they build an entry. This check stays so that no caller can store a
 		// reference that looks different from its bytes.
 		return fmt.Errorf("%w: object holds a hidden character", ErrInvalidEntry)
-	case strings.ContainsFunc(e.ObjectID, IsHiddenRune):
+	case ident.HasHidden(e.ObjectID):
 		return fmt.Errorf("%w: object ID holds a hidden character", ErrInvalidEntry)
 	case len(e.UserAgent) > MaxUserAgentLen:
 		return fmt.Errorf("%w: user agent longer than %d bytes", ErrInvalidEntry, MaxUserAgentLen)
@@ -318,7 +318,7 @@ func (e Entry) validateWhat() error {
 // validatePrincipal checks the principal kind and the job ID of the entry.
 func (e Entry) validatePrincipal() error {
 	switch e.PrincipalKind {
-	case "", PrincipalKindPerson, PrincipalKindService, PrincipalKindWorkload:
+	case "", PrincipalKindPerson, PrincipalKindService, PrincipalKindWorkload, PrincipalKindAgent:
 	default:
 		return fmt.Errorf("%w: unknown principal kind %q", ErrInvalidEntry, e.PrincipalKind)
 	}

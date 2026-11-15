@@ -182,6 +182,8 @@ func TestSanitizeSourceActor(t *testing.T) {
 	}{
 		{"plain", "alice@example.com", "alice@example.com"},
 		{"control characters", "ali\x1b[31mce\r\n\t", "ali[31mce"},
+		{"a format character", "ada\u202e", "ada"},
+		{"a line separator", "ada\u2028", "ada"},
 		{"invalid UTF-8", "bob\xff", "bob\uFFFD"},
 		{"empty", "", ""},
 		{"long", long, strings.Repeat("é", unitimport.MaxSourceActorBytes/2)},

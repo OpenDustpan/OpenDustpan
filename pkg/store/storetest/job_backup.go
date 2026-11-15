@@ -60,6 +60,7 @@ func RunJobBackup(t *testing.T, newBackup func(t *testing.T) JobBackup) {
 					Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network",
 					Revision: "abc123",
 				},
+				LocationSource: job.LocationSourceRequest,
 				Steps: []job.Step{{
 					Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"}, Env: nil,
 					Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,
@@ -83,6 +84,7 @@ func RunJobBackup(t *testing.T, newBackup func(t *testing.T) JobBackup) {
 			ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
 			Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "",
 			Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+			Origin: nil,
 		}
 
 		stored, created, createErr := b.Jobs.Create(ctx, j, nil, fence, []audit.Entry{entry})

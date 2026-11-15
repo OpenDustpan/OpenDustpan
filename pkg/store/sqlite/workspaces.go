@@ -355,7 +355,10 @@ func (s *Store) CreateStateVersion(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	row := codec.ToStateVersionRow(sv)
+	row, err := codec.PendingStateVersionRow(sv)
+	if err != nil {
+		return err
+	}
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		wrow, err := q.GetWorkspaceByID(ctx, row.WorkspaceID)
@@ -686,7 +689,10 @@ func (s *Store) FinalizeStateVersion(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	row := codec.ToStateVersionRow(sv)
+	row, err := codec.FinalizeStateVersionRow(sv)
+	if err != nil {
+		return err
+	}
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		return finalizeInTx(ctx, unitStateTx{q: q, logger: s.logger}, sv, row, nil)
@@ -702,7 +708,10 @@ func (s *Store) FinalizeStateVersionExpecting(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	row := codec.ToStateVersionRow(sv)
+	row, err := codec.FinalizeStateVersionRow(sv)
+	if err != nil {
+		return err
+	}
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		return finalizeInTx(ctx, unitStateTx{q: q, logger: s.logger}, sv, row, &expect)
@@ -721,8 +730,13 @@ func (s *Store) FenceAndUnlock(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	row, err := codec.FinalizeStateVersionRow(sv)
+	if err != nil {
+		return err
+	}
+
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		return fenceAndUnlockInTx(ctx, unitStateTx{q: q, logger: s.logger}, w, codec.ToStateVersionRow(sv), expect)
+		return fenceAndUnlockInTx(ctx, unitStateTx{q: q, logger: s.logger}, w, row, expect)
 	})
 }
 
@@ -860,15 +874,16 @@ func publishFencedState(
 // content.
 func finalizeFenceRow(ctx context.Context, q *db.Queries, row codec.StateVersionRow) error {
 	n, err := q.FinalizeStateVersion(ctx, db.FinalizeStateVersionParams{
-		Serial:        row.Serial,
-		Lineage:       row.Lineage,
-		Md5:           row.MD5,
-		Outputs:       row.Outputs,
-		Status:        string(workspace.StatusFinalized),
-		FinalizedAtMs: row.FinalizedAtMs,
-		ContentKey:    row.ContentKey,
-		Size:          row.Size,
-		ID:            row.ID,
+		Serial:          row.Serial,
+		Lineage:         row.Lineage,
+		Md5:             row.MD5,
+		Outputs:         row.Outputs,
+		Status:          string(workspace.StatusFinalized),
+		FinalizedAtMs:   row.FinalizedAtMs,
+		ContentKey:      row.ContentKey,
+		Size:            row.Size,
+		ClientEncrypted: clientEncryptedColumn(row.ClientEncrypted),
+		ID:              row.ID,
 	})
 	if err != nil {
 		return fmt.Errorf("finalize fence version: %w", err)
@@ -1004,15 +1019,16 @@ func writeFinalize(
 	}
 
 	n, err := tx.q.FinalizeStateVersion(ctx, db.FinalizeStateVersionParams{
-		Serial:        row.Serial,
-		Lineage:       row.Lineage,
-		Md5:           row.MD5,
-		Outputs:       row.Outputs,
-		Status:        string(workspace.StatusFinalized),
-		FinalizedAtMs: row.FinalizedAtMs,
-		ContentKey:    row.ContentKey,
-		Size:          row.Size,
-		ID:            row.ID,
+		Serial:          row.Serial,
+		Lineage:         row.Lineage,
+		Md5:             row.MD5,
+		Outputs:         row.Outputs,
+		Status:          string(workspace.StatusFinalized),
+		FinalizedAtMs:   row.FinalizedAtMs,
+		ContentKey:      row.ContentKey,
+		Size:            row.Size,
+		ClientEncrypted: clientEncryptedColumn(row.ClientEncrypted),
+		ID:              row.ID,
 	})
 	if err != nil {
 		return fmt.Errorf("finalize state version: %w", err)
@@ -1276,6 +1292,34 @@ func workspaceFromRow(row db.Workspace, namespaceID string) workspace.Workspace 
 	})
 }
 
+// clientEncryptedColumn maps the client-encryption bit of a state version row
+// to its nullable column: an unknown bit binds as NULL, the column of a
+// version stored before the server kept the bit.
+func clientEncryptedColumn(bit *bool) sql.NullInt64 {
+	if bit == nil {
+		return sql.NullInt64{Int64: 0, Valid: false}
+	}
+
+	value := int64(0)
+	if *bit {
+		value = 1
+	}
+
+	return sql.NullInt64{Int64: value, Valid: true}
+}
+
+// clientEncryptedBit maps the nullable client-encryption column to the bit:
+// NULL is the unknown bit of a version stored before the server kept it.
+func clientEncryptedBit(column sql.NullInt64) *bool {
+	if !column.Valid {
+		return nil
+	}
+
+	encrypted := column.Int64 != 0
+
+	return &encrypted
+}
+
 // stateFromRow converts a state version row into a domain state version.
 func stateFromRow(row db.StateVersion) (workspace.StateVersion, error) {
 	sv, err := codec.FromStateVersionRow(codec.StateVersionRow{
@@ -1297,6 +1341,7 @@ func stateFromRow(row db.StateVersion) (workspace.StateVersion, error) {
 		FencedBy:          row.FencedBy,
 		UnlockedWrite:     row.UnlockedWrite,
 		SensitiveMarks:    row.SensitiveMarks,
+		ClientEncrypted:   clientEncryptedBit(row.ClientEncrypted),
 		CreatedAtMs:       row.CreatedAtMs,
 		FinalizedAtMs:     row.FinalizedAtMs,
 		UploadExpiresAtMs: row.UploadExpiresAtMs,

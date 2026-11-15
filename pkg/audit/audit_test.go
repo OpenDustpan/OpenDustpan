@@ -45,6 +45,7 @@ func testEntry() audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -515,7 +516,7 @@ func TestValidateChecksThePrincipalFields(t *testing.T) {
 		{"person", audit.PrincipalKindPerson, "", false},
 		{"service", audit.PrincipalKindService, "", false},
 		{"workload with a job", audit.PrincipalKindWorkload, "job-7", false},
-		{"unknown kind", "agent", "", true},
+		{"unknown kind", "robot", "", true},
 		{"job ID at the limit", "", strings.Repeat("j", audit.MaxJobIDLen), false},
 		{"job ID over the limit", "", strings.Repeat("j", audit.MaxJobIDLen+1), true},
 	}
@@ -536,31 +537,24 @@ func TestValidateChecksThePrincipalFields(t *testing.T) {
 	}
 }
 
-func TestIsHiddenRune(t *testing.T) {
+// TestValidatePrincipalKinds proves that an entry accepts the principal kind
+// agent, and that a kind that the audit log does not know is refused.
+func TestValidatePrincipalKinds(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name   string
-		r      rune
-		hidden bool
-	}{
-		{"letter", 'a', false},
-		{"space", ' ', false},
-		{"newline (Cc)", '\n', true},
-		{"NUL (Cc)", 0, true},
-		{"right-to-left override (Cf)", rune(0x202e), true},
-		{"zero width space (Cf)", rune(0x200b), true},
-		{"line separator (Zl)", rune(0x2028), true},
-		{"paragraph separator (Zp)", rune(0x2029), true},
+	for _, kind := range []string{audit.PrincipalKindAgent, audit.PrincipalKindPerson} {
+		e := testEntry()
+		e.PrincipalKind = kind
+
+		if err := e.Validate(); err != nil {
+			t.Fatalf("validate a %q entry: %v", kind, err)
+		}
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	e := testEntry()
+	e.PrincipalKind = "robot"
 
-			if got := audit.IsHiddenRune(tc.r); got != tc.hidden {
-				t.Fatalf("IsHiddenRune(%U) = %v, want %v", tc.r, got, tc.hidden)
-			}
-		})
+	if err := e.Validate(); !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("validate a robot entry = %v, want ErrInvalidEntry", err)
 	}
 }

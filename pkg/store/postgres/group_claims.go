@@ -173,12 +173,8 @@ func (r claimRunner) InTx(ctx context.Context, e audit.Entry, fn func(groupclaim
 		return err
 	}
 
-	return r.s.inTx(ctx, func(q *db.Queries) error {
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		return fn(claimTx{claimReads{q: q}})
+	return runServerAuditTx(ctx, r.s.inTx, func(tx serverAuditTx) error {
+		return fn(claimTx{claimReads: claimReads(tx), srv: tx})
 	})
 }
 
@@ -218,9 +214,12 @@ func (r claimReads) IsTempAdmin(ctx context.Context, id string) (bool, error) {
 	return true, nil
 }
 
-// claimTx is the groupclaims.Tx of one transaction.
+// claimTx is the groupclaims.Tx of one transaction. srv is the locked
+// transaction that appends an entry of the scope @server.
 type claimTx struct {
 	claimReads
+
+	srv serverAuditTx
 }
 
 // GroupSource implements groupclaims.Tx.
@@ -322,5 +321,5 @@ func (t claimTx) EndMember(ctx context.Context, groupID, principalID string, at 
 
 // Append implements groupclaims.Tx.
 func (t claimTx) Append(ctx context.Context, e audit.Entry) error {
-	return appendMemberAudit(ctx, t.q, e)
+	return appendMemberAudit(ctx, t.srv, e)
 }

@@ -76,8 +76,9 @@ func awaitingWriteBackJob(
 				Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network",
 				Revision: unitStateWriteRevision,
 			},
-			Steps: nil,
-			Pool:  "", Profile: "", Edits: []job.FileEdit{{
+			LocationSource: job.LocationSourceRequest,
+			Steps:          nil,
+			Pool:           "", Profile: "", Edits: []job.FileEdit{{
 				Path: "network.tfvars.json", Keys: map[string][]byte{"size": []byte(`"large"`)},
 			}},
 			Delivery: job.DeliveryDirectPush, Defaulted: nil,
@@ -147,5 +148,6 @@ func stateOriginEntry(unit identity.Object) audit.Entry {
 		ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "",
 		Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 }
