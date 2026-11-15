@@ -126,6 +126,7 @@ func TestPlacementServiceRefusesHostileCollectionID(t *testing.T) {
 				SourceIP: "", UserAgent: "", Channel: "", Kind: "", Outcome: "", RequestID: "",
 				ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0,
 				PrincipalKind: "", JobID: "", Reason: "",
+				Origin: nil,
 			}
 			for _, run := range []func() error{
 				func() error {
