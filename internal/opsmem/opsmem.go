@@ -209,5 +209,6 @@ func Entry(scope namespace.Name, subject, action, object string, at time.Time) a
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }

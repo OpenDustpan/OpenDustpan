@@ -189,6 +189,7 @@ func (a *Audit) RecordOutOfScope(ctx context.Context, ns namespace.ID, op string
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        a.family.Blobs + " " + op + " refused: key " + place,
+		Origin:        nil,
 	}
 
 	if _, err := a.entries.AppendServer(ctx, entry); err != nil {

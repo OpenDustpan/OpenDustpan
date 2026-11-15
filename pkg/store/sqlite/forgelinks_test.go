@@ -43,6 +43,7 @@ func (p *forgeLinkPrincipals) person(t *testing.T, s *sqlite.Store, name string)
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	if err := s.CreatePrincipal(t.Context(), pr, e); err != nil {
