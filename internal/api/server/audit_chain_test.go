@@ -67,6 +67,20 @@ func newAuditChainHandler(
 ) testHandler {
 	t.Helper()
 
+	return newAuditChainHandlerWorkers(t, namespaces, chain, nil, deny...)
+}
+
+// newAuditChainHandlerWorkers builds the handler of newAuditChainHandler
+// with workers as the worker check of the server.
+func newAuditChainHandlerWorkers(
+	t *testing.T,
+	namespaces *namespace.Service,
+	chain apiserver.AuditChain,
+	workers apiserver.WorkerSource,
+	deny ...identity.Action,
+) testHandler {
+	t.Helper()
+
 	denied := map[identity.Action]bool{}
 	for _, action := range deny {
 		denied[action] = true
@@ -83,7 +97,7 @@ func newAuditChainHandler(
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
-		Workers:          nil,
+		Workers:          workers,
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		TempAdmins:       nil,

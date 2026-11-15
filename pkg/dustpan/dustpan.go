@@ -1533,7 +1533,7 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		writable = checker
 	}
 
-	return newComponentReadiness(readinessSettings{
+	probe := newComponentReadiness(readinessSettings{
 		components:  cfg.components,
 		streamStop:  cfg.streamStop,
 		store:       cfg.namespaceStore,
@@ -1546,6 +1546,9 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		failures:    observed.ReadinessFailures(),
 		logger:      cfg.logger,
 	})
+	probe.drainPeriod = cfg.drainPeriod
+
+	return probe
 }
 
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It

@@ -1827,6 +1827,7 @@ export const description: string = [
   "          \"git-host.link-request-not-found\",",
   "          \"git-host.link-request-used\",",
   "          \"git-host.link-unavailable\",",
+  "          \"instance.draining\",",
   "          \"instance.invalid-id\",",
   "          \"instance.not-found\",",
   "          \"issuer.conflict\",",

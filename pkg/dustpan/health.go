@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,6 +55,10 @@ type readiness struct {
 	draining atomic.Bool
 	// streamStop tells the log streams that the process drains, or is nil.
 	streamStop *streamStop
+	// drainPeriod is the time that the process keeps serving after the
+	// readiness probe started to answer 503. The Retry-After header of that
+	// answer names it in whole seconds.
+	drainPeriod time.Duration
 }
 
 // The names of the checks and the states in the readiness body.
@@ -124,13 +129,14 @@ func newReadinessHandler(
 	logger *slog.Logger,
 ) http.Handler {
 	return &readiness{
-		checks:     []readinessCheck{{name: checkStore, ping: store}, {name: checkBlob, ping: blobs}},
-		timeout:    timeout,
-		failures:   failures,
-		logger:     logger,
-		parts:      nil,
-		draining:   atomic.Bool{},
-		streamStop: nil,
+		checks:      []readinessCheck{{name: checkStore, ping: store}, {name: checkBlob, ping: blobs}},
+		timeout:     timeout,
+		failures:    failures,
+		logger:      logger,
+		parts:       nil,
+		draining:    atomic.Bool{},
+		streamStop:  nil,
+		drainPeriod: 0,
 	}
 }
 
@@ -145,13 +151,14 @@ func newReadinessHandler(
 // processes to stay in the pool of the Service.
 func newComponentReadiness(cfg readinessSettings) *readiness {
 	rd := &readiness{
-		checks:     nil,
-		timeout:    cfg.timeout,
-		failures:   cfg.failures,
-		logger:     cfg.logger,
-		parts:      nil,
-		draining:   atomic.Bool{},
-		streamStop: cfg.streamStop,
+		checks:      nil,
+		timeout:     cfg.timeout,
+		failures:    cfg.failures,
+		logger:      cfg.logger,
+		parts:       nil,
+		draining:    atomic.Bool{},
+		streamStop:  cfg.streamStop,
+		drainPeriod: 0,
 	}
 
 	if cfg.components.Has(ComponentAPI) {
@@ -333,9 +340,19 @@ func (rd *readiness) drain() {
 	rd.streamStop.stop()
 }
 
+// Draining reports whether the process started its drain. A draining process
+// answers 503 on its readiness probe and refuses each start of a durable
+// operation.
+func (s *Server) Draining() bool {
+	return s.ready != nil && s.ready.draining.Load()
+}
+
 // writeDraining answers a probe of a draining process. It is not a failure of
 // a dependency, so it does not count on the failure counter.
 func (rd *readiness) writeDraining(w http.ResponseWriter, r *http.Request) {
+	seconds := max(int64((rd.drainPeriod+time.Second-1)/time.Second), 1)
+
+	w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	rd.writeJSON(r.Context(), w, http.StatusServiceUnavailable,
 		readinessDoc{Status: statusUnavailable, Failed: []string{checkDraining}})
 }
