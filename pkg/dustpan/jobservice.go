@@ -74,6 +74,9 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 		Gates:      jobGates{snapshots: gates, members: facts},
 		Fences:     jobFences{namespaces: svc.namespaces}, Freezes: freezes, Switches: nil, Now: cfg.now, NewID: nil,
 		Log: log, Approvers: &approvers, MaxPlanAge: 0, Groups: jobGroups{principals: principalStoreOf(cfg)},
+		// No adapter of job.ArtifactStore exists yet, so the service refuses a
+		// redaction of a log.
+		Artifacts: nil,
 	})
 	if svcErr != nil {
 		return nil, fmt.Errorf("job service: %w", svcErr)

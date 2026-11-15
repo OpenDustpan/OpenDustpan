@@ -255,6 +255,11 @@ func classifyJobRefusal(err error) (problem.Problem, bool) {
 		return problem.Refused(err, http.StatusForbidden, errcode.JobGateEnforced), true
 	case errors.Is(err, job.ErrAgentDenied):
 		return problem.Refused(err, http.StatusForbidden, errcode.JobAgentDenied), true
+	case errors.Is(err, errWrongState):
+		// Before classifyApproval, which answers ErrFinished with job.finished.
+		return problem.Refused(err, http.StatusConflict, errcode.JobWrongState), true
+	case errors.Is(err, job.ErrNotRequester):
+		return problem.Refused(err, http.StatusForbidden, errcode.AccessDenied), true
 	case errors.Is(err, job.ErrFrozen):
 		return problem.Refused(err, http.StatusConflict, errcode.JobFrozen), true
 	case errors.Is(err, job.ErrLimit):

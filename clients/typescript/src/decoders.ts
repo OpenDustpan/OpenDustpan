@@ -43,12 +43,14 @@ import type {
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelJobRequest,
   CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
   CheckBackupResponse,
   Collection,
   Components,
+  ConfirmJobRequest,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -122,6 +124,7 @@ import type {
   JobLocationRequest,
   JobLog,
   JobLogEntry,
+  JobLogSubstitution,
   JobPhase,
   JobPlan,
   JobPlanBinding,
@@ -215,6 +218,8 @@ import type {
   PublishProviderReleaseRequest,
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
+  RedactJobLogRequest,
+  RedactJobLogResponse,
   RedeemLocalUserCodeRequest,
   RegistryFileEntry,
   RegistryFileSection,
@@ -583,6 +588,11 @@ export const decodeBulkUnitSettingsUnit: Decoder<BulkUnitSettingsUnit> = object<
   version: int64,
 });
 
+/** The validator of CancelJobRequest. */
+export const decodeCancelJobRequest: Decoder<CancelJobRequest> = object<CancelJobRequest>("CancelJobRequest", {
+  reason: string,
+});
+
 /** The validator of CancelRestoreResponse. */
 export const decodeCancelRestoreResponse: Decoder<CancelRestoreResponse> = object<CancelRestoreResponse>("CancelRestoreResponse", {
   id: string,
@@ -619,6 +629,12 @@ export const decodeCollection: Decoder<Collection> = object<Collection>("Collect
 /** The validator of Components. */
 export const decodeComponents: Decoder<Components> = object<Components>("Components", {
   components: array(string),
+});
+
+/** The validator of ConfirmJobRequest. */
+export const decodeConfirmJobRequest: Decoder<ConfirmJobRequest> = object<ConfirmJobRequest>("ConfirmJobRequest", {
+  planBinding: nullable(ref(() => decodeJobPlanBinding)),
+  verdict: string,
 });
 
 /** The validator of ContextAnswer. */
@@ -1261,6 +1277,11 @@ export const decodeJobLogEntry: Decoder<JobLogEntry> = object<JobLogEntry>("JobL
   seq: int64,
   step: string,
   text: string,
+});
+
+/** The validator of JobLogSubstitution. */
+export const decodeJobLogSubstitution: Decoder<JobLogSubstitution> = object<JobLogSubstitution>("JobLogSubstitution", {
+  match: string,
 });
 
 /** The validator of JobPhase. */
@@ -1956,6 +1977,20 @@ export const decodePutGitHostAppRequest: Decoder<PutGitHostAppRequest> = object<
 /** The validator of PutGitHostInstallationRequest. */
 export const decodePutGitHostInstallationRequest: Decoder<PutGitHostInstallationRequest> = object<PutGitHostInstallationRequest>("PutGitHostInstallationRequest", {
   namespace: nullable(string),
+});
+
+/** The validator of RedactJobLogRequest. */
+export const decodeRedactJobLogRequest: Decoder<RedactJobLogRequest> = object<RedactJobLogRequest>("RedactJobLogRequest", {
+  reason: string,
+  substitutions: array(ref(() => decodeJobLogSubstitution)),
+  version: string,
+});
+
+/** The validator of RedactJobLogResponse. */
+export const decodeRedactJobLogResponse: Decoder<RedactJobLogResponse> = object<RedactJobLogResponse>("RedactJobLogResponse", {
+  log: ref(() => decodeJobLog),
+  matches: int64,
+  redactedVersion: string,
 });
 
 /** The validator of RedeemLocalUserCodeRequest. */

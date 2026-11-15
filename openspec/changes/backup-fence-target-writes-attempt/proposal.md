@@ -90,6 +90,18 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: No read path for the old unscoped layout; the attempt column is a baseline edit.
 - Conflict: none.
 
+**ADR 281: Any S3-compatible store: the database decides which write wins** (owner-tagged: decisions 1, 2, 3, 4, 5, 6, 7, 8, 9, 10).
+
+- Decisions that apply: 1 (current), 2 (current, with ADR 340 for the benchmark measure only).
+- Changed by: ADR 340 changes decision 2. Chain to the end: ADR 340.
+- Current rule: this ADR, with ADR 340.
+- Quote: "Only performance can depend on a store capability."
+- Quote: "A fenced row (ADR 72) names the blob, and the row decides."
+- Quote: "A caller no longer relies on the answer."
+- Quote: "so a replace of the copy does no harm."
+- Effect: The attempt that counts is the attempt that the backups row records. The pointer `live.json` is a copy of that row value: every writer writes the same bytes, so a store that replaces the object and a store that refuses the second write give the same pointer. The pointer writer reads the pointer before the put and after `ErrExists`, and it never uses `ErrExists` to decide a result. Cleanup keeps the prefix of the row attempt.
+- Conflict: none. The pointer is one fixed key, but its bytes come only from the committed row, as the shared blob copies of a backup target do, so no write of it has to win.
+
 ## Open questions
 
 none
@@ -98,6 +110,8 @@ Questions considered and answered:
 
 - Does a fenced finish write alone stop a stale holder with a blob delete in flight? No. ADR 72 decision 2 checks the fencing token in its own transaction; attempt-scoped keys add isolation so a stale attempt touches only its own prefix.
 - Should the backup take a lock on the target while it writes? No. ADR 280 decision 7 says the backup takes no lock and never waits; attempt-scoped writes keep that rule.
+- Does the fixed pointer depend on conditional writes? No. ADR 281 decision 1 says correctness never depends on a store capability. The pointer holds the attempt of the backups row, which the fenced write step records and the fenced finish commit confirms. Each writer reads the pointer first, writes only when it is absent, and treats `ErrExists` as a cue to read it again. A pointer that names another attempt fails closed with `backup.corrupt` on every store, and no writer replaces it.
+- Which attempt does a takeover at the finish step check? The attempt that the backups row records, not the token of the new claim. The durable runner skips a recorded step, so a new holder that runs only the finish step wrote no files under its own token.
 - Should the server keep reading backups written to the old unscoped layout? No. ADR 322 decision 2 forbids compat code for untagged shapes, so old unscoped targets get no read support.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

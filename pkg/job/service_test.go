@@ -411,7 +411,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		Now:       func() time.Time { return r.now },
 		NewID:     func() job.ID { return job.ID("job-fixed") },
 		Log:       slog.New(slog.DiscardHandler),
-		Approvers: nil, MaxPlanAge: 0, Groups: nil,
+		Approvers: nil, MaxPlanAge: 0, Groups: nil, Artifacts: nil,
 	}
 
 	for _, o := range opts {
@@ -1378,23 +1378,13 @@ func checkGet(t *testing.T, got *job.Job, err, wantErr error, want job.ID) {
 	}
 }
 
-func TestMethodsOfALaterVersion(t *testing.T) {
+func TestRedactLogWithoutAnArtifactStoreIsUnsupported(t *testing.T) {
 	t.Parallel()
 
 	r := newRig(t)
-	a := actorOf("ada")
 
-	if _, err := r.svc.Cancel(t.Context(), a, "job-1", ""); !errors.Is(err, job.ErrUnsupported) {
-		t.Errorf("Cancel = %v, want ErrUnsupported", err)
-	}
-
-	if _, err := r.svc.Confirm(t.Context(), a, "job-1", job.VerdictApprove, emptyBinding()); !errors.Is(
-		err, job.ErrUnsupported,
-	) {
-		t.Errorf("Confirm = %v, want ErrUnsupported", err)
-	}
-
-	if _, err := r.svc.RedactLog(t.Context(), a, "job-1", "v1", nil, ""); !errors.Is(err, job.ErrUnsupported) {
+	_, err := r.svc.RedactLog(t.Context(), actorOf("ada"), "job-1", redactReq("why", "a"))
+	if !errors.Is(err, job.ErrUnsupported) {
 		t.Errorf("RedactLog = %v, want ErrUnsupported", err)
 	}
 }
@@ -1422,6 +1412,7 @@ func TestNewServiceRefusesAPartialConfig(t *testing.T) {
 			Approvers:  nil,
 			MaxPlanAge: 0,
 			Groups:     nil,
+			Artifacts:  nil,
 		}
 	}
 
@@ -1462,11 +1453,6 @@ func TestNewServiceRefusesAPartialConfig(t *testing.T) {
 			}
 		})
 	}
-}
-
-// emptyBinding returns a plan binding with no field set.
-func emptyBinding() job.PlanBinding {
-	return job.PlanBinding{Plan: "", DisplaySHA256: "", ApplySHA256: "", StateVersion: ""}
 }
 
 // gateCase is one case of TestStartGateGuard.

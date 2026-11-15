@@ -43,6 +43,24 @@ var operationLabels = map[string]apidesc.Label{
 		"ApproveJobRequest",
 		apidesc.Named[bindingBody]("JobPlanBinding"),
 	), jobSchema),
+	apidesc.Pattern(http.MethodPost, cancelPath): apidesc.Name(
+		"cancelJob",
+		"jobs",
+	).WithETag().On(apidesc.KindUnit).WithBodies(apidesc.Typed[cancelBody]("CancelJobRequest"), jobSchema),
+	apidesc.Pattern(http.MethodPost, confirmationsPath): apidesc.Name(
+		"confirmJob",
+		"jobs",
+	).WithStatus(http.StatusCreated).WithETag().On(apidesc.KindUnit).WithBodies(apidesc.Typed[confirmBody](
+		"ConfirmJobRequest",
+		apidesc.Named[bindingBody]("JobPlanBinding"),
+	), jobSchema),
+	apidesc.Pattern(http.MethodPost, redactPath): apidesc.Name(
+		"redactJobLog",
+		"jobs",
+	).On(apidesc.KindUnit).WithBodies(apidesc.Typed[redactBody](
+		"RedactJobLogRequest",
+		apidesc.Named[substitutionBody]("JobLogSubstitution"),
+	), apidesc.Typed[redactResponse]("RedactJobLogResponse", apidesc.Named[logRef]("JobLog"))),
 }
 
 // jobDeclarations name the types inside the document of a job.
