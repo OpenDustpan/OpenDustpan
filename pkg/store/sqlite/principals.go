@@ -248,7 +248,7 @@ func endInstallationPrincipal(ctx context.Context, q *db.Queries, id string, at 
 		}
 
 		if enabledBreakGlass > 0 {
-			return 0, principal.ErrLastBreakGlass
+			return 0, principal.ErrNoWorkingBreakGlass
 		}
 
 		return 0, nil
@@ -325,7 +325,7 @@ func (s *Store) DisablePrincipal(ctx context.Context, id string, e audit.Entry) 
 		}
 
 		if enabledBreakGlass > 0 {
-			return principal.ErrLastBreakGlass
+			return principal.ErrNoWorkingBreakGlass
 		}
 
 		return principal.ErrDisabled
@@ -808,6 +808,42 @@ func (s *Store) ListGroupsOf(
 	}
 
 	return out, total, nil
+}
+
+// IsActiveMemberOfAny implements principal.Store. It counts the memberships in
+// effect (not ended, state active, group not deleted) in one query.
+func (s *Store) IsActiveMemberOfAny(ctx context.Context, principalID string, groupIDs []string) (bool, error) {
+	if len(groupIDs) > principal.MaxMembershipGroupIDs {
+		return false, fmt.Errorf("%w: %d group IDs, at most %d", principal.ErrInvalid, len(groupIDs),
+			principal.MaxMembershipGroupIDs)
+	}
+
+	if len(groupIDs) == 0 {
+		return false, nil
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var count int64
+
+	err := s.inReadTx(ctx, func(q *db.Queries) error {
+		var err error
+
+		count, err = q.CountActiveMembershipsInGroups(ctx, db.CountActiveMembershipsInGroupsParams{
+			PrincipalID: principalID, GroupIds: groupIDs,
+		})
+		if err != nil {
+			return fmt.Errorf("count active memberships: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return count > 0, nil
 }
 
 // ListActiveGroupNamesOf implements principal.Store. It reads the principal

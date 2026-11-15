@@ -1099,8 +1099,8 @@ func (h *rtHarness) runBackupAndRestoreWith(beforeRestore func() func()) backupR
 		ID string `json:"id"`
 	}
 
-	h.decode(h.call(http.MethodPost, "/api/server/backups", "", http.StatusAccepted), &started)
-	h.settle("/api/server/backups/"+started.ID, string(backup.StateRunning))
+	h.decode(h.call(http.MethodPost, "/api/dustpan/v1/backups", "", http.StatusAccepted), &started)
+	h.settle("/api/dustpan/v1/backups/"+started.ID, string(backup.StateRunning))
 	h.settleOperations()
 
 	out.backup = h.tracer.end()
@@ -1116,9 +1116,9 @@ func (h *rtHarness) runBackupAndRestoreWith(beforeRestore func() func()) backupR
 		ID string `json:"id"`
 	}
 
-	h.decode(h.call(http.MethodPost, "/api/server/restores", `{"backupID":"`+started.ID+`"}`, http.StatusAccepted),
+	h.decode(h.call(http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+started.ID+`"}`, http.StatusAccepted),
 		&restore)
-	h.settle("/api/server/restores/"+restore.ID, "running", "checking", "applying")
+	h.settle("/api/dustpan/v1/restores/"+restore.ID, "running", "checking", "applying")
 	h.settleOperations()
 
 	out.restore = h.tracer.end()
@@ -1356,13 +1356,25 @@ func backupModel() costModel {
 // perOther counts 2 round trips for each table that a backup leaves out. An
 // emptied table that the restore only reads for its column check costs 1. So
 // the fixed part takes 1 off for passkey_challenges, the table of the open
-// passkey ceremonies, which a restore leaves empty.
+// passkey ceremonies, and 1 more for job_tokens, the table of the job tokens,
+// which a restore leaves empty.
+// The job token column check uses one statement, with no change in cost
+// when the token rows keep only IDs instead of names.
 //
 // The fixed part takes 2 off for each table of Tables that the dev strip never
 // counts, group_mappings and member_removals. The run makes 5 round trips for
 // one of those tables, 2 fewer than the cost of a table in the model: the dev
 // strip counts no rows in it, and the other statements for it are the staging
 // count and the read of the backup.
+//
+// The fixed part takes 8 off for the 4 tables of the quota counter
+// (quota_keys, quota_reservations, quota_reservation_keys and quota_requests).
+// The dev strip counts no rows in them either, so each costs 5 round trips, as
+// group_mappings does.
+// The fixed part takes 2 off for the 2 tables of the sweeps (unmanaged_targets
+// and unmanaged_scans). The dev strip counts no rows in them either, so each
+// costs 5 round trips, 4 fewer in all. The check of the staged rows reads each
+// of the 2 tables once more, 2 more in all.
 //
 // The fixed part also holds forgeStripClassTrips: the dev strip counts the rows
 // of the two Git host classes that a principal owns, one statement for each,
@@ -1390,6 +1402,8 @@ func backupModel() costModel {
 // The fixed part also holds unitStateTrips: the restore derives the state
 // version of each unit from the restored rows.
 //
+// The fixed part also holds breakGlassFloorTrips: the swap counts the working
+// break-glass accounts before and after it.
 // The fixed part also holds serverAuditLockTrips: the swap transaction takes
 // the advisory lock of the server audit scope.
 //
@@ -1398,9 +1412,9 @@ func backupModel() costModel {
 // model gives a table.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 342 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+		fixed: 331 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
-			serverAuditLockTrips + checkpointSupersedesTrips,
+			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1464,6 +1478,13 @@ const stagedPrincipalCheckTrips = 2
 // statement, once for each restore. It does not grow with the units or the
 // tables.
 const stagedTriggerClockTrips = 1
+
+// breakGlassFloorTrips is the number of round trips of the check of the
+// working break-glass accounts in the swap step: the read of the clock of the
+// store, the count of the live data before the swap and the count after it,
+// once for each restore. The count is fixed: it does not grow with the units
+// or the tables.
+const breakGlassFloorTrips = 3
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer

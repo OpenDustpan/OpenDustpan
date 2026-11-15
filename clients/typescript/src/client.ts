@@ -6,10 +6,13 @@ import { operations } from "./operations.js";
 import type {
   AddRegistryKeyInput,
   ApproveAuditChainInput,
+  ApproveJobInput,
   BeginPasskeyRegistrationInput,
   BeginPasskeySignInInput,
   BulkReplaceUnitSettingsInput,
+  CancelRestoreInput,
   ChangeOwnPasswordInput,
+  CheckBackupInput,
   CheckGitHostConnectionInput,
   CheckNamespaceIssuerCopyInput,
   CreateCollectionInput,
@@ -60,6 +63,7 @@ import type {
   GetApprovalDefaultInput,
   GetApprovalRuleInput,
   GetAuditChainInput,
+  GetBackupInput,
   GetBlueprintDraftInput,
   GetBlueprintVersionInput,
   GetCapabilitiesInput,
@@ -91,6 +95,7 @@ import type {
   GetProfileInput,
   GetProfileRevisionInput,
   GetProviderReleaseInput,
+  GetRestoreInput,
   GetSettingsInput,
   GetSourceFilterInput,
   GetStoreCheckInput,
@@ -110,6 +115,7 @@ import type {
   LeaveMaintenanceInput,
   ListAccessLimitsInput,
   ListApprovalRulesInput,
+  ListBackupsInput,
   ListBlueprintsInput,
   ListCollectionAccessLimitsInput,
   ListCollectionGatesInput,
@@ -132,6 +138,7 @@ import type {
   ListRegistryKeysInput,
   ListRegistryModulesInput,
   ListRegistryProvidersInput,
+  ListRestoresInput,
   ListStoreChecksInput,
   ListTrustRulesInput,
   ListUnitAccessLimitsInput,
@@ -175,8 +182,10 @@ import type {
   SignInWithPasswordInput,
   SignInWithProviderPasswordInput,
   StageRegistryUploadInput,
+  StartBackupInput,
   StartDriftCheckInput,
   StartJobInput,
+  StartRestoreInput,
   StartStoreCheckInput,
   SweepDeletedUnitsInput,
   TestNotificationSinkInput,
@@ -201,19 +210,25 @@ import type {
   ApiDescription,
   ApprovalDefault,
   ApprovalRule,
+  ApproveJobRequest,
   Approvers,
   AuditChain,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupManifest,
+  BackupSummary,
   BackupTooManyUnverifiedError,
   BackupTooManyUnverifiedErrorArgs,
+  BlobFindings,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
+  CheckBackupResponse,
   Collection,
   Components,
   ContextAnswer,
@@ -241,8 +256,10 @@ import type {
   CreateTrustRuleRequest,
   CreateViewRequest,
   CreatedNotificationSink,
+  DamagedBlob,
   DeletedUnit,
   DeletedUnitSweep,
+  DevData,
   DriftCheck,
   DriftCheckLocation,
   DriftResource,
@@ -262,6 +279,8 @@ import type {
   GateApproversCountAboveError,
   GateApproversCountAboveErrorArgs,
   GateCheckedWith,
+  GetBackupResponse,
+  GetRestoreResponse,
   GitHostAccount,
   GitHostApp,
   GitHostCheck,
@@ -287,6 +306,7 @@ import type {
   JobLogEntry,
   JobPhase,
   JobPlan,
+  JobPlanBinding,
   JobPlanPart,
   JobStep,
   JobStepRecord,
@@ -295,6 +315,7 @@ import type {
   JobUnitRequest,
   ListAccessLimitsResponse,
   ListApprovalRulesResponse,
+  ListBackupsResponse,
   ListCollectionsResponse,
   ListDeletedUnitsResponse,
   ListGatesResponse,
@@ -314,6 +335,7 @@ import type {
   ListRegistryKeysResponse,
   ListRegistryModulesResponse,
   ListRegistryProvidersResponse,
+  ListRestoresResponse,
   ListStoreChecksResponse,
   ListUnitsResponse,
   ListViewsResponse,
@@ -330,9 +352,11 @@ import type {
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
   MaintenanceState,
+  ManifestBlob,
   ManualLock,
   MfaPasskeyLimitError,
   MfaPasskeyLimitErrorArgs,
+  MissingBlobLimit,
   ModuleRelease,
   ModuleReleaseArchive,
   NamespaceIssuer,
@@ -357,6 +381,7 @@ import type {
   PasswordTooShortErrorArgs,
   PlacementRule,
   PlacementRuleRequest,
+  PortableFile,
   Preferences,
   PreferencesFieldInvalidError,
   PreferencesFieldInvalidErrorArgs,
@@ -386,8 +411,10 @@ import type {
   ResetLocalUserPasswordResponse,
   RestoreEndedError,
   RestoreEndedErrorArgs,
+  RestoreSummary,
   RestoreSwappedError,
   RestoreSwappedErrorArgs,
+  RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
@@ -438,8 +465,11 @@ import type {
   StackRevealPathTooLongError,
   StackRevealPathTooLongErrorArgs,
   StagedUpload,
+  StartBackupResponse,
   StartDriftCheckRequest,
   StartJobRequest,
+  StartRestoreRequest,
+  StartRestoreResponse,
   StartStoreCheckRequest,
   StartStoreCheckResponse,
   StateVersionRevealPathTooLongError,
@@ -528,6 +558,10 @@ export class Client {
     return execute(this.transport, operations.approveAuditChain, input);
   }
 
+  approveJob(input: ApproveJobInput): Promise<Answer<Job>> {
+    return execute(this.transport, operations.approveJob, input);
+  }
+
   beginPasskeyRegistration(input: BeginPasskeyRegistrationInput = {}): Promise<Answer<PasskeyCreationOptions>> {
     return execute(this.transport, operations.beginPasskeyRegistration, input);
   }
@@ -540,8 +574,16 @@ export class Client {
     return execute(this.transport, operations.bulkReplaceUnitSettings, input);
   }
 
+  cancelRestore(input: CancelRestoreInput): Promise<Answer<CancelRestoreResponse>> {
+    return execute(this.transport, operations.cancelRestore, input);
+  }
+
   changeOwnPassword(input: ChangeOwnPasswordInput): Promise<Answer<void>> {
     return execute(this.transport, operations.changeOwnPassword, input);
+  }
+
+  checkBackup(input: CheckBackupInput): Promise<Answer<CheckBackupResponse>> {
+    return execute(this.transport, operations.checkBackup, input);
   }
 
   checkGitHostConnection(input: CheckGitHostConnectionInput): Promise<Answer<GitHostCheck>> {
@@ -744,6 +786,10 @@ export class Client {
     return execute(this.transport, operations.getAuditChain, input);
   }
 
+  getBackup(input: GetBackupInput): Promise<Answer<GetBackupResponse>> {
+    return execute(this.transport, operations.getBackup, input);
+  }
+
   getBlueprintDraft(input: GetBlueprintDraftInput): Promise<Answer<SelfServiceDraft>> {
     return execute(this.transport, operations.getBlueprintDraft, input);
   }
@@ -868,6 +914,10 @@ export class Client {
     return execute(this.transport, operations.getProviderRelease, input);
   }
 
+  getRestore(input: GetRestoreInput): Promise<Answer<GetRestoreResponse>> {
+    return execute(this.transport, operations.getRestore, input);
+  }
+
   getSettings(input: GetSettingsInput = {}): Promise<Answer<Settings>> {
     return execute(this.transport, operations.getSettings, input);
   }
@@ -942,6 +992,10 @@ export class Client {
 
   listApprovalRules(input: ListApprovalRulesInput): Promise<Answer<ListApprovalRulesResponse>> {
     return execute(this.transport, operations.listApprovalRules, input);
+  }
+
+  listBackups(input: ListBackupsInput = {}): Promise<Answer<ListBackupsResponse>> {
+    return execute(this.transport, operations.listBackups, input);
   }
 
   listBlueprints(input: ListBlueprintsInput): Promise<Answer<SelfServiceVersionList>> {
@@ -1030,6 +1084,10 @@ export class Client {
 
   listRegistryProviders(input: ListRegistryProvidersInput): Promise<Answer<ListRegistryProvidersResponse>> {
     return execute(this.transport, operations.listRegistryProviders, input);
+  }
+
+  listRestores(input: ListRestoresInput = {}): Promise<Answer<ListRestoresResponse>> {
+    return execute(this.transport, operations.listRestores, input);
   }
 
   listStoreChecks(input: ListStoreChecksInput = {}): Promise<Answer<ListStoreChecksResponse>> {
@@ -1204,12 +1262,20 @@ export class Client {
     return execute(this.transport, operations.stageRegistryUpload, input);
   }
 
+  startBackup(input: StartBackupInput = {}): Promise<Answer<StartBackupResponse>> {
+    return execute(this.transport, operations.startBackup, input);
+  }
+
   startDriftCheck(input: StartDriftCheckInput): Promise<Answer<DriftCheck>> {
     return execute(this.transport, operations.startDriftCheck, input);
   }
 
   startJob(input: StartJobInput): Promise<Answer<Job>> {
     return execute(this.transport, operations.startJob, input);
+  }
+
+  startRestore(input: StartRestoreInput): Promise<Answer<StartRestoreResponse>> {
+    return execute(this.transport, operations.startRestore, input);
   }
 
   startStoreCheck(input: StartStoreCheckInput): Promise<Answer<StartStoreCheckResponse>> {

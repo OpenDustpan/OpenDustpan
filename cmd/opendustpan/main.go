@@ -1635,6 +1635,9 @@ var openStore = func(
 		if errors.Is(err, postgres.ErrFailoverSetting) {
 			return nil, fmt.Errorf("open postgres store: %s: %w", errcode.StoreFailoverSettingInvalid, err)
 		}
+		if errors.Is(err, postgres.ErrServerVersion) {
+			return nil, fmt.Errorf("open postgres store: %s: %w", errcode.StoreServerVersionUnsupported, err)
+		}
 
 		return nil, err
 	}

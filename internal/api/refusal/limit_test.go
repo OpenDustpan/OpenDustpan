@@ -787,6 +787,7 @@ func TestUnknownPrincipalKindIsRecordedAsNoKind(t *testing.T) {
 		{kind: identity.KindPerson, want: audit.PrincipalKindPerson},
 		{kind: identity.KindService, want: audit.PrincipalKindService},
 		{kind: identity.KindWorkload, want: audit.PrincipalKindWorkload},
+		{kind: identity.KindAgent, want: audit.PrincipalKindAgent},
 	}
 
 	for _, tc := range cases {

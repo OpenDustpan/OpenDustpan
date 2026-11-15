@@ -30,7 +30,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -85,6 +84,8 @@ func KindFor(k principal.Kind) (Kind, error) {
 		return KindService, nil
 	case principal.KindWorkload:
 		return "", fmt.Errorf("%w: a workload uses a trust rule (ADR 54)", ErrNoTokenForKind)
+	case principal.KindAgent:
+		return "", fmt.Errorf("%w: an agent principal gets no access token", ErrNoTokenForKind)
 	default:
 		return "", fmt.Errorf("%w: unknown kind %q", ErrNoTokenForKind, k)
 	}
@@ -178,15 +179,28 @@ func ParseFilter(s string) (Filter, error) {
 	}
 }
 
-// DaysLeft returns the whole days until the expiry of t at the time now,
-// or false when t is not active. The server answers it, so a client never
-// needs its own clock to warn.
+// DaysUntil answers the number of started days from now until expiresAt:
+// the remaining days rounded up, at least 1 while the expiry is ahead and
+// 0 once it passed. The CLI warning calls it, so the server and the CLI
+// cannot disagree about the count.
+func DaysUntil(expiresAt, now time.Time) int64 {
+	d := expiresAt.Sub(now)
+	if d <= 0 {
+		return 0
+	}
+
+	return int64((d + day - 1) / day)
+}
+
+// DaysLeft returns the started days left until the expiry of t at the time
+// now, at least 1 for an active token, or false when t is not active. The
+// server answers it, so a client never needs its own clock to warn.
 func (t Token) DaysLeft(now time.Time) (int64, bool) {
 	if t.StatusAt(now) != StatusActive {
 		return 0, false
 	}
 
-	return int64(t.ExpiresAt.Sub(now) / day), true
+	return DaysUntil(t.ExpiresAt, now), true
 }
 
 // Owner is the principal of a token, as the Authenticator answers it.
@@ -330,10 +344,11 @@ func ValidateName(s string) error {
 		return fmt.Errorf("%w: name starts or ends with white space", ErrInvalid)
 	}
 
-	for _, c := range s {
-		if unicode.IsControl(c) || unicode.Is(unicode.Cf, c) {
-			return fmt.Errorf("%w: name holds the control or format character %U", ErrInvalid, c)
-		}
+	// Defense in depth: the token routes in internal/api/server refuse a
+	// hidden character in the name before they call the service. This check
+	// does not rely on them, so that a new caller of the domain cannot skip it.
+	if r, found := ident.FirstHidden(s); found {
+		return fmt.Errorf("%w: name holds the control, format or separator character %U", ErrInvalid, r)
 	}
 
 	return nil

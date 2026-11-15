@@ -68,9 +68,10 @@ const (
 // block with the lease tables, but a restore keeps its live rows: see
 // ControlTables.
 const (
+	TableDurableHeartbeats    = "durable_heartbeats"
 	TableIdempotencyRecords   = "idempotency_records"
 	TableIdempotencyServerKey = "idempotency_server_key"
-	TableDurableHeartbeats    = "durable_heartbeats"
+	TableJobTokens            = "job_tokens"
 	TableLocalUserResets      = "local_user_resets"
 	TablePasskeyChallenges    = "passkey_challenges"
 	// TableBlobDeleteLeases holds the lease of a blob deleter that runs now.
@@ -212,7 +213,13 @@ var Tables = []string{
 	"settings_state",
 	"self_service_blueprints",
 	"self_service_blueprint_versions",
+	"quota_keys",
+	"quota_reservations",
+	"quota_reservation_keys",
+	"quota_requests",
 	TableTrustRules,
+	"unmanaged_targets",
+	"unmanaged_scans",
 	"break_glass_reviews",
 }
 

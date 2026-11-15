@@ -10,6 +10,7 @@
 - [ ] 1.3 SECURITY. Add failing hostile tests for authorize at point of use in the existing file pkg/stack/reveal_test.go (NEW TestRevealDeniedWithOnlyUnitRead) and in the NEW file pkg/stack/masked_read_test.go (NEW TestMaskedReadDeniedWithoutGrant). Check: a read with no grant and a reveal with only unit:read give 403 with no secret bytes; both tests fail on main
 - [ ] 1.4 SECURITY. Add failing hostile tests for the boundary check in the NEW file pkg/stack/masked_read_test.go (NEW TestMaskedReadBoundaryRefusals). Check: a bad version, a bad JSON Pointer, a forged cursor, an expired cursor and a cursor of another caller are each refused, with no secret echo; the test fails on main
 - [ ] 1.5 SECURITY. Add a failing hostile test for fail closed in the existing file pkg/stack/reveal_test.go (NEW TestRevealFailsClosed). Check: with a broken audit write and with a broken open, reveal answers 500 and returns no bytes; the test fails on main
+- [ ] 1.6 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `state.bad-path` in the NEW file `internal/errcode/testdata/catalog/state.txt`; `unit.forbidden` in `internal/errcode/testdata/catalog/unit.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 2. Side effects (computed from main)
 

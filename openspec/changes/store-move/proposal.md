@@ -51,6 +51,7 @@ with the SDK; add to the persona table of `openspec/project.md`).
 
 ### Fix boundary
 
+- IN (PR B): `scripts/move-store.sh` rewrites the import path in every tracked Go file that imports a moved package, tests and e2e included; no other edit in those files.
 - IN (PR B): move the 28 packages to `internal/store/...` with the same names; keep
   `pkg/store/storetest` (a conformance suite, SDK by ADR 272 decision 4); (PR A) add
   `dustpan.OpenStore`, `dustpan.BuiltinStore`, `dustpan.StorePorts` and

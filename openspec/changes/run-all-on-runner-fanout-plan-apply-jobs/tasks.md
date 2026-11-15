@@ -13,6 +13,7 @@
 - [ ] 2.1 Implement fan-out of plan jobs in the NEW file `pkg/runner/fanout.go` through the existing wiring with stable unit IDs, start key `<change order ID>/<revision>`, no retry of a finished job, and allowlist of operations `plan` and `apply`. Check: the NEW test `TestFanoutStartsOnePlanJobPerUnit`
 - [ ] 2.2 Implement apply fan-out in the NEW file `pkg/runner/fanout.go` only for units whose plan has a change, with per-unit `unit:run-apply` or `unit:run-destroy` checks, each apply spec naming its stored plan ID, and each claim owning its workspace lock resource which it opens and closes. Check: the NEW test `TestFanoutApplyBindsOneWorkspace`
 - [ ] 2.3 Implement stop on first failure in the NEW file `pkg/runner/fanout.go` with cancel of pending apply jobs, `plan-failed` on failed or empty plans, and cancel of prior revision plan jobs on attach. Check: the NEW test `TestFanoutStopsOnFirstFailure`
+- [ ] 2.4 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `changeorder.plan-mismatch` in the NEW file `internal/errcode/testdata/catalog/changeorder.txt`; `changeorder.duplicate-unit` in the NEW file `internal/errcode/testdata/catalog/changeorder.txt`; `changeorder.foreign-unit` in the NEW file `internal/errcode/testdata/catalog/changeorder.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Side effects (computed from main)
 

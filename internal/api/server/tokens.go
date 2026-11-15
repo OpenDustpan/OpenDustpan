@@ -84,9 +84,9 @@ type tokenResponse struct {
 	LastUsedAt *string `json:"lastUsedAt"`
 	RevokedAt  *string `json:"revokedAt"`
 	DisabledAt *string `json:"disabledAt"`
-	// ExpiresInDays is the count of whole days until the expiry, at the
-	// time of the answer by the server clock, or null for a token that is
-	// not active. A client warns from it with no need of its own clock.
+	// ExpiresInDays is the count of days until the expiry, rounded up, at
+	// the time of the answer by the server clock, or null for a token that
+	// is not active. A client warns from it with no need of its own clock.
 	ExpiresInDays *int64 `json:"expiresInDays"`
 	ID            string `json:"id"`
 	PrincipalID   string `json:"principalID"`
@@ -488,6 +488,10 @@ func createPrincipalToken(
 		return failed(object), errPrincipalTokenBody
 	}
 
+	if err := refuseHidden("name", *req.Name); err != nil {
+		return failed(object), err
+	}
+
 	in := accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: id, Name: *req.Name}
 	if req.ExpiresAt != nil {
 		in.ExpiresAt = *req.ExpiresAt
@@ -599,11 +603,12 @@ func createToken(scope accesstoken.Scope) tokenOp {
 			object = principal.Ref(*req.PrincipalID)
 		}
 
-		if req.Name == nil || (scope == accesstoken.ScopeOwn) != (req.PrincipalID == nil) {
-			return failed(object), errTokenBody
+		name, err := createTokenName(scope, req)
+		if err != nil {
+			return failed(object), err
 		}
 
-		in := accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: "", Name: *req.Name}
+		in := accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: "", Name: name}
 		if req.PrincipalID != nil {
 			in.PrincipalID = *req.PrincipalID
 		}
@@ -621,6 +626,21 @@ func createToken(scope accesstoken.Scope) tokenOp {
 
 		return ok(http.StatusCreated, body, accesstoken.TokenRef(t.PrincipalID, t.ID)), nil
 	}
+}
+
+// createTokenName returns the name of a create request, or errTokenBody for a
+// body that does not fit scope, or an error that wraps errHiddenText for a
+// name with a hidden character.
+func createTokenName(scope accesstoken.Scope, req createTokenRequest) (string, error) {
+	if req.Name == nil || (scope == accesstoken.ScopeOwn) != (req.PrincipalID == nil) {
+		return "", errTokenBody
+	}
+
+	if err := refuseHidden("name", *req.Name); err != nil {
+		return "", err
+	}
+
+	return *req.Name, nil
 }
 
 // listTokens serves GET /api/server/tokens: one page, newest first.

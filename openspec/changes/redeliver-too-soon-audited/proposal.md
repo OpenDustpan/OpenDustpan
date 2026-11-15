@@ -30,17 +30,18 @@ for security code says that every denial goes to the audit log.
 
 ## Fix boundary
 
-- A too-soon refusal appends one denied entry in the namespace of the fence,
-  with the reason `sink.delivery-too-soon`, the same kind and the same
-  fields as the entry of a refusal at the limit. If that append fails, the
-  error joins the refusal and the redeliver stays refused.
-- The change builds on the audit port and the limit entry of #2899. If #2899
-  is still open when this change is ready, F4 implements these tasks in
-  #2899 itself, so that the two do not conflict in one function.
-- Out of scope: how many entries repeated refusals write. That is an open
-  question for the owner (the decision queue item on bounded denial
-  entries). Until the owner decides, each too-soon refusal writes one entry,
-  as each refusal at the limit does.
+- A too-soon refusal is recorded by the redeliver handler
+  (`internal/api/notifications/subscriptions.go`, func Handler.redeliver)
+  through the refusal recorder of the adapter, which uses the shared denial
+  limiter: the first refusal of a key (principal, action, object kind, scope)
+  in the window writes one denied entry with the reason
+  `sink.delivery-too-soon`, and later ones are counted and reported with the
+  next entry. This is the owner decision of 2026-11-15 on repeated refusals.
+- The service writes no entry of its own for the refusal.
+- The change builds on the error code of #2899. If #2899 is still open when
+  this change is ready, F4 implements these tasks in #2899 itself.
+- The refusal at the limit moves to the same path in the change
+  redeliver-refusals-through-denial-limiter.
 
 ## Check
 
@@ -56,11 +57,12 @@ Conflict: none.
 
 **ADR 220: Isolation between namespaces on shared infrastructure** (owner).
 Quote, decision 15: "The count of refusals goes to the audit scope of the
-namespace, one entry for each minute with refusals". Effect: none here; the
-bound on repeated entries is the open question. Conflict: none.
+namespace, one entry for each minute with refusals". Effect: the refusal
+goes through the shared denial limiter, as the owner decision of 2026-11-15
+on repeated refusals says. Conflict: none.
 
 ## Open questions
 
-none. Considered: route the entry through the shared denial
-limiter now (left out: it changes how many entries repeated refusals write,
-which the owner decides in the queue item).
+none. Considered: one entry for each refusal (refused: the owner decision of
+2026-11-15 on repeated refusals puts a refusal that a caller can repeat
+through the shared denial limiter).
