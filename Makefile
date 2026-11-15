@@ -9,7 +9,7 @@
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check
+.PHONY: cover regenerate-baseline release-record-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check ai-pr-spec-check
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -188,6 +188,21 @@ ifeq ($(strip $(PR_BODY_FILE)),)
 	@exit 1
 else
 	./scripts/check-pr-body.sh '$(PR_BODY_FILE)'
+endif
+
+# The AI pull request check reads the body and the author email of each commit
+# of the pull request from two files, so CI writes them first. Neither variable
+# has a default: the target refuses to run when one is unset. It is not part of
+# check, because it needs a pull request.
+ai-pr-spec-check: ## Check that an AI-authored PR in PR_BODY_FILE and PR_COMMITS_FILE names a spec-ready OpenSpec change.
+ifeq ($(strip $(PR_BODY_FILE)),)
+	@echo "usage: make ai-pr-spec-check PR_BODY_FILE=<file with the PR body> PR_COMMITS_FILE=<file with the commit author emails>" >&2
+	@exit 1
+else ifeq ($(strip $(PR_COMMITS_FILE)),)
+	@echo "usage: make ai-pr-spec-check PR_BODY_FILE=<file with the PR body> PR_COMMITS_FILE=<file with the commit author emails>" >&2
+	@exit 1
+else
+	bash ./scripts/check-ai-pr-spec.sh
 endif
 
 adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.

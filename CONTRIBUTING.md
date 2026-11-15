@@ -107,6 +107,10 @@ apply:
 
 - **Say that you used AI.** In the pull request or the issue, name the tool
   and say which parts it wrote.
+- **Name your OpenSpec change.** An AI-authored pull request names its
+  change with the line `Change: openspec/changes/<id>`. The change must be
+  spec-ready, so its proposal reads `Open questions: none`. CI checks this
+  line.
 - **Understand every change.** A human submits the change, understands all
   of it, and can explain what it does and how it works with the rest of the
   system, without the help of the tool. If you cannot do this, do not submit
