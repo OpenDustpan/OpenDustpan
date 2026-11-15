@@ -117,7 +117,7 @@ func TestInDeletedFactsReadTxRollbackThenClose(t *testing.T) {
 		t.Fatalf("inDeletedFactsReadTx() = %v, want the select error", err)
 	}
 
-	if strings.Contains(err.Error(), "roll back transaction") {
+	if err != nil && strings.Contains(err.Error(), "roll back transaction") {
 		t.Fatalf("inDeletedFactsReadTx() = %v, want no rollback error on the rollback-then-close path", err)
 	}
 
