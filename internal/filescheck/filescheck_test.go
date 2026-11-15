@@ -24,10 +24,11 @@ type filesCase struct {
 func TestCheckFiles(t *testing.T) {
 	t.Parallel()
 
-	script, err := filepath.Abs("../../scripts/check-files.sh")
+	raw, err := os.ReadFile("../../scripts/check-files.sh")
 	if err != nil {
-		t.Fatalf("Locate script: %v", err)
+		t.Fatalf("Read script: %v", err)
 	}
+	script := string(raw)
 
 	large := strings.Repeat("x", (1<<20)+1)
 	binary := "text\x00data\n"
@@ -435,19 +436,25 @@ func checkFilesCase(t *testing.T, script string, tt filesCase) {
 	dir, env := newRepository(t)
 	for path, content := range tt.files {
 		writeFile(t, filepath.Join(dir, path), content)
-		runGit(t, dir, env, "add", "--", path)
 	}
 	if tt.allowlist != "" {
 		writeFile(t, filepath.Join(dir, ".large-files-allowlist"), tt.allowlist)
-		runGit(t, dir, env, "add", "--", ".large-files-allowlist")
 	}
-	runGit(t, dir, env, "commit", "--quiet", "--allow-empty", "-m", "Add test files")
+	// The repository holds only the files of the case, so --all adds them.
+	runGit(t, exec.CommandContext(t.Context(), "git", "add", "--all"), dir, env)
+	runGit(
+		t,
+		exec.CommandContext(t.Context(), "git", "commit", "--quiet", "--allow-empty", "-m", "Add test files"),
+		dir,
+		env,
+	)
 	if tt.outside {
 		dir = t.TempDir()
 	}
-	args := append([]string{script}, tt.args...)
-	//nolint:gosec // The script path is fixed in this checkout. Each test value is a separate argument.
-	cmd := exec.CommandContext(t.Context(), "bash", args...)
+	// The script goes in on standard input, after a set line that gives it
+	// the arguments of the case, so that the command line holds no variable.
+	cmd := exec.CommandContext(t.Context(), "bash", "-s")
+	cmd.Stdin = strings.NewReader("set --" + shellWords(tt.args) + "\n" + script)
 	cmd.Dir = dir
 	cmd.Env = env
 	output, runErr := cmd.CombinedOutput()
@@ -487,24 +494,44 @@ func newRepository(t *testing.T) (string, []string) {
 		"LC_ALL=C",
 		"TMPDIR=" + home,
 	}
-	runGit(t, dir, env, "init", "--quiet", "--initial-branch=main")
-	runGit(t, dir, env, "config", "--local", "user.name", "Files check test")
-	runGit(t, dir, env, "config", "--local", "user.email", "filescheck@example.invalid")
-	runGit(t, dir, env, "commit", "--quiet", "--allow-empty", "-m", "Initial test commit")
-	runGit(t, dir, env, "switch", "--quiet", "-c", "test-files")
+	runGit(t, exec.CommandContext(t.Context(), "git", "init", "--quiet", "--initial-branch=main"), dir, env)
+	runGit(t, exec.CommandContext(t.Context(), "git", "config", "--local", "user.name", "Files check test"), dir, env)
+	runGit(
+		t,
+		exec.CommandContext(t.Context(), "git", "config", "--local", "user.email", "filescheck@example.invalid"),
+		dir,
+		env,
+	)
+	runGit(
+		t,
+		exec.CommandContext(t.Context(), "git", "commit", "--quiet", "--allow-empty", "-m", "Initial test commit"),
+		dir,
+		env,
+	)
+	runGit(t, exec.CommandContext(t.Context(), "git", "switch", "--quiet", "-c", "test-files"), dir, env)
 	return dir, env
 }
 
-func runGit(t *testing.T, dir string, env []string, args ...string) {
+// runGit runs a git command that the caller built with fixed arguments in
+// the test repository.
+func runGit(t *testing.T, cmd *exec.Cmd, dir string, env []string) {
 	t.Helper()
 
-	//nolint:gosec // Git receives only test arguments in an isolated repository. No shell runs.
-	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	cmd.Env = env
 	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("Git %q failed: %v\n%s", args, err, output)
+		t.Fatalf("Git %q failed: %v\n%s", cmd.Args, err, output)
 	}
+}
+
+// shellWords quotes each argument for a POSIX shell, each with a space
+// before it.
+func shellWords(args []string) string {
+	var b strings.Builder
+	for _, arg := range args {
+		b.WriteString(" '" + strings.ReplaceAll(arg, "'", `'\''`) + "'")
+	}
+	return b.String()
 }
 
 func writeFile(t *testing.T, path, content string) {
