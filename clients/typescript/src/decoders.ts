@@ -28,6 +28,7 @@ import type {
   ApiDescription,
   ApprovalDefault,
   ApprovalRule,
+  ApproveJobRequest,
   Approvers,
   AuditChain,
   BackupCorruptError,
@@ -123,6 +124,7 @@ import type {
   JobLogEntry,
   JobPhase,
   JobPlan,
+  JobPlanBinding,
   JobPlanPart,
   JobStep,
   JobStepRecord,
@@ -447,6 +449,13 @@ export const decodeApprovalRule: Decoder<ApprovalRule> = object<ApprovalRule>("A
   id: optional(string),
   timeoutSeconds: nullable(int64),
   version: optional(int64),
+});
+
+/** The validator of ApproveJobRequest. */
+export const decodeApproveJobRequest: Decoder<ApproveJobRequest> = object<ApproveJobRequest>("ApproveJobRequest", {
+  comment: string,
+  planBinding: nullable(ref(() => decodeJobPlanBinding)),
+  verdict: string,
 });
 
 /** The validator of Approvers. */
@@ -1263,6 +1272,14 @@ export const decodeJobPlan: Decoder<JobPlan> = object<JobPlan>("JobPlan", {
   id: string,
   parts: array(ref(() => decodeJobPlanPart)),
   redactedAt: optional(dateTime),
+  stateVersion: string,
+});
+
+/** The validator of JobPlanBinding. */
+export const decodeJobPlanBinding: Decoder<JobPlanBinding> = object<JobPlanBinding>("JobPlanBinding", {
+  applySha256: string,
+  displaySha256: string,
+  plan: string,
   stateVersion: string,
 });
 

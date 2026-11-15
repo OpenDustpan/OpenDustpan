@@ -140,7 +140,21 @@ type Input struct {
 }
 
 // CreatePrincipal validates and stores a new principal, with the entry e.
+// It refuses the kind agent: the model connect request makes that record,
+// with its sponsors.
 func (s *Service) CreatePrincipal(ctx context.Context, e audit.Entry, in Input) (Principal, error) {
+	// Defense in depth: the HTTP create route of the principals refuses the
+	// kind agent too, and a later model connect request makes the agent
+	// record with its sponsors. This check stays so that a caller that skips
+	// the route cannot make an agent without its sponsors through this
+	// method.
+	if in.Kind == KindAgent {
+		return Principal{}, fmt.Errorf(
+			"%w: the kind %q comes from the model connect request, with its sponsors",
+			ErrInvalid, in.Kind,
+		)
+	}
+
 	displayName := in.DisplayName
 	if displayName == "" {
 		displayName = in.Subject
