@@ -102,6 +102,13 @@ func SetBetweenPageReads(s *Store, hook func(ctx context.Context)) {
 	s.betweenPageReads = hook
 }
 
+// SetBetweenDeletedFactsReads sets the hook that GetDeletedUnitFacts runs
+// after the statement of the collection and before the statement of the
+// labels.
+func SetBetweenDeletedFactsReads(s *Store, hook func(ctx context.Context)) {
+	s.betweenDeletedFactsReads = hook
+}
+
 // runnerControlStatements write one row in each control table of the runner
 // protocol. The control rows of a live session need a durable operation, so
 // the test writes them through SQL.

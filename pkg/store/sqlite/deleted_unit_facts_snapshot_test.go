@@ -227,15 +227,15 @@ func checkSnapshotFacts(t *testing.T, s *sqlite.Store, fence namespace.Fence, id
 }
 
 // TestDeletedUnitFactsSnapshot reads the facts of a deleted unit while
-// another caller commits a change of both the collection and the labels.
+// another connection commits a change of both the collection and the labels.
 // Every read sees the facts of one commit: a collection from before a commit
 // never comes back with labels from after it, because the call reads in one
 // read-only transaction.
 //
-// Each turn starts one commit and then reads, and it waits for that commit
-// before the next read. A commit therefore runs while every read runs, and
-// each one lands between the first read and the last, so the test never
-// passes with every commit before or after the reads.
+// The hook commits the next state between the collection read and the labels
+// read of every call, and the test counts the commit. A commit therefore runs
+// while every read runs, and the test fails when a read saw no commit between
+// its reads.
 func TestDeletedUnitFactsSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -244,18 +244,26 @@ func TestDeletedUnitFactsSnapshot(t *testing.T) {
 
 	states := snapshotStates()
 
-	for i := range 50 {
-		commitDone := make(chan error, 1)
+	committed := 0
 
-		go func() {
-			commitDone <- commitSnapshotState(t, s, id, states[(i+1)%len(states)])
-		}()
+	sqlite.SetBetweenDeletedFactsReads(s, func(context.Context) {
+		if err := commitSnapshotState(t, s, id, states[(committed+1)%len(states)]); err != nil {
+			t.Errorf("commit the unit state between the reads: %v", err)
+
+			return
+		}
+
+		committed++
+	})
+
+	for i := range 50 {
+		before := committed
 
 		checkSnapshotFacts(t, s, fence, id)
 
-		commitErr := <-commitDone
-		if commitErr != nil {
-			t.Fatalf("commit the unit state: %v", commitErr)
+		if committed != before+1 {
+			t.Fatalf("read %d saw %d commits between its reads, want one commit in flight during every read",
+				i, committed-before)
 		}
 	}
 }
