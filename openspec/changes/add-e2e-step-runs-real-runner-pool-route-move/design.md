@@ -10,7 +10,7 @@ Runner management moves to resource paths under one namespace. The runner protoc
 
 ## Structure
 
-Domain types in pkg/runner stay unchanged; a thin HTTP adapter calls the runner service. No new tool and no custom analyzer.
+Domain types in pkg/runner stay unchanged; a thin HTTP adapter in internal/api/runnerapi passes the audit entry to the store. No new service layer and no new store package. No new tool and no custom analyzer.
 
 ## Risks
 
@@ -21,8 +21,8 @@ Domain types in pkg/runner stay unchanged; a thin HTTP adapter calls the runner 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
 | HTTP handler | Each route declares its action and object; the policy check refuses callers without the grant. | Call each route with a token without the grant and check 403. |
-| service | The service checks the grant at the point of use and writes the audit entry in the same transaction. | Call the service with a denied grant and check no change and no audit entry persist. |
-| port adapter | The store writes with the namespace fence in the same transaction. | Attempt a cross-namespace pool write and check refusal with no row change. |
+| route table | The route table of internal/api/runnerapi/routes.go checks the grant at the point of use, before any write and before any audit entry. | Call each change route with a denied grant and check 403, no change and no audit entry. |
+| port adapter | The stores pkg/store/sqlite/runner.go and pkg/store/postgres/runner.go write with the namespace fence and the audit entry in the same transaction. | Attempt a cross-namespace pool write and check refusal with no row change. |
 
 ## Diagrams
 
@@ -32,11 +32,9 @@ After this change:
 sequenceDiagram
 participant O as Operator
 participant A as API
-participant S as Service
 participant D as Store
 O->>A: POST runner-pools
-A->>S: create pool
-S->>D: store pool and audit entry
+A->>D: store pool and audit entry
 ```
 
 Modules that the change touches, and their imports on main:
@@ -62,7 +60,7 @@ flowchart TB
  C[Caller]
  end
  subgraph Server
- H[Pool route handler] --> S[Runner service]
+ H[Pool route handler and route table] --> S[Store with fence and audit entry]
  end
  subgraph Storage
  D[(Store and audit log)]
