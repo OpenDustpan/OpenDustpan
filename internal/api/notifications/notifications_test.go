@@ -952,7 +952,8 @@ func (f fixture) replaceURLItem(t *testing.T, id, url string) {
 
 // TestAnswerHoldsOnlyTheHostOfAWholeURLTarget proves the answer-side layer:
 // a row whose target is a whole URL, as a restore or another version could
-// leave it, never shows a path, a query, user information or a token.
+// leave it, never shows a path, a query, user information or a token, and
+// the diagnostic of the answer names the sink without showing the target.
 func TestAnswerHoldsOnlyTheHostOfAWholeURLTarget(t *testing.T) {
 	t.Parallel()
 
@@ -972,15 +973,14 @@ func TestAnswerHoldsOnlyTheHostOfAWholeURLTarget(t *testing.T) {
 					SecretRefs: []string{"itm-1", "itm-2"}, CreatedBy: "ana", Version: 1,
 				}
 
-				body, err := apinotifications.DocumentJSON(&s)
-				if err != nil {
-					t.Fatalf("DocumentJSON: %v", err)
-				}
+				body, logs := documentWithLog(t, &s)
 
 				if strings.Contains(string(body), canary) ||
 					!strings.Contains(string(body), `"target":"`+tc.want+`"`) {
 					t.Errorf("%s answer = %s, want the target %q and no token", kind, body, tc.want)
 				}
+
+				checkTargetLog(t, string(kind), logs, &s, tc.want)
 			}
 		})
 	}
