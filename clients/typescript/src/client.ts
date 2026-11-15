@@ -89,6 +89,7 @@ import type {
   GetNamespaceIssuerInput,
   GetNamespaceLockInput,
   GetNamespaceOverrideSwitchesInput,
+  GetNamespaceProxyRulesInput,
   GetNamespaceSettingsInput,
   GetNotificationSinkInput,
   GetNotificationSubscriptionInput,
@@ -98,6 +99,7 @@ import type {
   GetProfileInput,
   GetProfileRevisionInput,
   GetProviderReleaseInput,
+  GetRenderedProxyRulesInput,
   GetRestoreInput,
   GetSettingsInput,
   GetSourceFilterInput,
@@ -111,6 +113,7 @@ import type {
   GetUnitDriftInput,
   GetUnitGateInput,
   GetUnitOutputsInput,
+  GetUnitProxyRulesInput,
   GetUnitSettingsInput,
   GetUnitSettingsSuggestionsInput,
   GetUpgradeCheckInput,
@@ -176,6 +179,8 @@ import type {
   RotateNamespaceIssuerKeysInput,
   RotateTrustBundleInput,
   SaveTrustBundleInput,
+  SaveNamespaceProxyRulesInput,
+  SaveUnitProxyRulesInput,
   SetAccessLimitInput,
   SetApprovalDefaultInput,
   SetApprovalRuleInput,
@@ -325,6 +330,7 @@ import type {
   JobTrigger,
   JobUnit,
   JobUnitRequest,
+  JoinedProxyRule,
   ListAccessLimitsResponse,
   ListApprovalRulesResponse,
   ListBackupsResponse,
@@ -404,6 +410,8 @@ import type {
   ProfileRevision,
   ProviderRelease,
   ProviderReleaseFile,
+  ProxyRule,
+  ProxyRuleSet,
   PublishFile,
   PublishModuleReleaseRequest,
   PublishProviderReleaseRequest,
@@ -417,6 +425,7 @@ import type {
   RegistryKey,
   RegistryModule,
   RegistryProvider,
+  RenderedProxyRules,
   ReplaceNotificationSinkRequest,
   ReplaceNotificationSubscriptionRequest,
   RequestBodyTooLargeError,
@@ -433,6 +442,7 @@ import type {
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
   RotateTrustBundleRequest,
+  SaveProxyRuleSetRequest,
   SaveTriggerRequest,
   SaveTrustBundleRequest,
   SchemaBinaryBelowMinimumError,
@@ -532,6 +542,7 @@ import type {
   UnitNoStateErrorArgs,
   UnitOutputEntry,
   UnitOutputs,
+  UnitProxyRules,
   UnitSettings,
   UnitSettingsBoolField,
   UnitSettingsCodeLocation,
@@ -912,6 +923,10 @@ export class Client {
     return execute(this.transport, operations.getNamespaceOverrideSwitches, input);
   }
 
+  getNamespaceProxyRules(input: GetNamespaceProxyRulesInput): Promise<Answer<ProxyRuleSet>> {
+    return execute(this.transport, operations.getNamespaceProxyRules, input);
+  }
+
   getNamespaceSettings(input: GetNamespaceSettingsInput): Promise<Answer<Settings>> {
     return execute(this.transport, operations.getNamespaceSettings, input);
   }
@@ -946,6 +961,10 @@ export class Client {
 
   getProviderRelease(input: GetProviderReleaseInput): Promise<Answer<ProviderRelease>> {
     return execute(this.transport, operations.getProviderRelease, input);
+  }
+
+  getRenderedProxyRules(input: GetRenderedProxyRulesInput): Promise<Answer<RenderedProxyRules>> {
+    return execute(this.transport, operations.getRenderedProxyRules, input);
   }
 
   getRestore(input: GetRestoreInput): Promise<Answer<GetRestoreResponse>> {
@@ -998,6 +1017,10 @@ export class Client {
 
   getUnitOutputs(input: GetUnitOutputsInput): Promise<Answer<UnitOutputs>> {
     return execute(this.transport, operations.getUnitOutputs, input);
+  }
+
+  getUnitProxyRules(input: GetUnitProxyRulesInput): Promise<Answer<UnitProxyRules>> {
+    return execute(this.transport, operations.getUnitProxyRules, input);
   }
 
   getUnitSettings(input: GetUnitSettingsInput): Promise<Answer<UnitSettings>> {
@@ -1258,6 +1281,14 @@ export class Client {
 
   saveTrustBundle(input: SaveTrustBundleInput): Promise<Answer<TrustBundle>> {
     return execute(this.transport, operations.saveTrustBundle, input);
+  }
+
+  saveNamespaceProxyRules(input: SaveNamespaceProxyRulesInput): Promise<Answer<ProxyRuleSet>> {
+    return execute(this.transport, operations.saveNamespaceProxyRules, input);
+  }
+
+  saveUnitProxyRules(input: SaveUnitProxyRulesInput): Promise<Answer<ProxyRuleSet>> {
+    return execute(this.transport, operations.saveUnitProxyRules, input);
   }
 
   setAccessLimit(input: SetAccessLimitInput): Promise<Answer<AccessLimit>> {

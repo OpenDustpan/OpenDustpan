@@ -567,3 +567,55 @@ func TestWorkerLeaseDecidesWhenAWorkerIsAbsent(t *testing.T) {
 		})
 	}
 }
+
+// TestAdmitStartRefusesWhileDraining proves the drain guard of the start
+// gate: while the process drains, the start is refused with the drain period,
+// whether this process runs the worker or not. A watch without a draining
+// function, which is the state before attach, admits.
+func TestAdmitStartRefusesWhileDraining(t *testing.T) {
+	t.Parallel()
+
+	const period = 10 * time.Second
+
+	tests := []struct {
+		name        string
+		set         Components
+		draining    func() bool
+		wantRefused bool
+	}{
+		{name: "draining with worker", set: workerOnly(), draining: func() bool { return true }, wantRefused: true},
+		{name: "draining without worker", set: apiOnly(), draining: func() bool { return true }, wantRefused: true},
+		{
+			name: "not draining with worker", set: workerOnly(),
+			draining: func() bool { return false }, wantRefused: false,
+		},
+		{name: "no draining function with worker", set: workerOnly(), draining: nil, wantRefused: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newTestWatch(nil, tc.set, 0, time.Now)
+			w.draining = tc.draining
+			w.drainPeriod = period
+
+			err := w.AdmitStart(t.Context())
+			if !tc.wantRefused {
+				if err != nil {
+					t.Fatalf("AdmitStart = %v, want nil", err)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, noworker.ErrDraining) {
+				t.Fatalf("AdmitStart = %v, want ErrDraining", err)
+			}
+
+			if got := noworker.DrainRetryAfter(err); got != period {
+				t.Errorf("DrainRetryAfter = %v, want %v", got, period)
+			}
+		})
+	}
+}

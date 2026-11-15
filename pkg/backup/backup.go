@@ -223,6 +223,7 @@ var Tables = []string{
 	"unmanaged_targets",
 	"unmanaged_scans",
 	"break_glass_reviews",
+	"proxy_rule_sets",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

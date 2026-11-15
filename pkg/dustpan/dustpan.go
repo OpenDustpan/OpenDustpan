@@ -1535,7 +1535,7 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		writable = checker
 	}
 
-	return newComponentReadiness(readinessSettings{
+	probe := newComponentReadiness(readinessSettings{
 		components:  cfg.components,
 		streamStop:  cfg.streamStop,
 		store:       cfg.namespaceStore,
@@ -1548,6 +1548,9 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		failures:    observed.ReadinessFailures(),
 		logger:      cfg.logger,
 	})
+	probe.drainPeriod = cfg.drainPeriod
+
+	return probe
 }
 
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
@@ -2947,6 +2950,11 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
+	proxyRules, _, err := newProxyRuleService(cfg, deps.services.namespaces)
+	if err != nil {
+		return none, err
+	}
+
 	gitHost, idem, err := newGitHostParts(cfg, deps)
 	if err != nil {
 		return none, err
@@ -2962,7 +2970,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
-	serverAPI, err := newServerHandler(serverHandlerInputs{
+	serverAPI, err := newServerHandler(&serverHandlerInputs{
 		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
 		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
 		reach:  reach,
@@ -2970,7 +2978,8 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		cursors: cfg.secretWrapper,
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
-		principals: principals, gates: gates, forgeService: gitHost, idempotency: idem, extras: extras,
+		principals: principals, gates: gates, proxyRules: proxyRules, forgeService: gitHost,
+		idempotency: idem, extras: extras,
 		shipper: cfg.auditShipper, workers: cfg.watch, instances: cfg.instanceStore,
 		installationKind: cfg.installationKind, denialLimiter: cfg.denialLimiter,
 		version: cfg.version, logger: cfg.logger, now: cfg.now,

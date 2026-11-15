@@ -5,6 +5,7 @@ Status: accepted · 2026-11-01. Decided by the project owner on 1 November 2026.
 Changed by:
 
 - ADR 372 changes decision 14: a temporary administrator of a recovery issues an enrollment code with no fresh authentication.
+- ADR 385 extends decision 12: no step when the setting `freshAuthEnabled` is off, for every sign-in method.
 
 Changes:
 

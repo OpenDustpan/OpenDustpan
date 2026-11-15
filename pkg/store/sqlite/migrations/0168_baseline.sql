@@ -731,6 +731,20 @@ CREATE TABLE profile_revisions (
     CHECK (number >= 1)
 ) STRICT;
 
+CREATE TABLE proxy_rule_sets (
+    namespace_id  TEXT    NOT NULL REFERENCES namespaces (id),
+    scope_kind    TEXT    NOT NULL,
+    unit_id       TEXT    NOT NULL,
+    document      TEXT    NOT NULL,
+    digest        TEXT    NOT NULL,
+    version       INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (namespace_id, scope_kind, unit_id),
+    CHECK (scope_kind IN ('namespace', 'unit')),
+    CHECK ((scope_kind = 'namespace' AND unit_id = '') OR (scope_kind = 'unit' AND unit_id <> '')),
+    CHECK (version >= 1)
+) STRICT;
+
 CREATE TABLE runner_pools (
     id             TEXT    NOT NULL PRIMARY KEY,
     namespace_id   TEXT    NOT NULL REFERENCES namespaces (id),

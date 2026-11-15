@@ -128,6 +128,11 @@ type auditChain struct {
 	runner *durable.Runner
 	// migrationsRunning reports whether the runner loop runs.
 	migrationsRunning atomic.Bool
+	// approveMu serializes Approve from the check of the pending change to
+	// the commit of the approval in this instance. A second approval then
+	// reads the state that the first one left, and answers its refusal before
+	// it enters maintenance mode.
+	approveMu sync.Mutex
 	// readWarnAt is the time in Unix nanoseconds of the last warning about a
 	// failed read of the stored result, or 0 when none was logged.
 	readWarnAt atomic.Int64
@@ -225,6 +230,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		durableOps:        nil,
 		runner:            nil,
 		migrationsRunning: atomic.Bool{},
+		approveMu:         sync.Mutex{},
 		readWarnAt:        atomic.Int64{},
 		runsMigrations:    cfg.components.Has(ComponentWorker),
 		limit:             maintenance.DefaultCacheLimit,
@@ -434,6 +440,9 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 		return err
 	}
 
+	c.approveMu.Lock()
+	defer c.approveMu.Unlock()
+
 	if err := c.requirePendingChange(ctx); err != nil {
 		return err
 	}
@@ -448,10 +457,28 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 
 	change := audit.ChainChange{At: c.chainNow(), By: caller.Subject, To: c.setting.State()}
 
-	if err := c.enterForApproval(ctx); err != nil {
+	entered, err := c.enterForApproval(ctx)
+	if err != nil {
 		return err
 	}
 
+	if err := c.commitApproval(ctx, caller, change); err != nil {
+		// The approval did not commit, so no migration runs and none leaves
+		// maintenance mode. Undo the entry of this call, also when another
+		// instance won the approval.
+		if entered {
+			err = errors.Join(err, c.undoApprovalEntry(ctx))
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// commitApproval starts the migration request and appends the entry of the
+// approval in one transaction.
+func (c *auditChain) commitApproval(ctx context.Context, caller audit.Entry, change audit.ChainChange) error {
 	input, err := json.Marshal(change)
 	if err != nil {
 		return fmt.Errorf("encode audit chain change: %w", err)
@@ -467,6 +494,24 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 	)
 	if err != nil {
 		return fmt.Errorf("approve audit chain change: %w", err)
+	}
+
+	return nil
+}
+
+// undoApprovalEntry leaves maintenance mode and clears the mark after an
+// approval that entered maintenance mode and did not commit. It runs with a
+// context that a canceled request does not end, so that the undo is not
+// skipped.
+func (c *auditChain) undoApprovalEntry(ctx context.Context) error {
+	err := c.leaveAfterMigration(context.WithoutCancel(ctx))
+	if errors.Is(err, maintenance.ErrHeld) {
+		// A change still waits, and a waiting change keeps maintenance mode.
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("undo the maintenance entry of a refused approval: %w", err)
 	}
 
 	return nil
@@ -1158,26 +1203,31 @@ func (c *auditChain) leaveAfterMigration(ctx context.Context) error {
 }
 
 // enterForApproval enters maintenance mode for an approval. It notes in the
-// stored record when the chain entered maintenance mode itself.
-func (c *auditChain) enterForApproval(ctx context.Context) error {
+// stored record when the chain entered maintenance mode itself, and answers
+// true then.
+func (c *auditChain) enterForApproval(ctx context.Context) (bool, error) {
 	if c.maint == nil {
-		return nil
+		return false, nil
 	}
 
 	before, err := c.maint.Get(ctx)
 	if err != nil {
-		return fmt.Errorf("enter maintenance mode: %w", err)
+		return false, fmt.Errorf("enter maintenance mode: %w", err)
 	}
 
 	if _, err := c.maint.Enter(ctx, false); err != nil {
-		return fmt.Errorf("enter maintenance mode: %w", err)
+		return false, fmt.Errorf("enter maintenance mode: %w", err)
 	}
 
 	if before != maintenance.StateNormal {
-		return nil
+		return false, nil
 	}
 
-	return c.markEnteredMaintenance(ctx)
+	if err := c.markEnteredMaintenance(ctx); err != nil {
+		return true, err
+	}
+
+	return true, nil
 }
 
 // refuseWhileRestoring reports backup.ErrRestoreRunning while a restore

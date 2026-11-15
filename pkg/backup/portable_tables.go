@@ -828,5 +828,26 @@ func portableSpec() []PortableTable {
 		portableTrustRuleTables(),
 		portableUnmanagedTables(),
 		portableBreakGlassReviewTables(),
+		portableProxyRuleTables(),
 	)
+}
+
+// portableProxyRuleTables returns the table of the proxy rule sets of the
+// namespaces and the units.
+func portableProxyRuleTables() []PortableTable {
+	return []PortableTable{
+		{
+			Table:   "proxy_rule_sets",
+			OrderBy: []string{portColNamespaceID, "scope_kind", "unit_id"},
+			Columns: []Column{
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: "scope_kind", Kind: KindText},
+				{Name: "unit_id", Kind: KindText},
+				{Name: "document", Kind: KindText},
+				{Name: "digest", Kind: KindText},
+				{Name: portColVersion, Kind: KindInteger},
+				{Name: "updated_at_ms", Kind: KindTime},
+			},
+		},
+	}
 }

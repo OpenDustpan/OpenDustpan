@@ -956,6 +956,16 @@ type ProfileRevision struct {
 	Reason         string
 }
 
+type ProxyRuleSet struct {
+	NamespaceID string
+	ScopeKind   string
+	UnitID      string
+	Document    string
+	Digest      string
+	Version     int64
+	UpdatedAtMs int64
+}
+
 type QuotaKey struct {
 	NamespaceID  string
 	Blueprint    string
