@@ -1103,6 +1103,58 @@ FROM (
 ORDER BY kind, id
 LIMIT 1;
 
+-- name: CountLiveBlobDeleteLeases :one
+-- The number of lease rows that end after the database clock. A restore waits
+-- for zero of them before it applies the data.
+SELECT COUNT(*) FROM blob_delete_leases
+WHERE expires_at_ms > FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
+
+-- name: LockBlobDeleteLeaseExclusive :exec
+-- Takes the exclusive form of the blob delete lease lock for this
+-- transaction. It waits for every take of a lease in flight and holds every
+-- later take back until this transaction ends, so the take of a lease and the
+-- write of a running backup or restore row cannot interleave.
+SELECT pg_advisory_xact_lock(sqlc.arg(class)::int, hashtext(current_schema()));
+
+-- name: LockBlobDeleteLeaseShared :exec
+-- Takes the shared form of the blob delete lease lock for this transaction.
+-- The take of a lease runs as a later statement, so its READ COMMITTED
+-- snapshot is newer than the lock: a backup or a restore that committed its
+-- running row before the lock is visible to the take.
+SELECT pg_advisory_xact_lock_shared(sqlc.arg(class)::int, hashtext(current_schema()));
+
+-- name: ReleaseBlobDeleteLease :exec
+-- Deletes the lease row of one holder. A holder with no row is not an error.
+DELETE FROM blob_delete_leases
+WHERE holder = sqlc.arg(holder);
+
+-- name: TakeBlobDeleteLease :one
+-- Writes the lease of holder, ending at the database clock plus ttl_ms, in
+-- one statement. While a backup runs or a restore checks or applies, it
+-- writes nothing and answers that work instead, so a deleter that read the
+-- guard before a restore started cannot take a lease after it. A take for a
+-- holder with a row replaces that row. An empty kind and an empty ID are the
+-- answer of a written lease.
+WITH running AS (
+    SELECT kind, id
+    FROM (
+        SELECT 'backup'::text AS kind, id FROM backups WHERE state = 'running'
+        UNION ALL
+        SELECT 'restore'::text AS kind, id FROM restores WHERE state IN ('checking', 'applying')
+    ) AS running_work
+    ORDER BY kind, id
+    LIMIT 1
+), written AS (
+    INSERT INTO blob_delete_leases (holder, expires_at_ms)
+    SELECT sqlc.arg(holder)::text,
+           FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + sqlc.arg(ttl_ms)::bigint
+    WHERE NOT EXISTS (SELECT 1 FROM running)
+    ON CONFLICT (holder) DO UPDATE SET expires_at_ms = EXCLUDED.expires_at_ms
+    RETURNING holder
+)
+SELECT COALESCE((SELECT kind FROM running), '')::text AS kind,
+       COALESCE((SELECT id FROM running), '')::text AS id;
+
 -- name: ListBackups :many
 SELECT id, state, started_at_ms, ended_at_ms, target, error
 FROM backups
@@ -1304,7 +1356,8 @@ UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
 UNION ALL
-SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text AS content_key,
+SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text
+       || '-' || k.blob_attempt AS content_key,
        k.blob_size AS size, k.blob_md5 AS md5, FALSE AS sealed
 FROM item_keys AS k
 WHERE k.shredded_at_ms = 0
@@ -5097,18 +5150,19 @@ WHERE drift_results.unit_id = sqlc.arg(unit_id)
 -- The caller checks the fence in the same transaction. A record for the same
 -- item is not written: the caller reads the stored record.
 INSERT INTO item_keys (
-    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
+    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5,
+    blob_attempt
 )
 VALUES (
     sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
     sqlc.arg(scope_id), sqlc.arg(kind), sqlc.arg(item), sqlc.arg(wrapper_id), sqlc.arg(created_at_ms), 0,
-    sqlc.arg(blob_version), sqlc.arg(blob_size), sqlc.arg(blob_md5)
+    sqlc.arg(blob_version), sqlc.arg(blob_size), sqlc.arg(blob_md5), sqlc.arg(blob_attempt)
 )
 ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING;
 
 -- name: GetItemKey :one
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.kind = sqlc.arg(kind)
@@ -5125,7 +5179,7 @@ WHERE item_keys.shredded_at_ms = 0 AND item_keys.scope_id = sqlc.arg(scope_id) A
 
 -- name: ListItemKeys :many
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.id > sqlc.arg(after)
@@ -5137,6 +5191,11 @@ SELECT DISTINCT wrapper_id
 FROM item_keys
 WHERE shredded_at_ms = 0
 ORDER BY wrapper_id;
+
+-- name: SetTransactionTimeout :exec
+-- The attempt deadline of an item key transaction, on the clock of the
+-- database. The setting ends with the transaction. The value is milliseconds.
+SELECT set_config('transaction_timeout', sqlc.arg(timeout_ms)::text, true);
 
 -- name: InsertJobPlan :exec
 -- The caller checks the fence and the claim in the same transaction.

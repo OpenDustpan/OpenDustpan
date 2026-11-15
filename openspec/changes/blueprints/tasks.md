@@ -14,12 +14,12 @@
 ## 2. Build
 
 - [ ] 2.1 Implement the core and quota reservation in pkg/catalog/engine.go (NEW). Check: `go test ./pkg/catalog/... ./pkg/quota/...` passes
-- [ ] 2.2 Wire the NEW request routes with actions and audit, declared in internal/api/apidesc/openapi.json (generated) and adapted in internal/api/selfservice_requests.go (NEW). Check: `POST /api/dustpan/v1/namespaces/{namespace}/self-service/requests` (NEW) makes a unit seen in `GET /api/dustpan/v1/namespaces/{namespace}/units`
+- [ ] 2.2 Wire the NEW request routes with actions and audit, declared in the route table of its adapter package (`make generate` then writes internal/api/apidesc/openapi.json; never edit it by hand) and adapted in internal/api/selfservice/requests.go (NEW, in the existing package internal/api/selfservice). Check: `POST /api/dustpan/v1/namespaces/{namespace}/self-service/requests` (NEW) makes a unit seen in `GET /api/dustpan/v1/namespaces/{namespace}/units`
 
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

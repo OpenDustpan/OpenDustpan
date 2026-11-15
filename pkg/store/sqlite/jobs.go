@@ -53,18 +53,23 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 	r.s.mu.RLock()
 	defer r.s.mu.RUnlock()
 
-	release, err := r.s.holdWrite(ctx)
-	if err != nil {
-		return err
+	release, holdErr := r.s.holdWrite(ctx)
+	if holdErr != nil {
+		return holdErr
 	}
 	defer release()
 
-	return r.s.jobTx(ctx, false, func(tx *sql.Tx, q *db.Queries) error {
-		if err := r.s.checkWritable(ctx, q); err != nil {
+	// The write can make item key records (jobTx.ItemKeys), so the
+	// transaction has an attempt deadline.
+	attempt, txCtx, cancel := r.s.newAttempt(ctx)
+	defer cancel()
+
+	err := r.s.jobTx(txCtx, false, func(tx *sql.Tx, q *db.Queries) error {
+		if err := r.s.checkWritable(txCtx, q); err != nil {
 			return err
 		}
 
-		version, err := q.GetFailoverVersion(ctx, fence.Namespace.String())
+		version, err := q.GetFailoverVersion(txCtx, fence.Namespace.String())
 		if errors.Is(err, sql.ErrNoRows) {
 			return namespace.ErrNotFound
 		}
@@ -77,8 +82,16 @@ func (r jobRunner) Write(ctx context.Context, fence namespace.Fence, fn func(job
 			return namespace.ErrFenced
 		}
 
-		return fn(&jobTx{tx: tx, q: q})
+		if err := fn(&jobTx{tx: tx, q: q, attempt: attempt}); err != nil {
+			return err
+		}
+
+		// An item key record that this transaction wrote names a blob that
+		// the reaper may delete after the deadline, so a late commit fails.
+		return attempt.beforeCommit()
 	})
+
+	return attempt.attemptError(ctx, err)
 }
 
 // Read implements jobstore.Runner.
@@ -87,7 +100,7 @@ func (r jobRunner) Read(ctx context.Context, fn func(jobstore.Tx) error) error {
 	defer r.s.mu.RUnlock()
 
 	return r.s.jobTx(ctx, true, func(tx *sql.Tx, q *db.Queries) error {
-		return fn(&jobTx{tx: tx, q: q})
+		return fn(&jobTx{tx: tx, q: q, attempt: nil})
 	})
 }
 
@@ -117,6 +130,9 @@ func (s *Store) jobTx(ctx context.Context, readOnly bool, fn func(tx *sql.Tx, q 
 type jobTx struct {
 	tx *sql.Tx
 	q  *db.Queries
+	// attempt is the attempt deadline of a write transaction, and nil in a
+	// read transaction, which writes no item key record.
+	attempt *itemKeyAttempt
 }
 
 var _ jobstore.Tx = (*jobTx)(nil)
@@ -594,7 +610,7 @@ func (t *jobTx) UpdatePlan(ctx context.Context, ns namespace.Name, r jobstore.Pl
 //
 //nolint:ireturn // The method of jobstore.Tx returns the interface.
 func (t *jobTx) ItemKeys(fence namespace.Fence) secret.ItemKeyTx {
-	return itemKeyTx{q: t.q, fence: fence}
+	return itemKeyTx{q: t.q, fence: fence, attempt: t.attempt}
 }
 
 // Plan implements jobstore.Tx.

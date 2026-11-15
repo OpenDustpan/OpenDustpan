@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:393` (Manage namespace and unit proxy rule sets.).
@@ -18,10 +18,10 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Save fails when a proxy rule has a bad host, port, method, path, or operation. | The server says the proxy rule set is not valid and names the proxy rule id and the field. Fix the field and send the request again. | `GET /api/dustpan/v1/units/{unit_id}/proxy-rules/rendered` |
+| Save fails when a proxy rule has a bad host, port, method, path, or operation. | The server says the proxy rule set is not valid and names the proxy rule id and the field. Fix the field and send the request again. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules/rendered` |
 | Save fails without `namespace:manage-proxy-rules` or `unit:manage-proxy-rules`. | The server says access is denied for the proxy rule action. Ask a namespace administrator for the grant and check reach. | `GET /api/dustpan/v1/namespaces/{}/access-limits` |
 | Save fails without fresh authentication. | The server says fresh authentication is needed. Sign in again and send the request again. | `GET /api/dustpan/v1/namespaces/{}/settings` |
-| Save fails when If-Match is not the stored digest. | The server answers 412 and says the digest is stale. Read the set again and send the save again with the new digest. | `GET /api/dustpan/v1/units/{unit_id}/proxy-rules` |
+| Save fails when If-Match is not the stored digest. | The server answers 412 and says the digest is stale. Read the set again and send the save again with the new digest. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules` |
 
 Evidence for the claims above:
 
@@ -31,10 +31,10 @@ Evidence for the claims above:
 
 - New route `GET /api/dustpan/v1/namespaces/{namespace}/proxy-rules` to read the namespace set
 - New route `PUT /api/dustpan/v1/namespaces/{namespace}/proxy-rules` to save the namespace set with digest and audit
-- New route `GET /api/dustpan/v1/units/{unit_id}/proxy-rules` to read the unit set
-- New route `PUT /api/dustpan/v1/units/{unit_id}/proxy-rules` to save the unit set with digest and audit
-- New route `GET /api/dustpan/v1/units/{unit_id}/proxy-rules/rendered` for debug only with unit read access
-- Optional If-Match digest check on each save
+- New route `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules` to read the unit set
+- New route `PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules` to save the unit set with digest and audit
+- New route `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules/rendered` for debug only with unit read access
+- Optional If-Match check on each save, with the version of the stored set as its value (the port compares versions; the digest goes into the audit entry)
 - Strict validation of operation, host, port, method, and canonical path match
 - Joined set of namespace and unit scopes in fixed order
 - Rendered plan view of the joined set for debug only

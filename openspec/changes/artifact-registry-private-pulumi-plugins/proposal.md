@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:379` (Serve private Pulumi plugins for download.).
@@ -92,7 +92,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Run wiring check, route authorization check, docs page, usability walk" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part.
+none
 
 Questions considered and answered:
 

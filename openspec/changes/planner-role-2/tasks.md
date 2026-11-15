@@ -15,15 +15,18 @@
 - [ ] 1.9 Add failing service test for unknown operation refusal in NEW file pkg/job/planner_role_test.go. Check: TestUnknownOperationGives400 fails on main before the fix and passes after.
 - [ ] 1.10 Add the e2e step for plan success, masked read, apply 403 and destroy 403 in NEW file test/e2e/planner_role_test.go. The route is declared in internal/api/jobs and adapted in the same package. Route: POST /api/dustpan/v1/namespaces/{namespace}/jobs. Credential: personal access token of a planner principal. BLOCKED by the real runner pool e2e of the runners items listed in depends_on. Check: The e2e step fails on main before the fix and passes after, once the runner e2e exists. Confirmed by: CI (the agent writes the e2e test).
 
+- [ ] 1.11 SECURITY. Add a hostile test that sends a read error, a timeout, a missing commit and an unprotected commit straight to the branch protection read in NEW file pkg/job/branch_protection_test.go. Check: TestBranchProtectionReadFailsMasked fails on main before the fix and passes after.
+
 ## 2. Implementation
 
-- [ ] 2.1 Wire operation-to-action check in job start path in NEW file pkg/job/operation_actions.go. Route: POST /api/dustpan/v1/namespaces/{namespace}/jobs. Declare the route in NEW file internal/api/jobs/routes.go. Adapt the route in NEW file internal/api/jobs/handler.go. Check: Route test lists POST jobs with unit:run-plan for plan, the apply action for apply, the destroy action for destroy, and 400 for unknown operations.
+- [ ] 2.1 Wire operation-to-action check in job start path in NEW file pkg/job/operation_actions.go. Route: POST /api/dustpan/v1/namespaces/{namespace}/jobs. Declare the route in the existing file internal/api/jobs/routes.go and extend it for the operation check. Adapt the route in the existing file internal/api/jobs/start.go and extend it for the operation check. Check: Route test lists POST jobs with unit:run-plan for plan, the apply action for apply, the destroy action for destroy, and 400 for unknown operations.
 - [ ] 2.2 Record job decision and audit entry together in pkg/job/service.go:136. Check: Audit entry names starter, operation and decision in the same transaction as the queue insert.
+- [ ] 2.4 SECURITY. Build the branch protection read at job start in NEW file pkg/job/branch_protection.go. The read checks the pinned commit SHA. A read error, a timeout or a missing commit opens the job masked, with no secret value. Check: TestBranchProtectionReadFailsMasked passes for a read error, a timeout and a missing commit.
 - [ ] 2.3 Write docs page for the planner role with the workstation caveat in NEW file docs/planner-role.md. Check: Docs page runs as written and warns that workstation plans read state with state actions outside this role. Confirmed by: CI (an e2e step in the NEW file e2e/planner_role_2_docs_test.go runs each command of the docs page against the e2e test server).
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 

@@ -15,5 +15,5 @@
 
 - [ ] 3.1 Implement Paths, Dispatcher.ReviewRequest, source kind forge and ordered replacement. BLOCKED by the Forge port event for the wiring. Check: The unit and conformance tests pass.
 - [ ] 3.2 Keep the authorization actions of the trigger routes `POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` with an access token. Check: The route test passes.
-- [ ] 3.3 Add an e2e step on a fake forge. BLOCKED by git-host-webhook-intake-post. Check: The e2e step shows a plan, no plan, a fork audit entry and a replaced plan. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 3.4 Write the docs page, run the usability check and run make check. Check: make check reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.3 Add an e2e step on a fake forge in the NEW file e2e/start_plan_on_push_review_test.go. The step sends a push to a review request on the fake forge through the push intake route `POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` setup with an access token, then reads the plan job. BLOCKED by git-host-webhook-intake-post. Check: The e2e step shows a plan, no plan, a fork audit entry and a replaced plan. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.4 Write the NEW docs page docs/guides/push-plans.md about push plans and the fork rule, run the usability check and run make check (the existing Make target in Makefile:14). Check: make check reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

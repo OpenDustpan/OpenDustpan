@@ -5,7 +5,7 @@
 ## 2. Build
 
 - [ ] 2.1 Add the commands in the NEW files `internal/cli/collection.go` and `internal/cli/placement.go` and register them next to `commandNamespace` (`internal/cli/cli.go:39`). Check: `go test ./internal/cli/...` passes
-- [ ] 2.2 Name `opendustpan placement add` in the text of `placement.no-match` (`internal/errcode/catalog_placement.go:42`). Check: `go test ./internal/errcode/...` passes
+- [ ] 2.2 Name `opendustpan placement add` in the text of `placement.no-match` (`internal/errcode/catalog_placement.go:42`) and in the refusal text of `collection.PlacementError.Error` (`pkg/collection/placement.go:272`), in place of the three routes. Check: `go test ./internal/errcode/... ./pkg/collection/...` passes
 - [ ] 2.3 List the commands in `docs/reference/configuration.md` (regenerate the client flags table with the `-update` flag of its test) and use them in `docs/guides/quickstart.md` in place of curl. Check: make docs-lint passes. Confirmed by: the driver's gates.
 
 ## 3. Definition of done

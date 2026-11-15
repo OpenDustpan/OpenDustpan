@@ -10,7 +10,7 @@ Namespace and unit proxy rule sets are plain JSON data. The server stores each s
 
 ## Structure
 
-Unexported type `proxyRuleSet` with constructor `newProxyRuleSet` that checks all invariants. Only the constructor makes a value. Stored references use stable namespace ID and unit ID, never the name.
+Main already has the model and the port: `jobproxy.Rule`, `jobproxy.RuleSet`, `jobproxy.Parse` (the checks), `jobproxy.Join` and `jobproxy.Render` in pkg/jobproxy, and the port `rulestore.RuleStore` (Get, Put, Delete with a version check and `rulestore.DocumentDigest`) in pkg/jobproxy/rulestore, with its suite `jobproxytest.RunRuleStore`. This change adds no new model package: it adds the store adapters in pkg/store/sqlite and pkg/store/postgres, the service internal/jobproxysvc and the routes in internal/api/server. Stored references use the stable namespace ID and unit ID, never the name (`rulestore.Scope`).
 
 ## Risks
 
@@ -42,7 +42,7 @@ Server->>Client: joined set for operation
 
 New imports of this change (each one allowed by the module rules):
 
-- `internal/api/server` imports `add the new file internal/proxysvc`
+- `internal/api/server` imports `internal/jobproxysvc` (NEW)
 
 States and transitions after this change:
 
@@ -115,7 +115,7 @@ S --> A
 - Invariant: Each id is unique within one scope document.
 - Invariant: Each port defaults per ADR 330 decision 4 when absent.
 - Invariant: Each path pattern is canonical and keeps no normalized copy.
-- Invariant: A save with an If-Match digest that is not the stored digest changes nothing.
+- Invariant: A save with an If-Match version that is not the stored version changes nothing (`rulestore.ErrConflict`).
 - `Save namespace proxy rule set`: pre: Caller holds namespace:manage-proxy-rules.; Caller passed fresh authentication.; If-Match, when sent, equals the stored digest.. Post: Stored set equals validated input.; Digest changes on each save..
 - `Save unit proxy rule set`: pre: Caller holds unit:manage-proxy-rules.; Caller passed fresh authentication.; If-Match, when sent, equals the stored digest.. Post: Stored set equals validated input.; Digest changes on each save..
 - `Join scopes for a unit`: pre: Caller holds unit read access.. Post: Result lists namespace entries then unit entries..
