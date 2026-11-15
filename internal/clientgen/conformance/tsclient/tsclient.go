@@ -75,7 +75,7 @@ func Generate(opts Options) ([]clientgen.File, string, error) {
 	digest := sha256.Sum256(opts.Description)
 
 	files, err := typescript.New().Render(api, clientgen.Options{
-		Package: Package, ClientVersion: api.Version, ServerRelease: opts.ServerRelease,
+		Package: Package, Publish: true, ClientVersion: api.Version, ServerRelease: opts.ServerRelease,
 		ServerCommit: "development", Description: opts.Description,
 		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: hex.EncodeToString(digest[:]),
 	})

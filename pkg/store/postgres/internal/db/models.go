@@ -72,6 +72,13 @@ type AuditEntry struct {
 	SourceIp      string
 	UserAgent     string
 	Channel       string
+	AgentRun      string
+	AgentSession  string
+	ArgsDigest    string
+	BreakGlass    bool
+	DelegationID  string
+	SecretStage   string
+	Tool          string
 	Kind          string
 	Outcome       string
 	RequestID     string
