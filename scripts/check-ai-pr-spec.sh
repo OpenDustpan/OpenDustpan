@@ -16,7 +16,7 @@
 # A link is a line of the body, outside a fenced code block, that names
 # openspec/changes/<id>, where <id> holds only lowercase letters, digits
 # and hyphens. The link counts when openspec/changes/<id>/proposal.md
-# exists, or when an archived change openspec/changes/archive/*-<id>/
+# exists, or when an archived change openspec/changes/archive/YYYY-MM-DD-<id>/
 # proposal.md exists, and its "Open questions" section reads "none".
 # At least one link must count.
 #
@@ -103,27 +103,31 @@ done < <(awk '
 # outside openspec/changes too, even when this allowlist changes.
 valid_ids=()
 refused_note=""
-for raw in ${link_ids[@]+"${link_ids[@]}"}; do
-  # Strip trailing slashes and sentence punctuation that the text around
-  # the link adds. Pure bash, so the strip works the same on the bash of
-  # Linux and of macOS.
-  id="$raw"
-  while true; do
-    case "$id" in
-    *"/" | *"." | *"," | *";" | *":" | *"!" | *"?" | *")") id="${id%?}" ;;
-    *) break ;;
-    esac
+# The guard keeps the empty-array case working on the bash of macOS (3.2),
+# where a bare "${link_ids[@]}" on an empty array with set -u fails.
+if [[ ${#link_ids[@]} -gt 0 ]]; then
+  for raw in "${link_ids[@]}"; do
+    # Strip trailing slashes and sentence punctuation that the text around
+    # the link adds. Pure bash, so the strip works the same on the bash of
+    # Linux and of macOS.
+    id="$raw"
+    while true; do
+      case "$id" in
+      *"/" | *"." | *"," | *";" | *":" | *"!" | *"?" | *")") id="${id%?}" ;;
+      *) break ;;
+      esac
+    done
+    if [[ -z "$id" ]]; then
+      refused_note="refused id \"$raw\": an id holds only lowercase letters, digits and hyphens"
+      continue
+    fi
+    if [[ ! "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+      refused_note="refused id \"$id\": an id holds only lowercase letters, digits and hyphens"
+      continue
+    fi
+    valid_ids+=("$id")
   done
-  if [[ -z "$id" ]]; then
-    refused_note="refused id \"$raw\": an id holds only lowercase letters, digits and hyphens"
-    continue
-  fi
-  if [[ ! "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
-    refused_note="refused id \"$id\": an id holds only lowercase letters, digits and hyphens"
-    continue
-  fi
-  valid_ids+=("$id")
-done
+fi
 
 # A proposal is spec-ready when it holds the line "Open questions: none",
 # or when the first non-blank line of its "## Open questions" section reads
@@ -158,14 +162,15 @@ resolve_proposal() {
     printf '%s' "$direct"
     return 0
   fi
-  # An archived change lives in a directory named *-<id>, per the proposal's
-  # Fix boundary (openspec/changes/archive/*-<id>/proposal.md). The match
-  # needs the hyphen boundary: id "spec" does not match directory
-  # "2026-01-01-specx", but it matches "2026-01-01-ai-pr-spec".
+  # An archived change lives in a directory named YYYY-MM-DD-<id>
+  # (openspec/changes/archive/YYYY-MM-DD-<id>/proposal.md). The match
+  # takes the whole date prefix and the hyphen boundary: id "spec" matches
+  # "2026-01-01-spec", and it does not match "2026-01-01-specx" or
+  # "2026-01-01-ai-pr-spec".
   local candidate
   while IFS= read -r candidate; do
     case "$(basename "$(dirname "$candidate")")" in
-    *-"$id")
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-"$id")
       printf '%s' "$candidate"
       return 0
       ;;

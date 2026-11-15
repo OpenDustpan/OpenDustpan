@@ -199,6 +199,15 @@ func TestCheckAIPRSpec(t *testing.T) {
 			want:      "no change openspec/changes/spec",
 		},
 		{
+			name:      "archive id that is a suffix of the link id does not count",
+			proposals: nil,
+			archived:  map[string]string{"ai-pr-spec": readyProposal()},
+			body:      "Tool: test harness\n\nChange: openspec/changes/spec\n",
+			commits:   "someone@example.com\n",
+			wantPass:  false,
+			want:      "no change openspec/changes/spec",
+		},
+		{
 			name:      "valid link plus a refused id passes",
 			proposals: ready,
 			archived:  nil,
