@@ -49,8 +49,8 @@ concurrency:
 # - merge_group, push and schedule: every job (schedule keeps its own limits).
 # - pull_request with the label full-ci: every job. The label applies from the
 #   next push to the pull request; a re-run reads the labels of the old event.
-# - pull_request that changes only docs: lint and scan. lint holds docs-lint
-#   and the ADR index check.
+# - pull_request that changes only docs or OpenSpec files: lint and scan. lint
+#   holds docs-lint (with the check of openspec/specs) and the ADR index check.
 # - other pull_request: lint, golangci-lint, golangci-lint-journal, nilaway,
 #   go and scan, plus each suite whose own files changed.
 # A job that its condition skips reports "skipped", and a required check
@@ -98,11 +98,12 @@ jobs:
             case "$f" in
               .github/*|Makefile|go.mod|go.sum) run_all "$f changed" ;;
             esac
-            # Docs only: docs/, .repowise/ and Markdown files at the root.
-            # Go tests read the three docs files below, so they are code.
+            # Docs only: docs/, openspec/, .repowise/ and Markdown files at the
+            # root. Go tests read the three docs files below, so they are code.
+            # No Go code reads openspec/.
             case "$f" in
               docs/tfe-api.md|docs/reference/configuration.md|docs/reference/helm-values.md) code=true ;;
-              docs/*|.repowise/*) ;;
+              docs/*|openspec/*|.repowise/*) ;;
               */*) code=true ;;
               *.md) ;;
               *) code=true ;;
