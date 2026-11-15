@@ -22,7 +22,7 @@ func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Store: struct{ trustrule.Store }{nil}, Namespaces: namespaces,
 		Principals: struct{ trustrulesvc.Principals }{nil}, Authorizer: coverageAuthorizer{},
 		Reach:            nil,
-		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil,
+		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil, Bundles: nil, Sessions: nil,
 	})
 	if err != nil {
 		tb.Fatalf("trust rule service: %v", err)

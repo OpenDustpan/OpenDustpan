@@ -303,6 +303,56 @@ func TestTrustRuleRefusesTheCredential(t *testing.T) {
 	}
 }
 
+// TestTrustRuleWritesNeedAConsoleSession proves that each write of a rule or a
+// bundle with a valid token and no console session answers 403 with the code
+// of a missing fresh sign-in, and changes nothing. The service checks this
+// too: this test sends the hostile request to the handler.
+func TestTrustRuleWritesNeedAConsoleSession(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, allActions())
+
+	const (
+		bundlesURL = "/api/dustpan/v1/namespaces/acme/trust-bundles"
+		bundleID   = "trb-00000000000000000000000000000000"
+	)
+
+	steps := []struct {
+		name, method, path, body string
+	}{
+		{"create a rule", http.MethodPost, rulesURL, ruleBody("x", e.worker)},
+		{"update a rule", http.MethodPatch, rulesURL + "/" + trustruleID, `{"name":"y"}`},
+		{"delete a rule", http.MethodDelete, rulesURL + "/" + trustruleID, ""},
+		{"save a bundle", http.MethodPost, bundlesURL, `{"pem":"x"}`},
+		{"rotate a bundle", http.MethodPatch, bundlesURL + "/" + bundleID, `{"pem":"x"}`},
+		{"delete a version", http.MethodDelete, bundlesURL + "/" + bundleID + "/versions/1", ""},
+	}
+
+	for _, s := range steps {
+		status, body := e.doTokenOnly(s.method, s.path, adminToken, s.body)
+		if s.method == http.MethodPatch || s.method == http.MethodDelete {
+			// A change of an object that exists is refused first for its missing
+			// If-Match or its missing object, so only the status class is fixed.
+			if status < http.StatusBadRequest {
+				t.Errorf("%s with a token only = %d %s, want a refusal", s.name, status, body)
+			}
+
+			continue
+		}
+
+		if status != http.StatusForbidden || errorCode(t, body) != "mfa.fresh-step-required" {
+			t.Errorf("%s with a token only = %d %s, want 403 mfa.fresh-step-required", s.name, status, body)
+		}
+	}
+
+	if got := len(e.ruleEntries()); got != 0 {
+		t.Errorf("audit entries = %d, want 0", got)
+	}
+}
+
+// trustruleID is a rule ID that no rule holds.
+const trustruleID = "trr-00000000000000000000000000000000"
+
 // ruleActions are the routes of the trust rules with the one action that each
 // declares.
 func ruleActions() map[string]identity.Action {
@@ -310,7 +360,14 @@ func ruleActions() map[string]identity.Action {
 		http.MethodGet + " " + trustrules.RulesPath:   identity.ActionNamespaceReadAccess,
 		http.MethodPost + " " + trustrules.RulesPath:  identity.ActionNamespaceManageTrustRules,
 		http.MethodGet + " " + trustrules.RulePath:    identity.ActionNamespaceReadAccess,
+		http.MethodPatch + " " + trustrules.RulePath:  identity.ActionNamespaceManageTrustRules,
 		http.MethodDelete + " " + trustrules.RulePath: identity.ActionNamespaceManageTrustRules,
+
+		http.MethodGet + " " + trustrules.BundlesPath:          identity.ActionNamespaceReadAccess,
+		http.MethodPost + " " + trustrules.BundlesPath:         identity.ActionNamespaceManageTrustRules,
+		http.MethodGet + " " + trustrules.BundlePath:           identity.ActionNamespaceReadAccess,
+		http.MethodPatch + " " + trustrules.BundlePath:         identity.ActionNamespaceManageTrustRules,
+		http.MethodDelete + " " + trustrules.BundleVersionPath: identity.ActionNamespaceManageTrustRules,
 		// The public list: the exchange needs no sign-in, and declares no
 		// action. The token of the workload is its credential.
 		http.MethodPost + " " + trustrules.ExchangePath: "",

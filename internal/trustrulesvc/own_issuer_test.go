@@ -39,6 +39,7 @@ func ownFixture(t *testing.T, own trustrulesvc.OwnIssuer) fixture {
 		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz,
 		Reach:            reach,
 		InstallationURLs: []string{"https://dustpan.example.com"}, OwnIssuer: own, CheckURL: nil, Now: nil,
+		Bundles: nil, Sessions: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

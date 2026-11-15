@@ -217,7 +217,9 @@ import {
   decodeRestoreSwappedErrorArgs,
   decodeRestoreWarning,
   decodeRotateNamespaceIssuerKeysRequest,
+  decodeRotateTrustBundleRequest,
   decodeSaveTriggerRequest,
+  decodeSaveTrustBundleRequest,
   decodeSchemaBinaryBelowMinimumError,
   decodeSchemaBinaryBelowMinimumErrorArgs,
   decodeSelfServiceBlueprint,
@@ -297,6 +299,9 @@ import {
   decodeTriggerLocationRequest,
   decodeTriggerSourceRequest,
   decodeTriggerUnit,
+  decodeTrustBundle,
+  decodeTrustBundleList,
+  decodeTrustBundleVersion,
   decodeTrustRule,
   decodeTrustRuleCondition,
   decodeTrustRuleKeySource,
@@ -333,6 +338,7 @@ import {
   decodeUpdateNamespaceIssuerRequest,
   decodeUpdatePreferencesRequest,
   decodeUpdateSettingsRequest,
+  decodeUpdateTrustRuleRequest,
   decodeUpgradeCheck,
   decodeView,
   decodeViewLabel,
@@ -559,7 +565,9 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  RotateTrustBundleRequest,
   SaveTriggerRequest,
+  SaveTrustBundleRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
   SelfServiceBlueprint,
@@ -639,6 +647,9 @@ import type {
   TriggerLocationRequest,
   TriggerSourceRequest,
   TriggerUnit,
+  TrustBundle,
+  TrustBundleList,
+  TrustBundleVersion,
   TrustRule,
   TrustRuleCondition,
   TrustRuleKeySource,
@@ -675,6 +686,7 @@ import type {
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
   UpdateSettingsRequest,
+  UpdateTrustRuleRequest,
   UpgradeCheck,
   View,
   ViewLabel,
@@ -1095,6 +1107,16 @@ export interface DeleteTriggerInput {
     readonly namespace: string;
     readonly unit_id: string;
     readonly trigger_id: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation deleteTrustBundleVersion. */
+export interface DeleteTrustBundleVersionInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly bundle: string;
+    readonly version: string;
   };
   readonly signal?: AbortSignal;
 }
@@ -1581,6 +1603,15 @@ export interface GetTriggerInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getTrustBundle. */
+export interface GetTrustBundleInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly bundle: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getTrustRule. */
 export interface GetTrustRuleInput {
   readonly path: {
@@ -1956,6 +1987,14 @@ export interface ListStoreChecksInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation listTrustBundles. */
+export interface ListTrustBundlesInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation listTrustRules. */
 export interface ListTrustRulesInput {
   readonly path: {
@@ -2269,6 +2308,25 @@ export interface RotateNamespaceIssuerKeysInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation rotateTrustBundle. */
+export interface RotateTrustBundleInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly bundle: string;
+  };
+  readonly body: RotateTrustBundleRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation saveTrustBundle. */
+export interface SaveTrustBundleInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly body: SaveTrustBundleRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation setAccessLimit. */
 export interface SetAccessLimitInput {
   readonly path: {
@@ -2551,6 +2609,16 @@ export interface UpdateSettingsInput {
   readonly body: UpdateSettingsRequest;
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation updateTrustRule. */
+export interface UpdateTrustRuleInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly rule_id: string;
+  };
+  readonly body: UpdateTrustRuleRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -3264,6 +3332,23 @@ export const operations = {
       method: "DELETE",
       path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}",
       pathParameters: ["namespace", "unit_id", "trigger_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  deleteTrustBundleVersion: operation<void>(
+    {
+      id: "deleteTrustBundleVersion",
+      method: "DELETE",
+      path: "/api/dustpan/v1/namespaces/{namespace}/trust-bundles/{bundle}/versions/{version}",
+      pathParameters: ["namespace", "bundle", "version"],
       queryParameters: [],
       security: "caller",
       idempotencyKey: "none",
@@ -4210,6 +4295,23 @@ export const operations = {
     },
     ref(() => decodeTrigger),
   ),
+  getTrustBundle: operation<TrustBundle>(
+    {
+      id: "getTrustBundle",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/trust-bundles/{bundle}",
+      pathParameters: ["namespace", "bundle"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeTrustBundle),
+  ),
   getTrustRule: operation<TrustRule>(
     {
       id: "getTrustRule",
@@ -4890,6 +4992,23 @@ export const operations = {
     },
     ref(() => decodeListStoreChecksResponse),
   ),
+  listTrustBundles: operation<TrustBundleList>(
+    {
+      id: "listTrustBundles",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/trust-bundles",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeTrustBundleList),
+  ),
   listTrustRules: operation<TrustRuleList>(
     {
       id: "listTrustRules",
@@ -5365,6 +5484,40 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeNamespaceIssuerRotation),
+  ),
+  rotateTrustBundle: operation<TrustBundle>(
+    {
+      id: "rotateTrustBundle",
+      method: "PATCH",
+      path: "/api/dustpan/v1/namespaces/{namespace}/trust-bundles/{bundle}",
+      pathParameters: ["namespace", "bundle"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/merge-patch+json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeTrustBundle),
+  ),
+  saveTrustBundle: operation<TrustBundle>(
+    {
+      id: "saveTrustBundle",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/trust-bundles",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeTrustBundle),
   ),
   setAccessLimit: operation<AccessLimit>(
     {
@@ -5875,6 +6028,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeSettings),
+  ),
+  updateTrustRule: operation<TrustRule>(
+    {
+      id: "updateTrustRule",
+      method: "PATCH",
+      path: "/api/dustpan/v1/namespaces/{namespace}/trust-rules/{rule_id}",
+      pathParameters: ["namespace", "rule_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/merge-patch+json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeTrustRule),
   ),
   updateUnitContext: operation<ContextEntry>(
     {

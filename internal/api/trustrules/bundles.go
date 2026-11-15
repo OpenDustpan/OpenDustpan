@@ -1,6 +1,7 @@
 package trustrules
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -118,10 +119,9 @@ func (h *Handler) listBundles(w http.ResponseWriter, r *http.Request, _ identity
 
 	b, err := h.rules.GetBundle(ctx, obj.Namespace())
 
-	switch {
-	case err == nil:
+	if err == nil {
 		doc.Bundles = append(doc.Bundles, bundleDocumentOf(&b))
-	case !errors.Is(err, trustrule.ErrNotFound):
+	} else if !errors.Is(err, trustrule.ErrNotFound) {
 		h.writeError(ctx, w, err)
 
 		return
@@ -149,7 +149,7 @@ func (h *Handler) saveBundle(w http.ResponseWriter, r *http.Request, p identity.
 	}
 
 	b, err := h.rules.SaveBundle(ctx, p, h.entryOf(r, p), obj.Namespace(), trustrule.BundleFields{
-		PEM: *in.PEM, Overlap: 0,
+		PEM: *in.PEM, Overlap: 0, Revision: 0,
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -245,8 +245,8 @@ func (h *Handler) rotateBundle(w http.ResponseWriter, r *http.Request, p identit
 	}
 
 	b, err := h.rules.RotateBundle(ctx, p, h.entryOf(r, p), obj.Namespace(), trustrule.BundleFields{
-		PEM: *in.PEM, Overlap: overlap,
-	}, revision)
+		PEM: *in.PEM, Overlap: overlap, Revision: revision,
+	})
 	if err != nil {
 		h.writeBundleError(ctx, w, err)
 
@@ -288,12 +288,7 @@ func (h *Handler) deleteBundleVersion(
 
 // writeBundleError answers err as writeError does, except that a missing
 // bundle answers its own code and not the code of a missing rule.
-func (h *Handler) writeBundleError(ctx interface {
-	Done() <-chan struct{}
-	Err() error
-	Deadline() (time.Time, bool)
-	Value(key any) any
-}, w http.ResponseWriter, err error) {
+func (h *Handler) writeBundleError(ctx context.Context, w http.ResponseWriter, err error) {
 	if errors.Is(err, trustrule.ErrNotFound) {
 		h.writeError(ctx, w, problem.Fixed(http.StatusNotFound, errcode.TrustRuleBundleNotFound,
 			"the namespace has no trust bundle with this ID"))

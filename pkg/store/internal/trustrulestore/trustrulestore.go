@@ -95,10 +95,7 @@ func RowOf(r *trustrule.Rule) (Row, error) {
 		return Row{}, err
 	}
 
-	revision := r.Revision
-	if revision < 1 {
-		revision = 1
-	}
+	revision := max(r.Revision, 1)
 
 	return Row{
 		ID: string(r.ID), Namespace: r.Namespace.String(), Name: r.Name, Issuer: r.Issuer, Audience: r.Audience,

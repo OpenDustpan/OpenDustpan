@@ -272,6 +272,8 @@ type BundleFields struct {
 	// Overlap is the rotation overlap of a rotate, zero for a save. It must
 	// not exceed MaxOverlap.
 	Overlap time.Duration
+	// Revision is the stored revision that a rotate expects, zero for a save.
+	Revision int64
 }
 
 // ParseBundle checks the PEM text of a bundle save and returns its CA
@@ -281,7 +283,19 @@ type BundleFields struct {
 // more than MaxBundleCAs certificates. Now is the clock that expiry is
 // checked against.
 func ParseBundle(pemText string, now time.Time) ([]*x509.Certificate, error) {
-	return parseBundle(pemText, now, true)
+	certs, err := decodeBundle(pemText)
+	if err != nil {
+		return nil, err
+	}
+
+	for i, cert := range certs {
+		if now.After(cert.NotAfter) {
+			return nil, fmt.Errorf("%w: CA %d expired at %s", ErrBundle, i,
+				cert.NotAfter.UTC().Format(time.RFC3339))
+		}
+	}
+
+	return certs, nil
 }
 
 // ParseStoredBundle checks the PEM text of a stored bundle version like
@@ -289,11 +303,11 @@ func ParseBundle(pemText string, now time.Time) ([]*x509.Certificate, error) {
 // after one of its CAs expires, and the exchange refuses an expired CA when
 // it builds a chain.
 func ParseStoredBundle(pemText string) ([]*x509.Certificate, error) {
-	return parseBundle(pemText, time.Time{}, false)
+	return decodeBundle(pemText)
 }
 
-func parseBundle(pemText string, now time.Time, checkExpiry bool) ([]*x509.Certificate, error) {
-	if len(pemText) == 0 || len(pemText) > MaxBundleBytes {
+func decodeBundle(pemText string) ([]*x509.Certificate, error) {
+	if pemText == "" || len(pemText) > MaxBundleBytes {
 		return nil, fmt.Errorf("%w: the bundle is 1 to %d bytes, got %d", ErrBundle, MaxBundleBytes, len(pemText))
 	}
 
@@ -315,12 +329,7 @@ func parseBundle(pemText string, now time.Time, checkExpiry bool) ([]*x509.Certi
 
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("%w: CA %d does not parse: %v", ErrBundle, i, err)
-		}
-
-		if checkExpiry && now.After(cert.NotAfter) {
-			return nil, fmt.Errorf("%w: CA %d expired at %s", ErrBundle, i,
-				cert.NotAfter.UTC().Format(time.RFC3339))
+			return nil, fmt.Errorf("%w: CA %d does not parse: %w", ErrBundle, i, err)
 		}
 
 		out = append(out, cert)
@@ -349,8 +358,7 @@ func ValidateSpiffePattern(pattern string) error {
 	}
 
 	u, err := url.Parse(pattern)
-	if err != nil || u.Scheme != "spiffe" || u.Host == "" || u.User != nil || u.RawQuery != "" ||
-		u.Fragment != "" || u.ForceQuery || u.Opaque != "" || !strings.HasPrefix(u.Path, "/") {
+	if err != nil || !spiffeShape(u) {
 		return fmt.Errorf("%w: the SPIFFE ID pattern %s is not spiffe://<trust-domain>/<path>",
 			ErrInvalid, ident.Echo(pattern))
 	}
@@ -361,6 +369,19 @@ func ValidateSpiffePattern(pattern string) error {
 	}
 
 	return nil
+}
+
+// spiffeShape reports whether u has only a scheme, a host and a path.
+func spiffeShape(u *url.URL) bool {
+	if u.Scheme != "spiffe" || u.Host == "" || u.User != nil || u.Opaque != "" {
+		return false
+	}
+
+	if u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
+		return false
+	}
+
+	return strings.HasPrefix(u.Path, "/")
 }
 
 // CheckBundleRef returns ErrBundle when bundle is set but is not a bundle

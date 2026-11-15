@@ -247,6 +247,8 @@ var legacyFieldNames = map[string]string{
 	"backupID": "The backup and restore API spells the ID of a backup backupID, and the CLI and the console read it.",
 	"preBackupID": "The restore API spells the ID of the backup taken before the restore preBackupID, " +
 		"and the CLI and the console read it.",
+	"spiffeIDPattern": "The trust rule API spells the SPIFFE ID pattern of a rule spiffeIDPattern, because the " +
+		"tagliatelle goCamel rule of the linter demands it.",
 }
 
 // LegacyFieldNames returns a copy of the list of wire names that break the

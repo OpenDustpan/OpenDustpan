@@ -17,9 +17,18 @@ func sqliteTrustRuleBackupTables() []sqliteBackupTable {
 		{
 			table: backup.TableTrustRules,
 			columns: []string{
-				"id", "namespace", backupColName, backupColIssuer, "audience", "key_source", "static_keys",
+				"id", backupColNamespace, backupColName, backupColIssuer, "audience", "key_source", "static_keys",
 				"conditions_json", backupColPrincipalID, backupColCreatedBy, backupColCreatedAtMs,
+				"revision", "spiffe_id_pattern", backupColBundleID,
 			},
+		},
+		{
+			table:   backup.TableTrustBundles,
+			columns: []string{"id", backupColNamespace, "active_version", "revision", backupColCreatedAtMs},
+		},
+		{
+			table:   backup.TableTrustBundleVersions,
+			columns: []string{backupColBundleID, backupColVersion, "pem", backupColCreatedAtMs, "overlap_ends_at_ms"},
 		},
 	}
 }
@@ -36,7 +45,8 @@ func sqliteTrustRuleBackupTables() []sqliteBackupTable {
 // fails the restore and does not wait for a reader.
 func checkStagedTrustRules(ctx context.Context, conn *sql.DB) (err error) {
 	const query = `SELECT r.id, r.namespace, r.name, r.issuer, r.audience, r.key_source, r.static_keys,
-r.conditions_json, r.principal_id, r.created_by, r.created_at_ms, p.kind, p.namespace,
+r.conditions_json, r.principal_id, r.created_by, r.created_at_ms, r.revision, r.spiffe_id_pattern, r.bundle_id,
+p.kind, p.namespace,
 COALESCE(p.deleted_at_ms, 0), p.id IS NOT NULL
 FROM trust_rules AS r LEFT JOIN principals AS p ON p.id = r.principal_id`
 
@@ -60,8 +70,8 @@ FROM trust_rules AS r LEFT JOIN principals AS p ON p.id = r.principal_id`
 		)
 
 		scanErr := rows.Scan(&row.ID, &row.Namespace, &row.Name, &row.Issuer, &row.Audience, &row.KeySource,
-			&row.StaticKeys, &row.ConditionsJSON, &row.PrincipalID, &row.CreatedBy, &row.CreatedAtMs, &kind,
-			&principNS, &deletedAtMs, &found)
+			&row.StaticKeys, &row.ConditionsJSON, &row.PrincipalID, &row.CreatedBy, &row.CreatedAtMs,
+			&row.Revision, &row.SpiffeIDPattern, &row.BundleID, &kind, &principNS, &deletedAtMs, &found)
 		if scanErr != nil {
 			return fmt.Errorf("read staged trust rules: %w", backup.ErrExportRead)
 		}

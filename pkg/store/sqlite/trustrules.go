@@ -39,20 +39,8 @@ func (t TrustRules) Create(ctx context.Context, r trustrule.Rule, fence namespac
 	defer t.s.mu.RUnlock()
 
 	return t.s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		p, pErr := q.GetTrustRulePrincipal(ctx, r.PrincipalID)
-		if pErr != nil && !errors.Is(pErr, sql.ErrNoRows) {
-			return fmt.Errorf("select the principal of the trust rule: %w", pErr)
-		}
-
-		check := trustrulestore.PrincipalRow{
-			Kind: p.Kind, Namespace: p.Namespace, DeletedAtMs: p.DeletedAtMs, Found: pErr == nil,
-		}
-		if checkErr := trustrulestore.CheckPrincipal(check, r.Namespace); checkErr != nil {
-			return checkErr
-		}
-
-		if bundleErr := checkRuleBundle(ctx, q, row.BundleID, r.Namespace); bundleErr != nil {
-			return bundleErr
+		if refErr := checkRuleRefs(ctx, q, &row, r.Namespace); refErr != nil {
+			return refErr
 		}
 
 		n, insErr := q.InsertTrustRule(ctx, db.InsertTrustRuleParams{
@@ -194,49 +182,12 @@ func (t TrustRules) Update(
 			return fmt.Errorf("select trust rule: %w", getErr)
 		}
 
-		p, pErr := q.GetTrustRulePrincipal(ctx, r.PrincipalID)
-		if pErr != nil && !errors.Is(pErr, sql.ErrNoRows) {
-			return fmt.Errorf("select the principal of the trust rule: %w", pErr)
+		if refErr := checkRuleRefs(ctx, q, &row, ns); refErr != nil {
+			return refErr
 		}
 
-		check := trustrulestore.PrincipalRow{
-			Kind: p.Kind, Namespace: p.Namespace, DeletedAtMs: p.DeletedAtMs, Found: pErr == nil,
-		}
-		if checkErr := trustrulestore.CheckPrincipal(check, ns); checkErr != nil {
-			return checkErr
-		}
-
-		if bundleErr := checkRuleBundle(ctx, q, row.BundleID, ns); bundleErr != nil {
-			return bundleErr
-		}
-
-		taken, countErr := q.CountTrustRulesNamedInNamespace(ctx, db.CountTrustRulesNamedInNamespaceParams{
-			Namespace: ns.String(), Name: row.Name, ExceptID: row.ID,
-		})
-		if countErr != nil {
-			return fmt.Errorf("count the trust rules with the name: %w", countErr)
-		}
-
-		if taken > 0 {
-			return trustrule.ErrExists
-		}
-
-		if row.Revision != stored.Revision+1 {
-			return trustrule.ErrStale
-		}
-
-		n, updErr := q.UpdateTrustRule(ctx, db.UpdateTrustRuleParams{
-			Name: row.Name, Issuer: row.Issuer, Audience: row.Audience, KeySource: row.KeySource,
-			StaticKeys: row.StaticKeys, ConditionsJson: row.ConditionsJSON, PrincipalID: row.PrincipalID,
-			Revision: row.Revision, SpiffeIDPattern: row.SpiffeIDPattern, BundleID: row.BundleID,
-			Namespace: row.Namespace, ID: row.ID, StoredRevision: stored.Revision,
-		})
-		if updErr != nil {
-			return fmt.Errorf("update trust rule: %w", updErr)
-		}
-
-		if n == 0 {
-			return trustrule.ErrStale
+		if writeErr := writeRuleUpdate(ctx, q, &row, stored.Revision); writeErr != nil {
+			return writeErr
 		}
 
 		// The creator and the creation time are the stored ones.
@@ -256,6 +207,60 @@ func (t TrustRules) Update(
 	}
 
 	return out, nil
+}
+
+// checkRuleRefs checks the principal and the bundle that a rule row names, for
+// a write in the namespace ns.
+func checkRuleRefs(ctx context.Context, q *db.Queries, row *trustrulestore.Row, ns namespace.Name) error {
+	p, err := q.GetTrustRulePrincipal(ctx, row.PrincipalID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("select the principal of the trust rule: %w", err)
+	}
+
+	check := trustrulestore.PrincipalRow{
+		Kind: p.Kind, Namespace: p.Namespace, DeletedAtMs: p.DeletedAtMs, Found: err == nil,
+	}
+	if checkErr := trustrulestore.CheckPrincipal(check, ns); checkErr != nil {
+		return checkErr
+	}
+
+	return checkRuleBundle(ctx, q, row.BundleID, ns)
+}
+
+// writeRuleUpdate writes the rule row over the stored revision. A name that
+// another rule of the namespace has gives trustrule.ErrExists, and a revision
+// that is not one past the stored one gives trustrule.ErrStale.
+func writeRuleUpdate(ctx context.Context, q *db.Queries, row *trustrulestore.Row, storedRevision int64) error {
+	taken, err := q.CountTrustRulesNamedInNamespace(ctx, db.CountTrustRulesNamedInNamespaceParams{
+		Namespace: row.Namespace, Name: row.Name, ExceptID: row.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("count the trust rules with the name: %w", err)
+	}
+
+	if taken > 0 {
+		return trustrule.ErrExists
+	}
+
+	if row.Revision != storedRevision+1 {
+		return trustrule.ErrStale
+	}
+
+	n, err := q.UpdateTrustRule(ctx, db.UpdateTrustRuleParams{
+		Name: row.Name, Issuer: row.Issuer, Audience: row.Audience, KeySource: row.KeySource,
+		StaticKeys: row.StaticKeys, ConditionsJson: row.ConditionsJSON, PrincipalID: row.PrincipalID,
+		Revision: row.Revision, SpiffeIDPattern: row.SpiffeIDPattern, BundleID: row.BundleID,
+		Namespace: row.Namespace, ID: row.ID, StoredRevision: storedRevision,
+	})
+	if err != nil {
+		return fmt.Errorf("update trust rule: %w", err)
+	}
+
+	if n == 0 {
+		return trustrule.ErrStale
+	}
+
+	return nil
 }
 
 // checkRuleBundle returns trustrule.ErrBundle when a rule names a bundle that

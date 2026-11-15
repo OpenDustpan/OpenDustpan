@@ -76,16 +76,17 @@ type BundleStore interface {
 	// keeps the active pointer and retires versions past MaxBundleVersions.
 	// It returns ErrBundle for input that fails the checks, with the CA
 	// index in the message, and changes nothing.
-	SaveBundle(ctx context.Context, ns namespace.Name, f BundleFields, fence namespace.Fence, e audit.Entry) (Bundle, error)
+	SaveBundle(
+		ctx context.Context, ns namespace.Name, f BundleFields, fence namespace.Fence, e audit.Entry,
+	) (Bundle, error)
 	// RotateBundle checks the PEM text of f and the overlap, stores it as a
 	// new version, and moves the active pointer to it with
 	// overlapEndsAt = now + overlap. The overlap must not exceed MaxOverlap.
 	// It returns ErrBundle for input that fails the checks, ErrStale when
-	// revision is not the current revision of the bundle, and changes
+	// f.Revision is not the current revision of the bundle, and changes
 	// nothing on any error.
 	RotateBundle(
-		ctx context.Context, ns namespace.Name, f BundleFields, revision int64, fence namespace.Fence,
-		e audit.Entry,
+		ctx context.Context, ns namespace.Name, f BundleFields, fence namespace.Fence, e audit.Entry,
 	) (Bundle, error)
 	// GetBundle returns the bundle of the namespace ns, with all kept
 	// versions. It returns ErrNotFound for a namespace with no bundle, and

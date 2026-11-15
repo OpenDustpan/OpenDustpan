@@ -5,7 +5,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
 	"strings"
@@ -17,9 +16,9 @@ import (
 
 // testCA returns one self-signed CA certificate in PEM form. The helpers
 // build the certificates at run time so the source holds no certificate
-// text. Expired makes a CA whose validity ended, so the save must refuse it
-// with its index.
-func testCA(t *testing.T, expired bool) string {
+// text. A negative validity makes a CA whose validity ended, so the save must
+// refuse it with its index.
+func testCA(t *testing.T, validity time.Duration) string {
 	t.Helper()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -27,10 +26,7 @@ func testCA(t *testing.T, expired bool) string {
 		t.Fatalf("generate key: %v", err)
 	}
 
-	notAfter := time.Now().Add(24 * time.Hour)
-	if expired {
-		notAfter = time.Now().Add(-time.Hour)
-	}
+	notAfter := time.Now().Add(validity)
 
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
@@ -40,7 +36,7 @@ func testCA(t *testing.T, expired bool) string {
 	var tmpl x509.Certificate
 
 	tmpl.SerialNumber = serial
-	tmpl.Subject = pkix.Name{CommonName: "test CA"}
+	tmpl.Subject.CommonName = "test CA"
 	tmpl.NotBefore = time.Now().Add(-time.Hour)
 	tmpl.NotAfter = notAfter
 	tmpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature
@@ -52,7 +48,12 @@ func testCA(t *testing.T, expired bool) string {
 		t.Fatalf("create certificate: %v", err)
 	}
 
-	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	var block pem.Block
+
+	block.Type = "CERTIFICATE"
+	block.Bytes = der
+
+	return string(pem.EncodeToMemory(&block))
 }
 
 // TestBundleSaveRefusesBadPEM checks the boundary of a bundle save: each bad
@@ -67,7 +68,7 @@ func TestBundleSaveRefusesBadPEM(t *testing.T) {
 		t.Error("malformed PEM: ParseBundle = nil, want ErrBundle")
 	}
 
-	expired := testCA(t, true)
+	expired := testCA(t, -time.Hour)
 	if _, err := trustrule.ParseBundle(expired, now); err == nil {
 		t.Error("expired CA: ParseBundle = nil, want ErrBundle")
 	}
@@ -76,7 +77,7 @@ func TestBundleSaveRefusesBadPEM(t *testing.T) {
 		t.Error("empty bundle: ParseBundle = nil, want ErrBundle")
 	}
 
-	many := strings.Repeat(testCA(t, false), trustrule.MaxBundleCAs+1)
+	many := strings.Repeat(testCA(t, 24*time.Hour), trustrule.MaxBundleCAs+1)
 	if _, err := trustrule.ParseBundle(many, now); err == nil {
 		t.Error("11 CAs: ParseBundle = nil, want ErrBundle")
 	}
@@ -90,7 +91,7 @@ func TestBundleSaveRefusesBadPEM(t *testing.T) {
 		t.Error("non-certificate block: ParseBundle = nil, want ErrBundle")
 	}
 
-	good := testCA(t, false)
+	good := testCA(t, 24*time.Hour)
 	if _, err := trustrule.ParseBundle(good, now); err != nil {
 		t.Errorf("valid CA: ParseBundle = %v, want nil", err)
 	}

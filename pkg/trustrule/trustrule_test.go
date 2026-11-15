@@ -16,6 +16,7 @@ func validRule() trustrule.Rule {
 		CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), ID: trustrule.NewID(), Namespace: "acme",
 		Name: "deploy", Issuer: "https://token.actions.example.com", Audience: "https://dustpan.example.com",
 		Keys: trustrule.KeySourceDiscovery, StaticKeys: "", PrincipalID: "prn-worker", CreatedBy: "ada",
+		Revision: 1, SpiffeIDPattern: "", Bundle: "",
 		Conditions: []trustrule.Condition{
 			{Claim: "repository", Values: []string{"acme/infra"}},
 			{Claim: "sub", Values: []string{"repo:acme/infra:ref:refs/heads/main"}},

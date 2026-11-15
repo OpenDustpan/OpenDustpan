@@ -236,7 +236,9 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  RotateTrustBundleRequest,
   SaveTriggerRequest,
+  SaveTrustBundleRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
   SelfServiceBlueprint,
@@ -316,6 +318,9 @@ import type {
   TriggerLocationRequest,
   TriggerSourceRequest,
   TriggerUnit,
+  TrustBundle,
+  TrustBundleList,
+  TrustBundleVersion,
   TrustRule,
   TrustRuleCondition,
   TrustRuleKeySource,
@@ -352,6 +357,7 @@ import type {
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
   UpdateSettingsRequest,
+  UpdateTrustRuleRequest,
   UpgradeCheck,
   View,
   ViewLabel,
@@ -773,11 +779,13 @@ export const decodeCreateProfileRevisionRequest: Decoder<CreateProfileRevisionRe
 /** The validator of CreateTrustRuleRequest. */
 export const decodeCreateTrustRuleRequest: Decoder<CreateTrustRuleRequest> = object<CreateTrustRuleRequest>("CreateTrustRuleRequest", {
   audience: string,
+  bundle: optional(string),
   conditions: array(ref(() => decodeTrustRuleCondition)),
   issuer: string,
   keySource: ref(() => decodeTrustRuleKeySource),
   name: string,
   principal: string,
+  spiffeIDPattern: optional(string),
   staticKeys: optional(string),
 });
 
@@ -2096,12 +2104,23 @@ export const decodeRotateNamespaceIssuerKeysRequest: Decoder<RotateNamespaceIssu
   reason: string,
 });
 
+/** The validator of RotateTrustBundleRequest. */
+export const decodeRotateTrustBundleRequest: Decoder<RotateTrustBundleRequest> = object<RotateTrustBundleRequest>("RotateTrustBundleRequest", {
+  overlapSeconds: optional(int64),
+  pem: string,
+});
+
 /** The validator of SaveTriggerRequest. */
 export const decodeSaveTriggerRequest: Decoder<SaveTriggerRequest> = object<SaveTriggerRequest>("SaveTriggerRequest", {
   enabled: nullable(boolean),
   frequency: nullable(ref(() => decodeTriggerFrequency)),
   kind: ref(() => decodeTriggerKind),
   source: nullable(ref(() => decodeTriggerSourceRequest)),
+});
+
+/** The validator of SaveTrustBundleRequest. */
+export const decodeSaveTrustBundleRequest: Decoder<SaveTrustBundleRequest> = object<SaveTrustBundleRequest>("SaveTrustBundleRequest", {
+  pem: string,
 });
 
 /** The validator of SchemaBinaryBelowMinimumError. */
@@ -2656,9 +2675,34 @@ export const decodeTriggerUnit: Decoder<TriggerUnit> = object<TriggerUnit>("Trig
   tool: string,
 });
 
+/** The validator of TrustBundle. */
+export const decodeTrustBundle: Decoder<TrustBundle> = object<TrustBundle>("TrustBundle", {
+  active: int64,
+  createdAt: dateTime,
+  id: string,
+  namespace: string,
+  overlapEndsAt: nullable(dateTime),
+  revision: int64,
+  versions: array(ref(() => decodeTrustBundleVersion)),
+});
+
+/** The validator of TrustBundleList. */
+export const decodeTrustBundleList: Decoder<TrustBundleList> = object<TrustBundleList>("TrustBundleList", {
+  bundles: array(ref(() => decodeTrustBundle)),
+});
+
+/** The validator of TrustBundleVersion. */
+export const decodeTrustBundleVersion: Decoder<TrustBundleVersion> = object<TrustBundleVersion>("TrustBundleVersion", {
+  caCount: int64,
+  createdAt: dateTime,
+  number: int64,
+  overlapEndsAt: nullable(dateTime),
+});
+
 /** The validator of TrustRule. */
 export const decodeTrustRule: Decoder<TrustRule> = object<TrustRule>("TrustRule", {
   audience: string,
+  bundle: string,
   conditions: array(ref(() => decodeTrustRuleCondition)),
   createdAt: dateTime,
   createdBy: string,
@@ -2668,6 +2712,8 @@ export const decodeTrustRule: Decoder<TrustRule> = object<TrustRule>("TrustRule"
   name: string,
   namespace: string,
   principal: string,
+  revision: int64,
+  spiffeIDPattern: string,
   staticKeys: string,
 });
 
@@ -2942,6 +2988,19 @@ export const decodeUpdatePreferencesRequest: Decoder<UpdatePreferencesRequest> =
 
 /** The validator of UpdateSettingsRequest. */
 export const decodeUpdateSettingsRequest: Decoder<UpdateSettingsRequest> = record(anyValue);
+
+/** The validator of UpdateTrustRuleRequest. */
+export const decodeUpdateTrustRuleRequest: Decoder<UpdateTrustRuleRequest> = object<UpdateTrustRuleRequest>("UpdateTrustRuleRequest", {
+  audience: optional(string),
+  bundle: optional(string),
+  conditions: optional(array(ref(() => decodeTrustRuleCondition))),
+  issuer: optional(string),
+  keySource: optional(ref(() => decodeTrustRuleKeySource)),
+  name: optional(string),
+  principal: optional(string),
+  spiffeIDPattern: optional(string),
+  staticKeys: optional(string),
+});
 
 /** The validator of UpgradeCheck. */
 export const decodeUpgradeCheck: Decoder<UpgradeCheck> = object<UpgradeCheck>("UpgradeCheck", {

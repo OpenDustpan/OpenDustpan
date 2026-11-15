@@ -329,7 +329,7 @@ func staticRule(jwks, name, principalID string) trustrule.Rule {
 	return trustrule.Rule{
 		CreatedAt: exchangeNow(), ID: trustrule.NewID(), Namespace: "acme", Name: name, Issuer: staticIssuer,
 		Audience: "https://dustpan.example.com", Keys: trustrule.KeySourceStatic, StaticKeys: jwks,
-		PrincipalID: principalID, CreatedBy: "ada",
+		PrincipalID: principalID, CreatedBy: "ada", Revision: 0, SpiffeIDPattern: "", Bundle: "",
 		Conditions: []trustrule.Condition{{Claim: "sub", Values: []string{"repo:acme/infra:ref:refs/heads/main"}}},
 	}
 }

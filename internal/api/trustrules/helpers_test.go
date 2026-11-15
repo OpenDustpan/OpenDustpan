@@ -16,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/trustrules"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -223,7 +224,7 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 		e.t.Fatalf("handler: %v", err)
 	}
 
-	srv := httptest.NewServer(h)
+	srv := httptest.NewServer(withTestSession(h))
 	e.t.Cleanup(srv.Close)
 
 	e.server, e.handler = srv, h
@@ -294,8 +295,41 @@ func (e *env) storePrincipal(id, subject string, ns namespace.Name, kind princip
 	return id
 }
 
-// do sends a request with the given token and body.
+// sessionHeader makes the test server carry a console session with a sign-in
+// of now on the request, as the session checker of the server does.
+const sessionHeader = "X-Test-Session"
+
+// withTestSession wraps h so that a request with sessionHeader carries a
+// fresh console session in its context.
+func withTestSession(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(sessionHeader) == "1" {
+			ctx := sessionauth.WithSession(r.Context())
+			ctx = sessionauth.WithSignIn(ctx, sessionauth.SignIn{At: time.Now(), Provider: "local"})
+			r = r.WithContext(ctx)
+		}
+
+		h.ServeHTTP(w, r)
+	})
+}
+
+// do sends a request with the given token and body, with a fresh console
+// session.
 func (e *env) do(method, path, token, body string) (int, []byte) {
+	e.t.Helper()
+
+	return e.send(method, path, token, body, map[string]string{sessionHeader: "1"})
+}
+
+// doTokenOnly sends a request with the given token and no console session.
+func (e *env) doTokenOnly(method, path, token, body string) (int, []byte) {
+	e.t.Helper()
+
+	return e.send(method, path, token, body, nil)
+}
+
+// send sends a request. The header map holds more request headers.
+func (e *env) send(method, path, token, body string, header map[string]string) (int, []byte) {
 	e.t.Helper()
 
 	req, err := http.NewRequestWithContext(e.t.Context(), method, e.server.URL+path, strings.NewReader(body))
@@ -305,6 +339,10 @@ func (e *env) do(method, path, token, body string) (int, []byte) {
 
 	if token != "" {
 		req.Header.Set("Authorization", "token "+token)
+	}
+
+	for k, v := range header {
+		req.Header.Set(k, v)
 	}
 
 	resp, err := e.server.Client().Do(req)

@@ -45,6 +45,7 @@ import type {
   DeletePrincipalGitHostLinkInput,
   DeleteProfileInput,
   DeleteTriggerInput,
+  DeleteTrustBundleVersionInput,
   DeleteTrustRuleInput,
   DeleteUnitAccessLimitInput,
   DeleteUnitContextInput,
@@ -100,6 +101,7 @@ import type {
   GetSourceFilterInput,
   GetStoreCheckInput,
   GetTriggerInput,
+  GetTrustBundleInput,
   GetTrustRuleInput,
   GetUnitAccessLimitInput,
   GetUnitContextInput,
@@ -140,6 +142,7 @@ import type {
   ListRegistryProvidersInput,
   ListRestoresInput,
   ListStoreChecksInput,
+  ListTrustBundlesInput,
   ListTrustRulesInput,
   ListUnitAccessLimitsInput,
   ListUnitGatesInput,
@@ -168,6 +171,8 @@ import type {
   ResetUnitSettingsInput,
   RetireBlueprintVersionInput,
   RotateNamespaceIssuerKeysInput,
+  RotateTrustBundleInput,
+  SaveTrustBundleInput,
   SetAccessLimitInput,
   SetApprovalDefaultInput,
   SetApprovalRuleInput,
@@ -198,6 +203,7 @@ import type {
   UpdatePlacementRuleInput,
   UpdatePreferencesInput,
   UpdateSettingsInput,
+  UpdateTrustRuleInput,
   UpdateUnitContextInput,
   WriteBlueprintDraftInput,
 } from "./operations.js";
@@ -418,7 +424,9 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  RotateTrustBundleRequest,
   SaveTriggerRequest,
+  SaveTrustBundleRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
   SelfServiceBlueprint,
@@ -498,6 +506,9 @@ import type {
   TriggerLocationRequest,
   TriggerSourceRequest,
   TriggerUnit,
+  TrustBundle,
+  TrustBundleList,
+  TrustBundleVersion,
   TrustRule,
   TrustRuleCondition,
   TrustRuleKeySource,
@@ -534,6 +545,7 @@ import type {
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
   UpdateSettingsRequest,
+  UpdateTrustRuleRequest,
   UpgradeCheck,
   View,
   ViewLabel,
@@ -714,6 +726,10 @@ export class Client {
 
   deleteTrigger(input: DeleteTriggerInput): Promise<Answer<void>> {
     return execute(this.transport, operations.deleteTrigger, input);
+  }
+
+  deleteTrustBundleVersion(input: DeleteTrustBundleVersionInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.deleteTrustBundleVersion, input);
   }
 
   deleteTrustRule(input: DeleteTrustRuleInput): Promise<Answer<void>> {
@@ -936,6 +952,10 @@ export class Client {
     return execute(this.transport, operations.getTrigger, input);
   }
 
+  getTrustBundle(input: GetTrustBundleInput): Promise<Answer<TrustBundle>> {
+    return execute(this.transport, operations.getTrustBundle, input);
+  }
+
   getTrustRule(input: GetTrustRuleInput): Promise<Answer<TrustRule>> {
     return execute(this.transport, operations.getTrustRule, input);
   }
@@ -1096,6 +1116,10 @@ export class Client {
     return execute(this.transport, operations.listStoreChecks, input);
   }
 
+  listTrustBundles(input: ListTrustBundlesInput): Promise<Answer<TrustBundleList>> {
+    return execute(this.transport, operations.listTrustBundles, input);
+  }
+
   listTrustRules(input: ListTrustRulesInput): Promise<Answer<TrustRuleList>> {
     return execute(this.transport, operations.listTrustRules, input);
   }
@@ -1206,6 +1230,14 @@ export class Client {
 
   rotateNamespaceIssuerKeys(input: RotateNamespaceIssuerKeysInput): Promise<Answer<NamespaceIssuerRotation>> {
     return execute(this.transport, operations.rotateNamespaceIssuerKeys, input);
+  }
+
+  rotateTrustBundle(input: RotateTrustBundleInput): Promise<Answer<TrustBundle>> {
+    return execute(this.transport, operations.rotateTrustBundle, input);
+  }
+
+  saveTrustBundle(input: SaveTrustBundleInput): Promise<Answer<TrustBundle>> {
+    return execute(this.transport, operations.saveTrustBundle, input);
   }
 
   setAccessLimit(input: SetAccessLimitInput): Promise<Answer<AccessLimit>> {
@@ -1326,6 +1358,10 @@ export class Client {
 
   updateSettings(input: UpdateSettingsInput): Promise<Answer<Settings>> {
     return execute(this.transport, operations.updateSettings, input);
+  }
+
+  updateTrustRule(input: UpdateTrustRuleInput): Promise<Answer<TrustRule>> {
+    return execute(this.transport, operations.updateTrustRule, input);
   }
 
   updateUnitContext(input: UpdateUnitContextInput): Promise<Answer<ContextEntry>> {

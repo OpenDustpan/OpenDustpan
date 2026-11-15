@@ -65,6 +65,7 @@ const (
 	pgColStatus      = "status"
 	pgColUpdateID    = "update_id"
 	pgColVersion     = "version"
+	pgColBundleID    = "bundle_id"
 	pgColUpdatedAtMs = "updated_at_ms"
 	pgColDeletedAtMs = "deleted_at_ms"
 	pgColSource      = "source"

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -182,8 +182,8 @@ func newFixture(t *testing.T) fixture {
 	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz, Reach: reach,
 		InstallationURLs: []string{"https://dustpan.example.com", "https://issuer.example.com/base/"}, OwnIssuer: nil,
-		CheckURL: nil,
-		Now:      nil,
+		CheckURL: nil, Bundles: nil, Sessions: nil,
+		Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -215,6 +215,7 @@ func input() trustrulesvc.Input {
 	return trustrulesvc.Input{
 		Name: "deploy", Issuer: "https://token.actions.example.com", Audience: "https://dustpan.example.com",
 		Keys: trustrule.KeySourceDiscovery, StaticKeys: "", PrincipalID: "prn-worker",
+		SpiffeIDPattern: "", Bundle: "",
 		Conditions: []trustrule.Condition{
 			{Claim: "sub", Values: []string{"repo:acme/infra:ref:refs/heads/main"}},
 			{Claim: "repository", Values: []string{"acme/infra"}},
@@ -572,7 +573,7 @@ func TestCreateRefusesWithNoReachChecker(t *testing.T) {
 
 	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz, Reach: nil,
-		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil,
+		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil, Bundles: nil, Sessions: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -651,7 +652,7 @@ func TestNewServiceNeedsItsPorts(t *testing.T) {
 			Principals:       fakePrincipals{},
 			Authorizer:       &grants{allow: nil, checked: nil, err: nil},
 			Reach:            &fakeReach{checked: nil, err: nil},
-			InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil,
+			InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Bundles: nil, Sessions: nil,
 			Now: nil,
 		}
 	}

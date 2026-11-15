@@ -51,7 +51,7 @@ func signedRule(t *testing.T, issuer, tokenIssuer string) (trustrule.Rule, strin
 	r := trustrule.Rule{
 		CreatedAt: internalNow(), ID: trustrule.NewID(), Namespace: "acme", Name: "deploy", Issuer: issuer,
 		Audience: "https://dustpan.example.com", Keys: trustrule.KeySourceStatic, StaticKeys: jwks,
-		PrincipalID: "prn-worker", CreatedBy: "ada",
+		PrincipalID: "prn-worker", CreatedBy: "ada", Revision: 0, SpiffeIDPattern: "", Bundle: "",
 		Conditions: []trustrule.Condition{{Claim: "sub", Values: []string{"repo:acme/infra:ref:refs/heads/main"}}},
 	}
 

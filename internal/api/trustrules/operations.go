@@ -18,6 +18,8 @@ func operationLabels() map[string]apidesc.Label {
 		string(trustrule.KeySourceDiscovery), string(trustrule.KeySourceStatic))
 	condition := apidesc.Named[conditionDocument]("TrustRuleCondition")
 	rule := apidesc.Typed[ruleDocument]("TrustRule", keySource, condition)
+	version := apidesc.Named[bundleVersionDocument]("TrustBundleVersion")
+	bundle := apidesc.Typed[bundleDocument]("TrustBundle", version)
 
 	return map[string]apidesc.Label{
 		apidesc.Pattern(http.MethodGet, RulesPath): apidesc.Name("listTrustRules", tag).
@@ -30,7 +32,26 @@ func operationLabels() map[string]apidesc.Label {
 		apidesc.Pattern(http.MethodGet, RulePath): apidesc.Name("getTrustRule", tag).
 			On(apidesc.KindNamespace).
 			WithBodies(apidesc.NoBody, rule),
+		apidesc.Pattern(http.MethodPatch, RulePath): apidesc.Name("updateTrustRule", tag).
+			On(apidesc.KindNamespace).
+			WithBodies(apidesc.Typed[updateRequest]("UpdateTrustRuleRequest", keySource, condition), rule),
 		apidesc.Pattern(http.MethodDelete, RulePath): apidesc.Name("deleteTrustRule", tag).
+			On(apidesc.KindNamespace).
+			WithBodies(apidesc.NoBody, apidesc.NoBody),
+		apidesc.Pattern(http.MethodGet, BundlesPath): apidesc.Name("listTrustBundles", tag).
+			On(apidesc.KindNamespace).
+			WithBodies(apidesc.NoBody, apidesc.Typed[bundleListDocument]("TrustBundleList", version,
+				apidesc.Named[bundleDocument]("TrustBundle"))),
+		apidesc.Pattern(http.MethodPost, BundlesPath): apidesc.Name("saveTrustBundle", tag).
+			On(apidesc.KindNamespace).
+			WithBodies(apidesc.Typed[saveBundleRequest]("SaveTrustBundleRequest"), bundle),
+		apidesc.Pattern(http.MethodGet, BundlePath): apidesc.Name("getTrustBundle", tag).
+			On(apidesc.KindNamespace).
+			WithBodies(apidesc.NoBody, bundle),
+		apidesc.Pattern(http.MethodPatch, BundlePath): apidesc.Name("rotateTrustBundle", tag).
+			On(apidesc.KindNamespace).
+			WithBodies(apidesc.Typed[rotateBundleRequest]("RotateTrustBundleRequest"), bundle),
+		apidesc.Pattern(http.MethodDelete, BundleVersionPath): apidesc.Name("deleteTrustBundleVersion", tag).
 			On(apidesc.KindNamespace).
 			WithBodies(apidesc.NoBody, apidesc.NoBody),
 		apidesc.Pattern(http.MethodPost, ExchangePath): apidesc.Name("exchangeWorkloadToken", tag).

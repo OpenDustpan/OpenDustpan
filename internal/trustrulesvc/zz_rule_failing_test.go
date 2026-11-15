@@ -2,7 +2,6 @@ package trustrulesvc_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -19,7 +18,16 @@ import (
 // refuse before the bundles port is reached. It lets rule reads pass.
 type failingStore struct {
 	fakeStore
+
 	updated []trustrule.Rule
+}
+
+// renameInput returns the update of the rule id that sets its name.
+func renameInput(id trustrule.ID, name string, revision int64) trustrulesvc.UpdateInput {
+	return trustrulesvc.UpdateInput{
+		ID: id, Name: name, Issuer: "", Audience: "", Keys: "", KeysSet: false, StaticKeys: nil, PrincipalID: "",
+		Conditions: nil, ConditionsSet: false, SpiffeIDPattern: nil, Bundle: nil, ExpectedRevision: revision,
+	}
 }
 
 func (f *failingStore) Update(
@@ -47,7 +55,7 @@ func fixtureWithStore(t *testing.T) (fixture, *failingStore, time.Time) {
 	t.Helper()
 
 	f := newFixture(t)
-	fs := &failingStore{fakeStore: *f.store}
+	fs := &failingStore{fakeStore: *f.store, updated: nil}
 	f.store = &fs.fakeStore
 	now := time.Now()
 
@@ -55,8 +63,8 @@ func fixtureWithStore(t *testing.T) (fixture, *failingStore, time.Time) {
 		Store: fs, Namespaces: fakeNamespaces{}, Principals: servicePrincipals(), Authorizer: f.authz,
 		Reach:            f.reach,
 		InstallationURLs: []string{"https://dustpan.example.com", "https://issuer.example.com/base/"}, OwnIssuer: nil,
-		CheckURL: nil,
-		Now:      func() time.Time { return now },
+		CheckURL: nil, Bundles: nil, Sessions: nil,
+		Now: func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -128,8 +136,8 @@ func TestRuleUpdateNeedsETag(t *testing.T) {
 
 	id := trustrule.NewID()
 
-	if _, err := f.svc.Update(ctx, person(), emptyEntry(), "acme", id,
-		trustrulesvc.UpdateInput{Name: "deploy-2", ExpectedRevision: 0}); err == nil {
+	_, err := f.svc.Update(ctx, person(), emptyEntry(), "acme", renameInput(id, "deploy-2", 0))
+	if err == nil {
 		t.Error("update with a stale revision = nil, want trustrule.ErrStale")
 	}
 
@@ -190,8 +198,8 @@ func TestTokenAloneRefused(t *testing.T) {
 			t.Errorf("%s: create with a token only = nil, want a refusal", name)
 		}
 
-		if _, err := f.svc.Update(ctx, caller, emptyEntry(), "acme", trustrule.NewID(),
-			trustrulesvc.UpdateInput{Name: "x", ExpectedRevision: 1}); err == nil {
+		_, updateErr := f.svc.Update(ctx, caller, emptyEntry(), "acme", renameInput(trustrule.NewID(), "x", 1))
+		if updateErr == nil {
 			t.Errorf("%s: update with a token only = nil, want a refusal", name)
 		}
 
@@ -199,8 +207,9 @@ func TestTokenAloneRefused(t *testing.T) {
 			t.Errorf("%s: delete with a token only = nil, want a refusal", name)
 		}
 
-		if _, err := f.svc.SaveBundle(ctx, caller, emptyEntry(), "acme",
-			trustrule.BundleFields{PEM: "x"}); err == nil {
+		_, saveErr := f.svc.SaveBundle(ctx, caller, emptyEntry(), "acme",
+			trustrule.BundleFields{PEM: "x", Overlap: 0, Revision: 0})
+		if saveErr == nil {
 			t.Errorf("%s: bundle save with a token only = nil, want a refusal", name)
 		}
 
@@ -209,6 +218,3 @@ func TestTokenAloneRefused(t *testing.T) {
 		}
 	}
 }
-
-// unused keeps the errors import used when the cases above change.
-var _ = errors.New

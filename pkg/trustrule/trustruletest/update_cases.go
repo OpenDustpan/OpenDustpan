@@ -289,7 +289,7 @@ func bundleOf(t *testing.T, h Harness, ns namespace.Name) string {
 
 	fence := h.Namespace(t, ns.String())
 
-	b, err := h.Bundles.SaveBundle(t.Context(), ns, trustrule.BundleFields{PEM: testCA(t, false)}, fence,
+	b, err := h.Bundles.SaveBundle(t.Context(), ns, saveFields(testCA(t)), fence,
 		bundleEntry(ns, "save"))
 	if err != nil {
 		t.Fatalf("save bundle: %v", err)
