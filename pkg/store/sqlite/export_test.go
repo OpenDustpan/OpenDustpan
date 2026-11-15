@@ -3,6 +3,7 @@ package sqlite //nolint:testpackage // The white-box template state is unexporte
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -15,6 +16,32 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
+
+// RunWithoutForeignKeys runs query with args on one connection of sqlDB with
+// the foreign key checks off, as a restore or a failover changes a row.
+func RunWithoutForeignKeys(ctx context.Context, sqlDB *sql.DB, query string, args ...any) error {
+	pinned, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("take a connection: %w", err)
+	}
+
+	runErr := func() error {
+		if _, err := pinned.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+			return fmt.Errorf("turn foreign key checks off: %w", err)
+		}
+
+		if _, err := pinned.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("%s: %w", query, err)
+		}
+
+		return nil
+	}()
+	if closeErr := pinned.Close(); closeErr != nil {
+		return fmt.Errorf("release the connection: %w", errors.Join(runErr, closeErr))
+	}
+
+	return runErr
+}
 
 // DB returns the database handle of s, so a test can read or change rows
 // with direct SQL.
