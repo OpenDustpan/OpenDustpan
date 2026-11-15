@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
@@ -348,6 +349,12 @@ func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request, _ identity
 // which writes no audit entry and keeps the revision. A change that reduces
 // security needs a fresh authentication. Any other refused change changes
 // nothing and writes one failure entry.
+//
+// A request with an Idempotency-Key runs inside the idempotency middleware. The
+// store keeps the answer in the transaction of the change, so a replay with the
+// same body answers the stored result and writes nothing. The same key with
+// another body or another If-Match is refused with 422. The caller is
+// authorized before this handler runs: a replay never skips that check.
 func (h *Handler) patchSettings(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
@@ -357,6 +364,36 @@ func (h *Handler) patchSettings(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
+	h.keyed(w, r, p, keyedCall{
+		build: settingsAnswer,
+		serve: func(w http.ResponseWriter, r *http.Request) { h.writeSettingsPatch(w, r, p, obj) },
+	})
+}
+
+// settingsAnswer makes the stored answer of a change from its result. The
+// stored answer and the sent answer are one.
+func settingsAnswer(result any) (idempotency.Answer, error) {
+	res, ok := result.(setting.Result)
+	if !ok {
+		return idempotency.Answer{}, errGitHostResult
+	}
+
+	answer, err := jsonAnswer(http.StatusOK, 0, settingsOf(res.Resource), "")
+	if err != nil {
+		return idempotency.Answer{}, err
+	}
+
+	// The revision 0 is a valid ETag, which jsonAnswer leaves out.
+	answer.Headers["Etag"] = settingsETag(res.Resource.Revision)
+
+	return answer, nil
+}
+
+// writeSettingsPatch runs the change of a PATCH and writes its answer.
+func (h *Handler) writeSettingsPatch(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
 	scope := settingScope(obj)
 
 	patch, revision, err := h.readSettingsPatch(w, r, scope)
@@ -373,9 +410,14 @@ func (h *Handler) patchSettings(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("ETag", settingsETag(res.Resource.Revision))
-	h.writeJSON(ctx, w, http.StatusOK, settingsOf(res.Resource))
+	answer, err := settingsAnswer(res)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	writeAnswer(w, answer)
 }
 
 // readSettingsPatch reads and checks the request of a PATCH: the content type,
