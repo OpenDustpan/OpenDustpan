@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -104,6 +105,50 @@ func TestCheckStagedTriggers(t *testing.T) {
 	}
 }
 
+// TestCheckStagedTriggersRefusesANextSlotInTheFuture proves the restore check:
+// an enabled hourly trigger whose next slot is in 2100 would never be due, so
+// the schedule would stop. The staged row is corrupt.
+func TestCheckStagedTriggersRefusesANextSlotInTheFuture(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	seedTriggers(t, s)
+
+	next := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+
+	_, err := s.pool.Exec(t.Context(),
+		`UPDATE triggers SET preset = '', cron = '0 * * * *', next_slot_ms = $1 WHERE id = 's1'`, next)
+	if err != nil {
+		t.Fatalf("change the row: %v", err)
+	}
+
+	err = checkStagedTriggers(t.Context(), s.pool, currentSchema(t, s))
+	if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, triggerstore.ErrCorrupt) {
+		t.Fatalf("check = %v, want ErrCorrupt of the backup and of the store", err)
+	}
+}
+
+// TestCheckStagedTriggersReadsTheClockOfTheDatabase proves the layer of the
+// clock: the restore check takes its time from the database, through the
+// DatabaseNowMs statement, and not from the clock of the process.
+func TestCheckStagedTriggersReadsTheClockOfTheDatabase(t *testing.T) {
+	t.Parallel()
+
+	log := &statementLog{mu: sync.Mutex{}, sql: nil}
+	s := openWithStatementLog(t, log)
+	seedTriggers(t, s)
+
+	log.reset()
+
+	if err := checkStagedTriggers(t.Context(), s.pool, currentSchema(t, s)); err != nil {
+		t.Fatalf("check = %v, want nil", err)
+	}
+
+	if !log.saw("DatabaseNowMs") {
+		t.Error("the restore check did not read the clock of the database")
+	}
+}
+
 // TestCheckStagedTriggersRefusesAMissingNamespace proves that a trigger whose
 // namespace the backup does not hold is corrupt. An inner join would skip such a
 // row, and the restore would bring it in.
@@ -148,7 +193,7 @@ func TestScanStagedTriggerReturnsTheZeroRowOnError(t *testing.T) {
 	}{
 		"no namespace": {
 			query: `SELECT NULL::text, 'f1', 'opentofu', 'b', 'follows', '', '', 'acme', 'opentofu', 'a', 1::bigint,
-'user:ada', 'prn-user:ada', 1::bigint, 2::bigint`,
+'user:ada', 'prn-user:ada', 1::bigint, 2::bigint, 0::bigint`,
 			want: backup.ErrCorrupt,
 		},
 		"a row with too few columns": {query: `SELECT 'acme', 'f1'`, want: backup.ErrExportRead},
