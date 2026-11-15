@@ -828,7 +828,7 @@ func (errAuthorizer) Authorize(context.Context, identity.Principal, identity.Act
 func TestLockedTextHasNoTerminalControls(t *testing.T) {
 	t.Parallel()
 
-	hostile := "ok\x1b[2J\x1b]0;owned\x07\r\nforged: line‮evil ​\x00\xff"
+	hostile := "ok\x1b[2J\x1b]0;owned\x07\r\nforged: line\xe2\x80\xaeevil\xe2\x80\xa8\xe2\x80\x8b\x00\xff"
 
 	cases := []struct {
 		name   string
@@ -877,13 +877,13 @@ func TestSafeText(t *testing.T) {
 
 	cases := []struct{ name, in, want string }{
 		{name: "plain", in: "freeze for audit", want: "freeze for audit"},
-		{name: "unicode letters", in: "gel été 日本", want: "gel été 日本"},
+		{name: "unicode letters", in: "gel \xc3\xa9t\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac", want: "gel \xc3\xa9t\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac"},
 		{name: "escape", in: "a\x1bb", want: "a\\u001Bb"},
-		{name: "bidi override", in: "a‮b", want: "a\\u202Eb"},
-		{name: "line separator", in: "a b", want: "a\\u2028b"},
-		{name: "paragraph separator", in: "a b", want: "a\\u2029b"},
-		{name: "next line control", in: "a\u0085b", want: "a\\u0085b"},
-		{name: "bad bytes", in: "a\xffb", want: "a�b"},
+		{name: "bidi override", in: "a\xe2\x80\xaeb", want: "a\\u202Eb"},
+		{name: "line separator", in: "a\xe2\x80\xa8b", want: "a\\u2028b"},
+		{name: "paragraph separator", in: "a\xe2\x80\xa9b", want: "a\\u2029b"},
+		{name: "next line control", in: "a\xc2\x85b", want: "a\\u0085b"},
+		{name: "bad bytes", in: "a\xffb", want: "a\xef\xbf\xbdb"},
 	}
 
 	for _, tc := range cases {
