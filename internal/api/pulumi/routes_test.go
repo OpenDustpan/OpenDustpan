@@ -1224,6 +1224,7 @@ func testRenameEntry(ns namespace.Name, ref stack.Ref) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 }
 

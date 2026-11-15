@@ -32,6 +32,7 @@ func (f accessFixture) sessionOf(t *testing.T, subject string, authTime time.Tim
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelConsole, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	_, secret, err := f.sessions.Start(t.Context(), entry, session.Start{
@@ -224,6 +225,7 @@ func (s storeSessions) start(t *testing.T, req *http.Request, age time.Duration)
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelConsole, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	_, secret, err := s.svc.Start(t.Context(), entry, session.Start{

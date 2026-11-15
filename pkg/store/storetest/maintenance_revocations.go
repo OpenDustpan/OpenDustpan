@@ -184,6 +184,7 @@ func revEntry(object string, when time.Time) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

@@ -2322,6 +2322,7 @@ func (s *Server) sweepTempAdminsOnce(ctx context.Context) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	})
 
 	switch {

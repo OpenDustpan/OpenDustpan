@@ -417,6 +417,7 @@ func TestStalePasswordSessionGetsNoStartLink(t *testing.T) {
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelConsole, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	_, secret, err := f.sessions.Start(t.Context(), e, session.Start{

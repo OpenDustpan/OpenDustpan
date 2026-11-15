@@ -53,6 +53,7 @@ func settingEntry(fence namespace.Fence) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 }
 
