@@ -1,18 +1,12 @@
 package postgres
 
 import (
-	"os"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
-	"opendustpan.org/opendustpan/internal/pgtest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
-
-// placementURLEnv names the variable holding the PostgreSQL URL of the
-// placement rule tests. The tests skip when it is empty.
-const placementURLEnv = "DUSTPAN_TEST_POSTGRES_URL"
 
 // placementRuleInsert is the raw insert of one placement rule row. Only the
 // columns that differ between the rows of these tests stay placeholders.
@@ -41,7 +35,7 @@ func TestPlacementRuleRawRowIsTiedToTheNamespaceOfItsCollection(t *testing.T) {
 	_, err = seed.s.pool.Exec(t.Context(), placementRuleInsert,
 		ident.NewID("plr-"), seed.alpha.Name.String(), seed.colID, 1_700_000_000_001,
 	)
-	if !isForeignKeyError(err) {
+	if !isForeignKeyViolation(err) {
 		t.Fatalf("insert a rule of alpha that names the collection of beta = %v, want a foreign key error", err)
 	}
 }
@@ -65,12 +59,7 @@ func newPlacementSeed(t *testing.T) placementSeed {
 	ctx := t.Context()
 	at := time.UnixMilli(1_700_000_000_000).UTC()
 
-	s, err := Open(ctx, pgtest.MigratedURL(t, placementURL(t)))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(s.Close)
+	s := openKeepLockStore(t, testPostgresURL(t))
 
 	seed := placementSeed{
 		s:     s,
@@ -79,7 +68,7 @@ func newPlacementSeed(t *testing.T) placementSeed {
 		colID: ident.NewID("col-"),
 	}
 
-	_, err = s.pool.Exec(ctx,
+	_, err := s.pool.Exec(ctx,
 		`INSERT INTO collections (id, namespace, name_key, name, created_at_ms)
 		VALUES ($1, $2, 'beta-one', 'beta-one', $3)`,
 		seed.colID, seed.beta.Name.String(), at.UnixMilli(),
@@ -108,17 +97,4 @@ func placementNamespace(
 	}
 
 	return ns
-}
-
-// placementURL returns a URL for a migrated schema in a database of its own.
-// It skips the test when the environment names no database.
-func placementURL(t *testing.T) string {
-	t.Helper()
-
-	base := os.Getenv(placementURLEnv)
-	if base == "" {
-		t.Skipf("set %s to run the PostgreSQL placement rule tests", placementURLEnv)
-	}
-
-	return pgtest.MigratedURL(t, base)
 }
