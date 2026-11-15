@@ -23,6 +23,7 @@ func TestPrincipalKindValuesAgree(t *testing.T) {
 		{"person", identity.KindPerson, principal.KindPerson, audit.PrincipalKindPerson},
 		{"service", identity.KindService, principal.KindService, audit.PrincipalKindService},
 		{"workload", identity.KindWorkload, principal.KindWorkload, audit.PrincipalKindWorkload},
+		{"agent", identity.KindAgent, principal.KindAgent, audit.PrincipalKindAgent},
 	} {
 		if string(tc.identity) != tc.name || string(tc.record) != tc.name || tc.entry != tc.name {
 			t.Errorf("kind %q: identity %q, record %q, entry %q; want all equal",
@@ -46,7 +47,9 @@ func TestAuditAcceptsEveryIdentityKind(t *testing.T) {
 		}
 	}
 
-	for _, k := range []string{audit.PrincipalKindPerson, audit.PrincipalKindService, audit.PrincipalKindWorkload} {
+	for _, k := range []string{
+		audit.PrincipalKindPerson, audit.PrincipalKindService, audit.PrincipalKindWorkload, audit.PrincipalKindAgent,
+	} {
 		if !identity.Kind(k).Known() {
 			t.Errorf("audit principal kind %q is not a kind of the identity package", k)
 		}

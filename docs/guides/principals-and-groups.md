@@ -21,6 +21,7 @@ A change that needs a fresh sign-in is made in the console. The console sends th
 | `person` | A person who signs in to the console or the CLI. Only a person can be a break-glass account. |
 | `service` | A machine that uses a service token. |
 | `workload` | A machine that proves its identity with a JWT or a client certificate. |
+| `agent` | An agent that acts for a person. A person cannot create it through this API. `GET /api/server/principals` filters by it. |
 
 ## Create a principal
 
@@ -241,8 +242,12 @@ Each `server:read-*` action is not in the table:
 `server:read-principals`, `server:read-access`, `server:read-tokens`,
 `server:read-audit`, `server:read-settings`, `server:read-instances` and
 `server:read-git-host`. A read-only action cannot raise a privilege, so a
-group that holds one is not protected, and the identity provider can still
-manage its members.
+group that holds one is not protected.
+
+The server shows the `protected` flag on the group list and the group read.
+The accepted rule refuses an add by the identity provider to a protected
+group. SCIM and the group claims of a sign-in do not refuse that add yet. The
+server does not enforce the rule yet.
 
 A read that can return secret material stays sensitive. A secret setting, for
 example the database URL or a credential, shows only whether it holds a value,

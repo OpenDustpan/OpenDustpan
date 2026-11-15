@@ -9,18 +9,18 @@
 
 ## 2. Implementation
 
-- [ ] 2.1 Implement credential hold and injection with fail closed in NEW file pkg/jobproxy/vault.go (NEW proxyCredentialVault and NEW newProxyCredentialVault). Check: `go test ./pkg/jobproxy/... -run TestProxyInjection -count=1` passes.
-- [ ] 2.2 Implement response scan and redaction with over-limit refuse in NEW file pkg/jobproxy/scan.go. Check: `go test ./pkg/jobproxy/... -run TestProxyResponseScan -count=1` passes.
+- [ ] 2.1 Implement credential hold and injection with fail closed in NEW file pkg/jobproxy/vault.go (NEW proxyCredentialVault and NEW newProxyCredentialVault). The task adds the NEW top-level test `TestProxyInjection` in a `_test.go` file of `pkg/jobproxy`, so that the Check runs it. Check: `go test ./pkg/jobproxy/... -run TestProxyInjection -count=1` passes.
+- [ ] 2.2 Implement response scan and redaction with over-limit refuse in NEW file pkg/jobproxy/scan.go. The task adds the NEW top-level test `TestProxyResponseScan` in a `_test.go` file of `pkg/jobproxy`, so that the Check runs it. Check: `go test ./pkg/jobproxy/... -run TestProxyResponseScan -count=1` passes.
 - [ ] 2.3 Add the per-request records route (list-records) with authorization actions. Declare it in NEW file internal/api/route/proxyrecords.go and write its adapter in NEW file internal/api/proxyrecords.go. Check: Route test passes and the route declares actions.
-- [ ] 2.4 Write phase aggregation and the idempotent audit entry (finish-phase) in NEW file pkg/audit/proxyphase.go. Check: `go test ./pkg/audit/... -run TestProxyPhaseAudit -count=1` passes.
-- [ ] 2.5 Enforce the plan-phase block with method-based write check in NEW file pkg/jobproxy/planblock.go (NEW planEffectiveRules and NEW newPlanEffectiveRules). Check: `go test ./pkg/jobproxy/... -run TestPlanPhaseWriteBlock -count=1` passes.
+- [ ] 2.4 Write phase aggregation and the idempotent audit entry (finish-phase) in NEW file pkg/audit/proxyphase.go. The task adds the NEW top-level test `TestProxyPhaseAudit` in a `_test.go` file of `pkg/audit`, so that the Check runs it. Check: `go test ./pkg/audit/... -run TestProxyPhaseAudit -count=1` passes.
+- [ ] 2.5 Enforce the plan-phase block with method-based write check in NEW file pkg/jobproxy/planblock.go (NEW planEffectiveRules and NEW newPlanEffectiveRules). The task adds the NEW top-level test `TestPlanPhaseWriteBlock` in a `_test.go` file of `pkg/jobproxy`, so that the Check runs it. Check: `go test ./pkg/jobproxy/... -run TestPlanPhaseWriteBlock -count=1` passes.
 
 - [ ] 2.6 SECURITY. Build the header strip and the per-redirect host check in NEW file pkg/jobproxy/requestcheck.go. The proxy removes job credential headers and checks each redirect host against the effective rule set. Check: `go test ./pkg/jobproxy/... -run TestRequestCheckHostile -count=1` passes.
 - [ ] 2.7 SECURITY. Add a hostile test in NEW file pkg/jobproxy/requestcheck_test.go, test name TestRequestCheckHostile. The test sends a forged Authorization header and a redirect to an unlisted host straight to the request check. Check: `go test ./pkg/jobproxy/... -run TestRequestCheckHostile -count=1` passes and the test fails when the strip or the redirect check is removed.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

@@ -71,28 +71,30 @@ type memWorld struct {
 	units      map[string]identity.Object
 	principals map[string]*memPrincipal
 	// bySubject maps the subject of a principal to the ID of its record.
-	bySubject map[string]string
-	jobs      map[job.ID]*job.Job
-	claims    map[durable.ID]*memClaim
-	tokens    map[jobtoken.Digest]memToken
-	audit     map[namespace.Name][]audit.Entry
+	bySubject     map[string]string
+	jobs          map[job.ID]*job.Job
+	jobNamespaces map[job.ID]string
+	claims        map[durable.ID]*memClaim
+	tokens        map[jobtoken.Digest]memToken
+	audit         map[namespace.Name][]audit.Entry
 }
 
 var _ jobtoken.Store = (*memWorld)(nil)
 
 func newMemWorld() *memWorld {
 	return &memWorld{
-		mu:         sync.Mutex{},
-		fences:     map[namespace.Name]int64{},
-		namespaces: map[string]*memNamespace{},
-		nsByName:   map[namespace.Name]string{},
-		units:      map[string]identity.Object{},
-		principals: map[string]*memPrincipal{},
-		bySubject:  map[string]string{},
-		jobs:       map[job.ID]*job.Job{},
-		claims:     map[durable.ID]*memClaim{},
-		tokens:     map[jobtoken.Digest]memToken{},
-		audit:      map[namespace.Name][]audit.Entry{},
+		mu:            sync.Mutex{},
+		fences:        map[namespace.Name]int64{},
+		namespaces:    map[string]*memNamespace{},
+		nsByName:      map[namespace.Name]string{},
+		units:         map[string]identity.Object{},
+		principals:    map[string]*memPrincipal{},
+		bySubject:     map[string]string{},
+		jobs:          map[job.ID]*job.Job{},
+		jobNamespaces: map[job.ID]string{},
+		claims:        map[durable.ID]*memClaim{},
+		tokens:        map[jobtoken.Digest]memToken{},
+		audit:         map[namespace.Name][]audit.Entry{},
 	}
 }
 
@@ -130,9 +132,13 @@ func (m *memWorld) GetByDigest(_ context.Context, d jobtoken.Digest) (jobtoken.M
 	}
 
 	tok := row.token
-	if ns.name != tok.Unit.Namespace() {
+	unit, ok := m.units[tok.Unit.UnitID()]
+	if !ok || ns.name != unit.Namespace() || unit.Tool() != tok.Unit.Tool() {
 		return mch, jobtoken.ErrNotFound
 	}
+
+	tok.Namespace = ns.name
+	tok.Unit = unit
 
 	starter, ok := m.principals[tok.StarterID]
 	if !ok || starter.deleted {
@@ -140,7 +146,7 @@ func (m *memWorld) GetByDigest(_ context.Context, d jobtoken.Digest) (jobtoken.M
 	}
 
 	j, ok := m.jobs[tok.JobID]
-	if !ok {
+	if !ok || m.jobNamespaces[tok.JobID] != row.namespaceID {
 		return mch, jobtoken.ErrNotFound
 	}
 
@@ -205,12 +211,45 @@ func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audi
 		return fmt.Errorf("%w: the starter is not the job starter", jobtoken.ErrInvalid)
 	}
 
+	if err := m.checkIssueNamespaces(tok, namespaceID); err != nil {
+		return err
+	}
+
 	if err := checkClaimAndJob(j, claim, tok, e.At); err != nil {
 		return err
 	}
 
 	m.tokens[tok.Digest] = memToken{token: tok, namespaceID: namespaceID}
 	m.audit[tok.Namespace] = append(m.audit[tok.Namespace], e)
+
+	return nil
+}
+
+// checkIssueNamespaces refuses an issue whose unit row or job is not in the
+// namespace of the fence, or whose namespace ID is empty. The caller holds
+// the lock.
+func (m *memWorld) checkIssueNamespaces(tok jobtoken.Token, namespaceID string) error {
+	// Defense in depth: the namespace check of GetByDigest refuses a read of
+	// such a record; this check stays so that the write layer stops an issue
+	// whose unit row is not a live row in the namespace of the fence, with no
+	// help from the read path. The refusal of an empty namespace ID has no
+	// help from issueLocked, which refuses a namespace with no row: this
+	// check alone stops an empty ID, on either side of the comparison.
+	unit, ok := m.units[tok.Unit.UnitID()]
+	if namespaceID == "" || !ok || unit.Tool() != tok.Unit.Tool() ||
+		m.nsByName[unit.Namespace()] != namespaceID {
+		return jobtoken.ErrNotLive
+	}
+
+	// Defense in depth: the namespace check of GetByDigest refuses a read of
+	// such a record; this check stays so that the write layer stops an issue
+	// whose job is in another namespace than the fence, with no help from
+	// the read path. The refusal of an empty namespace ID has no help from
+	// issueLocked, which refuses a namespace with no row: this check alone
+	// stops an empty ID, on either side of the comparison.
+	if namespaceID == "" || m.jobNamespaces[tok.JobID] != namespaceID {
+		return jobtoken.ErrNotLive
+	}
 
 	return nil
 }
@@ -267,24 +306,27 @@ func currentOperation(j *job.Job) durable.ID {
 
 func (m *memWorld) harness() jobtokentest.Harness {
 	return jobtokentest.Harness{
-		Store:           m,
-		Namespace:       m.makeNamespace,
-		DeleteNamespace: m.deleteNamespace,
-		RenameNamespace: m.renameNamespace,
-		Unit:            m.makeUnit,
-		Principal:       m.makePrincipal,
-		Disable:         m.disable,
-		Delete:          m.deletePrincipal,
-		Rename:          m.rename,
-		Job:             m.makeJob,
-		Takeover:        m.takeover,
-		SetJobState:     m.setJobState,
-		EndClaim:        m.endClaim,
-		ReleaseClaim:    m.releaseClaim,
-		EndJob:          m.endJob,
-		MoveJob:         m.moveJob,
-		WriteRaw:        m.writeRaw,
-		Audit:           m.entries,
+		Store:               m,
+		Namespace:           m.makeNamespace,
+		DeleteNamespace:     m.deleteNamespace,
+		RenameNamespace:     m.renameNamespace,
+		Unit:                m.makeUnit,
+		DeleteUnit:          m.deleteUnit,
+		PurgeUnit:           m.deleteUnit,
+		Principal:           m.makePrincipal,
+		Disable:             m.disable,
+		Delete:              m.deletePrincipal,
+		Rename:              m.rename,
+		Job:                 m.makeJob,
+		Takeover:            m.takeover,
+		SetJobState:         m.setJobState,
+		EndClaim:            m.endClaim,
+		ReleaseClaim:        m.releaseClaim,
+		EndJob:              m.endJob,
+		MoveJob:             m.moveJob,
+		WriteRaw:            m.writeRaw,
+		WriteRawInNamespace: m.writeRawInNamespace,
+		Audit:               m.entries,
 	}
 }
 
@@ -369,6 +411,20 @@ func (m *memWorld) renameNamespace(t *testing.T, ns namespace.Name, newName stri
 		delete(m.audit, ns)
 		m.audit[renamed] = entries
 	}
+
+	for id := range m.units {
+		unit := m.units[id]
+		if unit.Namespace() != ns {
+			continue
+		}
+
+		ref, refErr := identity.UnitObject(unit.Tool(), renamed, unit.UnitName())
+		if refErr != nil {
+			t.Fatal(refErr)
+		}
+
+		m.units[id] = ref.WithUnitID(id)
+	}
 }
 
 func (m *memWorld) makeUnit(t *testing.T, nsName, tool, name string) identity.Object {
@@ -397,6 +453,15 @@ func (m *memWorld) makeUnit(t *testing.T, nsName, tool, name string) identity.Ob
 	m.units[id] = unit
 
 	return unit
+}
+
+func (m *memWorld) deleteUnit(t *testing.T, unit identity.Object) {
+	t.Helper()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.units, unit.UnitID())
 }
 
 func (m *memWorld) makePrincipal(t *testing.T, subject string) jobtokentest.Starter {
@@ -474,6 +539,7 @@ func (m *memWorld) makeJob(
 	}
 
 	m.jobs[j.ID] = &j
+	m.jobNamespaces[j.ID] = m.nsByName[unit.Namespace()]
 	m.claims[op.ID] = &memClaim{state: op.State, token: op.Token, leaseEnd: op.LeaseEnd}
 
 	return j
@@ -589,6 +655,15 @@ func (m *memWorld) writeRaw(t *testing.T, tok jobtoken.Token) {
 	defer m.mu.Unlock()
 
 	m.tokens[tok.Digest] = memToken{token: tok, namespaceID: m.nsByName[tok.Namespace]}
+}
+
+func (m *memWorld) writeRawInNamespace(t *testing.T, tok jobtoken.Token, ns namespace.Name) {
+	t.Helper()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.tokens[tok.Digest] = memToken{token: tok, namespaceID: m.nsByName[ns]}
 }
 
 func (m *memWorld) entries(t *testing.T, ns namespace.Name) []audit.Entry {

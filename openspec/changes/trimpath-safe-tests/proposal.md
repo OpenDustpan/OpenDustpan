@@ -31,11 +31,15 @@ the Go build cache: #3101 measured 103 MB for each extra worktree without
 
 ## Fix boundary
 
-- Each of the four helpers builds its path from the package directory, the
-  working directory of `go test`, with a path relative to `.`, and no longer
-  calls `runtime.Caller`. The helpers keep their names and their callers.
-- `e2e/e2e_test.go` `replayScriptPath` uses `filepath.Join("..", "scripts",
-  "import-tfe-state.sh")`.
+- Each of the three helpers under `internal/` builds its path from the
+  package directory, the working directory of `go test`, with a path
+  relative to `.`. All four helpers no longer call `runtime.Caller`, and they
+  keep their names and their callers. The fourth, `replayScriptPath`, returns
+  an absolute path (next item).
+- `e2e/e2e_test.go` `replayScriptPath` joins `../scripts/import-tfe-state.sh`
+  to the working directory of the test from `os.Getwd()`, and returns that
+  absolute path: the e2e steps run the script from other directories, so a
+  relative path fails there (PM decision, 15 Nov 2026).
 - `internal/zonegen/zonegen_test.go` `committedPath` uses
   `filepath.Join("..", "..", "pkg", "preferences", "zones_gen.go")`.
 - `internal/cli/reference_test.go` `repoRoot` returns `filepath.Join("..", "..")`.

@@ -450,6 +450,31 @@ func (q *Queries) BackupWrapperIDs(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+const blobKeyNamed = `-- name: BlobKeyNamed :one
+SELECT EXISTS (
+    SELECT 1 FROM checkpoints AS c
+    WHERE c.stack_id = $1 AND c.blob_key = $2
+    UNION ALL
+    SELECT 1 FROM update_journal AS j
+    WHERE j.stack_id = $1 AND j.blob_key = $2
+) AS named
+`
+
+type BlobKeyNamedParams struct {
+	StackID string
+	BlobKey string
+}
+
+// Reports whether a checkpoint row or a journal batch row of the stack names
+// the blob key. The sweep reads it in the transaction that drops a mark, so a
+// row that still names the key keeps the blob.
+func (q *Queries) BlobKeyNamed(ctx context.Context, arg BlobKeyNamedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, blobKeyNamed, arg.StackID, arg.BlobKey)
+	var named bool
+	err := row.Scan(&named)
+	return named, err
+}
+
 const bumpFailoverVersions = `-- name: BumpFailoverVersions :execrows
 UPDATE namespaces
 SET failover_version = failover_version + 1
@@ -660,6 +685,34 @@ func (q *Queries) CancelDurableOperation(ctx context.Context, arg CancelDurableO
 		arg.ID,
 	)
 	return err
+}
+
+const cancelUnmanagedScansOfTarget = `-- name: CancelUnmanagedScansOfTarget :execrows
+
+UPDATE unmanaged_scans SET status = 'canceled', ended_at_ms = $1
+WHERE namespace_id = $2 AND target = $3
+  AND status IN ('queued', 'dispatched', 'running')
+`
+
+type CancelUnmanagedScansOfTargetParams struct {
+	EndedAtMs   int64
+	NamespaceID string
+	Target      string
+}
+
+// Sweep targets and sweeps. A target names a runner pool of its namespace and
+// the account scopes that a sweep reads. A sweep is one run of a target, or one
+// state check of the namespace, and it keeps the name of a target that a person
+// deleted. A row holds the namespace ID, and the reads join the name of the
+// namespace, because a caller names a namespace by its name.
+// Cancels the sweeps of target that a cancel event allows: a sweep in the match
+// keeps its status. The caller appends one audit entry for the delete.
+func (q *Queries) CancelUnmanagedScansOfTarget(ctx context.Context, arg CancelUnmanagedScansOfTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelUnmanagedScansOfTarget, arg.EndedAtMs, arg.NamespaceID, arg.Target)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const claimDurableOperation = `-- name: ClaimDurableOperation :one
@@ -1192,6 +1245,29 @@ func (q *Queries) CountAccessTokens(ctx context.Context, arg CountAccessTokensPa
 		arg.AtMs,
 		arg.SoonMs,
 	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countActiveMembershipsInGroups = `-- name: CountActiveMembershipsInGroups :one
+SELECT COUNT(*)
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = $1 AND m.removed_at_ms IS NULL AND m.state = 'active'
+  AND g.deleted_at_ms IS NULL
+  AND m.group_id = ANY($2::text[])
+`
+
+type CountActiveMembershipsInGroupsParams struct {
+	PrincipalID string
+	GroupIds    []string
+}
+
+// The memberships of a principal that are in effect in the given groups: not ended, state active, group not deleted.
+// Defense in depth: DeleteGroup ends the memberships of the group too. The filter on the group row stays so that a
+// membership row that outlives its group gives no rights. The caller checks that the principal is enabled.
+func (q *Queries) CountActiveMembershipsInGroups(ctx context.Context, arg CountActiveMembershipsInGroupsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveMembershipsInGroups, arg.PrincipalID, arg.GroupIds)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1803,6 +1879,27 @@ func (q *Queries) CountOpenRunnerJoinTokens(ctx context.Context, arg CountOpenRu
 	return count, err
 }
 
+const countOpenUnmanagedScansOfTarget = `-- name: CountOpenUnmanagedScansOfTarget :one
+SELECT COUNT(*) FROM unmanaged_scans
+WHERE namespace_id = $1 AND target = $2 AND kind = $3
+  AND status NOT IN ('succeeded', 'failed', 'canceled', 'expired')
+`
+
+type CountOpenUnmanagedScansOfTargetParams struct {
+	NamespaceID string
+	Target      string
+	Kind        string
+}
+
+// The sweeps of target that did not end. A start of a sweep refuses while one
+// exists.
+func (q *Queries) CountOpenUnmanagedScansOfTarget(ctx context.Context, arg CountOpenUnmanagedScansOfTargetParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOpenUnmanagedScansOfTarget, arg.NamespaceID, arg.Target, arg.Kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPasskeys = `-- name: CountPasskeys :one
 SELECT COUNT(*) FROM passkeys WHERE principal_id = $1
 `
@@ -2207,6 +2304,31 @@ SELECT COUNT(*) FROM trust_rules WHERE namespace = $1
 
 func (q *Queries) CountTrustRulesInNamespace(ctx context.Context, namespace string) (int64, error) {
 	row := q.db.QueryRow(ctx, countTrustRulesInNamespace, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUnmanagedTargets = `-- name: CountUnmanagedTargets :one
+SELECT COUNT(*) FROM unmanaged_targets WHERE namespace_id = $1
+`
+
+// The targets of a namespace, for the limit of MaxTargets.
+func (q *Queries) CountUnmanagedTargets(ctx context.Context, namespaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnmanagedTargets, namespaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUnmanagedTargetsOfPool = `-- name: CountUnmanagedTargetsOfPool :one
+SELECT COUNT(*) FROM unmanaged_targets WHERE pool_id = $1
+`
+
+// The targets that name a runner pool. A delete of the pool refuses while one
+// exists.
+func (q *Queries) CountUnmanagedTargetsOfPool(ctx context.Context, poolID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnmanagedTargetsOfPool, poolID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -4366,6 +4488,26 @@ func (q *Queries) DeleteStateVersionsOfWorkspace(ctx context.Context, workspaceI
 	return err
 }
 
+const deleteSupersededMark = `-- name: DeleteSupersededMark :execrows
+DELETE FROM checkpoint_supersedes
+WHERE stack_id = $1 AND blob_key = $2
+`
+
+type DeleteSupersededMarkParams struct {
+	StackID string
+	BlobKey string
+}
+
+// Deletes the mark of the blob key of the stack. A missing mark deletes no
+// row, which is not an error.
+func (q *Queries) DeleteSupersededMark(ctx context.Context, arg DeleteSupersededMarkParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSupersededMark, arg.StackID, arg.BlobKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteTempAdmin = `-- name: DeleteTempAdmin :execrows
 DELETE FROM temp_admins WHERE principal_id = $1
 `
@@ -4499,6 +4641,23 @@ type DeleteUnitSettingsOfUnitParams struct {
 func (q *Queries) DeleteUnitSettingsOfUnit(ctx context.Context, arg DeleteUnitSettingsOfUnitParams) error {
 	_, err := q.db.Exec(ctx, deleteUnitSettingsOfUnit, arg.UnitID, arg.Namespace)
 	return err
+}
+
+const deleteUnmanagedTarget = `-- name: DeleteUnmanagedTarget :execrows
+DELETE FROM unmanaged_targets WHERE namespace_id = $1 AND name = $2
+`
+
+type DeleteUnmanagedTargetParams struct {
+	NamespaceID string
+	Name        string
+}
+
+func (q *Queries) DeleteUnmanagedTarget(ctx context.Context, arg DeleteUnmanagedTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnmanagedTarget, arg.NamespaceID, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteUpdatesOfStack = `-- name: DeleteUpdatesOfStack :exec
@@ -7506,6 +7665,127 @@ func (q *Queries) GetJobPlan(ctx context.Context, arg GetJobPlanParams) (GetJobP
 	return i, err
 }
 
+const getJobToken = `-- name: GetJobToken :one
+SELECT t.digest, n.name AS namespace, u.namespace AS unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
+       CAST(u.name AS TEXT) AS unit_name,
+       t.claim_operation, t.claim_token, t.expires_at_ms, t.created_at_ms,
+       o.state AS operation_state, o.claim_token AS operation_claim_token,
+       o.claim_expires_at_ms AS operation_claim_expires_at_ms,
+       j.id AS job_record_id, j.state AS job_state, j.current_operation AS job_operation,
+       j.unit_id AS job_unit_id, jn.name AS job_namespace, js.id AS job_starter_id,
+       s.id AS starter_record_id, s.subject AS starter_subject, s.display_name AS starter_display_name,
+       s.kind AS starter_kind, s.disabled_at_ms AS starter_disabled_at_ms
+FROM job_tokens AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+JOIN (
+    SELECT id, 'pulumi' AS tool, namespace, project || '/' || name AS name
+    FROM stacks WHERE deleted_at_ms IS NULL
+    UNION ALL
+    SELECT id, 'opentofu' AS tool, namespace, name
+    FROM workspaces WHERE deleted_at_ms IS NULL
+) AS u ON u.id = t.unit_id AND u.tool = t.unit_tool
+JOIN durable_operations AS o ON o.id = t.claim_operation
+JOIN jobs AS j ON j.id = t.job_id
+JOIN namespaces AS jn ON jn.id = j.namespace_id
+JOIN principals AS js ON js.subject COLLATE "C" = (j.body::jsonb ->> 'startedBy') AND js.deleted_at_ms IS NULL
+JOIN principals AS s ON s.id = t.starter_id AND s.deleted_at_ms IS NULL
+WHERE t.digest = $1
+`
+
+type GetJobTokenRow struct {
+	Digest                    string
+	Namespace                 string
+	UnitNamespace             string
+	StarterID                 string
+	JobID                     string
+	UnitTool                  string
+	UnitID                    string
+	UnitName                  string
+	ClaimOperation            string
+	ClaimToken                int64
+	ExpiresAtMs               int64
+	CreatedAtMs               int64
+	OperationState            string
+	OperationClaimToken       int64
+	OperationClaimExpiresAtMs pgtype.Int8
+	JobRecordID               string
+	JobState                  string
+	JobOperation              string
+	JobUnitID                 string
+	JobNamespace              string
+	JobStarterID              string
+	StarterRecordID           string
+	StarterSubject            string
+	StarterDisplayName        string
+	StarterKind               string
+	StarterDisabledAtMs       pgtype.Int8
+}
+
+// Defense in depth: the service checks the unit ID too. Resolve only a live
+// unit row so that a restored token cannot reach a removed unit by name.
+func (q *Queries) GetJobToken(ctx context.Context, digest string) (GetJobTokenRow, error) {
+	row := q.db.QueryRow(ctx, getJobToken, digest)
+	var i GetJobTokenRow
+	err := row.Scan(
+		&i.Digest,
+		&i.Namespace,
+		&i.UnitNamespace,
+		&i.StarterID,
+		&i.JobID,
+		&i.UnitTool,
+		&i.UnitID,
+		&i.UnitName,
+		&i.ClaimOperation,
+		&i.ClaimToken,
+		&i.ExpiresAtMs,
+		&i.CreatedAtMs,
+		&i.OperationState,
+		&i.OperationClaimToken,
+		&i.OperationClaimExpiresAtMs,
+		&i.JobRecordID,
+		&i.JobState,
+		&i.JobOperation,
+		&i.JobUnitID,
+		&i.JobNamespace,
+		&i.JobStarterID,
+		&i.StarterRecordID,
+		&i.StarterSubject,
+		&i.StarterDisplayName,
+		&i.StarterKind,
+		&i.StarterDisabledAtMs,
+	)
+	return i, err
+}
+
+const getJobTokenUnitNamespace = `-- name: GetJobTokenUnitNamespace :one
+SELECT n.id
+FROM namespaces AS n
+WHERE n.name = (
+    SELECT s.namespace
+    FROM stacks AS s
+    WHERE s.id = $1 AND s.deleted_at_ms IS NULL AND $2::text = 'pulumi'
+    UNION ALL
+    SELECT w.namespace
+    FROM workspaces AS w
+    WHERE w.id = $1 AND w.deleted_at_ms IS NULL AND $2::text = 'opentofu'
+)
+`
+
+type GetJobTokenUnitNamespaceParams struct {
+	UnitID   string
+	UnitTool string
+}
+
+// The stable namespace ID of the live unit row that a job token names, by
+// tool and stable unit ID. The issue of a job token reads it to refuse a
+// token whose unit row is in another namespace.
+func (q *Queries) GetJobTokenUnitNamespace(ctx context.Context, arg GetJobTokenUnitNamespaceParams) (string, error) {
+	row := q.db.QueryRow(ctx, getJobTokenUnitNamespace, arg.UnitID, arg.UnitTool)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features, c.saved_at_ms,
@@ -8957,6 +9237,30 @@ func (q *Queries) GetRunnerPool(ctx context.Context, id string) (GetRunnerPoolRo
 	return i, err
 }
 
+const getRunnerPoolByName = `-- name: GetRunnerPoolByName :one
+SELECT id, purpose FROM runner_pools
+WHERE namespace_id = $1 AND name = $2
+`
+
+type GetRunnerPoolByNameParams struct {
+	NamespaceID string
+	Name        string
+}
+
+type GetRunnerPoolByNameRow struct {
+	ID      string
+	Purpose string
+}
+
+// The pool of a namespace with the name, for a caller that names a pool as a
+// person does. It returns no row for a pool of another namespace.
+func (q *Queries) GetRunnerPoolByName(ctx context.Context, arg GetRunnerPoolByNameParams) (GetRunnerPoolByNameRow, error) {
+	row := q.db.QueryRow(ctx, getRunnerPoolByName, arg.NamespaceID, arg.Name)
+	var i GetRunnerPoolByNameRow
+	err := row.Scan(&i.ID, &i.Purpose)
+	return i, err
+}
+
 const getRunnerSession = `-- name: GetRunnerSession :one
 SELECT s.id, s.operation_id, s.token, s.runner_id, s.key_public, s.key_created_at_ms, s.created_at_ms,
        COALESCE((SELECT r.retired_at_ms FROM runners r WHERE r.id = s.runner_id), 1)::bigint AS runner_retired_at_ms
@@ -9647,7 +9951,8 @@ func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (Te
 
 const getTrigger = `-- name: GetTrigger :one
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.id = $2
@@ -9674,6 +9979,7 @@ type GetTriggerRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTriggerRow, error) {
@@ -9695,6 +10001,7 @@ func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTrig
 		&i.LastSaverID,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.NextSlotMs,
 	)
 	return i, err
 }
@@ -9906,6 +10213,83 @@ func (q *Queries) GetUnitState(ctx context.Context, arg GetUnitStateParams) (Get
 		&i.FinalJob,
 		&i.FinalAtMs,
 	)
+	return i, err
+}
+
+const getUnmanagedScan = `-- name: GetUnmanagedScan :one
+SELECT s.id, n.name AS namespace, s.seq, s.target, s.kind, s.status, s.started_by, s.reason, s.scopes_json,
+       s.counts_json, s.created_at_ms, s.ended_at_ms
+FROM unmanaged_scans AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = $1 AND s.id = $2
+`
+
+type GetUnmanagedScanParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetUnmanagedScanRow struct {
+	ID          string
+	Namespace   string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+func (q *Queries) GetUnmanagedScan(ctx context.Context, arg GetUnmanagedScanParams) (GetUnmanagedScanRow, error) {
+	row := q.db.QueryRow(ctx, getUnmanagedScan, arg.Namespace, arg.ID)
+	var i GetUnmanagedScanRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Seq,
+		&i.Target,
+		&i.Kind,
+		&i.Status,
+		&i.StartedBy,
+		&i.Reason,
+		&i.ScopesJson,
+		&i.CountsJson,
+		&i.CreatedAtMs,
+		&i.EndedAtMs,
+	)
+	return i, err
+}
+
+const getUnmanagedTarget = `-- name: GetUnmanagedTarget :one
+SELECT t.pool_id, p.purpose, p.namespace_id AS pool_namespace_id
+FROM unmanaged_targets AS t
+JOIN runner_pools AS p ON p.id = t.pool_id
+WHERE t.namespace_id = $1 AND t.name = $2
+  AND p.namespace_id = t.namespace_id
+`
+
+type GetUnmanagedTargetParams struct {
+	NamespaceID string
+	Name        string
+}
+
+type GetUnmanagedTargetRow struct {
+	PoolID          string
+	Purpose         string
+	PoolNamespaceID string
+}
+
+// The pool of a target and its purpose, for a write of the target and for the
+// kind of the durable operation of a sweep. A target whose pool belongs to
+// another namespace gives no row.
+func (q *Queries) GetUnmanagedTarget(ctx context.Context, arg GetUnmanagedTargetParams) (GetUnmanagedTargetRow, error) {
+	row := q.db.QueryRow(ctx, getUnmanagedTarget, arg.NamespaceID, arg.Name)
+	var i GetUnmanagedTargetRow
+	err := row.Scan(&i.PoolID, &i.Purpose, &i.PoolNamespaceID)
 	return i, err
 }
 
@@ -11618,6 +12002,47 @@ func (q *Queries) InsertJobPlan(ctx context.Context, arg InsertJobPlanParams) er
 	return err
 }
 
+const insertJobToken = `-- name: InsertJobToken :exec
+INSERT INTO job_tokens (
+    digest, namespace_id, starter_id, job_id, unit_tool, unit_id, claim_operation,
+    claim_token, expires_at_ms, created_at_ms
+) VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    $3, $4, $5, $6,
+    $7, $8, $9,
+    $10
+)
+`
+
+type InsertJobTokenParams struct {
+	Digest         string
+	Namespace      string
+	StarterID      string
+	JobID          string
+	UnitTool       string
+	UnitID         string
+	ClaimOperation string
+	ClaimToken     int64
+	ExpiresAtMs    int64
+	CreatedAtMs    int64
+}
+
+func (q *Queries) InsertJobToken(ctx context.Context, arg InsertJobTokenParams) error {
+	_, err := q.db.Exec(ctx, insertJobToken,
+		arg.Digest,
+		arg.Namespace,
+		arg.StarterID,
+		arg.JobID,
+		arg.UnitTool,
+		arg.UnitID,
+		arg.ClaimOperation,
+		arg.ClaimToken,
+		arg.ExpiresAtMs,
+		arg.CreatedAtMs,
+	)
+	return err
+}
+
 const insertJournal = `-- name: InsertJournal :exec
 INSERT INTO update_journal (
     stack_id, update_id, arrival, blob_key, sha256, md5, size,
@@ -12598,6 +13023,90 @@ func (q *Queries) InsertUnitSettings(ctx context.Context, arg InsertUnitSettings
 		arg.Namespace,
 		arg.Body,
 		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const insertUnmanagedScan = `-- name: InsertUnmanagedScan :exec
+INSERT INTO unmanaged_scans (
+    id, namespace_id, seq, target, kind, status, started_by, reason, scopes_json, counts_json,
+    created_at_ms, ended_at_ms
+) VALUES (
+    $1, $2, $3, $4, $5, $6,
+    $7, $8, $9, $10,
+    $11, $12
+)
+`
+
+type InsertUnmanagedScanParams struct {
+	ID          string
+	NamespaceID string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+func (q *Queries) InsertUnmanagedScan(ctx context.Context, arg InsertUnmanagedScanParams) error {
+	_, err := q.db.Exec(ctx, insertUnmanagedScan,
+		arg.ID,
+		arg.NamespaceID,
+		arg.Seq,
+		arg.Target,
+		arg.Kind,
+		arg.Status,
+		arg.StartedBy,
+		arg.Reason,
+		arg.ScopesJson,
+		arg.CountsJson,
+		arg.CreatedAtMs,
+		arg.EndedAtMs,
+	)
+	return err
+}
+
+const insertUnmanagedTarget = `-- name: InsertUnmanagedTarget :execrows
+INSERT INTO unmanaged_targets (
+    namespace_id, name, pool_id, scopes_json, command_json, every_ms, timeout_ms, enabled
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8
+)
+ON CONFLICT (namespace_id, name) DO NOTHING
+`
+
+type InsertUnmanagedTargetParams struct {
+	NamespaceID string
+	Name        string
+	PoolID      string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
+}
+
+// The caller checks the fence in the same transaction. A target of the same
+// name in the namespace is not written.
+func (q *Queries) InsertUnmanagedTarget(ctx context.Context, arg InsertUnmanagedTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertUnmanagedTarget,
+		arg.NamespaceID,
+		arg.Name,
+		arg.PoolID,
+		arg.ScopesJson,
+		arg.CommandJson,
+		arg.EveryMs,
+		arg.TimeoutMs,
+		arg.Enabled,
 	)
 	if err != nil {
 		return 0, err
@@ -13682,7 +14191,8 @@ func (q *Queries) ListDurableSteps(ctx context.Context, ids []string) ([]Durable
 
 const listEnabledFollowTriggers = `-- name: ListEnabledFollowTriggers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
@@ -13705,6 +14215,7 @@ type ListEnabledFollowTriggersRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace string) ([]ListEnabledFollowTriggersRow, error) {
@@ -13732,6 +14243,7 @@ func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace strin
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -18052,6 +18564,112 @@ func (q *Queries) ListStoreChecks(ctx context.Context) ([]StoreCheck, error) {
 	return items, nil
 }
 
+const listSupersededBlobs = `-- name: ListSupersededBlobs :many
+SELECT CAST(COALESCE(m.blob_key, '') AS TEXT) AS blob_key,
+       CAST(COALESCE(m.size, 0) AS BIGINT) AS size,
+       CAST(COALESCE(m.superseded_at_ms, 0) AS BIGINT) AS superseded_at_ms
+FROM stacks AS st
+LEFT JOIN checkpoint_supersedes AS m ON m.stack_id = st.id
+WHERE st.id = $1 AND st.deleted_at_ms IS NULL
+ORDER BY 1
+`
+
+type ListSupersededBlobsRow struct {
+	BlobKey        string
+	Size           int64
+	SupersededAtMs int64
+}
+
+// Every mark of one live stack, ordered by blob key: the blob that a later
+// save of the same update replaced, with the size of the stored blob and the
+// time of the save that replaced it. The stack is the driving table, so one
+// statement tells a stack without marks (one row with an empty key) from a
+// stack that is missing or soft-deleted (no row), and the read needs no
+// transaction.
+func (q *Queries) ListSupersededBlobs(ctx context.Context, stackID string) ([]ListSupersededBlobsRow, error) {
+	rows, err := q.db.Query(ctx, listSupersededBlobs, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSupersededBlobsRow
+	for rows.Next() {
+		var i ListSupersededBlobsRow
+		if err := rows.Scan(&i.BlobKey, &i.Size, &i.SupersededAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSupersededMarks = `-- name: ListSupersededMarks :many
+SELECT m.stack_id, n.id AS namespace_id, m.blob_key, m.size,
+       CAST(m.superseded_at_ms AS BIGINT) AS superseded_at_ms
+FROM checkpoint_supersedes AS m
+JOIN stacks AS st ON st.id = m.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE st.deleted_at_ms IS NULL
+  AND m.superseded_at_ms < $1
+  AND (m.stack_id COLLATE "C" > $2
+    OR (m.stack_id = $2 AND m.blob_key COLLATE "C" > $3))
+ORDER BY m.stack_id COLLATE "C", m.blob_key COLLATE "C"
+LIMIT $4
+`
+
+type ListSupersededMarksParams struct {
+	OlderThanMs  int64
+	AfterStackID string
+	AfterBlobKey string
+	PageLimit    int32
+}
+
+type ListSupersededMarksRow struct {
+	StackID        string
+	NamespaceID    string
+	BlobKey        string
+	Size           int64
+	SupersededAtMs int64
+}
+
+// One page of the marks of every live stack whose save replaced the blob
+// before the given time, ordered by stack ID and blob key. The read starts
+// after the cursor, so a sweep goes page by page. A soft-deleted stack has no
+// marks in the result.
+func (q *Queries) ListSupersededMarks(ctx context.Context, arg ListSupersededMarksParams) ([]ListSupersededMarksRow, error) {
+	rows, err := q.db.Query(ctx, listSupersededMarks,
+		arg.OlderThanMs,
+		arg.AfterStackID,
+		arg.AfterBlobKey,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSupersededMarksRow
+	for rows.Next() {
+		var i ListSupersededMarksRow
+		if err := rows.Scan(
+			&i.StackID,
+			&i.NamespaceID,
+			&i.BlobKey,
+			&i.Size,
+			&i.SupersededAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTempAdmins = `-- name: ListTempAdmins :many
 SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
 FROM temp_admins ORDER BY expires_at_ms, principal_id
@@ -18127,7 +18745,8 @@ func (q *Queries) ListTempAdminsAwaitingReview(ctx context.Context) ([]TempAdmin
 
 const listTriggerFollowers = `-- name: ListTriggerFollowers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
@@ -18159,6 +18778,7 @@ type ListTriggerFollowersRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollowersParams) ([]ListTriggerFollowersRow, error) {
@@ -18191,6 +18811,7 @@ func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollo
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -18204,7 +18825,8 @@ func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollo
 
 const listTriggersOfUnit = `-- name: ListTriggersOfUnit :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.unit_tool = $2 AND t.unit_id = $3
@@ -18233,6 +18855,7 @@ type ListTriggersOfUnitRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnitParams) ([]ListTriggersOfUnitRow, error) {
@@ -18260,6 +18883,7 @@ func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnit
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -18340,6 +18964,136 @@ func (q *Queries) ListUnitGateObjectKeys(ctx context.Context, arg ListUnitGateOb
 	for rows.Next() {
 		var i ListUnitGateObjectKeysRow
 		if err := rows.Scan(&i.Kind, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnmanagedScans = `-- name: ListUnmanagedScans :many
+SELECT s.id, n.name AS namespace, s.seq, s.target, s.kind, s.status, s.started_by, s.reason, s.scopes_json,
+       s.counts_json, s.created_at_ms, s.ended_at_ms
+FROM unmanaged_scans AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = $1
+  AND ($2::text = '' OR s.target = $2)
+  AND ($3::text = '' OR s.seq < (
+      SELECT c.seq FROM unmanaged_scans AS c
+      WHERE c.namespace_id = s.namespace_id AND c.id = $3))
+ORDER BY s.seq DESC
+LIMIT $4
+`
+
+type ListUnmanagedScansParams struct {
+	Namespace string
+	Target    string
+	After     string
+	PageSize  int32
+}
+
+type ListUnmanagedScansRow struct {
+	ID          string
+	Namespace   string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+// The sweeps of a namespace for target, newest first, or of every target when
+// target is empty. It starts after the sweep whose ID is after, and an unknown
+// after gives no row.
+func (q *Queries) ListUnmanagedScans(ctx context.Context, arg ListUnmanagedScansParams) ([]ListUnmanagedScansRow, error) {
+	rows, err := q.db.Query(ctx, listUnmanagedScans,
+		arg.Namespace,
+		arg.Target,
+		arg.After,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnmanagedScansRow
+	for rows.Next() {
+		var i ListUnmanagedScansRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Seq,
+			&i.Target,
+			&i.Kind,
+			&i.Status,
+			&i.StartedBy,
+			&i.Reason,
+			&i.ScopesJson,
+			&i.CountsJson,
+			&i.CreatedAtMs,
+			&i.EndedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnmanagedTargets = `-- name: ListUnmanagedTargets :many
+SELECT n.name AS namespace, t.name, p.name AS pool_name, t.scopes_json, t.command_json, t.every_ms,
+       t.timeout_ms, t.enabled
+FROM unmanaged_targets AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+JOIN runner_pools AS p ON p.id = t.pool_id
+WHERE n.name = $1
+  AND p.namespace_id = t.namespace_id
+ORDER BY t.name
+`
+
+type ListUnmanagedTargetsRow struct {
+	Namespace   string
+	Name        string
+	PoolName    string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
+}
+
+// The targets of a namespace with the name of their pool, ordered by name. A
+// target whose pool belongs to another namespace gives no row.
+func (q *Queries) ListUnmanagedTargets(ctx context.Context, namespace string) ([]ListUnmanagedTargetsRow, error) {
+	rows, err := q.db.Query(ctx, listUnmanagedTargets, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnmanagedTargetsRow
+	for rows.Next() {
+		var i ListUnmanagedTargetsRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Name,
+			&i.PoolName,
+			&i.ScopesJson,
+			&i.CommandJson,
+			&i.EveryMs,
+			&i.TimeoutMs,
+			&i.Enabled,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -19075,6 +19829,39 @@ func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyi
 	return result.RowsAffected(), nil
 }
 
+const markSupersededCheckpoint = `-- name: MarkSupersededCheckpoint :exec
+INSERT INTO checkpoint_supersedes (blob_key, stack_id, update_id, size, superseded_at_ms)
+SELECT c.blob_key, c.stack_id, c.update_id, COALESCE(c.blob_size, 0),
+       FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+FROM checkpoints AS c
+WHERE c.stack_id = $1 AND c.update_id = $2
+  AND c.blob_key <> $3 AND c.blob_key = $4
+ON CONFLICT (blob_key) DO NOTHING
+`
+
+type MarkSupersededCheckpointParams struct {
+	StackID  string
+	UpdateID string
+	BlobKey  string
+	ReadKey  string
+}
+
+// Marks the checkpoint blob that a save of the update replaces, with the time
+// of the database clock, from the same expression as the checkpoint upsert.
+// It marks only the row that still names the key that the sequence check read:
+// the row is not locked, and a concurrent attempt can replace it between the
+// read and the mark. The mark names the blob of that row and the size of the
+// stored blob, and a mark of an earlier save stays as it is.
+func (q *Queries) MarkSupersededCheckpoint(ctx context.Context, arg MarkSupersededCheckpointParams) error {
+	_, err := q.db.Exec(ctx, markSupersededCheckpoint,
+		arg.StackID,
+		arg.UpdateID,
+		arg.BlobKey,
+		arg.ReadKey,
+	)
+	return err
+}
+
 const markTempAdminReviewOpened = `-- name: MarkTempAdminReviewOpened :execrows
 UPDATE temp_admins SET review_opened_at_ms = $1::bigint
 WHERE principal_id = $2 AND ended_at_ms IS NOT NULL AND review_opened_at_ms IS NULL
@@ -19251,6 +20038,39 @@ func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestPa
 	return result.RowsAffected(), nil
 }
 
+const moveTriggerNextSlot = `-- name: MoveTriggerNextSlot :execrows
+UPDATE triggers
+SET next_slot_ms = $1::bigint
+WHERE triggers.id = $2
+  AND triggers.kind = 'schedule' AND triggers.enabled = 1
+  AND triggers.next_slot_ms = $3::bigint
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $4)
+`
+
+type MoveTriggerNextSlotParams struct {
+	NextSlotMs    int64
+	ID            string
+	OldNextSlotMs int64
+	Namespace     string
+}
+
+// Moves the next slot of a schedule trigger from the value that the caller read
+// to the value after the claim. The compare on the old value is a layer of its
+// own: the transaction of the caller already serializes the writes of the
+// namespace, and this statement still changes no row when the slot moved.
+func (q *Queries) MoveTriggerNextSlot(ctx context.Context, arg MoveTriggerNextSlotParams) (int64, error) {
+	result, err := q.db.Exec(ctx, moveTriggerNextSlot,
+		arg.NextSlotMs,
+		arg.ID,
+		arg.OldNextSlotMs,
+		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const namespacesWithList = `-- name: NamespacesWithList :many
 SELECT name
 FROM namespaces
@@ -19330,6 +20150,21 @@ func (q *Queries) NextRefusalArrival(ctx context.Context, arg NextRefusalArrival
 	var arrival int64
 	err := row.Scan(&arrival)
 	return arrival, err
+}
+
+const nextUnmanagedScanSeq = `-- name: NextUnmanagedScanSeq :one
+SELECT (COALESCE(MAX(s.seq), 0) + 1)::bigint AS seq
+FROM unmanaged_scans AS s
+WHERE s.namespace_id = $1
+`
+
+// The sequence number of the next sweep of a namespace. The write transaction
+// orders it, and the unique index on (namespace_id, seq) refuses a duplicate.
+func (q *Queries) NextUnmanagedScanSeq(ctx context.Context, namespaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, nextUnmanagedScanSeq, namespaceID)
+	var seq int64
+	err := row.Scan(&seq)
+	return seq, err
 }
 
 const pageNamespaces = `-- name: PageNamespaces :many
@@ -23471,6 +24306,74 @@ func (q *Queries) UpdateUnitSettings(ctx context.Context, arg UpdateUnitSettings
 	return result.RowsAffected(), nil
 }
 
+const updateUnmanagedScan = `-- name: UpdateUnmanagedScan :exec
+UPDATE unmanaged_scans SET status = $1, reason = $2,
+    scopes_json = $3, counts_json = $4, ended_at_ms = $5
+WHERE namespace_id = $6 AND id = $7
+`
+
+type UpdateUnmanagedScanParams struct {
+	Status      string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	EndedAtMs   int64
+	NamespaceID string
+	ID          string
+}
+
+// It replaces the status, the reason, the scopes, the counts and the end of the
+// sweep. The caller read the sweep in the same transaction.
+func (q *Queries) UpdateUnmanagedScan(ctx context.Context, arg UpdateUnmanagedScanParams) error {
+	_, err := q.db.Exec(ctx, updateUnmanagedScan,
+		arg.Status,
+		arg.Reason,
+		arg.ScopesJson,
+		arg.CountsJson,
+		arg.EndedAtMs,
+		arg.NamespaceID,
+		arg.ID,
+	)
+	return err
+}
+
+const updateUnmanagedTarget = `-- name: UpdateUnmanagedTarget :execrows
+UPDATE unmanaged_targets SET pool_id = $1, scopes_json = $2,
+    command_json = $3, every_ms = $4, timeout_ms = $5,
+    enabled = $6
+WHERE namespace_id = $7 AND name = $8
+`
+
+type UpdateUnmanagedTargetParams struct {
+	PoolID      string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
+	NamespaceID string
+	Name        string
+}
+
+// It replaces the target of the same name. It changes no row when the target is
+// not there.
+func (q *Queries) UpdateUnmanagedTarget(ctx context.Context, arg UpdateUnmanagedTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUnmanagedTarget,
+		arg.PoolID,
+		arg.ScopesJson,
+		arg.CommandJson,
+		arg.EveryMs,
+		arg.TimeoutMs,
+		arg.Enabled,
+		arg.NamespaceID,
+		arg.Name,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const upsertDriftResult = `-- name: UpsertDriftResult :execrows
 INSERT INTO drift_results (unit_id, namespace_id, tool, job_id, status, checked_at_ms, truncated, resources_json)
 VALUES (
@@ -23774,19 +24677,20 @@ func (q *Queries) UpsertSettingsRevision(ctx context.Context, arg UpsertSettings
 const upsertTrigger = `-- name: UpsertTrigger :execrows
 INSERT INTO triggers (
     namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
-    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms, next_slot_ms
 )
 SELECT
     n.id, $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10::bigint,
-    $11, $12, $13::bigint, $14::bigint
+    $11, $12, $13::bigint, $14::bigint,
+    $15::bigint
 FROM namespaces AS n
-WHERE n.name = $15
+WHERE n.name = $16
 ON CONFLICT (namespace_id, id) DO UPDATE SET
     preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
     source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
     last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
-    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms)
+    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms), next_slot_ms = excluded.next_slot_ms
 `
 
 type UpsertTriggerParams struct {
@@ -23804,6 +24708,7 @@ type UpsertTriggerParams struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 	Namespace        string
 }
 
@@ -23825,6 +24730,7 @@ func (q *Queries) UpsertTrigger(ctx context.Context, arg UpsertTriggerParams) (i
 		arg.LastSaverID,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.NextSlotMs,
 		arg.Namespace,
 	)
 	if err != nil {

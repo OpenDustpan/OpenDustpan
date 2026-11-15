@@ -4,6 +4,10 @@ version: 8
 
 Issue: #970.
 
+Waits for: #2916
+
+Task 2.2 (the SQL adapters of jobtoken.Store) is implemented by #2916. This change does the rest.
+
 ## Why
 
 **Persona: runner operator.** As a Runner operator I run a pool that executes jobs. The tool step of a launcher needs a credential that works on one unit only and stops when the claim or the step stops.
@@ -44,7 +48,7 @@ Out of scope:
 
 Depends on:
 
-- none
+- job-token-authenticator-chain (task 4.2 checks that the job token reaches its own unit and is refused on another unit through that chain)
 
 Builds on (not a change):
 

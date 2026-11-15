@@ -140,7 +140,7 @@ func TestIPAllowlistAPIThroughHandler(t *testing.T) {
 	inside := "198.51.100.7:1234"
 	outside := "192.0.2.10:5678"
 	allowlistPath := "/api/server/namespaces/acme/ip-allowlist"
-	switchesPath := "/api/server/namespaces/acme/override-switches"
+	switchesPath := "/api/dustpan/v1/namespaces/acme/override-switches"
 
 	code, body := serveIPAllowAPI(t, srv, ipAPIRequest{
 		method: http.MethodPut, path: allowlistPath, remote: inside, body: `{"cidrs":["198.51.100.0/24"]}`,

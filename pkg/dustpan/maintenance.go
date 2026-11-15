@@ -170,7 +170,7 @@ func writeRefusal(ctx context.Context, w http.ResponseWriter, shape errorShape, 
 // withAuditChainGate refuses requests while the audit chain of this
 // instance does not agree with the stored state, in the error shape of the
 // adapter of each path. The probes under /health/, GET /api/server/metrics,
-// GET and POST /api/server/audit/chain, the paths under
+// GET and POST /api/dustpan/v1/audit/chain, the paths under
 // /api/dustpan/v1/maintenance, and the console files always pass. The
 // maintenance routes pass on purpose: an operator must be able to clear stale
 // active work on a single instance whose setting differs from the stored
@@ -215,24 +215,25 @@ func withAuditChainGate(next http.Handler, chain *auditChain, logger *slog.Logge
 
 // chainGateShape answers whether the audit chain gate covers the request,
 // and the error shape of its adapter. The probes under /health/, GET
-// /api/server/metrics, GET and POST /api/server/audit/chain, the paths under
-// /api/dustpan/v1/maintenance, and the console files bypass the gate.
+// /api/server/metrics, GET and POST /api/dustpan/v1/audit/chain, the paths
+// under /api/dustpan/v1/maintenance, and the console files bypass the gate.
 func chainGateShape(r *http.Request) (errorShape, bool) {
 	path := r.URL.Path
 
 	switch {
 	case strings.HasPrefix(path, "/health/"),
 		path == metricsPath && r.Method == http.MethodGet,
-		path == "/api/server/audit/chain" && (r.Method == http.MethodGet || r.Method == http.MethodPost),
+		path == "/api/dustpan/v1/audit/chain" && (r.Method == http.MethodGet || r.Method == http.MethodPost),
 		path == maintenanceAPIPath || strings.HasPrefix(path, maintenanceAPIPath+"/"):
 		return shapePulumi, false
 	case strings.HasPrefix(path, "/runner/v1/"):
 		return shapeRunner, true
 	case strings.HasPrefix(path, "/api/inventory/"), strings.HasPrefix(path, v1Prefix),
 		strings.HasPrefix(path, "/api/runners/"):
-		// The backup and restore routes must stay in the bypass cases above
-		// when they move under v1Prefix: an operator reads and restores a
-		// backup while the gate refuses the tool-neutral routes.
+		// The backup and restore routes under v1Prefix stay gated like the
+		// other tool-neutral routes. The gate does not read maintenance
+		// mode. While the gate refuses, only the paths of the first case
+		// pass, which include the maintenance routes.
 		return shapeInventory, true
 	case strings.HasPrefix(path, "/api/v2/"), path == "/.well-known/terraform.json":
 		return shapeTFE, true

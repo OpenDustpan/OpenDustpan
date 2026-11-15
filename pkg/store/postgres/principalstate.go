@@ -21,9 +21,11 @@ var _ session.PrincipalStateStore = (*Store)(nil)
 // of the change: the bump fails closed.
 var errNoBumpEntry = errors.New("a bump of the session generation needs the audit entry of its change")
 
-// generationTx is the generationstore.Tx of one transaction.
+// generationTx is the generationstore.Tx of one transaction. srv is the
+// locked transaction that appends the entry of the bump.
 type generationTx struct {
-	q *db.Queries
+	q   *db.Queries
+	srv serverAuditTx
 }
 
 func (t generationTx) PrincipalKind(ctx context.Context, id string) (string, error) {
@@ -84,11 +86,7 @@ func (t generationTx) Generation(ctx context.Context, id string) (int64, error) 
 }
 
 func (t generationTx) Append(ctx context.Context, e audit.Entry) error {
-	if err := validServerEntry(e); err != nil {
-		return err
-	}
-
-	if _, err := appendAuditEntry(ctx, t.q, e); err != nil {
+	if _, err := appendServerEntry(ctx, t.srv, e); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 
@@ -150,10 +148,10 @@ func (s *Store) BumpGeneration(
 
 	var g uint64
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
 		next, bumpErr := generationstore.Bump(
 			ctx,
-			generationTx{q: q},
+			generationTx{q: tx.q, srv: tx},
 			generationstore.Request{ID: id, Cause: cause, Expected: expected},
 			e,
 		)
@@ -168,13 +166,13 @@ func (s *Store) BumpGeneration(
 	return g, nil
 }
 
-// bumpFor runs the bump r in the transaction of q, with the entry
+// bumpFor runs the bump r in the locked transaction tx, with the entry
 // session:generation-bumped of the change with the entry change, and returns
 // the new generation. A nil change fails closed.
-func bumpFor(ctx context.Context, q *db.Queries, r generationstore.Request, change *audit.Entry) (uint64, error) {
+func bumpFor(ctx context.Context, tx serverAuditTx, r generationstore.Request, change *audit.Entry) (uint64, error) {
 	if change == nil {
 		return 0, errNoBumpEntry
 	}
 
-	return generationstore.Bump(ctx, generationTx{q: q}, r, generationstore.EntryOf(*change, r.ID))
+	return generationstore.Bump(ctx, generationTx{q: tx.q, srv: tx}, r, generationstore.EntryOf(*change, r.ID))
 }

@@ -26,7 +26,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -90,12 +89,15 @@ const (
 	// KindWorkload is a workload that proves its identity with a JWT or a
 	// client certificate (ADR 54).
 	KindWorkload Kind = "workload"
+	// KindAgent is an agent principal that acts for a person. The model
+	// connect request makes it, with its sponsors.
+	KindAgent Kind = "agent"
 )
 
 // ParseKind returns the Kind that s names, or ErrInvalid.
 func ParseKind(s string) (Kind, error) {
 	switch k := Kind(s); k {
-	case KindPerson, KindService, KindWorkload:
+	case KindPerson, KindService, KindWorkload, KindAgent:
 		return k, nil
 	default:
 		return "", fmt.Errorf("%w: unknown kind %q", ErrInvalid, s)
@@ -505,14 +507,12 @@ func validateText(field, s string, maxLen int) error {
 		return fmt.Errorf("%w: %s starts or ends with white space", ErrInvalid, field)
 	}
 
-	for _, c := range s {
-		if unicode.IsControl(c) {
-			return fmt.Errorf("%w: %s holds a control character", ErrInvalid, field)
-		}
-
-		if unicode.Is(unicode.Cf, c) {
-			return fmt.Errorf("%w: %s holds the format character %U", ErrInvalid, field, c)
-		}
+	// Defense in depth: the principal and group routes in internal/api/server
+	// refuse a hidden character in the display name and the description before
+	// they call the service. This check does not rely on them, so that a new
+	// caller of the domain cannot skip it.
+	if r, found := ident.FirstHidden(s); found {
+		return fmt.Errorf("%w: %s holds the control, format or separator character %U", ErrInvalid, field, r)
 	}
 
 	return nil

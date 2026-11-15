@@ -1,41 +1,25 @@
 ## ADDED Requirements
 
-### Requirement: Create with kind
+### Requirement: The kind agent is known or refused everywhere
 
-When a caller creates a principal, the server SHALL store one kind of person, service, or the NEW agent kind.
+Each reader of the kind of a principal SHALL know the kind `agent` or refuse it, and SHALL refuse an unknown kind.
 
-#### Scenario: Create agent principal
-- **WHEN** a site administrator creates a principal with the NEW kind agent
-- **THEN** the server stores kind agent and returns it on read.
+#### Scenario: An unknown kind
+- **WHEN** a request or a stored value names the kind `robot`
+- **THEN** the parse answers `principal.invalid`, and no reader treats it as a person
 
-### Requirement: Reject unknown kind
+#### Scenario: A create of an agent
+- **WHEN** a site administrator posts a principal of the kind `agent` to `POST /api/server/principals`
+- **THEN** the server answers 400 `principal.invalid` and stores no row
 
-If a caller sends an unknown principal kind, then the server SHALL reject the request with the NEW error code principal.kind-invalid.
+#### Scenario: An audit entry of an agent
+- **WHEN** the server appends an entry whose principal kind is `agent`
+- **THEN** the entry passes the validation of the principal kind
 
-#### Scenario: Reject robot kind
-- **WHEN** a caller sends kind robot
-- **THEN** the server rejects the request with the NEW error code principal.kind-invalid.
+### Requirement: A state-write gate refuses an agent until it has a mapping
 
-### Requirement: Default omitted kind
+The gate subject source of a state write SHALL refuse a principal of the kind `agent` with a denial, and SHALL NOT give it the kind person, until a change maps the kind `agent` to the agent kind of the gate.
 
-When a caller creates a principal without a kind, the server SHALL store kind person.
-
-#### Scenario: Omit kind on create
-- **WHEN** a caller creates a principal without a kind
-- **THEN** the server stores kind person and returns it on read.
-
-### Requirement: Freeze kind after creation
-
-If a caller updates the stored kind of a principal, then the server SHALL reject the request with the NEW error code principal.kind-immutable.
-
-#### Scenario: Change kind after creation
-- **WHEN** a caller updates the kind from person to agent
-- **THEN** the server rejects the request with the NEW error code principal.kind-immutable.
-
-### Requirement: Read legacy principal
-
-When a stored principal carries no kind value, the server SHALL return kind person.
-
-#### Scenario: Read row without kind
-- **WHEN** a stored principal carries no kind value
-- **THEN** the server returns kind person and keeps current access unchanged.
+#### Scenario: An agent principal reaches a state-write gate
+- **WHEN** a principal of the kind `agent` reaches the gate subject source of a state write
+- **THEN** the source refuses it with a denial, and no gate sees it as a person

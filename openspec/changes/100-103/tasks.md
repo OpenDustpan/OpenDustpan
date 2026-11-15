@@ -16,6 +16,7 @@
 - [ ] 2.2 Wire write-back advance in NEW internal/jobsvc/advance.go (NEW) under the server executor identity with idempotent phase reports. Check: Write-back advance verified with access token on the NEW jobs routes; BLOCKED by NEW jobs routes, read baseline on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=` with access token.
 - [ ] 2.3 Write docs page NEW docs/jobs.md for jobs: create, list, cancel, phases, and errors. Check: Docs page commands run as written in a fresh install, verified with access token reads on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=`; BLOCKED by NEW jobs routes for job create examples. Confirmed by: CI (an e2e step in the NEW file e2e/100_103_docs_test.go runs each command of the docs page against the e2e test server). A person's step.
 - [ ] 2.4 Measure job create latency target and record the result. Check: 500 ms p95 create to queued measured in internal/servertest with access token on `GET /api/dustpan/v1/namespaces/{namespace}/units?reference=` as the read baseline; BLOCKED by NEW POST /api/dustpan/v1/namespaces/{namespace}/jobs for the create call.
+- [ ] 2.5 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `job.busy` in `internal/errcode/testdata/catalog/job.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 2a. Hostile tests
 
@@ -25,7 +26,7 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

@@ -12,7 +12,7 @@
 
 - [ ] 2.1 Implement plan-only starter, cycle check and limits in pkg/trigger/service.go (NEW). Check: go test ./pkg/trigger/... -count=1
 - [ ] 2.2 Wire routes with declared actions and audit entries. Edit the route declaration file internal/api/triggers/routes.go and the adapter file internal/api/triggers/serve.go. Check: go test ./internal/api/triggers/... -count=1
-- [ ] 2.3 Extend the run triggers guide. Its commands use GET and POST on /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with an access token of a person. Check: go test ./e2e -run TestTriggersGuide -count=1 runs each command of docs/guides/run-triggers.md as written. `make docs-lint` passes on each edited guide.
+- [ ] 2.3 Extend the run triggers guide. Its commands use GET and POST on /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with an access token of a person. The task adds the NEW top-level test `TestTriggersGuide` in a `_test.go` file of `e2e`, so that the Check runs it. Check: go test ./e2e -run TestTriggersGuide -count=1 runs each command of docs/guides/run-triggers.md as written. `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 
