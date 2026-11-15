@@ -327,13 +327,6 @@ func (e *env) do(method, path, token, body string) (int, []byte) {
 	return e.send(method, path, token, body, map[string]string{sessionHeader: "1"})
 }
 
-// doTokenOnly sends a request with the given token and no console session.
-func (e *env) doTokenOnly(method, path, token, body string) (int, []byte) {
-	e.t.Helper()
-
-	return e.send(method, path, token, body, nil)
-}
-
 // send sends a request. The header map holds more request headers.
 func (e *env) send(method, path, token, body string, header map[string]string) (int, []byte) {
 	e.t.Helper()

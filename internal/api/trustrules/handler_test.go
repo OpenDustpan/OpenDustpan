@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/route"
@@ -311,6 +312,7 @@ func TestTrustRuleWritesNeedAConsoleSession(t *testing.T) {
 	t.Parallel()
 
 	e := newEnv(t, allActions())
+	existing := e.mustCreate("guarded")
 
 	const (
 		bundlesURL = "/api/dustpan/v1/namespaces/acme/trust-bundles"
@@ -321,22 +323,18 @@ func TestTrustRuleWritesNeedAConsoleSession(t *testing.T) {
 		name, method, path, body string
 	}{
 		{"create a rule", http.MethodPost, rulesURL, ruleBody("x", e.worker)},
-		{"update a rule", http.MethodPatch, rulesURL + "/" + trustruleID, `{"name":"y"}`},
-		{"delete a rule", http.MethodDelete, rulesURL + "/" + trustruleID, ""},
+		{"update a rule", http.MethodPatch, rulesURL + "/" + existing.ID, `{"name":"y"}`},
+		{"delete a rule", http.MethodDelete, rulesURL + "/" + existing.ID, ""},
 		{"save a bundle", http.MethodPost, bundlesURL, `{"pem":"x"}`},
 		{"rotate a bundle", http.MethodPatch, bundlesURL + "/" + bundleID, `{"pem":"x"}`},
 		{"delete a version", http.MethodDelete, bundlesURL + "/" + bundleID + "/versions/1", ""},
 	}
 
 	for _, s := range steps {
-		status, body := e.doTokenOnly(s.method, s.path, adminToken, s.body)
-		if s.method == http.MethodPatch || s.method == http.MethodDelete {
-			// A change of an object that exists is refused first for its missing
-			// If-Match or its missing object, so only the status class is fixed.
-			if status < http.StatusBadRequest {
-				t.Errorf("%s with a token only = %d %s, want a refusal", s.name, status, body)
-			}
-
+		status, body := e.send(s.method, s.path, adminToken, s.body, map[string]string{"If-Match": `"1"`})
+		if strings.Contains(s.path, "trust-bundles") && s.method != http.MethodPost && status == http.StatusBadRequest {
+			// The handler fixture has no bundle store, so a change of a bundle
+			// that exists is proved in the service tests with the store wired.
 			continue
 		}
 
@@ -345,13 +343,10 @@ func TestTrustRuleWritesNeedAConsoleSession(t *testing.T) {
 		}
 	}
 
-	if got := len(e.ruleEntries()); got != 0 {
-		t.Errorf("audit entries = %d, want 0", got)
+	if got := len(e.ruleEntries()); got != 1 {
+		t.Errorf("audit entries = %d, want only the first create", got)
 	}
 }
-
-// trustruleID is a rule ID that no rule holds.
-const trustruleID = "trr-00000000000000000000000000000000"
 
 // ruleActions are the routes of the trust rules with the one action that each
 // declares.
