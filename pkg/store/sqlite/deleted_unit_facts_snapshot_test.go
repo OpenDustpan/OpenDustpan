@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,28 +142,57 @@ func snapshotStates() []snapshotState {
 	}
 }
 
+// errWriteRows is the error of a test write that does not change exactly one
+// row. A row that is not there fails the test, so the snapshot test never
+// passes on an unchanged state.
+var errWriteRows = errors.New("no single row changed")
+
+// execOne runs stmt and requires that it changes exactly one row, so a test
+// that writes a row fails when the row is not there and never passes on an
+// unchanged state.
+func execOne(ctx context.Context, tx *sql.Tx, what, stmt string, args ...any) error {
+	res, execErr := tx.ExecContext(ctx, stmt, args...)
+	if execErr != nil {
+		return fmt.Errorf("%s: %w", what, execErr)
+	}
+
+	rows, rowsErr := res.RowsAffected()
+	if rowsErr != nil {
+		return fmt.Errorf("count %s: %w", what, rowsErr)
+	}
+
+	if rows != 1 {
+		return fmt.Errorf("%s: %w: %d rows", what, errWriteRows, rows)
+	}
+
+	return nil
+}
+
 // commitSnapshotState writes the collection and the team label of the deleted
 // unit in one transaction, so one commit switches both rows together. The
 // store serves no move of a deleted unit, so the test writes the two rows
-// that the fact read reads.
+// that the fact read reads. Each write requires its one row, so a missing row
+// fails the test instead of leaving the state unchanged.
 func commitSnapshotState(t *testing.T, s *sqlite.Store, id string, st snapshotState) error {
 	t.Helper()
 
-	tx, beginErr := sqlite.DB(s).BeginTx(t.Context(), nil)
+	ctx := t.Context()
+
+	tx, beginErr := sqlite.DB(s).BeginTx(ctx, nil)
 	if beginErr != nil {
 		return fmt.Errorf("begin the unit state: %w", beginErr)
 	}
 
-	_, moveErr := tx.ExecContext(t.Context(),
+	collectionErr := execOne(ctx, tx, "write the unit collection",
 		`UPDATE collection_members SET collection_key = ? WHERE unit_id = ?`, st.collectionKey, id)
-	if moveErr != nil {
-		return errors.Join(fmt.Errorf("write the unit collection: %w", moveErr), tx.Rollback())
+	if collectionErr != nil {
+		return errors.Join(collectionErr, tx.Rollback())
 	}
 
-	_, tagErr := tx.ExecContext(t.Context(),
+	labelErr := execOne(ctx, tx, "write the unit label",
 		`UPDATE stack_tags SET value = ? WHERE stack_id = ? AND name = ?`, st.tag, id, "team")
-	if tagErr != nil {
-		return errors.Join(fmt.Errorf("write the unit label: %w", tagErr), tx.Rollback())
+	if labelErr != nil {
+		return errors.Join(labelErr, tx.Rollback())
 	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
@@ -204,6 +231,11 @@ func checkSnapshotFacts(t *testing.T, s *sqlite.Store, fence namespace.Fence, id
 // Every read sees the facts of one commit: a collection from before a commit
 // never comes back with labels from after it, because the call reads in one
 // read-only transaction.
+//
+// Each turn starts one commit and then reads, and it waits for that commit
+// before the next read. A commit therefore runs while every read runs, and
+// each one lands between the first read and the last, so the test never
+// passes with every commit before or after the reads.
 func TestDeletedUnitFactsSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -212,30 +244,19 @@ func TestDeletedUnitFactsSnapshot(t *testing.T) {
 
 	states := snapshotStates()
 
-	var committed atomic.Int64
+	for i := range 50 {
+		commitDone := make(chan error, 1)
 
-	var wg sync.WaitGroup
+		go func() {
+			commitDone <- commitSnapshotState(t, s, id, states[(i+1)%len(states)])
+		}()
 
-	wg.Go(func() {
-		for i := range 50 {
-			if commitErr := commitSnapshotState(t, s, id, states[(i+1)%len(states)]); commitErr != nil {
-				t.Errorf("commit the unit state: %v", commitErr)
-
-				continue
-			}
-
-			committed.Add(1)
-		}
-	})
-
-	for range 50 {
 		checkSnapshotFacts(t, s, fence, id)
-	}
 
-	wg.Wait()
-
-	if got := committed.Load(); got != 50 {
-		t.Fatalf("landed %d commits, want 50", got)
+		commitErr := <-commitDone
+		if commitErr != nil {
+			t.Fatalf("commit the unit state: %v", commitErr)
+		}
 	}
 }
 

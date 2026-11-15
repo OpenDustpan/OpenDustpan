@@ -1470,37 +1470,33 @@ func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) erro
 	return nil
 }
 
-// inDeletedFactsReadTx runs fn in a read-only transaction like inReadTx, and
-// ends the transaction on every path: success, error and panic. Only
+// inDeletedFactsReadTx runs fn in one read-only transaction and ends the
+// transaction before it returns, on every path: success, error and panic. Only
 // GetDeletedUnitFacts calls it, so the deferred close stays on the
 // deleted-unit facts read path. The transaction begins as DEFERRED, not
-// IMMEDIATE, so it takes no write lock.
+// IMMEDIATE, so it takes no write lock, and every read of fn sees one snapshot.
+//
+// A failed read keeps its own error: the close reports a rollback error only
+// when the read did not fail, so the caller sees the error of the failed read
+// and no partial facts.
 func (s *Store) inDeletedFactsReadTx(ctx context.Context, fn func(q *db.Queries) error) (err error) {
 	tx, beginErr := s.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
 	if beginErr != nil {
 		return fmt.Errorf("begin read transaction: %w", beginErr)
 	}
 
-	// Defense in depth: the read transaction must end on every path. The
-	// explicit rollback and the commit below end it on the normal paths, and
-	// then this close reports sql.ErrTxDone, which rollback treats as success.
-	// This defer does not rely on them, so a panic in fn still ends the
-	// transaction.
+	// Defense in depth: the read transaction must end on every path, and the
+	// error of a failed read must stay the error of the call. The explicit
+	// branch on the rollback error keeps the read error and reports its own
+	// error only when no read error would hide it. This defer does not rely on
+	// the paths of fn, so a panic in fn still ends the transaction.
 	defer func() {
-		if rbErr := rollback(tx); rbErr != nil {
-			err = errors.Join(err, rbErr)
+		if rbErr := rollback(tx); rbErr != nil && err == nil {
+			err = rbErr
 		}
 	}()
 
-	if fnErr := fn(s.queries.WithTx(tx)); fnErr != nil {
-		return errors.Join(fnErr, rollback(tx))
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return fmt.Errorf("commit read transaction: %w", commitErr)
-	}
-
-	return nil
+	return fn(s.queries.WithTx(tx))
 }
 
 // inFencedTx runs fn in a write transaction that first checks the

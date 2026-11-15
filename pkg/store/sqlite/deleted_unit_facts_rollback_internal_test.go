@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
-	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -79,9 +78,8 @@ func fakeReadStore(t *testing.T, rollbackErr error) (*Store, *fakeReadConn) {
 
 // TestDeletedUnitFactsSelectAndRollbackFailure reaches the snapshot read
 // helper of the deleted-unit facts when the select and the rollback both
-// fail: the call returns the select error, keeps the rollback error in the
-// same error, and closes the transaction. The read path then returns the
-// store error and no partial facts.
+// fail: the call returns the select error alone, keeps no rollback error
+// beside it, and closes the transaction.
 func TestDeletedUnitFactsSelectAndRollbackFailure(t *testing.T) {
 	t.Parallel()
 
@@ -93,8 +91,8 @@ func TestDeletedUnitFactsSelectAndRollbackFailure(t *testing.T) {
 		t.Fatalf("inDeletedFactsReadTx() = %v, want the select error", err)
 	}
 
-	if !errors.Is(err, errFakeRollback) {
-		t.Fatalf("inDeletedFactsReadTx() = %v, want the rollback error in the same error", err)
+	if errors.Is(err, errFakeRollback) {
+		t.Fatalf("inDeletedFactsReadTx() = %v, want no rollback error beside the select error", err)
 	}
 
 	if !conn.rollbackCalled {
@@ -102,10 +100,9 @@ func TestDeletedUnitFactsSelectAndRollbackFailure(t *testing.T) {
 	}
 }
 
-// TestInDeletedFactsReadTxRollbackThenClose proves the rollback-then-close
-// path of the read: the explicit rollback runs, the deferred close then runs
-// as a no-op on the ended transaction, and the call returns the first error,
-// the select error.
+// TestInDeletedFactsReadTxRollbackThenClose proves the close of the read after
+// a failed read. The close rolls the transaction back and keeps the error of
+// the read: the call returns the select error, not the error of the close.
 func TestInDeletedFactsReadTxRollbackThenClose(t *testing.T) {
 	t.Parallel()
 
@@ -117,8 +114,23 @@ func TestInDeletedFactsReadTxRollbackThenClose(t *testing.T) {
 		t.Fatalf("inDeletedFactsReadTx() = %v, want the select error", err)
 	}
 
-	if err != nil && strings.Contains(err.Error(), "roll back transaction") {
-		t.Fatalf("inDeletedFactsReadTx() = %v, want no rollback error on the rollback-then-close path", err)
+	if !conn.rollbackCalled {
+		t.Fatal("inDeletedFactsReadTx() left the read transaction open, want a rollback")
+	}
+}
+
+// TestInDeletedFactsReadTxReportsARollbackFailureOfItsOwn proves the other
+// side of the close: when the read succeeds and the rollback fails, the call
+// returns the rollback error, because no read error hides it.
+func TestInDeletedFactsReadTxReportsARollbackFailureOfItsOwn(t *testing.T) {
+	t.Parallel()
+
+	store, conn := fakeReadStore(t, errFakeRollback)
+
+	err := store.inDeletedFactsReadTx(t.Context(), func(*db.Queries) error { return nil })
+
+	if !errors.Is(err, errFakeRollback) {
+		t.Fatalf("inDeletedFactsReadTx() = %v, want the rollback error", err)
 	}
 
 	if !conn.rollbackCalled {
