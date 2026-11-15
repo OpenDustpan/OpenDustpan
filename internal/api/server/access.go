@@ -39,6 +39,7 @@ import (
 	"strings"
 
 	denials "opendustpan.org/opendustpan/internal/api/refusal"
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -816,6 +817,12 @@ func (h *Handler) serveRevokeGrantByID(
 // collection during the request 409, and a store with no access or review port 501.
 func classifyAccess(err error) (failure, bool) {
 	switch {
+	case errors.Is(err, errCallerQuery):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidQuery), true
+	case errors.Is(err, errCallerPageSize):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestPageSizeInvalid), true
+	case errors.Is(err, errCallerPageToken):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestPageTokenInvalid), true
 	case errors.Is(err, errRoleBody), errors.Is(err, errRoleChangeBody), errors.Is(err, errGrantBody),
 		errors.Is(err, errUnitQuery), errors.Is(err, errReviewQuery), errors.Is(err, errCallerAccessQuery),
 		errors.Is(err, errExpandQuery),
