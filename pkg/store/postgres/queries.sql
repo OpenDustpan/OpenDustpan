@@ -5289,17 +5289,6 @@ JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND l.job_id = sqlc.arg(job_id) AND c.confirmed = 1
 ORDER BY c.blob_key;
 
--- name: InsertJobToken :exec
-INSERT INTO job_tokens (
-    digest, namespace_id, starter_id, job_id, unit_tool, unit_id, claim_operation,
-    claim_token, expires_at_ms, created_at_ms
-) VALUES (
-    sqlc.arg(digest), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
-    sqlc.arg(starter_id), sqlc.arg(job_id), sqlc.arg(unit_tool), sqlc.arg(unit_id),
-    sqlc.arg(claim_operation), sqlc.arg(claim_token), sqlc.arg(expires_at_ms),
-    sqlc.arg(created_at_ms)
-);
-
 -- name: GetJobToken :one
 SELECT t.digest, n.name AS namespace, u.namespace AS unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
        CAST(u.name AS TEXT) AS unit_name,
@@ -5327,6 +5316,33 @@ JOIN namespaces AS jn ON jn.id = j.namespace_id
 JOIN principals AS js ON js.subject COLLATE "C" = (j.body::jsonb ->> 'startedBy') AND js.deleted_at_ms IS NULL
 JOIN principals AS s ON s.id = t.starter_id AND s.deleted_at_ms IS NULL
 WHERE t.digest = sqlc.arg(digest);
+
+-- name: GetJobTokenUnitNamespace :one
+-- The stable namespace ID of the live unit row that a job token names, by
+-- tool and stable unit ID. The issue of a job token reads it to refuse a
+-- token whose unit row is in another namespace.
+SELECT n.id
+FROM namespaces AS n
+WHERE n.name = (
+    SELECT s.namespace
+    FROM stacks AS s
+    WHERE s.id = sqlc.arg(unit_id) AND s.deleted_at_ms IS NULL AND sqlc.arg(unit_tool)::text = 'pulumi'
+    UNION ALL
+    SELECT w.namespace
+    FROM workspaces AS w
+    WHERE w.id = sqlc.arg(unit_id) AND w.deleted_at_ms IS NULL AND sqlc.arg(unit_tool)::text = 'opentofu'
+);
+
+-- name: InsertJobToken :exec
+INSERT INTO job_tokens (
+    digest, namespace_id, starter_id, job_id, unit_tool, unit_id, claim_operation,
+    claim_token, expires_at_ms, created_at_ms
+) VALUES (
+    sqlc.arg(digest), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(starter_id), sqlc.arg(job_id), sqlc.arg(unit_tool), sqlc.arg(unit_id),
+    sqlc.arg(claim_operation), sqlc.arg(claim_token), sqlc.arg(expires_at_ms),
+    sqlc.arg(created_at_ms)
+);
 
 -- name: UpsertInstanceVersion :exec
 -- Writes the version row of one server process. A row with the same ID is

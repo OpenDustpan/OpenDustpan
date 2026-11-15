@@ -211,12 +211,39 @@ func (m *memWorld) issueLocked(tok jobtoken.Token, fence namespace.Fence, e audi
 		return fmt.Errorf("%w: the starter is not the job starter", jobtoken.ErrInvalid)
 	}
 
+	if err := m.checkIssueNamespaces(tok, namespaceID); err != nil {
+		return err
+	}
+
 	if err := checkClaimAndJob(j, claim, tok, e.At); err != nil {
 		return err
 	}
 
 	m.tokens[tok.Digest] = memToken{token: tok, namespaceID: namespaceID}
 	m.audit[tok.Namespace] = append(m.audit[tok.Namespace], e)
+
+	return nil
+}
+
+// checkIssueNamespaces refuses an issue whose unit row or job is not in the
+// namespace of the fence. The caller holds the lock.
+func (m *memWorld) checkIssueNamespaces(tok jobtoken.Token, namespaceID string) error {
+	// Defense in depth: the namespace check of GetByDigest refuses a read of
+	// such a record; this check stays so that the write layer stops an issue
+	// whose unit row is not a live row in the namespace of the fence, with no
+	// help from the read path.
+	unit, ok := m.units[tok.Unit.UnitID()]
+	if !ok || unit.Tool() != tok.Unit.Tool() || m.nsByName[unit.Namespace()] != namespaceID {
+		return jobtoken.ErrNotLive
+	}
+
+	// Defense in depth: the namespace check of GetByDigest refuses a read of
+	// such a record; this check stays so that the write layer stops an issue
+	// whose job is in another namespace than the fence, with no help from the
+	// read path.
+	if m.jobNamespaces[tok.JobID] != namespaceID {
+		return jobtoken.ErrNotLive
+	}
 
 	return nil
 }

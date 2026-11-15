@@ -160,12 +160,16 @@ func (t *JobTokens) issueRecord(
 }
 
 // issueWorld is the record that an issue checks against the job and the
-// claim.
+// claim. namespaceID is the stable ID of the namespace of the token.
+// unitNamespaceID is the stable ID of the namespace of the live unit row
+// that its unit ID names.
 type issueWorld struct {
-	job          db.GetJobRow
-	claim        db.DurableOperation
-	starter      db.GetPrincipalRow
-	jobStarterID string
+	job             db.GetJobRow
+	claim           db.DurableOperation
+	starter         db.GetPrincipalRow
+	jobStarterID    string
+	namespaceID     string
+	unitNamespaceID string
 }
 
 // loadIssueWorld reads the job, the claim and the starters of an issue. It
@@ -229,17 +233,66 @@ func loadIssueWorld(ctx context.Context, q *db.Queries, tok jobtoken.Token) (iss
 
 	w.jobStarterID = jobStarter.ID
 
+	if err := loadIssueNamespaces(ctx, q, tok, &w); err != nil {
+		return w, err
+	}
+
 	return w, nil
 }
 
-// checkIssueLive refuses an issue whose starter is not the job starter or
-// whose claim or job is not live.
+// loadIssueNamespaces reads into w the stable namespace ID of the namespace
+// of tok and the stable namespace ID of the live unit row that its unit ID
+// names, for the namespace checks of checkIssueLive. A name with no namespace
+// row and a unit ID with no live unit row give an empty ID, which no
+// comparison accepts.
+func loadIssueNamespaces(
+	ctx context.Context, q *db.Queries, tok jobtoken.Token, w *issueWorld,
+) error {
+	nsID, err := q.GetNamespaceID(ctx, tok.Namespace.String())
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("select namespace ID: %w", err)
+	}
+
+	w.namespaceID = nsID
+
+	unitNS, err := q.GetJobTokenUnitNamespace(ctx, db.GetJobTokenUnitNamespaceParams{
+		UnitID:   tok.Unit.UnitID(),
+		UnitTool: tok.Unit.Tool(),
+	})
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("select job token unit namespace: %w", err)
+	}
+
+	w.unitNamespaceID = unitNS
+
+	return nil
+}
+
+// checkIssueLive refuses an issue whose starter is not the job starter, whose
+// claim or job is not live, or whose job or unit row is not in the namespace
+// of the token.
 func checkIssueLive(tok jobtoken.Token, w *issueWorld, at time.Time) error {
 	// Defense in depth: Service.Issue checks the starter against the job too;
 	// this check stays so that a caller that skips the service cannot issue a
 	// token under another principal.
 	if w.jobStarterID != tok.StarterID {
 		return fmt.Errorf("%w: the starter is not the job starter", jobtoken.ErrInvalid)
+	}
+
+	// Defense in depth: the namespace check of GetByDigest refuses a read of
+	// such a record; this check stays so that the write layer stops an issue
+	// whose unit row is not a live row in the namespace of the fence, with no
+	// help from the read path.
+	if w.unitNamespaceID != w.namespaceID {
+		return jobtoken.ErrNotLive
+	}
+
+	// Defense in depth: the namespace check of GetByDigest refuses a read of
+	// such a record; this check stays so that the write layer stops an issue
+	// whose job is in another namespace than the fence, with no help from the
+	// read path.
+	if w.job.NamespaceID != w.namespaceID {
+		return jobtoken.ErrNotLive
 	}
 
 	// Defense in depth: Service.Issue checks the claim against the current

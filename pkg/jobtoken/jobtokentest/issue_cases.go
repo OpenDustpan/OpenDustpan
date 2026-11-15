@@ -35,6 +35,14 @@ func issueCases() []suiteCase {
 		{name: "issue of a hard-expired token returns invalid", test: testHardExpired},
 		{name: "issue of a token with a lifetime above the maximum returns invalid", test: testLifetimeTooLong},
 		{name: "issue for another unit than the job unit returns not live", test: testUnitMismatch},
+		{
+			name: "issue with a unit ID of another namespace returns not live and writes nothing",
+			test: testUnitIDOfAnotherNamespace,
+		},
+		{
+			name: "issue with a job of another namespace returns not live and writes nothing",
+			test: testJobOfAnotherNamespace,
+		},
 		{name: "issue with a disabled starter returns not live", test: testDisabledStarter},
 		{name: "issue with a deleted starter returns not live", test: testDeletedStarter},
 		{
@@ -345,6 +353,55 @@ func testUnitMismatch(t *testing.T, h Harness) {
 
 	if err := tryIssue(t, h, tok, fence); !errors.Is(err, jobtoken.ErrNotLive) {
 		t.Fatalf("Issue for another unit = %v, want ErrNotLive", err)
+	}
+
+	wantNothing(t, h, tok.Digest, fence.Namespace)
+}
+
+// testUnitIDOfAnotherNamespace sends a token whose namespace and unit
+// reference name a namespace beta, but whose stable unit ID is the ID of a
+// unit of namespace acme, for a live job of acme. The fence and the entry are
+// of beta, so every earlier check passes.
+func testUnitIDOfAnotherNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	h.Namespace(t, "acme")
+	otherFence := h.Namespace(t, "beta")
+	unit := h.Unit(t, "acme", "pulumi", "web/prod")
+	otherUnit := h.Unit(t, "beta", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-unit-other-namespace")
+	j := h.Job(t, unit, starter, op)
+	tok := liveToken(t, otherUnit, starter, j.ID, op)
+	tok.Unit = otherUnit.WithUnitID(unit.UnitID())
+
+	if err := tryIssue(t, h, tok, otherFence); !errors.Is(err, jobtoken.ErrNotLive) {
+		t.Fatalf("Issue with a unit ID of another namespace = %v, want ErrNotLive", err)
+	}
+
+	wantNothing(t, h, tok.Digest, otherFence.Namespace)
+}
+
+// testJobOfAnotherNamespace sends a token of namespace beta with its own
+// unit, for a job of namespace acme that names the stable unit ID of the
+// unit of the token. The unit ID of the job matches the unit of the token,
+// so the unit check of the claim passes.
+func testJobOfAnotherNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	h.Namespace(t, "acme")
+	fence := h.Namespace(t, "beta")
+	unit := h.Unit(t, "beta", "pulumi", "web/prod")
+	otherUnit := h.Unit(t, "acme", "pulumi", "web/prod")
+	starter := h.Principal(t, "alice")
+	op := liveOperation("op-job-other-namespace")
+
+	foreign := otherUnit.WithUnitID(unit.UnitID())
+	j := h.Job(t, foreign, starter, op)
+	tok := liveToken(t, unit, starter, j.ID, op)
+
+	if err := tryIssue(t, h, tok, fence); !errors.Is(err, jobtoken.ErrNotLive) {
+		t.Fatalf("Issue with a job of another namespace = %v, want ErrNotLive", err)
 	}
 
 	wantNothing(t, h, tok.Digest, fence.Namespace)

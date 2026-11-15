@@ -7598,6 +7598,35 @@ func (q *Queries) GetJobToken(ctx context.Context, digest string) (GetJobTokenRo
 	return i, err
 }
 
+const getJobTokenUnitNamespace = `-- name: GetJobTokenUnitNamespace :one
+SELECT n.id
+FROM namespaces AS n
+WHERE n.name = (
+    SELECT s.namespace
+    FROM stacks AS s
+    WHERE s.id = $1 AND s.deleted_at_ms IS NULL AND $2::text = 'pulumi'
+    UNION ALL
+    SELECT w.namespace
+    FROM workspaces AS w
+    WHERE w.id = $1 AND w.deleted_at_ms IS NULL AND $2::text = 'opentofu'
+)
+`
+
+type GetJobTokenUnitNamespaceParams struct {
+	UnitID   string
+	UnitTool string
+}
+
+// The stable namespace ID of the live unit row that a job token names, by
+// tool and stable unit ID. The issue of a job token reads it to refuse a
+// token whose unit row is in another namespace.
+func (q *Queries) GetJobTokenUnitNamespace(ctx context.Context, arg GetJobTokenUnitNamespaceParams) (string, error) {
+	row := q.db.QueryRow(ctx, getJobTokenUnitNamespace, arg.UnitID, arg.UnitTool)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features, c.saved_at_ms,
