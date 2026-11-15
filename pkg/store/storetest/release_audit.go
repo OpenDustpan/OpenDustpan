@@ -57,6 +57,7 @@ func releaseEntry(ns namespace.Name) audit.Entry {
 		Reason:        releaseReason,
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-07. Decided by the project owner on 7 November 2026
 
+Changed by:
+
+- ADR 379 changes decision 2: the server registry uses the versions of ADR 379.
+
 Changes:
 
 - Changes ADR 316 decision 1: the OpenPGP approval is not only for the provider kit.

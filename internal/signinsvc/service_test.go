@@ -942,7 +942,7 @@ func checkCauseLogged(t *testing.T, w *world, cause error) {
 func TestCompleteDisableLastAdministrator(t *testing.T) {
 	t.Parallel()
 
-	for _, storeErr := range []error{access.ErrLastSiteAdministrator, principal.ErrLastBreakGlass} {
+	for _, storeErr := range []error{access.ErrLastSiteAdministrator, principal.ErrNoWorkingBreakGlass} {
 		w := newWorld()
 		w.disableErr = fmt.Errorf("disable: %w", storeErr)
 

@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 Roadmap: `docs/roadmap.md:455` (Kill during a backup).
@@ -11,7 +11,7 @@ Roadmap: `docs/roadmap.md:455` (Kill during a backup).
 The user path this change must make work:
 
 1. **API.** Seed at least 500 MB of blobs and start a backup through the proxy.
-2. **API.** Read the backup status on ANY /api/server/backups/{} with an access token to find the holder process.
+2. **API.** Read the backup status on ANY /api/dustpan/v1/backups/{} with an access token to find the holder process.
 3. **E2e.** Send SIGKILL to the holder while the copy runs.
 4. **API.** Watch the backup end succeeded within the lease period plus 60 seconds.
 5. **CLI.** Run backup check and confirm complete and one expiry.
@@ -20,7 +20,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Backup operation never reaches succeeded after the holder was killed. | Backup stays running past the lease period plus 60 seconds. Read the backup status again. | `GET /api/server/backups/{id}` with an access token |
+| Backup operation never reaches succeeded after the holder was killed. | Backup stays running past the lease period plus 60 seconds. Read the backup status again. | `GET /api/dustpan/v1/backups/{id}` with an access token |
 | Backup check fails after takeover. | Backup check reports incomplete or corrupt. Run backup check again after the backup ends. | `opendustpan backup check <backup-id>` |
 | Backup ends failed after the survivor also stops. | Backup ends failed after takeover. Read the backup status reason and start a new backup. | `opendustpan backup check <backup-id>` |
 
@@ -51,8 +51,6 @@ Out of scope:
 Depends on:
 
 - backup-fence-target-writes-attempt
-- `alternation` (order of the milestone review)
-- `backup-fence-target-writes-attempt` (order of the milestone review)
 
 ## Usability
 
@@ -110,6 +108,6 @@ Questions considered and answered:
 
 - Does another worker take over the backup after SIGKILL? Yes. ADR 72 decision 2: another worker claims after expiry, with a new fencing token checked in each step transaction.
 - What is the lease period for the takeover wait? ADR 280 decision 8: fixed 30 seconds, no flag, no setting. The bound is the lease period plus 60 seconds.
-- Where does the test read the holder and the result? From backup status on ANY /api/server/backups/{} and from ANY /api/server/backups/{}/check. Both routes are on main.
+- Where does the test read the holder and the result? From backup status on ANY /api/dustpan/v1/backups/{} and from ANY /api/dustpan/v1/backups/{}/check. Both routes are on main.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

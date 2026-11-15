@@ -4,7 +4,7 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write the failing tests of the scenarios in the NEW file `pkg/gate/breakglass_test.go`. Check: TestBreakGlassErrorPassesOnce, TestBreakGlassReplayRefuses, TestBreakGlassExpiryRefuses, TestBreakGlassBadReasonRefuses, TestBreakGlassDenyStillRefuses, TestBreakGlassWrongUnitOrKindRefuses and TestBreakGlassChangeFailsClosed fail on main.
+- [ ] 1.1 Write the failing tests of the scenarios in the NEW file `pkg/gate/breakglass_test.go`; TestBreakGlassChangeFailsClosed exists on main in `pkg/gate/statewrite_test.go`: extend it there, and when it passes on main from the start, the pull request body says so. Check: TestBreakGlassErrorPassesOnce, TestBreakGlassReplayRefuses, TestBreakGlassExpiryRefuses, TestBreakGlassBadReasonRefuses, TestBreakGlassDenyStillRefuses, TestBreakGlassWrongUnitOrKindRefuses and TestBreakGlassChangeFailsClosed fail on main.
 
 ## 2. Implementation
 
@@ -17,5 +17,5 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 The route fields, the e2e step against the real CLI and the usable docs page for the pass: BLOCKED by break-glass-pass-wiring, which adds the pass store, the routes and the proof kind. Here, add a docs note that break-glass is not reachable yet. Check: `make docs-lint` passes.
-- [ ] 4.2 Run the full check. Check: `make check` reports zero findings.
+- [ ] 4.1 The route fields, the e2e step against the real CLI and the usable docs page for the pass: BLOCKED by break-glass-pass-wiring, which adds the pass store, the routes and the proof kind. Here, add a docs note that break-glass is not reachable yet. Check: `make docs-lint` passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

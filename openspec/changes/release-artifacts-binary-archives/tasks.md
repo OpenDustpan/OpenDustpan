@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -14,8 +14,8 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run definition of done for this part: wiring of both NEW Make targets and usability check from test output; route, e2e install step, and docs page are BLOCKED by part 2 container image and install docs work Check: BLOCKED by part 2 container image, install test route and docs page; `make check` with zero findings
+- [ ] 4.1 Run definition of done for this part: wiring of both NEW Make targets and usability check from test output; route, e2e install step, and docs page are BLOCKED by part 2 container image and install docs work Check: BLOCKED by part 2 container image, install test route and docs page; `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

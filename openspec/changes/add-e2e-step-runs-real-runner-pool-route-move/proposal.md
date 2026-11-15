@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 12
 ---
 
 Issue: #984.
@@ -34,7 +34,8 @@ Evidence for the claims above:
 
 - Add GET and POST /api/dustpan/v1/namespaces/{namespace}/runner-pools (NEW paths)
 - Add GET, PATCH and DELETE /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool} (NEW paths)
-- Runner drain and retire routes move under the runner-pools path (NEW paths)
+- Runner drain and retire move to POST /api/dustpan/v1/namespaces/{namespace}/runners/{runner}/drain and POST /api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire (NEW paths). A runner ID is unique in its namespace, so a runner is an object of the namespace (ADR 210 decision 3, the row "An object of a namespace": the collection of the object under the namespace, then its ID), and `pkg/dustpan/apidesc_classes_test.go:168-169` already maps the old paths to these.
+- The runners of a pool move from GET /api/runners/{namespace}/pools/{pool}/runners (`internal/api/runnerapi/routes.go:80`) to GET /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/runners (NEW path; the parent comes first)
 - Join-token list, create and revoke routes move under the runner-pools path (NEW paths)
 - Each mutation writes its audit entry in the same transaction
 - Remove /api/runners/{}/pools, /api/runners/{}/runners/{}/drain, /api/runners/{}/runners/{}/retire and /api/runners/{}/pools/{}/join-tokens/{}/revoke; they answer 404 with no alias
@@ -77,11 +78,13 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 **ADR 210: The tool-neutral API: one prefix, resource paths, action names, versions and a style guide** (not owner-tagged).
 
-- Decisions that apply: 2 (current).
+- Decisions that apply: 2 and 3 (current).
 - Changed by: ADR 247 extends decision 3; ADR 286 changes. Chain to the end: ADR 247, ADR 286.
 - Current rule: this ADR, with ADR 247, 286.
 - Quote: "Paths that stay outside `/api/dustpan/v1`. A protocol endpoint that an external system stores (a CLI, a runner, an IdP, a cloud trust policy) is not part of `/api/dustpan/v1` and has no API version."
 - Effect: Keeps /runner/v1 outside the prefix. Management is not a protocol endpoint that an external system stores, so it belongs under /api/dustpan/v1.
+- Quote (decision 3): "| An object of a namespace | `/api/dustpan/v1/namespaces/{namespace}/<collection>[/{id}]`, for example `.../namespaces/{namespace}/change-orders/{id}`, `.../namespaces/{namespace}/runner-pools/{id}` |"
+- Effect: a runner is an object of its namespace, so drain and retire are under `.../namespaces/{namespace}/runners/{runner}`; the runners of a pool are under the pool, the parent first (PM decision, rule 16, AIP-122).
 - Conflict: none.
 
 ## Open questions

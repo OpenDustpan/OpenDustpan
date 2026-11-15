@@ -22,7 +22,7 @@ A classification rule SHALL make a matching principal of kind `service`, with no
 
 #### Scenario: Service principal and the console
 - **WHEN** a service principal tries to sign in to the console
-- **THEN** the server answers 403 `session.service-principal` and writes an audit entry
+- **THEN** the server answers 403 `access.denied` and writes an audit entry
 
 ### Requirement: Glob grammar and exact bytes
 
@@ -114,4 +114,4 @@ The exchange SHALL read the external account in its source by its external ID, a
 
 #### Scenario: Inactive account
 - **WHEN** the account is blocked in its source
-- **THEN** the exchange answers 401 `trustrule.account-inactive` and issues no token
+- **THEN** the exchange answers 401 `auth.unauthenticated` and issues no token

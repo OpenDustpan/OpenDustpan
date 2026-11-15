@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:141` (Sign-in methods).
@@ -47,13 +47,12 @@ Out of scope:
 - SCIM provisioning and LDAP sync schedules
 - Group mapping rules
 - IP allowlists and token life cycle
-- Break-glass mode 2
+- Signed-request recovery (change signed-request-recovery)
 - The generic settings API; the switches are keys that add-one-generic-settings-api registers
 
 Depends on:
 
 - add-one-generic-settings-api
-- `add-one-generic-settings-api` (order of the milestone review)
 
 ## Usability
 

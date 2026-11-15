@@ -18,11 +18,11 @@ When the server reads deleted-unit facts for state.write on SQLite, the server S
 
 ### Requirement: Start without gate service
 
-When the server starts with no gate service, the server SHALL write one INFO log line that names the absent gate service.
+When the server starts with no gate service, the server SHALL write one WARN log line with the fixed message "state.write gates: off" and the attribute `reason`, as recordStateWriteGates does on main.
 
 #### Scenario: Server starts with no gate service
 - **WHEN** the server starts with no gate service configured
-- **THEN** the log holds one INFO line with fixed text, and a server with a gate service logs no such line.
+- **THEN** the log holds one WARN line "state.write gates: off" with its reason, and a server with a gate service logs the INFO line "state.write gates: on" and no WARN line.
 
 #### Scenario: Repeat start with no gate service
 - **WHEN** the process starts twice with no gate service

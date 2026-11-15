@@ -26,9 +26,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -140,6 +140,7 @@ const (
 	PrincipalKindPerson   = "person"
 	PrincipalKindService  = "service"
 	PrincipalKindWorkload = "workload"
+	PrincipalKindAgent    = "agent"
 )
 
 // MaxJobIDLen caps the job ID of an entry, in bytes.
@@ -211,7 +212,7 @@ func ValidateReason(reason string) error {
 // look different from its bytes, so a stored text that the server shows or
 // logs refuses it.
 func IsHiddenRune(r rune) bool {
-	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+	return ident.IsHiddenRune(r)
 }
 
 // Origin names the agent that acted for the subject of an entry, if any:
@@ -395,12 +396,12 @@ func (o *Origin) SecretStage() string {
 // free text that a person gave for the action, for example for a force-unlock,
 // at most MaxReasonLen Unicode code points with no control characters; it
 // stays empty when the action had none. PrincipalKind is the kind of the
-// principal record that acted: "person", "service" or "workload", and empty
-// when the server cannot name the kind. JobID is the job whose token acted,
-// and empty for every other credential. Origin names the agent that acted
-// for the subject, if any, and is nil for an ordinary entry. The hash covers
-// it in the agent/1 block, which stays out of the hash for a nil Origin, so
-// an entry from before the block keeps its hash.
+// principal record that acted: "person", "service", "workload" or "agent",
+// and empty when the server cannot name the kind. JobID is the job whose
+// token acted, and empty for every other credential. Origin names the agent
+// that acted for the subject, if any, and is nil for an ordinary entry. The
+// hash covers it in the agent/1 block, which stays out of the hash for a nil
+// Origin, so an entry from before the block keeps its hash.
 type Entry struct {
 	At            time.Time
 	Namespace     namespace.Name
@@ -497,7 +498,7 @@ func (e Entry) validateWhat() error {
 // validatePrincipal checks the principal kind and the job ID of the entry.
 func (e Entry) validatePrincipal() error {
 	switch e.PrincipalKind {
-	case "", PrincipalKindPerson, PrincipalKindService, PrincipalKindWorkload:
+	case "", PrincipalKindPerson, PrincipalKindService, PrincipalKindWorkload, PrincipalKindAgent:
 	default:
 		return fmt.Errorf("%w: unknown principal kind %q", ErrInvalidEntry, e.PrincipalKind)
 	}

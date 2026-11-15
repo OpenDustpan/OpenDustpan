@@ -209,6 +209,7 @@ func deleteEntry(ns namespace.Name) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -242,6 +243,7 @@ func renameEntry(ns namespace.Name, ref stack.Ref) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

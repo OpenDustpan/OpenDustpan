@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -37,9 +37,11 @@ Out of scope:
 
 Depends on:
 
-- runs (milestone 5)
 - 109-job-kinds-state-operations
-- `109-job-kinds-state-operations` (order of the milestone review)
+
+Builds on (not a change):
+
+- runs (milestone 5)
 
 ## Usability
 

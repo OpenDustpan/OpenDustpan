@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 6
 ---
 
 Issue: #670.
@@ -19,8 +19,8 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Operator starts a restore with no worker for 2 lease periods and gets 503 naming the worker. | 503 with Retry-After and the NEW error code `restore.worker-absent`, in the shape of the API. | `GET /api/dustpan/v1/worker` |
-| Operator starts a second restore while one runs and gets 409 naming the running restore. | 409 with the NEW error code `restore.running` and the running restore ID. | `GET ANY /api/server/restores/{}` |
-| Operator without the restore right starts a restore and gets 403 naming the right. | 403 with the NEW error code `restore.forbidden` naming the missing restore right. | `GET ANY /api/server/restores/{}` |
+| Operator starts a second restore while one runs and gets 409 naming the running restore. | 409 with the NEW error code `restore.running` and the running restore ID. | `GET ANY /api/dustpan/v1/restores/{}` |
+| Operator without the restore right starts a restore and gets 403 naming the right. | 403 with the NEW error code `restore.forbidden` naming the missing restore right. | `GET ANY /api/dustpan/v1/restores/{}` |
 
 Evidence for the claims above:
 

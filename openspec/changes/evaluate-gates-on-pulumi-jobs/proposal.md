@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 6
 ---
 
 Issue: #1033.
@@ -53,7 +53,6 @@ Depends on:
 
 - add-job-service-routes-start-1
 - state-write-state-facts-fixed
-- `state-write-state-facts-fixed` (order of the milestone review)
 
 ## Usability
 

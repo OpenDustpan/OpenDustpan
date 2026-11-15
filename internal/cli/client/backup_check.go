@@ -1,6 +1,6 @@
 package client
 
-// Backup check subcommand: a client of GET /api/server/backups/{id}/check
+// Backup check subcommand: a client of GET /api/dustpan/v1/backups/{id}/check
 // (ADR 39 decision 3).
 //
 //	opendustpan backup check --server https://dustpan.example --backup <id> [--ca-file ca.pem]
@@ -136,7 +136,7 @@ func readBackupCheck(
 ) (CheckBackupAnswer, error) {
 	var none CheckBackupAnswer
 
-	endpoint := backupEndpoint(server, "/api/server/backups/"+url.PathEscape(id)+"/check")
+	endpoint := backupEndpoint(server, "/api/dustpan/v1/backups/"+url.PathEscape(id)+"/check")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, http.NoBody)
 	if err != nil {

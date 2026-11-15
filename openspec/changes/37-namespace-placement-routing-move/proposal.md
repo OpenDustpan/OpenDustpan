@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 ## Why
@@ -64,7 +64,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Main reads placement rules in the inventory handler (`internal/api/inventory/placement.go:302 (func placementRuleOf)`)
 - Main checks that a fence belongs to the same namespace (`pkg/gate/access.go:449 (func sameNamespaceFence)`)
-- Main reads the failover version in the restore worker test rig (`pkg/store/storetest/restore_worker_cases.go:534 (func workerRig.failoverVersion)`)
+- Main reads the failover version in the restore worker test rig (`pkg/store/storetest/restore_worker_cases.go:534 (func workerRig.mustRestoredOnce)`)
 
 ## Owner decisions that apply
 

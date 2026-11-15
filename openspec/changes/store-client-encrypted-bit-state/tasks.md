@@ -12,15 +12,15 @@
 
 ## 2. change
 
-- [ ] 2.1 Add the column to each dialect baseline in name order. Edit the baseline file of each dialect under pkg/store (NEW column in the state version table). Check: `make generate` and `sqlc diff` are clean with no numbered migration file
+- [ ] 2.1 Add the column to each dialect baseline in name order. Edit the baseline file of each dialect under pkg/store (NEW column in the state version table). Add the same column to the backup column list of the table in pkg/backup/portable_tables.go, because a backup holds every column. Check: `make generate` and `sqlc diff` are clean with no numbered migration file
 - [ ] 2.2 Write the bit at finalize and read it in Latest in pkg/workspace/state_meta.go. Check: `go test ./pkg/workspace/...` passes
 - [ ] 2.3 Add a guard test that removes the constructor rejection in pkg/outputshare/outputsharetest/states.go. Check: The mutation fails the conformance suite
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
 
 ## 4. definition of done
 
 - [ ] 4.1 Confirm the existing outputs routes use the Latest port with no new route Check: Test log shows one row read and no blob read
-- [ ] 4.2 Pass the full check Check: `make check` reports zero findings
+- [ ] 4.2 Pass the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

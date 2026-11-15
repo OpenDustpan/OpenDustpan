@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -18,6 +18,6 @@
 
 - [ ] 3.1 Extend decider to maximum bipartite matching for up to 10 requirements per change in pkg/gate/jobgate scope with distinct approvers across requirements Check: go test ./pkg/gate/... passes
 - [ ] 3.2 Wire eligibility, fresh window, unless, plan binding, and audit through existing job approve routes Check: POST apply with one unmet requirement returns the named 403 body
-- [ ] 3.3 Add e2e step on the existing route POST /api/dustpan/v1/namespaces/{namespace}/jobs with 2 person sign-ins (console session cookie credential), checked with the real Pulumi CLI binary Check: make e2e: a job posted to /api/dustpan/v1/namespaces/{namespace}/jobs with a namespace plus a collection rule applies only after 2 approvals by 2 persons, each with a console session cookie; the real Pulumi CLI reads the resulting update
-- [ ] 3.4 Write docs page for several requirements and distinct approvers Check: Docs page command runs as written
-- [ ] 3.5 Run usability check and full checks Check: `make check` reports zero findings
+- [ ] 3.3 Add e2e step in the NEW file e2e/several_approval_requirements_one_change_test.go on the existing route POST /api/dustpan/v1/namespaces/{namespace}/jobs with 2 person sign-ins (console session cookie credential), checked with the real Pulumi CLI binary Check: make e2e: a job posted to /api/dustpan/v1/namespaces/{namespace}/jobs with a namespace plus a collection rule applies only after 2 approvals by 2 persons, each with a console session cookie; the real Pulumi CLI reads the resulting update. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.4 Write the NEW docs page docs/guides/several-approval-requirements.md for several requirements and distinct approvers Check: Docs page command runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/several_approval_requirements_one_change_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
+- [ ] 3.5 Run usability check and full checks Check: `make check` reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

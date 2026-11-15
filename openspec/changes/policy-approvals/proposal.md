@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 8
 ---
 
 Roadmap: `docs/roadmap.md:280` (Policy and approvals).
@@ -66,12 +66,6 @@ Depends on:
 - planner-role-2
 - runners
 - several-approval-requirements-one-change
-- `runners` (order of the milestone review)
-- `planner-role-2` (order of the milestone review)
-- `approval-defaults-take-effect-live` (order of the milestone review)
-- `several-approval-requirements-one-change` (order of the milestone review)
-- `add-access-limits-per-scope` (order of the milestone review)
-- `evaluate-gates-on-pulumi-jobs` (order of the milestone review)
 
 ## Usability
 
@@ -85,10 +79,10 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - State-write enforce helper refuses writes that gates do not allow (`pkg/gate/statewrite.go:618 (func stateWriteRun.enforce)`)
-- Freshness hook test covers the fresh step path (`pkg/accesstoken/accesstoken_test.go:779 (func TestFreshnessHook)`)
+- Freshness hook test covers the fresh step path (`pkg/accesstoken/accesstoken_test.go:780 (func TestFreshnessHook)`)
 - Job service test covers planner refusal of apply and destroy (`pkg/dustpan/jobservice_internal_test.go:448 (func TestJobPlannerRefusesApplyAndDestroyWithTheOldAnswer)`)
-- Concurrent approvals test covers one entry and one operation (`pkg/dustpan/auditchain_approval_test.go:108 (func TestConcurrentApprovalsLeaveOneEntryAndOneOperation)`)
-- Policy bounds test covers token lifetime (`pkg/accesstoken/accesstoken_test.go:1160 (func TestPolicyBoundsLifetime)`)
+- Concurrent approvals test covers one entry and one operation (`pkg/dustpan/auditchain_approval_test.go:109 (func TestConcurrentApprovalsLeaveOneEntryAndOneOperation)`)
+- Policy bounds test covers token lifetime (`pkg/accesstoken/accesstoken_test.go:1161 (func TestPolicyBoundsLifetime)`)
 
 ## ADR check
 

@@ -24,6 +24,7 @@ Unexported outputshare.checker built only by NewChecker with Store, Access, Atta
 | --- | --- | --- |
 | HTTP adapter | HTTP adapter allowlists producer object kinds and unit references, and declares unit:read-outputs on the producer object. | GET outputs read with principal name as consumer gets 403. |
 | service | Service rechecks rule match and starter grants at read time, including unit:read-secrets for secret outputs. | Revoked starter grant or removed rule between job start and read denies the in-flight read with 403. |
+| rate limit | Checker in internal/outputsharesvc limits denied reads per job token, returns 429 after the limit, and fails closed with 500 on an audit-store outage. | Flood of denied reads from one job token gets 429 with no extra audit writes. A failed audit write gets 500 with no outputs. |
 | store | Checker matches rules by stable ID only, so a renamed unit still matches and a removed-and-made-again unit does not match. | Consumer removed and made again under the same name is denied until a new rule names the new stable ID. |
 
 ## Diagrams
@@ -91,7 +92,7 @@ CHK --> AUDIT
 | server to store | T | A caller tampers with rule IDs or state IDs to widen a read. | authorize at point of use | Rule match uses stable IDs bound to producer namespace. | Remove and remake consumer under same name; read denies until new rule. |
 | server to store | T | A caller tampers with rule IDs or state IDs to widen a read. | fail closed | Read, Decrypt, and audit share fail-closed behavior per request. | Fail audit write; server returns 500 with no outputs. |
 | server to runner response | I | A denied read leaks secret output values in errors or logs. | boundary check | Error shape validated to carry only code and message with no state values. | Read secret outputs without read-secrets; response holds no secret. |
-| server to runner response | I | A denied read leaks secret output values in errors or logs. | encode or contain | Error shape carries code unit.forbidden with no secret values. | Read secret outputs without read-secrets; response holds no secret. |
+| server to runner response | I | A denied read leaks secret output values in errors or logs. | encode or contain | Error shape carries code access.denied with no secret values. | Read secret outputs without read-secrets; response holds no secret. |
 | server to runner response | I | A denied read leaks secret output values in errors or logs. | limit | Rate limit caps repeated denials to one audit batch per window. | Flood denied reads; audit holds only the first batch. |
 | server to runner response | I | A denied read leaks secret output values in errors or logs. | authorize at point of use | Denials write audit entry with producer, consumer, and starter. | Trigger 403 read; denial entry exists. |
 | server to runner response | I | A denied read leaks secret output values in errors or logs. | fail closed | Any audit failure returns 500 with no outputs. | Fail audit write on denial; server returns 500 with no outputs. |

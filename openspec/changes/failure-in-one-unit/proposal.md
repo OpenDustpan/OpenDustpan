@@ -47,8 +47,6 @@ Depends on:
 - run-all-on-runner-fanout-plan-apply-jobs
 - record-names-cause
 - review-holds
-- `record-names-cause` (order of the milestone review)
-- `review-holds` (order of the milestone review)
 
 ## Usability
 
@@ -61,7 +59,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- A test on main checks that a round deadline ends cleanly without failure or backoff in audit shipping. (`pkg/audit/ship_test.go:1542 (func TestARoundDeadlineEndsCleanlyWithoutFailureOrBackoff)`)
+- A test on main checks that a round deadline ends cleanly without failure or backoff in audit shipping. (`pkg/audit/ship_test.go:1543 (func TestARoundDeadlineEndsCleanlyWithoutFailureOrBackoff)`)
 
 ## ADR check
 

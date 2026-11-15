@@ -1,6 +1,6 @@
 ## Context
 
-Owner decision, 13 Nov 2026 (queue P17): an SSO installation gets its first step-up key from a host command with a one-time marker, in modes 1 and 2.
+Owner decision, 13 Nov 2026 (queue P17): an SSO installation gets its first step-up key from a host command with a one-time marker, in bootstrap recovery and signed-request recovery.
 
 ## Decisions
 

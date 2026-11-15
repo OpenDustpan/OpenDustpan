@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 9
 ---
 
 Roadmap: `docs/roadmap.md:269` (The planner role).
@@ -20,9 +20,9 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Apply job as planner is refused. | 403 with error code job.forbidden and the job is not created. The text names the missing action and the action that allows an apply. | `curl -X POST /api/dustpan/v1/namespaces/{namespace}/jobs` |
-| Job with unknown operation is refused. | 400 with error code job.invalid-operation and no job is created. The text names the known operations plan, apply and destroy. | `curl -X POST /api/dustpan/v1/namespaces/{namespace}/jobs` |
-| Plan job without the planner grant is refused. | 403 with error code job.forbidden and no job is created. The text names the missing unit:run-plan action on the unit. | `curl -X POST /api/dustpan/v1/namespaces/{namespace}/jobs` |
+| Apply job as planner is refused. | 403 with error code access.denied and the job is not created. The text names the missing action and the action that allows an apply. | `curl -X POST /api/dustpan/v1/namespaces/{namespace}/jobs` |
+| Job with unknown operation is refused. | 400 with error code job.invalid and no job is created. The text names the known operations plan, apply and destroy. | `curl -X POST /api/dustpan/v1/namespaces/{namespace}/jobs` |
+| Plan job without the planner grant is refused. | 403 with error code access.denied and no job is created. The text names the missing unit:run-plan action on the unit. | `curl -X POST /api/dustpan/v1/namespaces/{namespace}/jobs` |
 
 Evidence for the claims above:
 
@@ -32,7 +32,7 @@ Evidence for the claims above:
 ## What Changes
 
 - A principal with only the planner role starts plan-only jobs for stacks and workspaces.
-- An apply or destroy job of the same principal gives 403 and creates no job with error code job.forbidden.
+- An apply or destroy job of the same principal gives 403 and creates no job with error code access.denied.
 - A planner plan job pins the commit SHA from the request, reads branch protection of that SHA at job start, and runs masked with no secret values unless that SHA is on a protected branch.
 
 Out of scope:
@@ -46,9 +46,6 @@ Depends on:
 - add-job-service-routes-start-1
 - job-service-unit-settings-pool
 - open-profile-serve-open-sessions
-- `job-service-unit-settings-pool` (order of the milestone review)
-- `git-host-webhook-intake-post` (order of the milestone review)
-- `open-profile-serve-open-sessions` (order of the milestone review)
 
 ## Usability
 

@@ -1,8 +1,12 @@
 ---
-version: 5
+version: 8
 ---
 
 Issue: #970.
+
+Waits for: #2916
+
+Task 2.2 (the SQL adapters of jobtoken.Store) is implemented by #2916. This change does the rest.
 
 ## Why
 
@@ -43,6 +47,10 @@ Out of scope:
 - Sweep pools (no sweep code in this part)
 
 Depends on:
+
+- job-token-authenticator-chain (task 4.2 checks that the job token reaches its own unit and is refused on another unit through that chain)
+
+Builds on (not a change):
 
 - #881
 - #968

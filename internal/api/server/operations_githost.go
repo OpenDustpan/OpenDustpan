@@ -56,7 +56,7 @@ var gitHostOperationLabels = map[string]apidesc.Label{
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.Typed[gitHostConnectionRequest](
 			"CreateGitHostConnectionRequest",
-			apidesc.Declare[any](map[string]any{
+			apidesc.Declare[operatorOwned](map[string]any{
 				"description": "Any JSON value. Only the operator sets the field that holds it. " +
 					"A request that holds the field is refused.",
 			}),

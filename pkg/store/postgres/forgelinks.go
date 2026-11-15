@@ -120,21 +120,17 @@ func (f forgeLinks) AcceptRequest(
 ) (forgelink.Accepted, error) {
 	var accepted forgelink.Accepted
 
-	err := f.s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
+	err := f.s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
 		var acceptErr error
 
-		accepted, acceptErr = forgelinkstore.ApplyAccept(ctx, linkTx{requestTx{q: q}}, a)
+		accepted, acceptErr = forgelinkstore.ApplyAccept(ctx, linkTx{requestTx(tx)}, a)
 		if acceptErr != nil || accepted.Replaced == "" {
 			return acceptErr
 		}
 
 		// The principal that lost its link finds the loss under its own object,
 		// in the transaction of the accept.
-		if lostErr := validServerEntry(a.Lost); lostErr != nil {
-			return lostErr
-		}
-
-		if _, appendErr := appendAuditEntry(ctx, q, a.Lost); appendErr != nil {
+		if _, appendErr := appendServerEntry(ctx, tx, a.Lost); appendErr != nil {
 			return fmt.Errorf("append audit entry: %w", appendErr)
 		}
 
@@ -153,8 +149,8 @@ func (f forgeLinks) DeleteLink(ctx context.Context, a forgelink.Account, e audit
 		return err
 	}
 
-	return f.s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
-		n, err := q.DeleteForgeAccountLink(ctx, db.DeleteForgeAccountLinkParams{
+	return f.s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
+		n, err := tx.q.DeleteForgeAccountLink(ctx, db.DeleteForgeAccountLinkParams{
 			Kind: string(a.Kind), Host: a.Host, AccountID: a.ID,
 		})
 		if err != nil {

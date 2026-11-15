@@ -896,6 +896,21 @@ func TestBlobDeleteDuringBackup(t *testing.T) {
 	})
 }
 
+func TestSupersededSweepConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL superseded sweep suite", envURL)
+	}
+
+	storetest.RunSupersededSweep(t, func(t *testing.T) storetest.BlobDeleteStore {
+		t.Helper()
+
+		return openBackup(t, base)
+	})
+}
+
 func TestPortableExportConformance(t *testing.T) {
 	t.Parallel()
 
@@ -1111,6 +1126,7 @@ func newRestoreAuditServices(
 		Backups:      backups,
 		Maintenance:  storetest.StateMaintenance{State: st, Hold: false},
 		Blobs:        live,
+		Leases:       st,
 		Target:       target,
 		Key:          key,
 		Installation: "test",

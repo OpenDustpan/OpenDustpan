@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 5
 ---
 
 Issue: #295.
@@ -10,7 +10,7 @@ Issue: #295.
 
 The user path this change must make work:
 
-1. **Docs page.** Read the operations docs page for the nightly load, soak and fault job
+1. **Docs page.** Read the section "The nightly run" in docs/guides/load.md and docs/guides/soak.md for the nightly load, soak and fault job
 2. **Console.** Inspect a failed nightly run and open the linked regression issue with numbers
 3. **CLI.** Rerun the workflow after a fix with one command
 

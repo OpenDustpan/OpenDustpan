@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #611.
@@ -12,7 +12,7 @@ The user path this change must make work:
 
 1. **Docs page.** Read the docs page for the restore access setting and its default.
 2. **API.** Read the setting and change it through PATCH /api/dustpan/v1/settings with a fresh session step.
-3. **API.** Start a restore through POST /api/server/restores and check the audit entry for the change.
+3. **API.** Start a restore through POST /api/dustpan/v1/restores and check the audit entry for the change.
 4. **E2e.** Run the e2e step: change the setting, then restore, against the real binary over TLS.
 
 Errors the person may hit, and the one command that helps:
@@ -40,13 +40,15 @@ Out of scope:
 
 - Default restore behavior without the setting (issue #553, lands first)
 - New roles or new actions beyond server:restore-access
-- Break-glass mode 2 recovery
+- Signed-request recovery (change signed-request-recovery)
 
 Depends on:
 
 - add-one-generic-settings-api
+
+Builds on (not a change):
+
 - issue-553-default-restore
-- `add-one-generic-settings-api` (order of the milestone review)
 
 ## Usability
 

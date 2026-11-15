@@ -333,6 +333,11 @@ CREATE TABLE access_token_policy (
     updated_at_ms       INTEGER NOT NULL
 , exchange_lifetime_ms INTEGER NOT NULL DEFAULT 3600000) STRICT;
 
+CREATE TABLE blob_delete_leases (
+    holder        TEXT    NOT NULL PRIMARY KEY,
+    expires_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE blob_purges (
     tool          TEXT    NOT NULL,
     unit_id       TEXT    NOT NULL,
@@ -497,6 +502,16 @@ CREATE TABLE "checkpoints" (
     blob_size      INTEGER,
     blob_md5       BLOB,
     PRIMARY KEY (stack_id, update_id),
+    FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE,
+    FOREIGN KEY (stack_id, update_id) REFERENCES updates (stack_id, id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE "checkpoint_supersedes" (
+    blob_key         TEXT    NOT NULL PRIMARY KEY,
+    stack_id         TEXT    NOT NULL REFERENCES stacks (id) ON DELETE CASCADE,
+    update_id        TEXT    NOT NULL,
+    size             INTEGER NOT NULL,
+    superseded_at_ms INTEGER NOT NULL,
     FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE,
     FOREIGN KEY (stack_id, update_id) REFERENCES updates (stack_id, id) ON DELETE CASCADE
 ) STRICT;
@@ -1023,7 +1038,15 @@ CREATE TABLE item_keys (
     shredded_at_ms INTEGER NOT NULL CHECK (shredded_at_ms >= 0),
     blob_version   INTEGER NOT NULL CHECK (blob_version >= 1),
     blob_size      INTEGER NOT NULL CHECK (blob_size >= 1),
-    blob_md5       BLOB NOT NULL CHECK (length(blob_md5) = 16)
+    blob_md5       BLOB NOT NULL CHECK (length(blob_md5) = 16),
+    -- The attempt part of the key of the wrapped item key blob that the record
+    -- names. Each write of a wrapped item key uses a key with a new attempt part,
+    -- so two writes never share a key, and a store that replaces an object on a
+    -- second write never replaces a blob that a record names. The key is
+    -- namespaces/<namespace ID>/item-keys/<id>/v<blob_version>-<blob_attempt>.
+    -- The attempt part is 20 lowercase ASCII letters and digits, so it names no
+    -- other path.
+    blob_attempt   TEXT    NOT NULL CHECK (length(blob_attempt) = 20 AND blob_attempt NOT GLOB '*[^a-z0-9]*')
 ) STRICT;
 
 CREATE TABLE job_plans (
@@ -1055,6 +1078,20 @@ CREATE TABLE job_log_chunks (
     PRIMARY KEY (log_id, seq)
 ) STRICT;
 
+CREATE TABLE job_tokens (
+    digest          TEXT    NOT NULL PRIMARY KEY
+        CHECK (length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*'),
+    namespace_id    TEXT    NOT NULL REFERENCES namespaces (id),
+    starter_id      TEXT    NOT NULL REFERENCES principals (id) CHECK (starter_id <> ''),
+    job_id          TEXT    NOT NULL CHECK (job_id <> ''),
+    unit_tool       TEXT    NOT NULL CHECK (unit_tool <> ''),
+    unit_id         TEXT    NOT NULL CHECK (unit_id <> ''),
+    claim_operation TEXT    NOT NULL CHECK (claim_operation <> ''),
+    claim_token     INTEGER NOT NULL CHECK (claim_token > 0),
+    expires_at_ms   INTEGER NOT NULL,
+    created_at_ms   INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE drift_results (
     unit_id        TEXT    NOT NULL PRIMARY KEY,
     namespace_id   TEXT    NOT NULL REFERENCES namespaces (id),
@@ -1082,6 +1119,15 @@ CREATE TABLE triggers (
     last_saver_id      TEXT    NOT NULL,
     created_at_ms      INTEGER NOT NULL,
     updated_at_ms      INTEGER NOT NULL,
+    -- The next slot of a schedule trigger: the first run that a claim can still
+    -- take, in Unix milliseconds. Put sets it from the schedule when it makes or
+    -- switches on an enabled schedule trigger. The value 0 means that the row has
+    -- no slot, which holds for a trigger of another kind and for a trigger that is
+    -- off. An enabled schedule trigger with the value 0 is refused. A claim of a slot
+    -- moves the value to the slot after it, in one transaction, so of many instances
+    -- that claim one slot exactly one succeeds.
+    next_slot_ms       INTEGER NOT NULL DEFAULT 0
+        CHECK (next_slot_ms >= 0 AND (kind <> 'schedule' OR enabled = 0 OR next_slot_ms > 0)),
     PRIMARY KEY (namespace_id, id)
 ) STRICT;
 
@@ -1136,6 +1182,43 @@ CREATE TABLE self_service_blueprint_versions (
     retired         INTEGER NOT NULL CHECK (retired IN (0, 1)),
     PRIMARY KEY (namespace_id, name, number),
     FOREIGN KEY (namespace_id, name) REFERENCES self_service_blueprints (namespace_id, name)
+) STRICT;
+
+CREATE TABLE quota_keys (
+    namespace_id  TEXT    NOT NULL REFERENCES namespaces (id),
+    blueprint     TEXT    NOT NULL,
+    kind          TEXT    NOT NULL CHECK (kind IN ('units', 'requests', 'expr')),
+    scope         TEXT    NOT NULL,
+    settled_count INTEGER NOT NULL DEFAULT 0 CHECK (settled_count >= 0),
+    PRIMARY KEY (namespace_id, blueprint, kind, scope)
+) STRICT;
+
+CREATE TABLE quota_reservations (
+    namespace_id TEXT    NOT NULL REFERENCES namespaces (id),
+    id           TEXT    NOT NULL,
+    state        TEXT    NOT NULL CHECK (state IN ('open', 'settled', 'released')),
+    at_ms        INTEGER NOT NULL,
+    ends_at_ms   INTEGER NOT NULL CHECK (ends_at_ms > at_ms),
+    PRIMARY KEY (namespace_id, id)
+) STRICT;
+
+CREATE TABLE quota_reservation_keys (
+    namespace_id   TEXT NOT NULL,
+    reservation_id TEXT NOT NULL,
+    blueprint      TEXT NOT NULL,
+    kind           TEXT NOT NULL CHECK (kind = 'units'),
+    scope          TEXT NOT NULL,
+    PRIMARY KEY (namespace_id, reservation_id, blueprint, kind, scope),
+    FOREIGN KEY (namespace_id, reservation_id) REFERENCES quota_reservations (namespace_id, id)
+) STRICT;
+
+CREATE TABLE quota_requests (
+    id           TEXT    NOT NULL PRIMARY KEY,
+    namespace_id TEXT    NOT NULL REFERENCES namespaces (id),
+    blueprint    TEXT    NOT NULL,
+    kind         TEXT    NOT NULL CHECK (kind = 'requests'),
+    scope        TEXT    NOT NULL,
+    at_ms        INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE store_checks (
@@ -1261,6 +1344,7 @@ CREATE TABLE notification_deliveries (
     principal       TEXT    NOT NULL,
     state           TEXT    NOT NULL,
     attempts        INTEGER NOT NULL,
+    redeliveries    INTEGER NOT NULL CHECK (redeliveries >= 0),
     next_at_ms      INTEGER NOT NULL,
     last_error      TEXT    NOT NULL,
     delivered_at_ms INTEGER NOT NULL,
@@ -1494,6 +1578,41 @@ CREATE TABLE gate_references (
     CHECK (ref_kind IN ('approval-rule', 'path-set'))
 ) STRICT;
 
+-- Sweep targets and sweeps. A target names a runner pool of its namespace and
+-- the account scopes that a sweep reads. A sweep is one run of a target, or one
+-- state check of the namespace. A target holds no time of its own: the audit
+-- entry of each change holds the time. A sweep of a target that a person
+-- deleted keeps the name of its target, because a sweep is history. Times are
+-- Unix milliseconds, and a zero in ended_at_ms means that the sweep did not end.
+CREATE TABLE unmanaged_targets (
+    namespace_id TEXT    NOT NULL REFERENCES namespaces (id),
+    name         TEXT    NOT NULL,
+    pool_id      TEXT    NOT NULL REFERENCES runner_pools (id),
+    scopes_json  TEXT    NOT NULL,
+    command_json TEXT    NOT NULL,
+    every_ms     INTEGER NOT NULL CHECK (every_ms >= 0),
+    timeout_ms   INTEGER NOT NULL CHECK (timeout_ms >= 0),
+    enabled      INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    PRIMARY KEY (namespace_id, name)
+) STRICT;
+
+CREATE TABLE unmanaged_scans (
+    id            TEXT    NOT NULL PRIMARY KEY,
+    namespace_id  TEXT    NOT NULL REFERENCES namespaces (id),
+    seq           INTEGER NOT NULL CHECK (seq >= 1),
+    target        TEXT    NOT NULL,
+    kind          TEXT    NOT NULL CHECK (kind IN ('cloud', 'state')),
+    status        TEXT    NOT NULL CHECK (status IN ('queued', 'dispatched', 'running', 'matching',
+                                                     'succeeded', 'failed', 'canceled', 'expired')),
+    started_by    TEXT    NOT NULL,
+    reason        TEXT    NOT NULL,
+    scopes_json   TEXT    NOT NULL,
+    counts_json   TEXT    NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    ended_at_ms   INTEGER NOT NULL,
+    UNIQUE (namespace_id, seq)
+) STRICT;
+
 CREATE UNIQUE INDEX stacks_id ON stacks (id);
 
 CREATE UNIQUE INDEX updates_one_running ON updates (stack_id)
@@ -1501,6 +1620,8 @@ WHERE status = 'running' AND dry_run = 0 AND kind <> 'preview';
 
 CREATE INDEX updates_history ON updates (stack_id, version)
 WHERE status <> 'not started' AND dry_run = 0 AND kind <> 'preview';
+
+CREATE INDEX checkpoint_supersedes_age ON checkpoint_supersedes (stack_id, superseded_at_ms);
 
 CREATE INDEX inventory_unit_id ON inventory (unit_id);
 
@@ -1653,6 +1774,15 @@ CREATE INDEX inventory_namespace_unit_id ON inventory (namespace, unit_id);
 
 CREATE INDEX inventory_labels_value ON inventory_labels (namespace, label_key, label_value, unit_id);
 
+-- The partial index holds the live rows alone (deleted_at_ms IS NULL), so the
+-- deleted workspaces are not in it. A list of the live workspaces of a
+-- namespace walks the index in name order, and the offset pagination of the
+-- list skips index entries and reads no deleted row. The unique constraint on
+-- (namespace, name) has no predicate, so it covers the deleted rows too. A
+-- soft delete moves the name to deleted_name and sets name to "deleted:" plus
+-- the ID, so the deleted row keeps an entry in that index. That index holds
+-- the deleted entries with the live ones, so a walk of it reads the deleted
+-- rows to skip them. It cannot give the same live-only walk.
 CREATE INDEX workspaces_live_name ON workspaces (namespace, name) WHERE deleted_at_ms IS NULL;
 
 CREATE INDEX triggers_unit ON triggers (namespace_id, unit_tool, unit_id);
@@ -1707,6 +1837,12 @@ CREATE INDEX gate_objects_namespace ON gate_objects (namespace_id, level);
 CREATE INDEX gate_objects_unit ON gate_objects (namespace_id, unit_id);
 
 CREATE INDEX gate_references_owner ON gate_references (namespace_id, scope_key, owner_kind, owner_id);
+
+CREATE INDEX quota_reservation_keys_key ON quota_reservation_keys (namespace_id, blueprint, kind, scope);
+
+CREATE INDEX quota_requests_window ON quota_requests (namespace_id, blueprint, kind, scope, at_ms);
+
+CREATE INDEX unmanaged_scans_target ON unmanaged_scans (namespace_id, target, seq DESC);
 
 CREATE TRIGGER namespaces_id_insert BEFORE INSERT ON namespaces
 WHEN NEW.id NOT GLOB 'ns-?*'

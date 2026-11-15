@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Roadmap: `docs/roadmap.md:466` (Test rolling deploy with mixed version pool.).

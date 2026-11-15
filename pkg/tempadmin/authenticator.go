@@ -303,6 +303,7 @@ func (d *Decorator) expire(ctx context.Context, rec TempAdmin) error {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}, now, Ref(rec.PrincipalID)))
 
 	switch {
@@ -350,6 +351,7 @@ func (d *Decorator) appendSignIn(
 		Reason:        "",
 		PrincipalKind: string(p.Kind),
 		JobID:         p.JobID,
+		Origin:        nil,
 	}
 
 	if _, err := d.audit.AppendServer(ctx, e); err != nil {

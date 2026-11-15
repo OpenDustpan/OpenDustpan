@@ -22,39 +22,39 @@ When an output read serves the last completed checkpoint, the server SHALL retur
 
 ### Requirement: RefuseReadWithNoCheckpoint
 
-When a consumer reads the outputs of a stack with no completed checkpoint, the server SHALL refuse the read with a 404 unknown-state error.
+When a consumer reads the outputs of a stack with no completed checkpoint, the server SHALL refuse the read with a 404 unit.no-state error.
 
 #### Scenario: Read before first checkpoint
 - **WHEN** a consumer reads the outputs of a stack with no completed checkpoint
-- **THEN** the server refuses the read with a 404 unknown-state error
+- **THEN** the server refuses the read with a 404 unit.no-state error
 
 #### Scenario: Read after producer delete
 - **WHEN** a consumer reads the outputs of a deleted producer stack
-- **THEN** the server refuses the read with a 404 unknown-state error against the stable producer id
+- **THEN** the server refuses the read with a 404 unit.no-state error against the stable producer id
 
 #### Scenario: Producer removed and remade by name
 - **WHEN** a producer is removed and remade with the same name after a consumer read
-- **THEN** the server refuses the read against the old stable producer id with a 404 unknown-state error
+- **THEN** the server refuses the read against the old stable producer id with a 404 unit.no-state error
 
 ### Requirement: RefuseReadWithoutSharingRule
 
-When a consumer without a sharing rule reads the outputs of a producer stack, the server SHALL refuse the read with a 403 denied error.
+When a consumer without a sharing rule reads the outputs of a producer stack, the server SHALL refuse the read with a 403 output-sharing.denied error.
 
 #### Scenario: Read without rule
 - **WHEN** a consumer without a sharing rule reads the outputs of a producer stack
-- **THEN** the server refuses the read with a 403 denied error
+- **THEN** the server refuses the read with a 403 output-sharing.denied error
 
 #### Scenario: Rule removed in flight
 - **WHEN** the sharing rule is removed before a running output read completes
-- **THEN** the server refuses the read with a 403 denied error
+- **THEN** the server refuses the read with a 403 output-sharing.denied error
 
 ### Requirement: RefuseReadWithoutGrant
 
-When a caller without unit:read-outputs reads the outputs of a producer stack, the server SHALL refuse the read with a 403 denied error.
+When a caller without unit:read-outputs reads the outputs of a producer stack, the server SHALL refuse the read with a 403 access.denied error.
 
 #### Scenario: Read without unit read-outputs grant
 - **WHEN** a caller without unit:read-outputs reads the outputs of a producer stack
-- **THEN** the server refuses the read with a 403 denied error
+- **THEN** the server refuses the read with a 403 access.denied error
 
 ### Requirement: DenyBeforeNotFound
 

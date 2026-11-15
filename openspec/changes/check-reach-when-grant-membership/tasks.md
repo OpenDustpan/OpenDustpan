@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -14,15 +14,15 @@
 ## 2. Implementation
 
 - [ ] 2.1 Add the cover proof, the checks, the flag record and its end rule in pkg/access/service.go, pkg/principal/service.go (AddMember, line 496) and pkg/accesstoken. Check: go test ./pkg/access/... ./pkg/principal/... ./pkg/accesstoken/... passes
-- [ ] 2.2 Map the sentinels in internal/api/server/tokens.go and add the NEW flag routes with their actions and the API description. Declare the routes in the NEW file internal/api/server/flagged_edges.go and the adapter in internal/api/apidesc/openapi.json. Check: go test ./internal/api/server/... passes
+- [ ] 2.2 Map the sentinels in internal/api/server/tokens.go and add the NEW flag routes with their actions and the API description. Declare the routes in the NEW file internal/api/server/flagged_edges.go and the declaration in the route table of internal/api/server (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand). Join the new apidesc labels into joinLabels in internal/api/server/operations.go (:187-198), the one join point of the labels. Check: go test ./internal/api/server/... passes
 
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add e2e steps with a site administrator access token, through the existing routes POST /api/server/grants, POST /api/server/groups/{id}/members and POST /api/server/principals/{id}/tokens, and the NEW routes GET /api/dustpan/v1/flagged-edges with acknowledge and revoke. BLOCKED by the groups-roles-grants change for the reach function. Check: make e2e passes
-- [ ] 4.2 Write the docs page and walk the user path from it. Check: make docs-lint passes
-- [ ] 4.3 Run the full check. Check: make check with zero findings
+- [ ] 4.1 Add e2e steps in the NEW file e2e/cover_flagged_edges_test.go with a site administrator access token, through the existing routes POST /api/server/grants, POST /api/server/groups/{id}/members and POST /api/server/principals/{id}/tokens, and the NEW routes GET /api/dustpan/v1/flagged-edges with acknowledge and revoke. The routes are declared in internal/api/server/operations.go and internal/api/server/flagged_edges.go (NEW), and the adapter files are internal/api/server/tokens.go and internal/api/server/flagged_edges.go (NEW). BLOCKED by the groups-roles-grants change for the reach function. Check: make e2e passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Write the NEW docs page docs/guides/act-as-reach-and-flagged-edges.md about act-as reach and flagged edges, and walk the user path from it. Check: make docs-lint passes
+- [ ] 4.3 Run the full check. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

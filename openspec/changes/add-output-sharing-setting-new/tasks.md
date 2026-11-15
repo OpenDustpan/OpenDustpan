@@ -4,8 +4,8 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing tests for default nobody deny, collection rule allow, rule removal deny and invalid target, in the NEW file pkg/outputshare/outputshare_test.go. Check: TestOutputSharingDefaultNobodyDenies fails on main
-- [ ] 1.2 Write failing e2e steps for the Pulumi stack reference read and the OpenTofu remote state read, in the NEW file e2e/output_sharing_test.go that uses e2e/tool.go:110 (func OpenTofu). BLOCKED by #897 for the job token path. Check: e2e output sharing steps fail on main
+- [ ] 1.1 Write failing tests for default nobody deny, collection rule allow, rule removal deny and invalid target, in the existing file pkg/outputshare/outputshare_test.go (extend it in place). Check: TestOutputSharingDefaultNobodyDenies fails on main
+- [ ] 1.2 Write failing e2e steps for the Pulumi stack reference read and the OpenTofu remote state read, in the existing file e2e/output_sharing_test.go (extend it in place) that uses e2e/tool.go:110 (func OpenTofu). BLOCKED by #897 for the job token path. Check: e2e output sharing steps fail on main. Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. Build
 
@@ -15,11 +15,11 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run the e2e steps in e2e/output_sharing_test.go against the real Pulumi CLI and OpenTofu on SQLite and PostgreSQL. BLOCKED by #897 for the job token path. Check: make e2e
+- [ ] 4.1 Run the e2e steps in e2e/output_sharing_test.go against the real Pulumi CLI and OpenTofu on SQLite and PostgreSQL. BLOCKED by #897 for the job token path. Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Add docs/guides/output-sharing.md in the same pull request. Check: make docs-lint
-- [ ] 4.3 Run the usability check from docs/guides/output-sharing.md alone. Check: Each error names one command
-- [ ] 4.4 Run the full check over the whole repository. Check: make check with zero findings
+- [ ] 4.3 Run the usability check from docs/guides/output-sharing.md alone. Check: Each error names one command. A person's step.
+- [ ] 4.4 Run the full check over the whole repository. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

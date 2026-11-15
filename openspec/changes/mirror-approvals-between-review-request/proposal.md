@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 9
 ---
 
 Issue: #895, #903.
@@ -46,9 +46,10 @@ Depends on:
 
 - git-host-webhook-intake-post
 - approval-defaults-take-effect-live
-- policy-approvals
-- `git-host-webhook-intake-post` (order of the milestone review)
-- `approval-defaults-take-effect-live` (order of the milestone review)
+
+Removed from Depends on (14 Nov 2026, not a code dependency):
+
+- policy-approvals: no task uses a route or type that policy-approvals adds
 
 ## Usability
 
@@ -61,7 +62,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main has approval audit chain tests for concurrent approvals. (`pkg/dustpan/auditchain_approval_test.go:108 (func TestConcurrentApprovalsLeaveOneEntryAndOneOperation)`)
+- Main has approval audit chain tests for concurrent approvals. (`pkg/dustpan/auditchain_approval_test.go:109 (func TestConcurrentApprovalsLeaveOneEntryAndOneOperation)`)
 - Main has the dev strip coverage test for approver fields. (`pkg/backup/devstrip_coverage_test.go:281 (func TestDevStripCoversEveryApproverField)`)
 - Main has a reviewer expression hostile test. (`internal/expr/hostile_test.go:349 (func TestWorkLayerReviewerExpressions)`)
 

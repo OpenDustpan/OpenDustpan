@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 6
 ---
 
 Issue: #615, #617, #619, #626.
@@ -53,10 +53,6 @@ Depends on:
 - one-membership-function-identity-provider
 - add-one-generic-settings-api
 - keep-two-working-break-glass
-- `check-reach-when-grant-membership` (order of the milestone review)
-- `one-membership-function-identity-provider` (order of the milestone review)
-- `add-one-generic-settings-api` (order of the milestone review)
-- `keep-two-working-break-glass` (order of the milestone review)
 
 ## Usability
 
@@ -70,7 +66,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - A Freshness type exists in the access token package. (`pkg/accesstoken/service.go:50 (type Freshness)`)
-- A test covers the freshness hook of access tokens. (`pkg/accesstoken/accesstoken_test.go:779 (func TestFreshnessHook)`)
+- A test covers the freshness hook of access tokens. (`pkg/accesstoken/accesstoken_test.go:780 (func TestFreshnessHook)`)
 - Membership column suspended_at_ms exists in the backup table list. (`pkg/backup/portable_tables.go:554 (func portable table list)`)
 - The settings registry holds soft-delete-retention in the CLI package. (`internal/cli/settings.go:345 (func settings registry)`)
 - A test covers group grants. (`pkg/access/access_test.go:394 (func TestGroupGrants)`)

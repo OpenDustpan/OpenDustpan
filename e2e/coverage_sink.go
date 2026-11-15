@@ -42,6 +42,7 @@ func coverageSinkRoutes(tb testing.TB) []RouteRef {
 		Subscriptions: struct{ subscriptionPort }{nil},
 		Deliveries:    struct{ notify.Deliveries }{nil},
 		Namespaces:    coverageNamespaces(tb),
+		Audit:         coverageAuditStore{},
 		Now:           nil,
 	})
 	if err != nil {
@@ -60,6 +61,7 @@ func coverageSinkRoutes(tb testing.TB) []RouteRef {
 		Namespaces:     nil,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
+		Now:            nil,
 	})
 	if err != nil {
 		tb.Fatalf("sink handler: %v", err)

@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -13,13 +13,14 @@
 
 - [ ] 2.1 Extend the Toolset in internal/agent with the three tools. Check: The tests above pass.
 - [ ] 2.2 Add the user docs page at docs/user/dusty-comment-propose.md (NEW). Check: make docs-lint passes.
+- [ ] 2.3 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `agent.denied` in the NEW file `internal/errcode/testdata/catalog/agent.txt`; `change.not-draft` in the NEW file `internal/errcode/testdata/catalog/change.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run the e2e step against the Dusty loop and the MCP tools/list route with an access token. Check: Toolset call through the Dusty loop with an access token passes the agent:use gate; BLOCKED by dusty-proposes-change-order for the draft route.
-- [ ] 4.2 Usability check from the docs page alone. Check: Each error names its one command.
-- [ ] 4.3 Run make check. Check: make check reports zero findings.
+- [ ] 4.1 Run the e2e step against the Dusty loop and the MCP tools/list route with an access token. Check: Toolset call through the Dusty loop with an access token passes the agent:use gate; BLOCKED by dusty-proposes-change-order for the draft route. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Usability check from the docs page alone. Check: Each error names its one command. A person's step.
+- [ ] 4.3 Run make check. Check: make check reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

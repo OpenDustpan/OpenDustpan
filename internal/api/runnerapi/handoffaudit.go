@@ -179,6 +179,7 @@ func handoffOverflowEntry(at time.Time, suppressed int) audit.Entry {
 		Kind: audit.KindChange, Outcome: audit.OutcomeDenied, RequestID: "", ObjectID: "", PrevHash: "", Hash: "",
 		Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
 		Reason: fmt.Sprintf("%d refusals were not recorded one by one: too many principals in one window", suppressed),
+		Origin: nil,
 	}
 }
 

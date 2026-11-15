@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Issue: #1069.
@@ -40,7 +40,7 @@ Evidence for the claims above:
 Out of scope:
 
 - Installation scope lock
-- Import holds beyond the preview pass
+- Import holds, the preview pass under an import hold included: ADR 241 decision 12 makes the hold "a manual lock on each target unit" in the transaction of an import, and main has no import yet. The change that builds the import resource of ADR 241 owns the requirement import-hold-preview (ADR 244 decision 12) and its test TestPreviewUnderImportHold.
 - Freeze schedules
 - Cover of state restore, delete, stack import and stack rename
 - Console display, which belongs to the console repository
@@ -93,7 +93,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
 - Quote: "**A preview under the import hold (supersedes in part ADR 213 decision 10).** While the manual lock of an import covers a unit, the Pulumi Cloud-compatible API accepts the start of an update of the kind `preview` on that"
-- Effect: A preview keeps passing under an import hold.
+- Effect: none in this change: the import-hold preview moves to the change that builds imports (see Out of scope).
 - Conflict: none.
 
 ## Open questions

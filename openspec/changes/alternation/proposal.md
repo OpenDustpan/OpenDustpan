@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:448` (Alternation).
@@ -47,8 +47,6 @@ Depends on:
 
 - ci-service-container-s3-suite
 - signed-file-urls-registry-need
-- `ci-service-container-s3-suite` (order of the milestone review)
-- `signed-file-urls-registry-need` (order of the milestone review)
 
 ## Usability
 

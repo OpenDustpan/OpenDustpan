@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -13,12 +13,15 @@
 - [ ] 2.1 Implement causeRef storage in NEW file pkg/audit/cause.go on fan-out plan and apply jobs with the NEW constructor and copy the three cause fields into history entry rows and audit entry rows using stable IDs. Check: NEW constructor NewCauseRef plus TestFanOutCauseBinding via ANY /api/audit/entries with access token
 - [ ] 2.2 Expose the stored cause fields in pkg/history and pkg/audit on history reads and on the existing ANY /api/audit/entries list and ANY /api/audit/entries/{} read with existing grants and no TFE-compatible adapter field. Check: GET ANY /api/audit/entries with access token returns cause fields; history read returns cause under existing unit grant; no new route
 
+- [ ] 2.3 SECURITY. Build the audit-read grant guard on the audit read route in NEW file pkg/audit/cause_read.go. The guard checks the existing audit-read grant before it returns any cause field of ANY /api/audit/entries and ANY /api/audit/entries/{}. Check: a caller without the audit-read grant gets a denial and no cause field, proved by NEW TestAuditCauseReadRequiresGrant
+- [ ] 2.4 SECURITY. Write NEW hostile test TestAuditCauseReadRequiresGrant in NEW file pkg/audit/cause_test.go that reads the audit entries without the audit-read grant. Check: NEW TestAuditCauseReadRequiresGrant asserts denial and no cause disclosed, via ANY /api/audit/entries and ANY /api/audit/entries/{}, fails before task 2.3
+
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the e2e step that runs terragrunt run-all apply over 3 units on a runner through the real binary over TLS with real OpenTofu and Terragrunt on PostgreSQL with an access token credential, then asserts each of the 3 plan jobs and 3 apply jobs yields 1 history entry and 1 audit entry with the discovery job ID, requester ID, and fixed reason. Check: e2e terragrunt run-all apply over 3 units asserting each plan and apply entry via ANY /api/audit/entries with access token
-- [ ] 4.2 Write the docs page that shows how to read the cause fields from history and audit entries for fan-out jobs. Check: docs page for Terragrunt fan-out provenance
-- [ ] 4.3 Run wiring, authorization with audit-read grant, usability from the docs page alone, and make check with zero findings. Check: `make check` with zero findings
+- [ ] 4.1 Add the e2e step in NEW file e2e/run_all_cause_test.go (route ANY /api/audit/entries, access token credential) that runs terragrunt run-all apply over 3 units on a runner through the real binary over TLS with real OpenTofu and Terragrunt on PostgreSQL with an access token credential, then asserts each of the 3 plan jobs and 3 apply jobs yields 1 history entry and 1 audit entry with the discovery job ID, requester ID, and fixed reason. Check: e2e terragrunt run-all apply over 3 units asserting each plan and apply entry via ANY /api/audit/entries with access token. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Write the NEW docs page docs/guides/terragrunt-fanout-provenance.md that shows how to read the cause fields from history and audit entries for fan-out jobs. Check: docs page for Terragrunt fan-out provenance. `make docs-lint` passes on each edited guide.
+- [ ] 4.3 Run wiring, authorization with audit-read grant, usability from the docs page alone, and make check with zero findings. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

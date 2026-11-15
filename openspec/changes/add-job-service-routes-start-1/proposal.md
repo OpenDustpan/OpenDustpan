@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Issue: #1165, #1315, #1318.
@@ -19,9 +19,9 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Cancel of a job that already reached a final state fails. | 409 with code job.state names the current state. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
-| Approve by a principal without the approve action fails. | 403 with code job.forbidden names the missing action. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
-| Approve of a stale plan revision fails. | 409 with code job.state names the current plan revision. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
+| Cancel of a job that already reached a final state fails. | 409 with code job.wrong-state (NEW: no catalog code names a job in the wrong state; update.wrong-state belongs to the Pulumi update) names the current state. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
+| Approve by a principal without the approve action fails. | 403 with code access.denied names the missing action. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
+| Approve of a stale plan revision fails. | 409 with code job.wrong-state names the current plan revision. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}` |
 
 Evidence for the claims above:
 

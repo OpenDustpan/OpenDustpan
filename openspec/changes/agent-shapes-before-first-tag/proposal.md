@@ -1,90 +1,63 @@
 ---
-version: 1
+version: 5
 ---
 
 ## Why
 
-**Persona: site administrator.** A site administrator manages principals and reviews audit history. Before the first tag the stored shapes for agents must stay fixed so a later delegation feature needs no migration, while the agent kind alone must grant nothing.
+**Persona: site administrator.** ADR 354 (owner) gives the kind of a principal the value `agent` and makes an unknown kind fail closed. On main, the kind has three values, and some readers of the kind would treat a fourth value in ways that nobody chose. Before an agent principal exists (person-delegates-dusty builds the first one), every reader of the kind must know `agent` or refuse it.
 
 The user path this change must make work:
 
-1. **API.** Create a principal with kind agent through ANY /api/server/principals with a session credential.
-2. **API.** Read the principal back through ANY /api/server/principals/{} and confirm the kind.
-3. **API.** Read an audit entry with the agent block through ANY /api/audit/entries/{} and confirm agent, delegation, and reason.
-4. **Docs page.** Follow the docs page for agent shapes and run each command as written.
+1. **API.** A site administrator lists the principals through `GET /api/server/principals` with a session credential and filters by kind; the kind `agent` is a known filter value, and an unknown value answers 400 with `principal.invalid`.
+2. **API.** A create of a principal of the kind `agent` through `POST /api/server/principals` answers 400 with `principal.invalid`: an agent record needs its sponsors and is made by the model connect request (RFC 121 decisions 4 and 7), not by this route.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Unknown principal kind rejected with the NEW error code `principal.kind-invalid`. | The server rejects the unknown kind and keeps stored data unchanged. Check the kind value and retry. | `GET /api/server/principals/{subject}` |
-| Malformed agent block rejected with the NEW error code `audit.agent-invalid`. | The server rejects the entry and keeps the hash chain unchanged. Read the entry shape in the docs and retry. | `GET /api/audit/entries/{id}` |
-| Malformed agent key rejected with the NEW error code `jobtoken.agent-invalid`. | The server rejects mint and stores no token. Check the agent subject and retry. | `POST /api/server/service-tokens` |
-
-Evidence for the claims above:
-
-- Principal domain package exists on main. Proof: pkg/principal where pkg/principal
-- Audit domain package exists on main with an audit-read kind and hash coverage test. Proof: pkg/audit where pkg/audit; audit kind audit-read where pkg/audit/audit.go:69; test TestComputeHashIsStableAndCoversTheFields where pkg/audit/audit_test.go:99
-- Principal and audit routes exist on main. Proof: routes ANY /api/server/principals, ANY /api/server/principals/{}, ANY /api/audit/entries, ANY /api/audit/entries/{}
-- Principal and audit error catalogs exist on main. Proof: error codes principal.invalid at internal/errcode/catalog_principal.go:11 and audit.reason-invalid at internal/errcode/catalog_audit.go:17
-- Main proves no agent kind because the pack states identity kinds are person, service, and workload with no agent kind. Proof: RFC 121 excerpt states identity.Kind has person, service and workload, and no agent kind
+| Create with the kind `agent` or an unknown kind | 400 `principal.invalid`: the kind is not one that this route makes. | `GET /api/server/principals?kind=agent` |
 
 ## What Changes
 
-- Stored principal kind with values person, service, and agent that alone changes no access.
-- Stored audit agent block of agent subject, delegation ID, and reason covered by the chain hash.
-- Stored job token agent key returned on verification with existing claims unchanged.
+- `principal.Kind` and `identity.Kind` get the value `agent` (`KindAgent`): `principal.ParseKind` (pkg/principal/principal.go:96) and `identity.Kinds` (pkg/identity/identity.go:93) know it, and `audit.Entry.validatePrincipal` (pkg/audit/audit.go:327) accepts the principal kind `agent` in an entry.
+- Each switch over the kind on main handles `agent` explicitly, or refuses it in its default (fail closed): internal/subscriptionsvc/subscriptionsvc.go:382, internal/api/registry/handlers.go:163, internal/api/inventory/views.go:231, pkg/notify/sinks/sinks.go:691, and pkg/accesstoken/accesstoken.go:82 (`KindFor` already refuses an unknown kind with `ErrNoTokenForKind`; an agent gets no access token of these kinds).
+- The create route of principals (internal/api/server/principals.go:671) keeps making person, service and workload only, and refuses `agent` with `principal.invalid`.
+- No new table, column or error code: `principals.kind` is `text NOT NULL` on main, and no tag shipped a row of another shape.
 
 Out of scope:
 
-- Agent delegation checks, ceilings, scopes, and held requests
-- Dusty principal, grants, and run behavior
-- Migration or upgrade of shipped data beyond additive baseline fields
-- Console views for agents
-- List or filter by kind and audit export format changes
-
-## Usability
-
-Where the path still costs the person time or surprises them:
-
-- The site administrator must learn a new kind value that grants nothing yet, which surprises without the docs note.
-- Reason length and ID rules add read time on the principal and audit pages.
+- The agent block of an audit entry: ADR 380 (owner) fixes it, and audit-agent-block owns it.
+- The agent key of a job token: job tokens and their mint are not on main; add-job-session-paths-runner-token-issuer owns them.
+- The agent record itself (sponsors, ceiling, delegations): person-delegates-dusty and later changes.
 
 ## What main already does
 
-Each fact names its file, line and function on main. The change specifies only the difference.
-
-- Audit HTTP adapter converts stored entries to API output. (`internal/api/audit/audit.go:173 (func toAuditEntry)`)
-- Audit hash computation has a stable coverage test. (`pkg/audit/audit_test.go:99 (func TestComputeHashIsStableAndCoversTheFields)`)
-- Route declarations have a hook test that fails on unknown shapes. (`pkg/dustpan/route_declarations_hook_internal_test.go:17 (func TestRouteHookFailsOnAnUnknownShape)`)
-- Job token test helper builds an audit entry for token actions. (`pkg/jobtoken/jobtokentest/jobtokentest.go:204 (func auditEntry)`)
+- `principal.Kind` has three values and `ParseKind` refuses others with `ErrInvalid` (`pkg/principal/principal.go:96 (func ParseKind)`)
+- The record holds the kind, `text NOT NULL` (`pkg/store/postgres/migrations/0168_baseline.sql:978`, the table `principals`).
+- The audit entry refuses an unknown principal kind (`pkg/audit/audit.go:327 (func Entry.validatePrincipal)`)
+- An access token refuses an unknown kind (`pkg/accesstoken/accesstoken.go:80 (func KindFor)`)
 
 ## ADR check
 
-Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+**ADR 354: Agent principals, delegation and the kind agent** (owner-tagged, all decisions).
 
-No ADR is touched.
+- Quote, Changes: "Changes ADR 240 decisions 1, 3 and 4: `principal.kind` gets the value `agent`, and an unknown kind fails closed."
+- Quote, decision 7: "A token from a trust rule gives `workload`, as ADR 240 decision 3 says." So `workload` stays a kind.
+- Quote, decision 6: "Decisions 1 to 52 of the \"Proposal\" of the RFC apply." RFC 121 decision 4: "The record holds 1 to 5 sponsors (persons) and a fallback group."; decision 7: "The model connect request creates it, with the connecting administrator as its creator and first sponsor."
+- Effect: the change adds the kind and makes every reader know it or refuse it; it makes no agent record, so the create route refuses `agent`.
+- Conflict: none.
+
+**ADR 380: The delegation in the agent block of an audit entry** (owner-tagged).
+
+- Quote, decision 1: "The agent block of ADR 126 decision 10 holds seven fields in this fixed order".
+- Effect: this change adds no agent block; audit-agent-block builds it.
+- Conflict: none.
+
+**ADR 240: A state download by a person is a reveal, and a principal has a kind.**
+
+- Quote, Consequences: "the kind cannot change after the server makes the record". No route changes the kind on main (an update changes the display name only), so this change adds no rule and no error code for a change of the kind.
+- Conflict: none.
 
 ## Open questions
 
-none
-
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
-
-1. Does the PM adopt the provisional stored values person, service, and agent for principal kind, the audit agent block of agent, delegation, and reason, and the job token agent key before the first tag? Provisional decision (owner review 14 Nov): yes, additive shapes only with no access change.
-   - Options: Fix kind values as person, service, agent as provisional PM decision before the first tag; Leave kind unfixed until a later RFC.
-   - Provisional decision (owner review 14 Nov): Fix kind values as person, service, agent as provisional PM decision before the first tag
-   - Reason: The pack lists no ADR that decides these shapes and the roadmap calls them one-way doors before the first tag. Benchmark: AWS practice for IAM principal kinds keeps a fixed allowlist of kinds and rejects unknown kinds at creation.
-   - Persona impact: No persona loses access; the agent kind alone grants nothing until a later change. Escape hatch: Unknown kinds stay rejected; existing person and service rows keep current access with no change.
-2. Which accepted ADRs decide the audit hash chain, the principal model, and the job token claims that this additive shape touches?
-   - Options: Name the accepted ADRs that decide the audit hash chain, the principal model, and the job token claims and quote their decision lines; Confirm no accepted ADR decides them and proceed as provisional PM decision.
-   - Provisional decision (owner review 14 Nov): Name the accepted ADRs that decide the audit hash chain, the principal model, and the job token claims and quote their decision lines
-   - Reason: The context pack lists zero ADRs, so this draft cannot quote an ADR decision line without inventing a path or quote. Benchmark: ISO 27001 practice keeps a record of each decision that controls log integrity and identity records before the change ships.
-   - Persona impact: No persona loses access; the question only names the ADR basis for the audit, principal, and token shapes. Escape hatch: This change ships only additive stored fields with no access change, so current grants and current hash checks keep working.
-
-Questions considered and answered:
-
-- Does an accepted ADR already fix the agent shapes? The pack lists zero ADRs. The pack lists RFC 121 as accepted but an RFC is an open question, not a decision. This change fixes only additive stored shapes with no access change, so it claims no ADR conflict and the provisional values stay a PM decision in open questions.
-- What is the boundary of this change versus RFC 121 behavior? The milestone roadmap names three stored shapes as one-way doors before the first tag: principal kind, audit agent block in the hash chain, and job token agent key. This change fixes only those stored fields with no delegation checks, no Dusty behavior, and no console views.
-
-Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
+none. Considered: a NEW error code `principal.kind-invalid` (refused: main answers `principal.invalid` for an unknown kind, and the code says enough); a NEW code `principal.kind-immutable` (refused: no route changes the kind, ADR 240 Consequences).

@@ -42,9 +42,12 @@ Out of scope:
 
 Depends on:
 
-- ADR 368 on main (pull request #3052)
 - concurrent-applies-merge-core
 - `concurrent-applies-merge-core` (the part before it in the split)
+
+Builds on (not a change):
+
+- ADR 368 on main (pull request #3052)
 
 ## Usability
 

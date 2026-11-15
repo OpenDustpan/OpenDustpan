@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:373` (Environment promotion).
@@ -54,7 +54,6 @@ Out of scope:
 Depends on:
 
 - blueprints
-- `blueprints` (order of the milestone review)
 
 ## Usability
 
@@ -67,7 +66,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Self-service blueprint read test exists (`pkg/store/postgres/self_service_blueprints_internal_test.go:93 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
+- Self-service blueprint read test exists (`pkg/store/postgres/self_service_blueprints_internal_test.go:94 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
 - Unit missing error code exists (`internal/errcode/catalog_unit.go:21 (unit.not-found)`)
 - Gate denial error code exists (`internal/errcode/catalog_gate.go:17 (gate.denied)`)
 

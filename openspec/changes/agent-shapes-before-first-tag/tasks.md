@@ -1,26 +1,23 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
-## 1. Failing tests first
+## 1. Hostile tests first (SECURITY)
 
-- [ ] 1.1 Add failing store and service tests for Create with kind values person, service, and agent, omitted kind default, kind freeze, and legacy rows without kind. Check: TestPrincipalKindStoredAndReturned in pkg/principal fails on main, passes after.
-- [ ] 1.2 Add failing audit tests for population from auth context, canonical encoding, hash coverage, absent block compatibility, subject and reason limits, delegation grammar, and atomic principal audit write. Check: TestAuditAgentBlockCoveredByHash in pkg/audit fails on main, passes after.
-- [ ] 1.3 Add failing job token tests in NEW file pkg/jobtoken/agentkey_test.go for Mint (NEW agent key support) with agent key round trip, existence check, malformed key rejection, and legacy tokens without a key. Check: TestJobTokenAgentKeyRoundTrip in job token suite fails on main, passes after.
+- [x] 1.1 SECURITY. No route: the test calls the parse function only. Add `TestParseKindTable` (NEW) in pkg/principal/principal_test.go: person, service, workload and agent pass; `robot`, `Agent`, ` agent` and `agent` with a NUL byte are `principal.ErrInvalid`. Check: `go test ./pkg/principal/ -run TestParseKindTable -count=1` fails on main, because `KindAgent` is NEW.
+- [x] 1.2 SECURITY. Add `TestCreatePrincipalRefusesAgentAndUnknownKinds` (NEW) in internal/api/server/principals_test.go: `POST /api/server/principals` with a session credential and the kinds `agent`, `robot`, `Agent`, an empty kind and `agent` with a newline each answer 400 `principal.invalid`, and the store holds no new row. Check: `go test ./internal/api/server/ -run TestCreatePrincipalRefusesAgentAndUnknownKinds -count=1` passes on main for the unknown kinds and still passes after the change for `agent`.
+- [x] 1.3 SECURITY. No route: the test calls the audit validation only. Add `TestValidatePrincipalKinds` (NEW) in pkg/audit/audit_test.go: an entry with the principal kind `agent` passes, and `robot` is `audit.ErrInvalidEntry`. Check: `go test ./pkg/audit/ -run TestValidatePrincipalKinds -count=1` fails on main for `agent`.
+- [x] 1.4 SECURITY. No route: the test calls the gate subject source only. Add `TestSubjectRefusesAgentKind` (NEW) in `pkg/dustpan/stateguard_internal_test.go`: `principalSubjects.Subject` (pkg/dustpan/stateguard.go:335) with an identity principal of the kind `agent` returns `identity.ErrDenied` and never a subject of the kind `gate.PrincipalPerson`, also when the principal record exists. Check: `go test ./pkg/dustpan/ -run TestSubjectRefusesAgentKind -count=1` fails on main.
 
-## 2. Build the shapes
+## 2. Build
 
-- [ ] 2.1 Edit the baseline of each dialect in place for the three additive fields with defaults that keep current rows valid. Edit the baseline files under pkg/store (one per dialect). Check: Baseline builds for both dialects and `sqlc diff` is clean after `make generate`.
-- [ ] 2.2 Wire kind and agent fields through the existing principal, audit, and token paths with allowlist checks in pkg/principal, pkg/audit, and pkg/jobtoken. Change the audit adapter at internal/api/audit/audit.go:173 (func toAuditEntry). Check: Route test TestRouteHookFailsOnAnUnknownShape still passes and changed routes declare authorization actions.
-- [ ] 2.3 Update the API description in internal/api/apidesc/openapi.json for the new stored fields with no new routes. Check: API description build passes and lists kind, agent block, and agent key fields.
-- [ ] 2.4 Add e2e coverage against the real directory for create, read, and audit read in NEW file internal/servertest/agent_shapes_test.go. Check: e2e step calls ANY /api/server/principals/{} and ANY /api/audit/entries/{} with a session credential, passes the existing read gates, and reads back kind and agent block.
+- [x] 2.1 SECURITY. Add `KindAgent` to `principal.Kind` and `principal.ParseKind` (pkg/principal/principal.go:84-101) and to `identity.Kind` and `identity.Kinds` (pkg/identity/identity.go:86-95); accept `agent` in `audit.Entry.validatePrincipal` (pkg/audit/audit.go:327) with the NEW constant `audit.PrincipalKindAgent`. Check: the tests of 1.1 and 1.3 pass.
+- [x] 2.2 SECURITY. Give each switch over the kind an explicit `agent` case, or keep a default that refuses, with `TestKindSwitchesKnowAgent` (NEW) in the test file of each package: internal/subscriptionsvc/subscriptionsvc.go:382, internal/api/registry/handlers.go:163, internal/api/inventory/views.go:231, pkg/notify/sinks/sinks.go:691, and pkg/accesstoken/accesstoken.go:82 (`KindFor` refuses `agent` with `ErrNoTokenForKind`). Check: `go test ./internal/subscriptionsvc/ ./internal/api/registry/ ./internal/api/inventory/ ./pkg/notify/sinks/ ./pkg/accesstoken/ -run TestKindSwitchesKnowAgent -count=1` passes.
+- [x] 2.3 SECURITY. Make the create route of principals (internal/api/server/principals.go:671) refuse the kind `agent` with `principal.invalid` after `principal.ParseKind`, with a comment that an agent record comes from the model connect request. Check: the test of 1.2 passes.
+- [x] 2.4 The store conformance case of an unknown principal kind uses `agent`, which this change makes valid, so it must use a kind that stays unknown. Replace `"agent"` with `"robot"` in `pkg/audit/audittest/audittest.go` (the kind of the entry in func testPrincipalKindRefused). No route: the test calls the store append only. Check: `go test -timeout 60m ./pkg/store/sqlite/ ./pkg/store/postgres/ -run 'TestAuditConformance/an_unknown_principal_kind_is_refused' -count=1` passes on SQLite and PostgreSQL.
+- [x] 2.5 SECURITY. In `principalSubjects.Subject` (pkg/dustpan/stateguard.go:335), refuse the kind `identity.KindAgent` (NEW in task 2.1) with `identity.ErrDenied` before the kind mapping at :340, which maps every kind other than service and workload to `gate.PrincipalPerson`. The caller writes its existing denial record for the refusal, as for every other error of the subject source. Add a comment that the state write has no agent mapping yet, so an agent fails closed and never passes a gate as a person; the change state-write-gates-context-principal replaces this refusal with the mapping to `gate.PrincipalAgent`. Check: `go test ./pkg/dustpan/ -run TestSubjectRefusesAgentKind -count=1` passes.
 
-## 3. Side effects (computed from main)
+## 3. Definition of done
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
-
-## 4. Definition of done
-
-- [ ] 4.1 Document the stored shapes and the rule that the agent kind alone grants nothing. Check: Docs page commands run as written in a test.
-- [ ] 4.2 Run a usability check with a site administrator. Check: Persona completes the path from the docs page alone and each error names the one command that helps.
-- [ ] 4.3 Run the full definition of done including wiring, route actions, e2e step, docs page, and usability check. Check: `make check` with zero findings after wiring through ANY /api/server/principals and ANY /api/audit/entries with a session credential and the existing read gates.
+- [x] 3.1 Add one line to docs/guides/principals-and-groups.md: the kind `agent` exists, a person cannot create it through the API, and the list filters by it. Check: `make docs-lint` passes on each edited guide.
+- [x] 3.2 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -34,7 +34,6 @@ Out of scope:
 Depends on:
 
 - 57-documentation-product
-- `57-documentation-product` (order of the milestone review)
 
 ## Usability
 

@@ -10,7 +10,7 @@ When a publisher publishes a provider archive, the server SHALL compute the H1 d
 
 #### Scenario: Republish with changed bytes refused
 - **WHEN** a publisher republishes the same version with an archive of different H1.
-- **THEN** the server refuses the request with 409 registry.content-changed.
+- **THEN** the server refuses the request with 409 registry.version-exists.
 
 #### Scenario: Large archive refused with path forward
 - **WHEN** a valid provider archive exceeds 64 MB unpacked or 16 MB in one file.
@@ -42,7 +42,7 @@ When a provider archive holds terraform-registry-manifest.json, the server SHALL
 
 #### Scenario: Mismatch refused
 - **WHEN** stated protocols differ from the protocols in terraform-registry-manifest.json.
-- **THEN** the server refuses the request with 400 registry.protocol-mismatch and stores no release.
+- **THEN** the server refuses the request with 400 registry.invalid and stores no release.
 
 #### Scenario: Match stored
 - **WHEN** stated protocols match the protocols in terraform-registry-manifest.json as an order-insensitive set with duplicates ignored.
@@ -50,19 +50,19 @@ When a provider archive holds terraform-registry-manifest.json, the server SHALL
 
 #### Scenario: Empty manifest list refused
 - **WHEN** the manifest lists an empty protocol list.
-- **THEN** the server refuses with 400 registry.protocol-mismatch.
+- **THEN** the server refuses with 400 registry.invalid.
 
 ### Requirement: Protocols without manifest
 
-When a provider archive lacks terraform-registry-manifest.json, the server SHALL refuse stated protocols with 400 registry.protocol-mismatch.
+When a provider archive lacks terraform-registry-manifest.json, the server SHALL refuse the publish with 400 registry.invalid, with or without stated protocols.
 
 #### Scenario: Stated protocols without manifest refused
 - **WHEN** a publisher states protocols and the archive holds no terraform-registry-manifest.json.
-- **THEN** the server refuses the request with 400 registry.protocol-mismatch and stores no release.
+- **THEN** the server refuses the request with 400 registry.invalid and stores no release.
 
-#### Scenario: No manifest and no protocols stored empty
+#### Scenario: No manifest and no protocols refused
 - **WHEN** the archive holds no manifest and the publisher states no protocols.
-- **THEN** the stored release holds an empty protocol list.
+- **THEN** the server refuses the request with 400 registry.invalid and stores no release, as the store refuses a release with no protocol.
 
 ### Requirement: Malformed manifest
 
@@ -74,11 +74,11 @@ When terraform-registry-manifest.json holds malformed JSON, the server SHALL ref
 
 ### Requirement: Unknown protocol value
 
-When terraform-registry-manifest.json lists a protocol value outside the known set of 5.0 and 6.0, the server SHALL refuse the publish with 400 registry.protocol-mismatch.
+When terraform-registry-manifest.json lists a protocol value outside the known set of 5.0 and 6.0, the server SHALL refuse the publish with 400 registry.invalid.
 
 #### Scenario: Unknown value refused
 - **WHEN** the manifest lists a protocol value outside the known set of 5.0 and 6.0.
-- **THEN** the server refuses the request with 400 registry.protocol-mismatch.
+- **THEN** the server refuses the request with 400 registry.invalid.
 
 ### Requirement: serve releases under slug
 
@@ -94,7 +94,7 @@ Where a namespace owns releases, the server SHALL serve its releases under the s
 
 #### Scenario: Unknown slug refused
 - **WHEN** a client requests a slug that maps to no namespace.
-- **THEN** the server refuses with 404 registry.unknown-slug.
+- **THEN** the server refuses with 404 registry.not-found.
 
 #### Scenario: Slug collision resolved
 - **WHEN** two namespace IDs strip to the same slug or to an empty string.
@@ -112,14 +112,6 @@ When the server compares a republished release with the stored release, the serv
 - **WHEN** a republish carries the same H1 and the same manifest protocols.
 - **THEN** the server accepts the republish as identical.
 
-### Requirement: Missing H1 of old release
-
-Where the stored release lacks H1, the server SHALL compare by SHA256 and backfill H1 on identical republish.
-
-#### Scenario: Old release same bytes accepted
-- **WHEN** the stored release lacks H1 and the republish carries the same SHA256.
-- **THEN** the server accepts the republish as identical and backfills the H1 digest.
-
 ### Requirement: Concurrent republish same bytes
 
 While a release version exists, the server SHALL compare and store a same-bytes republish inside one transaction.
@@ -130,11 +122,11 @@ While a release version exists, the server SHALL compare and store a same-bytes 
 
 ### Requirement: Concurrent republish changed bytes
 
-While a release version exists, the server SHALL refuse a changed-bytes republish inside one transaction with 409 registry.content-changed.
+While a release version exists, the server SHALL refuse a changed-bytes republish inside one transaction with 409 registry.version-exists.
 
 #### Scenario: Race changed bytes
 - **WHEN** two publishers publish the same version with different bytes at the same time.
-- **THEN** one request succeeds and the other receives 409 registry.content-changed.
+- **THEN** one request succeeds and the other receives 409 registry.version-exists.
 
 ### Requirement: Request guards
 

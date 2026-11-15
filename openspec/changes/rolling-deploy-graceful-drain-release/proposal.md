@@ -1,8 +1,10 @@
 ---
-version: 1
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:466` (Drain instances with 503 and release claims.).
+
+Issue: #2027.
 
 ## Why
 
@@ -31,7 +33,7 @@ Evidence for the claims above:
 ## What Changes
 
 - SIGTERM enters draining: readiness 503 with Retry-After, no new durable claims.
-- Bounded wait for in-flight requests up to NEW fixed `drain-timeout` of 30 s per instance.
+- Bounded wait with the constants of main: the drain of WithDrainPeriod (DefaultDrainPeriod 10 s, at most 15 s), then the shutdown bound shutdownTimeout of 30 s for in-flight requests and the claim release, inside maxStopTime 45 s (pkg/dustpan/dustpan.go:130-142). A `Retry-After` header on the draining 503 of GET /health/ready.
 - Release of held durable claims at drain end so another worker takes over with no operator action.
 
 Out of scope:
@@ -57,7 +59,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - A readiness drain test exists. (`pkg/dustpan/health_internal_test.go:224 (func TestReadinessDrains)`)
 - A backup takeover test after graceful stop exists. (`internal/servertest/backup_test.go:367 (func TestBackupTakeoverAfterGracefulStop)`)
 - A shutdown-during-write test that leaves a backup for another worker exists. (`pkg/backup/service_durable_test.go:480 (func TestShutdownDuringWriteStepLeavesTheBackupForAnotherWorker)`)
-- An audit shipper lease-release test on shutdown exists. (`pkg/audit/ship_test.go:1292 (func TestShipperReleasesItsLeaseOnShutdown)`)
+- An audit shipper lease-release test on shutdown exists. (`pkg/audit/ship_test.go:1293 (func TestShipperReleasesItsLeaseOnShutdown)`)
 
 ## ADR check
 
@@ -69,15 +71,9 @@ No ADR is touched.
 
 none
 
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
-
-1. What fixed drain timeout bounds the wait for in-flight requests before claims release?
-   - Options: 30 s fixed drain timeout; 60 s fixed drain timeout.
-   - Provisional decision (owner review 14 Nov): 30 s fixed drain timeout per instance.
-   - Reason: The pack and roadmap scope name a drain but give no number, unit or scope. Benchmark: AWS: load balancer drains targets for a bounded deregistration delay then forces close.
-   - Persona impact: Operator waits at most the timeout per instance; longer timeout slows deploys. Escape hatch: Operator sets the NEW drain timeout `drain-timeout` to 0 to skip waiting; claims still release.
-
 Questions considered and answered:
+
+- What bounds the drain? The constants of main, PM decision 14 Nov 2026 22:20 (week log): no new drain timer and no internal/instance/drain.go. shutdownTimeout 30 s is the existing bound for in-flight requests and the claim release; DefaultDrainPeriod 10 s and maxStopTime 45 s stay (pkg/dustpan/dustpan.go:130-142, checkDrainPeriod at pkg/dustpan/health.go:493). SIGTERM uses WithDrainPeriod and the existing shutdown path.
 
 - Does this change alter the minimum version check on the write path? No. The split scope keeps the minimum version check in another part; this change only drains and releases claims.
 - Does this change add the exit-test rolling deploy step? No. The roadmap scope for this part is drain with readiness 503 and release of claims for takeover only.
