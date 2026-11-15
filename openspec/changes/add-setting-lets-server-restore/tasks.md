@@ -1,13 +1,24 @@
-## 1. build
+## 0. Confirm against the code first
 
-- [ ] 1.1 Add failing tests for default off refusal, off with server:restore-access success, allowed change, refused change without action, refused change without fresh step, and restore with setting on plus snapshot, invalid value, and race cases. Check: TestRestoreAccessSetting_defaultOff fails on main, passes after.
-- [ ] 1.2 Add the setting with default off and the REST route with its actions and object. Check: `go test ./internal/api/server/... -run TestSettingsRoute -count=1` passes.
-- [ ] 1.3 Branch the restore apply step on the snapshot value with fail-closed read and the two-path guard in the same transaction. Check: `go test ./internal/backup/... -run TestRestoreAccess -count=1` passes.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
-## 2. definition of done
+## 1. tests first
 
-- [ ] 2.1 Update the route test and the audit entry check for old and new value. Check: Route test lists the new settings route with its actions.
-- [ ] 2.2 Add e2e coverage for the setting change and a restore. Check: e2e step changes the setting and runs a restore against the real binary over TLS.
-- [ ] 2.3 Add the user docs page in the same pull request. Check: Docs page shows the setting, default, actions, fresh step, and audit record.
-- [ ] 2.4 Run the usability walk from the docs page alone. Check: Persona completes the path from the docs page alone and each error names the one command that helps.
-- [ ] 2.5 Run full checks. Check: `make check` passes with zero findings.
+- [ ] 1.1 Write failing tests for each spec scenario in NEW file pkg/backup/restore_access_setting_test.go (package backup). TestRestoreAccessSettingDefaultOff is NEW. Check: TestRestoreAccessSettingDefaultOff fails on main
+
+## 2. build
+
+- [ ] 2.1 Add the stored boolean key with fail-closed parse in NEW file pkg/backup/restore_access_setting.go (the NEW restoreAccessSetting constructor), and register the key in internal/cli/settings.go. Check: `go test ./pkg/backup/... -run TestRestoreAccessSetting -count=1`
+- [ ] 2.2 Branch the restore apply step on the snapshot with the two-path guard in pkg/backup/service.go. Check: `go test ./pkg/backup/... -run TestRestoreAccess -count=1`
+
+## 3. Side effects (computed from main)
+
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
+
+## 4. definition of done
+
+- [ ] 4.1 Route test lists the settings route with its actions. Check: Route test passes
+- [ ] 4.2 E2E: PATCH /api/dustpan/v1/settings with a console session cookie (fresh step, never an access token), then POST /api/server/restores with the same session, over TLS. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Add the docs page NEW file docs/guides/restore-access-setting.md, and list the value in the admin access report in the existing file pkg/backup/service.go. Check: Docs page and report show the value. `make docs-lint` passes on each edited guide.
+- [ ] 4.4 Usability walk from the docs page alone. Check: Each error names one command. A person's step.
+- [ ] 4.5 Run full checks. Check: `make check` has zero findings. Confirmed by: CI (the agent runs the fast checks only).

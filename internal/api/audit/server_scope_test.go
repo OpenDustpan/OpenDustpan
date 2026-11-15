@@ -42,6 +42,7 @@ func seedServerEntry(t *testing.T, store *memAuditStore, subject string) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	})
 	if err != nil {
 		t.Fatalf("seed @server audit entry: %v", err)

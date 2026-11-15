@@ -70,11 +70,15 @@ type RecorderParts struct {
 	Wrapper secret.Wrapper
 }
 
-// noRefusals is a scopeaudit.Recorder that drops every refusal: the cases read
-// a refusal as the error of the call.
+// noRefusals is a scopeaudit.Recorder and a scopeaudit.IntegrityRecorder that
+// drops every refusal: the cases read a refusal as the error of the call.
 type noRefusals struct{}
 
 func (noRefusals) RecordOutOfScope(context.Context, namespace.ID, string, scopeaudit.Where) error {
+	return nil
+}
+
+func (noRefusals) RecordMismatch(context.Context, namespace.ID, string) error {
 	return nil
 }
 
@@ -113,7 +117,7 @@ func NewRecorderHarnessWithRetention(
 		}
 	}
 
-	itemBlobs, err := secret.NewItemKeyBlobs(parts.Blobs, noRefusals{})
+	itemBlobs, err := secret.NewItemKeyBlobs(parts.Blobs, noRefusals{}, noRefusals{})
 	if err != nil {
 		t.Fatalf("item key blobs: %v", err)
 	}

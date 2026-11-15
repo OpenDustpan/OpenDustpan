@@ -37,8 +37,9 @@ var errEventStore = errors.New("event store down")
 // that needs a blob store panics on it.
 func keyService(live RestoreLive) *RestoreService {
 	return &RestoreService{
-		live: live, operations: nil, canceler: nil, backups: nil, maintenance: nil, blobs: nil, target: nil,
-		key: nil, installation: "", afterApply: nil, admit: nil, allowDev: false, devHint: "", lease: 0,
+		live: live, operations: nil, canceler: nil, backups: nil, maintenance: nil, blobs: nil, leases: nil,
+		target: nil,
+		key:    nil, installation: "", afterApply: nil, admit: nil, allowDev: false, devHint: "", lease: 0,
 		lockWait: 0, now: nil, logger: nil, runner: nil,
 	}
 }

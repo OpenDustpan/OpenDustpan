@@ -34,6 +34,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
@@ -114,6 +115,13 @@ type Store struct {
 	// reads runs the short catalog reads of the backup and restore code with
 	// the bounds of the API paths.
 	reads guardedDB
+	// attemptDeadline gives the attempt deadline of a transaction that can
+	// write an item key record. It is secret.AttemptDeadline. An internal test
+	// sets a shorter one.
+	attemptDeadline func(ctx context.Context, start time.Time) time.Time
+	// now gives the current time of the item key attempt code. Tests
+	// replace it.
+	now func() time.Time
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -254,6 +262,8 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		guard:               nil,
 		marks:               newLongMarks(),
 		reads:               guardedDB{inner: nil, rt: roundTrip{deadline: 0, watch: nil, readOnlyTx: false}},
+		attemptDeadline:     secret.AttemptDeadline,
+		now:                 time.Now,
 	}
 
 	for _, opt := range opts {
@@ -444,7 +454,11 @@ func (s *Store) CreateStackPlaced(
 			return err
 		}
 
-		return setUnitCollection(ctx, q, placementMove(st, p), e)
+		if err := setUnitCollection(ctx, q, placementMove(st, p), e); err != nil {
+			return placementCollectionError(p.Collection.Name, err)
+		}
+
+		return nil
 	})
 }
 
@@ -1045,6 +1059,18 @@ func stackTagMap(ctx context.Context, q *db.Queries, ns string) (map[string]map[
 // is the schema, so two installations in one database do not wait for each
 // other ("main" in ASCII).
 const writeLockClass int32 = 0x6d61696e
+
+// blobDeleteLockClass is the first key of the advisory lock that orders the
+// take of a blob delete lease against the start of the work that the lease
+// holds back ("blob" in ASCII). A take transaction takes the shared form
+// before it reads the running work, and each transaction that writes a
+// running backup row or a checking or applying restore row takes the
+// exclusive form before that write. So the take sees every row that the lock
+// ordered before it, and the write waits for the take: a take and a start
+// cannot interleave, and a deleter that holds a lease never started after the
+// work that it must wait for. The second key is the schema, so two
+// installations in one database do not wait for each other.
+const blobDeleteLockClass int32 = 0x626c6f62
 
 // writeLockSQL takes the shared form of the write lock for this transaction.
 const writeLockSQL = `SELECT pg_advisory_xact_lock_shared($1, hashtext(current_schema()))`

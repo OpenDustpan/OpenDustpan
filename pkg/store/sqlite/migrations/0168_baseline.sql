@@ -327,6 +327,11 @@ CREATE TABLE access_token_policy (
     updated_at_ms       INTEGER NOT NULL
 , exchange_lifetime_ms INTEGER NOT NULL DEFAULT 3600000) STRICT;
 
+CREATE TABLE blob_delete_leases (
+    holder        TEXT    NOT NULL PRIMARY KEY,
+    expires_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE blob_purges (
     tool          TEXT    NOT NULL,
     unit_id       TEXT    NOT NULL,
@@ -1017,7 +1022,15 @@ CREATE TABLE item_keys (
     shredded_at_ms INTEGER NOT NULL CHECK (shredded_at_ms >= 0),
     blob_version   INTEGER NOT NULL CHECK (blob_version >= 1),
     blob_size      INTEGER NOT NULL CHECK (blob_size >= 1),
-    blob_md5       BLOB NOT NULL CHECK (length(blob_md5) = 16)
+    blob_md5       BLOB NOT NULL CHECK (length(blob_md5) = 16),
+    -- The attempt part of the key of the wrapped item key blob that the record
+    -- names. Each write of a wrapped item key uses a key with a new attempt part,
+    -- so two writes never share a key, and a store that replaces an object on a
+    -- second write never replaces a blob that a record names. The key is
+    -- namespaces/<namespace ID>/item-keys/<id>/v<blob_version>-<blob_attempt>.
+    -- The attempt part is 20 lowercase ASCII letters and digits, so it names no
+    -- other path.
+    blob_attempt   TEXT    NOT NULL CHECK (length(blob_attempt) = 20 AND blob_attempt NOT GLOB '*[^a-z0-9]*')
 ) STRICT;
 
 CREATE TABLE job_plans (
@@ -1076,6 +1089,15 @@ CREATE TABLE triggers (
     last_saver_id      TEXT    NOT NULL,
     created_at_ms      INTEGER NOT NULL,
     updated_at_ms      INTEGER NOT NULL,
+    -- The next slot of a schedule trigger: the first run that a claim can still
+    -- take, in Unix milliseconds. Put sets it from the schedule when it makes or
+    -- switches on an enabled schedule trigger. The value 0 means that the row has
+    -- no slot, which holds for a trigger of another kind and for a trigger that is
+    -- off. An enabled schedule trigger with the value 0 is refused. A claim of a slot
+    -- moves the value to the slot after it, in one transaction, so of many instances
+    -- that claim one slot exactly one succeeds.
+    next_slot_ms       INTEGER NOT NULL DEFAULT 0
+        CHECK (next_slot_ms >= 0 AND (kind <> 'schedule' OR enabled = 0 OR next_slot_ms > 0)),
     PRIMARY KEY (namespace_id, id)
 ) STRICT;
 

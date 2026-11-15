@@ -1,16 +1,19 @@
-## 1. Failing tests first
+## 0. Confirm against the code first
 
-- [ ] 1.1 Add failing API tests for the generic locked-section reason and the same answer for unseen and nonexistent objects. Check: `go test ./internal/api/... -run TestConsoleLockedReason -count=1` fails on main, passes after the fix.
-- [ ] 1.2 Add failing tests for 403 grant.forbidden surface and 401 token.expired surface. Check: `go test ./internal/api/... -run TestConsoleDeniedAndExpired -count=1` fails on main, passes after the fix.
-- [ ] 1.3 Add failing tests for export row fields with Never value and export audit entry. Check: `go test ./internal/api/... -run TestConsoleExportRows -count=1` fails on main, passes after the fix.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
-## 2. Wiring and checks
+## 1. Wiring first
 
-- [ ] 2.1 Run the console browser tests against the real server over TLS: add member, make group, give and revoke grant, download export, show expiry banner, open locked section. Check: `make e2e CONSOLE=1` runs the console browser tests against the TLS server and passes.
-- [ ] 2.2 Write the docs page for the console access views with copy-paste commands. Check: Docs page commands run as written against the same server.
+- [ ] 1.1 Write the failing browser job in the NEW file e2e/console_browser_test.go: add member, make group, give and revoke grant, download export, banner and locked section. It calls GET /api/server/access-review and POST /api/server/grants with a session cookie over TLS. Check: `make e2e CONSOLE=1` fails on main and passes after the wiring; BLOCKED by the console repository job and the depends_on changes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.2 Add NEW test TestConsoleBrowserWiring in the NEW file e2e/console_browser_wiring_test.go. It reads the audit entries of each browser step with GET /api/audit/export and an access token of the site administrator. Check: `go test ./e2e/ -run TestConsoleBrowserWiring -count=1` (NEW test). Confirmed by: CI (the agent writes the e2e test).
+
+## 2. Side effects (computed from main)
+
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
-- [ ] 3.1 Route with authorization actions is present and the public list is unchanged. Check: Route with actions for the access endpoint is present in the route test.
-- [ ] 3.2 Usability check with a site administrator. Check: Persona completes the path from the docs page alone and each error names the one command that helps.
-- [ ] 3.3 `make check` with zero findings. Check: `make check` reports zero findings.
+- [ ] 3.1 Write the docs page for the console access views with copy-paste commands in the NEW file docs/guides/console-access-views.md. Check: A test runs each docs page command as written over TLS. `make docs-lint` passes on each edited guide.
+- [ ] 3.2 Confirm that the routes the job uses are in the route test with their actions. Check: The route test passes and the public list is unchanged.
+- [ ] 3.3 Usability check with a site administrator. Check: The persona completes the path from the docs page alone and each error names the one command that helps. A person's step.
+- [ ] 3.4 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

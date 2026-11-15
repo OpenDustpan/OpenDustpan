@@ -199,6 +199,7 @@ func wiringEntry(at time.Time, object string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

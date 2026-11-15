@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"runtime"
 	"slices"
@@ -860,15 +861,20 @@ func requestFlows() []requestFlow {
 			h.measure(func() { h.save(run, 1) })
 			h.complete(run)
 		}},
-		// The budget is 67. The second save reads the blob guard after the
-		// commit that replaces the previous checkpoint blob, so that a backup
-		// that started before the commit cannot lose the blob. The
-		// transaction of the create writes the record of the item key of the
-		// update, which seals its event payloads at rest: a read of the
-		// record, a read of the namespace, the insert and a read back. The
-		// start reads the stack one time, so that the manual lock check
-		// matches the lock by the stable ID of the stack, not by its name.
-		{"pulumi update cycle", 67, func(h *rtHarness) {
+		// The budget is 76. The second save replaces the previous checkpoint
+		// blob, so it holds a blob delete lease while it deletes the blob: 9
+		// round trips. The take is a transaction of 5 round trips: begin, the
+		// schema check, the shared lock, the insert and commit. The release is
+		// a transaction of 4: begin, the schema check, the delete and commit.
+		// A backup or a restore that starts while the lease is live waits for
+		// it, so it cannot lose the blob. The transaction of the create writes
+		// the record of the item key of the update, which seals its event
+		// payloads at rest: a read of the record, a read of the namespace, the
+		// insert and a read back. The item key transaction also arms its
+		// attempt deadline with one set_config: one more round trip. The start
+		// reads the stack one time, so that the manual lock check matches the
+		// lock by the stable ID of the stack, not by its name.
+		{"pulumi update cycle", 76, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()
@@ -897,17 +903,20 @@ func requestFlows() []requestFlow {
 		// membership of the unit: one more round trip in each budget. The
 		// manual lock check of each flow reads the stack one time, so that it
 		// matches the lock by the stable ID of the stack, not by its name: one
-		// more round trip in each budget.
+		// more round trip in each budget. The import and the restore write the
+		// state of a unit, so the item key transaction of each arms its attempt
+		// deadline with one set_config: one more round trip in each of their
+		// budgets.
 		{"pulumi stack rm", 40, func(h *rtHarness) {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 70, func(h *rtHarness) {
+		{"pulumi stack import", 71, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 71, func(h *rtHarness) {
+		{"pulumi stack restore", 72, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)
@@ -1144,6 +1153,13 @@ type backupSize struct {
 func TestRoundTripsOfBackup(t *testing.T) {
 	t.Parallel()
 
+	// This test measures the round trips of a backup and of a restore on
+	// PostgreSQL. It skips before it registers the cleanup, because the cleanup
+	// checks the runs of its subtests, and a skipped subtest writes no run.
+	if os.Getenv(servertest.EnvURL) == "" {
+		t.Skipf("set %s to run the multi-instance tests", servertest.EnvURL)
+	}
+
 	sizes := backupSizes()
 	runs := make([]measuredRun, len(sizes))
 
@@ -1355,6 +1371,9 @@ func backupModel() costModel {
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
 //
+// The fixed part also holds blobDeleteLeaseTrips: the waits for the blob
+// deleters.
+//
 // The fixed part takes breakGlassReviewTrips off for break_glass_reviews.
 //
 // The fixed part also holds stagedJobCheckTrips: the staged check of the job
@@ -1367,12 +1386,16 @@ func backupModel() costModel {
 // The fixed part also holds stagedPrincipalCheckTrips: the staged checks of
 // the grants and the memberships of principals of a namespace.
 //
+// The fixed part also holds stagedTriggerClockTrips: the staged check of the
+// trigger rows reads the clock of the store in one statement, once for each
+// restore.
+//
 // The fixed part also holds unitStateTrips: the restore derives the state
 // version of each unit from the restored rows.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 342 + 1 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips + removalAlertTrips +
-			stagedPrincipalCheckTrips + unitStateTrips,
+		fixed: 342 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1399,6 +1422,14 @@ const unitStateTrips = 5
 // units.
 const forgeStripClassTrips = 2
 
+// blobDeleteLeaseTrips is the number of round trips that the waits for the
+// blob deleters add to a restore. The restore takes the exclusive lock of the
+// blob delete leases two times and counts the live leases one time: 3
+// statements. The table of the leases is now a control table that a restore
+// keeps, so it costs 3 round trips: the column check, one delete and one copy.
+// That is 1 more than the 2 of perOther, so the model adds 1.
+const blobDeleteLeaseTrips = 3 + 1
+
 // breakGlassReviewTrips is the number of round trips that the restore of the
 // table break_glass_reviews makes fewer than perTable gives. The measured run
 // makes 6 round trips for that table, not 7, at 3 and at 30 units, so the
@@ -1417,6 +1448,12 @@ const stagedJobCheckTrips = 1
 // query, once for each restore. The count is fixed: it does not grow with the
 // units or the tables.
 const stagedPrincipalCheckTrips = 2
+
+// stagedTriggerClockTrips is the number of round trips that the staged check of
+// the trigger rows adds for the clock: it reads the clock of the store in one
+// statement, once for each restore. It does not grow with the units or the
+// tables.
+const stagedTriggerClockTrips = 1
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer

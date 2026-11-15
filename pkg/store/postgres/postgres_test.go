@@ -1106,6 +1106,7 @@ func newRestoreAuditServices(
 		Backups:      backups,
 		Maintenance:  storetest.StateMaintenance{State: st, Hold: false},
 		Blobs:        live,
+		Leases:       st,
 		Target:       target,
 		Key:          key,
 		Installation: "test",

@@ -1,25 +1,80 @@
 ## Context
 
-The planner role is a data role in the existing access model. No new store table and no new grant shape is needed. The built-in role table and the per-route action checks carry the behavior. The server plan-job start for planners stays closed until milestone 5 enforces the protected-branch gate.
+The planner role is a data role in the existing access model. No new table or grant shape is needed.
 
 ## Decisions
 
-1. **Planner as role-table entry with secret deny.** Define planner in the built-in role table as viewer actions plus unit:run-plan, job:read-plans and changeorder:author, with no secret reveal action. Reuse grant evaluation, masked state read and the audit writer.
-2. **Protected-branch gate stated now, server start closed until milestone 5.** State the protected-branch gate for planner-started plan jobs now and refuse planner plan-job start on the server until milestone 5 enforces the gate. Local plan and preview on a workstation read masked state through the same state actions.
+1. **Planner as role-table entry.** Keep planner in the built-in role table with no reveal action.
 
 ## Structure
 
-Built-in role table with unexported roleActionSet built only by NewRoleActionSet, which checks that planner holds exactly viewer actions plus unit:run-plan, job:read-plans and changeorder:author and no secret action.
+The built-in role table with an unexported action set that only its constructor makes; the constructor checks that planner holds the viewer actions plus unit:run-plan and job:read-plans. The action changeorder:author joins planner with the change order routes (ADR 197 decision 3).
 
 ## Risks
 
 - A handler declares a wrong action and lets a planner write.
-- A secret read path forgets the reveal check, including for old state versions.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| service | Access service allows only viewer reads plus unit:run-plan, job:read-plans and changeorder:author for planner holders and refuses secret reveal and non-plan job start. | Call reveal and non-plan job start as planner directly on the service; each call fails with 403 and writes an audit entry. |
-| HTTP handler | Pulumi, TFE-compatible, OpenTofu HTTP backend and tool-neutral handlers declare read actions for reads, write actions for apply and destroy, the reveal action for secret reads including state history and export routes, run-plan for plan start, and token and settings actions for those routes; each refusal is 403 with a fixed code. | Send pulumi up, pulumi destroy, tofu apply, tofu destroy, secret reveal, state history export, settings write, token create for another principal and non-plan job start with a planner token; each gets 403. |
-| port adapter | Store adapters enforce the same action check in the transaction with the namespace fence and mask secret values at read time for every state version including pre-change versions. | Attempt a write query with planner reach and read a state version written before the change as planner; the write is refused and the read shows masked placeholders. |
+| service | The access service refuses reveal, writes and token creation for another principal. | Call each action as planner on the service; each fails. |
+| HTTP handler | Each route declares its action. | Send up, destroy, apply and reveal with a planner token; each gets 403. |
+
+## Diagrams
+
+After this change:
+
+```mermaid
+sequenceDiagram
+  Developer->>Server: read state
+  Server-->>Developer: masked state
+  Developer->>Server: up
+  Server-->>Developer: 403
+```
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| audit completeness | 1 audit entry for each refusal | entries per refusal | planner refusals |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart LR
+  subgraph Client[Client boundary]
+    CLI[CLI]
+  end
+  subgraph Server[Server boundary]
+    H[HTTP handler] --> S[Access service]
+  end
+  subgraph Data[Data boundary]
+    D[(Store)]
+  end
+  CLI --> H
+  S --> D
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| API routes for state, secrets and tokens | E | A planner escalates a read grant to a write or a secret reveal. | boundary check | Each route declares its action. | Call each route as planner; each gets 403. |
+| API routes for state, secrets and tokens | E | A planner escalates a read grant to a write or a secret reveal. | encode or contain | The handler decodes the body strictly and rejects unknown fields, so no input names another action or principal. | Send a body with an extra principal field as planner; the server rejects it. |
+| API routes for state, secrets and tokens | E | A planner escalates a read grant to a write or a secret reveal. | limit | The handler caps the body size and the role holds no write action. | Send an oversized body as planner; the server rejects it. |
+| API routes for state, secrets and tokens | E | A planner escalates a read grant to a write or a secret reveal. | authorize at point of use | The service checks the action. | Call the service directly; it fails. |
+| API routes for state, secrets and tokens | E | A planner escalates a read grant to a write or a secret reveal. | fail closed | An unknown action is denied and audited. | Send an unknown action; denied and audited. |
+
+## Contracts
+
+**access**
+
+- Invariant: Planner holds the viewer actions plus unit:run-plan and job:read-plans. The action changeorder:author joins planner with the change order routes (ADR 197 decision 3).
+- `Authorizer.Authorize` (pkg/access/authorizer.go:111), tested by TestPlannerAccessDecision in pkg/access/planner_role_test.go: pre: Caller presents a session or an access token. Post: Allows planner state reads; refuses writes and reveal with access.denied.
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| planner runs up | The write is refused. | Ask an administrator for a write role. | No state version changes; the refusal is audited. |

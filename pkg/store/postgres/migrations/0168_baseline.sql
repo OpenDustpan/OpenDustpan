@@ -115,6 +115,11 @@ CREATE TABLE audit_sink_leases (
     expires_at_ms bigint NOT NULL
 );
 
+CREATE TABLE blob_delete_leases (
+    holder text NOT NULL,
+    expires_at_ms bigint NOT NULL
+);
+
 CREATE TABLE blob_purges (
     tool text NOT NULL,
     unit_id text NOT NULL,
@@ -577,6 +582,8 @@ CREATE TABLE item_keys (
     blob_version bigint NOT NULL,
     blob_size bigint NOT NULL,
     blob_md5 bytea NOT NULL,
+    blob_attempt text NOT NULL,
+    CONSTRAINT item_keys_blob_attempt_check CHECK ((blob_attempt ~ '^[a-z0-9]{20}$'::text)),
     CONSTRAINT item_keys_blob_md5_check CHECK ((length(blob_md5) = 16)),
     CONSTRAINT item_keys_blob_size_check CHECK ((blob_size >= 1)),
     CONSTRAINT item_keys_blob_version_check CHECK ((blob_version >= 1)),
@@ -1318,6 +1325,8 @@ CREATE TABLE triggers (
     last_saver_id text NOT NULL,
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
+    next_slot_ms bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT triggers_check CHECK (((next_slot_ms >= 0) AND ((kind <> 'schedule'::text) OR (enabled = 0) OR (next_slot_ms > 0)))),
     CONSTRAINT triggers_enabled_check CHECK ((enabled = ANY (ARRAY[(0)::bigint, (1)::bigint]))),
     CONSTRAINT triggers_kind_check CHECK ((kind = ANY (ARRAY['review-request-push'::text, 'schedule'::text, 'follows'::text])))
 );
@@ -1522,6 +1531,9 @@ ALTER TABLE ONLY audit_sink_cursors
 
 ALTER TABLE ONLY audit_sink_leases
     ADD CONSTRAINT audit_sink_leases_pkey PRIMARY KEY (sink);
+
+ALTER TABLE ONLY blob_delete_leases
+    ADD CONSTRAINT blob_delete_leases_pkey PRIMARY KEY (holder);
 
 ALTER TABLE ONLY blob_purges
     ADD CONSTRAINT blob_purges_pkey PRIMARY KEY (tool, unit_id);

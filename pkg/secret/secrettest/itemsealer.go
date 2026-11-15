@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/scopeaudit"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -35,8 +36,13 @@ type SealerRig struct {
 	// blobs of the rig and the given index.
 	withIndex func(secret.ItemKeyIndex) secret.ItemSealer
 	Blobs     blob.Store
+	// ItemBlobs is the item key blob view of the sealers.
+	ItemBlobs *secret.ItemKeyBlobs
 	// Counts counts the calls that the sealers make to Blobs.
 	Counts *BlobCounts
+	// Mismatches counts the blobs that the sealers refused because they do
+	// not match their record.
+	Mismatches *MismatchCounts
 	// Acme and Other are two namespaces of the store.
 	Acme, Other namespace.Namespace
 }
@@ -83,6 +89,38 @@ func (c *countingBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blo
 	return c.Store.ListPage(ctx, req)
 }
 
+// errMismatchOp reports a mismatch record of an operation that is not a read.
+var errMismatchOp = errors.New("a mismatch record needs the operation get")
+
+// MismatchCounts is a scopeaudit.IntegrityRecorder that counts the refusals
+// of blobs that do not match their record, for each namespace.
+type MismatchCounts struct {
+	mu     sync.Mutex
+	counts map[namespace.ID]int
+}
+
+// RecordMismatch implements scopeaudit.IntegrityRecorder.
+func (m *MismatchCounts) RecordMismatch(_ context.Context, ns namespace.ID, op string) error {
+	if op != "get" {
+		return fmt.Errorf("%w: %q", errMismatchOp, op)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.counts[ns]++
+
+	return nil
+}
+
+// Of returns the number of refusals in the namespace ns.
+func (m *MismatchCounts) Of(ns namespace.ID) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.counts[ns]
+}
+
 // noRefusals is a scopeaudit.Recorder that drops every refusal. The suite
 // reads the refusal as the returned error.
 type noRefusals struct{}
@@ -117,10 +155,16 @@ func NewSealerRig(t *testing.T, index ItemKeyStore, blobs blob.Store) *SealerRig
 
 	rig.Counts = &BlobCounts{puts: atomic.Int64{}, reads: atomic.Int64{}}
 
-	itemBlobs, err := secret.NewItemKeyBlobs(&countingBlobs{Store: blobs, counts: rig.Counts}, noRefusals{})
+	rig.Mismatches = &MismatchCounts{mu: sync.Mutex{}, counts: map[namespace.ID]int{}}
+
+	itemBlobs, err := secret.NewItemKeyBlobs(
+		&countingBlobs{Store: blobs, counts: rig.Counts}, noRefusals{}, rig.Mismatches,
+	)
 	if err != nil {
 		t.Fatalf("item key blobs: %v", err)
 	}
+
+	rig.ItemBlobs = itemBlobs
 
 	build := func(w secret.Wrapper) secret.ItemSealer {
 		s, buildErr := secret.NewItemKeySealer(secret.ItemSealerConfig{
@@ -185,6 +229,10 @@ func RunItemSealer(t *testing.T, newRig SealerFactory) {
 		{name: "content seals and opens, also over many chunks and empty", test: testSealerRoundTrip},
 		{name: "a second NewItemKey returns the first record", test: testSealerNewKeyTwice},
 		{name: "writers of one item agree on one key and leave one blob", test: testSealerConcurrentNewKey},
+		{
+			name: "two writers of one item, many rounds: one record wins, the loser deletes only its own blob",
+			test: testSealerRaceRounds,
+		},
 		{name: "an item with no key does not seal or open", test: testSealerNoKey},
 		{name: "a stale fence writes no record and no blob", test: testSealerStaleFence},
 		{name: "a fence of another namespace writes no record and no blob", test: testSealerOtherNamespaceFence},
@@ -195,10 +243,14 @@ func RunItemSealer(t *testing.T, newRig SealerFactory) {
 		{name: "a tampered, cut or extended stream does not open", test: testSealerTamper},
 		{name: "a legacy stream header is refused", test: testSealerLegacyHeader},
 		{name: "a shredded key answers before any blob read", test: testSealerShredded},
-		{name: "a wrapped key blob of another item does not unwrap", test: testSealerSwappedBlob},
+		{name: "a wrapped key blob of another item is refused before the unwrap", test: testSealerSwappedBlob},
+		{name: "a blob that matches a lying record does not unwrap", test: testSealerSwappedBlobAndRecord},
+		{name: "a replaced wrapped key blob is refused and recorded", test: testSealerReplacedBlob},
 		{name: "a wrapped key moved to another record ID does not unwrap", test: testSealerMovedRecordID},
 		{name: "a wrapped key blob of another namespace does not unwrap", test: testSealerOtherNamespaceBlob},
-		{name: "only the blob version of the record is read", test: testSealerRecordVersion},
+		{name: "only the blob version and attempt of the record are read", test: testSealerRecordVersion},
+		{name: "two item key writes never share a blob key", test: testSealerAttemptKeys},
+		{name: "the reaper keeps a blob until its record commits", test: testSealerGarbageWaitsForTheCommit},
 		{name: "another key-encryption key does not open", test: testSealerForeignWrapper},
 		{name: "no key-encryption key fails closed", test: testSealerUnkeyed},
 		{name: "a malformed reference is refused", test: testSealerBadRef},
@@ -765,12 +817,148 @@ func testSealerSwappedBlob(t *testing.T, r *SealerRig) {
 	sealed := sealItem(t, r, b, sealerBinding(), []byte("content of pln-2"))
 
 	// An attacker with write access to the blob store puts the wrapped key of
-	// pln-1 where the wrapped key of pln-2 was.
+	// pln-1 where the wrapped key of pln-2 was. Both have the same size, so
+	// only the MD5 of the record shows the swap.
 	replaceBlob(t, r, blobOf(t, r, r.Acme.ID, kb), readBlob(t, r, blobOf(t, r, r.Acme.ID, ka)))
 
-	if _, err := openSealed(t.Context(), r.Sealer, b, sealerBinding(), sealed); !errors.Is(err, secret.ErrDecrypt) {
-		t.Errorf("open with a swapped wrapped key err = %v, want ErrDecrypt", err)
+	_, err := openSealed(t.Context(), r.Sealer, b, sealerBinding(), sealed)
+	if !errors.Is(err, secret.ErrItemKeyBlobMismatch) {
+		t.Errorf("open with a swapped wrapped key err = %v, want ErrItemKeyBlobMismatch", err)
 	}
+
+	if n := r.Mismatches.Of(r.Acme.ID); n != 1 {
+		t.Errorf("mismatch records = %d, want 1", n)
+	}
+}
+
+// blobInfoIndex answers each read with the stored record of the request, but
+// with the size and the MD5 of info, so the digest check of the blob passes.
+type blobInfoIndex struct {
+	secret.ItemKeyIndex
+
+	info secret.ItemKeyBlobInfo
+}
+
+func (i blobInfoIndex) GetItemKey(ctx context.Context, ref secret.ItemRef) (secret.ItemKey, error) {
+	k, err := i.ItemKeyIndex.GetItemKey(ctx, ref)
+	k.Blob.Size, k.Blob.MD5 = i.info.Size, i.info.MD5
+
+	return k, err
+}
+
+// testSealerSwappedBlobAndRecord sends a swapped blob straight to the unwrap,
+// as if the digest check had failed: the wrapped key of pln-1 is in the place
+// of the wrapped key of pln-2, and the index answers with a record of pln-2
+// that holds the size and the MD5 of the blob of pln-1. Only the associated
+// data of the unwrap refuses it.
+func testSealerSwappedBlobAndRecord(t *testing.T, r *SealerRig) {
+	t.Helper()
+
+	a := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-1")
+	b := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-2")
+	ka, kb := mustNewKey(t, r, a), mustNewKey(t, r, b)
+	sealed := sealItem(t, r, b, sealerBinding(), []byte("content of pln-2"))
+
+	replaceBlob(t, r, blobOf(t, r, r.Acme.ID, kb), readBlob(t, r, blobOf(t, r, r.Acme.ID, ka)))
+
+	lying := r.withIndex(blobInfoIndex{ItemKeyIndex: r.Index, info: ka.Blob})
+
+	if _, err := openSealed(t.Context(), lying, b, sealerBinding(), sealed); !errors.Is(err, secret.ErrDecrypt) {
+		t.Errorf("open with a swapped blob and a matching record err = %v, want ErrDecrypt", err)
+	}
+
+	if n := r.Mismatches.Of(r.Acme.ID); n != 0 {
+		t.Errorf("a blob that matches its record wrote %d mismatch records", n)
+	}
+}
+
+// testSealerReplacedBlob replaces the wrapped key blob of a record, as a store
+// that ignores a conditional write does on a second write to the key. The
+// sealer refuses the blob before it unwraps it, seals and opens nothing, and
+// writes one mismatch record for each refusal.
+func testSealerReplacedBlob(t *testing.T, r *SealerRig) {
+	t.Helper()
+
+	ref := sealerRef(t, "unit-one", secret.ItemKindJobLog, "jlv-1")
+
+	// A first write of the item rolls back and leaves its blob. Its wrapped
+	// key has the associated data of the same item, so the unwrap alone
+	// would accept it in the place of the committed blob.
+	rollBackNewKey(t, r, ref)
+
+	orphans := keyBlobs(t, r, r.Acme.ID)
+	if len(orphans) != 1 {
+		t.Fatalf("blobs after a rolled-back write = %d, want 1", len(orphans))
+	}
+
+	sameItem := readBlob(t, r, orphans[0].Key)
+
+	k := mustNewKey(t, r, ref)
+	sealed := sealItem(t, r, ref, sealerBinding(), []byte("log of jlv-1"))
+	key := blobOf(t, r, r.Acme.ID, k)
+	original := readBlob(t, r, key)
+
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{name: "a wrapped key of the same item from another write", data: sameItem},
+		{name: "one flipped byte", data: flipLast(original)},
+		{name: "a cut blob", data: original[:len(original)-1]},
+	}
+
+	for i, tc := range cases {
+		replaceBlob(t, r, key, tc.data)
+
+		if _, err := openSealed(t.Context(), r.Sealer, ref, sealerBinding(), sealed); !errors.Is(
+			err, secret.ErrItemKeyBlobMismatch,
+		) {
+			t.Errorf("%s: open err = %v, want ErrItemKeyBlobMismatch", tc.name, err)
+		}
+
+		if _, err := r.Sealer.SealContent(t.Context(), ref, sealerBinding(), strings.NewReader("x")); !errors.Is(
+			err, secret.ErrItemKeyBlobMismatch,
+		) {
+			t.Errorf("%s: seal err = %v, want ErrItemKeyBlobMismatch", tc.name, err)
+		}
+
+		if n := r.Mismatches.Of(r.Acme.ID); n != 2*(i+1) {
+			t.Errorf("%s: mismatch records = %d, want %d", tc.name, n, 2*(i+1))
+		}
+	}
+
+	// The original bytes open again: the refusal changed nothing.
+	replaceBlob(t, r, key, original)
+
+	if got, err := openSealed(t.Context(), r.Sealer, ref, sealerBinding(), sealed); err != nil ||
+		string(got) != "log of jlv-1" {
+		t.Errorf("open with the original blob = %q, %v", got, err)
+	}
+}
+
+// rollBackNewKey makes the item key of ref in a transaction that rolls back.
+// The wrapped key blob of the write stays in the store as an orphan.
+func rollBackNewKey(t *testing.T, r *SealerRig, ref secret.ItemRef) {
+	t.Helper()
+
+	err := r.Index.InItemKeyTx(t.Context(), r.fence(), func(tx secret.ItemKeyTx) error {
+		if _, err := r.Sealer.NewItemKey(t.Context(), tx, ref, r.fence()); err != nil {
+			return err
+		}
+
+		return errRollback
+	})
+	if !errors.Is(err, errRollback) {
+		t.Fatalf("rolled-back write of %s err = %v", ref, err)
+	}
+}
+
+// flipLast returns a copy of data with its last byte changed.
+func flipLast(data []byte) []byte {
+	c := bytes.Clone(data)
+	c[len(c)-1] ^= 0x01
+
+	return c
 }
 
 // reidIndex answers each read with the stored record of the request, but
@@ -859,13 +1047,23 @@ func testSealerOtherNamespaceBlob(t *testing.T, r *SealerRig) {
 
 	sealedOther := sealItem(t, r, otherRef, sealerBinding(), []byte("content of other"))
 
-	// The wrapped key of "acme" in the place of the key of "other".
+	// The wrapped key of "acme" in the place of the key of "other". The
+	// digest check refuses it first.
 	replaceBlob(t, r, blobOf(t, r, r.Other.ID, other), readBlob(t, r, blobOf(t, r, r.Acme.ID, acme)))
 
 	if _, err := openSealed(t.Context(), r.Sealer, otherRef, sealerBinding(), sealedOther); !errors.Is(
+		err, secret.ErrItemKeyBlobMismatch,
+	) {
+		t.Errorf("open with a wrapped key of another namespace err = %v, want ErrItemKeyBlobMismatch", err)
+	}
+
+	// With a record that matches the swapped blob, the unwrap refuses it.
+	lying := r.withIndex(blobInfoIndex{ItemKeyIndex: r.Index, info: acme.Blob})
+
+	if _, err := openSealed(t.Context(), lying, otherRef, sealerBinding(), sealedOther); !errors.Is(
 		err, secret.ErrDecrypt,
 	) {
-		t.Errorf("open with a wrapped key of another namespace err = %v, want ErrDecrypt", err)
+		t.Errorf("open with a wrapped key of another namespace and a matching record err = %v, want ErrDecrypt", err)
 	}
 }
 
@@ -877,23 +1075,32 @@ func testSealerRecordVersion(t *testing.T, r *SealerRig) {
 	ka, kb := mustNewKey(t, r, a), mustNewKey(t, r, b)
 	sealed := sealItem(t, r, a, sealerBinding(), []byte("content of pln-1"))
 
-	// A later version of the key blob of pln-1 that the record does not name:
-	// the wrapped key of pln-2, then bytes that are not a wrapped key.
+	// Other blobs of the item key of pln-1 that the record does not name: a
+	// later version, another attempt of the same version, and a key with no
+	// attempt part. Each holds the wrapped key of pln-2, then bytes that are
+	// not a wrapped key.
 	named := blobOf(t, r, r.Acme.ID, ka).String()
-	later := blob.Key(strings.TrimSuffix(named, "/v1") + "/v2")
+	dir := named[:strings.LastIndex(named, "/")+1]
+	strays := []blob.Key{
+		blob.Key(dir + "v2-" + strings.Repeat("a", 20)),
+		blob.Key(dir + "v1-" + strings.Repeat("b", 20)),
+		blob.Key(dir + "v1"),
+	}
 
-	for _, data := range [][]byte{readBlob(t, r, blobOf(t, r, r.Acme.ID, kb)), []byte("not a wrapped key")} {
-		if err := r.Blobs.Delete(t.Context(), later); err != nil {
-			t.Fatalf("delete %s: %v", later, err)
-		}
+	for _, stray := range strays {
+		for _, data := range [][]byte{readBlob(t, r, blobOf(t, r, r.Acme.ID, kb)), []byte("not a wrapped key")} {
+			if err := r.Blobs.Delete(t.Context(), stray); err != nil {
+				t.Fatalf("delete %s: %v", stray, err)
+			}
 
-		if err := r.Blobs.Put(t.Context(), later, bytes.NewReader(data)); err != nil {
-			t.Fatalf("put %s: %v", later, err)
-		}
+			if err := r.Blobs.Put(t.Context(), stray, bytes.NewReader(data)); err != nil {
+				t.Fatalf("put %s: %v", stray, err)
+			}
 
-		got, err := openSealed(t.Context(), r.Sealer, a, sealerBinding(), sealed)
-		if err != nil || string(got) != "content of pln-1" {
-			t.Errorf("open with a later blob version present = %q, %v, want the content", got, err)
+			got, err := openSealed(t.Context(), r.Sealer, a, sealerBinding(), sealed)
+			if err != nil || string(got) != "content of pln-1" {
+				t.Errorf("open with the stray blob %s present = %q, %v, want the content", stray, got, err)
+			}
 		}
 	}
 
@@ -985,6 +1192,247 @@ func testSealerBadRef(t *testing.T, r *SealerRig) {
 	if n := len(keyBlobs(t, r, r.Acme.ID)); n != 0 {
 		t.Errorf("a refused create left %d key blobs", n)
 	}
+}
+
+// testSealerAttemptKeys shows that each write of a wrapped key has its own
+// blob key, which the record names: the records of many items, and the
+// records of one item after rolled-back writes, never share a blob key.
+func testSealerAttemptKeys(t *testing.T, r *SealerRig) {
+	t.Helper()
+
+	const items = 20
+
+	seen := make(map[blob.Key]secret.ItemKeyID, items)
+
+	for i := range items {
+		ref := sealerRef(t, "unit-one", secret.ItemKindPlan, fmt.Sprintf("pln-%d", i))
+
+		// A rolled-back write first: its blob stays as an orphan, and the next
+		// write of the same item must not reuse its key.
+		rollBackNewKey(t, r, ref)
+
+		k := mustNewKey(t, r, ref)
+
+		if !secret.ValidItemKeyAttempt(k.Blob.Attempt) {
+			t.Fatalf("record of %s has the attempt part %q", ref, k.Blob.Attempt)
+		}
+
+		key, err := r.ItemBlobs.Key(r.Acme.ID, k.ID, k.Blob.Version, k.Blob.Attempt)
+		if err != nil {
+			t.Fatalf("key of %s: %v", ref, err)
+		}
+
+		if other, dup := seen[key]; dup {
+			t.Fatalf("the records %s and %s name one blob key", other, k.ID)
+		}
+
+		seen[key] = k.ID
+
+		data := readBlob(t, r, key)
+		if d := blob.DigestBytes(data); d.Size != k.Blob.Size || d.MD5 != k.Blob.MD5 {
+			t.Errorf("blob of %s does not match its record", ref)
+		}
+	}
+
+	// Each item has its committed blob and the orphan of its rolled-back
+	// write, under two keys.
+	if n := len(keyBlobs(t, r, r.Acme.ID)); n != 2*items {
+		t.Errorf("item key blobs = %d, want %d", n, 2*items)
+	}
+}
+
+// namerOfScope returns an ItemKeyBlobNamer over the committed records of the
+// scope of ref, as a reaper reads them.
+func namerOfScope(r *SealerRig, scope secret.Scope) secret.ItemKeyBlobNamer {
+	return func(ctx context.Context, part secret.ItemKeyBlob) (bool, error) {
+		records, err := r.Index.ListItemKeys(ctx, scope, "", 1000)
+		if err != nil {
+			return false, fmt.Errorf("list item keys: %w", err)
+		}
+
+		for i := range records {
+			k := &records[i]
+			if k.ID == part.ID && k.Blob.Version == part.Version && k.Blob.Attempt == part.Attempt {
+				return true, nil
+			}
+		}
+
+		return false, nil
+	}
+}
+
+// testSealerGarbageWaitsForTheCommit shows the reaper rule over a real store
+// and a real transaction. While the write has not committed, its blob is in
+// the grace period and is no candidate. After a commit the record names it.
+// After a rollback, it is garbage once the grace period ends.
+func testSealerGarbageWaitsForTheCommit(t *testing.T, r *SealerRig) {
+	t.Helper()
+
+	committed := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-commit")
+	rolledBack := sealerRef(t, "unit-one", secret.ItemKindPlan, "pln-rollback")
+	namer := namerOfScope(r, committed.Scope)
+
+	var pending []blob.Key
+
+	err := r.Index.InItemKeyTx(t.Context(), r.fence(), func(tx secret.ItemKeyTx) error {
+		if _, err := r.Sealer.NewItemKey(t.Context(), tx, rolledBack, r.fence()); err != nil {
+			return err
+		}
+
+		// The blob exists and no committed record names it yet. The grace
+		// period keeps it out of the candidates, and the reaper reads no
+		// record for it.
+		got, garbageErr := r.ItemBlobs.Garbage(t.Context(), r.Acme.ID, namer, time.Now())
+		if garbageErr != nil {
+			return garbageErr
+		}
+
+		pending = got
+
+		return errRollback
+	})
+	if !errors.Is(err, errRollback) {
+		t.Fatalf("rolled-back write err = %v", err)
+	}
+
+	if len(pending) != 0 {
+		t.Errorf("garbage before the commit = %v, want none", pending)
+	}
+
+	k := mustNewKey(t, r, committed)
+
+	committedKey, err := r.ItemBlobs.Key(r.Acme.ID, k.ID, k.Blob.Version, k.Blob.Attempt)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+
+	// Inside the grace period nothing is garbage.
+	if got, garbageErr := r.ItemBlobs.Garbage(t.Context(), r.Acme.ID, namer, time.Now()); garbageErr != nil ||
+		len(got) != 0 {
+		t.Errorf("garbage in the grace period = %v, %v, want none", got, garbageErr)
+	}
+
+	// After the grace period, only the orphan of the rolled-back write is
+	// garbage. The committed blob stays. A view of the store makes the item
+	// key blobs older than the grace period, and the server clock and the
+	// probe stay in step.
+	aged, err := secret.NewItemKeyBlobs(
+		agedBlobs{Store: r.Blobs, age: secret.ItemKeyBlobGracePeriod + time.Minute},
+		noRefusals{}, r.Mismatches,
+	)
+	if err != nil {
+		t.Fatalf("aged item key blobs: %v", err)
+	}
+
+	got, err := aged.Garbage(t.Context(), r.Acme.ID, namer, time.Now())
+	if err != nil {
+		t.Fatalf("garbage after the grace period: %v", err)
+	}
+
+	if len(got) != 1 || got[0] == committedKey {
+		t.Errorf("garbage after the grace period = %v, want the one orphan and not %s", got, committedKey)
+	}
+}
+
+// raceRounds is the number of rounds of the race case.
+const raceRounds = 25
+
+// testSealerRaceRounds runs two concurrent first writes of one item, each with
+// its own random key, in many rounds. In each round exactly one record wins:
+// both writers get that record, as the port promises, and the loser deletes
+// its own blob and no other. One blob stays for each item, and it is the blob
+// that the record names, with the size and the MD5 of the record.
+func testSealerRaceRounds(t *testing.T, r *SealerRig) {
+	t.Helper()
+
+	for round := range raceRounds {
+		ref := sealerRef(t, "unit-race", secret.ItemKindPlan, fmt.Sprintf("pln-%d", round))
+
+		var (
+			wg   sync.WaitGroup
+			got  [2]secret.ItemKey
+			errs [2]error
+		)
+
+		for i := range got {
+			wg.Go(func() {
+				got[i], errs[i] = newKeyVia(t.Context(), r, r.Sealer, ref, r.fence())
+			})
+		}
+
+		wg.Wait()
+
+		for i := range got {
+			if errs[i] != nil {
+				t.Fatalf("round %d: writer %d: %v", round, i, errs[i])
+			}
+		}
+
+		if !sameItemKey(got[0], got[1]) {
+			t.Fatalf("round %d: the writers got two records: %s and %s", round, got[0].ID, got[1].ID)
+		}
+
+		checkOneBlobOf(t, r, got[0])
+
+		// The loser wrote under its own item key ID. Its blob is gone, so the
+		// namespace holds one blob for each round.
+		if n := len(keyBlobs(t, r, r.Acme.ID)); n != round+1 {
+			t.Fatalf("round %d: item key blobs = %d, want %d: a losing write left its blob", round, n, round+1)
+		}
+	}
+}
+
+// checkOneBlobOf checks that the directory of the item key of k holds exactly
+// the blob that k names, with the size and the MD5 of k, and no orphan of a
+// losing write.
+func checkOneBlobOf(t *testing.T, r *SealerRig, k secret.ItemKey) {
+	t.Helper()
+
+	key, err := r.ItemBlobs.Key(r.Acme.ID, k.ID, k.Blob.Version, k.Blob.Attempt)
+	if err != nil {
+		t.Fatalf("key of %s: %v", k.ID, err)
+	}
+
+	var inDir []blob.Key
+
+	for _, o := range keyBlobs(t, r, r.Acme.ID) {
+		if strings.Contains(o.Key.String(), "/"+string(k.ID)+"/") {
+			inDir = append(inDir, o.Key)
+		}
+	}
+
+	if len(inDir) != 1 || inDir[0] != key {
+		t.Fatalf("blobs of the winning item key %s = %v, want only %s", k.ID, inDir, key)
+	}
+
+	if d := blob.DigestBytes(readBlob(t, r, key)); d.Size != k.Blob.Size || d.MD5 != k.Blob.MD5 {
+		t.Errorf("the blob of %s does not match its record", k.ID)
+	}
+}
+
+// agedBlobs is a view of a blob store whose listing makes each item key blob
+// older by age, as the time of the store gives it after that time passed. A
+// probe of a reaper run keeps the time of the store, because the run writes it
+// now.
+type agedBlobs struct {
+	blob.Store
+
+	age time.Duration
+}
+
+func (a agedBlobs) ListPage(ctx context.Context, req blob.PageRequest) (blob.Page, error) {
+	page, err := a.Store.ListPage(ctx, req)
+	if err != nil {
+		return blob.Page{}, fmt.Errorf("list: %w", err)
+	}
+
+	for i := range page.Objects {
+		if _, parseErr := secret.ParseItemKeyBlobKey(page.Objects[i].Key); parseErr == nil {
+			page.Objects[i].ModifiedAt = page.Objects[i].ModifiedAt.Add(-a.age)
+		}
+	}
+
+	return page, nil
 }
 
 // listBlobs walks every page under prefix and returns the objects.

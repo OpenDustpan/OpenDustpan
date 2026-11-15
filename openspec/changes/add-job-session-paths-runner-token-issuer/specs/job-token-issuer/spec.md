@@ -2,7 +2,7 @@
 
 ### Requirement: Make at claim
 
-When a runner claims a runner phase, the server SHALL make one job token bound to the job ID, the stable unit ID and the claim expiry.
+When a runner claims a runner phase, the server SHALL store one job token bound to the job ID, the stable unit ID and the claim expiry.
 
 #### Scenario: Make at claim
 - **WHEN** a runner claims a runner phase
@@ -11,6 +11,18 @@ When a runner claims a runner phase, the server SHALL make one job token bound t
 #### Scenario: Rollback
 - **WHEN** the claim transaction fails
 - **THEN** the server stores no token
+
+#### Scenario: Retry
+- **WHEN** a claim is repeated
+- **THEN** the earlier token of that claim answers 401 and one live token exists
+
+### Requirement: Step bound
+
+When the step timeout plus grace period of a token passes, the server SHALL end the token.
+
+#### Scenario: Grace bound
+- **WHEN** the step timeout plus grace period passes while the claim is renewed
+- **THEN** the token answers 401
 
 ### Requirement: Refuse no unit
 
@@ -22,7 +34,7 @@ If a claim names no stable unit ID, then the server SHALL refuse the claim with 
 
 ### Requirement: Check unit only
 
-When a step presents a job token, the server SHALL allow it only on the unit of its job.
+When a step presents a job token, the server SHALL allow it only on the state routes of the unit of its job.
 
 #### Scenario: Own unit
 - **WHEN** a step uses its token on its unit
@@ -30,15 +42,27 @@ When a step presents a job token, the server SHALL allow it only on the unit of 
 
 #### Scenario: Other unit
 - **WHEN** a step uses its token on another unit
-- **THEN** the server answers 403 and changes nothing
+- **THEN** the server answers 403 with the job token message and changes nothing
+
+#### Scenario: Recreated unit
+- **WHEN** the unit was removed and made again with the same name
+- **THEN** the old token answers 403
+
+#### Scenario: REST API
+- **WHEN** a step uses its token on the REST API
+- **THEN** the server answers 403
 
 #### Scenario: Runner key
 - **WHEN** a runner key is sent on a tool path
 - **THEN** the server answers 403
 
+#### Scenario: Grant lost
+- **WHEN** the starter lost its grant after the claim
+- **THEN** the server answers 403
+
 ### Requirement: End with claim
 
-When the claim of a job token ends, the server SHALL end the token.
+When the claim of a job token ends, the server SHALL end the token in the same transaction.
 
 #### Scenario: Job end
 - **WHEN** the job ends
@@ -53,8 +77,8 @@ When the claim of a job token ends, the server SHALL end the token.
 - **THEN** the token answers 401
 
 #### Scenario: Renew
-- **WHEN** the claim is renewed
-- **THEN** the token stays valid until the new expiry
+- **WHEN** the claim is renewed before the step bound
+- **THEN** the token stays valid until its expiry
 
 ### Requirement: Fail closed
 
@@ -62,7 +86,7 @@ If a token is unknown, malformed or past its expiry, then the server SHALL answe
 
 #### Scenario: Unknown token
 - **WHEN** a caller presents an unknown token
-- **THEN** the server answers 401 and reads no state
+- **THEN** the server answers 401 with the job token ended message and reads no state
 
 #### Scenario: Expired token
 - **WHEN** a caller presents a token past its expiry

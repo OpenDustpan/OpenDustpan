@@ -1,81 +1,73 @@
 ## ADDED Requirements
 
-### Requirement: Ownership rule and path-set validation
-
-When a namespace administrator saves an ownership rule or a path set, the server SHALL check the ID, the path pattern, the condition size and the scope limits.
-
-#### Scenario: Save rule with bad pattern
-- **WHEN** A namespace administrator saves an ownership rule with a bad path pattern or a bad condition
-- **THEN** The save fails with 422 gate.invalid and names the bad field.
-
-#### Scenario: Save above limits
-- **WHEN** A scope already holds 256 ownership rules or 64 path sets or the condition is above 4 KiB
-- **THEN** The save fails with 422 gate.limit.
-
-### Requirement: Ownership audit entry
-
-When a namespace administrator creates, changes or deletes an ownership rule or a path set, the server SHALL write an audit entry of kind change with the old and the new version.
-
-#### Scenario: Create ownership rule
-- **WHEN** A namespace administrator creates, changes or deletes an ownership rule or a path set
-- **THEN** The audit log holds one entry of kind change with the old and the new version.
-
 ### Requirement: Path match adds owner requirement
 
-When a plan touches a path set of an ownership rule in enforce mode, the server SHALL add exactly one approval requirement for the owners of each matched rule.
+When a plan touches a path set of an ownership rule in enforce mode, the server SHALL add one approval requirement for the owners of each matched rule.
 
-#### Scenario: Plan touches owned path set
-- **WHEN** A plan in enforce mode touches a path set of an ownership rule
-- **THEN** The decision record holds one requirement for the owners of each matched rule.
-
-#### Scenario: Two rules match one plan
-- **WHEN** A plan touches path sets of two enforce ownership rules
-- **THEN** The decision record holds two requirements, one for each rule.
+#### Scenario: Two rules match
+- **WHEN** a plan touches path sets of two enforce rules
+- **THEN** the record holds two requirements
 
 ### Requirement: Evaluate mode records only
 
-When a plan touches a path set of an ownership rule in evaluate mode, the server SHALL record the match with no approval requirement.
+When a plan touches a path set of an ownership rule in evaluate mode, the server SHALL record the match with no requirement.
 
-#### Scenario: Plan touches evaluate rule
-- **WHEN** A plan touches a path set of an ownership rule in evaluate mode
-- **THEN** The decision record names the rule and the match and holds no new requirement.
+#### Scenario: Evaluate rule
+- **WHEN** a plan touches an evaluate rule
+- **THEN** the record names the match and holds no new requirement
 
-### Requirement: Conditional auto-apply by ownership unless
+### Requirement: Conditional auto-apply
 
-When a plan meets the unless condition of its matched ownership rule over the facts of change.planned, the server SHALL mark the decision record autoApply true for that ownership requirement.
+When a plan meets the unless condition of its matched ownership rule, the server SHALL mark autoApply true for that requirement.
 
-#### Scenario: Schedule plan inside unless
-- **WHEN** A schedule-started plan has no changes outside the unless condition of its matched ownership rule
-- **THEN** The decision record shows autoApply true with the matched rule and the true unless result, and the apply starts with no approval for that requirement.
+#### Scenario: Schedule plan
+- **WHEN** a schedule-started plan meets the unless condition
+- **THEN** the record shows autoApply true and the apply starts with no approval for that requirement
 
 ### Requirement: Warn stops auto-apply
 
 When a plan that meets an unless condition holds a warn, the server SHALL mark autoApply false.
 
-#### Scenario: Warn on auto-apply candidate
-- **WHEN** A plan that meets the unless condition holds a warn
-- **THEN** The decision record shows autoApply false and the apply waits for approval.
+#### Scenario: Warn present
+- **WHEN** the plan holds a warn
+- **THEN** autoApply is false and the apply waits for approval
 
 ### Requirement: Unless error fails closed
 
-When the unless evaluation over change.planned facts fails, the server SHALL mark autoApply false.
+If the unless evaluation fails, then the server SHALL mark autoApply false.
 
-#### Scenario: Unknown fact in unless
-- **WHEN** The unless evaluation reads an unknown fact or the Cedar evaluation fails
-- **THEN** The decision record shows autoApply false and the unless result error, and the apply waits for approval.
+#### Scenario: Unknown fact
+- **WHEN** the unless reads an unknown fact
+- **THEN** autoApply is false and the record shows the error
 
-### Requirement: Author-only owners still wait
+### Requirement: Operation source fact
 
-When a matched ownership rule leaves no eligible approver other than the author, the server SHALL keep the requirement in approval wait.
+When the server builds the facts of change.planned, the server SHALL include operationSource with one of push, schedule, follows, merge or api.
 
-#### Scenario: Author is sole eligible approver
-- **WHEN** A matched rule leaves no eligible approver other than the author and authorMayApprove is false
-- **THEN** The requirement stays in approval wait and names its eligible approvers.
+#### Scenario: Missing source
+- **WHEN** operationSource is missing
+- **THEN** autoApply is false
+
+### Requirement: Excuse scope
+
+When the unless of an ownership rule is true, the server SHALL excuse only that ownership requirement.
+
+#### Scenario: Gate still waits
+- **WHEN** a gate requirement also applies
+- **THEN** the change waits for the gate requirement
+
+### Requirement: Apply recheck only adds
+
+When the server evaluates change.apply after change.planned, the server SHALL add each newly matched ownership requirement and remove none.
+
+#### Scenario: Rule saved after plan
+- **WHEN** a matching rule is saved after the plan
+- **THEN** the apply waits for the owner approval
 
 ### Requirement: Record shows rule and unless
 
 When the server evaluates an ownership rule at change.planned, the server SHALL write the rule ID, the matched path set and the unless result in the decision record.
 
-#### Scenario: Read decision record
-- **WHEN** An ownership rule was evaluated at change.planned
-- **THEN** The record names the rule ID, the matched path set and the unless result.
+#### Scenario: Read record
+- **WHEN** a rule was evaluated
+- **THEN** the record names the rule, the path set and the unless result

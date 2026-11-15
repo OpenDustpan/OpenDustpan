@@ -642,7 +642,7 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Now: nil, NewID: nil,
-		BootstrapAdmins: nil, LimitGroups: nil,
+		BootstrapAdmins: nil, Settings: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -885,6 +885,7 @@ func newRouteTestRestores(
 		Backups:         service,
 		Maintenance:     storetest.StateMaintenance{State: st, Hold: false},
 		Blobs:           live,
+		Leases:          st,
 		Target:          target,
 		Key:             nil,
 		Installation:    "test",
@@ -2062,6 +2063,7 @@ func seedRouteLocalUser(t *testing.T, st *sqlite.Store) {
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	// A store of another fixture holds no person testPrincipalID: it gets no

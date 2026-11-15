@@ -108,6 +108,11 @@ type Backup struct {
 	Error       string
 }
 
+type BlobDeleteLease struct {
+	Holder      string
+	ExpiresAtMs int64
+}
+
 type BlobPurge struct {
 	Tool        string
 	UnitID      string
@@ -554,6 +559,7 @@ type ItemKey struct {
 	BlobVersion  int64
 	BlobSize     int64
 	BlobMd5      []byte
+	BlobAttempt  string
 }
 
 type Job struct {
@@ -1253,6 +1259,7 @@ type Trigger struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 type TrustRule struct {

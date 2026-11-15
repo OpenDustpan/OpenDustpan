@@ -130,6 +130,7 @@ func (s ldapServer) setPlain(t *testing.T, value string) {
 			Object: "@server", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 			UserAgent: "", Channel: audit.ChannelAPI, Kind: "", Outcome: "", RequestID: "", ObjectID: "",
 			PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+			Origin: nil,
 		},
 		IfMatch: stored.Revision, Fresh: true,
 	})

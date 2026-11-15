@@ -2,48 +2,48 @@
 
 ### Requirement: Save namespace trust bundle
 
-When an administrator saves a trust bundle, the server SHALL store it as a new version under that namespace only.
+When an administrator runs save-bundle, the server SHALL store the bundle as a new version under that namespace only.
 
 #### Scenario: Save valid bundle
-- **WHEN** administrator saves a PEM bundle with unexpired CAs in one namespace
-- **THEN** server stores a new bundle version, keeps the prior version, and writes an audit entry
+- **WHEN** an administrator with the namespace action and a fresh session posts a valid PEM bundle
+- **THEN** the server stores a new version, keeps the prior version and writes an audit entry
 
-### Requirement: Refuse bad CA
+### Requirement: Refuse invalid bundle
 
-If a bundle holds malformed PEM or an expired CA, then the server SHALL refuse the save.
+If a bundle holds malformed PEM, an expired CA or input outside the size bounds, then the server SHALL refuse the save.
 
 #### Scenario: Refuse expired CA
-- **WHEN** bundle holds malformed PEM or an expired CA
-- **THEN** server refuses the save with 400, names the CA index, and stores nothing
+- **WHEN** a bundle holds an expired CA
+- **THEN** the server refuses with 400, names the CA index and stores nothing
 
-### Requirement: Fresh auth for bundle save
+### Requirement: Rotate bundle
 
-When an administrator saves a trust bundle, the server SHALL require a fresh authentication.
+When an administrator runs rotate-bundle with PATCH, the server SHALL move the active pointer to the new version.
 
-#### Scenario: Stale bundle save refused
-- **WHEN** bundle save arrives with an authentication older than freshAuthSeconds
-- **THEN** server refuses with fresh-authentication-required
+#### Scenario: Pointer moves
+- **WHEN** an administrator patches with a valid bundle, a current If-Match and an overlap of at most 24 hours
+- **THEN** the server marks the new version active and states overlapEndsAt
+
+### Requirement: Refuse stale bundle patch
+
+If a bundle PATCH carries a stale If-Match, then the server SHALL refuse it.
+
+#### Scenario: Stale patch
+- **WHEN** the If-Match differs from the revision
+- **THEN** the server refuses with 412 and keeps the active version
 
 ### Requirement: Refuse active version delete
 
 If a caller deletes the active bundle version, then the server SHALL refuse the delete.
 
 #### Scenario: Active delete refused
-- **WHEN** caller deletes the active bundle version
-- **THEN** server refuses with 409 and keeps the active version trusted
+- **WHEN** a caller deletes the active version
+- **THEN** the server refuses with 409
 
-### Requirement: Concurrent bundle save
+### Requirement: Fresh authentication for bundle write
 
-When two bundle saves race, the server SHALL order versions and refuse a stale If-Match.
+If a bundle write arrives without a fresh session authentication, then the server SHALL refuse the write.
 
-#### Scenario: Stale version refused
-- **WHEN** two saves race and the second carries a stale ETag in If-Match
-- **THEN** server refuses with 412 and stores no new version
-
-### Requirement: Bounded rotation overlap
-
-When a rotation opens an overlap window, the server SHALL end the overlap at the stated time.
-
-#### Scenario: Overlap ends
-- **WHEN** the overlap window ends
-- **THEN** server trusts only the new active version and shows the end in the read
+#### Scenario: Token only refused
+- **WHEN** a save arrives with an access token only
+- **THEN** the server refuses with 403
