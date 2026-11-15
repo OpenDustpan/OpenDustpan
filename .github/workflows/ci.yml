@@ -46,7 +46,13 @@ concurrency:
 # least recently used entries when the repository is above its cache limit.
 
 # Which jobs run (the changes job sets the outputs):
-# - merge_group, push and schedule: every job (schedule keeps its own limits).
+# - push and schedule: every job (schedule keeps its own limits).
+# - merge_group that changes only docs or OpenSpec files against its base (the
+#   main under the group, so the change of each pull request in the group):
+#   lint and scan. The code of the group is then the code of main, which the
+#   queue already gated.
+# - other merge_group: every job, so the queue gates each change of code on
+#   the full set.
 # - pull_request with the label full-ci: every job. The label applies from the
 #   next push to the pull request; a re-run reads the labels of the old event.
 # - pull_request that changes only docs or OpenSpec files: lint and scan. lint
@@ -54,8 +60,7 @@ concurrency:
 # - other pull_request: lint, golangci-lint, golangci-lint-journal, nilaway,
 #   go and scan, plus each suite whose own files changed.
 # A job that its condition skips reports "skipped", and a required check
-# accepts "skipped". The merge queue runs every job, so it gates each change
-# on the full set. If the changes job fails, each job runs (fail closed).
+# accepts "skipped". If the changes job fails, each job runs (fail closed).
 jobs:
   changes:
     runs-on: ubuntu-26.04
@@ -80,6 +85,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           FULL_CI_LABEL: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+          MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
           set -uo pipefail
           outputs="code e2e store bench journal chart"
@@ -88,10 +94,21 @@ jobs:
             echo "Every job runs: $1" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           }
-          [ "$EVENT_NAME" = pull_request ] || run_all "event $EVENT_NAME"
-          [ "$FULL_CI_LABEL" = true ] && run_all "label full-ci"
-          git rev-parse --verify -q 'HEAD^2' >/dev/null || run_all "HEAD is not a merge commit"
-          files=$(git diff --name-only --no-renames 'HEAD^1' HEAD) || run_all "git diff failed"
+          case "$EVENT_NAME" in
+            pull_request)
+              [ "$FULL_CI_LABEL" = true ] && run_all "label full-ci"
+              git rev-parse --verify -q 'HEAD^2' >/dev/null || run_all "HEAD is not a merge commit"
+              files=$(git diff --name-only --no-renames 'HEAD^1' HEAD) || run_all "git diff failed"
+              ;;
+            merge_group)
+              # The base of the group can be more than one commit below HEAD,
+              # so the step fetches it. A tree diff needs no common history.
+              [[ "$MERGE_GROUP_BASE" =~ ^[0-9a-f]{40}$ ]] || run_all "the merge group base is not a commit id"
+              git fetch -q --no-tags --depth=1 origin "$MERGE_GROUP_BASE" || run_all "fetch of the merge group base failed"
+              files=$(git diff --name-only --no-renames "$MERGE_GROUP_BASE" HEAD) || run_all "git diff failed"
+              ;;
+            *) run_all "event $EVENT_NAME" ;;
+          esac
           [ -n "$files" ] || run_all "no changed path"
           code=false e2e=false store=false bench=false journal=false chart=false
           while IFS= read -r f; do
@@ -124,6 +141,14 @@ jobs:
               deploy/helm/*|scripts/chart-lint.sh) chart=true ;;
             esac
           done <<< "$files"
+          # The queue skips jobs only for a group of docs and OpenSpec files. A
+          # group that changes anything else runs every job, not only the
+          # suites of its paths.
+          if [ "$EVENT_NAME" = merge_group ]; then
+            for v in "$code" "$e2e" "$store" "$bench" "$journal" "$chart"; do
+              [ "$v" = false ] || run_all "the merge group changes more than docs"
+            done
+          fi
           {
             echo "code=$code"; echo "e2e=$e2e"; echo "store=$store"
             echo "bench=$bench"; echo "journal=$journal"; echo "chart=$chart"
