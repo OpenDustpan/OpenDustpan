@@ -25,6 +25,9 @@ The unexported settingsRegistry has only NewSettingsRegistry as constructor. The
 | --- | --- | --- |
 | HTTP handler | Checks the action, the Idempotency-Key, keys, locks and the fresh step. Defense in depth: the service checks too. | PATCH with no key header, an unknown key, a locked key and a weaker value with a token: each is refused. |
 | service | Applies all or none, checks the revision and writes audit entries. | A PATCH with an invalid second key and a PATCH with a failed audit write change nothing. |
+| ParseTempAdminLimit | Checks the range of 1 millisecond to 24 hours at use. | A value of 48 hours, a non-numeric value and a negative value are refused. |
+| host reset | Needs a reason, refuses in mode 3 and writes an audit entry. | A reset with no reason and a reset in mode 3 are refused. |
+| idempotency replay | Stores the result by key and body. | The same key with another body is refused. |
 | port adapter | Keeps declared keys only. The creator reads the limit through ParseTempAdminLimit. | An out-of-range limit row inserted directly makes the creator refuse. |
 
 ## Diagrams

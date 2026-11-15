@@ -1,21 +1,21 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Regression tests
 
-- [ ] 1.1 Test that a Pulumi checkpoint and an OpenTofu finalize each set the current version. Check: go test ./pkg/store/... -run TestStateWriteSetsCurrentVersion -count=1
-- [ ] 1.2 Test that a final write sets the final version and closes an awaiting job. Check: go test ./pkg/store/... -run TestFinalWriteClosesAwaitingJob -count=1
-- [ ] 1.3 Test a duplicate final write and a rollback. Check: go test ./pkg/store/... -run 'TestDuplicateFinalIdempotent|TestFinalWriteRollback' -count=1
+- [ ] 1.1 Test that a Pulumi checkpoint and an OpenTofu finalize each set the current version. Write the test in the NEW file pkg/store/sqlite/unit_state_versions_test.go and the same test for PostgreSQL in the NEW file pkg/store/postgres/state_version_write_test.go (it runs against DUSTPAN_TEST_POSTGRES_URL), so that each store behavior is tested on both dialects, which tests publishUnitState (pkg/store/sqlite/unit_state.go:97). Check: go test ./pkg/store/... -run TestStateWriteSetsCurrentVersion -count=1
+- [ ] 1.2 Test that a final write sets the final version and closes an awaiting job. Write the test in the NEW file pkg/store/sqlite/unit_state_versions_test.go and the same test for PostgreSQL in the NEW file pkg/store/postgres/state_version_write_test.go (it runs against DUSTPAN_TEST_POSTGRES_URL), so that each store behavior is tested on both dialects. Check: go test ./pkg/store/... -run TestFinalWriteClosesAwaitingJob -count=1
+- [ ] 1.3 Test a duplicate final write and a rollback. Write the test in the NEW file pkg/store/sqlite/unit_state_versions_test.go and the same test for PostgreSQL in the NEW file pkg/store/postgres/state_version_write_test.go (it runs against DUSTPAN_TEST_POSTGRES_URL), so that each store behavior is tested on both dialects. Check: go test ./pkg/store/... -run 'TestDuplicateFinalIdempotent|TestFinalWriteRollback' -count=1
 
 ## 2. Side effects (computed from main)
 
 - [ ] 2.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
 - [ ] 2.2 Check the callers that type-assert on `Store`: `internal/api/server/server.go`, `pkg/access/accesstest/accesstest.go`, `pkg/access/accesstest/caller_grants.go`, `pkg/access/accesstest/check.go`, `pkg/access/accesstest/fence.go`, `pkg/access/accesstest/holders.go`, `pkg/access/accesstest/moves.go`, `pkg/access/accesstest/review.go`. Check: the named files change in the same pull request
-- [ ] 2.3 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 2.3 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
-- [ ] 3.1 Add the e2e step with the real Pulumi CLI and OpenTofu. Pulumi: after `pulumi up`, read GET /api/stacks/{namespace}/{project}/{stack}/export with a personal token of the Developer. OpenTofu: after `tofu apply`, read GET /api/v2/workspaces/{workspace_id}/current-state-version with a personal token of the Developer. Check: make e2e E2E_FOCUS=state-versions on SQLite and PostgreSQL
-- [ ] 3.2 Add the docs page on state versions. Check: make docs-lint
-- [ ] 3.3 Run the full check. Check: make check with zero findings
+- [ ] 3.1 Add the e2e step with the real Pulumi CLI and OpenTofu in the NEW file e2e/state_versions_test.go. Pulumi: after `pulumi up`, read GET /api/stacks/{namespace}/{project}/{stack}/export with a personal token of the Developer. OpenTofu: after `tofu apply`, read GET /api/v2/workspaces/{workspace_id}/current-state-version with a personal token of the Developer. Check: make e2e E2E_FOCUS=state-versions on SQLite and PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.2 Add the NEW page docs/guides/state-versions.md. It covers: the current and the final state version of a unit; a final version that waits for the close of its write-back job; the refused duplicate final write and its error; the retry after a rollback, with `opendustpan doctor`; and the read and restore routes (GET /api/v2/workspaces/{workspace_id}/current-state-version, GET /api/stacks/{namespace}/{project}/{stack}/export and POST /api/v2/state-versions/{state_version_id}/actions/restore). Add the e2e step TestStateVersionsGuideCommands in the NEW file e2e/state_versions_guide_test.go: it runs each command of the page against the e2e test server with a personal access token. The agent writes the step; CI runs it with `make e2e`. Confirmed by CI, not by the agent. Check: make docs-lint passes, and the CI e2e job passes TestStateVersionsGuideCommands
+- [ ] 3.3 Run the full check. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

@@ -14,6 +14,8 @@ Changed by:
   to an SSO provider.
 - ADR 301 changes decision 2: for a plain OAuth 2.0 provider or a trusted
   header, OpenDustpan asks for its own factor at the fresh step.
+- ADR 372 changes decision 6: on the route of signed-request recovery only,
+  the signed request stands in place of the factor.
 
 ## Context
 

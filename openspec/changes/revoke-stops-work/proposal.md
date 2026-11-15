@@ -40,8 +40,6 @@ Depends on:
 - person-delegates-dusty
 - dusty-proposes-change-order
 - every-step-audited
-- `person-delegates-dusty` (order of the milestone review)
-- `every-step-audited` (order of the milestone review)
 
 ## Usability
 
@@ -54,7 +52,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main checks revocation against the object in the access service. (`pkg/access/access_test.go:1089 (TestRevokeChecksTheObject)`)
+- Main checks revocation against the object in the access service. (`pkg/access/access_test.go:1098 (TestRevokeChecksTheObject)`)
 - Main restricts a grant on a principal to delegation actions only. (`pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly)`)
 - Main walks the audit hash chain from a start sequence. (`pkg/audit/chain_test.go:258 (TestChainWalkStart)`)
 

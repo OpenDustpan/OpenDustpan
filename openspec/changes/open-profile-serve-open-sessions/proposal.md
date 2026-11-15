@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 7
 ---
 
 Issue: #1010, #1014, #1144.
@@ -10,10 +10,10 @@ Issue: #1010, #1014, #1144.
 
 The user path this change must make work:
 
-1. **API.** Open a profile with paths, consumer, mode, and duration. Replay with the same Idempotency-Key.
-2. **API.** Read the session values or one path with the same credential.
+1. **API.** Open a profile with paths, consumer, mode, and duration through the NEW route POST /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}/open. Replay with the same Idempotency-Key.
+2. **API.** Read the session values or one path with the same credential through the NEW route GET /api/dustpan/v1/namespaces/{namespace}/profile-sessions/{session}.
 3. **Docs page.** Follow docs/reference/profiles-api.md to open and read a session.
-4. **E2e.** Run the e2e profiles step against the real server, with a personal access token of a person, on the NEW routes of open and session read.
+4. **E2e.** Run the e2e profiles step against the real server over HTTP with a personal access token of a person, on the NEW open route and the NEW session read route.
 
 Errors the person may hit, and the one command that helps:
 
@@ -36,7 +36,7 @@ Evidence for the claims above:
 - Sessions port with Put, Get, Sweep in both dialects, sealed with the root data key, with limits, Sweep, backup exclusion
 - NEW route POST /api/dustpan/v1/namespaces/{namespace}/profiles/{profile}/open with profile:open and Idempotency-Key replay holding only the session ID
 - NEW route GET /api/dustpan/v1/namespaces/{namespace}/profile-sessions/{session} with action recheck and delete on refusal
-- One audit entry of kind access for each open and each refused open, with no value
+- One audit entry of kind access (NEW kind in pkg/audit/audit.go) for each open and each refused open, with no value
 - Docs page for open and sessions
 
 Out of scope:
@@ -105,14 +105,14 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Add the e2e profiles step: POST the NEW open route and GET the NEW pro" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part.
+none
 
 Questions considered and answered:
 
-- Which audit kind does an open write? Kind access, per ADR 203 decision 9. pkg/audit/audit.go lacks it, so the change adds it. ADR 240 covers state downloads only.
-- Does this slice evaluate ${ }? Yes. ADR 201 decision 4 fixes Expr as the language and ADR 228 decision 1 limits it to values.
+- Which audit kind does an open write? Kind access, per ADR 203 decision 9: "Each open writes one audit entry of the kind `access`, with the action `profile:open` and the consumer:". ADR 240 covers state downloads only.
+- Does this slice evaluate ${ }? Yes. ADR 201 decision 4: "Expressions are Expr. A string that is exactly `${ <expression> }` gives the value of the expression, of any type." ADR 228 decision 1 limits Expr to values.
 - Does neverStore need secret or sealed? No. ADR 201 decision 12 allows it on any value. The slice 1 rule in document_check.go is corrected.
-- Who refuses never-store for the data source? The server, through a mode field in the open request, so an old provider build cannot skip it (ADR 209 decision 3).
-- Can expressions decide access? No. ADR 228 decision 1 says Expr computes values only.
+- Who refuses never-store for the data source? The server, through a NEW mode field in the open request, so an old provider build cannot skip it (ADR 209 decision 3).
+- Can expressions decide access? No. ADR 228 decision 1: "Expr never decides whether a change may go on."
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

@@ -52,10 +52,11 @@ Depends on:
 - two-disjoint-claims
 - runner-job-overlapping-claim-refused
 - concurrent-applies-merge-core
+
+Builds on (not a change):
+
 - ADR 368 on main (pull request #3052)
 - ADR 369 on main (pull request #3056)
-- `two-disjoint-claims` (order of the milestone review)
-- `runner-job-overlapping-claim-refused` (order of the milestone review)
 
 ## Usability
 

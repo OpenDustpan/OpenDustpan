@@ -156,9 +156,10 @@ type settings struct {
 	// stackRefusals records the refusals of the stack blob scope. newServices
 	// builds it once.
 	stackRefusals scopeaudit.Recorder
-	// blobGuard tells the blob deleters whether a backup or a restore runs.
-	// newUpdateService attaches it.
-	blobGuard       blobguard.Watch
+	// blobGuard holds the leases of the blob deletes: the namespace store,
+	// which reads the backups table and the restores table. newUpdateService
+	// attaches it.
+	blobGuard       blobguard.Leases
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore
@@ -266,6 +267,9 @@ type settings struct {
 	devSignIn        *devsignin.Config
 	// instanceStore keeps the instance version rows. See WithInstanceStore.
 	instanceStore installation.InstanceStore
+	// builtinStore is the built-in SQLite or PostgreSQL store. See WithSQLite,
+	// WithPostgreSQL and WithBuiltinStore.
+	builtinStore builtinStoreSettings
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
 	// durableStore keeps the durable operations and the job schedules, or
@@ -533,6 +537,9 @@ func WithCheckpointDeltaCutoff(n int) Option {
 // Server is a configured OpenDustpan server.
 type Server struct {
 	handler http.Handler
+	// closeBuiltin closes the store that NewServer opened, or is nil when the
+	// caller opened the store or no built-in store exists.
+	closeBuiltin *builtinStoreCloser
 	// started records that Start succeeded. The gate in front of handler
 	// reads it.
 	started *startState
@@ -760,6 +767,10 @@ func defaultSettings() *settings {
 		components:              AllComponents(),
 		operationLease:          0,
 		watch:                   nil,
+		builtinStore: builtinStoreSettings{
+			source: builtinStoreNone, path: "", dsn: "", config: defaultStoreConfig(), handle: nil,
+			open: nil, close: nil,
+		},
 	}
 }
 
@@ -778,6 +789,30 @@ func NewServer(opts ...Option) (*Server, error) {
 		opt(cfg)
 	}
 
+	if err := applyBuiltinStore(cfg); err != nil {
+		return nil, err
+	}
+
+	closeStore := cfg.builtinStore.closeFunc()
+
+	srv, err := buildServer(cfg)
+	if err != nil {
+		if closeStore == nil {
+			return nil, err
+		}
+
+		return nil, errors.Join(err, closeStore())
+	}
+
+	if closeStore != nil {
+		srv.closeBuiltin = &builtinStoreCloser{mu: sync.Mutex{}, close: closeStore}
+	}
+
+	return srv, nil
+}
+
+// buildServer wires the server from settings that have their built-in store.
+func buildServer(cfg *settings) (*Server, error) {
 	base, err := checkSettings(cfg)
 	if err != nil {
 		return nil, err
@@ -1060,7 +1095,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		reconciler:   reconciler, artifactSweeper: artifactSweeper, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
-		components: cfg.components, nameLocks: nameLocksOf(cfg),
+		components: cfg.components, nameLocks: nameLocksOf(cfg), closeBuiltin: nil,
 		watch: cfg.watch, auditChainEvery: cfg.auditChainInterval, stateWrite: newStateWriteStart(cfg, svc),
 	}
 

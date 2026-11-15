@@ -16,7 +16,7 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Agent tries to confirm or approve its own change order. | 403 with the NEW error code `changeorder.agent-confirm-refused`; the response names the NEW person confirm route. | `POST /api/dustpan/v1/namespaces/{namespace}/change-orders/{id}/confirm (NEW)` |
-| Delegator tries second approval under a two-person rule. | 403 with error code approval.not-eligible; the response names the approval rule and the authorMayApprove setting. | `GET /api/dustpan/v1/namespaces/{namespace}/approval-rules` |
+| Delegator tries second approval under a two-person rule. | 403 with error code access.denied; the response names the approval rule and the authorMayApprove setting. | `GET /api/dustpan/v1/namespaces/{namespace}/approval-rules` |
 | Apply or destroy starts before a person confirms the revision. | 409 with the NEW error code `changeorder.not-ready`; the response names the NEW confirm route that must come first. | `GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job}` |
 | Person confirms with an access token while a fresh step is needed. | 403 with error code mfa.fresh-step-required; the response names the enrollment page. | `POST /api/dustpan/v1/namespaces/{namespace}/change-orders/{id}/confirm (NEW)` |
 
@@ -45,9 +45,6 @@ Depends on:
 - person-delegates-dusty
 - dusty-proposes-change-order
 - every-step-audited
-- `person-delegates-dusty` (order of the milestone review)
-- `dusty-proposes-change-order` (order of the milestone review)
-- `every-step-audited` (order of the milestone review)
 
 ## Usability
 

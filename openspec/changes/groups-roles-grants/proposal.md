@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:159` (Groups, roles and grants).
@@ -30,7 +30,7 @@ Evidence for the claims above:
 
 - E2E files already name holders of grants and the access review Proof: e2e/access_test.go, e2e/access_review_test.go (keyword Holder evidence list)
 - Guides describe roles, grants and the access review Proof: docs/guides/roles-and-grants.md, docs/guides/access-review.md
-- Group grants and built-in roles have tests on main Proof: pkg/access/access_test.go:385 (TestGroupGrants), pkg/access/access_test.go:587 (TestBuiltInRoleFamilies)
+- Group grants and built-in roles have tests on main Proof: pkg/access/access_test.go:394 (TestGroupGrants), pkg/access/access_test.go:596 (TestBuiltInRoleFamilies)
 - The collection access review has a test on main Proof: pkg/access/review_collection_test.go:65 (TestReviewOfACollection)
 - The pack lists the viewer refusal and the revocation timing as gaps Proof: gaps list of the context pack
 
@@ -39,6 +39,7 @@ Evidence for the claims above:
 - Add e2e steps that drive the real Pulumi CLI and OpenTofu for viewer refusal and revocation timing
 - Close the gaps that these steps find in the grant check
 - Update the guides with the proved behavior
+- Apply ADR 374 decision 1 (owner, 2026-11-14), which extends ADR 52 decision 5. The organization and discovery routes of a namespace also answer a principal who holds a grant on a collection or a unit in that namespace. These are the TFE routes GET /api/v2/organizations/{organization}/entitlement-set, the organization read and the workspace reads by organization, and the Pulumi organization routes that the Pulumi CLI calls. The answer holds only that the namespace exists and its entitlements. A list route still filters its items to what the caller can read. Each other caller gets the same 404 body as for an unknown namespace. The answer names the grant that allowed it. A revoked grant loses the discovery read on the next request.
 
 Out of scope:
 
@@ -58,8 +59,8 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Group grants have a test (`pkg/access/access_test.go:385 (TestGroupGrants)`)
-- Built-in role families have a test (`pkg/access/access_test.go:587 (TestBuiltInRoleFamilies)`)
+- Group grants have a test (`pkg/access/access_test.go:394 (TestGroupGrants)`)
+- Built-in role families have a test (`pkg/access/access_test.go:596 (TestBuiltInRoleFamilies)`)
 - The collection access review has a test (`pkg/access/review_collection_test.go:65 (TestReviewOfACollection)`)
 
 ## ADR check

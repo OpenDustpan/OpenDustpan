@@ -1,0 +1,22 @@
+## 0. Confirm against the code first
+
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none. Done: Checked against main on 14 Nov 2026; the differences are below.
+
+## 1. Failing tests first
+
+- [x] 1.1 Write failing server test for old write refused and read allowed through existing write route and gate. The test is in the NEW file internal/servertest/version_gate_test.go. Check: TestVersionGateRefusesOldWrite fails on main, passes after fix; calls ANY /api/v2/state-versions, passes namespace write grant gate, uses access token Done: Main has it: the conformance suite pkg/store/storetest/control_minimum.go:104 (RunControlMinimum) runs each write path with a binary below the minimum and wants schema.ErrBinaryBelowMinimum (:150), for both stores (pkg/store/sqlite/control_minimum_internal_test.go, pkg/store/postgres/control_minimum_internal_test.go).
+- [x] 1.2 Write failing store test for atomic concurrent raise keeping the greatest version. The test is in the NEW file internal/instance/version_test.go. Check: TestRaiseMinimumKeepsGreatest fails on main, passes after fix; calls ANY /api/server/instances, passes installation read grant gate, uses access token Done: Not applicable: ADR 72 decision 11 says "A contract migration raises it", so no instance raises the minimum and there is no concurrent raise.
+
+## 2. Build
+
+- [x] 2.1 Add the NEW type VersionGate, the NEW port VersionStore with the NEW methods RecordInstance, RaiseMinimum and CheckWriteAllowed, and the version rows with atomic raise and installation scope check via InstallationScope, in the NEW file internal/instance/version.go (next to the existing internal/instance/instance.go). The minimum check at Open stays in pkg/store/schema (schema.go: MinimumError, ErrBinaryBelowMinimum); the new gate reuses its comparison. Check: `go test -race ./pkg/store/schema/... ./internal/instance/...` passes Done: Main has it in another shape, the one ADR 72 decision 11 gives: the version rows are the port pkg/installation/instances.go:74 (InstanceStore: RegisterInstance, UnregisterInstance, ListInstances, DeleteInstance); the check is checkWriteMinimum in the write transaction (pkg/store/postgres/postgres.go:1239, pkg/store/sqlite/sqlite.go:1431) through schema.CheckMinimums. VersionGate, VersionStore and CheckWriteAllowed are not needed.
+- [x] 2.2 Wire CheckWriteAllowed into write paths and map refusal to 503 with Retry-After through belowMinimum (internal/api/problem/problem.go:501) and belowMinimumText (internal/api/pulumi/pulumi.go:1130). The write paths are in the existing file internal/api/problem/problem.go. Check: `go test -race ./internal/api/...` passes with Pulumi and TFE shapes checked Done: Main has it: internal/api/problem/problem.go:491 maps schema.ErrBinaryBelowMinimum to 503 schema.binary-below-minimum (belowMinimum :501), and internal/api/tfe/errors.go:314 gives the TFE shape (belowMinimumText :112).
+
+## 3. Side effects (computed from main)
+
+- [x] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request Done: Not applicable: no request flow changes.
+
+## 4. Definition of done
+
+- [x] 4.1 Run e2e step against real CLI binaries on existing TFE state-version and Pulumi checkpoint routes with mixed binary pool. Check: Real `tofu apply` and `pulumi up` via ANY /api/v2/state-versions with namespace write grant gate and access token show old write 503 and reads 200. Confirmed by: CI (the agent writes the e2e test). Done: Main has it: make mixed-version-test (Makefile:310) runs in CI (.github/workflows/ci.yml:671) with the real Pulumi CLI and OpenTofu.
+- [x] 4.2 Docs page for minimum version behavior, route authorization actions listed, usability check from docs page alone. Check: `make check` passes with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only). Done: Main has it: docs/guides/several-instances.md, docs/guides/high-availability.md and docs/reference/tool-neutral-error-codes.md describe the minimum and the error.

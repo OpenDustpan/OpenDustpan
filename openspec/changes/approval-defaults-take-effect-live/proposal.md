@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 9
 ---
 
 Issue: #1157.
@@ -47,11 +47,9 @@ Out of scope:
 
 Depends on:
 
-- add-job-service-routes-start
+- add-job-service-routes-start-1
 - several-approval-requirements-one-change
 - gate-evaluation-must-apply-dev
-- `several-approval-requirements-one-change` (order of the milestone review)
-- `gate-evaluation-must-apply-dev` (order of the milestone review)
 
 ## Usability
 

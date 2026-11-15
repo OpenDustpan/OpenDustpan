@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 7
 ---
 
 Roadmap: `docs/roadmap.md:183` (IP allowlists).
@@ -46,7 +46,6 @@ Out of scope:
 Depends on:
 
 - add-one-generic-settings-api
-- `add-one-generic-settings-api` (order of the milestone review)
 
 ## Usability
 

@@ -43,8 +43,6 @@ Depends on:
 
 - person-delegates-dusty
 - every-step-audited
-- `person-delegates-dusty` (order of the milestone review)
-- `every-step-audited` (order of the milestone review)
 
 ## Usability
 

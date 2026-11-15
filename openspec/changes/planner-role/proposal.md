@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 6
 ---
 
 Roadmap: `docs/roadmap.md:166` (The planner role).
@@ -12,17 +12,17 @@ The user path this change must make work:
 
 1. **API.** Site administrator grants the planner role on a collection to the developer or a group.
 2. **CLI.** Developer creates an access token for self and configures the Pulumi CLI and OpenTofu with it.
-3. **CLI.** Developer reads state with pulumi stack export and tofu state pull with secrets masked.
-4. **CLI.** Developer tries up, destroy or apply and gets 403; asks for a secret reveal and gets 403.
+3. **CLI.** Developer reads the masked state with GET /api/v2/state-versions/{state_version_id}/resources and the masked Pulumi state read. ADR 212 decision 1: a planner "reads state with the state actions that the role gives, as viewer does". ADR 41 gives the masked state read with unit:read. The raw state download needs unit:read-secrets. So `pulumi stack export` and `tofu state pull` (GET /api/v2/state-versions/{state_version_id}/download) answer access.denied for a planner.
+4. **CLI.** Developer tries up, destroy or apply and gets 403 with access.denied; asks for a secret reveal and gets 403 with access.denied. ADR 212 decision 1: a planner "cannot apply, destroy, approve or read a secret value".
 5. **Docs page.** Developer follows docs/guides/planner-role.md for the allowed reads.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| pulumi up or pulumi destroy as planner is refused. | 403 with the error code unit.forbidden. | `opendustpan --help` |
-| tofu apply or tofu destroy as planner is refused. | 403 with the error code unit.forbidden. | `opendustpan --help` |
-| Read of the plain text of a secret value as planner is refused. | 403 with the error code secret.forbidden. | `opendustpan --help` |
+| pulumi up or pulumi destroy as planner is refused. | 403 with the error code access.denied. | `opendustpan --help` |
+| tofu apply or tofu destroy as planner is refused. | 403 with the error code access.denied. | `opendustpan --help` |
+| Read of the plain text of a secret value as planner is refused. | 403 with the error code access.denied. | `opendustpan --help` |
 
 Evidence for the claims above:
 
@@ -47,7 +47,6 @@ Out of scope:
 Depends on:
 
 - groups-roles-grants
-- `groups-roles-grants` (order of the milestone review)
 
 ## Usability
 
