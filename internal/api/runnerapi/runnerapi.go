@@ -1,6 +1,6 @@
 // Package runnerapi serves the server side of the runner protocol under
 // /runner/v1, and the tool-neutral API that people use to manage runner
-// pools, join tokens and runners under /api/runners.
+// pools, join tokens and runners under /api/dustpan/v1/namespaces/{namespace}.
 //
 // The protocol is a thin layer over the ports of package runner, package job
 // and package durable: a path calls one port. A runner proves possession of

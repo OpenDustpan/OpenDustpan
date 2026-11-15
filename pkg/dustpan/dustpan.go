@@ -3777,13 +3777,11 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// runners is more specific than /api/, so it reaches its own adapter.
 	if a.runners != nil {
 		mux.Handle("/runner/v1/", withMaintenance(a.runners, a.maintenance, shapeRunner, cfg.logger))
-		mux.Handle(
-			"/api/runners/",
-			withCORS(
-				withRunnerMaintenance(withJSONMethodNotAllowed(a.runners), a.maintenance, shapeInventory, cfg.logger),
-				cfg.allowedOrigins,
-			),
-		)
+		// The management routes are under v1Prefix. Only the reducing routes
+		// pass in maintenance mode.
+		mountV1(mux, a.runners, func(h http.Handler) http.Handler {
+			return withCORS(withRunnerMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+		})
 	}
 	// The adapters below answer in the shape of the inventory API, with CORS
 	// and the maintenance gate.

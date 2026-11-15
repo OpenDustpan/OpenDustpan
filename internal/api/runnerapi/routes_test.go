@@ -63,10 +63,10 @@ func TestRouteTable(t *testing.T) {
 			checkProtocolRoute(t, route, paths)
 
 			seen[route.Path] = true
-		case strings.HasPrefix(route.Path, "/api/runners/"):
+		case strings.HasPrefix(route.Path, "/api/dustpan/v1/namespaces/"):
 			checkManagementRoute(t, route)
 		default:
-			t.Errorf("route %s %s is outside /runner/v1 and /api/runners", route.Method, route.Path)
+			t.Errorf("route %s %s is outside /runner/v1 and /api/dustpan/v1/namespaces", route.Method, route.Path)
 		}
 	}
 
@@ -190,7 +190,7 @@ func TestReducingListMatchesRunnerRoutes(t *testing.T) {
 	listed := map[string]bool{}
 
 	for _, r := range maintenance.ReducingRoutes() {
-		if !strings.HasPrefix(r.Pattern, "/api/runners/") {
+		if !strings.HasPrefix(r.Pattern, "/api/dustpan/v1/namespaces/") {
 			continue
 		}
 

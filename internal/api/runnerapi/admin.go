@@ -30,6 +30,21 @@ type poolJSON struct {
 	UpdatedAt      time.Time          `json:"updatedAt"`
 }
 
+// poolListJSON is the answer of the pool list.
+type poolListJSON struct {
+	Pools []poolJSON `json:"pools"`
+}
+
+// joinTokenListJSON is the answer of the join token list. It holds no secret.
+type joinTokenListJSON struct {
+	JoinTokens []joinTokenJSON `json:"joinTokens"`
+}
+
+// runnerListJSON is the answer of the list of the runners of a pool.
+type runnerListJSON struct {
+	Runners []runnerJSON `json:"runners"`
+}
+
 type gitCredentialsJSON struct {
 	Mode   string `json:"mode"`
 	Helper string `json:"helper,omitempty"`
@@ -112,7 +127,7 @@ func (h *Handler) listPools(w http.ResponseWriter, r *http.Request, c *call) {
 		out = append(out, poolOut(&pools[i]))
 	}
 
-	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{"pools": out})
+	h.writeJSON(r.Context(), w, http.StatusOK, poolListJSON{Pools: out})
 }
 
 func (h *Handler) getPool(w http.ResponseWriter, r *http.Request, c *call) {
@@ -410,7 +425,7 @@ func (h *Handler) listJoinTokens(w http.ResponseWriter, r *http.Request, c *call
 		out = append(out, tokenOut(&tokens[i]))
 	}
 
-	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{"joinTokens": out})
+	h.writeJSON(r.Context(), w, http.StatusOK, joinTokenListJSON{JoinTokens: out})
 }
 
 // createJoinTokenRequest is the body of a join token create. Ttl is the
@@ -546,20 +561,20 @@ func (h *Handler) revokeJoinToken(w http.ResponseWriter, r *http.Request, c *cal
 // runnerJSON is a runner in the management API. It holds the ID of the key,
 // never the key.
 type runnerJSON struct {
-	ID         string            `json:"id"`
-	Pool       string            `json:"pool"`
-	Name       string            `json:"name"`
-	Kind       string            `json:"kind"`
-	Isolation  string            `json:"isolation"`
-	Labels     map[string]string `json:"labels"`
-	Release    string            `json:"release"`
-	Status     string            `json:"status"`
-	Draining   bool              `json:"draining"`
-	KeyID      string            `json:"keyID"`
-	KeyExpires time.Time         `json:"keyExpires"`
-	LastSeenAt time.Time         `json:"lastSeenAt"`
-	JoinedAt   time.Time         `json:"joinedAt"`
-	RejoinArgs []string          `json:"rejoinCommand,omitempty"`
+	ID            string            `json:"id"`
+	Pool          string            `json:"pool"`
+	Name          string            `json:"name"`
+	Kind          string            `json:"kind"`
+	Isolation     string            `json:"isolation"`
+	Labels        map[string]string `json:"labels"`
+	Release       string            `json:"release"`
+	Status        string            `json:"status"`
+	Draining      bool              `json:"draining"`
+	KeyIdentifier string            `json:"keyIdentifier"`
+	KeyExpires    time.Time         `json:"keyExpires"`
+	LastSeenAt    time.Time         `json:"lastSeenAt"`
+	JoinedAt      time.Time         `json:"joinedAt"`
+	RejoinArgs    []string          `json:"rejoinCommand,omitempty"`
 }
 
 func (h *Handler) runnerOut(rn *runner.Runner, now time.Time) runnerJSON {
@@ -571,7 +586,7 @@ func (h *Handler) runnerOut(rn *runner.Runner, now time.Time) runnerJSON {
 	out := runnerJSON{
 		ID: rn.ID, Pool: rn.Pool, Name: rn.Name, Kind: string(rn.Kind), Isolation: string(rn.Isolation),
 		Labels: labels, Release: rn.Release.String(), Status: string(rn.StatusAt(now)), Draining: rn.Draining,
-		KeyID: rn.Key.ID(), KeyExpires: rn.Key.CreatedAt.Add(runner.MaxKeyAge), LastSeenAt: rn.LastSeenAt,
+		KeyIdentifier: rn.Key.ID(), KeyExpires: rn.Key.CreatedAt.Add(runner.MaxKeyAge), LastSeenAt: rn.LastSeenAt,
 		JoinedAt: rn.JoinedAt, RejoinArgs: nil,
 	}
 
@@ -604,7 +619,7 @@ func (h *Handler) listRunners(w http.ResponseWriter, r *http.Request, c *call) {
 		out = append(out, h.runnerOut(&runners[i], now))
 	}
 
-	h.writeJSON(r.Context(), w, http.StatusOK, map[string]any{"runners": out})
+	h.writeJSON(r.Context(), w, http.StatusOK, runnerListJSON{Runners: out})
 }
 
 // resolveRunner finds the runner of the path in the namespace of the call.

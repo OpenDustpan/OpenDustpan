@@ -20,7 +20,7 @@ func TestPoolCreateTimesEqualTheReadTimes(t *testing.T) {
 
 	e := newEnv(t)
 
-	status, body := e.admin(http.MethodPost, "/api/runners/acme/pools",
+	status, body := e.admin(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools",
 		map[string]any{"name": "prod", "purpose": "jobs"})
 	if status != http.StatusCreated {
 		t.Fatalf("create pool = %d %s, want 201", status, body)
@@ -30,7 +30,7 @@ func TestPoolCreateTimesEqualTheReadTimes(t *testing.T) {
 
 	decode(t, body, &created)
 
-	status, body = e.admin(http.MethodGet, "/api/runners/acme/pools/"+created.ID, nil)
+	status, body = e.admin(http.MethodGet, "/api/dustpan/v1/namespaces/acme/runner-pools/"+created.ID, nil)
 	if status != http.StatusOK {
 		t.Fatalf("read pool = %d %s, want 200", status, body)
 	}
@@ -52,7 +52,7 @@ func TestPoolPatchAndJoinTokenTimesEqualTheReadTimes(t *testing.T) {
 
 	e := newEnv(t)
 
-	status, body := e.admin(http.MethodPost, "/api/runners/acme/pools",
+	status, body := e.admin(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools",
 		map[string]any{"name": "prod", "purpose": "jobs"})
 	if status != http.StatusCreated {
 		t.Fatalf("create pool = %d %s, want 201", status, body)
@@ -62,7 +62,11 @@ func TestPoolPatchAndJoinTokenTimesEqualTheReadTimes(t *testing.T) {
 
 	decode(t, body, &created)
 
-	status, body = e.admin(http.MethodPatch, "/api/runners/acme/pools/"+created.ID, map[string]any{"concurrency": 2})
+	status, body = e.admin(
+		http.MethodPatch,
+		"/api/dustpan/v1/namespaces/acme/runner-pools/"+created.ID,
+		map[string]any{"concurrency": 2},
+	)
 	if status != http.StatusOK {
 		t.Fatalf("patch pool = %d %s, want 200", status, body)
 	}
@@ -71,7 +75,7 @@ func TestPoolPatchAndJoinTokenTimesEqualTheReadTimes(t *testing.T) {
 
 	decode(t, body, &patched)
 
-	status, body = e.admin(http.MethodGet, "/api/runners/acme/pools/"+created.ID, nil)
+	status, body = e.admin(http.MethodGet, "/api/dustpan/v1/namespaces/acme/runner-pools/"+created.ID, nil)
 	if status != http.StatusOK {
 		t.Fatalf("read pool = %d %s, want 200", status, body)
 	}
@@ -84,7 +88,11 @@ func TestPoolPatchAndJoinTokenTimesEqualTheReadTimes(t *testing.T) {
 		t.Fatalf("read answers %+v, want the times of the patch answer %+v", read, patched)
 	}
 
-	status, body = e.admin(http.MethodPost, "/api/runners/acme/pools/"+created.ID+"/join-tokens", map[string]any{})
+	status, body = e.admin(
+		http.MethodPost,
+		"/api/dustpan/v1/namespaces/acme/runner-pools/"+created.ID+"/join-tokens",
+		map[string]any{},
+	)
 	if status != http.StatusCreated {
 		t.Fatalf("create join token = %d %s, want 201", status, body)
 	}
@@ -93,7 +101,11 @@ func TestPoolPatchAndJoinTokenTimesEqualTheReadTimes(t *testing.T) {
 
 	decode(t, body, &token)
 
-	status, body = e.admin(http.MethodGet, "/api/runners/acme/pools/"+created.ID+"/join-tokens", nil)
+	status, body = e.admin(
+		http.MethodGet,
+		"/api/dustpan/v1/namespaces/acme/runner-pools/"+created.ID+"/join-tokens",
+		nil,
+	)
 	if status != http.StatusOK {
 		t.Fatalf("list join tokens = %d %s, want 200", status, body)
 	}

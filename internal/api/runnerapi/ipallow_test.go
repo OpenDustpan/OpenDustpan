@@ -104,14 +104,14 @@ func TestAddressOutsideTheAllowlistAnswers403(t *testing.T) {
 	t.Parallel()
 
 	for _, q := range []struct{ method, path, body string }{
-		{method: http.MethodGet, path: "/api/runners/acme/pools", body: ""},
-		{method: http.MethodPost, path: "/api/runners/acme/pools", body: `{"name":"p1","purpose":"jobs"}`},
+		{method: http.MethodGet, path: "/api/dustpan/v1/namespaces/acme/runner-pools", body: ""},
+		{method: http.MethodPost, path: "/api/dustpan/v1/namespaces/acme/runner-pools", body: `{"name":"p1","purpose":"jobs"}`},
 		// A pool that does not exist and a namespace that does not exist answer
 		// the same 403: the refusal does not tell whether the object exists.
-		{method: http.MethodGet, path: "/api/runners/acme/pools/absent", body: ""},
-		{method: http.MethodGet, path: "/api/runners/absent/pools", body: ""},
-		{method: http.MethodPost, path: "/api/runners/absent/pools", body: `{"name":"p1","purpose":"jobs"}`},
-		{method: http.MethodGet, path: "/api/runners/absent/pools/absent", body: ""},
+		{method: http.MethodGet, path: "/api/dustpan/v1/namespaces/acme/runner-pools/absent", body: ""},
+		{method: http.MethodGet, path: "/api/dustpan/v1/namespaces/absent/runner-pools", body: ""},
+		{method: http.MethodPost, path: "/api/dustpan/v1/namespaces/absent/runner-pools", body: `{"name":"p1","purpose":"jobs"}`},
+		{method: http.MethodGet, path: "/api/dustpan/v1/namespaces/absent/runner-pools/absent", body: ""},
 	} {
 		req := httptest.NewRequestWithContext(t.Context(), q.method, q.path, strings.NewReader(q.body))
 		req.Header.Set("Authorization", "token "+adminToken)
@@ -148,29 +148,49 @@ func TestRefusedReadWritesOneDenialEntry(t *testing.T) {
 		scope   namespace.Name
 	}{
 		{
-			name: "address outside the allowlist", authz: addressRefused{},
-			path: "/api/runners/acme/pools", status: http.StatusForbidden, entries: 1, reason: "", scope: "",
+			name:    "address outside the allowlist",
+			authz:   addressRefused{},
+			path:    "/api/dustpan/v1/namespaces/acme/runner-pools",
+			status:  http.StatusForbidden,
+			entries: 1,
+			reason:  "",
+			scope:   "",
 		},
 		{
-			name: "policy refuses the namespace read", authz: holdsOnly{actions: nil},
-			path: "/api/runners/acme/pools", status: http.StatusNotFound, entries: 1, reason: "", scope: "",
+			name:    "policy refuses the namespace read",
+			authz:   holdsOnly{actions: nil},
+			path:    "/api/dustpan/v1/namespaces/acme/runner-pools",
+			status:  http.StatusNotFound,
+			entries: 1,
+			reason:  "",
+			scope:   "",
 		},
 		{
-			name: "unknown namespace under a policy that refuses everything", authz: holdsOnly{actions: nil},
-			path: "/api/runners/absent/pools", status: http.StatusNotFound, entries: 0, reason: "", scope: "",
+			name:    "unknown namespace under a policy that refuses everything",
+			authz:   holdsOnly{actions: nil},
+			path:    "/api/dustpan/v1/namespaces/absent/runner-pools",
+			status:  http.StatusNotFound,
+			entries: 0,
+			reason:  "",
+			scope:   "",
 		},
 		{
-			name: "allowed request", authz: holdsOnly{actions: read},
-			path: "/api/runners/acme/pools", status: http.StatusOK, entries: 0, reason: "", scope: "",
+			name:    "allowed request",
+			authz:   holdsOnly{actions: read},
+			path:    "/api/dustpan/v1/namespaces/acme/runner-pools",
+			status:  http.StatusOK,
+			entries: 0,
+			reason:  "",
+			scope:   "",
 		},
 		{
 			name: "authorizer failure", authz: authorizationFailed{},
-			path: "/api/runners/acme/pools", status: http.StatusInternalServerError, entries: 1,
+			path: "/api/dustpan/v1/namespaces/acme/runner-pools", status: http.StatusInternalServerError, entries: 1,
 			reason: refusal.ReasonFailed, scope: "",
 		},
 		{
 			name: "authorizer failure on an unknown namespace", authz: authorizationFailed{},
-			path: "/api/runners/absent/pools", status: http.StatusInternalServerError, entries: 1,
+			path: "/api/dustpan/v1/namespaces/absent/runner-pools", status: http.StatusInternalServerError, entries: 1,
 			reason: refusal.ReasonFailed, scope: audit.ServerScope,
 		},
 	}
@@ -212,7 +232,12 @@ func TestCheckAddressRefusesAnAddressOutsideTheAllowlist(t *testing.T) {
 		cfg.DenialLimiter = writingLimiter()
 	})
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/runners/acme/pools", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/api/dustpan/v1/namespaces/acme/runner-pools",
+		http.NoBody,
+	)
 	req.SetPathValue("namespace", "acme")
 
 	p, authErr := adminAuthenticator{}.AuthenticateToken(t.Context(), adminToken)
@@ -239,7 +264,12 @@ func TestCheckAddressRefusesAnAuthorizerError(t *testing.T) {
 		cfg.DenialLimiter = writingLimiter()
 	})
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/runners/acme/pools", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/api/dustpan/v1/namespaces/acme/runner-pools",
+		http.NoBody,
+	)
 	req.SetPathValue("namespace", "acme")
 
 	p, authErr := adminAuthenticator{}.AuthenticateToken(t.Context(), adminToken)
@@ -296,8 +326,8 @@ func TestAuthorizerErrorAnswersTheSameForAnyNamespace(t *testing.T) {
 		return rec
 	}
 
-	known := send("/api/runners/acme/pools")
-	unknown := send("/api/runners/absent/pools")
+	known := send("/api/dustpan/v1/namespaces/acme/runner-pools")
+	unknown := send("/api/dustpan/v1/namespaces/absent/runner-pools")
 
 	checkSameAnswer(t, known, unknown)
 

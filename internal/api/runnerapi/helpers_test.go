@@ -459,7 +459,7 @@ func (e *env) send(req *http.Request) (int, []byte) {
 func (e *env) createPool() string {
 	e.t.Helper()
 
-	status, body := e.admin(http.MethodPost, "/api/runners/acme/pools",
+	status, body := e.admin(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools",
 		map[string]any{"name": "prod", "purpose": "jobs"})
 	if status != http.StatusCreated {
 		e.t.Fatalf("create pool = %d %s, want 201", status, body)
@@ -478,7 +478,7 @@ func (e *env) createPool() string {
 func (e *env) joinToken(pool string) string {
 	e.t.Helper()
 
-	status, body := e.admin(http.MethodPost, "/api/runners/acme/pools/"+pool+"/join-tokens", nil)
+	status, body := e.admin(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools/"+pool+"/join-tokens", nil)
 	if status != http.StatusCreated {
 		e.t.Fatalf("create join token = %d %s, want 201", status, body)
 	}
@@ -497,7 +497,7 @@ func (e *env) joinToken(pool string) string {
 func (e *env) joinToken2(pool string) string {
 	e.t.Helper()
 
-	status, body := e.admin(http.MethodPost, "/api/runners/globex/pools/"+pool+"/join-tokens", nil)
+	status, body := e.admin(http.MethodPost, "/api/dustpan/v1/namespaces/globex/runner-pools/"+pool+"/join-tokens", nil)
 	if status != http.StatusCreated {
 		e.t.Fatalf("create join token = %d %s, want 201", status, body)
 	}

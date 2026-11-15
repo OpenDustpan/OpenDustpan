@@ -114,7 +114,8 @@ func claimAPhase(t *testing.T, env *e2e.Env) claimed {
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		UserAgent: jobsAgent, Name: "create the runner pool", Method: http.MethodPost,
-		Path: "/api/runners/" + e2e.Namespace + "/pools", Body: `{"name":"` + jobsPool + `","purpose":"jobs"}`,
+		Path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/runner-pools",
+		Body: `{"name":"` + jobsPool + `","purpose":"jobs"}`,
 		Want: http.StatusCreated, Scheme: "token",
 		Check: func(body string) error {
 			var pool struct {

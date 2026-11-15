@@ -73,13 +73,13 @@ type Route struct {
 
 // Path patterns of the management API.
 const (
-	poolsPath       = "/api/runners/{namespace}/pools"
+	poolsPath       = "/api/dustpan/v1/namespaces/{namespace}/runner-pools"
 	poolPath        = poolsPath + "/{pool}"
 	joinTokensPath  = poolPath + "/join-tokens"
 	joinTokenPath   = joinTokensPath + "/{id}/revoke"
 	poolRunnersPath = poolPath + "/runners"
-	drainPath       = "/api/runners/{namespace}/runners/{runner}/drain"
-	retirePath      = "/api/runners/{namespace}/runners/{runner}/retire"
+	drainPath       = "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/drain"
+	retirePath      = "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire"
 )
 
 // buildRoutes returns the route table. It is the single source of the

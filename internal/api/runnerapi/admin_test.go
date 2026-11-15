@@ -137,53 +137,60 @@ func TestManagementActions(t *testing.T) {
 		body    string
 		wantErr int
 	}{
-		{"list without namespace:read", nil, http.MethodGet, "/api/runners/acme/pools", "", http.StatusNotFound},
+		{
+			"list without namespace:read",
+			nil,
+			http.MethodGet,
+			"/api/dustpan/v1/namespaces/acme/runner-pools",
+			"",
+			http.StatusNotFound,
+		},
 		{
 			"list without read-runners",
 			[]identity.Action{read},
-			http.MethodGet, "/api/runners/acme/pools", "",
+			http.MethodGet, "/api/dustpan/v1/namespaces/acme/runner-pools", "",
 			http.StatusForbidden,
 		},
 		{
 			"list with read-runners",
 			[]identity.Action{read, readRunners},
-			http.MethodGet, "/api/runners/acme/pools", "",
+			http.MethodGet, "/api/dustpan/v1/namespaces/acme/runner-pools", "",
 			http.StatusOK,
 		},
 		{
 			"create with read-runners only",
 			[]identity.Action{read, readRunners},
-			http.MethodPost, "/api/runners/acme/pools",
+			http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools",
 			`{"name":"prod","purpose":"jobs"}`, http.StatusForbidden,
 		},
 		{
 			"create with manage-runners",
 			[]identity.Action{read, manage},
-			http.MethodPost, "/api/runners/acme/pools",
+			http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools",
 			`{"name":"prod","purpose":"jobs"}`, http.StatusCreated,
 		},
 		{
 			"create with a bad name",
 			[]identity.Action{read, manage},
-			http.MethodPost, "/api/runners/acme/pools",
+			http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools",
 			`{"name":"Prod!","purpose":"jobs"}`, http.StatusBadRequest,
 		},
 		{
 			"create with an unknown field",
 			[]identity.Action{read, manage},
-			http.MethodPost, "/api/runners/acme/pools",
+			http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools",
 			`{"name":"prod","purpose":"jobs","flavor":"red"}`, http.StatusBadRequest,
 		},
 		{
 			"unknown namespace",
 			[]identity.Action{read, readRunners},
-			http.MethodGet, "/api/runners/absent/pools", "",
+			http.MethodGet, "/api/dustpan/v1/namespaces/absent/runner-pools", "",
 			http.StatusNotFound,
 		},
 		{
 			"unknown pool",
 			[]identity.Action{read, readRunners},
-			http.MethodGet, "/api/runners/acme/pools/none", "",
+			http.MethodGet, "/api/dustpan/v1/namespaces/acme/runner-pools/none", "",
 			http.StatusNotFound,
 		},
 	}
@@ -213,8 +220,12 @@ func TestPoolCreateNamesTheHelperRule(t *testing.T) {
 
 	for _, helper := range []string{`/usr/bin/x\"y`, "/usr/bin/x#y", "/usr/bin/x;y", "bin/helper", `/usr/bin/x\ny`} {
 		body := `{"name":"prod","purpose":"jobs","gitCredentials":{"mode":"custom","helper":"` + helper + `"}}`
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/runners/acme/pools",
-			strings.NewReader(body))
+		req := httptest.NewRequestWithContext(
+			t.Context(),
+			http.MethodPost,
+			"/api/dustpan/v1/namespaces/acme/runner-pools",
+			strings.NewReader(body),
+		)
 		req.Header.Set("Authorization", "token "+adminToken)
 
 		rec := httptest.NewRecorder()
@@ -254,25 +265,29 @@ func TestPoolAndTokenLifecycle(t *testing.T) {
 
 	status, body := e.admin(
 		http.MethodPost,
-		"/api/runners/acme/pools",
+		"/api/dustpan/v1/namespaces/acme/runner-pools",
 		map[string]any{"name": "prod", "purpose": "jobs"},
 	)
 	if status != http.StatusConflict {
 		t.Fatalf("create pool again = %d %s, want 409", status, body)
 	}
 
-	status, body = e.admin(http.MethodGet, "/api/runners/acme/pools/prod", nil)
+	status, body = e.admin(http.MethodGet, "/api/dustpan/v1/namespaces/acme/runner-pools/prod", nil)
 	if status != http.StatusOK || !strings.Contains(string(body), pool) {
 		t.Fatalf("get pool by name = %d %s, want 200 with the ID", status, body)
 	}
 
-	status, body = e.admin(http.MethodPost, "/api/runners/acme/pools/"+pool+"/join-tokens", map[string]any{"ttl": 0})
+	status, body = e.admin(
+		http.MethodPost,
+		"/api/dustpan/v1/namespaces/acme/runner-pools/"+pool+"/join-tokens",
+		map[string]any{"ttl": 0},
+	)
 	if status != http.StatusCreated || !strings.Contains(string(body), `"token":"dpj_`) ||
 		!strings.Contains(string(body), "--token-stdin") {
 		t.Fatalf("create join token = %d %s, want 201 with the secret and the command", status, body)
 	}
 
-	status, body = e.admin(http.MethodGet, "/api/runners/acme/pools/"+pool+"/join-tokens", nil)
+	status, body = e.admin(http.MethodGet, "/api/dustpan/v1/namespaces/acme/runner-pools/"+pool+"/join-tokens", nil)
 	if status != http.StatusOK || strings.Contains(string(body), "dpj_") {
 		t.Fatalf("list join tokens = %d %s, want 200 with no secret", status, body)
 	}
@@ -285,7 +300,7 @@ func TestPoolAndTokenLifecycle(t *testing.T) {
 		t.Fatalf("join tokens = %d, want 1", len(listing.JoinTokens))
 	}
 
-	revoke := "/api/runners/acme/pools/" + pool + "/join-tokens/" + listing.JoinTokens[0].ID + "/revoke"
+	revoke := "/api/dustpan/v1/namespaces/acme/runner-pools/" + pool + "/join-tokens/" + listing.JoinTokens[0].ID + "/revoke"
 	if status, body = e.admin(http.MethodPost, revoke, nil); status != http.StatusNoContent {
 		t.Fatalf("revoke = %d %s, want 204", status, body)
 	}
@@ -308,7 +323,7 @@ func TestRunnerManagement(t *testing.T) {
 		t.Fatalf("join = %d %s", status, body)
 	}
 
-	status, body := e.admin(http.MethodGet, "/api/runners/acme/pools/prod/runners", nil)
+	status, body := e.admin(http.MethodGet, "/api/dustpan/v1/namespaces/acme/runner-pools/prod/runners", nil)
 	if status != http.StatusOK || !strings.Contains(string(body), `"status":"online"`) ||
 		!strings.Contains(string(body), r.id) {
 		t.Fatalf("list runners = %d %s, want the online runner", status, body)
@@ -316,7 +331,7 @@ func TestRunnerManagement(t *testing.T) {
 
 	status, body = e.admin(
 		http.MethodPost,
-		"/api/runners/acme/runners/"+r.id+"/drain",
+		"/api/dustpan/v1/namespaces/acme/runners/"+r.id+"/drain",
 		nil,
 	)
 
@@ -330,7 +345,8 @@ func TestRunnerManagement(t *testing.T) {
 
 	e.startOperation(pool)
 
-	if status, body = e.admin(http.MethodDelete, "/api/runners/acme/pools/prod", nil); status != http.StatusConflict {
+	status, body = e.admin(http.MethodDelete, "/api/dustpan/v1/namespaces/acme/runner-pools/prod", nil)
+	if status != http.StatusConflict {
 		t.Fatalf("delete a pool in use = %d %s, want 409", status, body)
 	}
 
@@ -353,7 +369,7 @@ func TestPoolUpdate(t *testing.T) {
 
 	e := newEnv(t)
 	pool := e.createPool()
-	path := "/api/runners/acme/pools/" + pool
+	path := "/api/dustpan/v1/namespaces/acme/runner-pools/" + pool
 
 	status, body := e.admin(http.MethodPatch, path, map[string]any{"concurrency": 4, "lease": 120_000})
 	if status != http.StatusOK || !strings.Contains(string(body), `"concurrency":4`) ||
@@ -383,7 +399,11 @@ func TestPoolUpdate(t *testing.T) {
 		}
 	}
 
-	status, body = e.admin(http.MethodPatch, "/api/runners/acme/pools/rp-missing", map[string]any{})
+	status, body = e.admin(
+		http.MethodPatch,
+		"/api/dustpan/v1/namespaces/acme/runner-pools/rp-missing",
+		map[string]any{},
+	)
 	if status != http.StatusNotFound {
 		t.Errorf("patch of an unknown pool = %d %s, want 404", status, body)
 	}
@@ -432,7 +452,7 @@ func TestOtherNamespaceIsNotFound(t *testing.T) {
 
 	status, body := e.admin(
 		http.MethodPost,
-		"/api/runners/globex/pools",
+		"/api/dustpan/v1/namespaces/globex/runner-pools",
 		map[string]any{"name": "prod", "purpose": "jobs"},
 	)
 	if status != http.StatusCreated {
@@ -445,7 +465,11 @@ func TestOtherNamespaceIsNotFound(t *testing.T) {
 
 	decode(t, body, &pool)
 
-	status, body = e.admin(http.MethodPost, "/api/runners/globex/pools/"+pool.ID+"/join-tokens", nil)
+	status, body = e.admin(
+		http.MethodPost,
+		"/api/dustpan/v1/namespaces/globex/runner-pools/"+pool.ID+"/join-tokens",
+		nil,
+	)
 	if status != http.StatusCreated {
 		t.Fatalf("create join token in globex = %d %s, want 201", status, body)
 	}
@@ -484,20 +508,24 @@ func TestOtherNamespaceIsNotFound(t *testing.T) {
 		method string
 		path   string
 	}{
-		{"drain by ID", http.MethodPost, "/api/runners/acme/runners/" + foreign.id + "/drain"},
-		{"retire by ID", http.MethodPost, "/api/runners/acme/runners/" + foreign.id + "/retire"},
+		{"drain by ID", http.MethodPost, "/api/dustpan/v1/namespaces/acme/runners/" + foreign.id + "/drain"},
+		{"retire by ID", http.MethodPost, "/api/dustpan/v1/namespaces/acme/runners/" + foreign.id + "/retire"},
 		{
 			"revoke a token by ID",
 			http.MethodPost,
-			"/api/runners/acme/pools/" + acmePool + "/join-tokens/" + tok.ID + "/revoke",
+			"/api/dustpan/v1/namespaces/acme/runner-pools/" + acmePool + "/join-tokens/" + tok.ID + "/revoke",
 		},
 		{
 			"revoke through the pool ID",
 			http.MethodPost,
-			"/api/runners/acme/pools/" + pool.ID + "/join-tokens/" + tok.ID + "/revoke",
+			"/api/dustpan/v1/namespaces/acme/runner-pools/" + pool.ID + "/join-tokens/" + tok.ID + "/revoke",
 		},
-		{"read the pool by ID", http.MethodGet, "/api/runners/acme/pools/" + pool.ID},
-		{"drain in the namespace", http.MethodPost, "/api/runners/globex/runners/" + foreign.id + "/drain"},
+		{"read the pool by ID", http.MethodGet, "/api/dustpan/v1/namespaces/acme/runner-pools/" + pool.ID},
+		{
+			"drain in the namespace",
+			http.MethodPost,
+			"/api/dustpan/v1/namespaces/globex/runners/" + foreign.id + "/drain",
+		},
 	}
 
 	for _, tc := range tests {
@@ -506,13 +534,17 @@ func TestOtherNamespaceIsNotFound(t *testing.T) {
 		}
 	}
 
-	status, body = e.admin(http.MethodGet, "/api/runners/globex/pools/"+pool.ID+"/runners", nil)
+	status, body = e.admin(http.MethodGet, "/api/dustpan/v1/namespaces/globex/runner-pools/"+pool.ID+"/runners", nil)
 	if status != http.StatusOK || !strings.Contains(string(body), `"draining":false`) ||
 		strings.Contains(string(body), `"status":"retired"`) {
 		t.Errorf("runners of globex = %d %s, want the runner not draining and not retired", status, body)
 	}
 
-	status, body = e.admin(http.MethodGet, "/api/runners/globex/pools/"+pool.ID+"/join-tokens", nil)
+	status, body = e.admin(
+		http.MethodGet,
+		"/api/dustpan/v1/namespaces/globex/runner-pools/"+pool.ID+"/join-tokens",
+		nil,
+	)
 	if status != http.StatusOK || strings.Contains(string(body), `"revokedAt"`) {
 		t.Errorf("join tokens of globex = %d %s, want none revoked", status, body)
 	}
@@ -523,12 +555,12 @@ func TestOtherNamespaceIsNotFound(t *testing.T) {
 func (e *env) retireThenDrain(id string) {
 	e.t.Helper()
 
-	status, body := e.admin(http.MethodPost, "/api/runners/acme/runners/"+id+"/retire", nil)
+	status, body := e.admin(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runners/"+id+"/retire", nil)
 	if status != http.StatusNoContent {
 		e.t.Fatalf("retire = %d %s, want 204", status, body)
 	}
 
-	status, body = e.admin(http.MethodPost, "/api/runners/acme/runners/"+id+"/drain", nil)
+	status, body = e.admin(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runners/"+id+"/drain", nil)
 	if status != http.StatusConflict || !strings.Contains(string(body), "the runner is retired") {
 		e.t.Fatalf("drain of a retired runner = %d %s, want 409 with the message that the runner is retired",
 			status, body)

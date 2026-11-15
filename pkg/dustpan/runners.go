@@ -31,7 +31,7 @@ type RunnerStores interface {
 
 // WithRunners sets the stores of the runner protocol. With them and a public
 // URL (WithPublicURL), the server serves the runner protocol under
-// /runner/v1 and the management API under /api/runners. Without them, the
+// /runner/v1 and the management API under /api/dustpan/v1/namespaces. Without them, the
 // server serves neither.
 func WithRunners(s RunnerStores) Option {
 	return func(o *settings) { o.runners = s }

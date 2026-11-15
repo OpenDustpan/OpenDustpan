@@ -148,7 +148,7 @@ func TestOnePollAtATime(t *testing.T) {
 		t.Fatalf("second poll = %d %s, want 429 rate-limited", status, body)
 	}
 
-	status, body = e.admin(http.MethodPost, "/api/runners/acme/runners/"+r.id+"/drain", nil)
+	status, body = e.admin(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runners/"+r.id+"/drain", nil)
 	if status != http.StatusNoContent {
 		t.Fatalf("drain = %d %s, want 204", status, body)
 	}
@@ -264,7 +264,7 @@ func TestProofIsCheckedBeforeTheRunnerState(t *testing.T) {
 		t.Fatalf("join = %d %s, want 200", status, body)
 	}
 
-	status, body := e.admin(http.MethodPost, "/api/runners/acme/runners/"+r.id+"/retire", nil)
+	status, body := e.admin(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runners/"+r.id+"/retire", nil)
 	if status != http.StatusNoContent {
 		t.Fatalf("retire = %d %s, want 204", status, body)
 	}

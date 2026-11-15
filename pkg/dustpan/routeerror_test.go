@@ -36,7 +36,7 @@ func TestRouteErrorsAreNoStore(t *testing.T) {
 			http.StatusMethodNotAllowed, errcode.ServerMethodNotAllowed,
 		},
 		{
-			"runner pools", http.MethodPatch, "/api/runners/acme/pools",
+			"runner pools", http.MethodPatch, "/api/dustpan/v1/namespaces/acme/runner-pools",
 			http.StatusMethodNotAllowed, errcode.ServerMethodNotAllowed,
 		},
 		{
