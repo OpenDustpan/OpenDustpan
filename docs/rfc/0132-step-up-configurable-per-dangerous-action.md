@@ -77,6 +77,10 @@ One per-action step-up configuration covers break-glass, the reset of a
 factor and the issue of an enrollment code, default on for each. The issue of
 an enrollment code is the administrator side of the reset of a factor.
 
+An administrator reset of the factors of a person also deletes the recovery
+codes of the person, removes the passkeys and ends the sessions of the
+person. The person gets new recovery codes when the person enrolls again.
+
 ## What main has (15 November 2026)
 
 - Recovery codes and enrollment codes are separate. The recovery codes of a
@@ -118,9 +122,9 @@ an enrollment code is the administrator side of the reset of a factor.
    a REST route under the principal, a stored grant (one action, named by the
    ADR), a reason, a reach check, one audit entry, the end of the sessions of
    the person, and the removal of every kind of factor (keys, TOTP, passkeys
-   and the recovery codes). At the next sign-in the person gets an enroll-only
+   and the recovery codes, as the owner decided). At the next sign-in the person gets an enroll-only
    session when the installation requires MFA. This uses `ResetFactors` and
-   the enroll-only session that exist. It needs a decision on whether the
+   the enroll-only session that exist. The owner decided that the
    recovery codes go with the reset.
 
 ## Checklist
