@@ -440,7 +440,7 @@ func insertPlacedEntry(
 		e.Hash = audit.ComputeHash(e, "")
 	}
 
-	// A nil origin writes the empty value in the six columns.
+	// A nil origin writes the empty value in the seven columns.
 	origin := e.Origin
 
 	insertErr := q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
@@ -461,6 +461,7 @@ func insertPlacedEntry(
 		AgentSession:  origin.Session(),
 		ArgsDigest:    origin.ArgsDigest(),
 		BreakGlass:    origin.BreakGlass(),
+		DelegationID:  origin.DelegationID(),
 		SecretStage:   origin.SecretStage(),
 		Tool:          origin.Tool(),
 		Kind:          string(e.Kind),
@@ -741,7 +742,7 @@ func checkScope(
 // NULL changes column reads as nil. The changes decode leniently, for
 // display: a text that does not decode reads as nil, so a list always
 // answers the entry, and only the chain check reports the changed text.
-// All six agent columns empty read as a nil Origin. A row with a partial
+// All seven agent columns empty read as a nil Origin. A row with a partial
 // set is refused: the write path validates the origin, so such a row names
 // a database that another writer changed by hand.
 func fromAuditRow(row db.AuditEntry) (audit.Entry, error) {
@@ -753,12 +754,13 @@ func fromAuditRow(row db.AuditEntry) (audit.Entry, error) {
 	}
 
 	origin, err := audit.NewOrigin(audit.OriginArgs{
-		Run:         row.AgentRun,
-		Session:     row.AgentSession,
-		Tool:        row.Tool,
-		ArgsDigest:  row.ArgsDigest,
-		BreakGlass:  row.BreakGlass,
-		SecretStage: row.SecretStage,
+		Run:          row.AgentRun,
+		Session:      row.AgentSession,
+		Tool:         row.Tool,
+		ArgsDigest:   row.ArgsDigest,
+		BreakGlass:   row.BreakGlass,
+		DelegationID: row.DelegationID,
+		SecretStage:  row.SecretStage,
 	})
 	if err != nil {
 		return audit.Entry{}, fmt.Errorf("audit entry at sequence %d: %w", row.Sequence, err)

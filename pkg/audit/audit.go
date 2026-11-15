@@ -220,52 +220,56 @@ func IsHiddenRune(r rune) bool {
 // the MCP session ID of a call of an outside agent or the run ID of a call
 // of the built-in agent, Tool names the tool of the call, ArgsDigest is the
 // SHA-256 of its arguments, BreakGlass is true for a break-glass
-// credential, and SecretStage names the closed secret stage of the call.
+// credential, SecretStage names the closed secret stage of the call, and
+// DelegationID names the delegation under which the agent acted, and is
+// empty when the step had no delegation.
 // The fields are unexported: NewOrigin builds an Origin and checks its
 // invariants, so no caller can store a partial or hostile block. An entry
 // holds at most one Origin, as a pointer, so an ordinary entry without
 // agent data stays small: nil names no agent and the hash writes no block.
 type Origin struct {
-	run         string
-	session     string
-	tool        string
-	argsDigest  string
-	breakGlass  bool
-	secretStage string
+	run          string
+	session      string
+	tool         string
+	argsDigest   string
+	breakGlass   bool
+	secretStage  string
+	delegationID string
 }
 
 // OriginArgs holds the fields of NewOrigin: the run and session that
-// identify the call, the tool, the arguments digest, the break-glass flag
-// and the secret stage.
+// identify the call, the tool, the arguments digest, the break-glass flag,
+// the secret stage and the delegation under which the agent acted.
 type OriginArgs struct {
-	Run         string
-	Session     string
-	Tool        string
-	ArgsDigest  string
-	BreakGlass  bool
-	SecretStage string
+	Run          string
+	Session      string
+	Tool         string
+	ArgsDigest   string
+	BreakGlass   bool
+	SecretStage  string
+	DelegationID string
 }
 
-// NewOrigin returns the agent origin of an entry from args. All six fields
+// NewOrigin returns the agent origin of an entry from args. All seven fields
 // empty (and BreakGlass false) answers a nil origin and a nil error: the
 // entry carries no agent data. A break-glass credential without a run or a
 // session answers an origin with only the flag set, for the entry of a
 // person who acted under break-glass. Any other origin without the run and
-// the session is partial and is refused: the tool, the digest and the stage
-// describe a call, and without its identity they name nothing. Each text
-// field holds at most MaxAgentFieldLen bytes of valid UTF-8 with no hidden
-// character, so a joined value can never mimic another field outside the
-// length-prefixed hash.
+// the session is partial and is refused: the tool, the digest, the stage
+// and the delegation describe a call, and without its identity they name
+// nothing. Each text field holds at most MaxAgentFieldLen bytes of valid
+// UTF-8 with no hidden character, so a joined value can never mimic another
+// field outside the length-prefixed hash.
 func NewOrigin(args OriginArgs) (*Origin, error) {
 	if args.Run == "" && args.Session == "" && args.Tool == "" &&
-		args.ArgsDigest == "" && !args.BreakGlass && args.SecretStage == "" {
+		args.ArgsDigest == "" && !args.BreakGlass && args.SecretStage == "" && args.DelegationID == "" {
 		var none *Origin
 
 		return none, nil
 	}
 
 	if args.Run == "" && args.Session == "" && !args.BreakGlass {
-		return nil, fmt.Errorf("%w: the tool, the arguments digest and the secret stage"+
+		return nil, fmt.Errorf("%w: the tool, the arguments digest, the secret stage and the delegation"+
 			" need the agent run or the agent session", ErrInvalidOrigin)
 	}
 
@@ -274,12 +278,13 @@ func NewOrigin(args OriginArgs) (*Origin, error) {
 	}
 
 	return &Origin{
-		run:         args.Run,
-		session:     args.Session,
-		tool:        args.Tool,
-		argsDigest:  args.ArgsDigest,
-		breakGlass:  args.BreakGlass,
-		secretStage: args.SecretStage,
+		run:          args.Run,
+		session:      args.Session,
+		tool:         args.Tool,
+		argsDigest:   args.ArgsDigest,
+		breakGlass:   args.BreakGlass,
+		secretStage:  args.SecretStage,
+		delegationID: args.DelegationID,
 	}, nil
 }
 
@@ -297,6 +302,7 @@ func checkOriginFields(args OriginArgs) error {
 		{name: "tool", value: args.Tool},
 		{name: "arguments digest", value: args.ArgsDigest},
 		{name: "secret stage", value: args.SecretStage},
+		{name: "delegation ID", value: args.DelegationID},
 	} {
 		switch {
 		case len(field.value) > MaxAgentFieldLen:
@@ -364,6 +370,16 @@ func (o *Origin) SecretStage() string {
 	}
 
 	return o.secretStage
+}
+
+// DelegationID answers the stable ID of the delegation under which the
+// agent acted, and empty when the step had no delegation.
+func (o *Origin) DelegationID() string {
+	if o == nil {
+		return ""
+	}
+
+	return o.delegationID
 }
 
 // Entry is one append-only record of an action in a namespace. Namespace and
@@ -527,6 +543,7 @@ func (e Entry) validateAgent() error {
 		{name: "tool", value: e.Origin.tool},
 		{name: "arguments digest", value: e.Origin.argsDigest},
 		{name: "secret stage", value: e.Origin.secretStage},
+		{name: "delegation ID", value: e.Origin.delegationID},
 	} {
 		switch {
 		case len(field.value) > MaxAgentFieldLen:
@@ -539,7 +556,7 @@ func (e Entry) validateAgent() error {
 	}
 
 	if e.Origin.run == "" && e.Origin.session == "" && !e.Origin.breakGlass {
-		return fmt.Errorf("%w: the tool, the arguments digest and the secret stage"+
+		return fmt.Errorf("%w: the tool, the arguments digest, the secret stage and the delegation"+
 			" need the agent run or the agent session", ErrInvalidEntry)
 	}
 
@@ -606,7 +623,7 @@ const hashLengthEnd = ':'
 const hashNoCount = '-'
 
 // agentBlockVersion names the version of the agent block in the hash. The
-// block writes this text length-prefixed, then the six fields in a fixed
+// block writes this text length-prefixed, then the seven fields in a fixed
 // order, when the entry carries agent data.
 const agentBlockVersion = "agent/1"
 
@@ -628,7 +645,8 @@ const agentBlockVersion = "agent/1"
 // it again from the stored fields. When the entry carries agent data (see
 // HasAgentBlock), the encoding appends the agent block: the length-prefixed
 // text agent/1, then agent run, agent session, tool, arguments digest,
-// break-glass as "true" or "false", and secret stage, each length-prefixed,
+// break-glass as "true" or "false", secret stage and delegation ID, each
+// length-prefixed,
 // with an empty value when it is not set. Inside the block no field is
 // optional. An entry with no agent data hashes exactly as before the block
 // existed.
@@ -695,6 +713,7 @@ func hashWithChanges(e Entry, prevHash, changesText string) string {
 		write(e.Origin.argsDigest)
 		write(strconv.FormatBool(e.Origin.breakGlass))
 		write(e.Origin.secretStage)
+		write(e.Origin.delegationID)
 	}
 
 	sum := sha256.Sum256([]byte(sb.String()))

@@ -76,6 +76,7 @@ type AuditEntry struct {
 	AgentSession  string
 	ArgsDigest    string
 	BreakGlass    int64
+	DelegationID  string
 	SecretStage   string
 	Tool          string
 	Kind          string

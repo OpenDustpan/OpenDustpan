@@ -598,12 +598,13 @@ func (s *service) entry(a Actor, req *StartRequest, j *Job) (audit.Entry, error)
 	}
 
 	origin, err := audit.NewOrigin(audit.OriginArgs{
-		Run:         agentRunOf(a.Agent, channel),
-		Session:     agentSessionOf(a.Agent, channel),
-		Tool:        "",
-		ArgsDigest:  "",
-		BreakGlass:  j.BreakGlass != nil,
-		SecretStage: "",
+		Run:          agentRunOf(a.Agent, channel),
+		Session:      agentSessionOf(a.Agent, channel),
+		Tool:         "",
+		ArgsDigest:   "",
+		BreakGlass:   j.BreakGlass != nil,
+		SecretStage:  "",
+		DelegationID: "",
 	})
 	if err != nil {
 		return audit.Entry{}, err

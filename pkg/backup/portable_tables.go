@@ -510,6 +510,7 @@ func portableSpec() []PortableTable {
 				{Name: "agent_session", Kind: KindText},
 				{Name: "args_digest", Kind: KindText},
 				{Name: "break_glass", Kind: KindBool},
+				{Name: "delegation_id", Kind: KindText},
 				{Name: "secret_stage", Kind: KindText},
 				{Name: "tool", Kind: KindText},
 				{Name: portColKind, Kind: KindText},

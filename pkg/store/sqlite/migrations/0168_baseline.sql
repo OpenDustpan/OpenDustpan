@@ -252,6 +252,7 @@ CREATE TABLE "audit_entries" (
     agent_session  TEXT    NOT NULL DEFAULT '',
     args_digest    TEXT    NOT NULL DEFAULT '',
     break_glass    INTEGER NOT NULL DEFAULT 0,
+    delegation_id  TEXT    NOT NULL DEFAULT '',
     secret_stage   TEXT    NOT NULL DEFAULT '',
     tool           TEXT    NOT NULL DEFAULT '',
     kind           TEXT    NOT NULL,

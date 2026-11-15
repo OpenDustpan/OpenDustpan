@@ -2,6 +2,7 @@ package audit_test
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -11,12 +12,13 @@ import (
 // fullArgs answers the origin arguments of agentEntry.
 func fullArgs() audit.OriginArgs {
 	return audit.OriginArgs{
-		Run:         "run-1",
-		Session:     "run-1",
-		Tool:        "read",
-		ArgsDigest:  "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-		BreakGlass:  false,
-		SecretStage: "open",
+		Run:          "run-1",
+		Session:      "run-1",
+		Tool:         "read",
+		ArgsDigest:   "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+		BreakGlass:   false,
+		SecretStage:  "open",
+		DelegationID: "dlg-1",
 	}
 }
 
@@ -46,7 +48,7 @@ func agentEntry(t *testing.T) audit.Entry {
 // TestComputeHashAgentBlock proves that an entry with the block hashes
 // differently from the same entry without it, that each agent field moves
 // the hash, that swapping two fields moves it, and that a block with one
-// field set still holds all six fields.
+// field set still holds all seven fields.
 func TestComputeHashAgentBlock(t *testing.T) {
 	t.Parallel()
 
@@ -81,6 +83,7 @@ func TestComputeHashAgentBlock(t *testing.T) {
 		"tool":             set(func(args *audit.OriginArgs) { args.Tool = "other" }),
 		"arguments digest": set(func(args *audit.OriginArgs) { args.ArgsDigest = "other" }),
 		"secret stage":     set(func(args *audit.OriginArgs) { args.SecretStage = "other" }),
+		"delegation ID":    set(func(args *audit.OriginArgs) { args.DelegationID = "other" }),
 	}
 
 	for name, origin := range setters {
@@ -144,12 +147,13 @@ func TestComputeHashDiffersForEachAgentField(t *testing.T) {
 
 	digest := glass.ArgsDigest
 	cleared := []audit.OriginArgs{
-		{Run: "", Session: "run-1", Tool: "read", ArgsDigest: digest, BreakGlass: true, SecretStage: "open"},
-		{Run: "run-1", Session: "", Tool: "read", ArgsDigest: digest, BreakGlass: true, SecretStage: "open"},
-		{Run: "run-1", Session: "run-1", Tool: "", ArgsDigest: digest, BreakGlass: true, SecretStage: "open"},
-		{Run: "run-1", Session: "run-1", Tool: "read", ArgsDigest: "", BreakGlass: true, SecretStage: "open"},
-		{Run: "run-1", Session: "run-1", Tool: "read", ArgsDigest: digest, BreakGlass: false, SecretStage: "open"},
-		{Run: "run-1", Session: "run-1", Tool: "read", ArgsDigest: digest, BreakGlass: true, SecretStage: ""},
+		{Run: "", Session: "run-1", Tool: "read", ArgsDigest: digest, BreakGlass: true, SecretStage: "open", DelegationID: "dlg-1"},
+		{Run: "run-1", Session: "", Tool: "read", ArgsDigest: digest, BreakGlass: true, SecretStage: "open", DelegationID: "dlg-1"},
+		{Run: "run-1", Session: "run-1", Tool: "", ArgsDigest: digest, BreakGlass: true, SecretStage: "open", DelegationID: "dlg-1"},
+		{Run: "run-1", Session: "run-1", Tool: "read", ArgsDigest: "", BreakGlass: true, SecretStage: "open", DelegationID: "dlg-1"},
+		{Run: "run-1", Session: "run-1", Tool: "read", ArgsDigest: digest, BreakGlass: false, SecretStage: "open", DelegationID: "dlg-1"},
+		{Run: "run-1", Session: "run-1", Tool: "read", ArgsDigest: digest, BreakGlass: true, SecretStage: "", DelegationID: "dlg-1"},
+		{Run: "run-1", Session: "run-1", Tool: "read", ArgsDigest: digest, BreakGlass: true, SecretStage: "open", DelegationID: ""},
 	}
 
 	for i, args := range cleared {
@@ -228,6 +232,18 @@ func TestNewOriginRefusesHostileFields(t *testing.T) {
 			},
 		},
 		{
+			name: "control character in the delegation ID",
+			args: audit.OriginArgs{
+				Run:          "run-1",
+				Session:      "run-1",
+				Tool:         "",
+				ArgsDigest:   "",
+				BreakGlass:   false,
+				SecretStage:  "",
+				DelegationID: "dl\x00g-1",
+			},
+		},
+		{
 			name: "invalid UTF-8 in the agent run",
 			args: audit.OriginArgs{
 				Run:         "run-\xff-1",
@@ -267,6 +283,7 @@ func TestNewOriginRefusesOversizedField(t *testing.T) {
 		{name: "tool", change: func(args *audit.OriginArgs, long string) { args.Tool = long }},
 		{name: "arguments digest", change: func(args *audit.OriginArgs, long string) { args.ArgsDigest = long }},
 		{name: "secret stage", change: func(args *audit.OriginArgs, long string) { args.SecretStage = long }},
+		{name: "delegation ID", change: func(args *audit.OriginArgs, long string) { args.DelegationID = long }},
 	}
 
 	base := audit.OriginArgs{
@@ -299,7 +316,7 @@ func TestNewOriginRefusesOversizedField(t *testing.T) {
 
 // TestNewOriginRefusesPartialOrigin proves that agent details without the
 // run or the session that identifies the call are refused: the tool, the
-// arguments digest and the secret stage alone name no call.
+// arguments digest, the secret stage and the delegation alone name no call.
 func TestNewOriginRefusesPartialOrigin(t *testing.T) {
 	t.Parallel()
 
@@ -307,9 +324,10 @@ func TestNewOriginRefusesPartialOrigin(t *testing.T) {
 		name string
 		args audit.OriginArgs
 	}{
-		{name: "tool without identity", args: audit.OriginArgs{Run: "", Session: "", Tool: "read", ArgsDigest: "", BreakGlass: false, SecretStage: ""}},
-		{name: "arguments digest without identity", args: audit.OriginArgs{Run: "", Session: "", Tool: "", ArgsDigest: "abcd", BreakGlass: false, SecretStage: ""}},
-		{name: "secret stage without identity", args: audit.OriginArgs{Run: "", Session: "", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "open"}},
+		{name: "tool without identity", args: audit.OriginArgs{Run: "", Session: "", Tool: "read", ArgsDigest: "", BreakGlass: false, SecretStage: "", DelegationID: ""}},
+		{name: "arguments digest without identity", args: audit.OriginArgs{Run: "", Session: "", Tool: "", ArgsDigest: "abcd", BreakGlass: false, SecretStage: "", DelegationID: ""}},
+		{name: "secret stage without identity", args: audit.OriginArgs{Run: "", Session: "", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "open", DelegationID: ""}},
+		{name: "delegation without identity", args: audit.OriginArgs{Run: "", Session: "", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "", DelegationID: "dlg-1"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -338,10 +356,54 @@ func TestOriginNilIsNoBlock(t *testing.T) {
 	}
 
 	origin, err := audit.NewOrigin(audit.OriginArgs{
-		Run: "", Session: "", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "",
+		Run: "", Session: "", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "", DelegationID: "",
 	})
 	if err != nil || origin != nil {
-		t.Fatalf("new origin of six empty fields = %+v, %v, want (nil, nil)", origin, err)
+		t.Fatalf("new origin of seven empty fields = %+v, %v, want (nil, nil)", origin, err)
+	}
+}
+
+// TestEveryOriginFieldIsHashed proves that every field of audit.Origin is
+// covered by the hash: setting each field of the struct alone (by
+// reflection over the struct) moves the hash of the entry. A field that a
+// later change adds but ComputeHash does not cover fails this test.
+func TestEveryOriginFieldIsHashed(t *testing.T) {
+	t.Parallel()
+
+	base := reflect.TypeOf(audit.Origin{})
+	if base.Kind() != reflect.Struct {
+		t.Fatalf("audit.Origin is %s, want a struct", base.Kind())
+	}
+
+	plain := testEntry()
+	plainHash := audit.ComputeHash(plain, "")
+
+	for i := range base.NumField() {
+		field := base.Field(i)
+
+		set := map[string]func(*audit.OriginArgs){
+			"run":          func(args *audit.OriginArgs) { args.Run = "run-9" },
+			"session":      func(args *audit.OriginArgs) { args.Session = "ses-9" },
+			"tool":         func(args *audit.OriginArgs) { args.Tool = "exec" },
+			"argsDigest":   func(args *audit.OriginArgs) { args.ArgsDigest = "digest-9" },
+			"breakGlass":   func(args *audit.OriginArgs) { args.BreakGlass = true },
+			"secretStage":  func(args *audit.OriginArgs) { args.SecretStage = "closed" },
+			"delegationID": func(args *audit.OriginArgs) { args.DelegationID = "dlg-9" },
+		}[field.Name]
+		if set == nil {
+			t.Fatalf("Origin holds a field %q with no setter: cover it in the hash", field.Name)
+		}
+
+		args := audit.OriginArgs{Run: "run-1", Session: "run-1"}
+		set(&args)
+
+		e := testEntry()
+		e.Channel = audit.ChannelAgent
+		e.Origin = mustOrigin(t, args)
+
+		if got := audit.ComputeHash(e, ""); got == plainHash {
+			t.Errorf("hash is unchanged when only the field %q is set", field.Name)
+		}
 	}
 }
 

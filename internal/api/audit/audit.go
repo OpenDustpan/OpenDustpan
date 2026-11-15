@@ -175,7 +175,8 @@ type auditEntry struct {
 // auditAgentBlock is the wire shape of the agent data of an entry: the run
 // of a call of the built-in agent, the MCP session ID of a call of an
 // outside agent or the run ID, the tool of the call, the digest of its
-// arguments, the break-glass flag and the closed secret stage. A job entry
+// arguments, the break-glass flag, the closed secret stage and the
+// delegation under which the agent acted. A job entry
 // of an agent leaves the tool, the digest and the stage empty.
 //
 // Contract: never remove or rename these fields. The console reads only this
@@ -188,6 +189,7 @@ type auditAgentBlock struct {
 	ArgsDigest   string `json:"argsDigest"`
 	BreakGlass   bool   `json:"breakGlass"`
 	SecretStage  string `json:"secretStage"`
+	DelegationID string `json:"delegationID"`
 }
 
 // toAuditEntry maps one domain entry to its wire shape.
@@ -228,6 +230,7 @@ func toAuditEntry(e audit.Entry) auditEntry {
 			ArgsDigest:   o.ArgsDigest(),
 			BreakGlass:   o.BreakGlass(),
 			SecretStage:  o.SecretStage(),
+			DelegationID: o.DelegationID(),
 		}
 	}
 

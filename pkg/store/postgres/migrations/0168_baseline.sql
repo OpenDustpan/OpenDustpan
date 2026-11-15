@@ -92,6 +92,7 @@ CREATE TABLE audit_entries (
     agent_session text DEFAULT ''::text NOT NULL,
     args_digest text DEFAULT ''::text NOT NULL,
     break_glass boolean DEFAULT false NOT NULL,
+    delegation_id text DEFAULT ''::text NOT NULL,
     secret_stage text DEFAULT ''::text NOT NULL,
     tool text DEFAULT ''::text NOT NULL,
     kind text NOT NULL,
