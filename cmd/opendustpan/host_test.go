@@ -185,8 +185,8 @@ func checkHostExpiry(t *testing.T, creds hostCredentials) {
 		t.Fatalf("person = %q, want alice", creds.person)
 	}
 
-	if got := time.Until(creds.expires); got <= 23*time.Hour || got > tempadmin.Lifetime {
-		t.Fatalf("expiry is in %s, want about %s", got, tempadmin.Lifetime)
+	if got := time.Until(creds.expires); got <= 59*time.Minute || got > tempadmin.DefaultSessionLimit {
+		t.Fatalf("expiry is in %s, want about %s", got, tempadmin.DefaultSessionLimit)
 	}
 }
 

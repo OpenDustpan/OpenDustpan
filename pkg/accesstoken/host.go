@@ -95,6 +95,12 @@ type HostInput struct {
 	Subject   string
 	Reason    string
 	CreatedBy string
+
+	// SessionLimit is the session limit that the host read from the stored
+	// setting. The record ends after the shorter of it and the token policy
+	// maximum. Zero means that the host read none: the limit is then
+	// tempadmin.Lifetime.
+	SessionLimit time.Duration
 }
 
 // HostResult is the result of a recovery: the new person, the ID of its
@@ -218,13 +224,23 @@ func hostRefusal(why string) error {
 		identity.ErrDenied, ErrNotOwnToken, why)
 }
 
+// hostLimit returns the session limit of a recovery. It never exceeds
+// tempadmin.Lifetime, the longest time that a record may last.
+func hostLimit(in HostInput) time.Duration {
+	if in.SessionLimit <= 0 {
+		return tempadmin.Lifetime
+	}
+
+	return min(in.SessionLimit, tempadmin.Lifetime)
+}
+
 // hostRecord returns the temporary administrator record of the principal id,
-// made at the time at. The record ends with the token policy maximum when
-// that is below tempadmin.Lifetime.
+// made at the time at. The record ends with the session limit of the input,
+// or with the token policy maximum when that is shorter.
 func hostRecord(in HostInput, id string, at time.Time, lifetime time.Duration) tempadmin.TempAdmin {
 	return tempadmin.TempAdmin{
 		CreatedAt:      at,
-		ExpiresAt:      at.Add(min(tempadmin.Lifetime, lifetime)),
+		ExpiresAt:      at.Add(min(hostLimit(in), lifetime)),
 		EndedAt:        time.Time{},
 		ReviewOpenedAt: time.Time{},
 		PrincipalID:    id,

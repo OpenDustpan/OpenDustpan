@@ -434,9 +434,8 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 		return hostMade{}, fmt.Errorf("host token issuer: %w", err)
 	}
 
-	// The check fails closed on a stored limit outside the range. The record
-	// does not take the limit until accesstoken.HostInput carries it.
-	_, err = tempadmin.ResolveSessionLimit(ctx, tempadmin.SessionLimitSource{
+	// The check fails closed on a stored limit outside the range.
+	limit, err := tempadmin.ResolveSessionLimit(ctx, tempadmin.SessionLimitSource{
 		Settings: st.builtin().SettingStore(), Audit: st, Entry: hostEntry(""), At: time.Now(),
 	})
 	if err != nil {
@@ -445,6 +444,7 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 
 	got, err := issuer.Recover(ctx, hostEntry(""), accesstoken.HostInput{
 		Subject: in.person, Reason: in.reason, CreatedBy: hostOperator(),
+		SessionLimit: limit,
 	})
 	if errors.Is(err, principal.ErrAlreadyExists) {
 		return hostMade{}, personExists(in.person)

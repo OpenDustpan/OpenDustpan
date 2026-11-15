@@ -227,7 +227,7 @@ func TestHostIssuerRecover(t *testing.T) {
 	ctx := t.Context()
 
 	got, err := f.issuer.Recover(ctx, hostAuditEntry(), accesstoken.HostInput{
-		Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator",
+		Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator", SessionLimit: 0,
 	})
 	if err != nil {
 		t.Fatalf("recover: %v", err)
@@ -247,7 +247,7 @@ func TestHostIssuerRecover(t *testing.T) {
 	}
 
 	_, err = f.issuer.Recover(ctx, hostAuditEntry(), accesstoken.HostInput{
-		Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator",
+		Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator", SessionLimit: 0,
 	})
 	if !errors.Is(err, principal.ErrAlreadyExists) {
 		t.Fatalf("second recovery of carol: err = %v, want principal.ErrAlreadyExists", err)
