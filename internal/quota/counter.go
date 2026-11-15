@@ -85,7 +85,8 @@ func (r Reservation) Validate() error {
 // of a requests limit.
 type Tx interface {
 	// Reserve checks each of checks with r counted, with the usage at r.At,
-	// and stores r only when each one passes. A reservation with the ID of an
+	// and stores r only when each one passes. Each key of r must be the key
+	// of one of checks, else ErrInvalid. A reservation with the ID of an
 	// open or ended one and the same keys returns the stored one, with no
 	// change, so a retry is safe. It returns an *ExceededError that matches
 	// ErrExceeded with each check that fails, ErrConflict for an ID that

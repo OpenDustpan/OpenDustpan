@@ -181,6 +181,80 @@ func TestQuotaBackupRestore(t *testing.T) {
 	}
 }
 
+// TestQuotaBackupRestoresReservationKeys proves that a backup holds each
+// reservation before its keys: each key row needs its reservation row. An
+// open reservation with two keys restores, and the usage after the restore
+// equals the usage before the backup.
+func TestQuotaBackupRestoresReservationKeys(t *testing.T) {
+	t.Parallel()
+
+	target, err := fs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open backup target: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	})
+
+	source := newQuotaBackupRig(t, target)
+	fence := quotaFence(t, source.store.Store, "payments")
+	counter := source.store.QuotaCounter()
+	at := quotaTime()
+
+	all := quota.Key{Namespace: "payments", Blueprint: "postgres", Kind: quota.KindUnits, Scope: "namespace"}
+	mine := quota.Key{Namespace: "payments", Blueprint: "postgres", Kind: quota.KindUnits, Scope: "requester:alice"}
+	reserved := quota.Reservation{
+		ID: "req-1/1", Namespace: "payments", State: quota.ReservationOpen,
+		Keys: []quota.Key{all, mine}, At: at, EndsAt: at.Add(24 * time.Hour),
+	}
+
+	err = counter.InTx(t.Context(), fence, func(tx quota.Tx) error {
+		_, reserveErr := tx.Reserve(t.Context(), reserved,
+			[]quota.Check{{Key: all, Window: 0, Max: 10}, {Key: mine, Window: 0, Max: 10}})
+
+		return reserveErr
+	})
+	if err != nil {
+		t.Fatalf("Reserve() = %v", err)
+	}
+
+	checks := []quota.Check{{Key: all, Window: 0, Max: 0}, {Key: mine, Window: 0, Max: 0}}
+	want := []quota.Usage{
+		{Key: all, Settled: 0, Reserved: 1, Requests: 0},
+		{Key: mine, Settled: 0, Reserved: 1, Requests: 0},
+	}
+	before := quotaUsages(t, source.store.Store, checks, at)
+	if !slices.Equal(want, before) {
+		t.Fatalf("Usage before the backup = %+v, want %+v", before, want)
+	}
+
+	backupID := backup.ID(ident.NewID("bkp-"))
+	if _, err = source.backups.Run(t.Context(), backupID); err != nil {
+		t.Fatalf("run backup: %v", err)
+	}
+
+	dest := newQuotaBackupRig(t, target)
+	restoreID := backup.RestoreID(ident.NewID("rst-"))
+	req := backup.RestoreRequest{
+		BackupID: backupID, PreBackupID: "", CheckOnly: false, Force: false, RequestedBy: "tester",
+		KeepAccessTables: false,
+	}
+
+	if err = dest.restores.Start(t.Context(), restoreID, req); err != nil {
+		t.Fatalf("start restore: %v", err)
+	}
+
+	waitQuotaRestore(t, dest.restores, restoreID)
+
+	after := quotaUsages(t, dest.store.Store, checks, at)
+	if !slices.Equal(before, after) {
+		t.Fatalf("Usage after the restore = %+v, want %+v", after, before)
+	}
+}
+
 // quotaRestoreRuns bounds the runs of the restore operation in
 // waitQuotaRestore. Each run takes one step, and a restore has fewer steps.
 const quotaRestoreRuns = 100

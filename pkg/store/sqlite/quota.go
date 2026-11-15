@@ -159,6 +159,12 @@ func (t *quotaTx) Reserve(
 		return quota.Reservation{}, err
 	}
 
+	// Defense in depth: the caller builds the checks from the limits, and this
+	// check stays so that a caller cannot count a key that no limit checked.
+	if err := checkQuotaReservationKeys(r, checks); err != nil {
+		return quota.Reservation{}, err
+	}
+
 	have, err := getQuotaReservation(ctx, t.q, r.Namespace, r.ID)
 	switch {
 	case err == nil:
@@ -448,6 +454,19 @@ func sameQuotaKeys(a, b []quota.Key) bool {
 // compareQuotaKeys orders two keys of one namespace by their parts.
 func compareQuotaKeys(a, b quota.Key) int {
 	return strings.Compare(a.String(), b.String())
+}
+
+// checkQuotaReservationKeys checks that each key of r is the key of one of
+// checks, so a caller cannot count a key that no limit checked. It returns an
+// error that wraps quota.ErrInvalid for a key without its check.
+func checkQuotaReservationKeys(r quota.Reservation, checks []quota.Check) error {
+	for _, k := range r.Keys {
+		if !slices.ContainsFunc(checks, func(c quota.Check) bool { return c.Key == k }) {
+			return fmt.Errorf("%w: no check covers key %s of reservation %s", quota.ErrInvalid, k, r.ID)
+		}
+	}
+
+	return nil
 }
 
 // checkQuotaFenceKeys checks that the key of each check counts in the
