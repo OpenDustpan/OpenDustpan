@@ -80,7 +80,7 @@ func testPlacementRuleRefusesForeignCollection(t *testing.T, s PlacementStore) {
 	}
 	// A name that equals an ID must not turn that ID into a local reference.
 	ensureCollection(t, s, ns, foreign.ID)
-	stored := mustAdd(t, s, ns, ruleSpec{"web", "*", collA}, 0)
+	stored := mustAdd(t, s, ns, ruleSpec{unitName, "*", collA}, 0)
 	cases := []struct {
 		name string
 		run  func(collection.Rule) error
@@ -106,7 +106,7 @@ func testPlacementRuleRefusesForeignCollection(t *testing.T, s PlacementStore) {
 	if err != nil || got != stored {
 		t.Errorf("a refused write changed the rule: %+v, %v", got, err)
 	}
-	wantProjects(t, s, ns.Name, "web")
+	wantProjects(t, s, ns.Name, unitName)
 	wantProjects(t, s, other.Name)
 }
 
@@ -114,17 +114,17 @@ func testPlacementRuleOfRemovedCollectionPlacesNothing(t *testing.T, s Placement
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
-	mustAdd(t, s, ns, ruleSpec{"web", "*", collA}, 0)
+	mustAdd(t, s, ns, ruleSpec{unitName, "*", collA}, 0)
 	ref := collection.Ref{Namespace: ns.Name, Name: mustName(t, collA)}
 	old, err := s.GetCollection(t.Context(), ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := deleteColl(t, s, ref, ns.Fence()); err != nil {
+	if err = deleteColl(t, s, ref, ns.Fence()); err != nil {
 		t.Fatal(err)
 	}
 	replacement := newCollection(t, ns.Name, collA)
-	if err := createColl(t, s, replacement, ns.Fence()); err != nil {
+	if err = createColl(t, s, replacement, ns.Fence()); err != nil {
 		t.Fatal(err)
 	}
 	if replacement.ID == old.ID {
@@ -134,7 +134,7 @@ func testPlacementRuleOfRemovedCollectionPlacesNothing(t *testing.T, s Placement
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, placeErr := svc.Place(t.Context(), ns.Name, collection.ToolPulumi, "web", "new")
+	_, placeErr := svc.Place(t.Context(), ns.Name, collection.ToolPulumi, unitName, "new")
 	if !errors.Is(placeErr, collection.ErrNoPlacement) {
 		t.Errorf("placement after delete and create: got %v, want ErrNoPlacement", placeErr)
 	}
@@ -399,6 +399,8 @@ func testRuleCollectionCase(t *testing.T, s PlacementStore) {
 func testRuleInvalid(t *testing.T, s PlacementStore) {
 	t.Helper()
 
+	const oversizedCollectionIDSuffix = 65
+
 	ns := newNamespace(t, s, "acme")
 	ensureCollection(t, s, ns, collPayments)
 	existing := mustAdd(t, s, ns, ruleSpec{"existing", "*", collPayments}, 0)
@@ -427,7 +429,7 @@ func testRuleInvalid(t *testing.T, s PlacementStore) {
 		{"line break in ID", func(r *collection.Rule) { r.CollectionID = "col-a\nb" }, collection.ErrInvalidName},
 		{"slash in ID", func(r *collection.Rule) { r.CollectionID = "col-a/b" }, collection.ErrInvalidName},
 		{"long ID", func(r *collection.Rule) {
-			r.CollectionID = "col-" + strings.Repeat("a", 65)
+			r.CollectionID = "col-" + strings.Repeat("a", oversizedCollectionIDSuffix)
 		}, collection.ErrInvalidName},
 	}
 

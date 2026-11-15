@@ -106,8 +106,10 @@ func seedTofuPlacement(t *testing.T, f fixture) {
 	mustDo(t, f, call{method: http.MethodPost, path: base + "/collections", body: `{"name":"default"}`},
 		http.StatusCreated)
 	id := placementCollectionID(t, f, "acme", "default")
-	mustDo(t, f, call{method: http.MethodPost, path: base + "/placement-rules",
-		body: `{"tool":"opentofu","project":"*","stack":"*","collectionId":"` + id + `"}`}, http.StatusCreated)
+	mustDo(t, f, call{
+		method: http.MethodPost, path: base + "/placement-rules",
+		body: `{"tool":"opentofu","project":"*","stack":"*","collectionID":"` + id + `"}`,
+	}, http.StatusCreated)
 }
 
 // TestFirstTofuLockWithNoRuleIsRefused proves that a first LOCK that no

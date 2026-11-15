@@ -4193,7 +4193,7 @@
           "collection": {
             "type": "string"
           },
-          "collectionId": {
+          "collectionID": {
             "type": "string"
           },
           "createdAt": {
@@ -4225,7 +4225,7 @@
         },
         "required": [
           "collection",
-          "collectionId",
+          "collectionID",
           "createdAt",
           "createdBy",
           "id",
@@ -4239,7 +4239,7 @@
       },
       "PlacementRuleRequest": {
         "properties": {
-          "collectionId": {
+          "collectionID": {
             "type": "string"
           },
           "position": {
@@ -4257,7 +4257,7 @@
           }
         },
         "required": [
-          "collectionId",
+          "collectionID",
           "project",
           "stack",
           "tool"

@@ -1,12 +1,15 @@
 package errcode
 
-// The codes of the area. A code is never removed and never changes its
-// meaning.
+// Collection ID input errors. A code is never removed and never changes its meaning.
 const (
 	// PlacementCollectionIDRequired means that a placement write has no collection ID.
 	PlacementCollectionIDRequired = "placement.collection-id-required"
 	// PlacementInvalidCollectionID means that the collection ID has an invalid form.
 	PlacementInvalidCollectionID = "placement.invalid-collection-id"
+)
+
+// Placement rule errors.
+const (
 	// PlacementConflict means that a placement rule is hidden by an earlier rule, or hides a later rule.
 	PlacementConflict = "placement.conflict"
 	// PlacementInvalidPattern means that a pattern of a placement rule is not valid.

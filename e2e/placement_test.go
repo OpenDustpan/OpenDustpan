@@ -27,7 +27,7 @@ type placementRule struct {
 	ID           string `json:"id"`
 	Position     int    `json:"position"`
 	Stack        string `json:"stack"`
-	CollectionID string `json:"collectionId"`
+	CollectionID string `json:"collectionID"`
 	Collection   string `json:"collection"`
 }
 
@@ -143,13 +143,13 @@ func placementRulesMakeAndRead(ctx context.Context, t *testing.T, env *e2e.Env) 
 
 	narrow := placementCall(ctx, t, env, principalStep{
 		http.MethodPost, placementRules,
-		placementRuleBody(ctx, t, env, "payments", "prod*", "payments-prod", 0),
+		placementRuleBody(ctx, t, env, placementRuleInput{"payments", "prod*", "payments-prod", 0}),
 		http.StatusCreated,
 	}, `"position":1`, `"id":"plr-`)
 
 	wide := placementCall(ctx, t, env, principalStep{
 		http.MethodPost, placementRules,
-		placementRuleBody(ctx, t, env, "payments", "*", "payments", 0),
+		placementRuleBody(ctx, t, env, placementRuleInput{"payments", "*", "payments", 0}),
 		http.StatusCreated,
 	}, `"position":2`)
 
@@ -182,19 +182,19 @@ func placementRulesRefusals(ctx context.Context, t *testing.T, env *e2e.Env) {
 	// The rule wide hides a later rule with the patterns payments and prod*.
 	placementCall(ctx, t, env, principalStep{
 		http.MethodPost, placementRules,
-		placementRuleBody(ctx, t, env, "payments", "prod*", "payments", 0),
+		placementRuleBody(ctx, t, env, placementRuleInput{"payments", "prod*", "payments", 0}),
 		http.StatusConflict,
 	}, "placement.conflict")
 
 	placementCall(ctx, t, env, principalStep{
 		http.MethodPost, placementRules,
-		placementRuleBody(ctx, t, env, "payments", "prod?", "payments", 0),
+		placementRuleBody(ctx, t, env, placementRuleInput{"payments", "prod?", "payments", 0}),
 		http.StatusBadRequest,
 	}, "placement.invalid-pattern")
 
 	placementCall(ctx, t, env, principalStep{
 		http.MethodPost, placementRules,
-		placementRuleBody(ctx, t, env, "payments", "dev", "payments", 9),
+		placementRuleBody(ctx, t, env, placementRuleInput{"payments", "dev", "payments", 9}),
 		http.StatusBadRequest,
 	}, "placement.invalid-position")
 
@@ -202,7 +202,7 @@ func placementRulesRefusals(ctx context.Context, t *testing.T, env *e2e.Env) {
 	// stores nothing.
 	placementCall(ctx, t, env, principalStep{
 		http.MethodPut, placementRules + "/plr-missing",
-		placementRuleBody(ctx, t, env, "payments", "dev", "payments", 0),
+		placementRuleBody(ctx, t, env, placementRuleInput{"payments", "dev", "payments", 0}),
 		http.StatusNotFound,
 	}, "placement.rule-not-found")
 
@@ -228,14 +228,14 @@ func placementRulesMoveAndDelete(ctx context.Context, t *testing.T, env *e2e.Env
 	// A change without a position keeps the place of the rule.
 	placementCall(ctx, t, env, principalStep{
 		http.MethodPut, placementRules + "/" + narrow,
-		placementRuleBody(ctx, t, env, "payments", "prod-eu*", "payments-prod", 0),
+		placementRuleBody(ctx, t, env, placementRuleInput{"payments", "prod-eu*", "payments-prod", 0}),
 		http.StatusOK,
 	}, `"stack":"prod-eu*"`, `"position":1`)
 
 	// Moved to the front, the rule payments and * hides the rule that follows it.
 	placementCall(ctx, t, env, principalStep{
 		http.MethodPut, placementRules + "/" + wide,
-		placementRuleBody(ctx, t, env, "payments", "*", "payments", 1),
+		placementRuleBody(ctx, t, env, placementRuleInput{"payments", "*", "payments", 1}),
 		http.StatusConflict,
 	}, "placement.conflict")
 
@@ -243,13 +243,13 @@ func placementRulesMoveAndDelete(ctx context.Context, t *testing.T, env *e2e.Env
 	// a position moves it to the front, and the list shows the new order.
 	other := placementRuleOf(t, placementCall(ctx, t, env, principalStep{
 		http.MethodPost, placementRules,
-		placementRuleBody(ctx, t, env, "billing", "*", "payments", 0),
+		placementRuleBody(ctx, t, env, placementRuleInput{"billing", "*", "payments", 0}),
 		http.StatusCreated,
 	}, `"position":3`))
 
 	moved := placementCall(ctx, t, env, principalStep{
 		http.MethodPut, placementRules + "/" + other.ID,
-		placementRuleBody(ctx, t, env, "billing", "*", "payments", 1),
+		placementRuleBody(ctx, t, env, placementRuleInput{"billing", "*", "payments", 1}),
 		http.StatusOK,
 	}, `"position":1`)
 	if got := placementRuleOf(t, moved); got.ID != other.ID {
@@ -291,7 +291,7 @@ func placementRulesDenied(ctx context.Context, t *testing.T, env *e2e.Env) {
 	// The administrator makes the rule that the maintainer tries to change.
 	seed := placementCall(ctx, t, env, principalStep{
 		http.MethodPost, placementRules,
-		placementRuleBody(ctx, t, env, "payments", "*", "payments", 0),
+		placementRuleBody(ctx, t, env, placementRuleInput{"payments", "*", "payments", 0}),
 		http.StatusCreated,
 	}, `"position":1`)
 	seedID := placementRuleOf(t, seed).ID
@@ -316,7 +316,7 @@ func placementRulesDenied(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Fatalf("maintainer reads the rules = %d, %v (%s); want 200", status, err, body)
 	}
 
-	denied := placementRuleBody(ctx, t, env, "payments", "dev", "payments", 0)
+	denied := placementRuleBody(ctx, t, env, placementRuleInput{"payments", "dev", "payments", 0})
 
 	for _, s := range []principalStep{
 		{method: http.MethodPost, path: placementRules, body: denied, want: http.StatusForbidden},
@@ -377,7 +377,7 @@ func placementRulesCustomRole(ctx context.Context, t *testing.T, env *e2e.Env) {
 	token := env.PersonalToken(ctx, t, custom.ID, "placement-rules-only-check")
 
 	project := e2e.Project
-	rule := placementRuleBody(ctx, t, env, project, "*", "payments", 0)
+	rule := placementRuleBody(ctx, t, env, placementRuleInput{project, "*", "payments", 0})
 
 	status, body, err := env.ServerAPIStatusAs(ctx, token.Secret, http.MethodPost, placementRules, rule)
 	if err != nil || status != http.StatusCreated {
@@ -462,13 +462,16 @@ func placementCollectionID(ctx context.Context, t *testing.T, env *e2e.Env, ns, 
 	return c.ID
 }
 
-func placementRuleBody(
-	ctx context.Context, t *testing.T, env *e2e.Env, project, stack, name string, position int,
-) string {
+type placementRuleInput struct {
+	project, stack, collection string
+	position                   int
+}
+
+func placementRuleBody(ctx context.Context, t *testing.T, env *e2e.Env, in placementRuleInput) string {
 	t.Helper()
-	id := placementCollectionID(ctx, t, env, placementNamespace, name)
+	id := placementCollectionID(ctx, t, env, placementNamespace, in.collection)
 	body, err := json.Marshal(map[string]any{
-		"tool": "pulumi", "project": project, "stack": stack, "collectionId": id, "position": position,
+		"tool": "pulumi", "project": in.project, "stack": in.stack, "collectionID": id, "position": in.position,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -587,7 +590,7 @@ func placementCollectionOf(ctx context.Context, t *testing.T, env *e2e.Env, stac
 }
 
 // placementPulumiPlaces makes collections, reads their IDs, and creates rules
-// with collectionId. It runs "pulumi stack init" for each rule and checks the
+// with collectionID. It runs "pulumi stack init" for each rule and checks the
 // collection of each new stack.
 func placementPulumiPlaces(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
@@ -595,8 +598,8 @@ func placementPulumiPlaces(ctx context.Context, t *testing.T, env *e2e.Env) {
 	placementSetup(ctx, t, env, "payments", "payments-prod")
 
 	for _, rule := range []string{
-		placementRuleBody(ctx, t, env, e2e.Project, "prod*", "payments-prod", 0),
-		placementRuleBody(ctx, t, env, e2e.Project, "*", "payments", 0),
+		placementRuleBody(ctx, t, env, placementRuleInput{e2e.Project, "prod*", "payments-prod", 0}),
+		placementRuleBody(ctx, t, env, placementRuleInput{e2e.Project, "*", "payments", 0}),
 	} {
 		placementCall(ctx, t, env, principalStep{http.MethodPost, placementRules, rule, http.StatusCreated})
 	}
@@ -627,7 +630,7 @@ func placementPulumiRefused(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	placementCall(ctx, t, env, principalStep{
 		http.MethodPost, placementRules,
-		placementRuleBody(ctx, t, env, "another-project", "*", "payments", 0),
+		placementRuleBody(ctx, t, env, placementRuleInput{"another-project", "*", "payments", 0}),
 		http.StatusCreated,
 	})
 

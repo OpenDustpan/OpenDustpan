@@ -222,7 +222,7 @@ func TestPlacementRuleUnknownCollectionIsAudited(t *testing.T) {
 			}
 			code, body := placementCall(t, h, method, target, ruleBody("web", "*", "missing"))
 			expectError(t, code, body, http.StatusNotFound, errcode.CollectionNotFound)
-			list, err := store.denials.List(t.Context(), "acme", audit.Page{})
+			list, err := store.denials.List(t.Context(), "acme", audit.Page{Number: 0, Size: 0})
 			if err != nil || len(list.Entries) != 1 {
 				t.Fatalf("refusal audit has %d entries, %v, want 1", len(list.Entries), err)
 			}
@@ -278,26 +278,32 @@ func TestPlacementRuleRefusesMalformedID(t *testing.T) {
 			t.Parallel()
 
 			for _, method := range []string{http.MethodPost, http.MethodPut} {
-				h, store := newPlacementRouteHandler(t, selectiveAuthorizer{deny: nil})
-				target := placementBase
-				if method == http.MethodPut {
-					target += "/plr-existing"
-				}
-
-				raw, err := json.Marshal(map[string]any{
-					"tool": "pulumi", "project": "web", "stack": "*", "collectionId": tc.id,
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				code, body := placementCall(t, h, method, target, string(raw))
-				expectError(t, code, body, http.StatusBadRequest, "placement.invalid-collection-id")
-				if len(store.rules) != 0 || len(store.entries) != 0 {
-					t.Fatal("a malformed ID wrote a rule or an audit change")
-				}
+				checkMalformedPlacementID(t, method, tc.id)
 			}
 		})
+	}
+}
+
+func checkMalformedPlacementID(t *testing.T, method, id string) {
+	t.Helper()
+
+	h, store := newPlacementRouteHandler(t, selectiveAuthorizer{deny: nil})
+	target := placementBase
+	if method == http.MethodPut {
+		target += "/plr-existing"
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		"tool": "pulumi", "project": "web", "stack": "*", "collectionID": id,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := placementCall(t, h, method, target, string(raw))
+	expectError(t, code, body, http.StatusBadRequest, "placement.invalid-collection-id")
+	if len(store.rules) != 0 || len(store.entries) != 0 {
+		t.Fatal("a malformed ID wrote a rule or an audit change")
 	}
 }
 
@@ -317,7 +323,7 @@ func TestPlacementRuleWriteNeedsTheAction(t *testing.T) {
 			}
 
 			code, _ := placementCall(t, h, method, target,
-				`{"tool":"pulumi","project":"web","stack":"*","collectionId":"col-payments"}`)
+				`{"tool":"pulumi","project":"web","stack":"*","collectionID":"col-payments"}`)
 			if code != http.StatusForbidden {
 				t.Fatalf("a write without the action answers %d, want 403", code)
 			}
@@ -357,7 +363,7 @@ func errorCodeOf(t *testing.T, body string) string {
 }
 
 func ruleBody(project, stack, coll string) string {
-	return `{"tool":"pulumi","project":"` + project + `","stack":"` + stack + `","collectionId":"col-` + coll + `"}`
+	return `{"tool":"pulumi","project":"` + project + `","stack":"` + stack + `","collectionID":"col-` + coll + `"}`
 }
 
 func idOf(t *testing.T, body string) string {
@@ -472,7 +478,7 @@ func TestPlacementRuleLifecycle(t *testing.T) {
 
 	// The same rule at position 1 is accepted.
 	third := postRule(t, h,
-		`{"tool":"pulumi","project":"payments","stack":"dev*","collectionId":"col-sandbox","position":1}`)
+		`{"tool":"pulumi","project":"payments","stack":"dev*","collectionID":"col-sandbox","position":1}`)
 
 	order := make([]string, 0, len(store.rules))
 	for i := range store.rules {
@@ -487,7 +493,7 @@ func TestPlacementRuleLifecycle(t *testing.T) {
 	if !strings.Contains(expectStatus(t, code, body, http.StatusOK), `"position":2`) {
 		t.Errorf("get = %s, want position 2", body)
 	}
-	if !strings.Contains(body, `"collectionId":"col-payments"`) || !strings.Contains(body, `"collection":"payments"`) {
+	if !strings.Contains(body, `"collectionID":"col-payments"`) || !strings.Contains(body, `"collection":"payments"`) {
 		t.Errorf("get = %s, want the collection ID and its label", body)
 	}
 
@@ -586,7 +592,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"escaped line feed",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a","stack":"x\ny","collectionId":"col-payments"}`,
+			`{"tool":"pulumi","project":"a","stack":"x\ny","collectionID":"col-payments"}`,
 			400,
 			errcode.PlacementInvalidPattern,
 		},
@@ -594,7 +600,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"null byte",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a\u0000","stack":"*","collectionId":"col-payments"}`,
+			`{"tool":"pulumi","project":"a\u0000","stack":"*","collectionID":"col-payments"}`,
 			400,
 			errcode.PlacementInvalidPattern,
 		},
@@ -610,7 +616,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"tool without rules",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"terraform","project":"a","stack":"*","collectionId":"col-payments"}`,
+			`{"tool":"terraform","project":"a","stack":"*","collectionID":"col-payments"}`,
 			400,
 			errcode.PlacementInvalidTool,
 		},
@@ -618,7 +624,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"collection name and ID",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a","stack":"*","collectionId":"col-payments","collection":"payments"}`,
+			`{"tool":"pulumi","project":"a","stack":"*","collectionID":"col-payments","collection":"payments"}`,
 			400,
 			errcode.RequestBodyInvalid,
 		},
@@ -642,7 +648,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"position zero is the end, 9 is outside",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a","stack":"*","collectionId":"col-payments","position":9}`,
+			`{"tool":"pulumi","project":"a","stack":"*","collectionID":"col-payments","position":9}`,
 			400,
 			errcode.PlacementInvalidPosition,
 		},
@@ -650,7 +656,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"negative position",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a","stack":"*","collectionId":"col-payments","position":-1}`,
+			`{"tool":"pulumi","project":"a","stack":"*","collectionID":"col-payments","position":-1}`,
 			400,
 			errcode.PlacementInvalidPosition,
 		},
@@ -658,7 +664,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"unknown field",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a","stack":"*","collectionId":"col-payments","x":1}`,
+			`{"tool":"pulumi","project":"a","stack":"*","collectionID":"col-payments","x":1}`,
 			400,
 			errcode.RequestBodyInvalid,
 		},
@@ -666,7 +672,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"missing field",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a","collectionId":"col-payments"}`,
+			`{"tool":"pulumi","project":"a","collectionID":"col-payments"}`,
 			400,
 			errcode.RequestBodyInvalid,
 		},
@@ -684,7 +690,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"pattern as number",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":1,"stack":"*","collectionId":"col-payments"}`,
+			`{"tool":"pulumi","project":1,"stack":"*","collectionID":"col-payments"}`,
 			400,
 			errcode.RequestBodyInvalid,
 		},

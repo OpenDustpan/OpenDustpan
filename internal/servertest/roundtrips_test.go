@@ -520,11 +520,11 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 	h.decode(body, &target)
 	h.call(
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
-		`{"tool":"pulumi","project":"*","stack":"*","collectionId":"`+target.ID+`"}`, http.StatusCreated,
+		`{"tool":"pulumi","project":"*","stack":"*","collectionID":"`+target.ID+`"}`, http.StatusCreated,
 	)
 	h.call(
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
-		`{"tool":"opentofu","project":"*","stack":"*","collectionId":"`+target.ID+`"}`, http.StatusCreated,
+		`{"tool":"opentofu","project":"*","stack":"*","collectionID":"`+target.ID+`"}`, http.StatusCreated,
 	)
 
 	return h

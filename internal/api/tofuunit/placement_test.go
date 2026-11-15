@@ -66,7 +66,7 @@ func TestPlaceRefusalAudit(t *testing.T) {
 		collections collectionsStub
 	}{
 		{"no rule", newRules(noRule(), noRuleError()), collectionsStub{found: true, id: "col-1", err: nil}},
-		{"removed collection", newRules(testRule(), nil), collectionsStub{}},
+		{"removed collection", newRules(testRule(), nil), collectionsStub{id: "", found: false, err: nil}},
 		{"replacement collection", newRules(testRule(), nil), collectionsStub{found: true, id: "col-new", err: nil}},
 	}
 	for _, tc := range cases {

@@ -18,13 +18,13 @@ var _ collection.PlacementStore = (*Store)(nil)
 
 // placementCollectionError maps the missing collection of a placement rule to
 // collection.ErrPlacementCollectionMissing, with the ID of the collection in
-// the text. It wraps any other error.
-func placementCollectionError(id string, err error) error {
+// the text. It wraps any other error with the operation that failed.
+func placementCollectionError(operation, id string, err error) error {
 	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, collection.ErrNotFound) {
 		return fmt.Errorf("placement rule names collection %q: %w", id, collection.ErrPlacementCollectionMissing)
 	}
 
-	return fmt.Errorf("read placement collection: %w", err)
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 // CreatePlacementRule implements collection.PlacementStore. The fence is
@@ -61,10 +61,11 @@ func (s *Store) CreatePlacementRule(
 		}
 
 		// Defense in depth: the foreign key checks existence, not namespace.
-		if _, idErr := q.GetPlacementCollection(ctx, db.GetPlacementCollectionParams{
+		_, idErr := q.GetPlacementCollection(ctx, db.GetPlacementCollectionParams{
 			Namespace: r.Namespace.String(), ID: r.CollectionID,
-		}); idErr != nil {
-			return placementCollectionError(r.CollectionID, idErr)
+		})
+		if idErr != nil {
+			return placementCollectionError("read placement collection", r.CollectionID, idErr)
 		}
 
 		err = q.CreatePlacementRule(ctx, db.CreatePlacementRuleParams{
@@ -118,10 +119,11 @@ func (s *Store) UpdatePlacementRule(
 		}
 
 		// Defense in depth: the foreign key checks existence, not namespace.
-		if _, idErr := q.GetPlacementCollection(ctx, db.GetPlacementCollectionParams{
+		_, idErr := q.GetPlacementCollection(ctx, db.GetPlacementCollectionParams{
 			Namespace: r.Namespace.String(), ID: r.CollectionID,
-		}); idErr != nil {
-			return placementCollectionError(r.CollectionID, idErr)
+		})
+		if idErr != nil {
+			return placementCollectionError("read placement collection", r.CollectionID, idErr)
 		}
 
 		n, err := q.UpdatePlacementRuleContent(ctx, db.UpdatePlacementRuleContentParams{

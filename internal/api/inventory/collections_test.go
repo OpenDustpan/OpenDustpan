@@ -88,6 +88,11 @@ func (m *memCollections) ListCollections(ctx context.Context, ns namespace.Name)
 	return out, nil
 }
 
+type listedCollection struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 func TestCollectionListAnswersTheID(t *testing.T) {
 	t.Parallel()
 
@@ -97,10 +102,7 @@ func TestCollectionListAnswersTheID(t *testing.T) {
 	expectStatus(t, code, body, http.StatusOK)
 
 	var doc struct {
-		Collections []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		} `json:"collections"`
+		Collections []listedCollection `json:"collections"`
 	}
 	if err := json.Unmarshal([]byte(body), &doc); err != nil {
 		t.Fatal(err)

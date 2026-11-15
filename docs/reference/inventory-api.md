@@ -52,7 +52,7 @@ holds only the units that the caller can read with `unit:read`. A caller with
 
 The collection create and read answers hold `id`, `namespace`, `name` and
 `createdAt` in Unix seconds. The collection list holds the same fields for each
-entry. The stable `id` has the prefix `col-`. Use it as `collectionId` in
+entry. The stable `id` has the prefix `col-`. Use it as `collectionID` in
 [placement rules](placement-rules-api.md). The name is a label only.
 
 These routes have no path under `/api/dustpan/v1` yet. Use these paths:

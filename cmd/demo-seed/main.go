@@ -355,7 +355,7 @@ type placementRuleRequest struct {
 	Tool         string `json:"tool"`
 	Project      string `json:"project"`
 	Stack        string `json:"stack"`
-	CollectionID string `json:"collectionId"`
+	CollectionID string `json:"collectionID"`
 }
 
 // placeEveryStack makes the collection demoCollection and a placement rule

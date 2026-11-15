@@ -201,7 +201,7 @@ func testListOrdered(t *testing.T, s Store) {
 	ns := newNamespace(t, s, "acme")
 	other := newNamespace(t, s, "globex")
 
-	for _, n := range []string{"web", "api", "data"} {
+	for _, n := range []string{unitName, "api", "data"} {
 		if err := createColl(t, s, newCollection(t, ns.Name, n), ns.Fence()); err != nil {
 			t.Fatalf("create %q: %v", n, err)
 		}
@@ -216,7 +216,7 @@ func testListOrdered(t *testing.T, s Store) {
 		t.Fatalf("ListCollections: %v", err)
 	}
 
-	want := []string{"api", "data", "web"}
+	want := []string{"api", "data", unitName}
 	if len(got) != len(want) {
 		t.Fatalf("got %d collections, want %d", len(got), len(want))
 	}
@@ -1120,6 +1120,10 @@ func testCreateStackPlacedRefused(t *testing.T, s Store) {
 		err := s.CreateStackPlaced(t.Context(), st, refusals[i].p, refusals[i].fence)
 		if !errors.Is(err, refusals[i].want) {
 			t.Errorf("%s: err = %v, want %v", refusals[i].name, err, refusals[i].want)
+		}
+		if errors.Is(err, collection.ErrCollectionChanged) &&
+			!strings.Contains(err.Error(), "set placement collection:") {
+			t.Errorf("%s: err = %v, want the failed placement operation", refusals[i].name, err)
 		}
 
 		if _, getErr := s.GetStack(t.Context(), st.Ref); !errors.Is(getErr, stack.ErrNotFound) {

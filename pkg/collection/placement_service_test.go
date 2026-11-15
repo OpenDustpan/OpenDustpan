@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -14,6 +15,7 @@ import (
 // uncheckedRules accepts each write without validation.
 type uncheckedRules struct {
 	collection.PlacementStore
+
 	writes int
 	rules  []collection.Rule
 }
@@ -32,7 +34,11 @@ func TestPlacementServiceRefusesHostileStoredRule(t *testing.T) {
 	}{
 		{"collection name", func(r *collection.Rule) { r.CollectionID = "payments" }, collection.ErrInvalidName},
 		{"SQL text", func(r *collection.Rule) { r.CollectionID = "col-a' OR '1'='1" }, collection.ErrInvalidName},
-		{"foreign namespace", func(r *collection.Rule) { r.Namespace = "foreign" }, collection.ErrPlacementCollectionMissing},
+		{
+			"foreign namespace",
+			func(r *collection.Rule) { r.Namespace = "foreign" },
+			collection.ErrPlacementCollectionMissing,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -42,7 +48,7 @@ func TestPlacementServiceRefusesHostileStoredRule(t *testing.T) {
 			tc.edit(&r)
 			store := &uncheckedRules{PlacementStore: nil, writes: 0, rules: []collection.Rule{r}}
 			svc, err := collection.NewPlacementService(collection.PlacementConfig{
-				Store: store, Namespaces: placementNamespaces{}, Now: nil,
+				Store: store, Namespaces: placementNamespaces{Store: nil}, Now: nil,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -69,7 +75,10 @@ func (s *uncheckedRules) UpdatePlacementRule(
 }
 
 func (*uncheckedRules) GetPlacementRule(_ context.Context, _ namespace.Name, _ string) (collection.Rule, error) {
-	return collection.Rule{}, nil
+	return collection.Rule{
+		CreatedAt: time.Time{}, ID: "", Namespace: "", Tool: "", Project: "", Stack: "",
+		CollectionID: "", CollectionName: "", CreatedBy: "", Position: 0,
+	}, nil
 }
 
 type placementNamespaces struct {
@@ -101,9 +110,9 @@ func TestPlacementServiceRefusesHostileCollectionID(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			store := &uncheckedRules{}
+			store := &uncheckedRules{PlacementStore: nil, writes: 0, rules: nil}
 			svc, err := collection.NewPlacementService(collection.PlacementConfig{
-				Store: store, Namespaces: placementNamespaces{}, Now: nil,
+				Store: store, Namespaces: placementNamespaces{Store: nil}, Now: nil,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -111,9 +120,22 @@ func TestPlacementServiceRefusesHostileCollectionID(t *testing.T) {
 			in := collection.RuleInput{
 				Tool: collection.ToolPulumi, Project: "web", Stack: "*", CollectionID: tc.id, Position: 0,
 			}
+			entry := audit.Entry{
+				At: time.Time{}, Namespace: "", Subject: "", IDPSubject: "", TokenID: "",
+				Action: "", Object: "", Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+				SourceIP: "", UserAgent: "", Channel: "", Kind: "", Outcome: "", RequestID: "",
+				ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0,
+				PrincipalKind: "", JobID: "", Reason: "",
+			}
 			for _, run := range []func() error{
-				func() error { _, err := svc.Create(t.Context(), "acme", in, audit.Entry{}); return err },
-				func() error { _, err := svc.Update(t.Context(), "acme", "plr-rule", in, audit.Entry{}); return err },
+				func() error {
+					_, err := svc.Create(t.Context(), "acme", in, entry)
+					return err
+				},
+				func() error {
+					_, err := svc.Update(t.Context(), "acme", "plr-rule", in, entry)
+					return err
+				},
 			} {
 				if err := run(); !errors.Is(err, collection.ErrInvalidName) {
 					t.Errorf("got %v, want ErrInvalidName", err)

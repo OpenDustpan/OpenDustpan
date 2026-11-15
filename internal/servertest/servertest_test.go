@@ -288,7 +288,7 @@ func seedPlacement(t *testing.T, c *servertest.Cluster, server int, namespaceBod
 		t.Fatalf("create placement collection = %d %s, %v", status, body, err)
 	}
 	for _, tool := range []string{"pulumi", "opentofu"} {
-		rule := `{"tool":"` + tool + `","project":"*","stack":"*","collectionId":"` + target.ID + `"}`
+		rule := `{"tool":"` + tool + `","project":"*","stack":"*","collectionID":"` + target.ID + `"}`
 		status, body := c.Do(t, server, http.MethodPost, base+"/placement-rules", rule)
 		if status != http.StatusCreated {
 			t.Fatalf("POST placement rule = %d %s, want %d", status, body, http.StatusCreated)
