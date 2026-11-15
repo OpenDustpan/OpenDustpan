@@ -59,7 +59,7 @@ func newQuotaBackupRig(t *testing.T, target *fs.Store) *quotaBackupRig {
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live: st, Operations: st.DurableOperationsPort(), Backups: backups,
-		Maintenance: storetest.StateMaintenance{State: st, Hold: false}, Blobs: live, Target: target,
+		Maintenance: storetest.StateMaintenance{State: st, Hold: false}, Blobs: live, Leases: st, Target: target,
 		Key: nil, Installation: "test", AfterApply: nil, Admit: nil, AllowDevBackups: false, AllowDevHint: "",
 		Owner: "", Lease: 0, CleanupLockWait: 0, RetryBase: time.Millisecond, Now: nil, Logger: nil,
 	})
