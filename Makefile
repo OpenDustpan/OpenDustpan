@@ -274,6 +274,13 @@ GO_TEST_COUNT ?=
 # test-ci-other.
 STORE_TEST_TIMEOUT := 30m
 
+# STORE_TEST_PARALLEL is the -parallel of test-ci-store. Many cases of the store
+# suites wait, for example 20 s for the lease of a restore to run out, and hold
+# one of the GOMAXPROCS slots of the default while they wait. 16 lets the other
+# cases run in that time: pkg/store/sqlite under -race on 4 cores took 447 s at
+# 16 and 552 s at 4. The PostgreSQL job raises max_connections for it.
+STORE_TEST_PARALLEL := 16
+
 test-ci-other: ## Go tests as in test, without the two store packages; the go job of CI runs it.
 	go list ./... >/dev/null
 	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS)))
@@ -293,7 +300,7 @@ cover: ## Fast coverage pass for the packages of test-ci-other, without -race: w
 
 test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres; each store job of CI runs it.
 	@case "$(STORE)" in sqlite|postgres) ;; *) echo "set STORE=sqlite or STORE=postgres"; exit 1 ;; esac
-	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -timeout $(STORE_TEST_TIMEOUT) ./pkg/store/$(STORE)/
+	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -parallel $(STORE_TEST_PARALLEL) -timeout $(STORE_TEST_TIMEOUT) ./pkg/store/$(STORE)/
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
