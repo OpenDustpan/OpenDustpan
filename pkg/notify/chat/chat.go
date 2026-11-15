@@ -18,9 +18,9 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/notify"
 )
 
@@ -179,15 +179,15 @@ func (c Content) validateCharacters() error {
 	return nil
 }
 
-// forbiddenRune reports whether r is a control character other than a line
-// feed, or a bidirectional control character.
+// forbiddenRune reports whether r is a hidden character other than a line
+// feed. A hidden character can change how a chat client shows the message,
+// so the check refuses it, with the line feed that a summary may hold as the
+// one exception.
 func forbiddenRune(r rune) bool {
 	switch {
 	case r == '\n':
 		return false
-	case unicode.IsControl(r):
-		return true
-	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
+	case ident.IsHiddenRune(r):
 		return true
 	default:
 		return false

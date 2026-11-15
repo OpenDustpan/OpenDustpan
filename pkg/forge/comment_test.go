@@ -72,6 +72,16 @@ func TestValidateComment(t *testing.T) {
 		{"a body of spaces", forge.CommentRequest{Marker: "plan", Body: " \n "}, forge.ErrInvalid},
 		{"a null byte", forge.CommentRequest{Marker: "plan", Body: "a\x00b"}, forge.ErrInvalid},
 		{"an escape character", forge.CommentRequest{Marker: "plan", Body: "a\x1bb"}, forge.ErrInvalid},
+		{
+			"a right-to-left override",
+			forge.CommentRequest{Marker: "plan", Body: "a" + string(rune(0x202e)) + "b"},
+			forge.ErrInvalid,
+		},
+		{
+			"a line separator",
+			forge.CommentRequest{Marker: "plan", Body: "a" + string(rune(0x2028)) + "b"},
+			forge.ErrInvalid,
+		},
 		{"a body that is not UTF-8", forge.CommentRequest{Marker: "plan", Body: "a\xffb"}, forge.ErrInvalid},
 	}
 

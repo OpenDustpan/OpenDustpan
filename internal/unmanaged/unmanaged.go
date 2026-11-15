@@ -167,7 +167,7 @@ func NormalizeKey(k ResourceKey) (ResourceKey, error) {
 	}
 
 	if k.ID == "" || len(k.ID) > MaxKeyIDBytes || strings.ContainsFunc(k.ID, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsControl(r)
+		return unicode.IsSpace(r) || ident.IsHiddenRune(r)
 	}) {
 		return k, fmt.Errorf("%w: ID", ErrInvalidKey)
 	}

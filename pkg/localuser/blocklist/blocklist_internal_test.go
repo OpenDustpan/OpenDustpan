@@ -66,6 +66,8 @@ func TestParseLinesRefusesHostileLines(t *testing.T) {
 		{name: "a line count that is not the pinned count", raw: "a\nb\n", want: 3},
 		{name: "a CR at the end of a line", raw: "a\r\nb\n", want: 2},
 		{name: "a NUL", raw: "a\x00\nb\n", want: 2},
+		{name: "a right-to-left override", raw: "a" + string(rune(0x202e)) + "b\nc\n", want: 2},
+		{name: "a line separator", raw: "a" + string(rune(0x2028)) + "b\nc\n", want: 2},
 		{name: "a byte that is not UTF-8", raw: "a\xff\nb\n", want: 2},
 	}
 

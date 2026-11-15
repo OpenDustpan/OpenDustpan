@@ -39,6 +39,11 @@ func TestValidateReviewRequest(t *testing.T) {
 		{"an empty title", func(r *forge.ReviewRequest) { r.Title = "  " }, forge.ErrInvalid},
 		{"a title with a line break", func(r *forge.ReviewRequest) { r.Title = "a\nb" }, forge.ErrInvalid},
 		{"a title with an escape", func(r *forge.ReviewRequest) { r.Title = "a\x1b[31m" }, forge.ErrInvalid},
+		{
+			"a title with a right-to-left override",
+			func(r *forge.ReviewRequest) { r.Title = "a" + string(rune(0x202e)) + "b" },
+			forge.ErrInvalid,
+		},
 		{"a title that is not UTF-8", func(r *forge.ReviewRequest) { r.Title = "a\xff" }, forge.ErrInvalid},
 		{
 			"a long title",
@@ -46,6 +51,16 @@ func TestValidateReviewRequest(t *testing.T) {
 			forge.ErrTooLarge,
 		},
 		{"a description with a NUL", func(r *forge.ReviewRequest) { r.Body = "a\x00" }, forge.ErrInvalid},
+		{
+			"a description with a right-to-left override",
+			func(r *forge.ReviewRequest) { r.Body = "a" + string(rune(0x202e)) + "b" },
+			forge.ErrInvalid,
+		},
+		{
+			"a description with a line separator",
+			func(r *forge.ReviewRequest) { r.Body = "a" + string(rune(0x2028)) + "b" },
+			forge.ErrInvalid,
+		},
 		{
 			"a long description",
 			func(r *forge.ReviewRequest) { r.Body = strings.Repeat("b", forge.MaxReviewBodyBytes+1) },

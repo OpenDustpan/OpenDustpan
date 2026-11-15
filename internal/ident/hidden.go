@@ -15,6 +15,28 @@ func IsHiddenRune(r rune) bool {
 	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
+// IsHiddenRuneExcept reports whether r is hidden like IsHiddenRune says,
+// except for a rune of allowed. A caller passes the line breaks or tabs that
+// its text may hold. The check stays as strict as IsHiddenRune for every
+// other rune.
+func IsHiddenRuneExcept(r rune, allowed ...rune) bool {
+	for _, a := range allowed {
+		if r == a {
+			return false
+		}
+	}
+
+	return IsHiddenRune(r)
+}
+
+// IsControlRune reports whether r is a control character (Cc). A password
+// uses it: a password may hold a format character (a U+200D joins the parts
+// of an emoji), so the password check stays as strict as today and refuses
+// controls only.
+func IsControlRune(r rune) bool {
+	return unicode.IsControl(r)
+}
+
 // HasHidden reports whether s holds a rune for which IsHiddenRune is true.
 //
 // HasHidden does not refuse invalid UTF-8. Go decodes each invalid byte as

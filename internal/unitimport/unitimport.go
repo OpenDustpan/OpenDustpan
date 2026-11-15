@@ -25,9 +25,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -212,7 +212,7 @@ func SanitizeSourceActor(s string) string {
 	var b strings.Builder
 
 	for _, r := range strings.ToValidUTF8(s, string(utf8.RuneError)) {
-		if unicode.IsControl(r) {
+		if ident.IsHiddenRune(r) {
 			continue
 		}
 

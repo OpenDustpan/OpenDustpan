@@ -968,7 +968,7 @@ func ValidateComment(req CommentRequest) error {
 	}
 
 	for _, r := range req.Body {
-		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+		if ident.IsHiddenRuneExcept(r, '\n', '\r', '\t') {
 			return fmt.Errorf("%w: the comment text has a control character", ErrInvalid)
 		}
 	}
@@ -1119,7 +1119,7 @@ func validateStatusURL(raw string) error {
 
 	switch {
 	case err != nil, u.Scheme != "https", u.Host == "", u.User != nil, u.Fragment != "",
-		strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }):
+		strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsSpace(r) || ident.IsHiddenRune(r) }):
 		return fmt.Errorf("%w: the status address must be an https address with a host", ErrInvalid)
 	}
 
@@ -1192,7 +1192,7 @@ func validateReviewTitle(text string) error {
 		return fmt.Errorf("%w: the text is not valid UTF-8", ErrInvalid)
 	case strings.TrimSpace(text) == "":
 		return fmt.Errorf("%w: the text is empty", ErrInvalid)
-	case strings.ContainsFunc(text, unicode.IsControl):
+	case strings.ContainsFunc(text, ident.IsHiddenRune):
 		return fmt.Errorf("%w: the text has a control character", ErrInvalid)
 	}
 
@@ -1211,7 +1211,7 @@ func validateReviewBody(text string) error {
 	}
 
 	for _, r := range text {
-		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+		if ident.IsHiddenRuneExcept(r, '\n', '\r', '\t') {
 			return fmt.Errorf("%w: the text has a control character", ErrInvalid)
 		}
 	}

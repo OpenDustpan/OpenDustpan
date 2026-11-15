@@ -563,6 +563,14 @@ func TestPasswordRequestOutsideTheBoundaryNeverReachesTheMethod(t *testing.T) {
 			session.MethodLDAP, signinsvc.ReasonInput,
 		},
 		{"a control character", "alice\x00", "right", ldapProvider(), session.MethodLDAP, signinsvc.ReasonInput},
+		{
+			"a right-to-left override in the name", "alice" + string(rune(0x202e)), "right", ldapProvider(),
+			session.MethodLDAP, signinsvc.ReasonInput,
+		},
+		{
+			"a line separator in the name", "alice" + string(rune(0x2028)), "right", ldapProvider(),
+			session.MethodLDAP, signinsvc.ReasonInput,
+		},
 		{"bytes that are not UTF-8", "alice\xff", "right", ldapProvider(), session.MethodLDAP, signinsvc.ReasonInput},
 		{"a provider of another kind", "alice", "right", oidc, session.MethodLDAP, signinsvc.ReasonProviderKind},
 		{"the local provider", "alice", "right", signinsvc.Provider{

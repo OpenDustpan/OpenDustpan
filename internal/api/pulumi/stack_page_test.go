@@ -323,6 +323,8 @@ func TestListStacksRefusesBadTagFilter(t *testing.T) {
 		"/api/user/stacks?organization=acme&tagValue=blue",
 		"/api/user/stacks?tagName=",
 		"/api/user/stacks?organization=acme&tagName=&tagValue=blue",
+		"/api/user/stacks?organization=acme&tagName=team&tagValue=a" + string(rune(0x202e)) + "b",
+		"/api/user/stacks?organization=acme&tagName=team&tagValue=a" + string(rune(0x2028)) + "b",
 	} {
 		rec := get(t, handler, target)
 

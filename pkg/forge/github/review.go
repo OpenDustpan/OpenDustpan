@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/forge"
 )
 
@@ -701,7 +701,7 @@ func checkReviewLocal(req forge.ReviewRequest) error {
 // reviewTitle reports whether s is valid UTF-8 of limit bytes at most, with no
 // control character.
 func reviewTitle(s string) bool {
-	return len(s) <= forge.MaxReviewTitleBytes && utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
+	return len(s) <= forge.MaxReviewTitleBytes && utf8.ValidString(s) && !ident.HasHidden(s)
 }
 
 // reviewBody reports whether s is valid UTF-8 of limit bytes at most, with no
@@ -712,7 +712,7 @@ func reviewBody(s string) bool {
 	}
 
 	return !strings.ContainsFunc(s, func(r rune) bool {
-		return unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t'
+		return ident.IsHiddenRuneExcept(r, '\n', '\r', '\t')
 	})
 }
 

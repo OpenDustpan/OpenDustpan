@@ -76,6 +76,7 @@ func TestContentValidate(t *testing.T) {
 		{"RLO in a value", func(c *chat.Content) { c.Fields[0].Value = "a\u202eb" }, false},
 		{"isolate in the product", func(c *chat.Content) { c.Product = "a\u2066b" }, false},
 		{"C1 control in a link title", func(c *chat.Content) { c.Links[0].Title = "a\u0085b" }, false},
+		{"line separator in the summary", func(c *chat.Content) { c.Summary = "a" + string(rune(0x2028)) + "b" }, false},
 		{"invalid UTF-8 in the title", func(c *chat.Content) { c.Title = "a\xffb" }, false},
 		{"no product", func(c *chat.Content) { c.Product = "" }, false},
 		{"long product", func(c *chat.Content) { c.Product = strings.Repeat("p", chat.MaxProductLen+1) }, false},

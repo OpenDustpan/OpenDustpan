@@ -48,6 +48,11 @@ func TestValidateStatus(t *testing.T) {
 		{"a line break in the context", func(s *forge.Status) { s.Context = "a\nb" }, forge.ErrInvalid},
 		{"a null byte in the context", func(s *forge.Status) { s.Context = "a\x00b" }, forge.ErrInvalid},
 		{"a line separator in the context", func(s *forge.Status) { s.Context = "a b" }, forge.ErrInvalid},
+		{
+			"a right-to-left override in the context",
+			func(s *forge.Status) { s.Context = "a" + string(rune(0x202e)) + "b" },
+			forge.ErrInvalid,
+		},
 		{"a context that is not UTF-8", func(s *forge.Status) { s.Context = "a\xffb" }, forge.ErrInvalid},
 		{
 			"a context above the limit",
@@ -55,6 +60,11 @@ func TestValidateStatus(t *testing.T) {
 			forge.ErrTooLarge,
 		},
 		{"a line break in the description", func(s *forge.Status) { s.Description = "a\r\nb" }, forge.ErrInvalid},
+		{
+			"a right-to-left override in the description",
+			func(s *forge.Status) { s.Description = "a" + string(rune(0x202e)) + "b" },
+			forge.ErrInvalid,
+		},
 		{"a description that is not UTF-8", func(s *forge.Status) { s.Description = "\xc3" }, forge.ErrInvalid},
 		{
 			"a description above the limit",
@@ -92,6 +102,11 @@ func TestValidateStatus(t *testing.T) {
 		{
 			"an address with a line break",
 			func(s *forge.Status) { s.TargetURL = "https://dustpan.example/\nx" },
+			forge.ErrInvalid,
+		},
+		{
+			"an address with a right-to-left override",
+			func(s *forge.Status) { s.TargetURL = "https://dustpan.example/" + string(rune(0x202e)) + "x" },
 			forge.ErrInvalid,
 		},
 		{

@@ -528,6 +528,21 @@ func TestRedeemRules(t *testing.T) {
 	}
 }
 
+// TestRedeemAcceptsAPasswordWithAJoiner checks the password exception: a
+// password may hold a format character (U+200D joins the parts of an emoji),
+// so the password check refuses controls only and the redeem succeeds.
+func TestRedeemAcceptsAPasswordWithAJoiner(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	c := f.mustCreate(t, "alice", "")
+
+	candidate := "violet-harbor-" + string(rune(0x200d)) + "81-ledger"
+	if err := f.svc.Redeem(t.Context(), base(""), c.SetUp.Text, candidate); err != nil {
+		t.Fatalf("redeem = %v, want nil", err)
+	}
+}
+
 // TestRedeemRefusesHostileCodes sends codes of a wrong form directly to the
 // redeem: each one answers ErrNotFound and writes a denied entry that holds
 // no part of the code.

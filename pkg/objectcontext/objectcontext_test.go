@@ -30,6 +30,16 @@ func TestRefValidate(t *testing.T) {
 		{"resource address", objectcontext.ResourceRef(unit, "module.net.aws_subnet.a[0]"), true},
 		{"empty resource key", objectcontext.ResourceRef(unit, ""), false},
 		{"resource key with a line feed", objectcontext.ResourceRef(unit, "a\nb"), false},
+		{
+			"resource key with a right-to-left override",
+			objectcontext.ResourceRef(unit, "a"+string(rune(0x202e))+"b"),
+			false,
+		},
+		{
+			"resource key with a line separator",
+			objectcontext.ResourceRef(unit, "a"+string(rune(0x2028))+"b"),
+			false,
+		},
 		{"collection with no name", objectcontext.CollectionRef("acme", ""), false},
 		{
 			"namespace with a name",
@@ -125,6 +135,14 @@ func TestParseOutput(t *testing.T) {
 			`{"schemaVersion":1,"links":[{"title":"x","url":"https://a.b","kind":"chat"}]}`,
 		},
 		{objectcontext.ErrOutputInvalid, "invalid resource", `{"schemaVersion":1,"resources":{"a":{"owners":[""]}}}`},
+		{
+			objectcontext.ErrOutputInvalid, "summary with a right-to-left override",
+			`{"schemaVersion":1,"summary":"a` + string(rune(0x202e)) + `b"}`,
+		},
+		{
+			objectcontext.ErrOutputInvalid, "runbook with a line separator",
+			`{"schemaVersion":1,"runbook":"a` + string(rune(0x2028)) + `b"}`,
+		},
 		{objectcontext.ErrOutputInvalid, "two values", `{"schemaVersion":1}{"schemaVersion":1}`},
 		{
 			objectcontext.ErrOutputInvalid,

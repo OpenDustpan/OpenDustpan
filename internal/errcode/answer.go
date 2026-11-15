@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"maps"
 	"time"
-	"unicode"
 	"unicode/utf8"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // The limits of the arguments of one answer.
@@ -199,7 +200,7 @@ func validIdentifier(s string, limit int) bool {
 	}
 
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		if ident.IsHiddenRune(r) {
 			return false
 		}
 	}

@@ -757,3 +757,33 @@ func TestOpenErrorHoldsNoControlCharacters(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenErrorHoldsNoHiddenRunes checks that the error of a refused open
+// holds no hidden character: the probe drops each one from the answer text.
+func TestOpenErrorHoldsNoHiddenRunes(t *testing.T) {
+	t.Parallel()
+
+	for _, code := range []string{
+		"Access" + string(rune(0x202e)) + "Denied",
+		"Access" + string(rune(0x2028)) + "Denied",
+	} {
+		fake := newFakeServer(t, func(*http.Request, []byte, int) (int, string) {
+			return http.StatusForbidden, errorDoc(code)
+		})
+		server := httptest.NewServer(fake)
+		t.Cleanup(server.Close)
+
+		_, err := s3.Open(
+			t.Context(), testSigner(server.URL, nil), "pfx", server.Client(), fastProbeOptions()...,
+		)
+		if err == nil {
+			t.Fatal("open succeeded, want an error")
+		}
+
+		for _, r := range []rune{0x202e, 0x2028} {
+			if strings.Contains(err.Error(), string(r)) {
+				t.Errorf("error holds %U: %q", r, err.Error())
+			}
+		}
+	}
+}

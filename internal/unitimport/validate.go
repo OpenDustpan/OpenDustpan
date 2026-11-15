@@ -3,8 +3,8 @@ package unitimport
 import (
 	"fmt"
 	"strings"
-	"unicode"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -24,7 +24,7 @@ func text(field, v string, needed bool) error {
 		return fmt.Errorf("%w: %s is empty", ErrInvalid, field)
 	case len(v) > MaxTextBytes:
 		return fmt.Errorf("%w: %s is longer than %d bytes", ErrInvalid, field, MaxTextBytes)
-	case strings.IndexFunc(v, unicode.IsControl) >= 0:
+	case strings.IndexFunc(v, ident.IsHiddenRune) >= 0:
 		return fmt.Errorf("%w: %s holds a control character", ErrInvalid, field)
 	}
 

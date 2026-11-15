@@ -19,11 +19,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/localuser"
 )
 
@@ -153,7 +153,7 @@ func checkLine(line []byte) error {
 		return fmt.Errorf("%w: the line is not valid UTF-8", errBadList)
 	}
 
-	if bytes.ContainsFunc(line, unicode.IsControl) {
+	if bytes.ContainsFunc(line, ident.IsHiddenRune) {
 		return fmt.Errorf("%w: the line holds a control character", errBadList)
 	}
 

@@ -7,10 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -114,7 +113,7 @@ func checkTagFilterValues(query url.Values) error {
 		}
 
 		for _, v := range values {
-			if !utf8.ValidString(v) || strings.ContainsFunc(v, unicode.IsControl) {
+			if !utf8.ValidString(v) || ident.HasHidden(v) {
 				return fmt.Errorf("%w: %s must be UTF-8 text with no control character: "+
 					"run pulumi stack ls --tag name=value", errStackTagFilter, key)
 			}

@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/text/unicode/norm"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/localuser/blocklist"
 )
@@ -41,7 +42,7 @@ func checkForm(password string) (string, error) {
 		return "", fmt.Errorf("%w: the password is not valid UTF-8", localuser.ErrPasswordForm)
 	}
 
-	if strings.ContainsFunc(password, unicode.IsControl) {
+	if strings.ContainsFunc(password, ident.IsControlRune) {
 		return "", fmt.Errorf("%w: the password holds a control character", localuser.ErrPasswordForm)
 	}
 

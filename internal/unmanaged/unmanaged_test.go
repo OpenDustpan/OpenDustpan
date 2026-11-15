@@ -75,6 +75,16 @@ func TestNormalizeKey(t *testing.T) {
 		},
 		{"provider in uppercase", unmanaged.ResourceKey{Provider: "AWS", ID: bucketARN}, "", "", false},
 		{"ID with a space", unmanaged.ResourceKey{Provider: "other", ID: "a b"}, "", "", false},
+		{
+			"ID with a right-to-left override",
+			unmanaged.ResourceKey{Provider: "other", ID: "a" + string(rune(0x202e)) + "b"},
+			"", "", false,
+		},
+		{
+			"ID with a line separator",
+			unmanaged.ResourceKey{Provider: "other", ID: "a" + string(rune(0x2028)) + "b"},
+			"", "", false,
+		},
 		{"empty ID", unmanaged.ResourceKey{Provider: "other", ID: ""}, "", "", false},
 		{
 			"long ID",

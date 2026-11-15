@@ -26,7 +26,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/forge"
 )
 
@@ -158,7 +158,7 @@ func validText(s string) bool {
 	}
 
 	return !strings.ContainsFunc(s, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsControl(r) || audit.IsHiddenRune(r)
+		return unicode.IsSpace(r) || ident.IsHiddenRune(r)
 	})
 }
 

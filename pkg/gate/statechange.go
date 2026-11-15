@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // The limits of a StateChange. A change above a limit is refused, never cut:
@@ -126,8 +128,8 @@ func (sc *StateChange) facts() StateFacts {
 	return StateFacts{Available: true, Resources: sc.Resources, Removed: slices.Compact(removed)}
 }
 
-// hasControl reports whether s holds a control character, which includes CR
+// hasControl reports whether s holds a hidden character, which includes CR
 // and LF, or a character that is not valid UTF-8 text.
 func hasControl(s string) bool {
-	return strings.ContainsFunc(s, func(r rune) bool { return unicode.IsControl(r) || r == unicode.ReplacementChar })
+	return strings.ContainsFunc(s, func(r rune) bool { return ident.IsHiddenRune(r) || r == unicode.ReplacementChar })
 }

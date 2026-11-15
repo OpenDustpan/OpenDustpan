@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // consoleHandler serves a built single-page app from dir, for GET and HEAD
@@ -56,7 +57,7 @@ func consoleHandler(dir string, headers []consoleHeader) (http.Handler, error) {
 		// Defense in depth: the os.Root file system also refuses such a name.
 		// This check stays so that the answer is a client error and no file
 		// lookup runs.
-		if strings.ContainsFunc(r.URL.Path, unicode.IsControl) {
+		if strings.ContainsFunc(r.URL.Path, ident.IsHiddenRune) {
 			writeRouteError(w, http.StatusBadRequest, "invalid path", routeAnswer(errcode.RequestInvalidPath))
 
 			return

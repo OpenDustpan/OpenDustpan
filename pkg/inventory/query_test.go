@@ -81,16 +81,16 @@ func TestValidLabelValue(t *testing.T) {
 	}
 }
 
-func TestHasControl(t *testing.T) {
+func TestHasHidden(t *testing.T) {
 	t.Parallel()
 
-	if inventory.HasControl("plain text é") {
-		t.Fatal("HasControl(plain) = true")
+	if inventory.HasHidden("plain text é") {
+		t.Fatal("HasHidden(plain) = true")
 	}
 
-	for _, s := range []string{"\n", "a\rb", "\x00", "\x1b[0m", "\u0085"} {
-		if !inventory.HasControl(s) {
-			t.Fatalf("HasControl(%q) = false", s)
+	for _, s := range []string{"\n", "a\rb", "\x00", "\x1b[0m", "a" + string(rune(0x202e)) + "b", "a" + string(rune(0x2028)) + "b", "a" + string(rune(0x2029)) + "b", "\u0085"} {
+		if !inventory.HasHidden(s) {
+			t.Fatalf("HasHidden(%q) = false", s)
 		}
 	}
 }

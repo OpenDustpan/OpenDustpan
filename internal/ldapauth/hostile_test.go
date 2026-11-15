@@ -68,16 +68,22 @@ func TestNewMethodRefusesASettingThatIsNotValid(t *testing.T) {
 	s := newSetup(t)
 
 	cases := map[string]func(c *ldapauth.Config){
-		"an http URL":              func(c *ldapauth.Config) { c.URL = "http://127.0.0.1:389" },
-		"a URL with a path":        func(c *ldapauth.Config) { c.URL = "ldaps://127.0.0.1:636/dc=example" },
-		"a URL with user info":     func(c *ldapauth.Config) { c.URL = "ldaps://admin@127.0.0.1:636" },
-		"a URL with a query":       func(c *ldapauth.Config) { c.URL = "ldaps://127.0.0.1:636?x" },
-		"an ldapi URL":             func(c *ldapauth.Config) { c.URL = "ldapi:///var/run/slapd" },
-		"StartTLS on ldaps":        func(c *ldapauth.Config) { c.StartTLS = true },
-		"an empty bind password":   func(c *ldapauth.Config) { c.BindPassword = session.NewPassword("") },
-		"a filter with no user":    func(c *ldapauth.Config) { c.UserFilter = "(uid=alice)" },
-		"a filter that is broken":  func(c *ldapauth.Config) { c.UserFilter = "(uid={user}" },
-		"a filter with a newline":  func(c *ldapauth.Config) { c.UserFilter = "(uid={user})\n" },
+		"an http URL":             func(c *ldapauth.Config) { c.URL = "http://127.0.0.1:389" },
+		"a URL with a path":       func(c *ldapauth.Config) { c.URL = "ldaps://127.0.0.1:636/dc=example" },
+		"a URL with user info":    func(c *ldapauth.Config) { c.URL = "ldaps://admin@127.0.0.1:636" },
+		"a URL with a query":      func(c *ldapauth.Config) { c.URL = "ldaps://127.0.0.1:636?x" },
+		"an ldapi URL":            func(c *ldapauth.Config) { c.URL = "ldapi:///var/run/slapd" },
+		"StartTLS on ldaps":       func(c *ldapauth.Config) { c.StartTLS = true },
+		"an empty bind password":  func(c *ldapauth.Config) { c.BindPassword = session.NewPassword("") },
+		"a filter with no user":   func(c *ldapauth.Config) { c.UserFilter = "(uid=alice)" },
+		"a filter that is broken": func(c *ldapauth.Config) { c.UserFilter = "(uid={user}" },
+		"a filter with a newline": func(c *ldapauth.Config) { c.UserFilter = "(uid={user})\n" },
+		"a filter with a right-to-left override": func(c *ldapauth.Config) {
+			c.UserFilter = "(uid={user" + string(rune(0x202e)) + "})"
+		},
+		"a filter with a line separator": func(c *ldapauth.Config) {
+			c.UserFilter = "(uid={user" + string(rune(0x2028)) + "})"
+		},
 		"a base DN that is broken": func(c *ldapauth.Config) { c.BaseDN = "dc=example,,=" },
 		"an empty base DN":         func(c *ldapauth.Config) { c.BaseDN = "" },
 		"a bad attribute type":     func(c *ldapauth.Config) { c.EmailAttribute = "mail)(x" },

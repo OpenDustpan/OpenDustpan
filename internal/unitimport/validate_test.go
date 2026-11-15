@@ -58,3 +58,30 @@ func TestValidateUnitsStartState(t *testing.T) {
 		})
 	}
 }
+
+// TestSourceUnitValidateRefusesHiddenRunes checks the text rules of a source
+// unit through SourceUnit.Validate: a hidden character in the name is refused
+// like a control character is.
+func TestSourceUnitValidateRefusesHiddenRunes(t *testing.T) {
+	t.Parallel()
+
+	for name, tool := range map[string]unitimport.SourceUnit{
+		"plain": {Tool: "opentofu", Name: "acme/web"},
+	} {
+		if err := tool.Validate(); err != nil {
+			t.Errorf("%s: Validate = %v, want nil", name, err)
+		}
+	}
+
+	for name, unit := range map[string]unitimport.SourceUnit{
+		"control character":         {Tool: "opentofu", Name: "acme/we\x00b"},
+		"right-to-left override":    {Tool: "opentofu", Name: "acme/we" + string(rune(0x202e)) + "b"},
+		"line separator":            {Tool: "opentofu", Name: "acme/we" + string(rune(0x2028)) + "b"},
+		"paragraph separator":       {Tool: "opentofu", Name: "acme/we" + string(rune(0x2029)) + "b"},
+		"control character in tool": {Tool: "open\x00tofu", Name: "acme/web"},
+	} {
+		if err := unit.Validate(); !errors.Is(err, unitimport.ErrInvalid) {
+			t.Errorf("%s: Validate = %v, want ErrInvalid", name, err)
+		}
+	}
+}

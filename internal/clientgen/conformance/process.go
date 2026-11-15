@@ -409,6 +409,9 @@ func (a *ProcessAdapter) decode(line []byte, id int64, method string, out any) e
 // report. It changes each control or format character, CR and LF included,
 // to a space, and it changes bytes that are not valid UTF-8 to U+FFFD. It
 // cuts a message that is longer than MaxRPCMessageBytes at a rune boundary.
+//
+// This is the own copy of the client generator unit. The unit imports no
+// server code, so it cannot call ident.
 func rpcMessage(m string) string {
 	m = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {

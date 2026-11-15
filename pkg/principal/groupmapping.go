@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 )
 
@@ -92,7 +92,7 @@ func validateClaimText(what, s string, limit int) error {
 	}
 
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		if ident.IsHiddenRune(r) {
 			return fmt.Errorf("%w: %s has a control character", ErrInvalid, what)
 		}
 	}

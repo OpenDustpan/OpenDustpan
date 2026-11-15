@@ -67,3 +67,61 @@ func TestFirstHidden(t *testing.T) {
 		})
 	}
 }
+
+func TestIsHiddenRuneExcept(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		r    rune
+		want map[string]bool
+	}{
+		{'a', map[string]bool{"none": false, "breaks": false, "returns": false}},
+		{0x00, map[string]bool{"none": true, "breaks": true, "returns": true}},
+		{'\n', map[string]bool{"none": true, "breaks": false, "returns": false}},
+		{'\r', map[string]bool{"none": true, "breaks": true, "returns": false}},
+		{'\t', map[string]bool{"none": true, "breaks": false, "returns": false}},
+		{0x202e, map[string]bool{"none": true, "breaks": true, "returns": true}},
+		{0x2028, map[string]bool{"none": true, "breaks": true, "returns": true}},
+		{0x2029, map[string]bool{"none": true, "breaks": true, "returns": true}},
+		{0x200d, map[string]bool{"none": true, "breaks": true, "returns": true}},
+	}
+
+	allowed := map[string][]rune{
+		"none":    {},
+		"breaks":  {'\n', '\t'},
+		"returns": {'\n', '\r', '\t'},
+	}
+
+	for _, tc := range tests {
+		for name, allow := range allowed {
+			if got := ident.IsHiddenRuneExcept(tc.r, allow...); got != tc.want[name] {
+				t.Errorf("IsHiddenRuneExcept(%U, %q) = %v, want %v", tc.r, allow, got, tc.want[name])
+			}
+		}
+	}
+}
+
+func TestIsControlRune(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		r    rune
+		want bool
+	}{
+		{'a', false},
+		{0x00, true},
+		{'\n', true},
+		{'\r', true},
+		{'\t', true},
+		{0x202e, false},
+		{0x2028, false},
+		{0x2029, false},
+		{0x200d, false},
+	}
+
+	for _, tc := range tests {
+		if got := ident.IsControlRune(tc.r); got != tc.want {
+			t.Errorf("IsControlRune(%U) = %v, want %v", tc.r, got, tc.want)
+		}
+	}
+}

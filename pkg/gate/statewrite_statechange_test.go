@@ -233,6 +233,16 @@ func TestStateChangeHostileInputIsRefused(t *testing.T) {
 			&gate.StateChange{Current: "sv-1\nx", Resources: 1, Removed: nil, Unavailable: ""}, gate.ErrInvalid,
 		},
 		{
+			"a current version with a right-to-left override", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1" + string(rune(0x202e)) + "x", Resources: 1, Removed: nil, Unavailable: ""},
+			gate.ErrInvalid,
+		},
+		{
+			"a current version with a line separator", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1" + string(rune(0x2028)) + "x", Resources: 1, Removed: nil, Unavailable: ""},
+			gate.ErrInvalid,
+		},
+		{
 			"a negative resource count", gate.OperationRollback,
 			&gate.StateChange{Current: "sv-1", Resources: -1, Removed: nil, Unavailable: ""}, gate.ErrInvalid,
 		},
@@ -247,6 +257,17 @@ func TestStateChangeHostileInputIsRefused(t *testing.T) {
 				Current:     "sv-1",
 				Resources:   1,
 				Removed:     []string{"a.b\r\nforged"},
+				Unavailable: "",
+			},
+			gate.ErrInvalid,
+		},
+		{
+			"an address with a right-to-left override",
+			gate.OperationRollback,
+			&gate.StateChange{
+				Current:     "sv-1",
+				Resources:   1,
+				Removed:     []string{"a.b" + string(rune(0x202e)) + "forged"},
 				Unavailable: "",
 			},
 			gate.ErrInvalid,
@@ -275,6 +296,11 @@ func TestStateChangeHostileInputIsRefused(t *testing.T) {
 		{
 			"a reason with a newline", gate.OperationRollback,
 			&gate.StateChange{Current: "sv-1", Resources: 0, Removed: nil, Unavailable: "x\nforged"}, gate.ErrInvalid,
+		},
+		{
+			"a reason with a right-to-left override", gate.OperationRollback,
+			&gate.StateChange{Current: "sv-1", Resources: 0, Removed: nil, Unavailable: "x" + string(rune(0x202e))},
+			gate.ErrInvalid,
 		},
 		{
 			"a reason above its limit", gate.OperationRollback,

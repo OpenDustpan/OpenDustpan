@@ -213,6 +213,14 @@ func hostileRouteCases() []hostileCase {
 			"subject with a control character", signinsvc.ReasonAssertion, failed,
 		},
 		{
+			func(_ *signinsvc.Provider, a *session.Assertion) { a.Subject = "a" + string(rune(0x202e)) + "b" },
+			"subject with a right-to-left override", signinsvc.ReasonAssertion, failed,
+		},
+		{
+			func(_ *signinsvc.Provider, a *session.Assertion) { a.Subject = "a" + string(rune(0x2028)) + "b" },
+			"subject with a line separator", signinsvc.ReasonAssertion, failed,
+		},
+		{
 			func(_ *signinsvc.Provider, a *session.Assertion) { a.PrincipalID = "prn-other" },
 			"method names a principal", signinsvc.ReasonAssertion, failed,
 		},
@@ -429,6 +437,14 @@ func disabledCases() []disabledCase {
 		{
 			func(_ *world, a *session.Assertion) { a.Subject = "a\nb" },
 			"subject with a control character", signinsvc.ReasonAssertion, false, false,
+		},
+		{
+			func(_ *world, a *session.Assertion) { a.Subject = "a" + string(rune(0x202e)) + "b" },
+			"subject with a right-to-left override", signinsvc.ReasonAssertion, false, false,
+		},
+		{
+			func(_ *world, a *session.Assertion) { a.Subject = "a" + string(rune(0x2028)) + "b" },
+			"subject with a line separator", signinsvc.ReasonAssertion, false, false,
 		},
 		{
 			func(_ *world, a *session.Assertion) { a.PrincipalID = "prn-1" },

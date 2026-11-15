@@ -527,6 +527,14 @@ linters:
         - pattern: ^http\.Request\.(Header|Form|PostForm|MultipartForm|RequestURI|Trailer|FormValue|PostFormValue|FormFile|ParseForm|ParseMultipartForm|MultipartReader|UserAgent|Referer|Cookie|Cookies|CookiesNamed|BasicAuth)$
           pkg: ^net/http$
           msg: Read the query through apidesc.QueryOf and the headers through apidesc.Header, which allow only the declared names.
+        # The one hidden-character check lives in internal/ident. Every other
+        # check of the server calls ident.IsHiddenRune, ident.HasHidden or
+        # ident.IsHiddenRuneExcept instead of naming unicode.IsControl or the
+        # Cc, Cf, Zl and Zp tables. A table check alone misses categories, so
+        # the linter refuses each direct use. Tests may name them to build
+        # hostile input.
+        - pattern: ^unicode\.(IsControl|Cc|Cf|Zl|Zp)$
+          msg: Call ident.IsHiddenRune, ident.HasHidden or ident.IsHiddenRuneExcept instead of a direct unicode check.
       analyze-types: true
 
     funlen:
@@ -736,6 +744,16 @@ linters:
         linters:
           - forbidigo
         text: os\.Exit
+      # The one definition in internal/ident, hostile input in tests, and the
+      # own copy of the client generator unit keep their unicode check. The
+      # client generator and its conformance suite are a separate unit
+      # (depguard rule clientgen). They import no server code, so they keep
+      # their own copy of the check. This is a boundary, not a per-file
+      # exception.
+      - path: (^|/)internal/ident/|_test\.go$|(^|/)internal/clientgen/|(^|/)cmd/clientgen/
+        linters:
+          - forbidigo
+        text: Call ident\.IsHiddenRune
 
 formatters:
   enable:

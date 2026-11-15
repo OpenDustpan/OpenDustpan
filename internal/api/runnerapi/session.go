@@ -13,9 +13,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -667,7 +667,7 @@ func checkFinishMessage(m string) error {
 		return fmt.Errorf("%w: the reason is at most %d bytes of text", runner.ErrInvalid, maxFinishMessage)
 	}
 
-	if strings.ContainsFunc(m, func(r rune) bool { return unicode.IsControl(r) && r != '\n' && r != '\t' }) {
+	if strings.ContainsFunc(m, func(r rune) bool { return ident.IsHiddenRuneExcept(r, '\n', '\t') }) {
 		return fmt.Errorf("%w: the reason has a control character", runner.ErrInvalid)
 	}
 

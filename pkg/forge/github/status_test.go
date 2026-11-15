@@ -193,6 +193,34 @@ func TestStatusCapabilityFollowsThePermissions(t *testing.T) {
 	}
 }
 
+// TestSetStatusRefusesAHostileStatus checks the checks of the adapter alone: a
+// hidden character in the context, the description or the address is refused
+// before any call, as if the check of the port and the check of GitHub were not there.
+func TestSetStatusRefusesAHostileStatus(t *testing.T) {
+	t.Parallel()
+
+	f := cannedForge(t, map[string]hostAnswer{})
+
+	for name, edit := range map[string]func(*forge.Status){
+		"right-to-left override in the context": func(s *forge.Status) {
+			s.Context = "a" + string(rune(0x202e)) + "b"
+		},
+		"line separator in the description": func(s *forge.Status) {
+			s.Description = "a" + string(rune(0x2028)) + "b"
+		},
+		"right-to-left override in the address": func(s *forge.Status) {
+			s.TargetURL = "https://dustpan.example/" + string(rune(0x202e))
+		},
+	} {
+		s := successStatus()
+		edit(&s)
+
+		if err := f.SetStatus(t.Context(), "acme/infra", headSHA, s); !errors.Is(err, forge.ErrInvalid) {
+			t.Errorf("%s: SetStatus = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
 // TestSetStatusRefusesAnInstallationThatCannotWrite checks the error of a
 // token request that GitHub refuses for the permission to write statuses: the
 // call is refused and the text names the permission.

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/blob"
 )
 
@@ -97,10 +97,10 @@ func isTransientNetwork(err error) bool {
 	return ok && netErr.Timeout()
 }
 
-// stripControl drops CR, LF and the other control characters from text.
+// stripControl drops CR, LF and the other hidden characters from text.
 func stripControl(text string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if ident.IsHiddenRune(r) {
 			return -1
 		}
 
