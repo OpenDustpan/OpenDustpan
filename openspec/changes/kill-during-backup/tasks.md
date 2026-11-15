@@ -11,7 +11,7 @@
 
 - [ ] 2.1 Add a throttled blob seed helper for the 500 MB backup in e2e/ha_kill_test.go (NEW func seedThrottledBlobs). The helper seeds blobs through the proxy and starts the backup on ANY /api/server/backups/{} with an access token. Check: The fixture seeds 500 MB and the copy still runs at kill time. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 2.2 Expose the NEW field expiryCount on the durable operation with the same name on backup status and backup check output, in internal/cli/client/backup.go and internal/cli/client/backup_check.go. Check: Operation shape and ANY /api/server/backups/{} and ANY /api/server/backups/{}/check return the same NEW field expiryCount with an access token.
-- [ ] 2.3 Document the measured takeover time with its date and no service level wording. Check: docs/guides/high-availability.md lists the figure with date.
+- [ ] 2.3 Document the measured takeover time with its date and no service level wording. Check: docs/guides/high-availability.md lists the figure with date. `make docs-lint` passes on each edited guide.
 
 ## 3. Definition of done
 

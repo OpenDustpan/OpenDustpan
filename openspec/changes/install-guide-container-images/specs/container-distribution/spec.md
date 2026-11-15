@@ -10,4 +10,4 @@ The install page of the container image SHALL be `docs/guides/install.md`, linke
 
 #### Scenario: Pull by digest
 - **WHEN** an operator reads the section "Pull by digest"
-- **THEN** the page shows the digest form of the reference and names the release notes as the place of the digest
+- **THEN** the page shows the digest form of the reference, and names the summary of the release workflow run and `docker buildx imagetools inspect <image>:<tag>` as the places of the digest

@@ -45,7 +45,7 @@ open questions, reaches review, and the maintainer finds out by hand.
 - A link is a line of the body, outside a fenced code block, that names
   `openspec/changes/<id>` with `<id>` of lowercase letters, digits and
   hyphens. The link counts when `openspec/changes/<id>/proposal.md` exists on
-  the head of the pull request, or `openspec/changes/archive/*-<id>/proposal.md`
+  the head of the pull request, or `openspec/changes/archive/YYYY-MM-DD-<id>/proposal.md` (the date prefix that OpenSpec writes when it archives a change)
   exists (an archived change), and its section "## Open questions" reads
   "none" (or the proposal has the line "Open questions: none").
 - At least one link must count. Else the check fails with one line that names

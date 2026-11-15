@@ -14,10 +14,10 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Wire the probe to the real proxy, the real instances, and the real CLI binaries with credential kind access token, skipped with the missing part named when a depended part is not merged Check: Probe calls existing route `GET /health/ready` on each instance and the existing TFE-compatible state version and lock routes through the proxy with credential kind access token
-- [ ] 4.2 Write the NEW docs page `docs/guides/database-outage-probe.md` for the long and short outage steps and the retry report Check: Docs page for the outage probe runs each command as written
+- [ ] 4.2 Write the NEW docs page `docs/guides/database-outage-probe.md` for the long and short outage steps and the retry report Check: Docs page for the outage probe runs each command as written. `make docs-lint` passes on each edited guide.
 - [ ] 4.3 Run usability check from the docs page alone and full checks Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

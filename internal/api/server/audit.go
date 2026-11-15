@@ -81,6 +81,7 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		Reason:        "",
 		PrincipalKind: string(p.Kind),
 		JobID:         p.JobID,
+		Origin:        nil,
 	}
 }
 

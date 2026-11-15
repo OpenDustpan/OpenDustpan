@@ -22,7 +22,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Write the docs page in NEW file docs/guides/unmanaged-sweep-store.md. Check: The commands on the page run as written in a test. Confirmed by: CI (an e2e step in the NEW file e2e/add_job_session_paths_runner_unmanaged_sweep_store_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.1 Write the docs page in NEW file docs/guides/unmanaged-sweep-store.md. Check: The commands on the page run as written in a test. Confirmed by: CI (an e2e step in the NEW file e2e/add_job_session_paths_runner_unmanaged_sweep_store_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 4.2 Run the usability check from the docs page alone. Check: An embedder runs the suite on a new adapter from the page. A person's step.
 - [ ] 4.3 The wiring, the route and the e2e step with the real runner. Check: BLOCKED by the last part of the split (sweep claimer wiring and sweep routes). This part ships no route and no credential. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.4 Pass the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

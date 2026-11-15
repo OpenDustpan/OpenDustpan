@@ -23,10 +23,10 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Run e2e step against the real CLI: create pool, create token, join with dustpan-runner, retire, delete refused in use. Check: GET ANY /api/runners/{}/pools with access token of a namespace admin. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Add user docs page for pools and join tokens in the NEW file docs/guides/runner-pools.md in the same pull request. Check: docs page docs/guides/runner-pools.md runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/130_138_runner_pools_management_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.2 Add user docs page for pools and join tokens in the NEW file docs/guides/runner-pools.md in the same pull request. Check: docs page docs/guides/runner-pools.md runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/130_138_runner_pools_management_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 4.3 Run usability check, route action test TestActionsWithoutRoutesAreUnclassified, and make check. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

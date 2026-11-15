@@ -46,6 +46,7 @@ func groupClaimsEntry(action, object string) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 }
 
