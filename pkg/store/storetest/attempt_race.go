@@ -203,6 +203,7 @@ func (r *blobDeleteRig) raceUpdates(
 		BlobGuard: r.store, ManualLocks: nil, Updates: r.store, Tokens: nil, Checkpoints: checkpoints,
 		Events: r.store, Namespaces: nsSvc, Stacks: r.store, Blobs: r.live, Refusals: refusals, Now: now,
 		Logger: nil, MaxCheckpointBytes: 1 << 20, Journal: journal, Replayer: pulumijournal.NewReplayer(time.Now, ""),
+		OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)

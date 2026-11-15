@@ -601,6 +601,7 @@ func newFixtureWith(
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -620,6 +621,7 @@ func newFixtureWith(
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)
@@ -767,6 +769,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -786,6 +789,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)

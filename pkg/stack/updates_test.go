@@ -707,7 +707,13 @@ func newUpdates(t *testing.T) updatesFixture {
 func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Logger) updatesFixture {
 	t.Helper()
 
-	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: blobguardtest.None{}, wrap: nil})
+	return newUpdatesFull(
+		t,
+		clk,
+		blobs,
+		logger,
+		updatesFixtureOptions{guard: blobguardtest.None{}, wait: nil, wrap: nil},
+	)
 }
 
 // newUpdatesGuarded is newUpdatesWith with guard as the guard of the blob
@@ -717,7 +723,17 @@ func newUpdatesGuarded(
 ) updatesFixture {
 	t.Helper()
 
-	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: guard, wrap: nil})
+	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: guard, wait: nil, wrap: nil})
+}
+
+// newUpdatesWaiting is newUpdatesGuarded with wait as the hook of the refused
+// blob delete takes.
+func newUpdatesWaiting(
+	t *testing.T, clk *clock, guard blobguard.Leases, wait blobguard.WaitCounter,
+) updatesFixture {
+	t.Helper()
+
+	return newUpdatesFull(t, clk, nil, nil, updatesFixtureOptions{guard: guard, wait: wait, wrap: nil})
 }
 
 // newUpdatesWrapped is newUpdatesWith with a wrap of the checkpoint store: a
@@ -727,14 +743,21 @@ func newUpdatesWrapped(
 ) updatesFixture {
 	t.Helper()
 
-	return newUpdatesFull(t, clk, blobs, logger, updatesFixtureOptions{guard: blobguardtest.None{}, wrap: wrap})
+	return newUpdatesFull(
+		t,
+		clk,
+		blobs,
+		logger,
+		updatesFixtureOptions{guard: blobguardtest.None{}, wait: nil, wrap: wrap},
+	)
 }
 
 // updatesFixtureOptions holds the parts of the fixture that some tests set:
-// the guard of the blob deletes and the wrap of the checkpoint store. A nil
-// wrap uses the in-memory store itself.
+// the guard of the blob deletes, the hook of the refused takes and the wrap
+// of the checkpoint store. A nil wrap uses the in-memory store itself.
 type updatesFixtureOptions struct {
 	guard blobguard.Leases
+	wait  blobguard.WaitCounter
 	wrap  func(*memUpdates) stack.CheckpointStore
 }
 
@@ -744,7 +767,7 @@ func newUpdatesFull(
 ) updatesFixture {
 	t.Helper()
 
-	guard, wrap := opts.guard, opts.wrap
+	guard, wait, wrap := opts.guard, opts.wait, opts.wrap
 
 	ns := namespace.Namespace{
 		ID:                  namespace.NewID(),
@@ -783,6 +806,7 @@ func newUpdatesFull(
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
 		Sealer:             sealer,
 		BlobGuard:          guard,
+		OnDeleteWait:       wait,
 		ManualLocks:        nil,
 		Updates:            store,
 		Tokens:             nil,
@@ -2233,6 +2257,7 @@ func (f updatesFixture) withStacks(t *testing.T, stacks stack.CheckpointStacks) 
 		Journal:            nil,
 		Replayer:           nil,
 		Refusals:           f.refusals,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)
@@ -2328,7 +2353,7 @@ func (f updatesFixture) withKeepSetHook(t *testing.T, before func()) *stack.Upda
 		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},
 		Events:      f.store, Namespaces: f.namespaces, Stacks: f.store, Blobs: f.blobs,
 		Now: f.clock.Now, Logger: nil, MaxCheckpointBytes: 1024,
-		Journal: nil, Replayer: nil, Refusals: f.refusals,
+		Journal: nil, Replayer: nil, Refusals: f.refusals, OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)
@@ -2349,7 +2374,7 @@ func (f updatesFixture) withKeepSetHookAndGuard(t *testing.T, guard blobguard.Le
 		Checkpoints: hookedKeepSet{memUpdates: f.store, before: before},
 		Events:      f.store, Namespaces: f.namespaces, Stacks: f.store, Blobs: f.blobs,
 		Now: f.clock.Now, Logger: nil, MaxCheckpointBytes: 1024,
-		Journal: nil, Replayer: nil, Refusals: f.refusals,
+		Journal: nil, Replayer: nil, Refusals: f.refusals, OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)
