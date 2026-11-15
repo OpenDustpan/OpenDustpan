@@ -22,6 +22,8 @@ const (
 	// MinTokenFreshness is the shortest token freshness window that is not
 	// zero.
 	MinTokenFreshness = time.Minute
+	// MaxTokenFreshness is the longest token freshness window: 15 minutes.
+	MaxTokenFreshness = 900 * time.Second
 )
 
 // DefaultTokenFreshness is the token freshness window of a policy that no
@@ -30,15 +32,15 @@ const (
 const DefaultTokenFreshness = 15 * time.Minute
 
 // ValidTokenFreshness reports whether d is a usable token freshness window:
-// 0 (no check), or MinTokenFreshness to MaxLengthBound, in whole seconds.
-// It returns ErrInvalid otherwise.
+// 0 (a fresh authentication at each step), or MinTokenFreshness to
+// MaxTokenFreshness, in whole seconds. It returns ErrInvalid otherwise.
 func ValidTokenFreshness(d time.Duration) error {
 	switch {
 	case d == 0:
 		return nil
-	case d < MinTokenFreshness || d > MaxLengthBound:
+	case d < MinTokenFreshness || d > MaxTokenFreshness:
 		return fmt.Errorf("%w: the token freshness window %s is not 0 or %s to %s", ErrInvalid, d,
-			MinTokenFreshness, MaxLengthBound)
+			MinTokenFreshness, MaxTokenFreshness)
 	case d%time.Second != 0:
 		return fmt.Errorf("%w: the token freshness window is not a whole count of seconds", ErrInvalid)
 	default:

@@ -21,32 +21,33 @@ import (
 var errReauthenticate = errors.New("the sign-in of this console session is too old for this change")
 
 // reauthenticateError is the refusal of a token change from a console
-// session whose sign-in is older than window. URL starts a sign-in that
-// asks the identity provider for a new authentication. The console adds
-// the query parameter return. A session of the password sign-in has no
-// such URL: the person signs in again with the password, through POST
-// /api/dustpan/v1/sign-in/password, which is no page to open.
+// session whose sign-in is older than window. URL is the path of a new
+// sign-in. For an identity provider it starts a sign-in that asks the
+// provider for a new authentication, and the console adds the query
+// parameter return. A session of the password sign-in has no start route:
+// its URL is the password route (POST /api/dustpan/v1/sign-in/password),
+// which is no page to open.
 type reauthenticateError struct {
 	url    string
 	window time.Duration
 }
 
 func (e reauthenticateError) Error() string {
-	if e.url == "" {
+	if e.url == localSignInPath {
 		return fmt.Sprintf("the sign-in of this console session is older than %s, so sign in again with the "+
-			"password before this change", e.window)
+			"password through POST %s before this change", e.window, localSignInPath)
 	}
 
 	return fmt.Sprintf("the sign-in of this console session is older than %s, so sign in again at the identity "+
 		"provider before this change", e.window)
 }
 
-// reauthenticateURL returns the URL that starts a new authentication at the
-// identity provider of a session, and empty for the password sign-in: its
-// provider has no start route.
+// reauthenticateURL returns the path of a new sign-in for the provider of a
+// session: the start path with ?fresh=1 for an identity provider, and the
+// password route for the password sign-in, which has no start route.
 func reauthenticateURL(provider string) string {
 	if provider == localuser.ProviderID {
-		return ""
+		return localSignInPath
 	}
 
 	return sessionauth.SignInStartPrefix + url.PathEscape(provider) + "?fresh=1"
@@ -74,6 +75,35 @@ const freshStepRequiredCode = sessionauth.FreshStepRequiredCode
 
 // freshnessKey carries the freshness check of a token change.
 type freshnessKey struct{}
+
+// freshWindow is the token freshness window that a check may compare: 0,
+// or a whole count of seconds from session.MinTokenFreshness to
+// session.MaxTokenFreshness. newFreshWindow is the only constructor, so no
+// raw duration of the store reaches a comparison.
+type freshWindow time.Duration
+
+// newFreshWindow returns the window d when it is 0, or a whole count of
+// seconds from session.MinTokenFreshness to session.MaxTokenFreshness. It
+// reports false for each other value.
+func newFreshWindow(d time.Duration) (freshWindow, bool) {
+	if d == 0 {
+		return freshWindow(0), true
+	}
+
+	if d < session.MinTokenFreshness || d > session.MaxTokenFreshness || d%time.Second != 0 {
+		return 0, false
+	}
+
+	return freshWindow(d), true
+}
+
+// asksEachTime reports whether w is 0: a window of 0 asks for a fresh
+// authentication at each step, so no sign-in passes.
+func (w freshWindow) asksEachTime() bool { return w == 0 }
+
+// duration returns w as a time.Duration for the comparison of
+// sessionauth.Fresh.
+func (w freshWindow) duration() time.Duration { return time.Duration(w) }
 
 // requireFresh runs the freshness check of a change on a request with a
 // console session. A request with no session, for example one with an
@@ -110,7 +140,8 @@ func freshParam(r *http.Request) (bool, error) {
 // policy, from a console session whose sign-in is older than the token
 // freshness window of the session policy. A request with no console
 // session, for example one with an access token, returns
-// errFreshStepRequired. A sign-in after now is too old. A window of 0 passes. With no session policy
+// errFreshStepRequired. A sign-in after now is too old. A window of 0 asks
+// at each step, so no sign-in passes. With no session policy
 // service, the window is session.DefaultTokenFreshness.
 func (h *Handler) checkTokenFreshness(r *http.Request) error {
 	caller, ok := sessionFromRequest(r)
@@ -122,32 +153,61 @@ func (h *Handler) checkTokenFreshness(r *http.Request) error {
 		return errNoFreshnessCheck
 	}
 
-	window := session.DefaultTokenFreshness
+	set := session.DefaultTokenFreshness
 
 	if h.sessions != nil {
 		policy, err := h.sessions.Policy(r.Context())
 		if err != nil {
-			return fmt.Errorf("read the token freshness window: %w", err)
+			// Defense in depth: newFreshWindow refuses a stored window that
+			// is out of range, and sessionauth.Fresh refuses a window of 0
+			// at the comparison. The server fails closed here as well, so
+			// that a policy read that cannot answer cannot widen the window
+			// or turn the check off: an unknown window is 0.
+			set = 0
+		} else {
+			set = policy.TokenFreshness
 		}
+	}
 
-		window = policy.TokenFreshness
+	window, ok := newFreshWindow(set)
+	if !ok {
+		// Defense in depth: ValidTokenFreshness refuses an out-of-range
+		// window at the write of the session policy (internal/api/server/
+		// sessionpolicy.go), and sessionauth.Fresh refuses a window of 0.
+		// This check stays, so that a row that another version wrote cannot
+		// extend the window or turn the check off: an unknown window
+		// refuses like a window of 0.
+		window = freshWindow(0)
+	}
+
+	if window.asksEachTime() {
+		// Defense in depth: sessionauth.Fresh refuses a window of 0 at the
+		// comparison below, and each other caller of Fresh (the TFE, the
+		// issuer, the profile and the Pulumi paths) refuses with it. This
+		// check stays, so that this route cannot pass a sign-in if a new
+		// caller of Fresh accepts a window of 0 again.
+		return reauthenticateError{
+			url:    reauthenticateURL(caller.Match.Session.Provider),
+			window: window.duration(),
+		}
 	}
 
 	// A sign-in after now has a negative age and is refused like a stale one.
-	if sessionauth.Fresh(h.signIn.sessions.Now(), caller.Match.Session.AuthTime, window) {
+	if sessionauth.Fresh(h.signIn.sessions.Now(), caller.Match.Session.AuthTime, window.duration()) {
 		return nil
 	}
 
 	return reauthenticateError{
 		url:    reauthenticateURL(caller.Match.Session.Provider),
-		window: window,
+		window: window.duration(),
 	}
 }
 
 // fresh wraps a write that needs a fresh authentication: a console session
 // must have signed in recently enough. A request with an access token gets
 // 403 with the error code mfa.fresh-step-required, and a session with an old
-// sign-in gets 401. Each refusal writes one failure entry for action on the
+// sign-in, or a session under a window of 0, gets the same 403 with the path
+// of a new sign-in. Each refusal writes one failure entry for action on the
 // object, best effort.
 func (h *Handler) fresh(action identity.Action, serve RouteHandler) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
