@@ -6,17 +6,51 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+// argvScript runs the program in ARGV_0 with the arguments in ARGV_1 and
+// later. The arguments go through the environment, so the command line of the
+// test process holds no variable and no argument goes through a shell parse.
+const argvScript = `args=()
+for ((i = 1; i < ARGC; i++)); do
+  name="ARGV_${i}"
+  args+=("${!name}")
+done
+program="${ARGV_0}"
+if [[ "${program}" == bash ]]; then
+  program="${BASH}"
+fi
+exec "${program}" "${args[@]}"`
+
+// argvCommand builds a command that runs program with args, as an argument
+// list, with the values in the environment (see argvScript).
+func argvCommand(t *testing.T, program string, args []string) *exec.Cmd {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "bash", "-s")
+	cmd.Stdin = strings.NewReader(argvScript)
+
+	// A program named bash runs as the absolute path of the outer bash, so
+	// that it does not depend on the restricted PATH of a test.
+	cmd.Env = []string{"ARGC=" + strconv.Itoa(len(args)+1), "ARGV_0=" + program}
+	for i, a := range args {
+		cmd.Env = append(cmd.Env, "ARGV_"+strconv.Itoa(i+1)+"="+a)
+	}
+
+	return cmd
+}
 
 // gitIn runs git in dir and fails the test on an error.
 func gitIn(t *testing.T, dir string, args ...string) {
 	t.Helper()
 
-	cmd := exec.CommandContext(t.Context(), "git", args...) //nolint:gosec // The test passes fixed git arguments to a throwaway repository.
+	cmd := argvCommand(t, "git", args)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(cmd.Env, os.Environ()...)
+	cmd.Env = append(cmd.Env,
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
@@ -65,9 +99,10 @@ func run(t *testing.T, dir, path string, args ...string) (int, string) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.CommandContext(t.Context(), "bash", append([]string{script}, args...)...) //nolint:gosec // The test runs the script under test with hostile arguments on purpose, as an argument list and not through a shell.
+	cmd := argvCommand(t, "bash", append([]string{script}, args...))
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+path)
+	cmd.Env = append(cmd.Env, os.Environ()...)
+	cmd.Env = append(cmd.Env, "PATH="+path)
 
 	var stderr bytes.Buffer
 
