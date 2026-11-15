@@ -180,20 +180,11 @@ func ValidateReason(reason string) error {
 		return fmt.Errorf("%w: longer than %d characters", ErrInvalidReason, MaxReasonLen)
 	}
 
-	if strings.ContainsFunc(reason, IsHiddenRune) {
-		return fmt.Errorf("%w: holds a control character", ErrInvalidReason)
+	if ident.HasHidden(reason) {
+		return fmt.Errorf("%w: holds a hidden character", ErrInvalidReason)
 	}
 
 	return nil
-}
-
-// IsHiddenRune reports whether r is a control character (Cc), a format
-// character (Cf, for example U+202E), a line separator (Zl, U+2028) or a
-// paragraph separator (Zp, U+2029). Text that holds such a character can
-// look different from its bytes, so a stored text that the server shows or
-// logs refuses it.
-func IsHiddenRune(r rune) bool {
-	return ident.IsHiddenRune(r)
 }
 
 // Entry is one append-only record of an action in a namespace. Namespace and
@@ -305,12 +296,12 @@ func (e Entry) validateWhat() error {
 		return fmt.Errorf("%w: missing action", ErrInvalidEntry)
 	case e.Object == "":
 		return fmt.Errorf("%w: missing object", ErrInvalidEntry)
-	case strings.ContainsFunc(e.Object, IsHiddenRune):
+	case ident.HasHidden(e.Object):
 		// Defense in depth: the adapters parse and clean the reference before
 		// they build an entry. This check stays so that no caller can store a
 		// reference that looks different from its bytes.
 		return fmt.Errorf("%w: object holds a hidden character", ErrInvalidEntry)
-	case strings.ContainsFunc(e.ObjectID, IsHiddenRune):
+	case ident.HasHidden(e.ObjectID):
 		return fmt.Errorf("%w: object ID holds a hidden character", ErrInvalidEntry)
 	case len(e.UserAgent) > MaxUserAgentLen:
 		return fmt.Errorf("%w: user agent longer than %d bytes", ErrInvalidEntry, MaxUserAgentLen)

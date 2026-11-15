@@ -411,6 +411,10 @@ func (a *ProcessAdapter) decode(line []byte, id int64, method string, out any) e
 // cuts a message that is longer than MaxRPCMessageBytes at a rune boundary.
 func rpcMessage(m string) string {
 	m = strings.Map(func(r rune) rune {
+		// This package is the client conformance harness: depguard fences it
+		// off from the server module, so it cannot call ident.IsHiddenRune.
+		// The check below is the same set: control (Cc), format (Cf), line
+		// separator (Zl) and paragraph separator (Zp) characters.
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
 			return ' '
 		}

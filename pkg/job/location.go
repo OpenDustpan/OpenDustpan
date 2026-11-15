@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode"
 
-	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/source"
 )
 
@@ -151,10 +151,10 @@ func checkLocationField(name, v string, required bool) error {
 }
 
 // hasHidden reports whether s holds a hidden character (see
-// audit.IsHiddenRune), a space or another character that does not print.
+// ident.IsHiddenRune), a space or another character that does not print.
 func hasHidden(s string) bool {
 	return strings.ContainsFunc(s, func(r rune) bool {
-		return audit.IsHiddenRune(r) || !unicode.IsPrint(r) || r == ' '
+		return ident.IsHiddenRune(r) || !unicode.IsPrint(r) || r == ' '
 	})
 }
 
