@@ -53,7 +53,7 @@ func listAndLog(t *testing.T, env *e2e.Env) {
 	}
 
 	first, second := []byte("first line\n"), []byte("second line\n")
-	run.streamsWhileTheStepRuns(t, step, first, second)
+	run.streamsWhileTheStepRuns(ctx, t, step, first, second)
 
 	// A resume with after reads the entries after that seq, and the end.
 	resumed := openLogStream(ctx, t, env, run.job, "?after=1")
@@ -71,10 +71,9 @@ func listAndLog(t *testing.T, env *e2e.Env) {
 // streamsWhileTheStepRuns writes two chunks of the log through the launcher and
 // reads the log stream meanwhile: the first entry arrives before the phase
 // ends, and the second entry and the end line arrive after the finish.
-func (r *launched) streamsWhileTheStepRuns(t *testing.T, step string, first, second []byte) {
+func (r *launched) streamsWhileTheStepRuns(ctx context.Context, t *testing.T, step string, first, second []byte) {
 	t.Helper()
 
-	ctx := t.Context()
 	run := r
 	endPath := pathOf(protocol.PathSessionStepEnd, step, 0)
 
