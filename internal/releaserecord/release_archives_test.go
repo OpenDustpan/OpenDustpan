@@ -323,7 +323,8 @@ func extendRecord(t *testing.T, dir, version string) {
 }
 
 // runInTree runs scripts/release-<step>.sh in dir with the Go caches of the
-// test process and no network for the Go tool.
+// test process. The build of the other platforms may need modules that the
+// cache of the test process does not hold, so the Go tool may download them.
 func runInTree(t *testing.T, dir, step, version, outdir string) (string, error) {
 	t.Helper()
 
@@ -338,7 +339,7 @@ func runInTree(t *testing.T, dir, step, version, outdir string) (string, error) 
 	}
 
 	env := []string{
-		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GOPROXY=off", "GOTOOLCHAIN=local",
+		"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GOTOOLCHAIN=local",
 		"GOCACHE=" + goEnv[0], "GOMODCACHE=" + goEnv[1],
 		"RELEASE_STEP=" + step, "RELEASE_VERSION=" + version, "RELEASE_DIR=" + outdir,
 	}

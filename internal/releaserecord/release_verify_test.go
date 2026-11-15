@@ -189,6 +189,24 @@ func editSums(change func(lines []string) []string) func(t *testing.T, dir strin
 	}
 }
 
+// replaceWithLink moves a file out of the set and puts a symbolic link of the
+// same name in its place. The link points to the moved file, so the bytes are
+// right and only a check for links can refuse the set.
+func replaceWithLink(name string) func(t *testing.T, dir string) {
+	return func(t *testing.T, dir string) {
+		t.Helper()
+
+		target := filepath.Join(t.TempDir(), name)
+		if err := os.Rename(filepath.Join(dir, name), target); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func verifyCases() []verifyCase {
 	good := goodEntries(verifyVersion)
 	zeros := strings.Repeat("0", 64)
@@ -268,6 +286,34 @@ func verifyCases() []verifyCase {
 		{
 			"a repeated entry", verifyVersion,
 			plus(fileEntry("opendustpan", "x", 0o755)), nil,
+			"archive content: " + verifyArchive,
+		},
+		{
+			"an archive that is a symbolic link", verifyVersion, nil,
+			replaceWithLink(verifyArchive), "missing file: " + verifyArchive,
+		},
+		{
+			"a SHA256SUMS that is a symbolic link", verifyVersion, nil,
+			replaceWithLink("SHA256SUMS"), "missing file: SHA256SUMS",
+		},
+		{
+			"a SHA256SUMS with a repeated entry", verifyVersion, nil,
+			editSums(func(lines []string) []string { return append(lines, lines[0]) }),
+			"SHA256SUMS has an unexpected entry",
+		},
+		{
+			"a directory named LICENSE", verifyVersion,
+			append(without(good, "LICENSE"), dirEntry("LICENSE")), nil,
+			"archive content: " + verifyArchive,
+		},
+		{
+			"a directory named README.md", verifyVersion,
+			append(without(good, "README.md"), dirEntry("README.md")), nil,
+			"archive content: " + verifyArchive,
+		},
+		{
+			"a directory named opendustpan", verifyVersion,
+			append(without(good, "opendustpan"), dirEntry("opendustpan")), nil,
 			"archive content: " + verifyArchive,
 		},
 	}
