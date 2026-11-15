@@ -98,12 +98,28 @@ func TestMirrorRefusals(t *testing.T) {
 		"unknown version":        "/v1/mirror/registry.example.com/acme/payments/9.9.9.json",
 		"other namespace":        "/v1/mirror/registry.example.com/other/payments/index.json",
 		"other host":             "/v1/mirror/evil.example.com/acme/payments/index.json",
+		"other host, version":    "/v1/mirror/evil.example.com/acme/payments/1.0.0.json",
 		"version without suffix": "/v1/mirror/registry.example.com/acme/payments/1.0.0",
 		"not a version file":     "/v1/mirror/registry.example.com/acme/payments/latest",
 	} {
 		rec := f.get(t, target)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s = %d, want 404", name, rec.Code)
+		}
+	}
+
+	// Defense in depth: a file name with the .json suffix that is not a valid
+	// version is refused before the store is read.
+	for _, file := range []string{"1.0.0+x.json", "v1.0.0.json", "..json", "1.0.0.json.json", ".json"} {
+		before := f.reg.reads()
+
+		rec := f.get(t, "/v1/mirror/registry.example.com/acme/payments/"+file)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("version file %q = %d, want 404", file, rec.Code)
+		}
+
+		if after := f.reg.reads(); after != before {
+			t.Fatalf("version file %q read the store %d times, want 0", file, after-before)
 		}
 	}
 

@@ -36,6 +36,9 @@ type fakeRegistry struct {
 	mu      sync.Mutex
 	keyGone bool
 	files   map[string][]byte
+	// releaseReads counts the calls of Release: a test of a refused request
+	// checks that the store was not read.
+	releaseReads int
 }
 
 // fixtureRelease is the one release of acme/payments.
@@ -75,6 +78,10 @@ func (f *fakeRegistry) ServableReleases(_ context.Context, ns namespace.Name, na
 }
 
 func (f *fakeRegistry) Release(_ context.Context, ns namespace.Name, name, version string) (registry.Release, error) {
+	f.mu.Lock()
+	f.releaseReads++
+	f.mu.Unlock()
+
 	if ns != "acme" || name != "payments" || version != "1.0.0" {
 		return registry.Release{}, registry.ErrNotFound
 	}
@@ -164,10 +171,18 @@ type registryFixture struct {
 	clock   *time.Time
 }
 
+// reads returns the number of Release calls so far.
+func (f *fakeRegistry) reads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.releaseReads
+}
+
 // newFakeRegistry returns the fake registry of acme/payments with its files.
 func newFakeRegistry() *fakeRegistry {
 	return &fakeRegistry{
-		mu: sync.Mutex{}, keyGone: false,
+		mu: sync.Mutex{}, keyGone: false, releaseReads: 0,
 		files: map[string][]byte{
 			zipHash: []byte("zip"), sumsHash: []byte("sums"), sigHash: []byte("sig"), moduleHash: []byte("tgz!"),
 		},
@@ -446,7 +461,7 @@ func TestRegistryHostGate(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		for _, route := range []string{versionsPath, downloadPath} {
+		for _, route := range []string{versionsPath, downloadPath, mirrorIndexPath, mirrorVersionPath} {
 			t.Run(tc.name+" "+route, func(t *testing.T) {
 				t.Parallel()
 
@@ -492,6 +507,37 @@ func TestRegistryHostGateWritesAnAuditEntryAndAnswersAsMissing(t *testing.T) {
 	}
 }
 
+func TestMirrorHostGateAuditsAPathHostnameRefusal(t *testing.T) {
+	t.Parallel()
+
+	for _, target := range []string{
+		"/v1/mirror/evil.example.com/acme/payments/index.json",
+		"/v1/mirror/evil.example.com/acme/payments/1.0.0.json",
+	} {
+		f := newRegistryFixture(t, registryHost, allowAll())
+
+		rec := f.serve(t, regReq{host: registryHost, target: target, token: "test-token", headers: nil})
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s = %d, want 404", target, rec.Code)
+		}
+
+		f.audits.mu.Lock()
+
+		if len(f.audits.entries) != 1 {
+			f.audits.mu.Unlock()
+			t.Fatalf("%s wrote %d audit entries, want 1", target, len(f.audits.entries))
+		}
+
+		e := f.audits.entries[0]
+		f.audits.mu.Unlock()
+
+		if e.Outcome != "denied" || e.Action != "registry:read" || e.Namespace != "acme" ||
+			!strings.Contains(e.Reason, "another host") {
+			t.Fatalf("%s audit entry = %+v", target, e)
+		}
+	}
+}
+
 func TestRegistryHostGateFailsClosedWithNoConfiguredHost(t *testing.T) {
 	t.Parallel()
 
@@ -509,16 +555,20 @@ func TestRegistryAuthorization(t *testing.T) {
 	t.Parallel()
 
 	denied := newRegistryFixture(t, registryHost, stubAuthorizer{})
-	if rec := denied.get(t, versionsPath); rec.Code != http.StatusForbidden {
-		t.Fatalf("versions without registry:read = %d", rec.Code)
+	for _, route := range []string{versionsPath, mirrorIndexPath, mirrorVersionPath} {
+		if rec := denied.get(t, route); rec.Code != http.StatusForbidden {
+			t.Fatalf("%s without registry:read = %d", route, rec.Code)
+		}
 	}
 
 	open := newRegistryFixture(t, registryHost, allowAll())
 
 	for _, token := range []string{"", "stranger"} {
-		rec := open.serve(t, regReq{host: registryHost, target: versionsPath, token: token, headers: nil})
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("token %q = %d, want 401", token, rec.Code)
+		for _, route := range []string{versionsPath, mirrorIndexPath, mirrorVersionPath} {
+			rec := open.serve(t, regReq{host: registryHost, target: route, token: token, headers: nil})
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("%s with token %q = %d, want 401", route, token, rec.Code)
+			}
 		}
 	}
 }
@@ -537,6 +587,11 @@ func TestRegistryHostileNames(t *testing.T) {
 		"/v1/providers/%2e%2e/payments/versions",
 		"/v1/providers/acme/payments/1.0.0/download/linux%2Famd64",
 		"/v1/providers/beta/payments/versions",
+		"/v1/mirror/registry.example.com/Acme/payments/index.json",
+		"/v1/mirror/registry.example.com/acme/Payments/index.json",
+		"/v1/mirror/registry.example.com/acme/pay_ments/index.json",
+		"/v1/mirror/registry.example.com/%2e%2e/payments/index.json",
+		"/v1/mirror/registry.example.com/acme/payments/%2e%2e.json",
 	} {
 		if rec := f.get(t, target); rec.Code != http.StatusNotFound {
 			t.Errorf("%s = %d %s, want 404", target, rec.Code, rec.Body.String())
@@ -740,9 +795,10 @@ func TestNewHandlerRefusesAShortRegistryKey(t *testing.T) {
 		DenialLimiter:  nil,
 		Registry: &tfe.RegistryConfig{
 			Service: &fakeRegistry{
-				mu:      sync.Mutex{},
-				keyGone: false,
-				files:   nil,
+				mu:           sync.Mutex{},
+				keyGone:      false,
+				releaseReads: 0,
+				files:        nil,
 			},
 			Host:        registryHost,
 			DefaultPort: "443",
