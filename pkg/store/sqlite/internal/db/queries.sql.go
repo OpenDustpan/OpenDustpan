@@ -2546,20 +2546,20 @@ func (q *Queries) CreatePasskeyChallenge(ctx context.Context, arg CreatePasskeyC
 }
 
 const createPlacementRule = `-- name: CreatePlacementRule :exec
-INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
+INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_id, created_by, created_at_ms)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreatePlacementRuleParams struct {
-	ID            string
-	Namespace     string
-	Position      int64
-	Tool          string
-	Project       string
-	Stack         string
-	CollectionKey string
-	CreatedBy     string
-	CreatedAtMs   int64
+	ID           string
+	Namespace    string
+	Position     int64
+	Tool         string
+	Project      string
+	Stack        string
+	CollectionID string
+	CreatedBy    string
+	CreatedAtMs  int64
 }
 
 // The caller checks the fence in the same transaction and renumbers the list
@@ -2572,7 +2572,7 @@ func (q *Queries) CreatePlacementRule(ctx context.Context, arg CreatePlacementRu
 		arg.Tool,
 		arg.Project,
 		arg.Stack,
-		arg.CollectionKey,
+		arg.CollectionID,
 		arg.CreatedBy,
 		arg.CreatedAtMs,
 	)
@@ -3980,16 +3980,16 @@ func (q *Queries) DeletePlacementRule(ctx context.Context, arg DeletePlacementRu
 
 const deletePlacementRulesOfCollection = `-- name: DeletePlacementRulesOfCollection :exec
 DELETE FROM placement_rules
-WHERE namespace = ? AND collection_key = ?
+WHERE namespace = ? AND collection_id = ?
 `
 
 type DeletePlacementRulesOfCollectionParams struct {
-	Namespace     string
-	CollectionKey string
+	Namespace    string
+	CollectionID string
 }
 
 func (q *Queries) DeletePlacementRulesOfCollection(ctx context.Context, arg DeletePlacementRulesOfCollectionParams) error {
-	_, err := q.db.ExecContext(ctx, deletePlacementRulesOfCollection, arg.Namespace, arg.CollectionKey)
+	_, err := q.db.ExecContext(ctx, deletePlacementRulesOfCollection, arg.Namespace, arg.CollectionID)
 	return err
 }
 
@@ -7987,10 +7987,27 @@ func (q *Queries) GetPersonPreferences(ctx context.Context, id string) (GetPerso
 	return i, err
 }
 
+const getPlacementCollection = `-- name: GetPlacementCollection :one
+SELECT id FROM collections WHERE namespace = ? AND id = ?
+`
+
+type GetPlacementCollectionParams struct {
+	Namespace string
+	ID        string
+}
+
+// The collection ID must belong to the namespace of the rule.
+func (q *Queries) GetPlacementCollection(ctx context.Context, arg GetPlacementCollectionParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getPlacementCollection, arg.Namespace, arg.ID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getPlacementRule = `-- name: GetPlacementRule :one
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = ? AND r.id = ?
 `
 
@@ -8006,6 +8023,7 @@ type GetPlacementRuleRow struct {
 	Tool           string
 	Project        string
 	Stack          string
+	CollectionID   string
 	CollectionName string
 	CreatedBy      string
 	CreatedAtMs    int64
@@ -8021,6 +8039,7 @@ func (q *Queries) GetPlacementRule(ctx context.Context, arg GetPlacementRulePara
 		&i.Tool,
 		&i.Project,
 		&i.Stack,
+		&i.CollectionID,
 		&i.CollectionName,
 		&i.CreatedBy,
 		&i.CreatedAtMs,
@@ -16968,9 +16987,9 @@ func (q *Queries) ListPlacementRuleIDs(ctx context.Context, namespace string) ([
 }
 
 const listPlacementRules = `-- name: ListPlacementRules :many
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = ?
 ORDER BY r.position, r.id
 `
@@ -16982,6 +17001,7 @@ type ListPlacementRulesRow struct {
 	Tool           string
 	Project        string
 	Stack          string
+	CollectionID   string
 	CollectionName string
 	CreatedBy      string
 	CreatedAtMs    int64
@@ -17003,6 +17023,7 @@ func (q *Queries) ListPlacementRules(ctx context.Context, namespace string) ([]L
 			&i.Tool,
 			&i.Project,
 			&i.Stack,
+			&i.CollectionID,
 			&i.CollectionName,
 			&i.CreatedBy,
 			&i.CreatedAtMs,
@@ -17023,13 +17044,13 @@ func (q *Queries) ListPlacementRules(ctx context.Context, namespace string) ([]L
 const listPlacementRulesOfCollection = `-- name: ListPlacementRulesOfCollection :many
 SELECT id, tool, project, stack
 FROM placement_rules
-WHERE namespace = ? AND collection_key = ?
+WHERE namespace = ? AND collection_id = ?
 ORDER BY position, id
 `
 
 type ListPlacementRulesOfCollectionParams struct {
-	Namespace     string
-	CollectionKey string
+	Namespace    string
+	CollectionID string
 }
 
 type ListPlacementRulesOfCollectionRow struct {
@@ -17041,7 +17062,7 @@ type ListPlacementRulesOfCollectionRow struct {
 
 // The rules that name one collection, for the audit entry of its delete.
 func (q *Queries) ListPlacementRulesOfCollection(ctx context.Context, arg ListPlacementRulesOfCollectionParams) ([]ListPlacementRulesOfCollectionRow, error) {
-	rows, err := q.db.QueryContext(ctx, listPlacementRulesOfCollection, arg.Namespace, arg.CollectionKey)
+	rows, err := q.db.QueryContext(ctx, listPlacementRulesOfCollection, arg.Namespace, arg.CollectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -23846,17 +23867,17 @@ func (q *Queries) UpdateNotificationSubscription(ctx context.Context, arg Update
 
 const updatePlacementRuleContent = `-- name: UpdatePlacementRuleContent :execrows
 UPDATE placement_rules
-SET tool = ?, project = ?, stack = ?, collection_key = ?
+SET tool = ?, project = ?, stack = ?, collection_id = ?
 WHERE namespace = ? AND id = ?
 `
 
 type UpdatePlacementRuleContentParams struct {
-	Tool          string
-	Project       string
-	Stack         string
-	CollectionKey string
-	Namespace     string
-	ID            string
+	Tool         string
+	Project      string
+	Stack        string
+	CollectionID string
+	Namespace    string
+	ID           string
 }
 
 func (q *Queries) UpdatePlacementRuleContent(ctx context.Context, arg UpdatePlacementRuleContentParams) (int64, error) {
@@ -23864,7 +23885,7 @@ func (q *Queries) UpdatePlacementRuleContent(ctx context.Context, arg UpdatePlac
 		arg.Tool,
 		arg.Project,
 		arg.Stack,
-		arg.CollectionKey,
+		arg.CollectionID,
 		arg.Namespace,
 		arg.ID,
 	)

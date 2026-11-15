@@ -253,7 +253,8 @@ func (coveragePlacementStore) GetPlacementRule(
 	_ context.Context, _ namespace.Name, _ string,
 ) (collection.Rule, error) {
 	return collection.Rule{
-		CreatedAt: time.Time{}, ID: "", Namespace: "", Tool: "", Project: "", Stack: "", Collection: "",
+		CreatedAt: time.Time{}, ID: "", Namespace: "", Tool: "", Project: "", Stack: "",
+		CollectionID: "", CollectionName: "",
 		CreatedBy: "", Position: 0,
 	}, nil
 }

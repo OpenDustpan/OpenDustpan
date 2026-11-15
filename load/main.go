@@ -745,12 +745,13 @@ func seedLoadPlacement(ctx context.Context, stores namespace.Store, ns namespace
 	ref := collection.Ref{Namespace: ns, Name: loadCollection}
 	created := loadEntry(ns, identity.ActionCollectionCreate, "collection:"+ns.String()+"/"+loadCollection)
 
-	if _, err = collections.Create(ctx, ref, created); err != nil {
+	c, err := collections.Create(ctx, ref, created)
+	if err != nil {
 		return fmt.Errorf("create collection: %w", err)
 	}
 
 	for _, tool := range []string{collection.ToolPulumi, collection.ToolOpenTofu} {
-		in := collection.RuleInput{Tool: tool, Project: "*", Stack: "*", Collection: loadCollection, Position: 0}
+		in := collection.RuleInput{Tool: tool, Project: "*", Stack: "*", CollectionID: c.ID, Position: 0}
 		ruled := loadEntry(ns, identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
 
 		if _, err = rules.Create(ctx, ns, in, ruled); err != nil {
