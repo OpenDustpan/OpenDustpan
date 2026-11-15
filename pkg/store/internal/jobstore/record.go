@@ -421,7 +421,7 @@ func (s *Store) ReservePlan(ctx context.Context, pc job.PhaseClaim, np *job.NewP
 
 		p.ItemKey, p.Parts, p.StateVersion = key, nil, j.Phases[pc.Phase].StateVersion
 
-		body, err := json.Marshal(encodePlan(&p))
+		body, err := json.Marshal(encodeReservePlan(&p, pc))
 		if err != nil {
 			return fmt.Errorf("encode plan %s: %w", p.ID, err)
 		}
@@ -545,8 +545,9 @@ func reservedRepeat(
 }
 
 // checkReserved checks that p is the plan that a reserve recorded for the job
-// j: the row exists, belongs to j, has no part, and names the same item key.
-// It returns the plan of the row.
+// j under the phase and the claim of pc: the row exists, belongs to j, has no
+// part, names the same item key, and its reserve names the phase, the
+// operation and the token of pc. It returns the plan of the row.
 func checkReserved(ctx context.Context, tx Tx, j *job.Job, pc *job.PhaseClaim, p *job.PlanRef) (*job.PlanRef, error) {
 	row, ok, err := tx.Plan(ctx, pc.Fence.Namespace, p.ID)
 	if err != nil {
@@ -571,6 +572,13 @@ func checkReserved(ctx context.Context, tx Tx, j *job.Job, pc *job.PhaseClaim, p
 		return nil, fmt.Errorf("%w: plan %s has parts", job.ErrConflict, p.ID)
 	case reserved.ItemKey != p.ItemKey:
 		return nil, fmt.Errorf("%w: plan %s has another item key than its reserve", job.ErrInvalid, p.ID)
+	case body.ReservePhase != pc.Phase || body.ReserveOperation != string(pc.Claim.Operation) ||
+		body.ReserveToken != pc.Claim.Token:
+		// Defense in depth: the write checks the live claim of pc before this
+		// read. This check stays so that a later claim of the same job cannot
+		// fill the reserve that another claim made, and a row without the
+		// binding fields is refused.
+		return nil, fmt.Errorf("%w: plan %s was reserved by another phase or claim", job.ErrConflict, p.ID)
 	}
 
 	return reserved, nil

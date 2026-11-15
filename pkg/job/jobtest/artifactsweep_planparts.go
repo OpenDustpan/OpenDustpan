@@ -17,17 +17,23 @@ const liveLease = sweepAfter + 2*time.Hour
 // errOperationRead is the failure of a read of an operation in the cases.
 var errOperationRead = errors.New("read of the operation failed")
 
-// sweepPlanPartCases returns the cases of the sweep of the parts of a plan that
-// the upload and the commit of a launcher leave: the parts of a plan that never
-// committed, and the parts that a committed plan does not name.
+// sweepPlanPartCases returns the cases of the sweep of the parts of a plan
+// that need no state write.
 func sweepPlanPartCases() []artifactSweepCase {
 	return []artifactSweepCase{
 		{"sweep: the parts of a plan whose claim was lost go", testSweepAbandonedPlanParts},
-		{"sweep: a part that the committed plan does not name goes", testSweepUnnamedPartAfterCommit},
 		{
 			"sweep: the parts of a live claim stay, and a failed read of the claim deletes nothing",
 			testSweepLiveClaimParts,
 		},
+	}
+}
+
+// stateSweepPlanPartCases returns the cases of the sweep of the parts of a
+// plan that need a state write.
+func stateSweepPlanPartCases() []artifactSweepCase {
+	return []artifactSweepCase{
+		{"sweep: a part that the committed plan does not name goes", testSweepUnnamedPartAfterCommit},
 	}
 }
 
@@ -84,9 +90,7 @@ func testSweepUnnamedPartAfterCommit(t *testing.T, h ArtifactSweepHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	writeState(t, h.Harness, f, false)
 
 	a := openPlan(t, h.RecorderHarness, f, "")
 	putStandardParts(t, h.RecorderHarness, a)

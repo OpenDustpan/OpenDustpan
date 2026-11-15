@@ -159,7 +159,7 @@ func (coverageStackStore) QueryStacks(ctx context.Context, q stack.PageQuery) ([
 }
 
 func (coverageStackStore) RenameStack(
-	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence,
+	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence, _ audit.Entry,
 ) error {
 	return stack.ErrNotFound
 }

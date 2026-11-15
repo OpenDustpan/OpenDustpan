@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -819,7 +820,7 @@ func newUpdatesFull(
 func (f updatesFixture) started(t *testing.T, kind stack.UpdateKind) stack.Started {
 	t.Helper()
 
-	return f.startedPlan(t, stack.Plan{Kind: kind, DryRun: false, CreatedBy: "", RestoredFrom: 0})
+	return f.startedPlan(t, stack.Plan{Kind: kind, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""})
 }
 
 func (f updatesFixture) startedPlan(t *testing.T, plan stack.Plan) stack.Started {
@@ -966,7 +967,7 @@ func TestOneMutatingUpdateAtATime(t *testing.T) {
 	running := f.started(t, stack.KindUpdate)
 
 	second, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindDestroy, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1060,7 +1061,10 @@ func TestDryRunsDoNotMutate(t *testing.T) {
 	ctx := t.Context()
 	running := f.started(t, stack.KindUpdate)
 
-	dry := f.startedPlan(t, stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0})
+	dry := f.startedPlan(
+		t,
+		stack.Plan{Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
+	)
 	if dry.Update.Mutates() || dry.Update.Version != 0 {
 		t.Errorf("dry run: mutates %t version %d, want false 0", dry.Update.Mutates(), dry.Update.Version)
 	}
@@ -1329,7 +1333,7 @@ func TestCreateRecordsRequester(t *testing.T) {
 	u, err := f.svc.Create(
 		ctx,
 		f.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "alice@example.com", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "alice@example.com", RestoredFrom: 0, GitHead: ""},
 	)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -1719,7 +1723,7 @@ func TestStartSweepsOldOrphanBlobs(t *testing.T) {
 	mem.ageAll(2 * time.Hour)
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -1762,7 +1766,7 @@ func TestStartKeepsYoungBlobs(t *testing.T) {
 	}
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -1809,7 +1813,7 @@ func TestStartKeepsReferencedBlobs(t *testing.T) {
 	mem.ageAll(90 * time.Minute)
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -1858,7 +1862,7 @@ func TestStartSucceedsWhenSweepDeleteFails(t *testing.T) {
 	mem.ageAll(2 * time.Hour)
 
 	next, err := f.svc.Create(ctx, f.ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create next update: %v", err)
@@ -1956,7 +1960,7 @@ func TestCheckpointLogsHoldNoBlobKey(t *testing.T) {
 		BlobSize:      0,
 		BlobMD5:       [16]byte{},
 
-		AttemptStartedAt: clk.Now(),
+		AttemptStartedAt: clk.Now(), Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if _, err := f.store.PutCheckpoint(ctx, stored, namespace.Fence{Namespace: "", FailoverVersion: 0}); err != nil {
@@ -2383,7 +2387,7 @@ func TestStartSweepKeepsBlobsWhenTheStackChanges(t *testing.T) {
 			svc := f.withKeepSetHook(t, func() { tc.change(f.store, f.ref) })
 
 			preview, createErr := f.svc.Create(t.Context(), f.ref, stack.Plan{
-				Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0,
+				Kind: stack.KindUpdate, DryRun: true, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 			})
 			if createErr != nil {
 				t.Fatalf("create preview: %v", createErr)

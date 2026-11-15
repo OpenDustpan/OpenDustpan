@@ -28,11 +28,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
@@ -117,6 +119,13 @@ type Store struct {
 	// reads runs the short catalog reads of the backup and restore code with
 	// the bounds of the API paths.
 	reads guardedDB
+	// attemptDeadline gives the attempt deadline of a transaction that can
+	// write an item key record. It is secret.AttemptDeadline. An internal test
+	// sets a shorter one.
+	attemptDeadline func(ctx context.Context, start time.Time) time.Time
+	// now gives the current time of the item key attempt code. Tests
+	// replace it.
+	now func() time.Time
 }
 
 // Option tunes Open. Callers that pass none get the defaults.
@@ -258,6 +267,8 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		guard:               nil,
 		marks:               newLongMarks(),
 		reads:               guardedDB{inner: nil, rt: roundTrip{deadline: 0, watch: nil, readOnlyTx: false}},
+		attemptDeadline:     secret.AttemptDeadline,
+		now:                 time.Now,
 	}
 
 	for _, opt := range opts {
@@ -268,8 +279,7 @@ func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 		cfg.ConnConfig.Tracer = s.tracer
 	}
 
-	cfg.AfterRelease = s.marks.afterRelease
-	cfg.BeforeClose = s.marks.beforeClose
+	cfg.AfterRelease, cfg.BeforeClose = s.marks.afterRelease, s.marks.beforeClose
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -448,7 +458,11 @@ func (s *Store) CreateStackPlaced(
 			return err
 		}
 
-		return setUnitCollection(ctx, q, placementMove(st, p), e)
+		if err := setUnitCollection(ctx, q, placementMove(st, p), e); err != nil {
+			return placementCollectionError(p.Collection.Name, err)
+		}
+
+		return nil
 	})
 }
 
@@ -593,22 +607,42 @@ func insertStackTags(ctx context.Context, q *db.Queries, id string, tags map[str
 	return nil
 }
 
+// stackNameChangeKey is the audit change key of a stack name.
+const stackNameChangeKey = "name"
+
 // RenameStack implements stack.Store. It renames the stack without moving its
 // history, checkpoint or events: child rows key on the stable stack ID. The
 // inventory keeps one entry for the same stack ID, under the new name, in the
-// same transaction. It returns ErrNotFound if no live stack has oldRef, and
-// ErrUpdateConflict while a mutating update of the stack runs.
+// same transaction. It appends the audit entry e in that transaction, with the
+// stable stack ID and the old and the new name. It returns ErrNotFound if no
+// live stack has oldRef, and ErrUpdateConflict while a mutating update of the
+// stack runs.
 func (s *Store) RenameStack(
-	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
+	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, e audit.Entry,
 ) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		if newName == oldRef.Stack {
-			return confirmStackPresent(ctx, q, oldRef)
-		}
-
-		if err := refuseRename(ctx, q, oldRef, newName); err != nil {
+	if newName == oldRef.Stack {
+		// Defense in depth: the service builds a valid entry too; this check
+		// stays so that a new caller cannot skip it.
+		if err := checkFencedEntry(fence, e); err != nil {
 			return err
 		}
+
+		return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+			return confirmStackPresent(ctx, q, oldRef)
+		})
+	}
+
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+		stackID, err := refuseRename(ctx, q, oldRef, newName)
+		if err != nil {
+			return err
+		}
+
+		oldName := oldRef.Stack.String()
+		e.ObjectID = stackID
+		e.Changes = []audit.Change{{
+			Key: stackNameChangeKey, Old: &oldName, New: newName.String(), Layer: "", TakesEffect: "",
+		}}
 
 		n, err := q.RenameStack(ctx, db.RenameStackParams{
 			Name:      newName.String(),
@@ -652,25 +686,30 @@ func (s *Store) RenameStack(
 // ErrAlreadyExists when newName names a stack of the same project. A running
 // update addresses the stack by its name. A rename under it would leave the
 // update with a name that no stack has: its checkpoint saves would fail and
-// the stack would stay locked by the update.
-func refuseRename(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) error {
+// the stack would stay locked by the update. On success it returns the stable
+// ID of the stack.
+func refuseRename(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) (string, error) {
 	// The stack lock serializes this check with StartUpdate. Without it, a
 	// start could commit between the count and the rename, and the update
 	// would run under a name that no stack has.
 	locked, err := lockStack(ctx, q, oldRef)
 	if errors.Is(err, stack.ErrUpdateNotFound) {
-		return stack.ErrNotFound
+		return "", stack.ErrNotFound
 	}
 
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if runErr := refuseRunningStack(ctx, q, locked.ID); runErr != nil {
-		return runErr
+		return "", runErr
 	}
 
-	return rejectTakenName(ctx, q, oldRef, newName)
+	if takenErr := rejectTakenName(ctx, q, oldRef, newName); takenErr != nil {
+		return "", takenErr
+	}
+
+	return locked.ID, nil
 }
 
 // confirmStackPresent returns nil when ref exists and ErrNotFound otherwise.

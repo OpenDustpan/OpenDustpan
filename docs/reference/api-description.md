@@ -142,7 +142,7 @@ reads them as they are. They are renamed in a later version of the API.
 | `components.schemas.ErrorResponse` | The body of an error: `code` (the HTTP status), `message`, and the optional `errorCode` and `errorArgs` |
 | `components.schemas.ErrorCode` | The `errorCode` values that exist today: every code of the error catalog, sorted. `errorCode` is an open enum of it: a client must accept a code that is not in the list, because the list grows. |
 | `components.schemas.ErrorAnswer` | The default answer of each route. It is a `oneOf` with a `discriminator` on `errorCode`. |
-| `components.schemas.<Code>Error` | The error answer of one code that has arguments, for example `LockLockedError` for `lock.locked`. `errorCode` has the one value of the code. `errorArgs` refers to the schema `<Code>ErrorArgs`. That schema lists each argument of the code with its type. A name is a string. A count is an integer. A time is a string with the format `date-time`. Each answer of the code has all of its arguments. |
+| `components.schemas.<Code>Error` | The error answer of one code that has arguments, for example `LockLockedError` for `lock.locked`. `errorCode` has the one value of the code. `errorArgs` refers to the schema `<Code>ErrorArgs`. That schema lists each argument of the code with its type. A name is a string. A count is an integer. A time is a string with the format `date-time`. Each answer of the code has all of its arguments. `access.denied` is the one exception: it has `action` and `objectKind` only when the server knows them. A program must still decide by `errorCode`, not by `message`. |
 
 ## Error answers by code
 

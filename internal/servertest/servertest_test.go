@@ -121,7 +121,7 @@ func TestMaintenanceStopsWritesOnEveryServer(t *testing.T) {
 		request{
 			server: 0,
 			method: http.MethodPost,
-			path:   "/api/server/maintenance/enter",
+			path:   "/api/dustpan/v1/maintenance/enter",
 			body:   "",
 			want:   http.StatusOK,
 		},
@@ -143,7 +143,7 @@ func TestMaintenanceStopsWritesOnEveryServer(t *testing.T) {
 		request{
 			server: 1,
 			method: http.MethodPost,
-			path:   "/api/server/maintenance/leave",
+			path:   "/api/dustpan/v1/maintenance/leave",
 			body:   "",
 			want:   http.StatusOK,
 		},
@@ -210,7 +210,7 @@ func TestSplitTopology(t *testing.T) {
 		request{server: 1, method: http.MethodGet, path: "/health/ready/api", body: "", want: http.StatusNotFound},
 		request{server: 1, method: http.MethodGet, path: "/api/server/metrics", body: "", want: http.StatusOK},
 		request{server: 0, method: http.MethodGet, path: "/health/ready/api", body: "", want: http.StatusOK},
-		request{server: 0, method: http.MethodGet, path: "/api/server/worker", body: "", want: http.StatusOK},
+		request{server: 0, method: http.MethodGet, path: "/api/dustpan/v1/worker", body: "", want: http.StatusOK},
 	)
 }
 

@@ -328,8 +328,8 @@ func testOrphans(t *testing.T, h Harness) {
 		t.Fatalf("durable Cancel = %v", err)
 	}
 
-	orphans, err := h.Jobs.Orphans(t.Context(), orphanPage)
-	if err != nil || len(orphans) != 1 || orphans[0].Job.ID != lost.ID || orphans[0].Missing {
+	orphans, damaged, err := h.Jobs.Orphans(t.Context(), orphanPage)
+	if err != nil || len(orphans) != 1 || orphans[0].Job.ID != lost.ID || orphans[0].Missing || len(damaged) != 0 {
 		t.Fatalf("Orphans = %v, %v; want only %s with an ended operation (not %s or %s)", orphanIDs(orphans), err,
 			lost.ID, live.ID, queued.ID)
 	}
@@ -338,7 +338,8 @@ func testOrphans(t *testing.T, h Harness) {
 		t.Fatalf("reconcile of an orphan = %s, want failed", got.State)
 	}
 
-	if orphans, err = h.Jobs.Orphans(t.Context(), orphanPage); err != nil || len(orphans) != 0 {
+	if orphans, damaged, err = h.Jobs.Orphans(t.Context(), orphanPage); err != nil || len(orphans) != 0 ||
+		len(damaged) != 0 {
 		t.Fatalf("Orphans after the reconcile = %v, %v; want none", orphanIDs(orphans), err)
 	}
 }

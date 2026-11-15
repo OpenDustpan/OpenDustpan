@@ -6,5 +6,7 @@ gate.approvers-user-invalid
 gate.final
 gate.invalid
 gate.limit
+gate.limit-group-reach
+gate.limit-membership
 gate.not-found
 gate.version-conflict

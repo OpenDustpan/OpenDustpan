@@ -67,6 +67,7 @@ func requestEntry(
 		Reason:        "",
 		PrincipalKind: string(p.Kind),
 		JobID:         p.JobID,
+		Origin:        nil,
 	}
 }
 

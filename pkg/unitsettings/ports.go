@@ -25,12 +25,12 @@ import (
 //
 // When the context of a write carries an idempotency.Completion, the store
 // stores the answer of the request in the transaction of the write, as its
-// last step. Put passes the stored Settings to the Completion, also for a
-// write that changes nothing. Delete passes a Settings that holds only the
-// unit. SetDefaults passes the stored NamespaceDefaults. A write that fails
-// stores no answer. The write returns idempotency.ErrLost, and changes nothing
-// (no row and no audit entry), when the pending record of the request is not
-// in place.
+// last step. Put passes the PutResult to the Completion, also for a write
+// that changes nothing. Delete passes a Settings that holds only the unit.
+// SetDefaults passes the stored NamespaceDefaults. A write that fails stores
+// no answer. The write returns idempotency.ErrLost, and changes nothing (no
+// row and no audit entry), when the pending record of the request is not in
+// place.
 //
 // A version is a count of writes. A write names the version that the caller
 // read, and 0 names a unit that has no record. The check runs in the
@@ -41,29 +41,36 @@ type Store interface {
 	// a unit that fails Validate or for a stored record that fails Parse (the
 	// caller fails closed), and ErrUnknownUnit when the unit does not exist.
 	Get(ctx context.Context, unit identity.Object) (Settings, error)
-	// Put stores s as the record of s.Unit and returns the stored record.
+	// Put stores s as the record of s.Unit and returns the stored record and
+	// the unit defaults of its namespace, read in the same transaction. The
+	// caller computes the effective value from the returned defaults, so a
+	// change of the defaults between an earlier read and the write cannot
+	// give a value from the old defaults.
+	//
 	// expected is the version that the caller read: 0 creates the record and
 	// fails when one exists. In one transaction it checks the fence, checks
 	// that the unit exists with its stable ID and its name, checks the
 	// version, runs Validate, writes the record with Version one above the
-	// stored one and UpdatedAt set to e.At, and appends the entry that
-	// ChangeEntry makes from e.
+	// stored one and UpdatedAt set to e.At, reads the unit defaults of the
+	// namespace, and appends the entry that ChangeEntry makes from e.
 	//
 	// A write that changes no field (Equal) of a record at expected writes
 	// nothing: no new version, no new time and no audit entry. The result is
-	// the stored record.
+	// the stored record and the defaults that the write read.
 	//
 	// It returns:
 	//   - ErrInvalid when s fails Validate, or when e fails validation or
-	//     names another namespace than the unit.
+	//     names another namespace than the unit, or when the stored unit
+	//     defaults of the namespace fail Validate.
 	//   - ErrUnknownUnit when the unit does not exist in its namespace, or its
 	//     stable ID and its name point to different units.
 	//   - ErrConflict when the stored version is not expected.
 	//   - namespace.ErrFenced when the fence is stale or belongs to another
 	//     namespace than the unit.
+	//   - namespace.ErrNotFound when the namespace of the unit has no row.
 	//
 	// On every error the store changes nothing.
-	Put(ctx context.Context, s *Settings, expected int64, fence namespace.Fence, e audit.Entry) (Settings, error)
+	Put(ctx context.Context, s *Settings, expected int64, fence namespace.Fence, e audit.Entry) (PutResult, error)
 	// Delete removes the record of unit and appends the entry that ResetEntry
 	// makes from e. expected is the version that the caller read, and it must
 	// be one or more. It returns ErrNotFound when the unit has no record,
@@ -84,4 +91,16 @@ type Store interface {
 	// It changes no record of a unit.
 	SetDefaults(ctx context.Context, d NamespaceDefaults, expected int64, fence namespace.Fence,
 		e audit.Entry) (NamespaceDefaults, error)
+}
+
+// PutResult is the result of Store.Put: the stored record of the unit and the
+// unit defaults of its namespace, read in the transaction of the write. A
+// caller computes the effective value of the unit from these defaults, so the
+// value matches the record that the write stored.
+type PutResult struct {
+	// Settings is the stored record of the unit.
+	Settings Settings
+	// Defaults are the unit defaults of the namespace, read in the
+	// transaction of the write.
+	Defaults NamespaceDefaults
 }

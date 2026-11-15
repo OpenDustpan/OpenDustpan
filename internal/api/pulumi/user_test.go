@@ -89,7 +89,9 @@ func (m *memStackStore) CreateStack(_ context.Context, st stack.Stack, _ namespa
 }
 
 // RenameStack is not used by the user and organization tests.
-func (m *memStackStore) RenameStack(_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence) error {
+func (m *memStackStore) RenameStack(
+	_ context.Context, _ stack.Ref, _ stack.Name, _ namespace.Fence, _ audit.Entry,
+) error {
 	return errNotUsed
 }
 

@@ -15,19 +15,22 @@ import (
 
 	"opendustpan.org/opendustpan/internal/egress/egresshttp"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/egress/plainconn"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // ErrPlainRefused reports a connection with no TLS to a host that is not a
-// loopback IP address, when the AllowPlain hook of the config does not allow
-// it. It matches session.ErrMethodUnavailable too.
+// loopback IP address, when the installation setting that allows plain
+// connections is off. It matches session.ErrMethodUnavailable too.
 var ErrPlainRefused = errors.New("a connection with no TLS to the directory is not allowed")
 
 // plainRefused returns the error of a refused plain connection to address.
-// It names the address and the transports to use.
+// It names the address, the setting key and the one call that changes the
+// setting.
 func plainRefused(address string) error {
-	return fmt.Errorf("%w: %w: %s: use ldaps:// or StartTLS",
-		session.ErrMethodUnavailable, ErrPlainRefused, address)
+	return fmt.Errorf(`%w: %w: %s: use ldaps:// or StartTLS, or send PATCH /api/dustpan/v1/settings `+
+		`with {"%s": true}`, session.ErrMethodUnavailable, ErrPlainRefused, address,
+		plainconn.SettingAllowPlainConnections)
 }
 
 // plainRule is the rule of the dial guard for a connection with no TLS.
@@ -196,7 +199,9 @@ func (m *Method) closeConn(ctx context.Context, conn *ldap.Conn) {
 	}
 }
 
-// allowPlain calls the AllowPlain hook of the config. An error counts as false.
+// allowPlain calls the AllowPlain hook of the config, which reads the
+// installation setting that allows plain connections. An error counts as
+// false.
 func (m *Method) allowPlain(ctx context.Context) bool {
 	on, err := m.allowPlainFn(ctx)
 	if err != nil {

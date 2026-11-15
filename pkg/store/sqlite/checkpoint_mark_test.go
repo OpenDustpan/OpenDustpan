@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -108,6 +109,8 @@ func (f *markFixture) startUpdate(t *testing.T, id string) stack.Update {
 		CreatedBy:       "",
 		RestoredFrom:    0,
 		CheckpointBytes: 0,
+		JobID:           "",
+		GitHead:         "",
 	}
 	if err := f.store.CreateUpdate(ctx, u, storetest.UnrecordedKey(), f.fence); err != nil {
 		t.Fatalf("create update %s: %v", id, err)
@@ -154,6 +157,7 @@ func (f *markFixture) checkpoint(
 		BlobSize:         0,
 		BlobMD5:          [16]byte{},
 		AttemptStartedAt: f.now,
+		Origin:           identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 

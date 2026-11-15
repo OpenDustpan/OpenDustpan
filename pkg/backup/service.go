@@ -192,10 +192,14 @@ type Service struct {
 	now        func() time.Time
 	version    string
 	maxSQL     int64
-	runner     *durable.Runner
-	operations durable.Store
-	lease      time.Duration
-	logger     *slog.Logger
+	// maxUnverified is the largest number of unverified keys that a backup
+	// this service writes may hold. Zero means MaxUnverifiedKeys; a test sets
+	// a smaller bound, so it does not build that many keys.
+	maxUnverified int
+	runner        *durable.Runner
+	operations    durable.Store
+	lease         time.Duration
+	logger        *slog.Logger
 }
 
 // StateOpener opens sealed OpenTofu state blobs of the live store for the
@@ -242,20 +246,21 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	s := &Service{
-		exporter:   cfg.Exporter,
-		kinds:      cfg.Kinds,
-		registry:   cfg.Registry,
-		source:     cfg.Blobs,
-		opener:     cfg.StateOpener,
-		target:     cfg.Target,
-		targetName: cfg.TargetName,
-		now:        now,
-		version:    version,
-		maxSQL:     cfg.MaxSQLBytes,
-		runner:     nil,
-		operations: cfg.Operations,
-		lease:      cmp.Or(cfg.Lease, durable.DefaultLease),
-		logger:     cmp.Or(cfg.Logger, slog.New(slog.DiscardHandler)),
+		exporter:      cfg.Exporter,
+		kinds:         cfg.Kinds,
+		registry:      cfg.Registry,
+		source:        cfg.Blobs,
+		opener:        cfg.StateOpener,
+		target:        cfg.Target,
+		targetName:    cfg.TargetName,
+		now:           now,
+		version:       version,
+		maxSQL:        cfg.MaxSQLBytes,
+		maxUnverified: 0,
+		runner:        nil,
+		operations:    cfg.Operations,
+		lease:         cmp.Or(cfg.Lease, durable.DefaultLease),
+		logger:        cmp.Or(cfg.Logger, slog.New(slog.DiscardHandler)),
 	}
 
 	runner, err := s.newRunner(cfg)
@@ -942,6 +947,17 @@ func (s *Service) backup(ctx context.Context, run backupRun) error {
 			slog.String("backup", id.String()), slog.Int("blobs", n), slog.String("first", exported.sum.Unverified[0]))
 	}
 
+	// The refusal comes before the first copy and before the manifest, so a
+	// refused backup leaves no manifest that a restore would accept as
+	// complete.
+	if boundErr := refuseUnverified(exported.sum.Unverified, s.unverifiedLimit()); boundErr != nil {
+		s.logger.WarnContext(ctx, "backup refused: the data names too many blobs without a check value",
+			slog.String("backup", id.String()), slog.Int("blobs", len(exported.sum.Unverified)),
+			slog.Int("limit", s.unverifiedLimit()))
+
+		return boundErr
+	}
+
 	// The export refuses a key that a restore would refuse, so a poisoned row
 	// cannot make this backup and every later one unrestorable.
 	if keyErr := checkExportKeys(id, exported.sum.Blobs); keyErr != nil {
@@ -1569,6 +1585,14 @@ type manifestInput struct {
 // writeManifest writes backups/<id>/manifest.json last, after the SQL part
 // and every blob, so a backup without a manifest never counts as complete.
 func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
+	// Defense in depth: backup refuses the bound before the first copy, so no
+	// manifest above the bound reaches this write. This check stays so that no
+	// caller writes such a manifest. It reads only the summary of this run,
+	// not the target or the rows of the database.
+	if boundErr := refuseUnverified(in.sum.Unverified, s.unverifiedLimit()); boundErr != nil {
+		return boundErr
+	}
+
 	manifest := Manifest{
 		CreatedAt:            in.startedAt,
 		ID:                   in.id,

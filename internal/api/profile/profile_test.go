@@ -604,29 +604,46 @@ func TestRoutingChangeNeedsOpen(t *testing.T) {
 	}
 }
 
-// TestRoutingChangeOfAFileExportNeedsOpen sends a write that moves the value
-// that exports.files reads to another secret, from a principal with
-// profile:write and no profile:open. The routing review must refuse it and
-// name the value.
-func TestRoutingChangeOfAFileExportNeedsOpen(t *testing.T) {
+// TestRoutingChangeOfALauncherExportNeedsOpen sends, for each export that
+// the launcher gets, a write that moves the value that the export reads to
+// another secret, from a principal with profile:write and no profile:open.
+// The routing review must refuse each one and name the value.
+func TestRoutingChangeOfALauncherExportNeedsOpen(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
-	doc := "schemaVersion: 1\nvalues:\n  dbPassword: \"${ values.source }\"\n" +
-		"  source: { $secret: abc }\n  other: { $secret: def }\n" +
-		"exports:\n  files:\n    DB_PASSWORD_FILE: \"${ values.dbPassword }\"\n"
+	exports := map[string]string{
+		"files":     "  files:\n    DB_PASSWORD_FILE: \"${ values.dbPassword }\"\n",
+		"variables": "  variables:\n    DB_PASSWORD: \"${ values.dbPassword }\"\n",
+		"pulumi":    "  pulumi:\n    \"app:dbPassword\": \"${ values.dbPassword }\"\n",
+		"opentofu":  "  opentofu:\n    db_password: \"${ values.dbPassword }\"\n",
+	}
 
-	created := f.create(t, "files", doc)
-	moved := jsonString(t, map[string]string{
-		"document": strings.Replace(doc, `dbPassword: "${ values.source }"`, `dbPassword: "${ values.other }"`, 1),
-	})
-	edit := send("writer", http.MethodPost, base+"/"+created.ID+"/revisions", moved).
-		withHeader("If-Match", created.ETag)
+	for name, export := range exports {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	got := f.do(t, edit)
-	if got.code != http.StatusForbidden || !strings.Contains(got.body, "profile.routing-change-needs-open") ||
-		!strings.Contains(got.body, "values.dbPassword") {
-		t.Fatalf("change of a value that a file export reads, without open: %d %s", got.code, got.body)
+			f := newFixture(t)
+			doc := "schemaVersion: 1\nvalues:\n  dbPassword: \"${ values.source }\"\n" +
+				"  source: { $secret: abc }\n  other: { $secret: def }\nexports:\n" + export
+
+			created := f.create(t, "exports-"+name, doc)
+			moved := jsonString(t, map[string]string{
+				"document": strings.Replace(
+					doc,
+					`dbPassword: "${ values.source }"`,
+					`dbPassword: "${ values.other }"`,
+					1,
+				),
+			})
+			edit := send("writer", http.MethodPost, base+"/"+created.ID+"/revisions", moved).
+				withHeader("If-Match", created.ETag)
+
+			got := f.do(t, edit)
+			if got.code != http.StatusForbidden || !strings.Contains(got.body, "profile.routing-change-needs-open") ||
+				!strings.Contains(got.body, "values.dbPassword") {
+				t.Fatalf("change of a value that exports.%s reads, without open: %d %s", name, got.code, got.body)
+			}
+		})
 	}
 }
 
@@ -933,7 +950,8 @@ func TestSharedLimiterFlushReachesNamespace(t *testing.T) {
 
 	for range 3 {
 		other.Record(t.Context(), nil, bo, refusal.Denial{
-			Action: identity.ActionUnitWrite, Object: identity.NamespaceObject("acme"), Reason: "denied", Window: 0,
+			Action: identity.ActionUnitWrite, Object: identity.NamespaceObject("acme"), Reason: "denied",
+			ReasonWithin: nil, Window: 0,
 		})
 	}
 

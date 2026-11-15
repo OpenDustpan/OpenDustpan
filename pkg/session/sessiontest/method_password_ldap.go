@@ -94,7 +94,8 @@ type DirectorySettings struct {
 	Groups DirectoryGroups
 	// Transport is the connection.
 	Transport DirectoryTransport
-	// AllowPlain is the value that the AllowPlain hook of the method returns.
+	// AllowPlain is the value of the plain-connection setting that the
+	// AllowPlain hook of the method returns.
 	AllowPlain bool
 	// EgressRefused makes the egress rules refuse the address of the
 	// directory.

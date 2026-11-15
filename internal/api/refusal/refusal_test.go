@@ -34,7 +34,7 @@ func (a fakeAuthorizer) Authorize(context.Context, identity.Principal, identity.
 
 // ListObjects answers an empty scope for every list.
 func (fakeAuthorizer) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 // fakeStore keeps the entries that it is given. It fails every append when

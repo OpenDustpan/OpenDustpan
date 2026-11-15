@@ -18,6 +18,13 @@ var (
 	// ErrPlacementRuleNotFound reports a placement rule that the namespace does not hold.
 	ErrPlacementRuleNotFound = errors.New("placement rule not found: list the rules with " +
 		"GET /api/dustpan/v1/namespaces/{namespace}/placement-rules")
+	// ErrPlacementCollectionMissing reports that a placement rule names a
+	// collection that does not exist. A rule write returns it when the rule
+	// names such a collection, and the placement of a new unit returns it when
+	// the rule that matches the unit names one. Make the collection, or change
+	// the rule to name a collection that exists.
+	ErrPlacementCollectionMissing = errors.New("collection not found: create it with " +
+		"POST /api/dustpan/v1/namespaces/{namespace}/collections, or change the placement rule")
 	// ErrInvalidPattern reports a pattern that fails validation.
 	ErrInvalidPattern = errors.New("invalid placement pattern")
 	// ErrInvalidPlacementTool reports a tool that has no placement rules.
@@ -307,20 +314,21 @@ func quoteName(s string) string {
 type PlacementStore interface {
 	// CreatePlacementRule inserts r at r.Position and moves the rules from that
 	// position on down by one place. Position 0 means the end of the list, read
-	// in the same transaction. It returns ErrNotFound when r.Collection does not
-	// exist in the namespace, ErrInvalidPosition when r.Position is not 0 or from
-	// 1 to the count of rules plus 1, ErrPlacementConflict when the result has a
-	// hidden rule, ErrTooManyPlacementRules at MaxPlacementRules, and
-	// namespace.ErrFenced when the fence is stale. It also returns ErrNotFound
-	// when r.Namespace is not the namespace of the fence.
+	// in the same transaction. It returns ErrPlacementCollectionMissing when
+	// r.Collection does not exist in the namespace, ErrInvalidPosition when
+	// r.Position is not 0 or from 1 to the count of rules plus 1,
+	// ErrPlacementConflict when the result has a hidden rule,
+	// ErrTooManyPlacementRules at MaxPlacementRules, and namespace.ErrFenced
+	// when the fence is stale. It also returns ErrNotFound when r.Namespace is
+	// not the namespace of the fence.
 	CreatePlacementRule(ctx context.Context, r Rule, fence namespace.Fence, e audit.Entry) error
 	// UpdatePlacementRule replaces the tool, the patterns and the collection of
 	// the rule r.ID, and moves it to r.Position. Position 0 keeps the place of
 	// the rule. It does not change the creator or the creation time. It returns
 	// ErrPlacementRuleNotFound (also when r.Namespace is not the namespace of the
-	// fence), ErrNotFound for a missing collection, ErrInvalidPosition when
-	// r.Position is not 0 or from 1 to the count of rules,
-	// ErrPlacementConflict when the result has a hidden rule, and
+	// fence), ErrPlacementCollectionMissing for a missing collection,
+	// ErrInvalidPosition when r.Position is not 0 or from 1 to the count of
+	// rules, ErrPlacementConflict when the result has a hidden rule, and
 	// namespace.ErrFenced.
 	UpdatePlacementRule(ctx context.Context, r Rule, fence namespace.Fence, e audit.Entry) error
 	// DeletePlacementRule removes the rule id and closes the gap in the

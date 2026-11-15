@@ -631,7 +631,8 @@ func (s *Store) PutBuiltCheckpoint(
 			return rowErr
 		}
 
-		if _, writeErr := writeBuiltCheckpoint(ctx, q, cp, stackID, row); writeErr != nil {
+		_, writeErr := writeBuiltCheckpoint(ctx, unitStateTx{q: q, logger: s.logger}, cp, stackID, row)
+		if writeErr != nil {
 			return writeErr
 		}
 
