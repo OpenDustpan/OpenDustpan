@@ -47,8 +47,8 @@ type tgLocalScope struct {
 // sharedNameAttempts bounds the retries of the shared name landing run: two
 // units that name one workspace share its lock, so the run-all at parallelism
 // 3 with no lock timeout refuses the unit that loses the lock race. The loop
-// retries the same run until the one chain holds a state version of each
-// unit.
+// reruns the refused unit alone until the one chain holds a state version of
+// each unit.
 const sharedNameAttempts = 6
 
 // tgLocalUnits returns the three units of the run, each with its own
@@ -384,7 +384,7 @@ func tgLocalRefusedUnit(ctx context.Context, t *testing.T, cli, tg e2e.Install, 
 		granted.writeLiveUnit(t, live, tgLocalNamespace, dirs[i], unit)
 	}
 
-	res, runErr := granted.runAllResult(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
+	res, runErr := granted.tgResult(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
 		"--", "apply", "-input=false", "-auto-approve", "-lock-timeout=0s")
 	if runErr != nil {
 		t.Fatalf("terragrunt run --all over the ungranted unit: %v", runErr)
@@ -499,29 +499,48 @@ func tgLocalSharedName(ctx context.Context, t *testing.T, cli, tg e2e.Install, s
 	tgLocalReleaseSharedLock(ctx, t, env, token, id)
 
 	// Both writes land in the one workspace chain, at the same parallelism 3
-	// with no lock timeout. The two units still share the one workspace
-	// lock, so a run lands the unit that wins the lock race and refuses the
-	// unit that loses it; a later run of the same command lands the refused
-	// unit. Every apply adds one state version to the one chain, so a run
-	// writes one version or two: the loop ends when the chain holds a state
-	// version of each unit, not at a fixed count.
+	// with no lock timeout.
+	tgLocalLandSharedUnits(ctx, t, runner, live, unit)
+}
+
+// tgLocalLandSharedUnits runs the shared units until the one workspace chain
+// holds a state version of each of them, and fails the test when a unit is
+// still missing after the attempts of sharedNameAttempts. The two units
+// share the one workspace lock, so the run lands the unit that wins the lock
+// race and refuses the unit that loses it with the workspace.locked error. A
+// retry of the whole run races the two units again, and the winner keeps
+// winning, so the refused unit never lands. The test reruns the refused unit
+// alone; the run has returned, so the winner has released the lock, and the
+// rerun lands the refused write in the same chain.
+func tgLocalLandSharedUnits(ctx context.Context, t *testing.T, runner tgLocalCLI, live, unit string) {
+	t.Helper()
+
 	shared := []string{"shared-a", "shared-b"}
 	writers := map[string]bool{}
 
-	for attempt := 1; attempt <= sharedNameAttempts; attempt++ {
-		res, err := runner.runAllResult(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
+	for attempt := 1; attempt <= sharedNameAttempts && !tgLocalSharedLanded(writers, shared); attempt++ {
+		res, err := runner.tgResult(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
 			"--", "apply", "-input=false", "-auto-approve", "-lock-timeout=0s")
 		if err != nil {
 			t.Fatalf("terragrunt run --all attempt %d: %v", attempt, err)
 		}
 
-		writers = tgLocalStateWriters(ctx, t, env, unit, shared)
+		writers = tgLocalStateWriters(ctx, t, runner.env, unit, shared)
 
 		if tgLocalSharedLanded(writers, shared) {
 			break
 		}
 
-		t.Logf("shared run attempt %d exits %d; retry the refused unit:\n%s", attempt, res.ExitCode, res.Stderr)
+		for _, dir := range shared {
+			if writers[dir] {
+				continue
+			}
+
+			runner.applyUnit(ctx, t, filepath.Join(live, dir))
+		}
+
+		writers = tgLocalStateWriters(ctx, t, runner.env, unit, shared)
+		t.Logf("shared run attempt %d exits %d; writers after the rerun: %v", attempt, res.ExitCode, writers)
 	}
 
 	if !tgLocalSharedLanded(writers, shared) {
@@ -547,7 +566,7 @@ func tgLocalSharedLanded(writers map[string]bool, dirs []string) bool {
 func tgLocalRefusedSharedApply(ctx context.Context, t *testing.T, runner tgLocalCLI, live string) {
 	t.Helper()
 
-	res, err := runner.runAllResult(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
+	res, err := runner.tgResult(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
 		"--", "apply", "-input=false", "-auto-approve", "-lock-timeout=0s")
 	if err != nil {
 		t.Fatalf("terragrunt run --all of the shared units: %v", err)
@@ -1054,19 +1073,21 @@ func (c tgLocalCLI) useToken(t *testing.T, token string) {
 	c.env.WriteFile(t, c.creds, creds)
 }
 
-// runAllResult runs `terragrunt run --all` with args in the live directory.
-// returns what it printed. A non-zero exit is reported in the Result, not as
-// an error.
-func (c tgLocalCLI) runAllResult(ctx context.Context, t *testing.T, live string, args ...string) (e2e.Result, error) {
+// tgResult runs terragrunt with args in the directory dir. It returns what
+// the run printed. A non-zero exit is reported in the Result, not as an
+// error. The run uses the pinned Terragrunt binary, with the OpenTofu binary
+// of the fetcher as its TG_TF_PATH: no test calls tofu directly in place of
+// Terragrunt.
+func (c tgLocalCLI) tgResult(ctx context.Context, t *testing.T, dir string, args ...string) (e2e.Result, error) {
 	t.Helper()
 
 	if c.tg.Binary() == "" {
-		t.Fatal("run-all needs the pinned Terragrunt binary, not a direct tofu call")
+		t.Fatal("the Terragrunt suite needs the pinned Terragrunt binary, not a direct tofu call")
 	}
 
 	extra := []string{"TF_CLI_CONFIG_FILE=" + c.creds, "TG_TF_PATH=" + c.cli.Binary()}
 
-	return c.env.RunAs(ctx, c.tg, live, extra, args...)
+	return c.env.RunAs(ctx, c.tg, dir, extra, args...)
 }
 
 // runAll runs `terragrunt run --all` with args in the live directory, with the
@@ -1075,7 +1096,7 @@ func (c tgLocalCLI) runAllResult(ctx context.Context, t *testing.T, live string,
 func (c tgLocalCLI) runAll(ctx context.Context, t *testing.T, live string, args ...string) {
 	t.Helper()
 
-	res, err := c.runAllResult(ctx, t, live, args...)
+	res, err := c.tgResult(ctx, t, live, args...)
 	if err != nil {
 		t.Fatalf("terragrunt run --all %s: %v", strings.Join(args, " "), err)
 	}
@@ -1088,6 +1109,23 @@ func (c tgLocalCLI) runAll(ctx context.Context, t *testing.T, live string, args 
 			res.Stdout,
 			res.Stderr,
 		)
+	}
+}
+
+// applyUnit applies one unit directory of the live directory on its own,
+// with the flags of the run, no lock timeout included. A unit that the
+// shared workspace lock refused lands on a rerun of that unit alone. The
+// run has returned, so the holder of the lock has released it.
+func (c tgLocalCLI) applyUnit(ctx context.Context, t *testing.T, dir string) {
+	t.Helper()
+
+	res, err := c.tgResult(ctx, t, dir, "apply", "-input=false", "-auto-approve", "-lock-timeout=0s")
+	if err != nil {
+		t.Fatalf("terragrunt apply in %s: %v", dir, err)
+	}
+
+	if res.ExitCode != 0 {
+		t.Fatalf("terragrunt apply in %s exits %d:\n%s\n%s", dir, res.ExitCode, res.Stdout, res.Stderr)
 	}
 }
 

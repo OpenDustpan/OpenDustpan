@@ -545,6 +545,15 @@ func remapMember(want map[string]archiveEntry, wantMember, wantBinary string) er
 		return nil
 	}
 
+	// Defense in depth: the member name comes from the tool table in this
+	// process, and both extraction and the cache check open files through
+	// os.Root, which contains every path; this check does not rely on the
+	// tool table or on either root, and refuses a member name with a path
+	// part before the lookup.
+	if wantMember == ".." || path.Base(wantMember) != wantMember {
+		return fmt.Errorf("%w: member name %q has a path part", ErrUnsafeArchive, wantMember)
+	}
+
 	// Defense in depth: the sum check above already accepted this archive
 	// against its pinned or published checksum, and the download stages the
 	// member before it publishes an entry; this check does not rely on

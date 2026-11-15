@@ -11,11 +11,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -505,6 +507,31 @@ func TestFetchRefusesWrongPinnedSum(t *testing.T) {
 		if entry.Name() != name+".lock" {
 			t.Errorf("cache holds %q after a rejected download, want only the lock file", entry.Name())
 		}
+	}
+}
+
+// TestTerragruntPinnedSums checks the four pinned Terragrunt sums, one
+// archive for each platform, and the one pinned version 1.2.1. The archive
+// name carries no version, so the map holds one entry for each platform and
+// no other.
+func TestTerragruntPinnedSums(t *testing.T) {
+	t.Setenv("E2E_TERRAGRUNT_VERSIONS", "")
+
+	tool := e2e.Terragrunt()
+
+	want := map[string]string{
+		"terragrunt_linux_amd64.tar.gz":  "08c8844cc69e4f03451ebb8f347cb57d9bd6b8db7b16e437ae5ec6f001228ef9",
+		"terragrunt_linux_arm64.tar.gz":  "8b92d56a20b2848365e22ef94f963fbfe25fedeebcacffacbc286cfcf9966066",
+		"terragrunt_darwin_amd64.tar.gz": "29806d1708f5c54e54bc6adfcacfb710d4bb1f6f180efd751692e6fad5985640",
+		"terragrunt_darwin_arm64.tar.gz": "0aded323f844ce6567a15feb26393b67eff1400dc1722203fa4dd4e23b3bb182",
+	}
+
+	if got := e2e.PinnedSums(tool); !maps.Equal(got, want) {
+		t.Fatalf("pinned sums = %v, want %v", got, want)
+	}
+
+	if versions := tool.Versions(); !slices.Equal(versions, []string{"1.2.1"}) {
+		t.Fatalf("Versions() = %v, want the one pinned version 1.2.1", versions)
 	}
 }
 
@@ -1037,6 +1064,41 @@ func TestFetchRefusesCacheArchiveWithoutMember(t *testing.T) {
 	// from a later check of the extracted directory.
 	if !strings.Contains(err.Error(), member) {
 		t.Errorf("error %q does not name the member %q", err, member)
+	}
+}
+
+// TestRemapMember proves that the member remap of the cache check refuses an
+// unknown member name and a member name with a path part. Defense in depth:
+// the test sends each hostile name to the remap alone, as if the tool table
+// and the os.Root containment of extraction and of the cache check had let
+// it through.
+func TestRemapMember(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		member string
+		want   error
+	}{
+		{name: "unknown member", member: "terragrunt_linux_amd64", want: e2e.ErrCacheMismatch},
+		{name: "parent directory", member: "..", want: e2e.ErrUnsafeArchive},
+		{name: "parent then a name", member: "../x", want: e2e.ErrUnsafeArchive},
+		{name: "name below a directory", member: "a/b", want: e2e.ErrUnsafeArchive},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := e2e.RemapCacheMember(tc.member, "terragrunt")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("RemapCacheMember(%q, %q) = %v, want %v", tc.member, "terragrunt", err, tc.want)
+			}
+
+			if !strings.Contains(err.Error(), tc.member) {
+				t.Errorf("error %q does not name the member %q", err, tc.member)
+			}
+		})
 	}
 }
 

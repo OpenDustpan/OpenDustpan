@@ -3,37 +3,11 @@
 package e2e_test
 
 import (
-	"maps"
 	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
 )
-
-// TestTerragruntPinnedSums checks the four pinned Terragrunt sums, one
-// archive for each platform, and the one pinned version 1.2.1. The archive
-// name carries no version, so the map holds one entry for each platform and
-// no other.
-func TestTerragruntPinnedSums(t *testing.T) {
-	t.Setenv("E2E_TERRAGRUNT_VERSIONS", "")
-
-	tool := e2e.Terragrunt()
-
-	want := map[string]string{
-		"terragrunt_linux_amd64.tar.gz":  "08c8844cc69e4f03451ebb8f347cb57d9bd6b8db7b16e437ae5ec6f001228ef9",
-		"terragrunt_linux_arm64.tar.gz":  "8b92d56a20b2848365e22ef94f963fbfe25fedeebcacffacbc286cfcf9966066",
-		"terragrunt_darwin_amd64.tar.gz": "29806d1708f5c54e54bc6adfcacfb710d4bb1f6f180efd751692e6fad5985640",
-		"terragrunt_darwin_arm64.tar.gz": "0aded323f844ce6567a15feb26393b67eff1400dc1722203fa4dd4e23b3bb182",
-	}
-
-	if got := e2e.PinnedSums(tool); !maps.Equal(got, want) {
-		t.Fatalf("pinned sums = %v, want %v", got, want)
-	}
-
-	if versions := tool.Versions(); !slices.Equal(versions, []string{"1.2.1"}) {
-		t.Fatalf("Versions() = %v, want the one pinned version 1.2.1", versions)
-	}
-}
 
 func TestIsMatrixEnd(t *testing.T) {
 	cases := []struct {

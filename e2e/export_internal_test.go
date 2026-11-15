@@ -39,6 +39,15 @@ func CheckToolCache(cacheDir string, tool Tool, version, archive, wantSum string
 	)
 }
 
+// RemapCacheMember runs the member remap of the cache check for wantMember
+// and wantBinary on an empty archive map, so a test can prove that the remap
+// refuses a member name with the remap alone, as if every other layer had
+// let the name through. An empty map holds no member, so a plain name fails
+// the lookup and a name with a path part fails the name check.
+func RemapCacheMember(wantMember, wantBinary string) error {
+	return remapMember(map[string]archiveEntry{}, wantMember, wantBinary)
+}
+
 // PinnedSums returns a copy of the pinned checksums of tool, keyed by archive
 // name, so a test can check each pinned platform and the pinned version
 // without changing the map.
