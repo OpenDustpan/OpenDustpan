@@ -741,7 +741,7 @@ func classifySignIn(err error) (failure, bool) {
 	case errors.Is(err, errFreshParam):
 		return fail(http.StatusBadRequest, err.Error()), true
 	case errors.Is(err, errReauthenticate):
-		return fail(http.StatusUnauthorized, err.Error()), true
+		return fail(http.StatusForbidden, err.Error()), true
 	default:
 		return fail(0, ""), false
 	}

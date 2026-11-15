@@ -297,16 +297,23 @@ on the same routes as with a token. An access token never creates or
 rotates a token: the request answers 403 with the error code
 `mfa.fresh-step-required`, and changes nothing. The sign-in of the session
 must be fresh: the token freshness window of the session policy sets how old it
-can be. The default is 15 minutes, and 0 turns the check off.
+can be. The default is 15 minutes. A window of 0 asks for a fresh
+authentication at each step, so no sign-in passes. The other values are 60
+to 900 seconds.
 
-When the sign-in is older than the window, a create or a rotation answers
-401 with the field `reauthenticate`, for example
+When the sign-in is older than the window, or the window is 0, a create or
+a rotation answers 403 with the field `reauthenticate`, for example
 `/api/server/sign-in/corp?fresh=1`. The console sends the browser to that
 path, with its own `return` parameter. With `fresh=1`, the server asks the
 identity provider for a new authentication (`max_age=0`), and the callback
 refuses an authentication that is older. The new session then creates the
 token. For a plain OAuth 2.0 provider, see "Plain OAuth 2.0 providers":
-the window then counts from the last sign-in round trip.
+the window then counts from the last sign-in round trip. Under a window
+of 0, each step asks again, also after a new sign-in.
+
+A session of the password sign-in has no start route. Its `reauthenticate`
+field is `/api/dustpan/v1/sign-in/password`: the person signs in again with
+the password, through a `POST` to that path.
 
 The same rule holds for these changes:
 
@@ -326,15 +333,17 @@ The same rule holds for these changes:
   OpenTofu state version and for a profile (`showSecrets=true`)
 
 An access token answers 403 with `mfa.fresh-step-required`. A session with an
-old sign-in answers 401 with `reauthenticate` and the same error code. A
-session with a sign-in time after the current time is also too old. A refused
+old sign-in, and a session under a window of 0, answer 403 with
+`reauthenticate` and the same error code. A session with a sign-in time after
+the current time is also too old. A session that is not valid at all, for
+example one that ended, answers 401 as before. A refused
 change adds a failure entry to the audit log.
 
 Set the window with `PATCH /api/server/session-policy` and the field
 `tokenFreshnessSeconds` (action `server:manage-sign-in`): 0, or 60 to
-604800 seconds. A change of the session policy from a console session
-also needs a sign-in inside the window, so an old session cannot turn the
-window off.
+900 seconds. A change of the session policy from a console session
+also needs a sign-in inside the window, so an old session cannot change
+the window.
 
 ## Limits of the answer of a provider
 
