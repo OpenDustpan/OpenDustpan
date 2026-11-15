@@ -5,7 +5,7 @@ ADR 227 decision 3 says no value turns the check off. requireFresh returns nil a
 ## Decisions
 
 1. **Zero asks each time.** requireFresh refuses at any age when the window is 0.
-2. **Refusal text.** The 403 names the sign-in path; comment fresh() with its error code.
+2. **Refusal text.** The fix is in Fresh in internal/sessionauth/sessionauth.go and in ValidTokenFreshness in pkg/session/policy.go, so each caller gets it. The 403 names the sign-in path; comment fresh() with its error code.
 3. **Decrypt.** No decrypt change until the owner decides.
 
 ## Structure
