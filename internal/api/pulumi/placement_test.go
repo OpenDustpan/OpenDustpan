@@ -201,6 +201,73 @@ func TestCreateStackPlacement(t *testing.T) {
 	}
 }
 
+// TestCreateStackPlacementMissingCollection proves that a rule whose
+// collection does not exist answers with the Pulumi error shape: code 409,
+// the message that names the collection, and the code of a missing
+// collection.
+func TestCreateStackPlacementMissingCollection(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newPlacingHandler(
+		t, selectiveAuthorizer{deny: nil}, nil, stategate.Off("the test keeps no gates"),
+		(&fakePlacer{missing: true}).placer(),
+	)
+
+	rec := postStack(t, h, "web", "prod")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d %s, want 409", rec.Code, rec.Body.String())
+	}
+
+	var doc struct {
+		Message   string `json:"message"`
+		Code      int    `json:"code"`
+		ErrorCode string `json:"errorCode"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode the answer %s: %v", rec.Body.String(), err)
+	}
+
+	if doc.Code != http.StatusConflict || doc.ErrorCode != errcode.CollectionNotFound {
+		t.Fatalf("answer = %+v, want code 409 and %s", doc, errcode.CollectionNotFound)
+	}
+
+	if !strings.Contains(doc.Message, "payments") {
+		t.Fatalf("message %q does not name the collection", doc.Message)
+	}
+}
+
+// TestCreateStackPlacementPlainNotFound proves that a plain
+// collection.ErrNotFound on the placement path does not get the answer of a
+// rule whose collection is missing: only the typed error of that condition
+// does.
+func TestCreateStackPlacementPlainNotFound(t *testing.T) {
+	t.Parallel()
+
+	h, stores := newPlacingHandler(
+		t, selectiveAuthorizer{deny: nil}, nil, stategate.Off("the test keeps no gates"), newFake().placer(),
+	)
+	stores.placeErr = collection.ErrNotFound
+
+	rec := postStack(t, h, "web", "prod")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d %s, want 500", rec.Code, rec.Body.String())
+	}
+
+	var doc struct {
+		Code      int    `json:"code"`
+		ErrorCode string `json:"errorCode"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode the answer %s: %v", rec.Body.String(), err)
+	}
+
+	if doc.Code != http.StatusInternalServerError || doc.ErrorCode != errcode.ServerInternal {
+		t.Fatalf("answer = %+v, want code 500 and %s", doc, errcode.ServerInternal)
+	}
+}
+
 // TestCreateStackPlacementRecordsRule proves that the placement names the
 // collection that the rule chose and its stable ID, and that the audit entry
 // of the placement says which rule put the stack there and who made it.

@@ -1009,6 +1009,47 @@ func (s *backupStore) StagingAlive(id string) bool {
 	return err == nil
 }
 
+// errUnknownEndedAtTable reports a table that the raw end-time reader does
+// not know.
+var errUnknownEndedAtTable = errors.New("unknown end-time table")
+
+// StoredEndedAtMs implements storetest.NullEndedWitness: it reads the
+// ended_at_ms column of one control row with a raw query.
+func (s *backupStore) StoredEndedAtMs(ctx context.Context, table, id string) (int64, bool, error) {
+	var query string
+
+	switch table {
+	case backup.TableBackups:
+		query = `SELECT ended_at_ms FROM backups WHERE id = ?`
+	case backup.TableRestores:
+		query = `SELECT ended_at_ms FROM restores WHERE id = ?`
+	case backup.TableStoreChecks:
+		query = `SELECT ended_at_ms FROM store_checks WHERE id = ?`
+	default:
+		return 0, false, fmt.Errorf("read ended_at_ms: %w: %q", errUnknownEndedAtTable, table)
+	}
+
+	conn, err := openRawDB(s.path)
+	if err != nil {
+		return 0, false, fmt.Errorf("open raw database: %w", err)
+	}
+
+	var ms sql.NullInt64
+
+	scanErr := conn.QueryRowContext(ctx, query, id).Scan(&ms)
+	closeErr := conn.Close()
+
+	if scanErr != nil {
+		return 0, false, errors.Join(fmt.Errorf("read ended_at_ms of %s %s: %w", table, id, scanErr), closeErr)
+	}
+
+	if closeErr != nil {
+		return 0, false, fmt.Errorf("close raw database: %w", closeErr)
+	}
+
+	return ms.Int64, ms.Valid, nil
+}
+
 // open returns a fresh store in a temporary directory, copied from the
 // migrated template so only the first test of the binary runs every
 // migration.
@@ -1251,7 +1292,7 @@ func TestRenameKeepsTags(t *testing.T) {
 		t.Fatalf("update tags: %v", err)
 	}
 
-	if err := s.RenameStack(ctx, ref, "renamed", ns.Fence()); err != nil {
+	if err := s.RenameStack(ctx, ref, "renamed", ns.Fence(), renameTestEntry(ns.Name, ref)); err != nil {
 		t.Fatalf("rename stack: %v", err)
 	}
 
@@ -1620,6 +1661,23 @@ func BenchmarkAuthorizer(b *testing.B) {
 	accesstest.Bench(b, s)
 }
 
+// BenchmarkProtectedGroups measures the protected flag of 1000 groups at the
+// scale of accesstest.Bench: one group at a time, and one page.
+func BenchmarkProtectedGroups(b *testing.B) {
+	s, err := sqlite.Open(b.Context(), filepath.Join(b.TempDir(), "dustpan.db"))
+	if err != nil {
+		b.Fatalf("open store: %v", err)
+	}
+
+	b.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			b.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	accesstest.BenchProtectedGroups(b, s)
+}
+
 // revocationStore adds to the store the two hooks of the revocation suite: the
 // runner pools of the store, and a write to the revocation journal that the
 // CHECK constraint of the table does not stop.
@@ -1797,4 +1855,87 @@ func TestLiveMarkerConformance(t *testing.T) {
 
 		return &liveMarkerStore{revocationStore: &revocationStore{Store: s, path: path}}
 	})
+}
+
+// insertWithoutIDCase names one table and the two inserts of its ID guard.
+type insertWithoutIDCase struct {
+	name      string
+	setup     []string
+	withoutID string
+	withID    string
+}
+
+// TestInsertWithoutIDIsRefused proves that an insert into namespaces, stacks
+// or blob_purges with no ID column is refused, and that the same insert with
+// a valid ID succeeds.
+func TestInsertWithoutIDIsRefused(t *testing.T) {
+	t.Parallel()
+
+	cases := []insertWithoutIDCase{
+		{
+			name:  "namespaces",
+			setup: nil,
+			withoutID: `INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms)
+VALUES ('ns-test', 'primary', 0, 0)`,
+			withID: `INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
+VALUES ('ns-test', 'primary', 0, 0, 'ns-1')`,
+		},
+		{
+			name: "stacks",
+			setup: []string{`INSERT INTO namespaces (name, primary_installation, failover_version, created_at_ms, id)
+VALUES ('ns-test', 'primary', 0, 0, 'ns-1')`},
+			withoutID: `INSERT INTO stacks (namespace, project, name, version, created_at_ms, updated_at_ms)
+VALUES ('ns-test', 'project', 'stack', 1, 0, 0)`,
+			withID: `INSERT INTO stacks (namespace, project, name, version, created_at_ms, updated_at_ms, id)
+VALUES ('ns-test', 'project', 'stack', 1, 0, 0, 'stk-1')`,
+		},
+		{
+			name:      "blob_purges",
+			setup:     nil,
+			withoutID: `INSERT INTO blob_purges (tool, unit_id, purged_at_ms) VALUES ('pulumi', 'unit-1', 1)`,
+			withID:    `INSERT INTO blob_purges (tool, unit_id, purged_at_ms, namespace_id) VALUES ('pulumi', 'unit-1', 1, 'ns-1')`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkInsertWithoutID(t, tc)
+		})
+	}
+}
+
+// checkInsertWithoutID runs the two inserts of one case on a new database.
+func checkInsertWithoutID(t *testing.T, tc insertWithoutIDCase) {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	copyTemplate(t, path)
+
+	conn, err := openRawDB(path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	for _, statement := range tc.setup {
+		if _, execErr := conn.ExecContext(t.Context(), statement); execErr != nil {
+			t.Fatalf("%s: %v", statement, execErr)
+		}
+	}
+
+	_, execErr := conn.ExecContext(t.Context(), tc.withoutID)
+	if execErr == nil || !strings.Contains(execErr.Error(), "NOT NULL constraint failed") {
+		t.Fatalf("insert into %s without an ID = %v, want a NOT NULL constraint error", tc.name, execErr)
+	}
+
+	if _, execErr := conn.ExecContext(t.Context(), tc.withID); execErr != nil {
+		t.Fatalf("insert into %s with a valid ID: %v", tc.name, execErr)
+	}
 }

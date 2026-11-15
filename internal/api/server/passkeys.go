@@ -194,21 +194,21 @@ func (h *Handler) passkeyRoutes() []Route {
 	return append(routes,
 		Route{
 			Method: http.MethodPost, Path: passkeyBeginPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.fresh(identity.ActionCallerManageSignIn, h.beginPasskey),
 		},
 		Route{
 			Method: http.MethodPost, Path: passkeyFinishPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.fresh(identity.ActionCallerManageSignIn, h.finishPasskey),
 		},
 		Route{
 			Method: http.MethodGet, Path: ownKeysPath, Scope: ScopeAuthorized, Actions: read,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.listPasskeys,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.listPasskeys,
 		},
 		Route{
 			Method: http.MethodDelete, Path: passkeyPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.fresh(identity.ActionCallerManageSignIn, h.removePasskey),
 		},
 	)

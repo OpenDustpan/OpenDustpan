@@ -171,7 +171,13 @@ func (c *DurableClaimer) Renew(ctx context.Context, pc PhaseClaim, d time.Durati
 		return PhaseClaim{}, fmt.Errorf("%w: a lease must be positive", ErrInvalid)
 	}
 
-	if err := c.checkFence(ctx, &pc); err != nil {
+	j, err := c.jobs.Get(ctx, pc.Job)
+	if err != nil {
+		return PhaseClaim{}, fmt.Errorf("read job %s: %w", pc.Job, err)
+	}
+
+	err = c.checkFence(ctx, &pc, &j)
+	if err != nil {
 		return PhaseClaim{}, err
 	}
 
@@ -643,11 +649,21 @@ func (c *DurableClaimer) giveBack(ctx context.Context, claim durable.Claim, caus
 	return cause
 }
 
-// fence returns the current fence of the namespace of the unit of j.
+// fence returns the current fence of the namespace of the unit of j. It
+// returns an error that wraps namespace.ErrNotFound when the namespace that
+// holds the name of the namespace of j is not the namespace that held the
+// unit of j when the job started: a namespace that is created again under
+// that name is another namespace, and the job must not run in it. A job with
+// no namespace ID is refused the same way.
 func (c *DurableClaimer) fence(ctx context.Context, j *Job) (namespace.Fence, error) {
 	ns, err := c.namespaces.GetNamespace(ctx, j.Spec.Unit.Namespace())
 	if err != nil {
 		return namespace.Fence{}, fmt.Errorf("read namespace %s: %w", j.Spec.Unit.Namespace(), err)
+	}
+
+	if j.NamespaceID == "" || ns.ID != j.NamespaceID {
+		return namespace.Fence{}, fmt.Errorf("job %s: namespace %s has ID %s, not %s: %w",
+			j.ID, ns.Name, ns.ID, j.NamespaceID, namespace.ErrNotFound)
 	}
 
 	return ns.Fence(), nil
@@ -656,13 +672,13 @@ func (c *DurableClaimer) fence(ctx context.Context, j *Job) (namespace.Fence, er
 // running checks the fence of pc, and returns the job of pc while it runs the
 // phase of pc. It returns ErrClaimLost for a job that moved on.
 func (c *DurableClaimer) running(ctx context.Context, pc *PhaseClaim) (Job, error) {
-	if err := c.checkFence(ctx, pc); err != nil {
-		return Job{}, err
-	}
-
 	j, err := c.jobs.Get(ctx, pc.Job)
 	if err != nil {
 		return Job{}, fmt.Errorf("read job %s: %w", pc.Job, err)
+	}
+
+	if err := c.checkFence(ctx, pc, &j); err != nil {
+		return Job{}, err
 	}
 
 	// Defense in depth: the token check of the durable store decides who holds
@@ -679,10 +695,12 @@ func (c *DurableClaimer) running(ctx context.Context, pc *PhaseClaim) (Job, erro
 	return j, nil
 }
 
-// checkFence returns namespace.ErrFenced when the fence of pc is not the
-// current fence of its namespace. The job store checks the fence again in
-// the transaction of each event.
-func (c *DurableClaimer) checkFence(ctx context.Context, pc *PhaseClaim) error {
+// checkFence reads the namespace of pc and checks it against the fence of pc
+// and the namespace ID of j. It returns namespace.ErrFenced when the fence of
+// pc is not the current fence of its namespace, and ErrClaimLost when the job
+// does not name the namespace that holds that name. The job store checks the
+// fence again in the transaction of each event.
+func (c *DurableClaimer) checkFence(ctx context.Context, pc *PhaseClaim, j *Job) error {
 	ns, err := c.namespaces.GetNamespace(ctx, pc.Fence.Namespace)
 	if err != nil {
 		return fmt.Errorf("read namespace %s: %w", pc.Fence.Namespace, err)
@@ -690,6 +708,17 @@ func (c *DurableClaimer) checkFence(ctx context.Context, pc *PhaseClaim) error {
 
 	if ns.FailoverVersion != pc.Fence.FailoverVersion {
 		return fmt.Errorf("claim of job %s: %w", pc.Job, namespace.ErrFenced)
+	}
+
+	// Defense in depth: the claim-time check of fence compares the namespace
+	// ID, and the store checks the fence of the namespace in the transaction
+	// of each event. This check stays so that a renewal or an event cannot
+	// use the claim of a job whose namespace a restore replaced under the
+	// same name. It does not rely on the claim-time check or on the fence
+	// check of the store.
+	if j.NamespaceID == "" || ns.ID != j.NamespaceID {
+		return fmt.Errorf("%w: %w: job %s: namespace %s has ID %s, not %s", ErrClaimLost,
+			durable.ErrClaimLost, j.ID, ns.Name, ns.ID, j.NamespaceID)
 	}
 
 	return nil

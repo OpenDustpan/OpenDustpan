@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/devsignin"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -35,8 +36,12 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		TempAdmins: nil, Store: st, Principals: st, Freshness: nil, Authorizer: nil, Logger: nil,
-		Now: func() time.Time { return now }, NewID: nil,
+		TempAdmins: nil, Store: st, Principals: st, Freshness: nil, Authorizer: nil,
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
+		Logger: nil,
+		Now:    func() time.Time { return now }, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -44,7 +49,7 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 
 	principals, err := principal.NewService(principal.Config{
 		TempAdmins: nil, Store: st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil,
-		Now: func() time.Time { return now }, NewID: nil,
+		GroupReach: nil, Now: func() time.Time { return now }, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

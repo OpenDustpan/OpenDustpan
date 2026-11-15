@@ -569,6 +569,56 @@ exports:
 	}
 }
 
+// TestRoutingChangesReadsOfEachLauncherExport sends, for each export that
+// the launcher gets, a change of the value that the export reads straight to
+// RoutingChanges. The value decides which secret goes into the environment,
+// a file or the configuration of the tool, so each change must be a routing
+// change.
+func TestRoutingChangesReadsOfEachLauncherExport(t *testing.T) {
+	t.Parallel()
+
+	exports := map[string]string{
+		"variables": "  variables:\n    DB_PASSWORD: \"${ values.secretRef }\"\n",
+		"files":     "  files:\n    DB_PASSWORD_FILE: \"${ values.secretRef }\"\n",
+		"pulumi":    "  pulumi:\n    \"app:dbPassword\": \"${ values.secretRef }\"\n",
+		"opentofu":  "  opentofu:\n    db_password: \"${ values.secretRef }\"\n",
+	}
+
+	for name, export := range exports {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			base := "schemaVersion: 1\nvalues:\n  secretRef: \"${ values.source }\"\n" +
+				"  source: { $secret: abc }\n  other: { $secret: def }\n  note: hello\nexports:\n" + export
+			before := mustDoc(t, base)
+
+			tests := []struct {
+				name, after string
+				want        []string
+			}{
+				{"value that no export reads", strings.Replace(base, "note: hello", "note: bye", 1), nil},
+				{
+					"value moved to another secret",
+					strings.Replace(base, `secretRef: "${ values.source }"`, `secretRef: "${ values.other }"`, 1),
+					[]string{"values.secretRef"},
+				},
+				{
+					"value read through an expression",
+					strings.Replace(base, "source: { $secret: abc }", "source: { $secret: xyz }", 1),
+					[]string{"values.source"},
+				},
+			}
+
+			for _, tc := range tests {
+				got := profile.RoutingChanges(before, mustDoc(t, tc.after))
+				if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+					t.Errorf("%s: RoutingChanges() = %v, want %v", tc.name, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func FuzzParseProxyExport(f *testing.F) {
 	f.Add(proxyMap(profile.MaxProxyExports), "header", "name", "X-Key", "value", "${ values.t }")
 	f.Add(proxyMap(profile.MaxProxyExports+1), "header", "name", "Authorization", "value", "${ values[\"t\"] }")

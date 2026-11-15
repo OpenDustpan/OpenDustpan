@@ -137,6 +137,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopySettingTables()...)
 	tables = append(tables, pgCopySelfServiceTables()...)
 	tables = append(tables, pgCopyTrustRuleTables()...)
+	tables = append(tables, pgCopyBreakGlassReviewTables()...)
 
 	return tables
 }
@@ -173,7 +174,7 @@ func pgCopyStackTables() []pgCopyTable {
 				pgColStackID, "id", pgColKind, "dry_run", pgColStatus, pgColVersion, pgColRevision,
 				"lease_digest", "lease_expires_at_ms", pgColCreatedAtMs, pgColStartedAtMs, pgColEndedAtMs,
 				pgColCreatedBy, "restored_from", "journal_version", "journal_closed", "token_id",
-				"journal_records_changed",
+				"journal_records_changed", pgColJobID, "git_head",
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},
@@ -357,7 +358,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				"id", pgColWorkspaceID, pgColStatus, "serial", "lineage", "md5", pgColSize,
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
 				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from", "sealed",
-				"sensitive_marks", "fenced_by", "unlocked_write",
+				"sensitive_marks", "fenced_by", "unlocked_write", "origin_job",
 			},
 			orderBy: []string{"id"},
 		},
@@ -455,7 +456,10 @@ func pgControlTables() []pgCopyTable {
 		},
 	}
 
-	return slices.Concat(core, pgStoreCheckControlTables(), pgRunnerControlTables(), pgNameLockControlTables())
+	return slices.Concat(
+		core, pgStoreCheckControlTables(), pgBlobDeleteLeaseControlTables(), pgRunnerControlTables(),
+		pgNameLockControlTables(),
+	)
 }
 
 // pgNameLockControlTables holds the COPY columns of the counts of the
@@ -497,6 +501,19 @@ func pgStoreCheckControlTables() []pgCopyTable {
 	}
 }
 
+// pgBlobDeleteLeaseControlTables lists the column list of the blob delete
+// lease rows, which live in the live schema. The swap keeps the live rows, so
+// the restore waits for the deleters that run now.
+func pgBlobDeleteLeaseControlTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table:   backup.TableBlobDeleteLeases,
+			columns: []string{pgColHolder, pgColExpiresAtMs},
+			orderBy: []string{pgColHolder},
+		},
+	}
+}
+
 // pgEmptiedTables lists the column list of every table of
 // backup.EmptiedTables. CheckCoverage compares each list with the live
 // columns.
@@ -529,6 +546,14 @@ func pgEmptiedTables() []pgCopyTable {
 			table:   backup.TablePasskeyChallenges,
 			columns: pgPasskeyChallengeColumns(),
 			orderBy: []string{pgColDigest},
+		},
+		{
+			table: backup.TableUnitState,
+			columns: []string{
+				pgColUnitID, pgColNamespaceID, "version_id", "final_version_id", "final_commit", "final_job",
+				"final_at_ms",
+			},
+			orderBy: []string{pgColUnitID},
 		},
 	}
 }
@@ -603,7 +628,7 @@ func pgCopyPrincipalTables() []pgCopyTable {
 			table: backup.TablePrincipalGroups,
 			columns: []string{
 				"id", pgColName, "name_key", "description", pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs,
+				pgColDeletedAtMs, "closed_to_identity_provider",
 			},
 			orderBy: []string{"id"},
 		},
@@ -1069,8 +1094,9 @@ func (s *Store) buildChecked(ctx context.Context, in stagingInput) (backup.Summa
 }
 
 // checkStaged runs the checks of the staged rows in q: the staging name, the
-// sealed state, the namespace IDs, the owned rows, the removal alert markers
-// and the feature rows.
+// sealed state, the namespace IDs, the owned rows, the grants and the
+// memberships of principals of a namespace, the removal alert markers and the
+// feature rows.
 func checkStaged(ctx context.Context, q pgQuerier, staging string, restoreAt time.Time) error {
 	if identErr := checkStagingIdent(staging); identErr != nil {
 		return identErr
@@ -1086,6 +1112,14 @@ func checkStaged(ctx context.Context, q pgQuerier, staging string, restoreAt tim
 
 	if ownedErr := checkStagedOwnedRows(ctx, q, staging); ownedErr != nil {
 		return ownedErr
+	}
+
+	if grantErr := checkStagedNamespacePrincipalGrants(ctx, q, staging); grantErr != nil {
+		return grantErr
+	}
+
+	if memberErr := checkStagedNamespacePrincipalMemberships(ctx, q, staging); memberErr != nil {
+		return memberErr
 	}
 
 	if markerErr := checkStagedRemovalAlerts(ctx, q, staging, restoreAt); markerErr != nil {
@@ -1452,7 +1486,7 @@ func stagingBlobRefs(ctx context.Context, pool pgQuerier, staging string) ([]bac
 			" UNION ALL SELECT blob_key AS content_key, size AS size, "+
 			"md5 AS md5, FALSE AS sealed FROM "+stagingTable(staging, "update_journal")+
 			" UNION ALL SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || blob_version::text "+
-			"AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed FROM "+
+			"|| '-' || blob_attempt AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed FROM "+
 			stagingTable(staging, "item_keys")+" WHERE shredded_at_ms = 0"+
 			" ORDER BY content_key",
 	)
@@ -1613,9 +1647,32 @@ func (s *Store) schemaVersion(ctx context.Context) (int, error) {
 }
 
 // CreateBackup implements backup.Registry: it stores r as a running backup
-// and reports ErrAlreadyExists when the ID is taken.
+// and reports ErrAlreadyExists when the ID is taken. A running row is work
+// that a take of a blob delete lease must see, so the write of a running row
+// takes the exclusive form of the lease lock before it, like the start of a
+// backup. A row of any other state names no running work, so it needs no
+// lock.
 func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
-	n, err := s.queries.CreateBackup(ctx, db.CreateBackupParams{
+	if r.State != backup.StateRunning {
+		return insertBackup(ctx, s.queries, r)
+	}
+
+	return s.inControlTx(ctx, func(q *db.Queries) error {
+		// The exclusive form of the lease lock, before the insert of the
+		// running row: a take that the lock ordered before this write sees
+		// the row, and a later take waits for this write.
+		if err := q.LockBlobDeleteLeaseExclusive(ctx, blobDeleteLockClass); err != nil {
+			return fmt.Errorf("lock the blob delete leases: %w", err)
+		}
+
+		return insertBackup(ctx, q, r)
+	})
+}
+
+// insertBackup stores r in the transaction of q and reports ErrAlreadyExists
+// when the ID is taken.
+func insertBackup(ctx context.Context, q *db.Queries, r backup.Record) error {
+	n, err := q.CreateBackup(ctx, db.CreateBackupParams{
 		ID:          r.ID.String(),
 		State:       string(r.State),
 		StartedAtMs: codec.Millis(r.StartedAt),
@@ -1628,7 +1685,7 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 	}
 
 	if n == 0 {
-		return s.createBackupConflict(ctx, r.ID)
+		return backupConflict(ctx, q, r.ID)
 	}
 
 	return nil
@@ -1644,6 +1701,13 @@ func (s *Store) StartBackup(ctx context.Context, r backup.Record, start durable.
 	}
 
 	return s.inMinimumTx(ctx, func(q *db.Queries) error {
+		// The exclusive form of the lease lock, before the insert of the
+		// running row: a take that the lock ordered before this start sees
+		// the row, and a later take waits for this start.
+		if err := q.LockBlobDeleteLeaseExclusive(ctx, blobDeleteLockClass); err != nil {
+			return fmt.Errorf("lock the blob delete leases: %w", err)
+		}
+
 		_, err := startBackupTx(ctx, q, r, start)
 
 		return err
@@ -1667,6 +1731,13 @@ func (s *Store) StartBackupClaimed(
 	var op durable.Operation
 
 	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
+		// The exclusive form of the lease lock, before the insert of the
+		// running row: a take that the lock ordered before this start sees
+		// the row, and a later take waits for this start.
+		if err := q.LockBlobDeleteLeaseExclusive(ctx, blobDeleteLockClass); err != nil {
+			return fmt.Errorf("lock the blob delete leases: %w", err)
+		}
+
 		started, err := startBackupTx(ctx, q, r, start)
 		if err != nil {
 			return err
@@ -1951,14 +2022,9 @@ func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// createBackupConflict answers why CreateBackup inserted no row: the ID is
-// taken (ErrAlreadyExists), or the unique index on running backups refused a
-// second running backup (ErrAlreadyRunning).
-func (s *Store) createBackupConflict(ctx context.Context, id backup.ID) error {
-	return backupConflict(ctx, s.queries, id)
-}
-
-// backupConflict is createBackupConflict for the queries of one transaction.
+// backupConflict answers why an insert of a backup row wrote no row: the ID
+// is taken (ErrAlreadyExists), or the unique index on running backups refused
+// a second running backup (ErrAlreadyRunning).
 func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 	_, err := q.GetBackup(ctx, id.String())
 	if err == nil {
@@ -1974,7 +2040,8 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
-// the notification sinks, the triggers, the self-service blueprints and the trust rules.
+// the notification sinks, the triggers, the self-service blueprints, the trust rules and the
+// break-glass reviews.
 func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
 		return err
@@ -2013,6 +2080,10 @@ func checkStagedFeatureRows(ctx context.Context, pool pgQuerier, staging string)
 	}
 
 	if err := checkStagedTrustRules(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	if err := checkStagedBreakGlassReviews(ctx, pool, staging); err != nil {
 		return err
 	}
 

@@ -127,13 +127,8 @@ func (s *Store) inAuditedTxOf(ctx context.Context, e *audit.Entry, fn func(q *db
 func (s *Store) inFencedAuditedTx(
 	ctx context.Context, fence namespace.Fence, e *audit.Entry, fn func(q *db.Queries) error,
 ) error {
-	if err := e.Validate(); err != nil {
-		return fmt.Errorf("audit entry: %w", err)
-	}
-
-	if e.Namespace != fence.Namespace {
-		return fmt.Errorf("%w: entry names %q, fence names %q",
-			audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	if err := checkFencedEntry(fence, *e); err != nil {
+		return err
 	}
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
@@ -147,6 +142,21 @@ func (s *Store) inFencedAuditedTx(
 
 		return nil
 	})
+}
+
+// checkFencedEntry returns audit.ErrInvalidEntry when e fails validation or
+// names another namespace than fence.
+func checkFencedEntry(fence namespace.Fence, e audit.Entry) error {
+	if err := e.Validate(); err != nil {
+		return fmt.Errorf("audit entry: %w", err)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return fmt.Errorf("%w: entry names %q, fence names %q",
+			audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
+	return nil
 }
 
 // validServerEntry returns audit.ErrInvalidEntry when e fails validation or

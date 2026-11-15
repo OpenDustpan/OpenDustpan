@@ -418,7 +418,9 @@ func (h *Handler) unlockFree(w http.ResponseWriter, r *http.Request, c call, ws 
 func (h *Handler) unlockHeld(w http.ResponseWriter, r *http.Request, c call, id workspace.ID, lockID string) {
 	ctx := r.Context()
 
-	_, err := h.ws.UnlockLock(ctx, id, lockID, c.principal.Subject)
+	// The job of a job token is the origin of the release: the state version
+	// that the release publishes records it.
+	_, err := h.ws.UnlockLock(workspace.WithJob(ctx, c.principal.JobTokenID()), id, lockID, c.principal.Subject)
 	if errors.Is(err, workspace.ErrLockedByOther) || errors.Is(err, workspace.ErrNotLocked) ||
 		errors.Is(err, workspace.ErrLockMismatch) {
 		h.recordLockRefusal(ctx, r, c, "the lock changed or is held by another principal")
@@ -447,7 +449,9 @@ func (h *Handler) recordLockRefusal(ctx context.Context, r *http.Request, c call
 		return
 	}
 
-	denial := refusal.Denial{Action: identity.ActionUnitLock, Object: obj, Reason: reason, Window: 0}
+	denial := refusal.Denial{
+		Action: identity.ActionUnitLock, Object: obj, Reason: reason, ReasonWithin: nil, Window: 0,
+	}
 	h.guard.Record(ctx, r, c.principal, denial)
 }
 

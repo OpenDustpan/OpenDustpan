@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
-	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/manuallock"
@@ -166,7 +165,7 @@ func PlanJob(
 // the phase of job jobID on unit started. It returns the zero time when the
 // service has no phase clock or the clock has no answer.
 func ManualLockPhaseStart(
-	ctx context.Context, unit collection.UnitRef, jobID string, opts ...Option,
+	ctx context.Context, unit manuallock.Unit, jobID string, opts ...Option,
 ) (time.Time, error) {
 	cfg := defaultSettings()
 	for _, opt := range opts {
@@ -335,4 +334,26 @@ func adapterHandlerSetter(a *adapters, name string) func(http.Handler) {
 	}
 
 	return fields[name]
+}
+
+// ErrStoreDatabaseForm is the refusal of a database value that names no
+// built-in store.
+var ErrStoreDatabaseForm = errStoreDatabaseForm
+
+// OpenPostgresStoreForTest runs openPostgresStore, so that a test reaches the
+// form check of the inner layer.
+func OpenPostgresStoreForTest(ctx context.Context, dsn string) (*BuiltinStore, error) {
+	return openPostgresStore(ctx, dsn, defaultStoreConfig())
+}
+
+// OpenBuiltinPostgresForTest runs openBuiltinPostgres with a default settings
+// value and a built-in store whose dsn is the given value, so that a test
+// reaches the form check of the outer layer.
+func OpenBuiltinPostgresForTest(dsn string) error {
+	cfg := defaultSettings()
+
+	builtin := newBuiltinStoreSettings(builtinStorePostgresDSN, nil)
+	builtin.dsn = dsn
+
+	return openBuiltinPostgres(cfg, &builtin)
 }
