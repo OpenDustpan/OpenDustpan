@@ -216,7 +216,7 @@ that the named part applies, and the later ADR adds to it.
 | [247](0247-works-with-backstage-an-entity-tab-of-units.md) | Works with Backstage: an entity tab that shows the units of a component | accepted | extends ADR 13; extends ADR 210 decision 3 | - | this ADR |
 | [248](0248-federation-model.md) | Federation model: installations own namespaces, request forwarding, asynchronous replication and manual failover | accepted | changes ADR 4; changes ADR 12; changes ADR 18; changes ADR 19; changes ADR 30 decisions 1, 6 and 8; changes ADR 38 decision 3; changes ADR 42; changes ADR 48; changes ADR 51 decision 2; changes ADR 145 decision 9; changes ADR 153 decision 4; changes ADR 204 decision 4; changes ADR 215 decision 21; changes ADR 218 decisions 1, 2 and 5; changes ADR 241 decision 11 | ADR 286 changes | this ADR, with ADR 286 |
 | [249](0249-components-of-the-server-process.md) | Components of the server process, and a start flag that selects them | accepted | extends ADR 72 decision 11; extends ADR 211 | - | this ADR |
-| [250](0250-defense-in-depth-for-security-code.md) | Defense in depth for security code | accepted | - | - | this ADR |
+| [250](0250-defense-in-depth-for-security-code.md) | Defense in depth for security code | accepted | - | ADR 382 extends decision 3 | this ADR, with ADR 382 |
 | [251](0251-copy-rules-for-user-facing-text.md) | Copy rules for user-facing text | accepted | extends ADR 14; extends ADR 66 | - | this ADR |
 | [252](0252-the-dev-sign-in-person-and-the-reserved-dev-prefix.md) | The dev sign-in person and the reserved dev prefix | accepted | changes ADR 237 decision 12 | ADR 253 extends decision 7 | this ADR, with ADR 253 |
 | [253](0253-dev-data-does-not-reach-a-production-installation.md) | Dev data does not reach a production installation | accepted | changes ADR 42 decision 4; extends ADR 252 decision 7 | - | this ADR |
@@ -346,3 +346,4 @@ that the named part applies, and the later ADR adds to it.
 | [378](0378-the-binding-of-an-uploaded-plan.md) | The binding of an uploaded plan | accepted | extends ADR 102 decision 7; extends ADR 307 decision 2; extends ADR 369 decision 1 | - | this ADR |
 | [379](0379-the-openpgp-dependency-of-the-registry.md) | The OpenPGP dependency of the registry | accepted | changes ADR 316 decision 2; changes ADR 349 decision 2 | - | this ADR |
 | [380](0380-the-delegation-in-the-agent-block-of-an-audit-entry.md) | The delegation in the agent block of an audit entry | accepted | changes ADR 126 decision 10 | - | this ADR |
+| [382](0382-a-repeatable-domain-refusal-goes-through-the-shared-denial-limiter.md) | A repeatable domain refusal goes through the shared denial limiter | accepted | extends ADR 250 decision 3 | - | this ADR |
