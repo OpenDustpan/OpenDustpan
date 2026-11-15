@@ -50,9 +50,12 @@ no way to say so.
 
 ## Proposal
 
-No preference yet. The default of each setting stays the safe value. The
-default for break-glass and for the reset of a factor is `required` (on),
-as the owner said.
+One per-action step-up configuration that covers break-glass and the reset
+of a factor together. The owner said on 15 November 2026: "If we build this
+for break-glass we might as well fold it in for factor reset too." The
+default for both is `required` (on). The master switch `freshAuthEnabled`
+stays and gives the default of the other dangerous actions (option 2 or
+option 3 above). The choice between option 2 and option 3 is open.
 
 ## Open questions
 
@@ -65,6 +68,10 @@ as the owner said.
   required (ADR 385 decision 4)?
 - Where does the settings API show the effective value of each action, and
   where does it come from (ADR 212 decision 9)?
+- Issuing an enrollment code (ADR 301 decision 14, ADR 372 decision 14) is the
+  administrator side of the reset of a factor. Today it does not follow
+  `freshAuthEnabled`. Does it join the same configuration, and does it take
+  the value of the reset of a factor? This is for the owner to decide.
 - Which actions never become configurable? The first-administrator code (ADR
   339 decision 6) is not a step-up (ADR 385 decision 5).
 
