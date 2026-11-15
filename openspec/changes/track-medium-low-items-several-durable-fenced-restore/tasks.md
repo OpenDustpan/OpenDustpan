@@ -19,6 +19,7 @@
 - [ ] 2.3 Prove takeover with 2 instances in `internal/servertest` on `ANY /api/server/restores/{}` with access token. Check: Kill holder during copy and swap in `internal/servertest` on `ANY /api/server/restores/{}` with access token shows taker success.
 - [ ] 2.5 SECURITY. Build the staging name layer in pkg/backup/service.go: NEW func restoreStagingName builds restore-staging-<restore-id> from a checked restore ID and refuses any other form. Check: TestRestoreStagingNameHostileInputRefused passes.
 - [ ] 2.4 Add the NEW error code restore.lock-wait to the restore codes of the catalog in internal/errcode/catalog_restore.go, with its message and the one command that helps, and its row in internal/errcode/catalog_test.go. Check: `go test ./internal/errcode/...`
+- [ ] 2.5 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `restore.worker-absent` in `internal/errcode/testdata/catalog/restore.txt`; `restore.running` in `internal/errcode/testdata/catalog/restore.txt`; `restore.forbidden` in `internal/errcode/testdata/catalog/restore.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Side effects (computed from main)
 

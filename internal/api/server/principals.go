@@ -18,7 +18,7 @@ package server
 // 100 when the request names none, and 0 answers 400), cursor (the
 // nextCursor of the page before, at most 512 bytes) and prefix (the start of
 // the subject, or of the group name without regard to case). The list of
-// principals also takes kind (person, service or workload).
+// principals also takes kind (person, service, workload or agent).
 
 import (
 	"bytes"
@@ -655,7 +655,7 @@ func pageRequest(r *http.Request) (principal.PageRequest, error) {
 
 // createPrincipal serves POST /api/server/principals: it answers 201 with
 // the new principal. A taken subject answers 409. A bad or reserved subject,
-// an unknown kind or a bad body answers 400.
+// a kind that this route does not make or a bad body answers 400.
 func createPrincipal(
 	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
@@ -671,6 +671,18 @@ func createPrincipal(
 	kind, err := principal.ParseKind(*req.Kind)
 	if err != nil {
 		return failed("principals"), err
+	}
+
+	// An agent record comes from the model connect request, with its
+	// sponsors. This route makes a person, a service and a workload only. The
+	// answer names the route that lists the principals of one kind, so that a
+	// caller can read the agent records that the server makes.
+	if kind == principal.KindAgent {
+		return failed("principals"), fmt.Errorf(
+			"%w: the kind %q is not one that this route makes. "+
+				"To list the principals of a kind, send GET /api/server/principals?kind=agent",
+			principal.ErrInvalid, kind,
+		)
 	}
 
 	if hidden := refuseHiddenPtr("displayName", req.DisplayName); hidden != nil {

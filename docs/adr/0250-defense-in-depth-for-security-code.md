@@ -2,6 +2,11 @@
 
 Status: accepted · 2026-10-19. The project owner decided it.
 
+Changed by:
+
+- ADR 382 extends decision 3: a repeated domain refusal writes its audit
+  entry through the shared denial limiter, with the count of the refusals.
+
 ## Context
 
 A security audit found about 10 low-severity findings. Each one is safe today only because its input is safe, so a later change can turn it into a real fault. One check for each risk is one hole away from failure. In the Swiss cheese model (https://en.wikipedia.org/wiki/Swiss_cheese_model), harm gets through only when the holes in every slice line up. Defense in depth (https://en.wikipedia.org/wiki/Defense_in_depth_(computing)) puts several independent layers in the path.

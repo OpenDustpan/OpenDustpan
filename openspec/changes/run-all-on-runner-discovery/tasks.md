@@ -17,6 +17,7 @@
 
 - [ ] 2.4 SECURITY. Build the launcher sandbox path containment in NEW file pkg/launcher/discovery_path.go. The code cleans the path, resolves symlinks and `..` segments, and denies a path outside the working directory before any read. Check: a discovery path with `..` or a symlink to a place outside the working directory returns the NEW error code `run.discovery-refused` and no file is read.
 - [ ] 2.5 SECURITY. Add a hostile test sent straight to the launcher in NEW file pkg/launcher/discovery_path_test.go. Check: TestLauncherRefusesEscapingDiscoveryPath calls the launcher function directly with a `..` path and a symlinked include that points outside the working directory, and the launcher refuses both.
+- [ ] 2.6 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `run.discovery-refused` in `internal/errcode/testdata/catalog/run.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Definition of done
 

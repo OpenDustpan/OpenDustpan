@@ -309,6 +309,21 @@ func TestKindFollowsPrincipal(t *testing.T) {
 	}
 }
 
+// TestKindSwitchesKnowAgent proves that KindFor knows the kind agent and
+// refuses it, as it refuses a kind that it does not know: an agent principal
+// gets no access token.
+func TestKindSwitchesKnowAgent(t *testing.T) {
+	t.Parallel()
+
+	if _, err := accesstoken.KindFor(principal.KindAgent); !errors.Is(err, accesstoken.ErrNoTokenForKind) {
+		t.Fatalf("KindFor(agent) = %v, want ErrNoTokenForKind", err)
+	}
+
+	if _, err := accesstoken.KindFor("robot"); !errors.Is(err, accesstoken.ErrNoTokenForKind) {
+		t.Fatalf("KindFor(robot) = %v, want ErrNoTokenForKind", err)
+	}
+}
+
 func TestLifetime(t *testing.T) {
 	t.Parallel()
 
