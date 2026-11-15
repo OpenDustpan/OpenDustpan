@@ -176,6 +176,8 @@ var families = map[identity.Action]Family{
 	identity.ActionNamespaceUseGitHostConnection:     FamilyData,
 	identity.ActionNamespaceReadPlacementRules:       FamilyData,
 	identity.ActionNamespaceManagePlacementRules:     FamilyData,
+	identity.ActionNamespaceManageProxyRules:         FamilyData,
+	identity.ActionUnitManageProxyRules:              FamilyData,
 	identity.ActionCollectionRead:                    FamilyData,
 	identity.ActionCollectionCreate:                  FamilyData,
 	identity.ActionCollectionUpdate:                  FamilyData,

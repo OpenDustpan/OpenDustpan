@@ -195,6 +195,13 @@ const (
 	// the administrator holds it. The account administrator and the site
 	// administrator hold it as data actions.
 	ActionNamespaceManageGates Action = "namespace:manage-gates"
+	// ActionNamespaceManageProxyRules allows saving the proxy rule set of a
+	// namespace. Its object is a namespace. A read of the set needs
+	// ActionNamespaceRead.
+	ActionNamespaceManageProxyRules Action = "namespace:manage-proxy-rules"
+	// ActionUnitManageProxyRules allows saving the proxy rule set of a unit.
+	// Its object is a unit. A read of the set needs ActionUnitRead.
+	ActionUnitManageProxyRules Action = "unit:manage-proxy-rules"
 	// ActionUnitSetOverrides allows changing the override switches of a unit.
 	// Its object is a unit.
 	ActionUnitSetOverrides Action = "unit:set-overrides"

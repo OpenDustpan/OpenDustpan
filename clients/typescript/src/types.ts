@@ -883,6 +883,11 @@ export interface JobUnitRequest {
   readonly tool: string;
 }
 
+export interface JoinedProxyRule {
+  readonly rule: ProxyRule;
+  readonly scope: string;
+}
+
 export interface ListAccessLimitsResponse {
   readonly accessLimits: ReadonlyArray<AccessLimit>;
 }
@@ -1420,6 +1425,26 @@ export interface ProviderReleaseFile {
   readonly size?: number;
 }
 
+export interface ProxyRule {
+  readonly clientCertificate?: string;
+  readonly credential?: string;
+  readonly host: string;
+  readonly id: string;
+  readonly methods?: ReadonlyArray<string>;
+  readonly mode: string;
+  readonly operations: ReadonlyArray<string>;
+  readonly paths?: ReadonlyArray<string>;
+  readonly port: number;
+  readonly serverTrust: string;
+}
+
+export interface ProxyRuleSet {
+  readonly digest: string;
+  readonly rules: ReadonlyArray<ProxyRule>;
+  readonly updatedAt: number;
+  readonly version: number;
+}
+
 export interface PublishFile {
   readonly name: string;
   readonly role: string;
@@ -1491,6 +1516,11 @@ export interface RegistryModule {
 export interface RegistryProvider {
   readonly name: string;
   readonly namespace: string;
+}
+
+export interface RenderedProxyRules {
+  readonly operation: string;
+  readonly rules: ReadonlyArray<JoinedProxyRule>;
 }
 
 export interface ReplaceNotificationSinkRequest {
@@ -1600,6 +1630,10 @@ export interface RestoreWarning {
 export interface RotateNamespaceIssuerKeysRequest {
   readonly emergency: boolean;
   readonly reason: string;
+}
+
+export interface SaveProxyRuleSetRequest {
+  readonly rules: ReadonlyArray<ProxyRule>;
 }
 
 export interface SaveTriggerRequest {
@@ -2272,6 +2306,14 @@ export interface UnitOutputs {
   readonly stateId: string;
   readonly tool: string;
   readonly unitId: string;
+}
+
+export interface UnitProxyRules {
+  readonly digest: string;
+  readonly joined: ReadonlyArray<JoinedProxyRule>;
+  readonly rules: ReadonlyArray<ProxyRule>;
+  readonly updatedAt: number;
+  readonly version: number;
 }
 
 export interface UnitSettings {

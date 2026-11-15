@@ -43,6 +43,7 @@ func newAuditSinkHandler(t *testing.T, source apiserver.AuditSinkSource) testHan
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
