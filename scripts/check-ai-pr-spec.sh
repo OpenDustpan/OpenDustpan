@@ -24,8 +24,10 @@
 # script builds a path from it, and the script reads only under
 # openspec/changes; a later containment check refuses a path that leaves
 # that directory, so a new caller cannot pass a hostile id through. The
-# log prints at most 64 bytes of printable ASCII for an id, so a body
-# cannot write a terminal sequence or a very long line into the CI log.
+# log prints at most 64 bytes of printable ASCII for an id and replaces
+# a non-printable byte of the quoted open-questions line with "?", so a
+# body cannot write a terminal sequence or a very long line into the CI
+# log.
 set -euo pipefail
 
 if [[ $# -gt 3 ]]; then
@@ -207,12 +209,23 @@ for id in "${valid_ids[@]}"; do
   fi
   # Defense in depth: the path must stay under openspec/changes, so a
   # hostile id cannot read another file even when the allowlist above is
-  # bypassed by a new caller. The check resolves symlinks, so a link under
-  # openspec/changes that points outside does not pass.
+  # bypassed by a new caller. The check resolves the directory of the
+  # proposal and refuses a proposal that is itself a symlink, so a link
+  # under openspec/changes that points outside does not pass.
   resolved_changes="$(cd -P "$changes_dir" && pwd -P)"
   proposal_dir="$(dirname "$proposal")"
+  proposal_base="$(basename "$proposal")"
   resolved_dir="$(cd -P "$proposal_dir" 2>/dev/null && pwd -P || printf '%s' "$proposal_dir")"
-  if [[ "$resolved_dir" != "$resolved_changes" && "$resolved_dir" != "$resolved_changes"/* ]]; then
+  resolved_file="$resolved_dir/$proposal_base"
+  # Defense in depth: a symlinked proposal file points at a file that the
+  # directory check below does not see, because the directory of the link
+  # stays inside openspec/changes. This check refuses such a link, so that
+  # a new caller cannot read a file outside the tree through it.
+  if [[ -L "$proposal" ]]; then
+    echo "check-ai-pr-spec: refused id \"$(printable_id "$id")\": the resolved path leaves openspec/changes" >&2
+    exit 1
+  fi
+  if [[ "$resolved_file" != "$resolved_changes" && "$resolved_file" != "$resolved_changes"/* ]]; then
     echo "check-ai-pr-spec: refused id \"$(printable_id "$id")\": the resolved path leaves openspec/changes" >&2
     exit 1
   fi
@@ -222,6 +235,11 @@ for id in "${valid_ids[@]}"; do
   fi
   seen_not_ready="$id"
   seen_questions="$(section_first_line "$proposal")"
+  # The line comes from the proposal, so make it printable before it goes
+  # into the log. A hostile proposal can then not write a control sequence.
+  # Defense in depth: the id already goes through printable_id; this
+  # encoding stays so that a new caller cannot print a raw section line.
+  seen_questions="$(printf '%s' "$seen_questions" | LC_ALL=C tr -c '[:print:]' '?')"
   if [[ -z "$seen_questions" ]]; then
     seen_questions="(empty)"
   fi

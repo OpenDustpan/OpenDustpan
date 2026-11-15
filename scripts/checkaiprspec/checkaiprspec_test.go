@@ -93,6 +93,26 @@ func runCheck(
 	return string(out), err
 }
 
+// runCheckInRoot runs scripts/check-ai-pr-spec.sh with dir as the repo
+// root. The caller writes body.md and commits.txt in dir first. This
+// variant lets a test build a repo root that a proposal map cannot hold,
+// such as one with a symlink.
+func runCheckInRoot(t *testing.T, dir string) (string, error) {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "bash", "-s")
+	cmd.Stdin = strings.NewReader(readScript(t))
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"AI_PR_BODY_FILE=" + filepath.Join(dir, "body.md"),
+		"AI_PR_COMMITS_FILE=" + filepath.Join(dir, "commits.txt"),
+		"AI_PR_ROOT=" + dir,
+	}
+
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
 func TestCheckAIPRSpec(t *testing.T) {
 	t.Parallel()
 
@@ -362,20 +382,92 @@ func TestCheckAIPRSpecSymlinkLeavesChanges(t *testing.T) {
 	writeFile(t, dir, "body.md", "Tool: test harness\n\nChange: openspec/changes/demo-link\n")
 	writeFile(t, dir, "commits.txt", "someone@example.com\n")
 
-	cmd := exec.CommandContext(t.Context(), "bash", "-s")
-	cmd.Stdin = strings.NewReader(readScript(t))
-	cmd.Env = []string{
-		"PATH=" + os.Getenv("PATH"),
-		"AI_PR_BODY_FILE=" + filepath.Join(dir, "body.md"),
-		"AI_PR_COMMITS_FILE=" + filepath.Join(dir, "commits.txt"),
-		"AI_PR_ROOT=" + dir,
-	}
-	out, err := cmd.CombinedOutput()
+	out, err := runCheckInRoot(t, dir)
 	if err == nil {
 		t.Fatalf("the check passed, want a failure:\n%s", out)
 	}
-	if !strings.Contains(string(out), "resolved path leaves") {
+	if !strings.Contains(out, "resolved path leaves") {
 		t.Errorf("the check said:\n%s\nwant %q", out, "resolved path leaves")
+	}
+}
+
+// TestCheckAIPRSpecSymlinkProposalFileLeavesChanges puts a symlink named
+// proposal.md inside a change directory in openspec/changes, and points it
+// at a spec-ready file outside the tree. The directory of the link stays
+// inside openspec/changes, so the file itself must be refused.
+func TestCheckAIPRSpecSymlinkProposalFileLeavesChanges(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	outside := t.TempDir()
+	writeFile(t, outside, "elsewhere.md", readyProposal())
+
+	changeDir := filepath.Join(dir, "openspec", "changes", "demo-file-link")
+	if err := os.MkdirAll(changeDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "elsewhere.md"), filepath.Join(changeDir, "proposal.md")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "body.md", "Tool: test harness\n\nChange: openspec/changes/demo-file-link\n")
+	writeFile(t, dir, "commits.txt", "someone@example.com\n")
+
+	out, err := runCheckInRoot(t, dir)
+	if err == nil {
+		t.Fatalf("the check passed, want a failure:\n%s", out)
+	}
+	if !strings.Contains(out, "resolved path leaves") {
+		t.Errorf("the check said:\n%s\nwant %q", out, "resolved path leaves")
+	}
+}
+
+// TestCheckAIPRSpecSymlinkArchivedProposalFileLeavesChanges puts a symlink
+// named proposal.md inside an archived change directory. The find lists the
+// link, and the file itself must be refused.
+func TestCheckAIPRSpecSymlinkArchivedProposalFileLeavesChanges(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	outside := t.TempDir()
+	writeFile(t, outside, "elsewhere.md", readyProposal())
+
+	archiveDir := filepath.Join(dir, "openspec", "changes", "archive", "2026-01-01-demo-archive-link")
+	if err := os.MkdirAll(archiveDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "elsewhere.md"), filepath.Join(archiveDir, "proposal.md")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "body.md", "Tool: test harness\n\nChange: openspec/changes/demo-archive-link\n")
+	writeFile(t, dir, "commits.txt", "someone@example.com\n")
+
+	out, err := runCheckInRoot(t, dir)
+	if err == nil {
+		t.Fatalf("the check passed, want a failure:\n%s", out)
+	}
+	if !strings.Contains(out, "resolved path leaves") {
+		t.Errorf("the check said:\n%s\nwant %q", out, "resolved path leaves")
+	}
+}
+
+// TestCheckAIPRSpecQuestionsLineHoldsNoControlByte writes an escape byte
+// into the "Open questions" section. The failure line must not carry the
+// byte into the log.
+func TestCheckAIPRSpecQuestionsLineHoldsNoControlByte(t *testing.T) {
+	t.Parallel()
+
+	proposal := "# Title\n\n## Open questions\n\nopen \x1b[31mred\n"
+	out, err := runCheck(t, map[string]string{"demo-esc": proposal}, nil,
+		"Tool: test harness\n\nChange: openspec/changes/demo-esc\n",
+		"someone@example.com\n")
+	if err == nil {
+		t.Fatalf("the check passed, want a failure:\n%s", out)
+	}
+	if strings.ContainsRune(out, '\x1b') {
+		t.Errorf("the check output holds an escape byte:\n%q", out)
+	}
+	if !strings.Contains(out, "open ?[31mred") {
+		t.Errorf("the check output does not encode the line:\n%q", out)
 	}
 }
 
