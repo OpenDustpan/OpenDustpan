@@ -516,9 +516,9 @@ func TestRefusedAddressCountsAgainstTheLimits(t *testing.T) {
 // windowEnd returns the end of the window of length that holds now, on the
 // clock of authgatetest.Memory.
 func windowEnd(now time.Time, length time.Duration) time.Time {
-	atMs, ms := now.UnixMilli(), length.Milliseconds()
+	at, ms := now.UnixMilli(), length.Milliseconds()
 
-	return time.UnixMilli((atMs/ms + 1) * ms)
+	return time.UnixMilli((at/ms + 1) * ms)
 }
 
 // TestTakeRefusesHostileIdentifiers sends hostile names and sink IDs to the
