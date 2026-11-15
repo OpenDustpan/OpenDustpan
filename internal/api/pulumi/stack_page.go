@@ -7,10 +7,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -73,8 +72,8 @@ func (q stackListQuery) fingerprint() string {
 // for "--tag name=value". ok is false when query has no tagName: the list then
 // keeps every stack. An empty tagName, a tagValue with no tagName, a tagName
 // or a tagValue that the query holds more than one time, and a value that is
-// not UTF-8 text or that holds a control character give errStackTagFilter.
-// It refuses such a value and never changes it.
+// not UTF-8 text or that holds a control, format or separator character give
+// errStackTagFilter. It refuses such a value and never changes it.
 func stackTagFilter(query url.Values) (stack.TagFilter, bool, error) {
 	none := stack.TagFilter{Name: "", Value: "", HasValue: false}
 
@@ -104,7 +103,7 @@ func stackTagFilter(query url.Values) (stack.TagFilter, bool, error) {
 
 // checkTagFilterValues returns errStackTagFilter when query holds tagName or
 // tagValue more than one time, or a value of them that is not UTF-8 text or
-// that holds a control character.
+// that holds a control, format or separator character.
 func checkTagFilterValues(query url.Values) error {
 	for _, key := range []string{"tagName", "tagValue"} {
 		values := query[key]
@@ -114,8 +113,8 @@ func checkTagFilterValues(query url.Values) error {
 		}
 
 		for _, v := range values {
-			if !utf8.ValidString(v) || strings.ContainsFunc(v, unicode.IsControl) {
-				return fmt.Errorf("%w: %s must be UTF-8 text with no control character: "+
+			if !utf8.ValidString(v) || ident.HasHidden(v) {
+				return fmt.Errorf("%w: %s must be UTF-8 text with no control, format or separator character: "+
 					"run pulumi stack ls --tag name=value", errStackTagFilter, key)
 			}
 		}

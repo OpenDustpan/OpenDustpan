@@ -35,7 +35,7 @@ permissions:
 # One run for each branch at a time. A newer run replaces an older one.
 concurrency:
   group: auto-regen-resolve-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   resolve:

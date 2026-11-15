@@ -43,12 +43,14 @@ import type {
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelJobRequest,
   CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
   CheckBackupResponse,
   Collection,
   Components,
+  ConfirmJobRequest,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -122,6 +124,7 @@ import type {
   JobLocationRequest,
   JobLog,
   JobLogEntry,
+  JobLogSubstitution,
   JobPhase,
   JobPlan,
   JobPlanBinding,
@@ -215,7 +218,11 @@ import type {
   PublishProviderReleaseRequest,
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
+  RedactJobLogRequest,
+  RedactJobLogResponse,
   RedeemLocalUserCodeRequest,
+  RegistryFileEntry,
+  RegistryFileSection,
   RegistryKey,
   RegistryModule,
   RegistryProvider,
@@ -498,6 +505,7 @@ export const decodeBackupManifest: Decoder<BackupManifest> = object<BackupManife
   id: string,
   installationKind: string,
   primaryInstallations: array(string),
+  registryFiles: nullable(record(ref(() => decodeRegistryFileSection))),
   rowCounts: nullable(record(int64)),
   schemaVersion: int64,
   sqlFiles: array(ref(() => decodePortableFile)),
@@ -574,6 +582,11 @@ export const decodeBulkUnitSettingsUnit: Decoder<BulkUnitSettingsUnit> = object<
   version: int64,
 });
 
+/** The validator of CancelJobRequest. */
+export const decodeCancelJobRequest: Decoder<CancelJobRequest> = object<CancelJobRequest>("CancelJobRequest", {
+  reason: string,
+});
+
 /** The validator of CancelRestoreResponse. */
 export const decodeCancelRestoreResponse: Decoder<CancelRestoreResponse> = object<CancelRestoreResponse>("CancelRestoreResponse", {
   id: string,
@@ -602,6 +615,7 @@ export const decodeCheckBackupResponse: Decoder<CheckBackupResponse> = object<Ch
 /** The validator of Collection. */
 export const decodeCollection: Decoder<Collection> = object<Collection>("Collection", {
   createdAt: int64,
+  id: string,
   name: string,
   namespace: string,
 });
@@ -609,6 +623,12 @@ export const decodeCollection: Decoder<Collection> = object<Collection>("Collect
 /** The validator of Components. */
 export const decodeComponents: Decoder<Components> = object<Components>("Components", {
   components: array(string),
+});
+
+/** The validator of ConfirmJobRequest. */
+export const decodeConfirmJobRequest: Decoder<ConfirmJobRequest> = object<ConfirmJobRequest>("ConfirmJobRequest", {
+  planBinding: nullable(ref(() => decodeJobPlanBinding)),
+  verdict: string,
 });
 
 /** The validator of ContextAnswer. */
@@ -1251,6 +1271,11 @@ export const decodeJobLogEntry: Decoder<JobLogEntry> = object<JobLogEntry>("JobL
   text: string,
 });
 
+/** The validator of JobLogSubstitution. */
+export const decodeJobLogSubstitution: Decoder<JobLogSubstitution> = object<JobLogSubstitution>("JobLogSubstitution", {
+  match: string,
+});
+
 /** The validator of JobPhase. */
 export const decodeJobPhase: Decoder<JobPhase> = object<JobPhase>("JobPhase", {
   approvals: array(ref(() => decodeJobApproval)),
@@ -1653,6 +1678,7 @@ export const decodeNamespaceIssuerRotation: Decoder<NamespaceIssuerRotation> = o
 export const decodeNotificationDelivery: Decoder<NotificationDelivery> = object<NotificationDelivery>("NotificationDelivery", {
   attempts: int64,
   contact: optional(string),
+  createdAt: dateTime,
   deliveredAt: optional(dateTime),
   id: string,
   lastError: optional(string),
@@ -1780,6 +1806,7 @@ export const decodePasswordTooShortErrorArgs: Decoder<PasswordTooShortErrorArgs>
 /** The validator of PlacementRule. */
 export const decodePlacementRule: Decoder<PlacementRule> = object<PlacementRule>("PlacementRule", {
   collection: string,
+  collectionID: string,
   createdAt: int64,
   createdBy: string,
   id: string,
@@ -1792,7 +1819,7 @@ export const decodePlacementRule: Decoder<PlacementRule> = object<PlacementRule>
 
 /** The validator of PlacementRuleRequest. */
 export const decodePlacementRuleRequest: Decoder<PlacementRuleRequest> = object<PlacementRuleRequest>("PlacementRuleRequest", {
-  collection: string,
+  collectionID: string,
   position: optional(int64),
   project: string,
   stack: string,
@@ -1944,10 +1971,38 @@ export const decodePutGitHostInstallationRequest: Decoder<PutGitHostInstallation
   namespace: nullable(string),
 });
 
+/** The validator of RedactJobLogRequest. */
+export const decodeRedactJobLogRequest: Decoder<RedactJobLogRequest> = object<RedactJobLogRequest>("RedactJobLogRequest", {
+  reason: string,
+  substitutions: array(ref(() => decodeJobLogSubstitution)),
+  version: string,
+});
+
+/** The validator of RedactJobLogResponse. */
+export const decodeRedactJobLogResponse: Decoder<RedactJobLogResponse> = object<RedactJobLogResponse>("RedactJobLogResponse", {
+  log: ref(() => decodeJobLog),
+  matches: int64,
+  redactedVersion: string,
+});
+
 /** The validator of RedeemLocalUserCodeRequest. */
 export const decodeRedeemLocalUserCodeRequest: Decoder<RedeemLocalUserCodeRequest> = object<RedeemLocalUserCodeRequest>("RedeemLocalUserCodeRequest", {
   oneTimeCode: string,
   password: string,
+});
+
+/** The validator of RegistryFileEntry. */
+export const decodeRegistryFileEntry: Decoder<RegistryFileEntry> = object<RegistryFileEntry>("RegistryFileEntry", {
+  release: string,
+  sha256: string,
+  size: int64,
+  version: string,
+});
+
+/** The validator of RegistryFileSection. */
+export const decodeRegistryFileSection: Decoder<RegistryFileSection> = object<RegistryFileSection>("RegistryFileSection", {
+  files: array(ref(() => decodeRegistryFileEntry)),
+  version: int64,
 });
 
 /** The validator of RegistryKey. */

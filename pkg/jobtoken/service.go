@@ -21,6 +21,8 @@ type Service struct {
 	now   func() time.Time
 }
 
+var _ identity.Authenticator = (*Service)(nil)
+
 // NewService returns a Service. A nil now uses time.Now.
 func NewService(store Store, now func() time.Time) *Service {
 	if now == nil {
@@ -303,4 +305,20 @@ func live(m *Match, now time.Time) error {
 	}
 
 	return nil
+}
+
+// AuthenticateToken implements identity.Authenticator. It resolves raw to the
+// starter principal of its job token, with the job ID and the credential of a
+// job token set. It returns the same refusals as Authenticate, and it drops
+// the unit that Authenticate answers: the caller must not take the reach of a
+// token from the token itself. The rule of job tokens reads the unit of the
+// job from the job store on every request, so a unit that a record names
+// never widens a token.
+func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.Principal, error) {
+	p, _, err := s.Authenticate(ctx, raw)
+	if err != nil {
+		return identity.Principal{}, err
+	}
+
+	return p, nil
 }

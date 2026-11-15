@@ -7,11 +7,12 @@
 #   trufflehog    v3.99.2  https://github.com/trufflesecurity/trufflehog#floppy_disk-installation
 #   python3       any 3.x, standard library only (for docs-lint)
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
+#   node 20.19 or later with npx, for openspec-validate (the CLI comes from npm at a pinned version)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check
+.PHONY: cover regenerate-baseline release-record-check release-build release-verify ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e docs-commands-check e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check change-archived-check
 
-check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
+check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint openspec-validate release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -168,6 +169,15 @@ docs-lint: ## ASD-STE100 structural rules, banned words and the Repowise decisio
 adr-decisions: ## Write .repowise/decisions.yaml, the accepted decisions for Repowise, from docs/adr. docs-lint fails when the file is not current.
 	$(ADR_DECISIONS)
 
+# The OpenSpec CLI at the version that openspec/project.md names. Without these
+# variables it sends usage data to its own server and asks npm for a newer
+# version. With them, the only network use is the download of the pinned
+# package.
+OPENSPEC := OPENSPEC_TELEMETRY=0 DO_NOT_TRACK=1 OPENSPEC_NO_UPDATE_CHECK=1 npx --yes @fission-ai/openspec@1.15.0
+
+openspec-validate: ## Validate every OpenSpec change and spec (openspec validate --all). Needs node 20.19 or later.
+	$(OPENSPEC) validate --all --no-interactive
+
 # With no VERSION there is no tag to check, so the target runs the cases that
 # exist without one: the script against an empty record, a record of another
 # version, a record with a CR or a NUL byte, and a missing record. With
@@ -180,6 +190,36 @@ else
 	go test ./internal/releaserecord -run 'TestCheckReleaseRecordRefuses|TestReleaseBuildChecksTheRecordFirst|TestReleaseRecordTargetMode' -count=1
 endif
 
+# The release archives of one version: make release-build VERSION=v0.1.0. The
+# archives and SHA256SUMS go to RELEASE_DIR. The script refuses a version that
+# the release record does not list. The version goes to the script through the
+# environment, so that a shell never reads it as code.
+RELEASE_DIR ?= /var/tmp/opendustpan-release/$(VERSION)
+
+release-build: export RELEASE_VERSION := $(VERSION)
+release-build: export RELEASE_OUT := $(RELEASE_DIR)
+release-build: ## Build the four release archives and SHA256SUMS: VERSION=vX.Y.Z, in RELEASE_DIR.
+	./scripts/release-build.sh "$$RELEASE_VERSION" "$$RELEASE_OUT"
+
+release-verify: export RELEASE_VERSION := $(VERSION)
+release-verify: export RELEASE_OUT := $(RELEASE_DIR)
+release-verify: ## Check the archives and SHA256SUMS of one version: VERSION=vX.Y.Z, in RELEASE_DIR.
+	./scripts/release-verify.sh "$$RELEASE_VERSION" "$$RELEASE_OUT"
+
+# The pull request body and the author email of each commit of the pull
+# request, one per line. They have no defaults: CI passes both files, and a
+# local run passes its own files. Not part of check: the check needs a pull
+# request, and a local run has none.
+# The recipe reads both paths from the environment, never from the command
+# text. make exports a variable that came from the environment or from the
+# command line, so a path that holds a quote, a space or a shell word stays one
+# word and cannot escape into the command. The empty check and the two reads
+# use "$$VAR", which the shell expands; no value is pasted into the command.
+export PR_BODY_FILE PR_COMMITS_FILE
+ai-pr-spec-check: ## Fail an AI-authored pull request that names no spec-ready OpenSpec change (needs PR_BODY_FILE and PR_COMMITS_FILE).
+	@if [ -z "$$PR_BODY_FILE" ] || [ -z "$$PR_COMMITS_FILE" ]; then echo "usage: make ai-pr-spec-check PR_BODY_FILE=<body-file> PR_COMMITS_FILE=<commits-file>" >&2; exit 1; fi
+	bash scripts/check-ai-pr-spec.sh "$$PR_BODY_FILE" "$$PR_COMMITS_FILE"
+
 # The PR body check reads the body from a file, so CI writes the body to a file
 # first. PR_BODY_FILE has no default: the target refuses to run without it.
 pr-body-check: ## Check that the PR body in PR_BODY_FILE names an issue or says No issue.
@@ -188,6 +228,15 @@ ifeq ($(strip $(PR_BODY_FILE)),)
 	@exit 1
 else
 	./scripts/check-pr-body.sh '$(PR_BODY_FILE)'
+endif
+
+# The base ref has no default: the target refuses to run without it.
+change-archived-check: ## Fail when this branch completes an OpenSpec change and does not archive it (BASE_REF=origin/main).
+ifeq ($(strip $(BASE_REF)),)
+	@echo "usage: make change-archived-check BASE_REF=<base ref, for example origin/main>" >&2
+	@exit 1
+else
+	./scripts/check-change-archived.sh '$(BASE_REF)'
 endif
 
 adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.
@@ -217,9 +266,10 @@ TEST_TIMEOUT ?= 45m
 # detector stays on for all code, and checkptr stays on for our own code. On
 # 4 cores, the dev data suite of pkg/store/sqlite used 904 s of user CPU with
 # the checks and 647 s without them. The cost: checkptr does not find unsafe
-# pointer misuse inside those modules, which we do not maintain. A second
-# -gcflags on the same command line replaces this one, so a target that needs
-# its own -gcflags must merge them into one.
+# pointer misuse inside those modules, which we do not maintain. -gcflags can
+# repeat with other patterns; for a package that matches more than one, the
+# last match wins, so a later -gcflags with an overlapping pattern must repeat
+# -d=checkptr=0.
 RACE_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0'
 
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
@@ -241,6 +291,13 @@ GO_TEST_COUNT ?=
 # test-ci-other.
 STORE_TEST_TIMEOUT := 30m
 
+# STORE_TEST_PARALLEL is the -parallel of test-ci-store. Many cases of the store
+# suites wait, for example 20 s for the lease of a restore to run out, and hold
+# one of the GOMAXPROCS slots of the default while they wait. 16 lets the other
+# cases run in that time: pkg/store/sqlite under -race on 4 cores took 447 s at
+# 16 and 552 s at 4. The PostgreSQL job raises max_connections for it.
+STORE_TEST_PARALLEL := 16
+
 test-ci-other: ## Go tests as in test, without the two store packages; the go job of CI runs it.
 	go list ./... >/dev/null
 	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -timeout $(GO_TEST_TIMEOUT) $$(go list ./... | grep -v -x -F $(addprefix -e ,$(STORE_TEST_PKGS)))
@@ -260,7 +317,7 @@ cover: ## Fast coverage pass for the packages of test-ci-other, without -race: w
 
 test-ci-store: ## Go tests of one store package, STORE=sqlite or STORE=postgres; each store job of CI runs it.
 	@case "$(STORE)" in sqlite|postgres) ;; *) echo "set STORE=sqlite or STORE=postgres"; exit 1 ;; esac
-	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -timeout $(STORE_TEST_TIMEOUT) ./pkg/store/$(STORE)/
+	go test $(RACE_TEST_FLAGS) $(GO_TEST_COUNT) -parallel $(STORE_TEST_PARALLEL) -timeout $(STORE_TEST_TIMEOUT) ./pkg/store/$(STORE)/
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)
@@ -284,6 +341,9 @@ test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs D
 
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m ./e2e/...
+
+docs-commands-check: ## Run each shell block of README, docs/guides and docs/reference as written; a failure prints page, block index, command and output. Not part of check.
+	E2E_DOCS_COMMANDS=1 go test -tags e2e -count=1 -timeout 60m -run 'TestDocsCommands|TestDocsCommandRunsAsWritten' ./e2e/
 
 e2e-ha: ## Drive three server binaries of one installation behind a round-robin proxy on PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL; E2E_HA_BACKUP_MB sets the backup size; see e2e/doc.go). Not part of check; the e2e-ha-nightly workflow (e2e/e2e-ha-nightly.workflow.yml) runs it.
 	E2E_INSTANCES=3 go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m -run '^TestHighAvailability$$' ./e2e/

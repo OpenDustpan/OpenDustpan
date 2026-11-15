@@ -32,7 +32,7 @@ func TestLDAPSignIn(t *testing.T) {
 		t.Skip("the LDAP steps run against the in-process server: the binary refuses a directory on the loopback")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {

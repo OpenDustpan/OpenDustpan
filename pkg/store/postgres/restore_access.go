@@ -43,7 +43,13 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) (backup.KeepAcces
 // ones are inserted last. It locks the live access tables first, so a revoke
 // between the copy and the swap cannot be lost. It returns the count of the
 // dropped temp_admins rows.
-func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, live string, plan swapPlan) (int64, error) {
+func (s *Store) keepAccessTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	srv serverAuditTx,
+	live string,
+	plan swapPlan,
+) (int64, error) {
 	if err := lockLiveAccessTables(ctx, tx, live); err != nil {
 		return 0, err
 	}
@@ -67,7 +73,12 @@ func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, live string, plan s
 
 	previous, drop := previousSchema(live, plan.previous)
 
-	return dropped, swapSchemas(ctx, tx, swapNames{live: live, previous: previous, staging: plan.staging, drop: drop})
+	return dropped, swapSchemas(
+		ctx,
+		tx,
+		srv,
+		swapNames{live: live, previous: previous, staging: plan.staging, drop: drop},
+	)
 }
 
 // swapSchemas moves the live schema aside, moves the staged schema live,
@@ -75,7 +86,7 @@ func (s *Store) keepAccessTx(ctx context.Context, tx pgx.Tx, live string, plan s
 // of the staging area, and fences the restored namespaces, in tx. The
 // installation, backups and restores tables live in the control schema,
 // which the swap never renames.
-func swapSchemas(ctx context.Context, tx pgx.Tx, names swapNames) error {
+func swapSchemas(ctx context.Context, tx pgx.Tx, srv serverAuditTx, names swapNames) error {
 	live, previous, staging := names.live, names.previous, names.staging
 
 	if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(live)+" RENAME TO "+pgIdent(previous)); err != nil {
@@ -86,7 +97,7 @@ func swapSchemas(ctx context.Context, tx pgx.Tx, names swapNames) error {
 		return fmt.Errorf("move staged schema live: %w", err)
 	}
 
-	if err := keepControlTables(ctx, tx, live, previous); err != nil {
+	if err := keepControlTables(ctx, tx, srv, live, previous); err != nil {
 		return err
 	}
 

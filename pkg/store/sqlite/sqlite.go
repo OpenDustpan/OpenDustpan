@@ -249,6 +249,11 @@ type Store struct {
 	// inside the read transaction. Tests write there to prove that both
 	// statements read one snapshot. Nil in production.
 	betweenPageReads func(ctx context.Context)
+	// betweenDeletedFactsReads, when set, runs in GetDeletedUnitFacts after
+	// the collection select and before the labels select, inside the
+	// read-only transaction. Tests commit there to prove that both selects
+	// read one snapshot. Nil in production.
+	betweenDeletedFactsReads func(ctx context.Context)
 	// guardCancel stops the write-ahead log guard; guardDone closes when the
 	// guard ends. Close waits for the guard before it closes the connection,
 	// so no checkpoint runs on a closed handle.
@@ -408,31 +413,32 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 // newStore returns the store on conn, before the options and the migration.
 func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 	s := &Store{
-		conn:                conn,
-		queries:             db.New(conn),
-		path:                path,
-		mu:                  sync.RWMutex{},
-		sweepMu:             sync.Mutex{},
-		enterGate:           newWriteGate(),
-		enterWait:           maxEnterWait,
-		stagingMu:           sync.Mutex{},
-		stagingPath:         "",
-		guardCancel:         nil,
-		guardDone:           nil,
-		logger:              slog.New(slog.DiscardHandler),
-		lastTruncateSuccess: time.Now(),
-		busyWarned:          false,
-		keepAccessHook:      nil,
-		attemptDeadline:     secret.AttemptDeadline,
-		now:                 time.Now,
-		beforeLockDelete:    nil,
-		betweenPageReads:    nil,
-		binaryVersion:       "",
-		kind:                "",
-		noMigrate:           false,
-		processGuard:        guard,
-		stepTxBound:         DefaultStepTransactionBound,
-		gate:                nil,
+		conn:                     conn,
+		queries:                  db.New(conn),
+		path:                     path,
+		mu:                       sync.RWMutex{},
+		sweepMu:                  sync.Mutex{},
+		enterGate:                newWriteGate(),
+		enterWait:                maxEnterWait,
+		stagingMu:                sync.Mutex{},
+		stagingPath:              "",
+		guardCancel:              nil,
+		guardDone:                nil,
+		logger:                   slog.New(slog.DiscardHandler),
+		lastTruncateSuccess:      time.Now(),
+		busyWarned:               false,
+		keepAccessHook:           nil,
+		attemptDeadline:          secret.AttemptDeadline,
+		now:                      time.Now,
+		beforeLockDelete:         nil,
+		betweenPageReads:         nil,
+		betweenDeletedFactsReads: nil,
+		binaryVersion:            "",
+		kind:                     "",
+		noMigrate:                false,
+		processGuard:             guard,
+		stepTxBound:              DefaultStepTransactionBound,
+		gate:                     nil,
 	}
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 
@@ -694,7 +700,7 @@ func (s *Store) CreateStackPlaced(
 		}
 
 		if err := setUnitCollection(ctx, q, placementMove(st, p), e); err != nil {
-			return placementCollectionError(p.Collection.Name, err)
+			return placementCollectionError("set placement collection", p.CollectionID, err)
 		}
 
 		return nil
@@ -1468,6 +1474,35 @@ func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) erro
 	}
 
 	return nil
+}
+
+// inDeletedFactsReadTx runs fn in one read-only transaction and ends the
+// transaction before it returns, on every path: success, error and panic. Only
+// GetDeletedUnitFacts calls it, so the deferred close stays on the
+// deleted-unit facts read path. The transaction begins as DEFERRED, not
+// IMMEDIATE, so it takes no write lock, and every read of fn sees one snapshot.
+//
+// A failed read keeps its own error: the close reports a rollback error only
+// when the read did not fail, so the caller sees the error of the failed read
+// and no partial facts.
+func (s *Store) inDeletedFactsReadTx(ctx context.Context, fn func(q *db.Queries) error) (err error) {
+	tx, beginErr := s.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
+	if beginErr != nil {
+		return fmt.Errorf("begin read transaction: %w", beginErr)
+	}
+
+	// Defense in depth: the read transaction must end on every path, and the
+	// error of a failed read must stay the error of the call. The explicit
+	// branch on the rollback error keeps the read error and reports its own
+	// error only when no read error would hide it. This defer does not rely on
+	// the paths of fn, so a panic in fn still ends the transaction.
+	defer func() {
+		if rbErr := rollback(tx); rbErr != nil && err == nil {
+			err = rbErr
+		}
+	}()
+
+	return fn(s.queries.WithTx(tx))
 }
 
 // inFencedTx runs fn in a write transaction that first checks the

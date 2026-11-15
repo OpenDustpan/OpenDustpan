@@ -1,6 +1,8 @@
 package dustpan_test
 
 import (
+	"encoding/json"
+	"net/http"
 	"testing"
 	"time"
 
@@ -10,6 +12,19 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
+
+func placementCollectionID(t *testing.T, f fixture, ns, name string) string {
+	t.Helper()
+	path := "/api/dustpan/v1/namespaces/" + ns + "/collections/" + name
+	status, body := f.do(t, http.MethodGet, path, adminToken, "")
+	var target struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(body), &target); status != http.StatusOK || err != nil || target.ID == "" {
+		t.Fatalf("read collection %s = %d %s, %v", path, status, body, err)
+	}
+	return target.ID
+}
 
 // placementStore is the part of a store that the catch-all seed writes to.
 type placementStore interface {
@@ -49,7 +64,8 @@ func seedCatchAllPlacement(t *testing.T, store any, ns namespace.Name) {
 	ref := collection.Ref{Namespace: ns, Name: name}
 	created := entry(identity.ActionCollectionCreate, "collection:"+ns.String()+"/"+name)
 
-	if _, createErr := collections.Create(t.Context(), ref, created); createErr != nil {
+	c, createErr := collections.Create(t.Context(), ref, created)
+	if createErr != nil {
 		t.Fatalf("create collection: %v", createErr)
 	}
 
@@ -58,7 +74,7 @@ func seedCatchAllPlacement(t *testing.T, store any, ns namespace.Name) {
 		t.Fatalf("placement service: %v", err)
 	}
 
-	in := collection.RuleInput{Tool: "pulumi", Project: "*", Stack: "*", Collection: name, Position: 0}
+	in := collection.RuleInput{Tool: "pulumi", Project: "*", Stack: "*", CollectionID: c.ID, Position: 0}
 	ruled := entry(identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
 
 	if _, ruleErr := rules.Create(t.Context(), ns, in, ruled); ruleErr != nil {

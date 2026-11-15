@@ -411,7 +411,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 		Now:       func() time.Time { return r.now },
 		NewID:     func() job.ID { return job.ID("job-fixed") },
 		Log:       slog.New(slog.DiscardHandler),
-		Approvers: nil, MaxPlanAge: 0, Groups: nil,
+		Approvers: nil, MaxPlanAge: 0, Groups: nil, Artifacts: nil,
 	}
 
 	for _, o := range opts {
@@ -564,7 +564,7 @@ func TestStartSource(t *testing.T) {
 
 			r := newRig(t)
 			a := actorOf("ada")
-			a.Agent = tt.agent
+			a.Agent = agentRefOf(tt.agent)
 
 			req := r.plan("")
 			req.Source = tt.source
@@ -1099,7 +1099,7 @@ func TestStartAgent(t *testing.T) {
 	r := newRig(t)
 
 	a := actorOf("ada")
-	a.Agent, a.Mode = "dusty", job.AgentModeApproveFirst
+	a.Agent, a.Mode = agentRefOf("dusty"), job.AgentModeApproveFirst
 
 	j, err := r.svc.Start(t.Context(), a, r.plan(""))
 	if err != nil {
@@ -1114,6 +1114,93 @@ func TestStartAgent(t *testing.T) {
 
 	if r.decider.inputs[0].Agent != "dusty" || r.decider.inputs[0].AgentMode != job.AgentModeApproveFirst {
 		t.Fatalf("decision input = %+v, want the agent and its mode", r.decider.inputs[0])
+	}
+}
+
+// TestStartWritesAgentBlock proves that the start of an agent writes the
+// agent block of the audit entry instead of an agent change key: the run ID
+// for a call of the built-in agent, the MCP session ID for an outside
+// agent, and an empty tool, arguments digest and secret stage.
+func TestStartWritesAgentBlock(t *testing.T) {
+	t.Parallel()
+
+	tests := []startAgentCase{
+		{
+			"built-in agent", agentRefOf("run-1"),
+			audit.ChannelAgent, "run-1", "run-1",
+		},
+		{
+			"outside agent", agentRefOf("ses-1"),
+			audit.ChannelMCP, "", "ses-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			checkStartWritesAgentBlock(t, newRig(t), tt)
+		})
+	}
+}
+
+// startAgentCase is one agent start of TestStartWritesAgentBlock: the agent
+// reference of the actor, the channel of the request, and the block that the
+// audit entry must hold.
+type startAgentCase struct {
+	name    string
+	agent   job.AgentRef
+	channel audit.Channel
+	run     string
+	session string
+}
+
+// checkStartWritesAgentBlock starts a job with an agent actor and proves
+// that its audit entry holds the agent block and no agent change key.
+func checkStartWritesAgentBlock(t *testing.T, r *rig, tc startAgentCase) {
+	t.Helper()
+
+	a := actorOf("ada")
+	a.Agent, a.Mode = tc.agent, job.AgentModeApproveFirst
+
+	req := r.plan("")
+	req.Channel = tc.channel
+
+	j, err := r.svc.Start(t.Context(), a, req)
+	if err != nil {
+		t.Fatalf("Start = %v", err)
+	}
+
+	if j.Source != job.SourceAgent {
+		t.Fatalf("source = %q, want %q", j.Source, job.SourceAgent)
+	}
+
+	checkStartAgentBlock(t, r.store.creates[0].entries[0], tc)
+}
+
+// checkStartAgentBlock proves that e holds the agent block of tc and no
+// agent change key.
+func checkStartAgentBlock(t *testing.T, e audit.Entry, tc startAgentCase) {
+	t.Helper()
+
+	o := e.Origin
+	if o == nil || o.Run() != tc.run || o.Session() != tc.session || o.Tool() != "" || o.ArgsDigest() != "" ||
+		o.SecretStage() != "" || o.BreakGlass() {
+		t.Fatalf(
+			"audit entry block = run %q, session %q, tool %q, digest %q, stage %q, break-glass %t; "+
+				"want run %q, session %q and the rest empty",
+			o.Run(), o.Session(), o.Tool(), o.ArgsDigest(), o.SecretStage(), o.BreakGlass(),
+			tc.run, tc.session,
+		)
+	}
+
+	for _, ch := range e.Changes {
+		if ch.Key == "agent" {
+			t.Fatalf("audit changes hold an agent key: %+v", e.Changes)
+		}
+	}
+
+	if err := e.Validate(); err != nil {
+		t.Fatalf("audit entry does not validate: %v", err)
 	}
 }
 
@@ -1210,7 +1297,7 @@ func TestStartBreakGlassRefused(t *testing.T) {
 			r := freezeRig(t, tt.freezes, opts...)
 
 			a := actorOf("ada")
-			a.Agent = tt.agent
+			a.Agent = agentRefOf(tt.agent)
 
 			req := r.plan("")
 			req.BreakGlass = &job.BreakGlass{Reason: tt.reason, Freeze: ""}
@@ -1291,23 +1378,13 @@ func checkGet(t *testing.T, got *job.Job, err, wantErr error, want job.ID) {
 	}
 }
 
-func TestMethodsOfALaterVersion(t *testing.T) {
+func TestRedactLogWithoutAnArtifactStoreIsUnsupported(t *testing.T) {
 	t.Parallel()
 
 	r := newRig(t)
-	a := actorOf("ada")
 
-	if _, err := r.svc.Cancel(t.Context(), a, "job-1", ""); !errors.Is(err, job.ErrUnsupported) {
-		t.Errorf("Cancel = %v, want ErrUnsupported", err)
-	}
-
-	if _, err := r.svc.Confirm(t.Context(), a, "job-1", job.VerdictApprove, emptyBinding()); !errors.Is(
-		err, job.ErrUnsupported,
-	) {
-		t.Errorf("Confirm = %v, want ErrUnsupported", err)
-	}
-
-	if _, err := r.svc.RedactLog(t.Context(), a, "job-1", "v1", nil, ""); !errors.Is(err, job.ErrUnsupported) {
+	_, err := r.svc.RedactLog(t.Context(), actorOf("ada"), "job-1", redactReq("why", "a"))
+	if !errors.Is(err, job.ErrUnsupported) {
 		t.Errorf("RedactLog = %v, want ErrUnsupported", err)
 	}
 }
@@ -1335,6 +1412,7 @@ func TestNewServiceRefusesAPartialConfig(t *testing.T) {
 			Approvers:  nil,
 			MaxPlanAge: 0,
 			Groups:     nil,
+			Artifacts:  nil,
 		}
 	}
 
@@ -1375,11 +1453,6 @@ func TestNewServiceRefusesAPartialConfig(t *testing.T) {
 			}
 		})
 	}
-}
-
-// emptyBinding returns a plan binding with no field set.
-func emptyBinding() job.PlanBinding {
-	return job.PlanBinding{Plan: "", DisplaySHA256: "", ApplySHA256: "", StateVersion: ""}
 }
 
 // gateCase is one case of TestStartGateGuard.

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,6 +246,9 @@ func TestApproveAuditChainMapsItsErrors(t *testing.T) {
 		{name: "a migration runs", err: audit.ErrChainMigrating, want: http.StatusConflict},
 		{name: "no fresh MFA step", err: audit.ErrChainStepRequired, want: http.StatusForbidden},
 		{name: "a service principal approves turning off", err: audit.ErrChainNeedsPerson, want: http.StatusForbidden},
+		{name: "a workload principal approves turning off", err: audit.ErrChainNeedsPerson, want: http.StatusForbidden},
+		{name: "an agent principal approves turning off", err: audit.ErrChainNeedsPerson, want: http.StatusForbidden},
+		{name: "a subject with no principal row approves", err: audit.ErrChainNeedsPerson, want: http.StatusForbidden},
 		{name: "active work", err: maintenance.ErrActiveWork, want: http.StatusConflict},
 		{name: "no migration loop", err: audit.ErrChainMigrationsStopped, want: http.StatusServiceUnavailable},
 		{name: "a server fault", err: errAuditChainFault, want: http.StatusInternalServerError},
@@ -264,7 +268,31 @@ func TestApproveAuditChainMapsItsErrors(t *testing.T) {
 			if status != tc.want {
 				t.Fatalf("status = %d, want %d (%s)", status, tc.want, body)
 			}
+
+			text := audit.ErrChainNeedsPerson.Error()
+			if errors.Is(tc.err, audit.ErrChainNeedsPerson) && !strings.Contains(body, text) {
+				t.Fatalf("body = %s, want the text %q", body, text)
+			}
 		})
+	}
+}
+
+// TestApproveAuditChainWithAnAccessTokenNeedsAFreshSession proves that an
+// access token with no console session cannot approve, and never reaches the
+// chain.
+func TestApproveAuditChainWithAnAccessTokenNeedsAFreshSession(t *testing.T) {
+	t.Parallel()
+
+	chain := newFakeAuditChain(audit.ChainOff)
+	handler := newAuditChainHandler(t, newTestNamespaces(t), chain)
+
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/dustpan/v1/audit/chain", "")
+	if status != http.StatusForbidden || !strings.Contains(body, freshErrorCode) {
+		t.Fatalf("status = %d (%s), want 403 with %s", status, body, freshErrorCode)
+	}
+
+	if len(chain.callers) != 0 {
+		t.Fatalf("approvals = %d, want none", len(chain.callers))
 	}
 }
 

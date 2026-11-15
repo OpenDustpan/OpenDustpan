@@ -31,7 +31,9 @@ func TestDurableStartsRefusedWhileDraining(t *testing.T) {
 		t.Parallel()
 
 		stores := openBackupDeps(t)
-		fix := newBackupFixtureWorkers(t, stores, stores.registry, nil, workers())
+		fix := newBackupFixtureWorkers(
+			t, stores, stores.registry, nil, backupFixtureOptions{workers: workers(), authz: nil},
+		)
 
 		rec := serveRecorded(t, fix.handler, http.MethodPost, "/api/dustpan/v1/backups", "")
 		checkDrainingAnswer(t, rec)
@@ -41,7 +43,9 @@ func TestDurableStartsRefusedWhileDraining(t *testing.T) {
 		t.Parallel()
 
 		stores := openBackupDeps(t)
-		fix := newRestoreFixtureWorkers(t, stores, stores.target, nil, workers())
+		fix := newRestoreFixtureWorkers(
+			t, stores, stores.target, nil, restoreFixtureOptions{workers: workers(), authz: nil},
+		)
 
 		rec := serveRecorded(
 			t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-missing000000000001"}`,

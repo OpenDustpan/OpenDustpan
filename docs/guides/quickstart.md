@@ -15,6 +15,7 @@ You need these tools:
 
 - Go 1.27.4 or later, to build the server.
 - OpenSSL, to make secrets and a test certificate.
+- curl and jq, to make the first collection and placement rules.
 - The Pulumi CLI, OpenTofu, or both.
 - Docker with the Compose plugin, for the compose stack only.
 
@@ -55,19 +56,19 @@ The server keeps its data in `data/dustpan.db` and in `data/blobs`. Leave it run
 
 Use at least 3 characters for a namespace name. The Pulumi CLI refuses a shorter owner name with `error: invalid stack owner`. The server accepts 1 to 100 characters.
 
-The server refuses a new Pulumi stack or OpenTofu workspace that no placement rule matches, and `serve` makes no rule. Make a collection and one rule for each tool. The `opendustpan` binary has no command for these steps yet, so use the API:
+The server refuses a new Pulumi stack or OpenTofu workspace that no placement rule matches, and `serve` makes no rule. Make a collection and one rule for each tool. A rule names the collection by its ID. The `opendustpan` binary has no command for these steps yet, so use the API. These commands use `jq` to read the ID from the answer:
 
 ```sh
-curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
+COLLECTION_ID=$(curl -s --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' -d '{"name":"everything"}' \
-  https://localhost:8080/api/dustpan/v1/namespaces/acme/collections
+  https://localhost:8080/api/dustpan/v1/namespaces/acme/collections | jq -r '.id')
 curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}' \
+  -d "{\"tool\":\"pulumi\",\"project\":\"*\",\"stack\":\"*\",\"collectionID\":\"$COLLECTION_ID\"}" \
   https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
 curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}' \
+  -d "{\"tool\":\"opentofu\",\"project\":\"*\",\"stack\":\"*\",\"collectionID\":\"$COLLECTION_ID\"}" \
   https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
 ```
 
@@ -113,19 +114,19 @@ docker compose exec opendustpan /opendustpan namespace create \
   --server https://localhost:8080 --ca-file /tls/cert.pem acme
 ```
 
-Then make a collection and one placement rule for each tool in the namespace. The server refuses a new Pulumi stack or OpenTofu workspace that no placement rule matches. Run this from `deploy/compose`, where `.env` and `tls/` are:
+Then make a collection and one placement rule for each tool in the namespace. The server refuses a new Pulumi stack or OpenTofu workspace that no placement rule matches. A rule names the collection by its ID. These commands use `jq` to read the ID from the answer. Run them from `deploy/compose`, where `.env` and `tls/` are:
 
 ```sh
-curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
+COLLECTION_ID=$(curl -s --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' -d '{"name":"everything"}' \
-  https://localhost:8080/api/dustpan/v1/namespaces/acme/collections
+  https://localhost:8080/api/dustpan/v1/namespaces/acme/collections | jq -r '.id')
 curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}' \
+  -d "{\"tool\":\"pulumi\",\"project\":\"*\",\"stack\":\"*\",\"collectionID\":\"$COLLECTION_ID\"}" \
   https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
 curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}' \
+  -d "{\"tool\":\"opentofu\",\"project\":\"*\",\"stack\":\"*\",\"collectionID\":\"$COLLECTION_ID\"}" \
   https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
 ```
 
@@ -198,3 +199,4 @@ OpenTofu makes the workspace `web` in the namespace `acme` at the first `tofu in
 - [S3-compatible object storage](s3-blobs.md) explains the S3 settings.
 - [Kubernetes](kubernetes.md) shows the Helm chart.
 - [Backup, restore and upgrade](backup-restore-upgrade.md) shows how to protect the data.
+- [Terragrunt](terragrunt.md) shows the local run-all path for teams that already use Terragrunt.

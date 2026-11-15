@@ -493,6 +493,8 @@ type rtHarness struct {
 	workspace string
 	stack     string
 	nextStack int
+	// jobPool is true after the runner pool of the job flows exists.
+	jobPool bool
 }
 
 // newRoundTripHarness starts a cluster whose store has the tracer, and a client
@@ -508,18 +510,24 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 
 	h := &rtHarness{
 		t: t, cluster: cluster, client: &http.Client{Transport: transport, Timeout: requestLimit}, tracer: tracer,
-		warm: false, mode: mode, trips: nil, serial: 0, workspace: "", stack: "", nextStack: 0,
+		warm: false, mode: mode, trips: nil, serial: 0, workspace: "", stack: "", nextStack: 0, jobPool: false,
 	}
 
 	h.call(http.MethodPost, "/api/server/namespaces", `{"name":"acme"}`, http.StatusCreated)
-	h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/collections", `{"name":"everything"}`, http.StatusCreated)
+	body := h.call(
+		http.MethodPost, "/api/dustpan/v1/namespaces/acme/collections", `{"name":"everything"}`, http.StatusCreated,
+	)
+	var target struct {
+		ID string `json:"id"`
+	}
+	h.decode(body, &target)
 	h.call(
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
-		`{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
+		`{"tool":"pulumi","project":"*","stack":"*","collectionID":"`+target.ID+`"}`, http.StatusCreated,
 	)
 	h.call(
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
-		`{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
+		`{"tool":"opentofu","project":"*","stack":"*","collectionID":"`+target.ID+`"}`, http.StatusCreated,
 	)
 
 	return h
@@ -619,6 +627,35 @@ func (h *rtHarness) createStack(name string) {
 	h.t.Helper()
 
 	h.call(http.MethodPost, "/api/stacks/acme/web", `{"stackName":"`+name+`"}`, http.StatusOK)
+}
+
+// startPlanJob starts a plan job on the workspace and returns its ID. The first
+// call creates the runner pool of the job flows.
+func (h *rtHarness) startPlanJob() string {
+	h.t.Helper()
+
+	if !h.jobPool {
+		h.call(http.MethodPost, "/api/runners/acme/pools", `{"name":"ci","purpose":"jobs"}`, http.StatusCreated)
+
+		h.jobPool = true
+	}
+
+	answer := h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/jobs",
+		`{"unit":{"tool":"opentofu","name":"web"},"operation":"plan","pool":"ci",`+
+			`"location":{"repository":"acme/infra","ref":"main","directory":"net"},"reason":"round trips"}`,
+		http.StatusCreated)
+
+	var doc struct {
+		ID string `json:"id"`
+	}
+
+	h.decode(answer, &doc)
+
+	if doc.ID == "" {
+		h.t.Fatalf("job answer %s has no id", answer)
+	}
+
+	return doc.ID
 }
 
 // lock locks the workspace.
@@ -843,6 +880,16 @@ func requestFlows() []requestFlow {
 		{"lock", 34, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
+		}},
+		// The budget is 48. The cancel reads the job and its pool, ends the
+		// durable operation of the job, writes the job row and its audit entry
+		// in one transaction, and reads the pool again for the answer.
+		{"job cancel", 48, func(h *rtHarness) {
+			jobID := h.startPlanJob()
+			h.measure(func() {
+				h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/jobs/"+jobID+"/cancel",
+					`{"reason":"round trips"}`, http.StatusOK)
+			})
 		}},
 		{"unlock", 13, func(h *rtHarness) {
 			h.lock()
@@ -1414,7 +1461,8 @@ func restoreModel() costModel {
 	return costModel{
 		fixed: 331 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
-			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips,
+			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
+			droppedRunnerCredentialTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1485,6 +1533,13 @@ const stagedTriggerClockTrips = 1
 // once for each restore. The count is fixed: it does not grow with the units
 // or the tables.
 const breakGlassFloorTrips = 3
+
+// droppedRunnerCredentialTrips is the number of round trips of the read of
+// the runner credentials that the swap drops: one read of the handoff tokens
+// and one of the job sessions whose runner the restored data does not hold,
+// under the lock of the control tables. A restore that drops a credential
+// also appends one audit entry; the restores of this test drop none.
+const droppedRunnerCredentialTrips = 2
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer

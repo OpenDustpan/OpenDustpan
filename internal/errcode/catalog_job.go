@@ -34,6 +34,8 @@ const (
 	JobSelfApproval = "job.self-approval"
 	// JobUnsupported means that the server cannot run this kind of job.
 	JobUnsupported = "job.unsupported"
+	// JobWrongState means that the state of the job does not allow the request.
+	JobWrongState = "job.wrong-state"
 )
 
 // jobSpecs are the codes of a request to start a job that the job
@@ -55,6 +57,7 @@ func jobSpecs() []Spec {
 		{JobPolicyDenied, "the policy refuses the job"},
 		{JobSelfApproval, "the person who started the job cannot approve it"},
 		{JobUnsupported, "the server cannot run this kind of job"},
+		{JobWrongState, "the state of the job does not allow the request"},
 	}
 
 	out := make([]Spec, 0, len(meanings))

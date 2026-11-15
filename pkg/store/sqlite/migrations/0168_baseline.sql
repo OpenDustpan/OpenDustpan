@@ -123,7 +123,7 @@ CREATE TABLE state_versions (
     lock_id               TEXT    NOT NULL DEFAULT '',
     created_at_ms         INTEGER NOT NULL,
     finalized_at_ms       INTEGER NOT NULL DEFAULT 0
-, restored_from TEXT NOT NULL DEFAULT '', sealed INTEGER NOT NULL DEFAULT 0, sensitive_marks BLOB, fenced_by TEXT NOT NULL DEFAULT '', unlocked_write INTEGER NOT NULL DEFAULT 0, origin_job TEXT NOT NULL DEFAULT '') STRICT;
+, restored_from TEXT NOT NULL DEFAULT '', sealed INTEGER NOT NULL DEFAULT 0, sensitive_marks BLOB, fenced_by TEXT NOT NULL DEFAULT '', unlocked_write INTEGER NOT NULL DEFAULT 0, origin_job TEXT NOT NULL DEFAULT '', client_encrypted INTEGER) STRICT;
 
 CREATE TABLE backups (
     id            TEXT    NOT NULL PRIMARY KEY,
@@ -244,11 +244,18 @@ CREATE TABLE "audit_entries" (
     object       TEXT    NOT NULL,
     version      TEXT    NOT NULL DEFAULT '',
     value_path   TEXT    NOT NULL DEFAULT '',
-    at_ms        INTEGER NOT NULL,
-    source_ip    TEXT    NOT NULL DEFAULT '',
-    user_agent   TEXT    NOT NULL DEFAULT '',
-    channel      TEXT    NOT NULL,
-    kind         TEXT    NOT NULL,
+    at_ms          INTEGER NOT NULL,
+    source_ip      TEXT    NOT NULL DEFAULT '',
+    user_agent     TEXT    NOT NULL DEFAULT '',
+    channel        TEXT    NOT NULL,
+    agent_run      TEXT    NOT NULL DEFAULT '',
+    agent_session  TEXT    NOT NULL DEFAULT '',
+    args_digest    TEXT    NOT NULL DEFAULT '',
+    break_glass    INTEGER NOT NULL DEFAULT 0,
+    delegation_id  TEXT    NOT NULL DEFAULT '',
+    secret_stage   TEXT    NOT NULL DEFAULT '',
+    tool           TEXT    NOT NULL DEFAULT '',
+    kind           TEXT    NOT NULL,
     outcome      TEXT    NOT NULL,
     request_id   TEXT    NOT NULL DEFAULT '',
     prev_hash    TEXT    NOT NULL DEFAULT '',
@@ -345,7 +352,8 @@ CREATE TABLE collections (
     name_key      TEXT    NOT NULL,
     name          TEXT    NOT NULL,
     created_at_ms INTEGER NOT NULL,
-    PRIMARY KEY (namespace, name_key)
+    PRIMARY KEY (namespace, name_key),
+    UNIQUE (namespace, id)
 ) STRICT;
 
 CREATE TABLE collection_members (
@@ -1338,6 +1346,7 @@ CREATE TABLE notification_deliveries (
     principal       TEXT    NOT NULL,
     state           TEXT    NOT NULL,
     attempts        INTEGER NOT NULL,
+    created_at_ms   INTEGER NOT NULL,
     redeliveries    INTEGER NOT NULL CHECK (redeliveries >= 0),
     next_at_ms      INTEGER NOT NULL,
     last_error      TEXT    NOT NULL,
@@ -1395,10 +1404,10 @@ CREATE TABLE placement_rules (
     tool           TEXT    NOT NULL,
     project        TEXT    NOT NULL,
     stack          TEXT    NOT NULL,
-    collection_key TEXT    NOT NULL,
+    collection_id  TEXT    NOT NULL,
     created_by     TEXT    NOT NULL,
     created_at_ms  INTEGER NOT NULL,
-    FOREIGN KEY (namespace, collection_key) REFERENCES collections (namespace, name_key)
+    FOREIGN KEY (namespace, collection_id) REFERENCES collections (namespace, id)
 ) STRICT;
 
 CREATE TABLE local_users (
@@ -1810,7 +1819,7 @@ CREATE INDEX notification_subscriptions_sink ON notification_subscriptions (scop
 
 CREATE INDEX notification_deliveries_due ON notification_deliveries (scope, next_at_ms, id) WHERE state = 'pending';
 
-CREATE INDEX notification_deliveries_subscription ON notification_deliveries (scope, subscription_id, next_at_ms DESC, id DESC);
+CREATE INDEX notification_deliveries_subscription ON notification_deliveries (scope, subscription_id, created_at_ms DESC, id DESC);
 
 CREATE INDEX unit_settings_namespace ON unit_settings (namespace_id);
 
@@ -1819,6 +1828,7 @@ CREATE INDEX placement_rules_order ON placement_rules (namespace, position);
 CREATE INDEX local_user_resets_expiry ON local_user_resets (expires_at_ms);
 
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges (expires_at_ms);
+CREATE INDEX passkey_challenges_kind_expiry ON passkey_challenges (kind, expires_at_ms);
 CREATE INDEX passkey_challenges_source ON passkey_challenges (source, expires_at_ms);
 CREATE INDEX passkey_challenges_source_group ON passkey_challenges (source_group, expires_at_ms);
 

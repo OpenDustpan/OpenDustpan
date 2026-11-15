@@ -31,6 +31,8 @@ Changed by:
 - ADR 225 changes decision 2: the approval gate becomes approval rules.
 - ADR 227 changes decision 2: the age of a confirmation.
 - ADR 299 supersedes decision 3: the four review modes.
+- ADR 384 changes decision 8: a rejection by a person other than the
+  requester needs `job:cancel` in addition to `job:approve`.
 
 ## Context
 

@@ -2,12 +2,19 @@
 
 /** What this package was generated from. */
 export interface Metadata {
-  /** The version of this package. */
-  readonly clientVersion: string;
+  /**
+   * The version of this package. Only a published package has it: the files
+   * in the repository leave it out, so that a change of the description does
+   * not change them.
+   */
+  readonly clientVersion?: string;
   /** info.version of the API description. It is not a safe pin: use the digest. */
   readonly descriptionVersion: string;
-  /** The SHA-256 of the bytes of the API description, in lowercase hexadecimal. */
-  readonly descriptionSha256: string;
+  /**
+   * The SHA-256 of the bytes of the API description, in lowercase
+   * hexadecimal. Only a published package has it.
+   */
+  readonly descriptionSha256?: string;
   /** The release of the server that the description comes from, or the server commit before the first release. */
   readonly serverRelease: string;
   /**
@@ -20,9 +27,7 @@ export interface Metadata {
 }
 
 export const metadata: Metadata = {
-  clientVersion: "0.36.0",
   descriptionVersion: "0.36.0",
-  descriptionSha256: "ee1162cb92fb1e34ed51673e18959de0ac9949317c742e9d35780164f9966c09",
   serverRelease: "development",
   serverCommit: "development",
   generatorVersion: "0.1.0",

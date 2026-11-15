@@ -72,6 +72,13 @@ type AuditEntry struct {
 	SourceIp      string
 	UserAgent     string
 	Channel       string
+	AgentRun      string
+	AgentSession  string
+	ArgsDigest    string
+	BreakGlass    int64
+	DelegationID  string
+	SecretStage   string
+	Tool          string
 	Kind          string
 	Outcome       string
 	RequestID     string
@@ -765,6 +772,7 @@ type NotificationDelivery struct {
 	Principal      string
 	State          string
 	Attempts       int64
+	CreatedAtMs    int64
 	Redeliveries   int64
 	NextAtMs       int64
 	LastError      string
@@ -882,15 +890,15 @@ type PersonPreference struct {
 }
 
 type PlacementRule struct {
-	ID            string
-	Namespace     string
-	Position      int64
-	Tool          string
-	Project       string
-	Stack         string
-	CollectionKey string
-	CreatedBy     string
-	CreatedAtMs   int64
+	ID           string
+	Namespace    string
+	Position     int64
+	Tool         string
+	Project      string
+	Stack        string
+	CollectionID string
+	CreatedBy    string
+	CreatedAtMs  int64
 }
 
 type Principal struct {
@@ -1274,6 +1282,7 @@ type StateVersion struct {
 	FencedBy          string
 	UnlockedWrite     bool
 	OriginJob         string
+	ClientEncrypted   sql.NullInt64
 }
 
 type StoreCheck struct {

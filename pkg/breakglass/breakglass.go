@@ -335,7 +335,8 @@ func excluded(u Use, actAs []string, reviewer string) bool {
 }
 
 // fresh reports whether an authentication of the kind kind, at the time
-// at, is fresh at now.
+// at, is fresh at now. The server refuses a step with no fresh
+// authentication with 403 and the error code mfa.fresh-step-required.
 func fresh(kind AuthKind, at, now time.Time) bool {
 	return (kind == AuthMFA || kind == AuthSSO) && !at.IsZero() && !at.After(now) && now.Sub(at) <= Freshness
 }
