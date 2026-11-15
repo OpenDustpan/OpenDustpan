@@ -528,7 +528,7 @@ linters:
           pkg: ^net/http$
           msg: Read the query through apidesc.QueryOf and the headers through apidesc.Header, which allow only the declared names.
         # One definition of the hidden-character check (see internal/ident).
-        - pattern: ^unicode\.(IsControl|Cc|Cf|Zl|Zp)$
+        - pattern: ^unicode\.(IsControl|C|Cc|Cf|Other|Zl|Zp|Categories)$
           pkg: ^unicode$
           msg: Call ident.IsHiddenRune, ident.HasHidden or ident.IsHiddenRuneExcept.
       analyze-types: true
