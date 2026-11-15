@@ -1,9 +1,14 @@
 package workspace_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
@@ -13,6 +18,37 @@ import (
 )
 
 var errGuardRead = errors.New("registry unavailable")
+
+// leaseNow is the fixed clock of the lease guards in the tests.
+func leaseNow() time.Time {
+	return time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
+}
+
+// stallingBlobs is a blob store whose delete would stall the test forever. It
+// fails at once instead, so a delete that ignores the lease context cannot
+// hold the test. It deletes nothing.
+type stallingBlobs struct {
+	blob.Store
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *stallingBlobs) Delete(context.Context, blob.Key) error {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+
+	return fmt.Errorf("delete blob: %w", context.Canceled)
+}
+
+// deletes returns the number of delete calls that reached the store.
+func (s *stallingBlobs) deletes() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.calls
+}
 
 // stateBlobCount returns the number of state blobs under prefix.
 func stateBlobCount(t *testing.T, f fixture, prefix string) int {
@@ -24,6 +60,30 @@ func stateBlobCount(t *testing.T, f fixture, prefix string) int {
 	}
 
 	return len(listed)
+}
+
+// requireWaitForWork fails the test unless err is a wait for work.
+func requireWaitForWork(t *testing.T, err error, name string, work blobguard.Work) {
+	t.Helper()
+
+	wait, isWait := errors.AsType[*blobguard.WaitError](err)
+	if !isWait || wait.Work != work || !errors.Is(err, blobguard.ErrWait) {
+		t.Fatalf("delete while %s runs: err = %v, want a WaitError for %v", name, err, work)
+	}
+}
+
+// requireLeaseReleased fails the test unless the delete asked for a lease and
+// no lease is live.
+func requireLeaseReleased(t *testing.T, guard *blobguardtest.Leases, when string) {
+	t.Helper()
+
+	if guard.Takes() == 0 {
+		t.Fatalf("the delete took no lease %s, want one take for each delete", when)
+	}
+
+	if live, err := guard.LiveLeases(t.Context()); err != nil || live != 0 {
+		t.Fatalf("live leases %s = %d, %v, want none", when, live, err)
+	}
 }
 
 // TestDeletePurgedBlobsWaitsForRunningWork proves that the delete of the
@@ -40,18 +100,14 @@ func TestDeletePurgedBlobsWaitsForRunningWork(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			guard := blobguardtest.NewGuard()
+			guard := blobguardtest.NewLeases(leaseNow)
 			f := newFixtureGuarded(t, openFixtureBlobs(t), guard)
 			prefix := purgedWorkspace(t, f)
 
 			guard.Start(work)
 
-			err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID)
-
-			wait, isWait := errors.AsType[*blobguard.WaitError](err)
-			if !isWait || wait.Work != work || !errors.Is(err, blobguard.ErrWait) {
-				t.Fatalf("delete while %s runs: err = %v, want a WaitError for %v", name, err, work)
-			}
+			requireWaitForWork(t, f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID), name, work)
+			requireLeaseReleased(t, guard, "while "+name+" runs")
 
 			if stateBlobCount(t, f, prefix) == 0 {
 				t.Fatalf("state blobs while %s runs = 0, want them kept", name)
@@ -76,15 +132,15 @@ func TestDeletePurgedBlobsWaitsForRunningWork(t *testing.T) {
 func TestDeletePurgedBlobsFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	failing := blobguardtest.NewGuard()
+	failing := blobguardtest.NewLeases(leaseNow)
 	failing.Fail(errGuardRead)
 
-	unknown := blobguardtest.NewGuard()
+	unknown := blobguardtest.NewLeases(leaseNow)
 	unknown.Start(blobguard.Work{Kind: "other", ID: "x-1"})
 
 	tests := []struct {
 		name  string
-		guard blobguard.Watch
+		guard blobguard.Leases
 		want  error
 	}{
 		{name: "a failed read", guard: failing, want: errGuardRead},
@@ -116,13 +172,75 @@ func TestDeletePurgedBlobsFailsClosed(t *testing.T) {
 	}
 }
 
+// TestDeletePurgedBlobsReleasesTheLease proves that each delete takes a lease
+// and releases it: the blobs go, and no lease is live after the call.
+func TestDeletePurgedBlobsReleasesTheLease(t *testing.T) {
+	t.Parallel()
+
+	guard := blobguardtest.NewLeases(leaseNow)
+	f := newFixtureGuarded(t, openFixtureBlobs(t), guard)
+	prefix := purgedWorkspace(t, f)
+
+	if err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	if left := stateBlobCount(t, f, prefix); left != 0 {
+		t.Fatalf("state blobs after the delete = %d, want none", left)
+	}
+
+	requireLeaseReleased(t, guard, "after the delete")
+}
+
+// TestDeletePurgedBlobsStopsWhenTheLeaseEnded proves that the delete of the
+// state blobs deletes nothing when the context of the delete lease ended
+// before the delete: the blobs stay, and the method reports them as not
+// deleted.
+func TestDeletePurgedBlobsStopsWhenTheLeaseEnded(t *testing.T) {
+	t.Parallel()
+
+	blobs := &stallingBlobs{Store: openFixtureBlobs(t), mu: sync.Mutex{}, calls: 0}
+
+	// move moves the clock of the fixture forward by a lease time. The guard
+	// calls it on each take, so the context of the delete lease ends between
+	// the read of the start and the read of the elapsed time. The fixture
+	// exists before the first take.
+	var move func() time.Time
+
+	guard := blobguardtest.NewLeases(func() time.Time { return move() })
+	f := newFixtureGuarded(t, blobs, guard)
+
+	move = func() time.Time {
+		*f.now = f.now.Add(blobguard.LeaseTTL)
+
+		return *f.now
+	}
+
+	prefix := purgedWorkspace(t, f)
+
+	err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID)
+	if !errors.Is(err, workspace.ErrBlobsRemain) {
+		t.Fatalf("delete with an ended lease: err = %v, want ErrBlobsRemain", err)
+	}
+
+	if left := stateBlobCount(t, f, prefix); left == 0 {
+		t.Fatal("state blobs with an ended lease = 0, want them kept")
+	}
+
+	if got := blobs.deletes(); got != 0 {
+		t.Fatalf("store deletes = %d, want 0: the delete stopped before its first attempt", got)
+	}
+
+	requireLeaseReleased(t, guard, "after the failed delete")
+}
+
 // TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete proves that a restore
 // which starts between two deletes of one purge keeps the blob that is left:
 // the guard is read again before each delete.
 func TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete(t *testing.T) {
 	t.Parallel()
 
-	guard := blobguardtest.NewGuard()
+	guard := blobguardtest.NewLeases(leaseNow)
 	f := newFixtureGuarded(t, openFixtureBlobs(t), guard)
 	prefix := purgedWorkspace(t, f)
 
@@ -148,5 +266,70 @@ func TestDeletePurgedBlobsReadsTheGuardBeforeEachDelete(t *testing.T) {
 
 	if left := stateBlobCount(t, f, prefix); left != 1 {
 		t.Fatalf("state blobs left after the restore started = %d, want exactly one", left)
+	}
+}
+
+// TestDeletePurgedBlobsCountsRefusedTakes proves that each refused take of
+// the purge counts once with its reason: the running work, the missing guard
+// and the failed take. A canceled context counts nothing.
+func TestDeletePurgedBlobsCountsRefusedTakes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		reason blobguard.WaitReason
+		guard  func() blobguard.Leases
+	}{
+		{name: "a backup", reason: blobguard.WaitBackup, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(leaseNow)
+			g.Start(blobguard.Work{Kind: blobguard.Backup, ID: "bkp-1"})
+
+			return g
+		}},
+		{name: "a restore", reason: blobguard.WaitRestore, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(leaseNow)
+			g.Start(blobguard.Work{Kind: blobguard.Restore, ID: "rst-1"})
+
+			return g
+		}},
+		{name: "no guard", reason: blobguard.WaitNoGuard, guard: func() blobguard.Leases { return nil }},
+		{name: "a failed take", reason: blobguard.WaitGuardError, guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(leaseNow)
+			g.Fail(errGuardRead)
+
+			return g
+		}},
+		{name: "a canceled context", reason: "", guard: func() blobguard.Leases {
+			g := blobguardtest.NewLeases(leaseNow)
+			g.Fail(context.Canceled)
+
+			return g
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var got []blobguard.WaitReason
+
+			f := newFixtureWaiting(t, openFixtureBlobs(t), tc.guard(),
+				func(reason blobguard.WaitReason) { got = append(got, reason) })
+			purgedWorkspace(t, f)
+
+			err := f.svc.DeletePurgedBlobs(t.Context(), f.ws.NamespaceID, f.ws.ID)
+			if err == nil {
+				t.Fatal("delete with a refused take: want an error")
+			}
+
+			want := []blobguard.WaitReason(nil)
+			if tc.reason != "" {
+				want = []blobguard.WaitReason{tc.reason}
+			}
+
+			if !slices.Equal(got, want) {
+				t.Fatalf("counted reasons = %v, want %v", got, want)
+			}
+		})
 	}
 }

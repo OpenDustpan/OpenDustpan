@@ -33,7 +33,9 @@ func RecordingKey(after error) stack.NewItemKeyFunc {
 		rec := secret.ItemKey{
 			CreatedAt: time.Now().UTC(), ShreddedAt: time.Time{}, Ref: ref, ID: secret.NewItemKeyID(),
 			WrapperID: "kek-1",
-			Blob:      secret.ItemKeyBlobInfo{MD5: [16]byte{1}, Size: recordingKeyBlobSize, Version: 1},
+			Blob: secret.ItemKeyBlobInfo{
+				MD5: [16]byte{1}, Size: recordingKeyBlobSize, Version: 1, Attempt: recordingKeyAttempt,
+			},
 		}
 		if tx == nil {
 			return rec, after
@@ -51,3 +53,8 @@ func RecordingKey(after error) stack.NewItemKeyFunc {
 // recordingKeyBlobSize is the size of the key blob that a record of
 // RecordingKey names. No blob exists.
 const recordingKeyBlobSize = 60
+
+// recordingKeyAttempt is the attempt part of the key blob that a record of
+// RecordingKey names: 20 lowercase letters and digits, as the store requires.
+// No blob exists.
+const recordingKeyAttempt = "recordingkeyattempt0"

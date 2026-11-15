@@ -13,11 +13,11 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
 - [ ] 3.1 Implement applyTiming, wiring, the job start route with its authorization actions and preMergeGuard. Check: `GET /api/dustpan/v1/namespaces/{namespace}/units` shows the effective value.
-- [ ] 3.2 Add e2e step: BLOCKED by the missing named route and credential kind of the fake forge until the job start route and its access token are fixed by the route open question. Check: BLOCKED by the route open question. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 3.3 Write the docs page in the same pull request. Check: Docs page states the project does not recommend pre-merge apply.
+- [ ] 3.2 Add e2e step in NEW file e2e/pre_merge_apply_test.go. The step calls the job start route and uses the access token credential of the fake forge. It is BLOCKED until the route open question fixes the route and the token. Check: BLOCKED by the route open question. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.3 Write the docs page in NEW file docs/guides/pre-merge-apply.md in the same pull request. Check: Docs page states the project does not recommend pre-merge apply. `make docs-lint` passes on each edited guide.
 - [ ] 3.4 Run usability check and full checks. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

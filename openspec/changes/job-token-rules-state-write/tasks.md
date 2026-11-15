@@ -15,10 +15,10 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step in e2e/ for a runner plan then apply on both tools, using the job token credential on the Pulumi update routes and the TFE state-version routes. BLOCKED by add-job-session-paths-runner-token-issuer, which issues the job token. Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.1 Add an e2e step in the NEW file e2e/job_token_state_write_test.go for a runner plan then apply on both tools, using the job token credential on the Pulumi update routes and the TFE state-version routes. BLOCKED by add-job-session-paths-runner-token-issuer, which issues the job token. Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Document the refusal and the plan lock on the state.write docs page under docs/guides/. Check: make docs-lint
 - [ ] 4.3 Wiring, route actions, docs page and usability check done. Check: make check with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

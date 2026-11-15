@@ -5,14 +5,14 @@
 ## 1. failing tests first
 
 - [ ] 1.1 Add failing domain tests for plan-only start, cycle path and limits in pkg/trigger/plan_only_test.go (NEW). Check: go test ./pkg/trigger/... -run TestTriggerPlanOnly -count=1
-- [ ] 1.2 Add failing route tests for declared actions, audit entries and parallel saves in internal/api/triggers/routes_test.go (NEW). Check: go test ./internal/api/triggers/... -run TestTriggerRoutes -count=1
-- [ ] 1.3 Add a failing e2e step in e2e/triggers_test.go that creates a trigger with POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers and fires it with POST .../triggers/{trigger_id}/fire, both with an access token of a person, then reads the plan job. BLOCKED by the runners change for the job run. Check: go test ./e2e -run TestTriggers -count=1. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.2 Add failing route tests for declared actions, audit entries and parallel saves by extending the existing file internal/api/triggers/routes_test.go. Check: go test ./internal/api/triggers/... -run TestTriggerRoutes -count=1
+- [ ] 1.3 Add a failing e2e step in e2e/triggers_test.go that creates a trigger with POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers and fires it with POST .../triggers/{trigger_id}/fire, both with an access token of a person, then reads the plan job. BLOCKED by the runners change for the job run. Check: go test -tags e2e ./e2e -run TestTriggers -count=1. Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. build
 
 - [ ] 2.1 Implement plan-only starter, cycle check and limits in pkg/trigger/service.go (NEW). Check: go test ./pkg/trigger/... -count=1
 - [ ] 2.2 Wire routes with declared actions and audit entries. Edit the route declaration file internal/api/triggers/routes.go and the adapter file internal/api/triggers/serve.go. Check: go test ./internal/api/triggers/... -count=1
-- [ ] 2.3 Extend the run triggers guide. Its commands use GET and POST on /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with an access token of a person. Check: go test ./e2e -run TestTriggersGuide -count=1 runs each command of docs/guides/run-triggers.md as written
+- [ ] 2.3 Extend the run triggers guide. Its commands use GET and POST on /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with an access token of a person. The task adds the NEW top-level test `TestTriggersGuide` in a `_test.go` file of `e2e`, so that the Check runs it. Check: go test -tags e2e ./e2e -run TestTriggersGuide -count=1 runs each command of docs/guides/run-triggers.md as written. `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 

@@ -4,7 +4,7 @@ Operator installs a production server from one docs page. The shared command run
 
 ## Decisions
 
-1. **Fixtures only with links to shared runner and artifacts.** Production page links to install-from-artifacts for image and archive install and owns only fixtures: server TLS from files, TLS between proxy and server, one pinned NEW nginx example, PostgreSQL store, blob store, backups on with check on ANY /api/server/backups, and key file copy backed up with the database per the restore rule of key-encryption-key-rotation.
+1. **Fixtures only with links to shared runner and artifacts.** Production page links to install-from-artifacts for image and archive install and owns only fixtures: server TLS from files, TLS between proxy and server, one pinned NEW nginx example, PostgreSQL store, blob store, backups on with check on ANY /api/dustpan/v1/backups, and key file copy backed up with the database per the restore rule of key-encryption-key-rotation.
 2. **Proxy trust from allowlist with fail closed.** Server trusts proxy headers only from NEW allowlisted proxy addresses and fails closed on missing or forged headers. Persona path test uses the shared runner and ends with pulumi up and tofu apply through the proxy plus a backup check.
 
 ## Structure
@@ -27,7 +27,7 @@ participant P as NEW ReverseProxy
 participant S as Server
 O->>P: TLS handshake with certificate files
 P->>S: TLS forward with X-Forwarded-Proto and X-Forwarded-Host
-S-->>O: ANY /api/server/backups with access token
+S-->>O: ANY /api/dustpan/v1/backups with access token
 ```
 
 Modules that the change touches, and their imports on main:

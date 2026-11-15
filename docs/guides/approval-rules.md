@@ -161,6 +161,76 @@ reserved. The body must not hold an `id`.
 
 A namespace holds at most 64 approval rules. The 65th answers 422.
 
+## Approve or reject a job that waits
+
+A job that an approval default covers waits in the state `awaiting-approval`.
+Each approver sends one request. The approver needs the action `job:approve` on
+the stack or workspace of the job, and `job:read` to see the job.
+
+First read the job. In its plan phase, take the `id` of the plan, the `sha256` of
+the `plan-display` part, the `sha256` of the `plan-apply` part, and the
+`stateVersion`. Then send the verdict with these values as the binding:
+
+```text
+POST /api/dustpan/v1/namespaces/acme/jobs/job-4kd9q2m7xw1ztr8bnhyc/approvals
+{
+  "verdict": "approve",
+  "planBinding": {
+    "plan": "pln-3fa7c1d0e9b24a68",
+    "displaySha256": "5d41402abc4b2a76b9719d911017c592a0f1a5d0cc66a4fbb4a47ab1d53f1c8e",
+    "applySha256": "7d793037a0760186574b0282f2f435e7b5e3b4d5a3c8c2a9f6c1e0d4b8a79f21",
+    "stateVersion": "sv-17"
+  },
+  "comment": "The plan adds two subnets and changes nothing else."
+}
+```
+
+The rules:
+
+- A gate of two approvals needs two different people. A person who approves a
+  second time gets 409 with the error code `job.already-approved`.
+- A default that names groups lets only enabled members of those groups approve. A
+  suspended membership gives no rights, so it does not count. The
+  server compares the ID of the group, so a group that someone renamed still matches,
+  and a group that someone made again with the same name does not. If the server
+  cannot read the membership, it refuses the approval.
+- The person who started the job cannot approve it, also when an agent started it
+  for that person. That person can reject it.
+- An agent cannot approve. An agent can reject.
+- The binding must be the binding of the stored plan. If a new plan replaces the
+  plan, the old approvals do not count, and the job waits again.
+- The approval of a `destroy` job needs a fresh MFA step. This version cannot read
+  the MFA step of a console session yet, so it refuses the approval of a destroy
+  with 403 and the error code `mfa.fresh-step-required`. A rejection works.
+- One `reject` ends the job in the state `rejected`. Any holder of `job:approve` on the
+  unit can reject, also a person who is not in the groups of the default, because a
+  rejection only stops the change.
+
+When the last approval arrives, the job goes to `queued`, and the server dispatches
+the apply phase when no freeze, lock or other change holds the unit. If the state of
+the unit changed after the plan, the dispatch refuses the approvals, and the job plans
+again. The
+[jobs API reference](../reference/jobs-api.md) lists the errors.
+
+### Destroy approval and the fresh step
+
+An access token, a job token, a trust token or an agent cannot give the fresh
+step for a destroy approval. A break-glass session does not bypass this check.
+The refusal changes no approval and writes an approval denial to the audit log.
+
+The refusal names `/api/server/sign-in/{provider}?fresh=1` for a new sign-in.
+A person with no factor must first open the factor enrollment page. The first
+factor needs an email code, a key that the Git host lists, or an enrollment
+code from an administrator. A session alone is not proof of an enrolled factor.
+
+This version does not pass session MFA proof to job approvals. A new sign-in
+therefore does not make destroy approval work yet. Do not retry with an access
+token or put an MFA time in the request body.
+
+The composed plan and apply path is not available yet. The server starts plan
+jobs only. It refuses runner apply and destroy starts, rather than omit a plan,
+approval, limit or gate check.
+
 ## Roles and actions
 
 | Step | Action | Object | Roles |

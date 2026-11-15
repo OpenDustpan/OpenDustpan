@@ -29,19 +29,19 @@
 
 ## 2. Wiring and routes
 
-- [ ] 2.1 Wire the new comparison route with unit:read on source unit and on target unit. Declare it in internal/api/apidesc/openapi.json and write the adapter in NEW file internal/api/compare_handler.go. Check: TestCompareUnitsShowsFieldDiff passes through the route test
-- [ ] 2.2 Wire the new promotion route with unit:read on source unit and unit:manage on target unit plus gate evaluation. Declare it in internal/api/apidesc/openapi.json and write the adapter in NEW file internal/api/promote_handler.go. Check: TestPromoteUnitsCopiesConfigAsEdit passes through the route test
-- [ ] 2.3 Wire the new promotion read route for committed edit and decision record. Declare it in internal/api/apidesc/openapi.json and write the adapter in NEW file internal/api/promote_handler.go. Check: TestPromoteKeepsEditOnGateRefusal reads the decision record through the new promotions route
+- [ ] 2.1 Wire the new comparison route with unit:read on source unit and on target unit. Declare it in the route table of the adapter package (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand) and write the adapter in NEW file internal/api/compare_handler.go. Check: TestCompareUnitsShowsFieldDiff passes through the route test
+- [ ] 2.2 Wire the new promotion route with unit:read on source unit and unit:manage on target unit plus gate evaluation. Declare it in the route table of the adapter package (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand) and write the adapter in NEW file internal/api/promote_handler.go. Check: TestPromoteUnitsCopiesConfigAsEdit passes through the route test
+- [ ] 2.3 Wire the new promotion read route for committed edit and decision record. Declare it in the route table of the adapter package (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand) and write the adapter in NEW file internal/api/promote_handler.go. Check: TestPromoteKeepsEditOnGateRefusal reads the decision record through the new promotions route
 - [ ] 2.4 Add guard with mutation test for NEW promotionEdit constructor and record lint setting in NEW file pkg/unitsettings/promote.go, with the test in pkg/unitsettings/promote_test.go. Check: Mutation test removes allowlist check and fails
 
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Add e2e step for compare then promote with OpenTofu and Pulumi CLI and plan apply The step calls `GET /api/dustpan/v1/namespaces/{namespace}/units/compare` and `POST /api/dustpan/v1/namespaces/{namespace}/promotions` (both added by this change) with an access token. Check: make e2e runs e2e/unit_settings_test.go on these routes, then tofu and pulumi plan and apply. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write docs page for compare and promote Check: docs page command sequence runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/environment_promotion_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.2 Write docs page for compare and promote in NEW file docs/guides/promote-environment-config.md. Check: docs page command sequence runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/environment_promotion_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 4.3 Run usability check of full path Check: Developer completes compare and promote from docs page alone. A person's step.
 - [ ] 4.4 Run full check suite Check: make check passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).

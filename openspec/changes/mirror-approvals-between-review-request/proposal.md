@@ -1,5 +1,5 @@
 ---
-version: 6
+version: 9
 ---
 
 Issue: #895, #903.
@@ -62,7 +62,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main has approval audit chain tests for concurrent approvals. (`pkg/dustpan/auditchain_approval_test.go:108 (func TestConcurrentApprovalsLeaveOneEntryAndOneOperation)`)
+- Main has approval audit chain tests for concurrent approvals. (`pkg/dustpan/auditchain_approval_test.go:109 (func TestConcurrentApprovalsLeaveOneEntryAndOneOperation)`)
 - Main has the dev strip coverage test for approver fields. (`pkg/backup/devstrip_coverage_test.go:281 (func TestDevStripCoversEveryApproverField)`)
 - Main has a reviewer expression hostile test. (`internal/expr/hostile_test.go:349 (func TestWorkLayerReviewerExpressions)`)
 

@@ -96,6 +96,7 @@ func contextPurge(t *testing.T, s *postgres.Store, u graph.Unit) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 	d := inventory.Deletion{Entry: e, PurgeAfter: e.At}
 	ref := workspace.Ref{Namespace: n.Name, Name: name}
@@ -140,6 +141,7 @@ func contextHarness(s *postgres.Store) objectcontexttest.Harness {
 				Reason:        "",
 				PrincipalKind: "",
 				JobID:         "",
+				Origin:        nil,
 			}
 
 			if err := s.CreateCollection(t.Context(), c, n.Fence(), e); err != nil {
@@ -235,6 +237,7 @@ func TestObjectContextOwnerRows(t *testing.T) {
 			Reason:        "",
 			PrincipalKind: "",
 			JobID:         "",
+			Origin:        nil,
 		}
 
 		got, err := s.SetAPI(t.Context(), ref, p, "user:ada", fence, e)

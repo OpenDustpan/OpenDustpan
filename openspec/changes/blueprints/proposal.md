@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:360` (Blueprints).
@@ -53,6 +53,7 @@ Out of scope:
 Depends on:
 
 - add-sql-adapter-quota-counter
+- wire-self-service-blueprints-binary (the binary serves the blueprint routes that task 4.2 drives)
 
 ## Usability
 
@@ -64,7 +65,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Blueprint read refuses hostile rows (`pkg/store/postgres/self_service_blueprints_internal_test.go:93 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
+- Blueprint read refuses hostile rows (`pkg/store/postgres/self_service_blueprints_internal_test.go:94 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
 - Request body-invalid error code exists (`internal/errcode/catalog_request.go:7 (request.body-invalid)`)
 
 ## ADR check

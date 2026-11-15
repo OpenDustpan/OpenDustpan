@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -64,8 +64,8 @@ func checkReason(reason string) error {
 		return fmt.Errorf("%w: an emergency rotation needs a reason", profile.ErrInvalid)
 	case utf8.RuneCountInString(reason) > profile.MaxEmergencyReason:
 		return fmt.Errorf("%w: a reason has at most %d characters", profile.ErrInvalid, profile.MaxEmergencyReason)
-	case strings.ContainsFunc(reason, unicode.IsControl):
-		return fmt.Errorf("%w: a reason holds a control character", profile.ErrInvalid)
+	case ident.HasHidden(reason):
+		return fmt.Errorf("%w: a reason holds a control, format or separator character", profile.ErrInvalid)
 	default:
 		return nil
 	}

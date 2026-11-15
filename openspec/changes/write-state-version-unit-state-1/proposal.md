@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Issue: #1164.
@@ -35,6 +35,7 @@ Evidence for the claims above:
 - Add regression tests for an idempotent duplicate final write and for a rollback
 - Add an e2e step with the real Pulumi CLI and OpenTofu binaries
 - Add the docs page on state versions
+- Add the e2e step TestStateVersionsGuideCommands in the NEW file e2e/state_versions_guide_test.go. It runs each command of the docs page
 
 Out of scope:
 

@@ -250,17 +250,8 @@ func (r *Runners) DeletePool(ctx context.Context, id string, fence namespace.Fen
 			return runner.ErrNotFound
 		}
 
-		kinds := codec.PoolOperationKinds(id)
-
-		open, err := q.CountOpenOperationsOfKinds(ctx, db.CountOpenOperationsOfKindsParams{
-			KindA: string(kinds[0]), KindB: string(kinds[1]),
-		})
-		if err != nil {
-			return fmt.Errorf("count open operations of pool: %w", err)
-		}
-
-		if open > 0 {
-			return runner.ErrPoolInUse
+		if freeErr := checkPoolFree(ctx, q, id); freeErr != nil {
+			return freeErr
 		}
 
 		if err = q.DeleteRunnerPoolJoinTokens(ctx, id); err != nil {
@@ -277,6 +268,34 @@ func (r *Runners) DeletePool(ctx context.Context, id string, fence namespace.Fen
 
 		return nil
 	})
+}
+
+// checkPoolFree returns runner.ErrPoolInUse while a job that is not terminal
+// or a sweep target names the pool id.
+func checkPoolFree(ctx context.Context, q *db.Queries, id string) error {
+	kinds := codec.PoolOperationKinds(id)
+
+	open, err := q.CountOpenOperationsOfKinds(ctx, db.CountOpenOperationsOfKindsParams{
+		KindA: string(kinds[0]), KindB: string(kinds[1]),
+	})
+	if err != nil {
+		return fmt.Errorf("count open operations of pool: %w", err)
+	}
+
+	if open > 0 {
+		return runner.ErrPoolInUse
+	}
+
+	targets, err := q.CountUnmanagedTargetsOfPool(ctx, id)
+	if err != nil {
+		return fmt.Errorf("count sweep targets of pool: %w", err)
+	}
+
+	if targets > 0 {
+		return runner.ErrPoolInUse
+	}
+
+	return nil
 }
 
 // Pool implements runner.PoolStore.

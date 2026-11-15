@@ -23,9 +23,20 @@ func ClassifyCode(err error) string {
 }
 
 // DocumentJSON returns the JSON that the API answers for s, so the external
-// tests reach the answer of a sink that the store would not read.
+// tests reach the answer of a sink that the store would not read. It writes
+// the diagnostics of the conversion to no destination.
 func DocumentJSON(s *notify.Sink) ([]byte, error) {
-	b, err := json.Marshal(toDocument(s))
+	return DocumentJSONTo(slog.New(slog.DiscardHandler), s)
+}
+
+// DocumentJSONTo returns the JSON that the API answers for s and writes the
+// diagnostics of the conversion to logger.
+func DocumentJSONTo(logger *slog.Logger, s *notify.Sink) ([]byte, error) {
+	var h Handler
+
+	h.logger = logger
+
+	b, err := json.Marshal(h.toDocument(s))
 	if err != nil {
 		return nil, fmt.Errorf("marshal document: %w", err)
 	}

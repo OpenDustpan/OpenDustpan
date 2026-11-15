@@ -215,11 +215,6 @@ func (s *Updates) builtCheckpoint(ref Ref, u Update, document []byte) (Checkpoin
 // first attempt whose commit never landed writes a new blob, and the sweep
 // collects the blob of the first attempt.
 func (s *Updates) storeBuiltCheckpoint(ctx context.Context, save builtSave) error {
-	prev, err := s.previousCheckpoint(ctx, save.ref, save.id)
-	if err != nil {
-		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, err)
-	}
-
 	key, err := checkpointBlobKey(save.blobs, save.stackID, save.id, 0)
 	if err != nil {
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, err)
@@ -229,14 +224,14 @@ func (s *Updates) storeBuiltCheckpoint(ctx context.Context, save builtSave) erro
 		op: "save built checkpoint", ref: save.ref, id: save.id, blobs: save.blobs, stackID: save.stackID,
 		key: key, deployment: save.built.Deployment,
 		commit: func(ctx context.Context, size int64, sum [md5.Size]byte, started time.Time) (bool, error) {
-			return false, s.commitBuiltRow(ctx, builtRow(save, key, prev), size, sum, started)
+			return false, s.commitBuiltRow(ctx, builtRow(save, key), size, sum, started)
 		},
 	})
 }
 
 // builtRow returns the checkpoint row write of save under key: the built
 // deployment with the lease that authorized it.
-func builtRow(save builtSave, key blob.Key, prev *Checkpoint) checkpointSave {
+func builtRow(save builtSave, key blob.Key) checkpointSave {
 	return checkpointSave{
 		ref: save.ref, id: save.id, stackID: save.stackID, fence: save.fence, lease: save.built.Lease,
 		in: CheckpointInput{
@@ -246,7 +241,7 @@ func builtRow(save builtSave, key blob.Key, prev *Checkpoint) checkpointSave {
 			Sequence:      0,
 			Invalid:       false,
 		},
-		digest: save.built.Digest, prev: prev, key: key, origin: save.origin, blobs: save.blobs,
+		digest: save.built.Digest, key: key, origin: save.origin, blobs: save.blobs,
 	}
 }
 
@@ -289,16 +284,25 @@ func (s *Updates) commitBuiltRow(
 		return fmt.Errorf("save built checkpoint of update %s: %w", save.id, err)
 	}
 
-	// The guard comes after the commit that removed the journal rows, and again
-	// before each delete. A running backup or restore keeps the batch blobs,
-	// and the next sweep deletes them.
+	// The lease comes after the commit that removed the journal rows, and
+	// again before each delete. A running backup or restore keeps the batch
+	// blobs, and the next sweep deletes them.
 	if s.journal != nil {
 		for _, key := range keys {
-			if s.deletesHeld(ctx, "journal build", save.ref) {
+			leaseCtx, release, ok := s.takeDeleteLease(ctx, "journal build", save.ref)
+			if !ok {
 				break
 			}
 
-			if err := s.journal.RemoveBlobs(ctx, save.blobs.ns, save.stackID, save.id, []blob.Key{key}); err != nil {
+			delErr := s.journal.RemoveBlobs(leaseCtx, save.blobs.ns, save.stackID, save.id, []blob.Key{key})
+
+			if releaseErr := release(ctx); releaseErr != nil {
+				s.logger.WarnContext(ctx, "blob delete lease not released",
+					slog.String("stack", save.ref.String()), slog.String("update", save.id.String()),
+					slog.String("error", releaseErr.Error()))
+			}
+
+			if delErr != nil {
 				s.logger.WarnContext(
 					ctx,
 					"delete journal blobs",

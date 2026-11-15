@@ -49,7 +49,7 @@ func (f field) valueType() reflect.Type {
 
 // isRequired reports whether the member is in the list of required members. A
 // field promoted through an embedded pointer is never required: a nil pointer
-// leaves it out.
+// leaves it out, and field discovery refuses the tag required on such a field.
 func (f field) isRequired() bool {
 	if f.viaPointer {
 		return false
@@ -60,6 +60,25 @@ func (f field) isRequired() bool {
 		return true
 	case presenceOptional, presenceNullable:
 		return false
+	default:
+		return !f.omit
+	}
+}
+
+// isNullableMap reports whether the field is a map whose nil value the encoder
+// writes as null, so that its schema holds null too. A map with omitempty is
+// left out when it is nil, and the required and optional tags promise a value
+// that is never null, as they do for a pointer.
+func (f field) isNullableMap() bool {
+	if f.typ.Kind() != reflect.Map {
+		return false
+	}
+
+	switch f.presence {
+	case presenceRequired, presenceOptional:
+		return false
+	case presenceNullable:
+		return true
 	default:
 		return !f.omit
 	}
@@ -212,7 +231,7 @@ func scanStruct(sc scan) ([]field, []scan, error) {
 	for i := range sc.typ.NumField() {
 		sf := sc.typ.Field(i)
 
-		found, embedded, err := scanField(sf, append(slices.Clone(sc.index), i), sc.viaPointer)
+		found, embedded, err := scanField(sc, sf, append(slices.Clone(sc.index), i))
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s.%s: %w", sc.typ, sf.Name, err)
 		}
@@ -226,7 +245,7 @@ func scanStruct(sc scan) ([]field, []scan, error) {
 
 // scanField reads one struct field. It returns the field to write, or the
 // embedded struct to search, or neither.
-func scanField(sf reflect.StructField, index []int, viaPointer bool) ([]field, []scan, error) {
+func scanField(sc scan, sf reflect.StructField, index []int) ([]field, []scan, error) {
 	emb := embeddedStruct(sf)
 
 	parsed, skip, err := readJSONTag(sf)
@@ -235,7 +254,7 @@ func scanField(sf reflect.StructField, index []int, viaPointer bool) ([]field, [
 	}
 
 	if parsed.name == "" && emb.isStruct {
-		return nil, []scan{{typ: emb.typ, index: index, viaPointer: viaPointer || emb.isPointer}}, nil
+		return nil, []scan{{typ: emb.typ, index: index, viaPointer: sc.viaPointer || emb.isPointer}}, nil
 	}
 
 	extra, err := parseDustpanTag(sf.Tag.Get("dustpan"))
@@ -243,9 +262,17 @@ func scanField(sf reflect.StructField, index []int, viaPointer bool) ([]field, [
 		return nil, nil, err
 	}
 
+	if sc.viaPointer && extra == presenceRequired {
+		return nil, nil, fmt.Errorf(
+			"%w: the dustpan tag %q cannot apply to a field promoted through an embedded pointer: "+
+				"a nil pointer leaves the field out",
+			ErrInvalidBody, presenceRequired,
+		)
+	}
+
 	return []field{{
 		name: cmp.Or(parsed.name, sf.Name), typ: sf.Type, omit: parsed.omitempty || parsed.omitzero,
-		presence: extra, tagged: parsed.name != "", index: index, viaPointer: viaPointer,
+		presence: extra, tagged: parsed.name != "", index: index, viaPointer: sc.viaPointer,
 	}}, nil, nil
 }
 

@@ -128,6 +128,7 @@ func (h *Handler) changeEntry(r *http.Request, p identity.Principal, obj identit
 		Channel: sessionauth.AuditChannel(r, channelHeader), Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: string(p.Kind), JobID: "", Reason: "",
+		Origin: nil,
 	}
 }
 

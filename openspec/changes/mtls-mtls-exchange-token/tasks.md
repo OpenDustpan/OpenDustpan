@@ -7,9 +7,13 @@
 - [ ] 1.1 Write failing service tests for the verify scenarios in NEW file pkg/trust/mtls_exchange_test.go (NEW test TestMtlsExchangeVerify). Check: NEW test: `go test ./pkg/trust/ -run TestMtlsExchangeVerify` fails on main
 - [ ] 1.2 Write failing issue tests in NEW file pkg/accesstoken/mtls_trust_token_test.go (NEW test TestMtlsTrustTokenIssue): the token has the kind `mtls-exchange`, the token list and the issue audit entry show the kind, and the credential is `trust-token`. Check: NEW test: `go test ./pkg/accesstoken/ -run TestMtlsTrustTokenIssue` fails on main
 
+- [ ] 1.3 SECURITY. Write a hostile test for the limit layer in NEW file pkg/trust/mtls_exchange_limit_test.go (NEW test TestMtlsExchangeLimitHostile): flood the handler with no-certificate calls and oversize bodies, and force a store error; each call gets no token. Check: NEW test: `go test ./pkg/trust/ -run TestMtlsExchangeLimitHostile` fails on main
+
 ## 2. Build
 
 - [ ] 2.1 Build the verified-chain value, match and one-transaction issue in NEW file pkg/trust/mtls_exchange.go, and add NEW constant KindMTLSExchange in pkg/accesstoken. Check: `go test -race ./pkg/trust/... ./pkg/accesstoken/...`
+
+- [ ] 2.2 SECURITY. Build the limit layer in NEW file pkg/trust/mtls_exchange_limit.go: the exchange handler caps the body size and the request rate, and it fails closed on a store error with no token. Check: `go test -race ./pkg/trust/...`
 
 ## 3. Definition of done
 

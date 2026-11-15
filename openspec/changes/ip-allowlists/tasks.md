@@ -5,6 +5,7 @@
 ## 1. failing tests
 
 - [ ] 1.1 Write failing tests in NEW file pkg/dustpan/ipallow_deny_test.go for a denied console sign-in at POST /api/dustpan/v1/sign-in/providers/{provider}/password and a denied access token request to GET /api/dustpan/v1/namespaces/{namespace}/units. Check: TestDenyConsoleSignInOutsideList and TestDenyTokenOutsideList fail on main.
+- [ ] 1.4 SECURITY. Write a hostile test in NEW file pkg/dustpan/ipallow_deny_test.go, test name TestDenyAnyListDenies. It sends an address that is in the namespace list but outside the installation list straight to the checker newAllowChecker (NEW). It checks that the answer is denial with the installation scope and that the denial audit entry holds the scope and the address. Check: TestDenyAnyListDenies passes and fails when the checker ignores the installation list.
 - [ ] 1.2 Write a failing test in NEW file pkg/dustpan/ipallow_cidr_test.go for an invalid CIDR on PATCH /api/dustpan/v1/settings. Check: TestInvalidCidrRefused fails on main.
 - [ ] 1.3 Write a failing test in NEW file pkg/dustpan/ipallow_proxy_test.go for a spoofed proxy header. Check: TestRecordedAddressIgnoresUntrustedHeader fails on main.
 
@@ -12,11 +13,11 @@
 
 - [ ] 2.1 Add flag and list keys with CIDR parsing and audit entries in NEW file pkg/dustpan/ipallow.go. Check: PATCH settings returns 200 and GET shows the effective value.
 - [ ] 2.2 Wire the checker into sign-in and token authentication. Call the NEW checker newAllowChecker from NEW file pkg/dustpan/ipallow.go. Check: A denied address gets 403 with ip-allowlist.denied.
-- [ ] 2.3 Update docs/guides/ip-allowlists.md. Check: Each command on the page runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/ip_allowlists_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 2.3 Update docs/guides/ip-allowlists.md. Check: Each command on the page runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/ip_allowlists_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. definition of done
 

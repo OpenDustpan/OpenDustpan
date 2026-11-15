@@ -23,6 +23,8 @@ Unexported type reportReader, built only by newReportReader with limits, target 
 | --- | --- | --- |
 | boundary check | Header, version, tag limits and subset match. | TestReportRefusesBadVersionAndForeignScope |
 | limit | 1 GiB, 5,000,000 records, 64 KiB lines. | TestReportRefusesLongLine |
+| authorize at point of use | Session proof and live sweep claim on upload. The namespace:manage-sweeps action on list and triage. | TestSweepReportRefusesJobClaimAndBadProof |
+| fail closed | Any error deletes the staged blob and fails the sweep. | TestSweepReportFailsClosedOnCutStream |
 
 ## Diagrams
 

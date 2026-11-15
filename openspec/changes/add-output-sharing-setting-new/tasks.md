@@ -4,8 +4,8 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Write failing tests for default nobody deny, collection rule allow, rule removal deny and invalid target, in the NEW file pkg/outputshare/outputshare_test.go. Check: TestOutputSharingDefaultNobodyDenies fails on main
-- [ ] 1.2 Write failing e2e steps for the Pulumi stack reference read and the OpenTofu remote state read, in the NEW file e2e/output_sharing_test.go that uses e2e/tool.go:110 (func OpenTofu). BLOCKED by #897 for the job token path. Check: e2e output sharing steps fail on main. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.1 Write failing tests for default nobody deny, collection rule allow, rule removal deny and invalid target, in the existing file pkg/outputshare/outputshare_test.go (extend it in place). Check: TestOutputSharingDefaultNobodyDenies fails on main
+- [ ] 1.2 Write failing e2e steps for the Pulumi stack reference read and the OpenTofu remote state read, in the existing file e2e/output_sharing_test.go (extend it in place) that uses e2e/tool.go:110 (func OpenTofu). BLOCKED by #897 for the job token path. Check: e2e output sharing steps fail on main. Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. Build
 
@@ -15,7 +15,7 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

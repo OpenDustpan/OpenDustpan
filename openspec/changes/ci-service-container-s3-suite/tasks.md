@@ -10,12 +10,12 @@
 ## 2. Bucket and readiness
 
 - [ ] 2.1 In .github/workflows/ci.yml (the go job), add the RustFS service container to the go job and set DUSTPAN_TEST_S3_ENDPOINT, DUSTPAN_TEST_S3_BUCKET, DUSTPAN_TEST_S3_ACCESS_KEY and DUSTPAN_TEST_S3_SECRET_KEY. Check: `rg -n rustfs .github/workflows/ci.yml` shows the digest, ports 9000:9000 and the fixed test-only RUSTFS_ROOT_PASSWORD. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
-- [ ] 2.2 In .github/workflows/ci.yml (the go job, before the go test step), add steps that wait for the S3 API and then make the bucket with aws cli so an existing bucket passes. Check: CI log shows list-buckets readiness retries then create-bucket exits 0, and a rerun with an existing bucket still exits 0 (scenario Existing bucket passes). The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step.
+- [ ] 2.2 In .github/workflows/ci.yml (the go job, before the go test step), add steps that wait for the S3 API and then make the bucket with aws cli so an existing bucket passes. Check: CI log shows list-buckets readiness retries then create-bucket exits 0, and a rerun with an existing bucket still exits 0 (scenario Existing bucket passes). The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step (after the workflow patch is applied).
 
 ## 3. Definition of done
 
-- [ ] 3.1 Show that go test -race ./... runs the S3 suite in CI and passes Check: CI log of `go test -race ./... -v` shows pkg/blob/s3 ran blobtest.Run to pass and the guard step exits 0
-- [ ] 3.2 Prove the no-skip guard fails the job when the suite skips Check: Guard on the -v log exits 1 when the pkg/blob/s3 log holds --- SKIP or the package result is not ok
+- [ ] 3.1 Show that go test -race ./... runs the S3 suite in CI and passes Check: CI log of `go test -race ./... -v` shows pkg/blob/s3 ran blobtest.Run to pass and the guard step exits 0. The check needs a CI run of the patched .github/workflows/ci.yml. Confirmed by: A person's step (after the workflow patch is applied).
+- [ ] 3.2 Prove the no-skip guard fails the job when the suite skips Check: Guard on the -v log exits 1 when the pkg/blob/s3 log holds --- SKIP or the package result is not ok. The check needs a CI run of the patched .github/workflows/ci.yml. Confirmed by: A person's step (after the workflow patch is applied).
 
 ## 4. Docs and checks
 

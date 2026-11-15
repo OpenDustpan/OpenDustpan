@@ -41,11 +41,11 @@ type revocation struct {
 // fn can narrow access may use it. A write that grants or widens access uses
 // inAuditedTx, which the state check covers.
 //
-// The transaction first journals rev when the installation is in maintenance
-// mode. The journal insert queues behind the lock that a restore takes on the
-// journal for its swap, so the change that follows lands in the restored
-// schema, never in the one that the swap drops. Then it takes the advisory
-// lock of the scope, as every audited change does.
+// The transaction takes the advisory lock of the scope first, as every
+// audited change does. Then it journals rev when the installation is in
+// maintenance mode. The journal insert queues behind the lock that a restore
+// takes on the journal for its swap, so the change that follows lands in the
+// restored schema, never in the one that the swap drops.
 func (s *Store) inRevokingTx(ctx context.Context, e audit.Entry, rev revocation, fn func(q *db.Queries) error) error {
 	return s.inRevokingTxOf(ctx, &e, rev, fn)
 }
@@ -63,21 +63,17 @@ func (s *Store) inRevokingTxOf(
 		return err
 	}
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
-		if err := journalRevocation(ctx, q, rev, *e); err != nil {
+	return runServerAuditTx(ctx, s.inControlTx, func(tx serverAuditTx) error {
+		// The lock of runServerAuditTx comes before fn on purpose. It also
+		// serializes the writes that count other rows in the same
+		// transaction: the disable of a principal checks the last site
+		// administrator and the last enabled break-glass account. Under READ
+		// COMMITTED, two such writes without it both pass the check.
+		if err := journalRevocation(ctx, tx.q, rev, *e); err != nil {
 			return err
 		}
 
-		// This lock comes before fn on purpose. It also serializes the writes
-		// that count other rows in the same transaction: the disable of a
-		// principal checks the last site administrator and the last enabled
-		// break-glass account. Under READ COMMITTED, two such writes without
-		// it both pass the check. Do not move it after fn.
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		if err := fn(q); err != nil {
+		if err := fn(tx.q); err != nil {
 			return err
 		}
 
@@ -85,7 +81,7 @@ func (s *Store) inRevokingTxOf(
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, *e); err != nil {
+		if _, err := appendServerEntry(ctx, tx, *e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -111,24 +107,20 @@ func (s *Store) inRevokingFencedTx(
 			audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
 	}
 
-	return s.inControlTx(ctx, func(q *db.Queries) error {
-		if err := journalRevocation(ctx, q, rev, e); err != nil {
+	return runServerAuditTx(ctx, s.inControlTx, func(tx serverAuditTx) error {
+		if err := journalRevocation(ctx, tx.q, rev, e); err != nil {
 			return err
 		}
 
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		if err := checkFenceForUpdate(ctx, q, fence); err != nil {
+		if err := checkFenceForUpdate(ctx, tx.q, fence); err != nil {
 			return err
 		}
 
-		if err := fn(q); err != nil {
+		if err := fn(tx.q); err != nil {
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendAuditEntry(ctx, tx.q, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -472,18 +464,18 @@ func readJournal(ctx context.Context, tx pgx.Tx, live string) ([]maintenance.Rev
 
 // replayRevocations applies the journal to the restored schema live, in tx,
 // and appends one audit entry in the scope @server for each revocation that
-// changed a restored row. The restored log replaces the live log, so the
-// entries of the original revocations are gone from it. A row of the journal
-// that fails its checks (an unknown kind, a target that is not an ID) changes
-// nothing and gets an entry with the outcome denied. The entries follow the
-// chain state that the swap kept.
-func (s *Store) replayRevocations(ctx context.Context, tx pgx.Tx, live string) error {
+// changed a restored row, in the locked transaction srv. The restored log
+// replaces the live log, so the entries of the original revocations are gone
+// from it. A row of the journal that fails its checks (an unknown kind, a
+// target that is not an ID) changes nothing and gets an entry with the outcome
+// denied. The entries follow the chain state that the swap kept.
+func (s *Store) replayRevocations(
+	ctx context.Context, srv serverAuditTx, tx pgx.Tx, live string,
+) error {
 	journal, err := readJournal(ctx, tx, live)
 	if err != nil {
 		return err
 	}
-
-	q := s.queries.WithTx(tx)
 
 	for _, r := range journal {
 		entry, err := replayRevocation(ctx, tx, live, r)
@@ -495,7 +487,7 @@ func (s *Store) replayRevocations(ctx context.Context, tx pgx.Tx, live string) e
 			continue
 		}
 
-		if _, err := appendAuditEntry(ctx, q, *entry); err != nil {
+		if _, err := appendServerEntry(ctx, srv, *entry); err != nil {
 			return fmt.Errorf("append replay audit entry: %w", err)
 		}
 	}
@@ -560,7 +552,7 @@ func applyReplayPlan(ctx context.Context, tx pgx.Tx, r maintenance.Revocation, p
 // keptBreakGlassEntry returns the entry of a replayed disable that changed no
 // row. When the target is an enabled break-glass account of the restored data,
 // the conditional update kept it as the last one: the entry has the outcome
-// denied and the reason principal.last-break-glass. Otherwise the target was
+// denied and the reason principal.no-working-break-glass. Otherwise the target was
 // disabled, ended or not in the restored data, and kept is false.
 func keptBreakGlassEntry(
 	ctx context.Context, tx pgx.Tx, live string, r maintenance.Revocation,
@@ -581,7 +573,7 @@ func keptBreakGlassEntry(
 		return none, false, nil
 	}
 
-	entry := r.KeptEntry(maintenance.ReasonLastBreakGlass)
+	entry := r.KeptEntry(maintenance.ReasonNoWorkingBreakGlass)
 	if err = entry.Validate(); err != nil {
 		return none, false, fmt.Errorf("replay revocation %d: %w", r.ID, err)
 	}

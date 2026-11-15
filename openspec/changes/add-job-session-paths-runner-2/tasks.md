@@ -16,11 +16,11 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Run the session suites on SQLite and PostgreSQL. Check: `go test -race ./internal/api/runnerapi/... ./pkg/runner/...`
-- [ ] 4.2 Add the e2e step: the real launcher calls the route /runner/v1 (path /session) with the credential kind handoff token, then the session paths with the session key proof. Check: `make e2e` runs the session step. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Add the e2e step in e2e/job_session_paths_test.go (NEW): the real launcher calls the route POST /runner/v1/session with the credential kind handoff token, then the session paths with the session key proof (action runner:claim). Check: `make e2e` runs the session step. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Check the usability of the path from the docs page alone. Check: Each error names one command that helps. A person's step.
 - [ ] 4.4 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

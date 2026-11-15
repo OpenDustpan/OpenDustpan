@@ -5,8 +5,8 @@ Provider archives are untrusted zip files. The server unpacks with limits, compu
 ## Decisions
 
 1. **Bounded unpack as structure.** Add an unexported unpack function that opens the staged zip, rejects absolute paths and dot-dot entries, enforces limits on unpacked size, file count, entry size and compression ratio, counts real decompressed bytes while it reads, rejects duplicate names after case folding, and returns the manifest bytes and the h1 digest.
-2. **Archive truth from bytes.** Store H1 on registry.Archive at publish time from the unpack result, include H1 in SameContent with a missing-H1 rule for old releases, and derive protocols only from terraform-registry-manifest.json inside the archive with order-insensitive set match.
-3. **Stable slug from ID.** Derive the registry slug for each namespace from its stable ID in lowercase with unsafe characters removed, store the slug on the namespace record at publish time, index slug to namespace for lookup, backfill old namespaces on first publish or read, keep the prior name path for existing releases with slug winning on conflict, append a short suffix on collision or empty result, and edit the baseline of each dialect in place with no numbered migration.
+2. **Archive truth from bytes.** Store H1 on registry.Archive at publish time from the unpack result, include H1 in SameContent (every release gets H1 at publish; no backfill, because no tag shipped a release without it), and derive protocols only from terraform-registry-manifest.json inside the archive with order-insensitive set match.
+3. **Stable slug from ID.** Derive the registry slug for each namespace from its stable ID in lowercase with unsafe characters removed, store the slug on the namespace record at publish time, index slug to namespace for lookup (no backfill of earlier namespaces: no tag shipped the earlier shape, so the slug is set at the first publish), keep the name path of main for existing releases with slug winning on conflict, append a short suffix on collision or empty result, and edit the baseline of each dialect in place with no numbered migration.
 
 ## Structure
 

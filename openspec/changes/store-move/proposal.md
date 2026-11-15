@@ -37,7 +37,7 @@ with the SDK; add to the persona table of `openspec/project.md`).
    `dustpan.WithStackStore(st)`, `dustpan.WithJobStore(st)`.
 2. After: `store, err := dustpan.OpenStore(ctx, database)`, then
    `dustpan.NewServer(..., dustpan.WithBuiltinStore(store))`, with
-   `defer store.Close()`. One call opens the store, and one option sets
+   `defer store.Close()` (the NEW method `BuiltinStore.Close`). One call opens the store, and one option sets
    every store port. The caller closes the store. A wrong form or a store
    that cannot open fails with an error that names the accepted forms or
    the setting. `dustpan.WithSQLite(path)` and `dustpan.WithPostgreSQL(dsn)`
@@ -51,6 +51,7 @@ with the SDK; add to the persona table of `openspec/project.md`).
 
 ### Fix boundary
 
+- IN (PR B): `scripts/move-store.sh` rewrites the import path in every tracked Go file that imports a moved package, tests and e2e included; no other edit in those files.
 - IN (PR B): move the 28 packages to `internal/store/...` with the same names; keep
   `pkg/store/storetest` (a conformance suite, SDK by ADR 272 decision 4); (PR A) add
   `dustpan.OpenStore`, `dustpan.BuiltinStore`, `dustpan.StorePorts` and

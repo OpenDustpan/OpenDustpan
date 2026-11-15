@@ -13,8 +13,8 @@
 ## 2. Build
 
 - [ ] 2.1 Add the sweep store ports to the existing file internal/unmanaged/ports.go and the memory adapter to the existing internal/unmanaged/unmanagedtest/mem_test.go harness. Check: the sweep store cases (Conformance) of unmanagedtest.Run passes under TestMem.
-- [ ] 2.2 Add the SQLite and PostgreSQL adapters in NEW files pkg/store/internal/unmanagedstore/unmanagedstore.go and pkg/store/internal/unmanagedstore/unmanagedstore_test.go. Edit the baseline migrations and sqlc queries in the same package. Check: the sweep store cases (Conformance) of unmanagedtest.Run/sqlite and /postgres pass with DUSTPAN_TEST_POSTGRES_URL set. `sqlc diff` is clean.
-- [ ] 2.3 Add the tables to the table list in NEW file pkg/store/internal/unmanagedstore/tables.go. Check: The backup round trip test covers the sweep tables.
+- [ ] 2.2 Add the SQLite adapter in NEW file pkg/store/sqlite/unmanaged.go and the PostgreSQL adapter in NEW file pkg/store/postgres/unmanaged.go. Add the tests in NEW files pkg/store/sqlite/unmanaged_test.go and pkg/store/postgres/unmanaged_test.go. Edit the baseline migrations and sqlc queries in the same two packages. Check: the sweep store cases (Conformance) of unmanagedtest.Run/sqlite and /postgres pass with DUSTPAN_TEST_POSTGRES_URL set. `sqlc diff` is clean.
+- [ ] 2.3 Add the sweep tables to the table list of the backup in pkg/store/sqlite and pkg/store/postgres, in the NEW files pkg/store/sqlite/unmanaged_tables.go and pkg/store/postgres/unmanaged_tables.go. Check: The backup round trip test covers the sweep tables.
 
 ## 3. Side effects (computed from main)
 
@@ -22,7 +22,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Write the docs page. Check: The commands on the page run as written in a test. Confirmed by: CI (an e2e step in the NEW file e2e/add_job_session_paths_runner_unmanaged_sweep_store_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.1 Write the docs page in NEW file docs/guides/unmanaged-sweep-store.md. Check: The commands on the page run as written in a test. Confirmed by: CI (an e2e step in the NEW file e2e/add_job_session_paths_runner_unmanaged_sweep_store_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 4.2 Run the usability check from the docs page alone. Check: An embedder runs the suite on a new adapter from the page. A person's step.
 - [ ] 4.3 The wiring, the route and the e2e step with the real runner. Check: BLOCKED by the last part of the split (sweep claimer wiring and sweep routes). This part ships no route and no credential. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.4 Pass the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

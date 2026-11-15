@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 6
 ---
 
 ## Why
@@ -27,7 +27,7 @@ Evidence for the claims above:
 - Main has a history domain package and a conformance test Proof: pkg/history with TestHistoryConformance at pkg/inventory/inventorytest/mem_test.go:164
 - Main has a blame conformance test for workspaces Proof: TestWorkspaceBlameConformance at pkg/store/postgres/workspace_blame_test.go:10
 - Main refuses a short retention at start Proof: TestNewServerRefusesShortRetention at pkg/dustpan/dustpan_test.go:832
-- Main runs a scheduled artifact sweep Proof: TestJobScheduleArtifactSweepRuns at pkg/dustpan/schedules_internal_test.go:537
+- Main runs a scheduled artifact sweep Proof: TestJobScheduleArtifactSweepRuns at pkg/dustpan/schedules_internal_test.go:538
 
 ## What Changes
 
@@ -61,7 +61,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - The history conformance suite exists. (`pkg/inventory/inventorytest/mem_test.go:164 (func TestHistoryConformance)`)
 - The workspace blame conformance suite exists. (`pkg/store/postgres/workspace_blame_test.go:10 (func TestWorkspaceBlameConformance)`)
 - The server refuses a short retention at start. (`pkg/dustpan/dustpan_test.go:832 (func TestNewServerRefusesShortRetention)`)
-- The scheduled artifact sweep runs. (`pkg/dustpan/schedules_internal_test.go:537 (func TestJobScheduleArtifactSweepRuns)`)
+- The scheduled artifact sweep runs. (`pkg/dustpan/schedules_internal_test.go:538 (func TestJobScheduleArtifactSweepRuns)`)
 
 ## ADR check
 

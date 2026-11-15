@@ -17,11 +17,11 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the e2e step against the real binary over TLS on PostgreSQL once the Dusty run job exists. Check: E2e step is BLOCKED until dusty-proposes-change-order lands the Dusty run job with a test model port; then the step revokes through the route of person-delegates-dusty with an access token and reads GET /api/audit/entries with an access token. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write the user docs page in the same pull request. Check: Docs page for revoke effects with the exact verify command, each run as written. Confirmed by: CI (an e2e step in the NEW file e2e/revoke_stops_work_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.1 In the existing file `e2e/audit_export_test.go`, add the e2e step against the real binary over TLS on PostgreSQL once the Dusty run job exists. The step extends the audit e2e test with the revoke case. Check: E2e step is BLOCKED until dusty-proposes-change-order lands the Dusty run job with a test model port; then the step revokes through the route of person-delegates-dusty with an access token and reads GET /api/audit/entries with an access token. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Write the user docs page in the same pull request. Extend the existing guide `docs/guides/audit-log.md` with a revoke section. Check: Docs page for revoke effects with the exact verify command, each run as written. Confirmed by: CI (an e2e step in the NEW file e2e/revoke_stops_work_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 4.3 Run the usability check. Check: Console shows the revoke entry and each denied entry; the persona completes revoke from the docs page alone. A person's step.
 - [ ] 4.4 Pass the full check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
