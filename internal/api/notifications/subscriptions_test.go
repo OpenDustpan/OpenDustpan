@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/subscriptionsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 )
@@ -732,6 +733,54 @@ func TestRedeliverTooSoon(t *testing.T) {
 			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusTooManyRequests, []byte(got.body),
 				errcodetest.Want{Code: errcode.SinkDeliveryTooSoon, Args: nil, RequestBody: nil})
 		})
+	}
+}
+
+// TestRedeliverTooSoonRecorded checks that a redeliver that comes too soon
+// writes one denied audit entry, and that the repeats of the refusal in one
+// window write no entry of their own.
+func TestRedeliverTooSoonRecorded(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.clock.Set(base)
+
+	sub := f.makeSubscription(t)
+	done := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
+	f.clock.Set(base.Add(time.Millisecond))
+
+	before := len(f.entries(t))
+
+	for range 3 {
+		got := f.do(t, send("admin", http.MethodPost, deliveriesBase+"/"+done.ID+"/redeliver", ""))
+		wantCode(t, "too soon", got, http.StatusTooManyRequests)
+		errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusTooManyRequests, []byte(got.body),
+			errcodetest.Want{Code: errcode.SinkDeliveryTooSoon, Args: nil, RequestBody: nil})
+
+		if got.header.Get("Retry-After") == "" {
+			t.Fatal("Retry-After is empty, want the wait")
+		}
+	}
+
+	added := f.entries(t)[before:]
+	if len(added) != 1 {
+		t.Fatalf("audit entries after 3 refusals = %d, want 1: %+v", len(added), added)
+	}
+
+	e := added[0]
+	if e.Outcome != audit.OutcomeDenied || e.Action != string(identity.ActionNamespaceManageNotifications) ||
+		!strings.HasPrefix(e.Reason, errcode.SinkDeliveryTooSoon) {
+		t.Errorf("entry = outcome %q action %q reason %q, want denied, manage-notifications, %q",
+			e.Outcome, e.Action, e.Reason, errcode.SinkDeliveryTooSoon)
+	}
+
+	history := decode[historyWire](t, f.do(t, get("admin", subscriptionsBase+"/"+sub.ID+"/deliveries")))
+
+	for _, d := range history.Deliveries {
+		if d.ID == done.ID && d.State != "delivered" {
+			t.Errorf("delivery state after refusals = %q, want delivered", d.State)
+		}
 	}
 }
 
