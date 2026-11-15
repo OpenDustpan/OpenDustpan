@@ -43,7 +43,7 @@ func haNoWorkerRoutes(env *e2e.Env, console func(e2e.SessionRequest) (int, strin
 		}},
 		{"approve an audit chain change", func(context.Context) (int, string, error) {
 			status, body := console(
-				e2e.SessionRequest{Method: http.MethodPost, Path: "/api/server/audit/chain", Body: ""},
+				e2e.SessionRequest{Method: http.MethodPost, Path: "/api/dustpan/v1/audit/chain", Body: ""},
 			)
 
 			return status, body, nil

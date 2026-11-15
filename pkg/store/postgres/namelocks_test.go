@@ -40,6 +40,11 @@ func TestNameLockConformance(t *testing.T) {
 
 				ageNameLocks(t, openURL(t, schemaURL), d)
 			},
+			Place: func(t *testing.T, scope, name, sub string, offset time.Duration) {
+				t.Helper()
+
+				placeNameLocks(t, openURL(t, schemaURL), nameCount{scope: scope, name: name, sub: sub}, offset)
+			},
 			Broken: func(t *testing.T) authgate.NameLockCounter {
 				t.Helper()
 
@@ -123,5 +128,42 @@ func ageNameLocks(t *testing.T, s *postgres.Store, d time.Duration) {
 		d.Milliseconds())
 	if err != nil {
 		t.Fatalf("age the name counts: %v", err)
+	}
+}
+
+// nameCount names one stored name count: its scope, its name and its
+// sub-key.
+type nameCount struct {
+	scope, name, sub string
+}
+
+// placeNameLocks moves each time column of one name count of s, the count
+// that k names, to the time of the clock of the database plus offset, so a
+// case fixes the time of a count without a wait. A time of 0, a count with
+// no lock or no end, stays 0.
+func placeNameLocks(t *testing.T, s *postgres.Store, k nameCount, offset time.Duration) {
+	t.Helper()
+
+	now, err := s.DatabaseNow(t.Context())
+	if err != nil {
+		t.Fatalf("read the clock of the database: %v", err)
+	}
+
+	at := now.UnixMilli() + offset.Milliseconds()
+
+	// The cast keeps each placeholder a bigint: the CASE branch of 0 alone
+	// types it an int4, and a time in milliseconds does not fit an int4.
+	tag, err := postgres.Pool(s).Exec(t.Context(), `UPDATE name_locks SET
+		locked_until_ms  = CASE WHEN locked_until_ms <> 0 THEN $1::bigint ELSE 0 END,
+		last_failure_ms  = CASE WHEN last_failure_ms <> 0 THEN $1::bigint ELSE 0 END,
+		last_lock_end_ms = CASE WHEN last_lock_end_ms <> 0 THEN $1::bigint ELSE 0 END
+		WHERE scope = $2 AND name = $3 AND sub = $4`,
+		at, k.scope, k.name, k.sub)
+	if err != nil {
+		t.Fatalf("place the name count: %v", err)
+	}
+
+	if rows := tag.RowsAffected(); rows != 1 {
+		t.Fatalf("the update of the name count %s, %s, %s changed %d rows; want 1", k.scope, k.name, k.sub, rows)
 	}
 }

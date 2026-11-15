@@ -29,6 +29,7 @@ import type {
   ApprovalDefault,
   ApprovalRule,
   Approvers,
+  AuditChain,
   BackupCorruptError,
   BackupCorruptErrorArgs,
   BackupTooManyUnverifiedError,
@@ -68,6 +69,7 @@ import type {
   CreateViewRequest,
   CreatedNotificationSink,
   DeletedUnit,
+  DeletedUnitSweep,
   DriftCheck,
   DriftCheckLocation,
   DriftResource,
@@ -172,6 +174,7 @@ import type {
   NotificationSubscription,
   OutputSharing,
   OutputSharingRequest,
+  OverrideSwitches,
   Passkey,
   PasskeyCreationOptions,
   PasskeyRequestOptions,
@@ -277,6 +280,7 @@ import type {
   StoreCheckReport,
   StoreFailoverSettingInvalidError,
   StoreFailoverSettingInvalidErrorArgs,
+  SweptUnit,
   TerminalSchemes,
   TerminalSchemesPatch,
   Trigger,
@@ -431,6 +435,16 @@ export const decodeApprovers: Decoder<Approvers> = object<Approvers>("Approvers"
   groups: array(string),
   unitOwners: boolean,
   users: array(string),
+});
+
+/** The validator of AuditChain. */
+export const decodeAuditChain: Decoder<AuditChain> = object<AuditChain>("AuditChain", {
+  changedAt: optional(string),
+  changedBy: optional(string),
+  migrating: boolean,
+  pending: boolean,
+  setting: string,
+  state: string,
 });
 
 /** The validator of BackupCorruptError. */
@@ -715,6 +729,17 @@ export const decodeDeletedUnit: Decoder<DeletedUnit> = object<DeletedUnit>("Dele
   reference: string,
   tool: string,
   unitID: string,
+});
+
+/** The validator of DeletedUnitSweep. */
+export const decodeDeletedUnitSweep: Decoder<DeletedUnitSweep> = object<DeletedUnitSweep>("DeletedUnitSweep", {
+  failed: int64,
+  finishedBlobPurges: int64,
+  pendingBlobPurges: int64,
+  purged: array(ref(() => decodeSweptUnit)),
+  skipped: int64,
+  waitingBlobPurges: int64,
+  waitingFor: string,
 });
 
 /** The validator of DriftCheck. */
@@ -1540,6 +1565,12 @@ export const decodeOutputSharingRequest: Decoder<OutputSharingRequest> = object<
   newUnitDefault: string,
 });
 
+/** The validator of OverrideSwitches. */
+export const decodeOverrideSwitches: Decoder<OverrideSwitches> = object<OverrideSwitches>("OverrideSwitches", {
+  allowForcedWrites: boolean,
+  allowUnlockedWrites: boolean,
+});
+
 /** The validator of Passkey. */
 export const decodePasskey: Decoder<Passkey> = object<Passkey>("Passkey", {
   backupEligible: boolean,
@@ -2313,6 +2344,14 @@ export const decodeStoreFailoverSettingInvalidError: Decoder<StoreFailoverSettin
 /** The validator of StoreFailoverSettingInvalidErrorArgs. */
 export const decodeStoreFailoverSettingInvalidErrorArgs: Decoder<StoreFailoverSettingInvalidErrorArgs> = object<StoreFailoverSettingInvalidErrorArgs>("StoreFailoverSettingInvalidErrorArgs", {
   setting: string,
+});
+
+/** The validator of SweptUnit. */
+export const decodeSweptUnit: Decoder<SweptUnit> = object<SweptUnit>("SweptUnit", {
+  namespace: string,
+  reference: string,
+  tool: string,
+  unitID: string,
 });
 
 /** The validator of TerminalSchemes. */
