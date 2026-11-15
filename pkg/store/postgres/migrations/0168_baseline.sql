@@ -1363,7 +1363,8 @@ CREATE TABLE state_versions (
     sensitive_marks bytea,
     fenced_by text DEFAULT ''::text NOT NULL,
     unlocked_write boolean DEFAULT false NOT NULL,
-    origin_job text DEFAULT ''::text NOT NULL
+    origin_job text DEFAULT ''::text NOT NULL,
+    client_encrypted boolean
 );
 
 CREATE TABLE temp_admins (

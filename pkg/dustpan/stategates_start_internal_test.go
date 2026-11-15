@@ -17,6 +17,9 @@ import (
 // errAppendDown is the error of an audit store that cannot append.
 var errAppendDown = errors.New("audit store down")
 
+// errLogDown is the error of a start log sink that cannot write.
+var errLogDown = errors.New("start log sink down")
+
 // serverEntries keeps the entries of the installation scope.
 type serverEntries struct {
 	mu      sync.Mutex
@@ -42,6 +45,19 @@ func (s *serverEntries) AppendServer(_ context.Context, e audit.Entry) (audit.En
 	return e, nil
 }
 
+// failingLogHandler is a log handler whose writes fail, as a start log sink
+// that cannot write. slog ignores the error of a handler, so the start must
+// continue.
+type failingLogHandler struct{}
+
+func (failingLogHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (failingLogHandler) Handle(context.Context, slog.Record) error { return errLogDown }
+
+func (h failingLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h failingLogHandler) WithGroup(string) slog.Handler { return h }
+
 // startServer returns a Server with only the fields that the record of the
 // state.write gates reads, and its log.
 func startServer(eff stategate.Effective, store audit.ServerStore) (*Server, *bytes.Buffer) {
@@ -64,14 +80,17 @@ func startServer(eff stategate.Effective, store audit.ServerStore) (*Server, *by
 func TestStateWriteGatesOffIsRecordedAtStart(t *testing.T) {
 	t.Parallel()
 
+	off := stategate.EffectiveOf(stategate.Off(reasonNoGateStore))
+
 	cases := []struct {
 		name    string
 		eff     stategate.Effective
 		line    string
+		absent  string
 		entries int
 	}{
-		{"off", stategate.EffectiveOf(stategate.Off(reasonNoGateStore)), "state.write gates: off", 1},
-		{"on", stategate.EffectiveOf(nil), "state.write gates: on", 0},
+		{"off", off, "state.write gates: off", "state.write gates: on", 1},
+		{"on", stategate.EffectiveOf(nil), "state.write gates: on", "state.write gates: off", 0},
 	}
 
 	for _, tc := range cases {
@@ -89,9 +108,55 @@ func TestStateWriteGatesOffIsRecordedAtStart(t *testing.T) {
 				t.Fatalf("log = %q, want %q with the reason", log.String(), tc.line)
 			}
 
+			if strings.Contains(log.String(), tc.absent) {
+				t.Fatalf("log = %q, want no %q line", log.String(), tc.absent)
+			}
+
 			checkOffEntries(t, store.entries, tc.entries)
 		})
 	}
+}
+
+// TestStateWriteGatesRepeatStartLogsOneLinePerStart starts twice with no gate
+// service: each start writes the WARN line once and the audit entry once, and
+// no start writes the line twice.
+func TestStateWriteGatesRepeatStartLogsOneLinePerStart(t *testing.T) {
+	t.Parallel()
+
+	off := stategate.EffectiveOf(stategate.Off(reasonNoGateStore))
+	store := &serverEntries{mu: sync.Mutex{}, err: nil, entries: nil}
+	srv, log := startServer(off, store)
+
+	for start := range 2 {
+		if err := srv.recordStateWriteGates(t.Context()); err != nil {
+			t.Fatalf("start %d: recordStateWriteGates() = %v, want nil", start+1, err)
+		}
+
+		if got := strings.Count(log.String(), "state.write gates: off"); got != start+1 {
+			t.Fatalf("after start %d: log holds %d lines, want %d", start+1, got, start+1)
+		}
+	}
+
+	checkOffEntries(t, store.entries, 2)
+}
+
+// TestStateWriteGatesLogWriteFailureContinuesTheStart starts with no gate
+// service and a log sink that fails the WARN line: the start continues on the
+// no-gate path, and the audit entry of the gates off still lands.
+func TestStateWriteGatesLogWriteFailureContinuesTheStart(t *testing.T) {
+	t.Parallel()
+
+	off := stategate.EffectiveOf(stategate.Off(reasonNoGateStore))
+	store := &serverEntries{mu: sync.Mutex{}, err: nil, entries: nil}
+	srv, _ := startServer(off, store)
+
+	srv.logger = slog.New(failingLogHandler{})
+
+	if err := srv.recordStateWriteGates(t.Context()); err != nil {
+		t.Fatalf("recordStateWriteGates() = %v, want the start to continue", err)
+	}
+
+	checkOffEntries(t, store.entries, 1)
 }
 
 // checkOffEntries fails t unless entries holds want entries, each one the

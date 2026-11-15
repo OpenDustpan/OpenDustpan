@@ -25,6 +25,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -191,14 +192,14 @@ func (l Lock) Detail() string {
 // U+FFFD. The result has no character that moves a cursor, ends a line or
 // changes the direction of the text.
 func SafeText(s string) string {
-	if utf8.ValidString(s) && !strings.ContainsFunc(s, audit.IsHiddenRune) {
+	if utf8.ValidString(s) && !ident.HasHidden(s) {
 		return s
 	}
 
 	var b strings.Builder
 
 	for _, r := range s {
-		if audit.IsHiddenRune(r) {
+		if ident.IsHiddenRune(r) {
 			fmt.Fprintf(&b, "\\u%04X", r)
 
 			continue

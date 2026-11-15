@@ -182,11 +182,37 @@ func TestValidTokenFreshness(t *testing.T) {
 	}{
 		{d: 0, valid: true},
 		{d: session.MinTokenFreshness, valid: true},
-		{d: session.MaxLengthBound, valid: true},
+		{d: session.MaxTokenFreshness, valid: true},
 		{d: 30 * time.Second, valid: false},
-		{d: session.MaxLengthBound + time.Second, valid: false},
+		{d: session.MaxTokenFreshness + time.Second, valid: false},
 		{d: 90*time.Second + time.Millisecond, valid: false},
 		{d: -time.Minute, valid: false},
+	} {
+		err := session.ValidTokenFreshness(tc.d)
+		if tc.valid != (err == nil) || (err != nil && !errors.Is(err, session.ErrInvalid)) {
+			t.Errorf("ValidTokenFreshness(%s) = %v, want valid %t", tc.d, err, tc.valid)
+		}
+	}
+}
+
+// TestFreshWindowConstructorRefusesOutOfRange proves that the check of the
+// window accepts only 0 and a whole count of seconds from
+// session.MinTokenFreshness to session.MaxTokenFreshness: 1 s, 59 s, 901 s
+// and 7 days are refused, and 0, 60 s and 900 s are accepted.
+func TestFreshWindowConstructorRefusesOutOfRange(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		d     time.Duration
+		valid bool
+	}{
+		{d: time.Second, valid: false},
+		{d: 59 * time.Second, valid: false},
+		{d: 901 * time.Second, valid: false},
+		{d: 7 * 24 * time.Hour, valid: false},
+		{d: 0, valid: true},
+		{d: 60 * time.Second, valid: true},
+		{d: 900 * time.Second, valid: true},
 	} {
 		err := session.ValidTokenFreshness(tc.d)
 		if tc.valid != (err == nil) || (err != nil && !errors.Is(err, session.ErrInvalid)) {

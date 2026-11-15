@@ -427,6 +427,15 @@
             },
             "type": "array"
           },
+          "registryFiles": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RegistryFileSection"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
           "rowCounts": {
             "additionalProperties": {
               "format": "int64",
@@ -481,6 +490,7 @@
           "id",
           "installationKind",
           "primaryInstallations",
+          "registryFiles",
           "rowCounts",
           "schemaVersion",
           "sqlFiles",
@@ -5887,6 +5897,49 @@
         "required": [
           "oneTimeCode",
           "password"
+        ],
+        "type": "object"
+      },
+      "RegistryFileEntry": {
+        "properties": {
+          "release": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "release",
+          "sha256",
+          "size",
+          "version"
+        ],
+        "type": "object"
+      },
+      "RegistryFileSection": {
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryFileEntry"
+            },
+            "type": "array"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "files",
+          "version"
         ],
         "type": "object"
       },

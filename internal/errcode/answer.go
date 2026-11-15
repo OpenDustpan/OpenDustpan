@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"maps"
 	"time"
-	"unicode"
 	"unicode/utf8"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // The limits of the arguments of one answer.
@@ -191,15 +192,15 @@ func (v Value) wire() (any, error) {
 }
 
 // validIdentifier reports whether s is 1 to limit characters of
-// valid UTF-8 with no control character. A line break or a control character
-// can only come from text that is not a name.
+// valid UTF-8 with no control, format or separator character. A hidden
+// character can only come from text that is not a name.
 func validIdentifier(s string, limit int) bool {
 	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > limit {
 		return false
 	}
 
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		if ident.IsHiddenRune(r) {
 			return false
 		}
 	}

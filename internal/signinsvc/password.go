@@ -10,9 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
-	"strings"
 	"sync"
-	"unicode"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/authgate"
@@ -235,10 +233,10 @@ func (s *Service) checkPasswordRequest(req *PasswordRequest) string {
 }
 
 // validTypedName reports whether name has 1 to session.MaxUserName bytes of
-// UTF-8 and no control character.
+// UTF-8 and no control, format or separator character.
 func validTypedName(name string) bool {
 	return name != "" && len(name) <= session.MaxUserName && utf8.ValidString(name) &&
-		!strings.ContainsFunc(name, unicode.IsControl)
+		!ident.HasHidden(name)
 }
 
 // countRefusal refuses the sign-in for a count that locked or that could not

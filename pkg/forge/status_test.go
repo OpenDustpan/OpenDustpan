@@ -95,6 +95,16 @@ func TestValidateStatus(t *testing.T) {
 			forge.ErrInvalid,
 		},
 		{
+			"an address with a format character",
+			func(s *forge.Status) { s.TargetURL = "https://dustpan.example/a\u202eb" },
+			forge.ErrInvalid,
+		},
+		{
+			"an address with a line separator",
+			func(s *forge.Status) { s.TargetURL = "https://dustpan.example/a\u2028b" },
+			forge.ErrInvalid,
+		},
+		{
 			"an address above the limit",
 			func(s *forge.Status) {
 				s.TargetURL = "https://dustpan.example/" + strings.Repeat("p", forge.MaxStatusURLBytes)

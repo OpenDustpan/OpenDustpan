@@ -223,9 +223,22 @@ func restoreWant(manifest Manifest, wantBlobs []BlobRef) Summary {
 		WrapperIDs:           manifest.WrapperIDs,
 		RowCounts:            manifest.RowCounts,
 		Blobs:                wantBlobs,
+		RegistryFiles:        registryFileEntriesOf(manifest.RegistryFiles),
 		Unverified:           manifest.Unverified,
 		SchemaVersion:        manifest.SchemaVersion,
 	}
+}
+
+// registryFileEntriesOf flattens the manifest registry file sections into the
+// per-namespace entry lists of a Summary.
+func registryFileEntriesOf(sections map[string]RegistryFileSection) map[string][]RegistryFileEntry {
+	out := make(map[string][]RegistryFileEntry, len(sections))
+
+	for nsID, section := range sections {
+		out[nsID] = section.Files
+	}
+
+	return out
 }
 
 // restoreWarning warns when Installation is not among the primary installations of the

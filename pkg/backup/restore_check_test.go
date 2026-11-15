@@ -154,6 +154,7 @@ func newCheckSetup(t *testing.T) *checkSetup {
 			WrapperIDs:           nil,
 			RowCounts:            map[string]int64{},
 			Blobs:                nil,
+			RegistryFiles:        nil,
 			SchemaVersion:        backup.BaselineSchemaVersion,
 			Unverified:           nil,
 		},
@@ -194,6 +195,7 @@ func stagedSummary(t *testing.T, manifest backup.Manifest) backup.Summary {
 		WrapperIDs:           manifest.WrapperIDs,
 		RowCounts:            maps.Clone(manifest.RowCounts),
 		Blobs:                refs,
+		RegistryFiles:        nil,
 		SchemaVersion:        manifest.SchemaVersion,
 		Unverified:           nil,
 	}
