@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -430,13 +431,15 @@ func checkConflictingStartKeyLeavesNoEntryPostgres(t *testing.T) {
 var errApprovalCommit = errors.New("injected commit failure")
 
 // failingApprovalStore wraps the store of a server and fails each atomic
-// approval with err. Before it fails, it clears the waiting change, as the
-// end of a migration of another approval does between the check and the
-// commit of this one.
+// approval with err. Before it fails, it runs inside, then clears the waiting
+// change, as the end of a migration of another approval does between the
+// check and the commit of this one. keepPending leaves the change waiting.
 type failingApprovalStore struct {
 	*sqlite.Store
 
-	err error
+	err         error
+	keepPending bool
+	inside      func(ctx context.Context)
 }
 
 func (f failingApprovalStore) ApproveChainChange(
@@ -446,19 +449,109 @@ func (f failingApprovalStore) ApproveChainChange(
 		return f.Store.ApproveChainChange(ctx, e, fixed, retryKey)
 	}
 
-	rec, err := f.ChainRecord(ctx)
+	if f.inside != nil {
+		f.inside(ctx)
+	}
+
+	if f.keepPending {
+		return durable.Operation{}, f.err
+	}
+
+	// The end of the migration of another approval does not depend on the
+	// request of this one, so the clear runs with a context that a canceled
+	// request does not end.
+	other := context.WithoutCancel(ctx)
+
+	rec, err := f.ChainRecord(other)
 	if err != nil {
 		return durable.Operation{}, err
 	}
 
 	rec.Pending = false
 
-	err = f.SaveChainRecord(ctx, rec)
+	err = f.SaveChainRecord(other, rec)
 	if err != nil {
 		return durable.Operation{}, err
 	}
 
 	return durable.Operation{}, f.err
+}
+
+// failingApprovalSetup is the state of the installation before an approval
+// that fails to commit.
+type failingApprovalSetup struct {
+	// backToNormal puts the installation back to normal operation, with no
+	// mark in the record, as the end of a migration does.
+	backToNormal bool
+	// clearMark clears the mark in the record only, so that the installation
+	// stays in maintenance mode, as after an operator entered it.
+	clearMark bool
+}
+
+// startFailingApproval starts a server whose approval commit fails, waits
+// until its waiting change put the installation in maintenance mode, and
+// applies setup.
+func startFailingApproval(
+	t *testing.T, store func(*sqlite.Store) failingApprovalStore, setup failingApprovalSetup,
+) (*sqlite.Store, chainServer) {
+	t.Helper()
+
+	st := openChainStore(t)
+	ns := createChainNamespace(t, st)
+	appendChainEntry(t, st, ns, "req-1")
+
+	srv := runChainServer(t, st, audit.ChainOff, dustpan.WithNamespaceStore(store(st)))
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
+	waitForMaintenance(t, st, maintenance.StateMaintenance)
+
+	if setup.backToNormal || setup.clearMark {
+		rec, err := st.ChainRecord(t.Context())
+		if err != nil {
+			t.Fatalf("read chain record: %v", err)
+		}
+
+		rec.EnteredMaintenance = false
+
+		err = st.SaveChainRecord(t.Context(), rec)
+		if err != nil {
+			t.Fatalf("clear the maintenance mark: %v", err)
+		}
+	}
+
+	if setup.backToNormal {
+		err := st.SetState(t.Context(), maintenance.StateNormal)
+		if err != nil {
+			t.Fatalf("set normal operation: %v", err)
+		}
+	}
+
+	return st, srv
+}
+
+// approvalOutcome is the state that a failed approval must leave.
+type approvalOutcome struct {
+	state maintenance.State
+	// marked is whether the record notes that the chain entered maintenance mode.
+	marked bool
+}
+
+// wantOutcome fails the test unless the installation and the record are in
+// the state of want.
+func wantOutcome(t *testing.T, st *sqlite.Store, want approvalOutcome) {
+	t.Helper()
+
+	if got, err := st.GetState(t.Context()); err != nil || got != want.state {
+		t.Fatalf("state after a failed approval = %q, %v, want %q", got, err, want.state)
+	}
+
+	rec, err := st.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("read chain record: %v", err)
+	}
+
+	if rec.EnteredMaintenance != want.marked {
+		t.Fatalf("record after a failed approval = %+v, want maintenance mark %v", rec, want.marked)
+	}
 }
 
 // TestApprovalThatEntersMaintenanceAndFailsLeavesIt proves that an approval
@@ -470,53 +563,134 @@ func (f failingApprovalStore) ApproveChainChange(
 func TestApprovalThatEntersMaintenanceAndFailsLeavesIt(t *testing.T) {
 	t.Parallel()
 
-	st := openChainStore(t)
-	ns := createChainNamespace(t, st)
-	appendChainEntry(t, st, ns, "req-1")
-
-	errCommit := errApprovalCommit
-	srv := runChainServer(
-		t,
-		st,
-		audit.ChainOff,
-		dustpan.WithNamespaceStore(failingApprovalStore{Store: st, err: errCommit}),
-	)
-	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
-	waitForMaintenance(t, st, maintenance.StateMaintenance)
-
-	rec, err := st.ChainRecord(t.Context())
-	if err != nil {
-		t.Fatalf("read chain record: %v", err)
-	}
-
-	rec.EnteredMaintenance = false
-
-	err = st.SaveChainRecord(t.Context(), rec)
-	if err != nil {
-		t.Fatalf("clear the maintenance mark: %v", err)
-	}
-
-	err = st.SetState(t.Context(), maintenance.StateNormal)
-	if err != nil {
-		t.Fatalf("set normal operation: %v", err)
-	}
+	st, srv := startFailingApproval(t, func(s *sqlite.Store) failingApprovalStore {
+		return failingApprovalStore{Store: s, err: errApprovalCommit, keepPending: false, inside: nil}
+	}, failingApprovalSetup{backToNormal: true, clearMark: false})
 
 	if status, body := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status == http.StatusAccepted {
 		t.Fatalf("approve with a failing commit: %d %s, want a failure", status, body)
 	}
 
-	if got, stateErr := st.GetState(t.Context()); stateErr != nil || got != maintenance.StateNormal {
-		t.Fatalf("state after a failed approval = %q, %v, want normal", got, stateErr)
+	wantOutcome(t, st, approvalOutcome{state: maintenance.StateNormal, marked: false})
+
+	srv.stop()
+}
+
+// TestFailedApprovalKeepsMaintenanceThatAWaitingChainEntered proves that an
+// approval that did not move the installation from normal operation does not
+// leave maintenance mode when it fails: the waiting change entered it, and
+// the mark in the record stays.
+func TestFailedApprovalKeepsMaintenanceThatAWaitingChainEntered(t *testing.T) {
+	t.Parallel()
+
+	st, srv := startFailingApproval(t, func(s *sqlite.Store) failingApprovalStore {
+		return failingApprovalStore{Store: s, err: errApprovalCommit, keepPending: false, inside: nil}
+	}, failingApprovalSetup{backToNormal: false, clearMark: false})
+
+	if status, body := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status == http.StatusAccepted {
+		t.Fatalf("approve with a failing commit: %d %s, want a failure", status, body)
 	}
 
-	after, err := st.ChainRecord(t.Context())
+	wantOutcome(t, st, approvalOutcome{state: maintenance.StateMaintenance, marked: true})
+
+	srv.stop()
+}
+
+// TestFailedApprovalKeepsMaintenanceThatAnOperatorEntered proves that the
+// approval reads the state before it enters: an installation that already
+// is in maintenance mode is not marked as entered by the approval, and a
+// failed approval leaves it in maintenance mode with no mark.
+func TestFailedApprovalKeepsMaintenanceThatAnOperatorEntered(t *testing.T) {
+	t.Parallel()
+
+	st, srv := startFailingApproval(t, func(s *sqlite.Store) failingApprovalStore {
+		return failingApprovalStore{Store: s, err: errApprovalCommit, keepPending: false, inside: nil}
+	}, failingApprovalSetup{backToNormal: false, clearMark: true})
+
+	if status, body := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status == http.StatusAccepted {
+		t.Fatalf("approve with a failing commit: %d %s, want a failure", status, body)
+	}
+
+	wantOutcome(t, st, approvalOutcome{state: maintenance.StateMaintenance, marked: false})
+
+	srv.stop()
+}
+
+// TestFailedApprovalWithAWaitingChangeKeepsMaintenanceAndReportsOnlyTheCommit
+// proves that the undo treats the refusal of a waiting change as expected:
+// the change still waits, so maintenance mode stays, the mark stays, and the
+// answer is the commit failure only, with no failure of the undo.
+func TestFailedApprovalWithAWaitingChangeKeepsMaintenanceAndReportsOnlyTheCommit(t *testing.T) {
+	t.Parallel()
+
+	st, srv := startFailingApproval(t, func(s *sqlite.Store) failingApprovalStore {
+		return failingApprovalStore{Store: s, err: errApprovalCommit, keepPending: true, inside: nil}
+	}, failingApprovalSetup{backToNormal: true, clearMark: false})
+
+	status, body := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain")
+	if status == http.StatusAccepted {
+		t.Fatalf("approve with a failing commit: %d %s, want a failure", status, body)
+	}
+
+	if strings.Contains(body, "maintenance.held") || status == http.StatusConflict {
+		t.Fatalf("answer = %d %q, want the commit failure, not the refusal of the undo", status, body)
+	}
+
+	wantOutcome(t, st, approvalOutcome{state: maintenance.StateMaintenance, marked: true})
+
+	srv.stop()
+}
+
+// TestApprovalOfACanceledRequestStillUndoesItsEntry proves that the undo of
+// a failed approval does not depend on the request context: the client
+// cancels its request while the commit runs, and the installation still goes
+// back to normal operation.
+func TestApprovalOfACanceledRequestStillUndoesItsEntry(t *testing.T) {
+	t.Parallel()
+
+	inside := make(chan struct{})
+
+	st, srv := startFailingApproval(t, func(s *sqlite.Store) failingApprovalStore {
+		return failingApprovalStore{
+			Store: s, err: errApprovalCommit, keepPending: false,
+			inside: func(ctx context.Context) {
+				close(inside)
+				<-ctx.Done()
+			},
+		}
+	}, failingApprovalSetup{backToNormal: true, clearMark: false})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.base+"/api/dustpan/v1/audit/chain", http.NoBody)
 	if err != nil {
-		t.Fatalf("read chain record: %v", err)
+		t.Fatalf("request: %v", err)
 	}
 
-	if after.EnteredMaintenance {
-		t.Fatalf("record after a failed approval = %+v, want no maintenance mark", after)
+	authorize(t, req, adminToken)
+
+	sent := make(chan error, 1)
+
+	go func() {
+		resp, doErr := http.DefaultClient.Do(req)
+		if doErr == nil {
+			doErr = resp.Body.Close()
+		}
+
+		sent <- doErr
+	}()
+
+	<-inside
+	cancel()
+
+	if doErr := <-sent; doErr == nil {
+		t.Fatal("a canceled request got an answer, want a client error")
 	}
+
+	// The undo leaves maintenance mode first and clears the mark after it.
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return !rec.EnteredMaintenance })
+	wantOutcome(t, st, approvalOutcome{state: maintenance.StateNormal, marked: false})
 
 	srv.stop()
 }
