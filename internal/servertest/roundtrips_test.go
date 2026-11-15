@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"runtime"
 	"slices"
@@ -1151,6 +1152,13 @@ type backupSize struct {
 // against the growth rule. Each size has its own server.
 func TestRoundTripsOfBackup(t *testing.T) {
 	t.Parallel()
+
+	// This test measures the round trips of a backup and of a restore on
+	// PostgreSQL. It skips before it registers the cleanup, because the cleanup
+	// checks the runs of its subtests, and a skipped subtest writes no run.
+	if os.Getenv(servertest.EnvURL) == "" {
+		t.Skipf("set %s to run the multi-instance tests", servertest.EnvURL)
+	}
 
 	sizes := backupSizes()
 	runs := make([]measuredRun, len(sizes))
