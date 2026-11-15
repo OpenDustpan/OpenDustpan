@@ -28,3 +28,7 @@ soak-reports/
 
 # Coverage profile (make cover writes it next to the Makefile)
 coverage.out
+
+# Repowise local files. decisions.yaml stays tracked.
+/.repowise/*
+!/.repowise/decisions.yaml

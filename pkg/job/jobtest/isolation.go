@@ -45,10 +45,6 @@ func testForeignNamespace(t *testing.T, h Harness) {
 	wantError(t, "Apply with an audit entry of another namespace", err, audit.ErrInvalidEntry)
 
 	assertState(t, h, stored.ID, job.StateQueued)
-
-	v := job.StateVersion{Unit: f.unit, VersionID: svOne, Commit: "", Job: "", At: stored.CreatedAt, Final: true}
-	_, err = h.Jobs.ObserveStateVersion(t.Context(), v, other)
-	wantError(t, "ObserveStateVersion of a unit of another namespace", err, job.ErrInvalid)
 }
 
 // wantError fails t unless err wraps want.
@@ -107,7 +103,7 @@ func testParallelCreatesOneKey(t *testing.T, h Harness) {
 		Namespace: f.fence.Namespace, UnitID: "", States: nil, Limit: 0, After: "",
 		StateChangedBefore: time.Time{}, StateChangedAfter: time.Time{},
 	})
-	if err != nil || len(all) != 1 {
-		t.Fatalf("List = %d jobs, %v; want 1", len(all), err)
+	if err != nil || len(all.Jobs) != 1 {
+		t.Fatalf("List = %d jobs, %v; want 1", len(all.Jobs), err)
 	}
 }

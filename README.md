@@ -23,7 +23,7 @@ The [quickstart guide](docs/guides/quickstart.md) shows the setup with SQLite on
 loopback and a compose stack with PostgreSQL and S3-compatible storage. This
 section shows the setup from source with SQLite.
 
-No release exists yet, so build the server from source. You need Go 1.27.3 or
+No release exists yet, so build the server from source. You need Go 1.27.4 or
 later, OpenSSL, and the Pulumi CLI or OpenTofu.
 
 ```sh
@@ -221,9 +221,9 @@ address of the local server.
 
 The [backup guide](docs/guides/backup-restore-upgrade.md) shows each command.
 
-## Milestone 3: move in and run it
+## Move in and run it
 
-The milestone 3 exit test passes for both tools, on each version in the
+The test for this step passes for both tools, on each version in the
 matrix, on SQLite and on PostgreSQL. The upgrade steps that need a previous
 tag run from the first tag on (see the [roadmap](docs/roadmap.md)).
 
@@ -272,8 +272,8 @@ logging with `--log-level` and `--log-format`. Check readiness at
   `pulumi up` or `tofu apply` for you.
 - **You need a full audit log, policy checks or drift detection.** The
   audit log records secret reads and overrides only, and can send a copy
-  of each entry to a file, syslog, a webhook or object storage. ADR 60
-  plans the rest: every change and an export. Policy checks and drift
+  of each entry to a file, syslog, a webhook or object storage.
+  Planned: every change and an export. Policy checks and drift
   detection do not exist yet.
 - **Your file or S3 backend is enough.** A plain backend has fewer moving
   parts. OpenDustpan adds a server, a database and a key to look after.
@@ -380,6 +380,8 @@ How-to guides:
 
 Reference:
 
+- [Code rules](docs/reference/code-rules.md): the rules that the server
+  applies and that no grant, setting or administrator can change.
 - [Configuration](docs/reference/configuration.md): every flag and
   environment variable.
 - [Journaling](docs/reference/journaling.md): the setting, the recovery
@@ -422,7 +424,7 @@ Explanation:
 - [Security model](docs/explanation/security-model.md): what the server
   protects, how, and what it does not protect.
 - [Concepts](#concepts) below.
-- [Roadmap](docs/roadmap.md): the milestones and their exit tests.
+- [Roadmap](docs/roadmap.md): the planned work and the tests for each step.
 - [Architecture decisions](docs/adr/) and [open proposals](docs/rfc/).
 
 ## Concepts

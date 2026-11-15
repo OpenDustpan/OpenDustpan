@@ -128,9 +128,10 @@ A state that the client encrypted is a known condition, not an error: the
 restore goes on, `context.state.available` is `false`, and the warning above is
 in the decision record. The server reads a state as encrypted only when it is
 exactly the encryption envelope of OpenTofu: the members `meta`,
-`encrypted_data` and `encryption_version`, and the plain `serial` and
-`lineage`. A document that has the member `encrypted_data` and any other shape
-is refused as not valid, so a plaintext state never reads as encrypted.
+`encrypted_data` and `encryption_version` with the value `v0`, and the plain
+`serial` and `lineage`. A document that has the member `encrypted_data` and any
+other shape is refused as not valid, so a plaintext state never reads as
+encrypted and a state the server cannot classify never reads as plain.
 
 The server refuses a restore when it cannot read one of the two states for
 another reason: the store fails, the state holds a resource or an instance
@@ -184,7 +185,20 @@ not a fact stops the write with the error `gate.rule-failed`.
 
 An access limit is one Cedar `forbid` policy over the principal, the action and
 the unit. The server checks it with the action of the route, for example
-`unit:write` for a lock.
+`unit:write` for a lock. The groups of the principal are the names of its
+groups. The server knows the time of the last authentication only for a
+session. A session of a break-glass account is outside the access limits, and
+an access token of that account is not.
+
+A limit can test the group of the principal: `principal in
+OpenDustpan::Group::"sre"`. The right side of that test must name a group: one
+group entity, or a set of group entities. The save refuses any other right side
+with `400` and the code `gate.limit-membership`, for example `principal in
+resource.owners`. The server cannot check a change of the members of a group
+against such a limit, so it refuses to store one.
+
+A limit can name a group only when its author may manage groups with
+`server:manage-groups`, or is the bootstrap administrator.
 
 ## What a refusal looks like
 
@@ -379,8 +393,5 @@ the claim, and with the gates off, no gate covers a unit.
   access limits for a namespace, a collection and a unit. It has no route for
   ownership rules or path sets yet.
 - No route reads decision records yet.
-- The server knows no group of a principal and no time of the last
-  authentication. A gate or a limit that reads a group does not match. A limit
-  that asks for a recent authentication forbids the call.
 - A break-glass for a gate in error is not available.
 - An approval default does not apply at `state.write`.

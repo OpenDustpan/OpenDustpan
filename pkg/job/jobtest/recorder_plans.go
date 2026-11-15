@@ -16,20 +16,30 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
-// planCases returns the cases of PutPlan.
+// planCases returns the cases of PutPlan that need no state write.
 func planCases() []recorderCase {
 	return []recorderCase{
-		{"plans: PutPlan stores the plan with the hashes, the state version and the retention", testPlanPut},
+		{
+			"plans: two plan phases get two plan IDs and two sets of part keys, and both plans read back",
+			testPlanTwoPhases,
+		},
 		{"plans: a second plan for the phase is ErrConflict and leaves the first", testPlanTwice},
 		{"plans: no part, an unknown kind, a kind twice or no content is ErrInvalid", testPlanInvalidParts},
 		{"plans: a phase that is not a plan phase is ErrInvalid and leaves no blob", testPlanWrongPhase},
-		{"plans: a state write after the claim fails the phase with ErrPlanStale", testPutPlanStale},
-		{"plans: a takeover records the state version again, and the plan reads it", testPlanTakeover},
 		{"plans: a plan is stored during a cancel", testPlanCancel},
 		{"plans: the item key of a plan is of the kind plan", testPlanItemKey},
 		{"plans: parallel PutPlan calls give one plan", testPlanParallel},
-		{"plans: PutPlan and a state write in parallel agree", testPlanAndStateWrite},
 		{"plans: the store refuses hostile parts and keeps the times of the reserve", testPlanHostileRef},
+	}
+}
+
+// statePlanCases returns the cases of PutPlan that need a state write.
+func statePlanCases() []recorderCase {
+	return []recorderCase{
+		{"plans: PutPlan stores the plan with the hashes, the state version and the retention", testPlanPut},
+		{"plans: a state write after the claim fails the phase with ErrPlanStale", testPutPlanStale},
+		{"plans: a takeover records the state version again, and the plan reads it", testPlanTakeover},
+		{"plans: PutPlan and a state write in parallel agree", testPlanAndStateWrite},
 	}
 }
 
@@ -55,19 +65,17 @@ func testPlanPut(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	version := writeState(t, h.Harness, f, false)
 
 	a := openPlan(t, h, f, "")
 	started := time.Now().Add(-time.Minute)
 
 	p := putPlan(t, h, a)
 
-	if !strings.HasPrefix(p.ID, job.PlanIDPrefix) || p.ItemKey == "" || p.StateVersion != svOne ||
+	if !strings.HasPrefix(p.ID, job.PlanIDPrefix) || p.ItemKey == "" || p.StateVersion != version ||
 		len(p.Parts) != planBlobs || p.CreatedAt.Before(started) || !p.RedactedAt.IsZero() ||
 		!p.ExpiresAt.Equal(history.ExpiresAt(p.CreatedAt, h.Retention.Plan)) {
-		t.Fatalf("PutPlan = %+v, want pln-, an item key, state version %s, two parts, retention", p, svOne)
+		t.Fatalf("PutPlan = %+v, want pln-, an item key, state version %s, two parts, retention", p, version)
 	}
 
 	checkPlanParts(t, &p)
@@ -78,20 +86,21 @@ func testPlanPut(t *testing.T, h RecorderHarness) {
 	}
 }
 
-// checkPlanRecord fails t unless the phase of the job of a holds the plan p with
-// the state version svOne and its retention, and the binding of the plan has
+// checkPlanRecord fails t unless the phase of the job of a holds the plan p
+// with its state version and its retention, and the binding of the plan has
 // both hashes.
 func checkPlanRecord(t *testing.T, h RecorderHarness, a *job.Assignment, p *job.PlanRef) {
 	t.Helper()
 
 	got := jobOf(t, h.Harness, a.Claim.Job)
-	if got.Phases[0].Plan == nil || got.Phases[0].Plan.ID != p.ID || got.Phases[0].StateVersion != svOne ||
+	if got.Phases[0].Plan == nil || got.Phases[0].Plan.ID != p.ID || got.Phases[0].StateVersion != p.StateVersion ||
 		got.Phases[0].Plan.ExpiresAt.IsZero() {
-		t.Fatalf("phase = %+v, want the plan %s with state version %s and its retention", got.Phases[0], p.ID, svOne)
+		t.Fatalf("phase = %+v, want the plan %s with state version %s and its retention", got.Phases[0], p.ID,
+			p.StateVersion)
 	}
 
 	if b := got.Phases[0].Plan.Binding(); b.Plan != p.ID || b.DisplaySHA256 != hashOf(displayJSON) ||
-		b.ApplySHA256 != hashOf(applyBinary) || b.StateVersion != svOne {
+		b.ApplySHA256 != hashOf(applyBinary) || b.StateVersion != p.StateVersion {
 		t.Fatalf("binding = %+v, want the plan, both hashes and the state version", b)
 	}
 }
@@ -111,6 +120,50 @@ func checkPlanParts(t *testing.T, p *job.PlanRef) {
 		apply.Size != int64(len(applyBinary)) || apply.SHA256 != hashOf(applyBinary) || !apply.Secret {
 		t.Fatalf("parts = %+v, want sizes and hashes of the plaintext, and the apply part marked secret", p.Parts)
 	}
+}
+
+// testPlanTwoPhases stores a plan in each of two plan phases and checks that
+// the plans keep their own ID, their own part keys and their own content.
+func testPlanTwoPhases(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	f := setUp(t, h.Harness)
+	first := openPlan(t, h, f, "unit-0")
+	second := openPlan(t, h, f, "unit-1")
+
+	one := putPlan(t, h, first)
+
+	two, err := h.Recorder.PutPlan(t.Context(), second.Claim, planParts("other display", "other apply"))
+	if err != nil {
+		t.Fatalf("PutPlan = %v", err)
+	}
+
+	if one.ID == two.ID {
+		t.Fatalf("plan IDs = %q and %q, want two IDs", one.ID, two.ID)
+	}
+
+	firstKeys := []string{
+		planKey(t, first.Claim.Job, one.ID, job.OutputPlanDisplay),
+		planKey(t, first.Claim.Job, one.ID, job.OutputPlanApply),
+	}
+
+	secondKeys := []string{
+		planKey(t, second.Claim.Job, two.ID, job.OutputPlanDisplay),
+		planKey(t, second.Claim.Job, two.ID, job.OutputPlanApply),
+	}
+
+	for _, key := range firstKeys {
+		for _, other := range secondKeys {
+			if key == other {
+				t.Fatalf("part key %s of both plans, want two sets of keys", key)
+			}
+		}
+	}
+
+	assertPart(t, h, one.ID, job.OutputPlanDisplay, displayJSON)
+	assertPart(t, h, one.ID, job.OutputPlanApply, applyBinary)
+	assertPart(t, h, two.ID, job.OutputPlanDisplay, "other display")
+	assertPart(t, h, two.ID, job.OutputPlanApply, "other apply")
 }
 
 func testPlanTwice(t *testing.T, h RecorderHarness) {
@@ -215,16 +268,12 @@ func testPutPlanStale(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	first := writeState(t, h.Harness, f, false)
 
 	a := openPlan(t, h, f, "")
 
 	// A state write lands during the plan phase.
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	second := writeState(t, h.Harness, f, false)
 
 	_, err := h.Recorder.PutPlan(t.Context(), a.Claim, planParts("a", "b"))
 	if !errors.Is(err, job.ErrPlanStale) {
@@ -233,7 +282,7 @@ func testPutPlanStale(t *testing.T, h RecorderHarness) {
 
 	got := jobOf(t, h.Harness, a.Claim.Job)
 	if got.State != job.StateFailed || got.Phases[0].Plan != nil ||
-		!strings.Contains(got.Reason, svOne) || !strings.Contains(got.Reason, svTwo) {
+		!strings.Contains(got.Reason, first) || !strings.Contains(got.Reason, second) {
 		t.Fatalf("job = %s, plan %+v, reason %q; want failed, no plan, a reason that names both versions",
 			got.State, got.Phases[0].Plan, got.Reason)
 	}
@@ -256,16 +305,12 @@ func testPlanTakeover(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	writeState(t, h.Harness, f, false)
 
 	j := dispatched(t, h.Harness, f, plannedJob{unit: "", op: job.OperationPlan, steps: nil})
 	first := claimOf(t, h.Harness, runnerOne, longRenew, runnerKind(&j))
 
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	current := writeState(t, h.Harness, f, false)
 
 	lapse(t, h.Harness, first)
 
@@ -280,8 +325,8 @@ func testPlanTakeover(t *testing.T, h RecorderHarness) {
 	}
 
 	p := putPlan(t, h, second)
-	if p.StateVersion != svTwo {
-		t.Fatalf("plan state version = %q, want %q: the takeover read it again", p.StateVersion, svTwo)
+	if p.StateVersion != current {
+		t.Fatalf("plan state version = %q, want %q: the takeover read it again", p.StateVersion, current)
 	}
 }
 
@@ -372,11 +417,13 @@ func testPlanAndStateWrite(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	first := writeState(t, h.Harness, f, false)
 
 	a := openPlan(t, h, f, "")
+
+	if h.WriteState == nil {
+		t.Fatal("the harness gives no state writer")
+	}
 
 	var (
 		wg       sync.WaitGroup
@@ -385,11 +432,11 @@ func testPlanAndStateWrite(t *testing.T, h RecorderHarness) {
 	)
 
 	wg.Go(func() { _, planErr = h.Recorder.PutPlan(t.Context(), a.Claim, planParts("a", "b")) })
-	wg.Go(func() { stateErr = h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo) })
+	wg.Go(func() { _, stateErr = h.WriteState(t.Context(), f.fence, f.unit, false) })
 	wg.Wait()
 
 	if stateErr != nil {
-		t.Fatalf("SetStateVersion = %v", stateErr)
+		t.Fatalf("WriteState = %v", stateErr)
 	}
 
 	// Either the plan went in before the state write, or the state write came
@@ -399,9 +446,10 @@ func testPlanAndStateWrite(t *testing.T, h RecorderHarness) {
 
 	switch {
 	case planErr == nil:
-		if got.Phases[0].Plan == nil || got.Phases[0].Plan.StateVersion != svOne || got.State != job.StateRunning {
+		if got.Phases[0].Plan == nil || got.Phases[0].Plan.StateVersion != first ||
+			got.State != job.StateRunning {
 			t.Fatalf("plan stored: job %s, plan %+v; want running with a plan of state version %s", got.State,
-				got.Phases[0].Plan, svOne)
+				got.Phases[0].Plan, first)
 		}
 	case errors.Is(planErr, job.ErrPlanStale):
 		if got.State != job.StateFailed || got.Phases[0].Plan != nil {
@@ -412,14 +460,26 @@ func testPlanAndStateWrite(t *testing.T, h RecorderHarness) {
 	}
 }
 
-// planReadCases returns the cases of the reads of plans.
+// planReadCases returns the cases of the reads of plans that need no state
+// write.
 func planReadCases() []recorderCase {
 	return []recorderCase{
 		{"plan reads: both parts read as their content", testPlanReadParts},
 		{"plan reads: an unknown plan, part or namespace is ErrNotFound", testPlanReadUnknown},
 		{"plan reads: a shredded key is ErrShredded, also with no blob left", testPlanReadShredded},
 		{"plan reads: a damaged or moved part blob does not read as content", testPlanReadDamaged},
+	}
+}
+
+// statePlanReadCases returns the cases of the reads of plans that need a
+// state write.
+func statePlanReadCases() []recorderCase {
+	return []recorderCase{
 		{"plan reads: a replan clears the phase and the old plan still reads", testPlanReadAfterReplan},
+		{
+			"plan reads: a second plan of the same job after a replan gets its own part keys, and both plans read back",
+			testPlanSecondPlanAfterReplan,
+		},
 	}
 }
 
@@ -574,9 +634,7 @@ func testPlanReadAfterReplan(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	writeState(t, h.Harness, f, false)
 
 	j := dispatched(t, h.Harness, f, plannedJob{unit: "", op: job.OperationApply, steps: nil})
 	a := claimOf(t, h.Harness, runnerOne, time.Minute, runnerKind(&j))
@@ -586,9 +644,7 @@ func testPlanReadAfterReplan(t *testing.T, h RecorderHarness) {
 		t.Fatalf("Finish = %v", err)
 	}
 
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	writeState(t, h.Harness, f, false)
 
 	cur := jobOf(t, h.Harness, j.ID)
 	c := dispatch(&cur)
@@ -607,9 +663,84 @@ func testPlanReadAfterReplan(t *testing.T, h RecorderHarness) {
 	assertPart(t, h, p.ID, job.OutputPlanDisplay, displayJSON)
 }
 
+// testPlanSecondPlanAfterReplan stores a plan in a plan phase, replans the
+// job and stores a second plan in the same phase of the same job. The phase
+// runs again under a second claim of its operation, so that both plans
+// belong to one job. The two plans must keep their own part keys, and both
+// must read back.
+func testPlanSecondPlanAfterReplan(t *testing.T, h RecorderHarness) {
+	t.Helper()
+
+	f := setUp(t, h.Harness)
+	writeState(t, h.Harness, f, false)
+
+	j := dispatched(t, h.Harness, f, plannedJob{unit: "", op: job.OperationApply, steps: nil})
+	a := claimOf(t, h.Harness, runnerOne, longRenew, runnerKind(&j))
+	p := putPlan(t, h, a)
+
+	// The phase ends without ending its operation: the replan below gives
+	// the phase back to a new claim of that operation, and a completed
+	// operation cannot be claimed again.
+	cur := jobOf(t, h.Harness, j.ID)
+	cur = apply(t, h.Harness, f, change(&cur, job.EventPhaseDone))
+
+	writeState(t, h.Harness, f, false)
+
+	c := dispatch(&cur)
+	c.PlanNotBefore = time.Now().Add(-job.DefaultMaxPlanAge)
+
+	if _, err := h.Jobs.Apply(t.Context(), c, f.fence, nil); !errors.Is(err, job.ErrPlanStale) {
+		t.Fatalf("dispatch of the apply phase after a state write = %v, want ErrPlanStale", err)
+	}
+
+	back := apply(t, h.Harness, f, change(&cur, job.EventReplan))
+	if back.Phases[0].Plan != nil {
+		t.Fatalf("plan after a replan = %+v, want none", back.Phases[0].Plan)
+	}
+
+	lapse(t, h.Harness, a)
+
+	again := apply(t, h.Harness, f, dispatch(&back))
+	second := claimOf(t, h.Harness, runnerTwo, time.Minute, runnerKind(&again))
+
+	two, err := h.Recorder.PutPlan(t.Context(), second.Claim, planParts("other display", "other apply"))
+	if err != nil {
+		t.Fatalf("PutPlan = %v", err)
+	}
+
+	if a.Claim.Job != second.Claim.Job {
+		t.Fatalf("plan jobs = %s and %s, want one job", a.Claim.Job, second.Claim.Job)
+	}
+
+	if p.ID == two.ID {
+		t.Fatalf("plan IDs = %q and %q, want two IDs", p.ID, two.ID)
+	}
+
+	// No part key of one plan equals a part key of the other, because the
+	// key carries the plan ID.
+	kinds := []job.OutputKind{job.OutputPlanDisplay, job.OutputPlanApply}
+
+	for _, one := range kinds {
+		for _, other := range kinds {
+			firstKey := planKey(t, a.Claim.Job, p.ID, one)
+			secondKey := planKey(t, second.Claim.Job, two.ID, other)
+			if firstKey == secondKey {
+				t.Fatalf("part key %s of both plans of one job, want two sets of keys", firstKey)
+			}
+		}
+	}
+
+	assertPart(t, h, p.ID, job.OutputPlanDisplay, displayJSON)
+	assertPart(t, h, p.ID, job.OutputPlanApply, applyBinary)
+	assertPart(t, h, two.ID, job.OutputPlanDisplay, "other display")
+	assertPart(t, h, two.ID, job.OutputPlanApply, "other apply")
+}
+
 // hostilePart returns a valid part of kind k, which the cases change.
 func hostilePart(k job.OutputKind) job.PlanPart {
-	return job.PlanPart{Kind: k, Size: 1, SHA256: emptySHA256, Secret: false, StoredSize: 0, StoredMD5: ""}
+	return job.PlanPart{
+		Kind: k, Size: 1, SHA256: emptySHA256, Secret: k == job.OutputPlanApply, StoredSize: 0, StoredMD5: "",
+	}
 }
 
 // hostilePartCases returns the lists of parts that the store refuses, by what
@@ -629,6 +760,12 @@ func hostilePartCases() map[string][]job.PlanPart {
 
 	unknown := hostilePart(valueOther)
 
+	notSecret := hostilePart(job.OutputPlanApply)
+	notSecret.Secret = false
+
+	secretDisplay := hostilePart(job.OutputPlanDisplay)
+	secretDisplay.Secret = true
+
 	cases := map[string][]job.PlanPart{
 		"no part": nil,
 		"three parts": {
@@ -636,12 +773,14 @@ func hostilePartCases() map[string][]job.PlanPart {
 			hostilePart(job.OutputPlanApply),
 			hostilePart(job.OutputPlanApply),
 		},
-		"an unknown kind":        {unknown},
-		"a kind twice":           {hostilePart(job.OutputPlanApply), hostilePart(job.OutputPlanApply)},
-		"a hash in capitals":     {upper},
-		"a short hash":           {short},
-		"a negative size":        {negative},
-		"a size above the limit": {huge},
+		"an unknown kind":                  {unknown},
+		"a kind twice":                     {hostilePart(job.OutputPlanApply), hostilePart(job.OutputPlanApply)},
+		"a hash in capitals":               {upper},
+		"a short hash":                     {short},
+		"a negative size":                  {negative},
+		"a size above the limit":           {huge},
+		"an apply part that is not secret": {notSecret},
+		"a display part that is secret":    {secretDisplay},
 	}
 
 	return cases

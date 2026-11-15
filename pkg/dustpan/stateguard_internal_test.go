@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -213,6 +215,49 @@ func TestInventoryFactsFailClosedOnAReaderError(t *testing.T) {
 	}
 }
 
+// errPrincipalDown is the error of a principal read that does not answer.
+var errPrincipalDown = errors.New("principal down")
+
+// fakePrincipalReads serves one principal record and a list of active group
+// names.
+type fakePrincipalReads struct {
+	record    principal.Principal
+	recordErr error
+	groups    []string
+	groupsErr error
+	calls     int
+}
+
+func (f *fakePrincipalReads) GetPrincipalBySubject(
+	_ context.Context, subject string,
+) (principal.Principal, error) {
+	if f.recordErr != nil {
+		return principal.Principal{}, f.recordErr
+	}
+
+	if f.record.Subject != subject {
+		return principal.Principal{}, principal.ErrNotFound
+	}
+
+	return f.record, nil
+}
+
+func (f *fakePrincipalReads) ListActiveGroupNamesOf(
+	_ context.Context, principalID string,
+) ([]string, error) {
+	f.calls++
+
+	if f.groupsErr != nil {
+		return nil, f.groupsErr
+	}
+
+	if principalID != f.record.ID {
+		return nil, principal.ErrNotFound
+	}
+
+	return f.groups, nil
+}
+
 func TestPrincipalSubjects(t *testing.T) {
 	t.Parallel()
 
@@ -259,8 +304,16 @@ func TestPrincipalSubjects(t *testing.T) {
 			t.Parallel()
 
 			p := gatePrincipal("alice", tc.kind, tc.credential)
+			reads := &fakePrincipalReads{
+				record: principal.Principal{
+					CreatedAt: time.Time{}, UpdatedAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-alice",
+					Subject: "alice", DisplayName: "Alice", Kind: principal.KindPerson, Source: principal.SourceLocal,
+					Namespace: "", GroupCount: 0, BreakGlass: false,
+				},
+				recordErr: nil, groups: nil, groupsErr: nil, calls: 0,
+			}
 
-			s, err := principalSubjects{}.Subject(t.Context(), p)
+			s, err := principalSubjects{principals: reads}.Subject(t.Context(), p)
 			if err != nil || s.ID != "alice" || s.Kind != tc.wantKind || s.Credential != tc.wantCred ||
 				s.BreakGlassAccount || !s.AuthAt.IsZero() {
 				t.Fatalf("Subject() = %+v, %v, want kind %s and credential %s", s, err, tc.wantKind, tc.wantCred)
@@ -269,11 +322,185 @@ func TestPrincipalSubjects(t *testing.T) {
 	}
 }
 
+// TestPrincipalSubjectsResolveTheRecordGroupsAndAuthentication proves the
+// reads of the principal record, its groups and the authentication time.
+func TestPrincipalSubjectsResolveTheRecordGroupsAndAuthentication(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, time.November, 8, 10, 0, 0, 0, time.UTC)
+
+	alice := principal.Principal{
+		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-alice",
+		Subject: "alice", DisplayName: "Alice", Kind: principal.KindPerson, Source: principal.SourceLocal,
+		Namespace: "", GroupCount: 2, BreakGlass: false,
+	}
+	glass := alice
+	glass.ID, glass.Subject, glass.DisplayName, glass.BreakGlass = "prn-glass", "glass", "Glass", true
+
+	aliceGroups := []string{"zeta", "alpha", "zeta"}
+
+	var none principal.Principal
+
+	cases := []struct {
+		name           string
+		principal      identity.Principal
+		record         principal.Principal
+		recordErr      error
+		groups         []string
+		groupsErr      error
+		signedIn       bool
+		wantGroups     []string
+		wantAuthAt     time.Time
+		wantBreakGlass bool
+		wantErr        error
+		wantGroupsRead int
+	}{
+		{
+			"a session with a sign-in and duplicate group names",
+			gatePrincipal("alice", identity.KindPerson, identity.CredentialSession),
+			alice, nil, aliceGroups, nil, true,
+			[]string{"alpha", "zeta"},
+			at, false, nil, 1,
+		},
+		{
+			"an access token of the same person",
+			gatePrincipal("alice", identity.KindPerson, identity.CredentialAccessToken),
+			alice, nil, aliceGroups, nil, false,
+			[]string{"alpha", "zeta"},
+			time.Time{},
+			false, nil, 1,
+		},
+		{
+			"a session of a break-glass person",
+			gatePrincipal("glass", identity.KindPerson, identity.CredentialSession),
+			glass, nil, nil, nil, true,
+			nil, at, true, nil, 1,
+		},
+		{
+			"an access token of a break-glass person",
+			gatePrincipal("glass", identity.KindPerson, identity.CredentialAccessToken),
+			glass, nil, nil, nil, false,
+			nil,
+			time.Time{},
+			false, nil, 1,
+		},
+		{
+			"a session with no sign-in",
+			gatePrincipal("alice", identity.KindPerson, identity.CredentialSession),
+			alice, nil, nil, nil, false,
+			nil,
+			time.Time{},
+			false, nil, 1,
+		},
+		{
+			"a principal with no kind and no record",
+			gatePrincipal("admin", "", identity.CredentialAccessToken),
+			none, nil, nil, nil, false,
+			nil,
+			time.Time{},
+			false, nil, 0,
+		},
+		{
+			"a principal with a kind and no record",
+			gatePrincipal("alice", identity.KindPerson, identity.CredentialAccessToken),
+			none, nil, nil, nil, false,
+			nil,
+			time.Time{},
+			false, identity.ErrDenied, 0,
+		},
+		{
+			"a failed principal read",
+			gatePrincipal("alice", identity.KindPerson, identity.CredentialAccessToken),
+			none, errPrincipalDown, nil, nil, false,
+			nil,
+			time.Time{},
+			false, errPrincipalDown, 0,
+		},
+		{
+			"a failed groups read",
+			gatePrincipal("alice", identity.KindPerson, identity.CredentialAccessToken),
+			alice, nil, nil, errPrincipalDown, false,
+			nil,
+			time.Time{},
+			false, errPrincipalDown, 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			reads := &fakePrincipalReads{
+				record: tc.record, recordErr: tc.recordErr, groups: tc.groups, groupsErr: tc.groupsErr, calls: 0,
+			}
+
+			ctx := t.Context()
+			if tc.signedIn {
+				ctx = sessionauth.WithSignIn(ctx, sessionauth.SignIn{At: at, Provider: "corp"})
+			}
+
+			s, err := principalSubjects{principals: reads}.Subject(ctx, tc.principal)
+
+			if tc.wantErr != nil {
+				checkSubjectError(t, err, tc.wantErr, reads.calls, tc.wantGroupsRead)
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Subject() = %+v, %v, want no error", s, err)
+			}
+
+			checkSubject(t, s, subjectWant{
+				id: tc.principal.Subject, groups: tc.wantGroups, authAt: tc.wantAuthAt,
+				breakGlass: tc.wantBreakGlass,
+			})
+
+			if reads.calls != tc.wantGroupsRead {
+				t.Fatalf("ListActiveGroupNamesOf() calls = %d, want %d", reads.calls, tc.wantGroupsRead)
+			}
+		})
+	}
+}
+
+// checkSubjectError checks the error of a refused subject and the count of the
+// group reads.
+func checkSubjectError(t *testing.T, err, want error, calls, wantCalls int) {
+	t.Helper()
+
+	if !errors.Is(err, want) {
+		t.Fatalf("Subject() error = %v, want an error that matches %v", err, want)
+	}
+
+	if calls != wantCalls {
+		t.Fatalf("ListActiveGroupNamesOf() calls = %d, want %d", calls, wantCalls)
+	}
+}
+
+// subjectWant names the facts that a resolved subject must have.
+type subjectWant struct {
+	id         string
+	groups     []string
+	authAt     time.Time
+	breakGlass bool
+}
+
+// checkSubject checks the facts of a resolved subject.
+func checkSubject(t *testing.T, s gate.Subject, want subjectWant) {
+	t.Helper()
+
+	if s.ID != want.id || !slices.Equal(s.Groups, want.groups) || !s.AuthAt.Equal(want.authAt) ||
+		s.BreakGlassAccount != want.breakGlass {
+		t.Fatalf("Subject() = %+v, want ID %q, groups %v, auth at %v and break-glass %v",
+			s, want.id, want.groups, want.authAt, want.breakGlass)
+	}
+}
+
 func TestPrincipalSubjectsRefuseAnEmptySubject(t *testing.T) {
 	t.Parallel()
 
 	for _, subject := range []string{"", "  "} {
-		_, err := principalSubjects{}.Subject(t.Context(), gatePrincipal(subject, "", ""))
+		_, err := principalSubjects{principals: nil}.Subject(t.Context(), gatePrincipal(subject, "", ""))
 		if !errors.Is(err, identity.ErrDenied) {
 			t.Fatalf("Subject(%q) = %v, want identity.ErrDenied", subject, err)
 		}
@@ -284,7 +511,9 @@ func TestPrincipalSubjectsRefuseAnUnknownCredential(t *testing.T) {
 	t.Parallel()
 
 	for _, credential := range []identity.Credential{"unknown", "Session", "job-token ", "x\ny"} {
-		_, err := principalSubjects{}.Subject(t.Context(), gatePrincipal("alice", identity.KindPerson, credential))
+		_, err := principalSubjects{principals: nil}.Subject(
+			t.Context(), gatePrincipal("alice", identity.KindPerson, credential),
+		)
 		if !errors.Is(err, identity.ErrDenied) {
 			t.Fatalf("Subject(credential %q) = %v, want identity.ErrDenied", credential, err)
 		}
@@ -374,6 +603,44 @@ func TestStateWriteGatesRefuseAGateStoreWithAMissingPart(t *testing.T) {
 				t.Fatalf("claimGates() error = %v, want errGateParts: the claimer follows the same rule", claimErr)
 			}
 		})
+	}
+}
+
+// gateStoreWithoutPrincipals is a gate store that keeps no principal records.
+// Its GetPrincipal has another signature, so it does not meet the principal
+// store.
+type gateStoreWithoutPrincipals struct {
+	*sqlite.Store
+}
+
+func (gateStoreWithoutPrincipals) GetPrincipal(context.Context, string) (struct{}, error) {
+	return struct{}{}, nil
+}
+
+// TestStateWriteGatesRefuseAGateStoreWithNoPrincipalReads sends a store that
+// keeps gates with no principal records straight to the rule, as if the option
+// check had passed it. The server must not start.
+func TestStateWriteGatesRefuseAGateStoreWithNoPrincipalReads(t *testing.T) {
+	t.Parallel()
+
+	st := openGateStore(t)
+
+	nss, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Installation: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	cfg := new(settings)
+	cfg.namespaceStore = gateStoreWithoutPrincipals{Store: st}
+	cfg.inventoryReader, cfg.now = st, time.Now
+
+	gates, err := newStateWriteGates(cfg, nss)
+	if !errors.Is(err, ErrMissingOption) || !errors.Is(err, errGateParts) {
+		t.Fatalf("newStateWriteGates() error = %v, want ErrMissingOption and errGateParts", err)
+	}
+
+	if gates.guard != nil || gates.svc != nil {
+		t.Fatalf("newStateWriteGates() gave a service %v with the error", gates.svc)
 	}
 }
 

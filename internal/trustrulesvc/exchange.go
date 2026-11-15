@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -46,7 +47,7 @@ type TokenIssuer interface {
 }
 
 // ExchangeConfig holds the dependencies of an Exchanger. Every field except
-// Keys, Refusals, InstallationURLs and Now is required.
+// Keys, Refusals, InstallationURLs, Now and Log is required.
 type ExchangeConfig struct {
 	Rules      trustrule.Store
 	Exchanges  trustrule.ExchangeStore
@@ -75,6 +76,8 @@ type ExchangeConfig struct {
 	OwnIssuer OwnIssuer
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
+	// Log is the logger of the warnings. Nil means a logger that discards.
+	Log *slog.Logger
 }
 
 // Exchanger exchanges the JWT of a workload for an access token, through
@@ -83,6 +86,11 @@ type Exchanger struct {
 	cfg      ExchangeConfig
 	own      *Service
 	refusals *denylimit.Limiter
+	// warnings bounds the warnings that the keys of an issuer could not be
+	// read to one warning for each issuer in each minute: a failing issuer
+	// must not fill the log.
+	warnings *denylimit.Limiter
+	log      *slog.Logger
 	now      func() time.Time
 }
 
@@ -102,6 +110,7 @@ func NewExchanger(cfg ExchangeConfig) (*Exchanger, error) {
 
 	own, err := NewService(Config{
 		Store: cfg.Rules, Namespaces: cfg.Namespaces, Principals: cfg.Principals, Authorizer: denyAll{},
+		Reach:            nil,
 		InstallationURLs: cfg.InstallationURLs, OwnIssuer: cfg.OwnIssuer, CheckURL: nil, Now: now,
 	})
 	if err != nil {
@@ -115,7 +124,16 @@ func NewExchanger(cfg ExchangeConfig) (*Exchanger, error) {
 		})
 	}
 
-	return &Exchanger{cfg: cfg, own: own, refusals: refusals, now: now}, nil
+	// The warning limiter takes the clock of the exchange, so the window of
+	// an issuer follows the configured clock.
+	warnings := denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: now})
+
+	log := cfg.Log
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+
+	return &Exchanger{cfg: cfg, own: own, refusals: refusals, warnings: warnings, log: log, now: now}, nil
 }
 
 // ExchangeInput is one exchange request. Rule is empty, or the ID of the
@@ -372,6 +390,8 @@ func (x *Exchanger) keysOf(ctx context.Context, r *trustrule.Rule, kid string) (
 
 		keys, err := x.cfg.Keys.Keys(ctx, r.Issuer, kid)
 		if err != nil {
+			x.warnKeys(ctx, r, err)
+
 			return trustrule.KeySet{}, fmt.Errorf("read the keys of the issuer: %w", err)
 		}
 
@@ -379,6 +399,27 @@ func (x *Exchanger) keysOf(ctx context.Context, r *trustrule.Rule, kid string) (
 	default:
 		return trustrule.KeySet{}, fmt.Errorf("%w: key source %q", trustrule.ErrKeysUnavailable, r.Keys)
 	}
+}
+
+// warnKeys writes the warning that the keys of the issuer of r could not be
+// read. The warning is rate-limited for each issuer: at most one warning for
+// each issuer in each minute. A failing issuer must not fill the log.
+func (x *Exchanger) warnKeys(ctx context.Context, r *trustrule.Rule, err error) {
+	if !x.warnings.AllowWindow(keysWarnKey(r.Issuer), time.Minute).Write {
+		return
+	}
+
+	x.log.WarnContext(ctx, "trust rule keys could not be read",
+		slog.String("namespace", r.Namespace.String()),
+		slog.String("rule", string(r.ID)),
+		slog.String("error", err.Error()))
+}
+
+// keysWarnKey is the limiter key of the warnings that the keys of an issuer
+// could not be read: one key for each issuer, so one failing issuer writes at
+// most one warning in each minute.
+func keysWarnKey(issuer string) denylimit.Key {
+	return denylimit.Key{Principal: issuer, Action: ActionExchange, Kind: "trustrules:keys", Scope: issuer}
 }
 
 // checkGrant checks the issuer and the principal of the matched rule r again,
@@ -712,5 +753,5 @@ func (denyAll) Authorize(context.Context, identity.Principal, identity.Action, i
 }
 
 func (denyAll) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }

@@ -64,7 +64,16 @@
       "Bash(git push *HEAD::*)",
       "Bash(git reset --hard *)",
       "Bash(git rebase *)",
-      "Bash(git commit --amend*)"
+      "Bash(git commit --amend*)",
+      "Bash(git stash*)",
+      "Bash(git clean *)",
+      "Bash(git add -A*)",
+      "Bash(git add .)",
+      "Bash(git add --all*)",
+      "mcp__claude-code-remote__subscribe_pr_activity",
+      "Bash(git commit --no-verify*)",
+      "Bash(git commit -n *)",
+      "Bash(git commit * --no-verify*)"
     ]
   },
   "hooks": {

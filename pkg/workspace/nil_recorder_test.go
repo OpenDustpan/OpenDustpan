@@ -1,10 +1,13 @@
 package workspace_test
 
 import (
+	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -15,7 +18,35 @@ type noRecorderCase struct {
 	name string
 	// locked keeps the lock of alice while the write runs.
 	locked bool
-	run    func(t *testing.T, f fixture) error
+	// streams reports whether the write declares a placeholder row and records
+	// an upload attempt before it reads the body.
+	streams bool
+	run     func(t *testing.T, f fixture) error
+}
+
+// spyStateWrites counts the placeholder rows that a streamed write declares and
+// the upload attempts it records.
+type spyStateWrites struct {
+	workspace.StateStore
+
+	placeholders atomic.Int64
+	attempts     atomic.Int64
+}
+
+func (s *spyStateWrites) CreateStateVersion(
+	ctx context.Context, sv workspace.StateVersion, fence namespace.Fence, maxPending int,
+) error {
+	s.placeholders.Add(1)
+
+	return s.StateStore.CreateStateVersion(ctx, sv, fence, maxPending)
+}
+
+func (s *spyStateWrites) RecordUploadAttempt(
+	ctx context.Context, id workspace.StateVersionID, key blob.Key, fence namespace.Fence,
+) (blob.Key, error) {
+	s.attempts.Add(1)
+
+	return s.StateStore.RecordUploadAttempt(ctx, id, key, fence)
 }
 
 // noRecorderCases returns the declare (forced and unlocked) and the streamed
@@ -25,8 +56,9 @@ func noRecorderCases() []noRecorderCase {
 
 	return []noRecorderCase{
 		{
-			name:   "declare with the forced override",
-			locked: true,
+			name:    "declare with the forced override",
+			locked:  true,
+			streams: false,
 			run: func(t *testing.T, f fixture) error {
 				t.Helper()
 
@@ -39,8 +71,9 @@ func noRecorderCases() []noRecorderCase {
 			},
 		},
 		{
-			name:   "declare with the unlocked override",
-			locked: false,
+			name:    "declare with the unlocked override",
+			locked:  false,
+			streams: false,
 			run: func(t *testing.T, f fixture) error {
 				t.Helper()
 
@@ -52,8 +85,9 @@ func noRecorderCases() []noRecorderCase {
 			},
 		},
 		{
-			name:   "streamed write with the unlocked override",
-			locked: false,
+			name:    "streamed write with the unlocked override",
+			locked:  false,
+			streams: true,
 			run: func(t *testing.T, f fixture) error {
 				t.Helper()
 
@@ -111,21 +145,67 @@ func TestOverrideNeedsARecorder(t *testing.T) {
 	for _, tt := range noRecorderCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-
-			f := overrideFixture(t)
-
-			if !tt.locked {
-				if _, err := f.svc.Unlock(t.Context(), f.ws.ID, "alice"); err != nil {
-					t.Fatalf("unlock: %v", err)
-				}
-			}
-
-			if err := tt.run(t, f); !errors.Is(err, workspace.ErrNoRecorder) {
-				t.Fatalf("err = %v, want ErrNoRecorder", err)
-			}
-
-			checkHistoryTotal(t, f, 1)
+			runNoRecorderCase(t, tt)
 		})
+	}
+}
+
+// runNoRecorderCase runs one case and proves that it refused before it declared
+// a placeholder row or recorded an upload attempt.
+func runNoRecorderCase(t *testing.T, tt noRecorderCase) {
+	t.Helper()
+
+	f := overrideFixture(t)
+
+	if !tt.locked {
+		if _, err := f.svc.Unlock(t.Context(), f.ws.ID, "alice"); err != nil {
+			t.Fatalf("unlock: %v", err)
+		}
+	}
+
+	var spy *spyStateWrites
+	if tt.streams {
+		spy = watchStateWrites(t, &f)
+	}
+
+	if err := tt.run(t, f); !errors.Is(err, workspace.ErrNoRecorder) {
+		t.Fatalf("err = %v, want ErrNoRecorder", err)
+	}
+
+	checkNoStateWrites(t, spy)
+	checkHistoryTotal(t, f, 1)
+}
+
+// watchStateWrites replaces the service of f with one whose state store counts
+// the placeholder rows and the upload attempts of a streamed write.
+func watchStateWrites(t *testing.T, f *fixture) *spyStateWrites {
+	t.Helper()
+
+	spy := &spyStateWrites{
+		StateStore:   f.store,
+		placeholders: atomic.Int64{},
+		attempts:     atomic.Int64{},
+	}
+	f.svc = serviceWith(t, *f, spy)
+
+	return spy
+}
+
+// checkNoStateWrites proves that a write declared no placeholder row and
+// recorded no upload attempt. A nil spy checks nothing.
+func checkNoStateWrites(t *testing.T, spy *spyStateWrites) {
+	t.Helper()
+
+	if spy == nil {
+		return
+	}
+
+	if got := spy.placeholders.Load(); got != 0 {
+		t.Errorf("placeholder declarations = %d, want 0", got)
+	}
+
+	if got := spy.attempts.Load(); got != 0 {
+		t.Errorf("attempt writes = %d, want 0", got)
 	}
 }
 
@@ -136,7 +216,7 @@ func TestForceUnlockNeedsARecorder(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
-	lockAndPush(t, f, `{"encrypted_data":"c2VjcmV0"}`)
+	lockAndPush(t, f, envelope)
 	enableForced(t, f)
 
 	_, _, err := f.svc.ForceUnlock(t.Context(), f.ws.ID, "admin", forcedOnly(), nil, forceEntry())

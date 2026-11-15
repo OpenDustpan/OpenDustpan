@@ -13,10 +13,22 @@ import (
 // childMode selects the behavior of the child tests below.
 const childMode = "OPENDUSTPAN_TESTCHILD_MODE"
 
+// depthEnv marks a probe that runs inside another probe. A probe that finds it
+// set stops at once, so a checker that stopped refusing cannot start a chain of
+// children.
+const depthEnv = "OPENDUSTPAN_TESTCHILD_DEPTH"
+
 // TestChildProbe is the test that the parent tests run as a child. In a
 // normal run, childMode is not set and the test does nothing.
 func TestChildProbe(t *testing.T) {
 	t.Parallel()
+
+	// Defense in depth: the checker of testchild refuses a bad entry, and this
+	// check stays so that a weakened checker fails the test in one step instead
+	// of starting another child.
+	if os.Getenv(childMode) != "" && os.Getenv(depthEnv) != "" {
+		t.Fatal("the child probe ran inside the child probe: the checker did not refuse")
+	}
 
 	switch os.Getenv(childMode) {
 	case "":
@@ -26,10 +38,19 @@ func TestChildProbe(t *testing.T) {
 	case "fail":
 		t.Fatal("probe-fail-marker")
 	case "badname":
-		out, err := testchild.Run(t, "^TestChildProbe$", "lower=1")
+		out, err := testchild.Run(t, "^TestChildProbe$", "lower=1", depthEnv+"=1")
 		t.Logf("probe-reached-after-bad-entry: %q %v", out, err)
 	case "badvalue":
-		out, err := testchild.Run(t, "^TestChildProbe$", "GOOD_NAME=a\nb")
+		out, err := testchild.Run(t, "^TestChildProbe$", "GOOD_NAME=a\nb", depthEnv+"=1")
+		t.Logf("probe-reached-after-bad-entry: %q %v", out, err)
+	case "noequals":
+		out, err := testchild.Run(t, "^TestChildProbe$", "lower", depthEnv+"=1")
+		t.Logf("probe-reached-after-bad-entry: %q %v", out, err)
+	case "valuenul":
+		out, err := testchild.Run(t, "^TestChildProbe$", "GOOD_NAME=a\x00b", depthEnv+"=1")
+		t.Logf("probe-reached-after-bad-entry: %q %v", out, err)
+	case "valuecr":
+		out, err := testchild.Run(t, "^TestChildProbe$", "GOOD_NAME=a\rb", depthEnv+"=1")
 		t.Logf("probe-reached-after-bad-entry: %q %v", out, err)
 	default:
 		t.Fatalf("unknown probe mode %q", os.Getenv(childMode))
@@ -93,6 +114,9 @@ func TestRunRefusesABadEnvironmentEntry(t *testing.T) {
 	}{
 		{name: "NameWithLowercase", mode: "badname", want: `environment name does not match`},
 		{name: "ValueWithLF", mode: "badvalue", want: "environment value has NUL, CR or LF"},
+		{name: "EntryWithoutEquals", mode: "noequals", want: `environment entry has no "="`},
+		{name: "ValueWithNUL", mode: "valuenul", want: "environment value has NUL, CR or LF"},
+		{name: "ValueWithCR", mode: "valuecr", want: "environment value has NUL, CR or LF"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

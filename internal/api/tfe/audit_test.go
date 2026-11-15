@@ -151,6 +151,7 @@ func newAuditFixtureFor(t *testing.T, err error, authn identity.Authenticator) a
 		Sessions:      nil,
 		SessionPolicy: nil,
 		StateGuard:    stategate.Off("the test keeps no gates"),
+		Placer:        testPlacer(),
 	})
 	if handlerErr != nil {
 		t.Fatalf("handler: %v", handlerErr)

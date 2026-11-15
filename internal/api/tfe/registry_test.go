@@ -209,6 +209,7 @@ func buildRegistryFixture(
 		Sessions:      nil,
 		SessionPolicy: nil,
 		StateGuard:    stategate.Off("the test keeps no gates"),
+		Placer:        testPlacer(),
 		Authenticator: authn,
 		Authorizer:    authz,
 		AddressGate:   nil,
@@ -717,7 +718,7 @@ func TestNewHandlerRefusesAShortRegistryKey(t *testing.T) {
 	t.Parallel()
 
 	_, err := tfe.NewHandler(tfe.Config{
-		Sessions: nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions: nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"), Placer: testPlacer(),
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    allowAll(),
 		AddressGate:   nil,

@@ -24,6 +24,7 @@ var allowed = []edge{
 	{job.StateQueued, job.EventCancel, job.StateCanceled},
 	{job.StateQueued, job.EventExpire, job.StateExpired},
 	{job.StateQueued, job.EventReplan, job.StateQueued},
+	{job.StateQueued, job.EventPhaseFailed, job.StateFailed},
 
 	{job.StateAwaitingApproval, job.EventApproved, job.StateQueued},
 	{job.StateAwaitingApproval, job.EventRejected, job.StateRejected},

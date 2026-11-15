@@ -203,6 +203,8 @@ type viewFixture struct {
 type viewFixtureOptions struct {
 	// views wraps the saved view store, for a test that needs a misbehaving store.
 	views func(savedview.Store) savedview.Store
+	// units wraps the inventory reader, for a test that needs to see the store query.
+	units func(coreinventory.Reader) coreinventory.Reader
 	// noIdempotency builds the handler with no Idempotency-Key middleware.
 	noIdempotency bool
 }
@@ -210,7 +212,7 @@ type viewFixtureOptions struct {
 func newViewFixture(t *testing.T) *viewFixture {
 	t.Helper()
 
-	return newViewFixtureWith(t, viewFixtureOptions{views: nil, noIdempotency: false})
+	return newViewFixtureWith(t, viewFixtureOptions{views: nil, units: nil, noIdempotency: false})
 }
 
 func newViewFixtureWith(t *testing.T, opts viewFixtureOptions) *viewFixture {
@@ -276,7 +278,12 @@ func newViewFixtureWith(t *testing.T, opts viewFixtureOptions) *viewFixture {
 		mu: sync.Mutex{}, denyAction: map[identity.Action]bool{}, denyUnits: map[string]bool{}, asked: nil,
 	}
 
-	reader := &memReader{entries: map[namespace.Name][]coreinventory.Entry{"acme": labeledEntries()}, err: nil}
+	reader := coreinventory.Reader(
+		&memReader{entries: map[namespace.Name][]coreinventory.Entry{"acme": labeledEntries()}, err: nil},
+	)
+	if opts.units != nil {
+		reader = opts.units(reader)
+	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
 		Placements:    nil,

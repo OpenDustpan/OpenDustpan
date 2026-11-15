@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/blob/blobfault"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/internal/store/storefault"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
@@ -135,7 +136,7 @@ func newCrashFixture(
 	t.Helper()
 
 	ctx := t.Context()
-	wrappedSQL := wrapCrashSQL(t, sqlFaults)
+	wrappedSQL, innerSQL := openCrashSQL(t, sqlFaults)
 	wrappedBlobs := wrapCrashBlobs(t, blobFaults)
 	namespaces := crashNamespaces(t, wrappedSQL)
 
@@ -151,14 +152,23 @@ func newCrashFixture(
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	created, err := service.Create(ctx, ref, nil)
-	if err != nil {
-		t.Fatalf("create stack: %v", err)
-	}
-
 	ns, err := namespaces.Get(ctx, ref.Namespace)
 	if err != nil {
 		t.Fatalf("namespace of the stack: %v", err)
+	}
+
+	// The fault wrapper does not serve the placed-store port, so a second
+	// service over the store under the wrapper makes the stack in a collection.
+	placer, err := stack.NewService(
+		stack.Config{Store: innerSQL, Namespaces: namespaces, Now: nil, State: nil, Retention: 0, ManualLocks: nil},
+	)
+	if err != nil {
+		t.Fatalf("placing stacks: %v", err)
+	}
+
+	created, err := placer.CreatePlaced(ctx, ref, nil, placementtest.Stack(t, innerSQL, ns.Fence()))
+	if err != nil {
+		t.Fatalf("create stack: %v", err)
 	}
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
@@ -183,7 +193,7 @@ func newCrashFixture(
 		t.Fatalf("updates: %v", err)
 	}
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	u, err := updates.Create(ctx, ref, plan)
 	if err != nil {
@@ -213,6 +223,17 @@ func newCrashFixture(
 func wrapCrashSQL(t *testing.T, faults []storefault.Fault) *storefault.Store {
 	t.Helper()
 
+	wrapped, _ := openCrashSQL(t, faults)
+
+	return wrapped
+}
+
+// openCrashSQL is wrapCrashSQL that also returns the store under the wrapper.
+// The wrapper does not serve the placed-store port, so a test that makes a
+// stack in a collection makes it through the store under the wrapper.
+func openCrashSQL(t *testing.T, faults []storefault.Fault) (*storefault.Store, *sqlite.Store) {
+	t.Helper()
+
 	inner, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -229,7 +250,7 @@ func wrapCrashSQL(t *testing.T, faults []storefault.Fault) *storefault.Store {
 		}
 	})
 
-	return wrapped
+	return wrapped, inner
 }
 
 // wrapCrashBlobs opens a filesystem blob store and wraps it with faults.

@@ -10,6 +10,8 @@ Changed by:
 - ADR 222 changes decision 9: the age of the fresh step.
 - ADR 227 changes decision 9: the age of a break-glass review authentication.
 - ADR 297 changes decisions 1, 3 and 9: a session use names the sign-in ID.
+- ADR 372 changes decisions 1, 2 and 3: a third kind of use, `temp-admin`.
+  The review of a signed-request recovery opens whatever the opt-in.
 
 ## Context
 

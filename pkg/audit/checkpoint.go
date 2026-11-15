@@ -115,6 +115,9 @@ var (
 	// an epoch that differs from its directory, a hash that differs from
 	// the entry at its sequence, or a bad epoch object.
 	ErrCheckpointMismatch = errors.New("audit checkpoint does not match")
+	// ErrInvalidEpoch reports a negative epoch that a caller passed to
+	// VerifyAt or WriteAt. An epoch read from the store is never negative.
+	ErrInvalidEpoch = errors.New("invalid audit checkpoint epoch: want 0 or more")
 	// ErrInvalidVerifyKey reports a verify key that is not a 32-byte
 	// Ed25519 public key.
 	ErrInvalidVerifyKey = errors.New("invalid audit verify key: want a base64 32-byte Ed25519 public key")
@@ -751,11 +754,68 @@ func (c *Checkpoints) NewEpoch(ctx context.Context, now time.Time) (int64, error
 // that another instance stores in that small window stops the next Write of
 // the scope, not this one.
 func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.Time) (bool, error) {
+	return c.writeWith(ctx, scope, now, nil)
+}
+
+// WriteAt is Write for a caller that already read the current epoch in the
+// same background cycle: it does not read the epoch again for the gates, and
+// it uses epoch for the key of the scope. It still reads the epoch again
+// immediately before the store of a new checkpoint. When that read differs
+// from epoch, it stores nothing and answers false and no error.
+func (c *Checkpoints) WriteAt(ctx context.Context, scope namespace.Name, now time.Time, epoch int64) (bool, error) {
+	// Defense in depth: the epoch comes from the caller, and no other layer
+	// of the write checks its range before the key of the scope uses it.
+	if epoch < 0 {
+		return false, fmt.Errorf("audit checkpoint of %s at epoch %d: %w", scope, epoch, ErrInvalidEpoch)
+	}
+
+	return c.writeWith(ctx, scope, now, &epoch)
+}
+
+// Verify checks the checkpoints of scope in the current epoch: the newest
+// sequence first in every check, every sequence newer than the last one that
+// matched, up to MaxNewCheckpoints, and up to CheckpointSample older ones at
+// random. It reads every copy of each sequence that it checks. For each copy
+// it checks the signature, the key, the scope, the sequence and the epoch
+// that its key names. Two copies of one sequence that sign different hashes
+// fail the scope, before the check reads the database. Then it checks the
+// hash of the entry at the sequence. A bad epoch object fails the scope with
+// Valid false and BadSequence 0. So does a key under the directory of the
+// scope that the server does not write. More than MaxCheckpointCopies copies
+// of one sequence fail the scope at that sequence. It also fails when the
+// scope holds no entry or ends before the newest checkpoint, so a cut at the
+// end of the log fails the next check. It fails when stored checkpoints are
+// missing below the last one that matched, or when no copy of the last one
+// that matched is stored. A scope that failed to match before fails again
+// until a new epoch starts. It answers an error only when it cannot read a
+// checkpoint or an entry.
+func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (CheckpointResult, error) {
+	return c.verifyWith(ctx, scope, nil)
+}
+
+// VerifyAt is Verify for a caller that already read the current epoch in the
+// same background cycle: it checks the checkpoints of epoch and does not read
+// the epoch again. It does not check the epoch objects, so it does not fail a
+// scope for a bad epoch object. The Epoch read of the caller must have checked
+// them, and the caller must not call VerifyAt with an epoch from a failed read.
+func (c *Checkpoints) VerifyAt(ctx context.Context, scope namespace.Name, epoch int64) (CheckpointResult, error) {
+	// Defense in depth: the epoch comes from the caller, and no other layer
+	// of the check looks at its range before the directory of the scope uses it.
+	if epoch < 0 {
+		return CheckpointResult{Reason: "", Checked: 0, BadSequence: 0, Valid: false},
+			fmt.Errorf("audit checkpoints of %s at epoch %d: %w", scope, epoch, ErrInvalidEpoch)
+	}
+
+	return c.verifyWith(ctx, scope, &epoch)
+}
+
+// writeWith is Write with a known epoch, or nil to read it.
+func (c *Checkpoints) writeWith(ctx context.Context, scope namespace.Name, now time.Time, known *int64) (bool, error) {
 	if err := c.flushMarks(ctx); err != nil {
 		return false, fmt.Errorf("%w: %w", ErrCheckpointMismatch, err)
 	}
 
-	epoch, err := c.Epoch(ctx)
+	epoch, err := c.epochOr(ctx, known)
 	if err != nil {
 		return false, err
 	}
@@ -802,27 +862,20 @@ func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.
 	return c.storeNew(ctx, gk, last, now)
 }
 
-// Verify checks the checkpoints of scope in the current epoch: the newest
-// sequence first in every check, every sequence newer than the last one that
-// matched, up to MaxNewCheckpoints, and up to CheckpointSample older ones at
-// random. It reads every copy of each sequence that it checks. For each copy
-// it checks the signature, the key, the scope, the sequence and the epoch
-// that its key names. Two copies of one sequence that sign different hashes
-// fail the scope, before the check reads the database. Then it checks the
-// hash of the entry at the sequence. A bad epoch object fails the scope with
-// Valid false and BadSequence 0. So does a key under the directory of the
-// scope that the server does not write. More than MaxCheckpointCopies copies
-// of one sequence fail the scope at that sequence. It also fails when the
-// scope holds no entry or ends before the newest checkpoint, so a cut at the
-// end of the log fails the next check. It fails when stored checkpoints are
-// missing below the last one that matched, or when no copy of the last one
-// that matched is stored. A scope that failed to match before fails again
-// until a new epoch starts. It answers an error only when it cannot read a
-// checkpoint or an entry.
-func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (CheckpointResult, error) {
+// epochOr answers *known, or reads the current epoch when known is nil.
+func (c *Checkpoints) epochOr(ctx context.Context, known *int64) (int64, error) {
+	if known != nil {
+		return *known, nil
+	}
+
+	return c.Epoch(ctx)
+}
+
+// verifyWith is Verify with a known epoch, or nil to read it.
+func (c *Checkpoints) verifyWith(ctx context.Context, scope namespace.Name, known *int64) (CheckpointResult, error) {
 	result := CheckpointResult{Reason: "", Checked: 0, BadSequence: 0, Valid: true}
 
-	gate, err := c.verifyGate(ctx, scope, result)
+	gate, err := c.verifyGate(ctx, scope, result, known)
 	if gate.stop || err != nil {
 		return gate.result, err
 	}
@@ -893,13 +946,13 @@ type verifyGateResult struct {
 // stores marks that a failed store did not take, reads the epoch, and fails
 // the scope when a mark stands.
 func (c *Checkpoints) verifyGate(
-	ctx context.Context, scope namespace.Name, result CheckpointResult,
+	ctx context.Context, scope namespace.Name, result CheckpointResult, known *int64,
 ) (verifyGateResult, error) {
 	if err := c.flushMarks(ctx); err != nil {
 		return verifyGateResult{result: result.fail(0, err.Error()), epoch: 0, stop: true}, nil
 	}
 
-	epoch, err := c.Epoch(ctx)
+	epoch, err := c.epochOr(ctx, known)
 	if errors.Is(err, ErrCheckpointMismatch) {
 		return verifyGateResult{result: result.fail(0, err.Error()), epoch: 0, stop: true}, nil
 	}

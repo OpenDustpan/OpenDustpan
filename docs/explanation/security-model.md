@@ -2,8 +2,7 @@
 
 This page says what the OpenDustpan server protects, how, and what it does not
 protect. It describes the server as it is on `main` today. A planned change
-carries the word "planned" and the number of the decision (ADR) or the open
-proposal (RFC) that holds it.
+carries the word "planned".
 
 OpenDustpan is pre-alpha. Do not keep production state on it.
 
@@ -35,8 +34,8 @@ OpenDustpan is pre-alpha. Do not keep production state on it.
   the `X-Dustpan-CSRF` header. The sign-in cookie stays `SameSite=Lax`, so
   the return from the identity provider works.
 
-Planned: users, teams and roles (RFC 19), scoped access tokens (RFC 20), and
-single sign-on with directory sync (RFC 21).
+Planned: users, teams and roles, scoped access tokens, and
+single sign-on with directory sync.
 
 ## Authorization
 
@@ -56,14 +55,14 @@ secrets. With only administrators, that split has no effect yet.
 
 ## Access tokens
 
-ADR 53 adds access tokens that the server stores (`odp_` secrets) for
+The server issues access tokens that it stores (`odp_` secrets) for
 persons and services.
 
 - **The server stores only a SHA-256 digest of each secret.** It shows the
   secret once, at create or rotation.
 - **An access token cannot make or rotate a token.** Only a caller without
-  a stored token can: today the bootstrap admin token (ADR 6), later a
-  sign-in (ADR 55). A token that could make tokens would outlive its
+  a stored token can: today the bootstrap admin token, later a
+  sign-in. A token that could make tokens would outlive its
   maximum lifetime and a revoke of the token that made it.
 - **Each person makes only its own personal tokens.** A token acts as its
   principal, so a personal token for another person would be a grant by
@@ -227,6 +226,33 @@ Each force-unlock writes one audit entry of the kind `change`. It holds the
 released lock holder, the lock time, the new state version and the reason,
 if the caller gave one.
 
+### State that the client encrypts
+
+OpenTofu can encrypt its state on the client before it sends it. The server
+then stores the state, but it cannot read it. This keeps the state secret from
+the server, and it costs you every check and view that needs the content of
+the state:
+
+- **No check of the content.** The server checks only the encryption envelope
+  and the plain `serial` and `lineage`. It cannot see a broken or truncated
+  state inside the envelope, so it stores that state as it is. Only the tool
+  that holds the key finds the fault, at the next run.
+- **Gates see no resources.** For a write or a restore of such a state,
+  `context.state.available` is `false`, and `state.resources` and
+  `state.removed` keep their zero values. A gate that reads them never
+  matches. The write goes on under the other gates, and the decision record
+  says `state is client-encrypted`.
+- **No outputs.** A read of the outputs answers 409, and other units cannot
+  read them through output sharing.
+- **Less history.** A diff of two versions answers 409 when either one is
+  encrypted. History and point-in-time views show the version with no
+  resources.
+- **A force-unlock writes no fence version** (see above).
+
+Use client encryption when the server must not hold the plain state. For the
+checks and views above, use the encryption that the server applies to every
+state version (see "OpenTofu state").
+
 ## The key-encryption key
 
 `serve` needs a key-encryption key before it opens the database. It takes
@@ -253,8 +279,8 @@ secrets and lost OpenTofu state: nobody can decrypt them. A copy of the data dir
 the key file also holds the key, so keep the backups and the key
 apart.
 
-Planned: a command that rotates the key-encryption key (ADR 23), and keys
-that a key management service holds (RFC 33).
+Planned: a command that rotates the key-encryption key, and keys
+that a key management service holds.
 
 ## What the server encrypts at rest
 
@@ -274,7 +300,7 @@ disk encryption and with access rules on the S3 bucket.
 
 The server creates the blob directory with access for its owner only.
 
-Encryption of a whole backup is not decided (ADR 30, RFC 8).
+Encryption of a whole backup is not decided.
 
 ## Integrity
 
@@ -409,7 +435,7 @@ through each API and check that the log and the metrics do not hold them.
 - The server waits at most 10 seconds for the request headers.
 - **Failed token lookups have a limit for each client address.** The server counts the failed lookups of secret-shaped token values for each client address. The address is the resolved client address. An IPv6 address counts by its /64 network. Behind a proxy that is not in `--trusted-proxies`, every client shares the address of the proxy. A request with an unknown address counts in one shared bucket named `unknown`.
 - **Sign-in requests have their own limit for each client address.** The server counts each start of a console sign-in and each failed sign-in step. The count has its own budget. Token lookups do not use it. Many successful sign-ins from one address slow only the next sign-ins from that address. An example is a team behind one proxy. They never slow a token lookup. The address rules are the same as for failed token lookups.
-- No other rate limit exists today. Planned in a new RFC (ADR 32).
+- No other rate limit exists today. Planned as a future change.
 
 ## Outbound connections
 
@@ -473,8 +499,8 @@ entry and how to read them.
 - **Backups.** A backup holds the audit log, and a restore keeps a valid
   chain.
 
-RFC 22 holds retention, export and an anchor for the chain outside the
-database.
+Retention, export and an anchor for the chain outside the database are not
+decided.
 
 ## Report a vulnerability
 

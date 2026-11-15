@@ -39,7 +39,7 @@ func (m *memPlacements) CreatePlacementRule(
 	defer m.mu.Unlock()
 
 	if r.Collection.Key() != "payments" && r.Collection.Key() != "sandbox" {
-		return collection.ErrNotFound
+		return collection.ErrPlacementCollectionMissing
 	}
 
 	if err := r.Validate(); err != nil {
@@ -478,7 +478,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"tool without rules",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"opentofu","project":"a","stack":"*","collection":"payments"}`,
+			`{"tool":"terraform","project":"a","stack":"*","collection":"payments"}`,
 			400,
 			errcode.PlacementInvalidTool,
 		},

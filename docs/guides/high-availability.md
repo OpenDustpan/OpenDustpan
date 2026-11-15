@@ -176,7 +176,7 @@ See [Back up, restore and upgrade](backup-restore-upgrade.md).
 ## What is not supported
 
 - More than one instance on SQLite. SQLite holds one instance.
-- Primary and replica installations, request forwarding, and replication between installations. These are a later milestone.
+- Primary and replica installations, request forwarding, and replication between installations. The project plans these for a later release.
 - Active-active across sites. One installation uses one database.
 - The `fs` blob store, a `dir:` backup target and a `file:` audit or log sink with several instances. Each writes to the disk of one host. The Helm chart refuses them.
 - PostgreSQL before version 18. Nobody tested it.

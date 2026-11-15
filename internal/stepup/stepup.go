@@ -9,11 +9,29 @@
 // access token alone never gives a fresh authentication.
 //
 // Rows belong to a person, not to a namespace, so no write carries a fence.
+//
+// # Audit of refusals
+//
+// Exactly one layer appends the audit entry of each refusal, so that no
+// refusal is recorded twice and none is recorded zero times:
+//
+//   - ErrMismatch and ErrFactorRefused of CredentialStore.UseCredential: the
+//     store appends the failure entry of the Use, in the transaction that
+//     makes the credential void. The service appends no entry for them.
+//   - ErrNotFound, ErrExpired and ErrUsed of CredentialStore.UseCredential
+//     and of ChallengeStore.RecordFailure: the store changes nothing and
+//     appends nothing. The service appends one failure entry for each. When
+//     the service cannot append it, the request still fails, and the
+//     service never lets the write go on (fail closed).
+//
+// The implementation of the service and of the stores waits for the decision
+// on the CLI step-up.
 package stepup
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -221,6 +239,13 @@ type Challenge struct {
 	PersonID string
 	// Holder names the session or the access token of that request.
 	Holder Holder
+	// CreatedBy is the principal ID of the person who made the request that
+	// made the challenge: the person for their own add, and the administrator
+	// for a first-key enrollment. It is never empty. The store of a key add
+	// refuses a challenge that another principal made. The service sets it
+	// from the authenticated principal of the request, never from a request
+	// field, because the store cannot tie it to Holder.
+	CreatedBy string
 	// Requester is what the console accept page shows.
 	Requester Requester
 	// Origin is the normalized public URL of the server.
@@ -259,6 +284,84 @@ type Challenge struct {
 	CreatedAt  time.Time
 	ExpiresAt  time.Time
 	AcceptedAt time.Time
+}
+
+// KeyAddition is the add of a step-up key under the challenge that proved
+// possession of it. The store binds the key to the challenge, so that one
+// proof adds one key, once.
+type KeyAddition struct {
+	// Key is the new key.
+	Key Key
+	// ChallengeID names the challenge of ScopeKeyAdd that the new key
+	// answered. The service verified the signature before the call.
+	ChallengeID string
+	// At is the time of the add. A challenge that expired at or before At is
+	// expired.
+	At time.Time
+}
+
+// CheckKeyAdditionArguments applies step 1 of AddKey and EnrollFirstKey to
+// the arguments alone, and returns ErrInvalid for the first rule that fails.
+// An adapter calls it before it reads a challenge. For AddKey, adminID is
+// empty and enroll is false. For EnrollFirstKey, enroll is true.
+func CheckKeyAdditionArguments(a KeyAddition, adminID string, enroll bool) error {
+	switch {
+	case a.ChallengeID == "":
+		return fmt.Errorf("%w: the challenge ID is empty", ErrInvalid)
+	case a.At.IsZero():
+		return fmt.Errorf("%w: the time of the add is zero", ErrInvalid)
+	}
+
+	if err := checkNewKey(a.Key); err != nil {
+		return err
+	}
+
+	switch {
+	case !enroll && (adminID != "" || a.Key.EnrolledBy != ""):
+		return fmt.Errorf("%w: a key that the person adds has no administrator", ErrInvalid)
+	case enroll && (adminID == "" || adminID == a.Key.PersonID || a.Key.EnrolledBy != adminID):
+		return fmt.Errorf("%w: an enrollment needs an administrator other than the person, who enrolls the key",
+			ErrInvalid)
+	}
+
+	return nil
+}
+
+// checkNewKey returns ErrInvalid for a key with an empty field or a factor
+// that is not a key factor.
+func checkNewKey(k Key) error {
+	if k.ID == "" || k.PersonID == "" || k.Type == "" || k.Fingerprint == "" || len(k.PublicKey) == 0 ||
+		k.Name == "" || k.CreatedAt.IsZero() {
+		return fmt.Errorf("%w: a key field is empty", ErrInvalid)
+	}
+
+	if k.Factor != FactorSSH && k.Factor != FactorOpenPGP {
+		return fmt.Errorf("%w: the factor of a key is ssh or openpgp", ErrInvalid)
+	}
+
+	return nil
+}
+
+// CheckKeyAdditionChallenge applies steps 2 to 5 of AddKey and
+// EnrollFirstKey to the stored challenge ch, in this order, and returns the
+// first error. creator is the principal who must have made the challenge: the
+// person for AddKey and the administrator for EnrollFirstKey. An adapter calls
+// it with the challenge that it read in the transaction of the add, after
+// CheckKeyAdditionArguments, and it passes nil for a challenge that does not
+// exist, and the function returns ErrNotFound.
+func CheckKeyAdditionChallenge(a KeyAddition, creator string, ch *Challenge) error {
+	switch {
+	case ch == nil || ch.PersonID != a.Key.PersonID || creator == "" || ch.CreatedBy != creator:
+		return ErrNotFound
+	case ch.Scope != ScopeKeyAdd || ch.KeyAdd.Type != a.Key.Type || ch.KeyAdd.Fingerprint != a.Key.Fingerprint:
+		return fmt.Errorf("%w: the challenge does not hold this key", ErrInvalid)
+	case ch.State != StateOpen:
+		return ErrUsed
+	case !ch.ExpiresAt.After(a.At):
+		return ErrExpired
+	}
+
+	return nil
 }
 
 // Answer is the answer of a challenge.
@@ -366,24 +469,55 @@ type Use struct {
 
 // KeyStore is the persistence port for step-up keys.
 type KeyStore interface {
-	// AddKey stores k and appends e in the same transaction. It returns
-	// ErrConflict for a fingerprint that the person registered before,
-	// ErrLimit when the person holds the maximum count of keys, and
-	// ErrInvalid for a key with an empty field or a non-empty EnrolledBy. A
-	// failed add stores nothing and appends nothing.
-	AddKey(ctx context.Context, k Key, e audit.Entry) error
+	// AddKey stores a.Key, marks the challenge a.ChallengeID answered and
+	// appends e, in one transaction. The challenge must be a challenge of
+	// ScopeKeyAdd that the person a.Key.PersonID made for themselves, in
+	// StateOpen, not expired at a.At, and its KeyAdd must hold the type and
+	// the fingerprint of a.Key. An adapter applies the rules of
+	// CheckKeyAdditionArguments and CheckKeyAdditionChallenge, in this order,
+	// and the first failure decides:
+	//
+	//  1. ErrInvalid for an argument that fails CheckKeyAdditionArguments. It
+	//     needs no stored challenge.
+	//  2. ErrNotFound for a missing challenge, a challenge of another person,
+	//     and a challenge that the person did not make. The three answers are
+	//     the same, so that a caller learns nothing about the challenge of
+	//     another person.
+	//  3. ErrInvalid for a challenge of another scope or whose KeyAdd differs
+	//     from the key.
+	//  4. ErrUsed for a challenge that is not open: answered, void or
+	//     accepted. A challenge that made a key is answered, so the proof
+	//     adds no second key, also after the revoke of the first key and
+	//     before the expiry of the challenge.
+	//  5. ErrExpired for a challenge that expired at or before a.At.
+	//  6. ErrConflict for a fingerprint that the person registered before,
+	//     and ErrLimit when the person holds the maximum count of keys.
+	//
+	// A failed add stores nothing, appends nothing and leaves the challenge
+	// open. The store appends no entry for a refusal: the service appends
+	// the one failure entry and fails closed. Of two calls at the same time
+	// for one challenge, one wins, and the other returns ErrUsed.
+	AddKey(ctx context.Context, a KeyAddition, e audit.Entry) error
 	// Keys returns the keys of the person personID in the order of the add.
 	Keys(ctx context.Context, personID string) ([]Key, error)
 	// Key returns the key id of the person personID, or ErrNotFound.
 	Key(ctx context.Context, personID, id string) (Key, error)
-	// EnrollFirstKey stores k, the first key of the person k.PersonID, for
-	// the administrator adminID, and appends e, in one transaction. It
-	// returns ErrConflict when the person holds a key, also a suspended one,
-	// and ErrInvalid when adminID is empty or names the person, or for a key
-	// with an empty field or an EnrolledBy that is not adminID.
-	// Of two calls at the same time for one person, one wins. A failed
-	// enrollment stores nothing and appends nothing.
-	EnrollFirstKey(ctx context.Context, adminID string, k Key, e audit.Entry) error
+	// EnrollFirstKey stores a.Key, the first key of the person
+	// a.Key.PersonID, for the administrator adminID, marks the challenge
+	// a.ChallengeID answered and appends e, in one transaction. The rules
+	// and the order of the checks are those of AddKey, with these changes:
+	// step 1 also returns ErrInvalid when adminID is empty or names the
+	// person, or when the EnrolledBy of the key is not adminID; step 2 also
+	// returns ErrNotFound for a challenge that the administrator adminID did
+	// not make, so a challenge that the person made for their own add never
+	// enrolls a key for an administrator; and step 6 returns ErrConflict when
+	// the person holds a key, also a suspended one. The store checks that
+	// the challenge was made by adminID, and the service checks that adminID
+	// holds the right to enroll.
+	// Of two calls at the same time for one person, or for one challenge,
+	// one wins. A failed enrollment stores nothing, appends nothing and
+	// leaves the challenge open. The store appends no entry for a refusal.
+	EnrollFirstKey(ctx context.Context, adminID string, a KeyAddition, e audit.Entry) error
 	// RevokeKey deletes the key, revokes each credential that it made and
 	// appends e, in one transaction. It returns ErrNotFound.
 	RevokeKey(ctx context.Context, personID, id string, e audit.Entry) error
@@ -392,7 +526,8 @@ type KeyStore interface {
 // ChallengeStore is the persistence port for step-up challenges.
 type ChallengeStore interface {
 	// CreateChallenge stores c in the state StateOpen. It returns ErrInvalid
-	// for a challenge with an empty field or an empty holder, and
+	// for a challenge with an empty field, an empty holder or an empty
+	// CreatedBy, and
 	// ErrChallengeLimit when the person holds the maximum count of open
 	// challenges.
 	CreateChallenge(ctx context.Context, c Challenge) error
@@ -431,9 +566,25 @@ type ChallengeStore interface {
 	// from c. Of two calls at the same time, one wins, and the other changes
 	// nothing.
 	CompleteChallenge(ctx context.Context, c Completion) error
-	// RecordFailure counts one wrong answer and appends e, in one
-	// transaction. When the count reaches the limit, the challenge is void
-	// and it returns ErrUsed.
+	// RecordFailure counts one wrong answer of the challenge id of the
+	// person personID and appends e, in one transaction. Its result for each
+	// state of the challenge:
+	//
+	//   - Open, below the failure limit: it counts the answer, appends e and
+	//     returns nil. The challenge stays open.
+	//   - Open, and this answer reaches the failure limit: it counts the
+	//     answer, makes the challenge void, appends e, and appends a second
+	//     entry that records the void of the challenge at the limit, and
+	//     returns nil. The void is an automatic action, so it has its own
+	//     entry, and e stays the record of the wrong answer. The next call
+	//     returns ErrUsed.
+	//   - Missing, or a challenge of another person: it returns ErrNotFound.
+	//   - After the expiry: it returns ErrExpired.
+	//   - Accepted, answered or void: it returns ErrUsed.
+	//
+	// On ErrNotFound, ErrExpired and ErrUsed it counts nothing, changes no
+	// state and appends nothing. The service appends the entry of these
+	// refusals (see the package documentation).
 	RecordFailure(ctx context.Context, personID, id string, e audit.Entry) error
 }
 
@@ -448,8 +599,10 @@ type CredentialStore interface {
 	// digest differ, or when u is excluded for a window credential, and
 	// ErrFactorRefused when the level of the credential is below u.Level. A
 	// mismatch or a refused level makes the credential void and appends the
-	// failure entry of u. Of two calls at the same time on the last use, one
-	// wins.
+	// failure entry of u. On ErrNotFound, ErrExpired and ErrUsed it changes
+	// nothing and appends nothing: the service appends the entry of these
+	// refusals (see the package documentation). Of two calls at the same
+	// time on the last use, one wins.
 	UseCredential(ctx context.Context, u Use) (Credential, error)
 	// RevokeCredentialsOfKey revokes each credential that the key keyID of
 	// the person personID made.
@@ -460,6 +613,21 @@ type CredentialStore interface {
 	// RevokeCredentialsOfPerson revokes each credential of the person
 	// personID, for an admin reset and a deprovision.
 	RevokeCredentialsOfPerson(ctx context.Context, personID string) error
+}
+
+// ResetStore is the persistence port for the admin reset of the factors of a
+// person.
+type ResetStore interface {
+	// ResetFactors deletes each step-up key of the person personID and the
+	// active and the pending TOTP factor, revokes each step-up credential of
+	// the person, makes each open or accepted challenge of the person void,
+	// and appends e, which is the one entry of the reset, in one
+	// transaction. It returns ErrInvalid for an empty personID. A person who
+	// holds no key and no factor still gets the entry, so that the reset has
+	// a record. It changes nothing for another person. A failed reset
+	// changes nothing and appends nothing. Two resets at the same time each
+	// append their entry.
+	ResetFactors(ctx context.Context, personID string, e audit.Entry) error
 }
 
 // TOTP is the TOTP factor of a person. The store keeps the secret sealed.
@@ -487,14 +655,25 @@ type TOTP struct {
 	Disabled bool
 }
 
+// ReservationTTL is how long the reservation of a TOTP attempt lasts. The
+// service checks a code at once after BeginTOTPAttempt, so a reservation that
+// is older than this is not a live attempt.
+const ReservationTTL = 5 * time.Minute
+
 // Attempt is one reserved TOTP attempt. BeginTOTPAttempt counts it as a
-// failure, and AcceptStep cancels that count for a good code.
+// failure and records the reservation in the store, and AcceptStep consumes
+// the reservation and cancels that count for a good code. A value that the
+// store did not return from BeginTOTPAttempt is not a reservation.
 type Attempt struct {
+	// ID is the reservation ID, with the prefix "tra-". The store makes it.
+	ID       string
 	PersonID string
 	TOTPID   string
 	// Count is the failure count after the reservation of this attempt.
 	Count int
 	At    time.Time
+	// ExpiresAt is At plus ReservationTTL.
+	ExpiresAt time.Time
 }
 
 // TOTPStore is the persistence port for TOTP factors.
@@ -524,14 +703,29 @@ type TOTPStore interface {
 	// 10th wrong code locks, and the 10th attempt can still pass. Of calls
 	// at the same time, no more than the limit pass.
 	BeginTOTPAttempt(ctx context.Context, personID string, at time.Time, e, lockout audit.Entry) (Attempt, error)
-	// AcceptStep sets the last step to step, the failures to 0 and ends the
-	// lock and the disable, for the attempt a, when step is higher than the
-	// stored step. A lock or a disable that a or a concurrent attempt set
-	// does not refuse a, because BeginTOTPAttempt passed it. It returns
-	// ErrUsed for a step that is not higher, and ErrNotFound when the factor
-	// a.TOTPID is not the active factor, and then changes nothing. Of two
-	// calls at the same time with the same step, one wins.
-	AcceptStep(ctx context.Context, a Attempt, step int64) error
+	// AcceptStep checks the reservation a, consumes it and, for a step that is
+	// higher than the stored step, sets the last step to step, the failures
+	// to 0 and ends the lock and the disable, in one transaction. It
+	// validates the reservation against the record that BeginTOTPAttempt
+	// stored: the ID, the person, the factor, the count and the times must
+	// equal that record. It returns, in this order:
+	//
+	//  1. ErrNotFound for a reservation that the store did not record or
+	//     whose values differ from the record, and when the factor a.TOTPID
+	//     is not the active factor. It changes nothing.
+	//  2. ErrUsed for a reservation that was consumed. It changes nothing,
+	//     also with a higher step.
+	//  3. ErrExpired for a reservation that expired at or before at. It
+	//     changes nothing.
+	//  4. ErrUsed for a step that is not higher than the stored step. It
+	//     consumes the reservation and keeps the failure count of the
+	//     attempt, so that a retry of the reservation with another step fails.
+	//
+	// A lock or a disable that a or a concurrent attempt set does not refuse
+	// a, because BeginTOTPAttempt passed it. Of two calls at the same time
+	// with one reservation, one wins. A reset or a new active factor ends the
+	// reservations of the earlier factor.
+	AcceptStep(ctx context.Context, a Attempt, step int64, at time.Time) error
 	// ResetTOTP deletes the active and the pending factor, revokes each
 	// credential that TOTP made and appends e, in one transaction.
 	ResetTOTP(ctx context.Context, personID string, e audit.Entry) error

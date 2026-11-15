@@ -42,6 +42,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -60,6 +61,7 @@ import (
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/devsignin"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/forgelinksvc"
 	"opendustpan.org/opendustpan/internal/issuersvc"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
@@ -154,9 +156,10 @@ type settings struct {
 	// stackRefusals records the refusals of the stack blob scope. newServices
 	// builds it once.
 	stackRefusals scopeaudit.Recorder
-	// blobGuard tells the blob deleters whether a backup or a restore runs.
-	// newUpdateService attaches it.
-	blobGuard       blobguard.Watch
+	// blobGuard holds the leases of the blob deletes: the namespace store,
+	// which reads the backups table and the restores table. newUpdateService
+	// attaches it.
+	blobGuard       blobguard.Leases
 	namespaceStore  namespace.Store
 	stackStore      stack.Store
 	updateStore     stack.UpdateStore
@@ -234,6 +237,12 @@ type settings struct {
 	// oidcProviders are the OpenID Connect providers of the console
 	// sign-in. See WithOIDCProvider.
 	oidcProviders []OIDCProvider
+	// ldapProviders are the LDAP providers of the sign-in. See
+	// WithLDAPProvider.
+	ldapProviders []LDAPProvider
+	// ldapLoopback lets the LDAP sign-in reach a loopback address. See
+	// WithLDAPLoopbackForTests.
+	ldapLoopback bool
 	// signInHTTPClient makes the requests to the sign-in providers of the
 	// API. Nil uses the default client of the sign-in.
 	signInHTTPClient *http.Client
@@ -258,6 +267,9 @@ type settings struct {
 	devSignIn        *devsignin.Config
 	// instanceStore keeps the instance version rows. See WithInstanceStore.
 	instanceStore installation.InstanceStore
+	// builtinStore is the built-in SQLite or PostgreSQL store. See WithSQLite,
+	// WithPostgreSQL and WithBuiltinStore.
+	builtinStore builtinStoreSettings
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
 	// durableStore keeps the durable operations and the job schedules, or
@@ -272,6 +284,9 @@ type settings struct {
 	// trustRules keeps the workload trust rules of each namespace, or nil
 	// without them. See WithTrustRules.
 	trustRules trustRuleSettings
+	// selfService keeps the store of the blueprints of the self-service API.
+	// See WithSelfServiceBlueprints.
+	selfService selfServiceSettings
 	// jobClaimer builds the claimer of the phases of runner jobs for the
 	// runners of the protocol, or is nil. See WithJobClaimer.
 	jobClaimer JobClaimerFunc
@@ -522,6 +537,9 @@ func WithCheckpointDeltaCutoff(n int) Option {
 // Server is a configured OpenDustpan server.
 type Server struct {
 	handler http.Handler
+	// closeBuiltin closes the store that NewServer opened, or is nil when the
+	// caller opened the store or no built-in store exists.
+	closeBuiltin *builtinStoreCloser
 	// started records that Start succeeded. The gate in front of handler
 	// reads it.
 	started *startState
@@ -678,7 +696,7 @@ func defaultSettings() *settings {
 		eventStore:              nil,
 		secretKeys:              nil,
 		secretWrapper:           nil,
-		streamStop:              nil,
+		streamStop:              &streamStop{stopped: atomic.Bool{}},
 		workspaceStore:          nil,
 		stateStore:              nil,
 		blobStore:               nil,
@@ -713,6 +731,8 @@ func defaultSettings() *settings {
 		tlsKeyFile:              "",
 		publicURL:               "",
 		oidcProviders:           nil,
+		ldapProviders:           nil,
+		ldapLoopback:            false,
 		signInHTTPClient:        nil,
 		sessionCookies:          nil,
 		version:                 "",
@@ -741,11 +761,16 @@ func defaultSettings() *settings {
 		runners:                 nil,
 		sourceFilters:           nil,
 		trustRules:              trustRuleSettings{store: nil, cas: nil, loopback: false},
+		selfService:             selfServiceSettings{store: nil},
 		jobClaimer:              nil,
 		jobRecorder:             nil,
 		components:              AllComponents(),
 		operationLease:          0,
 		watch:                   nil,
+		builtinStore: builtinStoreSettings{
+			source: builtinStoreNone, path: "", dsn: "", config: defaultStoreConfig(), handle: nil,
+			open: nil, close: nil,
+		},
 	}
 }
 
@@ -764,6 +789,30 @@ func NewServer(opts ...Option) (*Server, error) {
 		opt(cfg)
 	}
 
+	if err := applyBuiltinStore(cfg); err != nil {
+		return nil, err
+	}
+
+	closeStore := cfg.builtinStore.closeFunc()
+
+	srv, err := buildServer(cfg)
+	if err != nil {
+		if closeStore == nil {
+			return nil, err
+		}
+
+		return nil, errors.Join(err, closeStore())
+	}
+
+	if closeStore != nil {
+		srv.closeBuiltin = &builtinStoreCloser{mu: sync.Mutex{}, close: closeStore}
+	}
+
+	return srv, nil
+}
+
+// buildServer wires the server from settings that have their built-in store.
+func buildServer(cfg *settings) (*Server, error) {
 	base, err := checkSettings(cfg)
 	if err != nil {
 		return nil, err
@@ -1046,7 +1095,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		reconciler:   reconciler, artifactSweeper: artifactSweeper, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
-		components: cfg.components, nameLocks: nameLocksOf(cfg),
+		components: cfg.components, nameLocks: nameLocksOf(cfg), closeBuiltin: nil,
 		watch: cfg.watch, auditChainEvery: cfg.auditChainInterval, stateWrite: newStateWriteStart(cfg, svc),
 	}
 
@@ -1227,6 +1276,8 @@ type neutralHandlers struct {
 	sourceFilter http.Handler
 	// trustRules is nil when no trust rule store is set.
 	trustRules http.Handler
+	// selfService is nil when no blueprint store is set.
+	selfService http.Handler
 }
 
 // newNeutralHandlers builds the tool-neutral inventory API, audit API and
@@ -1297,6 +1348,7 @@ func newNeutralHandlers(
 
 		sourceFilter: settingAPIs.sourceFilter,
 		trustRules:   settingAPIs.trustRules,
+		selfService:  settingAPIs.selfService,
 	}, nil
 }
 
@@ -1344,6 +1396,7 @@ func newProfileAPIs(
 type namespaceSettingHandlers struct {
 	sourceFilter http.Handler
 	trustRules   http.Handler
+	selfService  http.Handler
 }
 
 // newNamespaceSettingHandlers builds the source filter API and the trust rule
@@ -1357,14 +1410,21 @@ func newNamespaceSettingHandlers(svc services, cfg *settings, onFailure func()) 
 	if cfg.sourceFilters != nil {
 		out.sourceFilter, err = newSourceFilterHandler(svc, cfg, onFailure)
 		if err != nil {
-			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil}, err
+			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil, selfService: nil}, err
 		}
 	}
 
 	if cfg.trustRules.store != nil {
 		out.trustRules, err = newTrustRuleHandler(svc, cfg, onFailure)
 		if err != nil {
-			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil}, err
+			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil, selfService: nil}, err
+		}
+	}
+
+	if cfg.selfService.store != nil {
+		out.selfService, err = newSelfServiceHandler(svc, cfg, onFailure)
+		if err != nil {
+			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil, selfService: nil}, err
 		}
 	}
 
@@ -1463,6 +1523,7 @@ func newTofuHTTPHandler(
 		},
 		DenialLimiter: cfg.denialLimiter,
 		StateGuard:    svc.stateWrite.guard,
+		Placer:        newWorkspacePlacer(svc),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)
@@ -1531,7 +1592,7 @@ func newTFEHandler(
 		return nil, err
 	}
 
-	registryProtocol, err := newRegistryProtocol(cfg, base.String())
+	registryProtocol, err := newRegistryProtocol(cfg, base.String(), func() { observed.IncAuditAppendFailure() })
 	if err != nil {
 		return nil, err
 	}
@@ -1567,6 +1628,7 @@ func newTFEHandler(
 		},
 		DenialLimiter: cfg.denialLimiter,
 		StateGuard:    svc.stateWrite.guard,
+		Placer:        newWorkspacePlacer(svc),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tfe api: %w", err)
@@ -2841,10 +2903,17 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
+	reach, err := reachConfig(cfg)
+	if err != nil {
+		return none, err
+	}
+
 	serverAPI, err := newServerHandler(serverHandlerInputs{
 		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
 		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
+		reach:  reach,
 		tokens: deps.services.tokens, deleted: deps.services.deleted, stateWrite: deps.services.stateWrite.effective(),
+		cursors: cfg.secretWrapper,
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
 		principals: principals, gates: gates, forgeService: gitHost, idempotency: idem, extras: extras,
@@ -2877,7 +2946,7 @@ type forgeLinkStore interface {
 // namespace store, or returns nil when the store keeps no links or no
 // principals. Both SQL adapters keep both. A nil service makes the routes
 // answer 501.
-func newForgeLinkService(st namespace.Store, now func() time.Time) *forgelink.Service {
+func newForgeLinkService(st namespace.Store, now func() time.Time) *forgelinksvc.Service {
 	store, ok := st.(forgeLinkStore)
 	if !ok {
 		return nil
@@ -2888,7 +2957,7 @@ func newForgeLinkService(st namespace.Store, now func() time.Time) *forgelink.Se
 		return nil
 	}
 
-	return forgelink.NewService(store.ForgeLinks(), people, now, nil)
+	return forgelinksvc.NewService(store.ForgeLinks(), people, now, nil)
 }
 
 // auditStoreOf returns the audit store of the namespace store. It answers
@@ -2955,9 +3024,12 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 
 	var tokens principal.Tokens
 
+	var reach principal.GroupReach
+
 	if grants != nil {
 		guard = grants
 		tokens = grants
+		reach = grants
 	}
 
 	// Both SQL adapters keep the temporary administrators, so a sign-in
@@ -2969,7 +3041,8 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: temps,
-		Store:      store, Guard: guard, Namespaces: cfg.namespaceStore, Tokens: tokens, Now: nil, NewID: nil,
+		Store:      store, Guard: guard, GroupReach: reach, Namespaces: cfg.namespaceStore,
+		Tokens: tokens, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("principal service: %w", err)
@@ -3133,7 +3206,8 @@ func unitCollections(cfg *settings) (access.UnitCollections, error) {
 // namespace store, or returns nil when the store keeps no roles and grants.
 // The service checks escalation with the grant model, so it uses the
 // configured authorizer when that is an access.Authorizer, and its own one
-// otherwise.
+// otherwise. It reads the cap of the export of a collection from the settings
+// service when the server keeps one.
 func newAccessService(cfg *settings) (*access.Service, error) {
 	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
@@ -3157,9 +3231,26 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		}
 	}
 
+	var settings access.Settings
+	if settingsSvc := newSettingService(cfg, cfg.namespaceStore); settingsSvc != nil {
+		settings = settingsSvc
+	}
+
+	reach, reachErr := reachConfig(cfg)
+	if reachErr != nil {
+		return nil, fmt.Errorf("access service: %w", reachErr)
+	}
+
+	var limits access.LimitGroups
+
+	if reader := accessLimitGroups(cfg, stores); reader != nil {
+		limits = reader
+	}
+
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: adminSubjectsOf(cfg.authenticator),
+		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz,
+		Reach: reach, Now: nil, NewID: nil,
+		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), Settings: settings, LimitGroups: limits,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access service: %w", err)
@@ -3192,7 +3283,9 @@ func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, 
 // personal token for another person is the grants of grants, and the
 // authorizer of grants decides principal:manage-tokens for a service
 // token. With nil grants, a store that keeps none, only an administrator
-// passes either.
+// passes either. The reach config decides the reach rule of a token change:
+// a store that keeps no grants refuses each such change of a caller that is
+// not an administrator.
 func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
@@ -3209,8 +3302,13 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		authz = grants.Authorizer()
 	}
 
+	reach, err := reachConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("access token reach: %w", err)
+	}
+
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Authorizer: authz,
+		Store: store, Principals: principals, Freshness: nil, Authorizer: authz, Reach: reach,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
 	})
 	if err != nil {
@@ -3645,7 +3743,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// rest of the prefix. The tool adapters are refused in maintenance mode.
 	for _, h := range []http.Handler{
 		a.inventory, a.context, a.profiles, a.issuer, a.sinks, a.registry, a.jobs, a.triggers, a.unitSettings,
-		a.drift, a.sourceFilter, a.trustRules,
+		a.drift, a.sourceFilter, a.trustRules, a.selfService,
 	} {
 		mountV1(mux, h, wrapV1)
 	}

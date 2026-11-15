@@ -80,7 +80,7 @@ func newSealFixture(t *testing.T) sealFixture {
 		t.Fatalf("name: %v", err)
 	}
 
-	ws, err := sealed.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := sealed.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name}, memPlacement("acme"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

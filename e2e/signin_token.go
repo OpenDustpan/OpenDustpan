@@ -271,6 +271,30 @@ func (e *Env) FreshAdminAPIStatus(ctx context.Context, tb testing.TB, req Sessio
 	return e.FreshSession(ctx, tb, e.freshAdmin(ctx, tb))(req)
 }
 
+// FreshAdminMergePatch sends one merge patch of body to path, with the
+// If-Match revision ifMatch, as a site administrator with a console session
+// that has a fresh sign-in. It returns the status and the body of the answer.
+// A step uses it for a change of a setting that reduces security, which needs
+// a fresh authentication. The env must come from NewEnvWithSignIn.
+func (e *Env) FreshAdminMergePatch(ctx context.Context, tb testing.TB, path, ifMatch, body string) (int, string) {
+	tb.Helper()
+
+	if e.signIn == nil {
+		tb.Fatal("FreshAdminMergePatch needs an env from NewEnvWithSignIn")
+	}
+
+	browser := e.BrowserClient(tb)
+	csrf := e.signInAs(ctx, tb, browser, e.signInSubjectOf(ctx, tb, e.freshAdmin(ctx, tb)))
+
+	header := sessionHeader(csrf)
+	header.Set("Content-Type", "application/merge-patch+json")
+	header.Set("If-Match", ifMatch)
+
+	return e.browserDo(ctx, tb, browser, browserRequest{
+		method: http.MethodPatch, target: e.URL + path, body: body, header: header,
+	})
+}
+
 // FreshAdminAPIStatusFrom is FreshAdminAPIStatus for a request that leaves
 // from the local address source. The sign-in itself leaves from the default
 // address. A step uses it for a route that an IP allowlist limits.

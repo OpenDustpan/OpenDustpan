@@ -595,30 +595,41 @@ func TestReadTofuResourceWithoutMarks(t *testing.T) {
 	}
 }
 
-// TestTofuClientEncrypted proves the envelope detection: a state file with
-// the encrypted envelope reads encrypted, and a plain state does not.
+// TestTofuClientEncrypted proves the exported check of client-encrypted
+// state: the envelope reads encrypted, a plain state reads plain, and an
+// input the check cannot classify fails with ErrInvalidState.
 func TestTofuClientEncrypted(t *testing.T) {
 	t.Parallel()
 
-	encrypted := `{"version":4,"serial":1,"lineage":"l1",` +
-		`"encrypted_data":{"iv":"QUJD","data":"R0hJ"},"outputs":{},"resources":[]}`
-
-	isEncrypted, err := workspace.IsClientEncrypted([]byte(encrypted))
-	if err != nil {
-		t.Fatalf("encrypted check: %v", err)
+	tests := []struct {
+		name    string
+		doc     string
+		want    bool
+		wantErr bool
+	}{
+		{"a plain state of the CLI", tofuTestState, false, false},
+		{"the envelope", envelope, true, false},
+		{
+			"a plaintext state with the member",
+			`{"encrypted_data":"x","resources":[{"type":"t","name":"a"}]}`, false, true,
+		},
+		{"an unknown version", `{"meta":{},"encrypted_data":"x","encryption_version":"v9"}`, false, true},
+		{"an envelope in another object", `{"outer":` + envelope + `}`, false, false},
+		{"not an object", `[]`, false, true},
+		{"not JSON", `nope`, false, true},
+		{"empty input", ``, false, true},
 	}
 
-	if !isEncrypted {
-		t.Error("encrypted state reads plain, want encrypted")
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	isEncrypted, err = workspace.IsClientEncrypted([]byte(tofuTestState))
-	if err != nil {
-		t.Fatalf("plain check: %v", err)
-	}
-
-	if isEncrypted {
-		t.Error("plain state reads encrypted, want plain")
+			got, err := workspace.IsClientEncrypted([]byte(tc.doc))
+			if got != tc.want || (err != nil) != tc.wantErr ||
+				(err != nil && !errors.Is(err, workspace.ErrInvalidState)) {
+				t.Fatalf("IsClientEncrypted() = %v, %v, want %v and error %v", got, err, tc.want, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -778,7 +789,7 @@ func newMaskedFixture(t *testing.T) maskedFixture {
 		t.Fatalf("name: %v", err)
 	}
 
-	ws, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := svc.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name}, memPlacement("acme"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -1003,10 +1014,7 @@ func TestMaskedReadClientEncryptedThroughService(t *testing.T) {
 		t.Fatalf("lock: %v", err)
 	}
 
-	encrypted := `{"version":4,"serial":1,"lineage":"l1",` +
-		`"encrypted_data":{"iv":"QUJD","data":"R0hJ"},"outputs":{},"resources":[]}`
-
-	sv, _ := f.pushMasked(t, 1, encrypted, maskedRendering())
+	sv, _ := f.pushMasked(t, 1, envelope, maskedRendering())
 
 	if _, err := f.svc.ReadResources(ctx, sv.ID, "", 0, ""); !errors.Is(err, workspace.ErrClientEncrypted) {
 		t.Errorf("read resources of encrypted state: err = %v, want ErrClientEncrypted", err)

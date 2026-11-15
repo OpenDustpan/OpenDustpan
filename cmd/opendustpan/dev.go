@@ -260,7 +260,7 @@ func (r *devRun) run(ctx context.Context) error {
 	r.logGate = &gateWriter{w: r.stderr, buf: bytes.Buffer{}, mu: sync.Mutex{}, pass: false}
 
 	app, err := newAppLog( //nolint:contextcheck // The log writers outlive this call; close bounds them.
-		nil, level, r.flags.logFormat, r.logGate, r.proc.lookup,
+		nil, level, r.flags.logFormat, r.logGate, sinkEnv{lookup: r.proc.lookup, ranges: nil},
 	)
 	if err != nil {
 		return err
@@ -821,10 +821,11 @@ type placementPorts interface {
 	collection.PlacementStore
 }
 
-// seedPlacement makes the collection devCollection in the namespace ns and one
-// placement rule that puts each new Pulumi stack in it. The server refuses a
-// new stack that no rule places, so the first "pulumi stack init" of a trial
-// needs the rule. The server itself makes no rule: this is a step of the dev
+// seedPlacement makes the collection devCollection in the namespace ns and
+// two placement rules that put each new Pulumi stack and each new OpenTofu
+// workspace in it. The server refuses a new stack or workspace that no rule
+// places, so the first "pulumi stack init" or "tofu init" of a trial needs the
+// rules. The server itself makes no rule: this is a step of the dev
 // command, as the administrator of dev, and the audit log holds both entries.
 func (r *devRun) seedPlacement(ctx context.Context, in runInputs, ns namespace.Name) error {
 	ports, ok := in.st.(placementPorts)
@@ -865,11 +866,13 @@ func (r *devRun) seedPlacement(ctx context.Context, in runInputs, ns namespace.N
 		return fmt.Errorf("make the collection %s: %w", ref, err)
 	}
 
-	in2 := collection.RuleInput{Tool: "pulumi", Project: "*", Stack: "*", Collection: devCollection, Position: 0}
-	ruled := entry(identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
+	for _, tool := range []string{collection.ToolPulumi, collection.ToolOpenTofu} {
+		input := collection.RuleInput{Tool: tool, Project: "*", Stack: "*", Collection: devCollection, Position: 0}
+		ruled := entry(identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
 
-	if _, err = rules.Create(ctx, ns, in2, ruled); err != nil {
-		return fmt.Errorf("make the placement rule of %s: %w", ns, err)
+		if _, err = rules.Create(ctx, ns, input, ruled); err != nil {
+			return fmt.Errorf("make the %s placement rule of %s: %w", tool, ns, err)
+		}
 	}
 
 	return nil
@@ -890,7 +893,7 @@ func (r *devRun) placementLine(serverURL string) string {
 
 	path := serverURL + "/api/dustpan/v1/namespaces/<namespace>/placement-rules"
 
-	return where + `, a rule puts each new Pulumi stack in the collection ` +
+	return where + `, a rule for each tool puts each new Pulumi stack and each new OpenTofu workspace in the collection ` +
 		devCollection + `. List it with: curl -H "Authorization: Bearer $TOKEN" ` + path +
 		`; delete it with: curl -X DELETE -H "Authorization: Bearer $TOKEN" ` + path + `/<id>`
 }

@@ -195,7 +195,7 @@ func TestBlueprintValidate(t *testing.T) {
 		},
 		{"a filter with an object value", func(b *selfservice.Blueprint) {
 			source(b, 2).Where = []selfservice.Filter{{
-				Equals: selfservice.Operand{Input: "", Value: json.RawMessage(`{}`)}, Output: "x", Path: "",
+				Equals: selfservice.Operand{Input: "", Value: selfservice.ScalarValue(`{}`)}, Output: "x", Path: "",
 			}}
 		}, selfservice.ErrInvalid},
 		{"a source with a blueprint and a collection", func(b *selfservice.Blueprint) {

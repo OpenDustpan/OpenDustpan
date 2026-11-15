@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -30,6 +31,37 @@ func dockerfileLines(t *testing.T) []string {
 	}
 
 	return strings.Split(string(raw), "\n")
+}
+
+// dockerfileCommand answers the command of the image: the arguments of the
+// CMD line of the Dockerfile that runs serve. The image has a second CMD
+// line for its health check, so the helper takes the line whose first
+// argument is serve.
+func dockerfileCommand(t *testing.T) []string {
+	t.Helper()
+
+	for _, line := range dockerfileLines(t) {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "CMD [") {
+			continue
+		}
+
+		var command []string
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(trimmed, "CMD ")), &command); err != nil {
+			t.Fatalf("decode the CMD line %q of the Dockerfile: %v", trimmed, err)
+		}
+
+		if len(command) == 0 {
+			t.Fatalf("the CMD line %q of the Dockerfile is empty", trimmed)
+		}
+
+		if command[0] == "serve" {
+			return command
+		}
+	}
+
+	t.Fatal("the Dockerfile has no CMD line that runs serve")
+	return nil
 }
 
 // TestImageFailsClosed proves what the Dockerfile sets for a container that
@@ -91,9 +123,20 @@ func TestImageCommandWithoutKey(t *testing.T) {
 	bin := e2e.BuildBinaryWithVersion(t.Context(), t, t.TempDir(), "")
 	data := t.TempDir()
 
-	out, err := runBinaryWithEnv(t, bin, []string{"DUSTPAN_DATA_DIR=" + data},
-		"serve", "--database", "sqlite:"+filepath.Join(data, "dustpan.db"), "--blob-dir", filepath.Join(data, "blobs"),
-		"--listen", ":8080", "--console-dir", consoleStub(t))
+	args := dockerfileCommand(t)
+	for i, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, "sqlite:/data"):
+			args[i] = "sqlite:" + filepath.Join(data, strings.TrimPrefix(arg, "sqlite:/data"))
+		case strings.HasPrefix(arg, "/data"):
+			args[i] = filepath.Join(data, strings.TrimPrefix(arg, "/data"))
+		case arg == "/console":
+			args[i] = consoleStub(t)
+		default:
+		}
+	}
+
+	out, err := runBinaryWithEnv(t, bin, []string{"DUSTPAN_DATA_DIR=" + data}, args...)
 
 	exit, isExit := errors.AsType[*exec.ExitError](err)
 	if !isExit || exit.ExitCode() != 1 || !strings.Contains(out, "opendustpan: no key-encryption key is set") {

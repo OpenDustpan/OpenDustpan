@@ -8,6 +8,8 @@ Changed by:
 - ADR 286 changes: the words catalog and promotion become self-service and
   failover.
 - ADR 335 extends decision 4: a save of a gate while locks are held answers 409.
+- ADR 355 changes decision 3: the unit path has the segment `by-name`.
+- ADR 355 changes decision 4: the error table has two more rows.
 
 ## Context
 
