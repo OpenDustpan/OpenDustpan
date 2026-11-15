@@ -8,6 +8,8 @@
 - [ ] 1.2 Add failing audit test for one merged entry with each claim ID in the same transaction in NEW file pkg/audit/merge_record_test.go. TestMergedAuditEntry is NEW. Check: TestMergedAuditEntry fails on main.
 - [ ] 1.3 Add failing sealed values test for merges from two parents with masked reads and unsealed refusal in NEW file pkg/audit/merge_sealed_test.go. TestMergeKeepsSealedValues is NEW. Check: TestMergeKeepsSealedValues fails on main.
 
+- [ ] 1.4 SECURITY. Add a hostile handler test for the HTTP handler authorization layer in NEW file pkg/audit/merge_handler_authz_test.go. The test reads the state version list and the merged audit entry without the read actions and expects 403 for each. TestMergedHistoryAndAuditDenyWithoutReadAction is NEW. Check: TestMergedHistoryAndAuditDenyWithoutReadAction fails on main.
+
 ## 2. Build
 
 - [ ] 2.1 Store parent pointer and claim ID in the baseline in name order and expose them in the state version list. Edit the baseline in NEW file pkg/audit/merge_record.go for the record fields. Edit the route declaration and the adapter for `ANY /api/v2/workspaces/{}/state-versions` in the files that main declares for it. Check: `ANY /api/v2/workspaces/{}/state-versions` shows parent and claim per version with declared read action.

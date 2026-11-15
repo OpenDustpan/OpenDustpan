@@ -17,6 +17,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/durable/durabletest"
@@ -706,6 +707,7 @@ func newRestoreServiceSetupWith(t *testing.T, change func(*backup.RestoreConfig)
 		Backups:         backups,
 		Maintenance:     maint,
 		Blobs:           blobs,
+		Leases:          blobguardtest.None{},
 		Target:          setup.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -885,6 +887,7 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          setup.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1004,6 +1007,7 @@ func TestRestoreMutatedTargetCannotApply(t *testing.T) {
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          proxy,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1232,6 +1236,7 @@ func TestRestoreFailureLogsCauseWithoutDriverDetail(t *testing.T) {
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          setup.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1366,6 +1371,7 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		Backups:         backups,
 		Maintenance:     maint,
 		Blobs:           blobs,
+		Leases:          blobguardtest.None{},
 		Target:          check.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1452,6 +1458,7 @@ func restoreServiceWithHook(
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          setup.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1488,6 +1495,7 @@ func restoreServiceAdmitting(
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          setup.target,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1677,6 +1685,7 @@ func TestRestoreRefusesForeignDescriptorPath(t *testing.T) {
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          proxy,
 		Key:             testWrapper(),
 		Installation:    "eu-west",
@@ -1777,6 +1786,7 @@ func TestRestoreRefusesOtherFormat(t *testing.T) {
 		Backups:         setup.backups,
 		Maintenance:     setup.maint,
 		Blobs:           setup.blobs,
+		Leases:          blobguardtest.None{},
 		Target:          proxy,
 		Key:             testWrapper(),
 		Installation:    "eu-west",

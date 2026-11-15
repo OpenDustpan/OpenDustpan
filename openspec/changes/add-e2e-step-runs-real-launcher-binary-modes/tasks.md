@@ -9,10 +9,14 @@
 - [ ] 1.3 Write failing tests for credentials, timeouts, masking and secrets directory in pkg/launcher/volume_test.go. Check: TestLauncherCredentials fails on main
 - [ ] 1.4 Wire cmd/dustpan-launcher to the four modes with no new logic in cmd. Check: TestLauncherParseUsage
 - [ ] 1.5 Add the release build, static check and dependency check in cmd/dustpan-launcher/deps_test.go. Check: go list -deps check fails on a SQL driver import
+- [ ] 1.6 SECURITY. Build the secrets directory guard in the NEW file pkg/launcher/secretsdir.go: it checks tmpfs or ramfs backing, mode 0700 for the directory and mode 0600 for files. Check: TestSecretsDirGuard
+- [ ] 1.7 SECURITY. Write a hostile test in the NEW file pkg/launcher/secretsdir_test.go that points the secrets directory at a disk path and at a path with a wrong mode, and checks that the launcher refuses before any step starts. Check: TestSecretsDirRefusesHostilePath
+- [ ] 1.8 SECURITY. Build the masker in pkg/launcher/mask.go (StreamMasker, Add at line 68): it replaces each secret of 4 or more bytes with [masked], also when the secret crosses a chunk end. Check: TestStreamMaskerChunkEnds
+- [ ] 1.9 SECURITY. Write a hostile test in the NEW file pkg/launcher/mask_split_test.go that sends a secret split over two and over three chunks straight to StreamMasker and checks that the output holds [masked] only. Check: TestStreamMaskerSplitSecretHostile
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 2.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 3. Definition of done
 
