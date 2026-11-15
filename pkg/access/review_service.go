@@ -75,6 +75,27 @@ const unitTargetPrefix = "unit:"
 // admin token gives: it holds every action and has no grant (ADR 6).
 const BootstrapHolder = "bootstrap admin token"
 
+// Sources of the rows of an export. A stored grant has source "grant". A
+// row that no grant gives answers with source "code-rule" and the rule that
+// gives it. Any other source fails the export: the export answers an error,
+// never a row without a source.
+const (
+	// SourceGrant is a row that a stored grant gives.
+	SourceGrant = "grant"
+	// SourceCodeRule is a row that a code rule gives, with no stored grant.
+	SourceCodeRule = "code-rule"
+)
+
+// RuleBootstrapAdminToken is the code rule of a bootstrap row: the bootstrap
+// admin token holds every action on the installation by a code rule, with no
+// stored grant record. It is the rule name of the catalog of code rules, and
+// the holder text of the row.
+const RuleBootstrapAdminToken = BootstrapHolder
+
+// ErrReviewSource reports a row of an export that the code cannot classify:
+// it names neither a stored grant nor a known code rule.
+var ErrReviewSource = errors.New("the export holds a row with no known source")
+
 // ReviewRequest asks for one page of the access-review export of an object
 // (ADR 52, decision 10).
 //
@@ -121,13 +142,19 @@ const (
 // through a group. EffectiveUntil is nil while it lasts. Holder is
 // BootstrapHolder for a row of a bootstrap admin token, which has no grant
 // and names the subject of the token in Row.SubjectName, and empty for any
-// other row.
+// other row. Source is SourceGrant for a row that a stored grant gives,
+// with the grant ID, the creator and the time of the grant, and
+// SourceCodeRule for a row that a code rule gives, with the rule in Rule:
+// RuleBootstrapAdminToken for a bootstrap row, which keeps no grant ID, no
+// creator and no time.
 type ReviewEntry struct {
 	InheritedFrom  *identity.Object
 	EffectiveUntil *time.Time
 	EffectiveFrom  time.Time
 	ObjectState    string
 	Holder         string
+	Source         string
+	Rule           string
 	Row            ReviewRow
 	CanGrantAccess bool
 }
@@ -230,7 +257,33 @@ func (s *Service) reviewEntries(ctx context.Context, rs ReviewStore, r *reviewRe
 		page.Entries = append(page.Entries, reviewEntry(r.q, rows[i], states, r.grantAccess))
 	}
 
+	for i := range page.Entries {
+		if err := checkEntrySource(page.Entries[i]); err != nil {
+			return ReviewPage{}, err
+		}
+	}
+
 	return page, nil
+}
+
+// checkEntrySource fails closed on a row of an export that the code cannot
+// classify: a row with no known source, a stored grant that names a rule,
+// or a code rule that names no known rule. The export answers the error and
+// no rows.
+func checkEntrySource(e ReviewEntry) error {
+	switch e.Source {
+	case SourceGrant:
+		if e.Holder == "" && e.Rule == "" {
+			return nil
+		}
+	case SourceCodeRule:
+		if e.Holder == BootstrapHolder && e.Rule == RuleBootstrapAdminToken {
+			return nil
+		}
+	default:
+	}
+
+	return fmt.Errorf("%w: source %q rule %q", ErrReviewSource, e.Source, e.Rule)
 }
 
 // reviewPage reads one page of the export of obj with the query q, after
@@ -295,11 +348,16 @@ func (s *Service) reviewPage(
 	return page, rows, nil
 }
 
-// reviewEntry returns the entry of one row of the export of q.
-func reviewEntry(q ReviewQuery, row ReviewRow, states map[string]UnitState, grantAccess map[string]bool) ReviewEntry {
+// reviewEntry returns the entry of one row of the export of q. A row read
+// from the store is a stored grant, so its source is SourceGrant. The caller
+// checks the source of every entry with checkEntrySource, which fails closed
+// on a row the code cannot classify.
+func reviewEntry(
+	q ReviewQuery, row ReviewRow, states map[string]UnitState, grantAccess map[string]bool,
+) ReviewEntry {
 	e := ReviewEntry{
 		InheritedFrom: nil, EffectiveUntil: nil, EffectiveFrom: row.Grant.CreatedAt, ObjectState: ObjectLive,
-		Holder: "", Row: row, CanGrantAccess: grantAccess[row.Grant.Role],
+		Holder: "", Source: SourceGrant, Rule: "", Row: row, CanGrantAccess: grantAccess[row.Grant.Role],
 	}
 
 	if row.Grant.Object.IsUnit() {
@@ -367,7 +425,7 @@ func (s *Service) bootstrapEntries(scope ReviewScope) []ReviewEntry {
 	for _, subject := range s.bootstrap {
 		e := ReviewEntry{
 			InheritedFrom: nil, EffectiveUntil: nil, EffectiveFrom: time.Time{}, ObjectState: ObjectLive,
-			Holder: BootstrapHolder, CanGrantAccess: true,
+			Holder: BootstrapHolder, Source: SourceCodeRule, Rule: RuleBootstrapAdminToken, CanGrantAccess: true,
 			Row: ReviewRow{
 				RevokedAt: nil, LastAccessAt: nil, MemberCount: nil, Via: nil, SubjectName: subject, RevokedBy: "",
 				Grant: Grant{
