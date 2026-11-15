@@ -77,5 +77,17 @@ func jobAllowEntries() []AllowEntry {
 			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}",
 			CoveringTest: test, Reason: why,
 		},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/cancel",
+			CoveringTest: "TestJobActions", Reason: "Console and client route: no CLI calls it. The steps of TestJobActions call it through the API.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/confirmations",
+			CoveringTest: "TestJobActions", Reason: "Console and client route: no CLI calls it. The steps of TestJobActions call it through the API.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/log-redactions",
+			CoveringTest: "TestJobActions", Reason: "Console and client route: no CLI calls it. The steps of TestJobActions call it through the API.",
+		},
 	}
 }

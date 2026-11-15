@@ -21,8 +21,9 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/jso
 ```
 
 A job that is canceling already stays as it is, and the call writes no second
-entry. A job that ended, or whose
-change is in git for good, answers 409 with the code `job.finished`. To see the
+entry. A job that ended, or whose change is in git for good, answers 409 with
+the code `job.wrong-state`. The confirm and the redact routes answer the same
+code for a job or a log that is in the wrong state. To see the
 state of the job, run:
 
 ```
