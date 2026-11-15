@@ -9,6 +9,8 @@ Changed by:
 - ADR 210 changes: the route paths and the server: action names.
 - ADR 217 changes decision 2: the namespace key wraps each item key.
 - ADR 220 changes decision 2: the item key blob name gets a namespace prefix.
+- ADR 384 extends decision 29: only the built-in role `admin` holds
+  `unit:redact`, in the family `redaction`.
 
 ## Context
 
