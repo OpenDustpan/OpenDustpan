@@ -1,7 +1,7 @@
 package cli
 
 // RestoreCommand answers the restore row of the command table with run: a
-// client of POST /api/server/restores. The server restores from its own
+// client of POST /api/dustpan/v1/restores. The server restores from its own
 // backup target into its own stores, so the command takes no --from,
 // --database, --blob-dir or --blob-store.
 func RestoreCommand(run RunFunc) Command {
