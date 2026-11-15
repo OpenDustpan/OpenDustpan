@@ -266,9 +266,10 @@ TEST_TIMEOUT ?= 45m
 # detector stays on for all code, and checkptr stays on for our own code. On
 # 4 cores, the dev data suite of pkg/store/sqlite used 904 s of user CPU with
 # the checks and 647 s without them. The cost: checkptr does not find unsafe
-# pointer misuse inside those modules, which we do not maintain. A second
-# -gcflags on the same command line replaces this one, so a target that needs
-# its own -gcflags must merge them into one.
+# pointer misuse inside those modules, which we do not maintain. -gcflags can
+# repeat with other patterns; for a package that matches more than one, the
+# last match wins, so a later -gcflags with an overlapping pattern must repeat
+# -d=checkptr=0.
 RACE_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0'
 
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
