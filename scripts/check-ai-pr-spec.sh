@@ -82,10 +82,13 @@ fi
 
 # Collect candidate ids from lines outside fenced code blocks. A fence line
 # starts with ``` or ~~~ (with an optional language tag). The id on a link
-# line is the text after openspec/changes/ up to a space, quote, bracket,
-# paren or sentence punctuation. The awk stops the token at that boundary,
-# so the script validates the token as the body wrote it. The read loop
-# avoids mapfile, which the bash of macOS lacks.
+# line is the text after openspec/changes/ up to a space, a quote, a bracket,
+# a paren or an angle bracket. The awk removes one sentence mark at the end
+# of the token only when a space or the end of the line follows it, so
+# "openspec/changes/demo-ready." gives "demo-ready" and
+# "openspec/changes/demo-ready..x" keeps its dots. The script then validates
+# the token as the body wrote it, and the allowlist refuses the rest. The
+# read loop avoids mapfile, which the bash of macOS lacks.
 link_ids=()
 while IFS= read -r link_id; do
   link_ids+=("$link_id")
@@ -94,19 +97,27 @@ done < <(awk '
   in_fence { next }
   {
     line = $0
-    while (match(line, /openspec\/changes\/[^ [:space:]"\x27`()<>.,;:!?]*/)) {
+    while (match(line, /openspec\/changes\/[^[:space:]"\x27`()<>]*/)) {
       hit = substr(line, RSTART, RLENGTH)
       id = substr(hit, length("openspec/changes/") + 1)
+      rest = substr(line, RSTART + RLENGTH)
+      # Remove one sentence mark at the end of the token only when a space
+      # or the end of the line follows it. "demo-ready." gives "demo-ready";
+      # "demo-ready..x" keeps its dots and the allowlist refuses it.
+      if ((rest == "" || rest ~ /^[[:space:]]/) && id ~ /[.,;:!?]$/) {
+        id = substr(id, 1, length(id) - 1)
+      }
       print id
-      line = substr(line, RSTART + RLENGTH)
+      line = rest
     }
   }
 ' "$body_file")
 
-# An id holds only lowercase letters, digits and hyphens. The awk above stops
-# the token at sentence punctuation, so the script checks the token as it is
-# and never removes characters from it. Anything else is refused before the
-# script builds a path from it.
+# An id holds only lowercase letters, digits and hyphens. The awk above
+# removes at most one sentence mark at the end of the token, and only when a
+# space or the end of the line follows it, so the script checks the token as
+# the body wrote it. Anything else is refused before the script builds a
+# path from it.
 # Defense in depth: the containment check below refuses a resolved path
 # outside openspec/changes too, even when this allowlist changes.
 
@@ -129,8 +140,8 @@ if [[ ${#link_ids[@]} -gt 0 ]]; then
   for id in "${link_ids[@]}"; do
     # A token that holds a character other than a lowercase letter, a digit
     # or a hyphen fails this allowlist and is refused. A bare
-    # "openspec/changes/" or an id that starts with sentence punctuation
-    # gives an empty token, which also fails the allowlist.
+    # "openspec/changes/" also fails it, because the empty token does not
+    # match.
     if [[ ! "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
       refused_note="refused id \"$(printable_id "$id")\": an id holds only lowercase letters, digits and hyphens"
       continue
