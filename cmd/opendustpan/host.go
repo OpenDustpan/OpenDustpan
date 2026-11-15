@@ -209,7 +209,7 @@ func hostCreateTempAdminWithIO(
 	rest := fs.Args()
 
 	if f.resetLimit {
-		return hostResetSessionLimit(ctx, &f, rest, in, stdout, stderr)
+		return hostResetSessionLimit(ctx, hostReset{flags: &f, rest: rest, in: in}, stdout, stderr)
 	}
 
 	if len(rest) != 1 || strings.TrimSpace(rest[0]) == "" {
@@ -298,24 +298,31 @@ func hostReason(flagValue string, in hostIO, stderr io.Writer) (string, error) {
 	return reason, nil
 }
 
+// hostReset is the input of one reset of the stored session limit.
+type hostReset struct {
+	flags *hostFlags
+	rest  []string
+	in    hostIO
+}
+
 // hostResetSessionLimit runs the reset of the stored session limit: it
 // deletes the stored value and writes an audit entry with the reason. It
 // takes no person name.
-func hostResetSessionLimit(
-	ctx context.Context, f *hostFlags, rest []string, in hostIO, stdout, stderr io.Writer,
-) error {
-	if len(rest) != 0 {
+func hostResetSessionLimit(ctx context.Context, r hostReset, stdout, stderr io.Writer) error {
+	f := r.flags
+
+	if len(r.rest) != 0 {
 		return errHostResetWithPerson
 	}
 
-	reason, err := hostReason(f.reason, in, stderr)
+	reason, err := hostReason(f.reason, r.in, stderr)
 	if err != nil {
 		return err
 	}
 
-	st, err := openHostDatabase(ctx, f.database)
+	st, err := openStore(ctx, f.database, slog.New(slog.DiscardHandler), openNoMigrate, "")
 	if err != nil {
-		return err
+		return hostOpenError(err, f.database)
 	}
 
 	defer st.close()
@@ -327,46 +334,43 @@ func hostResetSessionLimit(
 		return fmt.Errorf("host create-temp-admin: %w", err)
 	}
 
-	if _, err := fmt.Fprintf(stdout, "setting: %s\nstored value: deleted\neffective value: %s\n",
-		tempadmin.SettingSessionLimit, tempadmin.DefaultSessionLimit); err != nil {
+	_, err = fmt.Fprintf(stdout, "setting: %s\nstored value: deleted\neffective value: %s\n",
+		tempadmin.SettingSessionLimit, tempadmin.DefaultSessionLimit)
+	if err != nil {
 		return fmt.Errorf("write host output: %w", err)
 	}
 
 	return nil
 }
 
-// openHostDatabase opens the database with no migration.
-func openHostDatabase(ctx context.Context, database string) (store, error) {
-	st, err := openStore(ctx, database, slog.New(slog.DiscardHandler), openNoMigrate, "")
+// hostOpenError says what a person does after the open of the database
+// with no migration failed with err.
+func hostOpenError(err error, database string) error {
 	if errors.Is(err, schema.ErrMigrationsPending) {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"%w: database %s has pending migrations: back up the database, "+
 				"start opendustpan serve --database %s with this binary to apply them, then run the command again: %w",
 			errHostMigrationsPending, database, database, err,
 		)
 	}
 
-	if err != nil {
-		if errors.Is(err, sqlite.ErrInUse) {
-			return nil, fmt.Errorf(
-				"host create-temp-admin: database %s is in use: stop the server that uses this file, then run the command again: %w",
-				database,
-				err,
-			)
-		}
-
-		return nil, err
+	if errors.Is(err, sqlite.ErrInUse) {
+		return fmt.Errorf(
+			"host create-temp-admin: database %s is in use: stop the server that uses this file, then run the command again: %w",
+			database,
+			err,
+		)
 	}
 
-	return st, nil
+	return err
 }
 
 // runHostCreate opens the database with no migration and makes the
 // temporary administrator of in.
 func runHostCreate(ctx context.Context, database string, in hostInput, stderr io.Writer) (hostMade, error) {
-	st, err := openHostDatabase(ctx, database)
+	st, err := openStore(ctx, database, slog.New(slog.DiscardHandler), openNoMigrate, "")
 	if err != nil {
-		return hostMade{}, err
+		return hostMade{}, hostOpenError(err, database)
 	}
 
 	defer st.close()

@@ -50,6 +50,18 @@ func openSettingsStore(t *testing.T) *sqlite.Store {
 	return st
 }
 
+// newRecordingAudit returns an empty recorder.
+func newRecordingAudit() *recordingAudit {
+	return &recordingAudit{entries: nil}
+}
+
+// blankEntry is an audit entry with no field set.
+func blankEntry() audit.Entry {
+	var e audit.Entry
+
+	return e
+}
+
 func TestTempAdminSessionLimit(t *testing.T) {
 	t.Parallel()
 
@@ -59,7 +71,7 @@ func TestTempAdminSessionLimit(t *testing.T) {
 		t.Parallel()
 
 		got, err := tempadmin.ResolveSessionLimit(t.Context(), tempadmin.SessionLimitSource{
-			Settings: stubLoader{values: nil}, Audit: &recordingAudit{}, Entry: audit.Entry{}, At: at,
+			Settings: stubLoader{values: nil}, Audit: newRecordingAudit(), Entry: blankEntry(), At: at,
 		})
 		if err != nil || got != time.Hour {
 			t.Fatalf("limit = %s, %v, want 1h", got, err)
@@ -87,32 +99,34 @@ func TestTempAdminSessionLimit(t *testing.T) {
 
 		got, err := tempadmin.ResolveSessionLimit(t.Context(), tempadmin.SessionLimitSource{
 			Settings: stubLoader{values: map[string]string{tempadmin.SettingSessionLimit: "2h"}},
-			Audit:    &recordingAudit{}, Entry: audit.Entry{}, At: at,
+			Audit:    newRecordingAudit(), Entry: blankEntry(), At: at,
 		})
 		if err != nil || got != 2*time.Hour {
 			t.Fatalf("limit = %s, %v, want 2h", got, err)
 		}
 	})
+}
 
-	t.Run("a stored limit outside the range fails closed with an entry", func(t *testing.T) {
-		t.Parallel()
+func TestTempAdminSessionLimitOutsideRange(t *testing.T) {
+	t.Parallel()
 
-		for _, bad := range []string{"48h", "-1h", "soon", "0s", "3600", "1h0m0.0001s"} {
-			log := &recordingAudit{}
+	at := baseTime()
 
-			_, err := tempadmin.ResolveSessionLimit(t.Context(), tempadmin.SessionLimitSource{
-				Settings: stubLoader{values: map[string]string{tempadmin.SettingSessionLimit: bad}},
-				Audit:    log, Entry: audit.Entry{}, At: at,
-			})
-			if !errors.Is(err, tempadmin.ErrSessionLimit) {
-				t.Fatalf("limit %q: error = %v, want ErrSessionLimit", bad, err)
-			}
+	for _, bad := range []string{"48h", "-1h", "soon", "0s", "3600", "1h0m0.0001s"} {
+		log := newRecordingAudit()
 
-			if len(log.entries) != 1 || log.entries[0].Outcome != audit.OutcomeFailure {
-				t.Fatalf("limit %q: entries = %+v, want one failure entry", bad, log.entries)
-			}
+		_, err := tempadmin.ResolveSessionLimit(t.Context(), tempadmin.SessionLimitSource{
+			Settings: stubLoader{values: map[string]string{tempadmin.SettingSessionLimit: bad}},
+			Audit:    log, Entry: blankEntry(), At: at,
+		})
+		if !errors.Is(err, tempadmin.ErrSessionLimit) {
+			t.Fatalf("limit %q: error = %v, want ErrSessionLimit", bad, err)
 		}
-	})
+
+		if len(log.entries) != 1 || log.entries[0].Outcome != audit.OutcomeFailure {
+			t.Fatalf("limit %q: entries = %+v, want one failure entry", bad, log.entries)
+		}
+	}
 }
 
 func TestTempAdminCreateAuditNamesLimit(t *testing.T) {
@@ -181,7 +195,10 @@ func TestHostResetSessionLimit(t *testing.T) {
 
 // resetEntry is the audit entry of the host.
 func resetEntry() audit.Entry {
-	return audit.Entry{
-		Subject: tempadmin.HostSubject, Channel: audit.ChannelAPI, Object: string(audit.ServerScope),
-	}
+	e := blankEntry()
+	e.Subject = tempadmin.HostSubject
+	e.Channel = audit.ChannelAPI
+	e.Object = string(audit.ServerScope)
+
+	return e
 }

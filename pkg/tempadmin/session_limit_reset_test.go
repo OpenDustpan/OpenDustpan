@@ -26,37 +26,45 @@ func TestHostResetSessionLimitHostile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			st := openSettingsStore(t)
-
-			registry, err := setting.NewRegistry(tempadmin.SessionLimitSettingDeclarations())
-			if err != nil {
-				t.Fatalf("registry: %v", err)
-			}
-
-			svc := setting.NewService(st.SettingStore(), registry, nil, nil, nil)
-
-			_, err = svc.Patch(t.Context(), setting.InstallationScope(),
-				setting.Patch{{Key: tempadmin.SettingSessionLimit, Value: "2h", Delete: false}},
-				setting.PatchRequest{Entry: resetEntry(), IfMatch: 0, Fresh: true})
-			if err != nil {
-				t.Fatalf("store the limit: %v", err)
-			}
-
-			err = tempadmin.ResetSessionLimit(t.Context(), st.SettingStore(), tempadmin.ResetInput{
-				Mode: tc.mode, Reason: tc.reason, Entry: resetEntry(), Now: nil,
-			})
-			if !errors.Is(err, tempadmin.ErrResetRefused) {
-				t.Fatalf("reset = %v, want ErrResetRefused", err)
-			}
-
-			stored, err := st.SettingStore().Load(t.Context(), setting.InstallationScope())
-			if err != nil {
-				t.Fatalf("load: %v", err)
-			}
-
-			if stored.Values[tempadmin.SettingSessionLimit] != "2h" {
-				t.Fatalf("the stored limit = %q, want 2h", stored.Values[tempadmin.SettingSessionLimit])
-			}
+			checkResetRefused(t, tc.mode, tc.reason)
 		})
+	}
+}
+
+// checkResetRefused stores a limit, calls the reset and checks that it
+// refuses and that the stored limit stays.
+func checkResetRefused(t *testing.T, mode, reason string) {
+	t.Helper()
+
+	st := openSettingsStore(t)
+
+	registry, err := setting.NewRegistry(tempadmin.SessionLimitSettingDeclarations())
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	svc := setting.NewService(st.SettingStore(), registry, nil, nil, nil)
+
+	_, err = svc.Patch(t.Context(), setting.InstallationScope(),
+		setting.Patch{{Key: tempadmin.SettingSessionLimit, Value: "2h", Delete: false}},
+		setting.PatchRequest{Entry: resetEntry(), IfMatch: 0, Fresh: true})
+	if err != nil {
+		t.Fatalf("store the limit: %v", err)
+	}
+
+	err = tempadmin.ResetSessionLimit(t.Context(), st.SettingStore(), tempadmin.ResetInput{
+		Mode: mode, Reason: reason, Entry: resetEntry(), Now: nil,
+	})
+	if !errors.Is(err, tempadmin.ErrResetRefused) {
+		t.Fatalf("reset = %v, want ErrResetRefused", err)
+	}
+
+	stored, err := st.SettingStore().Load(t.Context(), setting.InstallationScope())
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if stored.Values[tempadmin.SettingSessionLimit] != "2h" {
+		t.Fatalf("the stored limit = %q, want 2h", stored.Values[tempadmin.SettingSessionLimit])
 	}
 }
