@@ -161,7 +161,7 @@ func Terragrunt() Tool {
 			"terragrunt_linux_amd64.tar.gz":  "08c8844cc69e4f03451ebb8f347cb57d9bd6b8db7b16e437ae5ec6f001228ef9",
 			"terragrunt_linux_arm64.tar.gz":  "8b92d56a20b2848365e22ef94f963fbfe25fedeebcacffacbc286cfcf9966066",
 			"terragrunt_darwin_amd64.tar.gz": "29806d1708f5c54e54bc6adfcacfb710d4bb1f6f180efd751692e6fad5985640",
-			"terragrunt_darwin_arm64.tar.gz": "0aded323f844ce682a715feb26393b67eff1400dc1722203fa4dd4e23b3bb182",
+			"terragrunt_darwin_arm64.tar.gz": "0aded323f844ce6567a15feb26393b67eff1400dc1722203fa4dd4e23b3bb182",
 		},
 		Name: ToolTerragrunt,
 		// The GitHub releases HTML page of /latest is not a version: it is a
