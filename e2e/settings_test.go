@@ -234,7 +234,7 @@ func settingsChange(ctx context.Context, t *testing.T, env *e2e.Env, first strin
 
 	// The old revision no longer matches, and nothing changes.
 	settingsWant(ctx, t, env, settingsReq{path: settingsRoute, ifMatch: first, body: `{"branding.preset":"other"}`},
-		settingsAnswer{status: http.StatusPreconditionFailed, code: "request.precondition-failed"})
+		settingsAnswer{status: http.StatusPreconditionFailed, code: "settings.revision-stale"})
 
 	if read, _ := settingsRead(ctx, t, env, settingsRoute); read.Header.Get("ETag") != second {
 		t.Fatalf("ETag after a refused change = %q, want %q", read.Header.Get("ETag"), second)

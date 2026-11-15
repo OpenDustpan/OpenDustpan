@@ -110,8 +110,8 @@ var (
 		message: `If-Match must be one revision in quotes, as the ETag of a read gives it, for example "3"`,
 	}
 	errSettingsChanged = &codedError{
-		status: http.StatusPreconditionFailed, code: errcode.RequestPreconditionFailed, args: nil,
-		message: "the settings changed since the revision of If-Match: read them again",
+		status: http.StatusPreconditionFailed, code: errcode.SettingsRevisionStale, args: nil,
+		message: "the settings changed since the revision of If-Match: read them again with GET " + settingsPath,
 	}
 )
 

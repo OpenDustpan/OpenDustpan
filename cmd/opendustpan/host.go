@@ -148,7 +148,16 @@ type hostFlags struct {
 
 	reason string
 	mode   string
+	// resetLimit asks for a reset of the stored session limit, with no person.
+	resetLimit bool
 }
+
+// errHostResetWithPerson reports a reset of the session limit together with a
+// person name: the two actions run apart.
+var errHostResetWithPerson = errors.New(
+	"host create-temp-admin --reset-session-limit takes no person name: " +
+		"opendustpan host create-temp-admin --reset-session-limit --reason <text>",
+)
 
 // hostIO holds what the host command reads besides its arguments: the
 // standard input of the reason prompt, whether it is a terminal, and the
@@ -179,6 +188,8 @@ func hostCreateTempAdminWithIO(
 	fs.SetOutput(stderr)
 	f.register(fs)
 	cli.ByFlag("reason").String(fs, &f.reason)
+	fs.BoolVar(&f.resetLimit, "reset-session-limit", false,
+		"delete the stored temporary administrator session limit, so the default of 1 hour applies; needs --reason")
 
 	mode := cli.ByFlag("recovery-mode")
 	fs.StringVar(&f.mode, mode.Flag, cli.EnvWith(in.lookup, mode.Env, mode.Default), mode.Help)
@@ -196,6 +207,11 @@ func hostCreateTempAdminWithIO(
 	}
 
 	rest := fs.Args()
+
+	if f.resetLimit {
+		return hostResetSessionLimit(ctx, &f, rest, in, stdout, stderr)
+	}
+
 	if len(rest) != 1 || strings.TrimSpace(rest[0]) == "" {
 		return errHostNeedsPerson
 	}
@@ -282,12 +298,48 @@ func hostReason(flagValue string, in hostIO, stderr io.Writer) (string, error) {
 	return reason, nil
 }
 
-// runHostCreate opens the database with no migration and makes the
-// temporary administrator of in.
-func runHostCreate(ctx context.Context, database string, in hostInput, stderr io.Writer) (hostMade, error) {
+// hostResetSessionLimit runs the reset of the stored session limit: it
+// deletes the stored value and writes an audit entry with the reason. It
+// takes no person name.
+func hostResetSessionLimit(
+	ctx context.Context, f *hostFlags, rest []string, in hostIO, stdout, stderr io.Writer,
+) error {
+	if len(rest) != 0 {
+		return errHostResetWithPerson
+	}
+
+	reason, err := hostReason(f.reason, in, stderr)
+	if err != nil {
+		return err
+	}
+
+	st, err := openHostDatabase(ctx, f.database)
+	if err != nil {
+		return err
+	}
+
+	defer st.close()
+
+	err = tempadmin.ResetSessionLimit(ctx, st.builtin().SettingStore(), tempadmin.ResetInput{
+		Mode: strings.TrimSpace(f.mode), Reason: reason, Entry: hostEntry(""), Now: nil,
+	})
+	if err != nil {
+		return fmt.Errorf("host create-temp-admin: %w", err)
+	}
+
+	if _, err := fmt.Fprintf(stdout, "setting: %s\nstored value: deleted\neffective value: %s\n",
+		tempadmin.SettingSessionLimit, tempadmin.DefaultSessionLimit); err != nil {
+		return fmt.Errorf("write host output: %w", err)
+	}
+
+	return nil
+}
+
+// openHostDatabase opens the database with no migration.
+func openHostDatabase(ctx context.Context, database string) (store, error) {
 	st, err := openStore(ctx, database, slog.New(slog.DiscardHandler), openNoMigrate, "")
 	if errors.Is(err, schema.ErrMigrationsPending) {
-		return hostMade{}, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"%w: database %s has pending migrations: back up the database, "+
 				"start opendustpan serve --database %s with this binary to apply them, then run the command again: %w",
 			errHostMigrationsPending, database, database, err,
@@ -296,13 +348,24 @@ func runHostCreate(ctx context.Context, database string, in hostInput, stderr io
 
 	if err != nil {
 		if errors.Is(err, sqlite.ErrInUse) {
-			return hostMade{}, fmt.Errorf(
+			return nil, fmt.Errorf(
 				"host create-temp-admin: database %s is in use: stop the server that uses this file, then run the command again: %w",
 				database,
 				err,
 			)
 		}
 
+		return nil, err
+	}
+
+	return st, nil
+}
+
+// runHostCreate opens the database with no migration and makes the
+// temporary administrator of in.
+func runHostCreate(ctx context.Context, database string, in hostInput, stderr io.Writer) (hostMade, error) {
+	st, err := openHostDatabase(ctx, database)
+	if err != nil {
 		return hostMade{}, err
 	}
 
@@ -365,6 +428,15 @@ func createTempAdmin(ctx context.Context, st store, in hostInput, stderr io.Writ
 	issuer, err := accesstoken.NewHostIssuer(tokens, st)
 	if err != nil {
 		return hostMade{}, fmt.Errorf("host token issuer: %w", err)
+	}
+
+	// The check fails closed on a stored limit outside the range. The record
+	// does not take the limit until accesstoken.HostInput carries it.
+	_, err = tempadmin.ResolveSessionLimit(ctx, tempadmin.SessionLimitSource{
+		Settings: st.builtin().SettingStore(), Audit: st, Entry: hostEntry(""), At: time.Now(),
+	})
+	if err != nil {
+		return hostMade{}, fmt.Errorf("host create-temp-admin: %w", err)
 	}
 
 	got, err := issuer.Recover(ctx, hostEntry(""), accesstoken.HostInput{

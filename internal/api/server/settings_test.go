@@ -341,12 +341,12 @@ func TestSettingsPatchRefusals(t *testing.T) {
 		{
 			"a stale revision",
 			settingsCall{http.MethodPatch, settingsURL, `{"test.label":"a"}`, mergePatchType, `"9"`},
-			http.StatusPreconditionFailed, "request.precondition-failed",
+			http.StatusPreconditionFailed, "settings.revision-stale",
 		},
 		{
 			"a weak tag",
 			settingsCall{http.MethodPatch, settingsURL, `{}`, mergePatchType, `W/"0"`},
-			http.StatusPreconditionFailed, "request.precondition-failed",
+			http.StatusPreconditionFailed, "settings.revision-stale",
 		},
 		{
 			"an If-Match that is not a revision",
