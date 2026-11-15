@@ -56,8 +56,8 @@ func (g BreakGlassStore) Open(
 
 	var out breakglass.Review
 
-	err := g.breakGlassTx(ctx, fence, func(q *db.Queries) error {
-		stored, openErr := breakGlassOpen(ctx, q, r, fence, e)
+	err := g.inBreakGlassTx(ctx, fence, func(tx breakGlassTx) error {
+		stored, openErr := breakGlassOpen(ctx, tx, r, fence, e)
 		if openErr != nil {
 			return openErr
 		}
@@ -109,23 +109,24 @@ func checkBreakGlassOpen(r breakglass.Review, fence namespace.Fence, e audit.Ent
 	return nil
 }
 
-// breakGlassOpen opens r in the transaction of q: it returns the stored review
+// breakGlassOpen opens r in the transaction tx: it returns the stored review
 // of the use when the use already holds one, and otherwise it inserts the new
-// review and appends e.
+// review and appends e. tx holds the lock or the row that orders the appends
+// of the scope of e.
 func breakGlassOpen(
-	ctx context.Context, q *db.Queries, r breakglass.Review, fence namespace.Fence, e audit.Entry,
+	ctx context.Context, tx breakGlassTx, r breakglass.Review, fence namespace.Fence, e audit.Entry,
 ) (breakglass.Review, error) {
 	// An error returns the zero review, so that no caller reads a review from
 	// it.
 	var none breakglass.Review
 
-	existing, found, err := breakGlassByUse(ctx, q, r.Use)
+	existing, found, err := breakGlassByUse(ctx, tx.q, r.Use)
 	if err != nil {
 		return none, err
 	}
 
 	if !found {
-		return breakGlassInsertNew(ctx, q, r, e)
+		return breakGlassInsertNew(ctx, tx, r, e)
 	}
 
 	// The use already holds a review. A repeated open returns it unchanged,
@@ -140,15 +141,16 @@ func breakGlassOpen(
 }
 
 // breakGlassInsertNew inserts the new review r and appends e to the chain of
-// its scope in the transaction of q.
+// its scope in the transaction tx, which holds the lock or the row that orders
+// the appends of that scope.
 func breakGlassInsertNew(
-	ctx context.Context, q *db.Queries, r breakglass.Review, e audit.Entry,
+	ctx context.Context, tx breakGlassTx, r breakglass.Review, e audit.Entry,
 ) (breakglass.Review, error) {
 	// An error returns the zero review, so that no caller reads a review from
 	// it.
 	var none breakglass.Review
 
-	if err := breakGlassIDFree(ctx, q, r.ID); err != nil {
+	if err := breakGlassIDFree(ctx, tx.q, r.ID); err != nil {
 		return none, err
 	}
 
@@ -157,7 +159,7 @@ func breakGlassInsertNew(
 		return none, err
 	}
 
-	n, err := q.InsertBreakGlassReview(ctx, insert)
+	n, err := tx.q.InsertBreakGlassReview(ctx, insert)
 	if err != nil {
 		return none, fmt.Errorf("insert break-glass review: %w", err)
 	}
@@ -168,12 +170,12 @@ func breakGlassInsertNew(
 
 	// The read of the stored row answers exactly what a later Get answers,
 	// with the times of the row and the version 1.
-	stored, err := breakGlassStored(ctx, q, r.ID)
+	stored, err := breakGlassStored(ctx, tx.q, r.ID)
 	if err != nil {
 		return none, err
 	}
 
-	if err := appendBreakGlassEntry(ctx, q, e); err != nil {
+	if err := appendBreakGlassEntry(ctx, tx, e); err != nil {
 		return none, err
 	}
 
@@ -268,20 +270,21 @@ func (g BreakGlassStore) Record(
 		return fmt.Errorf("audit entry: %w", err)
 	}
 
-	return g.breakGlassTx(ctx, fence, func(q *db.Queries) error {
-		stored, err := breakGlassCurrent(ctx, q, r, fence)
+	return g.inBreakGlassTx(ctx, fence, func(tx breakGlassTx) error {
+		stored, err := breakGlassCurrent(ctx, tx.q, r, fence)
 		if err != nil {
 			return err
 		}
 
-		return breakGlassRecordVerdict(ctx, q, stored, r, e)
+		return breakGlassRecordVerdict(ctx, tx, stored, r, e)
 	})
 }
 
 // breakGlassRecordVerdict stores the verdict of r on the stored review in the
-// transaction of q, and appends e to the chain of the scope.
+// transaction tx, and appends e to the chain of the scope. tx holds the lock
+// or the row that orders the appends of that scope.
 func breakGlassRecordVerdict(
-	ctx context.Context, q *db.Queries, stored, r breakglass.Review, e audit.Entry,
+	ctx context.Context, tx breakGlassTx, stored, r breakglass.Review, e audit.Entry,
 ) error {
 	// Defense in depth: the transaction binds the fence to the scope of
 	// the stored review. This check stays so that the entry and the
@@ -298,7 +301,7 @@ func breakGlassRecordVerdict(
 		return fmt.Errorf("record %s: %w", r.ID, err)
 	}
 
-	if err := breakGlassCheckReviewedAt(ctx, q, r); err != nil {
+	if err := breakGlassCheckReviewedAt(ctx, tx.q, r); err != nil {
 		return err
 	}
 
@@ -307,7 +310,7 @@ func breakGlassRecordVerdict(
 		return err
 	}
 
-	n, err := q.UpdateBreakGlassReviewVerdict(ctx, db.UpdateBreakGlassReviewVerdictParams{
+	n, err := tx.q.UpdateBreakGlassReviewVerdict(ctx, db.UpdateBreakGlassReviewVerdictParams{
 		State:               string(r.State),
 		VerdictReviewer:     r.Verdict.Reviewer,
 		VerdictNote:         r.Verdict.Note,
@@ -327,7 +330,7 @@ func breakGlassRecordVerdict(
 		return fmt.Errorf("record %s: %w", r.ID, breakglass.ErrConflict)
 	}
 
-	return appendBreakGlassEntry(ctx, q, e)
+	return appendBreakGlassEntry(ctx, tx, e)
 }
 
 // breakGlassCheckReviewedAt returns ErrInvalid for a verdict at a time after
@@ -350,13 +353,13 @@ func breakGlassCheckReviewedAt(ctx context.Context, q *db.Queries, r breakglass.
 // Advance implements breakglass.Store. It writes no audit entry: a notice is
 // not an action of a person.
 func (g BreakGlassStore) Advance(ctx context.Context, r breakglass.Review, fence namespace.Fence) error {
-	return g.breakGlassTx(ctx, fence, func(q *db.Queries) error {
-		stored, err := breakGlassCurrent(ctx, q, r, fence)
+	return g.inBreakGlassTx(ctx, fence, func(tx breakGlassTx) error {
+		stored, err := breakGlassCurrent(ctx, tx.q, r, fence)
 		if err != nil {
 			return err
 		}
 
-		n, err := q.UpdateBreakGlassReviewStep(ctx, db.UpdateBreakGlassReviewStepParams{
+		n, err := tx.q.UpdateBreakGlassReviewStep(ctx, db.UpdateBreakGlassReviewStepParams{
 			Step:           int64(r.Step),
 			NextNoticeAtMs: breakGlassMillis(r.NextNoticeAt),
 			Version:        stored.Version + 1,
@@ -405,35 +408,36 @@ func (g BreakGlassStore) Due(ctx context.Context, now time.Time, limit int) ([]b
 	return out, nil
 }
 
-// breakGlassTx runs fn in a transaction that checks fence: the failover
+// breakGlassTx is the transaction of a break-glass write: the queries q, and
+// srv, the locked transaction that appends an entry of the scope @server, or
+// nil for a write in a namespace.
+type breakGlassTx struct {
+	q   *db.Queries
+	srv *serverAuditTx
+}
+
+// inBreakGlassTx runs fn in a transaction that checks fence: the failover
 // version of its namespace for a namespace review, and nothing for a review of
 // audit.ServerScope, which carries the zero fence. Open and Record append an
 // audit entry in the transaction, so the transaction holds the row or the lock
-// that orders the appends of the scope.
-func (g BreakGlassStore) breakGlassTx(
-	ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error,
+// that orders the appends of the scope: the advisory lock of the scope
+// @server first for a review of that scope, and the row of the namespace FOR
+// UPDATE for a review in a namespace.
+func (g BreakGlassStore) inBreakGlassTx(
+	ctx context.Context, fence namespace.Fence, fn func(tx breakGlassTx) error,
 ) error {
 	if fence.Namespace == "" {
-		return g.s.inTx(ctx, func(q *db.Queries) error {
-			// Open and Record append to the chain of the server scope, so the
-			// transaction takes the advisory lock of the scope first, as
-			// AppendServer does: two appends must not read the same last
-			// entry.
-			// Defense in depth: the caller reads the state that it writes
-			// under this lock, and appendAuditEntry takes the lock of @server
-			// too.
-			if err := q.LockServerAuditScope(ctx); err != nil {
-				return fmt.Errorf("lock server audit scope: %w", err)
-			}
-
-			return fn(q)
+		return runServerAuditTx(ctx, g.s.inTx, func(srv serverAuditTx) error {
+			return fn(breakGlassTx{q: srv.q, srv: &srv})
 		})
 	}
 
 	// Open and Record append an audit entry in this transaction, so the fence
 	// holds the namespace row FOR UPDATE: two appends in one namespace must
 	// not read the same last entry.
-	return g.s.inFencedUpdateTx(ctx, fence, fn)
+	return g.s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
+		return fn(breakGlassTx{q: q, srv: nil})
+	})
 }
 
 // breakGlassFenceMatches reports whether fence is the fence of a write in
@@ -778,9 +782,10 @@ func breakGlassMillis(t time.Time) int64 {
 }
 
 // appendBreakGlassEntry appends e to the audit chain of its scope in the
-// transaction of q.
-func appendBreakGlassEntry(ctx context.Context, q *db.Queries, e audit.Entry) error {
-	if _, err := appendAuditEntry(ctx, q, e); err != nil {
+// transaction tx: an entry of the scope @server goes through the locked
+// transaction of tx, and any other entry keeps the row lock of its caller.
+func appendBreakGlassEntry(ctx context.Context, tx breakGlassTx, e audit.Entry) error {
+	if _, err := appendAnyEntry(ctx, tx.q, tx.srv, e); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 

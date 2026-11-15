@@ -475,10 +475,10 @@ func (s *Store) AppendRestoreAudit(
 
 	var stored []audit.Entry
 
-	err := s.inControlTx(ctx, func(q *db.Queries) error {
+	err := runServerAuditTx(ctx, s.inControlTx, func(tx serverAuditTx) error {
 		var appendErr error
 
-		stored, appendErr = appendRestoreEntries(ctx, q, f, id, entries)
+		stored, appendErr = appendRestoreEntries(ctx, tx, f, id, entries)
 
 		return appendErr
 	})
@@ -490,23 +490,17 @@ func (s *Store) AppendRestoreAudit(
 }
 
 // appendRestoreEntries appends entries to the audit log of the installation
-// and records the step of f, in the transaction of q.
+// and records the step of f, in the locked transaction tx. The transaction
+// took the lock of the scope @server first, so the appends form one sequence
+// and no lock order can deadlock.
 func appendRestoreEntries(
-	ctx context.Context, q *db.Queries, f durable.StepFence, id backup.RestoreID, entries []audit.Entry,
+	ctx context.Context, tx serverAuditTx, f durable.StepFence, id backup.RestoreID, entries []audit.Entry,
 ) ([]audit.Entry, error) {
-	// The scope lock comes first, as in every append of the scope, so the
-	// appends form one sequence and no lock order can deadlock.
-	// Defense in depth: the caller reads the state that it writes under this
-	// lock, and appendAuditEntry takes the lock of @server too.
-	if err := q.LockServerAuditScope(ctx); err != nil {
-		return nil, fmt.Errorf("lock server audit scope: %w", err)
-	}
-
-	if err := recordedRestore(ctx, q, f, id); err != nil {
+	if err := recordedRestore(ctx, tx.q, f, id); err != nil {
 		return nil, err
 	}
 
-	row, err := runningRestore(ctx, q, id)
+	row, err := runningRestore(ctx, tx.q, id)
 	if err != nil {
 		return nil, err
 	}
@@ -518,7 +512,7 @@ func appendRestoreEntries(
 	stored := make([]audit.Entry, 0, len(entries))
 
 	for i := range entries {
-		got, appendErr := appendAuditEntry(ctx, q, entries[i])
+		got, appendErr := appendServerEntry(ctx, tx, entries[i])
 		if appendErr != nil {
 			return nil, appendErr
 		}

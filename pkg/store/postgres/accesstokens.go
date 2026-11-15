@@ -297,21 +297,15 @@ func (s *Store) SweepInactive(
 ) (accesstoken.SweepResult, error) {
 	var res accesstoken.SweepResult
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
-		// Defense in depth: the caller reads the state that it writes under
-		// this lock, and appendAuditEntry takes the lock of @server too.
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
+	err := runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
 		var err error
 
-		res, err = sweepInactive(ctx, q, sw)
+		res, err = sweepInactive(ctx, tx.q, sw)
 		if err != nil {
 			return err
 		}
 
-		return s.appendSweepEntries(ctx, q, res, entry)
+		return s.appendSweepEntries(ctx, tx, res, entry)
 	})
 	if err != nil {
 		return accesstoken.SweepResult{}, err
@@ -359,10 +353,10 @@ func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (ac
 	return res, nil
 }
 
-// appendSweepEntries appends one entry for each record of res, in the
-// transaction of q.
+// appendSweepEntries appends one entry for each record of res, in the locked
+// transaction tx.
 func (s *Store) appendSweepEntries(
-	ctx context.Context, q *db.Queries, res accesstoken.SweepResult, entry accesstoken.SweepEntryFunc,
+	ctx context.Context, tx serverAuditTx, res accesstoken.SweepResult, entry accesstoken.SweepEntryFunc,
 ) error {
 	objects := make([]string, 0, len(res.Tokens)+len(res.Principals))
 	for _, t := range res.Tokens {
@@ -375,11 +369,8 @@ func (s *Store) appendSweepEntries(
 
 	for _, object := range objects {
 		e := entry(res.At, object)
-		if err := validServerEntry(e); err != nil {
-			return err
-		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendServerEntry(ctx, tx, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 	}

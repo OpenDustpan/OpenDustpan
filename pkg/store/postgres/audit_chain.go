@@ -62,23 +62,17 @@ func (s *Store) ApproveChainChange(
 
 	var out durable.Operation
 
-	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
-		// Defense in depth: the caller reads the state that it writes under
-		// this lock, and appendAuditEntry takes the lock of @server too.
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		if err := checkChainApprovalWait(ctx, q); err != nil {
+	err := runServerAuditTx(ctx, s.inMinimumTx, func(tx serverAuditTx) error {
+		if err := checkChainApprovalWait(ctx, tx.q); err != nil {
 			return err
 		}
 
-		op, err := startChainApprovalOp(ctx, q, fixed, retry)
+		op, err := startChainApprovalOp(ctx, tx.q, fixed, retry)
 		if err != nil {
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendServerEntry(ctx, tx, e); err != nil {
 			return err
 		}
 
@@ -224,15 +218,8 @@ func (s *Store) appendChainMarker(
 
 	var err error
 	if fence.Namespace == audit.ServerScope {
-		err = s.inMinimumTx(ctx, func(q *db.Queries) error {
-			// Defense in depth: the caller reads the state that it writes
-			// under this lock, and appendAuditEntry takes the lock of @server
-			// too.
-			if lockErr := q.LockServerAuditScope(ctx); lockErr != nil {
-				return fmt.Errorf("lock server audit scope: %w", lockErr)
-			}
-
-			return run(q)
+		err = runServerAuditTx(ctx, s.inMinimumTx, func(tx serverAuditTx) error {
+			return run(tx.q)
 		})
 	} else {
 		err = s.inMinimumFencedUpdateTx(ctx, fence, run)

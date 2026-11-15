@@ -38,21 +38,17 @@ func (s *Store) CreateHostRecovery(ctx context.Context, r *accesstoken.HostRecov
 		BeginQuery: "", CommitQuery: "",
 	}
 
-	txErr := pgx.BeginTxFunc(ctx, s.txs, opts, func(tx pgx.Tx) error {
-		q := s.queries.WithTx(tx)
+	run := func(ctx context.Context, fn func(q *db.Queries) error) error {
+		return pgx.BeginTxFunc(ctx, s.txs, opts, func(tx pgx.Tx) error { return fn(s.queries.WithTx(tx)) })
+	}
 
-		// Defense in depth: the caller reads the state that it writes under
-		// this lock, and appendAuditEntry takes the lock of @server too.
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		if err := insertHostRecovery(ctx, q, r); err != nil {
+	txErr := runServerAuditTx(ctx, run, func(tx serverAuditTx) error {
+		if err := insertHostRecovery(ctx, tx.q, r); err != nil {
 			return err
 		}
 
 		for i := range entries {
-			if _, err := appendAuditEntry(ctx, q, entries[i]); err != nil {
+			if _, err := appendServerEntry(ctx, tx, entries[i]); err != nil {
 				return fmt.Errorf("append audit entry: %w", err)
 			}
 		}

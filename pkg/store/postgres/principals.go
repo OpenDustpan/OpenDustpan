@@ -509,18 +509,12 @@ func (s *Store) AddMember(
 		return err
 	}
 
-	return s.inTx(ctx, func(q *db.Queries) error {
-		// Defense in depth: the caller reads the state that it writes under
-		// this lock, and appendAuditEntry takes the lock of @server too.
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		if err := groupAndPrincipalExist(ctx, q, m.GroupID, m.PrincipalID); err != nil {
+	return runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
+		if err := groupAndPrincipalExist(ctx, tx.q, m.GroupID, m.PrincipalID); err != nil {
 			return err
 		}
 
-		entry, merr := memberChanges(ctx, q, e, more)
+		entry, merr := memberChanges(ctx, tx.q, e, more)
 		if merr != nil {
 			return merr
 		}
@@ -531,7 +525,7 @@ func (s *Store) AddMember(
 			return verr
 		}
 
-		n, ierr := q.AddGroupMember(ctx, db.AddGroupMemberParams{
+		n, ierr := tx.q.AddGroupMember(ctx, db.AddGroupMemberParams{
 			GroupID:       m.GroupID,
 			PrincipalID:   m.PrincipalID,
 			AddedAtMs:     codec.Millis(m.AddedAt),
@@ -549,7 +543,7 @@ func (s *Store) AddMember(
 			return principal.ErrAlreadyExists
 		}
 
-		return appendMemberAudit(ctx, q, entry)
+		return appendMemberAudit(ctx, tx, entry)
 	})
 }
 
@@ -575,13 +569,10 @@ func memberChanges(
 	return entry, nil
 }
 
-// appendMemberAudit validates the entry of the insert and appends it.
-func appendMemberAudit(ctx context.Context, q *db.Queries, entry audit.Entry) error {
-	if err := validServerEntry(entry); err != nil {
-		return err
-	}
-
-	if _, err := appendAuditEntry(ctx, q, entry); err != nil {
+// appendMemberAudit validates the entry of the insert and appends it in the
+// locked transaction tx.
+func appendMemberAudit(ctx context.Context, tx serverAuditTx, entry audit.Entry) error {
+	if _, err := appendServerEntry(ctx, tx, entry); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 

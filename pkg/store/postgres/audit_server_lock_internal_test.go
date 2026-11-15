@@ -3,142 +3,192 @@ package postgres
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
-	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
-// TestAppendAuditEntryLocksServerScope proves that an append of the scope
-// @server takes the advisory lock of the scope itself, also when the caller
-// took no lock. A second connection must not take the lock while the append
-// holds it, and must take it after the append commits.
-func TestAppendAuditEntryLocksServerScope(t *testing.T) {
+// TestAppendAuditEntryRefusesServerScope proves that appendAuditEntry refuses
+// an entry of the scope @server and stores nothing. The refusal is a
+// defense-in-depth layer: the type serverAuditTx already keeps an append of
+// @server out of appendAuditEntry. The test passes plain queries to
+// appendAuditEntry, as a new caller could.
+//
+// Mutation: delete the refusal. The entry then reaches appendEntry, the
+// append succeeds, and the test fails.
+func TestAppendAuditEntryRefusesServerScope(t *testing.T) {
 	t.Parallel()
 
 	s, _ := createLockSetup(t, "acme")
+
+	before, _ := serverScopeRows(t, s)
 
 	tx, err := s.pool.Begin(t.Context())
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 
-	t.Cleanup(func() {
-		rollbackErr := tx.Rollback(context.Background())
-		if rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			t.Errorf("roll back the append: %v", rollbackErr)
-		}
-	})
+	t.Cleanup(func() { rollbackTestTx(t, tx) })
 
-	if _, err := appendAuditEntry(t.Context(), s.queries.WithTx(tx), serverScopeEntry("server:append")); err != nil {
-		t.Fatalf("append a server entry: %v", err)
+	_, err = appendAuditEntry(t.Context(), db.New(tx), serverScopeEntry("server:append"))
+	if !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("appendAuditEntry with an entry of @server: err = %v, want audit.ErrInvalidEntry", err)
 	}
 
-	if tookServerScopeLock(t, s) {
-		t.Fatal("a second connection took the server audit scope lock while the append holds it")
-	}
+	rollbackTestTx(t, tx)
 
-	if err := tx.Commit(t.Context()); err != nil {
-		t.Fatalf("commit the append: %v", err)
-	}
+	after, _ := serverScopeRows(t, s)
 
-	if !tookServerScopeLock(t, s) {
-		t.Fatal("a second connection did not get the server audit scope lock after the append committed")
+	if len(after) != len(before) {
+		t.Fatalf("the server audit scope holds %d entries after the refused append, want %d", len(after), len(before))
 	}
 }
 
-// tookServerScopeLock reports whether a new connection takes the advisory
-// lock of the server audit scope. It tries the lock in a transaction of its
-// own and ends that transaction.
-func tookServerScopeLock(t *testing.T, s *Store) bool {
-	t.Helper()
-
-	tx, err := s.pool.Begin(t.Context())
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-
-	var took bool
-
-	if err := tx.QueryRow(t.Context(), "SELECT pg_try_advisory_xact_lock(418581342580)").Scan(&took); err != nil {
-		rollbackErr := tx.Rollback(t.Context())
-		if rollbackErr != nil {
-			t.Errorf("roll back the try: %v", rollbackErr)
-		}
-
-		t.Fatalf("try the server audit scope lock: %v", err)
-	}
-
-	if err := tx.Rollback(t.Context()); err != nil {
-		t.Fatalf("roll back the try: %v", err)
-	}
-
-	return took
-}
-
-// TestAppendAuditEntryLockErrorStoresNothing proves that an append whose
-// lock fails rolls the transaction back: the store keeps neither the entry
-// nor the change of the caller.
-func TestAppendAuditEntryLockErrorStoresNothing(t *testing.T) {
+// TestRunServerAuditTxLockErrorStopsFn proves that runServerAuditTx fails
+// closed: when the advisory lock of the scope @server fails, it returns the
+// error and never runs fn. Nothing reaches the log either.
+//
+// Mutation: ignore the lock error. Then fn runs and the test fails on the
+// error and on the flag.
+func TestRunServerAuditTxLockErrorStopsFn(t *testing.T) {
 	t.Parallel()
 
 	s, _ := createLockSetup(t, "acme")
 
-	_, entriesBefore := serverScopeRows(t, s)
+	before, _ := serverScopeRows(t, s)
 
-	const principalID = "prn-lock-error"
-
-	at := time.Date(2026, time.November, 14, 12, 0, 0, 0, time.UTC)
-
-	p := principal.Principal{
-		CreatedAt:   at,
-		UpdatedAt:   at,
-		DisabledAt:  time.Time{},
-		ID:          principalID,
-		Subject:     "local:" + principalID,
-		DisplayName: "Lock error",
-		Kind:        principal.KindPerson,
-		Source:      principal.SourceLocal,
-		Namespace:   "",
-		GroupCount:  0,
-		BreakGlass:  false,
+	run := func(_ context.Context, fn func(q *db.Queries) error) error {
+		return fn(db.New(lockFailTx{lockErr: errLockRefused, otherErr: errBeforeLock}))
 	}
 
 	ran := false
 
-	err := s.inTx(t.Context(), func(q *db.Queries) error {
-		if err := insertPrincipal(t.Context(), q, p); err != nil {
-			return err
-		}
-
+	err := runServerAuditTx(t.Context(), run, func(tx serverAuditTx) error {
 		ran = true
 
-		lockCtx, cancel := context.WithCancel(t.Context())
-		cancel()
+		_, appendErr := appendServerEntry(t.Context(), tx, serverScopeEntry("server:append"))
 
-		_, err := appendAuditEntry(lockCtx, q, serverScopeEntry("server:append"))
-
-		return err
+		return appendErr
 	})
-
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("append with a canceled context: err = %v, want context.Canceled", err)
+	if !errors.Is(err, errLockRefused) {
+		t.Fatalf("runServerAuditTx with a refused lock: err = %v, want the lock error", err)
 	}
 
-	if !ran {
-		t.Fatal("the caller change did not run before the lock")
+	if ran {
+		t.Fatal("runServerAuditTx ran fn after the lock failed")
 	}
 
-	_, entriesAfter := serverScopeRows(t, s)
-	if len(entriesAfter) != len(entriesBefore) {
-		t.Fatalf("the server audit scope holds %d entries after the refused append, want %d",
-			len(entriesAfter), len(entriesBefore))
+	after, _ := serverScopeRows(t, s)
+
+	if len(after) != len(before) {
+		t.Fatalf("the server audit scope holds %d entries after the refused lock, want %d", len(after), len(before))
+	}
+}
+
+// TestAppendServerEntryRefusesNamespaceScope proves that appendServerEntry
+// refuses an entry that names a scope other than @server and stores nothing.
+func TestAppendServerEntryRefusesNamespaceScope(t *testing.T) {
+	t.Parallel()
+
+	s, ns := createLockSetup(t, "acme")
+
+	tx, err := s.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatalf("begin: %v", err)
 	}
 
-	if _, err := s.GetPrincipal(t.Context(), principalID); !errors.Is(err, principal.ErrNotFound) {
-		t.Fatalf("the caller change after the rollback: err = %v, want principal.ErrNotFound", err)
+	t.Cleanup(func() { rollbackTestTx(t, tx) })
+
+	entry := serverScopeEntry("namespace:defaults")
+	entry.Namespace = ns.Name
+
+	_, err = appendServerEntry(t.Context(), serverAuditTx{q: db.New(tx)}, entry)
+	if !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("appendServerEntry with an entry of a namespace: err = %v, want audit.ErrInvalidEntry", err)
 	}
+
+	rollbackTestTx(t, tx)
+
+	if got := auditRowsInScope(t, s, ns.Name); got != 0 {
+		t.Fatalf("the namespace %q holds %d audit entries after the refused append, want 0", ns.Name, got)
+	}
+}
+
+// errLockRefused and errBeforeLock are the errors of the transaction of
+// TestRunServerAuditTxLockErrorStopsFn: its advisory lock fails with the
+// first, and a statement that runs before the lock reads the second.
+var (
+	errLockRefused = errors.New("the advisory lock was refused")
+	errBeforeLock  = errors.New("a statement ran before the lock")
+)
+
+// lockFailTx is a db.DBTX whose execution of the advisory lock fails with
+// lockErr. Any other statement is a program error of the caller: the lock
+// comes first, so a test reads otherErr only when the caller ran a statement
+// before the lock.
+type lockFailTx struct {
+	lockErr  error
+	otherErr error
+}
+
+// Exec returns lockErr for the advisory lock and otherErr for any other
+// statement.
+func (d lockFailTx) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "pg_advisory_xact_lock") {
+		return pgconn.CommandTag{}, d.lockErr
+	}
+
+	return pgconn.CommandTag{}, d.otherErr
+}
+
+// Query returns otherErr.
+func (d lockFailTx) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, d.otherErr
+}
+
+// QueryRow returns a row that scans to otherErr.
+func (d lockFailTx) QueryRow(context.Context, string, ...any) pgx.Row {
+	return failedRow{err: d.otherErr}
+}
+
+// failedRow is a pgx.Row whose scan fails with err.
+type failedRow struct {
+	err error
+}
+
+// Scan returns err.
+func (r failedRow) Scan(...any) error {
+	return r.err
+}
+
+// rollbackTestTx ends the transaction tx and tolerates one that ended
+// already.
+func rollbackTestTx(t *testing.T, tx pgx.Tx) {
+	t.Helper()
+
+	err := tx.Rollback(context.Background())
+	if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		t.Fatalf("roll back: %v", err)
+	}
+}
+
+// auditRowsInScope returns the count of the audit entries in scope.
+func auditRowsInScope(t *testing.T, s *Store, scope namespace.Name) int {
+	t.Helper()
+
+	var n int
+
+	err := s.pool.QueryRow(t.Context(),
+		"SELECT count(*) FROM audit_entries WHERE namespace = $1", scope.String()).Scan(&n)
+	if err != nil {
+		t.Fatalf("count the audit entries in %q: %v", scope, err)
+	}
+
+	return n
 }

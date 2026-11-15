@@ -16,13 +16,16 @@ var _ preferences.Store = (*Store)(nil)
 
 // preferencesTx is the SQL of an update of preferences inside a transaction.
 // The rules are in preferences.Change. lock says whether Load locks the row
-// of the person until the end of the transaction.
+// of the person until the end of the transaction. srv is the locked
+// transaction that appends the entry of the scope @server, or nil for a read,
+// which appends nothing.
 type preferencesTx struct {
 	q    *db.Queries
+	srv  *serverAuditTx
 	lock bool
 }
 
-var _ preferences.Tx = preferencesTx{q: nil, lock: false}
+var _ preferences.Tx = preferencesTx{q: nil, srv: nil, lock: false}
 
 // Load implements preferences.Tx. With lock set it takes the row of the
 // person FOR NO KEY UPDATE, so two updates of one person, and the end of the
@@ -69,13 +72,10 @@ func (t preferencesTx) Save(ctx context.Context, personID, document string, upda
 	return nil
 }
 
-// Append implements preferences.Tx.
+// Append implements preferences.Tx. A transaction that holds no lock sends
+// the entry to appendAuditEntry, which refuses an entry of the scope @server.
 func (t preferencesTx) Append(ctx context.Context, e audit.Entry) error {
-	if err := validServerEntry(e); err != nil {
-		return err
-	}
-
-	if _, err := appendAuditEntry(ctx, t.q, e); err != nil {
+	if _, err := appendAnyEntry(ctx, t.q, t.srv, e); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 
@@ -84,7 +84,7 @@ func (t preferencesTx) Append(ctx context.Context, e audit.Entry) error {
 
 // Get implements preferences.Store.
 func (s *Store) Get(ctx context.Context, personID string) (preferences.Document, error) {
-	document, updatedAtMs, err := preferencesTx{q: s.queries, lock: false}.Load(ctx, personID)
+	document, updatedAtMs, err := preferencesTx{q: s.queries, srv: nil, lock: false}.Load(ctx, personID)
 	if err != nil {
 		return preferences.Default(), err
 	}
@@ -114,14 +114,8 @@ func (s *Store) Update(
 
 	var result preferences.Result
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
-		// Defense in depth: the caller reads the state that it writes under
-		// this lock, and appendAuditEntry takes the lock of @server too.
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		res, err := preferences.Change(ctx, preferencesTx{q: q, lock: true}, preferences.ChangeInput{
+	err := runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
+		res, err := preferences.Change(ctx, preferencesTx{q: tx.q, srv: &tx, lock: true}, preferences.ChangeInput{
 			Log: s.logger, PersonID: personID, Patch: patch, Entry: e, IfMatch: ifMatch,
 		})
 		result = res

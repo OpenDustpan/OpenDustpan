@@ -104,12 +104,12 @@ func (s *Store) CreateProviderConfig(ctx context.Context, p session.ProviderConf
 		return err
 	}
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inServerAuditTx(ctx, func(tx serverAuditTx) error {
 		if err := validServerEntry(e); err != nil {
 			return err
 		}
 
-		n, err := q.CreateSignInProvider(ctx, db.CreateSignInProviderParams{
+		n, err := tx.q.CreateSignInProvider(ctx, db.CreateSignInProviderParams{
 			ProviderID:       row.ProviderID,
 			Issuer:           row.Issuer,
 			DisplayName:      row.DisplayName,
@@ -138,7 +138,7 @@ func (s *Store) CreateProviderConfig(ctx context.Context, p session.ProviderConf
 			return fmt.Errorf("%w: %s", session.ErrProviderExists, p.ID)
 		}
 
-		return appendProviderEntry(ctx, q, e)
+		return appendProviderEntry(ctx, tx, e)
 	})
 }
 
@@ -184,12 +184,12 @@ func (s *Store) UpdateProviderConfig(ctx context.Context, p session.ProviderConf
 		return err
 	}
 
-	return s.inTx(ctx, func(q *db.Queries) error {
+	return s.inServerAuditTx(ctx, func(tx serverAuditTx) error {
 		if err := validServerEntry(e); err != nil {
 			return err
 		}
 
-		n, err := q.UpdateSignInProvider(ctx, db.UpdateSignInProviderParams{
+		n, err := tx.q.UpdateSignInProvider(ctx, db.UpdateSignInProviderParams{
 			Issuer:           row.Issuer,
 			DisplayName:      row.DisplayName,
 			ClientID:         row.ClientID,
@@ -213,11 +213,11 @@ func (s *Store) UpdateProviderConfig(ctx context.Context, p session.ProviderConf
 		}
 
 		if n == 0 {
-			return missingOrChanged(ctx, q, p.ID)
+			return missingOrChanged(ctx, tx.q, p.ID)
 		}
 
 		if !p.Enabled {
-			ended, endErr := q.EndSessionsWithSubjectPrefix(ctx, db.EndSessionsWithSubjectPrefixParams{
+			ended, endErr := tx.q.EndSessionsWithSubjectPrefix(ctx, db.EndSessionsWithSubjectPrefixParams{
 				AtMs: codec.Millis(e.At), EndReason: string(session.ReasonEnded), Prefix: session.SubjectPrefix(p.ID),
 			})
 			if endErr != nil {
@@ -227,7 +227,7 @@ func (s *Store) UpdateProviderConfig(ctx context.Context, p session.ProviderConf
 			e = session.WithSessionsEnded(e, ended)
 		}
 
-		return appendProviderEntry(ctx, q, e)
+		return appendProviderEntry(ctx, tx, e)
 	})
 }
 
@@ -321,10 +321,10 @@ func missingOrChanged(ctx context.Context, q *db.Queries, id string) error {
 	return fmt.Errorf("%w: %s", session.ErrProviderChanged, id)
 }
 
-// appendProviderEntry appends the entry of a provider change in the
-// transaction of q.
-func appendProviderEntry(ctx context.Context, q *db.Queries, e audit.Entry) error {
-	if _, err := appendAuditEntry(ctx, q, e); err != nil {
+// appendProviderEntry appends the entry of a provider change in the locked
+// transaction tx.
+func appendProviderEntry(ctx context.Context, tx serverAuditTx, e audit.Entry) error {
+	if _, err := appendServerEntry(ctx, tx, e); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 
