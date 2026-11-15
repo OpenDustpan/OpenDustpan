@@ -60,6 +60,7 @@ import (
 	"strconv"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -94,9 +95,14 @@ const (
 // reviewRowResponse is one row of an access-review export on the wire.
 //
 // Subject is the text form of the holder, and SubjectName its subject or
-// group name. Holder is "bootstrap admin token" on the row of a bootstrap
-// admin token, which has no grant: its grantID, subject and grantedAtMs are
-// empty, and SubjectName names the subject of the token. InheritedFrom is
+// group name. Source is "grant" on a row that a stored grant gives, and
+// "code-rule" on a row that a code rule gives with no stored grant. A grant
+// row keeps its grantID, subject, grantedBy and grantedAtMs. A code-rule row
+// names the rule in Rule ("bootstrap admin token" for the bootstrap admin
+// token, which holds every action on the installation with no stored grant:
+// its grantID, subject and grantedAtMs are empty, and SubjectName names the
+// subject of the token), and Holder is "bootstrap admin token" on that row.
+// InheritedFrom is
 // the object of a grant that contains the object of the export, and empty
 // for any other grant. ObjectState is "live", "deleted" (a unit that a
 // restore can bring back) or "purged". CanGrantAccess is true when the role
@@ -127,6 +133,8 @@ type reviewRowResponse struct {
 	Subject           string             `json:"subject"`
 	SubjectName       string             `json:"subjectName"`
 	Holder            string             `json:"holder,omitempty"`
+	Source            string             `json:"source"`
+	Rule              string             `json:"rule,omitempty"`
 	Role              string             `json:"role"`
 	Object            string             `json:"object"`
 	ObjectState       string             `json:"objectState"`
@@ -293,12 +301,34 @@ func (h *Handler) reviewAccess(action identity.Action) accessOp {
 			return failed(""), err
 		}
 
-		if err := h.appendReviewRead(r, c, action, reviewAuditObject(c.obj, req, page.AsOf), svc.Now()); err != nil {
+		auditObject := reviewAuditObject(c.obj, req, page.AsOf)
+
+		if appendErr := h.appendReviewRead(r, c, action, auditObject, svc.Now()); appendErr != nil {
+			return failed(""), appendErr
+		}
+
+		wire, err := reviewPageOf(page)
+		if err != nil {
 			return failed(""), err
 		}
 
-		return ok(http.StatusOK, reviewPageOf(page), ""), nil
+		return ok(http.StatusOK, wire, ""), nil
 	}
+}
+
+// classifyReview maps the errors of the export that no other classifier
+// maps: an export of a collection over its unit cap answers 422 with the
+// count, the cap and the setting key.
+func classifyReview(err error) (failure, bool) {
+	over, ok := errors.AsType[*access.CollectionUnitCapError](err)
+	if !ok {
+		return fail(0, ""), false
+	}
+
+	return failCoded(http.StatusUnprocessableEntity, over.Error(), errcode.AccessCollectionUnitCap,
+		errcode.Quantity("count", int64(over.Count)),
+		errcode.Quantity("cap", int64(over.Cap)),
+		errcode.Identifier("key", over.Key)), true
 }
 
 // reviewExportError is the error of an export that failed and whose audit
@@ -319,8 +349,9 @@ func (e reviewExportError) Error() string {
 // Unwrap returns the error of the export, which decides the answer.
 func (e reviewExportError) Unwrap() error { return e.export }
 
-// reviewPageOf maps one page of an export to the wire.
-func reviewPageOf(page access.ReviewPage) reviewResponse {
+// reviewPageOf maps one page of an export to the wire. A row with no known
+// source fails closed: the page answers the error and no rows.
+func reviewPageOf(page access.ReviewPage) (reviewResponse, error) {
 	out := reviewResponse{
 		Total: page.Total, AsOfMs: nil, Grants: make([]reviewRowResponse, 0, len(page.Entries)),
 		NextCursor: page.NextCursor,
@@ -332,10 +363,15 @@ func reviewPageOf(page access.ReviewPage) reviewResponse {
 	}
 
 	for i := range page.Entries {
-		out.Grants = append(out.Grants, reviewRowOf(page.Entries[i]))
+		row, err := reviewRowOf(page.Entries[i])
+		if err != nil {
+			return reviewResponse{}, err
+		}
+
+		out.Grants = append(out.Grants, row)
 	}
 
-	return out
+	return out, nil
 }
 
 // appendReviewRead writes the audit entry of one export request that
@@ -500,13 +536,33 @@ func queryMillis(raw string) (*time.Time, error) {
 	return &t, nil
 }
 
-// reviewRowOf maps one export row to the wire.
-func reviewRowOf(e access.ReviewEntry) reviewRowResponse {
+// reviewRowOf maps one export row to the wire. A row with no known source
+// fails closed: it answers an error, never a row without a source. A grant
+// row keeps its grant ID, creator and time; a code-rule row names its rule.
+func reviewRowOf(e access.ReviewEntry) (reviewRowResponse, error) {
+	// Defense in depth: the service classifies every row, and this check
+	// stays so that a row that a new caller builds without a source cannot
+	// reach the wire.
+	var source, rule string
+
+	switch {
+	case e.Source == access.SourceGrant && e.Holder == "" && e.Rule == "":
+		source = access.SourceGrant
+	case e.Source == access.SourceCodeRule && e.Holder == access.BootstrapHolder &&
+		e.Rule == access.RuleBootstrapAdminToken:
+		source, rule = access.SourceCodeRule, access.RuleBootstrapAdminToken
+	default:
+		return reviewRowResponse{}, fmt.Errorf(
+			"%w: source %q rule %q", errReviewSource, e.Source, e.Rule,
+		)
+	}
+
 	row := e.Row
 	out := reviewRowResponse{
 		Via: nil, RevokedAtMs: millisOf(row.RevokedAt), GrantedAtMs: nil, EffectiveFromMs: nil,
 		EffectiveUntilMs: millisOf(e.EffectiveUntil), MemberCount: row.MemberCount, LastAccessTracked: nil,
 		LastAccessAtMs: nil, GrantID: row.Grant.ID, Subject: "", SubjectName: row.SubjectName, Holder: e.Holder,
+		Source: source, Rule: rule,
 		Role: row.Grant.Role, Object: row.Grant.Object.String(), ObjectState: e.ObjectState, InheritedFrom: "",
 		GrantedBy: row.Grant.CreatedBy, RevokedBy: row.RevokedBy, CanGrantAccess: e.CanGrantAccess,
 	}
@@ -541,8 +597,12 @@ func reviewRowOf(e access.ReviewEntry) reviewRowResponse {
 		}
 	}
 
-	return out
+	return out, nil
 }
+
+// errReviewSource reports a row of an export with no known source. The
+// export answers 500 with no rows: a row must name its source.
+var errReviewSource = errors.New("the access review holds a row with no known source")
 
 // millisOf returns t in Unix milliseconds, or nil for nil.
 func millisOf(t *time.Time) *int64 {
@@ -770,5 +830,10 @@ func callerGrants(
 		return failed(""), err
 	}
 
-	return ok(http.StatusOK, reviewPageOf(got), ""), nil
+	wire, err := reviewPageOf(got)
+	if err != nil {
+		return failed(""), err
+	}
+
+	return ok(http.StatusOK, wire, ""), nil
 }

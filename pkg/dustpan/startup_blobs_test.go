@@ -164,6 +164,7 @@ func seedSealedState(
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("sealed service: %v", err)

@@ -26,15 +26,15 @@ If a patch carries a revision that is not the current revision, then the server 
 
 #### Scenario: Old revision
 - **WHEN** a patch carries an old revision
-- **THEN** the server answers 412 with code settings.revision-stale and changes nothing
+- **THEN** the server answers 412 with the NEW code settings.revision-stale and changes nothing
 
 ### Requirement: Unknown key
 
-If a patch names an undeclared key, then the server SHALL refuse the patch with 422.
+If a patch names an undeclared key, then the server SHALL refuse the patch with 400.
 
 #### Scenario: Unknown key
 - **WHEN** a patch names a key that no setting declares
-- **THEN** the server answers 422 with code settings.key-unknown and changes nothing
+- **THEN** the server answers 400 with code settings.key-unknown and changes nothing
 
 ### Requirement: Static-only key
 

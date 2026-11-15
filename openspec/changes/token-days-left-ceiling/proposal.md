@@ -88,10 +88,10 @@ one day later at most, and still before the expiry.
 
 **IN**
 
-- `pkg/accesstoken/accesstoken.go`: add `DaysUntil` with its doc comment;
+- `pkg/accesstoken/accesstoken.go`: add the NEW function `DaysUntil` with its doc comment;
   `DaysLeft` calls it, and its comment says "started days left, at least 1 for
   an active token".
-- `internal/cli/client/expiry.go`: the warning calls `accesstoken.DaysUntil`;
+- `internal/cli/client/expiry.go`: the warning calls the NEW function `accesstoken.DaysUntil`;
   remove `hoursPerDay` if nothing else uses it. Its test asserts the count of a
   token with 23 hours left (1) and 24 hours and 1 ms left (2).
 - `pkg/accesstoken/accesstoken_test.go`: a table test of `DaysLeft` with the

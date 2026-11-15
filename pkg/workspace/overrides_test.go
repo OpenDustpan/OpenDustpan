@@ -236,6 +236,7 @@ func forceEntry() audit.Entry {
 		Reason:        "the run crashed",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -504,7 +505,7 @@ func checkRefusalText(t *testing.T, msg, word, action string) {
 	}
 
 	for _, route := range []string{
-		"PUT /api/server/namespaces/{namespace}/override-switches",
+		"PUT /api/dustpan/v1/namespaces/{namespace}/override-switches",
 		"PUT /api/v2/workspaces/{id}/override-switches",
 	} {
 		if !strings.Contains(msg, route) {

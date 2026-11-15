@@ -1,3 +1,7 @@
+---
+version: 5
+---
+
 Roadmap: `docs/roadmap.md:712` (Local run-all).
 
 ## Why
@@ -29,8 +33,10 @@ Evidence for the claims above:
 ## What Changes
 
 - Add the e2e step with real OpenTofu and real Terragrunt over TLS on PostgreSQL: 3 units, 3 workspaces, 3 new state versions and 3 history entries with no change order.
+- Add a pinned Terragrunt binary to the e2e fetcher (owner, 2026-11-14). Terragrunt is a test-only pinned binary of the e2e fetcher, the same way as OpenTofu in e2e/tool.go (func OpenTofu, the pinned map of sha256 sums and ReleaseURL). It is not a Go module and it is not in the shipped binary, so `make licenses` (each module linked into the binary) needs no license file for it.
 - Add the guide section for Terragrunt with OpenDustpan for local use.
 - Add the NEW docs page that says why profiles and blueprints stay the recommended path and links it from the Terragrunt guide.
+- Files: `e2e/tool.go` and `e2e/tool_test.go` and `e2e/doc.go` (existing, for the Terragrunt tool); `e2e/fetch.go`, `e2e/fetch_test.go` and `e2e/export_internal_test.go` (existing, for the remap of the archive member `terragrunt_<os>_<arch>`); `e2e/fetch.go`, `e2e/fetch_test.go` and `e2e/export_internal_test.go` (existing, for the remap of the archive member `terragrunt_<os>_<arch>`); the NEW e2e test file `e2e/terragrunt_local_test.go` with the NEW fixture `e2e/testdata/terragrunt-local/`, which holds only the root `terragrunt.hcl` (the unit directories come from `writeLiveUnit` at run time); the NEW guide `docs/guides/terragrunt.md` (its section "Run Terragrunt locally"), linked from the existing `docs/guides/quickstart.md`; the NEW explanation page `docs/explanation/profiles-and-blueprints.md`, linked from `docs/guides/terragrunt.md` and the existing `docs/guides/publish-a-blueprint.md`.
 
 Out of scope:
 
@@ -84,6 +90,6 @@ Questions considered and answered:
 - Does this step make a change order or a discovery job? No. ADR 304 decisions 5 and 6 place them in the runner step.
 - How are unit workspaces created? The e2e fixture pre-creates them through ANY /api/v2/organizations/{}/workspaces with an access token, so no creation race occurs during the run.
 - Does a parallel run use one token? One access token for the run, with stored grants per workspace. Authorization is checked per workspace.
-- How does the e2e step get real Terragrunt? It uses the pinned binaries of the existing e2e suite, with no new dependency and no new tool.
+- How does the e2e step get real Terragrunt? The owner decided to add a pinned Terragrunt binary to the e2e fetcher (NEW func Terragrunt in e2e/tool.go). The e2e tests run the real `terragrunt run-all` through fetcher.Install(ctx, e2e.Terragrunt(), version), with the OpenTofu binary of the fetcher as its TG_TF_PATH. No test calls tofu directly in place of Terragrunt.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

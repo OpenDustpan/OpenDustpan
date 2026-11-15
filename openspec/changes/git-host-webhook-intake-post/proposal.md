@@ -1,12 +1,12 @@
 ---
-version: 2
+version: 8
 ---
 
 Issue: #1299, #1300, #1301.
 
 ## Why
 
-**Persona: operator.** Operator installs the installation-level GitHub App and its webhook so pushes reach OpenDustpan as hints. The operator needs a stable hook URL, a secret rotation path with a bounded overlap, and a 204 intake that never leaks why it dropped a delivery, plus scoped tokens so runners never hold a long-lived credential.
+**Persona: operator.** Operator installs the installation-level GitHub App and its webhook so pushes reach OpenDustpan as hints. The operator needs a stable hook URL, a 204 intake that never leaks why it dropped a delivery, and scoped tokens so runners never hold a long-lived credential.
 
 The user path this change must make work:
 
@@ -33,7 +33,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-- POST /webhooks/{hook ID} intake with GitHub signature check, two stored secrets, effect-state duplicate rule and 204 for every request
+- POST /webhooks/{hook ID} intake with GitHub signature check, two active event secrets during a rotation with a bounded window for the old secret (ADR 374 decision 2), effect-state duplicate rule and 204 for every request
 - Hint flow with installation-to-connection lookup and replica drop
 - GitHub Files, Commits and Reviews methods behind capabilities
 - RepoToken scoped to one repository for at most 1 hour, and refusal of unscoped tokens on the runner path
@@ -65,9 +65,18 @@ Each fact names its file, line and function on main. The change specifies only t
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
 
-**ADR 271: The Forge port, Git host connections and the installation-level GitHub App** (owner-tagged: decision 2, 3, 4, 8, 9, 10, 11).
 
-- Decisions that apply: 2 (current), 3 (current), 4 (changed), 8 (current), 9 (current), 10 (current), 11 (extended).
+**ADR 374: Namespace discovery from inside, and the window of the old event secret** (owner-tagged: decisions 1 and 2, owner, 2026-11-14).
+
+- Decisions that apply: 2 (current). Changes: extends ADR 271 decision 8.
+- Changed by: none. Current rule: this ADR.
+- Quote: "During a rotation, the old event secret is valid for the check of an event only. It ends after 7 days, or earlier when the operator ends the rotation (the confirmation of the rotation). Each event that the server accepts with the old secret writes an audit entry. The API shows the effective end of the window. The server refuses an event signed with the old secret after the end, or after the confirmation. A secret older than the old secret is never valid: a registration keeps at most two event secrets."
+- Effect: design decision 5: three old columns with a CHECK, the rotation in the UPDATE of the new secret, the confirm route, the check order, the audit entries, the field oldSecretEndsAt.
+- Conflict: none.
+
+**ADR 271: The Forge port, Git host connections and the installation-level GitHub App** (owner-tagged: decision 2, 3, 4, 8, 9, 11).
+
+- Decisions that apply: 2 (current), 3 (current), 4 (changed), 8 (current), 9 (current), 11 (extended).
 - Changed by: ADR 286 changes; ADR 299 changes decision 4; ADR 299 extends decision 2; ADR 299 extends decision 7; ADR 300 changes decision 7; ADR 303 extends decision 11; ADR 336 extends. Chain to the end: ADR 286, ADR 299, ADR 300, ADR 303, ADR 336, ADR 328, ADR 359, ADR 368.
 - Current rule: this ADR, with ADR 286, 299, 300, 303, 336.
 - Quote: "One interface with capabilities."
@@ -88,15 +97,6 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "No polling (owner)."
 - Quote: "The Forge port gets the operations that GitHost needs (PM)."
 - Effect: Each delivery is a hint. No poll except the federation poll.
-- Conflict: none.
-
-**ADR 300: PM answers on runs, recorded** (not owner-tagged).
-
-- Decisions that apply: 4 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
-- Quote: "The review watcher of RFC 12 item WB-10 does not use the `job.review-watch` poll."
-- Effect: Merge and close deliveries are hints.
 - Conflict: none.
 
 **ADR 303: Scope limits: no Ansible stack, no CDKTF, and not a Git host** (owner-tagged (all decisions)).
@@ -121,17 +121,9 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 none
 
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
-
-1. How long does the old event secret stay valid during rotation of the registration secret?
-   - Options: Keep both valid until the operator confirms; End the old secret after at most 7 days, with an audit entry.
-   - Provisional decision (owner review 14 Nov): End the old secret after at most 7 days or at operator confirmation, with an audit entry. Show the window in the API.
-   - Reason: An open-ended overlap can leave a leaked secret valid for ever. Benchmark: AWS Secrets Manager keeps the previous version only during a bounded rotation.
-   - Persona impact: The operator has time to update the Git host. Escape hatch: The operator can confirm early or rotate again.
-   - Owner-tagged ADRs involved: ADR 271 (their words do not change).
-
 Questions considered and answered:
 
+- How long does the old event secret stay valid when the operator rotates it? ADR 374 decision 2.
 - Where does webhook parsing live? ADR 271 decision 4: ParseEvent in the port, the route in the internal adapter.
 - May a long-lived token reach a runner? ADR 271 decision 3: only a scoped token.
 - Does a member poll for missed changes? ADR 299 decision 29: only the federation poll and one catch-up read at start.

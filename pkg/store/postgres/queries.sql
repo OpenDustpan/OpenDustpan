@@ -472,6 +472,71 @@ LEFT JOIN (
 WHERE st.id = @stack_id AND st.deleted_at_ms IS NULL
 ORDER BY 1;
 
+-- name: BlobKeyNamed :one
+-- Reports whether a checkpoint row or a journal batch row of the stack names
+-- the blob key. The sweep reads it in the transaction that drops a mark, so a
+-- row that still names the key keeps the blob.
+SELECT EXISTS (
+    SELECT 1 FROM checkpoints AS c
+    WHERE c.stack_id = sqlc.arg(stack_id) AND c.blob_key = sqlc.arg(blob_key)
+    UNION ALL
+    SELECT 1 FROM update_journal AS j
+    WHERE j.stack_id = sqlc.arg(stack_id) AND j.blob_key = sqlc.arg(blob_key)
+) AS named;
+
+-- name: DeleteSupersededMark :execrows
+-- Deletes the mark of the blob key of the stack. A missing mark deletes no
+-- row, which is not an error.
+DELETE FROM checkpoint_supersedes
+WHERE stack_id = sqlc.arg(stack_id) AND blob_key = sqlc.arg(blob_key);
+
+-- name: ListSupersededBlobs :many
+-- Every mark of one live stack, ordered by blob key: the blob that a later
+-- save of the same update replaced, with the size of the stored blob and the
+-- time of the save that replaced it. The stack is the driving table, so one
+-- statement tells a stack without marks (one row with an empty key) from a
+-- stack that is missing or soft-deleted (no row), and the read needs no
+-- transaction.
+SELECT CAST(COALESCE(m.blob_key, '') AS TEXT) AS blob_key,
+       CAST(COALESCE(m.size, 0) AS BIGINT) AS size,
+       CAST(COALESCE(m.superseded_at_ms, 0) AS BIGINT) AS superseded_at_ms
+FROM stacks AS st
+LEFT JOIN checkpoint_supersedes AS m ON m.stack_id = st.id
+WHERE st.id = @stack_id AND st.deleted_at_ms IS NULL
+ORDER BY 1;
+
+-- name: ListSupersededMarks :many
+-- One page of the marks of every live stack whose save replaced the blob
+-- before the given time, ordered by stack ID and blob key. The read starts
+-- after the cursor, so a sweep goes page by page. A soft-deleted stack has no
+-- marks in the result.
+SELECT m.stack_id, n.id AS namespace_id, m.blob_key, m.size,
+       CAST(m.superseded_at_ms AS BIGINT) AS superseded_at_ms
+FROM checkpoint_supersedes AS m
+JOIN stacks AS st ON st.id = m.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE st.deleted_at_ms IS NULL
+  AND m.superseded_at_ms < sqlc.arg(older_than_ms)
+  AND (m.stack_id COLLATE "C" > sqlc.arg(after_stack_id)
+    OR (m.stack_id = sqlc.arg(after_stack_id) AND m.blob_key COLLATE "C" > sqlc.arg(after_blob_key)))
+ORDER BY m.stack_id COLLATE "C", m.blob_key COLLATE "C"
+LIMIT sqlc.arg(page_limit);
+
+-- name: MarkSupersededCheckpoint :exec
+-- Marks the checkpoint blob that a save of the update replaces, with the time
+-- of the database clock, from the same expression as the checkpoint upsert.
+-- It marks only the row that still names the key that the sequence check read:
+-- the row is not locked, and a concurrent attempt can replace it between the
+-- read and the mark. The mark names the blob of that row and the size of the
+-- stored blob, and a mark of an earlier save stays as it is.
+INSERT INTO checkpoint_supersedes (blob_key, stack_id, update_id, size, superseded_at_ms)
+SELECT c.blob_key, c.stack_id, c.update_id, COALESCE(c.blob_size, 0),
+       FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+FROM checkpoints AS c
+WHERE c.stack_id = @stack_id AND c.update_id = @update_id
+  AND c.blob_key <> @blob_key AND c.blob_key = @read_key
+ON CONFLICT (blob_key) DO NOTHING;
+
 -- name: SoftDeleteStack :execrows
 -- Moves the name to deleted_name and frees it (ADR 47). A stack name cannot
 -- hold ":", so "deleted:" and the ID never match a lookup by name.
@@ -1103,6 +1168,58 @@ FROM (
 ORDER BY kind, id
 LIMIT 1;
 
+-- name: CountLiveBlobDeleteLeases :one
+-- The number of lease rows that end after the database clock. A restore waits
+-- for zero of them before it applies the data.
+SELECT COUNT(*) FROM blob_delete_leases
+WHERE expires_at_ms > FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
+
+-- name: LockBlobDeleteLeaseExclusive :exec
+-- Takes the exclusive form of the blob delete lease lock for this
+-- transaction. It waits for every take of a lease in flight and holds every
+-- later take back until this transaction ends, so the take of a lease and the
+-- write of a running backup or restore row cannot interleave.
+SELECT pg_advisory_xact_lock(sqlc.arg(class)::int, hashtext(current_schema()));
+
+-- name: LockBlobDeleteLeaseShared :exec
+-- Takes the shared form of the blob delete lease lock for this transaction.
+-- The take of a lease runs as a later statement, so its READ COMMITTED
+-- snapshot is newer than the lock: a backup or a restore that committed its
+-- running row before the lock is visible to the take.
+SELECT pg_advisory_xact_lock_shared(sqlc.arg(class)::int, hashtext(current_schema()));
+
+-- name: ReleaseBlobDeleteLease :exec
+-- Deletes the lease row of one holder. A holder with no row is not an error.
+DELETE FROM blob_delete_leases
+WHERE holder = sqlc.arg(holder);
+
+-- name: TakeBlobDeleteLease :one
+-- Writes the lease of holder, ending at the database clock plus ttl_ms, in
+-- one statement. While a backup runs or a restore checks or applies, it
+-- writes nothing and answers that work instead, so a deleter that read the
+-- guard before a restore started cannot take a lease after it. A take for a
+-- holder with a row replaces that row. An empty kind and an empty ID are the
+-- answer of a written lease.
+WITH running AS (
+    SELECT kind, id
+    FROM (
+        SELECT 'backup'::text AS kind, id FROM backups WHERE state = 'running'
+        UNION ALL
+        SELECT 'restore'::text AS kind, id FROM restores WHERE state IN ('checking', 'applying')
+    ) AS running_work
+    ORDER BY kind, id
+    LIMIT 1
+), written AS (
+    INSERT INTO blob_delete_leases (holder, expires_at_ms)
+    SELECT sqlc.arg(holder)::text,
+           FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + sqlc.arg(ttl_ms)::bigint
+    WHERE NOT EXISTS (SELECT 1 FROM running)
+    ON CONFLICT (holder) DO UPDATE SET expires_at_ms = EXCLUDED.expires_at_ms
+    RETURNING holder
+)
+SELECT COALESCE((SELECT kind FROM running), '')::text AS kind,
+       COALESCE((SELECT id FROM running), '')::text AS id;
+
 -- name: ListBackups :many
 SELECT id, state, started_at_ms, ended_at_ms, target, error
 FROM backups
@@ -1304,7 +1421,8 @@ UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
 UNION ALL
-SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text AS content_key,
+SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text
+       || '-' || k.blob_attempt AS content_key,
        k.blob_size AS size, k.blob_md5 AS md5, FALSE AS sealed
 FROM item_keys AS k
 WHERE k.shredded_at_ms = 0
@@ -3701,6 +3819,12 @@ FROM runner_pools p
 JOIN namespaces n ON n.id = p.namespace_id
 WHERE p.id = sqlc.arg(id);
 
+-- name: GetRunnerPoolByName :one
+-- The pool of a namespace with the name, for a caller that names a pool as a
+-- person does. It returns no row for a pool of another namespace.
+SELECT id, purpose FROM runner_pools
+WHERE namespace_id = sqlc.arg(namespace_id) AND name = sqlc.arg(name);
+
 -- name: ListRunnerPools :many
 SELECT p.id, p.namespace_id, n.name AS namespace_name, p.name, p.purpose, p.lease_ms, p.concurrency, p.isolation,
        p.git_mode, p.git_helper, p.created_at_ms, p.updated_at_ms
@@ -5000,30 +5124,33 @@ WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scop
 -- its unit, its kind and its creation time.
 INSERT INTO triggers (
     namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
-    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms, next_slot_ms
 )
 SELECT
     n.id, sqlc.arg(id), sqlc.arg(unit_tool), sqlc.arg(unit_id), sqlc.arg(kind), sqlc.arg(preset), sqlc.arg(cron),
     sqlc.arg(source_namespace), sqlc.arg(source_tool), sqlc.arg(source_unit_id), sqlc.arg(enabled)::bigint,
-    sqlc.arg(last_saver_subject), sqlc.arg(last_saver_id), sqlc.arg(created_at_ms)::bigint, sqlc.arg(updated_at_ms)::bigint
+    sqlc.arg(last_saver_subject), sqlc.arg(last_saver_id), sqlc.arg(created_at_ms)::bigint, sqlc.arg(updated_at_ms)::bigint,
+    sqlc.arg(next_slot_ms)::bigint
 FROM namespaces AS n
 WHERE n.name = sqlc.arg(namespace)
 ON CONFLICT (namespace_id, id) DO UPDATE SET
     preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
     source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
     last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
-    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms);
+    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms), next_slot_ms = excluded.next_slot_ms;
 
 -- name: GetTrigger :one
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.id = sqlc.arg(id);
 
 -- name: ListTriggersOfUnit :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.unit_tool = sqlc.arg(unit_tool) AND t.unit_id = sqlc.arg(unit_id)
@@ -5031,7 +5158,8 @@ ORDER BY t.id COLLATE "C";
 
 -- name: ListTriggerFollowers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.kind = 'follows' AND t.enabled = 1
@@ -5041,11 +5169,24 @@ ORDER BY t.id COLLATE "C";
 
 -- name: ListEnabledFollowTriggers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.kind = 'follows' AND t.enabled = 1
 ORDER BY t.id COLLATE "C";
+
+-- name: MoveTriggerNextSlot :execrows
+-- Moves the next slot of a schedule trigger from the value that the caller read
+-- to the value after the claim. The compare on the old value is a layer of its
+-- own: the transaction of the caller already serializes the writes of the
+-- namespace, and this statement still changes no row when the slot moved.
+UPDATE triggers
+SET next_slot_ms = sqlc.arg(next_slot_ms)::bigint
+WHERE triggers.id = sqlc.arg(id)
+  AND triggers.kind = 'schedule' AND triggers.enabled = 1
+  AND triggers.next_slot_ms = sqlc.arg(old_next_slot_ms)::bigint
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
 -- name: DeleteTrigger :execrows
 DELETE FROM triggers
@@ -5087,18 +5228,19 @@ WHERE drift_results.unit_id = sqlc.arg(unit_id)
 -- The caller checks the fence in the same transaction. A record for the same
 -- item is not written: the caller reads the stored record.
 INSERT INTO item_keys (
-    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
+    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5,
+    blob_attempt
 )
 VALUES (
     sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
     sqlc.arg(scope_id), sqlc.arg(kind), sqlc.arg(item), sqlc.arg(wrapper_id), sqlc.arg(created_at_ms), 0,
-    sqlc.arg(blob_version), sqlc.arg(blob_size), sqlc.arg(blob_md5)
+    sqlc.arg(blob_version), sqlc.arg(blob_size), sqlc.arg(blob_md5), sqlc.arg(blob_attempt)
 )
 ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING;
 
 -- name: GetItemKey :one
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.kind = sqlc.arg(kind)
@@ -5115,7 +5257,7 @@ WHERE item_keys.shredded_at_ms = 0 AND item_keys.scope_id = sqlc.arg(scope_id) A
 
 -- name: ListItemKeys :many
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.id > sqlc.arg(after)
@@ -5127,6 +5269,11 @@ SELECT DISTINCT wrapper_id
 FROM item_keys
 WHERE shredded_at_ms = 0
 ORDER BY wrapper_id;
+
+-- name: SetTransactionTimeout :exec
+-- The attempt deadline of an item key transaction, on the clock of the
+-- database. The setting ends with the transaction. The value is milliseconds.
+SELECT set_config('transaction_timeout', sqlc.arg(timeout_ms)::text, true);
 
 -- name: InsertJobPlan :exec
 -- The caller checks the fence and the claim in the same transaction.
@@ -5911,3 +6058,123 @@ LEFT JOIN principal_session_generations g ON g.principal_id = p.id
 CROSS JOIN session_policy sp
 CROSS JOIN access_token_policy ap
 WHERE p.id = $1 AND num_nulls(p.deleted_at_ms) = 1 AND sp.id = 1 AND ap.id = 1;
+
+-- Sweep targets and sweeps. A target names a runner pool of its namespace and
+-- the account scopes that a sweep reads. A sweep is one run of a target, or one
+-- state check of the namespace, and it keeps the name of a target that a person
+-- deleted. A row holds the namespace ID, and the reads join the name of the
+-- namespace, because a caller names a namespace by its name.
+
+-- name: CancelUnmanagedScansOfTarget :execrows
+-- Cancels the sweeps of target that a cancel event allows: a sweep in the match
+-- keeps its status. The caller appends one audit entry for the delete.
+UPDATE unmanaged_scans SET status = 'canceled', ended_at_ms = sqlc.arg(ended_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND target = sqlc.arg(target)
+  AND status IN ('queued', 'dispatched', 'running');
+
+-- name: CountOpenUnmanagedScansOfTarget :one
+-- The sweeps of target that did not end. A start of a sweep refuses while one
+-- exists.
+SELECT COUNT(*) FROM unmanaged_scans
+WHERE namespace_id = sqlc.arg(namespace_id) AND target = sqlc.arg(target) AND kind = sqlc.arg(kind)
+  AND status NOT IN ('succeeded', 'failed', 'canceled', 'expired');
+
+-- name: CountUnmanagedTargets :one
+-- The targets of a namespace, for the limit of MaxTargets.
+SELECT COUNT(*) FROM unmanaged_targets WHERE namespace_id = sqlc.arg(namespace_id);
+
+-- name: CountUnmanagedTargetsOfPool :one
+-- The targets that name a runner pool. A delete of the pool refuses while one
+-- exists.
+SELECT COUNT(*) FROM unmanaged_targets WHERE pool_id = sqlc.arg(pool_id);
+
+-- name: DeleteUnmanagedTarget :execrows
+DELETE FROM unmanaged_targets WHERE namespace_id = sqlc.arg(namespace_id) AND name = sqlc.arg(name);
+
+-- name: GetUnmanagedScan :one
+SELECT s.id, n.name AS namespace, s.seq, s.target, s.kind, s.status, s.started_by, s.reason, s.scopes_json,
+       s.counts_json, s.created_at_ms, s.ended_at_ms
+FROM unmanaged_scans AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND s.id = sqlc.arg(id);
+
+-- name: GetUnmanagedTarget :one
+-- The pool of a target and its purpose, for a write of the target and for the
+-- kind of the durable operation of a sweep. A target whose pool belongs to
+-- another namespace gives no row.
+SELECT t.pool_id, p.purpose, p.namespace_id AS pool_namespace_id
+FROM unmanaged_targets AS t
+JOIN runner_pools AS p ON p.id = t.pool_id
+WHERE t.namespace_id = sqlc.arg(namespace_id) AND t.name = sqlc.arg(name)
+  AND p.namespace_id = t.namespace_id;
+
+-- name: InsertUnmanagedScan :exec
+INSERT INTO unmanaged_scans (
+    id, namespace_id, seq, target, kind, status, started_by, reason, scopes_json, counts_json,
+    created_at_ms, ended_at_ms
+) VALUES (
+    sqlc.arg(id), sqlc.arg(namespace_id), sqlc.arg(seq), sqlc.arg(target), sqlc.arg(kind), sqlc.arg(status),
+    sqlc.arg(started_by), sqlc.arg(reason), sqlc.arg(scopes_json), sqlc.arg(counts_json),
+    sqlc.arg(created_at_ms), sqlc.arg(ended_at_ms)
+);
+
+-- name: InsertUnmanagedTarget :execrows
+-- The caller checks the fence in the same transaction. A target of the same
+-- name in the namespace is not written.
+INSERT INTO unmanaged_targets (
+    namespace_id, name, pool_id, scopes_json, command_json, every_ms, timeout_ms, enabled
+) VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(name), sqlc.arg(pool_id), sqlc.arg(scopes_json), sqlc.arg(command_json),
+    sqlc.arg(every_ms), sqlc.arg(timeout_ms), sqlc.arg(enabled)
+)
+ON CONFLICT (namespace_id, name) DO NOTHING;
+
+-- name: ListUnmanagedScans :many
+-- The sweeps of a namespace for target, newest first, or of every target when
+-- target is empty. It starts after the sweep whose ID is after, and an unknown
+-- after gives no row.
+SELECT s.id, n.name AS namespace, s.seq, s.target, s.kind, s.status, s.started_by, s.reason, s.scopes_json,
+       s.counts_json, s.created_at_ms, s.ended_at_ms
+FROM unmanaged_scans AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = sqlc.arg(namespace)
+  AND (sqlc.arg(target)::text = '' OR s.target = sqlc.arg(target))
+  AND (sqlc.arg(after)::text = '' OR s.seq < (
+      SELECT c.seq FROM unmanaged_scans AS c
+      WHERE c.namespace_id = s.namespace_id AND c.id = sqlc.arg(after)))
+ORDER BY s.seq DESC
+LIMIT sqlc.arg(page_size);
+
+-- name: ListUnmanagedTargets :many
+-- The targets of a namespace with the name of their pool, ordered by name. A
+-- target whose pool belongs to another namespace gives no row.
+SELECT n.name AS namespace, t.name, p.name AS pool_name, t.scopes_json, t.command_json, t.every_ms,
+       t.timeout_ms, t.enabled
+FROM unmanaged_targets AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+JOIN runner_pools AS p ON p.id = t.pool_id
+WHERE n.name = sqlc.arg(namespace)
+  AND p.namespace_id = t.namespace_id
+ORDER BY t.name;
+
+-- name: NextUnmanagedScanSeq :one
+-- The sequence number of the next sweep of a namespace. The write transaction
+-- orders it, and the unique index on (namespace_id, seq) refuses a duplicate.
+SELECT (COALESCE(MAX(s.seq), 0) + 1)::bigint AS seq
+FROM unmanaged_scans AS s
+WHERE s.namespace_id = sqlc.arg(namespace_id);
+
+-- name: UpdateUnmanagedScan :exec
+-- It replaces the status, the reason, the scopes, the counts and the end of the
+-- sweep. The caller read the sweep in the same transaction.
+UPDATE unmanaged_scans SET status = sqlc.arg(status), reason = sqlc.arg(reason),
+    scopes_json = sqlc.arg(scopes_json), counts_json = sqlc.arg(counts_json), ended_at_ms = sqlc.arg(ended_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id);
+
+-- name: UpdateUnmanagedTarget :execrows
+-- It replaces the target of the same name. It changes no row when the target is
+-- not there.
+UPDATE unmanaged_targets SET pool_id = sqlc.arg(pool_id), scopes_json = sqlc.arg(scopes_json),
+    command_json = sqlc.arg(command_json), every_ms = sqlc.arg(every_ms), timeout_ms = sqlc.arg(timeout_ms),
+    enabled = sqlc.arg(enabled)
+WHERE namespace_id = sqlc.arg(namespace_id) AND name = sqlc.arg(name);

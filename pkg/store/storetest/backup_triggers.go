@@ -26,6 +26,7 @@ func seedBackupTriggers(t *testing.T, s BackupStore, acme namespace.Namespace) {
 		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 
 	app := graph.Unit{Namespace: acme.Name, Tool: "opentofu", ID: "wks-seed-app"}

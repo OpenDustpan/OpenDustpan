@@ -550,5 +550,6 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }

@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Issue: #1329.
@@ -19,7 +19,7 @@ An SSO installation can never get its first step-up key, so admin enrollment can
 - Add the new host command `opendustpan host step-up-bootstrap` that starts the enrollment of the first step-up key of one named administrator, guarded by a stored one-time marker
 - Add an unexported bootstrap token type with one constructor, and a store method that checks the marker and the key count
 - Show the marker as an installation fact in the API, with its authorization action
-- Allow the command in recovery modes 1 and 2, only while no administrator holds a key
+- Allow the command in bootstrap recovery and signed-request recovery, only while no administrator holds a key
 - Refuse the command in recovery mode none, on a pending migration and on an unknown off-switch value
 - Write the key, the marker and the audit entry in one transaction
 - Send the email after the commit, log a failed send, and write a second audit entry with the send result
@@ -52,10 +52,7 @@ Depends on:
 
 - mfa
 - app-level-second-factor-totp
-- break-glass-mode-2
-- `mfa` (order of the milestone review)
-- `app-level-second-factor-totp` (order of the milestone review)
-- `break-glass-mode-2` (order of the milestone review)
+- signed-request-recovery
 
 ## What main already does
 
@@ -86,7 +83,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "The command needs a reason: `--reason`, or a line that the operator types at a prompt on a terminal."
 - Quote: "The command refuses any other value, so a typo never turns the command on."
 - Quote: "No hidden characters. The reason and the creator refuse control characters (Unicode Cc) and format characters (Unicode Cf), such as a direction override, so the text in the audit log shows what the operator typed."
-- Effect: The key, the marker and the audit entry go in one store transaction. The email follows the commit, because it is not a store write. The command runs in mode 1 and mode 2, refuses mode none, refuses an unknown off-switch value and hidden characters, and needs a reason.
+- Effect: The key, the marker and the audit entry go in one store transaction. The email follows the commit, because it is not a store write. The command runs in bootstrap recovery and signed-request recovery, refuses mode none, refuses an unknown off-switch value and hidden characters, and needs a reason.
 - Conflict: none.
 
 **ADR 339: The first administrator gets a one-time code from the bootstrap token** (owner-tagged (all decisions)).
@@ -98,13 +95,13 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: The marker is stored, set in the same transaction as the key, and read through the API. The words of the decision do not change. A later loss of every administrator goes through recovery, so this route does not reopen after the marker is set.
 - Conflict: none.
 
-**ADR 295: Break-glass recovery mode 2 over the network** (owner-tagged (all decisions)).
+**ADR 295: Signed-request recovery over the network** (owner-tagged (all decisions)).
 
 - Decisions that apply: 9 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 372 extends decisions 8 and 9. Chain to the end: ADR 372.
+- Current rule: this ADR, with ADR 372.
 - Quote: "The controls of ADR 245 apply. A temporary administrator from this route keeps these controls of ADR 245."
-- Effect: Mode 2 keeps the controls of the host command. This change adds no network route.
+- Effect: Signed-request recovery keeps the controls of the host command. This change adds no network route.
 - Conflict: none.
 
 **ADR 46: Built-in MFA for installs with no SSO identity provider** (not owner-tagged).
@@ -122,7 +119,7 @@ none
 
 Questions considered and answered:
 
-- Which route and marker? Owner decision, 13 Nov 2026 (queue P17): the one-time marker of ADR 339 decision 7, with the host route in modes 1 and 2. Mode none closes the route.
+- Which route and marker? Owner decision, 13 Nov 2026 (queue P17): the one-time marker of ADR 339 decision 7, with the host route in bootstrap recovery and signed-request recovery ("D in mode 2" of the owner's words is signed-request recovery, ADR 372 decision 1). Mode none closes the route.
 - How does an email fit in a transaction? ADR 245 decision 7 covers the store writes. The email follows the commit. A second audit entry records the send result.
 - Does the command migrate? No. It refuses and names the command that applies migrations (ADR 245 decision 14).
 - Who is the first administrator, and what is the key material? The operator names one enabled site administrator by subject. The host cannot run a browser ceremony, so the command makes a one-time enrollment code and the administrator makes the passkey in the console.

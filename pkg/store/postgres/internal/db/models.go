@@ -108,6 +108,11 @@ type Backup struct {
 	Error       string
 }
 
+type BlobDeleteLease struct {
+	Holder      string
+	ExpiresAtMs int64
+}
+
 type BlobPurge struct {
 	Tool        string
 	UnitID      string
@@ -157,6 +162,14 @@ type Checkpoint struct {
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
+}
+
+type CheckpointSupersede struct {
+	BlobKey        string
+	StackID        string
+	UpdateID       string
+	Size           int64
+	SupersededAtMs int64
 }
 
 type Collection struct {
@@ -554,6 +567,7 @@ type ItemKey struct {
 	BlobVersion  int64
 	BlobSize     int64
 	BlobMd5      []byte
+	BlobAttempt  string
 }
 
 type Job struct {
@@ -1253,6 +1267,7 @@ type Trigger struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 type TrustRule struct {
@@ -1292,6 +1307,32 @@ type UnitState struct {
 	FinalCommit    string
 	FinalJob       string
 	FinalAtMs      int64
+}
+
+type UnmanagedScan struct {
+	ID          string
+	NamespaceID string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+type UnmanagedTarget struct {
+	NamespaceID string
+	Name        string
+	PoolID      string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
 }
 
 type Update struct {

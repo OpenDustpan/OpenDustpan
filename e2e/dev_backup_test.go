@@ -83,7 +83,7 @@ func checkRefusedWithoutFlag(t *testing.T, fix devBackupFixture) {
 		`{"backupID":"` + fix.backupID + `"}`,
 		`{"backupID":"` + fix.backupID + `","checkOnly":true}`,
 	} {
-		status, resp := post(t, server.url, "/api/server/restores", body)
+		status, resp := post(t, server.url, "/api/dustpan/v1/restores", body)
 		if status != http.StatusConflict {
 			t.Fatalf("POST restores %s = %d, want 409 (%s)", body, status, resp)
 		}
@@ -380,7 +380,7 @@ type restoreDoc struct {
 func startRestore(t *testing.T, server *productionServer, backupID string) string {
 	t.Helper()
 
-	status, resp := post(t, server.url, "/api/server/restores", `{"backupID":"`+backupID+`"}`)
+	status, resp := post(t, server.url, "/api/dustpan/v1/restores", `{"backupID":"`+backupID+`"}`)
 	if status != http.StatusAccepted {
 		t.Fatalf("POST restores = %d, want 202 (%s)", status, resp)
 	}
@@ -405,7 +405,7 @@ func restoreDevBackup(t *testing.T, server *productionServer, backupID string) {
 	deadline := time.Now().Add(2 * time.Minute)
 
 	for time.Now().Before(deadline) {
-		_, body := get(t, server.url, "/api/server/restores/"+id)
+		_, body := get(t, server.url, "/api/dustpan/v1/restores/"+id)
 
 		var doc restoreDoc
 		if err := json.Unmarshal([]byte(body), &doc); err != nil {

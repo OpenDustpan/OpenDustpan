@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 7
 ---
 
 Roadmap: `docs/roadmap.md:300` (Write-back).
@@ -47,7 +47,6 @@ Out of scope:
 Depends on:
 
 - add-job-service-routes-start-1
-- `git-host-webhook-intake-post` (order of the milestone review)
 
 ## Usability
 
@@ -61,7 +60,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Write-back branch helper is tested. (`pkg/forge/review_test.go:71 (func TestIsWriteBackBranch)`)
-- The GitHub commit trailer rule is tested. (`pkg/forge/github/commit_test.go:465 (func TestCommitNeedsATrailerInTheLastBlock)`)
+- The GitHub commit trailer rule is tested. (`pkg/forge/github/commit_test.go:467 (func TestCommitNeedsATrailerInTheLastBlock)`)
 - Blob retry backoff is tested. (`pkg/blob/retry_test.go:43 (func TestDeleteRetriedBacksOff)`)
 
 ## ADR check
@@ -82,7 +81,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: main_facts[1]: `pkg/forge/github/commit_test.go:465` is in func TestCommitMessageHasTheAuthorAsCoAuthor, not TestCommitNeedsATrailerInTheLastBlock.
+none
 
 Questions considered and answered:
 

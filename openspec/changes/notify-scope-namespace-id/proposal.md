@@ -28,7 +28,7 @@ separate bug; this change covers only the namespace-ID half.
 
 **IN**
 
-- `pkg/notify/notify.go`, `route.go`, `ports.go`: add `notify.Scope`, a namespace ID and a display name, or the installation scope `@server`. Use it for `Notification.Scope`, `Sink.Scope`, `Subscription.Scope`, `Delivery.Scope`, `CursorMove.Scope` and `ClaimRequest.Scope`. The ID is the key; the name is a label.
+- `pkg/notify/notify.go`, `route.go`, `ports.go`: add `notify.Scope` (NEW), a namespace ID and a display name, or the installation scope `@server`. Use it for the NEW field type of `Notification.Scope` (pkg/notify/notify.go:254), `Sink.Scope` (pkg/notify/route.go:89), `Subscription.Scope` (pkg/notify/route.go:671), `Delivery.Scope` (pkg/notify/ports.go:253), `CursorMove.Scope` (pkg/notify/ports.go:71) and `ClaimRequest.Scope` (pkg/notify/ports.go:434). The ID is the key; the name is a label.
 - `pkg/notify/route.go`: `ScopeActions`, `Route`, `SendsFor` and `BeforeAttempt` compare the scope ID.
 - `pkg/notify/webhook/encode.go` and `pkg/notify/chat/sender.go`: the payload and the chat message use the display name.
 - `internal/api/notifications/handlers.go` and `subscriptions.go`: the `namespace` field of the answers stays the display name.
@@ -37,7 +37,7 @@ separate bug; this change covers only the namespace-ID half.
 - `pkg/store/sqlite/notifications.go` and `pkg/store/postgres/notifications.go`: `inScopedTx`, `checkNotifyFence`, `commonScope`, `Append`, `After`, `Scopes`, `MoveCursor` read, write and compare the ID.
 - `pkg/store/sqlite/sinks.go` and `pkg/store/postgres/sinks.go`: sink reads and writes. The sink row scope is the namespace ID; the sink secret item keeps the namespace name for its secret scope.
 - `pkg/notify/seal.go`: `SinkSealer.sealValue` and `openValue` use the namespace name of the sink, not the row scope ID, for the secret item.
-- `pkg/store/sqlite/queries.sql` and `pkg/store/postgres/queries.sql`: the notification queries read the display name from the namespace row; regenerate `internal/db` with `make generate`.
+- `pkg/store/sqlite/queries.sql` and `pkg/store/postgres/queries.sql`: the notification queries read the display name from the namespace row; regenerate the generated query code with `make generate`.
 - `pkg/store/sqlite/backup_notifications.go`, `backup_notification_sinks.go` and the PostgreSQL counterparts: the backup rows carry the ID.
 - `pkg/notify/notifytest/notifytest.go`: the conformance suite.
 
@@ -54,6 +54,19 @@ separate bug; this change covers only the namespace-ID half.
 - **Guard: the reader receives the ID.** Test `TestCanReadUsesTheScopeID` with the first production `notify.Reader` implementation. It gives a principal of the new namespace a notification of the old ID. Mutation: resolve the scope by name; the answer is true. No implementation exists today, so this test lands with it.
 - **Guard: the API resolves the ID.** Test `TestRecreatedNamespaceListsNoSinks` in `internal/api/notifications`. Mutation: pass the path namespace name to the service; the new namespace lists the old sinks.
 - **Guard: the answers keep the name.** Test `TestSinkDocumentKeepsTheNamespaceName` in `internal/api/notifications` and `TestWebhookUsesTheNamespaceName` in `pkg/notify/webhook`. Mutation: use the ID in the answer or the payload; the tests fail.
+
+## Contract
+
+The production notify.Reader (pkg/dustpan/notify_reader.go, NEW):
+
+- `type notifyReader struct` (NEW, unexported fields: the principal service and the authorizer).
+- `func newNotifyReader(principals *principal.Service, authz identity.Authorizer) (*notifyReader, error)` (NEW): returns an error when either argument is nil.
+- `func (r *notifyReader) CanRead(ctx context.Context, id string, n notify.Notification) (bool, error)` (NEW), the method of `notify.Reader`:
+  - reads the principal by its stable ID through `principal.Service.GetPrincipal` (pkg/principal/service.go:174) and builds the `identity.Principal` as pkg/dustpan/triggers.go:280 does;
+  - an unknown or a disabled principal: `false, nil`;
+  - for each action of `notify.ScopeActions(n)` (pkg/notify/route.go:722): the object is `identity.ServerObject()` when n.Scope is the server scope (`audit.ServerScope`), else `identity.NamespaceObject(n.Scope)`; for a unit notification, also the read action of the unit through `identity.UnitObject`;
+  - an authorizer answer that wraps `identity.ErrDenied`: `false, nil`; any other error: `false, err`, so the caller sends nothing (fail closed).
+- The actions are those of main (pkg/notify/route.go:698-735), not new ones: `namespace:read`; `namespace:read-cost` for a cost or budget notification; `namespace:manage-notifications` for a settings notification; `server:observe` for the server scope; and `server:manage-notifications` for a settings notification of the server scope.
 
 ## ADR check
 

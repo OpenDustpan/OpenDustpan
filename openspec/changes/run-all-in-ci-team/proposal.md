@@ -42,7 +42,6 @@ Out of scope:
 Depends on:
 
 - local-run-all
-- `local-run-all` (order of the milestone review)
 
 ## Usability
 

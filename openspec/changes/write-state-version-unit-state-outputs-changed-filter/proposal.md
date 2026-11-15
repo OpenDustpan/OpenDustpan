@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 7
 ---
 
 Issue: #1215.
@@ -45,7 +45,7 @@ Out of scope:
 Depends on:
 
 - write-state-version-unit-state-follows-trigger-start
-- write-state-version-unit-state
+- write-state-version-unit-state-1
 - `write-state-version-unit-state-trigger-caps-depth` (the part before it in the split)
 
 ## Usability
@@ -59,7 +59,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Dispatcher.Upstream decides follows starts. (`pkg/trigger/ports.go:192`)
+- Dispatcher.Upstream decides follows starts. (`pkg/trigger/ports.go:136`)
 - Test helper drives Dispatcher.Upstream with an applied final version. (`pkg/trigger/triggertest/dispatcher.go:76`)
 - Unit state is written only in publishUnitState, inside the fenced transaction, which also closes awaiting jobs with jobstore.CloseAwaiting. No observer port exists and none is added. (`pkg/store/sqlite/unit_state.go:97`)
 

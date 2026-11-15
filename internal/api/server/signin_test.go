@@ -898,6 +898,7 @@ func policyChangeEntry(at time.Time) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -1692,7 +1693,7 @@ func newSignInAccess(
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Now: clock.Now, NewID: nil,
-		BootstrapAdmins: nil, LimitGroups: nil,
+		BootstrapAdmins: nil, Settings: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)

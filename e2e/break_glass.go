@@ -69,7 +69,8 @@ func seedBreakGlass(ctx context.Context, st namespace.Store, subjects, ids []str
 			ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: breakGlassActor,
 			Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 			ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "",
-			JobID: "",
+			JobID:  "",
+			Origin: nil,
 		}
 
 		if err := rows.CreatePrincipal(ctx, p, e); err != nil {
