@@ -1099,8 +1099,8 @@ func (h *rtHarness) runBackupAndRestoreWith(beforeRestore func() func()) backupR
 		ID string `json:"id"`
 	}
 
-	h.decode(h.call(http.MethodPost, "/api/server/backups", "", http.StatusAccepted), &started)
-	h.settle("/api/server/backups/"+started.ID, string(backup.StateRunning))
+	h.decode(h.call(http.MethodPost, "/api/dustpan/v1/backups", "", http.StatusAccepted), &started)
+	h.settle("/api/dustpan/v1/backups/"+started.ID, string(backup.StateRunning))
 	h.settleOperations()
 
 	out.backup = h.tracer.end()
@@ -1116,9 +1116,9 @@ func (h *rtHarness) runBackupAndRestoreWith(beforeRestore func() func()) backupR
 		ID string `json:"id"`
 	}
 
-	h.decode(h.call(http.MethodPost, "/api/server/restores", `{"backupID":"`+started.ID+`"}`, http.StatusAccepted),
+	h.decode(h.call(http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+started.ID+`"}`, http.StatusAccepted),
 		&restore)
-	h.settle("/api/server/restores/"+restore.ID, "running", "checking", "applying")
+	h.settle("/api/dustpan/v1/restores/"+restore.ID, "running", "checking", "applying")
 	h.settleOperations()
 
 	out.restore = h.tracer.end()
@@ -1356,13 +1356,21 @@ func backupModel() costModel {
 // perOther counts 2 round trips for each table that a backup leaves out. An
 // emptied table that the restore only reads for its column check costs 1. So
 // the fixed part takes 1 off for passkey_challenges, the table of the open
-// passkey ceremonies, which a restore leaves empty.
+// passkey ceremonies, and 1 more for job_tokens, the table of the job tokens,
+// which a restore leaves empty.
+// The job token column check uses one statement, with no change in cost
+// when the token rows keep only IDs instead of names.
 //
 // The fixed part takes 2 off for each table of Tables that the dev strip never
 // counts, group_mappings and member_removals. The run makes 5 round trips for
 // one of those tables, 2 fewer than the cost of a table in the model: the dev
 // strip counts no rows in it, and the other statements for it are the staging
 // count and the read of the backup.
+//
+// The fixed part takes 2 off for the 2 tables of the sweeps (unmanaged_targets
+// and unmanaged_scans). The dev strip counts no rows in them either, so each
+// costs 5 round trips, 4 fewer in all. The check of the staged rows reads each
+// of the 2 tables once more, 2 more in all.
 //
 // The fixed part also holds forgeStripClassTrips: the dev strip counts the rows
 // of the two Git host classes that a principal owns, one statement for each,
@@ -1398,7 +1406,7 @@ func backupModel() costModel {
 // model gives a table.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 342 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+		fixed: 339 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			serverAuditLockTrips + checkpointSupersedesTrips,
 		perTable:     7,

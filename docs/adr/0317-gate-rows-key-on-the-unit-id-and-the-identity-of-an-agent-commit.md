@@ -7,6 +7,8 @@ Changed by:
 - ADR 319 changes decision 2: the trailer `Co-Authored-By` of an agent commit.
 - ADR 375 extends decision 2: the author email of an agent commit marks a
   pull request as AI-authored.
+- ADR 381 changes decision 2: after the first tag, the `Signed-off-by:` line
+  of an agent commit is the line of the project owner.
 
 Changes:
 
