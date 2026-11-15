@@ -60,6 +60,11 @@ type workerWatch struct {
 	owner      string
 	logger     *slog.Logger
 	now        func() time.Time
+	// draining reports whether this process drains, or is nil before attach.
+	draining func() bool
+	// drainPeriod is the length of the drain. The drain refusal carries it
+	// in the Retry-After header.
+	drainPeriod time.Duration
 
 	// lastActive and lastBeat are times of the clock of this process in Unix
 	// nanoseconds. lastBeat is 0 before the first heartbeat.
@@ -88,6 +93,8 @@ func newWorkerWatch(cfg *settings) *workerWatch {
 		owner:       cfg.instanceID,
 		logger:      cfg.logger,
 		now:         cfg.now,
+		draining:    nil,
+		drainPeriod: cfg.drainPeriod,
 		lastActive:  atomic.Int64{},
 		lastBeat:    atomic.Int64{},
 		mu:          sync.Mutex{},
@@ -156,9 +163,15 @@ func (w *workerWatch) WorkerReport(ctx context.Context) (server.WorkerReport, er
 }
 
 // AdmitStart implements server.WorkerSource. A process that runs the worker
-// component claims for itself and admits each start. When the store cannot
-// be read, it admits the start too: a store error is not a missing worker.
+// component claims for itself and admits each start. A draining process
+// refuses every start, so a durable operation starts on another instance.
+// When the store cannot be read, it admits the start too: a store error is
+// not a missing worker.
 func (w *workerWatch) AdmitStart(ctx context.Context) error {
+	if w.draining != nil && w.draining() {
+		return admit.Draining(w.drainPeriod)
+	}
+
 	if w.components.Has(ComponentWorker) {
 		return nil
 	}
@@ -176,6 +189,8 @@ func (w *workerWatch) AdmitStart(ctx context.Context) error {
 func (w *workerWatch) attach(srv *Server, registry *metrics.Registry) {
 	w.specs = srv.jobSchedules
 	w.owner = srv.durableOwner
+	w.draining = srv.Draining
+	w.drainPeriod = srv.drainPeriod
 
 	registerWatchMetrics(registry, w)
 }
