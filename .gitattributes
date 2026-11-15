@@ -1,0 +1,18 @@
+# Generated files. GitHub collapses their diffs in a review.
+# The list is the list of GENERATED in scripts/auto-regen.sh.
+# No merge driver: a merge on a server does not run one. A conflict in a
+# generated file is resolved by a new run of its generator.
+internal/api/apidesc/openapi.json linguist-generated=true
+clients/typescript/** linguist-generated=true
+internal/clientgen/golang/testdata/golden/** linguist-generated=true
+internal/clientgen/typescript/testdata/golden/** linguist-generated=true
+pkg/store/postgres/internal/db/** linguist-generated=true
+pkg/store/sqlite/internal/db/** linguist-generated=true
+pkg/preferences/zones_gen.go linguist-generated=true
+internal/pulumijournal/entry_gen.go linguist-generated=true
+internal/pulumijournal/internal/gen/testdata/journal.go linguist-generated=true
+docs/adr/INDEX.md linguist-generated=true
+.repowise/decisions.yaml linguist-generated=true
+docs/reference/configuration.md linguist-generated=true
+pkg/store/postgres/migrations/*.sql.sha256 linguist-generated=true
+pkg/store/sqlite/migrations/*.sql.sha256 linguist-generated=true

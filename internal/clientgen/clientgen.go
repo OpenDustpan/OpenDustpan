@@ -66,8 +66,15 @@ type Options struct {
 	// Package is the package or module name of the client in the target
 	// language, for example opendustpan.org/client for Go.
 	Package string
+	// Publish is true for the run that writes the files of a published
+	// package. Only that run writes the client version and the digest of the
+	// description into the output. Any other run leaves them out, so that a
+	// change of the description does not change a line that it does not
+	// touch. A template set that has no use for it ignores it.
+	Publish bool
 	// ClientVersion is the version of the client release. Its major and minor
-	// parts are those of the description version.
+	// parts are those of the description version. A template set that has a
+	// publish mode uses it only when Publish is true.
 	ClientVersion string
 	// ServerRelease is the release of the server that the description comes
 	// from. The client carries it in its metadata and in its user agent,
@@ -87,7 +94,8 @@ type Options struct {
 	GeneratorVersion string
 	// DescriptionSHA256 is the SHA-256 of the bytes of the description, in
 	// lowercase hexadecimal. A client can carry it as a pin of the
-	// description. A template set that has no use for it ignores it.
+	// description. A template set that has a publish mode carries it only
+	// when Publish is true. A template set that has no use for it ignores it.
 	DescriptionSHA256 string
 }
 

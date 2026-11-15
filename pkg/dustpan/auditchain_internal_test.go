@@ -72,6 +72,11 @@ func newTestAuditChain(t *testing.T, setting audit.ChainSetting) *auditChain {
 		t.Fatalf("save chain record: %v", err)
 	}
 
+	// Only a person approves a change to off, so the default caller is one.
+	if setting == audit.ChainOff {
+		createPrincipalOfKind(t, chain, "alice", principal.KindPerson)
+	}
+
 	return chain
 }
 
@@ -137,8 +142,8 @@ func createPrincipalOfKind(t *testing.T, chain *auditChain, subject string, kind
 
 // TestApproveOffRefusesServicePrincipal proves that an approval of a change
 // to off by a service principal is refused before it writes anything, that
-// the same caller may approve a change to on, and that a subject with no
-// principal row may approve a change to off.
+// the same caller may approve a change to on, and that a person may approve a
+// change to off.
 func TestApproveOffRefusesServicePrincipal(t *testing.T) {
 	t.Parallel()
 
@@ -157,7 +162,7 @@ func TestApproveOffRefusesServicePrincipal(t *testing.T) {
 	}
 
 	if err := off.Approve(t.Context(), approver()); err != nil {
-		t.Fatalf("approve off without a principal row: %v", err)
+		t.Fatalf("approve off as a person: %v", err)
 	}
 
 	on := newTestAuditChain(t, audit.ChainOn)
@@ -169,11 +174,9 @@ func TestApproveOffRefusesServicePrincipal(t *testing.T) {
 }
 
 // TestApproveOffKindsAllowlist proves that the check on a change to off is
-// an allowlist of the kind person and the kind workload: each of those kinds
-// with a principal row may approve it. It refuses the kind service, the kind
-// agent and an unknown kind. A workload passed this check on main, when the
-// check refused only the kind service, and this test documents that it still
-// passes. A refused approval writes no operation.
+// an allowlist of the kind person: only that kind may approve it. It refuses
+// the kind workload, the kind service, the kind agent and an unknown kind. A
+// refused approval writes no operation.
 func TestApproveOffKindsAllowlist(t *testing.T) {
 	t.Parallel()
 
@@ -184,7 +187,7 @@ func TestApproveOffKindsAllowlist(t *testing.T) {
 	}{
 		{"person", principal.KindPerson, false},
 		{"service", principal.KindService, true},
-		{"workload", principal.KindWorkload, false},
+		{"workload", principal.KindWorkload, true},
 		{"agent", principal.KindAgent, true},
 		{"unknown", principal.Kind("robot"), true},
 	} {
@@ -216,6 +219,116 @@ func TestApproveOffKindsAllowlist(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestApproveOffRefusesEachOtherCaseAndAudits proves that an approval of a
+// change to off by each case that is not a person answers ErrChainNeedsPerson,
+// starts no migration, keeps the stored chain state and writes one denied
+// entry in the server scope.
+func TestApproveOffRefusesEachOtherCaseAndAudits(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range approverCases() {
+		if !tc.refused {
+			continue
+		}
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkRefusedApproval(t, tc)
+		})
+	}
+}
+
+// checkRefusedApproval approves a change to off as the caller of tc and
+// proves the refusal, the missing operation, the unchanged record and the one
+// denied entry.
+func checkRefusedApproval(t *testing.T, tc approverCase) {
+	t.Helper()
+
+	off := newTestAuditChain(t, audit.ChainOff)
+
+	if tc.stored {
+		createPrincipalOfKind(t, off, "intruder", tc.kind)
+	}
+
+	if tc.replace {
+		off.principals = tc.reader
+	}
+
+	before, err := off.store.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	caller := approver()
+	caller.Subject = "intruder"
+
+	err = off.Approve(t.Context(), caller)
+	if !errors.Is(err, audit.ErrChainNeedsPerson) {
+		t.Fatalf("approve off: %v, want ErrChainNeedsPerson", err)
+	}
+
+	if got := migrationOpCount(t, off); got != 0 {
+		t.Fatalf("operations after a refused approval = %d, want none", got)
+	}
+
+	after, err := off.store.ChainRecord(t.Context())
+	if err != nil || after != before {
+		t.Fatalf("chain record after = %+v, %v, want %+v", after, err, before)
+	}
+
+	if denied := deniedEntryCount(t, off, "intruder"); denied != 1 {
+		t.Fatalf("denied entries = %d, want 1", denied)
+	}
+}
+
+// deniedEntryCount answers the count of denied approval entries of subject in
+// the server scope.
+func deniedEntryCount(t *testing.T, chain *auditChain, subject string) int {
+	t.Helper()
+
+	listing, err := chain.entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 50})
+	if err != nil {
+		t.Fatalf("list server entries: %v", err)
+	}
+
+	denied := 0
+
+	for i := range listing.Entries {
+		e := listing.Entries[i]
+		if e.Action == audit.ActionSetChain && e.Outcome == audit.OutcomeDenied && e.Subject == subject {
+			denied++
+		}
+	}
+
+	return denied
+}
+
+// TestApproveOffRefusalJoinsTheFailedAuditWrite proves that a failed write of
+// the denied entry joins the refusal.
+func TestApproveOffRefusalJoinsTheFailedAuditWrite(t *testing.T) {
+	t.Parallel()
+
+	off := newTestAuditChain(t, audit.ChainOff)
+	off.principals = fakePrincipals{err: nil, kind: principal.KindService}
+	off.server = failingServer{}
+
+	err := off.Approve(t.Context(), approver())
+	if !errors.Is(err, audit.ErrChainNeedsPerson) || !errors.Is(err, errServerAppend) {
+		t.Fatalf("approve off: %v, want the refusal joined with the write error", err)
+	}
+}
+
+// errServerAppend is the failure of failingServer.
+var errServerAppend = errors.New("server append failed")
+
+// failingServer fails each append.
+type failingServer struct{}
+
+func (failingServer) AppendServer(context.Context, audit.Entry) (audit.Entry, error) {
+	return audit.Entry{}, errServerAppend
 }
 
 // TestApproveOffNeedsTheMFAStep proves that once the MFA check asks for a
@@ -488,6 +601,7 @@ func TestConcurrentApprovalsLeaveOneEntry(t *testing.T) {
 	first := newConcurrentApprovalChain(t, st)
 	second := newConcurrentApprovalChain(t, st)
 
+	createPrincipalOfKind(t, first, "alice", principal.KindPerson)
 	saveConcurrentWaitingChange(t, st)
 
 	counts := runConcurrentApprovals(t, []*auditChain{first, second})
@@ -540,6 +654,8 @@ func TestConcurrentApprovalsOnOneStore(t *testing.T) {
 	}
 
 	first, second := newChain(), newChain()
+
+	createPrincipalOfKind(t, first, "alice", principal.KindPerson)
 
 	saveErr := st.SaveChainRecord(t.Context(), audit.ChainRecord{
 		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,
