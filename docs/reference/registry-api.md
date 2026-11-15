@@ -74,6 +74,9 @@ The body of `PUT /providers/{name}/versions/{version}` is:
 to the highest, with no repeat. It has one to four entries in the form `5.0`.
 `files` has one `sums`, one `signature` and one to 64 `archive` entries. A token
 names a file that was staged in the same namespace. Each token is used once.
+A publish that repeats the `Idempotency-Key` answers the stored answer of the
+first publish, so the release in it is the release at the time of the first
+publish. A `GET` of the version gives the current state.
 
 The answer is the release:
 

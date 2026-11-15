@@ -226,6 +226,8 @@ var (
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant sets.
 var legacyFieldNames = map[string]string{
+	"collectionID": "The placement API spells the stable ID of a collection collectionID, because the tagliatelle " +
+		"goCamel rule of the linter demands it.",
 	"unitID":    "The inventory, context and job APIs spell the stable ID of a unit unitID, and the console reads it.",
 	"versionID": "The jobs API spells the ID of the closing state version versionID.",
 	"poolID": "The jobs API spells the ID of the runner pool poolID, because the tagliatelle goCamel " +

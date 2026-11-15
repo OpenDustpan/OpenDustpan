@@ -180,6 +180,7 @@ func TestFinishRefusesAHostileAnswer(t *testing.T) {
 		{name: "a proxy ticket", answer: castest.AnswerProxy, want: session.ErrMethodAnswer, fresh: false},
 		{name: "two users", answer: castest.AnswerTwoUsers, want: session.ErrMethodAnswer, fresh: false},
 		{name: "not XML", answer: castest.AnswerBroken, want: session.ErrMethodAnswer, fresh: false},
+		{name: "an empty answer", answer: castest.AnswerEmpty, want: session.ErrMethodAnswer, fresh: false},
 		{
 			name:   "an internal error",
 			answer: castest.AnswerInternalError,

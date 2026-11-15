@@ -7,7 +7,7 @@ chain to off becomes an allowlist of one kind, and each refusal is audited.
 
 - NEW method `auditChain.requirePersonApprover(ctx context.Context, subject string) error` in `pkg/dustpan/auditchain.go`, in place of `refuseServiceCaller`. It returns nil only for a stored principal of kind person. It returns `audit.ErrChainNeedsPerson` for every other kind, for a subject with no principal row and for a nil principal reader, and a read error joined with `audit.ErrChainNeedsPerson`.
 - `auditChain.Approve`: on that refusal it writes one entry in the `@server` scope (action `server:set-audit-chain`, outcome denied, the reason), then returns the refusal.
-- Endpoint `POST /api/server/audit/chain`: answers 403 with the text of `audit.ErrChainNeedsPerson` for a refused caller, as on main. Not changed.
+- Endpoint `POST /api/dustpan/v1/audit/chain`: answers 403 with the text of `audit.ErrChainNeedsPerson` for a refused caller, as on main. Not changed.
 
 ## Layers (defense in depth)
 

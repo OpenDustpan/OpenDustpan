@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/subscriptionsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 )
@@ -45,6 +46,7 @@ type deliveryWire struct {
 	Principal             string     `json:"principal"`
 	State                 string     `json:"state"`
 	Attempts              int        `json:"attempts"`
+	CreatedAt             time.Time  `json:"createdAt"`
 	RedeliverableAt       *time.Time `json:"redeliverableAt"`
 	RedeliveryLimit       int        `json:"redeliveryLimit"`
 	RedeliveriesRemaining int        `json:"redeliveriesRemaining"`
@@ -97,7 +99,7 @@ func (f fixture) seedDeliveryAt(
 	d := notify.Delivery{
 		ID: ident.NewID(notify.DeliveryIDPrefix), Notification: ident.NewID(notify.IDPrefix), Scope: ns,
 		Subscription: sub.ID, Sink: sub.Sink, Contact: "", Principal: sub.CreatedBy, State: notify.DeliveryPending,
-		Attempts: 0, Redeliveries: 0, NextAt: nextAt, LastError: "",
+		Attempts: 0, CreatedAt: nextAt, Redeliveries: 0, NextAt: nextAt, LastError: "",
 		DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 0,
 	}
 
@@ -174,7 +176,7 @@ func (f fixture) seedDeliveries(
 		ds = append(ds, notify.Delivery{
 			ID: ident.NewID(notify.DeliveryIDPrefix), Notification: ident.NewID(notify.IDPrefix), Scope: ns,
 			Subscription: sub.ID, Sink: sub.Sink, Contact: "", Principal: sub.CreatedBy, State: notify.DeliveryPending,
-			Attempts: 0, Redeliveries: 0, NextAt: nextAt, LastError: "",
+			Attempts: 0, CreatedAt: nextAt, Redeliveries: 0, NextAt: nextAt, LastError: "",
 			DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 0,
 		})
 	}
@@ -455,19 +457,19 @@ func TestDeliveryHistoryPages(t *testing.T) {
 // historyTokenWire is the page token of the delivery history, for a test that
 // forges one.
 type historyTokenWire struct {
-	NextAt      int64  `json:"t"`
+	CreatedAt   int64  `json:"t"`
 	ID          string `json:"i"`
 	Fingerprint string `json:"f"`
 }
 
 // historyTokenFor encodes a page token of the history of sub at the cursor
-// (nextAt, id). The fingerprint of the history is the namespace and the
+// (createdAt, id). The fingerprint of the history is the namespace and the
 // subscription ID.
-func historyTokenFor(t *testing.T, sub subscriptionWire, nextAt int64, id string) string {
+func historyTokenFor(t *testing.T, sub subscriptionWire, createdAt int64, id string) string {
 	t.Helper()
 
 	raw, err := pagetoken.Encode(historyTokenWire{
-		NextAt: nextAt, ID: id, Fingerprint: "acme\x00" + sub.ID,
+		CreatedAt: createdAt, ID: id, Fingerprint: "acme\x00" + sub.ID,
 	})
 	if err != nil {
 		t.Fatalf("encode page token: %v", err)
@@ -493,7 +495,7 @@ func TestDeliveryHistoryRefusesBadTokens(t *testing.T) {
 		token string
 	}{
 		{"empty cursor ID", historyTokenFor(t, sub, nextAtMs, "")},
-		{"next time before the Unix epoch", historyTokenFor(t, sub, -1, "dlv-aaaaaaaaaaaaaaaaaaaa")},
+		{"creation time before the Unix epoch", historyTokenFor(t, sub, -1, "dlv-aaaaaaaaaaaaaaaaaaaa")},
 		{"cursor ID that is not a delivery ID", historyTokenFor(t, sub, nextAtMs, "sub-aaaaaaaaaaaaaaaaaaaa")},
 	}
 
@@ -566,10 +568,10 @@ func TestDeliveryHistoryStopsAtTheBound(t *testing.T) {
 	}
 }
 
-// TestDeliveryHistorySameNextAt pages the history of many deliveries that
-// share one next time, with a page edge between them. Every delivery comes
+// TestDeliveryHistorySameCreatedAt pages the history of many deliveries that
+// share one creation time, with a page edge between them. Every delivery comes
 // back once, in the order of the history.
-func TestDeliveryHistorySameNextAt(t *testing.T) {
+func TestDeliveryHistorySameCreatedAt(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
@@ -582,7 +584,7 @@ func TestDeliveryHistorySameNextAt(t *testing.T) {
 		want = append(want, f.seedDeliveryAt(t, "acme", sub, notify.DeliveryDone, nextAt).ID)
 	}
 
-	// The history orders the rows of one next time by ID, greatest first.
+	// The history orders the rows of one creation time by ID, greatest first.
 	slices.SortFunc(want, func(a, b string) int { return strings.Compare(b, a) })
 
 	path := subscriptionsBase + "/" + sub.ID + "/deliveries"
@@ -607,6 +609,10 @@ func TestDeliveryHistorySameNextAt(t *testing.T) {
 
 		resp := decode[historyWire](t, answer)
 		for _, d := range resp.Deliveries {
+			if !d.CreatedAt.Equal(nextAt) {
+				t.Fatalf("createdAt of %s = %s, want %s", d.ID, d.CreatedAt, nextAt)
+			}
+
 			got = append(got, d.ID)
 		}
 
@@ -732,6 +738,54 @@ func TestRedeliverTooSoon(t *testing.T) {
 			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusTooManyRequests, []byte(got.body),
 				errcodetest.Want{Code: errcode.SinkDeliveryTooSoon, Args: nil, RequestBody: nil})
 		})
+	}
+}
+
+// TestRedeliverTooSoonRecorded checks that a redeliver that comes too soon
+// writes one denied audit entry, and that the repeats of the refusal in one
+// window write no entry of their own.
+func TestRedeliverTooSoonRecorded(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	f := newFixture(t)
+	f.clock.Set(base)
+
+	sub := f.makeSubscription(t)
+	done := f.seedDelivery(t, "acme", sub, notify.DeliveryDone)
+	f.clock.Set(base.Add(time.Millisecond))
+
+	before := len(f.entries(t))
+
+	for range 3 {
+		got := f.do(t, send("admin", http.MethodPost, deliveriesBase+"/"+done.ID+"/redeliver", ""))
+		wantCode(t, "too soon", got, http.StatusTooManyRequests)
+		errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusTooManyRequests, []byte(got.body),
+			errcodetest.Want{Code: errcode.SinkDeliveryTooSoon, Args: nil, RequestBody: nil})
+
+		if got.header.Get("Retry-After") == "" {
+			t.Fatal("Retry-After is empty, want the wait")
+		}
+	}
+
+	added := f.entries(t)[before:]
+	if len(added) != 1 {
+		t.Fatalf("audit entries after 3 refusals = %d, want 1: %+v", len(added), added)
+	}
+
+	e := added[0]
+	if e.Outcome != audit.OutcomeDenied || e.Action != string(identity.ActionNamespaceManageNotifications) ||
+		!strings.HasPrefix(e.Reason, errcode.SinkDeliveryTooSoon) {
+		t.Errorf("entry = outcome %q action %q reason %q, want denied, manage-notifications, %q",
+			e.Outcome, e.Action, e.Reason, errcode.SinkDeliveryTooSoon)
+	}
+
+	history := decode[historyWire](t, f.do(t, get("admin", subscriptionsBase+"/"+sub.ID+"/deliveries")))
+
+	for _, d := range history.Deliveries {
+		if d.ID == done.ID && d.State != "delivered" {
+			t.Errorf("delivery state after refusals = %q, want delivered", d.State)
+		}
 	}
 }
 
