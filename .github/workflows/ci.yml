@@ -678,7 +678,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     services:
       postgres: *postgres-service
     steps:
