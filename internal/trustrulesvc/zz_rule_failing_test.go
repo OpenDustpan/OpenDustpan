@@ -57,7 +57,7 @@ func fixtureWithStore(t *testing.T) (fixture, *failingStore, time.Time) {
 	f := newFixture(t)
 	fs := &failingStore{fakeStore: *f.store, updated: nil}
 	f.store = &fs.fakeStore
-	now := time.Now()
+	now := exchangeNow()
 
 	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: fs, Namespaces: fakeNamespaces{}, Principals: servicePrincipals(), Authorizer: f.authz,

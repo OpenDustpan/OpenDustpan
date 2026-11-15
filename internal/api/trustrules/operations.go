@@ -28,6 +28,7 @@ func operationLabels() map[string]apidesc.Label {
 				apidesc.Named[ruleDocument]("TrustRule"))),
 		apidesc.Pattern(http.MethodPost, RulesPath): apidesc.Name("createTrustRule", tag).
 			On(apidesc.KindNamespace).
+			WithStatus(http.StatusCreated).
 			WithBodies(apidesc.Typed[createRequest]("CreateTrustRuleRequest", keySource, condition), rule),
 		apidesc.Pattern(http.MethodGet, RulePath): apidesc.Name("getTrustRule", tag).
 			On(apidesc.KindNamespace).
@@ -44,6 +45,7 @@ func operationLabels() map[string]apidesc.Label {
 				apidesc.Named[bundleDocument]("TrustBundle"))),
 		apidesc.Pattern(http.MethodPost, BundlesPath): apidesc.Name("saveTrustBundle", tag).
 			On(apidesc.KindNamespace).
+			WithStatus(http.StatusCreated).
 			WithBodies(apidesc.Typed[saveBundleRequest]("SaveTrustBundleRequest"), bundle),
 		apidesc.Pattern(http.MethodGet, BundlePath): apidesc.Name("getTrustBundle", tag).
 			On(apidesc.KindNamespace).

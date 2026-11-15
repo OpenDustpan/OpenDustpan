@@ -183,7 +183,7 @@ func newFixture(t *testing.T) fixture {
 		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz, Reach: reach,
 		InstallationURLs: []string{"https://dustpan.example.com", "https://issuer.example.com/base/"}, OwnIssuer: nil,
 		CheckURL: nil, Bundles: nil, Sessions: nil,
-		Now: nil,
+		Now: exchangeNow,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -573,7 +573,7 @@ func TestCreateRefusesWithNoReachChecker(t *testing.T) {
 
 	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz, Reach: nil,
-		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil, Bundles: nil, Sessions: nil,
+		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: exchangeNow, Bundles: nil, Sessions: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -639,7 +639,7 @@ func freshSessionContext(t *testing.T) context.Context {
 
 	ctx := sessionauth.WithSession(t.Context())
 
-	return sessionauth.WithSignIn(ctx, sessionauth.SignIn{At: time.Now(), Provider: "password"})
+	return sessionauth.WithSignIn(ctx, sessionauth.SignIn{At: exchangeNow(), Provider: "password"})
 }
 
 func TestNewServiceNeedsItsPorts(t *testing.T) {

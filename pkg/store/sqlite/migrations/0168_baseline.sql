@@ -1149,14 +1149,6 @@ CREATE TABLE instance_versions (
     started_at_ms  INTEGER NOT NULL
 ) STRICT;
 
-CREATE TABLE trust_bundles (
-    id             TEXT    NOT NULL PRIMARY KEY,
-    namespace      TEXT    NOT NULL UNIQUE,
-    active_version INTEGER NOT NULL CHECK (active_version >= 1),
-    revision       INTEGER NOT NULL CHECK (revision >= 1),
-    created_at_ms  INTEGER NOT NULL
-) STRICT;
-
 CREATE TABLE trust_bundle_versions (
     bundle_id          TEXT    NOT NULL REFERENCES trust_bundles (id) ON DELETE CASCADE,
     version            INTEGER NOT NULL CHECK (version >= 1),
@@ -1164,6 +1156,14 @@ CREATE TABLE trust_bundle_versions (
     created_at_ms      INTEGER NOT NULL,
     overlap_ends_at_ms INTEGER NOT NULL CHECK (overlap_ends_at_ms >= 0),
     PRIMARY KEY (bundle_id, version)
+) STRICT;
+
+CREATE TABLE trust_bundles (
+    id             TEXT    NOT NULL PRIMARY KEY,
+    namespace      TEXT    NOT NULL UNIQUE,
+    active_version INTEGER NOT NULL CHECK (active_version >= 1),
+    revision       INTEGER NOT NULL CHECK (revision >= 1),
+    created_at_ms  INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE trust_rules (

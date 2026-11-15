@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -158,7 +159,8 @@ func (h *Handler) saveBundle(w http.ResponseWriter, r *http.Request, p identity.
 	}
 
 	w.Header().Set("ETag", trustrule.ETag(b.Revision))
-	w.Header().Set("Location", BundlesPath[:len(BundlesPath)-len("{bundle}")]+string(b.ID))
+	w.Header().Set("Location", "/api/dustpan/v1/namespaces/"+url.PathEscape(obj.Namespace().String())+
+		"/trust-bundles/"+url.PathEscape(string(b.ID)))
 	problem.WriteJSON(ctx, h.logger, w, http.StatusCreated, bundleDocumentOf(&b))
 }
 

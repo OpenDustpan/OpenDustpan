@@ -182,8 +182,8 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 			Grants: e.store, Roles: e.store, Callers: e.store, Principals: e.store,
 			Collections: nil, Units: e.store,
 		},
-		Store: e.store, Principals: e.store, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil, Now: nil,
-		NewID: nil,
+		Store: e.store, Principals: e.store, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil,
+		Now: testNow, NewID: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("token service: %v", err)
@@ -199,7 +199,7 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store, Authorizer: authz,
 		Reach:            reach,
-		InstallationURLs: []string{publicURL}, OwnIssuer: nil, CheckURL: nil, Now: nil, Bundles: nil, Sessions: nil,
+		InstallationURLs: []string{publicURL}, OwnIssuer: nil, CheckURL: nil, Now: testNow, Bundles: nil, Sessions: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("trust rule service: %v", err)
@@ -208,7 +208,7 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 	exchanger, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: e.store.TrustRules(), Exchanges: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store,
 		Tokens: tokens, Audit: e.store, ServerAudit: e.store, Refusals: nil, Keys: nil,
-		InstallationURLs: []string{publicURL}, OwnIssuer: nil, Now: nil, Log: nil,
+		InstallationURLs: []string{publicURL}, OwnIssuer: nil, Now: testNow, Log: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("exchanger: %v", err)
@@ -299,13 +299,19 @@ func (e *env) storePrincipal(id, subject string, ns namespace.Name, kind princip
 // of now on the request, as the session checker of the server does.
 const sessionHeader = "X-Test-Session"
 
+// testNow is the fixed clock of the service and of the sign-in of a test
+// session, so that no test reads the wall clock.
+func testNow() time.Time {
+	return time.Unix(1_700_000_000, 0).UTC()
+}
+
 // withTestSession wraps h so that a request with sessionHeader carries a
 // fresh console session in its context.
 func withTestSession(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(sessionHeader) == "1" {
 			ctx := sessionauth.WithSession(r.Context())
-			ctx = sessionauth.WithSignIn(ctx, sessionauth.SignIn{At: time.Now(), Provider: "local"})
+			ctx = sessionauth.WithSignIn(ctx, sessionauth.SignIn{At: testNow(), Provider: "local"})
 			r = r.WithContext(ctx)
 		}
 

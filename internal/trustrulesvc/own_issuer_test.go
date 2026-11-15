@@ -38,7 +38,7 @@ func ownFixture(t *testing.T, own trustrulesvc.OwnIssuer) fixture {
 	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz,
 		Reach:            reach,
-		InstallationURLs: []string{"https://dustpan.example.com"}, OwnIssuer: own, CheckURL: nil, Now: nil,
+		InstallationURLs: []string{"https://dustpan.example.com"}, OwnIssuer: own, CheckURL: nil, Now: exchangeNow,
 		Bundles: nil, Sessions: nil,
 	})
 	if err != nil {

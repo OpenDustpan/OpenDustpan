@@ -26,7 +26,7 @@ func testCA(t *testing.T, validity time.Duration) string {
 		t.Fatalf("generate key: %v", err)
 	}
 
-	notAfter := time.Now().Add(validity)
+	notAfter := bundleTestNow().Add(validity)
 
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
@@ -37,7 +37,7 @@ func testCA(t *testing.T, validity time.Duration) string {
 
 	tmpl.SerialNumber = serial
 	tmpl.Subject.CommonName = "test CA"
-	tmpl.NotBefore = time.Now().Add(-time.Hour)
+	tmpl.NotBefore = bundleTestNow().Add(-time.Hour)
 	tmpl.NotAfter = notAfter
 	tmpl.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature
 	tmpl.BasicConstraintsValid = true
@@ -62,7 +62,7 @@ func testCA(t *testing.T, validity time.Duration) string {
 func TestBundleSaveRefusesBadPEM(t *testing.T) {
 	t.Parallel()
 
-	now := time.Now()
+	now := bundleTestNow()
 
 	if _, err := trustrule.ParseBundle("not pem at all", now); err == nil {
 		t.Error("malformed PEM: ParseBundle = nil, want ErrBundle")
@@ -127,4 +127,10 @@ func TestBundleDeleteActive(t *testing.T) {
 	if got := trustrule.BundleRef("nope"); got != "trust-bundle:invalid" {
 		t.Errorf("BundleRef of an invalid ID = %q, want trust-bundle:invalid", got)
 	}
+}
+
+// bundleTestNow is the fixed clock of the bundle tests, so that no test reads
+// the wall clock.
+func bundleTestNow() time.Time {
+	return time.Unix(1_700_000_000, 0).UTC()
 }

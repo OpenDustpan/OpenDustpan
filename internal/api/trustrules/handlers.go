@@ -476,7 +476,7 @@ func classify(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusForbidden, errcode.MFAFreshStepRequired,
 			trustrulesvc.ErrFreshRequired.Error()), true
 	case errors.Is(err, trustrulesvc.ErrStaleToken):
-		return problem.New(http.StatusUnauthorized, errcode.MFAFreshStepRequired,
+		return problem.New(http.StatusForbidden, errcode.MFAFreshStepRequired,
 			trustrulesvc.ErrStaleToken.Error()), true
 	case errors.Is(err, trustrule.ErrStale):
 		return problem.New(http.StatusPreconditionFailed, errcode.RequestPreconditionFailed,
