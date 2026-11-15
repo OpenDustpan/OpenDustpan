@@ -92,9 +92,22 @@ func TestStoredRowsAreUntrusted(t *testing.T) {
 	}
 
 	d := notifystore.DeliveryRow{
-		ID: "dlv-1", Scope: "shop", NotificationID: "ntf-1", SubscriptionID: "sub-1", SinkID: "snk-1", Contact: "",
-		Principal: "alice", State: "pending", Attempts: 0, NextAtMs: 1, LastError: "dial tcp 10.0.0.1: refused",
-		DeliveredAtMs: 0, Owner: "", LeaseUntilMs: 0, Version: 1,
+		ID:             "dlv-1",
+		Scope:          "shop",
+		NotificationID: "ntf-1",
+		SubscriptionID: "sub-1",
+		SinkID:         "snk-1",
+		Contact:        "",
+		Principal:      "alice",
+		State:          "pending",
+		Attempts:       0,
+		Redeliveries:   0,
+		NextAtMs:       1,
+		LastError:      "dial tcp 10.0.0.1: refused",
+		DeliveredAtMs:  0,
+		Owner:          "",
+		LeaseUntilMs:   0,
+		Version:        1,
 	}
 
 	if _, err := notifystore.Delivery(d); !errors.Is(err, notifystore.ErrCorrupt) {

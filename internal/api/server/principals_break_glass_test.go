@@ -43,10 +43,10 @@ func addBreakGlass(t *testing.T, st *sqlite.Store, id, subject string) string {
 	return id
 }
 
-// TestLastBreakGlassIsKept proves that the disable and the delete of the last
-// enabled break-glass account answer 409 with the catalog code and change
-// nothing, while the disable of one of two works.
-func TestLastBreakGlassIsKept(t *testing.T) {
+// TestNoWorkingBreakGlassIsKept proves that the disable and the delete of the
+// last enabled break-glass account answer 409 with the catalog code, its
+// message and no change, while the disable of one of two works.
+func TestNoWorkingBreakGlassIsKept(t *testing.T) {
 	t.Parallel()
 
 	principals, st := newTestPrincipalStore(t)
@@ -71,10 +71,10 @@ func TestLastBreakGlassIsKept(t *testing.T) {
 			t.Fatalf("decode %q: %v", body, err)
 		}
 
-		if got.ErrorCode != errcode.PrincipalLastBreakGlass || got.Code != http.StatusConflict ||
-			!strings.Contains(got.Message, principal.ErrLastBreakGlass.Error()) {
-			t.Fatalf("%s %s answers %+v, want 409, code %q and the last break-glass message",
-				c.method, c.path, got, errcode.PrincipalLastBreakGlass)
+		if got.ErrorCode != errcode.PrincipalNoWorkingBreakGlass || got.Code != http.StatusConflict ||
+			!strings.Contains(got.Message, "The change leaves too few working break-glass accounts") {
+			t.Fatalf("%s %s answers %+v, want 409, code %q and the working break-glass message",
+				c.method, c.path, got, errcode.PrincipalNoWorkingBreakGlass)
 		}
 	}
 
