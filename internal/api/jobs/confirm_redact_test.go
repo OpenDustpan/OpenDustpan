@@ -516,3 +516,36 @@ func TestJobActionRoutesRedactMapsTheErrorsOfTheService(t *testing.T) {
 		})
 	}
 }
+
+// TestJobActionRoutesConfirmRefusesTheJobOfAnotherNamespace sends the answer of
+// a faulty service to the handler: a job of another ID, and a job of another
+// namespace. The handler must not answer with either job.
+func TestJobActionRoutesConfirmRefusesTheJobOfAnotherNamespace(t *testing.T) {
+	t.Parallel()
+
+	other := unitOf(t, "other", testUnit)
+
+	tests := []struct {
+		name string
+		mod  func(*job.Job)
+	}{
+		{"a job with another ID", func(j *job.Job) { j.ID = "job-other" }},
+		{"a job of another namespace", func(j *job.Job) { j.Spec.Unit = other }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newActionsRig(t, holdsBoth()...)
+			tc.mod(&r.svc.job)
+
+			rec := r.post(t, confirmURL(testJob), goodConfirm)
+			if rec.Code < http.StatusInternalServerError || rec.Header().Get("ETag") != "" ||
+				strings.Contains(rec.Body.String(), "job-other") {
+				t.Fatalf("status = %d, ETag = %q, body = %s; want a refusal that names no job", rec.Code,
+					rec.Header().Get("ETag"), rec.Body.String())
+			}
+		})
+	}
+}

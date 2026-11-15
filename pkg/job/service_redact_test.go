@@ -24,6 +24,12 @@ type svcArtifacts struct {
 	openErr   error
 	replace   error
 	redactErr error
+	// conflictOnRetry makes ReplaceLog answer ErrConflict from the second call,
+	// as the contract says for a version that is no longer the current one.
+	conflictOnRetry bool
+	replaceCalls    int
+	// openHook runs when OpenLog is called.
+	openHook func()
 
 	calls    []string
 	replaced []byte
@@ -34,8 +40,8 @@ type svcArtifacts struct {
 
 func newSvcArtifacts(text string) *svcArtifacts {
 	return &svcArtifacts{
-		text: text, openErr: nil, replace: nil, redactErr: nil, calls: nil, replaced: nil, redacted: nil,
-		entries: nil, by: "",
+		text: text, openErr: nil, replace: nil, redactErr: nil, conflictOnRetry: false, replaceCalls: 0,
+		openHook: nil, calls: nil, replaced: nil, redacted: nil, entries: nil, by: "",
 	}
 }
 
@@ -46,6 +52,10 @@ func (*svcArtifacts) OpenPlanPart(context.Context, namespace.Name, string, job.O
 func (a *svcArtifacts) OpenLog(_ context.Context, _ namespace.Name, version string) (io.ReadCloser, error) {
 	a.calls = append(a.calls, "open "+version)
 
+	if a.openHook != nil {
+		a.openHook()
+	}
+
 	if a.openErr != nil {
 		return nil, a.openErr
 	}
@@ -55,6 +65,11 @@ func (a *svcArtifacts) OpenLog(_ context.Context, _ namespace.Name, version stri
 
 func (a *svcArtifacts) ReplaceLog(_ context.Context, r job.LogReplacement) (job.LogRef, error) {
 	a.calls = append(a.calls, "replace "+r.From)
+	a.replaceCalls++
+
+	if a.conflictOnRetry && a.replaceCalls > 1 {
+		return job.LogRef{}, job.ErrConflict
+	}
 
 	if a.replace != nil {
 		return job.LogRef{}, a.replace
@@ -224,6 +239,98 @@ func TestServiceActionsRedactReplacesInOnePass(t *testing.T) {
 	}
 }
 
+// TestServiceActionsRedactTakesTheLongestMatch checks that, at each position,
+// the longest match wins, so that no tail of a longer secret stays in the log.
+func TestServiceActionsRedactTakesTheLongestMatch(t *testing.T) {
+	t.Parallel()
+
+	for _, order := range [][]string{{"SECRET", "SECRETTAIL99"}, {"SECRETTAIL99", "SECRET"}} {
+		arts := newSvcArtifacts("key=SECRETTAIL99 end")
+		r := redactRig(t, arts)
+		r.seedLog(nil)
+
+		got, err := r.svc.RedactLog(t.Context(), actorOf("carol"), approveID, redactReq("why", order...))
+		if err != nil {
+			t.Fatalf("RedactLog(%v) = %v", order, err)
+		}
+
+		if want := "key=[redacted] end"; string(arts.replaced) != want || got.Matches != 1 {
+			t.Errorf("order %v: new text = %q with %d matches, want %q with 1", order, arts.replaced, got.Matches, want)
+		}
+	}
+}
+
+// TestServiceActionsRedactRefusesAnOutputThatIsTooLarge checks that the new
+// text is bounded: each one-byte match grows by the length of the marker.
+func TestServiceActionsRedactRefusesAnOutputThatIsTooLarge(t *testing.T) {
+	t.Parallel()
+
+	arts := newSvcArtifacts(strings.Repeat("x", job.MaxRedactLogBytes/len(job.RedactMarker)+1))
+	r := redactRig(t, arts)
+	r.seedLog(nil)
+
+	_, err := r.svc.RedactLog(t.Context(), actorOf("carol"), approveID, redactReq("why", "x"))
+	if !errors.Is(err, job.ErrInvalid) {
+		t.Fatalf("RedactLog = %v, want ErrInvalid", err)
+	}
+
+	if len(arts.replaced) != 0 || len(arts.redacted) != 0 {
+		t.Errorf("replaced %d bytes and redacted %v, want no write", len(arts.replaced), arts.redacted)
+	}
+}
+
+// TestServiceActionsRedactStopsOnACanceledContext checks that the substitution
+// loop reads the context, so a canceled request writes nothing.
+func TestServiceActionsRedactStopsOnACanceledContext(t *testing.T) {
+	t.Parallel()
+
+	arts := newSvcArtifacts(strings.Repeat("x", 1<<20))
+	r := redactRig(t, arts)
+	r.seedLog(nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	arts.openHook = cancel
+
+	_, err := r.svc.RedactLog(ctx, actorOf("carol"), approveID, redactReq("why", "x"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RedactLog = %v, want context.Canceled", err)
+	}
+
+	if len(arts.replaced) != 0 || len(arts.redacted) != 0 {
+		t.Errorf("replaced %d bytes and redacted %v, want no write", len(arts.replaced), arts.redacted)
+	}
+}
+
+// TestServiceActionsRedactRetryFailsClosed checks the retry of a redaction
+// whose second step failed: the retry names the problem, writes nothing and
+// never reports success while the old version holds the text.
+func TestServiceActionsRedactRetryFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	arts := newSvcArtifacts("token=hunter2")
+	arts.redactErr = history.ErrLatest
+	arts.conflictOnRetry = true
+
+	r := redactRig(t, arts)
+	r.seedLog(nil)
+
+	_, err := r.svc.RedactLog(t.Context(), actorOf("carol"), approveID, redactReq("why", "hunter2"))
+	if !errors.Is(err, history.ErrLatest) || !strings.Contains(err.Error(), "still holds the text") {
+		t.Fatalf("first RedactLog = %v, want ErrLatest and a message that the old version holds the text", err)
+	}
+
+	arts.redactErr = nil
+
+	_, err = r.svc.RedactLog(t.Context(), actorOf("carol"), approveID, redactReq("why", "hunter2"))
+	if !errors.Is(err, job.ErrConflict) || !strings.Contains(err.Error(), "cannot redact an older one") {
+		t.Fatalf("retry = %v, want ErrConflict and a clear message", err)
+	}
+
+	if len(arts.redacted) != 0 {
+		t.Errorf("redacted = %v, want no redaction after a failed retry", arts.redacted)
+	}
+}
+
 // redactCase is one request that RedactLog must refuse before it writes a
 // version or a redaction.
 type redactCase struct {
@@ -260,12 +367,25 @@ func rReq(f func(*job.RedactRequest)) func(*redactCase) { return func(c *redactC
 // redactRefusals are the hostile requests, each against one layer alone.
 func redactRefusals() []redactCase {
 	key := func(r *rig, action identity.Action) string { return string(action) + " " + r.unit.String() }
-	tooMany := strings.Split(strings.Repeat("a,", job.MaxSubstitutions+1), ",")
-	tooLong := strings.Repeat("a", job.MaxSubstitutionBytes+1)
+	// Each hostile value below would match the text of the log, so only its own
+	// guard refuses it.
+	tooMany := make([]string, 0, job.MaxSubstitutions+1)
+	for i := range job.MaxSubstitutions + 1 {
+		tooMany = append(tooMany, fmt.Sprintf("hunter%d", i))
+	}
+
+	tooLong := "hunter2" + strings.Repeat("a", job.MaxSubstitutionBytes)
+	// tooLong is one byte over the bound of a match; the text of a case holds it.
 
 	return []redactCase{
 		redactRefuses("unknown job", job.ErrNotFound, rID("job-missing")),
-		redactRefuses("id with no job prefix", job.ErrNotFound, rID("x-1")),
+		// The store holds the job under the ID, so only the prefix check refuses it.
+		redactRefuses("id with no job prefix", job.ErrNotFound, rID("x-1"),
+			rPrep(func(r *rig, _ *svcArtifacts) {
+				j := r.store.jobs[approveID]
+				j.ID = "x-1"
+				r.store.jobs["x-1"] = j
+			})),
 		redactRefuses("no read action", job.ErrNotFound,
 			rPrep(func(r *rig, _ *svcArtifacts) { delete(r.authz.allow, key(r, job.ActionJobRead)) })),
 		redactRefuses("read but no redact action", identity.ErrDenied,
@@ -282,7 +402,13 @@ func redactRefusals() []redactCase {
 		redactRefuses("log that is too large", job.ErrInvalid,
 			rMod(func(l *job.LogRef) { l.Size = job.MaxRedactLogBytes + 1 })),
 		redactRefuses("text that is too large", job.ErrInvalid,
-			rPrep(func(_ *rig, a *svcArtifacts) { a.text = strings.Repeat("a", job.MaxRedactLogBytes+1) })),
+			// The record says 20 bytes, the reader gives more. A match of the first
+			// bytes keeps the new text under the bound, so only the check after the
+			// read refuses.
+			rPrep(func(_ *rig, a *svcArtifacts) {
+				a.text = tooLong + strings.Repeat("a", job.MaxRedactLogBytes-len(tooLong)+1)
+			}),
+			rReq(func(q *job.RedactRequest) { q.Substitutions = subsOf(tooLong[:job.MaxSubstitutionBytes]) })),
 		redactRefuses("the log cannot be opened", errDriver,
 			rPrep(func(_ *rig, a *svcArtifacts) { a.openErr = errDriver })),
 		redactRefuses("the log is shredded", secret.ErrShredded,
@@ -296,6 +422,7 @@ func redactRefusals() []redactCase {
 		redactRefuses("too many substitutions", job.ErrInvalid,
 			rReq(func(q *job.RedactRequest) { q.Substitutions = subsOf(tooMany...) })),
 		redactRefuses("match too long", job.ErrInvalid,
+			rPrep(func(_ *rig, a *svcArtifacts) { a.text = "token=" + tooLong }),
 			rReq(func(q *job.RedactRequest) { q.Substitutions = subsOf(tooLong) })),
 		redactRefuses("empty reason", job.ErrInvalid, rReq(func(q *job.RedactRequest) { q.Reason = "" })),
 		redactRefuses("hidden character in the reason", job.ErrInvalid,

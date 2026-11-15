@@ -498,7 +498,9 @@ type Service interface {
 	// the error of history.ValidateReason for a bad reason, and ErrInvalid
 	// for no substitution or an empty match. When an earlier RedactLog of
 	// version wrote the next version and its redaction of version failed, a
-	// retry only redacts version. The audit entry never holds the text of
+	// retry fails closed with ErrConflict and no write: the step record keeps
+	// the current version only, so this version cannot find version to
+	// redact it, and version still holds the text. The audit entry never holds the text of
 	// subs.
 	//
 	// This version finds version in the step records of the job, so a

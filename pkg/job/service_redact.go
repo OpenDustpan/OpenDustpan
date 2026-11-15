@@ -79,7 +79,11 @@ func (s *service) RedactLog(ctx context.Context, a Actor, id ID, req RedactReque
 		return LogRef{}, err
 	}
 
-	out, matches := substitute(text, req.Substitutions)
+	out, matches, err := substitute(ctx, text, req.Substitutions)
+	if err != nil {
+		return LogRef{}, err
+	}
+
 	if matches == 0 {
 		return LogRef{}, fmt.Errorf("%w: no substitution matches log version %s", ErrInvalid, old.ID)
 	}
@@ -155,39 +159,53 @@ func (s *service) readLog(ctx context.Context, j *Job, old *LogRef) ([]byte, err
 }
 
 // substitute replaces each match of subs in text with RedactMarker, in one
-// pass: at each position the first substitution in the list that matches
-// wins. It returns the new text and the number of matches.
-func substitute(text []byte, subs []Substitution) ([]byte, int) {
+// pass: at each position the longest match wins, so that no tail of a longer
+// secret stays in the text. It returns the new text and the number of matches.
+// It stops when ctx ends, and it refuses a new text of more than
+// MaxRedactLogBytes bytes: a short match grows by the length of the marker.
+func substitute(ctx context.Context, text []byte, subs []Substitution) ([]byte, int, error) {
 	out := make([]byte, 0, len(text))
 	matches := 0
 
 	for i := 0; i < len(text); {
-		k := matchAt(text[i:], subs)
-		if k < 0 {
+		// Check the context at a fixed interval, not at each byte.
+		if i&0xffff == 0 {
+			err := ctx.Err()
+			if err != nil {
+				return nil, 0, fmt.Errorf("redact log: %w", err)
+			}
+		}
+
+		n := longestMatchAt(text[i:], subs)
+		if n == 0 {
 			out = append(out, text[i])
 			i++
-
-			continue
+		} else {
+			out = append(out, RedactMarker...)
+			i += n
+			matches++
 		}
 
-		out = append(out, RedactMarker...)
-		i += len(subs[k].Match)
-		matches++
+		if len(out) > MaxRedactLogBytes {
+			return nil, 0, fmt.Errorf("%w: the new text is larger than %d bytes", ErrInvalid, MaxRedactLogBytes)
+		}
 	}
 
-	return out, matches
+	return out, matches, nil
 }
 
-// matchAt returns the index of the first substitution of subs whose match is a
-// prefix of text, or -1.
-func matchAt(text []byte, subs []Substitution) int {
+// longestMatchAt returns the length of the longest match of subs that is a
+// prefix of text, or 0.
+func longestMatchAt(text []byte, subs []Substitution) int {
+	longest := 0
+
 	for k := range subs {
-		if bytes.HasPrefix(text, subs[k].Match) {
-			return k
+		if len(subs[k].Match) > longest && bytes.HasPrefix(text, subs[k].Match) {
+			longest = len(subs[k].Match)
 		}
 	}
 
-	return -1
+	return longest
 }
 
 // logRedaction is what replaceLog writes: the log version old, the new text
@@ -213,6 +231,16 @@ func (s *service) replaceLog(ctx context.Context, j *Job, a Actor, lr *logRedact
 	next, err := s.artifacts.ReplaceLog(ctx, LogReplacement{
 		Namespace: ns, Fence: fence, From: lr.old.ID, Body: bytes.NewReader(lr.text), By: a.Principal.Subject,
 	})
+	if errors.Is(err, ErrConflict) {
+		// Fail closed. A retry of a redaction whose second step failed ends here:
+		// the next version exists, and this service cannot find the older version
+		// (the step record keeps only the current one), so it cannot redact it.
+		return LogRef{}, fmt.Errorf(
+			"replace log %s: %w: a newer version exists, and this version of the service cannot redact an older one; "+
+				"the log version %s still holds the text", lr.old.ID, err, lr.old.ID,
+		)
+	}
+
 	if err != nil {
 		return LogRef{}, fmt.Errorf("replace log %s: %w", lr.old.ID, err)
 	}
@@ -228,7 +256,10 @@ func (s *service) replaceLog(ctx context.Context, j *Job, a Actor, lr *logRedact
 
 	_, err = s.artifacts.Redact(ctx, r, nil, s.redactEntry(j, a, lr, &next), fence)
 	if err != nil {
-		return LogRef{}, fmt.Errorf("redact log %s: %w", lr.old.ID, err)
+		return LogRef{}, fmt.Errorf(
+			"redact log %s: %w: the new version %s exists, and the log version %s still holds the text; "+
+				"a retry cannot redact it yet", lr.old.ID, err, next.ID, lr.old.ID,
+		)
 	}
 
 	return next, nil

@@ -1,6 +1,7 @@
 package dustpan
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -43,7 +44,29 @@ func TestJobServiceRedactFailsClosedWithoutArtifactStore(t *testing.T) {
 		{name: "caller with no grant", actor: stranger, id: "job-unknown", req: redactOf("v1")},
 		{name: "empty request", actor: driftActor(), id: "", req: redactOf("")},
 		{name: "path-like version", actor: driftActor(), id: "job-unknown", req: redactOf("../../v1")},
+		{name: "valid request, administrator", actor: driftActor(), id: "job-unknown", req: validRedaction()},
+		{name: "valid request, no grant", actor: stranger, id: "job-unknown", req: validRedaction()},
 	}
+
+	// The store gets no write from a refused redaction: no job exists in it. The
+	// cleanup runs after all parallel cases.
+	t.Cleanup(func() {
+		var f job.Filter
+
+		f.Namespace = "acme"
+		f.Limit = 10
+
+		page, err := st.Jobs().List(context.Background(), f)
+		if err != nil {
+			t.Errorf("List = %v", err)
+
+			return
+		}
+
+		if len(page.Jobs) != 0 || len(page.Damaged) != 0 {
+			t.Errorf("store holds %d jobs and %d damaged rows, want none", len(page.Jobs), len(page.Damaged))
+		}
+	})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -54,6 +77,14 @@ func TestJobServiceRedactFailsClosedWithoutArtifactStore(t *testing.T) {
 				t.Fatalf("RedactLog = %v; want %v", err, job.ErrUnsupported)
 			}
 		})
+	}
+}
+
+// validRedaction returns a request that passes the boundary check: a log
+// version, one substitution and a reason.
+func validRedaction() job.RedactRequest {
+	return job.RedactRequest{
+		Version: "jlv-1", Substitutions: []job.Substitution{{Match: []byte("hunter2")}}, Reason: "leak",
 	}
 }
 
