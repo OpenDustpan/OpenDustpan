@@ -101,6 +101,14 @@ an enrollment code is the administrator side of the reset of a factor.
   (`pkg/session/cookie.go:136`, `pkg/mfa/mfa.go:283`) exist, with a grace
   setting (`EnrollmentGraceDays`, `pkg/mfa/mfa.go:350-353`).
 
+- The MFA policy has one level on main: the installation. `Policy`
+  (`pkg/mfa/mfa.go:339-358`) has `RequireForAll` and `EnrollmentGraceDays`.
+  No namespace level exists in code. Whether a namespace may also require MFA
+  is open in RFC 68 (MFA freshness: "installation, a namespace, or both").
+  The enroll-only session after a factor reset follows the installation
+  policy only. If a namespace level is added, the reset must follow the
+  stronger of the two.
+
 ## Smallest spec change for the owner to decide
 
 1. In the change `app-level-second-factor-totp`, add to `issue-enrollment-code`:
