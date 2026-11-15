@@ -237,6 +237,12 @@ type settings struct {
 	// oidcProviders are the OpenID Connect providers of the console
 	// sign-in. See WithOIDCProvider.
 	oidcProviders []OIDCProvider
+	// ldapProviders are the LDAP providers of the sign-in. See
+	// WithLDAPProvider.
+	ldapProviders []LDAPProvider
+	// ldapLoopback lets the LDAP sign-in reach a loopback address. See
+	// WithLDAPLoopbackForTests.
+	ldapLoopback bool
 	// signInHTTPClient makes the requests to the sign-in providers of the
 	// API. Nil uses the default client of the sign-in.
 	signInHTTPClient *http.Client
@@ -261,6 +267,9 @@ type settings struct {
 	devSignIn        *devsignin.Config
 	// instanceStore keeps the instance version rows. See WithInstanceStore.
 	instanceStore installation.InstanceStore
+	// builtinStore is the built-in SQLite or PostgreSQL store. See WithSQLite,
+	// WithPostgreSQL and WithBuiltinStore.
+	builtinStore builtinStoreSettings
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
 	// durableStore keeps the durable operations and the job schedules, or
@@ -528,6 +537,9 @@ func WithCheckpointDeltaCutoff(n int) Option {
 // Server is a configured OpenDustpan server.
 type Server struct {
 	handler http.Handler
+	// closeBuiltin closes the store that NewServer opened, or is nil when the
+	// caller opened the store or no built-in store exists.
+	closeBuiltin *builtinStoreCloser
 	// started records that Start succeeded. The gate in front of handler
 	// reads it.
 	started *startState
@@ -723,6 +735,8 @@ func defaultSettings() *settings {
 		tlsKeyFile:              "",
 		publicURL:               "",
 		oidcProviders:           nil,
+		ldapProviders:           nil,
+		ldapLoopback:            false,
 		signInHTTPClient:        nil,
 		sessionCookies:          nil,
 		version:                 "",
@@ -757,6 +771,10 @@ func defaultSettings() *settings {
 		components:              AllComponents(),
 		operationLease:          0,
 		watch:                   nil,
+		builtinStore: builtinStoreSettings{
+			source: builtinStoreNone, path: "", dsn: "", config: defaultStoreConfig(), handle: nil,
+			open: nil, close: nil,
+		},
 	}
 }
 
@@ -775,6 +793,30 @@ func NewServer(opts ...Option) (*Server, error) {
 		opt(cfg)
 	}
 
+	if err := applyBuiltinStore(cfg); err != nil {
+		return nil, err
+	}
+
+	closeStore := cfg.builtinStore.closeFunc()
+
+	srv, err := buildServer(cfg)
+	if err != nil {
+		if closeStore == nil {
+			return nil, err
+		}
+
+		return nil, errors.Join(err, closeStore())
+	}
+
+	if closeStore != nil {
+		srv.closeBuiltin = &builtinStoreCloser{mu: sync.Mutex{}, close: closeStore}
+	}
+
+	return srv, nil
+}
+
+// buildServer wires the server from settings that have their built-in store.
+func buildServer(cfg *settings) (*Server, error) {
 	base, err := checkSettings(cfg)
 	if err != nil {
 		return nil, err
@@ -1057,7 +1099,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 		reconciler:   reconciler, artifactSweeper: artifactSweeper, supersededSweeper: svc.updates, issuer: svc.issuer,
 		inactivityEvery: sweepEvery, deletedEvery: deletedSweepEvery,
 		idempotency: cfg.idempotencyStore, idempotencyEvery: idempotencySweepEvery,
-		components: cfg.components, nameLocks: nameLocksOf(cfg),
+		components: cfg.components, nameLocks: nameLocksOf(cfg), closeBuiltin: nil,
 		watch: cfg.watch, auditChainEvery: cfg.auditChainInterval, stateWrite: newStateWriteStart(cfg, svc),
 	}
 
@@ -2284,6 +2326,7 @@ func (s *Server) sweepTempAdminsOnce(ctx context.Context) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	})
 
 	switch {
@@ -2865,10 +2908,17 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
+	reach, err := reachConfig(cfg)
+	if err != nil {
+		return none, err
+	}
+
 	serverAPI, err := newServerHandler(serverHandlerInputs{
 		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
 		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
+		reach:  reach,
 		tokens: deps.services.tokens, deleted: deps.services.deleted, stateWrite: deps.services.stateWrite.effective(),
+		cursors: cfg.secretWrapper,
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
 		principals: principals, gates: gates, forgeService: gitHost, idempotency: idem, extras: extras,
@@ -2979,9 +3029,12 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 
 	var tokens principal.Tokens
 
+	var reach principal.GroupReach
+
 	if grants != nil {
 		guard = grants
 		tokens = grants
+		reach = grants
 	}
 
 	// Both SQL adapters keep the temporary administrators, so a sign-in
@@ -2993,7 +3046,8 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 
 	svc, err := principal.NewService(principal.Config{
 		TempAdmins: temps,
-		Store:      store, Guard: guard, Namespaces: cfg.namespaceStore, Tokens: tokens, Now: nil, NewID: nil,
+		Store:      store, Guard: guard, GroupReach: reach, Namespaces: cfg.namespaceStore,
+		Tokens: tokens, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("principal service: %w", err)
@@ -3157,7 +3211,8 @@ func unitCollections(cfg *settings) (access.UnitCollections, error) {
 // namespace store, or returns nil when the store keeps no roles and grants.
 // The service checks escalation with the grant model, so it uses the
 // configured authorizer when that is an access.Authorizer, and its own one
-// otherwise.
+// otherwise. It reads the cap of the export of a collection from the settings
+// service when the server keeps one.
 func newAccessService(cfg *settings) (*access.Service, error) {
 	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
@@ -3181,9 +3236,26 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		}
 	}
 
+	var settings access.Settings
+	if settingsSvc := newSettingService(cfg, cfg.namespaceStore); settingsSvc != nil {
+		settings = settingsSvc
+	}
+
+	reach, reachErr := reachConfig(cfg)
+	if reachErr != nil {
+		return nil, fmt.Errorf("access service: %w", reachErr)
+	}
+
+	var limits access.LimitGroups
+
+	if reader := accessLimitGroups(cfg, stores); reader != nil {
+		limits = reader
+	}
+
 	svc, err := access.NewService(access.ServiceConfig{
-		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: adminSubjectsOf(cfg.authenticator),
+		Store: stores, Directory: stores, Namespaces: cfg.namespaceStore, Authorizer: authz,
+		Reach: reach, Now: nil, NewID: nil,
+		BootstrapAdmins: adminSubjectsOf(cfg.authenticator), Settings: settings, LimitGroups: limits,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access service: %w", err)
@@ -3216,7 +3288,9 @@ func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, 
 // personal token for another person is the grants of grants, and the
 // authorizer of grants decides principal:manage-tokens for a service
 // token. With nil grants, a store that keeps none, only an administrator
-// passes either.
+// passes either. The reach config decides the reach rule of a token change:
+// a store that keeps no grants refuses each such change of a caller that is
+// not an administrator.
 func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
@@ -3233,8 +3307,13 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		authz = grants.Authorizer()
 	}
 
+	reach, err := reachConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("access token reach: %w", err)
+	}
+
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Authorizer: authz,
+		Store: store, Principals: principals, Freshness: nil, Authorizer: authz, Reach: reach,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
 	})
 	if err != nil {

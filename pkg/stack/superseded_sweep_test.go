@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -200,6 +201,7 @@ func TestSupersededSweepKeepsNamedBlob(t *testing.T) {
 		BlobSize:         mark.Size,
 		BlobMD5:          [16]byte{},
 		AttemptStartedAt: f.clock.Now(),
+		Origin:           identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if _, err := f.store.PutCheckpoint(t.Context(), cp, f.nsStore.ns.Fence()); err != nil {
@@ -287,6 +289,7 @@ func TestSupersededSweepCountsDeletedBytes(t *testing.T) {
 		BlobSize:         kept.Size,
 		BlobMD5:          [16]byte{},
 		AttemptStartedAt: f.clock.Now(),
+		Origin:           identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if _, err := f.store.PutCheckpoint(t.Context(), cp, f.nsStore.ns.Fence()); err != nil {

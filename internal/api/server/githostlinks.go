@@ -268,18 +268,32 @@ func (h *Handler) gitHostLinkRoutes() []Route {
 	routes := make([]Route, 0, gitHostLinkRouteCount)
 	routes = append(routes, []Route{
 		{
-			Method: http.MethodGet, Path: gitHostLinksPath, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
-			Serve: h.listGitHostLinks,
+			Method: http.MethodGet,
+			Path:   gitHostLinksPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionCallerRead,
+			},
+			Resolve:      resolveCaller,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.listGitHostLinks,
 		},
 		{
 			Method: http.MethodDelete, Path: gitHostLinkPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.deleteGitHostLink,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.deleteGitHostLink,
 		},
 		{
-			Method: http.MethodDelete, Path: principalGitHostLinks, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerManagePrincipals}, Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.deletePrincipalGitHostLink,
+			Method: http.MethodDelete,
+			Path:   principalGitHostLinks,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionServerManagePrincipals,
+			},
+			Resolve:      resolveServer,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.deletePrincipalGitHostLink,
 		},
 	}...)
 
@@ -292,24 +306,26 @@ func (h *Handler) gitHostLinkRoutes() []Route {
 	return append(routes, []Route{
 		{
 			Method: http.MethodPost, Path: gitHostLinkRequestsPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.startGitHostLink,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.startGitHostLink,
 		},
 		{
 			Method: http.MethodPost, Path: gitHostLinkShowPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.showGitHostLink,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.showGitHostLink,
 		},
 		{
 			Method: http.MethodPost, Path: gitHostLinksPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveCaller, ActionsFor: nil, Serve: h.acceptGitHostLink,
+			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
+			Serve: h.fresh(identity.ActionCallerManageGitHostLinks, h.acceptGitHostLink),
 		},
 	}...)
 }
 
 // requireSessionCaller refuses a request that a console session did not make.
 //
-// Defense in depth: the link service refuses a caller without a session too.
-// This check stays so that the body of such a caller is never read, and so that
-// an access token cannot reach the service at all.
+// Defense in depth: the link service refuses a caller without a session too,
+// and the fresh check of the accept route refuses an access token before this
+// handler runs. This check stays so that the body of such a caller is never
+// read, and so that an access token cannot reach the service at all.
 func requireSessionCaller(r *http.Request) linkFailure {
 	if _, ok := sessionFromRequest(r); !ok {
 		return clientFailure(errGitHostLinkPersonRequired)
@@ -443,7 +459,9 @@ func (h *Handler) showGitHostLink(w http.ResponseWriter, r *http.Request, p iden
 // acceptGitHostLink answers POST /api/dustpan/v1/me/linked-accounts. The link
 // names the account of the proof and the principal that started the request,
 // never a value of the body. It answers 201 with the link, and 409 when the
-// account has a link other than previousPrincipal.
+// account has a link other than previousPrincipal. The route table wraps this
+// handler with the fresh check: the accept needs a console session whose
+// sign-in is inside the token freshness window.
 func (h *Handler) acceptGitHostLink(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 

@@ -53,7 +53,7 @@ func (s *Store) StartCheck(
 		}
 
 		ended, err := q.CountStoreChecksEndedSince(ctx, db.CountStoreChecksEndedSinceParams{
-			Target: string(r.Target), EndedAtMs: codec.Millis(coolingSince),
+			Target: string(r.Target), EndedAtMs: nullMillis(codec.Millis(coolingSince)),
 		})
 		if err != nil {
 			return fmt.Errorf("count ended store checks: %w", err)
@@ -159,7 +159,7 @@ func (s *Store) FinishCheck(ctx context.Context, f durable.StepFence, id storech
 
 		n, err := q.FinishStoreCheck(ctx, db.FinishStoreCheckParams{
 			State: string(end.State), Error: end.Error, Report: string(end.Report),
-			EndedAtMs: codec.Millis(end.EndedAt), ID: id.String(),
+			EndedAtMs: optionalMillis(end.EndedAt), ID: id.String(),
 		})
 		if err != nil {
 			return fmt.Errorf("finish store check: %w", err)
@@ -193,7 +193,7 @@ func (s *Store) FailEndedChecks(ctx context.Context, endedAt time.Time) (int, er
 
 	n, err := s.queries.FailEndedStoreChecks(ctx, db.FailEndedStoreChecksParams{
 		Error:     storecheck.EndedWithoutFinishText,
-		EndedAtMs: codec.Millis(endedAt),
+		EndedAtMs: optionalMillis(endedAt),
 		Prefix:    storecheck.OperationKeyPrefix,
 		Kind:      string(storecheck.OperationKind),
 	})
@@ -204,12 +204,12 @@ func (s *Store) FailEndedChecks(ctx context.Context, endedAt time.Time) (int, er
 	return int(n), nil
 }
 
-// storeCheckRecord converts a row into a domain record. An end time of 0
+// storeCheckRecord converts a row into a domain record. A NULL end time
 // reads as the zero time: the check still runs.
 func storeCheckRecord(row db.StoreCheck) storecheck.Record {
 	var endedAt time.Time
-	if row.EndedAtMs != 0 {
-		endedAt = codec.FromMillis(row.EndedAtMs)
+	if row.EndedAtMs.Valid {
+		endedAt = codec.FromMillis(row.EndedAtMs.Int64)
 	}
 
 	var report []byte

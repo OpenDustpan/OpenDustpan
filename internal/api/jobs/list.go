@@ -40,6 +40,9 @@ var (
 	errPageToken    = fmt.Errorf(
 		"%w: pageToken does not belong to this query: start again without it", errInvalidQuery,
 	)
+	// errUnitUnresolved reports a damaged row whose unit the handler cannot
+	// resolve. The list does not count the row.
+	errUnitUnresolved = errors.New("the unit of a damaged row cannot be resolved")
 )
 
 // listJobsResponse is the page of jobs that the list answers. The jobs are
@@ -47,6 +50,11 @@ var (
 type listJobsResponse struct {
 	Jobs          []jobResponse `json:"jobs"`
 	NextPageToken string        `json:"nextPageToken,omitempty"`
+	// Damaged is the number of stored rows that this page read and could not
+	// decode, of units that the caller may list. The server leaves them out
+	// of Jobs and never dispatches, expires or closes them. A row that sits
+	// between the jobs of two pages can be in the count of both.
+	Damaged int `json:"damaged"`
 }
 
 // pageTokenWire is the opaque page token of the job list: the ID of the last
@@ -280,25 +288,24 @@ func (h *Handler) listJobs(w http.ResponseWriter, r *http.Request, p identity.Pr
 		}
 	}
 
-	page, next, err := h.scanJobs(ctx, p, t.ns.Name, &q)
-	if err != nil {
+	page := jobPage{ns: t.ns.Name, jobs: nil, next: "", damaged: 0, fingerprint: fingerprint}
+	if err := h.scanJobs(ctx, p, &q, &page); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	h.answerJobList(w, r, &jobPage{ns: t.ns.Name, jobs: page, next: next, fingerprint: fingerprint})
+	h.answerJobList(w, r, &page)
 }
 
 // scanJobs reads the store until the page holds q.size jobs and one more, or
-// the list ends, or maxScanned jobs are read. It returns the page and the job
-// ID after which the next page starts, or "" at the end of the list.
-func (h *Handler) scanJobs(
-	ctx context.Context, p identity.Principal, ns namespace.Name, q *listQuery,
-) ([]job.Job, job.ID, error) {
-	page := make([]job.Job, 0, q.size+1)
+// the list ends, or maxScanned rows are read. It fills the jobs of the page,
+// the job ID after which the next page starts (or "" at the end of the list),
+// and the number of damaged rows of units that the caller may list.
+func (h *Handler) scanJobs(ctx context.Context, p identity.Principal, q *listQuery, page *jobPage) error {
+	jobs := make([]job.Job, 0, q.size+1)
 	filter := job.Filter{
-		Namespace: ns, UnitID: q.unit, States: q.states, Limit: scanBatch, After: q.after,
+		Namespace: page.ns, UnitID: q.unit, States: q.states, Limit: scanBatch, After: q.after,
 		StateChangedBefore: time.Time{}, StateChangedAfter: time.Time{},
 	}
 
@@ -308,41 +315,91 @@ func (h *Handler) scanJobs(
 	limited := h.cursors != nil
 
 	for scanned := 0; !limited || scanned < maxScanned; {
-		rows, err := h.jobs.List(ctx, filter)
+		read, err := h.jobs.List(ctx, filter)
 		if err != nil {
-			return nil, "", fmt.Errorf("list jobs: %w", err)
+			return fmt.Errorf("list jobs: %w", err)
 		}
 
-		for i := range rows {
-			scanned++
-			filter.After = rows[i].ID
+		// A damaged row of a unit that the caller may not list is not
+		// counted, but it is a row read too: it counts against the scan
+		// limit either way.
+		page.damaged += h.countDamaged(ctx, p, page.ns, read.Damaged)
+		scanned += len(read.Damaged)
 
-			if !q.matches(&rows[i], ns) || !h.mayList(ctx, p, &rows[i]) {
+		for i := range read.Jobs {
+			scanned++
+
+			if !q.matches(&read.Jobs[i], page.ns) || !h.mayList(ctx, p, &read.Jobs[i]) {
 				continue
 			}
 
-			page = append(page, rows[i])
-			if len(page) > q.size {
+			jobs = append(jobs, read.Jobs[i])
+			if len(jobs) > q.size {
 				// More matches follow: the next page starts after the last job
 				// of this page.
-				return page[:q.size], page[q.size-1].ID, nil
+				page.jobs, page.next = jobs[:q.size], jobs[q.size-1].ID
+
+				return nil
 			}
 		}
 
-		if len(rows) < scanBatch {
-			return page, "", nil
+		if read.After == "" {
+			page.jobs = jobs
+
+			return nil
 		}
+
+		filter.After = read.After
 	}
 
 	// The scan limit ended the request before the end of the list.
-	return page, filter.After, nil
+	page.jobs, page.next = jobs, filter.After
+
+	return nil
 }
 
 // mayList reports whether p passes every filter action of the list on the unit
 // of j. Any error from the authorizer, not only a refusal, leaves the job out.
 func (h *Handler) mayList(ctx context.Context, p identity.Principal, j *job.Job) bool {
+	return h.mayListUnit(ctx, p, j.Spec.Unit)
+}
+
+// countDamaged returns the number of the damaged rows that p may list.
+func (h *Handler) countDamaged(
+	ctx context.Context, p identity.Principal, ns namespace.Name, rows []job.DamagedRow,
+) int {
+	n := 0
+
+	for i := range rows {
+		if h.mayListDamaged(ctx, p, ns, &rows[i]) {
+			n++
+		}
+	}
+
+	return n
+}
+
+// mayListDamaged reports whether p may list the unit of the damaged row row.
+// The purpose and the trigger filters of the query cannot apply to a damaged
+// row: its body did not decode. Any error, of the unit lookup or of the
+// authorizer, leaves the row out of the count.
+func (h *Handler) mayListDamaged(
+	ctx context.Context, p identity.Principal, ns namespace.Name, row *job.DamagedRow,
+) bool {
+	unit, err := h.unitRef(ctx, ns, row.UnitID)
+	if err != nil {
+		return false
+	}
+
+	return h.mayListUnit(ctx, p, unit)
+}
+
+// mayListUnit reports whether p passes every filter action of the list on the
+// unit obj. Any error from the authorizer, not only a refusal, leaves the
+// unit out.
+func (h *Handler) mayListUnit(ctx context.Context, p identity.Principal, obj identity.Object) bool {
 	for _, action := range listFilters() {
-		if h.authz.Authorize(ctx, p, action, j.Spec.Unit) != nil {
+		if h.authz.Authorize(ctx, p, action, obj) != nil {
 			return false
 		}
 	}
@@ -350,11 +407,40 @@ func (h *Handler) mayList(ctx context.Context, p identity.Principal, j *job.Job)
 	return true
 }
 
+// unitRef returns the reference of the live unit unitID of the namespace ns,
+// with its stable ID. An unknown unit, a unit of another namespace and a
+// failure of the inventory give an error.
+func (h *Handler) unitRef(ctx context.Context, ns namespace.Name, unitID string) (identity.Object, error) {
+	if h.units == nil || !ident.Valid(unitID, maxUnitIDLength) {
+		return identity.Object{}, errUnitUnresolved
+	}
+
+	e, err := h.units.GetUnit(ctx, unitID)
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("get unit: %w", err)
+	}
+
+	// Defense in depth: the inventory looks a unit up by its ID alone. A
+	// unit of another namespace must not answer under this namespace,
+	// whatever the caller may read there.
+	if e.Namespace != ns || e.UnitID != unitID {
+		return identity.Object{}, errUnitUnresolved
+	}
+
+	obj, err := identity.UnitObject(e.Tool, ns, e.Name)
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("unit object: %w", err)
+	}
+
+	return obj.WithUnitID(e.UnitID), nil
+}
+
 // jobPage is a page of the job list that is ready to answer.
 type jobPage struct {
 	ns          namespace.Name
 	jobs        []job.Job
 	next        job.ID
+	damaged     int
 	fingerprint string
 }
 
@@ -362,7 +448,7 @@ type jobPage struct {
 // pool ID.
 func (h *Handler) answerJobList(w http.ResponseWriter, r *http.Request, p *jobPage) {
 	ctx := r.Context()
-	out := listJobsResponse{Jobs: make([]jobResponse, 0, len(p.jobs)), NextPageToken: ""}
+	out := listJobsResponse{Jobs: make([]jobResponse, 0, len(p.jobs)), NextPageToken: "", Damaged: p.damaged}
 	names := map[string]string{}
 
 	for i := range p.jobs {

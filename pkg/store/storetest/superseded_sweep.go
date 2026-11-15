@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -239,6 +240,7 @@ func testSupersededSweepNamed(t *testing.T, r *blobDeleteRig) {
 		BlobSize:         mark.Size,
 		BlobMD5:          [16]byte{},
 		AttemptStartedAt: at,
+		Origin:           identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if _, err := r.store.PutCheckpoint(ctx, cp, r.ns.Fence()); err != nil {

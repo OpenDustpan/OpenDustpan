@@ -39,6 +39,7 @@ func recordJob() *job.Job {
 
 	return &job.Job{
 		ID:             "job-1",
+		NamespaceID:    "",
 		State:          job.StateRunning,
 		Current:        0,
 		Wait:           job.WaitNone,
@@ -69,12 +70,13 @@ func recordJob() *job.Job {
 				Directory:  "",
 				Revision:   "",
 			},
-			Steps:     []job.Step{planStep(stepRun), apply},
-			Pool:      "",
-			Profile:   "",
-			Edits:     nil,
-			Delivery:  "",
-			Defaulted: nil,
+			LocationSource: "",
+			Steps:          []job.Step{planStep(stepRun), apply},
+			Pool:           "",
+			Profile:        "",
+			Edits:          nil,
+			Delivery:       "",
+			Defaulted:      nil,
 		},
 		Phases: []job.Phase{
 			emptyPhase(job.PhasePlan),
@@ -549,6 +551,19 @@ func TestDeliveryResultSame(t *testing.T) {
 	b.Commit = "other"
 	if a.Same(&b) {
 		t.Fatal("results with another commit are the same")
+	}
+}
+
+func TestVerificationValid(t *testing.T) {
+	t.Parallel()
+
+	for result, want := range map[job.Verification]bool{
+		job.VerificationNone: true, job.VerificationPending: true, job.VerificationVerified: true,
+		job.VerificationUnverified: true, "done": false, "VERIFIED": false,
+	} {
+		if got := result.Valid(); got != want {
+			t.Errorf("Verification(%q).Valid() = %t, want %t", result, got, want)
+		}
 	}
 }
 

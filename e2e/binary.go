@@ -31,6 +31,8 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ldaptest"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/notify"
 )
@@ -102,6 +104,9 @@ type envInput struct {
 	// signIn turns on the console sign-in through a test OpenID provider,
 	// in process and with the server binary.
 	signIn bool
+	// signInSecretInVariable passes the client secret of the sign-in in
+	// DUSTPAN_OIDC_CLIENT_SECRET in place of DUSTPAN_OIDC_CLIENT_SECRET_FILE.
+	signInSecretInVariable bool
 	// signInRealTime runs the in-process server of a sign-in env on the
 	// real time instead of a TestClock, for tests that need time to pass.
 	// The server binary always keeps the real time.
@@ -121,9 +126,17 @@ type envInput struct {
 	// sinkSenders replace the built-in notification sink senders of the
 	// in-process server. The server binary has no such seam.
 	sinkSenders []notify.Sender
+	// auditSinks receive a copy of each audit entry of the in-process
+	// server. The server binary takes its sinks through --audit-sink.
+	auditSinks []audit.ShipSink
 	// issuer is a fake OpenID provider of a CI platform whose keys the
 	// in-process server may read, on the loopback, or nil.
 	issuer *OIDCIssuerFake
+	// ldap is a test LDAP directory on the loopback, or nil. With a sign-in,
+	// the in-process server gets the LDAP providers LDAPTLSProvider and
+	// LDAPPlainProvider of it. The server binary cannot reach a loopback
+	// directory, so NewEnvWithLDAP refuses the binary.
+	ldap *ldaptest.Server
 }
 
 // backendConfig groups the settings of one backend process.
@@ -173,14 +186,17 @@ type backendConfig struct {
 const pemCertificate = "CERTIFICATE"
 
 // binarySignIn is the console sign-in of a binary backend. The server reads
-// the client secret from secretFile (DUSTPAN_OIDC_CLIENT_SECRET_FILE) and
+// the client secret from secretFile (DUSTPAN_OIDC_CLIENT_SECRET_FILE), or
+// from secret (DUSTPAN_OIDC_CLIENT_SECRET) when secretInVariable is set, and
 // trusts the provider through caFile (SSL_CERT_FILE), so a run proves the
 // flags and the environment variables of the sign-in.
 type binarySignIn struct {
-	publicURL  string
-	issuer     string
-	caFile     string
-	secretFile string
+	publicURL        string
+	issuer           string
+	caFile           string
+	secretFile       string
+	secret           string
+	secretInVariable bool
 }
 
 // args returns the serve arguments of the sign-in, or none for nil.
@@ -202,6 +218,10 @@ func (s *binarySignIn) args() []string {
 func (s *binarySignIn) env() []string {
 	if s == nil {
 		return nil
+	}
+
+	if s.secretInVariable {
+		return []string{"SSL_CERT_FILE=" + s.caFile, "DUSTPAN_OIDC_CLIENT_SECRET=" + s.secret}
 	}
 
 	return []string{"SSL_CERT_FILE=" + s.caFile, "DUSTPAN_OIDC_CLIENT_SECRET_FILE=" + s.secretFile}
@@ -1063,7 +1083,7 @@ func binarySignInSetup(tb testing.TB, in envInput, proxy *recordingProxy, cfg *b
 	}
 
 	s := newSignInSetup(tb, proxy.publicURL(), nil)
-	cfg.signIn = writeBinarySignIn(tb, in.dir, s)
+	cfg.signIn = writeBinarySignIn(tb, in.dir, s, in.signInSecretInVariable)
 
 	return s
 }

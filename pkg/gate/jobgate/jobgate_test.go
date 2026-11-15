@@ -101,7 +101,8 @@ func input(t *testing.T, executor job.ExecutorKind, op job.Operation) job.Decisi
 			Unit: unit(t), Operation: op, Purpose: "", Executor: executor, Location: job.Location{
 				Connection: "", Repository: "", Ref: "", Directory: "", Revision: "",
 			},
-			Steps: nil, Pool: "", Profile: "", Edits: nil, Delivery: "",
+			LocationSource: "",
+			Steps:          nil, Pool: "", Profile: "", Edits: nil, Delivery: "",
 			Defaulted: nil,
 		},
 	}

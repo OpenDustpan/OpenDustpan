@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/cron"
+	"opendustpan.org/opendustpan/internal/driftsvc"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -304,8 +305,12 @@ func idempotencyKey(r *http.Request) (string, error) {
 		// Defense in depth: the job service refuses the prefix too. A key
 		// with the prefix of the drift checks of the server could name the
 		// job of a drift check of the same caller, so no fire sends one.
-		if strings.HasPrefix(string(k), reservedKeyPrefix) {
-			return "", fmt.Errorf("%w: a key does not start with %q", idempotency.ErrInvalidKey, reservedKeyPrefix)
+		if driftsvc.ReservedKey(string(k)) {
+			return "", fmt.Errorf(
+				"%w: a key does not start with %q",
+				idempotency.ErrInvalidKey,
+				driftsvc.CheckKeyPrefix,
+			)
 		}
 
 		return string(k), nil
@@ -324,7 +329,7 @@ func (h *Handler) manageError(r *http.Request, p identity.Principal, err error) 
 	}
 
 	h.guard.Record(r.Context(), r, p, refusal.Denial{
-		Action: denied.Action, Object: denied.Object, Reason: refusal.ReasonPolicy, Window: 0,
+		Action: denied.Action, Object: denied.Object, Reason: refusal.ReasonPolicy, ReasonWithin: nil, Window: 0,
 	})
 }
 

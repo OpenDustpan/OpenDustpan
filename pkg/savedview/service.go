@@ -283,6 +283,7 @@ func (s *Service) systemEntry(ns namespace.Name) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "the owner of the view was removed",
+		Origin:        nil,
 	}
 }
 

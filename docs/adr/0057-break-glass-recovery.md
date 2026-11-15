@@ -8,6 +8,9 @@ Changed by:
   administrator.
 - ADR 245 changes decision 2: the recovery-mode setting and the refusal of
   mode 3.
+- ADR 372 extends decisions 1 and 5: the names of modes 1 and 2. The
+  review use records the recovery mode and the source. A wording
+  refinement puts the names in place.
 
 ## Context
 
@@ -48,20 +51,20 @@ does not apply to this question.
 ## Decision
 
 1. **Three break-glass modes.** The server supports the three options of
-   RFC 21: a one-time bootstrap admin token (mode 1), a recovery request
-   signed with an offline operator key (mode 2), and no break-glass, with a
-   restore from a backup (mode 3).
+   RFC 21: a one-time bootstrap admin token (bootstrap recovery), a
+   recovery request signed with an offline operator key (signed-request
+   recovery), and no break-glass, with a restore from a backup (mode 3).
 2. **The operator chooses the mode at first boot.** The operator sets the
    mode when the installation starts for the first time.
-3. **Mode 1 is the default.** No standard names a preferred option, so the
+3. **Bootstrap recovery is the default.** No standard names a preferred option, so the
    default of the owner applies. The controls of PCI DSS 8.2.2 and NIST SP
-   800-53 AC-2(2) also fit mode 1.
-4. **Mode 1 works once.** The operator sets a new bootstrap admin token in
+   800-53 AC-2(2) also fit bootstrap recovery.
+4. **Bootstrap recovery works once.** The operator sets a new bootstrap admin token in
    the configuration or the environment (ADR 6) and restarts the server. The
    token works for one recovery. Then the operator must retire it (ADR 53,
    decision 9).
-5. **Every break-glass use writes an audit entry.** This applies to mode 1
-   and mode 2. The entry holds the mode, the time and the source of the
+5. **Every break-glass use writes an audit entry.** This applies to bootstrap
+   recovery and signed-request recovery. The entry holds the mode, the time and the source of the
    request.
 6. **API.** The break-glass setting and each recovery step have a REST API
    and an action (ADR 17), except for the token that the server reads
@@ -72,13 +75,13 @@ does not apply to this question.
 [RFC 21](../rfc/0021-directory-sync-and-sign-in.md) keeps these open:
 
 - Whether an operator can change the mode after the first boot, and how.
-- What "works once" means for mode 1: one sign-in, one MFA reset, or a time
-  limit. NIST SP 800-53 AC-2(2) asks for an automatic disable after a set
+- What "works once" means for bootstrap recovery: one sign-in, one MFA
+  reset, or a time limit. NIST SP 800-53 AC-2(2) asks for an automatic disable after a set
   time, and gives no number.
 - How the audit entry of a break-glass use names a person, as PCI DSS 8.2.2
   asks.
 - The format of the offline operator key and of the signed recovery request
-  of mode 2.
+  of signed-request recovery.
 - Whether "require MFA" (ADR 46) applies to the bootstrap admin token.
 
 ## Consequences
@@ -88,6 +91,18 @@ does not apply to this question.
 - Mode 3 still needs the bootstrap admin token on the empty installation
   that receives the backup (ADR 39).
 - The docs for operators describe each mode and the steps of a recovery.
-- Mode 2 needs a signature check in the server and a tool for the operator
-  that signs a request offline. A new library for this is a new dependency.
+- Signed-request recovery needs a signature check in the server and a tool
+  for the operator that signs a request offline. A new library for this is a new dependency.
   Ask the project owner before adding it.
+
+## Changelog
+
+- 2026-11-14, wording refinement (ADR 372, on the owner's word): the words
+  "mode 1" and "mode 2" become the names of ADR 372 decision 1. Decision 1
+  said "a one-time bootstrap admin token (mode 1), a recovery request signed
+  with an offline operator key (mode 2)". It now says "(bootstrap
+  recovery)" and "(signed-request recovery)". Decisions 3, 4 and 5, "Not
+  decided here" and "Consequences" said "mode 1" or "mode 2". They now say
+  "bootstrap recovery" or "signed-request recovery". The names are the
+  values `bootstrap` and `signed-request` of the setting `--recovery-mode`
+  (ADR 245 decision 6). Mode 3 keeps its words.

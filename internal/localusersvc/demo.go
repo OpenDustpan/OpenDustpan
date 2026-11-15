@@ -290,6 +290,7 @@ func (d *DemoSeed) entry(scope namespace.Name, action, object string) audit.Entr
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelStartup, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: DemoReason,
+		Origin: nil,
 	}
 }
 

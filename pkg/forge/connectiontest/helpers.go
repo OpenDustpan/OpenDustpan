@@ -63,6 +63,7 @@ func entry(scope namespace.Name, action string) audit.Entry {
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 		RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "",
 		JobID: "", Reason: "",
+		Origin: nil,
 	}
 }
 

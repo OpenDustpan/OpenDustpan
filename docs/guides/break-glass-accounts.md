@@ -74,7 +74,9 @@ message:
 cannot remove the last enabled break-glass account: keep a second enabled break-glass account first
 ```
 
-The request changes nothing. The account stays enabled.
+The request changes nothing. The account stays enabled. This refusal is one of
+the [code rules](../reference/code-rules.md) that no grant, setting or
+administrator can change.
 
 A disabled account does not count as a second account, because it cannot
 sign in. The server checks the count in the same database transaction as the

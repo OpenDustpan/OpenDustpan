@@ -111,6 +111,12 @@ func (s *Store) AddNameFailure(ctx context.Context, f authgate.NameFailure) (aut
 	)
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
+		// Two appends to the server scope must not read the same last entry,
+		// so the transaction takes the scope lock first.
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock the server audit scope: %w", err)
+		}
+
 		lock, addErr := namelockstore.Add(ctx, nameLockTx{q: q}, f)
 		if errors.Is(addErr, authgate.ErrNameLocked) {
 			// A locked name writes nothing: the transaction commits no change.
@@ -159,6 +165,12 @@ func (s *Store) ClearName(ctx context.Context, scopes []string, name string, e a
 	var total int64
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
+		// Two appends to the server scope must not read the same last entry,
+		// so the transaction takes the scope lock first.
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock the server audit scope: %w", err)
+		}
+
 		total = 0
 
 		for _, scope := range scopes {
@@ -218,6 +230,12 @@ func (s *Store) PruneNameLocks(
 	var n int64
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
+		// Two appends to the server scope must not read the same last entry,
+		// so the transaction takes the scope lock first.
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock the server audit scope: %w", err)
+		}
+
 		now, err := q.DatabaseNowMs(ctx)
 		if err != nil {
 			return fmt.Errorf("read the clock of the store: %w", err)

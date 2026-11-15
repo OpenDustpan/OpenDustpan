@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -182,7 +183,7 @@ func (f *benchSaveFixture) startBenchUpdate(b *testing.B, id string) stack.Updat
 		Revision:        1,
 		CreatedBy:       "",
 		RestoredFrom:    0,
-		CheckpointBytes: 0,
+		CheckpointBytes: 0, JobID: "", GitHead: "",
 	}
 
 	if err := f.store.CreateUpdate(ctx, u, storetest.UnrecordedKey(), f.fence); err != nil {
@@ -254,7 +255,7 @@ func (f *benchSaveFixture) benchCheckpoint(
 		BlobSize:      0,
 		BlobMD5:       [md5.Size]byte{},
 
-		AttemptStartedAt: time.Now().UTC(),
+		AttemptStartedAt: time.Now().UTC(), Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 

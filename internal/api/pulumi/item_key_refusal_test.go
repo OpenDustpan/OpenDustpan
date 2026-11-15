@@ -20,7 +20,7 @@ func startedBy(t *testing.T, f updateFixture, subject string) (stack.UpdateID, s
 	t.Helper()
 
 	u, err := f.updates.Create(t.Context(), f.ref, stack.Plan{
-		Kind: stack.KindPreview, DryRun: false, CreatedBy: subject, RestoredFrom: 0,
+		Kind: stack.KindPreview, DryRun: false, CreatedBy: subject, RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)

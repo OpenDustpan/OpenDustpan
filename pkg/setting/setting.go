@@ -183,7 +183,13 @@ type Declaration struct {
 	// that the database cannot hold is static only: a change through the API
 	// answers a conflict.
 	Database bool
-	Apply    Apply
+	// StaticCredentialHost marks a setting that names a host to which the
+	// server sends a static credential: a password, a key or a token that
+	// the static layer holds. Such a setting is static only: the database
+	// layer must not choose the host, because a stored value could point it
+	// at another server while the credential stays.
+	StaticCredentialHost bool
+	Apply                Apply
 	// Check refuses a value of the right kind, or is nil.
 	Check func(value string) error
 	// ReducesSecurity reports whether a change of the effective value from
@@ -257,6 +263,13 @@ func (d Declaration) validateLayers() error {
 		// The database keeps no secret: a sealed value needs a data key that
 		// no setting uses yet.
 		return fmt.Errorf("%w: %s is a secret in the database layer", ErrInvalidDeclaration, d.Key)
+	}
+
+	if d.Database && d.StaticCredentialHost {
+		// A host that receives a static credential must not have a database
+		// layer: a holder of the manage-settings action could point it at
+		// another server, and the server would send the credential there.
+		return fmt.Errorf("%w: %s is a static-credential host in the database layer", ErrInvalidDeclaration, d.Key)
 	}
 
 	if d.Level == LevelNamespace && !d.Database {

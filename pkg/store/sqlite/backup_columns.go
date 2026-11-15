@@ -37,6 +37,9 @@ const (
 	backupColUpdatedAtMs = "updated_at_ms"
 	backupColDeletedAtMs = "deleted_at_ms"
 	backupColSource      = "source"
+	backupColSourceID    = "source_id"
+	backupColSourceKind  = "source_kind"
+	backupColGroupID     = "group_id"
 	backupColKind        = "kind"
 	backupColUsedAtMs    = "used_at_ms"
 	backupColSubject     = "subject"
@@ -131,6 +134,8 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"journal_closed",
 				"token_id",
 				"journal_records_changed",
+				backupColJobID,
+				"git_head",
 			},
 		},
 		{
@@ -427,6 +432,7 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 				"sensitive_marks",
 				"fenced_by",
 				"unlocked_write",
+				"origin_job",
 			},
 		},
 	}
@@ -459,6 +465,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqlitePlacementBackupTables(),
 		sqliteSelfServiceBackupTables(),
 		sqliteTrustRuleBackupTables(),
+		sqliteBreakGlassReviewBackupTables(),
 	)
 }
 
@@ -547,7 +554,8 @@ func sqliteControlTables() []sqliteBackupTable {
 	}
 
 	return slices.Concat(
-		core, sqliteRevocationControlTables(), sqliteRunnerControlTables(), sqliteNameLockControlTables(),
+		core, sqliteRevocationControlTables(), sqliteBlobDeleteLeaseControlTables(), sqliteRunnerControlTables(),
+		sqliteNameLockControlTables(),
 	)
 }
 
@@ -603,6 +611,18 @@ func sqliteRevocationControlTables() []sqliteBackupTable {
 	}
 }
 
+// sqliteBlobDeleteLeaseControlTables lists the columns of the blob delete
+// lease rows. The swap keeps the live rows, so the restore waits for the
+// deleters that run now.
+func sqliteBlobDeleteLeaseControlTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table:   backup.TableBlobDeleteLeases,
+			columns: []string{backupColHolder, backupColExpiresAtMs},
+		},
+	}
+}
+
 // sqliteEmptiedTables lists the column list of every table of
 // backup.EmptiedTables. CheckCoverage compares each list with the live schema.
 func sqliteEmptiedTables() []sqliteBackupTable {
@@ -631,8 +651,11 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			columns: sqlitePasskeyChallengeColumns(),
 		},
 		{
-			table:   backup.TableBlobDeleteLeases,
-			columns: []string{backupColHolder, backupColExpiresAtMs},
+			table: backup.TableUnitState,
+			columns: []string{
+				backupColUnitID, backupColNamespaceID, "version_id", "final_version_id", "final_commit",
+				"final_job", "final_at_ms",
+			},
 		},
 	}
 }
@@ -743,17 +766,18 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColCreatedAtMs,
 				backupColUpdatedAtMs,
 				backupColDeletedAtMs,
+				"closed_to_identity_provider",
 			},
 		},
 		{
 			table: "group_members",
 			columns: []string{
-				"group_id",
+				backupColGroupID,
 				backupColPrincipalID,
 				"added_at_ms",
 				"removed_at_ms",
 				backupColSource,
-				"source_id",
+				backupColSourceID,
 				backupColState,
 				"suspended_at_ms",
 				"pinned",
@@ -763,11 +787,31 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			table: "group_mappings",
 			columns: []string{
 				backupColSource,
-				"source_id",
+				backupColSourceID,
 				"claim_value",
-				"group_id",
+				backupColGroupID,
 				backupColCreatedBy,
 				backupColCreatedAtMs,
+			},
+		},
+		{
+			table: "member_removal_alerts",
+			columns: []string{
+				backupColSourceKind,
+				backupColSourceID,
+				"alerted_at_ms",
+			},
+		},
+		{
+			table: "member_removals",
+			columns: []string{
+				"id",
+				backupColSourceKind,
+				backupColSourceID,
+				backupColGroupID,
+				"removed",
+				"members_before",
+				backupColAtMs,
 			},
 		},
 		{

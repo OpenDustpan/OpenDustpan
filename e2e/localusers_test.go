@@ -28,24 +28,24 @@ const (
 func TestLocalPasswordSignIn(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.OpenTofu().Versions()
-	if len(versions) == 0 {
+	version := e2e.OpenTofu().Single()
+	if version == "" {
 		t.Fatal("the OpenTofu tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), versions[0])
+	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, version, err)
 	}
 
 	for _, db := range databases {
