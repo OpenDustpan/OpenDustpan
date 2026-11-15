@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:287` (Pull request automation, first slice).
@@ -50,10 +50,6 @@ Depends on:
 - git-host-webhook-intake-post
 - report-plans-on-review-request
 - start-plan-on-push-review
-- `report-plans-on-review-request` (order of the milestone review)
-- `start-plan-on-push-review` (order of the milestone review)
-- `git-host-webhook-intake-post` (order of the milestone review)
-- `run-triggers` (order of the milestone review)
 
 ## Usability
 

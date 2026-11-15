@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 8
 ---
 
 Issue: #1316, #1346, #1383, #1384.
@@ -11,9 +11,9 @@ Issue: #1316, #1346, #1383, #1384.
 The user path this change must make work:
 
 1. **Docs page.** Namespace administrator saves code location, pool, profile reference and steps on the stack or workspace from the docs page.
-2. **API.** Developer starts a plan job with no location; the server uses the stored settings.
+2. **API.** Developer with the planner role starts a plan job with no location; the server uses the stored settings.
 3. **API.** A schedule or push trigger starts a plan on a runner with the stored settings. The job reads outputs of its source under the sharing rule and the read check.
-4. **E2e.** The e2e step drives the real binary over TLS with an access token of a namespace administrator. It saves the unit settings, fires a trigger, and proves the refusal and the trigger read denial.
+4. **E2e.** BLOCKED by the missing e2e helper for the trigger fire route and the job-token output read. The step would drive the real binary over TLS with an access token of a planner principal.
 
 Errors the person may hit, and the one command that helps:
 
@@ -29,6 +29,7 @@ Evidence for the claims above:
 - The read check type and a resolver of principal records exist. Proof: pkg/dustpan/triggers.go:250 and pkg/trigger/readcheck.go:15
 - No non-test code calls the trigger output-read check. Proof: rg -n -F --glob '!*_test.go' 'trigger.OutputReadCheck.Allow' pkg internal cmd matches 0
 - The planner checks the location in the dustpan service. Proof: pkg/dustpan/jobservice.go:606 (jobPlanner.checkLocation) and test pkg/dustpan/jobservice_internal_test.go:328
+- A test lists actions that no role holds. Proof: pkg/access/access_test.go:484 (TestActionsWithoutRoutesAreUnclassified)
 
 ## What Changes
 
@@ -36,7 +37,7 @@ Evidence for the claims above:
 - Job start resolves inputs from request override, then unit settings, then defaults, and snapshots them on the job.
 - Trigger starts carry the trigger ID, the stable ID of the run-as principal and the caller for the output-read check.
 - Job-token output reads enforce the sharing rule plus the run-as principal and manual-fire caller check.
-- Built-in roles hold the start and read actions as the owner decides in the open question.
+- Built-in roles hold the actions: viewer gets job:read; planner gets job:read, job:read-plans, job:read-logs and unit:run-plan; writer gets the actions of planner; maintainer gets the actions of writer, unit:define-steps and namespace:manage-runners; admin keeps all of them. No new role is added.
 
 Out of scope:
 
@@ -99,14 +100,6 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 none
 
-Each question below has a provisional answer by the PM decision rule (a benchmark, no persona upset or an escape hatch, not wrong after a step back). The owner reviews them on 14 Nov. No provisional answer changes the words of an owner decision.
-
-1. Which built-in roles hold unit:run-plan, unit:define-steps, job:read, job:read-plans, job:read-logs and namespace:manage-runners?
-   - Options: Reader gets job:read. Planner gets unit:run-plan and the job read actions. Lead gets unit:define-steps. Administrator keeps namespace:manage-runners; Maintainer gets unit:run-plan and unit:define-steps.
-   - Provisional decision (owner review 14 Nov): Reader gets job:read. Planner and starter get unit:run-plan, job:read, job:read-plans and job:read-logs. Lead also gets unit:define-steps. Administrator keeps namespace:manage-runners.
-   - Reason: The planner role needs unit:run-plan and masked reads, and the read actions must not stay with administrators alone. Benchmark: AWS: IAM managed policies give read, start and configure actions to distinct roles.
-   - Persona impact: Each role works from day one. Escape hatch: A custom role can hold any mix of the actions.
-
 Questions considered and answered:
 
 - Where do pool and location of a trigger start come from? ADR 267 decision 4: the unit settings. A request location is an override.
@@ -114,5 +107,6 @@ Questions considered and answered:
 - Does namespace:manage-runners depend on grants alone? Yes, intended: the gate service types the object as a namespace. The route still checks the grant and writes the audit entry.
 - What does a job-token read of outputs check? ADR 213 decision 1: two checks at each read. ADR 273 decision 5: unit:read-outputs of the principal.
 - Which principal does a trigger start run as? The run-as principal of the trigger, which holds the plan start only. The housekeeping-principals change owns its grant.
+- Which built-in roles hold the job and runner actions? The owner decided on 2026-11-14 to map the actions onto the existing roles. Viewer gets job:read. Planner gets job:read, job:read-plans, job:read-logs and unit:run-plan. Writer gets the planner actions. Maintainer gets the writer actions, unit:define-steps and namespace:manage-runners. Admin keeps all.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

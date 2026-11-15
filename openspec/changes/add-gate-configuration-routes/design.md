@@ -1,14 +1,35 @@
 ## Context
 
-Gate configuration is security code. A write needs an action check, a scope check, fresh authentication, limits, a version check and an audit entry. The service exists. This change serves it at every scope and keys unit rows on the stable unit ID.
+Gate configuration is security code. A write needs an action check, a scope check, fresh authentication, limits, a version check and an audit entry. The service and the store exist. This change serves the routes at every scope and verifies the stable unit key.
 
 ## Decisions
 
 1. **Routes on ConfigService.** Serve gates, approval rules, approval defaults including the reset, and the carry-over setting at four scopes. The unit scope is the by-name path of ADR 355. Each route declares the read or manage action of its scope.
-2. **Stable unit key.** Key gate rows of a unit on the stable unit ID by an in-place edit of the baseline of each dialect. A rename or a restore keeps the rows. A new unit that reuses a name starts clean. The by-name path resolves to the ID at the start of each request.
+2. **Stable unit key.** Gate rows of a unit key on the stable unit ID. The by-name path resolves to the ID at the start of each request. Tests verify it.
 3. **Version check in the transaction.** The adapter compares If-Match with the stored version in the write transaction. A PUT that creates a new object needs no If-Match. A PUT to an existing object without If-Match fails with 428.
 4. **Fresh authentication.** A change that needs fresh authentication fails closed with mfa.fresh-step-required for an access token and for a session with an old sign-in.
 5. **Final gates and rule IDs.** A narrower scope cannot save a gate or rule with the ID of a wider final object. The server resolves approval:<id> at the gate scope, then at wider scopes.
+
+6. **The route table (from ADR 230 decisions 2 to 4 and ADR 210 decision 3; the namespace, collection and unit rows of gates and access limits, and the namespace rows of approval rules and the approval default, are on main).** `{scope}` is one of `/api/dustpan/v1/namespaces/{namespace}`, `.../collections/{collection}` and `.../units/by-name/{tool}/{name}` (the unit path of main, internal/api/server/gate_objects.go:24-26). The installation prefix is `/api/dustpan/v1` with no scope segment (ADR 210 decision 3: "An object of the installation: /api/dustpan/v1/<collection>"). Each write takes `If-Match` with the version (the `ETag` of a read, `etag(version)` as main writes it); a PUT that creates takes none; a PUT of an existing object with no `If-Match` answers 428; a stale version answers 409 `gate.version-conflict` (main's mapping, internal/api/server/gate_config.go:633). A change that needs a fresh authentication (ADR 230 decision 2) answers 403 `mfa.fresh-step-required` for an access token or an old session.
+
+   | Method and path | Operation ID | Action (object) | Body (request / answer) | Errors |
+   | --- | --- | --- | --- | --- |
+   | GET /api/dustpan/v1/gates | listInstallationGates | installation:read-gates (installation) | - / gateListBody | 403 |
+   | GET /api/dustpan/v1/gates/{id} | getInstallationGate | installation:read-gates | - / gateBody, ETag | 404 gate.not-found |
+   | PUT /api/dustpan/v1/gates/{id} | putInstallationGate | installation:manage-gates, fresh for enforce and final | gateBody / gateBody, ETag | 409 version-conflict, 409 gate.final, 422 gate.invalid, 422 gate.limit, 428 |
+   | DELETE /api/dustpan/v1/gates/{id} | deleteInstallationGate | installation:manage-gates, fresh | ?reason for a final gate / 204 | 404, 409, 428 |
+   | GET, GET {id}, PUT {id}, DELETE {id} /api/dustpan/v1/access-limits | listInstallationAccessLimits, getInstallationAccessLimit, putInstallationAccessLimit, deleteInstallationAccessLimit | installation:read-gates; installation:manage-gates, fresh | accessLimitBody | as gates |
+   | GET, GET {id}, PUT {id}, DELETE {id} /api/dustpan/v1/approval-rules | listInstallationApprovalRules, getInstallationApprovalRule, putInstallationApprovalRule, deleteInstallationApprovalRule | installation:read-gates; installation:manage-gates, fresh | approvalRuleBody (main's body) | as gates |
+   | GET, GET {id}, PUT {id}, DELETE {id} {scope}/approval-rules for the collection and the unit scope | listCollectionApprovalRules, ..., deleteUnitApprovalRule | namespace:read-gates; namespace:manage-gates, fresh (namespace object) | approvalRuleBody | as gates |
+   | GET, PUT, DELETE {scope}/approval-default for each scope where `Scope.HoldsApprovalDefault` (pkg/gate/scope.go:293) is true | getApprovalDefault (main), putApprovalDefault (main), deleteApprovalDefault (main, the reset) | namespace:read-gates; namespace:manage-gates, fresh | approvalDefaultBody / 204 for DELETE, also when none is set | 409, 422 |
+   | GET, PUT {scope}/signature-carry-over and /api/dustpan/v1/signature-carry-over | getSignatureCarryOver, putSignatureCarryOver, with the scope infix of main (Collection, Unit, Installation) | namespace:read-gates, namespace:manage-gates (installation:read-gates, installation:manage-gates at the installation); a change to the value on needs a fresh authentication | carryOverBody with the fields value (off, on or forbidden) and version / carryOverBody, ETag | 422 gate.invalid for the value on at the installation (ADR 225 decision 12), 409 |
+
+   A PUT of `off` deletes the stored setting and answers version 0, so the next PUT takes no `If-Match` (pkg/gate/store.go:154-164). A list answers the objects stored at its scope only (ADR 230 decision 3).
+
+7. **The port signatures (internal/api/server/gate_config.go:26, type GateConfig).** GateConfig gets the NEW interface `CarryOverConfig`, which mirrors the store methods of pkg/gate/store.go:154-164:
+   - `CarryOver(ctx context.Context, scope gate.Scope) (gate.CarryOverSetting, error)`: `gate.CarryOverOff` with version 0 when none is stored; `gate.ErrInvalid` for a scope that is not valid.
+   - `PutCarryOver(ctx context.Context, s gate.CarryOverSetting, prev int64, fence namespace.Fence, e audit.Entry) (int64, error)`: the new version (0 after a PUT of off); `gate.ErrInvalid` for `on` at the installation; `gate.ErrConflict` for a prev that is not the stored version; `namespace.ErrFenced` for a stale fence.
+   The installation scope uses `gate.InstallationScope()` (pkg/gate/scope.go:92). The NEW actions `installation:read-gates` and `installation:manage-gates` go into pkg/identity/identity.go next to `ActionNamespaceReadGates` (:190), with the installation object.
 
 ## Structure
 
@@ -46,6 +67,7 @@ Modules that the change touches, and their imports on main:
 ```mermaid
 flowchart LR
 P1[pkg/gate]
+P2[pkg/backup]
 ```
 
 States on main in the touched packages:
@@ -57,6 +79,13 @@ state_import
 valid
 invalid
 state_write
+unit_state
+running
+succeeded
+failed
+missing
+damaged
+state_version_id
 ```
 
 States and transitions after this change:
@@ -130,9 +159,9 @@ flowchart LR
 
 Tests:
 
-- `internal/removalalertsvc/fakes_test.go` names `gate.ErrNotFound`
-- `internal/cost/costtest/mem_test.go` names `gate.ErrNotFound`
-- `internal/outputsharesvc/checker_test.go` names `gate.ErrNotFound`
+- `pkg/tempadmin/tempadmin_test.go` names `gate.ErrNotFound`
+- `pkg/manuallock/manuallock_test.go` names `gate.ErrNotFound`
+- `pkg/outputshare/outputsharetest/mem_test.go` names `gate.ErrNotFound`
 
 Docs pages:
 
@@ -142,4 +171,4 @@ ADRs:
 
 - `docs/adr/0271-the-forge-port-git-host-connections-and-the-installation-level-github-app.md` names `gate.ErrNotFound`
 - `docs/adr/0141-freeze-schedules.md` names `gate.ErrNotFound`
-- `docs/adr/0355-gate-configuration-paths-and-errors-as-shipped.md` names `gate.ErrNotFound`
+- `docs/adr/0179-conformance-suites-for-provider-wrappers.md` names `gate.ErrNotFound`

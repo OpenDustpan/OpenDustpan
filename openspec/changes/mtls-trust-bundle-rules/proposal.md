@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 6
 ---
 
 Roadmap: `docs/roadmap.md:188` (Bundle and rule API with audit ships first.).
@@ -10,10 +10,10 @@ Roadmap: `docs/roadmap.md:188` (Bundle and rule API with audit ships first.).
 
 The user path this change must make work:
 
-1. **API.** Administrator saves the namespace trust bundle
-2. **API.** Administrator rotates the bundle and reads the version list and the overlap end
-3. **API.** Administrator creates a trust rule that names the bundle, the SPIFFE ID and the principal
-4. **API.** Administrator updates a rule with PATCH and If-Match, then deletes a rule the team no longer needs
+1. **API.** Administrator saves the namespace trust bundle with the new route POST /api/dustpan/v1/namespaces/{namespace}/trust-bundles
+2. **API.** Administrator reads the bundle with the new route GET /api/dustpan/v1/namespaces/{namespace}/trust-bundles/{bundle}, rotates it with the new PATCH route and If-Match, and reads versions and overlapEndsAt
+3. **API.** Administrator creates a trust rule with the existing POST /api/dustpan/v1/namespaces/{namespace}/trust-rules that names bundle, spiffeIDPattern and the principal
+4. **API.** Administrator updates a rule with the new PATCH route and If-Match, then deletes a rule the team no longer needs
 5. **API.** Administrator reads the audit entries for each change
 6. **Docs page.** Administrator follows the same steps on the docs page
 
@@ -24,6 +24,7 @@ Errors the person may hit, and the one command that helps:
 | Caller without grant changes a bundle or a rule | Server answers 403 access.denied. | `GET /api/dustpan/v1/namespaces/{namespace}/trust-rules` |
 | Bundle or rule change with a stale session or with an access token only | Server answers 403 and states that a fresh authentication is needed. | `GET /api/dustpan/v1/me/preferences` |
 | Bundle save with malformed PEM, expired CA, oversize bundle or too many CAs | Server answers 400 with the CA index and the count, and stores nothing. | `GET /api/dustpan/v1/namespaces/{namespace}/trust-rules` |
+| PATCH with a stale If-Match | Server answers 412 and keeps the stored value. | `GET /api/dustpan/v1/namespaces/{namespace}/trust-rules/{rule_id}` |
 
 Evidence for the claims above:
 
@@ -33,10 +34,11 @@ Evidence for the claims above:
 ## What Changes
 
 - Versioned namespace trust bundle in pkg/trustrule with save checks, bounds, rotation and retired keeps
-- SPIFFE and mTLS fields on the existing trust rule in pkg/trustrule
+- Rule fields spiffeIDPattern and bundle on the existing trust rule in pkg/trustrule
 - Bundle save, rotate, rule update with If-Match and the fresh-authentication check in internal/trustrulesvc
-- Bundle routes and rule update route in internal/api/trustrules
-- Schema change in the baseline of each dialect, in name order
+- New routes GET and POST /api/dustpan/v1/namespaces/{namespace}/trust-bundles and GET and PATCH .../trust-bundles/{bundle} in internal/api/trustrules
+- New route PATCH /api/dustpan/v1/namespaces/{namespace}/trust-rules/{rule_id}
+- New tables trust_bundles and trust_bundle_versions in the baseline of each dialect, after triggers and before trust_rules
 
 Out of scope:
 
@@ -56,8 +58,8 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main has a workload token exchange test that this part does not replace (`e2e/workload_test.go:38 (func TestWorkloadTokenExchange)`)
-- Main has a test that the trust token lives the exchange lifetime (`pkg/accesstoken/trust_token_test.go:59 (func TestTrustTokenLivesTheExchangeLifetime)`)
+- Main has a workload token exchange test that this part does not replace (`e2e/workload_test.go:38`)
+- Main has a test that the trust token lives the exchange lifetime (`pkg/accesstoken/trust_token_test.go:59`)
 
 ## ADR check
 
@@ -76,8 +78,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 **ADR 284: The token exchange issues a stored access token** (owner-tagged (all decisions)).
 
 - Decisions that apply: 3 (current).
-- Changed by: -. Chain to the end: none.
-- Current rule: this ADR.
+- Changed by: ADR 371 changes decision 1. Chain to the end: none.
+- Current rule: this ADR, with ADR 371.
 - Quote: "The trust rules refuse the issuers of this installation. A rule cannot name an issuer at or under a URL of an issuer of this installation (ADR 204 decision 7)."
 - Effect: The save check refuses a JWT issuer URL of this installation. The exchange-time re-check is out of scope.
 - Conflict: none.
@@ -118,6 +120,6 @@ Questions considered and answered:
 - Where do the bundle and each rule live? In one namespace (ADR 54 decisions 4 and 5, ADR 216 decision 3).
 - Does each operation need a REST API, an action and an audit entry? Yes (ADR 54 decision 8).
 - Does a change need fresh authentication? Yes (ADR 227 decision 2, ADR 297 decision 18).
-- Do we add a parallel package? No. The PM decision extends the existing trust rule domain so that one writer serves each route.
+- Do we add a parallel package? No. The change extends the existing trust rule domain so that one writer serves each route.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

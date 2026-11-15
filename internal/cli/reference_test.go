@@ -4,7 +4,6 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/cli"
@@ -16,16 +15,12 @@ import (
 //nolint:gochecknoglobals // A test flag is read once; passing it as a parameter adds nothing.
 var updateReference = flag.Bool("update", false, "rewrite docs/reference/configuration.md from the declarations")
 
-// repoRoot answers the repository root from the location of this test file.
+// repoRoot answers the repository root from the package directory,
+// the working directory of go test.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime caller holds no file")
-	}
-
-	return filepath.Dir(filepath.Dir(filepath.Dir(file)))
+	return filepath.Join("..", "..")
 }
 
 // TestConfigurationReference proves docs/reference/configuration.md holds

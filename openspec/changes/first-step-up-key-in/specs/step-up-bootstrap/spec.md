@@ -20,11 +20,11 @@ When no marker is set and no administrator holds a key, the server SHALL enroll 
 
 Where the recovery mode is bootstrap or signed-request, the server SHALL accept the host bootstrap.
 
-#### Scenario: Mode 1
+#### Scenario: Bootstrap recovery
 - **WHEN** the operator runs the bootstrap in recovery mode bootstrap
 - **THEN** the key exists
 
-#### Scenario: Mode 2
+#### Scenario: Signed-request recovery
 - **WHEN** the operator runs the bootstrap in recovery mode signed-request
 - **THEN** the key exists
 

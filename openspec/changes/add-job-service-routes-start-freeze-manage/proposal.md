@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #1374.
@@ -63,7 +63,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Freeze test exists on main (`pkg/job/gate_test.go:764 (func TestFreeze)`)
-- Route action classification test exists on main (`pkg/access/access_test.go:484 (func TestActionsWithoutRoutesAreUnclassified)`)
+- Route action classification test exists on main (`pkg/access/access_test.go:493 (func TestActionsWithoutRoutesAreUnclassified)`)
 - Session renew path is registered in runnerapi routes (`internal/api/runnerapi/routes.go:171 (func Handler.launcherRoutes)`)
 - Launcher session client posts to session paths (`pkg/launcher/session/session.go:237 (func Open)`)
 

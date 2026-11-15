@@ -182,8 +182,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"parallel creates in several namespaces, then paging returns every job", testParallelNamespaces},
 		{"parallel creates in one namespace, then paging returns every job", testParallelCreatesOneNamespace},
 		{"freezes list, end once, and validate", testFreezes},
-	}, createRuleCases(), reconcileCases(), damagedCases(), claimerCases(), missingNamespaceCases(), endClaimCases(),
-		claimBoundCases(), claimGateCases())
+	}, createRuleCases(), reconcileCases(), approveCases(), damagedCases(), claimerCases(), missingNamespaceCases(),
+		endClaimCases(), claimBoundCases(), claimGateCases())
 
 	runCases(t, newHarness, cases)
 
@@ -347,6 +347,7 @@ func entry(unit identity.Object, action identity.Action) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

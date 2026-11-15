@@ -198,11 +198,12 @@ step ends with a check of the audit entries that the step must write
     `pulumi stack init` and `tofu init` for a unit that no rule places fail
     with the error that names the missing rule, and the unit does not exist
     (ADR 51 decision 5).
-11. **Break-glass mode 2.** An installation set at first boot to mode 2
-    (ADR 57) accepts a recovery request that the offline operator key signs,
-    and gives one admin session. A request with a wrong signature, or a
-    second use of the same request, gives no session. The use opens a
-    break-glass review (ADR 142).
+11. **Signed-request recovery.** An installation set at first boot to
+    signed-request recovery (ADR 57, ADR 372) accepts a recovery request that
+    the offline operator key signs, and makes one temporary administrator
+    (ADR 295). A request with a wrong signature, or a second use of the same
+    request, makes none. The use opens a break-glass review (ADR 142, ADR
+    372).
 12. **Audit log, export and sinks.** Each of steps 1 to 11 writes the audit
     entries of ADR 60. The audit export gives them for a time range. The
     `otlp` sink sends them to the test OTLP collector, and the `syslog` and
@@ -223,7 +224,7 @@ an access token of a non-admin principal.
 | server  | [RFC 4](rfc/0004-what-sits-under-a-namespace.md) What sits under a namespace | collections, placement, the refusal of a unit with no collection | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
 | server  | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | all, with the planner role               | discussing; groups, grants and export accepted (ADR 52), the planner role (ADR 212) |
 | server  | [RFC 20](rfc/0020-access-tokens.md) Access tokens and machine identity       | all: expiry email, workload identity, mTLS | discussing; token life cycle, workload identity, service principals and lifetimes accepted (ADR 53, ADR 54, ADR 67, ADR 69) |
-| server  | [RFC 21](rfc/0021-directory-sync-and-sign-in.md) Directory sync and sign-in  | all: OIDC, LDAP, SAML, CAS, OAuth 2.0, trusted header, passkeys, MFA, SCIM, IP allowlists, break-glass mode 2 | discussing; accepted in part (ADR 46, ADR 55, ADR 56, ADR 57); design needed for the open questions of ADR 55 |
+| server  | [RFC 21](rfc/0021-directory-sync-and-sign-in.md) Directory sync and sign-in  | all: OIDC, LDAP, SAML, CAS, OAuth 2.0, trusted header, passkeys, MFA, SCIM, IP allowlists, signed-request recovery | discussing; accepted in part (ADR 46, ADR 55, ADR 56, ADR 57); design needed for the open questions of ADR 55 |
 | server  | [RFC 22](rfc/0022-audit-log.md) Audit log                                    | all: export, the OTLP sink               | discussing; port, entries, export, sinks and opt-in tamper evidence accepted (ADR 60); retention accepted (ADR 68) |
 | console | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | members, groups, grants, access-review export | discussing; groups, grants and export accepted (ADR 52) |
 | console | [RFC 52](rfc/0052-console-core.md) Console core views                        | sections with the reason they are locked | draft |
@@ -553,6 +554,8 @@ comes before the exit test of each of milestones 1 to 7 passes. Its gate:
   it: the meaning of `principal.kind`, the agent block in the audit hash
   chain, and the `agent` key in the `sub` of the job identity token. If RFC 121
   is not accepted by then, this is an open item of the gate.
+- [ ] Agent sign-off rule settled
+  ([ADR 381](adr/0381-agent-sign-off-until-the-first-tag.md)).
 - [ ] Install docs, with TLS from files and a reverse proxy
   ([ADR 283](adr/0283-packaging-for-v0-1-0.md)).
 - [ ] Release workflows for the binaries, the image and the console tarball

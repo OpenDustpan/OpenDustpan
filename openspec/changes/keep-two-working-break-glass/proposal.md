@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 6
 ---
 
 Issue: #623, #627, #633.
@@ -36,7 +36,7 @@ Evidence for the claims above:
 - The IP allowlist code is in internal/api/server/ip_allowlist.go and pkg/ipallow. Proof: The pack path list shows both as existing.
 - The principal domain is in pkg/principal and the guides are in docs/guides. Proof: The pack path list shows both as existing.
 - The passkey or hardware key requirement comes from decision 23 of ADR 70, and ADR 320 decision 23 repeats it. Proof: Pack issue 627 and ADR 320 decision 23 text: it signs in with a passkey or a hardware key only.
-- Main already has a test that the inactivity sweep never disables a break-glass account. Proof: Pack main list: TestSweepNeverDisablesBreakGlass at pkg/accesstoken/accesstoken_test.go:1270.
+- Main already has a test that the inactivity sweep never disables a break-glass account. Proof: Pack main list: TestSweepNeverDisablesBreakGlass at pkg/accesstoken/accesstoken_test.go:1271.
 
 ## What Changes
 
@@ -56,15 +56,13 @@ Out of scope:
 - Reach recheck and act-as edges, and their guide text (change check-reach-when-grant-membership).
 - Group trust switches and protected groups, and their guide text (change let-group-trust-identity-provider).
 - The setting for the restore of access tables (change add-setting-lets-server-restore).
-- Mode 2 recovery route (change break-glass-mode-2).
+- Signed-request recovery route (change signed-request-recovery).
 - The change of the fresh-authentication window to 0 (change fresh-authentication-window-0-turns).
 
 Depends on:
 
 - add-setting-lets-server-restore
 - fresh-authentication-window-0-turns
-- `add-setting-lets-server-restore` (order of the milestone review)
-- `fresh-authentication-window-0-turns` (order of the milestone review)
 
 ## Usability
 
@@ -78,9 +76,9 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- A test shows that the inactivity sweep never disables a break-glass account. This change replaces that rule with the last-enabled rule for the sweep. (`pkg/accesstoken/accesstoken_test.go:1270 (func TestSweepNeverDisablesBreakGlass)`)
-- A test shows that the inactivity sweep disables inactive tokens and accounts. (`pkg/accesstoken/accesstoken_test.go:1217 (func TestSweepDisablesInactiveTokensAndAccounts)`)
-- A temporary administrator test exists for the expiry of recovery access. (`pkg/dustpan/tempadmin_test.go:84 (func TestExpiredTempAdminStaysDenied)`)
+- A test shows that the inactivity sweep never disables a break-glass account. This change replaces that rule with the last-enabled rule for the sweep. (`pkg/accesstoken/accesstoken_test.go:1271 (func TestSweepNeverDisablesBreakGlass)`)
+- A test shows that the inactivity sweep disables inactive tokens and accounts. (`pkg/accesstoken/accesstoken_test.go:1218 (func TestSweepDisablesInactiveTokensAndAccounts)`)
+- A temporary administrator test exists for the expiry of recovery access. (`pkg/dustpan/tempadmin_test.go:85 (func TestExpiredTempAdminStaysDenied)`)
 - Restore error codes exist on main. (`internal/errcode/catalog_restore.go:7 (error code restore.blobs-missing)`)
 
 ## Owner decisions that apply

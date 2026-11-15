@@ -199,6 +199,7 @@ func (s *Service) invalidMarker(
 		Kind: audit.KindSecurity, Outcome: audit.OutcomeFailure, RequestID: "", ObjectID: "",
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
 		Reason: errcode.PrincipalRemovalAlertMarkerInvalid,
+		Origin: nil,
 	}
 
 	if _, err := s.cfg.Audit.AppendServer(ctx, entry); err != nil {
@@ -264,6 +265,7 @@ func (s *Service) alert(ctx context.Context, in alertInput) error {
 		Changes: alertChanges(attrs), SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "",
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 
 	if _, err := s.cfg.Audit.AppendServer(ctx, entry); err != nil {

@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 6
 ---
 
 Roadmap: `docs/roadmap.md:319` (Run triggers).
@@ -58,8 +58,6 @@ Depends on:
 - add-job-service-routes-start-1
 - job-service-unit-settings-pool
 - runners
-- `job-service-unit-settings-pool` (order of the milestone review)
-- `runners` (order of the milestone review)
 
 ## Usability
 

@@ -13,6 +13,12 @@ import (
 // change makes the fields of c on next, and checks the rules of its event.
 // It keeps nothing on an error.
 func change(ctx context.Context, tx Tx, next *job.Job, c *job.Change, now time.Time) error {
+	// Defense in depth: the service checks the session proof before this
+	// write. Check its age again on the database clock in this transaction.
+	if err := checkDestroyProof(next, c.Approval, now); err != nil {
+		return err
+	}
+
 	if c.Approval != nil && next.Current < len(next.Phases) {
 		next.Phases[next.Current].Approvals = append(next.Phases[next.Current].Approvals, *c.Approval)
 	}
@@ -33,6 +39,24 @@ func change(ctx context.Context, tx Tx, next *job.Job, c *job.Change, now time.T
 		// Every other event changes the state only.
 		return nil
 	}
+}
+
+// checkDestroyProof refuses an approval whose proof expired before the
+// signature write. A rejection needs no fresh step.
+func checkDestroyProof(j *job.Job, ap *job.Approval, now time.Time) error {
+	if j.Spec.Operation != job.OperationDestroy || ap == nil || ap.Verdict == job.VerdictReject {
+		return nil
+	}
+
+	// The database clock has millisecond precision, as the stored times do.
+	at, proof, current := ap.At.UnixMilli(), ap.AuthAt.UnixMilli(), now.UnixMilli()
+	if ap.Verdict != job.VerdictApprove || ap.Agent != "" || ap.Auth != job.ConfirmAuthMFA ||
+		ap.AuthAt.IsZero() || proof > at || proof > current || at > current ||
+		current-proof > job.ConfirmFreshness.Milliseconds() {
+		return job.ErrAuthStale
+	}
+
+	return nil
 }
 
 // dispatch checks the rules of a dispatch and starts its operation.

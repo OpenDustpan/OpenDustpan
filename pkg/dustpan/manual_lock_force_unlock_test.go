@@ -399,7 +399,7 @@ func allowForcedWrites(t *testing.T, f fixture, w workspace.Workspace) {
 		body string
 	}{
 		{
-			path: "/api/server/namespaces/acme/override-switches",
+			path: "/api/dustpan/v1/namespaces/acme/override-switches",
 			body: `{"allowForcedWrites":true,"allowUnlockedWrites":false}`,
 		},
 		{

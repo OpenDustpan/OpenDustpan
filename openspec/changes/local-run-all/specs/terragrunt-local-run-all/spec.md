@@ -8,6 +8,14 @@ When a developer runs terragrunt run-all against the server, the server SHALL se
 - **WHEN** a developer runs terragrunt run-all apply over 3 pre-created unit workspaces
 - **THEN** each of the 3 workspaces holds 1 new state version and 1 history entry, and no state version holds resources from another unit
 
+### Requirement: real Terragrunt in e2e
+
+The e2e tests SHALL run the real terragrunt run-all through the pinned Terragrunt binary of the e2e fetcher.
+
+#### Scenario: e2e uses the pinned binary
+- **WHEN** an e2e test runs a local run-all
+- **THEN** it installs the binary with fetcher.Install(ctx, e2e.Terragrunt(), version), sets the OpenTofu binary of the fetcher as TG_TF_PATH and calls no tofu directly in place of Terragrunt
+
 ### Requirement: locked workspace refuses second writer
 
 When two applies target one locked workspace at the same time, the server SHALL refuse the second writer with the workspace.locked error.

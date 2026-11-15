@@ -417,6 +417,7 @@ func PruneLocks(ctx context.Context, locks authgate.NameLockCounter, at time.Tim
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelFrom(ctx), Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: audit.PrincipalKindService, JobID: "", Reason: ReasonNameLocksPruned,
+		Origin: nil,
 	}
 
 	n, err := locks.PruneNameLocks(ctx, p.Age, p.MaxRows, p.MaxEnded, e)

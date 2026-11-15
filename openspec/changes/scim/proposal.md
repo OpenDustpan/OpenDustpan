@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 8
 ---
 
 Roadmap: `docs/roadmap.md:153` (SCIM).
@@ -34,7 +34,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-- NEW routes under /api/dustpan/v1/scim/v2: Users, Groups, ServiceProviderConfig, Schemas, ResourceTypes.
+- NEW routes /api/dustpan/v1/scim/v2/Users and /api/dustpan/v1/scim/v2/Users/{id}, and NEW routes under /api/dustpan/v1/scim/v2: Groups, ServiceProviderConfig, Schemas, ResourceTypes.
 - NEW routes for the SCIM credential: create, rotate, revoke.
 - A provisioning port with a conformance suite, and a service that writes persons with source scim, groups and memberships.
 - A SCIM removal disables the person, adds 1 to the session generation and disables the access tokens. The revocation setting revokes them.
@@ -55,11 +55,6 @@ Depends on:
 - one-membership-function-identity-provider
 - keep-two-working-break-glass
 - add-one-generic-settings-api
-- `groups-roles-grants` (order of the milestone review)
-- `collections-placement` (order of the milestone review)
-- `one-membership-function-identity-provider` (order of the milestone review)
-- `keep-two-working-break-glass` (order of the milestone review)
-- `add-one-generic-settings-api` (order of the milestone review)
 
 ## Usability
 
@@ -116,8 +111,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
 - Quote: "SCIM comes later (owner, 2026-11-07). This ADR adds no SCIM."
-- Effect: The roadmap puts SCIM in milestone 4. No SCIM route ships until the owner clears the timing.
-- Conflict: owner_blocks.
+- Effect: The roadmap puts SCIM in milestone 4. ADR 376 decision 1 lifts the gate: "SCIM comes in milestone 4 (owner, 2026-11-14)."
+- Conflict: none.
 
 **ADR 306: Break-glass: the session limit, the mass-suspension alert and the disable rules** (owner-tagged (all decisions)).
 
@@ -139,19 +134,14 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-1. Does the owner allow SCIM in milestone 4 despite ADR 332 decision 9? Decides: owner.
-   - Options: Allow SCIM in milestone 4 with the same mapping; Defer SCIM and keep this change unbuilt.
-   - Recommended: Allow SCIM in milestone 4 with the same mapping. Reason: The roadmap lists SCIM in milestone 4 and the decision says only that SCIM comes later. Only the owner can clear an owner-tagged decision.
-2. What is the scope of the removal revocation setting? Decides: PM.
-   - Options: One installation setting for SCIM and LDAP; One setting for each SCIM provider.
-   - Recommended: One installation setting for SCIM and LDAP. Reason: ADR 55 decision 9 names one setting. One value is simple and shows in the API.
-3. What is the limit of SCIM removals? Decides: PM.
-   - Options: 100 DELETEs per 5 minutes for each credential; 1000 DELETEs per 5 minutes for each credential.
-   - Recommended: 100 DELETEs per 5 minutes for each credential. Reason: A mass disable needs a bound that shows as a setting.
-
-Deferred: SCIM comes later (ADR 332 decision 9).
+none
 
 Questions considered and answered:
+
+- What is the scope of the removal revocation setting? PM decision (rule 16): one installation setting for SCIM and LDAP. ADR 55 decision 9 names one setting; one value is simple and shows in the API.
+- What is the limit of SCIM removals? PM decision (rule 16): 100 DELETEs per 5 minutes for each credential, shown as a setting. A mass disable needs a bound.
+
+- Does the owner allow SCIM in milestone 4 despite ADR 332 decision 9? Yes. ADR 376 decision 1: "SCIM comes in milestone 4 (owner, 2026-11-14)." ADR 332 decision 9 now says so.
 
 - Does SCIM need a new group model? No. ADR 55 decision 4 says SCIM groups are the groups of ADR 52. ADR 332 decision 9 says SCIM uses the same mapping.
 - What happens to sessions and tokens on removal? ADR 55 decision 9 and ADR 70 decision 19: disable at once and keep. ADR 297 decision 12 gives the session generation.

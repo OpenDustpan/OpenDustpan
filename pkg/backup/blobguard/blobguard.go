@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Kind names the kind of work that holds blob deletes back.
@@ -41,9 +42,17 @@ var (
 	// ErrNoWatch reports a deleter without the guard. A deleter that has no
 	// guard deletes nothing.
 	ErrNoWatch = errors.New("no guard for blob deletes")
+	// ErrNoClock reports a deleter without a clock. A deleter that has no
+	// clock cannot bound the context of its delete, so it takes no lease and
+	// deletes nothing.
+	ErrNoClock = errors.New("no clock for blob deletes")
 	// ErrUnknown reports an answer of the guard that names a kind of work that
 	// this package does not know, or no ID. The deleter deletes nothing.
 	ErrUnknown = errors.New("unknown kind of running work")
+	// ErrNoHolder reports a lease take for a deleter that names no holder. A
+	// lease names the deleter that holds it, so a deleter without a name
+	// takes no lease and deletes nothing.
+	ErrNoHolder = errors.New("no holder for the blob delete lease")
 )
 
 // WaitError is the error of a blob delete that waits for Work. It matches
@@ -62,6 +71,75 @@ func (e *WaitError) Is(target error) bool {
 	return target == ErrWait
 }
 
+// WaitReason names why a blob delete did not run. It is the label value of
+// the counter of the blob deletes that wait.
+type WaitReason string
+
+const (
+	// WaitBackup counts a delete that waits for a backup.
+	WaitBackup WaitReason = "backup"
+	// WaitRestore counts a delete that waits for a restore.
+	WaitRestore WaitReason = "restore"
+	// WaitNoGuard counts a delete of a deleter that has no guard.
+	WaitNoGuard WaitReason = "no-guard"
+	// WaitGuardError counts a delete that a failed take, an unknown answer or
+	// another guard failure kept back.
+	WaitGuardError WaitReason = "guard-error"
+)
+
+// WaitCounter counts each refused take of a blob delete lease by reason. A
+// deleter calls Count with the error of the refused take after HoldLease
+// refuses it. A nil WaitCounter counts nothing.
+type WaitCounter func(reason WaitReason)
+
+// Count counts the refused take that HoldLease answered with err, unless err
+// is a canceled context: a take that the cancellation of its caller stopped
+// is not a wait for work, and it counts nothing. A nil counter counts
+// nothing.
+func (c WaitCounter) Count(err error) {
+	if c == nil {
+		return
+	}
+
+	reason, ok := ReasonOf(err)
+	if !ok {
+		return
+	}
+
+	c(reason)
+}
+
+// ReasonOf returns the reason of the refused take that HoldLease answered
+// with err, and true: the running work for a *WaitError, WaitNoGuard for
+// ErrNoWatch, and WaitGuardError for every other error, including a nil
+// error and a *WaitError with a kind that this package does not know. So an
+// unknown answer counts as a guard failure: fail closed. It returns false,
+// and no reason, when err is a canceled context: a canceled take is not a
+// wait, so it counts nothing. A context that reached its deadline is not a
+// canceled context, so it gives WaitGuardError.
+func ReasonOf(err error) (WaitReason, bool) {
+	if errors.Is(err, context.Canceled) {
+		return "", false
+	}
+
+	if wait, ok := errors.AsType[*WaitError](err); ok {
+		switch wait.Work.Kind {
+		case Backup:
+			return WaitBackup, true
+		case Restore:
+			return WaitRestore, true
+		default:
+			return WaitGuardError, true
+		}
+	}
+
+	if errors.Is(err, ErrNoWatch) {
+		return WaitNoGuard, true
+	}
+
+	return WaitGuardError, true
+}
+
 // Watch is the guard of the blob deletes. A deleter of a blob that a backup
 // snapshot can name, or that restored data can name, calls it after the
 // commit that removed or replaced the last row that names the blob, and
@@ -77,31 +155,126 @@ type Watch interface {
 	Running(ctx context.Context) (Work, bool, error)
 }
 
-// Hold calls w and returns nil only when nothing runs. It returns a
-// *WaitError when a backup or a restore runs, ErrNoWatch when w is nil, and
-// the error of the read, wrapped, when the read fails. An answer with an
-// unknown kind or an empty ID returns ErrUnknown. So every result but nil
-// means: delete nothing.
-func Hold(ctx context.Context, w Watch) error {
-	if w == nil {
-		return ErrNoWatch
+// LeaseTTL is the time that one lease of a blob deleter holds back a restore.
+// A deleter takes a lease around the delete of one blob, so this is the
+// longest time that one blob delete holds a restore back. A deleter that
+// stops leaves its row behind, and the row ends on its own, so a deleter that
+// stopped holds a restore back at most this long.
+const LeaseTTL = time.Minute
+
+// leaseWindow is the time that a deleter has for its delete: half of the
+// lease time, measured from the start that the deleter read before the take.
+// The row of the lease ends at the clock of the database plus LeaseTTL, so
+// the other half covers the time of the take and a difference between the
+// clock of the instance and the clock of the database.
+const leaseWindow = LeaseTTL / 2
+
+// Leases is the lease of the blob deletes. The guard of Watch holds a deleter
+// back that reads it while a backup runs or a restore checks or applies. It
+// does not hold back a deleter that read the guard before the restore
+// started, and then stalls: the restore applies the data, checks the blobs
+// after the apply, and the deleter deletes after that check.
+//
+// A deleter takes a lease before each delete, and releases it after. A take
+// writes nothing and answers the running work while a backup runs or a
+// restore checks or applies. A restore that applies data waits for zero live
+// leases. So a deleter that stalls past the read of the guard holds the
+// restore back, and it deletes nothing after a refused take.
+type Leases interface {
+	// TakeLease writes the lease of holder, ending at the database clock plus
+	// ttl, in one statement. It writes nothing and returns the running work
+	// and true when a backup runs or a restore checks or applies. A take for
+	// a holder with a row replaces that row. It defines no sentinel error: a
+	// failed write is an error, and the deleter deletes nothing.
+	TakeLease(ctx context.Context, holder string, ttl time.Duration) (Work, bool, error)
+	// ReleaseLease deletes the lease row of holder. A holder with no row is
+	// not an error. It defines no sentinel error: a failed write is an error.
+	ReleaseLease(ctx context.Context, holder string) error
+	// LiveLeases returns the number of lease rows that end after the database
+	// clock. It defines no sentinel error: a failed read is an error.
+	LiveLeases(ctx context.Context) (int, error)
+}
+
+// HoldLease takes the lease of holder and returns the context of the delete
+// and the function that releases the lease. The deleter deletes only under
+// the returned context, and it deletes nothing more once that context ends.
+// The window of the delete is half the lease time (LeaseTTL/2) from the
+// start, where the start is the clock read before the take: the lease row
+// ends at the clock of the database plus LeaseTTL, so the half leaves room
+// for the time of the take and for a difference between the clock of the
+// instance and the clock of the database. The injected clock measures the
+// time of the take, and the context ends when the rest of the window passes:
+// a take that used the whole window ends the context at once. The release
+// function cancels the context of the delete first, and then releases the
+// lease. It takes its own context, so a caller can release after the context
+// of the delete ended.
+//
+// It returns a *WaitError when a backup or a restore runs, ErrNoWatch when l
+// is nil, ErrNoClock when now is nil, ErrNoHolder when holder is empty, and
+// the error of the write, wrapped, when the write fails. An answer with an
+// unknown kind or an empty ID returns ErrUnknown. Every error path returns a
+// nil context and a nil release function. So every result but a context and a
+// release function means: delete nothing.
+func HoldLease(
+	ctx context.Context, l Leases, holder string, now func() time.Time,
+) (context.Context, func(context.Context) error, error) {
+	if l == nil {
+		return nil, nil, ErrNoWatch
 	}
 
-	work, ok, err := w.Running(ctx)
+	if now == nil {
+		return nil, nil, ErrNoClock
+	}
+
+	// A lease names the deleter that holds it. An empty holder takes no
+	// lease: its row would hold back every restore for the whole TTL, and no
+	// record would name who took it.
+	if holder == "" {
+		return nil, nil, ErrNoHolder
+	}
+
+	// The start comes before the take, so the context of the delete ends
+	// before the row that the take writes.
+	start := now()
+
+	work, ok, err := l.TakeLease(ctx, holder, LeaseTTL)
 	if err != nil {
-		return fmt.Errorf("read running backup or restore: %w", err)
+		return nil, nil, fmt.Errorf("take the blob delete lease: %w", err)
 	}
 
 	if !ok {
-		return nil
+		// The injected clock measures the time of the take, and only the
+		// rest of the window runs on a timer.
+		elapsed := now().Sub(start)
+
+		// A clock that stepped back between the two reads gives a negative
+		// elapsed time. The rest of the window would then outlast the lease
+		// row that holds the delete, so clamp it to zero: the context ends
+		// at once and the delete fails closed.
+		rest := leaseWindow - elapsed
+		if elapsed < 0 {
+			rest = 0
+		}
+
+		leaseCtx, cancel := context.WithTimeout(ctx, rest)
+
+		return leaseCtx, func(releaseCtx context.Context) error {
+			cancel()
+
+			if err := l.ReleaseLease(releaseCtx, holder); err != nil {
+				return fmt.Errorf("release the blob delete lease: %w", err)
+			}
+
+			return nil
+		}, nil
 	}
 
 	// Defense in depth: the adapters return the two kinds only. This check
 	// stays so that a new adapter or a fake cannot turn an unknown answer
 	// into permission to delete.
 	if (work.Kind != Backup && work.Kind != Restore) || work.ID == "" {
-		return ErrUnknown
+		return nil, nil, ErrUnknown
 	}
 
-	return &WaitError{Work: work}
+	return nil, nil, &WaitError{Work: work}
 }

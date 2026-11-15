@@ -22,18 +22,19 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - No delegation record exists on main; keyword Dusty has no e2e, no guide and no code in the pack. Proof: keywords Dusty e2e_count 0 with e2e [], guides [], code []
-- Main already pins delegation-scoped grant checks and revoke checks on objects. Proof: pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly) and pkg/access/access_test.go:1089 (TestRevokeChecksTheObject)
+- Main already pins delegation-scoped grant checks and revoke checks on objects. Proof: pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly) and pkg/access/access_test.go:1098 (TestRevokeChecksTheObject)
 - Milestone exit test needs one stored delegation with holder, scope, creator and time, listable and revocable. Proof: roadmap step: Pass: 1 delegation is a stored record with a holder, a scope, a creator and a time.
 
 ## What Changes
 
 - Make the NEW agent principal dusty of the NEW kind agent on model connect with stable ID dusty.
 - Store one delegation record per delegation with holder dusty, scope namespace id, level, creator, created time, expiry and revoked time.
-- NEW route POST /api/dustpan/v1/delegations to create one delegation with holder dusty and creator equal to caller and NEW action delegation:create on the delegation object.
-- NEW route GET /api/dustpan/v1/delegations to list own delegations with NEW action delegation:read.
-- NEW route GET /api/dustpan/v1/delegations/{id} to read one delegation with NEW action delegation:read.
-- NEW route GET /api/dustpan/v1/namespaces/{namespace}/delegations to list delegations in one namespace with NEW action delegation:read.
-- NEW route POST /api/dustpan/v1/delegations/{id}/revoke to revoke one delegation with idempotent repeat and NEW action delegation:revoke.
+- The person's own rows follow the pattern of the own access tokens (`token:manage-own` on `CallerObject`, pkg/identity/identity.go:367-371, held by every authenticated person through `identity.SelfAllowed` at pkg/dustpan/dustpan.go:925-928, and family `FamilySelf` at pkg/access/access.go:221): the NEW action `caller:manage-delegations` on `CallerObject`, family `FamilySelf`, added to that `SelfAllowed` list. No new object kind.
+  - NEW route POST /api/dustpan/v1/delegations creates one delegation with holder dusty and creator equal to the caller (`caller:manage-delegations` on `@caller`).
+  - NEW route GET /api/dustpan/v1/delegations lists the caller's own delegations (`caller:manage-delegations` on `@caller`).
+  - NEW route GET /api/dustpan/v1/delegations/{id} reads one of the caller's own delegations (`caller:manage-delegations` on `@caller`; a row of another creator answers 404).
+  - NEW route POST /api/dustpan/v1/delegations/{id}/revoke revokes one of the caller's own delegations, idempotent on repeat (`caller:manage-delegations` on `@caller`).
+- Every delegation, for an administrator (RFC 121 decision 17): NEW route GET /api/server/delegations lists every delegation, and NEW route POST /api/server/delegations/{id}/revoke revokes any one, both with `server:manage-access` on the installation (`ServerObject`).
 - Console delegation views call the same list and read routes with a session credential.
 - Audit entries for delegation create and revoke that name holder dusty, creator and revoker.
 
@@ -44,6 +45,10 @@ Out of scope:
 - Change orders, confirmations and approvals
 - Audit entry shape for agent steps
 - Outside-vendor agents and MCP endpoint
+
+Depends on:
+
+- agent-shapes-before-first-tag (its task 2.5 adds the principal kind `agent` in the NEW file pkg/principal/kind.go)
 
 ## Usability
 
@@ -57,8 +62,8 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Grants on a principal take delegation actions only in a pin test. (`pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly)`)
-- Revoke checks the object before it revokes. (`pkg/access/access_test.go:1089 (TestRevokeChecksTheObject)`)
-- Token scopes fit the principal kind. (`pkg/accesstoken/accesstoken_test.go:904 (TestScopesFitTheKind)`)
+- Revoke checks the object before it revokes. (`pkg/access/access_test.go:1098 (TestRevokeChecksTheObject)`)
+- Token scopes fit the principal kind. (`pkg/accesstoken/accesstoken_test.go:905 (TestScopesFitTheKind)`)
 
 ## ADR check
 
@@ -71,6 +76,13 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR.
 - Quote: "The person who delegated (Alice) may confirm a change that her own agent proposed, by default."
 - Effect: The change stores the delegation that ADR 354 decision 1 assumes: a person delegates to Dusty and may later confirm what the agent proposed.
+- Conflict: none.
+
+**RFC 121, accepted by ADR 354 decision 6 (owner, 2026-11-07):** "Decisions 1 to 52 of the \"Proposal\" of the RFC apply."
+
+- Quote, decision 11: "a creator (always the person)".
+- Quote, decision 17: "The person lists their delegations, with the delegated work and the standing objects made under each one, and revokes each one. An administrator with `server:manage-access` lists and revokes every delegation, and the access review exports them."
+- Effect: the person's own rows use a self action on `CallerObject`, as the own access tokens do; every row, for an administrator, uses `server:manage-access` on the installation.
 - Conflict: none.
 
 ## Open questions

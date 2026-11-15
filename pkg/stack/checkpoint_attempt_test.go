@@ -136,7 +136,7 @@ func runRaceCase(t *testing.T, tc raceCase) {
 
 	stale := &staleRowStore{memUpdates: nil, hide: atomic.Int32{}}
 
-	f := newUpdatesWrapped(t, clk, blobs, nil, func(m *memUpdates) stack.CheckpointStore {
+	f := newUpdatesWrapped(t, clk, blobs, func(m *memUpdates) stack.CheckpointStore {
 		stale.memUpdates = m
 
 		return stale
@@ -268,7 +268,7 @@ func TestCheckpointKnownForOwnKeyKeepsTheBlob(t *testing.T) {
 
 	clk := newClock()
 	blobs := newReplacingBlob(clk)
-	f := newUpdatesWrapped(t, clk, blobs, nil, func(m *memUpdates) stack.CheckpointStore {
+	f := newUpdatesWrapped(t, clk, blobs, func(m *memUpdates) stack.CheckpointStore {
 		return &knownStore{memUpdates: m}
 	})
 	s := f.started(t, stack.KindUpdate)

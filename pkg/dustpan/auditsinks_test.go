@@ -175,6 +175,7 @@ func appendAuditEntry(t *testing.T, st *sqlite.Store, ns namespace.Namespace, re
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	})
 	if err != nil {
 		t.Fatalf("append audit entry: %v", err)

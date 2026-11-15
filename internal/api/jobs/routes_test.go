@@ -851,12 +851,13 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	}
 }
 
-// kindsOf returns the kind that the description gives to the object of each
-// check, by action. A check is written as "<action> <object>".
-func kindsOf(t *testing.T, checks []string) map[string]string {
+// kindsOf returns the action and the kind of the object of each check, as
+// "<action> <kind>". A check is written as "<action> <object>". Each pair
+// stays, so one action on two kinds gives two entries.
+func kindsOf(t *testing.T, checks []string) map[string]bool {
 	t.Helper()
 
-	out := map[string]string{}
+	out := map[string]bool{}
 
 	for _, check := range checks {
 		action, text, _ := strings.Cut(check, " ")
@@ -866,23 +867,94 @@ func kindsOf(t *testing.T, checks []string) map[string]string {
 			t.Fatalf("object of check %q: %v", check, err)
 		}
 
+		var kind string
+
 		switch {
 		case obj.IsUnit():
-			out[action] = apidesc.KindUnit
+			kind = apidesc.KindUnit
 		case obj.IsNamespace():
-			out[action] = apidesc.KindNamespace
+			kind = apidesc.KindNamespace
 		case obj.IsCollection():
-			out[action] = apidesc.KindCollection
+			kind = apidesc.KindCollection
 		case obj.IsCaller():
-			out[action] = apidesc.KindCaller
+			kind = apidesc.KindCaller
 		case obj.IsServer():
-			out[action] = apidesc.KindServer
+			kind = apidesc.KindServer
 		default:
 			t.Fatalf("check %q has an object of no kind in the description", check)
 		}
+
+		out[action+" "+kind] = true
 	}
 
 	return out
+}
+
+// describedKinds returns the action and the kind of the object that the
+// description gives to each action, as "<action> <kind>".
+func describedKinds(objects map[string]string) map[string]bool {
+	out := make(map[string]bool, len(objects))
+
+	for action, kind := range objects {
+		out[action+" "+kind] = true
+	}
+
+	return out
+}
+
+// TestKindsKeepEachActionKindPair proves that the comparison of the checks
+// with the description keeps every action-kind pair. One action that a route
+// checks on two kinds gives two pairs, and the kind that the description
+// leaves out fails the comparison in either order.
+func TestKindsKeepEachActionKindPair(t *testing.T) {
+	t.Parallel()
+
+	unit := "unit:read opentofu:acme/net"
+	namespaceCheck := "unit:read acme"
+	both := map[string]bool{
+		"unit:read " + apidesc.KindUnit:      true,
+		"unit:read " + apidesc.KindNamespace: true,
+	}
+
+	for name, tc := range map[string]struct {
+		checks  []string
+		objects map[string]string
+		checked map[string]bool
+		same    bool
+	}{
+		"unit check first, unit described": {
+			[]string{unit, namespaceCheck}, map[string]string{"unit:read": apidesc.KindUnit}, both, false,
+		},
+		"namespace check first, unit described": {
+			[]string{namespaceCheck, unit}, map[string]string{"unit:read": apidesc.KindUnit}, both, false,
+		},
+		"unit check first, namespace described": {
+			[]string{unit, namespaceCheck}, map[string]string{"unit:read": apidesc.KindNamespace}, both, false,
+		},
+		"namespace check first, namespace described": {
+			[]string{namespaceCheck, unit}, map[string]string{"unit:read": apidesc.KindNamespace}, both, false,
+		},
+		"the unit check twice, unit described": {
+			[]string{unit, unit},
+			map[string]string{"unit:read": apidesc.KindUnit},
+			map[string]bool{"unit:read " + apidesc.KindUnit: true},
+			true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := kindsOf(t, tc.checks)
+			if !maps.Equal(got, tc.checked) {
+				t.Fatalf("kinds = %v, want %v", got, tc.checked)
+			}
+
+			if same := maps.Equal(got, describedKinds(tc.objects)); same != tc.same {
+				t.Errorf("the checks %v and the description %v are equal = %t, want %t",
+					got, tc.objects, same, tc.same)
+			}
+		})
+	}
 }
 
 // TestDescriptionHoldsTheChecksOfTheRoute sends a request that passes every
@@ -911,7 +983,7 @@ func TestDescriptionHoldsTheChecksOfTheRoute(t *testing.T) {
 		}
 	}
 
-	if !maps.Equal(got, op.ActionObjects) {
-		t.Errorf("the route checks %v, and the description lists %v", got, op.ActionObjects)
+	if want := describedKinds(op.ActionObjects); !maps.Equal(got, want) {
+		t.Errorf("the route checks %v, and the description lists %v", got, want)
 	}
 }

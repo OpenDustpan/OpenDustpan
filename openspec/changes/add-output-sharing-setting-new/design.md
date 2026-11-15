@@ -28,6 +28,17 @@ Server->>Server: rule and grant check
 Server->>Server: audit
 ```
 
+Modules that the change touches, and their imports on main:
+
+```mermaid
+flowchart LR
+P1[pkg/setting]
+P2[internal/api/apidesc]
+P3[internal/api/server]
+P3 --> P1
+P3 --> P2
+```
+
 ## Quality attributes
 
 | Attribute | Target | Unit | Scope |

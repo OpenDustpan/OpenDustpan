@@ -29,7 +29,7 @@ func newAuditChainFake(t *testing.T, token string, approveStatus int) *auditChai
 	f := &auditChainFake{server: nil, posts: atomic.Int64{}, gets: atomic.Int64{}, refused: atomic.Int64{}}
 
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/server/audit/chain" || r.Header.Get("Authorization") != "Bearer "+token {
+		if r.URL.Path != "/api/dustpan/v1/audit/chain" || r.Header.Get("Authorization") != "Bearer "+token {
 			f.refused.Add(1)
 			http.Error(w, `{"code":403,"message":"denied"}`, http.StatusForbidden)
 

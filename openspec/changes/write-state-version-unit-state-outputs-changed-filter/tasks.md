@@ -1,26 +1,26 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add a failing dispatcher test: unchanged outputs skip, changed outputs start, missing prior starts, mixed when values, retry replays the same pair. It drives Dispatcher.Upstream in process. BLOCKED by no route: the test calls the port with no credential. Check: `go test ./pkg/trigger/... -run TestUpstreamOutputsChangedSkipsWhenDigestMatches` fails on main.
-- [ ] 1.2 Add a failing store test: publishUnitState stores the digest without secret values for both tool shapes, with the secret-mark flip case. In process; no route or credential. Check: `go test ./pkg/store/... -run TestPublishUnitStateStoresRootOutputsDigest` fails on main.
-- [ ] 1.3 Add a failing trigger save test through `PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` with a personal access token: unknown when refused, default applied, change reads back. Check: `go test ./pkg/trigger/... -run TestSaveTriggerWhenValue` fails on main.
+- [ ] 1.1 Add a failing dispatcher test in NEW file pkg/trigger/upstream_outputs_changed_test.go: unchanged outputs skip, changed outputs start, missing prior starts, mixed when values, retry replays the same pair. It drives Dispatcher.Upstream in process. BLOCKED by no route: the test calls the port with no credential. Check: `go test ./pkg/trigger/... -run TestUpstreamOutputsChangedSkipsWhenDigestMatches` fails on main.
+- [ ] 1.2 Add a failing store test in NEW file pkg/store/sqlite/unit_state_outputs_digest_test.go and the same test in NEW file pkg/store/postgres/unit_state_outputs_digest_test.go (publishUnitState is in both dialects): publishUnitState stores the digest without secret values for both tool shapes, with the secret-mark flip case. In process; no route or credential. Check: `go test -timeout 60m ./pkg/store/... -run TestPublishUnitStateStoresRootOutputsDigest` fails on main.
+- [ ] 1.3 Add a failing trigger save test in NEW file internal/servertest/trigger_when_test.go through `PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` with a personal access token: unknown when refused, default applied, change reads back. The task adds the NEW top-level test `TestSaveTriggerWhenValue` in a `_test.go` file of `pkg/trigger`, so that the Check runs it. Check: `go test ./pkg/trigger/... -run TestSaveTriggerWhenValue` fails on main.
 
 ## 2. Build
 
-- [ ] 2.1 Write the digest in publishUnitState and compare in Dispatcher.Upstream against the immediate prior digest. BLOCKED by no route: both run in process on the store and the dispatcher, with no credential. The baseline of each dialect holds the new column. Check: `go test ./pkg/trigger/... ./pkg/store/...` passes.
-- [ ] 2.2 Add when outputs-changed to trigger create and replace with validation. Check: `PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` with a personal access token and when outputs-changed returns 200.
+- [ ] 2.1 Write the digest in publishUnitState (pkg/store/sqlite/unit_state.go:97) and compare in Dispatcher.Upstream (pkg/trigger/ports.go) against the immediate prior digest. BLOCKED by no route: both run in process on the store and the dispatcher, with no credential. The baseline of each dialect holds the new column. Add the new column to the backup column list in pkg/backup/portable_tables.go, because a backup holds every column. Check: `go test -timeout 60m ./pkg/trigger/... ./pkg/store/...` passes.
+- [ ] 2.2 Add when outputs-changed to trigger create and replace with validation in NEW file internal/servertest/trigger_when_test.go (test) and in the trigger validation of pkg/trigger/ports.go. Name the route declaration file and its adapter file in design.md before the edit. Check: `PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}` with a personal access token and when outputs-changed returns 200.
 
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step with real CLI binaries: apply A twice, once with a changed output, then read `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` with a personal access token. Check: `make e2e` runs the step over TLS on SQLite and PostgreSQL and shows one follower plan only after the changed output.
-- [ ] 4.2 Add the docs page for the when field. Check: `make docs-lint` passes and the triggers page documents when outputs-changed.
-- [ ] 4.3 Run the usability check of the path. Check: Developer follows the docs page alone and names the one command that explains a skipped start.
-- [ ] 4.4 Run the full check. The route `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` keeps its action, tested with a personal access token. Check: `make check` reports zero findings.
+- [ ] 4.1 Add an e2e step in NEW file e2e/trigger_outputs_changed_test.go with real CLI binaries: apply A twice, once with a changed output, then read `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` with a personal access token. Check: `make e2e` runs the step over TLS on SQLite and PostgreSQL and shows one follower plan only after the changed output. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Add the docs page for the when field in NEW file docs/guides/trigger-when-outputs-changed.md. Check: `make docs-lint` passes and the triggers page documents when outputs-changed.
+- [ ] 4.3 Run the usability check of the path. Check: Developer follows the docs page alone and names the one command that explains a skipped start. A person's step.
+- [ ] 4.4 Run the full check. The route `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers` keeps its action, tested with a personal access token. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

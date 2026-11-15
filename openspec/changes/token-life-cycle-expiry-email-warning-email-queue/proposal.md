@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 7
 ---
 
 Roadmap: `docs/roadmap.md:171` (Send expiry warning email through SMTP queue.).

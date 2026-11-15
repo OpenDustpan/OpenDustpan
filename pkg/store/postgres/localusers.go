@@ -30,32 +30,32 @@ func (s *Store) CreateUser(ctx context.Context, u localuser.User, e audit.Entry)
 		return err
 	}
 
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.CreateUser(ctx, localUserTx{q: q, entry: &e}, u)
+	return s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
+		return localuserstore.CreateUser(ctx, localUserTx{q: tx.q, srv: &tx, entry: &e}, u)
 	})
 }
 
 // UserByName implements localuser.Store.
 func (s *Store) UserByName(ctx context.Context, name string) (localuser.Credential, error) {
-	return localuserstore.ByName(ctx, localUserTx{q: s.queries, entry: nil}, name)
+	return localuserstore.ByName(ctx, localUserTx{q: s.queries, srv: nil, entry: nil}, name)
 }
 
 // UserByPrincipal implements localuser.Store.
 func (s *Store) UserByPrincipal(ctx context.Context, principalID string) (localuser.User, error) {
-	return localuserstore.ByPrincipal(ctx, localUserTx{q: s.queries, entry: nil}, principalID)
+	return localuserstore.ByPrincipal(ctx, localUserTx{q: s.queries, srv: nil, entry: nil}, principalID)
 }
 
 // RenameUser implements localuser.Store.
 func (s *Store) RenameUser(ctx context.Context, userID, name string, e audit.Entry) error {
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.Rename(ctx, localUserTx{q: q, entry: &e}, userID, name)
+	return s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
+		return localuserstore.Rename(ctx, localUserTx{q: tx.q, srv: &tx, entry: &e}, userID, name)
 	})
 }
 
 // DeleteUser implements localuser.Store.
 func (s *Store) DeleteUser(ctx context.Context, userID string, e audit.Entry) error {
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.Delete(ctx, localUserTx{q: q, entry: &e}, userID)
+	return s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
+		return localuserstore.Delete(ctx, localUserTx{q: tx.q, srv: &tx, entry: &e}, userID)
 	})
 }
 
@@ -65,9 +65,9 @@ func (s *Store) SetPassword(
 ) (uint64, error) {
 	var g uint64
 
-	err := s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	err := s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
 		next, setErr := localuserstore.SetPassword(
-			ctx, localUserTx{q: q, entry: &e}, userID, localuserstore.PasswordWrite(h, c, e.At),
+			ctx, localUserTx{q: tx.q, srv: &tx, entry: &e}, userID, localuserstore.PasswordWrite(h, c, e.At),
 		)
 		g = next
 
@@ -82,29 +82,29 @@ func (s *Store) SetPassword(
 
 // SetChangeRequired implements localuser.PasswordStore.
 func (s *Store) SetChangeRequired(ctx context.Context, userID string, required bool, e audit.Entry) error {
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.SetChangeRequired(ctx, localUserTx{q: q, entry: &e}, userID, required)
+	return s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
+		return localuserstore.SetChangeRequired(ctx, localUserTx{q: tx.q, srv: &tx, entry: &e}, userID, required)
 	})
 }
 
 // RehashPassword implements localuser.PasswordStore.
 func (s *Store) RehashPassword(ctx context.Context, userID string, old, h localuser.PasswordHash, e audit.Entry) error {
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.Rehash(ctx, localUserTx{q: q, entry: &e}, userID, old, h)
+	return s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
+		return localuserstore.Rehash(ctx, localUserTx{q: tx.q, srv: &tx, entry: &e}, userID, old, h)
 	})
 }
 
 // RemovePassword implements localuser.PasswordStore.
 func (s *Store) RemovePassword(ctx context.Context, userID string, e audit.Entry) error {
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.RemovePassword(ctx, localUserTx{q: q, entry: &e}, userID)
+	return s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
+		return localuserstore.RemovePassword(ctx, localUserTx{q: tx.q, srv: &tx, entry: &e}, userID)
 	})
 }
 
 // SeedDemoPassword implements localuser.PasswordStore.
 func (s *Store) SeedDemoPassword(ctx context.Context, h localuser.PasswordHash, e audit.Entry) error {
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return localuserstore.SeedDemoPassword(ctx, localUserTx{q: q, entry: &e}, h, e.At)
+	return s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
+		return localuserstore.SeedDemoPassword(ctx, localUserTx{q: tx.q, srv: &tx, entry: &e}, h, e.At)
 	})
 }
 
@@ -114,8 +114,8 @@ func (s *Store) CreateReset(ctx context.Context, r localuser.Reset, d localuser.
 		return err
 	}
 
-	return s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
-		return localuserstore.CreateReset(ctx, localUserTx{q: q, entry: &e}, r, d, &e)
+	return s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
+		return localuserstore.CreateReset(ctx, localUserTx{q: tx.q, srv: &tx, entry: &e}, r, d, &e)
 	})
 }
 
@@ -124,10 +124,10 @@ func (s *Store) CreateReset(ctx context.Context, r localuser.Reset, d localuser.
 func (s *Store) RedeemReset(ctx context.Context, rd localuser.Redeem, e audit.Entry) (localuser.Reset, error) {
 	var r localuser.Reset
 
-	err := s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	err := s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
 		var err error
 
-		r, err = localuserstore.RedeemReset(ctx, localUserTx{q: q, entry: &e}, rd)
+		r, err = localuserstore.RedeemReset(ctx, localUserTx{q: tx.q, srv: &tx, entry: &e}, rd)
 
 		return err
 	})
@@ -161,7 +161,7 @@ func (s *Store) deleteExpiredReset(ctx context.Context, d localuser.Digest, at t
 
 // UserOfReset implements localuser.ResetStore.
 func (s *Store) UserOfReset(ctx context.Context, d localuser.Digest, at time.Time) (localuser.User, error) {
-	return localuserstore.UserOfReset(ctx, localUserTx{q: s.queries, entry: nil}, d, at)
+	return localuserstore.UserOfReset(ctx, localUserTx{q: s.queries, srv: nil, entry: nil}, d, at)
 }
 
 // PruneResets implements localuser.ResetStore.
@@ -182,11 +182,14 @@ func (s *Store) PruneResets(ctx context.Context, at time.Time) (int64, error) {
 	return n, nil
 }
 
-// localUserTx is the localuserstore.Tx of the queries q. entry is the audit
-// entry of the change of the transaction, which a bump of the session
-// generation names, or nil for a read: a bump with no entry fails closed.
+// localUserTx is the localuserstore.Tx of the queries q. srv is the locked
+// transaction of the write, which appends the entry of a bump of the session
+// generation, or nil for a read, which appends nothing. entry is the audit
+// entry of the change of the transaction, which a bump names, or nil for a
+// read: a bump with no entry fails closed.
 type localUserTx struct {
 	q     *db.Queries
+	srv   *serverAuditTx
 	entry *audit.Entry
 }
 
@@ -360,7 +363,13 @@ func (t localUserTx) RehashPassword(ctx context.Context, id, oldHash, newHash st
 func (t localUserTx) BumpGeneration(
 	ctx context.Context, principalID string, cause session.BumpCause, expected uint64,
 ) (uint64, error) {
-	return bumpFor(ctx, t.q, generationstore.Request{ID: principalID, Cause: cause, Expected: expected}, t.entry)
+	// A read holds no lock of the audit scope @server and names no entry: a
+	// bump through it fails closed.
+	if t.srv == nil {
+		return 0, errNoBumpEntry
+	}
+
+	return bumpFor(ctx, *t.srv, generationstore.Request{ID: principalID, Cause: cause, Expected: expected}, t.entry)
 }
 
 func (t localUserTx) RevokeAccessTokens(ctx context.Context, principalID string, atMs int64) (int64, error) {

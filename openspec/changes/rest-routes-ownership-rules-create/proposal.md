@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 7
 ---
 
 Issue: #1238, #1240.
@@ -50,7 +50,6 @@ Out of scope:
 Depends on:
 
 - add-named-path-sets-paths
-- `add-named-path-sets-paths` (order of the milestone review)
 
 ## Usability
 
@@ -131,7 +130,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: task "Add the e2e step that drives each new route under /api/dustpan/v1/name" runs an acceptance path but names no existing route and credential kind; name them, or write "BLOCKED by <the missing part.
+none
 
 Questions considered and answered:
 

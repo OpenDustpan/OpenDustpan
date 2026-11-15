@@ -11,6 +11,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // This file holds the ports of the sign-in methods: the redirect method,
@@ -691,7 +693,7 @@ func IsDisplayText(s string) bool {
 			if i == 0 || i == len(runes)-1 || !joinable(runes[i-1]) || !joinable(runes[i+1]) {
 				return false
 			}
-		case unicode.IsControl(r), unicode.In(r, unicode.Zl, unicode.Zp, unicode.Cf):
+		case ident.IsHiddenRune(r):
 			return false
 		default:
 		}

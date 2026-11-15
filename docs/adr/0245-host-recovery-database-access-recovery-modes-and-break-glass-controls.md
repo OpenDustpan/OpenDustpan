@@ -4,7 +4,12 @@ Status: accepted · 2026-10-19. Supersedes in part ADR 39 decisions 1 and 4, for
 
 Changed by:
 
-- ADR 295 changes decision 12: a route for mode 2 over the network.
+- ADR 295 changes decision 12: a route for signed-request recovery over the
+  network.
+- ADR 372 changes decision 3: the review store is a condition of
+  signed-request recovery, and the two recovery steps need no fresh
+  authentication. A wording refinement of decisions 2 and 6 puts the names
+  of the recovery modes in place.
 
 ## Context
 
@@ -71,8 +76,9 @@ owner. The other decisions are the fixes of the review.
 2. **The command respects the recovery mode (product manager).** The
    command refuses when the installation chose mode 3 of ADR 57 ("no
    break-glass"). The error names the mode and the setting to change. The
-   command runs in mode 1 and in mode 2. The reason: the operator chose no
-   break-glass explicitly, and the command must not override that choice.
+   command runs in bootstrap recovery and in signed-request recovery. The
+   reason: the operator chose no break-glass explicitly, and the command
+   must not override that choice.
    To use the command, the operator changes the mode.
 
    Benchmark: the operator choice of ADR 57 decision 2. A product that
@@ -117,8 +123,8 @@ owner. The other decisions are the fixes of the review.
    it opens the database.
 6. **The recovery mode setting.** No setting held the mode of ADR 57 yet.
    The setting `--recovery-mode` (`DUSTPAN_RECOVERY_MODE`) holds it:
-   `bootstrap` (mode 1, the default), `signed-request` (mode 2) or `none`
-   (mode 3). The command refuses `none` and an unknown value.
+   `bootstrap` (bootstrap recovery, the default), `signed-request`
+   (signed-request recovery) or `none` (mode 3). The command refuses `none` and an unknown value.
    `--recovery-mode` must match the first-boot choice of ADR 57. When that
    choice is stored, a later change makes the stored choice win over the
    setting. The command reads the variable through the same environment
@@ -218,3 +224,14 @@ owner. The other decisions are the fixes of the review.
   what the expiry ends and what an operator checks after it.
 - An expired temporary administrator keeps its name: the principal stays,
   disabled, until a site administrator deletes it.
+
+## Changelog
+
+- 2026-11-14, wording refinement (ADR 372, on the owner's word): decision 2
+  said "The command runs in mode 1 and in mode 2". It now says "in
+  bootstrap recovery and in signed-request recovery". Decision 6 said
+  "`bootstrap` (mode 1, the default), `signed-request` (mode 2)". It now
+  says "(bootstrap recovery, the default)" and "(signed-request
+  recovery)". The "Changed by" item of ADR 295 said "a route for mode 2".
+  It now says "a route for signed-request recovery". The names are those of
+  ADR 372 decision 1. Mode 3 keeps its words.

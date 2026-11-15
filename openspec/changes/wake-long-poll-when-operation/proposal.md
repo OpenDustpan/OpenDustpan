@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Issue: #972, #979.
@@ -49,7 +49,6 @@ Depends on:
 
 - add-job-session-paths-runner-token-issuer
 - runners
-- `runners` (order of the milestone review)
 
 ## Usability
 

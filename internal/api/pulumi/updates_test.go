@@ -391,6 +391,30 @@ func (m *memUpdateStore) ReferencedBlobKeys(
 	return slices.Compact(out), nil
 }
 
+// SupersededBlobs implements stack.CheckpointStore. The fixture keeps no
+// marks: its saves replace the row of an update without a sequence number.
+func (m *memUpdateStore) SupersededBlobs(
+	_ context.Context, _ stack.ID,
+) ([]stack.SupersededBlob, error) {
+	return nil, nil
+}
+
+// SupersededMarks implements stack.CheckpointStore. The fixture keeps no
+// marks.
+func (m *memUpdateStore) SupersededMarks(
+	_ context.Context, _ stack.SupersededCursor, _ time.Time, _ int,
+) ([]stack.SupersededMark, error) {
+	return nil, nil
+}
+
+// DropSupersededMark implements stack.CheckpointStore. The fixture keeps no
+// marks.
+func (m *memUpdateStore) DropSupersededMark(
+	_ context.Context, _ stack.ID, _ blob.Key,
+) (bool, error) {
+	return false, nil
+}
+
 func (m *memUpdateStore) AppendEvents(
 	_ context.Context,
 	batch stack.EventBatch,
@@ -656,6 +680,7 @@ func newUpdateFixtureWithAuthenticator(
 		Journal:            journalWriterFor(t, blobs, mem, limit),
 		Replayer:           replayer,
 		Tokens:             checker,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -2897,6 +2922,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Journal:            nil,
 		Replayer:           nil,
 		Tokens:             nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
