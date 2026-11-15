@@ -57,6 +57,10 @@ way. Some actions stay without a family on purpose, until their routes land.
 - `rg -n "family" docs/adr` gives no decision that a core action must stay
   without a catalog.
 
+Depends on:
+
+- planner-role (its pull request adds the family entries of the five job actions that the new test holds)
+
 ## Fix boundary
 
 - `pkg/identity/identity.go`: the 125 action constants stay constants. Right
