@@ -1,27 +1,104 @@
 ## Context
 
-state.write evaluates gates before each tool write. An engine error in enforce mode stops every write of the scope until a person saves the gate again. The change adds a narrow single-use pass for that error case.
+The decision layer lives in pkg/gate. It has no HTTP, SQL or audit code. The port has no adapter in this change.
 
 ## Decisions
 
-1. **Break-glass as checked value.** Carry break-glass on the change object as a value type built by one constructor that checks action grant, reason length, fresh authentication and pass reuse, so an unchecked pass cannot be built. The holder key is provisional pending the owner answer on subject binding.
-2. **Single-use timed pass.** Store one pass row keyed by holder, unit stable ID and exact operation kind with expiry 15 minutes on the store clock and used flag; consume it with a conditional update in the same transaction as the state write and the override audit entry, so only one concurrent caller wins and a crash before commit leaves the pass unused.
+1. **Checked pass value.** Only the constructor can make a pass. It checks the reason, kind, holder and unit stable ID.
+2. **Port that fails closed.** The pass store port has a default value whose methods return gate.ErrUnavailable. A missing store never grants a pass.
+3. **Pass bound to stable IDs.** The pass names the unit by its stable ID, never by name.
 
 ## Structure
 
-Unexported type breakGlassPass with constructor newBreakGlassPass that checks grant, reason, fresh auth and single use.
+Unexported type breakGlassPass with constructor newBreakGlassPass that checks reason, kind, holder, unit ID and the 15-minute window.
 
 ## Risks
 
-- Pass reuse across units or operations if key is too wide.
-- Deny bypass if error path also passes deny outcomes.
-- Clock skew if expiry uses server clock instead of store clock.
-- Pass consumed but write lost on crash before commit.
+- A pass key that is too wide lets a pass cross units or kinds.
+- An error path that also passes deny.
+- Clock use: expiry takes an injected time, so the follow-up change must give the store clock.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| handler | Boundary checks reason text, fresh authentication proof and namespace:break-gate-error grant at the API handler. | Send empty reason, overlong reason, control characters, stale auth and no grant directly to the handler; each gives 403 or 422 and no pass row. |
-| service | Service consumes the pass only for result error at state.write, only for same holder unit and operation kind, only once within 15 minutes on the store clock. | Replay the same pass for a second write and for another unit; both fail closed with gate.ErrRuleFailed. |
-| store | Store guard writes audit entry of kind override with principal, reason and gate IDs in the same transaction, and the next decision record names the pass. | Remove the audit write and the record link; the conformance test fails on missing override entry. |
+| decision service | Passes only a result of error in enforce mode, and only when the pass matches holder, unit ID and kind. | TestBreakGlassDenyStillRefuses and TestBreakGlassWrongUnitOrKindRefuses send a deny, another unit and another kind; each is refused. |
+| pass constructor | Refuses an empty, overlong or control-character reason. | TestBreakGlassBadReasonRefuses sends each bad reason; no pass is built. |
+| store port | The default port answers gate.ErrUnavailable. | TestBreakGlassChangeFailsClosed sets break-glass with the default port; the write is refused. |
+
+## Diagrams
+
+After this change:
+
+```mermaid
+sequenceDiagram
+participant G as NEW state write gate step
+participant D as NEW pass decision
+participant P as NEW pass store port
+G->>D: gate in error, break-glass set
+D->>P: consume pass
+P-->>D: gate.ErrUnavailable until wired
+D-->>G: refuse
+```
+
+Modules that the change touches, and their imports on main:
+
+```mermaid
+flowchart LR
+P1[pkg/gate]
+```
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| correctness | 1 | winner per pass under concurrent use | break-glass consume in the port conformance suite |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart TB
+subgraph Server[Server boundary]
+S[gate decision layer]
+P[pass store port]
+end
+S-->P
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| decision layer to port | E | A caller passes a deny or a wrong unit with a valid pass | boundary check | The constructor checks reason, kind, holder and unit ID | Build passes with bad reasons and empty IDs; each is refused |
+| decision layer to port | E | A caller passes a deny or a wrong unit with a valid pass | encode or contain | The pass key is the tuple of holder, unit stable ID and operation kind; the store port matches the whole tuple and never a name or a prefix | TestBreakGlassWrongUnitOrKindRefuses uses a pass of another unit, another kind and a name that looks like the unit ID; each is refused |
+| decision layer to port | E | A caller passes a deny or a wrong unit with a valid pass | limit | 15-minute single-use pass | Replay and use after expiry; both refused |
+| decision layer to port | E | A caller passes a deny or a wrong unit with a valid pass | authorize at point of use | The decision matches holder, unit ID and kind at use | Swap the unit or kind; refused |
+| decision layer to port | E | A caller passes a deny or a wrong unit with a valid pass | fail closed | The default port answers gate.ErrUnavailable and deny never passes | Use the default port and a deny; both refused |
+
+## Contracts
+
+**BreakGlassPass**
+
+- Invariant: One use only
+- Invariant: Expiry 15 minutes after issue
+- `consume`: pre: The pass exists, is unused and is not expired. Post: The pass is used once; a second consume is refused.
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| Pass store read | The port is not wired or errors | Fix the wiring in the follow-up change | The write is refused and no pass is used |
+
+## Change impact (computed from main)
+
+Tests:
+
+- `internal/expr/owned_internal_test.go` names `gate.ErrRuleFailed`
+- `internal/expr/hostile_test.go` names `gate.ErrRuleFailed`
+- `internal/expr/timeout_internal_test.go` names `gate.ErrRuleFailed`
+
+ADRs:
+
+- `docs/adr/0114-the-policy-port-and-its-default-adapters.md` names `gate.ErrRuleFailed`
+- `docs/adr/0112-blueprints-the-document-versions-and-expr.md` names `gate.ErrRuleFailed`
+- `docs/adr/0230-gate-configuration-actions-routes-errors-and-audit.md` names `gate.ErrRuleFailed`

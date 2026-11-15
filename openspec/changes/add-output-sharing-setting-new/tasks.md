@@ -1,17 +1,25 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the implementer's notes (the pull request body) before the first test. Check: the pull request body lists the differences, or says that there are none.
+
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing tests for default nobody deny, collection share allow, and rule removal deny at next read. Check: Failing API test TestOutputSharingDefaultNobodyDenies on main.
-- [ ] 1.2 Add failing e2e steps for Pulumi StackReference and OpenTofu remote state read pass and fail by rule. Check: Failing e2e test TestOutputSharingPulumiStackReference on main.
+- [ ] 1.1 Write failing tests for default nobody deny, collection rule allow, rule removal deny and invalid target, in the existing file pkg/outputshare/outputshare_test.go (extend it in place). Check: TestOutputSharingDefaultNobodyDenies fails on main
+- [ ] 1.2 Write failing e2e steps for the Pulumi stack reference read and the OpenTofu remote state read, in the existing file e2e/output_sharing_test.go (extend it in place) that uses e2e/tool.go:110 (func OpenTofu). BLOCKED by #897 for the job token path. Check: e2e output sharing steps fail on main. Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. Build
 
-- [ ] 2.1 Add the namespace setting with default nobody and effective value in the settings read. Check: PATCH then GET /api/dustpan/v1/namespaces/{namespace}/settings shows outputSharing.newUnitDefault and its effective value.
-- [ ] 2.2 Add namespace and collection sharing rules on the producer with stable IDs. Check: POST then GET sharing rules on a producer by stable ID; rename of collection keeps rule on same ID.
-- [ ] 2.3 Wire the read check on all output paths with fail-closed deny after #897 is merged. Check: Tool-neutral outputs route plus both tool paths enforce rule plus unit:read-outputs at each read with audit entries.
+- [ ] 2.1 Add the namespace setting with its effective value in pkg/setting. Declare the setting in internal/api/apidesc and serve it in the NEW file internal/api/server/output_sharing_setting.go on the existing namespace settings route (the catalog at internal/errcode/catalog_settings.go:7 stays). Check: PATCH then GET /api/dustpan/v1/namespaces/{namespace}/settings shows the value
+- [ ] 2.2 Add namespace and collection rules to the existing output-sharing route: the domain in the NEW file pkg/outputshare/rule.go, the declaration in internal/api/apidesc, the handler in internal/api/server. Check: PUT then GET /api/dustpan/v1/namespaces/{namespace}/output-sharing shows the rule by ID
+- [ ] 2.3 Wire the read check and the audit entries in the NEW file internal/outputsharesvc/check.go after #897 is merged. Check: TestOutputReadChecksRuleAndGrant passes
 
-## 3. Definition of done
+## 3. Side effects (computed from main)
 
-- [ ] 3.1 Run e2e with real Pulumi CLI and OpenTofu against the real binary over TLS. Check: `make e2e` output-sharing steps pass on SQLite and PostgreSQL over TLS against the real binary.
-- [ ] 3.2 Add the docs page in the same pull request. Check: `docs/guides/output-sharing.md` renders and each command runs as written.
-- [ ] 3.3 Run the usability check. Check: Namespace administrator completes the path from the docs page alone; each error names the one command that helps.
-- [ ] 3.4 Run make check with zero findings. Check: `make check` with zero findings.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+
+## 4. Definition of done
+
+- [ ] 4.1 Run the e2e steps in e2e/output_sharing_test.go against the real Pulumi CLI and OpenTofu on SQLite and PostgreSQL. BLOCKED by #897 for the job token path. Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Add docs/guides/output-sharing.md in the same pull request. Check: make docs-lint
+- [ ] 4.3 Run the usability check from docs/guides/output-sharing.md alone. Check: Each error names one command. A person's step.
+- [ ] 4.4 Run the full check over the whole repository. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

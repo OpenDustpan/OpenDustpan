@@ -108,6 +108,11 @@ type Backup struct {
 	Error       string
 }
 
+type BlobDeleteLease struct {
+	Holder      string
+	ExpiresAtMs int64
+}
+
 type BlobPurge struct {
 	Tool        string
 	UnitID      string
@@ -157,6 +162,14 @@ type Checkpoint struct {
 	Size          sql.NullInt64
 	BlobSize      sql.NullInt64
 	BlobMd5       []byte
+}
+
+type CheckpointSupersede struct {
+	BlobKey        string
+	StackID        string
+	UpdateID       string
+	Size           int64
+	SupersededAtMs int64
 }
 
 type Collection struct {
@@ -554,6 +567,7 @@ type ItemKey struct {
 	BlobVersion  int64
 	BlobSize     int64
 	BlobMd5      []byte
+	BlobAttempt  string
 }
 
 type Job struct {
@@ -612,6 +626,19 @@ type JobPlan struct {
 	JobID       string
 	Body        string
 	CreatedAtMs int64
+}
+
+type JobToken struct {
+	Digest         string
+	NamespaceID    string
+	StarterID      string
+	JobID          string
+	UnitTool       string
+	UnitID         string
+	ClaimOperation string
+	ClaimToken     int64
+	ExpiresAtMs    int64
+	CreatedAtMs    int64
 }
 
 type LocalUser struct {
@@ -738,6 +765,7 @@ type NotificationDelivery struct {
 	Principal      string
 	State          string
 	Attempts       int64
+	Redeliveries   int64
 	NextAtMs       int64
 	LastError      string
 	DeliveredAtMs  int64
@@ -918,6 +946,39 @@ type ProfileRevision struct {
 	Author         string
 	CreatedAtMs    int64
 	Reason         string
+}
+
+type QuotaKey struct {
+	NamespaceID  string
+	Blueprint    string
+	Kind         string
+	Scope        string
+	SettledCount int64
+}
+
+type QuotaRequest struct {
+	ID          string
+	NamespaceID string
+	Blueprint   string
+	Kind        string
+	Scope       string
+	AtMs        int64
+}
+
+type QuotaReservation struct {
+	NamespaceID string
+	ID          string
+	State       string
+	AtMs        int64
+	EndsAtMs    int64
+}
+
+type QuotaReservationKey struct {
+	NamespaceID   string
+	ReservationID string
+	Blueprint     string
+	Kind          string
+	Scope         string
 }
 
 type RegistryKey struct {
@@ -1254,6 +1315,7 @@ type Trigger struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 type TrustRule struct {
@@ -1293,6 +1355,32 @@ type UnitState struct {
 	FinalCommit    string
 	FinalJob       string
 	FinalAtMs      int64
+}
+
+type UnmanagedScan struct {
+	ID          string
+	NamespaceID string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+type UnmanagedTarget struct {
+	NamespaceID string
+	Name        string
+	PoolID      string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
 }
 
 type Update struct {

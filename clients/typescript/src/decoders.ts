@@ -21,23 +21,32 @@ import {
 import type { Decoder } from "./decode.js";
 import { invalidValue } from "./errors.js";
 import type {
+  AccessCollectionUnitCapError,
+  AccessCollectionUnitCapErrorArgs,
   AccessLimit,
   AddRegistryKeyRequest,
   ApiDescription,
   ApprovalDefault,
   ApprovalRule,
+  ApproveJobRequest,
   Approvers,
+  AuditChain,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupManifest,
+  BackupSummary,
   BackupTooManyUnverifiedError,
   BackupTooManyUnverifiedErrorArgs,
+  BlobFindings,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
+  CheckBackupResponse,
   Collection,
   Components,
   ContextAnswer,
@@ -65,7 +74,10 @@ import type {
   CreateTrustRuleRequest,
   CreateViewRequest,
   CreatedNotificationSink,
+  DamagedBlob,
   DeletedUnit,
+  DeletedUnitSweep,
+  DevData,
   DriftCheck,
   DriftCheckLocation,
   DriftResource,
@@ -85,6 +97,8 @@ import type {
   GateApproversCountAboveError,
   GateApproversCountAboveErrorArgs,
   GateCheckedWith,
+  GetBackupResponse,
+  GetRestoreResponse,
   GitHostAccount,
   GitHostApp,
   GitHostCheck,
@@ -110,6 +124,7 @@ import type {
   JobLogEntry,
   JobPhase,
   JobPlan,
+  JobPlanBinding,
   JobPlanPart,
   JobStep,
   JobStepRecord,
@@ -118,6 +133,7 @@ import type {
   JobUnitRequest,
   ListAccessLimitsResponse,
   ListApprovalRulesResponse,
+  ListBackupsResponse,
   ListCollectionsResponse,
   ListDeletedUnitsResponse,
   ListGatesResponse,
@@ -137,6 +153,7 @@ import type {
   ListRegistryKeysResponse,
   ListRegistryModulesResponse,
   ListRegistryProvidersResponse,
+  ListRestoresResponse,
   ListStoreChecksResponse,
   ListUnitsResponse,
   ListViewsResponse,
@@ -153,9 +170,11 @@ import type {
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
   MaintenanceState,
+  ManifestBlob,
   ManualLock,
   MfaPasskeyLimitError,
   MfaPasskeyLimitErrorArgs,
+  MissingBlobLimit,
   ModuleRelease,
   ModuleReleaseArchive,
   NamespaceIssuer,
@@ -170,6 +189,7 @@ import type {
   NotificationSubscription,
   OutputSharing,
   OutputSharingRequest,
+  OverrideSwitches,
   Passkey,
   PasskeyCreationOptions,
   PasskeyRequestOptions,
@@ -179,6 +199,7 @@ import type {
   PasswordTooShortErrorArgs,
   PlacementRule,
   PlacementRuleRequest,
+  PortableFile,
   Preferences,
   PreferencesFieldInvalidError,
   PreferencesFieldInvalidErrorArgs,
@@ -208,8 +229,10 @@ import type {
   ResetLocalUserPasswordResponse,
   RestoreEndedError,
   RestoreEndedErrorArgs,
+  RestoreSummary,
   RestoreSwappedError,
   RestoreSwappedErrorArgs,
+  RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
@@ -260,8 +283,11 @@ import type {
   StackRevealPathTooLongError,
   StackRevealPathTooLongErrorArgs,
   StagedUpload,
+  StartBackupResponse,
   StartDriftCheckRequest,
   StartJobRequest,
+  StartRestoreRequest,
+  StartRestoreResponse,
   StartStoreCheckRequest,
   StartStoreCheckResponse,
   StateVersionRevealPathTooLongError,
@@ -275,6 +301,7 @@ import type {
   StoreCheckReport,
   StoreFailoverSettingInvalidError,
   StoreFailoverSettingInvalidErrorArgs,
+  SweptUnit,
   TerminalSchemes,
   TerminalSchemesPatch,
   Trigger,
@@ -375,6 +402,21 @@ function oneOf<T>(want: string, ...decoders: ReadonlyArray<Decoder<T>>): Decoder
   };
 }
 
+/** The validator of AccessCollectionUnitCapError. */
+export const decodeAccessCollectionUnitCapError: Decoder<AccessCollectionUnitCapError> = object<AccessCollectionUnitCapError>("AccessCollectionUnitCapError", {
+  code: int64,
+  errorArgs: ref(() => decodeAccessCollectionUnitCapErrorArgs),
+  errorCode: literal("access.collection-unit-cap"),
+  message: string,
+});
+
+/** The validator of AccessCollectionUnitCapErrorArgs. */
+export const decodeAccessCollectionUnitCapErrorArgs: Decoder<AccessCollectionUnitCapErrorArgs> = object<AccessCollectionUnitCapErrorArgs>("AccessCollectionUnitCapErrorArgs", {
+  cap: int64,
+  count: int64,
+  key: string,
+});
+
 /** The validator of AccessLimit. */
 export const decodeAccessLimit: Decoder<AccessLimit> = object<AccessLimit>("AccessLimit", {
   id: optional(string),
@@ -409,11 +451,28 @@ export const decodeApprovalRule: Decoder<ApprovalRule> = object<ApprovalRule>("A
   version: optional(int64),
 });
 
+/** The validator of ApproveJobRequest. */
+export const decodeApproveJobRequest: Decoder<ApproveJobRequest> = object<ApproveJobRequest>("ApproveJobRequest", {
+  comment: string,
+  planBinding: nullable(ref(() => decodeJobPlanBinding)),
+  verdict: string,
+});
+
 /** The validator of Approvers. */
 export const decodeApprovers: Decoder<Approvers> = object<Approvers>("Approvers", {
   groups: array(string),
   unitOwners: boolean,
   users: array(string),
+});
+
+/** The validator of AuditChain. */
+export const decodeAuditChain: Decoder<AuditChain> = object<AuditChain>("AuditChain", {
+  changedAt: optional(string),
+  changedBy: optional(string),
+  migrating: boolean,
+  pending: boolean,
+  setting: string,
+  state: string,
 });
 
 /** The validator of BackupCorruptError. */
@@ -429,6 +488,37 @@ export const decodeBackupCorruptErrorArgs: Decoder<BackupCorruptErrorArgs> = obj
   backup: string,
 });
 
+/** The validator of BackupManifest. */
+export const decodeBackupManifest: Decoder<BackupManifest> = object<BackupManifest>("BackupManifest", {
+  blobs: array(ref(() => decodeManifestBlob)),
+  createdAt: dateTime,
+  damaged: optional(array(ref(() => decodeDamagedBlob))),
+  dialect: string,
+  format: int64,
+  id: string,
+  installationKind: string,
+  primaryInstallations: array(string),
+  rowCounts: nullable(record(int64)),
+  schemaVersion: int64,
+  sqlFiles: array(ref(() => decodePortableFile)),
+  sqlFormat: string,
+  sqlSha256: string,
+  sqlSize: int64,
+  unverified: optional(array(string)),
+  version: string,
+  wrapperIds: array(string),
+});
+
+/** The validator of BackupSummary. */
+export const decodeBackupSummary: Decoder<BackupSummary> = object<BackupSummary>("BackupSummary", {
+  endedAt: optional(string),
+  error: optional(string),
+  id: string,
+  startedAt: string,
+  state: string,
+  target: string,
+});
+
 /** The validator of BackupTooManyUnverifiedError. */
 export const decodeBackupTooManyUnverifiedError: Decoder<BackupTooManyUnverifiedError> = object<BackupTooManyUnverifiedError>("BackupTooManyUnverifiedError", {
   code: int64,
@@ -441,6 +531,14 @@ export const decodeBackupTooManyUnverifiedError: Decoder<BackupTooManyUnverified
 export const decodeBackupTooManyUnverifiedErrorArgs: Decoder<BackupTooManyUnverifiedErrorArgs> = object<BackupTooManyUnverifiedErrorArgs>("BackupTooManyUnverifiedErrorArgs", {
   count: int64,
   limit: int64,
+});
+
+/** The validator of BlobFindings. */
+export const decodeBlobFindings: Decoder<BlobFindings> = object<BlobFindings>("BlobFindings", {
+  damaged: int64,
+  keys: array(string),
+  missing: int64,
+  named: int64,
 });
 
 /** The validator of BulkUnitSettingsError. */
@@ -476,6 +574,11 @@ export const decodeBulkUnitSettingsUnit: Decoder<BulkUnitSettingsUnit> = object<
   version: int64,
 });
 
+/** The validator of CancelRestoreResponse. */
+export const decodeCancelRestoreResponse: Decoder<CancelRestoreResponse> = object<CancelRestoreResponse>("CancelRestoreResponse", {
+  id: string,
+});
+
 /** The validator of Capabilities. */
 export const decodeCapabilities: Decoder<Capabilities> = object<Capabilities>("Capabilities", {
   apiVersion: string,
@@ -487,6 +590,13 @@ export const decodeCapabilities: Decoder<Capabilities> = object<Capabilities>("C
 export const decodeChangeOwnPasswordRequest: Decoder<ChangeOwnPasswordRequest> = object<ChangeOwnPasswordRequest>("ChangeOwnPasswordRequest", {
   currentPassword: string,
   newPassword: string,
+});
+
+/** The validator of CheckBackupResponse. */
+export const decodeCheckBackupResponse: Decoder<CheckBackupResponse> = object<CheckBackupResponse>("CheckBackupResponse", {
+  complete: boolean,
+  error: optional(string),
+  id: string,
 });
 
 /** The validator of Collection. */
@@ -516,7 +626,7 @@ export const decodeContextDocument: Decoder<ContextDocument> = object<ContextDoc
   deleted: optional(boolean),
   object: ref(() => decodeContextObject),
   schemaVersion: int64,
-  sections: record(ref(() => decodeContextAnswer)),
+  sections: nullable(record(ref(() => decodeContextAnswer))),
 });
 
 /** The validator of ContextEntry. */
@@ -599,15 +709,15 @@ export const decodeCreateCollectionRequest: Decoder<CreateCollectionRequest> = o
 
 /** The validator of CreateGitHostConnectionRequest. */
 export const decodeCreateGitHostConnectionRequest: Decoder<CreateGitHostConnectionRequest> = object<CreateGitHostConnectionRequest>("CreateGitHostConnectionRequest", {
-  apiAddress: nullable(string),
-  appID: nullable(string),
+  apiAddress: anyValue,
+  appID: anyValue,
   auth: nullable(string),
-  credential: nullable(string),
-  credentials: nullable(array(anyValue)),
-  eventSecret: nullable(string),
+  credential: anyValue,
+  credentials: anyValue,
+  eventSecret: anyValue,
   installationID: nullable(string),
   kind: nullable(string),
-  privateKey: nullable(string),
+  privateKey: anyValue,
   push: nullable(boolean),
 });
 
@@ -689,6 +799,16 @@ export const decodeCreatedNotificationSink: Decoder<CreatedNotificationSink> = o
   version: int64,
 });
 
+/** The validator of DamagedBlob. */
+export const decodeDamagedBlob: Decoder<DamagedBlob> = object<DamagedBlob>("DamagedBlob", {
+  key: string,
+  md5: string,
+  reason: string,
+  sealed: optional(boolean),
+  size: int64,
+  state: string,
+});
+
 /** The validator of DeletedUnit. */
 export const decodeDeletedUnit: Decoder<DeletedUnit> = object<DeletedUnit>("DeletedUnit", {
   deletedAt: string,
@@ -698,6 +818,23 @@ export const decodeDeletedUnit: Decoder<DeletedUnit> = object<DeletedUnit>("Dele
   reference: string,
   tool: string,
   unitID: string,
+});
+
+/** The validator of DeletedUnitSweep. */
+export const decodeDeletedUnitSweep: Decoder<DeletedUnitSweep> = object<DeletedUnitSweep>("DeletedUnitSweep", {
+  failed: int64,
+  finishedBlobPurges: int64,
+  pendingBlobPurges: int64,
+  purged: array(ref(() => decodeSweptUnit)),
+  skipped: int64,
+  waitingBlobPurges: int64,
+  waitingFor: string,
+});
+
+/** The validator of DevData. */
+export const decodeDevData: Decoder<DevData> = object<DevData>("DevData", {
+  classes: nullable(record(int64)),
+  principals: int64,
 });
 
 /** The validator of DriftCheck. */
@@ -750,6 +887,7 @@ export const decodeEnterMaintenanceResponse: Decoder<EnterMaintenanceResponse> =
 
 /** The validator of ErrorAnswer. A value of "errorCode" that no variant names gets the validator of ErrorResponse. */
 export const decodeErrorAnswer: Decoder<ErrorAnswer> = union<ErrorAnswer>("ErrorAnswer", "errorCode", {
+  "access.collection-unit-cap": ref(() => decodeAccessCollectionUnitCapError),
   "backup.corrupt": ref(() => decodeBackupCorruptError),
   "backup.too-many-unverified": ref(() => decodeBackupTooManyUnverifiedError),
   "context.field-from-code": ref(() => decodeContextFieldFromCodeError),
@@ -847,6 +985,38 @@ export const decodeGateCheckedWith: Decoder<GateCheckedWith> = object<GateChecke
   schema: string,
 });
 
+/** The validator of GetBackupResponse. */
+export const decodeGetBackupResponse: Decoder<GetBackupResponse> = object<GetBackupResponse>("GetBackupResponse", {
+  endedAt: optional(string),
+  error: optional(string),
+  id: string,
+  manifest: optional(ref(() => decodeBackupManifest)),
+  startedAt: string,
+  state: string,
+  target: string,
+  unverifiedKeyCount: int64,
+  unverifiedKeyLimit: int64,
+});
+
+/** The validator of GetRestoreResponse. */
+export const decodeGetRestoreResponse: Decoder<GetRestoreResponse> = object<GetRestoreResponse>("GetRestoreResponse", {
+  backupID: string,
+  devData: optional(ref(() => decodeDevData)),
+  endedAt: optional(string),
+  error: optional(string),
+  errorCode: optional(string),
+  id: string,
+  manifest: optional(ref(() => decodeBackupManifest)),
+  missingBlobLimit: ref(() => decodeMissingBlobLimit),
+  notHeld: optional(ref(() => decodeBlobFindings)),
+  preBackupFound: optional(ref(() => decodeBlobFindings)),
+  preBackupID: optional(string),
+  requestedBy: string,
+  startedAt: string,
+  state: string,
+  warnings: array(ref(() => decodeRestoreWarning)),
+});
+
 /** The validator of GitHostAccount. */
 export const decodeGitHostAccount: Decoder<GitHostAccount> = object<GitHostAccount>("GitHostAccount", {
   expiresAt: nullable(string),
@@ -873,7 +1043,7 @@ export const decodeGitHostApp: Decoder<GitHostApp> = object<GitHostApp>("GitHost
 export const decodeGitHostCheck: Decoder<GitHostCheck> = object<GitHostCheck>("GitHostCheck", {
   account: ref(() => decodeGitHostAccount),
   capabilities: array(string),
-  missing: record(array(string)),
+  missing: nullable(record(array(string))),
 });
 
 /** The validator of GitHostConnection. */
@@ -1105,6 +1275,14 @@ export const decodeJobPlan: Decoder<JobPlan> = object<JobPlan>("JobPlan", {
   stateVersion: string,
 });
 
+/** The validator of JobPlanBinding. */
+export const decodeJobPlanBinding: Decoder<JobPlanBinding> = object<JobPlanBinding>("JobPlanBinding", {
+  applySha256: string,
+  displaySha256: string,
+  plan: string,
+  stateVersion: string,
+});
+
 /** The validator of JobPlanPart. */
 export const decodeJobPlanPart: Decoder<JobPlanPart> = object<JobPlanPart>("JobPlanPart", {
   kind: string,
@@ -1157,6 +1335,11 @@ export const decodeListAccessLimitsResponse: Decoder<ListAccessLimitsResponse> =
 /** The validator of ListApprovalRulesResponse. */
 export const decodeListApprovalRulesResponse: Decoder<ListApprovalRulesResponse> = object<ListApprovalRulesResponse>("ListApprovalRulesResponse", {
   rules: array(ref(() => decodeApprovalRule)),
+});
+
+/** The validator of ListBackupsResponse. */
+export const decodeListBackupsResponse: Decoder<ListBackupsResponse> = object<ListBackupsResponse>("ListBackupsResponse", {
+  backups: array(ref(() => decodeBackupSummary)),
 });
 
 /** The validator of ListCollectionsResponse. */
@@ -1261,6 +1444,11 @@ export const decodeListRegistryModulesResponse: Decoder<ListRegistryModulesRespo
 export const decodeListRegistryProvidersResponse: Decoder<ListRegistryProvidersResponse> = object<ListRegistryProvidersResponse>("ListRegistryProvidersResponse", {
   nextPageToken: string,
   providers: array(ref(() => decodeRegistryProvider)),
+});
+
+/** The validator of ListRestoresResponse. */
+export const decodeListRestoresResponse: Decoder<ListRestoresResponse> = object<ListRestoresResponse>("ListRestoresResponse", {
+  restores: array(ref(() => decodeRestoreSummary)),
 });
 
 /** The validator of ListStoreChecksResponse. */
@@ -1377,6 +1565,14 @@ export const decodeMaintenanceState: Decoder<MaintenanceState> = object<Maintena
   state: string,
 });
 
+/** The validator of ManifestBlob. */
+export const decodeManifestBlob: Decoder<ManifestBlob> = object<ManifestBlob>("ManifestBlob", {
+  key: string,
+  md5: string,
+  sealed: optional(boolean),
+  size: int64,
+});
+
 /** The validator of ManualLock. */
 export const decodeManualLock: Decoder<ManualLock> = object<ManualLock>("ManualLock", {
   holder: string,
@@ -1397,6 +1593,13 @@ export const decodeMfaPasskeyLimitError: Decoder<MfaPasskeyLimitError> = object<
 /** The validator of MfaPasskeyLimitErrorArgs. */
 export const decodeMfaPasskeyLimitErrorArgs: Decoder<MfaPasskeyLimitErrorArgs> = object<MfaPasskeyLimitErrorArgs>("MfaPasskeyLimitErrorArgs", {
   limit: int64,
+});
+
+/** The validator of MissingBlobLimit. */
+export const decodeMissingBlobLimit: Decoder<MissingBlobLimit> = object<MissingBlobLimit>("MissingBlobLimit", {
+  count: int64,
+  percent: int64,
+  percentAbove: int64,
 });
 
 /** The validator of ModuleRelease. */
@@ -1456,6 +1659,9 @@ export const decodeNotificationDelivery: Decoder<NotificationDelivery> = object<
   nextAt: dateTime,
   notification: string,
   principal: string,
+  redeliverableAt: optional(dateTime),
+  redeliveriesRemaining: int64,
+  redeliveryLimit: int64,
   sink: string,
   state: string,
   subscription: string,
@@ -1517,6 +1723,12 @@ export const decodeOutputSharing: Decoder<OutputSharing> = object<OutputSharing>
 /** The validator of OutputSharingRequest. */
 export const decodeOutputSharingRequest: Decoder<OutputSharingRequest> = object<OutputSharingRequest>("OutputSharingRequest", {
   newUnitDefault: string,
+});
+
+/** The validator of OverrideSwitches. */
+export const decodeOverrideSwitches: Decoder<OverrideSwitches> = object<OverrideSwitches>("OverrideSwitches", {
+  allowForcedWrites: boolean,
+  allowUnlockedWrites: boolean,
 });
 
 /** The validator of Passkey. */
@@ -1585,6 +1797,16 @@ export const decodePlacementRuleRequest: Decoder<PlacementRuleRequest> = object<
   project: string,
   stack: string,
   tool: string,
+});
+
+/** The validator of PortableFile. */
+export const decodePortableFile: Decoder<PortableFile> = object<PortableFile>("PortableFile", {
+  columns: array(string),
+  path: string,
+  rows: int64,
+  sha256: string,
+  size: int64,
+  table: string,
 });
 
 /** The validator of Preferences. */
@@ -1678,6 +1900,7 @@ export const decodeProviderRelease: Decoder<ProviderRelease> = object<ProviderRe
   protocols: array(string),
   publishedAt: string,
   publishedBy: string,
+  served: boolean,
   version: string,
 });
 
@@ -1817,6 +2040,20 @@ export const decodeRestoreEndedErrorArgs: Decoder<RestoreEndedErrorArgs> = objec
   restore: string,
 });
 
+/** The validator of RestoreSummary. */
+export const decodeRestoreSummary: Decoder<RestoreSummary> = object<RestoreSummary>("RestoreSummary", {
+  backupID: string,
+  endedAt: optional(string),
+  error: optional(string),
+  errorCode: optional(string),
+  id: string,
+  preBackupID: optional(string),
+  requestedBy: string,
+  startedAt: string,
+  state: string,
+  warnings: array(ref(() => decodeRestoreWarning)),
+});
+
 /** The validator of RestoreSwappedError. */
 export const decodeRestoreSwappedError: Decoder<RestoreSwappedError> = object<RestoreSwappedError>("RestoreSwappedError", {
   code: int64,
@@ -1828,6 +2065,12 @@ export const decodeRestoreSwappedError: Decoder<RestoreSwappedError> = object<Re
 /** The validator of RestoreSwappedErrorArgs. */
 export const decodeRestoreSwappedErrorArgs: Decoder<RestoreSwappedErrorArgs> = object<RestoreSwappedErrorArgs>("RestoreSwappedErrorArgs", {
   restore: string,
+});
+
+/** The validator of RestoreWarning. */
+export const decodeRestoreWarning: Decoder<RestoreWarning> = object<RestoreWarning>("RestoreWarning", {
+  code: string,
+  text: string,
 });
 
 /** The validator of RotateNamespaceIssuerKeysRequest. */
@@ -2183,6 +2426,11 @@ export const decodeStagedUpload: Decoder<StagedUpload> = object<StagedUpload>("S
   upload: string,
 });
 
+/** The validator of StartBackupResponse. */
+export const decodeStartBackupResponse: Decoder<StartBackupResponse> = object<StartBackupResponse>("StartBackupResponse", {
+  id: string,
+});
+
 /** The validator of StartDriftCheckRequest. */
 export const decodeStartDriftCheckRequest: Decoder<StartDriftCheckRequest> = object<StartDriftCheckRequest>("StartDriftCheckRequest", {
   location: optional(ref(() => decodeDriftCheckLocation)),
@@ -2197,6 +2445,20 @@ export const decodeStartJobRequest: Decoder<StartJobRequest> = object<StartJobRe
   pool: string,
   reason: string,
   unit: nullable(ref(() => decodeJobUnitRequest)),
+});
+
+/** The validator of StartRestoreRequest. */
+export const decodeStartRestoreRequest: Decoder<StartRestoreRequest> = object<StartRestoreRequest>("StartRestoreRequest", {
+  backupID: string,
+  checkOnly: boolean,
+  force: boolean,
+});
+
+/** The validator of StartRestoreResponse. */
+export const decodeStartRestoreResponse: Decoder<StartRestoreResponse> = object<StartRestoreResponse>("StartRestoreResponse", {
+  id: string,
+  missingBlobLimit: ref(() => decodeMissingBlobLimit),
+  warnings: array(ref(() => decodeRestoreWarning)),
 });
 
 /** The validator of StartStoreCheckRequest. */
@@ -2292,6 +2554,14 @@ export const decodeStoreFailoverSettingInvalidError: Decoder<StoreFailoverSettin
 /** The validator of StoreFailoverSettingInvalidErrorArgs. */
 export const decodeStoreFailoverSettingInvalidErrorArgs: Decoder<StoreFailoverSettingInvalidErrorArgs> = object<StoreFailoverSettingInvalidErrorArgs>("StoreFailoverSettingInvalidErrorArgs", {
   setting: string,
+});
+
+/** The validator of SweptUnit. */
+export const decodeSweptUnit: Decoder<SweptUnit> = object<SweptUnit>("SweptUnit", {
+  namespace: string,
+  reference: string,
+  tool: string,
+  unitID: string,
 });
 
 /** The validator of TerminalSchemes. */
@@ -2556,7 +2826,7 @@ export const decodeUnitSettingsStep: Decoder<UnitSettingsStep> = object<UnitSett
   allowFailure: boolean,
   args: array(string),
   dir: string,
-  env: record(string),
+  env: nullable(record(string)),
   name: string,
   outputs: array(ref(() => decodeUnitSettingsStepOutput)),
   phase: string,

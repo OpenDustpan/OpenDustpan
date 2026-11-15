@@ -2,96 +2,44 @@
 
 ### Requirement: Pass a gate in error once
 
-When a state.write evaluation ends in error and the request carries break-glass, the server SHALL permit the write once for the same holder, unit stable ID, and exact operation kind within 15 minutes.
+When a write evaluation ends in error in enforce mode and a valid pass matches the holder, the unit stable ID and the operation kind, the server SHALL permit the write once within 15 minutes.
 
-#### Scenario: Error pass with reason and fresh auth
-- **WHEN** A state.write evaluation ends in error and the request carries break-glass with the grant, a reason of 1 to 500 characters, and fresh authentication
-- **THEN** The write proceeds, the server writes one audit entry of kind override, and the decision record keeps result error with a break-glass marker.
+#### Scenario: Error pass
+- **WHEN** a gate in enforce mode errors and a valid unused pass matches
+- **THEN** the decision permits the write and marks the pass used
 
-#### Scenario: Replay of a used pass
-- **WHEN** The same holder retries the same unit and operation kind with the same pass a second time
-- **THEN** The second write is refused with gate.ErrRuleFailed and no new write occurs.
+#### Scenario: Replay
+- **WHEN** the same pass is used a second time
+- **THEN** the decision refuses the write
 
-#### Scenario: Expired pass
-- **WHEN** The holder retries more than 15 minutes after the pass was granted on the store clock
-- **THEN** The write is refused with gate.ErrRuleFailed.
+#### Scenario: Expired
+- **WHEN** the pass is older than 15 minutes
+- **THEN** the decision refuses the write
 
-#### Scenario: Pass for another unit or kind
-- **WHEN** The holder uses a pass granted for one unit stable ID and operation kind on another unit or another operation kind
-- **THEN** The write is refused with gate.ErrRuleFailed and no pass is consumed for the other unit or kind.
+#### Scenario: Other unit or kind
+- **WHEN** the pass is used on another unit or operation kind
+- **THEN** the decision refuses the write and consumes no pass
 
-#### Scenario: Unlocked-write kind needs its own pass
-- **WHEN** The holder uses a pass granted for operation kind state-push on an unlocked-write
-- **THEN** The write is refused with gate.ErrRuleFailed.
+### Requirement: Refuse a bad reason
 
-#### Scenario: Unit-import kind needs its own pass
-- **WHEN** The holder uses a pass granted for another operation kind on a unit-import
-- **THEN** The import unit is skipped and no pass is consumed.
+If the reason is empty, longer than 500 characters or holds a control character, then the server SHALL build no pass.
 
-### Requirement: Refuse bad break-glass
-
-If the break-glass reason is empty or longer than 500 characters or holds control characters, or fresh authentication is stale, or the caller lacks namespace:break-gate-error, then the server SHALL refuse the write without creating or consuming a pass.
-
-#### Scenario: Empty or overlong reason
-- **WHEN** The break-glass reason is empty or longer than 500 characters
-- **THEN** The server refuses the write with 422 and creates no pass row.
-
-#### Scenario: Control characters in reason
-- **WHEN** The break-glass reason holds control characters or invalid UTF-8
-- **THEN** The server refuses the write with 422 and creates no pass row.
-
-#### Scenario: Stale authentication or missing grant
-- **WHEN** Fresh authentication is stale or the caller lacks namespace:break-gate-error
-- **THEN** The server refuses the write with 403 and creates no pass row.
-
-### Requirement: Atomic single use
-
-When the server consumes a break-glass pass, the server SHALL consume it with a conditional update in the same transaction as the state write so only one concurrent caller wins.
-
-#### Scenario: Concurrent writes with one pass
-- **WHEN** Two writes present the same unused pass at the same time
-- **THEN** Only one write proceeds and the other is refused with gate.ErrRuleFailed.
-
-#### Scenario: Crash before commit
-- **WHEN** The server restarts between the consume and the commit
-- **THEN** The write is not visible and the pass stays unused.
-
-### Requirement: Audit failure fails the write
-
-If the override audit entry cannot be written, then the server SHALL fail the state write without consuming the pass.
-
-#### Scenario: Override audit write fails
-- **WHEN** The override audit entry cannot be written
-- **THEN** The state write fails and the pass stays unused.
-
-### Requirement: Mark the passed write
-
-When the server permits a write by break-glass, the server SHALL write one audit entry of kind override with the principal, reason, and gate IDs.
-
-#### Scenario: Passed write audit and record
-- **WHEN** The server permits a write by break-glass
-- **THEN** One audit entry of kind override holds the principal, reason, and gate IDs, and the decision record names the break-glass use.
+#### Scenario: Bad reason
+- **WHEN** the reason is empty, too long or holds a control character
+- **THEN** the constructor returns an error and no pass exists
 
 ### Requirement: Deny still refuses
 
-If a state.write evaluation ends in deny, then the server SHALL refuse the write even when break-glass is set.
+If a write evaluation holds a deny, then the server SHALL refuse the write when a pass exists.
 
-#### Scenario: Deny with break-glass
-- **WHEN** A state.write evaluation ends in deny and the request sets break-glass
-- **THEN** The write is refused and no pass is consumed.
+#### Scenario: Deny with a pass
+- **WHEN** the evaluation has a deny and a valid pass exists
+- **THEN** the decision refuses the write and consumes no pass
 
-### Requirement: Error plus deny refuses
+### Requirement: Fail closed without a store
 
-If a state.write evaluation holds both an error and a deny, then the server SHALL refuse the write even when break-glass is set.
+If no pass store is wired, then the server SHALL refuse a write that sets break-glass with gate.unavailable.
 
-#### Scenario: Error combined with deny
-- **WHEN** A state.write evaluation holds both an error result and a deny outcome and the request sets break-glass
-- **THEN** The write is refused and no pass is consumed.
-
-### Requirement: Evaluate mode needs no pass
-
-If a gate in evaluate mode errors at state.write, then the server SHALL proceed with no break-glass and consume no pass.
-
-#### Scenario: Evaluate-mode error proceeds alone
-- **WHEN** A gate in evaluate mode errors at state.write
-- **THEN** The write proceeds with no break-glass and no pass is created or consumed.
+#### Scenario: Default port
+- **WHEN** a change sets break-glass and the default port is in use
+- **THEN** the write is refused with gate.unavailable and no pass is used

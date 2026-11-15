@@ -1369,6 +1369,10 @@ func testConcurrentFinalize(t *testing.T, s WorkspaceStore) {
 		}
 	}
 
+	// The two versions hold different bits, so the check of the exposed row
+	// below tells the winner's bit from the loser's.
+	finalized[1].ClientEncrypted = workspace.NewClientEncrypted(true)
+
 	errs := make([]error, len(finalized))
 
 	var wg sync.WaitGroup
@@ -1404,6 +1408,8 @@ func testConcurrentFinalize(t *testing.T, s WorkspaceStore) {
 
 	assertStateVersion(t, got, won[0])
 
+	assertClientEncrypted(t, got, won[0])
+
 	stored, err := s.GetWorkspaceByID(t.Context(), w.ID)
 	if err != nil {
 		t.Fatalf("get workspace after concurrent finalizes: %v", err)
@@ -1411,6 +1417,17 @@ func testConcurrentFinalize(t *testing.T, s WorkspaceStore) {
 
 	if !stored.UpdatedAt.Equal(won[0].FinalizedAt) {
 		t.Fatalf("workspace updated at = %v, want %v", stored.UpdatedAt, won[0].FinalizedAt)
+	}
+}
+
+// assertClientEncrypted checks that the exposed version holds the bit of the
+// version that won, not the bit of the one that lost.
+func assertClientEncrypted(t *testing.T, got, want workspace.StateVersion) {
+	t.Helper()
+
+	if got.ClientEncrypted != want.ClientEncrypted {
+		t.Fatalf("client encrypted bit of the exposed version = %v, want the winner's %v",
+			got.ClientEncrypted, want.ClientEncrypted)
 	}
 }
 
@@ -4385,6 +4402,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 			MaxStateBytes:      0,
 			MaxPendingVersions: 0,
 			Retention:          0,
+			OnDeleteWait:       nil,
 		})
 		if err != nil {
 			t.Fatalf("workspace service: %v", err)

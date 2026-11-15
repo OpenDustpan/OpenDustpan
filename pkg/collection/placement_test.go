@@ -299,7 +299,9 @@ func TestPlacementErrorText(t *testing.T) {
 		t.Errorf("error text has a control character: %q", text)
 	}
 
-	if len(text) > 400 {
+	// The message names the routes and carries a curl example. The long stack
+	// name is cut, so the text stays bounded.
+	if len(text) > 700 {
 		t.Errorf("error text has %d bytes, want a bounded text", len(text))
 	}
 

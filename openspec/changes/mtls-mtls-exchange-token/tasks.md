@@ -1,14 +1,21 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing service tests for chain, expiry with no skew, revocation, revocation unknown, SPIFFE match, single-rule match, hostile case text, and disabled rule or principal. Check: `go test ./pkg/trust/ -run TestMtlsExchangeVerify -count=1` fails on main, passes after the fix.
-- [ ] 1.2 Add failing issue tests for stored trust kind, 1-hour expiry setting, last-use record, shared revoke path, atomic write, and concurrent disable. Check: `go test ./pkg/accesstoken/ -run TestTrustTokenIssue -count=1` fails on main, passes after the fix.
+- [ ] 1.1 Write failing service tests for the verify scenarios in NEW file pkg/trust/mtls_exchange_test.go (NEW test TestMtlsExchangeVerify). Check: NEW test: `go test ./pkg/trust/ -run TestMtlsExchangeVerify` fails on main
+- [ ] 1.2 Write failing issue tests in NEW file pkg/accesstoken/mtls_trust_token_test.go (NEW test TestMtlsTrustTokenIssue): the token has the kind `mtls-exchange`, the token list and the issue audit entry show the kind, and the credential is `trust-token`. Check: NEW test: `go test ./pkg/accesstoken/ -run TestMtlsTrustTokenIssue` fails on main
+
+- [ ] 1.3 SECURITY. Write a hostile test for the limit layer in NEW file pkg/trust/mtls_exchange_limit_test.go (NEW test TestMtlsExchangeLimitHostile): flood the handler with no-certificate calls and oversize bodies, and force a store error; each call gets no token. Check: NEW test: `go test ./pkg/trust/ -run TestMtlsExchangeLimitHostile` fails on main
 
 ## 2. Build
 
-- [ ] 2.1 Build the verified-chain value, single-rule match, stored issue in one transaction, and refusal audit entries. Check: `go test ./pkg/trust/... ./pkg/accesstoken/... -count=1` passes with `-race`.
-- [ ] 2.2 Wire the exchange route with its authorization action and direct-TLS placement. Check: `go test ./internal/api/... -run TestMtlsExchangeRoute -count=1` passes and the route test shows the auth action.
-- [ ] 2.3 Check the path against a dev server over TLS with a test bundle and rule. Check: `curl --cert` against a dev server with a test bundle gives a token for a known SPIFFE ID and 401 for an unknown ID, a revoked leaf, and no client certificate.
+- [ ] 2.1 Build the verified-chain value, match and one-transaction issue in NEW file pkg/trust/mtls_exchange.go, and add NEW constant KindMTLSExchange in pkg/accesstoken. Check: `go test -race ./pkg/trust/... ./pkg/accesstoken/...`
+
+- [ ] 2.2 SECURITY. Build the limit layer in NEW file pkg/trust/mtls_exchange_limit.go: the exchange handler caps the body size and the request rate, and it fails closed on a store error with no token. Check: `go test -race ./pkg/trust/...`
 
 ## 3. Definition of done
 
-- [ ] 3.1 Run the full check, the hostile layer tests, and the usability check from the docs draft alone. Check: `make check` reports zero findings.
+- [ ] 3.1 BLOCKED by part 1 (bundle and rule API) until it merges; then wire the route POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange with its action. Check: Route test shows the action; `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.2 Usability check from the docs draft. Check: The persona completes the path and each error names one command. A person's step.

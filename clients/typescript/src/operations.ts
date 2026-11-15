@@ -2,23 +2,32 @@
 
 import { anyValue, array, boolean, dateTime, int64, nullable, number, record, ref, string } from "./decode.js";
 import {
+  decodeAccessCollectionUnitCapError,
+  decodeAccessCollectionUnitCapErrorArgs,
   decodeAccessLimit,
   decodeAddRegistryKeyRequest,
   decodeApiDescription,
   decodeApprovalDefault,
   decodeApprovalRule,
+  decodeApproveJobRequest,
   decodeApprovers,
+  decodeAuditChain,
   decodeBackupCorruptError,
   decodeBackupCorruptErrorArgs,
+  decodeBackupManifest,
+  decodeBackupSummary,
   decodeBackupTooManyUnverifiedError,
   decodeBackupTooManyUnverifiedErrorArgs,
+  decodeBlobFindings,
   decodeBulkUnitSettingsError,
   decodeBulkUnitSettingsItem,
   decodeBulkUnitSettingsRequest,
   decodeBulkUnitSettingsResult,
   decodeBulkUnitSettingsUnit,
+  decodeCancelRestoreResponse,
   decodeCapabilities,
   decodeChangeOwnPasswordRequest,
+  decodeCheckBackupResponse,
   decodeCollection,
   decodeComponents,
   decodeContextAnswer,
@@ -46,7 +55,10 @@ import {
   decodeCreateTrustRuleRequest,
   decodeCreateViewRequest,
   decodeCreatedNotificationSink,
+  decodeDamagedBlob,
   decodeDeletedUnit,
+  decodeDeletedUnitSweep,
+  decodeDevData,
   decodeDriftCheck,
   decodeDriftCheckLocation,
   decodeDriftResource,
@@ -66,6 +78,8 @@ import {
   decodeGateApproversCountAboveError,
   decodeGateApproversCountAboveErrorArgs,
   decodeGateCheckedWith,
+  decodeGetBackupResponse,
+  decodeGetRestoreResponse,
   decodeGitHostAccount,
   decodeGitHostApp,
   decodeGitHostCheck,
@@ -91,6 +105,7 @@ import {
   decodeJobLogEntry,
   decodeJobPhase,
   decodeJobPlan,
+  decodeJobPlanBinding,
   decodeJobPlanPart,
   decodeJobStep,
   decodeJobStepRecord,
@@ -99,6 +114,7 @@ import {
   decodeJobUnitRequest,
   decodeListAccessLimitsResponse,
   decodeListApprovalRulesResponse,
+  decodeListBackupsResponse,
   decodeListCollectionsResponse,
   decodeListDeletedUnitsResponse,
   decodeListGatesResponse,
@@ -118,6 +134,7 @@ import {
   decodeListRegistryKeysResponse,
   decodeListRegistryModulesResponse,
   decodeListRegistryProvidersResponse,
+  decodeListRestoresResponse,
   decodeListStoreChecksResponse,
   decodeListUnitsResponse,
   decodeListViewsResponse,
@@ -134,9 +151,11 @@ import {
   decodeMaintenanceActiveWorkError,
   decodeMaintenanceActiveWorkErrorArgs,
   decodeMaintenanceState,
+  decodeManifestBlob,
   decodeManualLock,
   decodeMfaPasskeyLimitError,
   decodeMfaPasskeyLimitErrorArgs,
+  decodeMissingBlobLimit,
   decodeModuleRelease,
   decodeModuleReleaseArchive,
   decodeNamespaceIssuer,
@@ -151,6 +170,7 @@ import {
   decodeNotificationSubscription,
   decodeOutputSharing,
   decodeOutputSharingRequest,
+  decodeOverrideSwitches,
   decodePasskey,
   decodePasskeyCreationOptions,
   decodePasskeyRequestOptions,
@@ -160,6 +180,7 @@ import {
   decodePasswordTooShortErrorArgs,
   decodePlacementRule,
   decodePlacementRuleRequest,
+  decodePortableFile,
   decodePreferences,
   decodePreferencesFieldInvalidError,
   decodePreferencesFieldInvalidErrorArgs,
@@ -189,8 +210,10 @@ import {
   decodeResetLocalUserPasswordResponse,
   decodeRestoreEndedError,
   decodeRestoreEndedErrorArgs,
+  decodeRestoreSummary,
   decodeRestoreSwappedError,
   decodeRestoreSwappedErrorArgs,
+  decodeRestoreWarning,
   decodeRotateNamespaceIssuerKeysRequest,
   decodeSaveTriggerRequest,
   decodeSchemaBinaryBelowMinimumError,
@@ -241,8 +264,11 @@ import {
   decodeStackRevealPathTooLongError,
   decodeStackRevealPathTooLongErrorArgs,
   decodeStagedUpload,
+  decodeStartBackupResponse,
   decodeStartDriftCheckRequest,
   decodeStartJobRequest,
+  decodeStartRestoreRequest,
+  decodeStartRestoreResponse,
   decodeStartStoreCheckRequest,
   decodeStartStoreCheckResponse,
   decodeStateVersionRevealPathTooLongError,
@@ -256,6 +282,7 @@ import {
   decodeStoreCheckReport,
   decodeStoreFailoverSettingInvalidError,
   decodeStoreFailoverSettingInvalidErrorArgs,
+  decodeSweptUnit,
   decodeTerminalSchemes,
   decodeTerminalSchemesPatch,
   decodeTrigger,
@@ -315,23 +342,32 @@ import {
 } from "./decoders.js";
 import { operation } from "./execute.js";
 import type {
+  AccessCollectionUnitCapError,
+  AccessCollectionUnitCapErrorArgs,
   AccessLimit,
   AddRegistryKeyRequest,
   ApiDescription,
   ApprovalDefault,
   ApprovalRule,
+  ApproveJobRequest,
   Approvers,
+  AuditChain,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupManifest,
+  BackupSummary,
   BackupTooManyUnverifiedError,
   BackupTooManyUnverifiedErrorArgs,
+  BlobFindings,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
+  CheckBackupResponse,
   Collection,
   Components,
   ContextAnswer,
@@ -359,7 +395,10 @@ import type {
   CreateTrustRuleRequest,
   CreateViewRequest,
   CreatedNotificationSink,
+  DamagedBlob,
   DeletedUnit,
+  DeletedUnitSweep,
+  DevData,
   DriftCheck,
   DriftCheckLocation,
   DriftResource,
@@ -379,6 +418,8 @@ import type {
   GateApproversCountAboveError,
   GateApproversCountAboveErrorArgs,
   GateCheckedWith,
+  GetBackupResponse,
+  GetRestoreResponse,
   GitHostAccount,
   GitHostApp,
   GitHostCheck,
@@ -404,6 +445,7 @@ import type {
   JobLogEntry,
   JobPhase,
   JobPlan,
+  JobPlanBinding,
   JobPlanPart,
   JobStep,
   JobStepRecord,
@@ -412,6 +454,7 @@ import type {
   JobUnitRequest,
   ListAccessLimitsResponse,
   ListApprovalRulesResponse,
+  ListBackupsResponse,
   ListCollectionsResponse,
   ListDeletedUnitsResponse,
   ListGatesResponse,
@@ -431,6 +474,7 @@ import type {
   ListRegistryKeysResponse,
   ListRegistryModulesResponse,
   ListRegistryProvidersResponse,
+  ListRestoresResponse,
   ListStoreChecksResponse,
   ListUnitsResponse,
   ListViewsResponse,
@@ -447,9 +491,11 @@ import type {
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
   MaintenanceState,
+  ManifestBlob,
   ManualLock,
   MfaPasskeyLimitError,
   MfaPasskeyLimitErrorArgs,
+  MissingBlobLimit,
   ModuleRelease,
   ModuleReleaseArchive,
   NamespaceIssuer,
@@ -464,6 +510,7 @@ import type {
   NotificationSubscription,
   OutputSharing,
   OutputSharingRequest,
+  OverrideSwitches,
   Passkey,
   PasskeyCreationOptions,
   PasskeyRequestOptions,
@@ -473,6 +520,7 @@ import type {
   PasswordTooShortErrorArgs,
   PlacementRule,
   PlacementRuleRequest,
+  PortableFile,
   Preferences,
   PreferencesFieldInvalidError,
   PreferencesFieldInvalidErrorArgs,
@@ -502,8 +550,10 @@ import type {
   ResetLocalUserPasswordResponse,
   RestoreEndedError,
   RestoreEndedErrorArgs,
+  RestoreSummary,
   RestoreSwappedError,
   RestoreSwappedErrorArgs,
+  RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
@@ -554,8 +604,11 @@ import type {
   StackRevealPathTooLongError,
   StackRevealPathTooLongErrorArgs,
   StagedUpload,
+  StartBackupResponse,
   StartDriftCheckRequest,
   StartJobRequest,
+  StartRestoreRequest,
+  StartRestoreResponse,
   StartStoreCheckRequest,
   StartStoreCheckResponse,
   StateVersionRevealPathTooLongError,
@@ -569,6 +622,7 @@ import type {
   StoreCheckReport,
   StoreFailoverSettingInvalidError,
   StoreFailoverSettingInvalidErrorArgs,
+  SweptUnit,
   TerminalSchemes,
   TerminalSchemesPatch,
   Trigger,
@@ -638,6 +692,21 @@ export interface AddRegistryKeyInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation approveAuditChain. */
+export interface ApproveAuditChainInput {
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation approveJob. */
+export interface ApproveJobInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly job_id: string;
+  };
+  readonly body: ApproveJobRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation beginPasskeyRegistration. */
 export interface BeginPasskeyRegistrationInput {
   readonly signal?: AbortSignal;
@@ -659,9 +728,25 @@ export interface BulkReplaceUnitSettingsInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation cancelRestore. */
+export interface CancelRestoreInput {
+  readonly path: {
+    readonly id: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation changeOwnPassword. */
 export interface ChangeOwnPasswordInput {
   readonly body: ChangeOwnPasswordRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation checkBackup. */
+export interface CheckBackupInput {
+  readonly path: {
+    readonly id: string;
+  };
   readonly signal?: AbortSignal;
 }
 
@@ -1165,6 +1250,19 @@ export interface GetApprovalRuleInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getAuditChain. */
+export interface GetAuditChainInput {
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getBackup. */
+export interface GetBackupInput {
+  readonly path: {
+    readonly id: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getBlueprintDraft. */
 export interface GetBlueprintDraftInput {
   readonly path: {
@@ -1347,6 +1445,14 @@ export interface GetNamespaceLockInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getNamespaceOverrideSwitches. */
+export interface GetNamespaceOverrideSwitchesInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getNamespaceSettings. */
 export interface GetNamespaceSettingsInput {
   readonly path: {
@@ -1428,6 +1534,14 @@ export interface GetProviderReleaseInput {
     readonly namespace: string;
     readonly name: string;
     readonly version: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getRestore. */
+export interface GetRestoreInput {
+  readonly path: {
+    readonly id: string;
   };
   readonly signal?: AbortSignal;
 }
@@ -1588,6 +1702,11 @@ export interface ListApprovalRulesInput {
   readonly path: {
     readonly namespace: string;
   };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listBackups. */
+export interface ListBackupsInput {
   readonly signal?: AbortSignal;
 }
 
@@ -1820,6 +1939,11 @@ export interface ListRegistryProvidersInput {
     /** The nextPageToken of the page before. */
     readonly pageToken?: string;
   };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listRestores. */
+export interface ListRestoresInput {
   readonly signal?: AbortSignal;
 }
 
@@ -2214,6 +2338,15 @@ export interface SetGateInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation setNamespaceOverrideSwitches. */
+export interface SetNamespaceOverrideSwitchesInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly body: OverrideSwitches;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation setOutputSharing. */
 export interface SetOutputSharingInput {
   readonly path: {
@@ -2283,6 +2416,11 @@ export interface StageRegistryUploadInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation startBackup. */
+export interface StartBackupInput {
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation startDriftCheck. */
 export interface StartDriftCheckInput {
   readonly path: {
@@ -2304,9 +2442,20 @@ export interface StartJobInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation startRestore. */
+export interface StartRestoreInput {
+  readonly body: StartRestoreRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation startStoreCheck. */
 export interface StartStoreCheckInput {
   readonly body: StartStoreCheckRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation sweepDeletedUnits. */
+export interface SweepDeletedUnitsInput {
   readonly signal?: AbortSignal;
 }
 
@@ -2442,6 +2591,40 @@ export const operations = {
     },
     ref(() => decodeRegistryKey),
   ),
+  approveAuditChain: operation<AuditChain>(
+    {
+      id: "approveAuditChain",
+      method: "POST",
+      path: "/api/dustpan/v1/audit/chain",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [202],
+    },
+    ref(() => decodeAuditChain),
+  ),
+  approveJob: operation<Job>(
+    {
+      id: "approveJob",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/approvals",
+      pathParameters: ["namespace", "job_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [201],
+    },
+    ref(() => decodeJob),
+  ),
   beginPasskeyRegistration: operation<PasskeyCreationOptions>(
     {
       id: "beginPasskeyRegistration",
@@ -2493,6 +2676,23 @@ export const operations = {
     },
     ref(() => decodeBulkUnitSettingsResult),
   ),
+  cancelRestore: operation<CancelRestoreResponse>(
+    {
+      id: "cancelRestore",
+      method: "POST",
+      path: "/api/dustpan/v1/restores/{id}/cancel",
+      pathParameters: ["id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [202],
+    },
+    ref(() => decodeCancelRestoreResponse),
+  ),
   changeOwnPassword: operation<void>(
     {
       id: "changeOwnPassword",
@@ -2509,6 +2709,23 @@ export const operations = {
       statuses: [204],
     },
     undefined,
+  ),
+  checkBackup: operation<CheckBackupResponse>(
+    {
+      id: "checkBackup",
+      method: "GET",
+      path: "/api/dustpan/v1/backups/{id}/check",
+      pathParameters: ["id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeCheckBackupResponse),
   ),
   checkGitHostConnection: operation<GitHostCheck>(
     {
@@ -3343,6 +3560,40 @@ export const operations = {
     },
     ref(() => decodeApprovalRule),
   ),
+  getAuditChain: operation<AuditChain>(
+    {
+      id: "getAuditChain",
+      method: "GET",
+      path: "/api/dustpan/v1/audit/chain",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeAuditChain),
+  ),
+  getBackup: operation<GetBackupResponse>(
+    {
+      id: "getBackup",
+      method: "GET",
+      path: "/api/dustpan/v1/backups/{id}",
+      pathParameters: ["id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeGetBackupResponse),
+  ),
   getBlueprintDraft: operation<SelfServiceDraft>(
     {
       id: "getBlueprintDraft",
@@ -3700,6 +3951,23 @@ export const operations = {
     },
     ref(() => decodeManualLock),
   ),
+  getNamespaceOverrideSwitches: operation<OverrideSwitches>(
+    {
+      id: "getNamespaceOverrideSwitches",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/override-switches",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeOverrideSwitches),
+  ),
   getNamespaceSettings: operation<Settings>(
     {
       id: "getNamespaceSettings",
@@ -3852,6 +4120,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeProviderRelease),
+  ),
+  getRestore: operation<GetRestoreResponse>(
+    {
+      id: "getRestore",
+      method: "GET",
+      path: "/api/dustpan/v1/restores/{id}",
+      pathParameters: ["id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeGetRestoreResponse),
   ),
   getSettings: operation<Settings>(
     {
@@ -4175,6 +4460,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeListApprovalRulesResponse),
+  ),
+  listBackups: operation<ListBackupsResponse>(
+    {
+      id: "listBackups",
+      method: "GET",
+      path: "/api/dustpan/v1/backups",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListBackupsResponse),
   ),
   listBlueprints: operation<SelfServiceVersionList>(
     {
@@ -4549,6 +4851,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeListRegistryProvidersResponse),
+  ),
+  listRestores: operation<ListRestoresResponse>(
+    {
+      id: "listRestores",
+      method: "GET",
+      path: "/api/dustpan/v1/restores",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeListRestoresResponse),
   ),
   listStoreChecks: operation<ListStoreChecksResponse>(
     {
@@ -5145,6 +5464,23 @@ export const operations = {
     },
     ref(() => decodeGate),
   ),
+  setNamespaceOverrideSwitches: operation<OverrideSwitches>(
+    {
+      id: "setNamespaceOverrideSwitches",
+      method: "PUT",
+      path: "/api/dustpan/v1/namespaces/{namespace}/override-switches",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeOverrideSwitches),
+  ),
   setOutputSharing: operation<OutputSharing>(
     {
       id: "setOutputSharing",
@@ -5264,6 +5600,23 @@ export const operations = {
     },
     ref(() => decodeStagedUpload),
   ),
+  startBackup: operation<StartBackupResponse>(
+    {
+      id: "startBackup",
+      method: "POST",
+      path: "/api/dustpan/v1/backups",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [202],
+    },
+    ref(() => decodeStartBackupResponse),
+  ),
   startDriftCheck: operation<DriftCheck>(
     {
       id: "startDriftCheck",
@@ -5298,6 +5651,23 @@ export const operations = {
     },
     ref(() => decodeJob),
   ),
+  startRestore: operation<StartRestoreResponse>(
+    {
+      id: "startRestore",
+      method: "POST",
+      path: "/api/dustpan/v1/restores",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [202],
+    },
+    ref(() => decodeStartRestoreResponse),
+  ),
   startStoreCheck: operation<StartStoreCheckResponse>(
     {
       id: "startStoreCheck",
@@ -5314,6 +5684,23 @@ export const operations = {
       statuses: [202],
     },
     ref(() => decodeStartStoreCheckResponse),
+  ),
+  sweepDeletedUnits: operation<DeletedUnitSweep>(
+    {
+      id: "sweepDeletedUnits",
+      method: "POST",
+      path: "/api/dustpan/v1/deleted-units/sweep",
+      pathParameters: [],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeDeletedUnitSweep),
   ),
   testNotificationSink: operation<NotificationSinkTest>(
     {

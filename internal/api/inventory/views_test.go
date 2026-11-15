@@ -326,6 +326,63 @@ func deniedEntries(t *testing.T, f *viewFixture) int {
 	return denied
 }
 
+// TestKindSwitchesKnowAgent proves that a refusal of a view caller records
+// the kind agent for an agent, and no kind for a kind that the server does
+// not know, so a denial entry never carries a kind that the audit log
+// refuses.
+func TestKindSwitchesKnowAgent(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{"an agent", tokenAgent, audit.PrincipalKindAgent},
+		{"an unknown kind", tokenUnknown, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newViewFixture(t)
+			id := f.createView(t, tokenAna, payments)
+
+			if res := f.do(t, http.MethodDelete, viewsPath+"/"+id, tc.token, ""); res.status != http.StatusForbidden {
+				t.Fatalf("%s answers %d (%s), want 403", tc.name, res.status, res.body)
+			}
+
+			if !hasDeniedEntry(t, f, tc.want) {
+				t.Fatalf("%s left no denial entry with the principal kind %q", tc.name, tc.want)
+			}
+		})
+	}
+}
+
+// hasDeniedEntry reports whether the fixture holds one valid denial entry
+// with the principal kind want.
+func hasDeniedEntry(t *testing.T, f *viewFixture, want string) bool {
+	t.Helper()
+
+	found := false
+	entries := f.auditEntries(t)
+
+	for i := range entries {
+		if entries[i].Outcome != audit.OutcomeDenied {
+			continue
+		}
+
+		if err := entries[i].Validate(); err != nil {
+			t.Fatalf("the denial entry is not valid: %v", err)
+		}
+
+		if entries[i].PrincipalKind == want {
+			found = true
+		}
+	}
+
+	return found
+}
+
 // readsAndDelete lists the routes that take a view ID and a person.
 func readsAndDelete() []struct{ method, suffix string } {
 	return []struct{ method, suffix string }{

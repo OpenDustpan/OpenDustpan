@@ -156,7 +156,7 @@ func TestLatestAnswersTheBitWithoutABlobRead(t *testing.T) {
 	t.Parallel()
 
 	counted := &countingBlobs{Store: openFixtureBlobs(t), mu: sync.Mutex{}, gets: 0, failGet: false}
-	f := newFixtureSized(t, counted, blobguardtest.None{}, 512)
+	f := newFixtureSized(t, counted, blobguardtest.None{}, nil, 512)
 
 	if _, err := f.svc.Lock(t.Context(), f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)
@@ -188,7 +188,7 @@ func TestLatestStreamsTheBlobWhenTheBitIsNull(t *testing.T) {
 	t.Parallel()
 
 	counted := &countingBlobs{Store: openFixtureBlobs(t), mu: sync.Mutex{}, gets: 0, failGet: false}
-	f := newFixtureSized(t, counted, blobguardtest.None{}, 512)
+	f := newFixtureSized(t, counted, blobguardtest.None{}, nil, 512)
 
 	if _, err := f.svc.Lock(t.Context(), f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)
@@ -232,7 +232,7 @@ func TestOutputsRefusesAClientEncryptedBlobBehindAPlaintextRow(t *testing.T) {
 	t.Parallel()
 
 	counted := &countingBlobs{Store: openFixtureBlobs(t), mu: sync.Mutex{}, gets: 0, failGet: false}
-	f := newFixtureSized(t, counted, blobguardtest.None{}, 512)
+	f := newFixtureSized(t, counted, blobguardtest.None{}, nil, 512)
 
 	if _, err := f.svc.Lock(t.Context(), f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)
@@ -258,7 +258,7 @@ func TestOutputsRefusesAClientEncryptedBlobBehindAPlaintextRow(t *testing.T) {
 func TestBothKeys(t *testing.T) {
 	t.Parallel()
 
-	f := newFixtureSized(t, openFixtureBlobs(t), blobguardtest.None{}, 512)
+	f := newFixtureSized(t, openFixtureBlobs(t), blobguardtest.None{}, nil, 512)
 	ctx := t.Context()
 
 	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
@@ -290,7 +290,7 @@ func TestBothKeys(t *testing.T) {
 func TestBothKeysFoldedVersion(t *testing.T) {
 	t.Parallel()
 
-	f := newFixtureSized(t, openFixtureBlobs(t), blobguardtest.None{}, 512)
+	f := newFixtureSized(t, openFixtureBlobs(t), blobguardtest.None{}, nil, 512)
 	ctx := t.Context()
 
 	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {

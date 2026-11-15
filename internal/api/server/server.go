@@ -698,7 +698,7 @@ func classifyIdentity(err error) (failure, bool) {
 // part of the contract: the first function that maps the error decides.
 func classify(err error) failure {
 	for _, try := range []func(error) (failure, bool){
-		classifyStoreCheck, classifyMaintenance, classifyBodyTooLarge, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity, classifyWorker,
+		classifyStoreCheck, classifyMaintenance, classifyBodyTooLarge, classifyNamespace, classifyBackup, classifyPrincipal, classifyReview, classifyIdentity, classifyWorker,
 		classifyIPAllowlist, classifyGateConfig, classifySessionPolicy, classifySignIn, classifyProviders,
 		classifyGitHost, classifyInstance, classifyRequest,
 	} {
@@ -723,6 +723,8 @@ func classifyRequest(err error) (failure, bool) {
 		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestInvalidObject), true
 	case errors.Is(err, errInvalidBody):
 		return failCoded(http.StatusBadRequest, errInvalidBody.Error(), errcode.RequestBodyInvalid), true
+	case errors.Is(err, errHiddenText):
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errOverrideSwitchesBody):
 		return failCoded(http.StatusBadRequest, errOverrideSwitchesBody.Error(), errcode.RequestBodyInvalid), true
 	case errors.Is(err, errCheckpointsOff):

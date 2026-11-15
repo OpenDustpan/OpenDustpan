@@ -1,30 +1,112 @@
 ## Context
 
-Slice 1 holds the connection store, the installation app registration and map, and Check. This change adds the hint intake, the read adapter methods, and the scoped token, without changing stored shapes from slice 1. Commit waits for the RFC 89 Q4 spike.
+Slice 1 holds the store, the registration map and the check. This change adds the intake, the reads and the scoped token. The 24-hour delivery record is a NEW store method in a NEW file. The local installation identity comes from the installation ID of main; if main has none, the change stops and asks the PM.
 
 ## Decisions
 
-1. **Hint parsing stays in the port.** Parse GitHub events in pkg/forge/github behind the Forge port ParseEvent, with an unexported verifier that checks X-Hub-Signature-256 against the two stored secrets from one registration snapshot with constant-time compare per secret. Either match accepts. An unexported dedupe store holds delivery IDs for 24 hours as a best-effort bound only.
-2. **Intake answers 204 and drops on replicas.** Serve POST /webhooks/{hook ID} outside /api/dustpan/v1 with no auth actions, always answer 204 after record of accept or reject, and increment git_host_event_rejected_total on reject. A replica drops an event for a namespace it does not serve. A repeated delivery causes no second effect when the state of the effect shows the hint already applied.
-3. **Adapter methods and scoped token.** Implement Head, ReadFile, Compare, FindCommit, OpenReview, ReadReview and CloseReview in the GitHub adapter behind capability checks that return ErrUnsupported when the host or auth kind cannot do the call. Hold Commit behind its capability until the RFC 89 Q4 spike fixes author and signature. Add RepoToken that mints a one-repository contents-read token of at most 1 hour with Scoped set.
-4. **Duplicate hints cause no second effect.** Make hints idempotent on the hint key of hook ID plus delivery ID plus event effect key of repository, event type and head sha, so a duplicate that reaches another member or arrives after a restart causes no second effect. The dedupe store is a best-effort bound, and the effect check is the guard that stays correct across members and restarts. When the effect state is unavailable the server drops without effect and counts a reject.
+1. **Hint parsing in the port.** ParseEvent for GitHub uses an unexported verifier that compares X-Hub-Signature-256 against the stored secrets of one registration snapshot in constant time. A registration keeps at most two event secrets. During a rotation the old secret is valid for the check of an event only. It ends after 7 days or when the operator confirms the rotation. Each event accepted with the old secret writes an audit entry. Each refusal of an event signed with an expired, confirmed-away or third (older) secret also writes an audit entry. The API shows the effective end of the window (ADR 374 decision 2).
+2. **Intake answers 204.** The route is outside /api/dustpan/v1, takes no auth action and answers 204 with an empty body. A reject counts git_host_event_rejected_total. The handler method HandleDelivery runs verify, map lookup, duplicate check and hint record in that order.
+3. **Adapter methods and scoped token.** Implement the Files, Commits and Reviews methods behind capabilities, and RepoToken with Scoped set and an expiry of at most 1 hour.
+4. **Duplicates.** The NEW store method MarkDelivery in pkg/forge/delivery.go records the delivery ID for 24 hours and the effect mark in one atomic check-and-set. The effect state decides a manual redelivery.
+5. **Two event secrets and the window, in the store (ADR 374 decision 2, owner).** ADR 374 decision 2 says: "During a rotation, the old event secret is valid for the check of an event only. It ends after 7 days, or earlier when the operator ends the rotation (the confirmation of the rotation). Each event that the server accepts with the old secret writes an audit entry. The API shows the effective end of the window. The server refuses an event signed with the old secret after the end, or after the confirmation. A secret older than the old secret is never valid: a registration keeps at most two event secrets."
+   - Storage: the table git_host_app_registrations gets three NEW nullable columns, edited in place in the baseline of each dialect in name order: old_event_secret_ends_at_ms (Unix milliseconds), old_event_secret_set_id and old_sealed_event_secret. The old secret stays sealed as the current one is: SealBound under EventSecretScope(kind), bound to the address digest. All three are NULL, or all three are set; a CHECK constraint in each dialect enforces this, and a read of a row with a partial set fails closed with `forge.ErrInvalid`.
+   - The rotation: a PutRegistration whose event secret differs from the current one (the service opens the current secret and compares in constant time), with the same address digest, moves the current sealed secret, its set ID and now + 7 days into the three old columns, in the same UPDATE statement and transaction that writes the new secret. A PutRegistration during an open window replaces the old secret with the current one, so the secret before it is gone: two columns hold at most two secrets, so a third secret cannot be valid by structure. A put that changes the address digest writes NULL in the three old columns: the old secret is bound to the old address and opens for no other (fail closed). This address-change rule is pending the owner's word: ADR 374 decision 2 speaks of a rotation only, and task 2.12 waits for the answer. A put with the same event secret leaves the old columns as they are.
+   - The confirmation: the NEW route POST /api/dustpan/v1/git-host-apps/{kind}/confirm-rotation writes NULL in the three old columns in one UPDATE with the version check, and writes an audit entry.
+   - The check order of one event, against one registration snapshot: (1) the signature with the current secret, constant time; on a match, accept. (2) Only when (1) fails, and the old columns are set, and the time of the server is before old_event_secret_ends_at_ms: the signature with the old secret, constant time; on a match, accept and write the audit entry `git-host.event-accepted-old-secret` with the kind, the hook ID, the delivery ID and the end of the window. (3) Else refuse, answer 204 as for every refusal, count git_host_event_rejected_total and write the audit entry `git-host.event-refused` with the reason (`signature`, `old-secret-expired`). An unreadable or partial old set refuses (fail closed).
+   - The API: the answer of GET /api/dustpan/v1/git-host-apps/{kind} gets the NEW field oldSecretEndsAt (Unix milliseconds), the effective end of the window; the field is absent when no window is open. No read answers a secret.
+   - Backup: backup_githost.go of each dialect lists the three columns, so a backup holds the window (a restore keeps an open window as it was).
 
 ## Structure
 
-Unexported type webhookIntake with constructor newWebhookIntake that takes the Forge port, the registration map, the dedupe store and the meter, and checks non-nil and secret length. The constructor is the only way to make a value, so missing checks cannot compile into the route.
+Unexported type webhookIntake with constructor newWebhookIntake that checks its ports and the secret length.
 
 ## Risks
 
-- Replayed deliveries start duplicate hints.
-- Unscoped token leak to runners.
-- Hook hostname tied to one member breaks failover.
-- Log or error exposes secret or token.
+- Replayed delivery causes a second effect
+- Unscoped token reaches a runner
+- Hook URL tied to one member
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| signature and dedupe | Boundary: verify X-Hub-Signature-256 with constant-time compare against each of two stored secrets from one snapshot; reject short secrets, unknown hook ID, bad body and replayed effect. | Send forged body, wrong secret, replayed delivery ID and short secret directly to the adapter and check reject and metric increment. |
-| hook mapping | Containment: map hook ID to app registration through the installation map only; never take a namespace or connection ID from the request; look up installation-to-connection only from stored data. | Send valid signature with guessed hook ID and with path traversal in hook ID and check 204 with reject and no lookup leak. |
-| fail-closed intake | Effect limit: answer 204 for every request with no body echo; bound body size and parse time; drop on replica without fetch. | Send 10 MB body, a bad-signature body above the bound, and 10000 rapid replays and check bound, 204 and stable memory. |
-| scoped token use | Point of use: enforce repo-token and git-access capabilities on the runner git path and refuse any token with Scoped not set. | Call the runner git credential path with an unscoped token and check refusal even when the token is otherwise valid. |
+| signature | Constant-time compare against the stored secrets; reject short secrets. | Forged body and wrong secret sent to the adapter count a reject. |
+| old secret window | The old secret is tried only after the current one fails, only before its end and only when all three old columns are set; at most two secrets by structure. | An event with the old secret 1 ms after the end, after the confirm, and with a third secret is refused with its audit entry; a row with a partial old set is refused (TestOldSecretWindow, TestConfirmRotation, TestThirdSecretRefused, TestPartialOldSecretRowRefused). |
+| store | The CHECK constraint refuses a partial old set; the rotation writes the old set in the same UPDATE as the new secret. | A direct insert of a partial old set fails in each dialect; a failed put leaves both secrets as they were (TestRotationIsAtomic in pkg/store/storetest). |
+| hook mapping | Hook ID resolves through the installation map only. | Traversal hook ID gives 204 and a reject. |
+| scoped token use | The runner path refuses a token with Scoped not set. | A valid unscoped token is refused. |
+
+## Diagrams
+
+After this change:
+
+```mermaid
+sequenceDiagram
+GitHub->>Server: POST /webhooks/{hook ID}
+Server-->>GitHub: 204
+```
+
+Modules that the change touches, and their imports on main:
+
+```mermaid
+flowchart LR
+P1[internal/api/route]
+```
+
+New imports of this change (each one allowed by the module rules):
+
+- `pkg/forge/github` imports `pkg/forge`
+
+## Quality attributes
+
+| Attribute | Target | Unit | Scope |
+| --- | --- | --- | --- |
+| request bound | 1 | MB max | webhook body read |
+| token lifetime | 1 | hours max | RepoToken expiry |
+| secret strength | 32 | bytes min | event secret length |
+
+## Threat model
+
+Data flow and trust boundaries:
+
+```mermaid
+flowchart TB
+subgraph Internet
+GH[GitHub]
+end
+subgraph Server
+INTAKE[POST /webhooks/hook ID]
+VERIFY[verifier]
+REG[registrations]
+end
+subgraph Runner
+RUN[runner git path]
+end
+GH-->INTAKE
+INTAKE-->VERIFY
+VERIFY-->REG
+REG-->RUN
+```
+
+| Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
+| --- | --- | --- | --- | --- | --- |
+| Internet to server | S | Attacker forges a push delivery. | boundary check | Constant-time signature check. | Forged body counts a reject. |
+| Internet to server | S | Attacker forges a push delivery. | encode or contain | Hook ID resolves through the map only. | Traversal hook ID gives 204 and a reject. |
+| Internet to server | S | Attacker forges a push delivery. | limit | Body bound of 1 MB. | A 10 MB body is cut and answers 204. |
+| Internet to server | S | Attacker forges a push delivery. | authorize at point of use | The runner path needs a scoped token. | An unscoped token is refused. |
+| Internet to server | S | Attacker forges a push delivery. | fail closed | Drop on error and count a reject. | Unreadable effect state drops with 204. |
+
+## Contracts
+
+**webhookIntake**
+
+- Invariant: Every answer is 204 with an empty body.
+- Invariant: Hint record and effect mark are one atomic step.
+- `HandleDelivery`: pre: Body within the size bound. Post: A verified hint is recorded once per effect key.
+
+## Failure modes
+
+| Step | Failure | Retry | State after |
+| --- | --- | --- | --- |
+| Hint apply | Duplicate delivery after restart | No retry; the effect check drops it. | Single hint effect. |
+| RepoToken | Git host refuses the mint | No retry; return a refusal that names the host. | No token issued. |

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
 // seedItemKey makes the namespace acme and one item key in it, and returns the
@@ -42,7 +44,7 @@ func seedItemKey(t *testing.T, s *Store) secret.ItemRef {
 	k := secret.ItemKey{
 		CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), ShreddedAt: time.Time{}, Ref: ref,
 		ID: secret.NewItemKeyID(), WrapperID: "builtin-1",
-		Blob: secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}},
+		Blob: secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}, Attempt: "abcdefghij0123456789"},
 	}
 	if _, err = s.CreateItemKey(t.Context(), k, ns.Fence()); err != nil {
 		t.Fatalf("create item key: %v", err)
@@ -276,4 +278,237 @@ func refusedItemKeys(other secret.ItemRef, acme namespace.Fence) []refusedItemKe
 			secret.ErrInvalidItemRef,
 		},
 	}
+}
+
+// TestItemKeyBackupNamesTheAttemptKey proves that the backup names the blob
+// key of a record with its attempt part, so a backup copies the blob that the
+// record names and no other attempt.
+func TestItemKeyBackupNamesTheAttemptKey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		update string
+		suffix func(k secret.ItemKey) string
+	}{
+		{
+			name: "a record of the first version", update: "",
+			suffix: func(k secret.ItemKey) string { return "/v1-" + k.Blob.Attempt },
+		},
+		{
+			name: "a record of a rewrap", update: `UPDATE item_keys SET blob_version = 3`,
+			suffix: func(k secret.ItemKey) string { return "/v3-" + k.Blob.Attempt },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := openForSavedViews(t)
+			k := seedRowOfLayout(t, s, tc.update)
+
+			if err := checkStagedItemKeys(t.Context(), s.pool, currentSchema(t, s)); err != nil {
+				t.Fatalf("check = %v, want nil", err)
+			}
+
+			want := "/item-keys/" + string(k.ID) + tc.suffix(k)
+
+			live := liveBlobRefs(t, s)
+
+			staged, err := stagingBlobRefs(t.Context(), s.pool, currentSchema(t, s))
+			if err != nil {
+				t.Fatalf("staged blob refs: %v", err)
+			}
+
+			if l, st := countKeySuffix(live, want), countKeySuffix(staged, want); l != 1 || st != 1 {
+				t.Errorf("blob key %q: %d live and %d staged references, want 1 and 1", want, l, st)
+			}
+		})
+	}
+}
+
+// liveBlobRefs returns the keys of the blob references of the live backup
+// query.
+func liveBlobRefs(t *testing.T, s *Store) []backup.BlobRef {
+	t.Helper()
+
+	rows, err := s.queries.BackupBlobs(t.Context())
+	if err != nil {
+		t.Fatalf("backup blobs: %v", err)
+	}
+
+	live := make([]backup.BlobRef, 0, len(rows))
+	for i := range rows {
+		live = append(live, backup.BlobRef{Key: rows[i].ContentKey, MD5: [16]byte{}, Size: 0, Sealed: false})
+	}
+
+	return live
+}
+
+// seedRowOfLayout seeds one item key, runs update on its row, and returns
+// the record that the store reads back.
+func seedRowOfLayout(t *testing.T, s *Store, update string) secret.ItemKey {
+	t.Helper()
+
+	ref := seedItemKey(t, s)
+
+	if update != "" {
+		if _, err := s.pool.Exec(t.Context(), update); err != nil {
+			t.Fatalf("change the row: %v", err)
+		}
+	}
+
+	k, err := s.GetItemKey(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	return k
+}
+
+// countKeySuffix counts the references whose key ends with suffix.
+func countKeySuffix(refs []backup.BlobRef, suffix string) int {
+	n := 0
+
+	for i := range refs {
+		if strings.HasSuffix(refs[i].Key, suffix) {
+			n++
+		}
+	}
+
+	return n
+}
+
+// TestItemKeyAttemptColumnRefusesABadLength proves the check of the column:
+// the database refuses an attempt part that is not 20 lowercase ASCII letters
+// and digits, also an empty one and one that names another path, when a write
+// skips every check of the store.
+func TestItemKeyAttemptColumnRefusesABadLength(t *testing.T) {
+	t.Parallel()
+
+	for _, update := range []string{
+		`UPDATE item_keys SET blob_attempt = ''`,
+		`UPDATE item_keys SET blob_attempt = 'abc'`,
+		`UPDATE item_keys SET blob_attempt = 'abcdefghij01234567890'`,
+		`UPDATE item_keys SET blob_attempt = 'ABCDEFGHIJ0123456789'`,
+		`UPDATE item_keys SET blob_attempt = 'aaaaaaaaaaaaaaaaa/x1'`,
+		`UPDATE item_keys SET blob_attempt = 'aaaaaaaaaaaaaaaaa..1'`,
+	} {
+		s := openForSavedViews(t)
+		seedItemKey(t, s)
+
+		if _, err := s.pool.Exec(t.Context(), update); err == nil {
+			t.Errorf("%s succeeded, want a refusal of the column check", update)
+		}
+	}
+}
+
+// TestItemKeyTransactionTimeoutEndsALateTransaction proves the deadline of the
+// database alone: a transaction that sets the timeout of the attempt deadline
+// and then stays open past it does not commit, with no deadline on the context
+// and no check of the server before the commit.
+func TestItemKeyTransactionTimeoutEndsALateTransaction(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	ref := seedItemKey(t, s)
+
+	k, err := s.GetItemKey(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	fence := namespace.Fence{Namespace: ref.Scope.Namespace, FailoverVersion: 1}
+
+	err = s.inFencedTx(t.Context(), fence, func(q *db.Queries) error {
+		if setErr := q.SetTransactionTimeout(t.Context(), "200"); setErr != nil {
+			return setErr
+		}
+
+		params := db.ShredItemKeyParams{
+			ShreddedAtMs: 1_700_000_000_001, ScopeID: ref.Scope.ID, Kind: string(ref.Kind),
+			Item: ref.Item, Namespace: ref.Scope.Namespace.String(),
+		}
+
+		if _, shredErr := q.ShredItemKey(t.Context(), params); shredErr != nil {
+			return shredErr
+		}
+
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
+
+		select {
+		case <-timer.C:
+		case <-t.Context().Done():
+		}
+
+		return nil
+	})
+	if err == nil {
+		t.Fatal("a transaction past its timeout committed")
+	}
+
+	got, err := s.GetItemKey(t.Context(), ref)
+	if err != nil || got.Shredded() || got.ID != k.ID {
+		t.Errorf("record after the late transaction = %+v, %v, want the record unchanged", got, err)
+	}
+}
+
+// TestInItemKeyTxEndsALateWrite proves that InItemKeyTx arms the deadline of
+// the database: a write through the transaction after the deadline fails, so
+// fn never returns nil and the check before the commit is not what stops it.
+// The write uses a context with no deadline.
+func TestInItemKeyTxEndsALateWrite(t *testing.T) {
+	t.Parallel()
+
+	s := openForSavedViews(t)
+	ref := seedItemKey(t, s)
+	late := lateItemKey(t, ref)
+	fence := namespace.Fence{Namespace: ref.Scope.Namespace, FailoverVersion: 1}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	var writeErr error
+
+	err := s.InItemKeyTx(ctx, fence, func(tx secret.ItemKeyTx) error {
+		waitPast(600 * time.Millisecond)
+
+		_, writeErr = tx.CreateItemKey(context.WithoutCancel(ctx), late)
+
+		return writeErr
+	})
+	if writeErr == nil || !errors.Is(err, secret.ErrItemKeyAttemptExpired) {
+		t.Fatalf("a write after the deadline = %v, transaction = %v, want both to fail, the transaction "+
+			"with ErrItemKeyAttemptExpired", writeErr, err)
+	}
+
+	if _, getErr := s.GetItemKey(t.Context(), late.Ref); !errors.Is(getErr, secret.ErrKeyNotFound) {
+		t.Errorf("a late write left a record: err = %v", getErr)
+	}
+}
+
+// lateItemKey returns a new record in the namespace of ref, for another item.
+func lateItemKey(t *testing.T, ref secret.ItemRef) secret.ItemKey {
+	t.Helper()
+
+	other, err := secret.NewItemRef(ref.Scope, ref.Kind, "pln-late")
+	if err != nil {
+		t.Fatalf("item ref: %v", err)
+	}
+
+	return secret.ItemKey{
+		CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), ShreddedAt: time.Time{}, Ref: other,
+		ID: secret.NewItemKeyID(), WrapperID: "builtin-1",
+		Blob: secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}, Attempt: "abcdefghij0123456789"},
+	}
+}
+
+// waitPast waits for d.
+func waitPast(d time.Duration) {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	<-timer.C
 }

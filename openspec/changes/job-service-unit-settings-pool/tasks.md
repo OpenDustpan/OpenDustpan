@@ -1,15 +1,25 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the implementer's notes (the pull request body) before the first test. Check: the pull request body lists the differences, or says that there are none.
+
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing planner tests for settings resolution, override authorization, missing location 422, and Pulumi with no stored steps. Check: TestStartResolvesPoolLocationProfileStepsFromSettings fails on main, passes after the fix.
-- [ ] 1.2 Add failing read-check tests for saver loss of unit:read-outputs, missing trigger, disabled saver and manual-fire caller intersection. Check: TestTriggerOutputReadDeniesAfterSaverLosesReadOutputs fails on main, passes after the fix.
+- [ ] 1.1 Write failing planner tests for settings resolution, override authorization, manual lock refusal and missing location in pkg/dustpan/jobservice_internal_test.go. Check: TestStartResolvesFromSettings fails on main
+- [ ] 1.2 Write failing read-check tests for run-as principal loss and manual-fire intersection in the existing file pkg/trigger/readcheck_test.go: extend it in place and add new tests for the new behavior only. Check: TestTriggerOutputReadDeniesAfterGrantLoss fails on main
+- [ ] 1.3 Write a failing role test for the role mapping in pkg/access/planner_role_test.go. Check: TestJobActionsInBuiltInRoles fails on main
 
 ## 2. Build
 
-- [ ] 2.1 Wire settings resolution with start snapshot into job start and trigger jobstarter with override checks. Check: `go test ./pkg/dustpan ./pkg/trigger/...` passes with no request-only location fallback.
-- [ ] 2.2 Classify unit:run-plan, unit:define-steps, job:read, job:read-plans, job:read-logs and namespace:manage-runners in built-in roles. Check: `go test ./pkg/access/...` shows the planner, lead and administrator role mapping and the route test lists no unclassified start action.
-- [ ] 2.3 Wire the saver check into the Pulumi export, OpenTofu state version and secret-output decrypt handlers. Check: Job-token export, state-version and secret-output decrypt paths call OutputReadCheck.Allow at each read.
+- [ ] 2.1 Add location, pool, profile ID and steps to unit settings with validation in internal/api/settings/serve.go. Check: go test ./pkg/unitsettings/...
+- [ ] 2.2 Wire the read check into the output read handlers in pkg/dustpan/triggers.go. Check: go test ./pkg/dustpan
+- [ ] 2.3 Add the actions to the built-in roles in pkg/access. Check: go test ./pkg/access -run TestActionsWithoutRoutesAreUnclassified
 
-## 3. Definition of done
+## 3. Side effects (computed from main)
 
-- [ ] 3.1 Add the e2e steps against the real CLI and the real directory. Check: e2e step: non-admin with planner role is refused on pool or location override; trigger plan reads source output then is refused after saver loses unit:read-outputs.
-- [ ] 3.2 Ship docs, wiring, routes with authorization actions, usability check and make check. Check: `make check` with zero findings and the docs page for unit settings and job start.
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
+
+## 4. Definition of done
+
+- [ ] 4.1 BLOCKED by the missing e2e helper for the trigger fire route and the job-token output read: add the e2e step against the real binary after the helper exists. Check: BLOCKED by the e2e helper. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Write the docs page docs/guides/unit-settings-pool.md (NEW) and the usability check from the page alone. Check: make docs-lint. A person's step.
+- [ ] 4.3 Run the full check. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

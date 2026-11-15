@@ -190,6 +190,10 @@ var devColumnDecisions = map[string]devDecision{
 		reason: "history text of who broke the glass; a review records a use that already happened and " +
 			"grants no authority",
 	},
+	"unmanaged_scans.started_by": {
+		strip:  false,
+		reason: "history text of who started the sweep; a sweep grants no authority",
+	},
 }
 
 // TestDevStripCoversEveryPrincipalColumn lists the columns of the backup that

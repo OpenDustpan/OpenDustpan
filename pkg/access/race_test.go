@@ -76,7 +76,7 @@ func racingServiceWith(
 			Grants: f.store, Roles: f.store, Callers: f.store, Principals: f.store, Collections: port, Units: f.store,
 		},
 		Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"}, LimitGroups: nil,
+		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)

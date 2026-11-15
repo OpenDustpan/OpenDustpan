@@ -12,12 +12,12 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 )
 
-// restoreStartDoc decodes POST /api/server/restores: the started restore ID.
+// restoreStartDoc decodes POST /api/dustpan/v1/restores: the started restore ID.
 type restoreStartDoc struct {
 	ID string `json:"id"`
 }
 
-// restoreStateDoc decodes GET /api/server/restores/{id}: the restore state.
+// restoreStateDoc decodes GET /api/dustpan/v1/restores/{id}: the restore state.
 type restoreStateDoc struct {
 	ID    string `json:"id"`
 	State string `json:"state"`
@@ -98,7 +98,7 @@ func startRestoreAs(ctx context.Context, t *testing.T, env *e2e.Env, secret, bac
 	t.Helper()
 
 	status, body, err := env.ServerAPIStatusAs(
-		ctx, secret, http.MethodPost, "/api/server/restores", `{"backupID":"`+backupID+`"}`,
+		ctx, secret, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+backupID+`"}`,
 	)
 	if err != nil {
 		t.Fatalf("start restore of %s as operator: %v", backupID, err)
@@ -132,7 +132,7 @@ func waitRestoreSucceeded(ctx context.Context, t *testing.T, env *e2e.Env, id st
 	defer timer.Stop()
 
 	for {
-		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/restores/"+id, "")
+		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/restores/"+id, "")
 		if err != nil {
 			t.Fatalf("get restore %s: %v", id, err)
 		}

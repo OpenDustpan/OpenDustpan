@@ -603,6 +603,7 @@ func (s *service) entry(a Actor, req *StartRequest, j *Job) (audit.Entry, error)
 		UserAgent: req.UserAgent, Channel: channel, Kind: kind, Outcome: audit.OutcomeSuccess,
 		RequestID: req.RequestID, ObjectID: j.Spec.Unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: string(a.Principal.Kind), JobID: "", Reason: reason,
+		Origin: nil,
 	}, nil
 }
 

@@ -186,8 +186,8 @@ type Placement struct {
 type PlacedStore interface {
 	// CreateStackPlaced persists st as CreateStack does and puts it in the
 	// collection of p, in the same transaction. It also returns
-	// collection.ErrNotFound when the collection does not exist,
-	// collection.ErrCollectionChanged when it has another ID than
+	// collection.ErrPlacementCollectionMissing when the collection does not
+	// exist, collection.ErrCollectionChanged when it has another ID than
 	// p.CollectionID, and the errors of a refused join (for example a gate).
 	CreateStackPlaced(ctx context.Context, st Stack, p Placement, fence namespace.Fence) error
 }

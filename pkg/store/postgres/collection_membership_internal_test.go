@@ -196,6 +196,7 @@ func membershipEntry(at time.Time, ns namespace.Name, action string) audit.Entry
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

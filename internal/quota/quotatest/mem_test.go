@@ -169,6 +169,19 @@ func (tx *memTx) Reserve(_ context.Context, r quota.Reservation, checks []quota.
 		return quota.Reservation{}, err
 	}
 
+	// Each key of the reservation must be the key of one of the checks, so a
+	// caller cannot count a key that no limit checked.
+	for _, k := range r.Keys {
+		if !slices.ContainsFunc(checks, func(c quota.Check) bool { return c.Key == k }) {
+			return quota.Reservation{}, fmt.Errorf(
+				"%w: no check covers key %s of reservation %s",
+				quota.ErrInvalid,
+				k,
+				r.ID,
+			)
+		}
+	}
+
 	if have, ok := tx.reservations[r.ID]; ok {
 		if !slices.Equal(have.Keys, r.Keys) {
 			return quota.Reservation{}, fmt.Errorf("%w: %s", quota.ErrConflict, r.ID)

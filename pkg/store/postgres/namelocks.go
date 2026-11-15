@@ -19,9 +19,11 @@ import (
 
 var _ authgate.NameLockCounter = (*Store)(nil)
 
-// nameLockTx is the namelockstore.Tx of one transaction.
+// nameLockTx is the namelockstore.Tx of one transaction. srv is the locked
+// transaction that appends an entry of the scope @server.
 type nameLockTx struct {
-	q *db.Queries
+	q   *db.Queries
+	srv serverAuditTx
 }
 
 func (t nameLockTx) NowMs(ctx context.Context) (int64, error) {
@@ -51,11 +53,7 @@ func (t nameLockTx) Get(ctx context.Context, scope, name, sub string) (namelocks
 }
 
 func (t nameLockTx) AppendAudit(ctx context.Context, e audit.Entry) error {
-	if err := validServerEntry(e); err != nil {
-		return err
-	}
-
-	if _, err := appendAuditEntry(ctx, t.q, e); err != nil {
+	if _, err := appendServerEntry(ctx, t.srv, e); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 
@@ -110,8 +108,8 @@ func (s *Store) AddNameFailure(ctx context.Context, f authgate.NameFailure) (aut
 		locked bool
 	)
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
-		lock, addErr := namelockstore.Add(ctx, nameLockTx{q: q}, f)
+	err := runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
+		lock, addErr := namelockstore.Add(ctx, nameLockTx{q: tx.q, srv: tx}, f)
 		if errors.Is(addErr, authgate.ErrNameLocked) {
 			// A locked name writes nothing: the transaction commits no change.
 			out, locked = lock, true
@@ -158,11 +156,11 @@ func (s *Store) ClearName(ctx context.Context, scopes []string, name string, e a
 
 	var total int64
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	err := runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
 		total = 0
 
 		for _, scope := range scopes {
-			cleared, err := q.ClearNameLocks(ctx, db.ClearNameLocksParams{Scope: scope, Name: name})
+			cleared, err := tx.q.ClearNameLocks(ctx, db.ClearNameLocksParams{Scope: scope, Name: name})
 			if err != nil {
 				return fmt.Errorf("clear name counts: %w", err)
 			}
@@ -173,7 +171,7 @@ func (s *Store) ClearName(ctx context.Context, scopes []string, name string, e a
 		entry := e
 		entry.Changes = append(append([]audit.Change{}, e.Changes...), authgate.ClearedChange(total))
 
-		if _, err := appendAuditEntry(ctx, q, entry); err != nil {
+		if _, err := appendServerEntry(ctx, tx, entry); err != nil {
 			return fmt.Errorf("append the entry of the clear: %w", err)
 		}
 
@@ -217,8 +215,8 @@ func (s *Store) PruneNameLocks(
 
 	var n int64
 
-	err := s.inTx(ctx, func(q *db.Queries) error {
-		now, err := q.DatabaseNowMs(ctx)
+	err := runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
+		now, err := tx.q.DatabaseNowMs(ctx)
 		if err != nil {
 			return fmt.Errorf("read the clock of the store: %w", err)
 		}
@@ -228,7 +226,7 @@ func (s *Store) PruneNameLocks(
 		// Defense in depth: CheckPruneRequest refuses an ended limit above the
 		// limit too. This bound stays so that a change of that check never lets
 		// a run delete more counts than its limit.
-		ended, err := pruneEnded(ctx, q, e, endedPrune{
+		ended, err := pruneEnded(ctx, tx, e, endedPrune{
 			before: before, now: now, limit: int64(min(endedLimit, limit)),
 		})
 		if err != nil {
@@ -237,7 +235,7 @@ func (s *Store) PruneNameLocks(
 
 		rest := max(int64(limit)-ended, 0)
 
-		plain, err := q.PruneNameLocks(ctx, db.PruneNameLocksParams{BeforeMs: before, NowMs: now, MaxRows: rest})
+		plain, err := tx.q.PruneNameLocks(ctx, db.PruneNameLocksParams{BeforeMs: before, NowMs: now, MaxRows: rest})
 		if err != nil {
 			return fmt.Errorf("prune name counts: %w", err)
 		}
@@ -247,7 +245,7 @@ func (s *Store) PruneNameLocks(
 		entry.Changes = append(append([]audit.Change{}, e.Changes...),
 			authgate.PrunedChanges(deleted, ended)...)
 
-		if _, err := appendAuditEntry(ctx, q, entry); err != nil {
+		if _, err := appendServerEntry(ctx, tx, entry); err != nil {
 			return fmt.Errorf("append the entry of the prune: %w", err)
 		}
 
@@ -269,10 +267,10 @@ type endedPrune struct {
 }
 
 // pruneEnded deletes the counts of p and appends the entry of the end of each
-// lock, built from the entry e of the prune, in the transaction of q. It
+// lock, built from the entry e of the prune, in the locked transaction tx. It
 // returns how many counts it deleted.
-func pruneEnded(ctx context.Context, q *db.Queries, e audit.Entry, p endedPrune) (int64, error) {
-	ended, err := q.PruneEndedNameLocks(ctx, db.PruneEndedNameLocksParams{
+func pruneEnded(ctx context.Context, tx serverAuditTx, e audit.Entry, p endedPrune) (int64, error) {
+	ended, err := tx.q.PruneEndedNameLocks(ctx, db.PruneEndedNameLocksParams{
 		BeforeMs: p.before, NowMs: p.now, MaxRows: p.limit,
 	})
 	if err != nil {
@@ -281,7 +279,7 @@ func pruneEnded(ctx context.Context, q *db.Queries, e audit.Entry, p endedPrune)
 
 	for _, row := range ended {
 		end := authgate.PrunedLockEndedEntry(e, row.Scope, codec.FromMillis(row.LockedUntilMs))
-		if _, appendErr := appendAuditEntry(ctx, q, end); appendErr != nil {
+		if _, appendErr := appendServerEntry(ctx, tx, end); appendErr != nil {
 			return 0, fmt.Errorf("append the entry of the end of a lock: %w", appendErr)
 		}
 	}

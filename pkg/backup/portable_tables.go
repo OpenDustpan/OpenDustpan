@@ -60,6 +60,9 @@ const (
 	portColOwner         = "owner"
 	portColJobID         = "job_id"
 	portColBody          = "body"
+	portColPoolID        = "pool_id"
+	portColTarget        = "target"
+	portColEnabled       = "enabled"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -155,6 +158,17 @@ func portableSpec() []PortableTable {
 				{Name: portColSize, Kind: KindInteger},
 				{Name: "blob_size", Kind: KindInteger},
 				{Name: "blob_md5", Kind: KindBytes},
+			},
+		},
+		{
+			Table:   "checkpoint_supersedes",
+			OrderBy: []string{portColStackID, portColBlobKey},
+			Columns: []Column{
+				{Name: portColBlobKey, Kind: KindText},
+				{Name: portColStackID, Kind: KindText},
+				{Name: portColUpdateID, Kind: KindText},
+				{Name: portColSize, Kind: KindInteger},
+				{Name: "superseded_at_ms", Kind: KindTime},
 			},
 		},
 		{
@@ -802,7 +816,9 @@ func portableSpec() []PortableTable {
 		portableItemKeyTables(),
 		portableSettingTables(),
 		portableSelfServiceTables(),
+		portableQuotaTables(),
 		portableTrustRuleTables(),
+		portableUnmanagedTables(),
 		portableBreakGlassReviewTables(),
 	)
 }

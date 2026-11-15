@@ -170,7 +170,26 @@ func (s *Store) swapStaging(ctx context.Context, plan swapPlan) (int64, error) {
 
 // swapTx is the transaction of swapStaging on tx. It sets dropped as swapIn
 // does.
+//
+// The swap takes the advisory lock of the scope @server first, before the swap
+// lock on the revocation journal. A write that runs in maintenance mode takes
+// the same advisory lock before it inserts into the journal, so the swap and
+// those writes cannot deadlock. The lock lasts to the commit of the swap.
 func (s *Store) swapTx(ctx context.Context, tx pgx.Tx, plan swapPlan, dropped *int64) error {
+	run := func(_ context.Context, fn func(q *db.Queries) error) error {
+		return fn(s.queries.WithTx(tx))
+	}
+
+	return runServerAuditTx(ctx, run, func(srv serverAuditTx) error {
+		return s.swapLockedTx(ctx, tx, srv, plan, dropped)
+	})
+}
+
+// swapLockedTx is swapTx after the transaction took the advisory lock of the
+// server audit scope.
+func (s *Store) swapLockedTx(
+	ctx context.Context, tx pgx.Tx, srv serverAuditTx, plan swapPlan, dropped *int64,
+) error {
 	var live string
 
 	if err := tx.QueryRow(ctx, "SELECT current_schema()").Scan(&live); err != nil {
@@ -181,8 +200,8 @@ func (s *Store) swapTx(ctx context.Context, tx pgx.Tx, plan swapPlan, dropped *i
 		return fmt.Errorf("apply staging schema %q over %q: %w", plan.staging, live, backup.ErrCorrupt)
 	}
 
-	// The swap lock comes first, before the swap touches a live table, so
-	// that no snapshot read overlaps the swap.
+	// The swap lock comes before the swap touches a live table, so that no
+	// snapshot read overlaps the swap.
 	if err := lockSwap(ctx, tx, live); err != nil {
 		return err
 	}
@@ -205,7 +224,7 @@ func (s *Store) swapTx(ctx context.Context, tx pgx.Tx, plan swapPlan, dropped *i
 		s.swapHook(ctx)
 	}
 
-	if err := s.swapIn(ctx, tx, live, plan, dropped); err != nil {
+	if err := s.swapInWithBreakGlassFloor(ctx, tx, srv, swapInTarget{plan: plan, live: live}, dropped); err != nil {
 		return err
 	}
 
@@ -216,29 +235,72 @@ func (s *Store) swapTx(ctx context.Context, tx pgx.Tx, plan swapPlan, dropped *i
 	return nil
 }
 
-// swapIn swaps plan.staging in for live in tx, after the swap lock and the
-// checks, and sets dropped to the count of the dropped temp_admins rows of a
-// swap that keeps the access tables.
-func (s *Store) swapIn(ctx context.Context, tx pgx.Tx, live string, plan swapPlan, dropped *int64) error {
-	if plan.keepAccess {
-		n, err := s.keepAccessTx(ctx, tx, live, plan)
+// swapInWithBreakGlassFloor swaps in.plan.staging in for in.live, and refuses a
+// swap that lowers the working break-glass count below the floor. It counts
+// the live data before the swap and the data that is live after it, in the
+// same transaction.
+func (s *Store) swapInWithBreakGlassFloor(
+	ctx context.Context, tx pgx.Tx, srv serverAuditTx, in swapInTarget, dropped *int64,
+) error {
+	nowMs, nowErr := storeNow(ctx, s.queries.WithTx(tx))
+	if nowErr != nil {
+		return nowErr
+	}
+
+	at := codec.FromMillis(nowMs)
+
+	before, beforeErr := countWorkingBreakGlass(ctx, s.queries.WithTx(tx), at)
+	if beforeErr != nil {
+		return beforeErr
+	}
+
+	if err := s.swapIn(ctx, tx, srv, in, dropped); err != nil {
+		return err
+	}
+
+	after, afterErr := countWorkingBreakGlass(ctx, s.queries.WithTx(tx), at)
+	if afterErr != nil {
+		return afterErr
+	}
+
+	return checkWorkingBreakGlassFloor(before, after)
+}
+
+// swapInTarget is the target of swapIn: the plan of the swap and the live
+// schema of the installation.
+type swapInTarget struct {
+	plan swapPlan
+	live string
+}
+
+// swapIn swaps in.plan.staging in for in.live in tx, after the swap lock and
+// the checks, and sets dropped to the count of the dropped temp_admins rows of
+// a swap that keeps the access tables. srv is the locked server audit
+// transaction of tx.
+func (s *Store) swapIn(
+	ctx context.Context, tx pgx.Tx, srv serverAuditTx, in swapInTarget, dropped *int64,
+) error {
+	if in.plan.keepAccess {
+		n, err := s.keepAccessTx(ctx, tx, in.live, in.plan)
 
 		*dropped = n
 
 		return err
 	}
 
-	previous, drop := previousSchema(live, plan.previous)
+	previous, drop := previousSchema(in.live, in.plan.previous)
 
-	if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(live)+" RENAME TO "+pgIdent(previous)); err != nil {
+	if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(in.live)+" RENAME TO "+pgIdent(previous)); err != nil {
 		return fmt.Errorf("move live schema aside: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(plan.staging)+" RENAME TO "+pgIdent(live)); err != nil {
+	if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(in.plan.staging)+" RENAME TO "+pgIdent(in.live)); err != nil {
 		return fmt.Errorf("move staged schema live: %w", err)
 	}
 
-	return s.finishSwap(ctx, tx, swapNames{live: live, previous: previous, staging: plan.staging, drop: drop})
+	return s.finishSwap(ctx, tx, srv, swapNames{
+		live: in.live, previous: previous, staging: in.plan.staging, drop: drop,
+	})
 }
 
 // previousSchema returns the name of the old live schema after a swap, and
@@ -262,7 +324,8 @@ type swapNames struct {
 	drop     bool
 }
 
-// finishSwap ends the swap in tx: it keeps the audit chain state of this
+// finishSwap ends the swap in tx, with srv the locked server audit
+// transaction of tx: it keeps the audit chain state of this
 // installation, keeps the durable control tables of the live installation,
 // applies the journaled revocations again, drops the schema previous when
 // names.drop says so and the control schema of the staging area, and fences
@@ -277,7 +340,7 @@ type swapNames struct {
 // tables in keepControlTables to the commit: through the copy of those
 // tables, the replay of the revocations and the fence of the namespaces.
 // That time grows with the size of the installation.
-func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, names swapNames) error {
+func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, srv serverAuditTx, names swapNames) error {
 	live, previous, staging := names.live, names.previous, names.staging
 
 	if err := keepChainState(ctx, tx, live, previous); err != nil {
@@ -291,7 +354,7 @@ func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, names swapNames) erro
 	// The restored access tables come from the backup. Apply again the
 	// revocations that ran in this stay in maintenance mode, so the swap does not
 	// bring back a session or a token that an operator ended.
-	if err := s.replayRevocations(ctx, tx, live); err != nil {
+	if err := s.replayRevocations(ctx, srv, tx, live); err != nil {
 		return err
 	}
 
