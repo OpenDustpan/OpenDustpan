@@ -22,6 +22,11 @@ type NameLockHarness struct {
 	// time by d: each time column of a count goes back by d, and a column of
 	// 0 stays 0.
 	Age func(t *testing.T, d time.Duration)
+	// Place moves one stored name count of the store of the harness, the
+	// count that scope, name and sub name, to the time of the database clock
+	// plus offset: each time column of the count goes to that time, and a
+	// column of 0 stays 0.
+	Place func(t *testing.T, scope, name, sub string, offset time.Duration)
 	// Broken returns a handle whose writes fail, for example a closed store.
 	Broken func(t *testing.T) authgate.NameLockCounter
 	// Entries returns the audit entries of the installation that the store
@@ -695,6 +700,7 @@ func testPrune(t *testing.T, h NameLockHarness) {
 
 	// A count with a failure inside the age stays.
 	add(t, c, key(authgate.ScopePassword, "recent", "s"), rule(limitFive, longLock), nil)
+	h.Place(t, authgate.ScopePassword, "recent", "s", longLock)
 
 	before := len(h.Entries(t))
 

@@ -3,8 +3,9 @@ package refusal
 import (
 	"fmt"
 	"strings"
-	"unicode"
 	"unicode/utf8"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // Clean returns s with each control character (Cc), format character (Cf),
@@ -25,7 +26,7 @@ func Clean(s string, limit int) string {
 		switch {
 		case r == utf8.RuneError && size <= 1:
 			piece = `�`
-		case unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp):
+		case ident.IsHiddenRune(r):
 			piece = fmt.Sprintf(`\u%04x`, r)
 		default:
 			piece = string(r)
