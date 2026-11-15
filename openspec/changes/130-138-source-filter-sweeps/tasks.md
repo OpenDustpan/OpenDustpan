@@ -19,7 +19,7 @@
 - [ ] 2.5 SECURITY. Build the per-chunk claim and pool check in the sweep pool code in the NEW file pkg/runner/sweep_pool.go. It refuses a chunk when the claim is not live, is not the claim of the runner, or the pool is not an operator pool with the sweep purpose. Check: go test ./pkg/runner/... -run TestChunkOfAnotherClaimIsRefused passes
 - [ ] 2.6 SECURITY. Call CheckSource (NEW) on the job claim path, in the NEW file pkg/source/checksource.go, so that a claim is refused with source.filter-invalid when the stored filter changed after create. Check: go test ./pkg/source/... -run TestClaimRefusesSourceOutsideNarrowedFilter passes
 - [ ] 2.3 Check the round trips of the sweep claim flow in internal/servertest. BLOCKED by 130-138-runner-protocol-claims, which adds the claim route under /runner/v1 with the runner key. Check: TestSweepClaimRoundTrips passes once the claim route exists
-- [ ] 2.4 Write the NEW guide docs/guides/runners.md. Check: A reviewer runs each command of the guide as written
+- [ ] 2.4 Write the NEW guide docs/guides/runners.md. Check: A reviewer runs each command of the guide as written. `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 

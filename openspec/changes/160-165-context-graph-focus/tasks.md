@@ -20,5 +20,5 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Add e2e step for context read and focus on one stack and one workspace in NEW file e2e/context_focus_test.go. Check: BLOCKED by NEW focus route; e2e will call GET /api/dustpan/v1/namespaces/{}/units/{}/context with personal token plus NEW focus route once wired. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write docs page for context and focus in NEW file docs/guides/context-and-focus.md. Check: Docs page shows context and focus calls with exact output.
+- [ ] 4.2 Write docs page for context and focus in NEW file docs/guides/context-and-focus.md. Check: Docs page shows context and focus calls with exact output. `make docs-lint` passes on each edited guide.
 - [ ] 4.3 Run usability check from docs page alone plus full checks. Check: `make check` passes with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

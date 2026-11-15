@@ -15,6 +15,6 @@
 
 - [ ] 2.1 Wire the masker into the local wrapper path. Check: `go test ./pkg/launcher/...` passes
 - [ ] 2.2 Add an e2e step with real tofu and the fake provider in the existing file e2e/e2e_masked_test.go. The step runs the local wrapper with the launcher token bound to the apply claim. BLOCKED by the local log upload route and the local credential kind of depends_on and of the owner question. Check: BLOCKED by local-run-two-cases; the step checks masked display and masked upload bytes. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 2.3 Write new docs page docs/guides/local-wrapper.md for local masking and its limits. Check: Each command on the page runs as written in a test. Confirmed by: CI (an e2e step in the NEW file e2e/runner_only_feature_in_local_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 2.3 Write new docs page docs/guides/local-wrapper.md for local masking and its limits. Check: Each command on the page runs as written in a test. Confirmed by: CI (an e2e step in the NEW file e2e/runner_only_feature_in_local_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 2.4 Run the usability check from the docs page. Check: A developer completes the path from the docs page alone and each error names one command. A person's step.
 - [ ] 2.5 Run the full check suite. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
