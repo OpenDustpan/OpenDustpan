@@ -1,16 +1,21 @@
-# The PR body check, apart from the CI suite. The lint job of ci.yml checks
-# the body of the pull request event, but the default activity types of the
-# pull_request event do not include edited: after an edit of the body, a new
-# push was needed to check the new body, because a re-run reads the body that
-# the old event holds. This workflow runs the same check also on edited, so an
-# edit of the body needs no new commit. It keeps opened, synchronize and
-# reopened, so the check reports the newest event and a maintainer can add it
-# to the required checks of the branch.
+# The PR body check, apart from the CI suite, and the one check of the body.
+# The default activity types of the pull_request event do not include edited,
+# and a re-run reads the body that the old event holds, so a check in ci.yml
+# needed a new push after an edit of the body. This workflow runs the check
+# also on edited, so an edit of the body needs no new commit. It keeps opened,
+# synchronize and reopened, so the check reports the newest event and a
+# maintainer can add it to the required checks of the branch.
+#
+# A required check must report on each merge group of the merge queue, or the
+# queue waits for it. A merge group has no body, so on merge_group the job runs
+# and the body step skips: the body was checked on the pull request.
 name: pr-body-check
 
 on:
   pull_request:
     types: [ opened, edited, synchronize, reopened ]
+  merge_group:
+    types: [ checks_requested ]
 
 permissions:
   contents: read
@@ -18,10 +23,12 @@ permissions:
 # This run must not join the group ci-<pull request number> of ci.yml: it must
 # not cancel the run of a push, and the workflow that cancels the CI run of a
 # closed pull request cancels only that group. Repeated edits of the body
-# replace the run of the older edit.
+# replace the run of the older edit. A merge group has no pull request number,
+# so its group holds the commit of the merge group, and a run of the merge
+# queue is never canceled.
 concurrency:
-  group: pr-body-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: pr-body-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # The job name is the check name, so a maintainer can add it to the
@@ -37,6 +44,7 @@ jobs:
       # The body goes through an environment variable, so the shell never
       # interpolates it. The step reads the body of the event.
       - name: Check that the PR body names an issue
+        if: ${{ github.event_name == 'pull_request' }}
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
