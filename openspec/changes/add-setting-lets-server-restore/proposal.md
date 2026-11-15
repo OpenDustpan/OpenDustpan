@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Issue: #611.
@@ -45,8 +45,10 @@ Out of scope:
 Depends on:
 
 - add-one-generic-settings-api
+
+Builds on (not a change):
+
 - issue-553-default-restore
-- `add-one-generic-settings-api` (order of the milestone review)
 
 ## Usability
 

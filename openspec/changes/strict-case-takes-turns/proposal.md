@@ -40,11 +40,13 @@ Out of scope:
 
 Depends on:
 
-- ADR 368 on main (pull request #3052)
-- ADR 369 on main (pull request #3056)
 - two-disjoint-claims
 - concurrent-applies-merge-core
-- `two-disjoint-claims` (order of the milestone review)
+
+Builds on (not a change):
+
+- ADR 368 on main (pull request #3052)
+- ADR 369 on main (pull request #3056)
 
 ## Usability
 

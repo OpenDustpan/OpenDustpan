@@ -6,9 +6,8 @@
 
 - [ ] 1.1 Conformance cases for namespace cover and join-leave in pkg/manuallock/manuallocktest/suite.go. Check: TestManuallockNamespaceCover fails on main
 - [ ] 1.2 Dispatch tests for wait, running phase, timeout and release in the NEW file pkg/manuallock/dispatch_test.go. Check: TestDispatchWaitsWithReasonLocked fails on main
-- [ ] 1.3 Job-token tests for OpenTofu lock and Pulumi update start with race cases in pkg/manuallock/manuallock_test.go. Check: TestToolLockWithPreLockJobToken (NEW, in pkg/manuallock/manuallock_test.go) fails on main
+- [ ] 1.3 Job-token tests for OpenTofu lock and Pulumi update start with race cases in pkg/manuallock/manuallock_test.go. Check: TestToolLockWithPreLockJobToken (NEW, in pkg/manuallock/manuallock_test.go) fails on main; when it passes from the start, the pull request body says so and the task counts as done
 - [ ] 1.4 Bulk route tests with mixed, duplicate and over-limit cases in the NEW file pkg/manuallock/bulk_test.go. Check: TestBulkLockPerItem fails on main
-- [ ] 1.5 Import-hold preview test in the NEW file pkg/manuallock/importhold_test.go. Check: TestPreviewUnderImportHold fails on main
 
 ## 2. Side effects (computed from main)
 

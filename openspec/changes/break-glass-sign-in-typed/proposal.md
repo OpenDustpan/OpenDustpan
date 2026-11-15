@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 6
 ---
 
 Issue: #624, #628.
@@ -61,8 +61,6 @@ Depends on:
 
 - keep-two-working-break-glass
 - add-one-generic-settings-api
-- `keep-two-working-break-glass` (order of the milestone review)
-- `add-one-generic-settings-api` (order of the milestone review)
 
 ## Usability
 

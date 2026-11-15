@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 7
 ---
 
 Issue: #1003, #1034, #1035, #1159.
@@ -39,7 +39,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Gate, approval-rule and approval-default routes at installation, namespace, collection and by-name unit scopes, with read and manage actions of each scope
+- NEW installation routes /api/dustpan/v1/gates, /api/dustpan/v1/gates/{id}, /api/dustpan/v1/access-limits, /api/dustpan/v1/access-limits/{id}, /api/dustpan/v1/approval-rules, /api/dustpan/v1/approval-rules/{id} and /api/dustpan/v1/signature-carry-over (the methods in design decision 6), and the approval-rule, approval-default and signature-carry-over routes at the namespace, collection and by-name unit scopes, with read and manage actions of each scope
 - The approval-default reset route, with 204 also when none is set
 - The signature carry-over setting route at each scope that ADR 230 names
 - Fresh authentication, stable error codes and limits on each change
@@ -58,6 +58,10 @@ Out of scope:
 - The default collection and catch-all placement rule at namespace create (namespace create change)
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - #996
 - #1015

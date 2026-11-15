@@ -28,7 +28,7 @@ separate bug; this change covers only the namespace-ID half.
 
 **IN**
 
-- `pkg/notify/notify.go`, `route.go`, `ports.go`: add `notify.Scope`, a namespace ID and a display name, or the installation scope `@server`. Use it for `Notification.Scope`, `Sink.Scope`, `Subscription.Scope`, `Delivery.Scope`, `CursorMove.Scope` and `ClaimRequest.Scope`. The ID is the key; the name is a label.
+- `pkg/notify/notify.go`, `route.go`, `ports.go`: add `notify.Scope` (NEW), a namespace ID and a display name, or the installation scope `@server`. Use it for the NEW field type of `Notification.Scope` (pkg/notify/notify.go:254), `Sink.Scope` (pkg/notify/route.go:89), `Subscription.Scope` (pkg/notify/route.go:671), `Delivery.Scope` (pkg/notify/ports.go:253), `CursorMove.Scope` (pkg/notify/ports.go:71) and `ClaimRequest.Scope` (pkg/notify/ports.go:434). The ID is the key; the name is a label.
 - `pkg/notify/route.go`: `ScopeActions`, `Route`, `SendsFor` and `BeforeAttempt` compare the scope ID.
 - `pkg/notify/webhook/encode.go` and `pkg/notify/chat/sender.go`: the payload and the chat message use the display name.
 - `internal/api/notifications/handlers.go` and `subscriptions.go`: the `namespace` field of the answers stays the display name.
@@ -37,7 +37,7 @@ separate bug; this change covers only the namespace-ID half.
 - `pkg/store/sqlite/notifications.go` and `pkg/store/postgres/notifications.go`: `inScopedTx`, `checkNotifyFence`, `commonScope`, `Append`, `After`, `Scopes`, `MoveCursor` read, write and compare the ID.
 - `pkg/store/sqlite/sinks.go` and `pkg/store/postgres/sinks.go`: sink reads and writes. The sink row scope is the namespace ID; the sink secret item keeps the namespace name for its secret scope.
 - `pkg/notify/seal.go`: `SinkSealer.sealValue` and `openValue` use the namespace name of the sink, not the row scope ID, for the secret item.
-- `pkg/store/sqlite/queries.sql` and `pkg/store/postgres/queries.sql`: the notification queries read the display name from the namespace row; regenerate `internal/db` with `make generate`.
+- `pkg/store/sqlite/queries.sql` and `pkg/store/postgres/queries.sql`: the notification queries read the display name from the namespace row; regenerate the generated query code with `make generate`.
 - `pkg/store/sqlite/backup_notifications.go`, `backup_notification_sinks.go` and the PostgreSQL counterparts: the backup rows carry the ID.
 - `pkg/notify/notifytest/notifytest.go`: the conformance suite.
 

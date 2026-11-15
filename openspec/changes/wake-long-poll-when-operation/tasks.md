@@ -10,7 +10,7 @@
 
 ## 2. Build
 
-- [ ] 2.1 Build the wake hub in internal/api/runnerapi/wake.go (NEW), publish after commit on both start paths in pkg/durable/store.go:38 (Start), and change the poll wait at internal/api/runnerapi/protocol.go:396 to wait on signal, and wait on signal, 5 s timer, deadline, and request end with unsubscribe. Check: `go test -race ./internal/api/runnerapi/... ./pkg/durable/...` passes on SQLite and PostgreSQL with no goleak failure.
+- [ ] 2.1 Build the wake hub in internal/api/runnerapi/wake.go (NEW), publish after commit on both start paths in pkg/durable/store.go:38 (Start), and change the poll wait at internal/api/runnerapi/protocol.go:396 to wait on signal, 5 s timer, deadline, and request end with unsubscribe. This task adds no store port method: the hub is in memory and the store ports stay as they are, so no conformance suite or dialect adapter in pkg/durable/durabletest, pkg/store/sqlite or pkg/store/postgres changes. Check: `go test -race ./internal/api/runnerapi/... ./pkg/durable/...` passes on SQLite and PostgreSQL with no goleak failure.
 - [ ] 2.2 Build the per-runner limiter in internal/api/runnerapi/limiter.go (NEW) and, after the session paths exist, the per-session limiter with 429 rate-limited and Retry-After: 1. Check: `go test -race ./internal/api/runnerapi/...` passes for poll limiter with standard library only and 5 minute eviction; session limiter lands with the session-paths change.
 - [ ] 2.3 Update docs/reference/runner-api.md with the wake and limit behavior. Check: Runner API reference states per-instance count, 10 polls, 50 session requests, Retry-After: 1, 5 minute eviction, and the 5 s fallback.
 

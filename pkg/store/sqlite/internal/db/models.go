@@ -108,6 +108,11 @@ type Backup struct {
 	Error       string
 }
 
+type BlobDeleteLease struct {
+	Holder      string
+	ExpiresAtMs int64
+}
+
 type BlobPurge struct {
 	Tool        string
 	UnitID      string

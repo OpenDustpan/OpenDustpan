@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 5
 ---
 
 Issue: #2950, #2951, #2969.
@@ -58,7 +58,6 @@ Depends on:
 
 - ldap-sign-in
 - one-membership-function-identity-provider
-- `one-membership-function-identity-provider` (order of the milestone review)
 
 ## Usability
 

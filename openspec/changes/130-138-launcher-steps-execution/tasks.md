@@ -10,7 +10,7 @@
 ## 2. Build
 
 - [ ] 2.1 Build the NEW command `opendustpan job steps validate` for local file checks with machine-readable errors in the NEW file cmd/opendustpan/job_steps_validate.go. Check: `opendustpan job steps validate steps.json` exits 0 on a good file and 2 with code launcher.step-invalid on a bad file, with no server call.
-- [ ] 2.2 Wire checked StartStep (NEW), streaming, and ReportExit (NEW) through ANY /runner/v1 with handoff token at open, stream, and exit. Write the launcher side in the NEW file pkg/launcher/run/step.go. Keep the route declaration and its adapter in the files that main has for ANY /runner/v1. Check: Assignment from route ANY /runner/v1 with credential kind handoff token starts a step with StartStep and no shell under a claim, streams ordered chunks, and ReportExit stores one code.
+- [ ] 2.2 Wire checked StartStep (NEW), streaming, and ReportExit (NEW) through ANY /runner/v1 with handoff token at open, stream, and exit. Write the launcher side in the existing file pkg/launcher/run/step.go: extend it in place with the NEW behavior. Keep the route declaration and its adapter in the files that main has for ANY /runner/v1. Check: Assignment from route ANY /runner/v1 with credential kind handoff token starts a step with StartStep and no shell under a claim, streams ordered chunks, and ReportExit stores one code.
 
 ## 3. Side effects (computed from main)
 
@@ -18,5 +18,5 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Write the docs page for step rules and the validate command. Check: Docs page for step rules and the validate command runs each command as written.
+- [ ] 4.1 Write the docs page for step rules and the validate command in the NEW file docs/guides/launcher-steps.md. Check: Docs page for step rules and the validate command runs each command as written.
 - [ ] 4.2 Run e2e step with real launcher, usability check, and full checks. Check: E2E job on route ANY /runner/v1 with credential kind handoff token runs a real launcher step with no shell, streams logs, and reports one exit; persona completes path from docs page; `make check` reports zero findings. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

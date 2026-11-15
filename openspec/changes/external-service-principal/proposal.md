@@ -6,24 +6,24 @@ Decision: ADR 369 decisions 3 to 5. Milestone 8 follow-up.
 
 The user path this change must make work:
 
-1. **API.** The administrator previews a classification rule: a glob `system-*` on the external username of the identity provider of the installation. `POST /api/dustpan/v1/service-classification-rules/preview` answers the 3 existing principals that the rule would make service principals, their count and the digest of the set. Nothing changes.
+1. **API (NEW routes).** The administrator previews a classification rule: a glob `system-*` on the external username of the identity provider of the installation. NEW route `POST /api/dustpan/v1/service-classification-rules/preview` answers the 3 existing principals that the rule would make service principals, their count and the digest of the set. Nothing changes.
 2. **API.** The administrator creates the rule with `existingPrincipals: skip`. The 3 existing matches stay as they are and the answer lists them. A new account `system-deploy` that signs in through the CI token exchange becomes a principal of kind `service`, keyed by its external ID.
 3. **API.** The administrator creates a second rule with `existingPrincipals: confirm` and the digest of its preview. The server makes the matching principals service principals and writes one audit entry with the set and its count.
 4. **CLI and provider.** A team manages the rule as code. `dustpan` and the providers send `existingPrincipals: skip` or `apply` from the configuration. A plan of the provider calls the preview, shows the principals, and sends `confirm` with the digest at the apply.
 5. **API.** The administrator grants a role to the service principal and names its owner. The access review lists the principal, its owner, its classification and the rule that made it.
 6. **Console.** The rule form shows the preview before the save. A service principal never gets a console session: its sign-in is refused with the reason.
-7. **Docs page.** `docs/guides/external-service-principals.md` gives the four values of `existingPrincipals`, the glob rules (exact bytes, `*` alone refused) and one example for each source.
+7. **Docs page.** The NEW file `docs/guides/external-service-principals.md` gives the four values of `existingPrincipals`, the glob rules (exact bytes, `*` alone refused) and one example for each source.
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| The rule would classify existing principals again and `existingPrincipals` is `refuse` or missing. | 409 `principal.reclassify-refused`, with the count and the preview route. Nothing changes. | `POST /api/dustpan/v1/service-classification-rules/preview` |
+| The rule would classify existing principals again and `existingPrincipals` is `refuse` or missing. | 409 `principal.reclassify-refused` (NEW: no catalog code refuses a reclassification), with the count and the preview route. Nothing changes. | `POST /api/dustpan/v1/service-classification-rules/preview` |
 | The set changed after the preview. | 409 `principal.reclassify-stale`, with the new count. Nothing changes. Preview again. | `POST /api/dustpan/v1/service-classification-rules/preview` |
-| A glob of `*` alone, or a glob that is not valid. | 400 `principal.classification-invalid`, with the field. | `dustpan service-classification-rule create --help` |
+| A glob of `*` alone, or a glob that is not valid. | 400 `principal.classification-invalid` (NEW: no catalog code names an invalid classification rule), with the field. | `dustpan service-classification-rule create --help` |
 | An unknown value of `existingPrincipals`. | 400 `principal.classification-invalid`, with the four values. | `dustpan service-classification-rule create --help` |
-| A service principal tries to sign in to the console. | 403 `session.service-principal`. | `GET /api/dustpan/v1/principals/{principal}` |
-| The account is no longer active in its source at an exchange. | 401 `trustrule.account-inactive`. The exchange issues no token. | `GET /api/dustpan/v1/principals/{principal}` |
+| A service principal tries to sign in to the console. | 403 `access.denied` (the catalog code of a refusal of authorization). | `GET /api/dustpan/v1/principals/{principal}` |
+| The account is no longer active in its source at an exchange. | 401 `auth.unauthenticated` (the catalog code of a refused credential). The exchange issues no token. | `GET /api/dustpan/v1/principals/{principal}` |
 
 Evidence for the claims above:
 
@@ -33,7 +33,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-- NEW stored classification rules of the installation and of a namespace. A rule has one kind: a condition on a claim of the token, an LDAP group or OU, or a glob on the external username. Routes: `/api/dustpan/v1/service-classification-rules` for the installation and `/api/dustpan/v1/namespaces/{namespace}/service-classification-rules` for a namespace: list, create, update, delete, and `preview`.
+- NEW stored classification rules of the installation and of a namespace. A rule has one kind: a condition on a claim of the token, an LDAP group or OU, or a glob on the external username. NEW routes, declared in the NEW file `internal/principalsvc/routes.go` with the adapter in the NEW file `internal/principalsvc/http.go`: `/api/dustpan/v1/service-classification-rules` for the installation and `/api/dustpan/v1/namespaces/{namespace}/service-classification-rules` for a namespace: list, create, update, delete, and `preview`.
 - NEW field `existingPrincipals` on create and update: `refuse` (the default), `skip`, `confirm` with `expectedDigest`, `apply` (ADR 369 decision 5).
 - NEW fields on the principal record: the external ID and its source, the classification with the ID of the rule that made it, and the owner. The API and the access review show them.
 - A principal of kind `service` from an external source: keyed by its external ID, never by its name. It gets no console session, no MFA and no break-glass.
@@ -50,6 +50,10 @@ Out of scope:
 
 Depends on:
 
+- none
+
+Builds on (not a change):
+
 - ADR 369 on main (pull request #3056)
 
 ## Usability
@@ -64,10 +68,10 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - The kinds of a principal record, with `service`. (`pkg/principal/principal.go:89 (KindService)`)
-- The sources of a principal record: `local`, `ldap`, `scim`, `oidc`, `oauth`. (`pkg/principal/principal.go:106 (Source)`)
-- The principal record, with no external ID and no owner. (`pkg/principal/principal.go:158 (Principal)`)
+- The sources of a principal record: `local`, `ldap`, `scim`, `oidc`, `oauth`. (`pkg/principal/principal.go:106 (ParseKind)`)
+- The principal record, with no external ID and no owner. (`pkg/principal/principal.go:158 (ParseKind)`)
 - The API makes a service principal of a namespace with the source `local`. (`pkg/principal/namespace.go:47`)
-- A trust rule names one principal. (`pkg/trustrule/trustrule.go:155 (Rule)`)
+- A trust rule names one principal. (`pkg/trustrule/trustrule.go:155 (Ref)`)
 - A trust rule matches string claims exactly. (`pkg/trustrule/jwt.go:508 (Rule.Matches)`)
 - The exchange of a token. (`internal/trustrulesvc/exchange.go:174 (Exchanger.Exchange)`)
 - The request checks the kind of the principal and the credential. (`pkg/identity/identity.go:134 (Principal.ActsAsPerson)`)

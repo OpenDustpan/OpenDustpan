@@ -515,6 +515,7 @@ var keepControlStatements = []string{
 	`DELETE FROM main.maintenance_revocations`,
 	`DELETE FROM main.instance_versions`,
 	`DELETE FROM main.store_checks`,
+	`DELETE FROM main.blob_delete_leases`,
 	`DELETE FROM main.name_locks`,
 	`DELETE FROM main.name_lock_key`,
 	`DELETE FROM main.used_tickets`,
@@ -549,6 +550,8 @@ var keepControlStatements = []string{
 		`SELECT id, binary_version, started_at_ms FROM live.instance_versions`,
 	`INSERT INTO main.store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report) ` +
 		`SELECT id, target, state, requested_by, started_at_ms, ended_at_ms, error, report FROM live.store_checks`,
+	`INSERT INTO main.blob_delete_leases (holder, expires_at_ms) ` +
+		`SELECT holder, expires_at_ms FROM live.blob_delete_leases`,
 	`INSERT INTO main.name_locks (` + nameLockColumns + `) SELECT ` + nameLockColumns + ` FROM live.name_locks`,
 	`INSERT INTO main.name_lock_key (id, key) SELECT id, key FROM live.name_lock_key`,
 	`INSERT INTO main.used_tickets (provider_id, ticket_digest, until_ms) ` +

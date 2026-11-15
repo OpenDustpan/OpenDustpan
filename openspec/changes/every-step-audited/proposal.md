@@ -45,8 +45,6 @@ Depends on:
 
 - person-delegates-dusty
 - audit-entry-has-no-agent
-- `person-delegates-dusty` (order of the milestone review)
-- `audit-entry-has-no-agent` (order of the milestone review)
 
 ## Usability
 

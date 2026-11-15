@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 6
 ---
 
 Roadmap: `docs/roadmap.md:304` (CLI-driven remote execution).
@@ -50,7 +50,6 @@ Depends on:
 
 - add-job-service-routes-start-1
 - add-job-session-paths-runner-2
-- `runners` (order of the milestone review)
 
 ## Usability
 

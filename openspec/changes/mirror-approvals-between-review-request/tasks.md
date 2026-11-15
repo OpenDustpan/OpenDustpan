@@ -10,7 +10,7 @@
 ## 2. Build
 
 - [ ] 2.1 Implement the mirror service in NEW file internal/changeordersvc/mirror.go with the link check at point of use and one audit entry per direction. Check: `go test ./internal/changeordersvc -count=1` passes
-- [ ] 2.2 Add the approve and read routes with authorization actions and the fresh-step refusal shape. Declare the routes in NEW file internal/api/server/changeorderapprovals.go and write the adapter in NEW file internal/api/server/changeorderapprovals_adapter.go. Check: `POST /api/dustpan/v1/change-orders/{id}/approvals` inside and outside the window behaves as specified
+- [ ] 2.2 Add the approve and read routes with authorization actions and the fresh-step refusal shape. Declare the routes in NEW file internal/api/server/changeorderapprovals.go and write the adapter in NEW file internal/api/server/changeorderapprovals_adapter.go. Join the new apidesc labels into joinLabels in internal/api/server/operations.go (:187-198), the one join point of the labels. Check: `POST /api/dustpan/v1/change-orders/{id}/approvals` inside and outside the window behaves as specified
 - [ ] 2.3 Add the namespace switch and window through the settings resource with audit entries in NEW file internal/changeordersvc/freshwindow.go. Check: `PATCH /api/dustpan/v1/namespaces/{namespace}/settings` sets freshAuthForApprovals and freshAuthSeconds, with an audit entry and a new revision
 
 ## 3. Side effects (computed from main)
@@ -19,7 +19,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step for both directions and the read-only view. BLOCKED by git-host-webhook-intake-post: the recorded forge intake route does not exist on main yet Check: e2e step over `POST /api/dustpan/v1/change-orders/{id}/approvals` with an OAuth-linked person credential and a recorded forge passes. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write the docs page with the OAuth setup and the refusal text Check: Docs page ships in the same pull request and `make docs-lint` passes
+- [ ] 4.1 Add an e2e step for both directions and the read-only view in NEW file e2e/change_order_approvals_mirror_test.go. BLOCKED by git-host-webhook-intake-post: the recorded forge intake route does not exist on main yet Check: e2e step over `POST /api/dustpan/v1/change-orders/{id}/approvals` with an OAuth-linked person credential and a recorded forge passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Write the docs page with the OAuth setup and the refusal text in NEW file docs/guides/change-order-approvals.md. Check: Docs page ships in the same pull request and `make docs-lint` passes
 - [ ] 4.3 Run the usability check for the Developer path Check: Developer approves in the forge and in OpenDustpan from the docs page alone. A person's step.
 - [ ] 4.4 Run make check with zero findings Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

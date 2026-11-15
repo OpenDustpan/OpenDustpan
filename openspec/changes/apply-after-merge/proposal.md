@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:291` (Apply after the merge).
@@ -42,9 +42,6 @@ Depends on:
 - pull-request-automation-first-slice
 - policy-approvals
 - git-host-webhook-intake-post
-- `pull-request-automation-first-slice` (order of the milestone review)
-- `policy-approvals` (order of the milestone review)
-- `git-host-webhook-intake-post` (order of the milestone review)
 
 ## Usability
 

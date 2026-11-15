@@ -15,6 +15,9 @@
 
 image:
   # The image of the server. The image holds the console files in /console.
+  # The default names the forge container registry. To pull from Docker Hub
+  # instead, set image.repository to docker.io/opendustpan/opendustpan.
+  # Docker Hub holds the same digest as the forge container registry.
   repository: ghcr.io/opendustpan/opendustpan
   # Empty means the appVersion of the chart. The schema refuses `latest`.
   tag: ""

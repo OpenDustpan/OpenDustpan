@@ -8,19 +8,20 @@ SECURITY: this change is security code (ADR 250): identity, classification and t
 
 - [ ] 1.1 SECURITY. Rule constructor hostile table. Check: NEW test `TestClassificationRuleHostile` in `pkg/principal` fails on main.
 - [ ] 1.2 SECURITY. The four values of `existingPrincipals`, a stale digest, the digest of another set, an unknown value, and the rename directions. Check: NEW test `TestReclassifyModes` in the NEW package `internal/principalsvc` fails on main.
+- [ ] 1.0 SECURITY. BLOCKED by the owner decision on the event-source vocabulary: ADR 369 decision 3 (owner) names the automated sources (a schedule, an API trigger, a pipeline that another pipeline started, a token with no user) and the person sources (a push, a start in the web interface, a merge request), but no ADR maps them to the claim values of each issuer kind (for example `event_name` of GitHub Actions, `pipeline_source` of GitLab), and main has no path where a trust rule makes a person the actor (`Exchanger.checkGrant`, internal/trustrulesvc/exchange.go:427, refuses each kind that is not a service kind). The vocabulary, its entry in the catalog of code rules, and the person-actor path wait for that decision. Check: the decision is recorded as an ADR or an ADR amendment.
 - [ ] 1.3 SECURITY. Automated sources never act as a person. Check: NEW test `TestExchangeAutomatedNeverPerson` in `internal/trustrulesvc` fails on main.
 - [ ] 1.4 SECURITY. An inactive account gets no token. Check: NEW test `TestExchangeInactiveAccount` in `internal/trustrulesvc` fails on main.
-- [ ] 1.5 SECURITY. A service principal gets no console session, MFA or break-glass. Check: NEW test `TestServicePrincipalNoSession` fails on main.
+- [ ] 1.5 SECURITY. A service principal gets no console session, MFA or break-glass. The test is in the NEW file pkg/dustpan/service_principal_session_internal_test.go. Check: NEW test `TestServicePrincipalNoSession` fails on main.
 - [ ] 1.6 Conformance cases for the store of the rules and the external key, on both dialects. Check: NEW cases in `pkg/principal/principaltest` fail on main.
 
 ## 2. Build
 
-- [ ] 2.1 SECURITY. Add `ClassificationRule`, `Classification`, the external key and the owner to `pkg/principal`, and the baseline columns of each dialect (ADR 322). Check: `go test -race ./pkg/principal/...` passes; the mutation list of each guard is in the pull request.
-- [ ] 2.2 SECURITY. Add the classification service with the four values, the digest and the rename rules. Check: `TestReclassifyModes` passes.
-- [ ] 2.3 SECURITY. Give the exchange the kind of actor and the active check. Check: `TestExchangeAutomatedNeverPerson` and `TestExchangeInactiveAccount` pass.
-- [ ] 2.4 SECURITY. Refuse a console session, MFA and break-glass for a service principal. Check: `TestServicePrincipalNoSession` passes.
-- [ ] 2.5 Add the routes with their actions (`server:manage-principals`, `namespace:manage-principals`), `If-Match` on update and delete, and the error codes. Check: the route test shows the actions; `go test ./internal/errcode/...` passes.
-- [ ] 2.6 Add the classification, the rule and the owner to the access review export. Check: NEW test `TestAccessReviewListsClassification` passes.
+- [ ] 2.1 SECURITY. In `pkg/principal/principal.go` add NEW `ClassificationRule`, NEW `Classification`, the external key and the owner to `pkg/principal`, and the baseline columns of each dialect (ADR 322). Check: `go test -race ./pkg/principal/...` passes; the mutation list of each guard is in the pull request.
+- [ ] 2.2 SECURITY. In the NEW file `internal/principalsvc/service.go` add the classification service with the four values, the digest and the rename rules. Check: `TestReclassifyModes` passes.
+- [ ] 2.3 SECURITY. In `internal/trustrulesvc/exchange.go` give the exchange the kind of actor, as the NEW field `ExchangeResult.ActorKind` (`ExchangeResult` at :151 has none), and the active check through the NEW read port `trustrule.AccountReader` (read the account of the source by its external ID; an inactive account, a failed read or an unreadable answer maps to 401 `auth.unauthenticated` and no token, design decision 7). Check: `TestExchangeAutomatedNeverPerson` and `TestExchangeInactiveAccount` pass.
+- [ ] 2.4 SECURITY. In the NEW file `internal/signinsvc/serviceprincipal.go` refuse a console session, MFA and break-glass for a service principal. Check: `TestServicePrincipalNoSession` passes.
+- [ ] 2.5 In the NEW files `internal/principalsvc/routes.go` (declaration) and `internal/principalsvc/http.go` (adapter) add the routes with their actions (`server:manage-principals`, `namespace:manage-principals`), `If-Match` on update and delete, and the error codes. Check: the route test shows the actions; `go test ./internal/errcode/...` passes.
+- [ ] 2.6 In the NEW file `internal/principalsvc/accessreview.go` add the classification, the rule and the owner to the access review export. Check: NEW test `TestAccessReviewListsClassification` passes.
 
 ## 3. Side effects
 
@@ -28,7 +29,7 @@ SECURITY: this change is security code (ADR 250): identity, classification and t
 
 ## 4. Definition of done
 
-- [ ] 4.1 E2e: a token exchange of a classified account, a preview, a create with each value of `existingPrincipals`, and a refused console sign-in. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Docs page `docs/guides/external-service-principals.md`. Check: `make docs-lint` passes, and a test runs each command of the page.
+- [ ] 4.1 BLOCKED by the NEW routes of tasks 2.5 and the NEW exchange check of 2.3, which main lacks. E2e in the NEW file `e2e/external_service_principal_test.go`, over `POST /api/dustpan/v1/service-classification-rules/preview` with an administrator token, and the token exchange with a CI job token: a token exchange of a classified account, a preview, a create with each value of `existingPrincipals`, and a refused console sign-in. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Add the new file `docs/guides/external-service-principals.md`. Check: `make docs-lint` passes, and a test runs each command of the page.
 - [ ] 4.3 Usability check: the site administrator completes the path from the docs page alone, and each error names its one command. Check: the check is recorded in the pull request. A person's step.
 - [ ] 4.4 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

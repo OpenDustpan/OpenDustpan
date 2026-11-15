@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 7
 ---
 
 Issue: #895, #903.
@@ -46,9 +46,10 @@ Depends on:
 
 - git-host-webhook-intake-post
 - approval-defaults-take-effect-live
-- policy-approvals
-- `git-host-webhook-intake-post` (order of the milestone review)
-- `approval-defaults-take-effect-live` (order of the milestone review)
+
+Removed from Depends on (14 Nov 2026, not a code dependency):
+
+- policy-approvals: no task uses a route or type that policy-approvals adds
 
 ## Usability
 

@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -20,7 +20,6 @@ Out of scope:
 Depends on:
 
 - 31-kubernetes
-- `31-kubernetes` (order of the milestone review)
 
 ## Usability
 

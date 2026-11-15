@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 6
 ---
 
 Roadmap: `docs/roadmap.md:212` (Console).
@@ -49,10 +49,6 @@ Depends on:
 - token-life-cycle-expiry-email-expiry-warning-display
 - move-caller-routes-api-server
 - check-reach-when-grant-membership
-- `groups-roles-grants` (order of the milestone review)
-- `move-caller-routes-api-server` (order of the milestone review)
-- `planner-role` (order of the milestone review)
-- `check-reach-when-grant-membership` (order of the milestone review)
 
 ## Usability
 

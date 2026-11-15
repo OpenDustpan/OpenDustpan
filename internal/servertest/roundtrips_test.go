@@ -860,17 +860,20 @@ func requestFlows() []requestFlow {
 			h.measure(func() { h.save(run, 1) })
 			h.complete(run)
 		}},
-		// The budget is 68. The second save reads the blob guard after the
-		// commit that replaces the previous checkpoint blob, so that a backup
-		// that started before the commit cannot lose the blob. The
-		// transaction of the create writes the record of the item key of the
-		// update, which seals its event payloads at rest: a read of the
-		// record, a read of the namespace, the insert and a read back. The
-		// item key transaction also arms its attempt deadline with one
-		// set_config: one more round trip. The start reads the stack one
-		// time, so that the manual lock check matches the lock by the stable
-		// ID of the stack, not by its name.
-		{"pulumi update cycle", 68, func(h *rtHarness) {
+		// The budget is 76. The second save replaces the previous checkpoint
+		// blob, so it holds a blob delete lease while it deletes the blob: 9
+		// round trips. The take is a transaction of 5 round trips: begin, the
+		// schema check, the shared lock, the insert and commit. The release is
+		// a transaction of 4: begin, the schema check, the delete and commit.
+		// A backup or a restore that starts while the lease is live waits for
+		// it, so it cannot lose the blob. The transaction of the create writes
+		// the record of the item key of the update, which seals its event
+		// payloads at rest: a read of the record, a read of the namespace, the
+		// insert and a read back. The item key transaction also arms its
+		// attempt deadline with one set_config: one more round trip. The start
+		// reads the stack one time, so that the manual lock check matches the
+		// lock by the stable ID of the stack, not by its name.
+		{"pulumi update cycle", 76, func(h *rtHarness) {
 			h.newStack()
 			h.measure(func() {
 				run := h.startUpdate()
@@ -1360,6 +1363,9 @@ func backupModel() costModel {
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
 //
+// The fixed part also holds blobDeleteLeaseTrips: the waits for the blob
+// deleters.
+//
 // The fixed part takes breakGlassReviewTrips off for break_glass_reviews.
 //
 // The fixed part also holds stagedJobCheckTrips: the staged check of the job
@@ -1376,8 +1382,8 @@ func backupModel() costModel {
 // version of each unit from the restored rows.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 342 + 1 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips + removalAlertTrips +
-			stagedPrincipalCheckTrips + unitStateTrips,
+		fixed: 342 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+			removalAlertTrips + stagedPrincipalCheckTrips + unitStateTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1403,6 +1409,14 @@ const unitStateTrips = 5
 // 30 units both hold these 2 round trips, so the count does not grow with the
 // units.
 const forgeStripClassTrips = 2
+
+// blobDeleteLeaseTrips is the number of round trips that the waits for the
+// blob deleters add to a restore. The restore takes the exclusive lock of the
+// blob delete leases two times and counts the live leases one time: 3
+// statements. The table of the leases is now a control table that a restore
+// keeps, so it costs 3 round trips: the column check, one delete and one copy.
+// That is 1 more than the 2 of perOther, so the model adds 1.
+const blobDeleteLeaseTrips = 3 + 1
 
 // breakGlassReviewTrips is the number of round trips that the restore of the
 // table break_glass_reviews makes fewer than perTable gives. The measured run

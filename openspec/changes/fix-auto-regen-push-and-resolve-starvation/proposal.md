@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 Short form: a bug in the CI workflows of this repository.

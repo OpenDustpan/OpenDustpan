@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:373` (Environment promotion).
@@ -54,7 +54,6 @@ Out of scope:
 Depends on:
 
 - blueprints
-- `blueprints` (order of the milestone review)
 
 ## Usability
 

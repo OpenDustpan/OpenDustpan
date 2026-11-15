@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 7
 ---
 
 Issue: #1253.
@@ -47,7 +47,11 @@ Out of scope:
 
 Depends on:
 
-- break-glass-pass-wiring
+- none
+
+Removed from Depends on (14 Nov 2026, not a code dependency):
+
+- break-glass-pass-wiring: the pass wiring builds on this change; task 4.1 stays BLOCKED by it
 
 ## Usability
 

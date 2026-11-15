@@ -11,7 +11,7 @@
 
 ## 2. Build
 
-- [ ] 2.1 Get the owner decision on SCIM timing and record it in proposal.md, section "Open questions", question 1. Build tasks are BLOCKED by it. (open question 1). Build tasks are BLOCKED by it. Check: The decision is recorded.
+- [x] 2.1 SCIM timing is decided by ADR 376 decision 1 (owner, 2026-11-14): "SCIM comes in milestone 4". The gate of this task is lifted. Check: docs/adr/0376-scim-in-milestone-4-and-rustfs-in-ci.md is on main.
 - [ ] 2.2 Build the port in NEW file pkg/scim/port.go, the service in NEW file pkg/scim/service.go and the adapter in NEW file internal/scimsvc/adapter.go. Check: `go test ./pkg/scim/... ./internal/scimsvc/...`
 - [ ] 2.3 Wire the NEW routes with their authorization actions. Declare them in NEW file internal/api/scim_routes.go and add the adapter in NEW file internal/api/scim_handlers.go. Check: `go test ./internal/api/... -run TestScimRoutes`
 
@@ -21,7 +21,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the e2e step. BLOCKED by the NEW route /api/dustpan/v1/scim/v2/Users and the NEW SCIM credential kind, which this change builds and which do not exist on main. Then a SCIM client creates a user with that credential, pulumi up and tofu apply pass, a DELETE follows, and the next CLI command gives 401. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write the SCIM docs page and run each command on it. Check: `make docs-lint` and the docs command test
+- [ ] 4.1 Add the e2e step that calls `POST /api/dustpan/v1/scim/v2/Users` and `DELETE /api/dustpan/v1/scim/v2/Users/{id}` (added by this change) with the SCIM credential (added by this change) in NEW file e2e/scim_test.go after tasks 2.2 and 2.3 build them. Then a SCIM client creates a user with the SCIM credential, pulumi up and tofu apply pass, a DELETE follows, and the next CLI command gives 401. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Write the SCIM docs page in NEW file docs/guides/scim.md and run each command on it. Link it from docs/guides/principals-and-groups.md. Check: `make docs-lint` and the docs command test
 - [ ] 4.3 Do the usability check from the docs page alone. Check: Each error names one command. A person's step.
 - [ ] 4.4 Run the full check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

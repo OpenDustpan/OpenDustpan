@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 6
 ---
 
 Issue: #1198, #1199.
@@ -48,9 +48,11 @@ Depends on:
 
 - add-job-service-routes-start-1
 - approval-defaults-take-effect-live
+
+Builds on (not a change):
+
 - stored-plans routes and plan-validity feed
 - states slice #1196
-- `approval-defaults-take-effect-live` (order of the milestone review)
 
 ## Usability
 

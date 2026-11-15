@@ -5,7 +5,7 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Add failing tests in NEW file pkg/jobproxy/proxy_test.go for injection without values, fail closed, redirect strip, redaction, records, finish-phase audit, list-records and plan-phase block. Check: TestProxyInjectionHoldsNoValue fails on main.
-- [ ] 1.2 Add a failing e2e step in NEW file e2e/jobproxy_test.go against the real runner pool and the real Pulumi CLI. BLOCKED by the missing route name and credential kind in the pack: the records route path and the credential kind are not named there. Check: e2e step fails on main and the job log lacks blocked by the job proxy. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 1.2 Add a failing e2e step in NEW file e2e/jobproxy_test.go against the real runner pool and the real Pulumi CLI. The step reads the records through `GET /api/audit/entries` with an access token. Check: e2e step fails on main and the job log lacks blocked by the job proxy. Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. Implementation
 
@@ -22,7 +22,7 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Wire the routes with authorization actions. Check: Route test passes.
-- [ ] 4.2 Add the e2e step against the real runner. BLOCKED by the missing route name and credential kind in the pack. Check: e2e job log contains blocked by the job proxy. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Write the docs page in the same pull request. Check: Docs page shows records and the plan-phase block.
+- [ ] 4.2 Add the e2e step against the real runner in e2e/jobproxy_test.go (the file of task 1.2). The step reads the records through `GET /api/audit/entries` with an access token. Check: e2e job log contains blocked by the job proxy. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Write the docs page in the same pull request in NEW file docs/guides/job-proxy-records-audit.md. Check: Docs page shows records and the plan-phase block.
 - [ ] 4.4 Run the usability check. Check: Persona completes the path from the docs page alone. A person's step.
 - [ ] 4.5 Run make check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

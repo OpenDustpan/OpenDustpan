@@ -23,5 +23,5 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Declare authorization actions for proxy session paths under /runner/v1. Check: Route test lists no new public route and proxy session paths carry runner authorization actions.
-- [ ] 4.2 Write docs page: when proxy runs, tunnel behavior, pool ranges and upstream proxy, blocked log line, fail-closed loss. Check: `make docs-lint` passes; docs page commands run as written. Confirmed by: CI (an e2e step in the NEW file e2e/job_proxy_runtime_guard_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.2 Write docs page in NEW docs/guides/job-proxy-runtime.md: when proxy runs, tunnel behavior, pool ranges and upstream proxy, blocked log line, fail-closed loss. Check: `make docs-lint` passes; docs page commands run as written. Confirmed by: CI (an e2e step in the NEW file e2e/job_proxy_runtime_guard_docs_test.go runs each command of the docs page against the e2e test server).
 - [ ] 4.3 Run usability check with runner operator path from docs page alone, then full definition of done. Check: `make check` passes with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

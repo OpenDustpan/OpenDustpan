@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Issue: #743.
@@ -18,9 +18,9 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Old binary refuses its writes on the new schema. | The old binary read a higher minimum row and refused its own writes with error code schema.binary-below-minimum. Rebuild the binaries and run the NEW `make mixed-version-test` again. | `make mixed-version-test` |
+| Old binary refuses its writes on the new schema. | The old binary read a higher minimum row and refused its own writes with error code schema.binary-below-minimum. Rebuild the binaries and run `make mixed-version-test` again. | `make mixed-version-test` |
 | No ancestor v* tag exists before the first tag. | The test reports zero old binaries and runs the new-binary steps. Run `git fetch --tags` with full history before the run. | `git fetch --tags` |
-| Tag list is empty because the clone is shallow or tags were not fetched. | The harness fails loudly and names the missing tags. Fetch all tags with full history, then run the NEW `make mixed-version-test` again. | `make mixed-version-test` |
+| Tag list is empty because the clone is shallow or tags were not fetched. | The harness fails loudly and names the missing tags. Fetch all tags with full history, then run `make mixed-version-test` again. | `make mixed-version-test` |
 
 Evidence for the claims above:
 
