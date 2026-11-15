@@ -91,9 +91,10 @@
 // maintainer triages that issue within 24 hours. A red run of a pinned version
 // blocks merges, as any required check does. e2e/tool.go lists the current pins.
 //
-// When E2E_PULUMI_VERSIONS or E2E_TOFU_VERSIONS is not set, Install refuses a
-// request for the newest version or for a published checksum file with
-// ErrUnpinnedFetch, so a run with the default matrix makes no such request.
+// When E2E_PULUMI_VERSIONS, E2E_TOFU_VERSIONS or E2E_TERRAGRUNT_VERSIONS is
+// not set, Install refuses a request for the newest version or for a published
+// checksum file with ErrUnpinnedFetch, so a run with the default matrix makes
+// no such request.
 //
 // A test that installs one version of a tool uses Tool.Single, the first version
 // of the matrix that is not "latest", so that it makes no network request when
@@ -106,6 +107,8 @@
 //	                     pinned versions of the default (default: see Pulumi)
 //	E2E_TOFU_VERSIONS    comma-separated versions, "latest", or "pinned" for the
 //	                     pinned versions of the default (default: see OpenTofu)
+//	E2E_TERRAGRUNT_VERSIONS  comma-separated versions, "latest", or "pinned" for the
+//	                     pinned versions of the default (default: see Terragrunt)
 //	E2E_DATABASES        comma-separated stores: sqlite, postgres (default: sqlite,
 //	                     plus postgres when DUSTPAN_TEST_POSTGRES_URL is set)
 //	DUSTPAN_TEST_POSTGRES_URL  PostgreSQL URL for the postgres store; each run gets its own

@@ -13,8 +13,8 @@ on:
     types: [ checks_requested ]
   # Every 2 hours, the go and store jobs on main run each test package again
   # without the test cache (GO_TEST_COUNT=-count=1), to find flaky tests. The
-  # lint job also runs, so that make vuln finds a new advisory. The other jobs
-  # do not run on the schedule.
+  # lint job also runs, so that make vuln finds a new advisory, and so does the
+  # semgrep job. The other jobs do not run on the schedule.
   # GitHub sends the failure notification of a scheduled run to the user who
   # last changed this cron line.
   schedule:
@@ -49,16 +49,17 @@ concurrency:
 # - push and schedule: every job (schedule keeps its own limits).
 # - merge_group that changes only docs or OpenSpec files against its base (the
 #   main under the group, so the change of each pull request in the group):
-#   lint and scan. The code of the group is then the code of main, which the
-#   queue already gated.
+#   lint, semgrep and scan. The code of the group is then the code of main,
+#   which the queue already gated.
 # - other merge_group: every job, so the queue gates each change of code on
 #   the full set.
 # - pull_request with the label full-ci: every job. The label applies from the
 #   next push to the pull request; a re-run reads the labels of the old event.
-# - pull_request that changes only docs or OpenSpec files: lint and scan. lint
-#   holds docs-lint (with the check of openspec/specs) and the ADR index check.
-# - other pull_request: lint, golangci-lint, golangci-lint-journal, nilaway,
-#   go and scan, plus each suite whose own files changed.
+# - pull_request that changes only docs or OpenSpec files: lint, semgrep and
+#   scan. lint holds docs-lint (with the check of openspec/specs) and the ADR
+#   index check.
+# - other pull_request: lint, semgrep, golangci-lint, golangci-lint-journal,
+#   nilaway, go and scan, plus each suite whose own files changed.
 # A job that its condition skips reports "skipped", and a required check
 # accepts "skipped". If the changes job fails, each job runs (fail closed).
 jobs:
@@ -212,12 +213,6 @@ jobs:
         run: make journal-guard
       - name: Known vulnerabilities
         run: make vuln
-      - name: Install Semgrep
-        env:
-          SEMGREP_VERSION: 1.178.0
-        run: pipx install "semgrep==$SEMGREP_VERSION"
-      - name: Semgrep rules
-        run: make semgrep
       - name: Each linked module has a license file to ship
         run: make licenses
       - name: Docs follow ASD-STE100
@@ -248,6 +243,24 @@ jobs:
             ~/.cache/go-build
             ~/go/pkg/mod
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
+
+  # Semgrep runs in a job of its own, next to the lint job: it was about half
+  # of the time of lint. Its rules cover Go, the Dockerfile, the workflows and
+  # secrets in any file, docs too, so it runs on each event that lint runs on.
+  # It needs no Go toolchain.
+  semgrep:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Semgrep
+        env:
+          SEMGREP_VERSION: 1.178.0
+        run: pipx install "semgrep==$SEMGREP_VERSION"
+      - name: Semgrep rules
+        run: make semgrep
 
   # The three long static checks run in jobs of their own, next to the lint
   # job. A new commit is needed to change their result, so they do not run on
