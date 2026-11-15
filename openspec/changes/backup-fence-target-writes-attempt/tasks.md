@@ -10,17 +10,17 @@
 
 ## 2. Fix
 
-- [ ] 2.1 Edit the baseline of each dialect in place to add the backups attempt column. Name the baseline file of each dialect in the pull request. Find the baseline files under pkg/store and write each path in the task. Check: `go test ./pkg/backup -count=1` passes
+- [ ] 2.1 Edit the baseline of each dialect in place to add the backups attempt column (the table backups is a control table that a backup leaves out, `TableBackups` at pkg/backup/backup.go:81, so pkg/backup/portable_tables.go does not list it), in its place in the name order: pkg/store/sqlite/migrations/0168_baseline.sql and pkg/store/postgres/migrations/0168_baseline.sql. Write the new SHA-256 of each file into pkg/store/sqlite/migrations/0168_baseline.sql.sha256 and pkg/store/postgres/migrations/0168_baseline.sql.sha256, which TestFrozenMigrations in pkg/store/sqlite/frozen_test.go and pkg/store/postgres/frozen_test.go checks. Check: `go test ./pkg/backup -count=1` passes and `go test ./pkg/store/sqlite -run TestFrozenMigrations -count=1` passes
 - [ ] 2.2 In the NEW file pkg/backup/attempt_prefix.go, make target writes attempt-scoped with the NEW unexported attemptPrefix and NEW newAttemptPrefix, fence each put, delete, and manifest write on the claim token, store the fencing token as the attempt, and reuse Check in the finish step. Check: `go test ./pkg/backup -count=1` passes
 - [ ] 2.3 Update the stepFinish comment in pkg/backup to state which deletes are covered and add a mutation test in the NEW file pkg/backup/fence_mutation_test.go that removes the pre-call fence check. Check: `go test ./pkg/backup -count=1` passes
 
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Run e2e backup plus check against the real directory through `ANY /api/server/backups/{}/check` with an access token, with a stale holder delete replayed after finish. Check: `GET /api/server/backups/{id}/check` with an access token reports complete after a stale-holder run against the real directory
-- [ ] 4.2 Update the several-instances guide for the attempt layout and cleanup. Check: Several-instances guide shows the attempt layout, orphan cleanup, and retention expiry of each prefix
+- [ ] 4.2 Update the existing file docs/guides/several-instances.md for the attempt layout and the cleanup. Check: docs/guides/several-instances.md shows the attempt layout and the orphan cleanup by the live holder
 - [ ] 4.3 Run the usability check from the docs page and `make check`. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

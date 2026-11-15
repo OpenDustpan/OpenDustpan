@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Short form: CLI commands for collections and placement rules. It covers the
@@ -46,6 +46,17 @@ answer `placement.no-match` names no command that fixes it.
   The code stays.
 - `docs/reference/configuration.md` lists the commands, and
   `docs/guides/quickstart.md` makes its collection and rule with them.
+
+Depends on:
+
+- collection-ids-in-api (the collection ID in the API, and placement rules by collection ID)
+
+The refusal text of a placement with no match (`pkg/collection/placement.go`,
+`internal/errcode/catalog_placement.go`) belongs to this change, not to the
+server prerequisite: the text names the one command that helps,
+`opendustpan placement add`, and that command exists only after this change.
+The work branch of D5 (wip/d5/cli-collections-placement at a03d75c2) changes
+both files for this reason; task 2.2 names them.
 
 ## Check
 

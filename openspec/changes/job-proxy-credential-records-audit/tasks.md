@@ -15,6 +15,9 @@
 - [ ] 2.4 Write phase aggregation and the idempotent audit entry (finish-phase) in NEW file pkg/audit/proxyphase.go. Check: `go test ./pkg/audit/... -run TestProxyPhaseAudit -count=1` passes.
 - [ ] 2.5 Enforce the plan-phase block with method-based write check in NEW file pkg/jobproxy/planblock.go (NEW planEffectiveRules and NEW newPlanEffectiveRules). Check: `go test ./pkg/jobproxy/... -run TestPlanPhaseWriteBlock -count=1` passes.
 
+- [ ] 2.6 SECURITY. Build the header strip and the per-redirect host check in NEW file pkg/jobproxy/requestcheck.go. The proxy removes job credential headers and checks each redirect host against the effective rule set. Check: `go test ./pkg/jobproxy/... -run TestRequestCheckHostile -count=1` passes.
+- [ ] 2.7 SECURITY. Add a hostile test in NEW file pkg/jobproxy/requestcheck_test.go, test name TestRequestCheckHostile. The test sends a forged Authorization header and a redirect to an unlisted host straight to the request check. Check: `go test ./pkg/jobproxy/... -run TestRequestCheckHostile -count=1` passes and the test fails when the strip or the redirect check is removed.
+
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
@@ -22,7 +25,7 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Wire the routes with authorization actions. Check: Route test passes.
-- [ ] 4.2 Add the e2e step against the real runner. The step reads the records through `GET /api/audit/entries` with an access token. Check: e2e job log contains blocked by the job proxy. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Write the docs page in the same pull request. Check: Docs page shows records and the plan-phase block.
+- [ ] 4.2 Add the e2e step against the real runner in e2e/jobproxy_test.go (the file of task 1.2). The step reads the records through `GET /api/audit/entries` with an access token. Check: e2e job log contains blocked by the job proxy. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Write the docs page in the same pull request in NEW file docs/guides/job-proxy-records-audit.md. Check: Docs page shows records and the plan-phase block.
 - [ ] 4.4 Run the usability check. Check: Persona completes the path from the docs page alone. A person's step.
 - [ ] 4.5 Run make check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

@@ -17,11 +17,11 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Add the e2e step that calls `POST /api/dustpan/v1/scim/v2/Users` and `DELETE /api/dustpan/v1/scim/v2/Users/{id}` (added by this change) with the SCIM credential (added by this change) in NEW file e2e/scim_test.go after tasks 2.2 and 2.3 build them. Then a SCIM client creates a user with the SCIM credential, pulumi up and tofu apply pass, a DELETE follows, and the next CLI command gives 401. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write the SCIM docs page and run each command on it. Check: `make docs-lint` and the docs command test
+- [ ] 4.2 Write the SCIM docs page in NEW file docs/guides/scim.md and run each command on it. Link it from docs/guides/principals-and-groups.md. Check: `make docs-lint` and the docs command test
 - [ ] 4.3 Do the usability check from the docs page alone. Check: Each error names one command. A person's step.
 - [ ] 4.4 Run the full check. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

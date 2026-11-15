@@ -4,8 +4,8 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Test that a window of 0 refuses age 0 and an old step: TestFreshWindowZeroAsksEachTime in the existing file internal/sessionauth/sessionauth_test.go (for Fresh at internal/sessionauth/sessionauth.go:312) and in NEW file internal/api/server/freshness_test.go (package server, edited by this change) for the route. Check: TestFreshWindowZeroAsksEachTime fails on main
-- [ ] 1.2 Test the 403 names the sign-in path in NEW file internal/api/server/freshness_test.go (package server, edited by this change). Check: TestStaleErrorNamesSignInPath fails on main
+- [ ] 1.1 Test that a window of 0 refuses age 0 and an old step: TestFreshWindowZeroAsksEachTime in the existing file internal/sessionauth/sessionauth_test.go (for Fresh at internal/sessionauth/sessionauth.go:312) and in the existing file internal/api/server/freshness_test.go (package server, edited by this change) for the route. Check: TestFreshWindowZeroAsksEachTime fails on main
+- [ ] 1.2 Test the 403 names the sign-in path: TestStaleErrorNamesSignInPath in the existing file internal/api/server/freshness_test.go (package server, edited by this change). This task extends the file with new behavior. Check: TestStaleErrorNamesSignInPath fails on main
 - [ ] 1.3 Test that an age equal to a nonzero window is fresh: TestFreshBoundaryEqualsWindow in the existing file internal/sessionauth/sessionauth_test.go. Check: TestFreshBoundaryEqualsWindow passes on main and keeps passing
 - [ ] 1.4 Test that a window outside 0 and 60 to 900 seconds is refused: TestFreshWindowConstructorRefusesOutOfRange in the existing file pkg/session/policy_test.go, for ValidTokenFreshness (pkg/session/policy.go:35), with 1 s, 59 s, 901 s and 7 days refused and 0, 60 s and 900 s accepted. Check: TestFreshWindowConstructorRefusesOutOfRange fails on main
 
@@ -15,7 +15,7 @@
 
 ## 2b. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 2.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 3. Definition of done
 

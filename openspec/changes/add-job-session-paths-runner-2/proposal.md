@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 8
 ---
 
 Issue: #982, #1026.
@@ -48,7 +48,6 @@ Out of scope:
 
 Depends on:
 
-- add-job-session-paths-runner
 - `add-job-session-paths-runner-token-issuer` (the part before it in the split)
 
 ## Usability

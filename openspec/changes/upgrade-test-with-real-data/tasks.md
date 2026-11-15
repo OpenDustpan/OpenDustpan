@@ -17,9 +17,9 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Wire the e2e step against the real CLIs on ANY /api/stacks/{}/{} and ANY /api/v2/workspaces/{}/current-state-version with an access token Check: e2e step with real Pulumi CLI and OpenTofu on ANY /api/stacks/{}/{} and ANY /api/v2/workspaces/{}/current-state-version with an access token verifies the upgraded database. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write the operator upgrade docs page with backup, stop, start and check steps and run the usability check Check: Docs commands run as written in CI; `make check` with zero findings; usability check of the upgrade page. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.2 Write the operator upgrade docs page with backup, stop, start and check steps in the NEW file `docs/guides/upgrade.md` and run the usability check Check: Docs commands run as written in CI; `make check` with zero findings; usability check of the upgrade page. A person's step. Confirmed by: CI (the agent runs the fast checks only).
