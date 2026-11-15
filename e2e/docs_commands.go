@@ -584,6 +584,159 @@ func (b *cappedBuffer) String() string {
 	return b.buf.String()
 }
 
+// PagesWithBlocks lists, sorted, each page of the scope that has an in-scope
+// shell block. Unlike CollectCommands, it accepts a scope with no block.
+func PagesWithBlocks(root string, scope []string) ([]string, error) {
+	var withBlocks []string
+
+	for _, entry := range scope {
+		pages, err := scopePages(root, entry)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, page := range pages {
+			data, readErr := readRooted(root, page)
+			if readErr != nil {
+				return nil, readErr
+			}
+
+			cmds, collectErr := collectPage(page, string(data))
+			if collectErr != nil {
+				return nil, collectErr
+			}
+
+			if len(cmds) > 0 {
+				withBlocks = append(withBlocks, page)
+			}
+		}
+	}
+
+	slices.Sort(withBlocks)
+
+	return slices.Compact(withBlocks), nil
+}
+
+// readRooted reads a file below root; a path that leaves root fails.
+func readRooted(root, path string) ([]byte, error) {
+	docsRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("%w: root %s: %w", errDocsCorpus, root, err)
+	}
+
+	data, readErr := docsRoot.ReadFile(path)
+	closeErr := docsRoot.Close()
+
+	if readErr != nil {
+		return nil, fmt.Errorf("%w: file %s: %w", errDocsCorpus, path, readErr)
+	}
+
+	if closeErr != nil {
+		return nil, fmt.Errorf("%w: close root: %w", errDocsCorpus, closeErr)
+	}
+
+	return data, nil
+}
+
+// ReadPageList reads a page list: one page path on each line. It fails on an
+// empty line. An empty file is an empty list.
+func ReadPageList(root, path string) ([]string, error) {
+	data, err := readRooted(root, path)
+	if err != nil {
+		return nil, err
+	}
+
+	var list []string
+
+	for i, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
+		if line == "" && len(data) == 0 {
+			break
+		}
+
+		if strings.TrimSpace(line) == "" || line != strings.TrimSpace(line) {
+			return nil, fmt.Errorf("%w: page list %s line %d: empty line or space around the path",
+				errDocsCorpus, path, i+1)
+		}
+
+		list = append(list, line)
+	}
+
+	return list, nil
+}
+
+// CheckPageLists checks the checked list and the pending list against the
+// pages of the scope. It fails when a page with an in-scope block is in
+// neither list, when a page is in both lists, when a listed page does not exist
+// or has no in-scope block, and when a list has a duplicate, an unsorted line
+// or a path outside the scope. An empty list is valid.
+func CheckPageLists(root string, scope, checked, pending []string) error {
+	withBlocks, err := PagesWithBlocks(root, scope)
+	if err != nil {
+		return err
+	}
+
+	var problems []string
+
+	for name, list := range map[string][]string{"checked": checked, "pending": pending} {
+		problems = append(problems, checkOneList(name, list, scope, withBlocks)...)
+	}
+
+	for _, page := range checked {
+		if slices.Contains(pending, page) {
+			problems = append(problems, fmt.Sprintf("page %s is in both lists", page))
+		}
+	}
+
+	for _, page := range withBlocks {
+		if !slices.Contains(checked, page) && !slices.Contains(pending, page) {
+			problems = append(problems, fmt.Sprintf("page %s has a shell block and is in neither list", page))
+		}
+	}
+
+	if len(problems) > 0 {
+		slices.Sort(problems)
+
+		return fmt.Errorf("%w: page lists: %s", errDocsCorpus, strings.Join(problems, "; "))
+	}
+
+	return nil
+}
+
+func checkOneList(name string, list, scope, withBlocks []string) []string {
+	var problems []string
+
+	for i, page := range list {
+		if !inDocsScope(page, scope) {
+			problems = append(problems, fmt.Sprintf("%s list: path %s is outside the scope", name, page))
+		} else if !slices.Contains(withBlocks, page) {
+			problems = append(problems,
+				fmt.Sprintf("%s list: page %s does not exist or has no shell block", name, page))
+		}
+
+		if i > 0 && list[i-1] == page {
+			problems = append(problems, fmt.Sprintf("%s list: duplicate line %s", name, page))
+		} else if i > 0 && list[i-1] > page {
+			problems = append(problems, fmt.Sprintf("%s list: line %s is not in sorted order", name, page))
+		}
+	}
+
+	return problems
+}
+
+func inDocsScope(page string, scope []string) bool {
+	if page != filepath.Clean(page) || filepath.IsAbs(page) || !strings.HasSuffix(page, ".md") {
+		return false
+	}
+
+	for _, entry := range scope {
+		if page == entry || strings.HasPrefix(page, strings.TrimSuffix(entry, "/")+"/") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // CheckCovered fails when a listed block has no result.
 func CheckCovered(cmds []DocsCommand, results []DocsResult) error {
 	seen := map[string]bool{}

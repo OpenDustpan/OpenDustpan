@@ -18,6 +18,9 @@ const (
 	docsFileMode = 0o600
 	docsDirMode  = 0o750
 	docsPage     = "docs/guides/a.md"
+
+	docsCheckedList = "docs/commands-checked-pages.txt"
+	docsPendingList = "docs/commands-pending-pages.txt"
 )
 
 func docsScope() []string { return []string{"docs/guides", "docs/reference", "README.md"} }
@@ -209,7 +212,16 @@ func TestDocsCommandsRealPages(t *testing.T) {
 		t.Skip("set E2E_DOCS_COMMANDS=1 (make docs-commands-check) to run the blocks of the pages")
 	}
 
-	cmds, err := e2e.CollectCommands(repoRoot(t), docsScope())
+	checked, err := e2e.ReadPageList(repoRoot(t), docsCheckedList)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(checked) == 0 {
+		t.Skip("the checked list is empty: no page runs yet")
+	}
+
+	cmds, err := e2e.CollectCommands(repoRoot(t), checked)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +239,95 @@ func TestDocsCommandsRealPages(t *testing.T) {
 		if r.Status == e2e.DocsFailed {
 			t.Error(r.Report())
 		}
+	}
+}
+
+// TestDocsCommandsPageListsCoverScope fails when a page with a shell block is
+// in neither page list, or when a list is not valid.
+func TestDocsCommandsPageListsCoverScope(t *testing.T) {
+	t.Parallel()
+
+	root := repoRoot(t)
+
+	checked, err := e2e.ReadPageList(root, docsCheckedList)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := e2e.ReadPageList(root, docsPendingList)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = e2e.CheckPageLists(root, docsScope(), checked, pending); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDocsCommandsPageListsRejects(t *testing.T) {
+	t.Parallel()
+
+	root := docsFixture(t, map[string]string{
+		"docs/guides/a.md": fenced("true\n"),
+		"docs/guides/b.md": fenced("true\n"),
+		"docs/guides/c.md": "no block\n",
+		"notes/x.md":       fenced("true\n"),
+	})
+
+	a, b := "docs/guides/a.md", "docs/guides/b.md"
+
+	tests := []struct {
+		name             string
+		checked, pending []string
+		want             string
+	}{
+		{"valid", nil, []string{a, b}, ""},
+		{"valid split", []string{a}, []string{b}, ""},
+		{"page in neither list", nil, []string{a}, "b.md has a shell block and is in neither list"},
+		{"page in both lists", []string{a}, []string{a, b}, "a.md is in both lists"},
+		{"missing page", nil, []string{a, b, "docs/guides/z.md"}, "z.md does not exist"},
+		{"page without block", nil, []string{a, b, "docs/guides/c.md"}, "c.md does not exist or has no shell block"},
+		{"duplicate", nil, []string{a, a, b}, "duplicate line"},
+		{"unsorted", nil, []string{b, a}, "not in sorted order"},
+		{"outside scope", nil, []string{a, b, "notes/x.md"}, "outside the scope"},
+		{"path escape", nil, []string{a, b, "docs/guides/../../x.md"}, "outside the scope"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := e2e.CheckPageLists(root, []string{"docs/guides"}, tc.checked, tc.pending)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				return
+			}
+
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error with %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestDocsCommandsReadPageList(t *testing.T) {
+	t.Parallel()
+
+	root := docsFixture(t, map[string]string{"empty.txt": "", "two.txt": "a.md\nb.md\n", "blank.txt": "a.md\n\nb.md\n"})
+
+	if got, err := e2e.ReadPageList(root, "empty.txt"); err != nil || len(got) != 0 {
+		t.Fatalf("empty list: got %v, err %v", got, err)
+	}
+
+	if got, err := e2e.ReadPageList(root, "two.txt"); err != nil || len(got) != 2 {
+		t.Fatalf("two lines: got %v, err %v", got, err)
+	}
+
+	if _, err := e2e.ReadPageList(root, "blank.txt"); err == nil {
+		t.Fatal("an empty line must fail")
 	}
 }
 
