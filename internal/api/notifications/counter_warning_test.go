@@ -82,6 +82,13 @@ func counterFixture(t *testing.T) (fixture, *storetest.BreakableCounter) {
 		return counter
 	})
 
+	// The fixture builds the counter when it builds its sink service. Fail
+	// here when a change of the fixture stops that, so that no caller of
+	// this helper reads a counter that was never built.
+	if counter == nil {
+		t.Fatal("the fixture built no counter")
+	}
+
 	return f, counter
 }
 
