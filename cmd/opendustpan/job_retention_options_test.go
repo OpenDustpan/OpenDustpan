@@ -9,7 +9,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/history"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // serverRetention builds the NewServer options of f over a fresh SQLite store
@@ -17,23 +16,22 @@ import (
 func serverRetention(t *testing.T, f *serveFlags) history.RetentionSettings {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	st, err := openStore(
+		t.Context(), "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"),
+		slog.New(slog.DiscardHandler), openMigrate, "",
+	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
+	t.Cleanup(st.close)
 
 	blobs, err := fs.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open blob directory: %v", err)
 	}
 
-	opts, err := f.serverOptions(sqliteStore{st}, blobs, nil, nil, slog.New(slog.DiscardHandler))
+	opts, err := f.serverOptions(st, blobs, nil, nil, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("serverOptions: %v", err)
 	}

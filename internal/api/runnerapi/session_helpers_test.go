@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -185,8 +186,8 @@ func (f *sessionJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 
 	spec := job.Spec{
 		Unit: unit, Operation: job.OperationPlan, Purpose: "", Executor: job.ExecutorRunner,
-		Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""}, Steps: steps,
-		Pool: "", Profile: "", Edits: nil, Delivery: "", Defaulted: nil,
+		Location:       job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
+		LocationSource: "", Steps: steps, Pool: "", Profile: "prf-default", Edits: nil, Delivery: "", Defaulted: nil,
 	}
 	phase := job.Phase{
 		Kind: job.PhasePlan, Operation: string(id), Claims: 1, Executor: "", Steps: records, StateVersion: "",
@@ -194,9 +195,9 @@ func (f *sessionJobs) Get(_ context.Context, id job.ID) (job.Job, error) {
 	}
 
 	return job.Job{
-		ID: id, Spec: spec, State: "", Wait: "", Reason: "", Phases: []job.Phase{phase}, Current: 0, StartedBy: "",
-		Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil, Closed: nil,
-		Verification: "", IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{},
+		ID: id, NamespaceID: "", Spec: spec, State: "", Wait: "", Reason: "", Phases: []job.Phase{phase}, Current: 0,
+		StartedBy: "", Source: "", Agent: "", AgentMode: "", BreakGlass: nil, Trigger: nil, Delivery: nil,
+		Closed: nil, Verification: "", IdempotencyKey: "", RequestHash: "", Version: 0, CreatedAt: time.Time{},
 		UpdatedAt: time.Time{}, StateChangedAt: time.Time{},
 	}, nil
 }
@@ -286,6 +287,13 @@ func (b *syncBuffer) String() string {
 func newSessionEnv(t *testing.T, b backend) *sessionEnv {
 	t.Helper()
 
+	return newSessionEnvWith(t, b, nil)
+}
+
+// newSessionEnvWith is newSessionEnv with a change of the Config of the handler.
+func newSessionEnvWith(t *testing.T, b backend, mutate func(cfg *runnerapi.Config)) *sessionEnv {
+	t.Helper()
+
 	jobs := newSessionJobs()
 	logs := &syncBuffer{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 	claimer := &sessionClaimer{opsClaimer: nil, finished: atomic.Int64{}, outcome: atomic.Pointer[job.Outcome]{}}
@@ -294,6 +302,7 @@ func newSessionEnv(t *testing.T, b backend) *sessionEnv {
 		claimer.opsClaimer = &opsClaimer{ops: s.operations, released: atomic.Int64{}}
 		o.claimer, o.recorder, o.jobs = claimer, jobs, jobs
 		o.logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		o.mutate = mutate
 	})
 
 	pool := e.createPool()

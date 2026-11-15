@@ -71,7 +71,7 @@ func TestOutputReadPaths(t *testing.T) {
 		t.Skipf("the output read paths need Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -104,9 +104,9 @@ func TestOutputReadPaths(t *testing.T) {
 			t.Parallel()
 
 			cli := installShareCLI(t, fetcher, e2e.OpenTofu(), label)
-			// The step across tools runs on the first Pulumi version of the
-			// matrix, which is the latest release by default.
-			pulumiCLI := installShareCLI(t, fetcher, e2e.Pulumi(), pulumiVersions[0])
+			// The step across tools runs on the single Pulumi version, which
+			// is a pinned version by default.
+			pulumiCLI := installShareCLI(t, fetcher, e2e.Pulumi(), e2e.Pulumi().Single())
 
 			for _, db := range databases {
 				t.Run(string(db), func(t *testing.T) {
@@ -553,11 +553,11 @@ func TestOutputSharingRules(t *testing.T) {
 		t.Skipf("the sharing rules need Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
-	pulumiVersions := e2e.Pulumi().Versions()
-	tofuVersions := e2e.OpenTofu().Versions()
+	fetcher := sharedFetcher(t)
+	pulumiVersion := e2e.Pulumi().Single()
+	tofuVersion := e2e.OpenTofu().Single()
 
-	if len(pulumiVersions) == 0 || len(tofuVersions) == 0 {
+	if pulumiVersion == "" || tofuVersion == "" {
 		t.Fatal("each tool needs at least one version in its matrix")
 	}
 
@@ -584,7 +584,7 @@ func TestOutputSharingRules(t *testing.T) {
 	t.Run("pulumi", func(t *testing.T) {
 		t.Parallel()
 
-		cli := installShareCLI(t, fetcher, e2e.Pulumi(), pulumiVersions[0])
+		cli := installShareCLI(t, fetcher, e2e.Pulumi(), pulumiVersion)
 
 		t.Run("reader", func(t *testing.T) {
 			t.Parallel()
@@ -607,7 +607,7 @@ func TestOutputSharingRules(t *testing.T) {
 	t.Run("opentofu", func(t *testing.T) {
 		t.Parallel()
 
-		cli := installShareCLI(t, fetcher, e2e.OpenTofu(), tofuVersions[0])
+		cli := installShareCLI(t, fetcher, e2e.OpenTofu(), tofuVersion)
 
 		t.Run("reader", func(t *testing.T) {
 			t.Parallel()
@@ -749,6 +749,11 @@ func outputReader(ctx context.Context, t *testing.T, env *e2e.Env, g readerGrant
 		http.MethodPost, "/api/server/principals/" + principal.ID + "/tokens", `{"name":` + name + `}`,
 		http.StatusCreated,
 	}, &created)
+
+	// An empty token would make shareAPI send the token of the admin.
+	if created.Secret == "" {
+		t.Fatalf("the token of %s has no secret", g.name)
+	}
 
 	return created.Secret
 }
@@ -945,30 +950,50 @@ func checkReducedStack(ctx context.Context, t *testing.T, env *e2e.Env, token, s
 func checkReducedDeployment(ctx context.Context, t *testing.T, env *e2e.Env, token, stackPath string) {
 	t.Helper()
 
-	full := shareAPI(ctx, t, env, shareCall{
+	full := exportOf(t, shareAPI(ctx, t, env, shareCall{
 		name: "the producer reads its export", token: "", method: http.MethodGet, path: stackPath + "/export", body: "",
 		want: http.StatusOK,
-	})
-	if n := len(deploymentOf(t, full).Resources); n < 2 {
+	}))
+	if n := len(full.Deployment.Resources); n < 2 {
 		t.Fatalf("the export of the producer has %d resources, want the root stack resource and another", n)
 	}
 
-	reduced := deploymentOf(t, shareAPI(ctx, t, env, shareCall{
+	reduced := exportOf(t, shareAPI(ctx, t, env, shareCall{
 		name: "a job token reads the export", token: token, method: http.MethodGet, path: stackPath + "/export",
 		body: "", want: http.StatusOK,
 	}))
 
-	if len(reduced.Resources) != 1 || reduced.Resources[0].Type != "pulumi:pulumi:Stack" {
-		t.Fatalf("the export to a job token has %d resources, want the root stack resource only",
-			len(reduced.Resources))
+	if reduced.Version != 3 {
+		t.Fatalf("the export to a job token has version %d, want 3", reduced.Version)
 	}
 
-	if len(reduced.Resources[0].Inputs) != 0 || len(reduced.Resources[0].Outputs) == 0 {
+	if len(reduced.Deployment.Resources) != 1 {
+		t.Fatalf("the export to a job token has %d resources, want the root stack resource only",
+			len(reduced.Deployment.Resources))
+	}
+
+	root := resourceOf(t, reduced.Deployment.Resources[0])
+
+	if root.Type != "pulumi:pulumi:Stack" {
+		t.Fatalf("the export to a job token has a resource of type %q, want the root stack resource", root.Type)
+	}
+
+	if len(root.Inputs) != 0 || len(root.Outputs) == 0 {
 		t.Fatal("the root stack resource of the export to a job token has inputs or no outputs")
 	}
 
-	if len(reduced.SecretsProviders) == 0 || len(reduced.PendingOperations) != 0 {
+	if len(reduced.Deployment.SecretsProviders) == 0 || len(reduced.Deployment.PendingOperations) != 0 {
 		t.Fatal("the export to a job token has no secrets providers, or has pending operations")
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(reduced.Deployment.Resources[0], &fields); err != nil {
+		t.Fatalf("the root stack resource of the export to a job token is not JSON: %v", err)
+	}
+
+	custom, ok := fields["custom"]
+	if !ok || string(custom) != "false" {
+		t.Fatal("the root stack resource of the export to a job token has no explicit custom false")
 	}
 }
 
@@ -980,28 +1005,44 @@ type shareResource struct {
 	Type    string         `json:"type"`
 }
 
+// resourceOf parses one resource of an export.
+func resourceOf(t *testing.T, raw json.RawMessage) shareResource {
+	t.Helper()
+
+	var resource shareResource
+	if err := json.Unmarshal(raw, &resource); err != nil {
+		t.Fatalf("a resource of the export is not JSON: %v", err)
+	}
+
+	return resource
+}
+
 // shareDeployment is the part of an export that the reduced deployment
 // checks read.
 type shareDeployment struct {
 	SecretsProviders  json.RawMessage   `json:"secrets_providers"` //nolint:tagliatelle // The Pulumi wire name.
-	Resources         []shareResource   `json:"resources"`
+	Resources         []json.RawMessage `json:"resources"`
 	PendingOperations []json.RawMessage `json:"pending_operations"` //nolint:tagliatelle // The Pulumi wire name.
 }
 
-// deploymentOf parses the deployment of the export body. The body holds
-// ciphertext, so no message prints it.
-func deploymentOf(t *testing.T, body string) shareDeployment {
+// shareExport is the envelope of an export: the schema version and the
+// deployment that it holds.
+type shareExport struct {
+	Deployment shareDeployment `json:"deployment"`
+	Version    int             `json:"version"`
+}
+
+// exportOf parses the export body. The body holds ciphertext, so no message
+// prints it.
+func exportOf(t *testing.T, body string) shareExport {
 	t.Helper()
 
-	var export struct {
-		Deployment shareDeployment `json:"deployment"`
-	}
-
+	var export shareExport
 	if err := json.Unmarshal([]byte(body), &export); err != nil {
 		t.Fatalf("the export is not JSON: %v", err)
 	}
 
-	return export.Deployment
+	return export
 }
 
 // producerConfigCiphertext answers the ciphertext of the config secret of the
@@ -1359,6 +1400,11 @@ func checkOperatorSavesNoCrossRule(ctx context.Context, t *testing.T, env *e2e.E
 		http.MethodPost, "/api/server/principals/" + principal.ID + "/tokens", `{"name":"sharing-operator"}`,
 		http.StatusCreated,
 	}, &created)
+
+	// An empty token would make shareAPI send the token of the admin.
+	if created.Secret == "" {
+		t.Fatalf("the token of %s has no secret", "sharing-operator")
+	}
 
 	// The positive control: the same grant saves a rule whose consumer is in
 	// the producer namespace, so the refusal below is for the other

@@ -1,5 +1,8 @@
-# Build output
+# Build output: make build and make build-launcher write bin/opendustpan and bin/dustpan-launcher.
 /bin/
+*.exe
+*.test
+*.out
 
 # Local databases and data
 *.db
@@ -28,3 +31,7 @@ soak-reports/
 
 # Coverage profile (make cover writes it next to the Makefile)
 coverage.out
+
+# Repowise local files. decisions.yaml stays tracked.
+/.repowise/*
+!/.repowise/decisions.yaml

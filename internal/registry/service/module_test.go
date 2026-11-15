@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -305,21 +306,35 @@ func TestModulesAreNotProviders(t *testing.T) {
 		t.Fatalf("PublishModule: %v", err)
 	}
 
-	addrs, err := e.svc.Modules(ctx, acme)
-	if err != nil || len(addrs) != 1 || addrs[0].Name != "vpc" || addrs[0].System != "aws" {
-		t.Fatalf("Modules = %+v, %v", addrs, err)
+	addrs, next, err := e.svc.Modules(ctx, acme, "", registry.MaxAddressPage)
+	if err != nil {
+		t.Fatalf("Modules: %v", err)
 	}
 
-	if none, listErr := e.svc.Modules(ctx, beta); listErr != nil || len(none) != 0 {
-		t.Fatalf("Modules of another namespace = %+v, %v", none, listErr)
+	if !slices.Equal(addrs, []registry.Address{moduleAddr(acme)}) || next != "" {
+		t.Fatalf("Modules = %+v, %q, want %+v, no cursor", addrs, next, moduleAddr(acme))
+	}
+
+	none, nextNone, err := e.svc.Modules(ctx, beta, "", registry.MaxAddressPage)
+	if err != nil {
+		t.Fatalf("Modules of another namespace: %v", err)
+	}
+
+	if len(none) != 0 || nextNone != "" {
+		t.Fatalf("Modules of another namespace = %+v, %q, want none", none, nextNone)
 	}
 
 	if _, relErr := e.svc.Release(ctx, acme, "vpc", "1.2.0"); !errors.Is(relErr, registry.ErrNotFound) {
 		t.Fatalf("Release of a module as a provider = %v, want ErrNotFound", relErr)
 	}
 
-	if provs, provErr := e.svc.Providers(ctx, acme); provErr != nil || len(provs) != 0 {
-		t.Fatalf("Providers = %v, %v, want none", provs, provErr)
+	provs, nextProv, err := e.svc.Providers(ctx, acme, "", registry.MaxAddressPage)
+	if err != nil {
+		t.Fatalf("Providers: %v", err)
+	}
+
+	if len(provs) != 0 || nextProv != "" {
+		t.Fatalf("Providers = %v, %q, want none", provs, nextProv)
 	}
 }
 

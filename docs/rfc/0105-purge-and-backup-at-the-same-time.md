@@ -54,7 +54,7 @@ states this only for retention. The code does not enforce it anywhere.
 
 ### Every delete of a blob that a snapshot can name
 
-This table is derived from the code on `main` at 94b9669. The author made
+This table is derived from the code on `main` at fb2a24e. The author made
 it with `rg` for every `Delete` call on a blob store or a scoped blob view
 outside tests, and followed each call to its callers. A delete is **in scope**
 when the blob can be named by a snapshot that was taken before the delete.
@@ -321,14 +321,14 @@ sweep runs.
 
 ### Assumptions
 
-A1 to A5 are facts of the code on `main` at 94b9669 or of an accepted ADR.
+A1 to A5 are facts of the code on `main` at fb2a24e or of an accepted ADR.
 A0 is not a fact of the code yet. The implementation must keep each one, and
 a conformance test must hold it (see "Conformance tests").
 
 - **A0. The sweeps keep every blob that a row names, journal batches
   included (#1923).** Rows 2 and 3 delete a blob only when no committed row
   of any table that a snapshot reads names it: no `checkpoints` row and no
-  `update_journal` row. On `main` at 94b9669 this is false: the sweeps read
+  `update_journal` row. On `main` at fb2a24e this is false: the sweeps read
   the checkpoint keys only. The proof below uses "the blob is unnamed" as its
   premise for rows 2 and 3. That premise holds only after the fix of #1923.
   Until then, rows 2 and 3 can delete a named blob, and no guard on the

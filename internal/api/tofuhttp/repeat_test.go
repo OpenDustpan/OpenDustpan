@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/api/tofuhttp"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
@@ -33,7 +34,7 @@ func (noSealer) SealState(context.Context, namespace.Name, string, string, io.Re
 	return nil, errNoSeal
 }
 
-func (noSealer) OpenState(context.Context, namespace.Name, string, string, io.Reader) (io.Reader, error) {
+func (noSealer) OpenState(context.Context, namespace.Name, string, string, io.Reader) (io.ReadCloser, error) {
 	return nil, errNoSeal
 }
 
@@ -123,7 +124,15 @@ func newRepeatEnv(t *testing.T) repeatEnv {
 
 	// The workspace exists before the first LOCK, so bob, who may not create
 	// it, can lock it.
-	if _, createErr := workspaces.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: "net"}); createErr != nil {
+	acme, err := namespaces.Get(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+
+	place := placementtest.Workspace(t, store, acme.Fence())
+
+	_, createErr := workspaces.Create(t.Context(), workspace.Ref{Namespace: "acme", Name: "net"}, place)
+	if createErr != nil {
 		t.Fatalf("create workspace: %v", createErr)
 	}
 
@@ -136,6 +145,7 @@ func newRepeatEnv(t *testing.T) repeatEnv {
 		Audit:          newTestAudit(),
 		Gate:           nil,
 		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 	})

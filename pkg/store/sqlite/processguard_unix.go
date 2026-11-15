@@ -49,3 +49,28 @@ func lockFile(path string) (*os.File, error) {
 
 	return file, nil
 }
+
+// unlockFile releases the lock that lockFile took. LOCK_UN releases the lock
+// of the open file description for every copy of the descriptor, so a copy
+// that a forked child holds before exec does not keep it.
+func unlockFile(file *os.File) error {
+	conn, err := file.SyscallConn()
+	if err != nil {
+		return fmt.Errorf("unlock %s: %w", file.Name(), err)
+	}
+
+	var unlockErr error
+
+	controlErr := conn.Control(func(fd uintptr) {
+		unlockErr = syscall.Flock(int(fd), syscall.LOCK_UN)
+	})
+	if controlErr != nil {
+		return fmt.Errorf("unlock %s: %w", file.Name(), controlErr)
+	}
+
+	if unlockErr != nil {
+		return fmt.Errorf("unlock %s: %w", file.Name(), unlockErr)
+	}
+
+	return nil
+}

@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/notify/sinks"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // errDiskFull stands for an error that no classify function knows.
@@ -85,6 +86,77 @@ func TestErrorsHaveCodes(t *testing.T) {
 				errcodetest.Want{Code: tc.code, Args: tc.args, RequestBody: nil})
 		})
 	}
+}
+
+// TestSinkLimitErrorKeepsSharedClass proves that a failure to count the tests
+// of notification destinations keeps the answer of a shared class that it
+// wraps: the maintenance mode and a schema minimum answer in their own words,
+// and any other limit failure answers with the sink code.
+func TestSinkLimitErrorKeepsSharedClass(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		code string
+		args map[string]any
+	}{
+		{
+			"no shared class",
+			fmt.Errorf("count: %w: %w", sinks.ErrLimitUnavailable, errDiskFull),
+			errcode.SinkTestLimitUnavailable, nil,
+		},
+		{
+			"maintenance mode",
+			fmt.Errorf("count: %w: %w", sinks.ErrLimitUnavailable, maintenance.ErrInMaintenance),
+			errcode.MaintenanceInMaintenance, nil,
+		},
+		{
+			"binary below the schema minimum",
+			fmt.Errorf("count: %w: %w", sinks.ErrLimitUnavailable,
+				&schema.MinimumError{SchemaMinimum: "v0.5.0", BinaryVersion: "v0.4.0"}),
+			errcode.SchemaBinaryBelowMinimum,
+			map[string]any{"binaryVersion": "v0.4.0", "minimumVersion": "v0.5.0"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			notifications.WriteError(t.Context(), rec, tc.err)
+
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+			}
+
+			errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusServiceUnavailable, rec.Body.Bytes(),
+				errcodetest.Want{Code: tc.code, Args: tc.args, RequestBody: nil})
+		})
+	}
+}
+
+// TestLimitUnavailableWithStoreOutage proves that a test limit whose counter
+// wraps the error of a store that does not answer gives 503
+// namespace.unavailable with Retry-After 5, not the code of the limit.
+func TestLimitUnavailableWithStoreOutage(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	notifications.WriteError(t.Context(), rec,
+		fmt.Errorf("test: %w: %w", sinks.ErrLimitUnavailable, namespace.ErrUnavailable))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	if got := rec.Header().Get("Retry-After"); got != "5" {
+		t.Fatalf("Retry-After = %q, want 5", got)
+	}
+
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, http.StatusServiceUnavailable, rec.Body.Bytes(),
+		errcodetest.Want{Code: errcode.NamespaceUnavailable, Args: nil, RequestBody: nil})
 }
 
 // TestRequestErrorsHaveCodes proves that the refusals of a request body and

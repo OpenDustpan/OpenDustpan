@@ -80,6 +80,10 @@ type fakeServer struct {
 	openAnswer *session.Response
 	// renew answers the renewal number n, from 1. Nil answers 200.
 	renew func(n int) *session.Response
+	// begin runs when the launcher begins a step, before the answer. It runs
+	// without the lock, so that a renewal is answered while it waits. A
+	// non-nil answer replaces the default answer.
+	begin func(name string) *session.Response
 	// finishAnswer replaces the answer to the finish when it is not nil.
 	finishAnswer *session.Response
 	renewals     int
@@ -96,8 +100,9 @@ func newFake(steps ...protocol.Step) *fakeServer {
 		assignment: protocol.Assignment{
 			Namespace: "acme", Unit: "opentofu/acme/net", Tool: "opentofu", Job: "job-1", Phase: "plan", Sweep: "",
 			ServerURL: server, Source: nil, Steps: steps, Plan: nil, GitCredentials: "none", GitHelper: "",
+			Profile: "",
 		},
-		openAnswer: nil, renew: nil, finishAnswer: nil, renewals: 0, begun: nil,
+		openAnswer: nil, renew: nil, begin: nil, finishAnswer: nil, renewals: 0, begun: nil,
 		logs: map[string][][]byte{}, ends: map[string]protocol.StepEnd{}, finish: nil, finishes: 0,
 	}
 }
@@ -127,8 +132,25 @@ func refusal(status int, code string) *session.Response {
 	return answer(status, &protocol.Error{Code: code, Message: "refused", Supported: ""})
 }
 
+// beginName returns the step name of a begin call, and false for another
+// call.
+func beginName(path string) (string, bool) {
+	rest, ok := strings.CutPrefix(path, "/runner/v1/session/steps/")
+	if !ok {
+		return "", false
+	}
+
+	name, action, _ := strings.Cut(rest, "/")
+
+	return name, action == "begin"
+}
+
 // Do implements session.Transport.
 func (f *fakeServer) Do(_ context.Context, req *session.Request) (*session.Response, error) {
+	if resp := f.runBegin(req); resp != nil {
+		return resp, nil
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -168,6 +190,26 @@ func (f *fakeServer) Do(_ context.Context, req *session.Request) (*session.Respo
 	default:
 		return f.step(req)
 	}
+}
+
+// runBegin runs the begin hook for req and returns its answer, or nil when
+// there is no hook and no answer. The hook runs without the lock, so that a
+// renewal is answered while it waits.
+func (f *fakeServer) runBegin(req *session.Request) *session.Response {
+	name, ok := beginName(req.Path)
+	if !ok {
+		return nil
+	}
+
+	f.mu.Lock()
+	hook := f.begin
+	f.mu.Unlock()
+
+	if hook == nil {
+		return nil
+	}
+
+	return hook(name)
 }
 
 // step answers the calls of a step.
@@ -255,6 +297,7 @@ func config(t *testing.T, f *fakeServer) runConfig {
 		Logger:     slog.New(slog.NewTextHandler(messages, nil)),
 		Grace:      func(bool) time.Duration { return 2 * time.Second },
 		RenewEvery: 50 * time.Millisecond, ChunkSize: 0, FlushEvery: 50 * time.Millisecond, Retry: time.Millisecond,
+		Sleep: nil,
 	}}
 }
 

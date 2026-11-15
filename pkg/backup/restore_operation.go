@@ -140,17 +140,22 @@ package backup
 //     that do not match, and the step fails. A retry finds that live key,
 //     sees that its bytes differ, and fails the restore with ErrCorrupt, on
 //     every store.
-//   - After the swap, after-apply checks that each blob that the restored
-//     data names exists, and copies a missing one again from the pinned
-//     backup, before leave-maintenance.
+//   - After the swap, after-apply waits for zero live leases of the blob
+//     deleters, checks that each blob that the restored data names exists,
+//     and copies a missing one again from the pinned backup, before
+//     leave-maintenance.
 //
 // A restore that is checking or applying counts as running work for the guard
 // of the blob deletes (blobguard.Watch): the store answers it from the
 // restores row, in the same read that finds a running backup. So the deleters
 // of the blobs that a backup or restored data can name wait while the restore
-// runs. A deleter that read the guard before the restore started, and stalls
-// until after the check of after-apply, can still delete a blob that the
-// restored data names. The check of after-apply cannot close that window.
+// runs. A deleter also takes a lease before each delete and releases it after
+// (blobguard.Leases). A take writes nothing and answers the running work while
+// a backup runs or a restore checks or applies. So a deleter that read the
+// guard before the restore started, and stalled, holds the restore back at
+// the after-apply step until it releases its lease or the lease ends, at most
+// blobguard.LeaseTTL after the take. The check of after-apply then finds a
+// blob that the deleter removed and copies it again from the pinned backup.
 //
 // # Failure, cancel and the end of the operation
 //
@@ -721,7 +726,8 @@ func ValidateRestoreEvent(object string) error {
 // a summary event: once the other places are full, each new object adds one
 // to the count of that summary instead, so a forced enter that cancels more
 // units than the limit still records each cancel, and never fails for the
-// limit. It returns ErrRestoreEventInvalid for an object that
+// limit. The count is an upper bound: an omitted event that a caller sends
+// again adds one again. It returns ErrRestoreEventInvalid for an object that
 // ValidateRestoreEvent refuses, and ErrCorrupt for stored text that
 // DecodeRestoreEvents refuses.
 func AddRestoreEvent(stored, object string) (string, bool, error) {
@@ -729,7 +735,7 @@ func AddRestoreEvent(stored, object string) (string, bool, error) {
 		return "", false, err
 	}
 
-	if strings.HasPrefix(object, restoreEventOverflowHead) {
+	if strings.HasPrefix(object, restoreEventOverflowPrefix) {
 		return "", false, fmt.Errorf("%w: the object has the form of the summary event", ErrRestoreEventInvalid)
 	}
 
@@ -764,18 +770,23 @@ func AddRestoreEvent(stored, object string) (string, bool, error) {
 	return string(out), true, nil
 }
 
+// restoreEventOverflowPrefix starts every summary event of the events past
+// the limit, with or without the upper bound that follows it.
+const restoreEventOverflowPrefix = "restore audit events past the limit of 999: "
+
 // restoreEventOverflowHead starts the summary event of the events past the
-// limit.
-const restoreEventOverflowHead = "restore audit events past the limit of 999: "
+// limit. The count that follows is an upper bound on the omitted events.
+const restoreEventOverflowHead = restoreEventOverflowPrefix + "up to "
 
 // restoreEventOverflow returns the summary event of count events past the
-// limit.
+// limit. count is an upper bound: an omitted event that a caller sends again
+// adds one again.
 func restoreEventOverflow(count int64) string {
 	return restoreEventOverflowHead + strconv.FormatInt(count, 10) + " more cancels or refusals, in the log lines"
 }
 
 // restoreEventOverflowCount returns the count of a summary event, and
-// whether event is one.
+// whether event is one. The count is an upper bound on the omitted events.
 func restoreEventOverflowCount(event string) (int64, bool) {
 	rest, ok := strings.CutPrefix(event, restoreEventOverflowHead)
 	if !ok {

@@ -1,14 +1,18 @@
 ---
 rfc: 91
 title: Plan review at scale, with one view of repeated changes across stacks and workspaces, and noise rules that expire
-status: draft
+status: discussing
 created: 2026-10-20
 ---
 
 # RFC 91. Plan review at scale, with one view of repeated changes across stacks and workspaces, and noise rules that expire
 
-Status: draft. Nothing in this RFC is decided. No code exists for it. The
-owner answers the questions at the end.
+Status: discussing. Design only. Nothing in this RFC is decided. No code
+exists for it. The research pass of 7 November 2026 adds the facts from
+research, sections J to O (risk classes, which facts are verified, review
+by risk, acknowledged changes, the delta since the last plan seen, and the
+new writes with their agent classes), the recommended
+design, the one-way doors, the slices and the questions for the owner.
 
 ## Problem
 
@@ -91,9 +95,33 @@ dropped from the RFC.
   `import` and each move.
 - **ADR 225 decision 12.** A carried signature also keeps the view basis of
   the signature that it carries from (section F, **recommendation**).
+- **ADR 226 decision 4.** `change.planned` and `change.apply` get the group
+  `risk` in the minor version `1.1` (section J).
+- **ADR 191.** A signature also holds the change keys that the signer
+  acknowledged (section M). A new error, `ErrAcknowledgeMismatch`.
+- **ADR 299 decision 10.** The record of what each approver saw also holds
+  the change keys. An acknowledged change whose key changed stops the
+  apply (section N).
+- **ADR 225 decision 4.** The `unless` of an approval default cannot read a
+  fact group of the origin `runner` to cancel the default (section K).
+
+**Dependencies on RFCs that are not accepted.** RFC 122 (gates at every
+step of an untrusted plan) and RFC 121 (agent principals) are open
+proposals, in pull requests #2565 and #2563. This RFC uses two of their
+proposals: the origin of each fact group (RFC 122) and the confirmation
+page of an agent change (RFC 121 decision 25). Each place that uses them
+says "as RFC 122 proposes" or "as RFC 121 proposes". Sections J to N do
+not depend on them for safety: section K gives its own rule for facts
+that the server did not compute, with or without RFC 122. If RFC 122 is
+accepted, this RFC also asks that its rule for an unverified fact covers
+the `unless` of an approval default.
 
 The resume of a multi-unit apply (ADR 190 decision 8) is not in this
-list. It is an open question (question 8).
+list. It goes to its own RFC (question 5, item 8). A resume in the same
+revision must rest on a fact that the server recorded (the apply job
+ended before the runner started the apply step), and it must run
+`job.CheckPlan`, whose guard `ErrPlanStale` refuses a plan that read
+another state version than the current one.
 
 ## Facts from primary sources
 
@@ -196,6 +224,91 @@ and the source of `pulumi/pulumi` on `master`, read on 2026-10-20:
   (<https://www.pulumi.com/docs/iac/concepts/resources/options/hidediffs/>).
   The state of a resource holds it as `hideDiff`. This is a noise rule in
   the code of the program, which the author of the change controls.
+
+### Facts from research: how other tools show a large plan, and review fatigue
+
+Checked on 7 November 2026, from public primary sources. Each source is a
+comparison only.
+
+**How other tools show a large plan.**
+
+- **Atlantis** posts the plan as forge comments. GitHub limits a comment to
+  65,535 characters, so Atlantis splits long output, and
+  `--max-comments-per-command` (default 100) cuts from the top
+  (<https://www.runatlantis.io/docs/server-configuration>). Its apply
+  requirement `approved` does not bind an approval to a plan, so an old
+  approval can meet a later plan unless `--discard-approval-on-plan` is set
+  (<https://www.runatlantis.io/docs/command-requirements>).
+- **Spacelift** shows a delta counter of changes, and a plan policy in Rego
+  reads `terraform.resource_changes[]`. A `warn` sends a tracked run with
+  autodeploy to a person. A `deny` fails it
+  (<https://docs.spacelift.io/concepts/policy/terraform-plan-policy>). Its
+  approval policy splits `reviews.current` from `reviews.older`
+  (<https://docs.spacelift.io/concepts/policy/approval-policy>). Its
+  example "blast radius" policy weights each action and type (delete 10,
+  update 5, create 1) and triggers above 100.
+- **Open Policy Agent** has the same pattern in its Terraform tutorial: a
+  weighted `blast_radius` under 30, and no change to an IAM resource
+  (<https://www.openpolicyagent.org/docs/terraform>).
+- **HCP Terraform** shows "structured run output" with one node for each
+  resource, and gives policies the `tfplan/v2` import with
+  `resource_changes`, `resource_drift` and `output_changes`
+  (<https://developer.hashicorp.com/terraform/cloud-docs/policy-enforcement/import-reference/tfplan-v2>).
+- **Pulumi** has `pulumi preview --diff` and `--json`, and update plans:
+  `pulumi up --plan` stops when the update differs from the saved plan
+  (<https://www.pulumi.com/docs/iac/concepts/update-plans/>). Its GitHub
+  action has `always-include-summary`, which cuts a long comment from the
+  front so that the summary stays
+  (<https://github.com/pulumi/actions/blob/main/README.md>).
+- **Terragrunt** writes one `tfplan.json` for each unit with
+  `--json-out-dir`. Its FAQ says no built-in flag prints one combined diff,
+  and shows `jq` for it
+  (<https://docs.terragrunt.com/process/faq/how-do-i-review-plans-across-all-my-units/>).
+- **tfcmt** labels a pull request `destroy` and lists created, updated,
+  deleted, replaced, imported and moved resources
+  (<https://suzuki-shunsuke.github.io/tfcmt/config>). **tf-summarize**
+  groups by add, delete, change and recreate
+  (<https://github.com/dineshba/tf-summarize>).
+
+**What no tool documents.** No source groups identical changes across
+`count` and `for_each` instances or across units, and no source offers
+"what changed since the plan that I approved" with a key for each change.
+No vendor publishes a taxonomy of risk (identity, network, stateful).
+Each scoring that the sources show is a weighted sum that a team writes,
+or an opaque product. Sections B, J and N fill these gaps.
+
+**Review fatigue.**
+
+- SmartBear and Cisco: review 200 to 400 lines at a time, for at most 60
+  to 90 minutes. Above about 500 lines each hour, fewer defects are found.
+  This is a vendor source with no study size
+  (<https://smartbear.com/learn/code-review/best-practices-for-peer-code-review/>).
+- Microsoft (Bosu, Greiler and Bird, 2015): the more files in a change,
+  the lower the share of useful review comments
+  (<https://www.microsoft.com/en-us/research/publication/characteristics-of-useful-code-reviews-an-empirical-study-at-microsoft/>).
+- Microsoft (Bacchelli and Bird, 2013): to understand the change is the
+  main problem of a reviewer, and tools do not help it much
+  (<https://2013.icse-conferences.org/content/expectations-outcomes-and-challenges-modern-code-review.html>).
+- McIntosh and others: low review coverage and low participation go with
+  more defects after release. This is an association, and a replication at
+  Sony Mobile did not find it
+  (<https://rebels.cs.uwaterloo.ca/papers/icse2016_shimagaki.pdf>).
+- Alert fatigue (Alahmadi, Axon and Martinovic, USENIX Security 2022, 21
+  practitioners of security operations): too many alarms make people
+  trust and act on them less
+  (<https://www.usenix.org/conference/usenixsecurity22/presentation/alahmadi>).
+- Public incidents where a plan or a destroy deleted a production database
+  are reports of single teams, not postmortems of a review process, for
+  example <https://repost.aws/questions/QU5HJ7WlNBQ6yJb-DHod2r7Q>. No
+  public study measures how often a reviewer approves a destroy that hides
+  in a large plan.
+
+**What this means for the design.** The numbers come from code review,
+not from plans, so they set a direction and no threshold. The direction is
+clear in each source: a person reads few items well, and many items badly.
+So the server must cut what a person reads (sections B, E and N), sort
+what is left by risk (section J), and ask for an act on each item that
+matters (section M), not one click for the whole plan.
 
 ## Options and recommendations
 
@@ -468,6 +581,8 @@ can match only these, and the reader ignores a match on these at render:
 - a path with `unknownAfter`: a path rule must not hide a value that is
   known only after the apply,
 - an error diagnostic,
+- a path of a change that has a risk class (section J), `unclassified`
+  included,
 - a whole resource. A rule collapses paths. A resource whose every changed
   path is collapsed shows as one row "only collapsed changes (N paths)",
   and it still counts in the summary.
@@ -628,8 +743,9 @@ canonical list that holds, in this order:
    basis, also when no rule changes,
 2. the ID and the version of each built-in rule set that a scope of the
    revision turned on,
-3. the version name of the view encoding (for example `cho-view/1`) and the
-   version of the reader of each tool in the revision.
+3. the version name of the view encoding (for example `cho-view/1`), the
+   version of the reader of each tool in the revision, and the version of
+   the risk catalog with each scope addition (section J).
 
 The view answers the `viewBasis` with each `GET` of the view. The rules
 for the basis:
@@ -740,61 +856,612 @@ which needs no provider download.
    resource is replaced (`replace_because_tainted`). The step checks that this resource is in
    "Needs attention" as `replace`, with no value path.
 
-## Open questions
+### J. The risk model: risk classes that the server computes
 
-Each question has a recommendation of the author. The owner decides.
+Sections A to I make the view readable. They do not tell a gate which
+changes are dangerous. ADR 226 decision 4 gives the `plan` group: counts of
+`add`, `change`, `replace` and `destroy`, and `resourceTypes`. A gate on
+those counts cannot tell a deleted tag from a deleted database, or a
+changed description from a changed IAM policy.
 
-1. Is this its own theme, or part of the plans theme? **Recommendation:**
-   its own theme. It adds a new kind of data (noise rules) with its own
-   actions, table and audit, and the plans theme is mostly decided.
-2. Are similar changes (B2) in version 1? **Recommendation:** no. Version 1
-   has exact change groups only (ADR 194). A later version adds similar
-   changes as a read-only row, with no content key and no thread anchor, so
-   no one-way door is opened.
-3. Does a signature record the view basis (F2), or does the digest cover
-   the rules (F1)? **Recommendation:** F2, with the view basis as section F
-   defines it, including the rule that the basis of `rules=none` is always
-   accepted.
-4. Who can create a noise rule? **Recommendation:** only a namespace
-   administrator. A rule that the author of a change order created or
-   changed, or that was created or changed after a revision was attached,
-   collapses nothing in that revision. A person who is in the write history
-   of a rule that collapses a row of a revision cannot sign it. The
-   action is `namespace:manage-noise-rules`, and a write needs a fresh
-   authentication.
-5. What is the longest expiry of a rule: 30, 90 or 180 days?
-   **Recommendation:** 90 days, with at most 3 renewals of 90 days each.
-6. Does a noise rule also apply to the facts of a gate, for example to not
-   count a collapsed update in `plan.change`? **Recommendation:** no. Facts
-   count every change.
-7. Is the part `plan-diagnostics` worth a second command in each OpenTofu
-   plan step, or can the plan step run `tofu plan -json` once and keep both
-   the stream and the plan file? **Recommendation:** run it once, if the
-   e2e suite shows that the plan file from the same run applies without
-   change. Else keep the second command.
-8. The resume of a multi-unit apply is out of this theme. ADR 190 decision
-   8 says that the author attaches a new revision for the units that did
-   not apply. Other options exist: resume in the same revision for a unit
-   whose apply never started, or a resume revision that pins the commit of
-   each code location. **Recommendation:** take this to its own RFC. If an
-   option for a resume in the same revision is chosen there, it must rest
-   on a fact that the server recorded (the apply job ended before the
-   runner started the apply step), and it must run `job.CheckPlan`. Its
-   guard `ErrPlanStale` already refuses a plan that read another state
-   version than the current one.
-9. Does the server ship built-in rule sets, or only an example in the docs?
-   **Recommendation:** ship the three sets of section E as data, none on by
-   default.
-10. Is a collection view with no change order (S2) wanted later?
-    **Recommendation:** not now. Decide when the change order view is in
-    use.
-11. Does the Pulumi reader read the streaming engine events instead of the
-    summary, to get `diffKind` with `*-replace` on each path? The summary
-    gives `replaceReasons` only as keys. **Recommendation:** no in version
-    1. The summary has `detailedDiff`, and Needs attention does not depend
-    on the paths.
+**Options.**
+
+1. **A numeric risk score** for each change and each unit, for example 0
+   to 100, as some commercial products show. A gate compares the score
+   with a threshold.
+2. **Risk classes.** A closed set of named classes. Each resource change
+   gets zero or more classes. Each unit gets a count for each class. A gate
+   names the class that it cares about.
+3. **Nothing in the server.** The policy pack of each team (RFC 90)
+   classifies changes and reports through `resourcePolicy`.
+
+**Recommendation: J2.** A score hides its reason, and two teams cannot
+agree what 70 means. A class names the reason, and the decision record
+can show it ("approval:security because `risk.counts.identity` is 2").
+This is the rule "No magic" of `CLAUDE.md`: each block names the rule. J3
+leaves every team to write the same classifier, and a pack runs in the
+sandbox, so its report is not a fact that the server computed.
+
+**The classes (proposal, version 1).** A class is a name, a meaning and a
+fixed rule. The rules read only the change kind, the resource type, the
+value paths and the flags of section A. They never read a value, except
+the closed set of value tests in the table.
+
+| Class | The change has it when | Example |
+| --- | --- | --- |
+| `destroy` | the kind is `delete`, or `replace` with the delete first | a deleted bucket |
+| `replace` | the kind is `replace` with the create first | a new instance before the old one goes |
+| `stateful` | the kind is `delete` or `replace`, and the resource type is in the `stateful` list of the catalog | a database, a bucket, a volume, a key, a DNS zone |
+| `identity` | the resource type is in the `identity` list, or a changed path matches an `identity` path pattern of the catalog | an IAM policy, a role binding, `assume_role_policy` |
+| `network` | the resource type is in the `network` list, or a changed path matches a `network` path pattern | a security group rule, a firewall rule, a route |
+| `exposure` | a changed path matches an `exposure` pattern and the value after is in the closed list of the pattern | `0.0.0.0/0` or `::/0` in an ingress CIDR, `publicly_accessible = true`, a public ACL |
+| `protection` | a changed path matches a `protection` pattern and the value after turns protection off | `deletion_protection = false`, `force_destroy = true`, a Pulumi `protect` flag deleted |
+| `secret` | a changed path is `secret` (section A) | a rotated password |
+| `unknown` | a changed path of class `identity`, `network` or `exposure` is `unknownAfter` | a policy document that is known only after the apply |
+| `lifecycle` | the kind is `forget`, `import` or `move`, or the change has `movedFrom` | a resource that leaves state |
+| `drift` | the plan writes a path that `resource_drift` (OpenTofu) or a refresh step (Pulumi) shows as changed outside the tool | a manual hotfix that the apply reverts |
+| `unclassified` | the resource type is in no list of the `x.0` release of the current major version of the **shipped** catalog. Each change kind counts. | a third-party access-policy resource that the catalog does not know yet |
+
+- `destroy` and `replace` come from the kind alone. They never depend on
+  the catalog, so a type that the catalog does not know is still caught.
+  This is the same rule as "Needs attention keys on actions, not on paths"
+  in section A.
+- `unclassified` covers every change kind. A `create` of a type that the
+  catalog does not know can grant access (a collaborator, a policy
+  attachment), so it is never treated as safe.
+- A change can have more than one class. A deleted RDS instance with
+  `deletion_protection` turned off in the same plan is `destroy`,
+  `stateful` and `protection`.
+- The view shows the classes of each change as labels, and sorts "Needs
+  attention" by class: `stateful`, `destroy`, `identity`, `exposure`,
+  `protection`, `network`, `unclassified`, then the rest.
+- **A noise rule never collapses a path of a change that has a class.**
+  This adds one line to the list "What a rule can never collapse" of
+  section E.
+
+**The catalog.** The lists and the path patterns are data, not code:
+
+- The server ships a **risk catalog** with a version, for example
+  `risk-catalog/1.4`. It holds the lists for the providers that the e2e
+  suite and the docs name first: AWS, Google Cloud, Azure, Kubernetes, the
+  built-in types of each tool, and the matching Pulumi types. Each entry
+  names its source (the provider docs of the type).
+- The shipped catalog has a list `known`: the types that the catalog
+  knows and that have no class of their own, for example a tag resource or
+  `terraform_data`. Only the shipped catalog holds `known`. A type is
+  `unclassified` when it is in no list of the first release of the current
+  major version (`x.0`), `known` included.
+- **A scope addition only adds a class.** A namespace, a collection or a
+  unit can add entries to the lists `stateful`, `identity`, `network`,
+  `exposure` and `protection`, as a path set is added (ADR 226 decision
+  13). It can never add to `known`, never delete an entry of a wider scope,
+  and never take `unclassified` away from a change: a type that a scope
+  adds to `identity` stays `unclassified` until the shipped catalog knows
+  it. So a scope addition can raise what a change needs, never lower it
+  (ADR 222 decision 5).
+- **A catalog upgrade never lowers a class.** An upgrade of the server can
+  add entries to the shipped catalog in a minor version. A type that the
+  `x.0` release of the major version had in no list stays `unclassified`
+  for the whole major version, also when a minor version adds it to a list
+  such as `stateful` or `network`. The minor version then adds that class,
+  and `unclassified` stays. So the warn of `risk-unclassified` stays, and
+  a change of the type never starts to auto-apply after an upgrade. A
+  minor version never adds a type to `known`. The shipped catalog deletes
+  or narrows an entry, adds a type to `known`, or takes `unclassified` away
+  from a type only in a new major version. A scope
+  moves to a new major version only by a person's act, with the action
+  `namespace:manage-risk-catalog`, a fresh authentication (ADR 227) and an
+  audit entry. So an upgrade never lowers a class on its own.
+- The decision record names the catalog version and each scope addition
+  that gave a class (ADR 229 decision 1).
+- The catalog is the same for both tools where the tools share a provider
+  (for example `aws_db_instance` and `aws:rds/instance:Instance`). Each
+  entry names the type in the words of each tool. No type of one tool is
+  in the core (ADR 12).
+
+**The fact group.** `change.planned` gets the group `risk` in a new minor
+version, `change.planned/1.1` (ADR 226 decision 2):
+
+| Field | Type |
+| --- | --- |
+| `available` | boolean |
+| `classes` | set of class names that at least one change has |
+| `counts` | record with one long for each class |
+| `catalog` | the catalog version, as a string |
+
+`change.apply` gets the same group with the values of that moment.
+`available` is `false` when the summary of a unit is `unreadable`, when
+the plan has no `plan-display`, or when the analysis did not end. Every
+built-in gate and starter pack treats `available == false` as a match
+(ADR 226 decision 3). The group is small: 12 counts and a set of at most
+12 names, so it never meets the 256 KiB limit of ADR 226 decision 14.
+
+### K. Which risk facts are verified, and what an unverified one can do
+
+The server computes the `risk` group itself, in Go, from the summary. But
+the summary reads `plan-display`, which the tool in the sandbox writes.
+The server does not check today that `plan-display` agrees with
+`plan-apply`, which the apply enforces. A `plan-display` that is partial but
+valid (for example, with entries of `resource_changes` left out) gives
+`available == true` and counts of 0. So the origin of `risk` is the origin
+of its input. This RFC uses the four origins that RFC 122 proposes:
+`server`, `job-proxy`, `runner` and `external`.
+
+| Tool | Input of the summary | Origin of `plan` and `risk` |
+| --- | --- | --- |
+| Pulumi, today | `plan-display` | `runner` |
+| Pulumi, when the server reads the update plan itself (RFC 122 option O11-b, a proposal) | the operation set and the property diff that the server computes from the update plan and the state that it holds | `server` |
+| OpenTofu, today | `plan-display` | `runner` |
+| OpenTofu, with a render step in a fresh sandbox (RFC 122 option O11-c, a proposal) | `tofu show -json` of the plan file, with no code of the change | `runner` |
+
+**The rule (this RFC, for every source, trusted or not).** A fact of the
+origin `runner` can only add a requirement. It can never cancel one:
+
+- When a gate with the outcome `approval:` reads a group of the origin
+  `runner` in its `when` or its `unless`, the server counts the gate as
+  matched, whatever the value. So `approval:security when
+  risk.counts.identity > 0` asks for security on each change until the
+  origin is `server`. The decision record says why: "counted as matched:
+  reads `risk`, origin `runner`".
+- The `unless` of an approval default (ADR 225 decision 4) that reads a
+  group of the origin `runner` exempts nothing.
+- A `deny` gate and a `warn` gate can read a group of the origin `runner`
+  as usual. A forged value then cancels only the layer that the gate adds.
+- The check at save warns, and the simulate route (ADR 229 decision 6)
+  shows, each gate whose `approval:` outcome the rule above holds on.
+
+This is stricter than RFC 122 proposes, which holds the rule for an
+untrusted source only. The reason: with a trusted source, a skipped
+approval leaves no approved set of operations, so the floor of ADR 299
+decision 10 has nothing to compare at the apply. If RFC 122 is accepted,
+its rule and this one both hold.
+
+So "review only what is risky" (section L) skips an approval only for a
+Pulumi plan after the server reads the update plan itself. For OpenTofu,
+it skips no approval until the server computes the operation set itself.
+Until then, the risk classes still sort the view, ask for the right
+approvers and give the acknowledgments of section M.
+
+### L. Review by risk
+
+With section J, a scope can ask for the right person for each risk.
+
+- **A starter pack `review-by-risk`** (ADR 229 decision 7) ships these
+  gates, in `evaluate` mode, as each pack does:
+
+  | Gate | Outcome |
+  | --- | --- |
+  | `risk-unavailable` | `approval:owners when !risk.available` |
+  | `risk-destroy` | `approval:owners when risk.counts.destroy > 0 \|\| risk.counts.lifecycle > 0` |
+  | `risk-stateful` | `approval:stateful-owners when risk.counts.stateful > 0`, with a rule whose `count` is 2 (two distinct people, ADR 225 decisions 1 and 6) |
+  | `risk-identity` | `approval:security when risk.counts.identity > 0 \|\| risk.counts.exposure > 0 \|\| risk.counts.unknown > 0` |
+  | `risk-protection` | `approval:owners when risk.counts.protection > 0 \|\| risk.counts.drift > 0` |
+  | `risk-unclassified` | `warn when risk.counts.unclassified > 0` (a warn blocks auto-apply, ADR 229 decision 3) |
+
+- **Auto-apply needs each change classified.** A plan with a change of the
+  class `unclassified` meets the warn, so it never auto-applies. A
+  narrower scope cannot exempt a change from this gate of a wider scope
+  (ADR 224 decision 6), and no scope addition takes `unclassified` away
+  (section J).
+- A change that matches no gate needs no approval from the pack, **only
+  when the origin of `risk` is `server`** (section K). With the origin
+  `runner`, each `approval:` gate of the pack counts as matched, so the
+  change waits for its approvers. The approval default of the scope (ADR
+  225 decision 4) still holds in both cases. The built-in gates of ADR 226
+  decision 7 hold too.
+- The pack is data. A team copies it, changes the rules and the approvers,
+  and tests it with `gate.RunTestFile` and the simulate route (ADR 229
+  decisions 6 and 8) against its last 90 days of plans before it switches
+  a gate to `enforce`.
+
+### M. Acknowledged changes: the signer acknowledges each high-risk change
+
+The evidence on review fatigue (section "Facts from research") says that
+a reviewer who sees many items approves without reading, and that a
+reviewer who must act on the key item reads it. ADR 191 binds a signature
+to a digest. A digest proves which plan the signer saw, not which line the
+signer read.
+
+1. **Nothing more.** The signature stays as ADR 191 gives it.
+2. **An acknowledgment of each high-risk change.** The approve request
+   lists the change key (below) of each change of the revision that has a
+   class of the **acknowledge list** of the scope. The server compares the
+   list with the set that it computes in the same transaction. A list that
+   is not equal fails with `ErrAcknowledgeMismatch` and records nothing.
+   The console shows a check box on each such change, and the approve
+   button stays off until each box is checked.
+3. **A typed confirmation** for each such change, as RFC 121 decision 25
+   proposes for a destroy of a stateful resource by an agent.
+
+**Recommendation: M2**, with M3 only for the confirmation that RFC 121
+proposes, where an agent drafted the change. A check box on 5 changes is
+work that a person can do. Typing on 5 changes is not, and people then
+copy and paste.
+
+- **The acknowledge list.** The installation sets a floor: `stateful`,
+  `identity`, `exposure`, `protection` and `unclassified` by default. A
+  namespace, a collection or a unit can add classes to the list, never
+  delete one of a wider scope or of the floor. So no scope can turn
+  section M off.
+- **The origin shows.** The acknowledgment set comes from the same summary
+  as the `risk` group, so it has the same origin (section K). The view and
+  the signature record show it. With the origin `runner`, the console says
+  "from the part `plan-display` that the runner wrote: not checked against the
+  plan that the apply runs", and the signature record holds the origin. An
+  acknowledgment of a set of the origin `runner` is evidence of what the
+  signer saw, not of what the apply runs.
+- **The confirmation page of an agent change.** RFC 121 decision 25
+  proposes a page with "the facts that the server computed". When that
+  page uses this summary, it shows the origin of each count and class,
+  with the same text. A `plan-display` that a hostile program wrote can hide a
+  `stateful` class, so with the origin `runner` the page asks for the typed
+  confirmation of each `delete` and `replace`, whatever its class.
+- A large plan with 400 `stateful` changes asks for 400 check boxes. That
+  is the point: a plan with 400 deletes of stateful resources needs a
+  person to see 400 lines. The view offers "check all in this group" for a
+  change group of identical changes only, and the request still lists each
+  key.
+
+**The change key.** Each resource change gets two keys:
+
+- The **pairing key** finds the same resource in two plans: the tool, the
+  unit ID and the resource key (ADR 193 decision 3). It holds no value.
+  Section N uses it to tell "changed" from "new" and "gone".
+- The **change key** says whether the change is the same. Its form is
+  `chg-<review key version>-<32 hex characters>`: the first 16 bytes of
+  HMAC-SHA-256, under the **review key** of the namespace, of this input:
+  - the encoding name `chg/1`, the tool, the unit ID, the resource key and
+    the kind,
+  - for each changed value path, in sorted order: the path, the flags
+    `secret` and `unknownAfter`, and the **value digests** before and
+    after.
+
+  The input is a list of fields. Each field is its length as 4 bytes, big
+  endian, then its bytes. So two different inputs never give the same
+  bytes.
+- **The value digest** is the HMAC-SHA-256 of the canonical JSON of the
+  real value, under the review key, before any mask. So a secret that
+  changes from A to B in one revision and from A to C in the next gives
+  two different keys, and the key tells nothing about the value. The
+  server computes it in the analysis, which already reads the real values
+  of an OpenTofu plan before it masks them (ADR 194 decision 6).
+- **Values that the server cannot see.** A value that is unknown until
+  the apply, a Pulumi value that `plan-display` shows as `[secret]`, and a
+  value that a secrets provider of the team encrypts have no value digest.
+  A change with such a path gets a change key with the mark `opaque`. An
+  `opaque` key never counts as "unchanged" in section N, and an
+  acknowledgment of it holds only for that revision.
+- **The review key.** A random 256-bit key of the namespace, kept sealed
+  as a data key of the namespace (ADR 23), with versions. It is a new key,
+  not the key of `cog-` (ADR 194 decision 5). A rotation of the namespace
+  key changes only its wrap (ADR 217 decision 19). A full re-encryption
+  after a compromise (ADR 217 decision 20) makes a new version. Each
+  stored change key holds its version. Two keys of different versions are
+  never compared: the delta then shows each change as changed.
+- **One-way door:** acknowledgments, the records of ADR 299 decision 10
+  and backups hold the key, its version and its encoding name. A new
+  encoding needs a new encoding name and a new prefix.
+
+### N. What changed since the plan that I saw
+
+A new revision of a change order, or a new plan after a push, makes the
+reviewer read the whole view again. ADR 299 decision 10 already records,
+for each approval, the set of operations that the approver saw.
+
+1. **No delta view.**
+2. **A delta against the last revision that the person signed or
+   acknowledged.** The view takes `since=<revision>`. For each unit, it
+   pairs the changes of the two revisions by their pairing key, and
+   answers each one as `new`, `gone`, `changed` (the same pairing key,
+   another change key, or an `opaque` key) or `unchanged` (the same change
+   key, not `opaque`). The view folds `unchanged`.
+3. **A delta against each plan that the person opened.** The server
+   records each read of a view.
+
+**Recommendation: N2.** N3 records reads, which is a log of people, and a
+read is not a review. N2 uses the records that ADR 191 and ADR 299 keep.
+
+- A `changed` row shows the value paths that changed between the two
+  plans, with masked values, as an update shows.
+- The delta has the origin of its two summaries (section K). With the
+  origin `runner`, the view says that a forged `plan-display` can fold a changed
+  resource, and it offers "show all" at the top.
+- The delta is a way to read. The approve request of section M still
+  lists every change of the acknowledge list in the new revision, also the
+  unchanged ones, and the signature still binds to the digest of the new
+  revision. A carry-over of a signature stays as ADR 225 decision 12
+  gives it (`off` by default).
+- **At `change.apply`.** The floor of ADR 299 decision 10 compares the
+  operations with the set that the approver saw. This RFC adds the change
+  keys to that record:
+  - an acknowledged change whose change key differs, or is `opaque` in a
+    new plan, **stops** the apply for a new approval with a fresh
+    authentication, as the floor does for a new delete,
+  - each other change whose key differs is **named** in the decision
+    record and does not stop the apply. The binding level of the scope
+    (ADR 299 decision 9) decides what may differ.
+- The same compare gives the plan diff between two runs of a unit with no
+  change order: `GET .../jobs/{job_id}/plan/view?since=<job_id>`, for two
+  jobs of the same unit.
+
+### O. The new writes, their actions and agents
+
+Each new write lowers or raises what a reviewer reads, so each one has a
+named action, a fresh authentication (ADR 227) and an audit entry. RFC
+121 proposes an agent class for each action: `allowed`, `held` or
+`never`. This RFC proposes `never` for each new write, so that an agent
+can never change what a person must review.
+
+| Write | Action | Fresh authentication | Agent class (as RFC 121 proposes the classes) |
+| --- | --- | --- | --- |
+| A scope addition to the risk catalog | `namespace:manage-risk-catalog` | yes | `never` |
+| A deletion of an entry that the scope added itself | `namespace:manage-risk-catalog` | yes | `never` |
+| A move of a scope to a new major version of the catalog | `namespace:manage-risk-catalog` | yes | `never` |
+| An addition to the acknowledge list of a scope | `namespace:manage-gates` (ADR 230) | yes | `never` |
+| A deletion of a class that the scope added itself to its acknowledge list | `namespace:manage-gates` (ADR 230) | yes | `never` |
+| A change of the installation floor of the acknowledge list | `installation:manage-gates` (ADR 230) | yes | `never` |
+| A switch of a gate of the starter pack to `enforce` or back | `namespace:manage-gates` (ADR 230) | yes | `never` |
+| A noise rule (section E) | `namespace:manage-noise-rules` | yes | `never` |
+| An acknowledgment and a signature | the approve action of ADR 225 decision 7 | as the approval rule asks | `never` |
+
+A scope addition, a catalog move and an acknowledge list hold a
+`namespace.Fence` and go in the table list of the backup domain, as a
+noise rule does (section E). The route test of ADR 17 checks each route.
+
+## Recommended design
+
+The server computes one plan summary for each unit plan, and every reader
+uses it: the view, the Markdown, the gates and, if RFC 121 is accepted,
+the confirmation page of an agent change.
+
+1. **One summary, computed once.** The `PlanReader` of each tool gives the
+   `UnitSummary` of ADR 194 with the fields of section A2 and the map of
+   change kinds. The durable operation `changeorder.analyze` (ADR 194
+   decision 6) adds the risk classes of section J, the pairing key and the
+   change key of section M to each resource change. Metadata goes to SQL,
+   content to the blob store under the item key of the plan, as ADR 194
+   decision 6 says. The core never parses a plan.
+2. **Risk classes, not a score** (section J). A closed set of 12 classes
+   from a versioned risk catalog. A scope addition only adds a class. Only
+   the shipped catalog can take `unclassified` away.
+3. **Facts with an origin** (section K). `change.planned/1.1` and
+   `change.apply` get the group `risk`. A fact of the origin `runner` can
+   only add a requirement, for every source.
+4. **Review by risk** (section L). The starter pack `review-by-risk` in
+   `evaluate` mode. It skips an approval only when the origin is `server`.
+5. **The view, sorted by risk.** The order of section A, with "Needs
+   attention" sorted by class. Exact change groups only in version 1
+   (section B1). Noise rules (section E) never collapse a classed change.
+6. **An act on each change that matters** (section M2), with the origin
+   shown.
+7. **The delta since the last signature** (section N2), with the pairing
+   key and the change key. An acknowledged change that changed stops the
+   apply.
+8. **Every new write is `never` for an agent** (section O).
+9. **The apply runs exactly the stored plan.** No change: ADR 102, ADR 190,
+   ADR 191 and the floor of ADR 299 decision 10.
+
+**What a reviewer of a plan with 400 changes then reads.** The summary
+counts, then the changes with a class (often a few), each with a check
+box, then one row for each exact change group, then the other changes,
+folded. On a new revision, only the changes that are new, gone or
+changed since the revision that the reviewer signed.
+
+## One-way doors before the first tag
+
+1. **The change key `chg-` and the pairing key** (section M): the prefix,
+   the encoding name `chg/1`, the length-prefixed input, the value digest
+   and the review key version in each key. Acknowledgments, the records of
+   ADR 299 decision 10 and backups hold them. A new encoding needs a new
+   encoding name and a new prefix, as for `cog-` (ADR 194 decision 5).
+2. **The names of the risk classes** (section J). Stored gates, approval
+   defaults and test files name them. A rename or a deletion is a new major
+   version of the fact schema (ADR 226 decision 2), and each stored gate
+   must pass the type check again. A new class is a minor version. So fix
+   the 12 names before the first tag. Adding classes later is safe.
+3. **Catalog changes only add** (section J). This covers the list `known`
+   and `unclassified` by name: only the shipped catalog holds `known`, a
+   scope never adds to it, a minor version never adds to it, and a type
+   that the `x.0` release had in no list stays `unclassified` for the whole
+   major version, also when a minor version adds it to another list. If the first release can lower a class in a minor
+   version or through a scope, each stored gate can relax on an upgrade or
+   by the act of a narrower scope. The rule must hold from the first
+   catalog.
+4. **The acknowledged keys and their origin in the signature record**
+   (section M). A signature is evidence. Its format holds the list and the
+   origin from the first tag, or a signature of the first release cannot
+   show what the signer acknowledged.
+5. **The rule that a fact of the origin `runner` only adds** (section K).
+   A team that writes gates in the first release learns what a gate can
+   skip. A later, stricter rule would turn their auto-applies into waits.
+   So the rule holds from the first tag.
+6. **The view basis** (section F) gets the catalog version in part 3
+   before the first tag, because a stored signature holds the basis.
+
+Not a door: the starter pack (data that a team copies), the sort order of
+the view, the classes that a scope adds to its acknowledge list, and
+similar changes (B2, a read-only row with no stored key).
+
+## Slices, each with its e2e step
+
+The first slice of section I stays the first slice. Each slice below adds
+one part and its e2e step. The e2e suite drives the real CLI with no cloud
+account, so the steps use `terraform_data`, which the shipped catalog has
+in `known`, and `random_pet` of the `hashicorp/random` provider, which the
+e2e suite already downloads and which the shipped catalog does not hold.
+
+1. **The OpenTofu reader and the job view** (section I). **e2e:** the three
+   steps of section I.
+2. **Risk classes and the `risk` fact.** The catalog, scope additions,
+   the classes of section J, and the group `risk` in `change.planned/1.1`.
+   **e2e:**
+   - The namespace adds the path `input.role` of `terraform_data` to
+     `identity`. A change of `input.role` has the class `identity`. The
+     decision record shows `risk.counts.identity == 1`, the origin
+     `runner` and the catalog version. The change is in "Needs attention".
+   - A change of `input.name` has no class.
+   - A `random_pet` with a new `length` has the class `unclassified`.
+   - A request that adds `random_pet` to `known` at the namespace scope
+     fails with `ErrInvalid`. A request that adds it to `identity` succeeds,
+     and the change then has both `identity` and `unclassified`.
+3. **Review by risk.** The starter pack, switched to `enforce` in the
+   test. **e2e:**
+   - The change of `input.role` waits for `approval:security`.
+   - `tofu taint` on a resource gives `destroy` and waits for
+     `approval:owners`.
+   - The change of `input.name` has no class, but the origin of `risk` is
+     `runner`, so each `approval:` gate of the pack counts as matched, and
+     the change waits. The decision record says "counted as matched:
+     reads `risk`, origin `runner`".
+   - The change of `random_pet` meets the warn of `risk-unclassified`, and
+     `autoApply` is false.
+   - A collection that saves a gate to exempt `risk-unclassified` fails
+     (ADR 224 decision 6).
+4. **Acknowledged changes.** The two keys, the acknowledge list and
+   `ErrAcknowledgeMismatch`. **e2e:** a change order with two units. The
+   approve request with one key fewer fails and records nothing. The
+   request with each key succeeds, and the audit entry lists the keys and
+   the origin. A request that deletes `identity` from the acknowledge list
+   of a collection fails.
+5. **The delta.** `since=<revision>`. **e2e:**
+   - Revision 1 changes three resources, and a person signs it. Revision 2
+     changes one of them again and adds one. The view with `since=1` shows
+     one `changed` and one `new` row.
+   - A sensitive variable changes from A to B in revision 1 and from A to
+     C in revision 2. The view shows it as `changed`.
+   - The step re-plans the signed revision with carry-over on, after a
+     change of an acknowledged resource, and checks that the apply stops
+     for a new approval.
+6. **The Pulumi reader**, with the same classes. **e2e:** a Pulumi YAML
+   program, as the e2e suite uses, with a scope addition for a resource
+   type that the program declares. If RFC 122 option O11-b is accepted and
+   lands, the same step checks that the origin of `risk` is `server` and
+   that a change with no class then needs no approval from the pack.
+
+## Questions for the owner
+
+Each question stands alone. The recommendation is first.
+
+### Question 1. How does the server mark a risky change?
+
+- **A. Risk classes (recommended).** 12 named classes (destroy, replace,
+  stateful, identity, network, exposure, protection, secret, unknown,
+  lifecycle, drift, unclassified). A gate names the class, and the record
+  says which class asked for the approval.
+- **B. A score from 0 to 100.** A gate compares it with a number.
+- **C. Nothing in the server.** Each team writes its own policy pack.
+
+**ELI5.** Instead of "this box is 73 dangerous", the label says "glass"
+or "heavy", so you know how to carry it.
+
+### Question 2. Who decides which resource types are risky?
+
+- **A (recommended).** The server ships a versioned risk catalog with a
+  list `known` of the types that it knows. A type that the shipped catalog
+  does not know is `unclassified`, with any change kind, and never
+  auto-applies. A namespace, a collection or a unit can add a type or a
+  path to a risk class, never to `known`, and never delete an entry of a
+  wider scope. A minor version of the catalog only adds classes: a type
+  that the major version did not know at its first release stays
+  `unclassified` until a new major version, also when a minor version adds
+  it to a risk class. A person moves a scope to a new major version, with
+  a fresh authentication.
+- **B.** Each namespace can also add types to `known`. This lowers a
+  class: a namespace could make an unknown type auto-apply.
+- **C.** No catalog. Only the change kinds (destroy, replace) count.
+
+**ELI5.** The project gives everyone the same list of fragile things, and
+anything not on the list counts as "we do not know yet". You can add to
+the fragile list, but you cannot write "safe" on a box yourself.
+
+### Question 3. Must a signer tick each high-risk change?
+
+- **A (recommended).** Yes. The approve request lists each change with a
+  class of the acknowledge list. The installation sets the floor of the
+  list (default: stateful, identity, exposure, protection, unclassified),
+  and a scope can only add to it. The approve button stays off until each
+  one is ticked. The page says when the list came from the part `plan-display`
+  that the runner wrote.
+- **B.** Only where a gate asks for it.
+- **C.** No. One signature for the whole plan, as now.
+
+**ELI5.** Before the bank sends a large payment, you tick each line that
+moves money out, not only "OK" at the bottom.
+
+### Question 4. When can a change with no risk class skip its approval?
+
+This RFC's answer does not depend on RFC 122 being accepted. RFC 122 is an
+open proposal.
+
+- **A (recommended).** Only when the server computed the classes from the
+  plan that the apply runs (the origin `server`). Today that is never: the
+  classes come from the part `plan-display` that the runner writes. For Pulumi it
+  becomes possible if the server reads the update plan itself (RFC 122
+  option O11-b, a proposal). For OpenTofu it stays never until the server
+  computes the operation set itself. Until then, the classes sort the
+  view, pick the approvers and give the check boxes, and every change
+  keeps its approval. This holds for every source, also a protected
+  branch, and also for the plans of a review request.
+- **B.** As A for an untrusted source only, as RFC 122 proposes. A change
+  from a trusted source with no class can skip its approval now. The risk:
+  a program on a protected branch that writes a partial `plan-display` skips the
+  approval, and the apply floor has no approved set to compare with.
+- **C.** Never. Each change keeps its approval default, also with the
+  origin `server`.
+
+**ELI5.** A label on a box can send it to the guard, but a label that the
+sender wrote can never let a box skip the guard. Only a label that we
+wrote ourselves, after we looked inside, can do that.
+
+### Question 5. Accept the recommendations of the earlier draft?
+
+Each item names its section, the recommendation, and the other option.
+
+| Item | Section | Recommendation | The other option |
+| --- | --- | --- | --- |
+| 1 | the whole RFC | Its own theme, with its own table, actions and audit | part of the plans theme |
+| 2 | B | Exact change groups only in version 1. Similar changes later, as a read-only row | similar changes (B2) in version 1 |
+| 3 | F | The view basis in the signature (F2), with the basis of `rules=none` always accepted | the rules in the digest (F1), which voids each signature at each rule change |
+| 4 | E | Only a namespace administrator writes a noise rule, with a fresh authentication. A rule of the author or a late rule collapses nothing | more roles can write a rule |
+| 5 | E | The longest expiry of a noise rule is 90 days, with at most 3 renewals | 30 or 180 days |
+| 6 | E | A noise rule never changes a fact. Facts count every change | a collapsed update does not count in `plan.change` |
+| 7 | D | `plan-diagnostics` from the one `tofu plan -json` run, if the e2e suite shows that its plan file applies. Else a second command | always a second command |
+| 8 | "ADRs this RFC would amend" | The resume of a multi-unit apply goes to its own RFC, with the condition given there | decide the resume here |
+| 9 | E | Ship the three built-in rule sets as data, none on by default | an example in the docs only |
+| 10 | B | No collection view with no change order (S2) now | build S2 now |
+| 11 | A | The Pulumi reader reads the summary, not the streaming events | read the streaming events for the diff kind of each path |
+
+- **A. Accept all 11 (recommended).**
+- **B. Accept some.** Name the items to discuss.
+
+**ELI5.** These were already worked out. One "yes" lets the work start.
 
 ## Proposed glossary lines
+
+**Risk class**:
+One of a closed set of names that the server gives a resource change of a
+plan, from its change kind, its resource type, its value paths and the risk
+catalog. A gate reads the count of each class as a fact.
+_Avoid_: Risk score, severity
+
+**Risk catalog**:
+Versioned data that maps resource types and value paths to risk classes.
+The server ships it, with the list `known`. A scope can add entries to a
+risk class, never to `known`, and never delete an entry of a wider scope.
+A minor version only adds classes, and never takes `unclassified` away.
+_Avoid_: Risk rules, risk policy
+
+**Change key**:
+The content key of one resource change of a plan, with the prefix `chg-`
+and the version of the review key. Two plans give the same key for the same
+change, also for a changed secret value, which the key covers through a
+keyed digest. An acknowledgment and the delta view use it.
+_Avoid_: Change hash, change ID
+
+**Pairing key**:
+The tool, the unit ID and the resource key of a resource change. It finds
+the same resource in two plans, so that the delta view can say "changed".
+_Avoid_: Resource ID
 
 **Noise rule**:
 Data of a namespace, a collection or a unit that collapses matching value paths

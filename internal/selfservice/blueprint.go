@@ -46,7 +46,7 @@ type Blueprint struct {
 	Tool string `json:"tool"`
 	// ExprVersion is the Expr version that compiled the expressions. A
 	// publish sets it. A draft leaves it empty.
-	ExprVersion string `json:"exprVersion,omitempty"`
+	ExprVersion ExprVersionName `json:"exprVersion,omitempty"`
 	// UnitName is an Expr expression that gives the tool's own name of the
 	// unit. The server computes it at the first submit and keeps it.
 	UnitName string `json:"unitName"`
@@ -61,6 +61,11 @@ type Blueprint struct {
 	Quotas          []QuotaRule  `json:"quotas,omitempty"`
 	SchemaVersion   int          `json:"schemaVersion"`
 }
+
+// ExprVersionName is the version of the Expr engine that compiled a blueprint.
+// It has its own type so that the description of the API can say that the
+// server sets it.
+type ExprVersionName string
 
 // Program is the module or the component that a blueprint adds to. Exactly
 // one of the two is set.

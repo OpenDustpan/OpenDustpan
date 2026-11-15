@@ -125,6 +125,7 @@ func entryAuditIn(ns namespace.Name) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/launcher/session"
+	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
 
@@ -103,11 +104,30 @@ func (t *httpTransport) Do(ctx context.Context, req *session.Request) (*session.
 	return &session.Response{Status: resp.StatusCode, Body: body, RetryAfter: retryAfter(resp.Header)}, nil
 }
 
-// retryAfter returns the wait of the header Retry-After in seconds, or 0.
+// maxRetryAfter caps the wait that a Retry-After header asks for. It is the
+// shortest claim lease, so one wait never outlasts a lease. Defense in depth:
+// the retry of the launcher caps the wait too.
+const maxRetryAfter = runner.MinLease
+
+// retryAfter returns the wait of the header Retry-After in seconds, capped at
+// maxRetryAfter. A missing or negative value gives 0. A value that is too large
+// to parse gives the cap.
 func retryAfter(h http.Header) time.Duration {
-	s, err := strconv.Atoi(h.Get("Retry-After"))
-	if err != nil || s < 0 {
+	s, err := strconv.ParseInt(h.Get("Retry-After"), 10, 64)
+	switch {
+	case errors.Is(err, strconv.ErrRange) && s < 0:
+		// ParseInt returns the lowest int64 for a negative value that overflows.
 		return 0
+	case errors.Is(err, strconv.ErrRange):
+		return maxRetryAfter
+	case err != nil || s < 0:
+		return 0
+	}
+
+	// Compare in whole seconds before the multiplication, so that the product
+	// cannot overflow time.Duration.
+	if s > int64(maxRetryAfter/time.Second) {
+		return maxRetryAfter
 	}
 
 	return time.Duration(s) * time.Second

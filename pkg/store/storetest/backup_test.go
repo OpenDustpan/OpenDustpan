@@ -73,6 +73,9 @@ type fakeData struct {
 	current          map[string]string
 	backups          map[string]backup.Record
 	restores         map[string]backup.RestoreRecord
+	// leases holds one row for each blob deleter that holds a lease, with the
+	// time it ends.
+	leases map[string]time.Time
 	// installation is the installation state. It starts normal, as the
 	// seeded row of the SQL adapters does.
 	installation maintenance.State
@@ -98,6 +101,7 @@ func newFakeData() *fakeData {
 		current:          map[string]string{},
 		backups:          map[string]backup.Record{},
 		restores:         map[string]backup.RestoreRecord{},
+		leases:           map[string]time.Time{},
 		installation:     maintenance.StateNormal,
 	}
 }
@@ -135,14 +139,21 @@ type fakeBackupStore struct {
 }
 
 var (
-	_ storetest.BackupStore    = (*fakeBackupStore)(nil)
-	_ storetest.RestoreStore   = (*fakeBackupStore)(nil)
-	_ storetest.Reopener       = (*fakeBackupStore)(nil)
-	_ storetest.StagingWitness = (*fakeBackupStore)(nil)
-	_ backup.KeyPeeker         = (*fakeBackupStore)(nil)
-	_ backup.Applier           = (*fakeBackupStore)(nil)
-	_ backup.Fencer            = (*fakeBackupStore)(nil)
+	_ storetest.BackupStore      = (*fakeBackupStore)(nil)
+	_ storetest.RestoreStore     = (*fakeBackupStore)(nil)
+	_ storetest.Reopener         = (*fakeBackupStore)(nil)
+	_ storetest.StagingWitness   = (*fakeBackupStore)(nil)
+	_ storetest.BreakGlassSeeder = (*fakeBackupStore)(nil)
+	_ backup.KeyPeeker           = (*fakeBackupStore)(nil)
+	_ backup.Applier             = (*fakeBackupStore)(nil)
+	_ backup.Fencer              = (*fakeBackupStore)(nil)
 )
+
+// BreakGlassPorts implements storetest.BreakGlassSeeder. The fake keeps no
+// break-glass reviews.
+func (*fakeBackupStore) BreakGlassPorts() storetest.BreakGlassPorts {
+	return storetest.BreakGlassPorts{Store: nil}
+}
 
 // newFakeBackupStore returns a fresh, empty fake of the SQLite dialect at
 // schema version 10.
@@ -466,7 +477,7 @@ func (s *fakeBackupStore) UpdateStackTags(
 // RenameStack implements stack.Store. Children key on the stable stack ID,
 // so only the stack row and the inventory entry move.
 func (s *fakeBackupStore) RenameStack(
-	_ context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
+	_ context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, _ audit.Entry,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2223,6 +2234,66 @@ func (s *fakeBackupStore) Running(_ context.Context) (blobguard.Work, bool, erro
 	}
 
 	return blobguard.Work{Kind: "", ID: ""}, false, nil
+}
+
+// TakeLease implements blobguard.Leases: it writes the lease of holder only
+// while the guard finds nothing running.
+func (s *fakeBackupStore) TakeLease(
+	ctx context.Context,
+	holder string,
+	ttl time.Duration,
+) (blobguard.Work, bool, error) {
+	work, ok, err := s.Running(ctx)
+	if err != nil || ok {
+		return work, ok, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return blobguard.Work{Kind: "", ID: ""}, false, errFakeClosed
+	}
+
+	s.data.leases[holder] = fakeTime().Add(ttl)
+
+	return blobguard.Work{Kind: "", ID: ""}, false, nil
+}
+
+// ReleaseLease implements blobguard.Leases: a holder with no row is not an
+// error.
+func (s *fakeBackupStore) ReleaseLease(_ context.Context, holder string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	delete(s.data.leases, holder)
+
+	return nil
+}
+
+// LiveLeases implements blobguard.Leases: the number of lease rows that end
+// after the time of the fake.
+func (s *fakeBackupStore) LiveLeases(_ context.Context) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.closed {
+		return 0, errFakeClosed
+	}
+
+	live := 0
+
+	for _, expires := range s.data.leases {
+		if expires.After(fakeTime()) {
+			live++
+		}
+	}
+
+	return live, nil
 }
 
 // FailEndedBackups implements backup.Registry. The noopFailEnded knob leaves

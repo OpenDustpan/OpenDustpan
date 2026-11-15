@@ -73,7 +73,9 @@ func (h *Handler) getOutputSharing(w http.ResponseWriter, r *http.Request, p ide
 
 	d, err := h.outputSharing.Setting(ctx, p, obj.Namespace())
 	if err != nil {
-		denial := refusal.Denial{Action: identity.ActionNamespaceRead, Object: obj, Reason: "", Window: 0}
+		denial := refusal.Denial{
+			Action: identity.ActionNamespaceRead, Object: obj, Reason: "", ReasonWithin: nil, Window: 0,
+		}
 		h.writeOutputSharingFailure(w, r, p, denial, err)
 
 		return
@@ -99,7 +101,9 @@ func (h *Handler) putOutputSharing(w http.ResponseWriter, r *http.Request, p ide
 	entry := auditEntry(r, p, obj, identity.ActionUnitManageSharing, "")
 
 	if err := h.outputSharing.SetSetting(ctx, p, obj.Namespace(), d, entry); err != nil {
-		denial := refusal.Denial{Action: identity.ActionUnitManageSharing, Object: obj, Reason: "", Window: 0}
+		denial := refusal.Denial{
+			Action: identity.ActionUnitManageSharing, Object: obj, Reason: "", ReasonWithin: nil, Window: 0,
+		}
 		h.writeOutputSharingFailure(w, r, p, denial, err)
 
 		return

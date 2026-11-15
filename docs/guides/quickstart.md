@@ -13,7 +13,7 @@ No release exists yet, so you build the server from source. The server is pre-al
 
 You need these tools:
 
-- Go 1.27.3 or later, to build the server.
+- Go 1.27.4 or later, to build the server.
 - OpenSSL, to make secrets and a test certificate.
 - The Pulumi CLI, OpenTofu, or both.
 - Docker with the Compose plugin, for the compose stack only.
@@ -55,7 +55,7 @@ The server keeps its data in `data/dustpan.db` and in `data/blobs`. Leave it run
 
 Use at least 3 characters for a namespace name. The Pulumi CLI refuses a shorter owner name with `error: invalid stack owner`. The server accepts 1 to 100 characters.
 
-The server refuses a new Pulumi stack that no placement rule matches, and `serve` makes no rule. Make a collection and one rule that puts each new Pulumi stack in it. The `opendustpan` binary has no command for these two steps yet, so use the API:
+The server refuses a new Pulumi stack or OpenTofu workspace that no placement rule matches, and `serve` makes no rule. Make a collection and one rule for each tool. The `opendustpan` binary has no command for these steps yet, so use the API:
 
 ```sh
 curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
@@ -65,9 +65,13 @@ curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}' \
   https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
+curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}' \
+  https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
 ```
 
-The collection must exist before the rule. For the compose stack, use the two calls of the compose section.
+The collection must exist before the rule. For the compose stack, use the three calls of the compose section.
 
 Go on to [Connect the Pulumi CLI](#connect-the-pulumi-cli). The certificate file is `data/cert.pem`.
 
@@ -109,7 +113,7 @@ docker compose exec opendustpan /opendustpan namespace create \
   --server https://localhost:8080 --ca-file /tls/cert.pem acme
 ```
 
-Then make a collection and one placement rule in the namespace. The server refuses a new Pulumi stack that no rule matches. Run this from `deploy/compose`, where `.env` and `tls/` are:
+Then make a collection and one placement rule for each tool in the namespace. The server refuses a new Pulumi stack or OpenTofu workspace that no placement rule matches. Run this from `deploy/compose`, where `.env` and `tls/` are:
 
 ```sh
 curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
@@ -118,6 +122,10 @@ curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
 curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}' \
+  https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
+curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}' \
   https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
 ```
 
@@ -179,7 +187,7 @@ tofu apply
 
 `SSL_CERT_FILE` works on Linux. On other systems, use a certificate that the system trusts.
 
-OpenTofu makes the workspace `web` in the namespace `acme` at the first `tofu init`. Placement rules apply to Pulumi stacks only, so OpenTofu needs no rule.
+OpenTofu makes the workspace `web` in the namespace `acme` at the first `tofu init`. The OpenTofu rule of the earlier step puts the workspace `web` in the collection `everything`.
 
 ## Test the compose stack
 

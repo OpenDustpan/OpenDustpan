@@ -92,9 +92,10 @@ func (c *opsClaimer) Claim(ctx context.Context, req job.ClaimRequest) (job.Assig
 	j.ID = job.ID(op.Key)
 
 	return job.Assignment{
-		Claim: job.PhaseClaim{Job: j.ID, Phase: 0, Claim: op.Claim, Fence: fence},
-		Job:   j,
-		Plan:  nil,
+		Claim:   job.PhaseClaim{Job: j.ID, Phase: 0, Claim: op.Claim, Fence: fence},
+		Job:     j,
+		Plan:    nil,
+		Profile: "",
 	}, nil
 }
 
@@ -375,26 +376,29 @@ func configFor(t *testing.T, s stores, opts serveOptions) (runnerapi.Config, *op
 	}
 
 	cfg := runnerapi.Config{
-		Audit:          newTestAudit(),
-		OnAuditFailure: nil,
-		Namespaces:     service,
-		Pools:          s.runners,
-		Members:        s.runners,
-		Handoffs:       s.runners,
-		Claimer:        phases,
-		Sweeps:         nil,
-		Operations:     s.operations,
-		Recorder:       opts.recorder,
-		Jobs:           opts.jobs,
-		Authenticator:  adminAuthenticator{},
-		Authorizer:     opts.authz,
-		Sessions:       nil,
-		Logger:         loggerOf(opts),
-		Release:        serverRelease(),
-		ServerURL:      serverURL,
-		Now:            opts.now,
-		PollInterval:   20 * time.Millisecond,
-		DenialLimiter:  nil,
+		Audit:                      newTestAudit(),
+		OnAuditFailure:             nil,
+		Namespaces:                 service,
+		Pools:                      s.runners,
+		Members:                    s.runners,
+		Handoffs:                   s.runners,
+		Claimer:                    phases,
+		Sweeps:                     nil,
+		Operations:                 s.operations,
+		Recorder:                   opts.recorder,
+		Jobs:                       opts.jobs,
+		Authenticator:              adminAuthenticator{},
+		Authorizer:                 opts.authz,
+		Sessions:                   nil,
+		Logger:                     loggerOf(opts),
+		Release:                    serverRelease(),
+		ServerURL:                  serverURL,
+		Now:                        opts.now,
+		PollInterval:               20 * time.Millisecond,
+		DenialLimiter:              nil,
+		Plans:                      nil,
+		Artifacts:                  nil,
+		OnHandoffRefusalSuppressed: nil,
 	}
 
 	if opts.mutate != nil {

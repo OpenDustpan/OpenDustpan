@@ -31,6 +31,10 @@ const (
 	portColDeletedAtMs   = "deleted_at_ms"
 	portColDisabledAtMs  = "disabled_at_ms"
 	portColSource        = "source"
+	portColSourceID      = "source_id"
+	portColSourceKind    = "source_kind"
+	portColGroupID       = "group_id"
+	portColClaimValue    = "claim_value"
 	portColKind          = "kind"
 	portColScopeID       = "scope_id"
 	portColRevision      = "revision"
@@ -130,6 +134,8 @@ func portableSpec() []PortableTable {
 				{Name: "journal_closed", Kind: KindBool},
 				{Name: "token_id", Kind: KindText},
 				{Name: "journal_records_changed", Kind: KindBool},
+				{Name: portColJobID, Kind: KindText},
+				{Name: "git_head", Kind: KindText},
 			},
 		},
 		{
@@ -466,6 +472,7 @@ func portableSpec() []PortableTable {
 				{Name: "sensitive_marks", Kind: KindBytes},
 				{Name: "fenced_by", Kind: KindText},
 				{Name: "unlocked_write", Kind: KindBool},
+				{Name: "origin_job", Kind: KindText},
 			},
 		},
 		{
@@ -530,21 +537,56 @@ func portableSpec() []PortableTable {
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 				{Name: portColDeletedAtMs, Kind: KindTime},
+				{Name: "closed_to_identity_provider", Kind: KindBool},
 			},
 		},
 		{
 			Table:   TableGroupMembers,
-			OrderBy: []string{"group_id", portColPrincipalID, "added_at_ms"},
+			OrderBy: []string{portColGroupID, portColPrincipalID, "added_at_ms"},
 			Columns: []Column{
-				{Name: "group_id", Kind: KindText},
+				{Name: portColGroupID, Kind: KindText},
 				{Name: portColPrincipalID, Kind: KindText},
 				{Name: "added_at_ms", Kind: KindTime},
 				{Name: "removed_at_ms", Kind: KindTime},
 				{Name: portColSource, Kind: KindText},
-				{Name: "source_id", Kind: KindText},
+				{Name: portColSourceID, Kind: KindText},
 				{Name: portColState, Kind: KindText},
 				{Name: "suspended_at_ms", Kind: KindTime},
 				{Name: "pinned", Kind: KindBool},
+			},
+		},
+		{
+			Table:   TableGroupMappings,
+			OrderBy: []string{portColSource, portColSourceID, portColClaimValue, portColGroupID},
+			Columns: []Column{
+				{Name: portColSource, Kind: KindText},
+				{Name: portColSourceID, Kind: KindText},
+				{Name: portColClaimValue, Kind: KindText},
+				{Name: portColGroupID, Kind: KindText},
+				{Name: portColCreatedBy, Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "member_removal_alerts",
+			OrderBy: []string{portColSourceKind, portColSourceID},
+			Columns: []Column{
+				{Name: portColSourceKind, Kind: KindText},
+				{Name: portColSourceID, Kind: KindText},
+				{Name: "alerted_at_ms", Kind: KindTime},
+			},
+		},
+		{
+			Table:   "member_removals",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColSourceKind, Kind: KindText},
+				{Name: portColSourceID, Kind: KindText},
+				{Name: portColGroupID, Kind: KindText},
+				{Name: "removed", Kind: KindInteger},
+				{Name: "members_before", Kind: KindInteger},
+				{Name: portColAtMs, Kind: KindTime},
 			},
 		},
 		{
@@ -760,5 +802,6 @@ func portableSpec() []PortableTable {
 		portableSettingTables(),
 		portableSelfServiceTables(),
 		portableTrustRuleTables(),
+		portableBreakGlassReviewTables(),
 	)
 }

@@ -11,21 +11,34 @@ import (
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
+// UnitQueryStore is every persistence port the unit query suite exercises:
+// namespaces for fixtures, the unit query under test, and the workspace ports
+// that the mixed-tool case writes through.
+type UnitQueryStore interface {
+	Store
+	WorkspaceStore
+}
+
+// UnitQueryFactory returns a fresh, empty store for one subtest.
+type UnitQueryFactory func(t *testing.T) UnitQueryStore
+
 // RunUnitQuery runs the conformance cases of inventory.UnitQuerier against
 // stores produced by newStore.
-func RunUnitQuery(t *testing.T, newStore Factory) {
+func RunUnitQuery(t *testing.T, newStore UnitQueryFactory) {
 	t.Helper()
 
 	cases := []struct {
-		test func(t *testing.T, s Store)
+		test func(t *testing.T, s UnitQueryStore)
 		name string
 	}{
 		{name: "walks every page in the order of the unit ID", test: testQueryUnitsPageBoundaries},
 		{name: "orders units with the same name by the unit ID", test: testQueryUnitsTies},
 		{name: "answers an empty page", test: testQueryUnitsEmptyPage},
 		{name: "skips a unit deleted between pages", test: testQueryUnitsDeletedBetweenPages},
+		{name: "an insert between pages", test: testQueryUnitsInsertBetweenPages},
 		{name: "pages a label filter", test: testQueryUnitsLabelPages},
 		{name: "pages a unit filter", test: testQueryUnitsUnitPages},
+		{name: "pages mix stacks and workspaces", test: testQueryUnitsMixedTools},
 		{name: "a state filter keeps the locked units only", test: testQueryUnitsStates},
 		{name: "reads the limit after the floor and the cap", test: testQueryUnitsLimit},
 	}
@@ -92,23 +105,35 @@ func queryUnits(t *testing.T, s Store, q inventory.UnitQuery) []inventory.Entry 
 func walkUnits(t *testing.T, s Store, q inventory.UnitQuery) ([]string, []int) {
 	t.Helper()
 
-	var (
-		ids   []string
-		sizes []int
-	)
-
 	q.After = ""
+
+	entries, sizes := walkUnitEntries(t, s, q)
+
+	ids := make([]string, len(entries))
+	for i := range entries {
+		ids[i] = entries[i].UnitID
+	}
+
+	return ids, sizes
+}
+
+// walkUnitEntries reads every page of q, from q.After, and returns the
+// entries in the order of the pages and the size of each page.
+func walkUnitEntries(t *testing.T, s Store, q inventory.UnitQuery) ([]inventory.Entry, []int) {
+	t.Helper()
+
+	var (
+		entries []inventory.Entry
+		sizes   []int
+	)
 
 	for range 100 {
 		page := queryUnits(t, s, q)
+		entries = append(entries, page...)
 		sizes = append(sizes, len(page))
 
-		for i := range page {
-			ids = append(ids, page[i].UnitID)
-		}
-
 		if len(page) < q.PageLimit() {
-			return ids, sizes
+			return entries, sizes
 		}
 
 		q.After = page[len(page)-1].UnitID
@@ -140,7 +165,7 @@ func wantUnits(t *testing.T, s Store, q inventory.UnitQuery) []string {
 // testQueryUnitsPageBoundaries walks 7 units with pages of 3: the pages hold
 // 3, 3 and 1 units, the walk gives each unit once in the order of the unit
 // ID, and each entry matches the entry that ListUnits reads.
-func testQueryUnitsPageBoundaries(t *testing.T, s Store) {
+func testQueryUnitsPageBoundaries(t *testing.T, s UnitQueryStore) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
@@ -198,7 +223,7 @@ func checkQueryEntries(t *testing.T, s Store, q inventory.UnitQuery) {
 // testQueryUnitsTies creates units with the same stack name in several
 // projects and the same labels: the page order is the unit ID alone, so the
 // walk gives each unit once with pages of 1 and of 2.
-func testQueryUnitsTies(t *testing.T, s Store) {
+func testQueryUnitsTies(t *testing.T, s UnitQueryStore) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
@@ -222,7 +247,7 @@ func testQueryUnitsTies(t *testing.T, s Store) {
 // testQueryUnitsEmptyPage reads a namespace with no unit, a namespace that
 // does not exist, and a filter that matches no unit: each answers an empty
 // list.
-func testQueryUnitsEmptyPage(t *testing.T, s Store) {
+func testQueryUnitsEmptyPage(t *testing.T, s UnitQueryStore) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
@@ -258,7 +283,7 @@ func testQueryUnitsEmptyPage(t *testing.T, s Store) {
 // unit of that page and the first unit of the next page, then reads the next
 // page after the cursor: the page starts at the next live unit, and no unit
 // is read twice.
-func testQueryUnitsDeletedBetweenPages(t *testing.T, s Store) {
+func testQueryUnitsDeletedBetweenPages(t *testing.T, s UnitQueryStore) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
@@ -303,6 +328,75 @@ func testQueryUnitsDeletedBetweenPages(t *testing.T, s Store) {
 	}
 }
 
+// testQueryUnitsInsertBetweenPages reads the first page, creates 20 more
+// units, then walks the rest of the pages from the last ID of the first page.
+// The unit IDs are random, so the new units fall on both sides of the cursor
+// almost always; the case also holds when one side is empty. The rest of the
+// walk holds the old units above the cursor and the new units above the
+// cursor, each exactly once: a new unit below the cursor does not appear.
+func testQueryUnitsInsertBetweenPages(t *testing.T, s UnitQueryStore) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	before := createStacks(t, s, ns, [][2]string{
+		{"web", "a"}, {"web", "b"}, {"web", "c"}, {"web", "d"}, {"web", "e"}, {"web", "f"},
+	}, []map[string]string{{}})
+
+	q := inventory.UnitQuery{
+		Namespace:      ns.Name,
+		After:          "",
+		Labels:         nil,
+		Units:          nil,
+		States:         nil,
+		Limit:          2,
+		RestrictUnits:  false,
+		RestrictStates: false,
+	}
+
+	first := queryUnits(t, s, q)
+	if len(first) != q.PageLimit() {
+		t.Fatalf("first page holds %d units, want %d", len(first), q.PageLimit())
+	}
+
+	cursor := first[len(first)-1].UnitID
+
+	names := make([][2]string, 0, 20)
+	for i := range 20 {
+		names = append(names, [2]string{"web", fmt.Sprintf("new-%d", i)})
+	}
+
+	added := createStacks(t, s, ns, names, []map[string]string{{}})
+
+	q.After = cursor
+
+	rest, _ := walkUnitEntries(t, s, q)
+
+	want := make([]string, 0, len(before)+len(added))
+
+	for i := range before {
+		if id := before[i].ID.String(); id > cursor {
+			want = append(want, id)
+		}
+	}
+
+	for i := range added {
+		if id := added[i].ID.String(); id > cursor {
+			want = append(want, id)
+		}
+	}
+
+	slices.Sort(want)
+
+	got := make([]string, len(rest))
+	for i := range rest {
+		got[i] = rest[i].UnitID
+	}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("walk after an insert = %v, want %v", got, want)
+	}
+}
+
 // labelNames returns 9 stack names in one project.
 func labelNames() [][2]string {
 	out := make([][2]string, 0, 9)
@@ -317,7 +411,7 @@ func labelNames() [][2]string {
 // two labels, and a key with another value. Each walk gives the units of
 // inventory.PageUnits, and no unit of another namespace with the same
 // labels.
-func testQueryUnitsLabelPages(t *testing.T, s Store) {
+func testQueryUnitsLabelPages(t *testing.T, s UnitQueryStore) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
@@ -346,7 +440,7 @@ func testQueryUnitsLabelPages(t *testing.T, s Store) {
 
 // testQueryUnitsUnitPages walks a filter of 4 units, one of them unknown and
 // one in another namespace, with pages of 1 and 2.
-func testQueryUnitsUnitPages(t *testing.T, s Store) {
+func testQueryUnitsUnitPages(t *testing.T, s UnitQueryStore) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
@@ -373,11 +467,68 @@ func testQueryUnitsUnitPages(t *testing.T, s Store) {
 	}
 }
 
+// testQueryUnitsMixedTools creates Pulumi stacks and OpenTofu workspaces in
+// one namespace, then walks every page with pages of 2: each unit appears
+// exactly once, in the order of the unit ID, and each entry carries the tool
+// of its unit.
+func testQueryUnitsMixedTools(t *testing.T, s UnitQueryStore) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+
+	stacks := createStacks(t, s, ns, [][2]string{
+		{"web", "a"}, {"web", "b"}, {"api", "c"}, {"db", "d"}, {"ops", "e"},
+	}, []map[string]string{{}})
+
+	wantTool := make(map[string]string, len(stacks)+4)
+	for i := range stacks {
+		wantTool[stacks[i].ID.String()] = "pulumi"
+	}
+
+	for _, name := range []string{"network", "cluster", "database", "ingress"} {
+		w := createTestWorkspace(t, s, ns, name)
+		wantTool[w.ID.String()] = "opentofu"
+	}
+
+	q := inventory.UnitQuery{
+		Namespace:      ns.Name,
+		After:          "",
+		Labels:         nil,
+		Units:          nil,
+		States:         nil,
+		Limit:          2,
+		RestrictUnits:  false,
+		RestrictStates: false,
+	}
+
+	entries, _ := walkUnitEntries(t, s, q)
+
+	ids := make([]string, len(entries))
+	for i := range entries {
+		ids[i] = entries[i].UnitID
+	}
+
+	if want := wantUnits(t, s, q); !slices.Equal(ids, want) {
+		t.Fatalf("walked unit IDs = %v, want %v", ids, want)
+	}
+
+	for i := range entries {
+		tool, ok := wantTool[entries[i].UnitID]
+		if !ok {
+			t.Fatalf("walked unit %q, which the case did not create", entries[i].UnitID)
+		}
+
+		if entries[i].Tool != tool {
+			t.Fatalf("unit %q has tool %q, want %q", entries[i].UnitID, entries[i].Tool, tool)
+		}
+	}
+}
+
 // testQueryUnitsStates checks the state filter on units with no lock: a
 // filter of states that the server does not derive matches nothing, and a
 // filter with the locked state keeps the locked units, here none. The
 // suites of the lock writers check the locked units.
-func testQueryUnitsStates(t *testing.T, s Store) {
+func testQueryUnitsStates(t *testing.T, s UnitQueryStore) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")
@@ -400,7 +551,7 @@ func testQueryUnitsStates(t *testing.T, s Store) {
 
 // testQueryUnitsLimit reads a limit of zero, of one below zero and of one
 // above the cap: the first two read one unit, the last reads every unit.
-func testQueryUnitsLimit(t *testing.T, s Store) {
+func testQueryUnitsLimit(t *testing.T, s UnitQueryStore) {
 	t.Helper()
 
 	ns := newNamespace(t, s, "acme")

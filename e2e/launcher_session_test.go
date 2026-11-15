@@ -42,6 +42,7 @@ func sessionRoundTrip(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
 	run := openLaunchedSession(t, env)
+	env.LogJobStepsOnFailure(t, e2e.Namespace, run.job, run.handoff)
 	step := run.launcher.Assignment.Steps[0].Name
 	secretText := "log-secret-line-" + run.job
 	chunk := []byte(secretText + "\n")

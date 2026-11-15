@@ -108,7 +108,7 @@ func CheckPublication(p *selfservice.Publication, fence namespace.Fence, e []aud
 	}
 
 	if p.Blueprint.ExprVersion != "" {
-		if err := CheckExprVersion(p.Blueprint.ExprVersion); err != nil {
+		if err := CheckExprVersion(string(p.Blueprint.ExprVersion)); err != nil {
 			return err
 		}
 	}
@@ -214,7 +214,7 @@ func Version(r VersionRow) (selfservice.Version, error) {
 		)
 	}
 
-	b.ExprVersion = r.ExprVersion
+	b.ExprVersion = selfservice.ExprVersionName(r.ExprVersion)
 
 	return selfservice.Version{
 		PublishedAt:  codec.FromMillis(r.PublishedAtMs),

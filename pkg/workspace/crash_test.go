@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/blob/blobfault"
+	"opendustpan.org/opendustpan/internal/placementtest"
 	"opendustpan.org/opendustpan/internal/store/storefault"
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -139,7 +140,7 @@ func newCrashFixture(
 	t.Helper()
 
 	ctx := t.Context()
-	wrappedSQL := wrapCrashSQL(t, sqlFaults)
+	wrappedSQL, innerSQL := wrapCrashSQL(t, sqlFaults)
 	wrappedBlobs := wrapCrashBlobs(t, blobFaults)
 	namespaces := crashNamespaces(t, wrappedSQL)
 
@@ -167,7 +168,36 @@ func newCrashFixture(
 		t.Fatalf("parse name: %v", err)
 	}
 
-	ws, err := service.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	ns, err := namespaces.Get(ctx, "acme")
+	if err != nil {
+		t.Fatalf("namespace of the workspace: %v", err)
+	}
+
+	// The fault wrapper does not serve the placed-store port, so a second
+	// service over the store under the wrapper makes the workspace in a
+	// collection.
+	placer, err := workspace.NewService(workspace.Config{
+		BlobGuard:          blobguardtest.None{},
+		ManualLocks:        nil,
+		Workspaces:         innerSQL,
+		States:             innerSQL,
+		Blobs:              wrappedBlobs,
+		Namespaces:         namespaces,
+		OutOfScope:         workspacetest.NewRefusals(),
+		Sealer:             newMemSealer(t, namespaces),
+		Logger:             nil,
+		Now:                nil,
+		MaxStateBytes:      0,
+		MaxPendingVersions: 0,
+		Retention:          0,
+	})
+	if err != nil {
+		t.Fatalf("placing service: %v", err)
+	}
+
+	ws, err := placer.Create(
+		ctx, workspace.Ref{Namespace: "acme", Name: name}, placementtest.Workspace(t, innerSQL, ns.Fence()),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
@@ -181,8 +211,10 @@ func newCrashFixture(
 }
 
 // wrapCrashSQL opens a fresh SQLite store and wraps it with faults. Cleanup
-// closes the wrapper, which closes the store.
-func wrapCrashSQL(t *testing.T, faults []storefault.Fault) *storefault.Store {
+// closes the wrapper, which closes the store. It also returns the store under
+// the wrapper: the wrapper does not serve the placed-store port, so a test
+// that makes a workspace in a collection makes it through that store.
+func wrapCrashSQL(t *testing.T, faults []storefault.Fault) (*storefault.Store, *sqlite.Store) {
 	t.Helper()
 
 	inner, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -201,7 +233,7 @@ func wrapCrashSQL(t *testing.T, faults []storefault.Fault) *storefault.Store {
 		}
 	})
 
-	return wrapped
+	return wrapped, inner
 }
 
 // wrapCrashBlobs opens a filesystem blob store and wraps it with faults.

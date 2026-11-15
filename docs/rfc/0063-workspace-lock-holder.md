@@ -19,8 +19,8 @@ write state under the lock of the other.
 
 ### What the server does today
 
-These facts are from `main` at e89ab7b. The line numbers in the issue came
-from 0e71e4d. They moved since then.
+These facts are from `main` at 79588d4. The line numbers in the issue came
+from b9c619e. They moved since then.
 
 - **Lock.** `POST /api/v2/workspaces/{id}/actions/lock` records the subject
   of the caller as the holder (`internal/api/tfe/locks.go`). The server mints

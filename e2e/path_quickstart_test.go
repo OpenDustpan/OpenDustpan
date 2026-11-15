@@ -40,7 +40,7 @@ const quickstartFileMode = 0o600
 // TestQuickstartFirstStack runs the commands of docs/guides/quickstart.md in
 // their order on a server that holds no placement rule except the one of the
 // harness namespace. It proves that the first Pulumi stack is refused with an
-// error that names the fix, that the collection and the rule of the guide make
+// error that names the fix, that the collection and the rules of the guide make
 // the same command work, and that the first OpenTofu workspace works.
 func TestQuickstartFirstStack(t *testing.T) {
 	t.Parallel()
@@ -123,8 +123,8 @@ func runQuickstartOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2
 		return nil
 	}, "stack", "init", stackRef, "--no-select"))
 
-	// The two curl commands of the guide. The test reads them from the guide, so
-	// it fails when the guide loses a step or changes a route or a body.
+	// The three curl commands of the guide. The test reads them from the guide,
+	// so it fails when the guide loses a step or changes a route or a body.
 	for _, req := range quickstartGuideRequests(t, quickstartNamespace) {
 		quickstartCall(ctx, t, env, req)
 	}
@@ -166,8 +166,8 @@ var (
 // namespace routes and returns their requests in the order of the guide, with
 // the namespace of the guide replaced by namespace. The guide repeats the
 // commands for the compose stack, so a request that appears again is kept once.
-// It fails unless the guide has exactly the collection request and then the
-// placement rule request.
+// It fails unless the guide has exactly the collection request, the Pulumi
+// placement rule request and the OpenTofu placement rule request.
 func quickstartGuideRequests(t *testing.T, namespace string) []quickstartRequest {
 	t.Helper()
 
@@ -214,14 +214,27 @@ func quickstartGuideRequests(t *testing.T, namespace string) []quickstartRequest
 		}
 	}
 
-	if len(requests) != 2 ||
-		!strings.HasSuffix(requests[0].path, "/collections") ||
-		!strings.HasSuffix(requests[1].path, "/placement-rules") {
-		t.Fatalf("the guide %s must hold a curl command for the collection and then one for the placement rule, got %v",
-			quickstartGuide, requests)
-	}
+	wantQuickstartGuideRequests(t, requests)
 
 	return requests
+}
+
+// wantQuickstartGuideRequests fails unless requests hold the requests of the
+// guide in order: the collection, the Pulumi placement rule, the OpenTofu
+// placement rule.
+func wantQuickstartGuideRequests(t *testing.T, requests []quickstartRequest) {
+	t.Helper()
+
+	if len(requests) != 3 ||
+		!strings.HasSuffix(requests[0].path, "/collections") ||
+		!strings.HasSuffix(requests[1].path, "/placement-rules") ||
+		!strings.HasSuffix(requests[2].path, "/placement-rules") ||
+		!strings.Contains(requests[1].body, `"tool":"pulumi"`) ||
+		!strings.Contains(requests[2].body, `"tool":"opentofu"`) {
+		t.Fatalf("the guide %s must hold a curl command for the collection, then one for the "+
+			"Pulumi placement rule, then one for the OpenTofu placement rule, got %v",
+			quickstartGuide, requests)
+	}
 }
 
 // quickstartTofu runs the OpenTofu part of the guide: a main.tf with a cloud
@@ -276,7 +289,7 @@ output "greeting" {
 	}
 }
 
-// quickstartPlacement makes the collection and the placement rule of the
+// quickstartPlacement makes the collection and the placement rules of the
 // guide on a server at host with the admin token and the certificate file
 // cert. The compose stack uses it, because its server runs in a container.
 func quickstartPlacement(ctx context.Context, t *testing.T, host, token, cert string) {
