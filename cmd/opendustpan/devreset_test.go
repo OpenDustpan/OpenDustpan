@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // ignoreChecks lets a test write a value that the CHECK constraints refuse.
@@ -753,18 +754,17 @@ func checkResetDatabase(t *testing.T, dir, kept string) {
 
 	ctx := context.WithoutCancel(t.Context())
 
-	opened, err := openStore(ctx, "sqlite:"+filepath.Join(dir, devDBName),
-		slog.New(slog.DiscardHandler), openMigrate, "")
+	st, err := sqlite.Open(ctx, filepath.Join(dir, devDBName), sqlite.WithLogger(slog.New(slog.DiscardHandler)),
+		sqlite.WithBinaryVersion(version), sqlite.WithInstallationKind(""))
 	if err != nil {
 		t.Fatalf("open the new database: %v", err)
 	}
 
-	defer opened.close()
-
-	st, ok := opened.(sqliteStore)
-	if !ok {
-		t.Fatal("the new database is no SQLite store")
-	}
+	defer func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close the new database: %v", closeErr)
+		}
+	}()
 
 	kind, err := st.ClaimKind(ctx, installation.KindDev)
 	if err != nil || kind != installation.KindDev {
@@ -776,7 +776,7 @@ func checkResetDatabase(t *testing.T, dir, kept string) {
 		t.Fatalf("namespaces of the new database = %v, %v; want none", names, err)
 	}
 
-	if !namesKept(hostServerEntries(ctx, t, st.Store), kept) {
+	if !namesKept(hostServerEntries(ctx, t, st), kept) {
 		t.Fatalf("the new database has no audit entry of the reset that names %s", kept)
 	}
 }

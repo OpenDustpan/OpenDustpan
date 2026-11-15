@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -18,6 +19,9 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -26,6 +30,7 @@ const (
 	maxExtractBytes = 4 << 30
 	dirMode         = 0o750
 	fileMode        = 0o750
+	lockMode        = 0o600
 	// downloadAttempts is how many times a download of an archive is tried.
 	// The wait before attempt n+1 is n times downloadRetryWait.
 	downloadAttempts  = 3
@@ -43,14 +48,32 @@ var (
 	ErrChecksumMismatch = errors.New("archive checksum mismatch")
 	ErrUnsafeArchive    = errors.New("unsafe archive entry")
 	ErrMissingBinary    = errors.New("archive has no CLI binary")
+	ErrCacheMismatch    = errors.New("cached CLI does not match its archive")
 )
 
 // Fetcher downloads CLI releases into a cache directory.
 type Fetcher struct {
 	// Client performs every request.
 	Client *http.Client
-	// CacheDir holds one extracted directory per tool, version and platform.
+	// CacheDir holds one extracted directory per tool, version and platform,
+	// and the verified archive next to it.
 	CacheDir string
+
+	mu      sync.Mutex
+	checked map[checkKey]bool
+
+	// checks counts the checks of cache entries. beforeLock, if set, runs
+	// after a call finds no record of a check and before it takes the lock
+	// of the entry. Only tests read checks and set beforeLock.
+	checks     atomic.Int64
+	beforeLock func()
+}
+
+// checkKey names one cache check: the archive and the sum it was checked
+// against.
+type checkKey struct {
+	archive string
+	sum     string
 }
 
 // Install is a CLI ready to run.
@@ -81,19 +104,9 @@ func (i Install) Binary() string {
 // Install resolves label for tool, downloads and verifies the release if it is
 // not cached, and returns it. Concurrent calls for different versions are safe.
 func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install, error) {
-	version := strings.TrimPrefix(label, "v")
-
-	if label == Latest {
-		if err := checkUnpinnedFetch(tool, label, tool.LatestURL); err != nil {
-			return Install{}, err
-		}
-
-		resolved, err := f.latest(ctx, tool)
-		if err != nil {
-			return Install{}, err
-		}
-
-		version = resolved
+	version, err := f.version(ctx, tool, label)
+	if err != nil {
+		return Install{}, err
 	}
 
 	archive, err := tool.ArchiveName(version)
@@ -101,15 +114,9 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 		return Install{}, err
 	}
 
-	if _, ok := tool.pinned[archive]; !ok {
-		checksumURL := tool.releaseFile(version, tool.checksums(version))
-
-		unpinnedErr := checkUnpinnedFetch(tool, label, checksumURL)
-		if unpinnedErr != nil {
-			return Install{}, unpinnedErr
-		}
+	if uerr := checkUnpinnedChecksum(tool, label, version, archive); uerr != nil {
+		return Install{}, uerr
 	}
-
 	want, err := f.checksum(ctx, tool, version, archive)
 	if err != nil {
 		return Install{}, err
@@ -126,7 +133,24 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 		binary:         binary,
 	}
 
-	if _, err := os.Stat(binary); err == nil {
+	key := checkKey{archive: archive, sum: want.sum}
+	if f.cacheChecked(key) {
+		return inst, nil
+	}
+
+	// Many Fetchers and processes can share one cache directory. Without
+	// this lock, one call could see the directory of another call before its
+	// archive is published, refuse it and remove a CLI that is in use.
+	unlock, err := f.lockEntry(archive)
+	if err != nil {
+		return Install{}, err
+	}
+
+	defer unlock()
+
+	// Another call of this Fetcher can have checked the entry while this call
+	// waited for the lock. Do not check it again.
+	if f.cacheChecked(key) {
 		return inst, nil
 	}
 
@@ -138,11 +162,143 @@ func (f *Fetcher) Install(ctx context.Context, tool Tool, label string) (Install
 		binary:  filepath.FromSlash(tool.binary),
 	}
 
+	// The cache comes from CI and is untrusted: an entry is used only when
+	// its archive and extracted files match the expected sum and the archive.
+	if f.checkCache(archive, rel.binary, want.sum) == nil {
+		f.markCacheChecked(key)
+
+		return inst, nil
+	}
+
+	if err := removeCacheEntry(dest, filepath.Join(f.CacheDir, archive)); err != nil {
+		return Install{}, err
+	}
+
 	if err := f.download(ctx, rel); err != nil {
 		return Install{}, err
 	}
 
+	f.markCacheChecked(key)
+
 	return inst, nil
+}
+
+// lockEntry runs the beforeLock function of f, if it is set, and then locks
+// the entry of archive in the cache directory of f.
+func (f *Fetcher) lockEntry(archive string) (func(), error) {
+	if f.beforeLock != nil {
+		f.beforeLock()
+	}
+
+	return lockEntry(f.CacheDir, archive)
+}
+
+// checkCache counts the check and checks the entry of archive in the cache
+// directory of f.
+func (f *Fetcher) checkCache(archive, wantBinary, wantSum string) error {
+	f.checks.Add(1)
+
+	return checkCache(f.CacheDir, archive, wantBinary, wantSum)
+}
+
+// lockEntry takes an exclusive lock on the lock file of archive in cacheDir
+// and returns the unlock function. The lock holds across Fetchers and
+// processes, because each call opens the file again.
+func lockEntry(cacheDir, archive string) (func(), error) {
+	if err := os.MkdirAll(cacheDir, dirMode); err != nil {
+		return nil, fmt.Errorf("create cache dir: %w", err)
+	}
+
+	cacheRoot, err := os.OpenRoot(cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("open cache dir: %w", err)
+	}
+
+	defer ignoreErr(cacheRoot.Close)
+
+	lockFile, err := cacheRoot.OpenFile(archive+".lock", os.O_CREATE|os.O_RDWR, lockMode)
+	if err != nil {
+		return nil, fmt.Errorf("open cache lock: %w", err)
+	}
+
+	if err := flock(lockFile, syscall.LOCK_EX); err != nil {
+		return nil, errors.Join(fmt.Errorf("lock cache entry: %w", err), lockFile.Close())
+	}
+
+	return func() {
+		ignoreErr(func() error { return flock(lockFile, syscall.LOCK_UN) })
+		ignoreErr(lockFile.Close)
+	}, nil
+}
+
+// flock applies how to the open file f.
+func flock(f *os.File, how int) error {
+	conn, err := f.SyscallConn()
+	if err != nil {
+		return fmt.Errorf("lock file: %w", err)
+	}
+
+	var lockErr error
+
+	controlErr := conn.Control(func(fd uintptr) {
+		lockErr = syscall.Flock(int(fd), how)
+	})
+	if controlErr != nil {
+		return fmt.Errorf("lock file: %w", controlErr)
+	}
+
+	if lockErr != nil {
+		return fmt.Errorf("lock file: %w", lockErr)
+	}
+
+	return nil
+}
+
+func (f *Fetcher) cacheChecked(key checkKey) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.checked[key]
+}
+
+func (f *Fetcher) markCacheChecked(key checkKey) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.checked == nil {
+		f.checked = make(map[checkKey]bool)
+	}
+
+	f.checked[key] = true
+}
+
+// version returns the release that label names: the latest release for
+// Latest, else the label without a leading "v". It refuses a version that is
+// not a plain "x.y.z" release.
+func (f *Fetcher) version(ctx context.Context, tool Tool, label string) (string, error) {
+	version := strings.TrimPrefix(label, "v")
+
+	if label == Latest {
+		if err := checkUnpinnedFetch(tool, label, tool.LatestURL); err != nil {
+			return "", err
+		}
+
+		resolved, err := f.latest(ctx, tool)
+		if err != nil {
+			return "", err
+		}
+
+		version = resolved
+	}
+
+	// Defense in depth: os.Root contains each cache path too. This check does
+	// not rely on it: the version also goes into the download URL, and a
+	// label that is not a plain release must not name a path at all.
+	if semver(version) == nil {
+		return "", fmt.Errorf("install %s: %w: %q", tool.Name, ErrBadVersion, label)
+	}
+
+	return version, nil
 }
 
 // checkUnpinnedFetch returns ErrUnpinnedFetch when a request to rawURL would
@@ -166,6 +322,17 @@ func checkUnpinnedFetch(tool Tool, label, rawURL string) error {
 	}
 
 	return fmt.Errorf("%w: %s %q: set %s to allow it", ErrUnpinnedFetch, tool.Name, label, tool.versionsEnv)
+}
+
+// checkUnpinnedChecksum returns ErrUnpinnedFetch when archive has no pinned
+// checksum and its published checksum file needs a request that
+// checkUnpinnedFetch refuses.
+func checkUnpinnedChecksum(tool Tool, label, version, archive string) error {
+	if _, ok := tool.pinned[archive]; ok {
+		return nil
+	}
+
+	return checkUnpinnedFetch(tool, label, tool.releaseFile(version, tool.checksums(version)))
 }
 
 func (f *Fetcher) latest(ctx context.Context, tool Tool) (string, error) {
@@ -268,12 +435,292 @@ func (f *Fetcher) download(ctx context.Context, rel release) error {
 	}
 
 	if err := os.Rename(stage, rel.dest); err != nil {
-		// Another process finished first; its copy was verified the same way.
-		if _, statErr := os.Stat(filepath.Join(rel.dest, rel.binary)); statErr == nil {
+		// Another process finished first; keep this case only when its entry
+		// passes the same check.
+		if checkCache(f.CacheDir, rel.archive, rel.binary, rel.sum) == nil {
 			return nil
 		}
 
 		return fmt.Errorf("publish %s: %w", rel.dest, err)
+	}
+
+	// Publish the verified archive next to the extracted directory. A later
+	// run can then check the extracted files against the archive.
+	if err := os.Rename(tmp.Name(), filepath.Join(f.CacheDir, rel.archive)); err != nil {
+		return fmt.Errorf("publish archive %s: %w", rel.archive, err)
+	}
+
+	return nil
+}
+
+// checkCache reports whether the cache entry for archive in cacheDir holds
+// exactly the contents of that archive, and whether the archive has wantSum.
+// The caller refuses the entry on any error.
+func checkCache(cacheDir, archive, wantBinary, wantSum string) error {
+	cacheRoot, err := os.OpenRoot(cacheDir)
+	if err != nil {
+		return fmt.Errorf("open cache dir: %w", err)
+	}
+
+	defer ignoreErr(cacheRoot.Close)
+
+	// Defense in depth: the archive name comes from the tool, not from the
+	// cache; the root keeps the open inside cacheDir.
+	archiveFile, err := cacheRoot.Open(archive)
+	if err != nil {
+		return fmt.Errorf("open cached archive: %w", err)
+	}
+
+	defer ignoreErr(archiveFile.Close)
+
+	if sizeErr := checkArchiveSize(archiveFile); sizeErr != nil {
+		return sizeErr
+	}
+
+	dest := strings.TrimSuffix(archive, ".tar.gz")
+
+	root, err := cacheRoot.OpenRoot(dest)
+	if err != nil {
+		return fmt.Errorf("open cached CLI: %w", err)
+	}
+
+	defer ignoreErr(root.Close)
+
+	// Defense in depth: download checks the sum before it publishes the
+	// archive; this check does not rely on that or on the cache state.
+	gotSum, err := hashSum(archiveFile)
+	if err != nil {
+		return fmt.Errorf("read cached archive: %w", err)
+	}
+
+	if gotSum != wantSum {
+		return fmt.Errorf("%w: %s: want %s, got %s", ErrChecksumMismatch, archive, wantSum, gotSum)
+	}
+
+	if _, seekErr := archiveFile.Seek(0, io.SeekStart); seekErr != nil {
+		return fmt.Errorf("rewind cached archive: %w", seekErr)
+	}
+
+	want, err := archiveContents(archiveFile)
+	if err != nil {
+		return err
+	}
+
+	if dirErr := checkCacheDir(root, want); dirErr != nil {
+		return dirErr
+	}
+
+	// Defense in depth: the directory check already covers the binary path;
+	// this check does not rely on it, so a missing binary is still refused.
+	if _, err := root.Lstat(wantBinary); err != nil {
+		return fmt.Errorf("inspect cached CLI binary: %w", err)
+	}
+
+	return nil
+}
+
+// checkArchiveSize refuses a cached archive above the download limit.
+// Defense in depth: download caps the archive size; this check does not rely
+// on that and refuses a larger cached archive before it reads it.
+func checkArchiveSize(f *os.File) error {
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect cached archive: %w", err)
+	}
+
+	if info.Size() > maxArchiveBytes {
+		return fmt.Errorf("%w: cached archive is larger than %d bytes", ErrCacheMismatch, maxArchiveBytes)
+	}
+
+	return nil
+}
+
+// archiveEntry is the type, size and content hash of one entry that the
+// extracted directory must hold.
+type archiveEntry struct {
+	kind byte
+	size int64
+	sum  string
+}
+
+// archiveContents returns the entries of the gzipped tarball in src, keyed by
+// their cleaned names.
+func archiveContents(src io.Reader) (map[string]archiveEntry, error) {
+	entries := make(map[string]archiveEntry)
+
+	err := walkArchive(src, func(hdr *tar.Header, body io.Reader) error {
+		name := entryName(hdr)
+		if name == "." {
+			return nil
+		}
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			addParentDirs(entries, name)
+			entries[name] = archiveEntry{kind: tar.TypeDir, size: 0, sum: ""}
+		case tar.TypeReg:
+			addParentDirs(entries, name)
+
+			hash := sha256.New()
+			if _, err := io.Copy(hash, body); err != nil {
+				return fmt.Errorf("read archive entry %q: %w", name, err)
+			}
+
+			entries[name] = archiveEntry{
+				kind: tar.TypeReg,
+				size: hdr.Size,
+				sum:  hex.EncodeToString(hash.Sum(nil)),
+			}
+		default:
+			// Extraction refuses every other type, so a cache entry that holds
+			// one did not come from extraction.
+			return fmt.Errorf("%w: %q has type %q", ErrUnsafeArchive, hdr.Name, hdr.Typeflag)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return entries, nil
+}
+
+// addParentDirs adds the directories that extraction creates for name.
+func addParentDirs(entries map[string]archiveEntry, name string) {
+	for dir := path.Dir(name); dir != "." && dir != "/"; dir = path.Dir(dir) {
+		if _, ok := entries[dir]; !ok {
+			entries[dir] = archiveEntry{kind: tar.TypeDir, size: 0, sum: ""}
+		}
+	}
+}
+
+// checkCacheDir reports whether root holds exactly the entries that the
+// archive names, and no other file.
+func checkCacheDir(root *os.Root, want map[string]archiveEntry) error {
+	seen := make(map[string]bool, len(want))
+
+	err := fs.WalkDir(root.FS(), ".", func(name string, _ fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		if name == "." {
+			return nil
+		}
+
+		entry, ok := want[name]
+		if !ok {
+			// A path that the archive does not name is refused.
+			return fmt.Errorf("%w: cached path %q is not in the archive", ErrCacheMismatch, name)
+		}
+
+		seen[name] = true
+
+		return checkCacheEntry(root, name, entry)
+	})
+	if err != nil {
+		return fmt.Errorf("walk cached CLI: %w", err)
+	}
+
+	for name := range want {
+		if !seen[name] {
+			// Every path of the archive must exist in the cache.
+			return fmt.Errorf("%w: archive path %q is missing from the cache", ErrCacheMismatch, name)
+		}
+	}
+
+	return nil
+}
+
+func checkCacheEntry(root *os.Root, name string, want archiveEntry) error {
+	info, err := root.Lstat(name)
+	if err != nil {
+		return fmt.Errorf("inspect cached %q: %w", name, err)
+	}
+
+	switch want.kind {
+	case tar.TypeDir:
+		return checkDir(name, info)
+	case tar.TypeReg:
+		return checkFile(root, name, info, want)
+	}
+
+	return fmt.Errorf("%w: cached %q has an unknown type", ErrCacheMismatch, name)
+}
+
+func checkDir(name string, info fs.FileInfo) error {
+	if !info.IsDir() {
+		return fmt.Errorf("%w: cached %q is not a directory", ErrCacheMismatch, name)
+	}
+
+	return nil
+}
+
+func checkFile(root *os.Root, name string, info fs.FileInfo, want archiveEntry) error {
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: cached %q is not a regular file", ErrCacheMismatch, name)
+	}
+
+	// The full mode, not only the permission bits: a setuid, setgid or
+	// sticky bit refuses the entry too.
+	if info.Mode() != fileMode {
+		return fmt.Errorf("%w: cached %q has mode %v, want %v",
+			ErrCacheMismatch, name, info.Mode(), fs.FileMode(fileMode))
+	}
+
+	if info.Size() != want.size {
+		// Defense in depth: the hash below also covers a change in size; this
+		// check does not rely on it and refuses a large file before it reads it.
+		return fmt.Errorf("%w: cached %q has size %d, want %d", ErrCacheMismatch, name, info.Size(), want.size)
+	}
+
+	got, err := fileSum(root, name)
+	if err != nil {
+		return err
+	}
+
+	if got != want.sum {
+		return fmt.Errorf("%w: cached %q does not match the archive", ErrCacheMismatch, name)
+	}
+
+	return nil
+}
+
+func fileSum(root *os.Root, name string) (string, error) {
+	f, err := root.Open(name)
+	if err != nil {
+		return "", fmt.Errorf("open cached %q: %w", name, err)
+	}
+
+	defer ignoreErr(f.Close)
+
+	sum, err := hashSum(f)
+	if err != nil {
+		return "", fmt.Errorf("read cached %q: %w", name, err)
+	}
+
+	return sum, nil
+}
+
+func hashSum(r io.Reader) (string, error) {
+	hash := sha256.New()
+	if _, err := io.Copy(hash, r); err != nil {
+		return "", fmt.Errorf("read file: %w", err)
+	}
+
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// removeCacheEntry removes a refused entry: the extracted directory and its
+// archive file.
+func removeCacheEntry(dest, archivePath string) error {
+	if err := os.RemoveAll(dest); err != nil {
+		return fmt.Errorf("remove refused cache directory: %w", err)
+	}
+
+	if err := os.RemoveAll(archivePath); err != nil {
+		return fmt.Errorf("remove refused cache archive: %w", err)
 	}
 
 	return nil
@@ -351,13 +798,6 @@ func (f *Fetcher) fetchTo(ctx context.Context, url string, dst io.Writer) (strin
 // extract unpacks a gzipped tarball into dir. Only directories and regular
 // files are accepted, and every path is confined to dir by os.Root.
 func extract(src io.Reader, dir string) error {
-	gz, err := gzip.NewReader(src)
-	if err != nil {
-		return fmt.Errorf("open gzip: %w", err)
-	}
-
-	defer ignoreErr(gz.Close)
-
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return fmt.Errorf("open extraction root: %w", err)
@@ -366,6 +806,29 @@ func extract(src io.Reader, dir string) error {
 	defer ignoreErr(root.Close)
 
 	var total int64
+
+	return walkArchive(src, func(hdr *tar.Header, body io.Reader) error {
+		if hdr.Typeflag == tar.TypeReg {
+			total += hdr.Size
+			if total > maxExtractBytes {
+				return fmt.Errorf("%w: archive expands beyond %d bytes", ErrUnsafeArchive, maxExtractBytes)
+			}
+		}
+
+		return extractEntry(root, hdr, body)
+	})
+}
+
+// walkArchive reads the gzipped tarball in src and calls visit for each entry.
+// Extraction and the cache check share this one reader, so they apply the
+// same name rules.
+func walkArchive(src io.Reader, visit func(*tar.Header, io.Reader) error) error {
+	gz, err := gzip.NewReader(src)
+	if err != nil {
+		return fmt.Errorf("open gzip: %w", err)
+	}
+
+	defer ignoreErr(gz.Close)
 
 	tr := tar.NewReader(gz)
 
@@ -379,21 +842,19 @@ func extract(src io.Reader, dir string) error {
 			return fmt.Errorf("read tar: %w", err)
 		}
 
-		if hdr.Typeflag == tar.TypeReg {
-			total += hdr.Size
-			if total > maxExtractBytes {
-				return fmt.Errorf("%w: archive expands beyond %d bytes", ErrUnsafeArchive, maxExtractBytes)
-			}
-		}
-
-		if err := extractEntry(root, hdr, tr); err != nil {
+		if err := visit(hdr, tr); err != nil {
 			return err
 		}
 	}
 }
 
+// entryName returns the cleaned name that extraction and the cache check use.
+func entryName(hdr *tar.Header) string {
+	return path.Clean(hdr.Name)
+}
+
 func extractEntry(root *os.Root, hdr *tar.Header, body io.Reader) error {
-	name := path.Clean(hdr.Name)
+	name := entryName(hdr)
 
 	switch hdr.Typeflag {
 	case tar.TypeDir:
@@ -421,6 +882,12 @@ func writeFile(root *os.Root, name string, src io.Reader, size int64) error {
 
 	if _, err := io.CopyN(f, src, size); err != nil {
 		return errors.Join(fmt.Errorf("write %q: %w", name, err), f.Close())
+	}
+
+	// The umask can remove bits from the mode of OpenFile. Set the mode
+	// exactly, so that the cache check can compare it.
+	if err := f.Chmod(fileMode); err != nil {
+		return errors.Join(fmt.Errorf("set the mode of %q: %w", name, err), f.Close())
 	}
 
 	if err := f.Close(); err != nil {

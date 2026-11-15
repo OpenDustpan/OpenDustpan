@@ -93,6 +93,7 @@ func (v *CreateProfileRevisionRequest) UnmarshalJSON(data []byte) error {
 type ErrorCode string
 
 const (
+	ErrorCodeAccessCollectionUnitCap               ErrorCode = "access.collection-unit-cap"
 	ErrorCodeAccessDenied                          ErrorCode = "access.denied"
 	ErrorCodeAccessIpNotAllowed                    ErrorCode = "access.ip-not-allowed"
 	ErrorCodeAccessLastSiteAdministrator           ErrorCode = "access.last-site-administrator"
@@ -134,6 +135,7 @@ const (
 	ErrorCodeGateRuleFailed                        ErrorCode = "gate.rule-failed"
 	ErrorCodeGateUnavailable                       ErrorCode = "gate.unavailable"
 	ErrorCodeGateVersionConflict                   ErrorCode = "gate.version-conflict"
+	ErrorCodeGitHostAppBudgetSpent                 ErrorCode = "git-host.app-budget-spent"
 	ErrorCodeGitHostAppNotRegistered               ErrorCode = "git-host.app-not-registered"
 	ErrorCodeGitHostInstallationNotAssigned        ErrorCode = "git-host.installation-not-assigned"
 	ErrorCodeGitHostLinkAccountInvalid             ErrorCode = "git-host.link-account-invalid"
@@ -311,6 +313,9 @@ const (
 	ErrorCodeRunnerTokenUsed                       ErrorCode = "runner.token-used"
 	ErrorCodeSchemaBinaryBelowMinimum              ErrorCode = "schema.binary-below-minimum"
 	ErrorCodeSecretConsoleSession                  ErrorCode = "secret.console-session"
+	ErrorCodeSecretItemKeyAttemptExpired           ErrorCode = "secret.item-key-attempt-expired"
+	ErrorCodeSecretItemKeyBlobClockSkew            ErrorCode = "secret.item-key-blob-clock-skew"
+	ErrorCodeSecretItemKeyBlobMismatch             ErrorCode = "secret.item-key-blob-mismatch"
 	ErrorCodeSecretKeyNotConfigured                ErrorCode = "secret.key-not-configured"
 	ErrorCodeSecretNotDecrypted                    ErrorCode = "secret.not-decrypted"
 	ErrorCodeSecretTooLarge                        ErrorCode = "secret.too-large"
@@ -333,7 +338,9 @@ const (
 	ErrorCodeSettingsStaticOnly                    ErrorCode = "settings.static-only"
 	ErrorCodeSettingsUnavailable                   ErrorCode = "settings.unavailable"
 	ErrorCodeSettingsValueInvalid                  ErrorCode = "settings.value-invalid"
+	ErrorCodeSignInFailed                          ErrorCode = "sign-in.failed"
 	ErrorCodeSignInRefused                         ErrorCode = "sign-in.refused"
+	ErrorCodeSignInUnavailable                     ErrorCode = "sign-in.unavailable"
 	ErrorCodeSinkAccessToken                       ErrorCode = "sink.access-token"
 	ErrorCodeSinkConflict                          ErrorCode = "sink.conflict"
 	ErrorCodeSinkDeliveryNotFound                  ErrorCode = "sink.delivery-not-found"

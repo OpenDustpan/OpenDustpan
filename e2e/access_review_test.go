@@ -29,6 +29,8 @@ type e2eReviewRow struct {
 	Subject           string        `json:"subject"`
 	SubjectName       string        `json:"subjectName"`
 	Holder            string        `json:"holder"`
+	Source            string        `json:"source"`
+	Rule              string        `json:"rule"`
 	Role              string        `json:"role"`
 	Object            string        `json:"object"`
 	ObjectState       string        `json:"objectState"`
@@ -103,7 +105,7 @@ type reviewFixture struct {
 func TestAccessReview(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {

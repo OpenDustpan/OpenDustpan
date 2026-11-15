@@ -125,6 +125,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.instanceRoutes()...)
 	routes = append(routes, h.storeCheckRoutes()...)
 	routes = append(routes, h.signInRoutes()...)
+	routes = append(routes, h.directorySignInRoutes()...)
 	routes = append(routes, h.devSignInRoutes()...)
 	routes = append(routes, h.capabilitiesRoutes()...)
 	routes = append(routes, h.openAPIRoutes()...)
@@ -230,7 +231,7 @@ func (h *Handler) checkRoutes() []Route {
 		},
 		{
 			Method:  http.MethodGet,
-			Path:    "/api/server/upgrade-check",
+			Path:    upgradeCheckPath,
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerObserve},
 			Resolve: resolveServer, ActionsFor: nil, OpaqueDenial: false,
@@ -239,14 +240,14 @@ func (h *Handler) checkRoutes() []Route {
 	}
 }
 
-// maintenanceRoutes returns the maintenance routes (ADR 38).
+// maintenanceRoutes returns the maintenance routes.
 func (h *Handler) maintenanceRoutes() []Route {
 	return []Route{
-		authorizedRoute(http.MethodGet, "/api/server/maintenance",
+		authorizedRoute(http.MethodGet, maintenancePath,
 			[]identity.Action{identity.ActionServerMaintenance}, resolveServer, h.getMaintenance),
-		authorizedRoute(http.MethodPost, "/api/server/maintenance/enter",
+		authorizedRoute(http.MethodPost, maintenanceEnterPath,
 			[]identity.Action{identity.ActionServerMaintenance}, resolveServer, h.enterMaintenance),
-		authorizedRoute(http.MethodPost, "/api/server/maintenance/leave",
+		authorizedRoute(http.MethodPost, maintenanceLeavePath,
 			[]identity.Action{identity.ActionServerMaintenance}, resolveServer, h.leaveMaintenance),
 	}
 }

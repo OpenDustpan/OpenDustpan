@@ -230,15 +230,15 @@ FOR NO KEY UPDATE;
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
     lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms,
-    created_by, restored_from, token_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15);
+    created_by, restored_from, token_id, job_id, git_head
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17);
 
 -- name: GetUpdate :one
 -- One statement finds the stack by its reference and reads the update, so the
 -- read needs no transaction. No stack and no update both return no row.
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version, u.token_id,
+       u.created_by, u.restored_from, u.journal_version, u.token_id, u.job_id, u.git_head,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 JOIN stacks AS st ON st.id = u.stack_id
@@ -252,7 +252,7 @@ UPDATE updates
 SET status = @status, version = @version, revision = @revision,
     lease_digest = @lease_digest, lease_expires_at_ms = @lease_expires_at_ms,
     started_at_ms = @started_at_ms, ended_at_ms = @ended_at_ms,
-    journal_version = @journal_version, token_id = @token_id
+    journal_version = @journal_version, token_id = @token_id, job_id = @job_id
 WHERE stack_id = @stack_id AND id = @id
   AND revision = @expected_revision;
 
@@ -288,7 +288,7 @@ WHERE namespace = $3 AND project = $4 AND name = $5 AND deleted_at_ms IS NULL;
 -- read needs no transaction. No stack and no running update both return no row.
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version, u.token_id,
+       u.created_by, u.restored_from, u.journal_version, u.token_id, u.job_id, u.git_head,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 JOIN stacks AS st ON st.id = u.stack_id
@@ -299,7 +299,7 @@ WHERE st.namespace = @namespace AND st.project = @project AND st.name = @name AN
 -- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
-       u.created_by, u.restored_from, u.journal_version, u.token_id,
+       u.created_by, u.restored_from, u.journal_version, u.token_id, u.job_id, u.git_head,
        COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -929,15 +929,15 @@ WHERE workspace_id = $1;
 INSERT INTO state_versions (
     id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
     force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-    restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+    restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
 );
 
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 FROM state_versions
 WHERE id = $1;
 
@@ -946,7 +946,7 @@ WHERE id = $1;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -1025,7 +1025,7 @@ WHERE w.id = $1;
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -1057,7 +1057,7 @@ WHERE id = $2;
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks, sv.fenced_by, unlocked_write
+       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1;
@@ -1102,6 +1102,58 @@ FROM (
 ) AS running_work
 ORDER BY kind, id
 LIMIT 1;
+
+-- name: CountLiveBlobDeleteLeases :one
+-- The number of lease rows that end after the database clock. A restore waits
+-- for zero of them before it applies the data.
+SELECT COUNT(*) FROM blob_delete_leases
+WHERE expires_at_ms > FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
+
+-- name: LockBlobDeleteLeaseExclusive :exec
+-- Takes the exclusive form of the blob delete lease lock for this
+-- transaction. It waits for every take of a lease in flight and holds every
+-- later take back until this transaction ends, so the take of a lease and the
+-- write of a running backup or restore row cannot interleave.
+SELECT pg_advisory_xact_lock(sqlc.arg(class)::int, hashtext(current_schema()));
+
+-- name: LockBlobDeleteLeaseShared :exec
+-- Takes the shared form of the blob delete lease lock for this transaction.
+-- The take of a lease runs as a later statement, so its READ COMMITTED
+-- snapshot is newer than the lock: a backup or a restore that committed its
+-- running row before the lock is visible to the take.
+SELECT pg_advisory_xact_lock_shared(sqlc.arg(class)::int, hashtext(current_schema()));
+
+-- name: ReleaseBlobDeleteLease :exec
+-- Deletes the lease row of one holder. A holder with no row is not an error.
+DELETE FROM blob_delete_leases
+WHERE holder = sqlc.arg(holder);
+
+-- name: TakeBlobDeleteLease :one
+-- Writes the lease of holder, ending at the database clock plus ttl_ms, in
+-- one statement. While a backup runs or a restore checks or applies, it
+-- writes nothing and answers that work instead, so a deleter that read the
+-- guard before a restore started cannot take a lease after it. A take for a
+-- holder with a row replaces that row. An empty kind and an empty ID are the
+-- answer of a written lease.
+WITH running AS (
+    SELECT kind, id
+    FROM (
+        SELECT 'backup'::text AS kind, id FROM backups WHERE state = 'running'
+        UNION ALL
+        SELECT 'restore'::text AS kind, id FROM restores WHERE state IN ('checking', 'applying')
+    ) AS running_work
+    ORDER BY kind, id
+    LIMIT 1
+), written AS (
+    INSERT INTO blob_delete_leases (holder, expires_at_ms)
+    SELECT sqlc.arg(holder)::text,
+           FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + sqlc.arg(ttl_ms)::bigint
+    WHERE NOT EXISTS (SELECT 1 FROM running)
+    ON CONFLICT (holder) DO UPDATE SET expires_at_ms = EXCLUDED.expires_at_ms
+    RETURNING holder
+)
+SELECT COALESCE((SELECT kind FROM running), '')::text AS kind,
+       COALESCE((SELECT id FROM running), '')::text AS id;
 
 -- name: ListBackups :many
 SELECT id, state, started_at_ms, ended_at_ms, target, error
@@ -1304,7 +1356,8 @@ UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
 UNION ALL
-SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text AS content_key,
+SELECT 'namespaces/' || k.namespace_id || '/item-keys/' || k.id || '/v' || k.blob_version::text
+       || '-' || k.blob_attempt AS content_key,
        k.blob_size AS size, k.blob_md5 AS md5, FALSE AS sealed
 FROM item_keys AS k
 WHERE k.shredded_at_ms = 0
@@ -4246,7 +4299,7 @@ INSERT INTO jobs (
 );
 
 -- name: GetJob :one
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -4254,7 +4307,7 @@ JOIN namespaces AS n ON n.id = j.namespace_id
 WHERE j.id = sqlc.arg(id);
 
 -- name: GetJobByKey :one
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -4292,7 +4345,7 @@ WHERE j.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg
 LIMIT 1;
 
 -- name: ListAwaitingJobsOfUnit :many
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms
 FROM jobs AS j
@@ -4304,7 +4357,7 @@ ORDER BY j.seq;
 -- name: ListOrphanJobs :many
 -- Jobs that hold their unit while the durable operation of their current
 -- phase does not exist or ended. op_state is NULL for a missing operation.
-SELECT j.id, n.name AS namespace, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
+SELECT j.id, n.name AS namespace, j.namespace_id, j.unit_id, j.seq, j.state, j.wait, j.current_phase, j.current_changes,
        j.current_operation, j.idempotency_key, j.version, j.body, j.created_at_ms, j.updated_at_ms,
        j.state_changed_at_ms,
        d.state AS op_state
@@ -4350,30 +4403,47 @@ JOIN namespaces AS n ON n.id = f.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND (f.ends_at_ms = 0 OR f.ends_at_ms > sqlc.arg(since_ms))
 ORDER BY f.starts_at_ms, f.id;
 
--- name: GetUnitStateVersion :one
-SELECT version_id FROM unit_state_versions
-WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND unit_id = sqlc.arg(unit_id);
+-- name: FinalizeReleasedUnitState :one
+-- Make the current state version of the unit final, with the origin of a
+-- release, and do nothing when the unit has no state version row or its
+-- current version is final already. It returns the version and the time that
+-- the database clock gives it.
+UPDATE unit_state
+SET final_version_id = version_id, final_commit = sqlc.arg(final_commit), final_job = sqlc.arg(final_job),
+    final_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND unit_id = sqlc.arg(unit_id) AND version_id <> final_version_id
+RETURNING version_id, final_at_ms;
 
--- name: PutUnitStateVersion :exec
-INSERT INTO unit_state_versions (unit_id, namespace_id, version_id, updated_at_ms)
+-- name: FinalizeUnitState :one
+-- Make the current state version of the unit final, with the origin of the
+-- write that ends it, at the time of the database clock. A unit with no state
+-- version row gets a row with the empty version as final. It returns the final
+-- version and its time.
+INSERT INTO unit_state (unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms)
 VALUES (
     sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
-    sqlc.arg(version_id), sqlc.arg(updated_at_ms)
+    '', '', sqlc.arg(final_commit), sqlc.arg(final_job), FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
 )
-ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, updated_at_ms = excluded.updated_at_ms;
+ON CONFLICT (unit_id) DO UPDATE SET final_version_id = unit_state.version_id,
+    final_commit = excluded.final_commit, final_job = excluded.final_job, final_at_ms = excluded.final_at_ms
+RETURNING version_id, final_at_ms;
 
--- name: GetUnitFinalVersion :one
-SELECT unit_id, version_id, commit_id, job_id, at_ms FROM unit_final_versions
+-- name: GetUnitState :one
+SELECT version_id, final_version_id, final_commit, final_job, final_at_ms FROM unit_state
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)) AND unit_id = sqlc.arg(unit_id);
 
--- name: PutUnitFinalVersion :exec
-INSERT INTO unit_final_versions (unit_id, namespace_id, version_id, commit_id, job_id, at_ms)
+-- name: PublishUnitState :exec
+INSERT INTO unit_state (unit_id, namespace_id, version_id, final_version_id, final_commit, final_job, final_at_ms)
 VALUES (
     sqlc.arg(unit_id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
-    sqlc.arg(version_id), sqlc.arg(commit_id), sqlc.arg(job_id), sqlc.arg(at_ms)
+    sqlc.arg(version_id), sqlc.arg(final_version_id), sqlc.arg(final_commit), sqlc.arg(final_job), sqlc.arg(final_at_ms)
 )
-ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id, commit_id = excluded.commit_id,
-    job_id = excluded.job_id, at_ms = excluded.at_ms;
+ON CONFLICT (unit_id) DO UPDATE SET version_id = excluded.version_id,
+    final_version_id = CASE WHEN sqlc.arg(final)::boolean THEN excluded.final_version_id ELSE unit_state.final_version_id END,
+    final_commit = CASE WHEN sqlc.arg(final)::boolean THEN excluded.final_commit ELSE unit_state.final_commit END,
+    final_job = CASE WHEN sqlc.arg(final)::boolean THEN excluded.final_job ELSE unit_state.final_job END,
+    final_at_ms = CASE WHEN sqlc.arg(final)::boolean THEN excluded.final_at_ms ELSE unit_state.final_at_ms END;
 
 -- name: GetPersonPreferences :one
 -- One row for a live person, with the stored preferences when the person has
@@ -5027,30 +5097,33 @@ WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scop
 -- its unit, its kind and its creation time.
 INSERT INTO triggers (
     namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
-    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms, next_slot_ms
 )
 SELECT
     n.id, sqlc.arg(id), sqlc.arg(unit_tool), sqlc.arg(unit_id), sqlc.arg(kind), sqlc.arg(preset), sqlc.arg(cron),
     sqlc.arg(source_namespace), sqlc.arg(source_tool), sqlc.arg(source_unit_id), sqlc.arg(enabled)::bigint,
-    sqlc.arg(last_saver_subject), sqlc.arg(last_saver_id), sqlc.arg(created_at_ms)::bigint, sqlc.arg(updated_at_ms)::bigint
+    sqlc.arg(last_saver_subject), sqlc.arg(last_saver_id), sqlc.arg(created_at_ms)::bigint, sqlc.arg(updated_at_ms)::bigint,
+    sqlc.arg(next_slot_ms)::bigint
 FROM namespaces AS n
 WHERE n.name = sqlc.arg(namespace)
 ON CONFLICT (namespace_id, id) DO UPDATE SET
     preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
     source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
     last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
-    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms);
+    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms), next_slot_ms = excluded.next_slot_ms;
 
 -- name: GetTrigger :one
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.id = sqlc.arg(id);
 
 -- name: ListTriggersOfUnit :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.unit_tool = sqlc.arg(unit_tool) AND t.unit_id = sqlc.arg(unit_id)
@@ -5058,7 +5131,8 @@ ORDER BY t.id COLLATE "C";
 
 -- name: ListTriggerFollowers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.kind = 'follows' AND t.enabled = 1
@@ -5068,11 +5142,24 @@ ORDER BY t.id COLLATE "C";
 
 -- name: ListEnabledFollowTriggers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.kind = 'follows' AND t.enabled = 1
 ORDER BY t.id COLLATE "C";
+
+-- name: MoveTriggerNextSlot :execrows
+-- Moves the next slot of a schedule trigger from the value that the caller read
+-- to the value after the claim. The compare on the old value is a layer of its
+-- own: the transaction of the caller already serializes the writes of the
+-- namespace, and this statement still changes no row when the slot moved.
+UPDATE triggers
+SET next_slot_ms = sqlc.arg(next_slot_ms)::bigint
+WHERE triggers.id = sqlc.arg(id)
+  AND triggers.kind = 'schedule' AND triggers.enabled = 1
+  AND triggers.next_slot_ms = sqlc.arg(old_next_slot_ms)::bigint
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
 -- name: DeleteTrigger :execrows
 DELETE FROM triggers
@@ -5114,18 +5201,19 @@ WHERE drift_results.unit_id = sqlc.arg(unit_id)
 -- The caller checks the fence in the same transaction. A record for the same
 -- item is not written: the caller reads the stored record.
 INSERT INTO item_keys (
-    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5
+    id, namespace_id, scope_id, kind, item, wrapper_id, created_at_ms, shredded_at_ms, blob_version, blob_size, blob_md5,
+    blob_attempt
 )
 VALUES (
     sqlc.arg(id), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
     sqlc.arg(scope_id), sqlc.arg(kind), sqlc.arg(item), sqlc.arg(wrapper_id), sqlc.arg(created_at_ms), 0,
-    sqlc.arg(blob_version), sqlc.arg(blob_size), sqlc.arg(blob_md5)
+    sqlc.arg(blob_version), sqlc.arg(blob_size), sqlc.arg(blob_md5), sqlc.arg(blob_attempt)
 )
 ON CONFLICT (namespace_id, scope_id, kind, item) DO NOTHING;
 
 -- name: GetItemKey :one
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.kind = sqlc.arg(kind)
@@ -5142,7 +5230,7 @@ WHERE item_keys.shredded_at_ms = 0 AND item_keys.scope_id = sqlc.arg(scope_id) A
 
 -- name: ListItemKeys :many
 SELECT k.id, n.name AS namespace, k.scope_id, k.kind, k.item, k.wrapper_id, k.created_at_ms, k.shredded_at_ms,
-       k.blob_version, k.blob_size, k.blob_md5
+       k.blob_version, k.blob_size, k.blob_md5, k.blob_attempt
 FROM item_keys AS k
 JOIN namespaces AS n ON n.id = k.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND k.scope_id = sqlc.arg(scope_id) AND k.id > sqlc.arg(after)
@@ -5154,6 +5242,11 @@ SELECT DISTINCT wrapper_id
 FROM item_keys
 WHERE shredded_at_ms = 0
 ORDER BY wrapper_id;
+
+-- name: SetTransactionTimeout :exec
+-- The attempt deadline of an item key transaction, on the clock of the
+-- database. The setting ends with the transaction. The value is milliseconds.
+SELECT set_config('transaction_timeout', sqlc.arg(timeout_ms)::text, true);
 
 -- name: InsertJobPlan :exec
 -- The caller checks the fence and the claim in the same transaction.

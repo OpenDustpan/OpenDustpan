@@ -31,6 +31,10 @@ func (hotpathNoRefusals) RecordOutOfScope(context.Context, namespace.ID, string,
 	return nil
 }
 
+func (hotpathNoRefusals) RecordMismatch(context.Context, namespace.ID, string) error {
+	return nil
+}
+
 // openHotpathStore returns a fresh SQLite store in a temporary directory with
 // the namespace acme, and the fence of that namespace.
 func openHotpathStore(b *testing.B) (*sqlite.Store, namespace.Fence) {
@@ -74,16 +78,16 @@ func hotpathPlanJob(b *testing.B, unit identity.Object) *job.Job {
 	}
 
 	j := job.Job{
-		ID: job.ID(ident.NewID(job.IDPrefix)), State: job.StateQueued, Wait: job.WaitNone, Reason: "",
-		Current: 0, StartedBy: "al", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil,
+		ID: job.ID(ident.NewID(job.IDPrefix)), NamespaceID: "", State: job.StateQueued, Wait: job.WaitNone,
+		Reason: "", Current: 0, StartedBy: "al", Source: job.SourceAPI, Agent: "", AgentMode: "", BreakGlass: nil,
 		Delivery: nil, Closed: nil, Verification: job.VerificationNone, IdempotencyKey: "", RequestHash: "",
 		Trigger: nil,
 		Version: 0, CreatedAt: time.Time{}, UpdatedAt: time.Time{}, StateChangedAt: time.Time{},
 		Spec: job.Spec{
 			Unit: unit, Operation: job.OperationPlan, Purpose: job.PurposeNone, Executor: job.ExecutorRunner,
-			Location: job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
-			Steps:    []job.Step{step}, Pool: "rpl-default", Profile: "prf-default", Edits: nil, Delivery: "",
-			Defaulted: nil,
+			Location:       job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
+			LocationSource: "", Steps: []job.Step{step}, Pool: "rpl-default", Profile: "prf-default", Edits: nil,
+			Delivery: "", Defaulted: nil,
 		},
 		Phases: make([]job.Phase, len(phases)),
 	}
@@ -144,7 +148,7 @@ func BenchmarkRecorderPutPlan(b *testing.B) {
 		}
 	})
 
-	itemBlobs, err := secret.NewItemKeyBlobs(blobs, hotpathNoRefusals{})
+	itemBlobs, err := secret.NewItemKeyBlobs(blobs, hotpathNoRefusals{}, hotpathNoRefusals{})
 	if err != nil {
 		b.Fatalf("item key blobs: %v", err)
 	}
@@ -278,6 +282,7 @@ func BenchmarkAuditAppend(b *testing.B) {
 		PrincipalKind: audit.PrincipalKindPerson,
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 
 	b.ResetTimer()

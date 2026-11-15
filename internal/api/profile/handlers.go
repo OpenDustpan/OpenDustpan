@@ -128,6 +128,7 @@ func actorOf(r *http.Request, p identity.Principal) *profile.Actor {
 		UserAgent: audit.TruncateUserAgent(userAgent(r)), Channel: sessionauth.AuditChannel(r, channelHeader),
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	return &profile.Actor{Principal: p, By: by}

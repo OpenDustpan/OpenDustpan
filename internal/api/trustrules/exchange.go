@@ -113,5 +113,6 @@ func (h *Handler) requestEntry(r *http.Request) audit.Entry {
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: requestid.FromContext(r.Context()),
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "",
 		Reason: "",
+		Origin: nil,
 	}
 }

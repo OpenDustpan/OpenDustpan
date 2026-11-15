@@ -64,7 +64,9 @@ func NewPair(ctx context.Context, tb testing.TB, cli Install, store Store) *Pair
 		rec:                    rec,
 		deltaCutoff:            0,
 		sinkSenders:            nil,
+		auditSinks:             nil,
 		issuer:                 nil,
+		ldap:                   nil,
 	})
 	dst := newInprocessEnv(ctx, envInput{
 		disableJournaling:      false,
@@ -84,7 +86,9 @@ func NewPair(ctx context.Context, tb testing.TB, cli Install, store Store) *Pair
 		rec:                    rec,
 		deltaCutoff:            0,
 		sinkSenders:            nil,
+		auditSinks:             nil,
 		issuer:                 nil,
+		ldap:                   nil,
 	})
 
 	return &Pair{Src: src, Dst: dst}

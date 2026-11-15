@@ -92,6 +92,7 @@ func publicPatterns() []string {
 		"GET /api/server/sign-in/{provider}/callback",
 		"POST /api/dustpan/v1/sign-in/dev-code",
 		"POST /api/dustpan/v1/sign-in/password",
+		"POST /api/dustpan/v1/sign-in/providers/{provider}/password",
 		"POST /api/dustpan/v1/sign-in/passkey/begin",
 		"POST /api/dustpan/v1/sign-in/passkey/finish",
 		"POST /api/dustpan/v1/local-users/redeem",
@@ -346,6 +347,7 @@ func newServiceBackedHandlerOf(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Workers:          nil,
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
@@ -377,7 +379,7 @@ func newServiceBackedHandlerOf(
 		SignIn: &apiserver.SignIn{
 			Service:      newTestSignInService(t, st, sessions, routePrincipals),
 			OnDevRefused: nil,
-			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
+			Sessions:     sessions, Limiter: nil, Stored: nil, Admin: nil, PasswordProviders: nil, Origins: nil,
 			PasswordLimiter: &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false},
 			Passkeys:        nil, PasskeySignIn: nil, PasskeyBeginLimiter: nil, PasskeyLimiter: nil,
 			Providers: []apiserver.SignInProvider{
@@ -640,7 +642,7 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
 		Now: nil, NewID: nil,
-		BootstrapAdmins: nil, LimitGroups: nil,
+		BootstrapAdmins: nil, Settings: nil, LimitGroups: nil,
 	})
 	if err != nil {
 		t.Fatalf("access service: %v", err)
@@ -883,6 +885,7 @@ func newRouteTestRestores(
 		Backups:         service,
 		Maintenance:     storetest.StateMaintenance{State: st, Hold: false},
 		Blobs:           live,
+		Leases:          st,
 		Target:          target,
 		Key:             nil,
 		Installation:    "test",
@@ -1642,6 +1645,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1817,6 +1821,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1866,6 +1871,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -2057,6 +2063,7 @@ func seedRouteLocalUser(t *testing.T, st *sqlite.Store) {
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	// A store of another fixture holds no person testPrincipalID: it gets no

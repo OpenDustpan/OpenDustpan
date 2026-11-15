@@ -528,6 +528,7 @@ func TestContextWorkspaceSurvivesRename(t *testing.T) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	if err = w.srv.Workspaces().Delete(t.Context(), workspace.Ref{Namespace: "acme", Name: oldName}, e); err != nil {

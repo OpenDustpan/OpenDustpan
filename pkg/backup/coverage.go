@@ -27,7 +27,9 @@ var ErrCoverage = errors.New("backup column list and schema differ")
 // access tables. The instance version rows describe the server processes
 // that run now, so the swap keeps them. The store check rows describe the
 // store of this installation at the time of a check, so the swap keeps
-// them too. The used CAS ticket records stay too: a restore must not let a
+// them too. A blob delete lease names a deleter that runs now, so the swap
+// keeps the live rows and the restore waits for them. The used CAS ticket
+// records stay too: a restore must not let a
 // ticket that a server used after the backup work again. The schema holds every table of Tables and of ControlTables,
 // and no other table (schema_migrations and audit_chain_state aside, which
 // the adapters keep as bookkeeping). Treat the list as a constant and never mutate it.
@@ -49,6 +51,7 @@ var ControlTables = []string{
 	TableMaintenanceRevocations,
 	TableInstanceVersions,
 	TableStoreChecks,
+	TableBlobDeleteLeases,
 	"runner_claims",
 	"runner_handoff_tokens",
 	"runner_sessions",
@@ -58,15 +61,18 @@ var ControlTables = []string{
 // EmptiedTables lists the tables of the schema that a backup leaves out and
 // a restore leaves empty: the replay records of the Idempotency-Key header and
 // the server key of their fingerprints, the heartbeats of the workers, the
-// reset codes and set-up codes of local users, and the open passkey
-// ceremonies. A reset code that a restore
+// reset codes and set-up codes of local users, the open passkey ceremonies,
+// and the state version of each unit.
+// A reset code that a restore
 // brought back would set a password that an administrator gave out before
 // the time of the restore. A ceremony lives 300 seconds, and a restore that
 // brought one back would let an old challenge work again. A
 // heartbeat describes the workers that run now, and the next beat of a worker
 // makes its row again. A replay record answers for the state
 // at the time of the first request, so a replay after a restore of older state
-// would answer for state that the restore removed. The schema holds these
+// would answer for state that the restore removed. A state version names the
+// state that an installation holds now, so a restore derives it from the
+// restored rows and brings no stored value back. The schema holds these
 // tables and the tables of Tables and ControlTables, and no other table.
 // Treat the list as a constant and never mutate it.
 //
@@ -77,6 +83,7 @@ var EmptiedTables = []string{
 	TableDurableHeartbeats,
 	TableLocalUserResets,
 	TablePasskeyChallenges,
+	TableUnitState,
 }
 
 // ErrSchemaRead reports that the store could not read its live schema to

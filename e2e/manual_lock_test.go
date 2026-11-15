@@ -247,7 +247,7 @@ func TestManualLockStopsBothTools(t *testing.T) {
 		t.Skipf("the combined suite needs Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -423,7 +423,7 @@ func TestManualLockOnNamespaceStopsTheChangeRoutes(t *testing.T) {
 		t.Skipf("the combined suite needs Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {

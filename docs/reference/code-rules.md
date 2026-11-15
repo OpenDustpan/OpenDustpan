@@ -5,6 +5,13 @@ administrator can change. Each rule here names what the server refuses or
 shows, and what a person sees. Read this page to learn why the server refused an action
 that a grant seems to allow.
 
+## Bootstrap admin token
+
+- The bootstrap admin token holds every action on the installation by a code
+  rule, with no stored grant record. It ends on the first sign-in of a person.
+  The access-review export shows it as a row with source `"code-rule"` and
+  rule `"bootstrap admin token"`, with no grant ID, no creator and no time.
+
 ## Sensitive actions
 
 - Each action of the operator, the administration and the delegation families

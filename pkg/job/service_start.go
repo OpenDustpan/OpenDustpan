@@ -460,7 +460,7 @@ func editKeys(spec *Spec) []string {
 // gates.
 func (s *service) newJob(a Actor, c *decided) Job {
 	j := Job{
-		ID: s.newID(), Spec: c.spec, State: StateQueued, Wait: WaitNone, Reason: "",
+		ID: s.newID(), NamespaceID: "", Spec: c.spec, State: StateQueued, Wait: WaitNone, Reason: "",
 		Phases: make([]Phase, len(c.kinds)), Current: 0, StartedBy: a.Principal.Subject, Source: c.source,
 		Agent: a.Agent, AgentMode: a.Mode, BreakGlass: c.bg, Trigger: copyTrigger(c.req.Trigger), Delivery: nil,
 		Closed:       nil,
@@ -603,6 +603,7 @@ func (s *service) entry(a Actor, req *StartRequest, j *Job) (audit.Entry, error)
 		UserAgent: req.UserAgent, Channel: channel, Kind: kind, Outcome: audit.OutcomeSuccess,
 		RequestID: req.RequestID, ObjectID: j.Spec.Unit.UnitID(), PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: string(a.Principal.Kind), JobID: "", Reason: reason,
+		Origin: nil,
 	}, nil
 }
 

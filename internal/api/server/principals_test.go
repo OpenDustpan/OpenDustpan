@@ -128,7 +128,7 @@ func newLimitedPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) 
 
 	grants, err := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil,
-		BootstrapAdmins: []string{"admin"}, LimitGroups: limitgroups.New(st, st),
+		BootstrapAdmins: []string{"admin"}, Settings: nil, LimitGroups: limitgroups.New(st, st),
 		Reach: access.ReachConfig{
 			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
 		},
@@ -301,6 +301,7 @@ func newReachPrincipalHandlerWith(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -1346,6 +1347,7 @@ func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
 	svc := newTestPrincipals(t)
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -1442,6 +1444,7 @@ func TestTempAdminFlagFollowsThePrincipalID(t *testing.T) {
 	records := []tempadmin.TempAdmin{}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,

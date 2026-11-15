@@ -370,6 +370,7 @@ func chainMarker(scope namespace.Name, action string, change ChainChange) Entry 
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 }
 

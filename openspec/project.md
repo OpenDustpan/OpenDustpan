@@ -21,6 +21,7 @@ A proposal starts from one of these people.
 | Developer | Run the Pulumi CLI or OpenTofu against the server, read history, and approve or review changes. |
 | Runner operator | Run a runner pool that executes jobs. |
 | Agent | A program that uses the REST API with an access token. |
+| Embedder | A Go developer who builds their own server binary with the SDK, or writes a third-party store. |
 
 Add a persona here when a proposal needs one that is not in this table.
 
@@ -86,6 +87,37 @@ questions. The pull request links the change and its issue.
 4. **Short form.** A bug or a tech-debt change may use a short proposal:
    problem, evidence, fix boundary, check and "Open questions: none". It still
    has an ADR check, but it can be one line when no ADR is touched.
+5. **Evidence for each claim.** Every negative claim carries its proof inline.
+   "No caller" gives the exact `rg` command and its output. "No ADR conflict"
+   gives the quoted decision lines. "Open questions: none" lists the questions
+   that were considered and why each one is answered. A claim without proof
+   counts as unchecked, and the gate refuses it.
+6. **An adversarial second pass.** Before the gate, a model from a provider
+   other than the author's gets one task: list the open questions, failure
+   modes and missing scenarios that the change does not cover. Each answer goes
+   into the proposal, either answered or as an open question.
+7. **Delight, for an infrastructure engineer.** The tool is predictable and
+   fast, and it gets out of the way:
+   - it works the first time from the docs page;
+   - every action can be scripted through the API or the CLI;
+   - output is exact, stable and machine-readable;
+   - a risky action can be previewed and undone, or says plainly that it cannot
+     be undone;
+   - an error names what failed and the one command that helps;
+   - nothing happens without a record;
+   - defaults are safe and visible.
+
+   No animation, gamification, celebration or emoji (see "Voice" in
+   `CLAUDE.md`). The usability check of each change records where the path
+   still costs the person time or surprises them.
+
+   The tests of delight:
+   - Each command on a docs page or in a runbook runs as written, and a test
+     runs it.
+   - An upgrade runs its checks, and the new replicas roll out and become ready
+     the first time, with no manual step.
+   - A production installation from the docs works without special knowledge.
+     A dev server alone does not prove a feature.
 
 ### Design
 
@@ -93,10 +125,48 @@ questions. The pull request links the change and its issue.
 checks. If a design adds a check, it says why no structure removes the need for
 it. A design does not add new tooling as a fix.
 
+The design names the structure that makes the bug class impossible. If none
+exists, it says why, and a guard with a mutation test takes its place.
+
+The design names the unexported type or field that makes the bug class
+impossible (only its constructor can make a value, and the constructor checks
+the invariants), then the golangci-lint setting for what remains, and how a
+rewrite of many call sites is done (go fix with //go:fix inline, gopls, eg or a
+script first). No custom analyzer and no new tool (ADR 364).
+
+#### Contract
+
+A change that adds or changes one of these gives a section `## Contract` in
+`design.md`:
+
+- a port or an exported type: the Go signature of each method or function, and
+  the sentinel errors that each one returns;
+- an API endpoint: the method and the path, the request and the response JSON,
+  the status codes, the error codes, the authorization action, the paging and
+  the ETag;
+- stored schema: the tables and the columns of each dialect, with their types,
+  keys and indexes;
+- CLI output that an e2e test asserts: the exact output.
+
+Each time field names its unit as the handler writes it, and each error names the
+sentinel that the conformance suite requires, with file:line.
+
+The section holds no function body and no internal detail. This rule applies to
+the changes that are made after it lands. A change made before it gets a
+Contract section only when a finding of the missing-contract kind (a port
+without a signature, a field without a name, an error code that is not defined)
+needs one, and then for that change only. No change is rewritten to add one.
+
 ### Tasks
 
 Each task names its acceptance check: a test, a command or an API call that
-shows the task is done. The definition of done for a change is:
+shows the task is done.
+
+**A failing test first.** Each spec scenario maps to a named test that fails on
+main before the fix. The pull request lists the mapping and shows the failure on
+main. A scenario that cannot be written as a failing test is an open question.
+
+The definition of done for a change is:
 
 - the wiring: the feature is reachable from the server, and not only built;
 - the route, with its authorization actions;
@@ -106,6 +176,31 @@ shows the task is done. The definition of done for a change is:
 - a usability check: the persona completes the user path from the docs page
   alone, and each error names the one command that helps;
 - `make check` with zero findings.
+
+### Tick and archive
+
+The pull request that completes a task ticks that task in `tasks.md`. A pull
+request that completes only some tasks of a change ticks those tasks and leaves
+the others open.
+
+The pull request that completes the last task of a change ticks its tasks and
+archives the change with the `openspec` command, in the same pull request:
+`npx @fission-ai/openspec@1.15.0 archive <change> --yes`. The command moves the
+change to `openspec/changes/archive/` and merges its spec deltas into
+`openspec/specs/`. Do not move the files by hand.
+
+Do not tick a task that is not done. If a task moves to another issue, write the
+issue next to the task and leave the box open.
+
+When an archive creates a new capability spec, the same pull request replaces
+the placeholder Purpose ("TBD") with a real Purpose of two to four sentences:
+what the capability covers for the user, and where it stops. `make docs-lint`
+fails when a line of a spec in `openspec/specs/` starts with "TBD". A reviewer
+refuses a "TBD" Purpose.
+
+A reviewer refuses a pull request that completes tasks without ticking them. A
+reviewer also refuses a pull request that completes the last task of a change
+and does not archive it.
 
 ### Validation
 
@@ -118,3 +213,14 @@ The slash commands and skills for Claude Code and OpenCode are plain files in
 `.claude/` and `.opencode/`. They were generated by `openspec init` and
 reviewed. They call the `openspec` command. Run the pinned version through
 `npx @fission-ai/openspec@1.15.0` or install it with the same version.
+
+## Review of a change
+
+These rules apply to each review:
+
+- The reviewer runs the evidence of at least one negative claim again (the `rg`
+  command or the ADR quote) and states the result.
+- The reviewer checks the scenario-to-test mapping and the failure on main.
+- The verdict is CLEAN or CHANGES, and each finding has `file:line`.
+- A pull request from an outside lane names the tool (not the model) in its
+  body.

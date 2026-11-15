@@ -57,6 +57,7 @@ type BackupStore interface { //nolint:interfacebloat // A whole-store round trip
 	backup.KeyPeeker
 	backup.Registry
 	blobguard.Watch
+	blobguard.Leases
 	// GetRestore and ListRestores read the restores table, as
 	// backup.RestoreOperations does. The cases that write restore rows
 	// assert the store to the restore operation ports.
@@ -115,6 +116,10 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "the table list names every table of the schema", test: testBackupTablesCoverSchema},
 		{name: "column lists cover every column of the schema", test: testBackupColumnsCoverSchema},
 		{name: "backups table creates, finishes, gets and lists", test: testBackupRegistry},
+		{
+			name: "a row that is not ended stores NULL, a row that is ended stores its time",
+			test: testBackupEndedShape,
+		},
 		{name: "one backup runs at a time", test: testBackupOneRunning},
 		{name: "starting a backup stores the row and the operation together", test: testBackupStart},
 		{name: "a refused start leaves no operation", test: testBackupStartRefused},
@@ -138,6 +143,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "the running work read returns none when every backup ended", test: testRunningEnded},
 		{name: "a takeover leaves the backup row running", test: testRunningTakeover},
 		{name: "a refused start gives no running work", test: testRunningRefusedStart},
+		{name: "a lease take writes one live lease and a release deletes it", test: testRunningLease},
 	}
 
 	for _, tc := range cases {
@@ -241,7 +247,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		Kind:         stack.KindUpdate,
 		DryRun:       false,
 		CreatedBy:    "alice@example.com",
-		RestoredFrom: 0,
+		RestoredFrom: 0, GitHead: "",
 	})
 	checkpoint := f.checkpoint(t, running, 0, resourcedDeployment)
 
@@ -259,7 +265,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 		Kind:         stack.KindRestore,
 		DryRun:       false,
 		CreatedBy:    "bob@example.com",
-		RestoredFrom: finished.Version,
+		RestoredFrom: finished.Version, GitHead: "",
 	})
 
 	scopes := []secret.Scope{
@@ -350,6 +356,7 @@ func seedBackupSavedViews(t *testing.T, s BackupStore, acme namespace.Namespace)
 		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 
 	for i, query := range []savedview.Query{
@@ -426,6 +433,7 @@ func seedBackupBreakGlass(t *testing.T, s BackupStore, acme namespace.Namespace)
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	// The pending review carries a notice step that is due, so the round trip
@@ -547,7 +555,12 @@ func seedBackupItemKeys(t *testing.T, s BackupStore, acme namespace.Namespace) {
 			Ref:        ref,
 			ID:         secret.NewItemKeyID(),
 			WrapperID:  "kek-1",
-			Blob:       secret.ItemKeyBlobInfo{Version: 1, Size: 60, MD5: [16]byte{1, 2, 3}},
+			Blob: secret.ItemKeyBlobInfo{
+				Version: 1,
+				Size:    60,
+				MD5:     [16]byte{1, 2, 3},
+				Attempt: "abcdefghij0123456789",
+			},
 		}
 		if _, err = keys.CreateItemKey(t.Context(), k, acme.Fence()); err != nil {
 			t.Fatalf("create item key %d: %v", i, err)
@@ -582,6 +595,7 @@ func seedBackupGitHost(t *testing.T, s BackupStore, acme namespace.Namespace) {
 			UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
 			RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "",
 			JobID: "", Reason: "",
+			Origin: nil,
 		}
 	}
 
@@ -650,6 +664,7 @@ func seedBackupSinks(t *testing.T, s BackupStore, acme namespace.Namespace) {
 		Object: acme.Name.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 		UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 
 	chat := notify.Sink{
@@ -1183,6 +1198,7 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -1345,6 +1361,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Reason:        "",
 			PrincipalKind: "",
 			JobID:         "",
+			Origin:        nil,
 		})
 		if err != nil {
 			t.Fatalf("append audit entry %d: %v", i, err)
@@ -1880,6 +1897,29 @@ func newBackupRecord(id backup.ID, startedAt time.Time) backup.Record {
 		Error:     "",
 		State:     backup.StateRunning,
 	}
+}
+
+// testBackupEndedShape proves the stored shape of ended_at_ms: a running row
+// stores NULL and a finished row stores its end time. It reads the column
+// with the raw reader of the store, not through the domain record.
+func testBackupEndedShape(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+
+	witness, ok := s.(NullEndedWitness)
+	if !ok {
+		t.Skip("store has no raw end-time reader")
+	}
+
+	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	requireNotEndedStored(t, witness, backup.TableBackups, running.ID.String())
+
+	endedAt := now().Add(time.Hour)
+	mustFinishBackup(t, s, backupFinish{
+		ID: running.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt,
+	})
+	requireEndedStored(t, witness, backup.TableBackups, running.ID.String(), endedAt)
 }
 
 // testBackupRegistry covers the backups table: create a running row, finish

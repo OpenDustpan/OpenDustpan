@@ -55,10 +55,13 @@ func TestNewServerRefusesCheckLimitsThatAreNotPositive(t *testing.T) {
 	good := forge.DefaultCheckLimits()
 
 	for name, limits := range map[string]forge.CheckLimits{
-		"zero per installation": {PerConnection: good.PerConnection, PerInstallation: 0, Window: good.Window},
-		"zero per connection":   {PerConnection: 0, PerInstallation: good.PerInstallation, Window: good.Window},
-		"zero window":           {PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, Window: 0},
-		"negative window":       {PerConnection: good.PerConnection, PerInstallation: 1, Window: -time.Minute},
+		"zero per installation": {PerConnection: good.PerConnection, PerInstallation: 0, PerApp: good.PerApp, Window: good.Window},
+		"zero per connection":   {PerConnection: 0, PerInstallation: good.PerInstallation, PerApp: good.PerApp, Window: good.Window},
+		"zero per app": {
+			PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, PerApp: 0, Window: good.Window,
+		},
+		"zero window":     {PerConnection: good.PerConnection, PerInstallation: good.PerInstallation, PerApp: good.PerApp, Window: 0},
+		"negative window": {PerConnection: good.PerConnection, PerInstallation: 1, PerApp: good.PerApp, Window: -time.Minute},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

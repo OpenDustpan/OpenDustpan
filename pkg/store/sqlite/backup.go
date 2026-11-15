@@ -41,7 +41,7 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 		ID:          row.ID,
 		State:       row.State,
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   optionalMillis(r.EndedAt),
 		Target:      row.Target,
 		Error:       row.Error,
 	})
@@ -185,7 +185,7 @@ func startBackupTx(
 		ID:          row.ID,
 		State:       string(backup.StateRunning),
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   optionalMillis(r.EndedAt),
 		Target:      row.Target,
 		Error:       "",
 	})
@@ -290,7 +290,7 @@ func finishRow(
 	n, err := q.FinishBackup(ctx, db.FinishBackupParams{
 		State:     string(state),
 		Error:     errText,
-		EndedAtMs: codec.OptionalMillis(endedAt),
+		EndedAtMs: optionalMillis(endedAt),
 		ID:        id.String(),
 	})
 	if err != nil {
@@ -319,7 +319,7 @@ func (s *Store) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, e
 	n, err := s.queries.FailEndedBackups(ctx, db.FailEndedBackupsParams{
 		Prefix:    backup.OperationKeyPrefix,
 		Fallback:  backup.EndedWithoutFinishText,
-		EndedAtMs: codec.Millis(endedAt),
+		EndedAtMs: optionalMillis(endedAt),
 		Kind:      string(backup.OperationKind),
 	})
 	if err != nil {
@@ -332,14 +332,30 @@ func (s *Store) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, e
 // backupFromRow converts a backup row into a domain record. Unknown states
 // report a corrupt row: every writer validates the state first.
 func backupFromRow(row db.Backup) (backup.Record, error) {
+	var endedAt time.Time
+
+	if row.EndedAtMs.Valid {
+		endedAt = codec.FromMillis(row.EndedAtMs.Int64)
+	}
+
 	return codec.FromBackupRow(codec.BackupRow{
 		ID:          row.ID,
 		State:       row.State,
 		Target:      row.Target,
 		Error:       row.Error,
 		StartedAtMs: row.StartedAtMs,
-		EndedAtMs:   row.EndedAtMs,
+		EndedAtMs:   codec.OptionalMillis(endedAt),
 	})
+}
+
+// optionalMillis encodes t as a nullable Unix millisecond column. The zero
+// time is NULL: the row has no end time.
+func optionalMillis(t time.Time) sql.NullInt64 {
+	if t.IsZero() {
+		return sql.NullInt64{Int64: 0, Valid: false}
+	}
+
+	return sql.NullInt64{Int64: codec.Millis(t), Valid: true}
 }
 
 // CheckCoverage implements backup.Coverage: it compares the column list of
@@ -1120,7 +1136,8 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, []string, er
 		UNION ALL
 		SELECT blob_key AS content_key, size AS size, md5 AS md5, 0 AS sealed FROM update_journal
 		UNION ALL
-		SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || CAST(blob_version AS TEXT) AS content_key,
+		SELECT 'namespaces/' || namespace_id || '/item-keys/' || id || '/v' || CAST(blob_version AS TEXT)
+			|| '-' || blob_attempt AS content_key,
 			blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM item_keys WHERE shredded_at_ms = 0
 		ORDER BY content_key`
 

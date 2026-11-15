@@ -347,6 +347,9 @@ skill (ADR 14):
   stops the change until the owner decides.
 - Prefer a code structure that makes a class of bug impossible over an added
   check or an added tool.
+- Prefer unexported fields with a constructor that checks the invariants. Put
+  a rule that visibility cannot express into the golangci-lint configuration.
+  Do not add a custom check or a new tool (ADR 364).
 - Use the stable ID for each stored reference to an entity that a user can
   rename, or remove and make again. A name is a label for people only
   (ADR 362).

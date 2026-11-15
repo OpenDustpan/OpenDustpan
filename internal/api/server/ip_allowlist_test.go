@@ -98,6 +98,7 @@ func newIPAllowHandler(
 	signIn, sessions := signInOf(t, st)
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
@@ -290,6 +291,7 @@ func seedIPAllowlist(t *testing.T, st *sqlite.Store, ns namespace.Name, cidrs ..
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	fence := namespace.Fence{Namespace: ns, FailoverVersion: 1}
