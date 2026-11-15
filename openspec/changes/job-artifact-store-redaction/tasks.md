@@ -29,7 +29,7 @@
 
 ## 4. The adapter
 
-- [ ] 4.1 Write `job.NewArtifactStore` and `ReplaceLog`, in the recorder order. Run `historytest.RunRedactor` with `JobArtifactSituations` and `JobLogSituations` against the real SQL adapters.
+- [ ] 4.1 Write `job.NewArtifactStore` and `ReplaceLog`, in the recorder order. Run `historytest.RunRedactor` with `JobArtifactSituations` and `JobLogSituations` against the real SQL adapters. `ReplaceLog` must also finish a retry: when the older version already has a next version, the retry skips the `From` check that answers `ErrConflict` and only redacts the older version. Test: the `Redact` step fails once after the new version exists; the retry redacts the older version, and the older version no longer holds the secret.
   - Check: `go test -race ./pkg/job/... ./internal/history/... -timeout 60m`
   - Confirmed by: CI
   - OpenDustpan: `pkg/job/artifactstore.go`, `internal/history/historytest/`
