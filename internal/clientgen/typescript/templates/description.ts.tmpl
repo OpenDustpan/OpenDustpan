@@ -2,6 +2,11 @@
 
 /**
  * The bytes of the API description that this package was generated from, as
- * text. The SHA-256 of its UTF-8 encoding is metadata.descriptionSha256.
+ * text: one string for each line, joined with a line feed. A published
+ * package has the SHA-256 of its UTF-8 encoding in metadata.descriptionSha256.
  */
-export const description: string = {{.DescriptionText}};
+export const description: string = [
+{{- range .DescriptionLines}}
+  {{.}},
+{{- end}}
+].join("\n");

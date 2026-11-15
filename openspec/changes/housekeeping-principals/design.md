@@ -28,3 +28,7 @@ ADR 370 removes the namespace service principal and gives each housekeeping purp
 ## Risks
 
 - A sweep that a person revoked stops until a person grants it again. The docs page says so, and the denial entry names the principal and the action.
+
+## Where the source filter runs
+
+The store applies the `source` filter in the list query and in the count query. The service does not filter after the read, because that breaks the page totals and the cursors. The port `pkg/principal/store.go` takes the source, and both dialects and the conformance suite follow. The agent may put the built-in principal constants in `pkg/identity/identity.go` instead of a new file.

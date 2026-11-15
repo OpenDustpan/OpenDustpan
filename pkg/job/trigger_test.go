@@ -94,7 +94,7 @@ func TestStartTrigger(t *testing.T) {
 		{
 			"an agent cannot fire a trigger", func(*testing.T) job.Actor {
 				a := actorOf("ada")
-				a.Agent = "dusty"
+				a.Agent = agentRefOf("dusty")
 
 				return a
 			}, job.SourceAPI, ref, job.ErrInvalid,

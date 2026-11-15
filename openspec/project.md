@@ -195,6 +195,15 @@ archives the change with the `openspec` command, in the same pull request:
 change to `openspec/changes/archive/` and merges its spec deltas into
 `openspec/specs/`. Do not move the files by hand.
 
+A task can have the check "Confirmed by: CI". The pull request ticks that task
+before it is marked ready, and archives the change in the same pull request when
+it completes the last task. A file on `main` has passed the merge queue, so the
+claim of CI is true when the file lands. If CI fails, nothing lands. This
+applies only to a task whose check is a required status check of the merge
+queue. A task that a check confirms which is not required (for example a
+nightly job) stays open until that run passes. The rule does not allow a tick
+that the implementer confirms by their own word: that tick stays refused.
+
 Do not tick a task that is not done. If a task moves to another issue, write the
 issue next to the task and leave the box open.
 

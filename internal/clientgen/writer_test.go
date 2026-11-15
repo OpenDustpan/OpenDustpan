@@ -271,6 +271,7 @@ func TestWriterUsesTheHeaderOfTheLanguage(t *testing.T) {
 	header := hashLanguage{}.Header(
 		clientgen.Options{
 			Package:           "",
+			Publish:           false,
 			ClientVersion:     "",
 			ServerRelease:     "",
 			ServerCommit:      "",

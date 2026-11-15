@@ -150,7 +150,16 @@ func (s *Store) StartChain(ctx context.Context, fence namespace.Fence, e audit.E
 	return s.appendChainMarker(ctx, fence, e, audit.ChainStateOn, func(q *db.Queries, e audit.Entry) error {
 		var digest audit.Digest
 
-		add := func(row db.AuditEntry) { digest.Add(fromAuditRow(row), row.Changes.String) }
+		add := func(row db.AuditEntry) error {
+			entry, err := fromAuditRow(row)
+			if err != nil {
+				return err
+			}
+
+			digest.Add(entry, row.Changes.String)
+
+			return nil
+		}
 		if err := walkScope(ctx, q, e.Namespace, add); err != nil {
 			return err
 		}
@@ -244,14 +253,18 @@ func lastEntry(ctx context.Context, q *db.Queries, scope namespace.Name) (*audit
 		return nil, fmt.Errorf("read last audit entry: %w", err)
 	}
 
-	e := fromAuditRow(row)
+	e, err := fromAuditRow(row)
+	if err != nil {
+		return nil, err
+	}
 
 	return &e, nil
 }
 
 // walkScope calls fn for each entry of scope in q in order of sequence, in
-// pages of audit.CheckPageSize.
-func walkScope(ctx context.Context, q *db.Queries, scope namespace.Name, fn func(row db.AuditEntry)) error {
+// pages of audit.CheckPageSize. fn reports a row it refuses, for example an
+// entry with a partial agent block that no validated write could store.
+func walkScope(ctx context.Context, q *db.Queries, scope namespace.Name, fn func(row db.AuditEntry) error) error {
 	var after int64
 
 	for {
@@ -265,7 +278,10 @@ func walkScope(ctx context.Context, q *db.Queries, scope namespace.Name, fn func
 		}
 
 		for i := range rows {
-			fn(rows[i])
+			if err := fn(rows[i]); err != nil {
+				return err
+			}
+
 			after = rows[i].Sequence
 		}
 

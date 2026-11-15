@@ -4,7 +4,7 @@ Audit entries keep a stable hash chain. Agent identity travels in the agent bloc
 
 ## Decisions
 
-1. **Agent in block, no struct field.** Keep the audit.Entry struct unchanged. The job service supplies the agent ref to the block writer, stops writing the agent change key on new entries, and readers accept both shapes with the block winning.
+1. **Agent in block, no struct field.** Keep the audit.Entry struct unchanged. The job service supplies the agent ref to the block writer, stops writing the agent change key on the approval entry (the start entry is already done on main), and writes no reader for the old key because no tag shipped that shape.
 2. **Same-transaction write, fail closed.** When the block write fails the job change fails and writes no entry. Entries with no block keep the unchanged hash encoding. Entries with a block cover the block bytes in verification.
 
 ## Structure
@@ -14,7 +14,7 @@ No new field on audit.Entry, so the hash of entries with no block stays unchange
 ## Risks
 
 - A reader that looks for a top-level Agent field finds none and must read the agent block.
-- Old entries carry the legacy change key until retention expiry.
+- No tag shipped the change key, so the project keeps no reader for it.
 
 ## Layers (defense in depth)
 

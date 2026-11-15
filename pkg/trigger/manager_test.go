@@ -570,7 +570,7 @@ func TestManagerFireLocation(t *testing.T) {
 func checkFireDispatch(t *testing.T, d *fakeDispatcher, id trigger.ID, loc job.Location) {
 	t.Helper()
 
-	if len(d.actors) != 1 || d.actors[0].Principal.Subject != ada || d.actors[0].Agent != "" ||
+	if len(d.actors) != 1 || d.actors[0].Principal.Subject != ada || !d.actors[0].Agent.IsZero() ||
 		d.reqs[0].Trigger != id || d.reqs[0].Namespace != acme || d.reqs[0].Reason != "test run" ||
 		d.reqs[0].Now.IsZero() || d.reqs[0].Location != loc {
 		t.Errorf("dispatcher calls = %+v %+v, want the caller as the actor", d.actors, d.reqs)

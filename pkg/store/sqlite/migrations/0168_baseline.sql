@@ -244,11 +244,18 @@ CREATE TABLE "audit_entries" (
     object       TEXT    NOT NULL,
     version      TEXT    NOT NULL DEFAULT '',
     value_path   TEXT    NOT NULL DEFAULT '',
-    at_ms        INTEGER NOT NULL,
-    source_ip    TEXT    NOT NULL DEFAULT '',
-    user_agent   TEXT    NOT NULL DEFAULT '',
-    channel      TEXT    NOT NULL,
-    kind         TEXT    NOT NULL,
+    at_ms          INTEGER NOT NULL,
+    source_ip      TEXT    NOT NULL DEFAULT '',
+    user_agent     TEXT    NOT NULL DEFAULT '',
+    channel        TEXT    NOT NULL,
+    agent_run      TEXT    NOT NULL DEFAULT '',
+    agent_session  TEXT    NOT NULL DEFAULT '',
+    args_digest    TEXT    NOT NULL DEFAULT '',
+    break_glass    INTEGER NOT NULL DEFAULT 0,
+    delegation_id  TEXT    NOT NULL DEFAULT '',
+    secret_stage   TEXT    NOT NULL DEFAULT '',
+    tool           TEXT    NOT NULL DEFAULT '',
+    kind           TEXT    NOT NULL,
     outcome      TEXT    NOT NULL,
     request_id   TEXT    NOT NULL DEFAULT '',
     prev_hash    TEXT    NOT NULL DEFAULT '',
@@ -1821,6 +1828,7 @@ CREATE INDEX placement_rules_order ON placement_rules (namespace, position);
 CREATE INDEX local_user_resets_expiry ON local_user_resets (expires_at_ms);
 
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges (expires_at_ms);
+CREATE INDEX passkey_challenges_kind_expiry ON passkey_challenges (kind, expires_at_ms);
 CREATE INDEX passkey_challenges_source ON passkey_challenges (source, expires_at_ms);
 CREATE INDEX passkey_challenges_source_group ON passkey_challenges (source_group, expires_at_ms);
 

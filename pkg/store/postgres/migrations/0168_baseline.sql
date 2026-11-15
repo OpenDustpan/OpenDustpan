@@ -88,6 +88,13 @@ CREATE TABLE audit_entries (
     source_ip text DEFAULT ''::text NOT NULL,
     user_agent text DEFAULT ''::text NOT NULL,
     channel text NOT NULL,
+    agent_run text DEFAULT ''::text NOT NULL,
+    agent_session text DEFAULT ''::text NOT NULL,
+    args_digest text DEFAULT ''::text NOT NULL,
+    break_glass boolean DEFAULT false NOT NULL,
+    delegation_id text DEFAULT ''::text NOT NULL,
+    secret_stage text DEFAULT ''::text NOT NULL,
+    tool text DEFAULT ''::text NOT NULL,
     kind text NOT NULL,
     outcome text NOT NULL,
     request_id text DEFAULT ''::text NOT NULL,
@@ -2186,6 +2193,8 @@ CREATE INDEX notification_subscriptions_sink ON notification_subscriptions USING
 CREATE INDEX object_context_owners_entry ON object_context_owners USING btree (namespace_id, object_kind, object_id, resource_key, source);
 
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges USING btree (expires_at_ms);
+
+CREATE INDEX passkey_challenges_kind_expiry ON passkey_challenges USING btree (kind, expires_at_ms);
 
 CREATE INDEX passkey_challenges_source ON passkey_challenges USING btree (source, expires_at_ms);
 
