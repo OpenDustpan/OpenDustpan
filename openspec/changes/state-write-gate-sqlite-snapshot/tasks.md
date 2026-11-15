@@ -6,9 +6,9 @@
 
 A test that passes on main from the start counts as done: main already has the behavior.
 
-- [ ] 1.1 Add the snapshot test TestDeletedUnitFactsSnapshot (SQLite only: the change is the read transaction of the SQLite store) in the NEW file pkg/store/sqlite/deleted_unit_facts_snapshot_test.go: a concurrent commit during GetDeletedUnitFacts (pkg/store/sqlite/inventory.go:573) does not change the facts of the call. Check: `go test ./pkg/store/sqlite/ -run TestDeletedUnitFactsSnapshot -count=1` passes.
-- [ ] 1.2 Add TestDeletedUnitFactsReadFailure (SQLite only) in pkg/store/sqlite/deleted_unit_facts_snapshot_test.go: a failed read-only transaction returns no partial facts. Check: `go test ./pkg/store/sqlite/ -run TestDeletedUnitFactsReadFailure -count=1` passes.
-- [ ] 1.3 Add TestDeletedUnitFactsSelectAndRollbackFailure (SQLite only) in pkg/store/sqlite/deleted_unit_facts_snapshot_test.go: when a select and the rollback both fail, the call closes the transaction and returns the select error (inReadTx, pkg/store/sqlite/sqlite.go:1447). Check: `go test ./pkg/store/sqlite/ -run TestDeletedUnitFactsSelectAndRollbackFailure -count=1` passes.
+- [ ] 1.1 Add the snapshot test TestDeletedUnitFactsSnapshot (SQLite only: the change is the read transaction of the SQLite store) in the NEW file pkg/store/sqlite/deleted_unit_facts_snapshot_test.go: a concurrent commit during GetDeletedUnitFacts (pkg/store/sqlite/inventory.go:573) does not change the facts of the call. Check: `go test -timeout 60m ./pkg/store/sqlite/ -run TestDeletedUnitFactsSnapshot -count=1` passes.
+- [ ] 1.2 Add TestDeletedUnitFactsReadFailure (SQLite only) in pkg/store/sqlite/deleted_unit_facts_snapshot_test.go: a failed read-only transaction returns no partial facts. Check: `go test -timeout 60m ./pkg/store/sqlite/ -run TestDeletedUnitFactsReadFailure -count=1` passes.
+- [ ] 1.3 Add TestDeletedUnitFactsSelectAndRollbackFailure (SQLite only) in pkg/store/sqlite/deleted_unit_facts_snapshot_test.go: when a select and the rollback both fail, the call closes the transaction and returns the select error (inReadTx, pkg/store/sqlite/sqlite.go:1447). Check: `go test -timeout 60m ./pkg/store/sqlite/ -run TestDeletedUnitFactsSelectAndRollbackFailure -count=1` passes.
 
 ## 2. Already on main (no work)
 

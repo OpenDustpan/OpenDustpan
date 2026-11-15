@@ -24,7 +24,7 @@
 - [ ] 2.10 SECURITY. Add hostile test in NEW file `pkg/secret/rotation_logs_test.go` that captures the logs during a rotation and searches them for key bytes. Check: `TestRotationLogsHostileCapture` passes and finds no key bytes.
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

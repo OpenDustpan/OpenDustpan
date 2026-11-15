@@ -392,7 +392,9 @@ func (g gitHost) PutRegistration(
 
 	var out forge.Registration
 
-	err := g.s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
+	err := g.s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
+		q := tx.q
+
 		_, getErr := readRegistration(ctx, q, r.Kind)
 		if getErr != nil && !errors.Is(getErr, forge.ErrNoRegistration) {
 			return getErr
@@ -569,7 +571,9 @@ func (g gitHost) PutAssignment(
 
 	var out forge.Assignment
 
-	err := g.s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
+	err := g.s.inAuditedTxOf(ctx, &e, func(tx serverAuditTx) error {
+		q := tx.q
+
 		if _, idErr := q.GitHostNamespaceID(ctx, a.Namespace.String()); errors.Is(idErr, pgx.ErrNoRows) {
 			return namespace.ErrNotFound
 		} else if idErr != nil {

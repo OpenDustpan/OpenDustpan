@@ -66,16 +66,18 @@ func testSweepAbandonedPlanParts(t *testing.T, h ArtifactSweepHarness) {
 
 	display, apply := planPartRel(t, h, a, job.OutputPlanDisplay), planPartRel(t, h, a, job.OutputPlanApply)
 	j := sweptJob(t, h, a)
+	clk := newTestClock(t, h)
 
 	// The claim is live and the parts are young: nothing goes.
-	if res, err := newSweeper(t, h, newGuardSwitch(), 0).SweepJob(t.Context(), &j); err != nil || res.Deleted != 0 {
+	if res, err := newSweeper(t, h, clk, newGuardSwitch(clk), 0).SweepJob(t.Context(), &j); err != nil ||
+		res.Deleted != 0 {
 		t.Fatalf("young sweep = %+v, %v; want nothing deleted", res, err)
 	}
 
 	// The claim lapses and no one commits. The parts get old, and then they go.
 	lapse(t, h.Harness, a)
 
-	res, err := newSweeper(t, h, newGuardSwitch(), sweepAfter).SweepJob(t.Context(), &j)
+	res, err := newSweeper(t, h, clk, newGuardSwitch(clk), sweepAfter).SweepJob(t.Context(), &j)
 	if err != nil || res.Deleted != planBlobs {
 		t.Fatalf("old sweep = %+v, %v; want the %d parts deleted", res, err, planBlobs)
 	}
@@ -102,8 +104,9 @@ func testSweepUnnamedPartAfterCommit(t *testing.T, h ArtifactSweepHarness) {
 
 	display, apply := planPartRel(t, h, a, job.OutputPlanDisplay), planPartRel(t, h, a, job.OutputPlanApply)
 	j := sweptJob(t, h, a)
+	clk := newTestClock(t, h)
 
-	res, err := newSweeper(t, h, newGuardSwitch(), sweepAfter).SweepJob(t.Context(), &j)
+	res, err := newSweeper(t, h, clk, newGuardSwitch(clk), sweepAfter).SweepJob(t.Context(), &j)
 	if err != nil || res.Deleted != 1 {
 		t.Fatalf("sweep = %+v, %v; want only the part that the plan does not name deleted", res, err)
 	}
@@ -139,9 +142,10 @@ func testSweepLiveClaimParts(t *testing.T, h ArtifactSweepHarness) {
 
 	part := planPartRel(t, h, a, job.OutputPlanDisplay)
 	swept := sweptJob(t, h, a)
+	clk := newTestClock(t, h)
 
 	// An old part of the live claim stays: the claim can still commit it.
-	res, err := newSweeper(t, h, newGuardSwitch(), sweepAfter).SweepJob(t.Context(), &swept)
+	res, err := newSweeper(t, h, clk, newGuardSwitch(clk), sweepAfter).SweepJob(t.Context(), &swept)
 	if err != nil || res.Deleted != 0 {
 		t.Fatalf("sweep with a live claim = %+v, %v; want nothing deleted", res, err)
 	}
@@ -179,10 +183,12 @@ func newSweeperOver(
 		t.Fatalf("artifact blobs: %v", err)
 	}
 
+	clk := newTestClock(t, h)
+
 	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
-		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: newGuardSwitch(),
+		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: newGuardSwitch(clk),
 		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Operations: ops, Audit: h.Audit, Logger: nil,
-		Now: func() time.Time { return time.Now().Add(ahead) },
+		Now: func() time.Time { return clk.Now().Add(ahead) }, OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("artifact sweeper: %v", err)
