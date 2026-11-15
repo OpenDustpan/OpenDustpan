@@ -66,6 +66,10 @@ option 3 above). The choice between option 2 and option 3 is open.
   recovery path.
 - Does a weaker setting for one action need a fresh step while the action is
   required (ADR 385 decision 4)?
+- What is the precedence between the three levels? Recommendation: the
+  stricter setting wins. A lower level (federation under installation,
+  namespace under federation) can turn a requirement on and cannot turn it
+  off. The owner has not decided this. It is not in the ADR.
 - Where does the settings API show the effective value of each action, and
   where does it come from (ADR 212 decision 9)?
 - Which actions never become configurable? The first-administrator code (ADR
@@ -80,6 +84,13 @@ an enrollment code is the administrator side of the reset of a factor.
 An administrator reset of the factors of a person also deletes the recovery
 codes of the person, removes the passkeys and ends the sessions of the
 person. The person gets new recovery codes when the person enrolls again.
+
+The owner wrote: "all of this definitely seems like it should be configurable
+on the installation config, for a federation and for a namespace." The
+setting `freshAuthEnabled`, the per-action step-up settings (break-glass,
+factor reset, enrollment code) and the MFA mandate are configurable at three
+levels: the installation, the federation (see "Federation" in `GLOSSARY.md`)
+and the namespace.
 
 ## What main has (15 November 2026)
 
