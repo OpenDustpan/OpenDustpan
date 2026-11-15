@@ -5,9 +5,9 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -295,10 +295,11 @@ type Finding struct {
 }
 
 // CheckReason reports whether s is a valid reason: 1 to MaxReasonBytes of
-// text with no control character. It returns ErrInvalidReason.
+// text with no control, format or separator character. It returns
+// ErrInvalidReason.
 func CheckReason(s string) error {
 	if strings.TrimSpace(s) == "" || len(s) > MaxReasonBytes || !utf8.ValidString(s) ||
-		strings.ContainsFunc(s, unicode.IsControl) {
+		ident.HasHidden(s) {
 		return fmt.Errorf("%w: 1 to %d characters of text", ErrInvalidReason, MaxReasonBytes)
 	}
 

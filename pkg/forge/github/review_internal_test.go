@@ -30,8 +30,12 @@ func TestCheckReviewLocalStopsHostileRequests(t *testing.T) {
 		{"an empty title", func(r *forge.ReviewRequest) { r.Title = " \t" }},
 		{"a title with a line break", func(r *forge.ReviewRequest) { r.Title = "a\nb" }},
 		{"a title with a NUL", func(r *forge.ReviewRequest) { r.Title = "a\x00b" }},
+		{"a title with a format character", func(r *forge.ReviewRequest) { r.Title = "a\u202eb" }},
+		{"a title with a line separator", func(r *forge.ReviewRequest) { r.Title = "a\u2028b" }},
 		{"a long title", func(r *forge.ReviewRequest) { r.Title = strings.Repeat("t", forge.MaxReviewTitleBytes+1) }},
 		{"a description with an escape", func(r *forge.ReviewRequest) { r.Body = "a\x1b[2J" }},
+		{"a description with a format character", func(r *forge.ReviewRequest) { r.Body = "a\u202eb" }},
+		{"a description with a line separator", func(r *forge.ReviewRequest) { r.Body = "a\u2028b" }},
 		{"a description that is not UTF-8", func(r *forge.ReviewRequest) { r.Body = "a\xc3" }},
 		{
 			"a long description",

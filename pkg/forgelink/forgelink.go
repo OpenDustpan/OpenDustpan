@@ -26,7 +26,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/forge"
 )
 
@@ -151,14 +151,14 @@ func validPort(port string) bool {
 }
 
 // validText reports whether s is valid UTF-8 of 1 to MaxIDLen bytes with no
-// space, no control character and no hidden rune.
+// space and no hidden rune.
 func validText(s string) bool {
 	if s == "" || len(s) > MaxIDLen || !utf8.ValidString(s) {
 		return false
 	}
 
 	return !strings.ContainsFunc(s, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsControl(r) || audit.IsHiddenRune(r)
+		return unicode.IsSpace(r) || ident.IsHiddenRune(r)
 	})
 }
 

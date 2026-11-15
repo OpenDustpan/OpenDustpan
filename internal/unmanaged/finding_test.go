@@ -235,6 +235,16 @@ func TestCheckIgnore(t *testing.T) {
 			false,
 		},
 		{"reason with a line feed", unmanaged.Ignore{Reason: "a\nb", Until: time.Time{}, By: "", Rule: ""}, false},
+		{
+			"reason with a format character",
+			unmanaged.Ignore{Reason: "a\u202eb", Until: time.Time{}, By: "", Rule: ""},
+			false,
+		},
+		{
+			"reason with a line separator",
+			unmanaged.Ignore{Reason: "a\u2028b", Until: time.Time{}, By: "", Rule: ""},
+			false,
+		},
 	}
 
 	for _, tc := range cases {

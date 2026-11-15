@@ -131,6 +131,18 @@ func caseStatusInvalid(t *testing.T, h Harness) {
 			with(func(s *forge.Status) { s.Context = "a\nb" }),
 			forge.ErrInvalid,
 		},
+		{
+			"a format character in the context",
+			c.ID,
+			with(func(s *forge.Status) { s.Context = "a\u202eb" }),
+			forge.ErrInvalid,
+		},
+		{
+			"a line separator in the context",
+			c.ID,
+			with(func(s *forge.Status) { s.Context = "a\u2028b" }),
+			forge.ErrInvalid,
+		},
 		{"a context that is not UTF-8", c.ID, with(func(s *forge.Status) { s.Context = "a\xffb" }), forge.ErrInvalid},
 		{
 			"a context above the limit", c.ID,
@@ -170,6 +182,18 @@ func caseStatusInvalid(t *testing.T, h Harness) {
 			"an address with a space",
 			c.ID,
 			with(func(s *forge.Status) { s.TargetURL = "https://a.example/a b" }),
+			forge.ErrInvalid,
+		},
+		{
+			"an address with a format character",
+			c.ID,
+			with(func(s *forge.Status) { s.TargetURL = "https://a.example/a\u202eb" }),
+			forge.ErrInvalid,
+		},
+		{
+			"an address with a line separator",
+			c.ID,
+			with(func(s *forge.Status) { s.TargetURL = "https://a.example/a\u2028b" }),
 			forge.ErrInvalid,
 		},
 		{"an address with no host", c.ID, with(func(s *forge.Status) { s.TargetURL = "https:///x" }), forge.ErrInvalid},
