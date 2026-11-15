@@ -471,6 +471,7 @@ func newBuildFixtureGuarded(
 		Journal:            journal,
 		Replayer:           replayer,
 		Refusals:           refusals,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)

@@ -1535,6 +1535,7 @@ func (s *RestoreService) restoreAuditEntry(in restoreInput, object string) audit
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

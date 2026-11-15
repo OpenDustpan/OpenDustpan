@@ -65,9 +65,9 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The TFE-compatible API serves state versions through the route ANY /api/v2/state-versions. (`internal/api/tfe/routes.go:243 (Handler.stateRoutes)`)
-- The TFE-compatible API serves state uploads through the route ANY /api/v2/state-uploads/{}/{}. (`internal/api/tfe/routes.go:351 (Handler.stateWriteRoutes)`)
-- The TFE-compatible API serves the current state version of a workspace through ANY /api/v2/workspaces/{}/current-state-version. (`internal/api/tfe/routes.go:243 (Handler.stateRoutes)`)
+- The TFE-compatible API serves state versions through the route ANY /api/v2/state-versions. (`internal/api/tfe/routes.go:243 (Handler.lockRoutes)`)
+- The TFE-compatible API serves state uploads through the route ANY /api/v2/state-uploads/{}/{}. (`internal/api/tfe/routes.go:351 (Handler.stateRoutes)`)
+- The TFE-compatible API serves the current state version of a workspace through ANY /api/v2/workspaces/{}/current-state-version. (`internal/api/tfe/routes.go:243 (Handler.lockRoutes)`)
 
 ## ADR check
 

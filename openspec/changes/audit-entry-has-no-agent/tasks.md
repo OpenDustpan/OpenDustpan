@@ -14,7 +14,7 @@
 ## 2. Build
 
 - [ ] 2.1 In `pkg/job/service_start.go:623`, remove the agent change key and write the agent block in the same transaction for start entries with an agent ref. Check: Job start with an agent ref, then GET /api/audit/entries with an access token shows the block and no change key.
-- [ ] 2.2 Document the agent block of a job entry on `docs/guides/audit-log.md`, with one example; the field of the entry read API comes from the change audit-agent-block. Check: GET /api/audit/entries with an access token returns the block of a job start entry; the docs page shows the example.
+- [ ] 2.2 Document the agent block of a job entry on `docs/guides/audit-log.md`, with one example; the field of the entry read API comes from the change audit-agent-block. Check: GET /api/audit/entries with an access token returns the block of a job start entry; the docs page shows the example. `make docs-lint` passes on each edited guide.
 
 - [ ] 2.3 SECURITY. Build the service ref validation in `pkg/job/service_start.go:623`: refuse a malformed agent ref before any write and pass only the supplied ref and digest to the block writer. Check: Job start with a malformed agent ref is refused and GET /api/audit/entries with an access token shows no new entry.
 - [ ] 2.4 SECURITY. Build the same-transaction write in `pkg/job/service_start.go:623`: write the block and the entry in one transaction and roll back the job change when the block write fails. Check: Job start with a failed block write fails and GET /api/audit/entries with an access token shows no orphan entry.

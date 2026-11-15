@@ -316,6 +316,7 @@ func (d *dispatcher) recordDenial(ctx context.Context, t *Trigger, actor *job.Ac
 		PrincipalKind: string(actor.Principal.Kind),
 		JobID:         "",
 		Reason:        "the last saver of the trigger no longer holds the actions of a start",
+		Origin:        nil,
 	})
 	if err != nil {
 		return fmt.Errorf("append: %w", err)

@@ -153,6 +153,7 @@ func storeDriftJob(t *testing.T, b DriftBackend, u graph.Unit, purpose job.Purpo
 		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	stored, created, err := b.Jobs.Create(t.Context(), j, nil, fence, []audit.Entry{entry})

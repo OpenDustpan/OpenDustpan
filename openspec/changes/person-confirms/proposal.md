@@ -58,9 +58,9 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Main has a job gate status test for confirmation gates. (`pkg/job/gate_test.go:101 (TestConfirmationGateStatus)`)
-- Main ships audit entries in order and moves cursors. (`pkg/audit/ship_test.go:257 (TestShipOnceCopiesEveryEntryInOrderAndMovesTheCursors)`)
+- Main ships audit entries in order and moves cursors. (`pkg/audit/ship_test.go:258 (TestShipOnceCopiesEveryEntryInOrderAndMovesTheCursors)`)
 - Main refuses a grant after a racing move. (`pkg/access/race_test.go:577 (TestGrantRefusedAfterARacingMove)`)
-- Main leaves one entry and one operation for concurrent approvals. (`pkg/dustpan/auditchain_approval_test.go:108 (TestConcurrentApprovalsLeaveOneEntryAndOneOperation)`)
+- Main leaves one entry and one operation for concurrent approvals. (`pkg/dustpan/auditchain_approval_test.go:109 (TestConcurrentApprovalsLeaveOneEntryAndOneOperation)`)
 
 ## ADR check
 
