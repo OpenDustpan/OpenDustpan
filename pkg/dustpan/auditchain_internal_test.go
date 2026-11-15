@@ -169,10 +169,11 @@ func TestApproveOffRefusesServicePrincipal(t *testing.T) {
 }
 
 // TestApproveOffKindsAllowlist proves that the check on a change to off is
-// an allowlist: a person with a principal row may approve it, and the kind
-// service, the kind workload (which passed before the check became an
-// allowlist) and the kind agent are refused. A refused approval writes no
-// operation.
+// an allowlist of the kind person and the kind workload: each of those kinds
+// with a principal row may approve it. It refuses the kind service, the kind
+// agent and an unknown kind. A workload passed this check on main, when the
+// check refused only the kind service, and this test documents that it still
+// passes. A refused approval writes no operation.
 func TestApproveOffKindsAllowlist(t *testing.T) {
 	t.Parallel()
 
@@ -183,8 +184,9 @@ func TestApproveOffKindsAllowlist(t *testing.T) {
 	}{
 		{"person", principal.KindPerson, false},
 		{"service", principal.KindService, true},
-		{"workload", principal.KindWorkload, true},
+		{"workload", principal.KindWorkload, false},
 		{"agent", principal.KindAgent, true},
+		{"unknown", principal.Kind("robot"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
