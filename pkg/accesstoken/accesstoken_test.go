@@ -2073,25 +2073,36 @@ func TestDaysUntil(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC)
+	far := time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC)
 
 	tests := []struct {
 		name      string
 		expiresAt time.Time
 		days      int64
+		minOnly   bool
 	}{
-		{"one_day_and_1ms_answers_2", now.Add(24*time.Hour + time.Millisecond), 2},
-		{"23h59m59s_answers_1", now.Add(23*time.Hour + 59*time.Minute + 59*time.Second), 1},
-		{"one_day_answers_1", now.Add(24 * time.Hour), 1},
-		{"1ms_answers_1", now.Add(time.Millisecond), 1},
-		{"at_expiry_answers_0", now, 0},
-		{"past_expiry_answers_0", now.Add(-time.Millisecond), 0},
+		{"one_day_and_1ms_answers_2", now.Add(24*time.Hour + time.Millisecond), 2, false},
+		{"23h59m59s_answers_1", now.Add(23*time.Hour + 59*time.Minute + 59*time.Second), 1, false},
+		{"one_day_answers_1", now.Add(24 * time.Hour), 1, false},
+		{"1ms_answers_1", now.Add(time.Millisecond), 1, false},
+		{"at_expiry_answers_0", now, 0, false},
+		{"past_expiry_answers_0", now.Add(-time.Millisecond), 0, false},
+		{"far_expiry_answers_a_large_positive_count", far, 100000, true},
+		{"two_days_past_expiry_answers_0", now.Add(-48 * time.Hour), 0, false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if days := accesstoken.DaysUntil(tc.expiresAt, now); days != tc.days {
+			days := accesstoken.DaysUntil(tc.expiresAt, now)
+			if tc.minOnly {
+				if days <= tc.days {
+					t.Fatalf("days until = %d, want above %d", days, tc.days)
+				}
+				return
+			}
+			if days != tc.days {
 				t.Fatalf("days until = %d, want %d", days, tc.days)
 			}
 		})

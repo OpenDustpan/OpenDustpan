@@ -51,7 +51,20 @@ type workspaceCase struct {
 func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 	t.Helper()
 
-	cases := []workspaceCase{
+	cases := slices.Concat(workspaceCases(), releaseAuditCases(), lastReleaseCases(), workspacePageCases())
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.test(t, newStore(t))
+		})
+	}
+}
+
+// workspaceCases returns the cases of the workspace store, its state versions
+// and its override switches.
+func workspaceCases() []workspaceCase {
+	return []workspaceCase{
 		{name: "create and read by name and by ID", test: testWorkspaceRoundTrip},
 		{name: "the change log follows the writes of a workspace", test: testWorkspaceChangeLog},
 		{name: "a refused write of a workspace appends no change log row", test: testWorkspaceChangeLogFence},
@@ -66,6 +79,18 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{name: "finalize of a workspace that is not locked is ErrNotLocked", test: testFinalizeWithoutLock},
 		{name: "finalize under a lock held by another principal is ErrLockedByOther", test: testFinalizeLockedByOther},
 		{name: "finalize sets the declared serial, lineage, MD5 and outputs", test: testFinalizeSetsDeclaredFields},
+		{
+			name: "finalize stores the client-encryption bit and the current row answers it",
+			test: testFinalizeStoresClientEncryptedBit,
+		},
+		{
+			name: "finalize without a client-encryption bit is ErrStateBitUnknown and exposes nothing",
+			test: testFinalizeWithoutTheBitIsRefused,
+		},
+		{
+			name: "create of a version that is not pending is ErrStateNotPending and stores nothing",
+			test: testCreateRefusesANonPendingStatus,
+		},
 		{
 			name: "finalize under the same lock ID held by another principal is ErrLockedByOther",
 			test: testFinalizeSameLockIDOtherHolder,
@@ -331,13 +356,6 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testUnlockedFinalizeNeedsSwitches,
 		},
 	}
-
-	for _, tc := range slices.Concat(cases, releaseAuditCases(), lastReleaseCases(), workspacePageCases()) {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			tc.test(t, newStore(t))
-		})
-	}
 }
 
 func newWorkspaceNamespace(t *testing.T, s WorkspaceStore, name string) namespace.Namespace {
@@ -482,6 +500,8 @@ func newPendingVersion(
 		SensitiveMarks:  nil,
 		FenceBy:         "",
 		UnlockedWrite:   false, Origin: identity.StateOrigin{Job: "", Commit: ""},
+		// A pending version holds no bit yet: the finalize writes it.
+		ClientEncrypted: workspace.ClientEncryptedUnknown,
 	}
 }
 
@@ -502,12 +522,16 @@ func createPendingVersion(
 }
 
 // finalizedVersion returns sv ready to finalize at at: each attempt writes its
-// own blob key, so a retry reuses the same key and content size.
+// own blob key, so a retry reuses the same key and content size. The version
+// holds the plaintext client-encryption bit, so a test that finalizes it
+// passes the guard that refuses a version with no bit. A test that finalizes a
+// client-encrypted version sets the bit itself.
 func finalizedVersion(sv workspace.StateVersion, at time.Time, content string) workspace.StateVersion {
 	sv.Status = workspace.StatusFinalized
 	sv.FinalizedAt = at
 	sv.Content = blob.Key(stateBlobDir(sv.Workspace) + sv.ID.String() + "/a1")
 	sv.Size = int64(len(content))
+	sv.ClientEncrypted = workspace.NewClientEncrypted(false)
 
 	return sv
 }
@@ -1345,6 +1369,10 @@ func testConcurrentFinalize(t *testing.T, s WorkspaceStore) {
 		}
 	}
 
+	// The two versions hold different bits, so the check of the exposed row
+	// below tells the winner's bit from the loser's.
+	finalized[1].ClientEncrypted = workspace.NewClientEncrypted(true)
+
 	errs := make([]error, len(finalized))
 
 	var wg sync.WaitGroup
@@ -1380,6 +1408,8 @@ func testConcurrentFinalize(t *testing.T, s WorkspaceStore) {
 
 	assertStateVersion(t, got, won[0])
 
+	assertClientEncrypted(t, got, won[0])
+
 	stored, err := s.GetWorkspaceByID(t.Context(), w.ID)
 	if err != nil {
 		t.Fatalf("get workspace after concurrent finalizes: %v", err)
@@ -1387,6 +1417,17 @@ func testConcurrentFinalize(t *testing.T, s WorkspaceStore) {
 
 	if !stored.UpdatedAt.Equal(won[0].FinalizedAt) {
 		t.Fatalf("workspace updated at = %v, want %v", stored.UpdatedAt, won[0].FinalizedAt)
+	}
+}
+
+// assertClientEncrypted checks that the exposed version holds the bit of the
+// version that won, not the bit of the one that lost.
+func assertClientEncrypted(t *testing.T, got, want workspace.StateVersion) {
+	t.Helper()
+
+	if got.ClientEncrypted != want.ClientEncrypted {
+		t.Fatalf("client encrypted bit of the exposed version = %v, want the winner's %v",
+			got.ClientEncrypted, want.ClientEncrypted)
 	}
 }
 
@@ -3467,7 +3508,8 @@ func newFenceVersion(t *testing.T, w workspace.Workspace, serial int64, at time.
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "admin",
-		UnlockedWrite:   false, Origin: identity.StateOrigin{Job: "", Commit: ""},
+		UnlockedWrite:   false, ClientEncrypted: workspace.ClientEncryptedNo,
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -3997,6 +4039,131 @@ func testFinalizeSetsDeclaredFields(t *testing.T, s WorkspaceStore) {
 	current, err := s.CurrentStateVersion(t.Context(), w.ID)
 	if err != nil || current.ID != pending.ID {
 		t.Fatalf("current state = %v, %v; want the finalized version", current.ID, err)
+	}
+}
+
+// testFinalizeStoresClientEncryptedBit proves a finalize stores the
+// client-encryption bit of the document that made the version, for a plaintext
+// and for a client-encrypted state, and that the current row answers the bit
+// of the winning version.
+func testFinalizeStoresClientEncryptedBit(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	plain := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("lin-1", "v1", 1),
+	))
+	plainRow := finalizedVersion(plain, now().Add(time.Hour), "v1")
+	plainRow.ClientEncrypted = workspace.NewClientEncrypted(false)
+
+	if err := finalizeRecorded(t, s, ns.Fence(), plainRow); err != nil {
+		t.Fatalf("finalize a plaintext state: %v", err)
+	}
+
+	encrypted := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("lin-1", "v2", 2),
+	))
+	encryptedRow := finalizedVersion(encrypted, now().Add(2*time.Hour), "v2")
+	encryptedRow.ClientEncrypted = workspace.NewClientEncrypted(true)
+
+	if err := finalizeRecorded(t, s, ns.Fence(), encryptedRow); err != nil {
+		t.Fatalf("finalize a client-encrypted state: %v", err)
+	}
+
+	want := []struct {
+		id  workspace.StateVersionID
+		bit workspace.ClientEncrypted
+	}{
+		{id: plain.ID, bit: workspace.ClientEncryptedNo},
+		{id: encrypted.ID, bit: workspace.ClientEncryptedYes},
+	}
+
+	for _, tc := range want {
+		stored, err := s.GetStateVersion(t.Context(), tc.id)
+		if err != nil {
+			t.Fatalf("get state version %s: %v", tc.id, err)
+		}
+
+		if stored.ClientEncrypted != tc.bit {
+			t.Fatalf("stored bit of %s = %d, want %d", tc.id, stored.ClientEncrypted, tc.bit)
+		}
+	}
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state: %v", err)
+	}
+
+	if current.ID != encrypted.ID || current.ClientEncrypted != workspace.ClientEncryptedYes {
+		t.Fatalf("current state = %s bit %d, want %s with the encrypted bit",
+			current.ID, current.ClientEncrypted, encrypted.ID)
+	}
+}
+
+// testFinalizeWithoutTheBitIsRefused proves a state version cannot finalize
+// with no client-encryption bit: the store refuses it with ErrStateBitUnknown,
+// the row stays pending and no version becomes current. This case is the
+// mutation test of the change: a store that stops rejecting the missing bit
+// finalizes the version and fails here.
+func testFinalizeWithoutTheBitIsRefused(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	pending := createPendingVersion(t, s, ns, newPendingVersion(
+		t, locked, locked.Lock.ID, stateInput("lin-1", "v1", 1),
+	))
+	declared := finalizedVersion(pending, now().Add(time.Hour), "v1")
+	declared.ClientEncrypted = workspace.ClientEncryptedUnknown
+
+	err := finalizeRecorded(t, s, ns.Fence(), declared)
+	if !errors.Is(err, workspace.ErrStateBitUnknown) {
+		t.Fatalf("finalize without a bit: err = %v, want ErrStateBitUnknown", err)
+	}
+
+	stored, getErr := s.GetStateVersion(t.Context(), pending.ID)
+	if getErr != nil {
+		t.Fatalf("get state version: %v", getErr)
+	}
+
+	if stored.Status != workspace.StatusPending {
+		t.Fatalf("status after a refused finalize = %s, want pending", stored.Status)
+	}
+
+	if _, curErr := s.CurrentStateVersion(t.Context(), w.ID); !errors.Is(curErr, workspace.ErrNoState) {
+		t.Fatalf("current after a refused finalize: err = %v, want ErrNoState", curErr)
+	}
+}
+
+// testCreateRefusesANonPendingStatus proves the create path stores pending
+// versions only: a finalized version is refused with ErrStateNotPending and
+// leaves no row, so a finalized row with no client-encryption bit cannot enter
+// through the create path and skip the finalize guard.
+func testCreateRefusesANonPendingStatus(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	sv := newPendingVersion(t, locked, locked.Lock.ID, stateInput("lin-1", "v1", 1))
+	sv.Status = workspace.StatusFinalized
+	sv.ClientEncrypted = workspace.ClientEncryptedUnknown
+
+	err := s.CreateStateVersion(t.Context(), sv, ns.Fence(), generousPendingCap)
+	if !errors.Is(err, workspace.ErrStateNotPending) {
+		t.Fatalf("create of a finalized version: err = %v, want ErrStateNotPending", err)
+	}
+
+	if _, getErr := s.GetStateVersion(t.Context(), sv.ID); !errors.Is(
+		getErr, workspace.ErrStateVersionNotFound,
+	) {
+		t.Fatalf("get after a refused create: err = %v, want ErrStateVersionNotFound", getErr)
 	}
 }
 
