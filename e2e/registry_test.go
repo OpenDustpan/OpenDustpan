@@ -336,7 +336,7 @@ func TestRegistryMirrorHTTP(t *testing.T) {
 		t.Fatalf("stores: %v", err)
 	}
 
-	for _, label := range tool.Versions()[:1] {
+	for _, label := range tool.Versions() {
 		t.Run(label, func(t *testing.T) {
 			t.Parallel()
 
