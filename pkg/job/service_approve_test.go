@@ -146,7 +146,7 @@ func actorWithToken(subject, tokenID string) job.Actor {
 
 func agentActor(subject, agent string) job.Actor {
 	a := actorOf(subject)
-	a.Agent = agent
+	a.Agent = job.AgentRef(agent)
 
 	return a
 }
@@ -229,7 +229,7 @@ func checkApproval(t *testing.T, c *job.Change, actor *job.Actor, v job.Verdict,
 		t.Fatal("change holds no approval")
 	}
 
-	if ap.Subject != actor.Principal.Subject || ap.Agent != actor.Agent || ap.Verdict != v ||
+	if ap.Subject != actor.Principal.Subject || ap.Agent != string(actor.Agent) || ap.Verdict != v ||
 		ap.Comment != "looks right" || !ap.At.Equal(now) || ap.Gate != job.GateApproval {
 		t.Errorf("approval = %+v, want the verdict %s of %s at %s", *ap, v, actor.Principal.Subject, now)
 	}
