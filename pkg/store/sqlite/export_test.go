@@ -8,9 +8,12 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
+	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
 // DB returns the database handle of s, so a test can read or change rows
@@ -37,6 +40,30 @@ func RemoveInternalTemplates() error {
 // SetSetting makes before it opens a transaction.
 func CheckSettingFence(ns namespace.Name, fence namespace.Fence) error {
 	return settingFenceBinds(ns, fence)
+}
+
+// MarkSupersededCheckpointInTx runs the mark of the replaced checkpoint in its
+// own transaction. cp names the write, and readKey is the key that the sequence
+// check read.
+func MarkSupersededCheckpointInTx(
+	ctx context.Context, s *Store, stackID stack.ID, cp stack.Checkpoint, readKey blob.Key,
+) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		return markSuperseded(ctx, q, cp, stackID.String(), readKey)
+	})
+}
+
+// AgeSupersededMarks moves every mark of the stack before at, with a direct
+// SQL update. The cases of the superseded sweep need marks older than the
+// grace period without a wait.
+func (s *Store) AgeSupersededMarks(ctx context.Context, stackID stack.ID, at time.Time) error {
+	const stmt = `UPDATE checkpoint_supersedes SET superseded_at_ms = ? WHERE stack_id = ?`
+
+	if _, err := s.conn.ExecContext(ctx, stmt, at.UnixMilli(), stackID.String()); err != nil {
+		return fmt.Errorf("age superseded marks: %w", err)
+	}
+
+	return nil
 }
 
 // SettingWrite is the input of WriteSettingInTx.

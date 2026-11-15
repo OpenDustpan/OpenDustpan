@@ -14,10 +14,11 @@
 - [ ] 2.1 Build the NEW dependency gate (NEW `newDependencyGate`) in the NEW file `internal/server/runall_gate.go` on stable workspace IDs with cycle reject and the 100-edge limit at discovery write. Check: The NEW test `TestRunAllApplyWaitsForDependency` passes with strict order; BLOCKED by the NEW change-order apply-start route.
 - [ ] 2.2 Wire the gate to the NEW change-order apply-start route, declared in the NEW file `internal/api/apidesc/changeorder_applystart.go` with its adapter in the NEW file `internal/server/changeorder_applystart.go`, in depends_on with job read and job start authorization actions on the change order. Check: `curl GET /api/dustpan/v1/namespaces/{}/units` with an access token shows queued, blocked, and running states with the blocking dependency named.
 - [ ] 2.3 Add e2e step in the NEW file `e2e/terragrunt_runall_dependency_test.go` with real Terragrunt and real OpenTofu over 3 workspaces on a runner over TLS on PostgreSQL through `ANY /runner/v1` with a runner token; BLOCKED by the NEW change-order apply-start route. Check: Real Terragrunt run over `ANY /runner/v1` with a runner token shows no workspace applied by the job of another workspace and start times follow A then B then C; BLOCKED by the NEW change-order apply-start route. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 2.4 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `change-order.too-many-edges` in the NEW file `internal/errcode/testdata/catalog/change-order.txt`; `change-order.dependency-blocked` in the NEW file `internal/errcode/testdata/catalog/change-order.txt`; `change-order.cycle-rejected` in the NEW file `internal/errcode/testdata/catalog/change-order.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

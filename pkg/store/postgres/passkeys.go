@@ -38,25 +38,64 @@ func (s *Store) PasskeyByCredentialID(ctx context.Context, id []byte) (mfa.Passk
 	return passkeystore.ByCredentialID(ctx, passkeyTx{q: s.queries}, id)
 }
 
-// RecordUse implements mfa.PasskeyStore. A regression commits the
-// suspension and its entry, and then returns mfa.ErrCounterRegressed.
+// errPasskeyCounterRegressed reports a passkey use that found a counter
+// regression. The first transaction of RecordUse returns it to roll back, so
+// the suspension and its entry run in the locked transaction that follows.
+var errPasskeyCounterRegressed = errors.New("passkey counter regressed")
+
+// RecordUse implements mfa.PasskeyStore. A regression suspends the passkey
+// and appends its entry in one transaction, and then returns
+// mfa.ErrCounterRegressed.
+//
+// A use with no regression runs in one transaction that updates the counter
+// and takes no lock, so a sign-in never waits for the installation-wide lock
+// of @server. When that transaction finds a regression, it rolls back, and a
+// second transaction takes the lock of @server first and then suspends the
+// passkey and appends the entry. It returns nil when that second transaction
+// finds no regression, because a concurrent use moved the counter first.
 func (s *Store) RecordUse(ctx context.Context, u mfa.PasskeyUse, regressed audit.Entry) error {
 	if err := validServerEntry(regressed); err != nil {
 		return err
 	}
 
-	suspended := false
-
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		var err error
-
-		suspended, err = passkeystore.RecordUse(ctx, passkeyTx{q: q}, u)
-		if err != nil || !suspended {
-			return err
+		suspended, useErr := passkeystore.RecordUse(ctx, passkeyTx{q: q}, u)
+		if useErr != nil {
+			return useErr
 		}
 
-		if _, err := appendAuditEntry(ctx, q, regressed); err != nil {
-			return fmt.Errorf("append audit entry: %w", err)
+		if suspended {
+			return errPasskeyCounterRegressed
+		}
+
+		return nil
+	})
+	if err == nil {
+		return nil
+	}
+
+	if !errors.Is(err, errPasskeyCounterRegressed) {
+		return err
+	}
+
+	var suspended bool
+
+	err = s.inServerAuditTx(ctx, func(tx serverAuditTx) error {
+		// The regression check depends on the stored row, so read it again
+		// under the lock.
+		var useErr error
+
+		suspended, useErr = passkeystore.RecordUse(ctx, passkeyTx(tx), u)
+		if useErr != nil {
+			return useErr
+		}
+
+		if !suspended {
+			return nil
+		}
+
+		if _, appendErr := appendServerEntry(ctx, tx, regressed); appendErr != nil {
+			return fmt.Errorf("append audit entry: %w", appendErr)
 		}
 
 		return nil
@@ -65,11 +104,11 @@ func (s *Store) RecordUse(ctx context.Context, u mfa.PasskeyUse, regressed audit
 		return err
 	}
 
-	if suspended {
-		return mfa.ErrCounterRegressed
+	if !suspended {
+		return nil
 	}
 
-	return nil
+	return mfa.ErrCounterRegressed
 }
 
 // RemovePasskey implements mfa.PasskeyStore.

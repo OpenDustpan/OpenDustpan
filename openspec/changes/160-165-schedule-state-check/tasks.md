@@ -13,10 +13,11 @@
 - [ ] 2.1 Build schedule worker with fence check and idempotent start keys in NEW file internal/unmanaged/schedule.go. Check: `go test ./internal/unmanaged/... ./pkg/durable/...` passes.
 - [ ] 2.2 Build RunStateCheck (NEW) from the resource index with audit entry and 10-minute expiry in NEW file internal/unmanaged/statecheck.go. Check: `go test ./internal/unmanaged/...` passes; audit entry holds namespace ID and counts.
 - [ ] 2.3 Wire the NEW `POST /api/dustpan/v1/namespaces/{namespace}/state-checks` route with `namespace:start-sweep`. Declare it in internal/api/server/routes.go and add its adapter in NEW file internal/api/server/statechecks.go. Join the new apidesc labels into joinLabels in internal/api/server/operations.go (:187-198), the one join point of the labels. Check: Servertest calls existing route `GET /api/audit/entries` with an access token and the `namespace:start-sweep` gate; BLOCKED by NEW `POST /api/dustpan/v1/namespaces/{namespace}/state-checks` until its route lands.
+- [ ] 2.4 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `unmanaged.scan-busy` in the NEW file `internal/errcode/testdata/catalog/unmanaged.txt`; `access.forbidden` in `internal/errcode/testdata/catalog/access.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

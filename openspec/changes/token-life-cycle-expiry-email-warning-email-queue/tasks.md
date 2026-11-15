@@ -10,13 +10,13 @@
 
 ## 2. Build
 
-- [ ] 2.1 Build durable warning queue with states queued, sending, retry, sent and failed and one retry in NEW file `pkg/accesstoken/warning_queue.go`. Check: `go test ./pkg/accesstoken -run TestWarningQueue -count=1` is NEW and passes.
+- [ ] 2.1 Build durable warning queue with states queued, sending, retry, sent and failed and one retry in NEW file `pkg/accesstoken/warning_queue.go`. The task adds the NEW top-level test `TestWarningQueue` in a `_test.go` file of `pkg/accesstoken`, so that the Check runs it. Check: `go test ./pkg/accesstoken -run TestWarningQueue -count=1` is NEW and passes.
 - [ ] 2.2 Wire SMTP sender to resolved installation settings with TLS rule, fixed poll, lease and backoff in NEW file `internal/smtpsvc/smtp.go`. Check: `go test ./internal/smtpsvc -run TestPlainRefused -count=1` is NEW and passes.
-- [ ] 2.3 Write audit entry for each delivered, skipped or failed warning in NEW file `pkg/accesstoken/warning_audit.go`. Check: `go test ./pkg/accesstoken -run TestWarningAudit -count=1` is NEW and passes.
+- [ ] 2.3 Write audit entry for each delivered, skipped or failed warning in NEW file `pkg/accesstoken/warning_audit.go`. The task adds the NEW top-level test `TestWarningAudit` in a `_test.go` file of `pkg/accesstoken`, so that the Check runs it. Check: `go test ./pkg/accesstoken -run TestWarningAudit -count=1` is NEW and passes.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

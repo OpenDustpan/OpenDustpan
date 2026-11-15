@@ -17,11 +17,11 @@
 
 ## 2. Merge core
 
-- [ ] 2.1 Serve reads under a claim from the named base version and latest without a claim in NEW file pkg/workspace/claim_merge.go. Check: `go test ./pkg/workspace/... -run TestServeClaimBase -count=1` passes
-- [ ] 2.2 Merge uploads one resource instance at a time under fence with conflict refusal in NEW file pkg/workspace/claim_merge.go. Check: `go test ./pkg/workspace/... -run TestMergeDisjoint -count=1` passes
-- [ ] 2.3 Enforce refuse rules, empty uploads, fail-closed behavior, and six strict whole-unit cases in NEW file pkg/workspace/claim_merge.go. Check: `go test ./pkg/workspace/... -run TestStrictCase -count=1` passes
+- [ ] 2.1 Serve reads under a claim from the named base version and latest without a claim in NEW file pkg/workspace/claim_merge.go. The task adds the NEW top-level test `TestServeClaimBase` in a `_test.go` file of `pkg/workspace`, so that the Check runs it. Check: `go test ./pkg/workspace/... -run TestServeClaimBase -count=1` passes
+- [ ] 2.2 Merge uploads one resource instance at a time under fence with conflict refusal in NEW file pkg/workspace/claim_merge.go. The task adds the NEW top-level test `TestMergeDisjoint` in a `_test.go` file of `pkg/workspace`, so that the Check runs it. Check: `go test ./pkg/workspace/... -run TestMergeDisjoint -count=1` passes
+- [ ] 2.3 Enforce refuse rules, empty uploads, fail-closed behavior, and six strict whole-unit cases in NEW file pkg/workspace/claim_merge.go. The task adds the NEW top-level test `TestStrictCase` in a `_test.go` file of `pkg/workspace`, so that the Check runs it. Check: `go test ./pkg/workspace/... -run TestStrictCase -count=1` passes
 
-- [ ] 2.4 SECURITY. Fill the token claim facts `ref`, `ref_protected` and the event source at state.write in `pkg/gate/facts.go:487 (AccessFacts)`. Check: `go test ./pkg/gate/... -run TestStateWriteLimitReadsTokenClaims -count=1` passes
+- [ ] 2.4 SECURITY. Fill the token claim facts `ref`, `ref_protected` and the event source at state.write in `pkg/gate/facts.go:487 (AccessFacts)`. The task adds the NEW top-level test `TestStateWriteLimitReadsTokenClaims` in a `_test.go` file of `pkg/gate`, so that the Check runs it. Check: `go test ./pkg/gate/... -run TestStateWriteLimitReadsTokenClaims -count=1` passes
 
 ## 3. Definition of done
 

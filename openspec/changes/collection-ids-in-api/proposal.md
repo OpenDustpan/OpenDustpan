@@ -38,9 +38,9 @@ again under the same name gets no old rule.)
 ## Fix boundary
 
 - The collection list and read answer `id` (the stable `col-` ID).
-- A placement rule create and update take `collectionId` and refuse a body
+- A placement rule create and update take `collectionID` and refuse a body
   that names `collection`; the stored rule holds the collection ID.
-- The rule read and list answer `collectionId` and, as a label for people
+- The rule read and list answer `collectionID` and, as a label for people
   only, `collection` (the current name of that collection).
 - The table `placement_rules` holds `collection_id` with a foreign key to the
   ID of `collections`, edited in place in the baseline of each dialect.
@@ -55,15 +55,15 @@ again under the same name gets no old rule.)
 - `POST /api/dustpan/v1/namespaces/{namespace}/placement-rules` and
   `PUT /api/dustpan/v1/namespaces/{namespace}/placement-rules/{rule}` (action
   `namespace:manage-placement-rules`, unchanged): the body is
-  `{"tool": "pulumi", "project": "…", "stack": "…", "collectionId": "col-…", "position": 1}`.
-  A body with `collection` and no `collectionId` answers 400 with the NEW
+  `{"tool": "pulumi", "project": "…", "stack": "…", "collectionID": "col-…", "position": 1}`.
+  A body with `collection` and no `collectionID` answers 400 with the NEW
   error code `placement.collection-id-required`.
   An ID that names no collection of the namespace answers 404
   `collection.not-found`. A malformed ID answers 400 with the NEW code
   `placement.invalid-collection-id`.
 - `GET …/placement-rules` and `GET …/placement-rules/{rule}` (action
   `namespace:read-placement-rules`, unchanged): each rule is
-  `{"id": "plr-…", "namespace": "acme", "position": 1, "tool": "pulumi", "project": "…", "stack": "…", "collectionId": "col-…", "collection": "web", "createdBy": "…", "createdAt": 1700000000}`.
+  `{"id": "plr-…", "namespace": "acme", "position": 1, "tool": "pulumi", "project": "…", "stack": "…", "collectionID": "col-…", "collection": "web", "createdBy": "…", "createdAt": 1700000000}`.
   `collection` is the current name, read at each request, a label only.
 - Go: `collection.Rule.CollectionID string` (NEW) replaces
   `collection.Rule.Collection Name`; `collection.Rule.Validate` returns
@@ -80,7 +80,7 @@ Placement decides the collection, and so the grants, of each new unit.
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| boundary check | The handler accepts only `collectionId` of the `col-` form and refuses `collection` in a write body. | TestPlacementRuleRefusesCollectionName, TestPlacementRuleRefusesMalformedID |
+| boundary check | The handler accepts only `collectionID` of the `col-` form and refuses `collection` in a write body. | TestPlacementRuleRefusesCollectionName, TestPlacementRuleRefusesMalformedID |
 | encode or contain | SQL placeholders; the ID is never put into a query string. | covered by the store suite |
 | limit | The rule names one collection of the same namespace: the store refuses an ID of another namespace. | TestPlacementRuleRefusesForeignCollection (store suite, both dialects) |
 | authorize at point of use | `namespace:manage-placement-rules` on the namespace of the path, unchanged. | TestPlacementRuleWriteNeedsTheAction |

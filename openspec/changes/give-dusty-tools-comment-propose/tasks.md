@@ -13,10 +13,11 @@
 
 - [ ] 2.1 Extend the Toolset in internal/agent with the three tools. Check: The tests above pass.
 - [ ] 2.2 Add the user docs page at docs/user/dusty-comment-propose.md (NEW). Check: make docs-lint passes.
+- [ ] 2.3 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `agent.denied` in the NEW file `internal/errcode/testdata/catalog/agent.txt`; `change.not-draft` in the NEW file `internal/errcode/testdata/catalog/change.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
