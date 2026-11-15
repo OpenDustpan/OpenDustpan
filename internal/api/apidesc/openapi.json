@@ -119,9 +119,7 @@
         "type": "object"
       },
       "ApiDescription": {
-        "additionalProperties": {
-          "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-        },
+        "additionalProperties": true,
         "type": "object"
       },
       "ApprovalDefault": {
@@ -358,7 +356,10 @@
               "format": "int64",
               "type": "integer"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "schemaVersion": {
             "format": "int64",
@@ -525,9 +526,7 @@
             "type": "integer"
           },
           "errorArgs": {
-            "additionalProperties": {
-              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-            },
+            "additionalProperties": true,
             "type": "object"
           },
           "errorCode": {
@@ -723,9 +722,7 @@
             "type": "string"
           },
           "data": {
-            "additionalProperties": {
-              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-            },
+            "additionalProperties": true,
             "type": "object"
           },
           "hidden": {
@@ -782,7 +779,10 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/ContextAnswer"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1052,16 +1052,10 @@
       "CreateGitHostConnectionRequest": {
         "properties": {
           "apiAddress": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "appID": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "auth": {
             "type": [
@@ -1070,25 +1064,13 @@
             ]
           },
           "credential": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "credentials": {
-            "items": {
-              "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
-            },
-            "type": [
-              "array",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "eventSecret": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "installationID": {
             "type": [
@@ -1103,10 +1085,7 @@
             ]
           },
           "privateKey": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Any JSON value. Only the operator sets the field that holds it. A request that holds the field is refused."
           },
           "push": {
             "type": [
@@ -1475,7 +1454,10 @@
               "format": "int64",
               "type": "integer"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "principals": {
             "format": "int64",
@@ -1897,8 +1879,8 @@
           "principal.already-exists",
           "principal.disabled",
           "principal.invalid",
-          "principal.last-break-glass",
           "principal.managed-by-directory",
+          "principal.no-working-break-glass",
           "principal.not-disabled",
           "principal.not-found",
           "principal.removal-alert-failed",
@@ -1992,6 +1974,8 @@
           "sink.conflict",
           "sink.delivery-not-found",
           "sink.delivery-not-redeliverable",
+          "sink.delivery-redeliver-limit",
+          "sink.delivery-too-soon",
           "sink.invalid",
           "sink.no-sender",
           "sink.no-url",
@@ -2026,6 +2010,7 @@
           "state-version.too-large",
           "state-version.upload-denied",
           "store.failover-setting-invalid",
+          "store.server-version-unsupported",
           "storecheck.cooldown",
           "storecheck.invalid-target",
           "storecheck.no-target",
@@ -2510,7 +2495,10 @@
               },
               "type": "array"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -4404,6 +4392,18 @@
           "principal": {
             "type": "string"
           },
+          "redeliverableAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "redeliveriesRemaining": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "redeliveryLimit": {
+            "format": "int64",
+            "type": "integer"
+          },
           "sink": {
             "type": "string"
           },
@@ -4424,6 +4424,8 @@
           "nextAt",
           "notification",
           "principal",
+          "redeliveriesRemaining",
+          "redeliveryLimit",
           "sink",
           "state",
           "subscription",
@@ -5168,6 +5170,9 @@
           "publishedBy": {
             "type": "string"
           },
+          "served": {
+            "type": "boolean"
+          },
           "version": {
             "type": "string"
           }
@@ -5180,6 +5185,7 @@
           "protocols",
           "publishedAt",
           "publishedBy",
+          "served",
           "version"
         ],
         "type": "object"
@@ -8104,7 +8110,10 @@
             "additionalProperties": {
               "type": "string"
             },
-            "type": "object"
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "name": {
             "type": "string"
