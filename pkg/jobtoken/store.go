@@ -53,8 +53,9 @@ type Store interface {
 	// never from the token row. It returns ErrNotFound when no record has the
 	// digest, when the namespace or the live unit of the row no longer exists,
 	// when the namespace differs from the namespace of the unit or the job,
-	// when the starter principal is deleted, or when the job or claim operation
-	// not exist. A disabled starter comes back with StarterEnabled false.
+	// when the starter principal is deleted, or when the job or the claim
+	// operation does not exist. A disabled starter comes back with
+	// StarterEnabled false.
 	// Every other failure comes back wrapped; the store never returns a driver
 	// error.
 	GetByDigest(ctx context.Context, d Digest) (Match, error)
