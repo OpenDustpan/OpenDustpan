@@ -1,6 +1,6 @@
 # 385. A fresh step is opt-in
 
-Status: accepted · 2026-11-15. Decided by the project owner (owner, 2026-11-15). The exclusions of decision 5 are the reading of the PM
+Status: accepted · 2026-11-15. Decided by the project owner (owner, 2026-11-15). The owner answered on the scope and the exclusions of decision 5 on 15 November 2026. Break-glass stays open (RFC 132)
 
 Changes:
 
@@ -25,7 +25,7 @@ The result today: an installation with an SSO provider cannot approve a `destroy
 
 ## Decision
 
-1. **One installation setting, off by default (owner, 2026-11-15).** The setting `freshAuthEnabled` is a boolean of the installation settings. Its effective default is `false`. The settings API shows the effective value and where it comes from (ADR 212 decision 9). A flag, an environment variable or the configuration file can set it, and that needs no step (ADR 212 decision 3, the static layer).
+1. **One installation setting, off by default (owner, 2026-11-15).** The setting `freshAuthEnabled` is a boolean of the installation settings. It covers only the normal dangerous actions that use 2FA step-up (owner, 2026-11-15). Its effective default is `false`. The settings API shows the effective value and where it comes from (ADR 212 decision 9). A flag, an environment variable or the configuration file can set it, and that needs no step (ADR 212 decision 3, the static layer).
 2. **Off means no step (owner, 2026-11-15).** When the setting is off, the server asks a person for no fresh authentication. This covers each step that ADR 227 decision 2 lists:
    - token creation and rotation, and a secret reveal,
    - the changes of ADR 70 decisions 16, 17 and 23, and the switches of ADR 125 decision 3,
@@ -33,14 +33,14 @@ The result today: an installation with an SSO provider cannot approve a `destroy
    - an approval of a `destroy`, an approval in a namespace with `freshAuthForApprovals`, and an approval rule with `freshAuthSeconds`,
    - a signature of a change order and a ChatOps approval.
 
-   The handler, the service and the store each read the same effective value. None of them keeps a rule of its own.
+   With the setting off, an access token that holds the grant may approve a `destroy` (owner, 2026-11-15). The handler, the service and the store each read the same effective value. None of them keeps a rule of its own.
 3. **On means the old rules (owner).** The rules of ADR 212 decision 3, ADR 225 decision 5, ADR 227 and ADR 301 apply. A fresh authentication is a built-in MFA step or a factor of ADR 301. It can also be a new authentication at the SSO identity provider. Its age is at most `freshAuthSeconds`. An access token never gives one. The refusal is `403` with `mfa.fresh-step-required`.
 4. **Turning it off is a weaker change (PM).** A change of `freshAuthEnabled` from on to off reduces security. It needs a fresh step while the setting is on (ADR 212 decision 3). A change from off to on needs no step. Both write an audit entry with the old and the new value.
-5. **What stays, because it is not a policy step (PM).** These keep their own rules and do not depend on the setting:
-   - the proof of a break-glass pass (ADR 373 decision 1, ADR 142),
-   - the one-time code of the first administrator (ADR 339 decision 6),
-   - the change or reset of a factor (ADR 301 decision 8, ADR 285 decision 17),
-   - the issue of an enrollment code (ADR 372 decision 14).
+5. **What stays, because it is not a policy step (owner, 2026-11-15).** These keep their own rules and do not depend on the setting:
+   - the one-time code of the first administrator (ADR 339 decision 6). It is not MFA and not a step-up. It is out of the scope of the setting (owner, 2026-11-15),
+   - the change or reset of a factor (ADR 301 decision 8, ADR 285 decision 17). It stays required, whatever the setting says. The proof is a working second factor, a recovery code, or an administrator who disables MFA (owner, 2026-11-15). The owner notes that many tools, for example GitLab, let a signed-in person change MFA settings. The rule may later become configurable, as break-glass may. The default stays on ([RFC 132](../rfc/0132-step-up-configurable-per-dangerous-action.md)),
+   - the issue of an enrollment code (ADR 372 decision 14). This is the reading of the PM. The owner has not decided it.
+   - the proof of a break-glass pass (ADR 373 decision 1, ADR 142). It stays as in the first draft for now. The owner thinks it may be a normal dangerous action, and that step-up may need to be configurable for each dangerous action. This is open and not decided. [RFC 132](../rfc/0132-step-up-configurable-per-dangerous-action.md) holds the question for break-glass and the reset of a factor, with the default on.
 
    They protect the sign-in system itself. The owner can widen the setting to them with a new decision.
 6. **The stored rules stay and show that they are not enforced (PM).** An approval rule with `freshAuthSeconds` keeps its stored value while the setting is off. A namespace with `freshAuthForApprovals` on keeps it too. The settings API and the rule API show `"enforced": false` for each of them. The server writes no silent change to a rule.
