@@ -83,6 +83,7 @@ func (d DroppedRunnerCredentials) Entry(at time.Time) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 }
 

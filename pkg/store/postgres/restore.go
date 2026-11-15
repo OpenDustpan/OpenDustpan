@@ -281,7 +281,7 @@ func (s *Store) swapIn(
 	ctx context.Context, tx pgx.Tx, srv serverAuditTx, in swapInTarget, dropped *int64,
 ) error {
 	if in.plan.keepAccess {
-		n, err := s.keepAccessTx(ctx, tx, in.live, in.plan)
+		n, err := s.keepAccessTx(ctx, tx, srv, in.live, in.plan)
 
 		*dropped = n
 
@@ -347,7 +347,7 @@ func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, srv serverAuditTx, na
 		return err
 	}
 
-	if err := keepControlTables(ctx, tx, live, previous); err != nil {
+	if err := keepControlTables(ctx, tx, srv, live, previous); err != nil {
 		return err
 	}
 
@@ -444,7 +444,8 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 
 // keepControlTables replaces the rows of the durable control tables in the
 // restored schema live with the rows of the schema previous, in tx, and
-// records the runner credentials that the copy does not keep. A restore
+// records the runner credentials that the copy does not keep, in the audit
+// scope @server through srv, the locked server audit transaction of tx. A restore
 // keeps the control tables of the live installation: the claim tokens of
 // durable operations only grow, and an older token from a backup would let a
 // stale holder write. The installation, backups and restores control tables
@@ -452,7 +453,7 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 // with no copy. The lock holds every durable operation write of another
 // instance out until the swap commits, so the copy has the last committed
 // rows.
-func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) error {
+func keepControlTables(ctx context.Context, tx pgx.Tx, srv serverAuditTx, live, previous string) error {
 	kept, err := keptControlTables()
 	if err != nil {
 		return err
@@ -501,7 +502,7 @@ func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) er
 		}
 	}
 
-	return appendDroppedRunnerCredentials(ctx, tx, dropped)
+	return appendDroppedRunnerCredentials(ctx, srv, dropped)
 }
 
 // droppedRunnerCredentials returns the live handoff tokens and job sessions
@@ -560,22 +561,26 @@ func runnerIDsOf(ctx context.Context, tx pgx.Tx, query string) ([]string, error)
 }
 
 // appendDroppedRunnerCredentials appends the audit entry of the dropped
-// runner credentials in tx, after the copy replaced the rows of the restored
-// schema. It writes no entry when the copy dropped nothing. The entry
-// follows the chain state that the swap kept.
-func appendDroppedRunnerCredentials(ctx context.Context, tx pgx.Tx, dropped backup.DroppedRunnerCredentials) error {
+// runner credentials in srv, the locked server audit transaction of the
+// swap, after the copy replaced the rows of the restored schema. The entry is
+// of the scope @server, so it goes through appendServerEntry. It writes no
+// entry when the copy dropped nothing. The entry follows the chain state that
+// the swap kept.
+func appendDroppedRunnerCredentials(
+	ctx context.Context,
+	srv serverAuditTx,
+	dropped backup.DroppedRunnerCredentials,
+) error {
 	if dropped.Empty() {
 		return nil
 	}
 
-	q := db.New(tx)
-
-	nowMs, err := storeNow(ctx, q)
+	nowMs, err := storeNow(ctx, srv.q)
 	if err != nil {
 		return err
 	}
 
-	if _, err := appendAuditEntry(ctx, q, dropped.Entry(codec.FromMillis(nowMs))); err != nil {
+	if _, err := appendServerEntry(ctx, srv, dropped.Entry(codec.FromMillis(nowMs))); err != nil {
 		return fmt.Errorf("append dropped runner credentials entry: %w", err)
 	}
 
