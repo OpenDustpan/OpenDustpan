@@ -10,10 +10,29 @@ import (
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/textbody"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
+
+// errWrongState marks a refusal because of the state of the job or of the log
+// version. The answer is 409 job.wrong-state.
+var errWrongState = errors.New("the state of the job does not allow the request")
+
+// wrongState wraps err with errWrongState when the state of the job, or of the
+// log version, caused it. It returns any other error as it is.
+func wrongState(err error) error {
+	switch {
+	case errors.Is(err, job.ErrFinished), errors.Is(err, job.ErrDelivered), errors.Is(err, job.ErrTransition),
+		errors.Is(err, history.ErrInProgress), errors.Is(err, history.ErrRedacted), errors.Is(err, history.ErrLatest),
+		errors.Is(err, secret.ErrShredded):
+		return fmt.Errorf("%w: %w", errWrongState, err)
+	default:
+		return err
+	}
+}
 
 // maxCancelBody bounds the body of a cancel. A reason of at most
 // audit.MaxReasonLen characters is far less.
@@ -67,13 +86,9 @@ func (h *Handler) cancelJob(w http.ResponseWriter, r *http.Request, p identity.P
 	if err != nil {
 		h.recordCancelRefusal(r, p, t, err)
 
-		// A change that is in git for good ended the job for a cancel: the
-		// answer is the code job.finished.
-		if errors.Is(err, job.ErrDelivered) {
-			err = fmt.Errorf("%w: %w", job.ErrFinished, err)
-		}
-
-		h.writeError(ctx, w, err)
+		// A job that ended, and a change that is in git for good, are in a
+		// state that a cancel cannot change: the answer is job.wrong-state.
+		h.writeError(ctx, w, wrongState(err))
 
 		return
 	}

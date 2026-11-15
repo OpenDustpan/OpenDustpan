@@ -146,7 +146,9 @@ func TestStartRouteIsDeclared(t *testing.T) {
 	for _, pattern := range with.RegisteredPatterns() {
 		if strings.HasPrefix(pattern, "POST") && pattern != "POST "+jobsURLPattern &&
 			pattern != "POST "+jobsURLPattern+"/{job_id}/approvals" &&
-			pattern != "POST "+jobsURLPattern+"/{job_id}/cancel" {
+			pattern != "POST "+jobsURLPattern+"/{job_id}/cancel" &&
+			pattern != "POST "+jobsURLPattern+"/{job_id}/confirmations" &&
+			pattern != "POST "+jobsURLPattern+"/{job_id}/log-redactions" {
 			t.Errorf("served pattern %q is not the declared route", pattern)
 		}
 	}

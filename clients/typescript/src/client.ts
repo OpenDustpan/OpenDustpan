@@ -16,6 +16,7 @@ import type {
   CheckBackupInput,
   CheckGitHostConnectionInput,
   CheckNamespaceIssuerCopyInput,
+  ConfirmJobInput,
   CreateCollectionInput,
   CreateGitHostConnectionInput,
   CreateLocalUserInput,
@@ -156,6 +157,7 @@ import type {
   PublishProviderReleaseInput,
   PutGitHostAppInput,
   PutGitHostInstallationInput,
+  RedactJobLogInput,
   RedeemLocalUserCodeInput,
   RedeliverNotificationInput,
   RemovePasskeyInput,
@@ -233,6 +235,7 @@ import type {
   CheckBackupResponse,
   Collection,
   Components,
+  ConfirmJobRequest,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -306,6 +309,7 @@ import type {
   JobLocationRequest,
   JobLog,
   JobLogEntry,
+  JobLogSubstitution,
   JobPhase,
   JobPlan,
   JobPlanBinding,
@@ -399,6 +403,8 @@ import type {
   PublishProviderReleaseRequest,
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
+  RedactJobLogRequest,
+  RedactJobLogResponse,
   RedeemLocalUserCodeRequest,
   RegistryFileEntry,
   RegistryFileSection,
@@ -600,6 +606,10 @@ export class Client {
 
   checkNamespaceIssuerCopy(input: CheckNamespaceIssuerCopyInput): Promise<Answer<IssuerCopyCheck>> {
     return execute(this.transport, operations.checkNamespaceIssuerCopy, input);
+  }
+
+  confirmJob(input: ConfirmJobInput): Promise<Answer<Job>> {
+    return execute(this.transport, operations.confirmJob, input);
   }
 
   createCollection(input: CreateCollectionInput): Promise<Answer<Collection>> {
@@ -1160,6 +1170,10 @@ export class Client {
 
   putGitHostInstallation(input: PutGitHostInstallationInput): Promise<Answer<GitHostInstallation>> {
     return execute(this.transport, operations.putGitHostInstallation, input);
+  }
+
+  redactJobLog(input: RedactJobLogInput): Promise<Answer<RedactJobLogResponse>> {
+    return execute(this.transport, operations.redactJobLog, input);
   }
 
   redeemLocalUserCode(input: RedeemLocalUserCodeInput): Promise<Answer<void>> {

@@ -154,11 +154,14 @@ type ServiceConfig struct {
 	// store at the dispatch of the apply phase, which reads the current
 	// state version of the unit.
 	MaxPlanAge time.Duration
+	// Artifacts reads and redacts the logs of jobs. Nil means that the server
+	// has no such store, so RedactLog returns ErrUnsupported and changes
+	// nothing.
+	Artifacts ArtifactStore
 }
 
-// service is the Service of this package. This version starts, reads,
-// cancels and approves a job. It refuses Confirm and RedactLog, so no caller
-// thinks that a missing rule is a rule.
+// service is the Service of this package. It starts, reads, cancels,
+// approves and confirms a job, and redacts its logs.
 type service struct {
 	store      Store
 	units      UnitResolver
@@ -176,6 +179,7 @@ type service struct {
 	approvers  gate.ApproverPolicy
 	groups     GroupReader
 	maxPlanAge time.Duration
+	artifacts  ArtifactStore
 }
 
 // Starter is a Service that tells a retry from a first start. The REST API
@@ -220,6 +224,7 @@ func NewService(cfg ServiceConfig) (Starter, error) { //nolint:ireturn // The po
 		approvers:  gate.ApproverPolicy{Production: true, IsDev: nil},
 		groups:     cfg.Groups,
 		maxPlanAge: DefaultMaxPlanAge,
+		artifacts:  cfg.Artifacts,
 	}
 
 	if cfg.Approvers != nil {
@@ -378,17 +383,4 @@ func (s *service) Get(ctx context.Context, a Actor, id ID) (Job, error) {
 	default:
 		return Job{}, fmt.Errorf("authorize %s: %w", ActionJobRead, err)
 	}
-}
-
-// errNotYet is the cause of the methods that this version does not have.
-var errNotYet = errors.New("the job service of this version does not do this yet")
-
-// Confirm implements Service. This version refuses it.
-func (*service) Confirm(context.Context, Actor, ID, Verdict, PlanBinding) (Job, error) {
-	return Job{}, fmt.Errorf("%w: confirm: %w", ErrUnsupported, errNotYet)
-}
-
-// RedactLog implements Service. This version refuses it.
-func (*service) RedactLog(context.Context, Actor, ID, string, []Substitution, string) (LogRef, error) {
-	return LogRef{}, fmt.Errorf("%w: redact log: %w", ErrUnsupported, errNotYet)
 }

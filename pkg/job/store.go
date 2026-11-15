@@ -484,10 +484,9 @@ type Service interface {
 	// not Job.StartedBy, ErrAuthStale when the fresh authentication is
 	// missing or older than ConfirmFreshness, ErrPlanChanged and
 	// ErrPlanStale as Approve does, and ErrFinished for a job that ended. A
-	// rejection ends the job rejected.
-	//
-	// This version does not implement the contract below: each call returns
-	// ErrUnsupported and changes nothing.
+	// rejection ends the job rejected. A rejection needs the state checks
+	// and no agent; it needs no requester, no fresh authentication and no
+	// plan binding.
 	Confirm(ctx context.Context, a Actor, id ID, v Verdict, plan PlanBinding) (Job, error)
 	// RedactLog replaces each match of subs in the log version with the ID
 	// version, of the job id, writes the result as the next version with
@@ -501,6 +500,20 @@ type Service interface {
 	// version wrote the next version and its redaction of version failed, a
 	// retry only redacts version. The audit entry never holds the text of
 	// subs.
-	RedactLog(ctx context.Context, a Actor, id ID, version string, subs []Substitution, reason string) (LogRef,
-		error)
+	//
+	// This version finds version in the step records of the job, so a
+	// version that is not one of them is ErrNotFound. It returns
+	// ErrUnsupported when the server has no ArtifactStore.
+	RedactLog(ctx context.Context, a Actor, id ID, req RedactRequest) (LogRef, error)
+}
+
+// RedactRequest is the request of Service.RedactLog.
+type RedactRequest struct {
+	// Version is the ID of the log version to redact.
+	Version string
+	// Substitutions are the texts to replace. The server never keeps them.
+	Substitutions []Substitution
+	// Reason is the reason of the redaction, for the audit entry and the
+	// history model.
+	Reason string
 }

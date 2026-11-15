@@ -82,6 +82,15 @@ func (s *service) Cancel(ctx context.Context, a Actor, id ID, reason string) (Jo
 // gets a *DeniedError, and an error of the authorizer is a denial too (fail
 // closed).
 func (s *service) authorizedFor(ctx context.Context, a Actor, id ID, action identity.Action) (Job, error) {
+	return s.authorizedBy(ctx, a, id, func(*Job) (identity.Action, error) { return action, nil })
+}
+
+// authorizedBy is authorizedFor for an action that depends on the job: pick
+// gives the action after the caller may read the job. An error of pick is
+// returned as it is, so a caller that may not read the job never sees it.
+func (s *service) authorizedBy(
+	ctx context.Context, a Actor, id ID, pick func(*Job) (identity.Action, error),
+) (Job, error) {
 	if !strings.HasPrefix(string(id), IDPrefix) {
 		return Job{}, ErrNotFound
 	}
@@ -99,6 +108,11 @@ func (s *service) authorizedFor(ctx context.Context, a Actor, id ID, action iden
 		return Job{}, ErrNotFound
 	default:
 		return Job{}, fmt.Errorf("authorize %s: %w", ActionJobRead, err)
+	}
+
+	action, err := pick(&j)
+	if err != nil {
+		return Job{}, err
 	}
 
 	err = s.authorizer.Authorize(ctx, a.Principal, action, j.Spec.Unit)
@@ -134,9 +148,18 @@ func (s *service) cancelEntry(j *Job, a Actor, reason string) audit.Entry {
 		changes = append(changes, audit.Change{Key: changeKeyAgent, Old: nil, New: a.Agent, Layer: "", TakesEffect: ""})
 	}
 
+	return s.changeEntry(j, a, ActionJobCancel, changes, reason)
+}
+
+// changeEntry returns the audit entry of a change that the principal of a made
+// to the unit of j with action. It holds the changes and the reason, and no
+// request data.
+func (s *service) changeEntry(
+	j *Job, a Actor, action identity.Action, changes []audit.Change, reason string,
+) audit.Entry {
 	return audit.Entry{
 		At: s.now().UTC(), Namespace: j.Spec.Unit.Namespace(), Subject: a.Principal.Subject, IDPSubject: "",
-		TokenID: a.Principal.TokenID, Action: string(ActionJobCancel), Object: j.Spec.Unit.String(), Version: "",
+		TokenID: a.Principal.TokenID, Action: string(action), Object: j.Spec.Unit.String(), Version: "",
 		ValuePath: "", ValueCount: nil, Changes: changes, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: j.Spec.Unit.UnitID(),
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: string(a.Principal.Kind), JobID: "",

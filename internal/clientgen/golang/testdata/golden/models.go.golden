@@ -173,6 +173,7 @@ const (
 	ErrorCodeJobPolicyDenied                       ErrorCode = "job.policy-denied"
 	ErrorCodeJobSelfApproval                       ErrorCode = "job.self-approval"
 	ErrorCodeJobUnsupported                        ErrorCode = "job.unsupported"
+	ErrorCodeJobWrongState                         ErrorCode = "job.wrong-state"
 	ErrorCodeJournalBatchInvalid                   ErrorCode = "journal.batch-invalid"
 	ErrorCodeJournalBuildTimeout                   ErrorCode = "journal.build-timeout"
 	ErrorCodeJournalConflict                       ErrorCode = "journal.conflict"

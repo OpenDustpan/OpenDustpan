@@ -314,8 +314,8 @@ func TestJobActionRoutesCancelMapsTheErrorsOfTheService(t *testing.T) {
 		status int
 		code   string
 	}{
-		{fmt.Errorf("%w: succeeded", job.ErrFinished), http.StatusConflict, "job.finished"},
-		{fmt.Errorf("%w: in git", job.ErrDelivered), http.StatusConflict, "job.finished"},
+		{fmt.Errorf("%w: succeeded", job.ErrFinished), http.StatusConflict, "job.wrong-state"},
+		{fmt.Errorf("%w: in git", job.ErrDelivered), http.StatusConflict, "job.wrong-state"},
 		{job.ErrConflict, http.StatusConflict, "job.conflict"},
 		{namespace.ErrFenced, http.StatusConflict, "namespace.fenced"},
 		{fmt.Errorf("%w: unit", identity.ErrDenied), http.StatusForbidden, errcode.AccessDenied},

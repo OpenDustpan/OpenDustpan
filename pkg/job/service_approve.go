@@ -75,7 +75,7 @@ func (s *service) Approve(
 		}
 	}
 
-	return s.record(ctx, &j, a, &ap, mfaOf(&j, v))
+	return s.record(ctx, &j, a, &ap, recordAs{action: ActionJobApprove, auth: mfaOf(&j, v)})
 }
 
 // checkApproval runs the checks that only an approval needs. ap.Plan holds the
@@ -334,10 +334,17 @@ func newDestroyFresh(a Actor, now time.Time) (destroyFresh, error) {
 	return destroyFresh{auth: ConfirmAuthMFA, at: a.AuthAt}, nil
 }
 
+// recordAs is what the audit entry of a verdict names: the action that allowed
+// it, and the fresh authentication when there is one.
+type recordAs struct {
+	action identity.Action
+	auth   ConfirmAuth
+}
+
 // record stores the verdict in one change with its audit entry. The event
 // follows from the gates after the verdict: a rejection ends the job, the last
 // needed approval opens it, and any other approval keeps it waiting.
-func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, auth ConfirmAuth) (Job, error) {
+func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, as recordAs) (Job, error) {
 	phase := &j.Phases[j.Current]
 	approvals := append(slices.Clone(phase.Approvals), *ap)
 
@@ -364,7 +371,7 @@ func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, aut
 		return Job{}, fmt.Errorf("fence of %s: %w", j.Spec.Unit.Namespace(), err)
 	}
 
-	stored, err := s.store.Apply(ctx, c, fence, []audit.Entry{s.approvalEntry(j, a, ap, auth, c.Event)})
+	stored, err := s.store.Apply(ctx, c, fence, []audit.Entry{s.approvalEntry(j, a, ap, as, c.Event)})
 	if err != nil {
 		return Job{}, fmt.Errorf("record approval: %w", err)
 	}
@@ -375,7 +382,7 @@ func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, aut
 // approvalEntry returns the audit entry of a verdict: who, on which unit, the
 // job, the verdict, the phase, the event that followed, and the agent and the
 // authentication when there are any. The comment is the reason.
-func (s *service) approvalEntry(j *Job, a Actor, ap *Approval, auth ConfirmAuth, ev Event) audit.Entry {
+func (s *service) approvalEntry(j *Job, a Actor, ap *Approval, as recordAs, ev Event) audit.Entry {
 	changes := []audit.Change{
 		{Key: "job", Old: nil, New: string(j.ID), Layer: "", TakesEffect: ""},
 		{Key: "verdict", Old: nil, New: string(ap.Verdict), Layer: "", TakesEffect: ""},
@@ -392,13 +399,13 @@ func (s *service) approvalEntry(j *Job, a Actor, ap *Approval, auth ConfirmAuth,
 		changes = append(changes, audit.Change{Key: keyPlan, Old: nil, New: ap.Plan.Plan, Layer: "", TakesEffect: ""})
 	}
 
-	if auth != "" {
-		changes = append(changes, audit.Change{Key: "auth", Old: nil, New: string(auth), Layer: "", TakesEffect: ""})
+	if as.auth != "" {
+		changes = append(changes, audit.Change{Key: "auth", Old: nil, New: string(as.auth), Layer: "", TakesEffect: ""})
 	}
 
 	return audit.Entry{
 		At: ap.At, Namespace: j.Spec.Unit.Namespace(), Subject: a.Principal.Subject, IDPSubject: "",
-		TokenID: a.Principal.TokenID, Action: string(ActionJobApprove), Object: j.Spec.Unit.String(), Version: "",
+		TokenID: a.Principal.TokenID, Action: string(as.action), Object: j.Spec.Unit.String(), Version: "",
 		ValuePath: "", ValueCount: nil, Changes: changes, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: j.Spec.Unit.UnitID(),
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: string(a.Principal.Kind), JobID: "",

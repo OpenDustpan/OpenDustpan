@@ -7,3 +7,4 @@ job.not-found
 job.plan-changed
 job.plan-stale
 job.self-approval
+job.wrong-state
