@@ -50,8 +50,8 @@ CI can fail on a change that does not touch name locks.
 
 ## Check
 
-`go test ./pkg/store/sqlite/ -run TestNameLockConformance -count=50` and
-`DUSTPAN_TEST_POSTGRES_URL=<url> go test ./pkg/store/postgres/ -run TestNameLockConformance -count=50`
+`go test -timeout 60m ./pkg/store/sqlite/ -run TestNameLockConformance -count=50` and
+`DUSTPAN_TEST_POSTGRES_URL=<url> go test -timeout 60m ./pkg/store/postgres/ -run TestNameLockConformance -count=50`
 pass.
 
 ## ADR check
