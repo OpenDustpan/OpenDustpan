@@ -1,13 +1,14 @@
 ---
 rfc: 131
 title: Generated files and merge conflicts
-status: draft
+status: accepted
+adr: 383
 created: 2026-11-15
 ---
 
 # RFC 131. Generated files and merge conflicts
 
-Status: draft. The project owner asked on 15 November 2026 how other projects
+Status: accepted ([ADR 383](../adr/0383-generated-files-do-not-conflict-by-layout.md)). The owner took the layout change and the bot fix on 15 November 2026. The project owner asked on 15 November 2026 how other projects
 handle merge conflicts in generated files. This RFC gives the facts, the
 options and a recommendation. It changes no decision. ADR 275 decision 2, ADR
 323 decision 3 and the definition of done in `CLAUDE.md` (`make check` passes
@@ -218,4 +219,4 @@ conflict to the merge. Option 2 is justified when `description.ts` and
 
 ## Outcome
 
-Empty until the RFC is accepted (link the ADR) or dropped (say why).
+Accepted on 15 November 2026 as [ADR 383](../adr/0383-generated-files-do-not-conflict-by-layout.md): options 2 and the bot fix of option 3 (no cancel of the resolve run). The measurement and the faster bot were not taken. Options 4 and 5 stay open.
