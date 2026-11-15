@@ -155,6 +155,7 @@ func exchangeFixture(t *testing.T, ruleIssuer string, k exchangeKey) exchangeEnv
 		FenceVersion:  0,
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 
 	if _, err := st.Issuer().PutIssuerSettings(t.Context(), set, 0, ns.Fence(), []audit.Entry{entry}); err != nil {
@@ -259,6 +260,7 @@ func requestEntry() audit.Entry {
 		FenceVersion:  0,
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 }
 

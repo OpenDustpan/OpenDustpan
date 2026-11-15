@@ -3,11 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/setting"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
 var errSyncFailed = errors.New("the store is gone")
@@ -136,4 +140,87 @@ func TestWireSettingsRecordsTheDigestOfTheStaticLayer(t *testing.T) {
 	if syncErr := wiring.sync(t.Context()); !errors.Is(syncErr, errSyncFailed) {
 		t.Fatalf("sync = %v, want the error of the store", syncErr)
 	}
+}
+
+// TestStoreSettingDeclarations proves the choice of the declarations by the
+// kind of store: a SQLite store declares no setting of its own, and a
+// PostgreSQL store declares the bounds of the store. Each bound key is named
+// in one row, so that a declaration that a change drops fails the test.
+func TestStoreSettingDeclarations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "statement timeout", key: postgres.SettingStatementTimeout},
+		{name: "idle-in-transaction timeout", key: postgres.SettingIdleInTransactionTimeout},
+		{name: "client connection check interval", key: postgres.SettingClientConnectionCheckInterval},
+		{name: "backup statement timeout", key: postgres.SettingBackupStatementTimeout},
+		{name: "backup idle-in-transaction timeout", key: postgres.SettingBackupIdleInTransactionTimeout},
+		{name: "schema change statement timeout", key: postgres.SettingSchemaChangeStatementTimeout},
+		{name: "schema change idle-in-transaction timeout", key: postgres.SettingSchemaChangeIdleInTransactionTimeout},
+		{name: "migration timeout", key: postgres.SettingMigrationTimeout},
+	}
+
+	st, err := dustpan.OpenStore(t.Context(), "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open the SQLite store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close the SQLite store: %v", closeErr)
+		}
+	})
+
+	// A SQLite store declares no setting of its own, so no key of the
+	// PostgreSQL bounds appears.
+	if got := storeSettingDeclarations(st); len(got) != 0 {
+		t.Fatalf("the SQLite store declares %v, want no declaration", declarationKeys(got))
+	}
+
+	// A PostgreSQL store declares exactly these keys, in this order.
+	got := declarationKeys(postgres.SettingDeclarations())
+	want := []string{
+		postgres.SettingStatementTimeout,
+		postgres.SettingIdleInTransactionTimeout,
+		postgres.SettingClientConnectionCheckInterval,
+		postgres.SettingBackupStatementTimeout,
+		postgres.SettingBackupIdleInTransactionTimeout,
+		postgres.SettingSchemaChangeStatementTimeout,
+		postgres.SettingSchemaChangeIdleInTransactionTimeout,
+		postgres.SettingMigrationTimeout,
+	}
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("the postgres store declares %v, want %v", got, want)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			postgresKeys := declarationKeys(postgres.SettingDeclarations())
+			if !slices.Contains(postgresKeys, tt.key) {
+				t.Fatalf("the postgres store declares no %s, keys = %v", tt.key, postgresKeys)
+			}
+
+			sqliteKeys := declarationKeys(storeSettingDeclarations(st))
+			if slices.Contains(sqliteKeys, tt.key) {
+				t.Fatalf("the SQLite store declares %s, keys = %v", tt.key, sqliteKeys)
+			}
+		})
+	}
+}
+
+// declarationKeys returns the keys of declarations, in order.
+func declarationKeys(declarations []setting.Declaration) []string {
+	keys := make([]string, 0, len(declarations))
+
+	for _, d := range declarations {
+		keys = append(keys, d.Key)
+	}
+
+	return keys
 }

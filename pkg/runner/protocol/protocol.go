@@ -347,6 +347,9 @@ type Assignment struct {
 	// the helper of the mode custom.
 	GitCredentials string `json:"gitCredentials"`
 	GitHelper      string `json:"gitHelper,omitempty"`
+	// Profile names the profile whose credentials the tool steps need, or is
+	// empty when they need none.
+	Profile string `json:"profile,omitempty"`
 }
 
 // Source names one source snapshot.
@@ -396,6 +399,8 @@ type Step struct {
 type Output struct {
 	Kind string `json:"kind"`
 	Path string `json:"path"`
+	// Needed is true when a later phase of the job reads the output.
+	Needed bool `json:"needed,omitempty"`
 }
 
 // Plan is the plan that an apply phase applies.

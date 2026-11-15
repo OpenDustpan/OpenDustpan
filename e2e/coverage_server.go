@@ -11,6 +11,7 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
@@ -56,6 +57,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Schema:           coverageSchema{},
 		Principals:       nil,
 		Access:           nil,
+		Reach:            coverageReach(),
 		DeletedUnits:     nil,
 		AuditChain:       nil,
 		AuditSinks:       nil,
@@ -67,6 +69,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		StoreChecks:      coverageStoreChecks(tb),
+		Cursors:          nil,
 		Now:              nil,
 		Authenticator:    coverageAuthenticator{},
 		Authorizer:       coverageAuthorizer{},
@@ -82,6 +85,15 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	}
 
 	return append(serverRefs(handler.Routes()), coverageSignInRoutes(tb)...)
+}
+
+// coverageReach returns the reach config of the group routes of the route
+// table. The coverage gate reads the route table only, and a zero reach config
+// makes a group read fail closed.
+func coverageReach() access.ReachConfig {
+	return access.ReachConfig{
+		Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+	}
 }
 
 // serverRefs formats the installation table as method and path pairs.
@@ -178,12 +190,12 @@ func operatorAllowEntries() []AllowEntry {
 			Reason:       "Operator route (ADR 32): no CLI calls it.",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/server/components",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/components",
 			CoveringTest: "TestBothToolsSameServer (checkServerComponents)",
 			Reason:       "Operator route: no CLI calls it.",
 		},
 		{
-			Method: http.MethodGet, Path: "/api/server/worker",
+			Method: http.MethodGet, Path: "/api/dustpan/v1/worker",
 			CoveringTest: "TestBothToolsSameServer (checkServerComponents)",
 			Reason:       "Operator route: no CLI calls it.",
 		},

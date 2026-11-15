@@ -33,7 +33,8 @@ type svcStore struct {
 	// applyErr fails every Apply.
 	applyErr error
 	jobs     map[job.ID]job.Job
-	replay   bool
+	// keys holds the job of each idempotency key, as the store contract says.
+	keys map[string]job.Job
 }
 
 type createCall struct {
@@ -51,7 +52,7 @@ func newSvcStore() *svcStore {
 		createErrs: nil,
 		applyErr:   nil,
 		jobs:       map[job.ID]job.Job{},
-		replay:     false,
+		keys:       map[string]job.Job{},
 	}
 }
 
@@ -73,14 +74,30 @@ func (s *svcStore) Create(
 		}
 	}
 
+	// A key that names a job with another request hash fails, as the store
+	// contract says; a key that names the same request gives the stored job.
+	if j.IdempotencyKey != "" {
+		stored, ok := s.keys[j.IdempotencyKey]
+		if ok {
+			if stored.RequestHash != j.RequestHash {
+				return job.Job{}, false, job.ErrKeyConflict
+			}
+
+			return stored, false, nil
+		}
+	}
+
 	j.Version = 1
 	if d != nil {
 		j.State = job.StateDispatched
 	}
 
 	s.jobs[j.ID] = j
+	if j.IdempotencyKey != "" {
+		s.keys[j.IdempotencyKey] = j
+	}
 
-	return j, !s.replay, nil
+	return j, true, nil
 }
 
 func (s *svcStore) Get(_ context.Context, id job.ID) (job.Job, error) {
@@ -116,10 +133,8 @@ func (s *svcStore) Apply(_ context.Context, c job.Change, _ namespace.Fence, _ [
 	return j, nil
 }
 
-func (*svcStore) List(context.Context, job.Filter) ([]job.Job, error) { return nil, nil }
-
-func (*svcStore) ObserveStateVersion(context.Context, job.StateVersion, namespace.Fence) ([]job.Job, error) {
-	return nil, nil
+func (*svcStore) List(context.Context, job.Filter) (job.Page, error) {
+	return job.Page{Jobs: nil, Damaged: nil, After: ""}, nil
 }
 
 func (*svcStore) SetVerification(context.Context, job.ID, job.Verification, namespace.Fence, []audit.Entry,
@@ -127,7 +142,13 @@ func (*svcStore) SetVerification(context.Context, job.ID, job.Verification, name
 	return nil
 }
 
-func (*svcStore) Orphans(context.Context, int) ([]job.Orphan, error) { return nil, nil }
+func (*svcStore) Orphans(context.Context, int) ([]job.Orphan, []job.DamagedRow, error) {
+	return nil, nil, nil
+}
+
+func (*svcStore) CancelDamaged(context.Context, job.ID, namespace.Fence, []audit.Entry) error {
+	return nil
+}
 
 type svcUnits struct {
 	unit identity.Object
@@ -237,7 +258,7 @@ func (a *svcAuthorizer) Authorize(_ context.Context, p identity.Principal, actio
 }
 
 func (*svcAuthorizer) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 // svcGates is a job.GateGuard that returns the gates in enforced, or err.
@@ -332,6 +353,7 @@ func newRig(t *testing.T, opts ...rigOption) *rig {
 						Directory:  "",
 						Revision:   "",
 					},
+					LocationSource: job.LocationSourceRequest,
 					Steps: []job.Step{
 						{
 							Name:             "plan",
@@ -717,8 +739,8 @@ func TestStartRefusesWhenPortsFail(t *testing.T) {
 			r.planner.spec = func(u identity.Object, _ *job.StartRequest) job.Spec {
 				return job.Spec{
 					Unit: u, Operation: job.OperationDestroy, Purpose: "", Executor: job.ExecutorRunner,
-					Location: emptyLocation(), Steps: nil, Pool: "p", Profile: "", Edits: nil, Delivery: "",
-					Defaulted: nil,
+					Location: emptyLocation(), LocationSource: "", Steps: nil, Pool: "p", Profile: "", Edits: nil,
+					Delivery: "", Defaulted: nil,
 				}
 			}
 		}},
@@ -791,20 +813,72 @@ func TestUnknownUnitLooksLikeDenied(t *testing.T) {
 	}
 }
 
-func TestStartRefusesAJobToken(t *testing.T) {
+// startRefusalCase is one case of TestStartRefusalCodes.
+type startRefusalCase struct {
+	name string
+	who  string
+	// jobToken makes the caller the job token of a job. The rig grants the
+	// start action to every subject but its denied one, so the refusal does
+	// not come from a missing permission.
+	jobToken bool
+	// wantErr is the sentinel of the refusal.
+	wantErr error
+	// notErr is the sentinel that the refusal must not wrap. A refusal that
+	// wraps identity.ErrDenied answers access.denied, because a denial wins
+	// over the other refusals.
+	notErr error
+	// wantAsked is false for a refusal before the authorizer runs.
+	wantAsked bool
+}
+
+// TestStartRefusalCodes proves that a job token with the start grants is
+// refused as a policy refusal and not as a denial, and that a principal
+// without the start grant is denied.
+func TestStartRefusalCodes(t *testing.T) {
 	t.Parallel()
 
-	r := newRig(t)
-	a := actorOf("ada")
-	a.Principal.Credential = identity.CredentialJobToken
-
-	if _, err := r.svc.Start(t.Context(), a, r.plan("")); !errors.Is(err, identity.ErrDenied) {
-		t.Fatalf("Start with a job token = %v, want denied", err)
+	tests := []startRefusalCase{
+		{
+			name: "a job token with the start grants", who: "ada", jobToken: true, wantErr: job.ErrPolicyDenied,
+			notErr: identity.ErrDenied, wantAsked: false,
+		},
+		{
+			name: "a principal without the start grant", who: "bob", jobToken: false, wantErr: identity.ErrDenied,
+			notErr: job.ErrPolicyDenied, wantAsked: true,
+		},
 	}
 
-	if len(r.authz.asked) != 0 || len(r.store.creates) != 0 {
-		t.Fatalf("a job token reached the authorizer (%d checks) or the store (%d creates)", len(r.authz.asked),
-			len(r.store.creates))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkStartRefusal(t, tt)
+		})
+	}
+}
+
+// checkStartRefusal starts a job for one case of TestStartRefusalCodes.
+func checkStartRefusal(t *testing.T, tt startRefusalCase) {
+	t.Helper()
+
+	r := newRig(t)
+	a := actorOf(tt.who)
+
+	if tt.jobToken {
+		a.Principal.Credential = identity.CredentialJobToken
+	}
+
+	_, err := r.svc.Start(t.Context(), a, r.plan(""))
+	if !errors.Is(err, tt.wantErr) || errors.Is(err, tt.notErr) {
+		t.Fatalf("Start = %v, want %v and not %v", err, tt.wantErr, tt.notErr)
+	}
+
+	if asked := len(r.authz.asked) > 0; asked != tt.wantAsked {
+		t.Fatalf("authorizer asked = %v, want %v", asked, tt.wantAsked)
+	}
+
+	if len(r.store.creates) != 0 {
+		t.Fatalf("Create calls = %d, want none", len(r.store.creates))
 	}
 }
 
@@ -916,8 +990,6 @@ func TestStartIdempotency(t *testing.T) {
 		t.Fatalf("first StartOnce = %v", err)
 	}
 
-	r.store.replay = true
-
 	_, created, err := r.svc.StartOnce(t.Context(), actorOf("ada"), r.plan("same"))
 	if err != nil || created {
 		t.Fatalf("second StartOnce = created %v, error %v; want the first job again", created, err)
@@ -949,6 +1021,69 @@ func TestStartIdempotency(t *testing.T) {
 
 	if last := r.store.creates[len(r.store.creates)-1].job.IdempotencyKey; last != "" {
 		t.Fatalf("stored key = %q, want none for a start with no key", last)
+	}
+}
+
+// TestStartKeyConflictForAnotherRequest proves that two starts with one key
+// and one principal are the same request only when their edits and their
+// resolved source kind are the same. The second start of another request
+// fails with ErrKeyConflict instead of replaying the first job.
+func TestStartKeyConflictForAnotherRequest(t *testing.T) {
+	t.Parallel()
+
+	editsOne := []job.FileEdit{
+		{Path: "a", Keys: map[string][]byte{"b": []byte("c")}},
+		{Path: "d", Keys: map[string][]byte{}},
+	}
+	editsTwo := []job.FileEdit{
+		{Path: "a", Keys: map[string][]byte{}},
+		{Path: "b", Keys: map[string][]byte{"c": []byte("d")}},
+	}
+
+	tests := []struct {
+		name   string
+		first  func(*job.StartRequest)
+		second func(*job.StartRequest)
+	}{
+		{
+			"another edit structure",
+			func(req *job.StartRequest) { req.Edits = editsOne },
+			func(req *job.StartRequest) { req.Edits = editsTwo },
+		},
+		{
+			"another source kind",
+			func(req *job.StartRequest) { req.Source = job.SourceAPI },
+			func(req *job.StartRequest) { req.Source = job.SourceSelfService },
+		},
+		{
+			// Without the trigger marker, the trigger fields "p" and "0"
+			// read as one edit at path "p" with no keys.
+			"a trigger against an edit",
+			func(req *job.StartRequest) { req.Trigger = &job.TriggerRef{ID: "p", Saver: "0"} },
+			func(req *job.StartRequest) { req.Edits = []job.FileEdit{{Path: "p", Keys: map[string][]byte{}}} },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t)
+
+			first := r.plan("same-key")
+			tt.first(&first)
+
+			if _, err := r.svc.Start(t.Context(), actorOf("ada"), first); err != nil {
+				t.Fatalf("first Start = %v", err)
+			}
+
+			second := r.plan("same-key")
+			tt.second(&second)
+
+			if _, err := r.svc.Start(t.Context(), actorOf("ada"), second); !errors.Is(err, job.ErrKeyConflict) {
+				t.Fatalf("second Start = %v, want %v", err, job.ErrKeyConflict)
+			}
+		})
 	}
 }
 
@@ -1470,6 +1605,7 @@ type fieldCase struct {
 
 func fieldCases() []fieldCase {
 	repo := job.Location{Connection: "", Repository: "acme/infra", Ref: "main", Directory: "", Revision: ""}
+	revisionOnly := job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: "abcdef0"}
 	none := emptyLocation()
 
 	return []fieldCase{
@@ -1479,6 +1615,10 @@ func fieldCases() []fieldCase {
 		{"both with both actions", "ci", repo, "", nil},
 		{"a pool without namespace:manage-runners", "ci", none, job.ActionNamespaceManageRunners, identity.ErrDenied},
 		{"a location without unit:define-steps", "", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
+		{
+			"a revision-only location without unit:define-steps", "", revisionOnly, job.ActionUnitDefineSteps,
+			identity.ErrDenied,
+		},
 		{"both without namespace:manage-runners", "ci", repo, job.ActionNamespaceManageRunners, identity.ErrDenied},
 		{"both without unit:define-steps", "ci", repo, job.ActionUnitDefineSteps, identity.ErrDenied},
 		{"no fields without the action of the pool", "", none, job.ActionNamespaceManageRunners, nil},

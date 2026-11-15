@@ -487,7 +487,7 @@ func newBuildFixtureGuarded(
 
 	ctx := t.Context()
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	first, createErr := svc.Create(ctx, ref, plan)
 	if createErr != nil {
@@ -535,7 +535,7 @@ func (f *buildFixture) startJournaled(t *testing.T) stack.Started {
 
 	ctx := t.Context()
 
-	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0}
+	plan := stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""}
 
 	u, err := f.svc.Create(ctx, f.ref, plan)
 	if err != nil {

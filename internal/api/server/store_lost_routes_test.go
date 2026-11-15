@@ -62,17 +62,22 @@ func TestMaintenanceAndInstanceRoutesAnswer503WhenTheStoreIsLost(t *testing.T) {
 	instanceErr := fmt.Errorf("select instance versions: %w: %w", installation.ErrUnavailable, lost)
 
 	maintenanceRoutes := []storeLostRoute{
-		{"state", http.MethodGet, "/api/server/maintenance", func(f *fakeMaintenance, err error) { f.getErr = err }},
+		{
+			"state",
+			http.MethodGet,
+			"/api/dustpan/v1/maintenance",
+			func(f *fakeMaintenance, err error) { f.getErr = err },
+		},
 		{
 			"enter",
 			http.MethodPost,
-			"/api/server/maintenance/enter",
+			"/api/dustpan/v1/maintenance/enter",
 			func(f *fakeMaintenance, err error) { f.enterErr = err },
 		},
 		{
 			"leave",
 			http.MethodPost,
-			"/api/server/maintenance/leave",
+			"/api/dustpan/v1/maintenance/leave",
 			func(f *fakeMaintenance, err error) { f.leaveErr = err },
 		},
 	}

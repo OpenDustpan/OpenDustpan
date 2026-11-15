@@ -15,12 +15,13 @@ package server
 // a time. The caller needs only caller:read. A grant on the namespace or on
 // the installation puts the namespace in the list; a namespace that the
 // caller reaches only through a collection or a unit grant is not listed.
-// Paging is by name with an opaque cursor: limit names the page size, and
-// cursor is the nextCursor of the page before. With the cursor the order is
-// stable. The total is on the first page only, and null on the pages after
-// it. The list writes no audit entry. With no access service only
-// administrators list (all namespaces) and everybody else gets an empty
-// page.
+// Paging is by name with an opaque, sealed cursor: limit names the page size,
+// and cursor is the nextCursor of the page before. A cursor works only with
+// the filter that made it, so a cursor of another query answers 400. With the
+// cursor the order is stable. The total is on the first page only, and null
+// on the pages after it. The list writes no audit entry. With no access
+// service only administrators list (all namespaces) and everybody else gets
+// an empty page.
 
 import (
 	"bytes"
@@ -28,15 +29,17 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // errInvalidNamespaceBody reports a namespace create body that is not valid JSON
@@ -166,6 +169,17 @@ func (h *Handler) storeNamespace(
 // name. classify maps it to 400.
 var errNamespaceCursor = errors.New("invalid cursor: provide the nextCursor of the page before")
 
+// errNoCursorSealer reports a handler without a cursor sealer. The list fails
+// closed with this error, so it never answers an unsealed cursor.
+var errNoCursorSealer = errors.New("namespace cursor sealer is not configured")
+
+// namespaceCursorWire is the opaque cursor of the namespace list: the name of
+// the last namespace of the page before, and a fingerprint of the filter.
+type namespaceCursorWire struct {
+	After       string `json:"a"`
+	Fingerprint string `json:"f"`
+}
+
 // listNamespacesResponse is one page of GET /api/server/namespaces.
 // Namespaces holds the page in the order of the name column of the store,
 // never null. NextCursor is empty on the last page. Total is the count of
@@ -180,12 +194,14 @@ type listNamespacesResponse struct {
 	Total      *int64                    `json:"total"`
 }
 
-// namespaceListQuery is one validated list request: the page size, the name
-// after which the page starts, and whether it is the first page.
+// namespaceListQuery is one validated list request: the page size, the
+// sealed cursor of the page before, the name after which the page starts, and
+// whether it is the first page.
 type namespaceListQuery struct {
-	limit int
-	after namespace.Name
-	first bool
+	limit  int
+	cursor string
+	after  namespace.Name
+	first  bool
 }
 
 // listNamespaces serves GET /api/server/namespaces: one page of the
@@ -195,18 +211,28 @@ type namespaceListQuery struct {
 func (h *Handler) listNamespaces(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
-	query, err := parseNamespaceList(r)
+	filter, empty, err := h.visibleNamespaces(ctx, p)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
 	}
 
-	filter, empty, err := h.visibleNamespaces(ctx, p)
+	fingerprint := namespaceListFingerprint(filter)
+
+	query, err := parseNamespaceList(r, fingerprint)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
+	}
+
+	if query.cursor != "" {
+		if query.after, err = h.openNamespaceCursor(ctx, fingerprint, query.cursor); err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
 	}
 
 	if empty {
@@ -223,7 +249,7 @@ func (h *Handler) listNamespaces(w http.ResponseWriter, r *http.Request, p ident
 		return
 	}
 
-	out, err := h.readNamespacePage(ctx, query, filter)
+	out, err := h.readNamespacePage(ctx, query, filter, fingerprint)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -233,9 +259,29 @@ func (h *Handler) listNamespaces(w http.ResponseWriter, r *http.Request, p ident
 	h.writeJSON(ctx, w, http.StatusOK, out)
 }
 
+// namespaceListFingerprint returns a short digest of the filter of a
+// namespace list, so a cursor works only with the query that made it. The
+// page size is not part of it: a caller may change the limit between pages.
+// Each kind of filter has its own prefix, so a filter of the one namespace
+// "all" never gives the fingerprint of the filter of all namespaces.
+func namespaceListFingerprint(filter namespace.Filter) string {
+	if filter.All {
+		return pagetoken.Fingerprint("all:")
+	}
+
+	names := make([]string, 0, len(filter.Names))
+	for i := range filter.Names {
+		names = append(names, filter.Names[i].String())
+	}
+
+	slices.Sort(names)
+
+	return pagetoken.Fingerprint("names:" + strings.Join(names, "\n"))
+}
+
 // parseNamespaceList reads the limit and the cursor of a list request: the
-// page size and the name after which the page starts.
-func parseNamespaceList(r *http.Request) (namespaceListQuery, error) {
+// page size and the sealed cursor of the page before.
+func parseNamespaceList(r *http.Request, fingerprint string) (namespaceListQuery, error) {
 	var none namespaceListQuery
 
 	req, err := pageRequest(r)
@@ -252,18 +298,40 @@ func parseNamespaceList(r *http.Request) (namespaceListQuery, error) {
 		return none, errPageQuery
 	}
 
-	after, first, err := decodeNamespaceCursor(req.Cursor)
+	cursor, first, err := parseNamespaceCursor(req.Cursor, fingerprint)
 	if err != nil {
 		return none, err
 	}
 
-	return namespaceListQuery{limit: limit, after: after, first: first}, nil
+	return namespaceListQuery{limit: limit, cursor: cursor, after: "", first: first}, nil
+}
+
+// parseNamespaceCursor reads a cursor of listNamespaces: empty means the
+// first page, otherwise the sealed cursor of the last namespace of the page
+// before. It answers whether the request asks for the first page.
+func parseNamespaceCursor(raw, fingerprint string) (string, bool, error) {
+	if raw == "" {
+		return "", true, nil
+	}
+
+	var wire namespaceCursorWire
+	if err := pagetoken.Decode(raw, &wire); err != nil || wire.After == "" {
+		return "", false, errNamespaceCursor
+	}
+
+	// Defense in depth: the AAD of the seal refuses a cursor of another query
+	// too, and this check stays so that a change to the seal cannot skip it.
+	if !pagetoken.SameFingerprint(wire.Fingerprint, fingerprint) {
+		return "", false, errNamespaceCursor
+	}
+
+	return wire.After, false, nil
 }
 
 // readNamespacePage reads one page of the namespaces of filter: at most the
 // page size rows after the cursor, with the total on the first page only.
 func (h *Handler) readNamespacePage(
-	ctx context.Context, query namespaceListQuery, filter namespace.Filter,
+	ctx context.Context, query namespaceListQuery, filter namespace.Filter, fingerprint string,
 ) (listNamespacesResponse, error) {
 	page, err := h.namespaces.PageNamespaces(ctx, namespace.PageQuery{
 		After: query.after, Limit: query.limit + 1, Filter: filter,
@@ -276,7 +344,18 @@ func (h *Handler) readNamespacePage(
 
 	if len(page) > query.limit {
 		page = page[:query.limit]
-		nextCursor = base64.RawURLEncoding.EncodeToString([]byte(page[len(page)-1].Name.String()))
+
+		var cursor string
+		if cursor, err = h.sealNamespaceCursor(ctx, fingerprint, page[len(page)-1].Name); err != nil {
+			return listNamespacesResponse{}, err
+		}
+
+		token, err := pagetoken.Encode(namespaceCursorWire{After: cursor, Fingerprint: fingerprint})
+		if err != nil {
+			return listNamespacesResponse{}, fmt.Errorf("encode namespace cursor: %w", err)
+		}
+
+		nextCursor = token
 	}
 
 	var total *int64
@@ -306,29 +385,56 @@ func (h *Handler) readNamespacePage(
 	return out, nil
 }
 
-// decodeNamespaceCursor reads a cursor of listNamespaces: empty means the
-// first page, otherwise the base64url name of the last namespace of the
-// page before. It answers whether the request asks for the first page.
-func decodeNamespaceCursor(cursor string) (namespace.Name, bool, error) {
-	if cursor == "" {
-		return "", true, nil
+// namespaceCursorAAD binds a sealed cursor to the filter of the list, so a
+// cursor works only in the token of the query that made it.
+func namespaceCursorAAD(fingerprint string) []byte {
+	return []byte("namespace-list-cursor\n" + fingerprint)
+}
+
+// sealNamespaceCursor returns the cursor of a page token for the namespace
+// after. A handler without a sealer fails closed: it answers an error and
+// never an unsealed cursor.
+func (h *Handler) sealNamespaceCursor(
+	ctx context.Context, fingerprint string, after namespace.Name,
+) (string, error) {
+	if h.cursors == nil {
+		return "", errNoCursorSealer
 	}
 
-	if len(cursor) > principal.MaxCursorLength {
-		return "", false, errNamespaceCursor
-	}
-
-	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	sealed, err := h.cursors.Wrap(ctx, []byte(after), namespaceCursorAAD(fingerprint))
 	if err != nil {
-		return "", false, errNamespaceCursor
+		return "", fmt.Errorf("seal namespace cursor: %w", err)
 	}
 
-	name, err := namespace.ParseName(string(raw))
+	return base64.RawURLEncoding.EncodeToString(sealed), nil
+}
+
+// openNamespaceCursor returns the namespace name that a cursor holds. A
+// handler without a sealer, a cursor that does not open, and a cursor that
+// does not hold a namespace name give errNamespaceCursor.
+func (h *Handler) openNamespaceCursor(
+	ctx context.Context, fingerprint, cursor string,
+) (namespace.Name, error) {
+	if h.cursors == nil || cursor == "" || len(cursor) > pagetoken.MaxLen {
+		return "", errNamespaceCursor
+	}
+
+	sealed, err := base64.RawURLEncoding.Strict().DecodeString(cursor)
 	if err != nil {
-		return "", false, errNamespaceCursor
+		return "", errNamespaceCursor
 	}
 
-	return name, false, nil
+	plain, err := h.cursors.Unwrap(ctx, sealed, namespaceCursorAAD(fingerprint))
+	if err != nil {
+		return "", errNamespaceCursor
+	}
+
+	name, err := namespace.ParseName(string(plain))
+	if err != nil {
+		return "", errNamespaceCursor
+	}
+
+	return name, nil
 }
 
 // visibleNamespaces answers the filter of the namespaces where p holds
@@ -357,7 +463,7 @@ func (h *Handler) visibleNamespaces(
 		return none, false, err
 	}
 
-	if scope.All {
+	if scope.CoversEveryObject() {
 		return namespace.Filter{All: true, Names: nil}, false, nil
 	}
 

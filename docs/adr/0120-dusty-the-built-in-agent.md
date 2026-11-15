@@ -14,6 +14,7 @@ Changed by:
 - ADR 311 extends: the mark and the avatar of Dusty.
 - ADR 314 extends: the stream of an answer of Dusty.
 - ADR 354 changes decisions 13, 14, 15 and 16: Dusty becomes an agent principal.
+- ADR 367 changes: the range of about 8 to 12 tools becomes 8 to 15 tools.
 .
 ## Context
 

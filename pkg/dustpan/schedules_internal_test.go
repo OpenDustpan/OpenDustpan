@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/localusersvc"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/scopeaudit"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
@@ -152,6 +153,7 @@ func testServer(durableStore DurableStore, owner string) *Server {
 		nameLocks:        nameLockPrune{locks: nil},
 		issuer:           nil,
 		handler:          nil,
+		closeBuiltin:     nil,
 		started:          nil,
 		ungated:          nil,
 		mounted:          nil,
@@ -354,6 +356,9 @@ func TestJobSchedulesRunInactivityDisableOncePerTick(t *testing.T) {
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
 		Store:      st, Principals: st, Freshness: nil, Authorizer: nil,
+		Reach: access.ReachConfig{
+			Grants: nil, Roles: nil, Callers: nil, Principals: nil, Collections: nil, Units: nil,
+		},
 		Logger: slog.New(slog.DiscardHandler), Now: time.Now, NewID: nil,
 	})
 	if err != nil {
@@ -484,7 +489,7 @@ func newArtifactSweepServer(t *testing.T) *Server {
 
 	sweeper, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
 		Jobs: store.Jobs(), Names: store.Jobs(), Blobs: artifacts, Namespaces: store, Guard: store,
-		Clock: store, Audit: store, Logger: nil, Now: nil, OnDeleteWait: nil,
+		Clock: store, Operations: store.DurableOperations(), Audit: store, Logger: nil, Now: nil, OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("new sweeper: %v", err)

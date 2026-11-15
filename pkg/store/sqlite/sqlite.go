@@ -28,11 +28,13 @@ import (
 	// Registers the "sqlite" database/sql driver.
 	_ "modernc.org/sqlite"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/gatestore"
@@ -280,6 +282,12 @@ type Store struct {
 	// stepTxBound is the longest time that a step transaction of a durable
 	// operation stays open before it rolls back.
 	stepTxBound time.Duration
+	// attemptDeadline gives the attempt deadline of an item key transaction.
+	// It is secret.AttemptDeadline. An internal test sets a shorter one.
+	attemptDeadline func(ctx context.Context, start time.Time) time.Time
+	// now gives the current time of the item key attempt code. Tests
+	// replace it.
+	now func() time.Time
 }
 
 var (
@@ -415,6 +423,8 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		lastTruncateSuccess: time.Now(),
 		busyWarned:          false,
 		keepAccessHook:      nil,
+		attemptDeadline:     secret.AttemptDeadline,
+		now:                 time.Now,
 		beforeLockDelete:    nil,
 		betweenPageReads:    nil,
 		binaryVersion:       "",
@@ -683,7 +693,11 @@ func (s *Store) CreateStackPlaced(
 			return err
 		}
 
-		return setUnitCollection(ctx, q, placementMove(st, p), e)
+		if err := setUnitCollection(ctx, q, placementMove(st, p), e); err != nil {
+			return placementCollectionError(p.Collection.Name, err)
+		}
+
+		return nil
 	})
 }
 
@@ -849,25 +863,45 @@ func stackTags(ctx context.Context, q *db.Queries, id string) (map[string]string
 	return tags, nil
 }
 
+// stackNameChangeKey is the audit change key of a stack name.
+const stackNameChangeKey = "name"
+
 // RenameStack implements stack.Store. It renames the stack without moving its
 // history, checkpoint or events: child rows key on the stable stack ID. The
 // inventory keeps one entry for the same stack ID, under the new name, in the
-// same transaction. It returns ErrNotFound if no live stack has oldRef, and
-// ErrUpdateConflict while a mutating update of the stack runs.
+// same transaction. It appends the audit entry e in that transaction, with the
+// stable stack ID and the old and the new name. It returns ErrNotFound if no
+// live stack has oldRef, and ErrUpdateConflict while a mutating update of the
+// stack runs.
 func (s *Store) RenameStack(
-	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence,
+	ctx context.Context, oldRef stack.Ref, newName stack.Name, fence namespace.Fence, e audit.Entry,
 ) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		if newName == oldRef.Stack {
-			return confirmStackPresent(ctx, q, oldRef)
-		}
-
-		if err := refuseRename(ctx, q, oldRef, newName); err != nil {
+	if newName == oldRef.Stack {
+		// Defense in depth: the service builds a valid entry too; this check
+		// stays so that a new caller cannot skip it.
+		if err := checkFencedEntry(fence, e); err != nil {
 			return err
 		}
+
+		return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+			return confirmStackPresent(ctx, q, oldRef)
+		})
+	}
+
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+		stackID, err := refuseRename(ctx, q, oldRef, newName)
+		if err != nil {
+			return err
+		}
+
+		oldName := oldRef.Stack.String()
+		e.ObjectID = stackID
+		e.Changes = []audit.Change{{
+			Key: stackNameChangeKey, Old: &oldName, New: newName.String(), Layer: "", TakesEffect: "",
+		}}
 
 		n, err := q.RenameStack(ctx, db.RenameStackParams{
 			Name:      newName.String(),
@@ -911,18 +945,23 @@ func (s *Store) RenameStack(
 // ErrAlreadyExists when newName names a stack of the same project. A running
 // update addresses the stack by its name. A rename under it would leave the
 // update with a name that no stack has: its checkpoint saves would fail and
-// the stack would stay locked by the update.
-func refuseRename(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) error {
+// the stack would stay locked by the update. On success it returns the stable
+// ID of the stack.
+func refuseRename(ctx context.Context, q *db.Queries, oldRef stack.Ref, newName stack.Name) (string, error) {
 	stackID, err := stackIDFor(ctx, q, oldRef)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if runErr := refuseRunningStack(ctx, q, stackID); runErr != nil {
-		return runErr
+		return "", runErr
 	}
 
-	return rejectTakenName(ctx, q, oldRef, newName)
+	if takenErr := rejectTakenName(ctx, q, oldRef, newName); takenErr != nil {
+		return "", takenErr
+	}
+
+	return stackID, nil
 }
 
 // confirmStackPresent returns nil when ref exists and ErrNotFound otherwise.
@@ -1301,9 +1340,11 @@ func (s *Store) holdWrite(ctx context.Context) (func(), error) {
 //
 // Never start a checked transaction (inTx, inFencedTx or any helper built on
 // them) from inside fn, and never call a Store method that does. The outer
-// transaction holds the write connection; the inner one asks for it again,
-// and it queues behind an enter that waits for the outer one: a deadlock.
-// Take the state check once, in the outermost transaction.
+// transaction holds the write connection; the inner one asks for it again and
+// waits behind an enter that waits for the outer one. That gate wait ends
+// when the context of the inner call ends, and the inner call returns the
+// context error. SQLite lock contention can fail the inner transaction after
+// the busy timeout. Take the state check once, in the outermost transaction.
 func (s *Store) inControlTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return s.runTx(ctx, fn, nil)
 }

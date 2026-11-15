@@ -5,9 +5,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
+
+	apiregistry "opendustpan.org/opendustpan/internal/api/registry"
+	"opendustpan.org/opendustpan/internal/pagetoken"
 )
 
 const moduleBase = base + "/modules"
@@ -273,18 +277,109 @@ func TestModuleListPaging(t *testing.T) {
 	}
 }
 
+// moduleToken is the wire shape of the module page token. The tests build one
+// to send a cursor that names no module.
+type moduleToken struct {
+	After string `json:"a"`
+}
+
+// moduleTokenOf returns a page token that holds the cursor after.
+func moduleTokenOf(t *testing.T, after string) string {
+	t.Helper()
+
+	token, err := pagetoken.Encode(moduleToken{After: after})
+	if err != nil {
+		t.Fatalf("encode a page token: %v", err)
+	}
+
+	return token
+}
+
 func TestModuleListHostileQuery(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
 	encode := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
 
-	for _, token := range []string{
-		"!!!", encode("vpc"), encode("../x/aws"), encode("vpc/AWS"), strings.Repeat("A", 5000),
+	// The parallel rows share one fixture and one call counter. Put only rows
+	// that make no store call in this table: a valid row would break the
+	// zero-calls check of every other row.
+	for _, tc := range []struct {
+		name  string
+		token string
+	}{
+		{"token that is not base64", "!!!"},
+		{"token in the old raw form", encode("vpc/aws")},
+		{"token that is not JSON", encode("{")},
+		{"empty cursor", moduleTokenOf(t, "")},
+		{"cursor with no system", moduleTokenOf(t, "vpc")},
+		{"cursor with an empty system", moduleTokenOf(t, "vpc/")},
+		{"upper case system", moduleTokenOf(t, "vpc/AWS")},
+		{"path traversal", moduleTokenOf(t, "../x/aws")},
+		{"token over the length limit", strings.Repeat("A", 5000)},
 	} {
-		wantCode(t, "hostile page token", f.call(t, "reader", http.MethodGet, moduleBase+"?pageToken="+token, nil),
-			http.StatusBadRequest)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			wantCode(t, tc.name, f.call(t, "reader", http.MethodGet, moduleBase+"?pageToken="+tc.token, nil),
+				http.StatusBadRequest)
+
+			if calls := f.registry.addresses.Load(); calls != 0 {
+				t.Errorf("the store got %d address list calls, want none", calls)
+			}
+		})
 	}
 
 	wantCode(t, "page size", f.call(t, "reader", http.MethodGet, moduleBase+"?pageSize=0", nil), http.StatusBadRequest)
+}
+
+// TestParseModuleTokenGuards proves each guard of the module page token
+// parser alone: each row sends a token that only one guard refuses, and
+// asserts the cause of that guard. The last row proves that the guards accept
+// a valid token.
+func TestParseModuleTokenGuards(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		raw   string
+		cause error
+		after string
+	}{
+		{
+			"a token over the length limit",
+			strings.Repeat("A", pagetoken.MaxLen+1),
+			apiregistry.ErrModuleTokenLength,
+			"",
+		},
+		{"a token that is not a page token", "!!!", apiregistry.ErrModuleTokenDecode, ""},
+		{"a token with an empty cursor", moduleTokenOf(t, ""), apiregistry.ErrModuleTokenEmpty, ""},
+		{
+			"a token whose cursor is no module key",
+			moduleTokenOf(t, "vpc"),
+			apiregistry.ErrModuleTokenAddress,
+			"",
+		},
+		{"a token of a module", moduleTokenOf(t, "vpc/aws"), nil, "vpc/aws"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			after, err := apiregistry.ParseModulePageToken(tt.raw, "acme")
+
+			if tt.cause != nil {
+				if !errors.Is(err, tt.cause) {
+					t.Fatalf("parse %q = %q, %v, want %v", tt.raw, after, err, tt.cause)
+				}
+
+				return
+			}
+
+			if err != nil || after != tt.after {
+				t.Fatalf("parse %q = %q, %v, want %q", tt.raw, after, err, tt.after)
+			}
+		})
+	}
 }

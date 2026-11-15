@@ -222,6 +222,7 @@ func driveArtifactSweep(t *testing.T, w blobWaitWorld) {
 
 	j := job.Job{
 		ID:             jobID,
+		NamespaceID:    ns.ID,
 		Spec:           artifactJobSpec(unit.WithUnitID("ws-wait00000000000001")),
 		State:          job.StateQueued,
 		Wait:           job.WaitNone,
@@ -280,12 +281,13 @@ func artifactJobSpec(unit identity.Object) job.Spec {
 		Location: job.Location{
 			Connection: "", Repository: "", Ref: "", Directory: "", Revision: "",
 		},
-		Steps:     nil,
-		Pool:      "",
-		Profile:   "",
-		Edits:     nil,
-		Delivery:  "",
-		Defaulted: nil,
+		LocationSource: "",
+		Steps:          nil,
+		Pool:           "",
+		Profile:        "",
+		Edits:          nil,
+		Delivery:       "",
+		Defaulted:      nil,
 	}
 }
 

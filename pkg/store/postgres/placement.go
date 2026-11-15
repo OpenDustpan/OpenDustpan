@@ -18,6 +18,17 @@ import (
 
 var _ collection.PlacementStore = (*Store)(nil)
 
+// placementCollectionError maps the missing collection of a placement rule to
+// collection.ErrPlacementCollectionMissing, with the name of the collection in
+// the text. It returns err unchanged for any other error.
+func placementCollectionError(name collection.Name, err error) error {
+	if errors.Is(err, collection.ErrNotFound) {
+		return fmt.Errorf("placement rule names collection %q: %w", name, collection.ErrPlacementCollectionMissing)
+	}
+
+	return err
+}
+
 // CreatePlacementRule implements collection.PlacementStore. The fence is
 // checked and the audit entry is appended in the same transaction as the insert
 // and the renumber of the list.
@@ -48,7 +59,7 @@ func (s *Store) CreatePlacementRule(
 		}
 
 		if _, idErr := collectionID(ctx, q, collection.Ref{Namespace: r.Namespace, Name: r.Collection}); idErr != nil {
-			return idErr
+			return placementCollectionError(r.Collection, idErr)
 		}
 
 		// The row gets a position behind the others. The renumber below then
@@ -103,7 +114,7 @@ func (s *Store) UpdatePlacementRule(
 		}
 
 		if _, idErr := collectionID(ctx, q, collection.Ref{Namespace: r.Namespace, Name: r.Collection}); idErr != nil {
-			return idErr
+			return placementCollectionError(r.Collection, idErr)
 		}
 
 		n, err := q.UpdatePlacementRuleContent(ctx, db.UpdatePlacementRuleContentParams{

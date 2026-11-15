@@ -66,7 +66,7 @@ func (g grants) Authorize(_ context.Context, p identity.Principal, a identity.Ac
 }
 
 func (grants) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
-	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
 }
 
 // clock is a time source that a test moves.
@@ -297,6 +297,7 @@ func auditBy(subject string) audit.Entry {
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
 		Channel: audit.ChannelAPI, Kind: "", Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "",
 		Sequence: 0, FenceVersion: 0, PrincipalKind: audit.PrincipalKindPerson, JobID: "", Reason: "",
+		Origin: nil,
 	}
 }
 

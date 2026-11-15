@@ -82,6 +82,35 @@ func cacheDir(t *testing.T) string {
 	return filepath.Join(base, "opendustpan-e2e")
 }
 
+// fetchers holds one Fetcher for each cache directory. A Fetcher checks each
+// cached CLI one time. With a Fetcher for each test, each test checks the
+// cache again under the lock of the entry, and the parallel tests wait for
+// each other until their install limit ends.
+//
+//nolint:gochecknoglobals // One Fetcher for each cache directory, so that each process checks each cached CLI one time.
+var (
+	fetchersMu sync.Mutex
+	fetchers   = map[string]*e2e.Fetcher{}
+)
+
+// sharedFetcher returns the Fetcher of the cache directory of the tests.
+func sharedFetcher(t *testing.T) *e2e.Fetcher {
+	t.Helper()
+
+	dir := cacheDir(t)
+
+	fetchersMu.Lock()
+	defer fetchersMu.Unlock()
+
+	fetcher, ok := fetchers[dir]
+	if !ok {
+		fetcher = &e2e.Fetcher{Client: http.DefaultClient, CacheDir: dir}
+		fetchers[dir] = fetcher
+	}
+
+	return fetcher
+}
+
 // TestCLIs runs each tool's scenario against every version in its matrix.
 // Reports from both tools land in one summary.
 func TestCLIs(t *testing.T) {
@@ -107,7 +136,7 @@ func TestCLIs(t *testing.T) {
 		checkContracts(t, reports)
 	})
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -8380,24 +8409,24 @@ func TestBinaryRunAndRestart(t *testing.T) {
 		t.Skip("needs E2E_SERVER=binary")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {
@@ -8524,24 +8553,24 @@ func readRestartStack(ctx context.Context, t *testing.T, env *e2e.Env) {
 func TestPairTwoLogins(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {
@@ -8624,7 +8653,7 @@ func checkPairReport(t *testing.T, pair *e2e.Pair) {
 func TestPulumiFileImport(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -9065,7 +9094,7 @@ func checkSourceDirUnchanged(t *testing.T, dir, before string) {
 func TestPulumiServiceImport(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -9730,24 +9759,24 @@ func TestTofuPairHosts(t *testing.T) {
 		t.Skipf("the OpenTofu pair suite needs Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.OpenTofu().Versions()
-	if len(versions) == 0 {
+	version := e2e.OpenTofu().Single()
+	if version == "" {
 		t.Fatal("the OpenTofu tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.OpenTofu(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.OpenTofu(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, version, err)
 	}
 
 	for _, db := range databases {
@@ -9834,7 +9863,7 @@ func TestTofuImportReplay(t *testing.T) {
 		t.Skipf("the OpenTofu replay suite needs Linux, not %s", runtime.GOOS)
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -10410,24 +10439,24 @@ func TestUpgradeCheck(t *testing.T) {
 		t.Skip("needs E2E_SERVER=binary")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {
@@ -11490,24 +11519,24 @@ func TestBackupCheck(t *testing.T) {
 		t.Skip("needs E2E_SERVER=binary")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {
@@ -11680,24 +11709,24 @@ const backupPollInterval = 100 * time.Millisecond
 func TestBackups(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {
@@ -12264,7 +12293,7 @@ func TestBackupRestore(t *testing.T) {
 		t.Skip("needs E2E_SERVER=binary")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
@@ -13446,7 +13475,7 @@ type maintenanceErrorDoc struct {
 func getMaintenanceState(ctx context.Context, t *testing.T, env *e2e.Env) string {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/maintenance", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/maintenance", "")
 	if err != nil {
 		t.Fatalf("GET maintenance: %v", err)
 	}
@@ -13473,7 +13502,7 @@ func enterMaintenance(
 ) (int, []string, string) {
 	t.Helper()
 
-	status, resp, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/maintenance/enter", forceBody)
+	status, resp, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/maintenance/enter", forceBody)
 	if err != nil {
 		t.Fatalf("POST maintenance enter: %v", err)
 	}
@@ -13499,7 +13528,7 @@ func enterMaintenance(
 func leaveMaintenance(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/maintenance/leave", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/maintenance/leave", "")
 	if err != nil {
 		t.Fatalf("POST maintenance leave: %v", err)
 	}
@@ -13720,24 +13749,24 @@ func tofuMaintenanceScenario(t *testing.T, env *e2e.Env) {
 func TestMaintenance(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {
@@ -13921,9 +13950,9 @@ func checkMaintenanceUnauthorized(ctx context.Context, t *testing.T, env *e2e.En
 	for _, target := range []struct {
 		method, path string
 	}{
-		{http.MethodGet, "/api/server/maintenance"},
-		{http.MethodPost, "/api/server/maintenance/enter"},
-		{http.MethodPost, "/api/server/maintenance/leave"},
+		{http.MethodGet, "/api/dustpan/v1/maintenance"},
+		{http.MethodPost, "/api/dustpan/v1/maintenance/enter"},
+		{http.MethodPost, "/api/dustpan/v1/maintenance/leave"},
 	} {
 		status, body, err := env.ServerAPIStatusBare(ctx, target.method, target.path)
 		if err != nil {

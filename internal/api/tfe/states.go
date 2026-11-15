@@ -875,7 +875,7 @@ func (h *Handler) recordChangedRestore(
 	}
 
 	h.guard.Record(r.Context(), r, p, refusal.Denial{
-		Action: identity.ActionUnitWrite, Object: obj, Window: 0,
+		Action: identity.ActionUnitWrite, Object: obj, ReasonWithin: nil, Window: 0,
 		Reason: "state.write refused: the current state version changed after the gate decision",
 	})
 }

@@ -204,7 +204,9 @@ func maintenanceWrites(ctx context.Context, s Store, ns namespace.Namespace, exi
 		},
 		{
 			name: "namespace scope: rename stack",
-			run:  func() error { return s.RenameStack(ctx, existing.Ref, "renamed", ns.Fence()) },
+			run: func() error {
+				return s.RenameStack(ctx, existing.Ref, "renamed", ns.Fence(), renameEntry(ns.Name, existing.Ref))
+			},
 		},
 		{
 			name: "namespace scope: set overrides",
@@ -502,6 +504,7 @@ func auditProbeEntry(ns namespace.Name, requestID string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

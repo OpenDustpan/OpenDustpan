@@ -414,7 +414,7 @@ func (r *blobDeleteRig) newStackCase(t *testing.T) *stackCase {
 
 	st := mustCreateStack(t, r.store, r.ns, "dev")
 	u, err := r.updates.Create(t.Context(), st.Ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create update: %v", err)
@@ -534,7 +534,7 @@ func (r *blobDeleteRig) startPreview(t *testing.T, c *stackCase) {
 	t.Helper()
 
 	u, err := r.updates.Create(t.Context(), c.ref, stack.Plan{
-		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0,
+		Kind: stack.KindPreview, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: "",
 	})
 	if err != nil {
 		t.Fatalf("create preview: %v", err)
@@ -580,7 +580,7 @@ func testBlobDeleteJournalBuild(t *testing.T, r *blobDeleteRig) {
 	u, err := r.updates.Create(
 		ctx,
 		base.ref,
-		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0},
+		stack.Plan{Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0, GitHead: ""},
 	)
 	if err != nil {
 		t.Fatalf("create journaled update: %v", err)

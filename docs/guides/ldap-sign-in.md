@@ -5,9 +5,88 @@ person at an LDAP directory, for example OpenLDAP or Active Directory. It
 gives each setting of an LDAP sign-in provider, the TLS rules, the choice
 of the subject, and the groups.
 
-The routes that add an LDAP provider are not in the server yet. This guide
-gives the settings that these routes will take. The settings and the rules
-of the check in this guide do not change when the routes come.
+You set one LDAP provider in the configuration of the server: flags,
+environment variables or keys of the configuration file. The API cannot add
+or change an LDAP provider yet.
+
+## Set up a provider
+
+Give the server the URL, the provider ID, the service account, the base DN
+and the user filter:
+
+```sh
+export DUSTPAN_LDAP_BIND_PASSWORD_FILE=/run/secrets/ldap-bind-password
+opendustpan serve \
+  --public-url https://dustpan.example.com \
+  --ldap-url ldaps://ldap.example.com \
+  --ldap-provider corp-ldap \
+  --ldap-display-name "Corp directory" \
+  --ldap-bind-dn cn=dustpan,ou=services,dc=example,dc=com \
+  --ldap-base-dn ou=people,dc=example,dc=com \
+  --ldap-user-filter '(&(objectClass=person)(uid={user}))'
+```
+
+The same settings in the configuration file:
+
+```yaml
+ldap:
+  url: ldaps://ldap.example.com
+  provider: corp-ldap
+  displayName: Corp directory
+  bindDN: cn=dustpan,ou=services,dc=example,dc=com
+  baseDN: ou=people,dc=example,dc=com
+  userFilter: (&(objectClass=person)(uid={user}))
+```
+
+The password of the service account comes only from the variable
+`DUSTPAN_LDAP_BIND_PASSWORD`, or from the file that
+`DUSTPAN_LDAP_BIND_PASSWORD_FILE` names. No flag and no key of the
+configuration file takes it, because a process list shows each flag. The
+file must be readable by its owner only. The server clears the variable
+`DUSTPAN_LDAP_BIND_PASSWORD` after it reads it, so a child process does not
+get the password.
+
+The sign-in needs a public URL with HTTPS. The server checks each setting
+when it starts, and does not start with a setting that is not valid. Only a
+server with the `api` component reads the LDAP settings. [Configuration
+reference](../reference/configuration.md) gives each flag, variable and
+key.
+
+The list of the sign-in providers, `GET /api/server/sign-in-providers`,
+shows the provider with the source `static`, the mode `ldap` and the
+effective value of each LDAP setting. It shows `"bindPasswordSet": true`,
+never the password.
+
+## Sign in
+
+A person signs in with one call:
+
+```sh
+curl -X POST "$SERVER/api/dustpan/v1/sign-in/providers/corp-ldap/password" \
+  -H "Content-Type: application/json" \
+  -d '{"userName": "alice", "password": "<password>"}'
+```
+
+| Answer | Meaning |
+| --- | --- |
+| `204` | The server signed the person in. The answer sets the session cookie of the console. |
+| `401` `sign-in.failed` | The server refused the sign-in. The text is "The user name or the password is wrong.", the same as for a local user. |
+| `400` `request.body-invalid` | The body is not a JSON object of this route. |
+| `429` | The source address has too many failed sign-ins. Try again later. |
+| `503` `sign-in.unavailable` | The directory does not answer. Try again later. |
+
+Each refusal gets the same `401` answer: a wrong password, an unknown user,
+a locked name or person, a disabled person, an unknown provider, and a
+request that another site can send. So the
+answer does not tell that a user or a provider exists. The audit entry of
+the sign-in holds the real reason.
+
+Each `401` and each `400` counts against the source address. A `503` does
+not count, because the person did not cause it.
+
+At the first sign-in of a person, the server makes a principal with no
+grant and no group. With `--ldap-no-auto-create`, the server refuses the
+sign-in of a person who has no principal yet.
 
 ## How the check works
 
@@ -24,6 +103,10 @@ At each sign-in, the server does these steps on one connection:
    compares a password hash.
 7. It binds again with the service account and reads the groups, when
    groups are on.
+
+When the search finds no entry, the server still sends one bind, with a
+random DN below the base DN and a random password. So an unknown user and
+a wrong password take about the same time.
 
 The server refuses the sign-in in these cases:
 
@@ -45,21 +128,24 @@ The server refuses the sign-in in these cases:
 
 ## Settings
 
-| Setting | Example | Rule |
-| --- | --- | --- |
-| URL | `ldaps://ldap.example.com` | `ldaps://host[:port]` or `ldap://host[:port]`. No path, query or user information. |
-| StartTLS | `false` | Starts TLS on an `ldap://` URL. Not allowed with `ldaps://`. |
-| CA bundle | (system roots) | The certificate authorities of the directory. |
-| Bind DN | `cn=dustpan,ou=services,dc=example,dc=com` | The DN of the service account. |
-| Bind password | (no default) | Only from an environment variable or a `*_FILE` file. |
-| Base DN | `ou=people,dc=example,dc=com` | The base of the user search. |
-| User filter | `(&(objectClass=person)(uid={user}))` | Holds `{user}` at least once. |
-| User name attribute | `uid` | Optional. Empty uses the typed user name. |
-| Email attribute | `mail` | Optional. |
-| Name attribute | `cn` | Optional. |
-| Subject | `entryUUID` | `entryUUID`, `objectGUID`, or an attribute that you name. |
-| Disabled rule | `userAccountControl`, mask `2` | Optional. See "Disabled persons". |
-| Groups | `off` | `off`, `search` or `memberOf`. See "Groups". |
+| Setting | Flag | Example | Rule |
+| --- | --- | --- | --- |
+| URL | `--ldap-url` | `ldaps://ldap.example.com` | `ldaps://host[:port]` or `ldap://host[:port]`. No path, query or user information. |
+| Provider ID | `--ldap-provider` | `corp-ldap` | 1 to 32 lower-case letters, digits and hyphens. Never change it after the first sign-in. |
+| Name in the console | `--ldap-display-name` | `Corp directory` | Optional. Empty uses the provider ID. |
+| StartTLS | `--ldap-start-tls` | `false` | Starts TLS on an `ldap://` URL. Not allowed with `ldaps://`. |
+| CA bundle | `--ldap-ca-file` | (system roots) | A PEM file of the certificate authorities of the directory. |
+| Allowed ranges | `--ldap-allowed-ranges` | `10.20.0.0/16` | Optional. See "Network". |
+| Bind DN | `--ldap-bind-dn` | `cn=dustpan,ou=services,dc=example,dc=com` | The DN of the service account. |
+| Bind password | (none) | (no default) | Only from `DUSTPAN_LDAP_BIND_PASSWORD` or `DUSTPAN_LDAP_BIND_PASSWORD_FILE`. |
+| Base DN | `--ldap-base-dn` | `ou=people,dc=example,dc=com` | The base of the user search. |
+| User filter | `--ldap-user-filter` | `(&(objectClass=person)(uid={user}))` | Holds `{user}` at least once. |
+| User name attribute | `--ldap-user-name-attribute` | `uid` | Optional. Empty uses the typed user name. |
+| Email attribute | `--ldap-email-attribute` | `mail` | Optional. |
+| Name attribute | `--ldap-name-attribute` | `cn` | Optional. |
+| Subject | `--ldap-subject` | `entryUUID` | `entryUUID`, `objectGUID`, or an attribute that you name. |
+| Disabled rule | `--ldap-disabled-attribute`, `--ldap-disabled-mask`, `--ldap-disabled-values` | `userAccountControl`, mask `2` | Optional. See "Disabled persons". |
+| Groups | `--ldap-groups` | `off` | `off`, `search` or `memberOf`. See "Groups". |
 
 The server replaces each `{user}` in the user filter with the user name.
 It escapes the user name first (RFC 4515), so a user name such as
@@ -81,20 +167,52 @@ Use `ldaps://`, or `ldap://` with StartTLS. The server checks the
 certificate of the directory against the CA bundle and the host name of
 the URL. It uses TLS 1.2 or later.
 
-The server refuses a connection with no TLS. It allows such a connection
-only in these cases:
+The server refuses a connection with no TLS, unless the host of the URL is
+a loopback IP address, for example `127.0.0.1` or `[::1]`, or the setting
+in [Plain connections](#plain-connections) is on. A host name, also
+`localhost`, is not enough, because its address can change.
 
-- The host of the URL is a loopback IP address, for example `127.0.0.1` or
-  `[::1]`. A host name, also `localhost`, is not enough, because its
-  address can change.
-- An operator allows plain connections for the installation. The setting is
-  off by default. It sends the bind password and the password of each
-  person over the network with no encryption.
+## Network
 
 The server checks the address of each connection when the connection opens,
-after the name lookup. Each connection also goes through the egress rules
-of the installation. So the URL of a provider cannot reach an address that
-the egress rules refuse.
+after the name lookup. By default, a connection reaches public addresses
+only. For a directory on a private network, set the ranges of that network
+with `--ldap-allowed-ranges`, for example `10.20.0.0/16`. A range opens
+private-network addresses only: RFC 1918 and unique local addresses. An
+IPv4 range has at least 8 bits, and an IPv6 range has at least 32 bits. The
+server always refuses loopback, link-local, cloud metadata, unspecified and
+multicast addresses, also inside a range. So the URL of a provider cannot
+reach an address that these rules refuse.
+
+## Plain connections
+
+The setting `egress.allowPlainConnections` allows a connection with no TLS
+to a host that is not a loopback IP address. It is off by default. The same
+setting allows an SMTP connection with no TLS.
+
+Set it with one call:
+
+```sh
+curl -X PATCH "$SERVER/api/dustpan/v1/settings" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/merge-patch+json" \
+  -H 'If-Match: "<revision>"' \
+  -d '{"egress.allowPlainConnections": true}'
+```
+
+An LDAP bind then sends the password of the service account and the
+password of each person over the network with no encryption. Set the
+setting only in a trusted network. The change makes the installation less
+secure, so it needs a fresh authentication.
+
+OpenDustpan Cloud locks the setting off. It sets the variable
+`DUSTPAN_ALLOW_PLAIN_CONNECTIONS` to `false`, so the API refuses a change
+with the error code `settings.locked`. The flag `--allow-plain-connections`,
+the variable and the file key `egress.allowPlainConnections` lock the
+setting the same way.
+
+The setting turns off no check of a connection with TLS. Each certificate
+check stays.
 
 ## Subject
 

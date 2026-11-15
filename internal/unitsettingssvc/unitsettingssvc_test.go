@@ -78,6 +78,7 @@ func entry() audit.Entry {
 		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
 		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 }
 
@@ -280,6 +281,63 @@ func TestPutChecksTheDefaultConnectionWhenTheBodyNamesNone(t *testing.T) {
 
 			if tc.want != nil && len(r.store.entries) != 0 {
 				t.Fatalf("a refused write wrote %d entries", len(r.store.entries))
+			}
+		})
+	}
+}
+
+// TestPutUsesTheDefaultsOfTheWrite checks that the view of a write uses the
+// unit defaults that the store read in the transaction of the write, not the
+// defaults that the earlier read of the service found.
+func TestPutUsesTheDefaultsOfTheWrite(t *testing.T) {
+	t.Parallel()
+
+	before := unitsettings.NamespaceDefaults{
+		Namespace: "acme", Pool: "rp-" + "0123456789abcdef", Version: 1, UpdatedAt: time.Time{},
+	}
+	next := unitsettings.NamespaceDefaults{
+		Namespace: "acme", Pool: "rp-" + "fedcba9876543210", Version: 2, UpdatedAt: time.Time{},
+	}
+	none := unitsettings.NamespaceDefaults{Namespace: "acme", Pool: "", Version: 2, UpdatedAt: time.Time{}}
+
+	cases := []struct {
+		name  string
+		after unitsettings.NamespaceDefaults
+		want  unitsettings.Field[string]
+	}{
+		{
+			name:  "a new pool before the write",
+			after: next,
+			want:  unitsettings.Field[string]{Value: next.Pool, Origin: unitsettings.OriginNamespaceDefault},
+		},
+		{
+			name:  "the pool removed before the write",
+			after: none,
+			want:  unitsettings.Field[string]{Value: "", Origin: unitsettings.OriginBuiltIn},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newRig(t, true)
+			r.store.defaults = before
+			r.store.defaultsAtPut = &tc.after
+
+			s := settingsFor(r.unit)
+
+			view, err := r.svc.Put(t.Context(), &s, 0, entry())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if view.Defaults != tc.after {
+				t.Fatalf("Put defaults = %+v, want %+v", view.Defaults, tc.after)
+			}
+
+			if view.Effective.Pool != tc.want {
+				t.Fatalf("effective pool = %+v, want %+v", view.Effective.Pool, tc.want)
 			}
 		})
 	}

@@ -111,14 +111,27 @@ func (m *mem) List(_ context.Context, addr registry.Address) ([]registry.Release
 	return out, nil
 }
 
-func (m *mem) Addresses(_ context.Context, ns namespace.Name, kind registry.Kind) ([]registry.Address, error) {
+func (m *mem) Addresses(
+	_ context.Context, ns namespace.Name, kind registry.Kind, after string, limit int,
+) ([]registry.Address, string, error) {
 	probe := registry.Address{Namespace: ns, Kind: kind, Name: "probe", System: ""}
 	if kind == registry.KindModule {
 		probe.System = "probe"
 	}
 
 	if err := probe.Validate(); err != nil {
-		return nil, err
+		return nil, "", err
+	}
+
+	if limit < 1 || limit > registry.MaxAddressPage {
+		return nil, "", fmt.Errorf("%w: limit %d", registry.ErrInvalid, limit)
+	}
+
+	// Defense in depth: the callers check the cursor too; the store refuses a
+	// cursor that does not hold an address of the kind.
+	cursor, err := registry.ParseAddressKey(ns, kind, after)
+	if err != nil {
+		return nil, "", err
 	}
 
 	m.mu.Lock()
@@ -137,11 +150,26 @@ func (m *mem) Addresses(_ context.Context, ns namespace.Name, kind registry.Kind
 		out = append(out, a)
 	}
 
-	slices.SortFunc(out, func(a, b registry.Address) int {
-		return strings.Compare(a.Name+"/"+a.System, b.Name+"/"+b.System)
-	})
+	slices.SortFunc(out, registry.CompareAddresses)
 
-	return out, nil
+	if cursor.Name != "" {
+		out = slices.DeleteFunc(out, func(a registry.Address) bool {
+			return registry.CompareAddresses(a, cursor) <= 0
+		})
+	}
+
+	// Read one address more than the page, as the SQL stores do, so that the
+	// extra address tells whether a next page exists.
+	out = out[:min(limit+1, len(out))]
+
+	next := ""
+
+	if len(out) > limit {
+		out = out[:limit]
+		next = registry.AddressKey(out[limit-1])
+	}
+
+	return out, next, nil
 }
 
 func TestMemStore(t *testing.T) {

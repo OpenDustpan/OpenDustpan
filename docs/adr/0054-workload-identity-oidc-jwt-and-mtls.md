@@ -13,6 +13,8 @@ Changed by:
 - ADR 223 extends decision 5: an access limit holds for a trust rule token.
 - ADR 284 changes decision 3: the trust rules refuse the issuers of this
   installation.
+- ADR 369 changes decision 6: a trust rule can opt in to the person who
+  started the event, and four kinds of actor.
 
 ## Context
 
