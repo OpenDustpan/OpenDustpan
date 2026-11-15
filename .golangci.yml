@@ -527,6 +527,10 @@ linters:
         - pattern: ^http\.Request\.(Header|Form|PostForm|MultipartForm|RequestURI|Trailer|FormValue|PostFormValue|FormFile|ParseForm|ParseMultipartForm|MultipartReader|UserAgent|Referer|Cookie|Cookies|CookiesNamed|BasicAuth)$
           pkg: ^net/http$
           msg: Read the query through apidesc.QueryOf and the headers through apidesc.Header, which allow only the declared names.
+        # One definition of the hidden-character check (see internal/ident).
+        - pattern: ^unicode\.(IsControl|Cc|Cf|Zl|Zp)$
+          pkg: ^unicode$
+          msg: Call ident.IsHiddenRune, ident.HasHidden or ident.IsHiddenRuneExcept.
       analyze-types: true
 
     funlen:
@@ -731,6 +735,20 @@ linters:
         linters:
           - forbidigo
         text: through apidesc
+      # The one definition of the hidden-character check, and the tests that
+      # build hostile input, may name the unicode categories.
+      - path: (^internal/ident/|_test\.go$)
+        linters:
+          - forbidigo
+        text: ident\.IsHiddenRune
+      # The client generator and its conformance suite are a separate unit
+      # (depguard rule clientgen). They import no server code, so they keep
+      # their own copy of the check. This is a boundary, not a per-file
+      # exception.
+      - path: (^internal/clientgen/|^cmd/clientgen/)
+        linters:
+          - forbidigo
+        text: ident\.IsHiddenRune
       # The binary entry point is the only place allowed to exit.
       - path: ^cmd/
         linters:
