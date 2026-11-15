@@ -1443,19 +1443,31 @@ func checkWriteMinimum(minimums, binaryVersion string) error {
 
 // inReadTx runs fn in a read-only transaction. It begins as DEFERRED, not
 // IMMEDIATE, so it takes no write lock, and every read of fn sees one
-// snapshot of the database.
-func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) error {
-	tx, err := s.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
-	if err != nil {
-		return fmt.Errorf("begin read transaction: %w", err)
+// snapshot of the database. The deferred close ends the transaction on
+// success, on error and on panic, so a panic in fn cannot leave it open.
+func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) (err error) {
+	tx, beginErr := s.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
+	if beginErr != nil {
+		return fmt.Errorf("begin read transaction: %w", beginErr)
 	}
 
-	if err := fn(s.queries.WithTx(tx)); err != nil {
-		return errors.Join(err, rollback(tx))
+	// Defense in depth: the read transaction must end on every path. The
+	// explicit rollback and the commit below end it on the normal paths, and
+	// then this close reports sql.ErrTxDone, which rollback treats as success.
+	// This defer does not rely on them, so a panic in fn still ends the
+	// transaction.
+	defer func() {
+		if rbErr := rollback(tx); rbErr != nil {
+			err = errors.Join(err, rbErr)
+		}
+	}()
+
+	if fnErr := fn(s.queries.WithTx(tx)); fnErr != nil {
+		return errors.Join(fnErr, rollback(tx))
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit read transaction: %w", err)
+	if commitErr := tx.Commit(); commitErr != nil {
+		return fmt.Errorf("commit read transaction: %w", commitErr)
 	}
 
 	return nil
