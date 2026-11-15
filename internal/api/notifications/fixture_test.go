@@ -414,7 +414,7 @@ func buildFixtureParts(t *testing.T, parts fixtureParts, deny ...identity.Action
 		Authenticator:  testAuthn{},
 		Authorizer:     testAuthz{deny: denied},
 		Audit:          store,
-		Namespaces:     nil,
+		Namespaces:     namespaces,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,

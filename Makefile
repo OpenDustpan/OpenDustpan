@@ -7,11 +7,12 @@
 #   trufflehog    v3.99.2  https://github.com/trufflesecurity/trufflehog#floppy_disk-installation
 #   python3       any 3.x, standard library only (for docs-lint)
 #   node 22 and tsc 6.0.2 (typescript on npm), only for clients-ts-test and clients-conformance
+#   node 20.19 or later with npx, for openspec-validate (the CLI comes from npm at a pinned version)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e docs-commands-check e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check
+.PHONY: cover regenerate-baseline release-record-check ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e docs-commands-check e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check change-archived-check
 
-check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
+check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint openspec-validate release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -168,6 +169,15 @@ docs-lint: ## ASD-STE100 structural rules, banned words and the Repowise decisio
 adr-decisions: ## Write .repowise/decisions.yaml, the accepted decisions for Repowise, from docs/adr. docs-lint fails when the file is not current.
 	$(ADR_DECISIONS)
 
+# The OpenSpec CLI at the version that openspec/project.md names. Without these
+# variables it sends usage data to its own server and asks npm for a newer
+# version. With them, the only network use is the download of the pinned
+# package.
+OPENSPEC := OPENSPEC_TELEMETRY=0 DO_NOT_TRACK=1 OPENSPEC_NO_UPDATE_CHECK=1 npx --yes @fission-ai/openspec@1.15.0
+
+openspec-validate: ## Validate every OpenSpec change and spec (openspec validate --all). Needs node 20.19 or later.
+	$(OPENSPEC) validate --all --no-interactive
+
 # With no VERSION there is no tag to check, so the target runs the cases that
 # exist without one: the script against an empty record, a record of another
 # version, a record with a CR or a NUL byte, and a missing record. With
@@ -202,6 +212,15 @@ ifeq ($(strip $(PR_BODY_FILE)),)
 	@exit 1
 else
 	./scripts/check-pr-body.sh '$(PR_BODY_FILE)'
+endif
+
+# The base ref has no default: the target refuses to run without it.
+change-archived-check: ## Fail when this branch completes an OpenSpec change and does not archive it (BASE_REF=origin/main).
+ifeq ($(strip $(BASE_REF)),)
+	@echo "usage: make change-archived-check BASE_REF=<base ref, for example origin/main>" >&2
+	@exit 1
+else
+	./scripts/check-change-archived.sh '$(BASE_REF)'
 endif
 
 adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.

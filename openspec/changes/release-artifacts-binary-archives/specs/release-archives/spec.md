@@ -6,7 +6,7 @@ When an operator builds a release, the server SHALL produce four tar.gz archives
 
 #### Scenario: Four archives present
 - **WHEN** an operator builds archives for one version
-- **THEN** the output holds opendustpan-<version>-linux-amd64.tar.gz, opendustpan-<version>-linux-arm64.tar.gz, opendustpan-<version>-darwin-amd64.tar.gz, opendustpan-<version>-darwin-arm64.tar.gz, plus SHA256SUMS
+- **THEN** the output holds opendustpan_<version>_linux_amd64.tar.gz, opendustpan_<version>_linux_arm64.tar.gz, opendustpan_<version>_darwin_amd64.tar.gz, opendustpan_<version>_darwin_arm64.tar.gz, plus SHA256SUMS
 
 ### Requirement: Reproducible archives
 
@@ -31,6 +31,14 @@ When an operator builds archives, the server SHALL include the root LICENSE file
 #### Scenario: License contents check
 - **WHEN** an operator lists the files of each archive
 - **THEN** each archive holds the root LICENSE file and the third party license file
+
+### Requirement: Record check first
+
+When an operator builds a release, the server SHALL run the release record check for the version before any build, and SHALL refuse the build when the record has no line for the version.
+
+#### Scenario: Version missing from the record
+- **WHEN** an operator builds a version that the release record does not list
+- **THEN** the build refuses with the record message and writes no archive
 
 ### Requirement: Version input allowlist
 
@@ -58,8 +66,8 @@ When an archive checksum, file set, license set, or version stamp does not match
 
 ### Requirement: Hostile archive refusal
 
-When an archive holds an entry outside the allowlist of one binary and two license files, the server SHALL refuse verification with an archive content error.
+When an archive holds an entry outside the allowlist of the binary, LICENSE, README.md and the third_party_licenses directory, the server SHALL refuse verification with an archive content error.
 
 #### Scenario: Traversal entry check
-- **WHEN** an archive holds an absolute path, a dot dot entry, or a file outside the allowlist of binary and license files
+- **WHEN** an archive holds an absolute path, a dot dot entry, or a file outside the allowlist of the binary, LICENSE, README.md and the third_party_licenses directory
 - **THEN** verification refuses the set with an archive content error

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -50,6 +51,8 @@ type Guard interface {
 	Authorize(
 		ctx context.Context, r *http.Request, p identity.Principal, action identity.Action, obj identity.Object,
 	) error
+	// Record writes the audit entry of a placement refusal.
+	Record(ctx context.Context, r *http.Request, p identity.Principal, d refusal.Denial)
 }
 
 // WorkspaceReader reads a workspace. It lets a duplicate create answer
@@ -109,10 +112,11 @@ func (p *Placer) Place(ctx context.Context, req PlaceRequest) (workspace.Placeme
 
 	rule, err := p.rule(ctx, req)
 	if err != nil {
+		recordPlacementRefusal(ctx, req)
 		return none, err
 	}
 
-	target := identity.CollectionObject(req.Ref.Namespace, rule.Collection.String())
+	target := identity.CollectionObject(req.Ref.Namespace, rule.CollectionName.String())
 
 	err = req.Guard.Authorize(ctx, req.Request, req.Principal, identity.ActionCollectionCreateUnit, target)
 	if err != nil {
@@ -121,16 +125,27 @@ func (p *Placer) Place(ctx context.Context, req PlaceRequest) (workspace.Placeme
 
 	id, found, err := p.Collections.CollectionID(ctx, target)
 
+	// Defense in depth: the service selects an ID, and the store checks it
+	// on the write. A name read here must still return that same ID.
 	switch {
 	case err != nil:
+		recordPlacementRefusal(ctx, req)
 		return none, err
-	case !found:
+	case !found || id != rule.CollectionID || collection.ValidateCollectionID(rule.CollectionID) != nil:
+		recordPlacementRefusal(ctx, req)
 		return none, fmt.Errorf("placement rule %s names collection %q: %w",
-			rule.ID, rule.Collection, collection.ErrNotFound)
+			rule.ID, rule.CollectionID, collection.ErrNotFound)
 	default:
 	}
 
 	return p.placement(req, rule, id)
+}
+
+func recordPlacementRefusal(ctx context.Context, req PlaceRequest) {
+	req.Guard.Record(ctx, req.Request, req.Principal, refusal.Denial{
+		Action: identity.ActionCollectionCreateUnit, Object: identity.NamespaceObject(req.Ref.Namespace),
+		Reason: "workspace placement failed", ReasonWithin: nil, Window: 0,
+	})
 }
 
 // Require refuses a write to the existing workspace obj when the workspace is
@@ -194,7 +209,7 @@ func (p *Placer) placement(req PlaceRequest, rule collection.Rule, id string) (w
 	entry := Entry(req.Request, req.Principal, obj, Detail{
 		At:        time.Time{},
 		Action:    identity.ActionCollectionCreateUnit,
-		Version:   "from=none;to=" + rule.Collection.String() + ";rule=" + rule.ID,
+		Version:   "from=none;to=" + rule.CollectionID + ";rule=" + rule.ID,
 		ValuePath: "",
 		Kind:      audit.KindChange,
 		Outcome:   audit.OutcomeSuccess,
@@ -202,7 +217,7 @@ func (p *Placer) placement(req PlaceRequest, rule collection.Rule, id string) (w
 	})
 
 	return workspace.Placement{
-		Collection:   collection.Ref{Namespace: req.Ref.Namespace, Name: rule.Collection},
+		Collection:   collection.Ref{Namespace: req.Ref.Namespace, Name: rule.CollectionName},
 		CollectionID: id,
 		Entry:        entry,
 	}, nil

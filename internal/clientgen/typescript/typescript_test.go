@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"os"
@@ -45,12 +46,30 @@ func digest() string {
 	return hex.EncodeToString(sum[:])
 }
 
-func options(version string) clientgen.Options {
+// options are the options of a run that is not a publish run: no client
+// version, and a digest that the template set only checks.
+func options(_ string) clientgen.Options {
+	return optionsFor(syntheticBytes())
+}
+
+// optionsFor are the options of a run that is not a publish run, for the
+// bytes of a description.
+func optionsFor(raw []byte) clientgen.Options {
+	sum := sha256.Sum256(raw)
+
 	return clientgen.Options{
-		Package: "@opendustpan/client", ClientVersion: version, ServerRelease: "0.1.0-test",
-		ServerCommit: commit, Description: syntheticBytes(),
-		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: digest(),
+		Package: "@opendustpan/client", Publish: false, ClientVersion: "", ServerRelease: "0.1.0-test",
+		ServerCommit: commit, Description: raw,
+		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: hex.EncodeToString(sum[:]),
 	}
+}
+
+// publishOptions are the options of a publish run.
+func publishOptions(version string) clientgen.Options {
+	opts := options(version)
+	opts.Publish, opts.ClientVersion = true, version
+
+	return opts
 }
 
 func synthetic(t *testing.T) *model.API {
@@ -275,7 +294,7 @@ func TestHeaders(t *testing.T) {
 	}
 }
 
-var versionOK = regexp.MustCompile(`"version": "0\.3\.0"`)
+var versionOK = regexp.MustCompile(`"version": "0\.0\.0"`)
 
 func TestPackageJSON(t *testing.T) {
 	t.Parallel()
@@ -287,7 +306,7 @@ func TestPackageJSON(t *testing.T) {
 
 		text := string(f.Content)
 		if !versionOK.MatchString(text) || !strings.Contains(text, `"name": "@opendustpan/client"`) {
-			t.Errorf("package.json: want the name and the version of the description:\n%s", text)
+			t.Errorf("package.json: want the name and the version that does not depend on the description:\n%s", text)
 		}
 
 		if strings.Contains(text, "dependencies") {
@@ -541,6 +560,18 @@ func TestRenderRefusesHostileInput(t *testing.T) {
 		{
 			"digest in capitals",
 			func(_ *model.API, o *clientgen.Options) { o.DescriptionSHA256 = strings.ToUpper(digest()) },
+			clientgen.ErrInvalidName,
+		},
+		{
+			"publish run with no digest",
+			func(_ *model.API, o *clientgen.Options) {
+				o.Publish, o.ClientVersion, o.DescriptionSHA256 = true, "0.3.0", ""
+			},
+			clientgen.ErrInvalidName,
+		},
+		{
+			"publish run with no client version",
+			func(_ *model.API, o *clientgen.Options) { o.Publish = true },
 			clientgen.ErrInvalidName,
 		},
 		{
@@ -931,28 +962,181 @@ func onEachQuery(a *model.API, f func(*model.Type)) {
 }
 
 // TestPackageCarriesTheDescriptionAndTheCommit checks that the package holds
-// a byte copy of the description that its digest names, and the server commit.
+// a byte copy of the description, as the lines that a join gives back, and the
+// server commit. The files of a run that is not a publish run name neither the
+// digest nor the client version.
 func TestPackageCarriesTheDescriptionAndTheCommit(t *testing.T) {
 	t.Parallel()
 
-	files := render(t, synthetic(t))
-	byPath := make(map[string][]byte, len(files))
-
-	for _, f := range files {
-		byPath[f.Path] = f.Content
-	}
+	byPath := contents(render(t, synthetic(t)))
 
 	if _, ok := byPath["src/description.ts"]; !ok {
 		t.Fatal("the package has no copy of the description")
 	}
 
-	if !bytes.Contains(byPath["src/metadata.ts"], []byte(digest())) {
-		t.Error("metadata.ts does not name the digest of the description")
+	if got := descriptionLines(t, byPath["src/description.ts"]); strings.Join(got, "\n") != string(syntheticBytes()) {
+		t.Error("description.ts does not join to the bytes of the description")
 	}
 
-	if !bytes.Contains(byPath["src/metadata.ts"], []byte(`serverCommit: "`+commit+`"`)) {
+	meta := string(byPath["src/metadata.ts"])
+	for _, banned := range []string{digest(), "descriptionSha256:", "clientVersion:"} {
+		if strings.Contains(meta, banned) {
+			t.Errorf("metadata.ts of a run that is not a publish run holds %q", banned)
+		}
+	}
+
+	if !strings.Contains(meta, `serverCommit: "`+commit+`"`) {
 		t.Error("metadata.ts does not name the server commit")
 	}
+}
+
+// TestPublishRunNamesTheDigestAndTheClientVersion checks the files of a
+// publish run.
+func TestPublishRunNamesTheDigestAndTheClientVersion(t *testing.T) {
+	t.Parallel()
+
+	api := synthetic(t)
+
+	files, err := typescript.New().Render(api, publishOptions("0.3.7"))
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	byPath := contents(files)
+	meta := string(byPath["src/metadata.ts"])
+
+	for _, want := range []string{`descriptionSha256: "` + digest() + `"`, `clientVersion: "0.3.7"`} {
+		if !strings.Contains(meta, want) {
+			t.Errorf("metadata.ts does not hold %s", want)
+		}
+	}
+
+	if !strings.Contains(string(byPath["package.json"]), `"version": "0.3.7"`) {
+		t.Error("package.json does not hold the client version")
+	}
+
+	if got := descriptionLines(t, byPath["src/description.ts"]); strings.Join(got, "\n") != string(syntheticBytes()) {
+		t.Error("description.ts does not join to the bytes of the description")
+	}
+}
+
+// TestOneChangedOperationChangesOnlyItsLines checks the layout rule: two
+// descriptions that differ in one line give the same metadata.ts, package.json
+// and tsconfig.json, and a description.ts that differs in that line only. A
+// line that every change of the description must edit makes two pull requests
+// conflict in Git.
+func TestOneChangedOperationChangesOnlyItsLines(t *testing.T) {
+	t.Parallel()
+
+	before := syntheticBytes()
+	oldLine, newLine := []byte(`"summary": "List the widgets."`), []byte(`"summary": "List all widgets."`)
+	after := bytes.Replace(before, oldLine, newLine, 1)
+
+	if bytes.Equal(before, after) {
+		t.Fatal("the change did not apply to the description")
+	}
+
+	a, b := renderBytes(t, before), renderBytes(t, after)
+
+	for _, path := range []string{"src/metadata.ts", "package.json", "tsconfig.json"} {
+		if !bytes.Equal(a[path], b[path]) {
+			t.Errorf("%s changed with one operation:\n%s\n---\n%s", path, a[path], b[path])
+		}
+	}
+
+	x, y := descriptionLines(t, a["src/description.ts"]), descriptionLines(t, b["src/description.ts"])
+	if len(x) != len(y) {
+		t.Fatalf("description.ts has %d lines, then %d", len(x), len(y))
+	}
+
+	changed := 0
+
+	for i := range x {
+		if x[i] != y[i] {
+			changed++
+		}
+	}
+
+	if changed != 1 {
+		t.Errorf("want 1 changed line of description.ts, got %d", changed)
+	}
+
+	// The lines of the file itself, not only the decoded text.
+	if n := differingLines(a["src/description.ts"], b["src/description.ts"]); n != 1 {
+		t.Errorf("want 1 changed line in the file description.ts, got %d", n)
+	}
+}
+
+// renderBytes renders the files of a run that is not a publish run, for the
+// bytes of a description.
+func renderBytes(t *testing.T, raw []byte) map[string][]byte {
+	t.Helper()
+
+	api, err := clientgen.NewParser().Parse(raw)
+	if err != nil {
+		t.Fatalf("parse the description: %v", err)
+	}
+
+	files, err := typescript.New().Render(api, optionsFor(raw))
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	return contents(files)
+}
+
+// contents maps the path of each file to its bytes.
+func contents(files []clientgen.File) map[string][]byte {
+	byPath := make(map[string][]byte, len(files))
+	for _, f := range files {
+		byPath[f.Path] = f.Content
+	}
+
+	return byPath
+}
+
+// differingLines counts the lines that differ, and the lines that one file has
+// more than the other.
+func differingLines(a, b []byte) int {
+	x, y := strings.Split(string(a), "\n"), strings.Split(string(b), "\n")
+	n := max(len(x), len(y))
+	diff := 0
+
+	for i := range n {
+		if i >= len(x) || i >= len(y) || x[i] != y[i] {
+			diff++
+		}
+	}
+
+	return diff
+}
+
+// descriptionLines reads the string of each line in description.ts, the way
+// the TypeScript module joins them.
+func descriptionLines(t *testing.T, file []byte) []string {
+	t.Helper()
+
+	text := string(file)
+
+	_, body, ok := strings.Cut(text, "= [\n")
+	if !ok {
+		t.Fatal("description.ts has no array of lines")
+	}
+
+	body, _, _ = strings.Cut(body, "\n].join(")
+
+	var out []string
+
+	for line := range strings.SplitSeq(body, "\n") {
+		var s string
+		if err := json.Unmarshal([]byte(strings.TrimSuffix(strings.TrimPrefix(line, "  "), ",")), &s); err != nil {
+			t.Fatalf("description.ts line %q: %v", line, err)
+		}
+
+		out = append(out, s)
+	}
+
+	return out
 }
 
 // TestOwnedPaths checks the paths that a run of the TypeScript client owns:

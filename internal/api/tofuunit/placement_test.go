@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/tofuunit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -48,8 +49,47 @@ func (c collectionsStub) CollectionOf(context.Context, identity.Object) (string,
 
 // guardStub allows or denies every action, and records the last action.
 type guardStub struct {
-	err    error
-	action identity.Action
+	err     error
+	action  identity.Action
+	denials []refusal.Denial
+}
+
+func (g *guardStub) Record(_ context.Context, _ *http.Request, _ identity.Principal, d refusal.Denial) {
+	g.denials = append(g.denials, d)
+}
+
+func TestPlaceRefusalAudit(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		rules       *rulesStub
+		collections collectionsStub
+	}{
+		{"no rule", newRules(noRule(), noRuleError()), collectionsStub{found: true, id: "col-1", err: nil}},
+		{"removed collection", newRules(testRule(), nil), collectionsStub{id: "", found: false, err: nil}},
+		{"replacement collection", newRules(testRule(), nil), collectionsStub{found: true, id: "col-new", err: nil}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g := newGuard(nil)
+			action := identity.ActionCollectionCreateUnit
+			if tc.name == "no rule" {
+				action = ""
+			}
+			got, err := placeOnce(t, request{
+				guard: g, placer: &tofuunit.Placer{Rules: tc.rules, Collections: tc.collections}, wantAction: action,
+				nsErr: nil, wsExists: false,
+			})
+			if err == nil || got.CollectionID != "" {
+				t.Fatal("a refused placement returned a collection")
+			}
+			if len(g.denials) != 1 || g.denials[0].Action != identity.ActionCollectionCreateUnit ||
+				g.denials[0].Object.Namespace() != "acme" || g.denials[0].Reason == "" {
+				t.Fatalf("refusal audit = %+v, want one entry", g.denials)
+			}
+		})
+	}
 }
 
 func (g *guardStub) Authorize(
@@ -100,7 +140,8 @@ func testRule() collection.Rule {
 
 	rule.ID = "rule-7"
 	rule.Tool = "opentofu"
-	rule.Collection = "platform"
+	rule.CollectionID = "col-1"
+	rule.CollectionName = "platform"
 
 	return rule
 }
@@ -112,7 +153,7 @@ func newRules(rule collection.Rule, err error) *rulesStub {
 
 // newGuard returns a guardStub that answers err.
 func newGuard(err error) *guardStub {
-	return &guardStub{err: err, action: ""}
+	return &guardStub{err: err, action: "", denials: nil}
 }
 
 // noRule is the zero rule that a lookup returns with an error.
@@ -167,7 +208,7 @@ func TestPlaceChoosesTheCollectionOfTheRule(t *testing.T) {
 	t.Parallel()
 
 	rules := newRules(testRule(), nil)
-	placer := &tofuunit.Placer{Rules: rules, Collections: collectionsStub{id: "c-1", found: true, err: nil}}
+	placer := &tofuunit.Placer{Rules: rules, Collections: collectionsStub{id: "col-1", found: true, err: nil}}
 
 	got, err := placeOnce(t, request{
 		guard: newGuard(nil), nsErr: nil, wsExists: false, placer: placer,
@@ -181,11 +222,11 @@ func TestPlaceChoosesTheCollectionOfTheRule(t *testing.T) {
 		t.Errorf("rule lookup = %v, want opentofu * network", rules.look)
 	}
 
-	if got.Collection.Name != "platform" || got.CollectionID != "c-1" || !got.Complete("acme") {
-		t.Errorf("placement = %+v, want collection platform with ID c-1", got)
+	if got.Collection.Name != "platform" || got.CollectionID != "col-1" || !got.Complete("acme") {
+		t.Errorf("placement = %+v, want collection platform with ID col-1", got)
 	}
 
-	if !strings.Contains(got.Entry.Version, "to=platform;rule=rule-7") {
+	if !strings.Contains(got.Entry.Version, "to=col-1;rule=rule-7") {
 		t.Errorf("audit entry version = %q, want it to name the collection and the rule", got.Entry.Version)
 	}
 }
@@ -194,7 +235,9 @@ func TestPlaceRefusals(t *testing.T) {
 	t.Parallel()
 
 	rule := testRule()
-	found := collectionsStub{id: "c-1", found: true, err: nil}
+	invalid := rule
+	invalid.CollectionID = "payments"
+	found := collectionsStub{id: "col-1", found: true, err: nil}
 	create := identity.ActionCollectionCreateUnit
 
 	cases := []struct {
@@ -231,6 +274,20 @@ func TestPlaceRefusals(t *testing.T) {
 			"the rule names a collection that is gone",
 			newRules(rule, nil),
 			collectionsStub{id: "", found: false, err: nil},
+			nil, nil, false,
+			collection.ErrNotFound, create,
+		},
+		{
+			"the collection was removed and made again",
+			newRules(rule, nil),
+			collectionsStub{id: "col-replacement", found: true, err: nil},
+			nil, nil, false,
+			collection.ErrNotFound, create,
+		},
+		{
+			"the stored collection ID is invalid",
+			newRules(invalid, nil),
+			collectionsStub{id: "payments", found: true, err: nil},
 			nil, nil, false,
 			collection.ErrNotFound, create,
 		},

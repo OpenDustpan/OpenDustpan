@@ -407,12 +407,15 @@ func checkTokenFreshness(t *testing.T, b browser) {
 	a := b.tokenChange(t, "/api/server/caller/tokens", body)
 
 	var refusal struct {
+		ErrorCode      string `json:"errorCode"`
 		Reauthenticate string `json:"reauthenticate"`
 	}
 
-	if err := json.Unmarshal([]byte(a.body), &refusal); err != nil || a.status != http.StatusUnauthorized ||
+	if err := json.Unmarshal([]byte(a.body), &refusal); err != nil || a.status != http.StatusForbidden ||
+		refusal.ErrorCode != "mfa.fresh-step-required" ||
 		refusal.Reauthenticate != "/api/server/sign-in/"+e2e.SignInProvider+"?fresh=1" {
-		t.Fatalf("token from a stale session = %d %s, want 401 with the path of a new sign-in", a.status, a.body)
+		t.Fatalf("token from a stale session = %d %s, want 403 with the code and the path",
+			a.status, a.body)
 	}
 
 	signIns := b.env.IdentityProvider(t).SignIns()
