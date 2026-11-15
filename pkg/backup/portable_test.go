@@ -294,6 +294,8 @@ func TestPortableManifestFormat(t *testing.T) {
 		InstallationKind: installation.KindProduction,
 		Unverified:       nil,
 		Damaged:          nil,
+		// A nil section is the manifest of a backup from before file copy.
+		RegistryFiles: nil,
 	}
 
 	raw, err := json.Marshal(manifest)

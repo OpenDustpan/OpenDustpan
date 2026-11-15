@@ -54,7 +54,9 @@ func TestStartBackupNeedsAWorker(t *testing.T) {
 			t.Parallel()
 
 			stores := openBackupDeps(t)
-			fix := newBackupFixtureWorkers(t, stores, stores.registry, time.Now, tc.workers())
+			fix := newBackupFixtureWorkers(t, stores, stores.registry, time.Now, backupFixtureOptions{
+				workers: tc.workers(), authz: nil,
+			})
 
 			status, body := serveBackup(t, fix.handler, http.MethodPost, "/api/dustpan/v1/backups")
 			if status != tc.wantStatus {
@@ -128,7 +130,9 @@ func TestStartRestoreNeedsAWorker(t *testing.T) {
 			t.Parallel()
 
 			stores := openBackupDeps(t)
-			fix := newRestoreFixtureWorkers(t, stores, stores.target, nil, tc.workers())
+			fix := newRestoreFixtureWorkers(
+				t, stores, stores.target, nil, restoreFixtureOptions{workers: tc.workers(), authz: nil},
+			)
 
 			status, body := serveRestore(
 				t, fix.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-missing000000000001"}`,
