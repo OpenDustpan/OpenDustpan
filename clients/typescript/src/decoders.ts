@@ -1656,6 +1656,7 @@ export const decodeNamespaceIssuerRotation: Decoder<NamespaceIssuerRotation> = o
 export const decodeNotificationDelivery: Decoder<NotificationDelivery> = object<NotificationDelivery>("NotificationDelivery", {
   attempts: int64,
   contact: optional(string),
+  createdAt: dateTime,
   deliveredAt: optional(dateTime),
   id: string,
   lastError: optional(string),

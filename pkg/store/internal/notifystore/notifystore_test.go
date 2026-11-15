@@ -101,6 +101,7 @@ func TestStoredRowsAreUntrusted(t *testing.T) {
 		Principal:      "alice",
 		State:          "pending",
 		Attempts:       0,
+		CreatedAtMs:    1,
 		Redeliveries:   0,
 		NextAtMs:       1,
 		LastError:      "dial tcp 10.0.0.1: refused",
@@ -112,5 +113,11 @@ func TestStoredRowsAreUntrusted(t *testing.T) {
 
 	if _, err := notifystore.Delivery(d); !errors.Is(err, notifystore.ErrCorrupt) {
 		t.Fatalf("Delivery with the text of a network error = %v, want ErrCorrupt", err)
+	}
+
+	d.LastError, d.CreatedAtMs = "", 0
+
+	if _, err := notifystore.Delivery(d); !errors.Is(err, notifystore.ErrCorrupt) {
+		t.Fatalf("Delivery with no creation time = %v, want ErrCorrupt", err)
 	}
 }
