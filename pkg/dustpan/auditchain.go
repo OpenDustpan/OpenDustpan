@@ -469,7 +469,8 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 }
 
 // checkApprovalGate refuses an approval while the migration loop stops,
-// by a service principal for a change to off, or without a fresh MFA step.
+// by a caller whose kind may not approve a change to off, or without a fresh
+// MFA step.
 func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) error {
 	if c.runsMigrations && !c.migrationsRunning.Load() {
 		return audit.ErrChainMigrationsStopped
@@ -546,9 +547,17 @@ func auditChainRetryKey() string {
 	return auditChainKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
-// refuseServiceCaller refuses an approval of a change to off when subject
-// belongs to a service principal. A subject with no principal row is a
-// person and passes.
+// refuseServiceCaller refuses an approval of a change to off by a caller
+// whose kind may not approve it. The check is an allowlist of the caller
+// kind: the kind person and the kind workload may approve, and every other
+// kind, including the kind service and the kind agent, is refused. A new kind
+// fails closed until this list names it. A subject with no principal row is a
+// person and passes. A workload passed this check on main, when the check
+// refused only the kind service, and it still passes.
+//
+// Defense in depth: the HTTP handler checks the actions of the caller and the
+// fresh MFA step too. This check stays so that a new caller cannot skip it,
+// and it does not rely on those checks.
 func (c *auditChain) refuseServiceCaller(ctx context.Context, subject string) error {
 	if c.principals == nil {
 		return nil
@@ -563,7 +572,9 @@ func (c *auditChain) refuseServiceCaller(ctx context.Context, subject string) er
 		return fmt.Errorf("read principal: %w", err)
 	}
 
-	if got.Kind == principal.KindService {
+	// The allowlist of the kinds that may approve a change to off. A kind
+	// that this list does not name fails closed.
+	if got.Kind != principal.KindPerson && got.Kind != principal.KindWorkload {
 		return audit.ErrChainNeedsPerson
 	}
 

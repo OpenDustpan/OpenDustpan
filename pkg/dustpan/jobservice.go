@@ -62,6 +62,8 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 		freezes = f
 	}
 
+	approvers := jobApprovers(cfg)
+
 	starter, svcErr := job.NewService(job.ServiceConfig{
 		Store: cfg.jobStore, Units: jobUnits{facts: facts}, Planner: newJobPlanner(cfg),
 		Executors: []job.Executor{executor}, Decider: decider,
@@ -71,13 +73,23 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 		Authorizer: unitLimits{grants: cfg.authorizer, limited: gate.LimitedAuthorizer(cfg.authorizer, svc.gates)},
 		Gates:      jobGates{snapshots: gates, members: facts},
 		Fences:     jobFences{namespaces: svc.namespaces}, Freezes: freezes, Switches: nil, Now: cfg.now, NewID: nil,
-		Log: log,
+		Log: log, Approvers: &approvers, MaxPlanAge: 0, Groups: jobGroups{principals: principalStoreOf(cfg)},
 	})
 	if svcErr != nil {
 		return nil, fmt.Errorf("job service: %w", svcErr)
 	}
 
 	return starter, nil
+}
+
+// jobApprovers returns the policy that counts the signatures of approvers: the
+// reconcile and the job service use the same one. A dev subject counts on a dev
+// installation only.
+func jobApprovers(cfg *settings) gate.ApproverPolicy {
+	return gate.ApproverPolicy{
+		Production: cfg.installationKind != installation.KindDev,
+		IsDev:      principal.IsDevSubject,
+	}
 }
 
 // newJobReconciler builds the reconcile of the job model, or returns nil when
@@ -101,13 +113,10 @@ func newJobReconciler(svc services, cfg *settings) (*job.Reconciler, error) {
 		DispatchTimeout: 0,
 		StateTimeout:    0,
 		MaxPlanAge:      0,
-		Approvers: gate.ApproverPolicy{
-			Production: cfg.installationKind != installation.KindDev,
-			IsDev:      principal.IsDevSubject,
-		},
-		Batch: 0,
-		Now:   cfg.now,
-		Log:   log,
+		Approvers:       jobApprovers(cfg),
+		Batch:           0,
+		Now:             cfg.now,
+		Log:             log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("job reconcile: %w", err)

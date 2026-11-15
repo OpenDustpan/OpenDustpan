@@ -13,6 +13,7 @@
 - [ ] 2.1 Add the four NEW routes with the action installation:move-namespace and the fresh step. Declare them in the route table of the adapter package (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand) and write the handlers in NEW internal/api/inventory/namespace_move.go. Check: The route test lists each route with its action
 - [ ] 2.2 Carry the default collection and the catch-all rule by stable ID in NEW pkg/namespace/move.go. Check: TestNamespaceMoveCarry passes, including a namespace with none
 - [ ] 2.3 Run the move as a durable operation with the drain of writes, the crash resume and the rollback in NEW pkg/namespace/move_operation.go. Check: TestNamespaceMoveCrash passes
+- [ ] 2.4 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `collection.name-conflict` in `internal/errcode/testdata/catalog/collection.txt`; `namespace.move-in-progress` in `internal/errcode/testdata/catalog/namespace.txt`; `namespace.move-conflict` in `internal/errcode/testdata/catalog/namespace.txt`; `namespace.move-target-unknown` in `internal/errcode/testdata/catalog/namespace.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Side effects (computed from main)
 
