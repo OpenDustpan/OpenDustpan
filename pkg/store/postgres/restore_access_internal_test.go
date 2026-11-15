@@ -23,14 +23,14 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
-// testPostgresURL returns the PostgreSQL URL for the keep-access lock test,
+// testPostgresURL returns the PostgreSQL URL for the tests of this package,
 // or skips when it is unset.
 func testPostgresURL(t *testing.T) string {
 	t.Helper()
 
 	base := os.Getenv("DUSTPAN_TEST_POSTGRES_URL")
 	if base == "" {
-		t.Skipf("set %s to run the keep-access lock test", "DUSTPAN_TEST_POSTGRES_URL")
+		t.Skipf("set %s to run the PostgreSQL tests", "DUSTPAN_TEST_POSTGRES_URL")
 	}
 
 	return base

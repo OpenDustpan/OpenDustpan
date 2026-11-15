@@ -227,6 +227,15 @@ func TestKeepAccessRefusesPlacementRuleOfAnotherNamespace(t *testing.T) {
 		t.Fatalf("write the staged rule of alpha: %v", err)
 	}
 
+	// Close the staged file before the apply. An open handle holds a lock
+	// on the file, and the apply can then fail with a busy database
+	// instead of the access mismatch that this test checks. Close is safe
+	// to call twice, so the cleanup of the open helper stays.
+	err = staged.Close()
+	if err != nil {
+		t.Fatalf("close the staged file: %v", err)
+	}
+
 	_, err = s.ApplyStagingKeepingAccess(t.Context())
 	if !errors.Is(err, backup.ErrRestoreAccessMismatch) {
 		t.Fatalf("apply keeping the access tables = %v, want ErrRestoreAccessMismatch", err)
