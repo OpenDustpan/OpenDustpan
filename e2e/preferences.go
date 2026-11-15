@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 )
 
 // TypedRequest is one request of ServerAPIStatusTyped. An empty Token sends no
@@ -27,6 +28,21 @@ type TypedRequest struct {
 // status, headers and body. A step uses it for a route that needs a media type
 // other than JSON, for example the merge patch of the preferences.
 func (e *Env) ServerAPIStatusTyped(ctx context.Context, in TypedRequest) (APIResponse, error) {
+	return e.ServerAPIStatusKeyed(ctx, in, "")
+}
+
+// idempotencyKeys counts the keys that NewIdempotencyKey gives.
+var idempotencyKeys atomic.Uint64
+
+// NewIdempotencyKey returns an Idempotency-Key that no earlier call of this
+// process gave. A step uses it for a route that refuses a request with no key.
+func NewIdempotencyKey() string {
+	return fmt.Sprintf("e2e-key-%d", idempotencyKeys.Add(1))
+}
+
+// ServerAPIStatusKeyed is ServerAPIStatusTyped with the Idempotency-Key header
+// key. An empty key sends no header.
+func (e *Env) ServerAPIStatusKeyed(ctx context.Context, in TypedRequest, key string) (APIResponse, error) {
 	method, path := in.Method, in.Path
 
 	req, err := http.NewRequestWithContext(ctx, method, e.URL+path, strings.NewReader(in.Body))
@@ -44,6 +60,10 @@ func (e *Env) ServerAPIStatusTyped(ctx context.Context, in TypedRequest) (APIRes
 
 	if in.IfMatch != "" {
 		req.Header.Set("If-Match", in.IfMatch)
+	}
+
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
 	}
 
 	resp, err := e.client.Do(req)

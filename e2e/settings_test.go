@@ -90,7 +90,7 @@ func (r settingsReq) typed(method, token string) e2e.TypedRequest {
 func settingsPatch(ctx context.Context, t *testing.T, env *e2e.Env, in settingsReq) (e2e.APIResponse, settingsDoc) {
 	t.Helper()
 
-	return settingsSend(ctx, t, env, in.typed(http.MethodPatch, env.AdminToken()))
+	return settingsSendKeyed(ctx, t, env, in.typed(http.MethodPatch, env.AdminToken()), e2e.NewIdempotencyKey())
 }
 
 // settingsSend sends the request and decodes the answer.
@@ -99,7 +99,17 @@ func settingsSend(
 ) (e2e.APIResponse, settingsDoc) {
 	t.Helper()
 
-	resp, err := env.ServerAPIStatusTyped(ctx, in)
+	return settingsSendKeyed(ctx, t, env, in, "")
+}
+
+// settingsSendKeyed is settingsSend with the Idempotency-Key header key. An
+// empty key sends no header.
+func settingsSendKeyed(
+	ctx context.Context, t *testing.T, env *e2e.Env, in e2e.TypedRequest, key string,
+) (e2e.APIResponse, settingsDoc) {
+	t.Helper()
+
+	resp, err := env.ServerAPIStatusKeyed(ctx, in, key)
 	if err != nil {
 		t.Fatalf("%s %s: %v", in.Method, in.Path, err)
 	}
@@ -427,12 +437,20 @@ func settingsRemovalAlert(ctx context.Context, t *testing.T, env *e2e.Env) {
 func settingsMediaAndCredential(ctx context.Context, t *testing.T, env *e2e.Env, tag string) {
 	t.Helper()
 
-	resp, err := env.ServerAPIStatusTyped(ctx, e2e.TypedRequest{
+	resp, err := env.ServerAPIStatusKeyed(ctx, e2e.TypedRequest{
 		Token: env.AdminToken(), Method: http.MethodPatch, Path: settingsRoute, ContentType: "application/json",
 		Body: `{}`, IfMatch: tag,
-	})
+	}, e2e.NewIdempotencyKey())
 	if err != nil || resp.Status != http.StatusUnsupportedMediaType {
 		t.Fatalf("PATCH as application/json = %v, %v; want 415", resp, err)
+	}
+
+	resp, err = env.ServerAPIStatusTyped(ctx, e2e.TypedRequest{
+		Token: env.AdminToken(), Method: http.MethodPatch, Path: settingsRoute, ContentType: prefsPatchType,
+		Body: `{}`, IfMatch: tag,
+	})
+	if err != nil || resp.Status != http.StatusBadRequest || !strings.Contains(resp.Body, "request.idempotency-key-required") {
+		t.Fatalf("PATCH with no Idempotency-Key = %v, %v; want 400 request.idempotency-key-required", resp, err)
 	}
 
 	resp, err = env.ServerAPIStatusTyped(ctx, e2e.TypedRequest{

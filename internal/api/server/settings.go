@@ -350,7 +350,8 @@ func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request, _ identity
 // security needs a fresh authentication. Any other refused change changes
 // nothing and writes one failure entry.
 //
-// A request with an Idempotency-Key runs inside the idempotency middleware. The
+// A request with no Idempotency-Key is refused with 400 before any change. The
+// request runs inside the idempotency middleware. The
 // store keeps the answer in the transaction of the change, so a replay with the
 // same body answers the stored result and writes nothing. The same key with
 // another body or another If-Match is refused with 422. The caller is
@@ -365,8 +366,9 @@ func (h *Handler) patchSettings(w http.ResponseWriter, r *http.Request, p identi
 	}
 
 	h.keyed(w, r, p, keyedCall{
-		build: settingsAnswer,
-		serve: func(w http.ResponseWriter, r *http.Request) { h.writeSettingsPatch(w, r, p, obj) },
+		build:    settingsAnswer,
+		serve:    func(w http.ResponseWriter, r *http.Request) { h.writeSettingsPatch(w, r, p, obj) },
+		required: true,
 	})
 }
 

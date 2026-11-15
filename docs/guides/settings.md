@@ -61,8 +61,9 @@ The answer is `200` with the new resource and the new `ETag`. The rules:
 - A patch that changes nothing keeps the revision and writes no audit entry.
 - Each change writes one audit entry in the scope. A refused change writes one
   failure entry. No entry holds a value of a secret.
-- With an `Idempotency-Key`, a second request with the same key, the same body
-  and the same `If-Match` gets the stored answer, with the header
+- A patch needs an `Idempotency-Key`. A request with no key gets `400`, and
+  nothing changes. A second request with the same key, the same body and the
+  same `If-Match` gets the stored answer, with the header
   `Idempotent-Replayed: true`. The change does not run again. The same key with
   another body or another `If-Match` gets `422`, and nothing changes.
 
@@ -86,6 +87,7 @@ Each refusal changes nothing. Read the resource again with
 | `409` | `settings.static-only` | Only a flag, a variable or the file sets this key. |
 | `400` | `settings.key-unknown` | The scope does not declare the key. |
 | `400` | `settings.value-invalid` | The value has the wrong kind or is outside the range of the key. |
+| `400` | `request.idempotency-key-required` | The request has no `Idempotency-Key` header. Send a new key. |
 | `412` | `settings.revision-stale` | The revision of `If-Match` is not the current revision. |
 | `428` | `request.precondition-required` | The request has no `If-Match` header. |
 | `415` | `request.content-type-unsupported` | The content type is not `application/merge-patch+json`. |

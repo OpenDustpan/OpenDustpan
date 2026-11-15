@@ -15844,6 +15844,9 @@
             }
           },
           {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
             "$ref": "#/components/parameters/IfMatchRequired"
           }
         ],
@@ -20050,6 +20053,9 @@
       "patch": {
         "operationId": "updateSettings",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
           {
             "$ref": "#/components/parameters/IfMatchRequired"
           }

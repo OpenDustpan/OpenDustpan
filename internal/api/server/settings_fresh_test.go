@@ -4,7 +4,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,13 +57,7 @@ func newKeyedSettingsEnv(t *testing.T) keyedSettingsEnv {
 	cfg.SignIn = signIn
 	cfg.Principals = seedRoutePrincipals(t, st)
 
-	mw, err := idempotent.New(idempotent.Config{
-		Store: st.Idempotency(idempotencytest.TestWrapper(t, 1)), Logger: slog.New(slog.DiscardHandler), Now: nil,
-		MaxBodyBytes: 1 << 20,
-	})
-	if err != nil {
-		t.Fatalf("idempotency middleware: %v", err)
-	}
+	mw := settingsIdempotency(t, st)
 
 	cfg.Idempotency = mw
 
@@ -83,14 +79,19 @@ type keyedPatch struct {
 }
 
 // tokenPatch returns a PATCH with the test token. A key of "" sends no
-// Idempotency-Key.
+// Idempotency-Key, which the route refuses.
 func tokenPatch(path, ifMatch, key, body string) keyedPatch {
 	return keyedPatch{path: path, ifMatch: ifMatch, key: key, body: body, session: false, age: 0}
 }
 
+var sessionKeys atomic.Int64
+
+// sessionKey returns a new Idempotency-Key for a PATCH of a console session.
+func sessionKey() string { return "key-session-" + strconv.FormatInt(sessionKeys.Add(1), 10) }
+
 // sessionPatch returns a PATCH from a console session whose sign-in is age old.
 func sessionPatch(path, ifMatch, body string, age time.Duration) keyedPatch {
-	return keyedPatch{path: path, ifMatch: ifMatch, key: "", body: body, session: true, age: age}
+	return keyedPatch{path: path, ifMatch: ifMatch, key: sessionKey(), body: body, session: true, age: age}
 }
 
 // patch sends p.
@@ -158,13 +159,13 @@ func TestSettingsPatchFreshStep(t *testing.T) {
 	e := newKeyedSettingsEnv(t)
 
 	// A change that makes the installation more secure needs no step.
-	wantSettingsStatus(t, e.patch(t, tokenPatch(settingsURL, `"0"`, "", `{"test.enabled":true}`)), http.StatusOK)
+	wantSettingsStatus(t, e.patch(t, tokenPatch(settingsURL, `"0"`, "key-more-secure", `{"test.enabled":true}`)), http.StatusOK)
 
 	weaker := `{"test.enabled":false}`
 	stale := session.DefaultTokenFreshness + time.Minute
 
 	refused := map[string]keyedPatch{
-		"an access token":               tokenPatch(settingsURL, `"1"`, "", weaker),
+		"an access token":               tokenPatch(settingsURL, `"1"`, "key-token-weaker", weaker),
 		"a session with an old sign-in": sessionPatch(settingsURL, `"1"`, weaker, stale),
 	}
 
@@ -221,4 +222,49 @@ func TestSettingsPatchIdempotency(t *testing.T) {
 	ns := tokenPatch(settingsNSURL, `"0"`, "key-one", `{"test.nsLimit":9}`)
 	wantSettingsStatus(t, e.patch(t, ns), http.StatusOK)
 	wantSettingsStatus(t, e.patch(t, ns), http.StatusOK)
+}
+
+// TestSettingsPatchRequiresKey checks that a PATCH with no Idempotency-Key
+// answers 400 with the catalog code and changes nothing, for an access token
+// and for a console session.
+func TestSettingsPatchRequiresKey(t *testing.T) {
+	t.Parallel()
+
+	e := newKeyedSettingsEnv(t)
+
+	noKeySession := sessionPatch(settingsURL, `"0"`, `{"test.enabled":true}`, 0)
+	noKeySession.key = ""
+
+	for name, p := range map[string]keyedPatch{
+		"an access token":    tokenPatch(settingsURL, `"0"`, "", `{"test.enabled":true}`),
+		"a console session":  noKeySession,
+		"a namespace change": tokenPatch(settingsNSURL, `"0"`, "", `{"test.nsLimit":9}`),
+	} {
+		r := e.patch(t, p)
+		wantSettingsStatus(t, r, http.StatusBadRequest)
+
+		if !strings.Contains(r.body, idempotent.CodeRequired) {
+			t.Fatalf("%s: body = %s, want the code %s", name, r.body, idempotent.CodeRequired)
+		}
+	}
+
+	if got := e.read(t, settingsURL); got.header.Get("ETag") != `"0"` || e.changeEntries(t) != 0 {
+		t.Fatalf("a refused change moved the settings: ETag %q, entries %d", got.header.Get("ETag"), e.changeEntries(t))
+	}
+}
+
+// settingsIdempotency returns the idempotency middleware over st, which the
+// settings routes need for each PATCH.
+func settingsIdempotency(t *testing.T, st *sqlite.Store) *idempotent.Middleware {
+	t.Helper()
+
+	mw, err := idempotent.New(idempotent.Config{
+		Store: st.Idempotency(idempotencytest.TestWrapper(t, 1)), Logger: slog.New(slog.DiscardHandler), Now: nil,
+		MaxBodyBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("idempotency middleware: %v", err)
+	}
+
+	return mw
 }
