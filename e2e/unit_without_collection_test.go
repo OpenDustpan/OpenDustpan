@@ -66,6 +66,7 @@ func withoutCatchAllRule(t *testing.T, env *e2e.Env, tool string, fn func()) {
 
 	ctx := t.Context()
 	id := catchAllRuleID(t, env, tool)
+	collectionID := placementCollectionID(ctx, t, env, e2e.Namespace, e2e.CatchAllCollection)
 
 	status, body, err := env.ServerAPIStatus(ctx, http.MethodDelete, rulesPath+"/"+id, "")
 	if err != nil || status != http.StatusNoContent {
@@ -78,8 +79,8 @@ func withoutCatchAllRule(t *testing.T, env *e2e.Env, tool string, fn func()) {
 	// context of the test is canceled before a cleanup runs, so the restore
 	// uses a context that is not canceled.
 	t.Cleanup(func() {
-		again := `{"tool":` + strconv.Quote(tool) + `,"project":"*","stack":"*","collection":` +
-			strconv.Quote(e2e.CatchAllCollection) + `}`
+		again := `{"tool":` + strconv.Quote(tool) + `,"project":"*","stack":"*","collectionId":` +
+			strconv.Quote(collectionID) + `}`
 
 		restoreStatus, restoreBody, restoreErr := env.ServerAPIStatus(
 			context.WithoutCancel(ctx), http.MethodPost, rulesPath, again,

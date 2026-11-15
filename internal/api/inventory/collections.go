@@ -108,6 +108,7 @@ func (h *Handler) collectionPathRoutes() []Route {
 //
 // Contract: never remove or rename these fields.
 type collectionEntry struct {
+	ID        string `json:"id"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	CreatedAt int64  `json:"createdAt"`
@@ -637,6 +638,7 @@ func collectionRef(obj identity.Object) collection.Ref {
 // collectionOf maps a domain collection to its wire shape.
 func collectionOf(c collection.Collection) collectionEntry {
 	return collectionEntry{
+		ID:        c.ID,
 		Namespace: c.Ref.Namespace.String(),
 		Name:      c.Ref.Name.String(),
 		CreatedAt: c.CreatedAt.Unix(),

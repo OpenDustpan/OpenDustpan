@@ -352,10 +352,10 @@ type collectionRequest struct {
 
 // placementRuleRequest is the placement rule create body.
 type placementRuleRequest struct {
-	Tool       string `json:"tool"`
-	Project    string `json:"project"`
-	Stack      string `json:"stack"`
-	Collection string `json:"collection"`
+	Tool         string `json:"tool"`
+	Project      string `json:"project"`
+	Stack        string `json:"stack"`
+	CollectionID string `json:"collectionId"`
 }
 
 // placeEveryStack makes the collection demoCollection and a placement rule
@@ -364,25 +364,31 @@ type placementRuleRequest struct {
 func (s *seeder) placeEveryStack(ctx context.Context, name string) error {
 	base := "/api/dustpan/v1/namespaces/" + name
 
-	for _, call := range []apiCall{
-		{
-			name: "create collection", method: http.MethodPost, path: base + "/collections",
-			auth: bearerAuth(s.token), body: collectionRequest{Name: demoCollection},
-			want: http.StatusCreated, exists: http.StatusConflict, fail: errCreateNamespace,
-		},
-		{
-			name: "create placement rule", method: http.MethodPost, path: base + "/placement-rules",
-			auth: bearerAuth(s.token),
-			body: placementRuleRequest{Tool: "pulumi", Project: "*", Stack: "*", Collection: demoCollection},
-			want: http.StatusCreated, exists: http.StatusConflict, fail: errCreateNamespace,
-		},
-	} {
-		if err := s.call(ctx, call, nil); err != nil {
-			return err
-		}
+	create := apiCall{
+		name: "create collection", method: http.MethodPost, path: base + "/collections",
+		auth: bearerAuth(s.token), body: collectionRequest{Name: demoCollection},
+		want: http.StatusCreated, exists: http.StatusConflict, fail: errCreateNamespace,
 	}
-
-	return nil
+	if err := s.call(ctx, create, nil); err != nil {
+		return err
+	}
+	var target struct {
+		ID string `json:"id"`
+	}
+	read := apiCall{
+		name: "read collection", method: http.MethodGet, path: base + "/collections/" + demoCollection,
+		auth: bearerAuth(s.token), body: nil, want: http.StatusOK, exists: 0, fail: errCreateNamespace,
+	}
+	if err := s.call(ctx, read, &target); err != nil {
+		return err
+	}
+	rule := apiCall{
+		name: "create placement rule", method: http.MethodPost, path: base + "/placement-rules",
+		auth: bearerAuth(s.token),
+		body: placementRuleRequest{Tool: "pulumi", Project: "*", Stack: "*", CollectionID: target.ID},
+		want: http.StatusCreated, exists: http.StatusConflict, fail: errCreateNamespace,
+	}
+	return s.call(ctx, rule, nil)
 }
 
 // createStack creates stack in projectDemo through the stack API.

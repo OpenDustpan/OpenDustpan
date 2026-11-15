@@ -318,7 +318,7 @@ func portableSpec() []PortableTable {
 				{Name: portColTool, Kind: KindText},
 				{Name: portColProject, Kind: KindText},
 				{Name: "stack", Kind: KindText},
-				{Name: "collection_key", Kind: KindText},
+				{Name: "collection_id", Kind: KindText},
 				{Name: "created_by", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 			},

@@ -27,7 +27,8 @@ A namespace has an ordered list of rules. Each rule has these fields:
 | `tool` | The tool of the units that the rule places. The value is `pulumi` or `opentofu`. |
 | `project` | The pattern for the Pulumi project name. |
 | `stack` | The pattern for the stack name. |
-| `collection` | The name of the collection for a stack that matches. The collection must exist. |
+| `collectionId` | The stable ID of the collection, with the prefix `col-`. The collection must exist in the namespace. |
+| `collection` | The current name of the collection, read at each request. This field is a read-only label. |
 | `createdBy` | The subject that made the rule. |
 | `createdAt` | The time of creation, in Unix seconds. |
 
@@ -51,15 +52,16 @@ A request to make a stack goes through these steps in this order:
 
 1. The server finds the first rule that matches the project name and the stack
    name. When no rule matches, the answer is `422` with the code
-   `placement.no-match`. The server makes no stack.
+   `placement.no-match`. The server makes no stack and writes the refusal to the audit log.
 2. The server checks that the caller holds `collection:create-unit` on the
    collection of the rule. Without it, the answer is `403`, and the server
    makes no stack. The server writes the refusal to the audit log.
-3. The server checks that the collection exists. If it does not, the answer is
-   `409` with the code `collection.not-found`, and the server makes no stack.
+3. The server checks that the collection still has the ID of the rule.
+   If it does not, the answer is `409` with the code `collection.not-found`.
+   The server makes no stack and writes the refusal to the audit log.
 4. The server makes the stack, puts it in the collection and writes the audit
    entry in one transaction. The audit entry holds the rule ID, in the form
-   `from=none;to=<collection>;rule=<rule ID>`. If any part fails, the server
+   `from=none;to=<collection ID>;rule=<rule ID>`. If any part fails, the server
    makes none of them, so no stack exists without a collection.
 
 A server that keeps no placement rules makes no stack. The answer is `501` with
@@ -132,7 +134,9 @@ revoke it.
 ### Make a rule
 
 `POST` takes a JSON object. The fields `tool`, `project`, `stack` and
-`collection` must be present. The field `position` is optional. Without it, the
+`collectionId` must be present. Read the collection list or one collection to
+get its `id`. A write refuses `collection`, also when `collectionId` is present.
+The field `position` is optional. Without it, the
 rule goes to the end of the list. With it, the rule goes to that position, and
 the rules from that position on move down by one place. The position must be
 from 1 to the number of rules plus 1.
@@ -141,7 +145,7 @@ A namespace holds at most 200 rules.
 
 ### Change a rule
 
-`PUT` replaces `tool`, `project`, `stack` and `collection`. The fields are
+`PUT` replaces `tool`, `project`, `stack` and `collectionId`. The fields are
 required, as for `POST`. A `position` moves the rule. Without `position`, the
 rule keeps its place. The position must be from 1 to the number of rules.
 
@@ -154,26 +158,39 @@ When someone deletes a collection, the server deletes the rules that name it in
 the same transaction. The audit entry of the delete of the collection names each
 deleted rule.
 
+A new collection with the same name gets a different ID. It does not take
+the placement rules of the old collection.
+
 ## Audit
 
 Each write of a rule appends one audit entry with the action
 `namespace:manage-placement-rules`. The `objectID` of the entry is the ID of
 the rule. For a make or a change, the `version` of the entry gives the tool,
-the patterns, the collection and the position.
+the patterns, the collection ID and the position.
 
 ## Example
 
 ```text
-$ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-    -d '{"tool":"pulumi","project":"payments","stack":"prod*","collection":"payments-prod"}' \
-    https://dustpan.example.com/api/dustpan/v1/namespaces/acme/placement-rules
-{"id":"plr-...","namespace":"acme","position":1,"tool":"pulumi","project":"payments","stack":"prod*","collection":"payments-prod","createdBy":"alex","createdAt":1767225600}
+$ curl -s -H "Authorization: Bearer $TOKEN" \
+    https://dustpan.example.com/api/dustpan/v1/namespaces/acme/collections/payments-prod
+{"id":"col-paymentsprod","namespace":"acme","name":"payments-prod","createdAt":1767225600}
 
 $ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
-    -d '{"tool":"pulumi","project":"payments","stack":"*","collection":"payments"}' \
+    -d '{"tool":"pulumi","project":"payments","stack":"prod*","collectionId":"col-paymentsprod"}' \
     https://dustpan.example.com/api/dustpan/v1/namespaces/acme/placement-rules
-{"id":"plr-...","namespace":"acme","position":2,"tool":"pulumi","project":"payments","stack":"*","collection":"payments","createdBy":"alex","createdAt":1767225601}
+{"id":"plr-...","namespace":"acme","position":1,"tool":"pulumi","project":"payments","stack":"prod*","collectionId":"col-paymentsprod","collection":"payments-prod","createdBy":"alex","createdAt":1767225600}
+
+$ curl -s -H "Authorization: Bearer $TOKEN" \
+    https://dustpan.example.com/api/dustpan/v1/namespaces/acme/collections/payments
+{"id":"col-payments","namespace":"acme","name":"payments","createdAt":1767225600}
+
+$ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+    -d '{"tool":"pulumi","project":"payments","stack":"*","collectionId":"col-payments"}' \
+    https://dustpan.example.com/api/dustpan/v1/namespaces/acme/placement-rules
+{"id":"plr-...","namespace":"acme","position":2,"tool":"pulumi","project":"payments","stack":"*","collectionId":"col-payments","collection":"payments","createdBy":"alex","createdAt":1767225601}
 ```
+
+The IDs are examples. Use the IDs that your server returns.
 
 A stack `payments/prod-eu` gets the collection `payments-prod`. A stack
 `payments/dev` gets the collection `payments`.
@@ -189,7 +206,8 @@ Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.
 | 400 | `placement.invalid-pattern` | A pattern fails the rules above. The message names the pattern. |
 | 400 | `placement.invalid-tool` | The tool has no placement rules. |
 | 400 | `placement.invalid-position` | The position is outside the list. |
-| 400 | `collection.invalid-name` | The collection name is not valid. |
+| 400 | `placement.collection-id-required` | The write has no `collectionId`, or sends only the old `collection` field. |
+| 400 | `placement.invalid-collection-id` | The collection ID has an invalid form. |
 | 401 | | The request has no valid credential. |
 | 403 | | The caller lacks the action of the route. |
 | 404 | `namespace.not-found` | The namespace does not exist. |

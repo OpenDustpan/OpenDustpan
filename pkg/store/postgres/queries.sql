@@ -5384,19 +5384,23 @@ WHERE version = sqlc.arg(expected)::bigint
 -- name: CreatePlacementRule :exec
 -- The caller checks the fence in the same transaction and renumbers the list
 -- after the insert.
-INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
+INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_id, created_by, created_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 
+-- name: GetPlacementCollection :one
+-- The collection ID must belong to the namespace of the rule.
+SELECT id FROM collections WHERE namespace = $1 AND id = $2;
+
 -- name: GetPlacementRule :one
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = $1 AND r.id = $2;
 
 -- name: ListPlacementRules :many
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = $1
 ORDER BY r.position, r.id;
 
@@ -5409,7 +5413,7 @@ ORDER BY position, id;
 
 -- name: UpdatePlacementRuleContent :execrows
 UPDATE placement_rules
-SET tool = $1, project = $2, stack = $3, collection_key = $4
+SET tool = $1, project = $2, stack = $3, collection_id = $4
 WHERE namespace = $5 AND id = $6;
 
 -- name: SetPlacementRulePosition :exec
@@ -5425,12 +5429,12 @@ WHERE namespace = $1 AND id = $2;
 -- The rules that name one collection, for the audit entry of its delete.
 SELECT id, tool, project, stack
 FROM placement_rules
-WHERE namespace = $1 AND collection_key = $2
+WHERE namespace = $1 AND collection_id = $2
 ORDER BY position, id;
 
 -- name: DeletePlacementRulesOfCollection :exec
 DELETE FROM placement_rules
-WHERE namespace = $1 AND collection_key = $2;
+WHERE namespace = $1 AND collection_id = $2;
 
 -- name: CreateStoreCheck :execrows
 INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)

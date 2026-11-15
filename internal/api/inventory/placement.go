@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -17,7 +18,7 @@ import (
 )
 
 // maxPlacementBodyBytes bounds the body of a placement rule write. The body
-// holds a tool, two patterns of at most 64 characters, a collection name and a
+// holds a tool, two patterns of at most 64 characters, a collection ID and a
 // position, so this is ample.
 const maxPlacementBodyBytes = 2048
 
@@ -28,7 +29,14 @@ const maxRuleIDLength = 64
 // is the error of the 400 answer.
 var errPlacementBody = errors.New(
 	`invalid placement rule body: provide {"tool":"pulumi","project":"<pattern>","stack":"<pattern>",` +
-		`"collection":"<collection name>"} and optionally "position"`,
+		`"collectionId":"<collection ID>"} and optionally "position"`,
+)
+
+var (
+	errPlacementCollectionIDRequired = errors.New("collection ID required: use the id from " +
+		"GET /api/dustpan/v1/namespaces/{namespace}/collections")
+	errPlacementCollectionID = errors.New("invalid collection ID: use the id from " +
+		"GET /api/dustpan/v1/namespaces/{namespace}/collections")
 )
 
 // errPlacementRuleID reports a rule ID in the path that has an invalid form.
@@ -72,15 +80,16 @@ func (h *Handler) placementRoutes() []Route {
 //
 // Contract: never remove or rename these fields.
 type placementRuleEntry struct {
-	ID         string `json:"id"`
-	Namespace  string `json:"namespace"`
-	Position   int    `json:"position"`
-	Tool       string `json:"tool"`
-	Project    string `json:"project"`
-	Stack      string `json:"stack"`
-	Collection string `json:"collection"`
-	CreatedBy  string `json:"createdBy"`
-	CreatedAt  int64  `json:"createdAt"`
+	ID           string `json:"id"`
+	Namespace    string `json:"namespace"`
+	Position     int    `json:"position"`
+	Tool         string `json:"tool"`
+	Project      string `json:"project"`
+	Stack        string `json:"stack"`
+	CollectionID string `json:"collectionId"`
+	Collection   string `json:"collection"`
+	CreatedBy    string `json:"createdBy"`
+	CreatedAt    int64  `json:"createdAt"`
 }
 
 // placementRulesResponse is the answered document of the rule list.
@@ -93,11 +102,11 @@ type placementRulesResponse struct {
 // placementRuleRequest is the body of a rule create or update. The fields are
 // pointers so that a missing field differs from an empty one.
 type placementRuleRequest struct {
-	Tool       *string `dustpan:"required" json:"tool"`
-	Project    *string `dustpan:"required" json:"project"`
-	Stack      *string `dustpan:"required" json:"stack"`
-	Collection *string `dustpan:"required" json:"collection"`
-	Position   *int    `dustpan:"optional" json:"position"`
+	Tool         *string `dustpan:"required" json:"tool"`
+	Project      *string `dustpan:"required" json:"project"`
+	Stack        *string `dustpan:"required" json:"stack"`
+	CollectionID *string `dustpan:"required" json:"collectionId"`
+	Position     *int    `dustpan:"optional" json:"position"`
 }
 
 // resolvePlacementRule returns the namespace of the path as the object, and
@@ -156,7 +165,7 @@ func (h *Handler) createPlacementRule(
 
 	in, err := readPlacementRule(w, r)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writePlacementWriteRefusal(w, r, p, obj, err)
 
 		return
 	}
@@ -164,7 +173,7 @@ func (h *Handler) createPlacementRule(
 	rule, err := h.placements.Create(ctx, obj.Namespace(), in,
 		auditEntry(r, p, obj, identity.ActionNamespaceManagePlacementRules, ""))
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writePlacementWriteRefusal(w, r, p, obj, err)
 
 		return
 	}
@@ -199,7 +208,7 @@ func (h *Handler) updatePlacementRule(
 
 	in, err := readPlacementRule(w, r)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writePlacementWriteRefusal(w, r, p, obj, err)
 
 		return
 	}
@@ -207,12 +216,22 @@ func (h *Handler) updatePlacementRule(
 	rule, err := h.placements.Update(ctx, obj.Namespace(), r.PathValue("rule"), in,
 		auditEntry(r, p, obj, identity.ActionNamespaceManagePlacementRules, ""))
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writePlacementWriteRefusal(w, r, p, obj, err)
 
 		return
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, placementRuleOf(&rule))
+}
+
+func (h *Handler) writePlacementWriteRefusal(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, err error,
+) {
+	h.guard.Record(r.Context(), r, p, refusal.Denial{
+		Action: identity.ActionNamespaceManagePlacementRules, Object: obj, Reason: "placement rule write failed",
+		ReasonWithin: nil, Window: 0,
+	})
+	h.writeError(r.Context(), w, err)
 }
 
 // deletePlacementRule serves DELETE on one rule. It answers 204. The units
@@ -235,12 +254,16 @@ func (h *Handler) deletePlacementRule(
 
 // readPlacementRule decodes the body of a rule write. It refuses an unknown
 // field, a body that is not one object, and a body without a required field.
-// It parses the patterns and the collection name, so an invalid value fails
+// It parses the patterns and the collection ID, so an invalid value fails
 // before the service reads the store.
 func readPlacementRule(w http.ResponseWriter, r *http.Request) (collection.RuleInput, error) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPlacementBodyBytes))
 	if err != nil {
 		return collection.RuleInput{}, errPlacementBody
+	}
+
+	if err := checkPlacementFields(body); err != nil {
+		return collection.RuleInput{}, err
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(body))
@@ -256,11 +279,37 @@ func readPlacementRule(w http.ResponseWriter, r *http.Request) (collection.RuleI
 		return collection.RuleInput{}, errPlacementBody
 	}
 
-	if in.Tool == nil || in.Project == nil || in.Stack == nil || in.Collection == nil {
+	if in.Tool == nil || in.Project == nil || in.Stack == nil {
 		return collection.RuleInput{}, errPlacementBody
+	}
+	if in.CollectionID == nil {
+		return collection.RuleInput{}, errPlacementCollectionIDRequired
 	}
 
 	return placementInput(&in)
+}
+
+// checkPlacementFields allows exact field names. The JSON decoder also accepts
+// names in another case. A write must not contain the read-only collection label.
+func checkPlacementFields(body []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil || fields == nil {
+		return errPlacementBody
+	}
+	if _, legacy := fields["collection"]; legacy {
+		if _, present := fields["collectionId"]; !present {
+			return errPlacementCollectionIDRequired
+		}
+		return errPlacementBody
+	}
+	for field := range fields {
+		switch field {
+		case "tool", "project", "stack", "collectionId", "position":
+		default:
+			return errPlacementBody
+		}
+	}
+	return nil
 }
 
 // placementInput parses the fields of a decoded body. All pointers are set.
@@ -275,12 +324,15 @@ func placementInput(in *placementRuleRequest) (collection.RuleInput, error) {
 		return collection.RuleInput{}, fmt.Errorf("stack: %w", err)
 	}
 
-	name, err := collection.ParseName(*in.Collection)
-	if err != nil {
-		return collection.RuleInput{}, fmt.Errorf("collection: %w", err)
+	// Defense in depth: the service and store validate IDs too. This check
+	// rejects an invalid ID before either layer reads stored data.
+	if err := collection.ValidateCollectionID(*in.CollectionID); err != nil {
+		return collection.RuleInput{}, errPlacementCollectionID
 	}
 
-	out := collection.RuleInput{Tool: *in.Tool, Project: project, Stack: stack, Collection: name, Position: 0}
+	out := collection.RuleInput{
+		Tool: *in.Tool, Project: project, Stack: stack, CollectionID: *in.CollectionID, Position: 0,
+	}
 	if in.Position != nil {
 		out.Position = *in.Position
 	}
@@ -301,14 +353,15 @@ func placementEntries(rules []collection.Rule) []placementRuleEntry {
 // placementRuleOf maps a domain rule to its wire shape.
 func placementRuleOf(r *collection.Rule) placementRuleEntry {
 	return placementRuleEntry{
-		ID:         r.ID,
-		Namespace:  r.Namespace.String(),
-		Position:   r.Position,
-		Tool:       r.Tool,
-		Project:    r.Project.String(),
-		Stack:      r.Stack.String(),
-		Collection: r.Collection.String(),
-		CreatedBy:  r.CreatedBy,
-		CreatedAt:  r.CreatedAt.Unix(),
+		ID:           r.ID,
+		Namespace:    r.Namespace.String(),
+		Position:     r.Position,
+		Tool:         r.Tool,
+		Project:      r.Project.String(),
+		Stack:        r.Stack.String(),
+		CollectionID: r.CollectionID,
+		Collection:   r.CollectionName.String(),
+		CreatedBy:    r.CreatedBy,
+		CreatedAt:    r.CreatedAt.Unix(),
 	}
 }

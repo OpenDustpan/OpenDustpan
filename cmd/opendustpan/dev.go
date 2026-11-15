@@ -862,12 +862,13 @@ func (r *devRun) seedPlacement(ctx context.Context, in runInputs, ns namespace.N
 	ref := collection.Ref{Namespace: ns, Name: devCollection}
 	created := entry(identity.ActionCollectionCreate, "collection:"+ref.String())
 
-	if _, err = collections.Create(ctx, ref, created); err != nil {
+	c, err := collections.Create(ctx, ref, created)
+	if err != nil {
 		return fmt.Errorf("make the collection %s: %w", ref, err)
 	}
 
 	for _, tool := range []string{collection.ToolPulumi, collection.ToolOpenTofu} {
-		input := collection.RuleInput{Tool: tool, Project: "*", Stack: "*", Collection: devCollection, Position: 0}
+		input := collection.RuleInput{Tool: tool, Project: "*", Stack: "*", CollectionID: c.ID, Position: 0}
 		ruled := entry(identity.ActionNamespaceManagePlacementRules, "namespace:"+ns.String())
 
 		if _, err = rules.Create(ctx, ns, input, ruled); err != nil {
