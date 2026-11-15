@@ -1273,7 +1273,11 @@ func (k NotificationStore) Redeliver(
 		}
 
 		if n == 0 {
-			return fmt.Errorf("redeliver %s: %w: the delivery is pending", id, notify.ErrConflict)
+			return fmt.Errorf(
+				"redeliver %s: %w: the delivery is pending or has no redeliveries left",
+				id,
+				notify.ErrConflict,
+			)
 		}
 
 		return finishCompletion(ctx, q, id)
