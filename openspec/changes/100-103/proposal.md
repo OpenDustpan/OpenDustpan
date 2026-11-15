@@ -25,7 +25,7 @@ Evidence for the claims above:
 - The shared job model ports exist on main in pkg/job. Proof: Pack path pkg/job exists:true
 - The runner protocol route exists on main. Proof: Pack route ANY /runner/v1 in route table or API description
 - Runner pool management routes exist on main. Proof: Pack route ANY /api/runners/{}/pools in route table or API description
-- Job token write limits are already tested on main. Proof: Pack test TestJobTokenWritesOnlyWhatTheJobModelAllows at pkg/gate/statewrite_test.go:804
+- Job token write limits are already tested on main. Proof: Pack test TestJobTokenWritesOnlyWhatTheJobModelAllows at pkg/gate/statewrite_test.go:805
 
 ## What Changes
 
@@ -54,7 +54,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Executor phase rules are tested on main. (`pkg/runner/executor_test.go:127 (func TestExecutorPhases)`)
-- Job token write limits are tested through the gate suite on main. (`pkg/gate/statewrite_test.go:804 (func TestJobTokenWritesOnlyWhatTheJobModelAllows)`)
+- Job token write limits are tested through the gate suite on main. (`pkg/gate/statewrite_test.go:805 (func TestJobTokenWritesOnlyWhatTheJobModelAllows)`)
 - Runner claim behavior is tested on main. (`pkg/durable/runner_claimed_test.go:16 (func TestRunnerRunsAnOperationStartedWithItsClaim)`)
 - Write-back branch naming is tested on main. (`pkg/forge/review_test.go:71 (func TestIsWriteBackBranch)`)
 

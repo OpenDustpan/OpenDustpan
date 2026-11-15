@@ -16,15 +16,15 @@
 ## 2. Implementation
 
 - [ ] 2.1 Edit the baseline of each dialect (`pkg/store/<dialect>/migrations/<NNNN>_baseline.sql`): staged created_at_ms and moved flag, content-key row table, mark table and cursor table. Check: `go test ./pkg/store/... -run TestFrozenMigrations -count=1` passes with the new baseline hash
-- [ ] 2.2 Implement the schedule row, the durable run, the paged listing and the publish lock in `pkg/registry/sweep.go` (NEW). Check: `go test ./pkg/registry/... -run TestRegistrySweep -count=1` passes
-- [ ] 2.4 SECURITY. Build the prefix guard of the port adapter in `pkg/registry/sweep.go` (NEW). The blob delete and the key listing accept only keys of the registry prefix. Check: `go test ./pkg/registry/... -run TestRegistrySweepRefusesForeignPrefix -count=1` passes
-- [ ] 2.5 SECURITY. Build the fencing token check of the delete step in `pkg/registry/sweep.go` (NEW). The check runs in the delete transaction. Check: `go test ./pkg/registry/... -run TestRegistrySweepStaleTokenDeletesNothing -count=1` passes
+- [ ] 2.2 Implement the schedule row, the durable run, the paged listing and the publish lock in `pkg/registry/sweep.go` (NEW). The task adds the NEW top-level test `TestRegistrySweep` in a `_test.go` file of `pkg/registry`, so that the Check runs it. Check: `go test ./pkg/registry/... -run TestRegistrySweep -count=1` passes
+- [ ] 2.4 SECURITY. Build the prefix guard of the port adapter in `pkg/registry/sweep.go` (NEW). The blob delete and the key listing accept only keys of the registry prefix. The task adds the NEW top-level test `TestRegistrySweepRefusesForeignPrefix` in a `_test.go` file of `pkg/registry`, so that the Check runs it. Check: `go test ./pkg/registry/... -run TestRegistrySweepRefusesForeignPrefix -count=1` passes
+- [ ] 2.5 SECURITY. Build the fencing token check of the delete step in `pkg/registry/sweep.go` (NEW). The check runs in the delete transaction. The task adds the NEW top-level test `TestRegistrySweepStaleTokenDeletesNothing` in a `_test.go` file of `pkg/registry`, so that the Check runs it. Check: `go test ./pkg/registry/... -run TestRegistrySweepStaleTokenDeletesNothing -count=1` passes
 - [ ] 2.3 Expose the metric with installation counters in `pkg/registry/sweep_metrics.go` (NEW). Check: NEW metrics series registry_sweep_* appear in the server metrics output, checked by a metrics test
 
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

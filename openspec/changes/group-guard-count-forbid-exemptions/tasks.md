@@ -13,11 +13,11 @@
 
 - [ ] 2.1 Build wideningCheck (NEW) in NEW file pkg/access/widening_check.go and apply it in pkg/access/service.go:656 (CheckGroupGrants) with the fenced namespace read and the versioned installation read, in the transaction of the reach check. Check: `go test -race ./pkg/access/... -count=1`
 - [ ] 2.2 Write hostile parser tests in NEW file pkg/access/group_guard_hostile_test.go for each group reference form, with a mutation check that removing the guard fails them. Check: `go test ./pkg/access -run TestGroupGuardHostileParser -count=1` (NEW test)
-- [ ] 2.3 Wire the guard into the member routes with their authorization actions and audit entries. Edit the route declaration in internal/api/apidesc and the adapter in internal/api/server/principals.go. Check: `go test ./internal/api/... -run TestRouteActions -count=1`
+- [ ] 2.3 Wire the guard into the member routes with their authorization actions and audit entries. Edit the route declaration in internal/api/apidesc and the adapter in internal/api/server/principals.go. The task adds the NEW top-level test `TestRouteActions` in a `_test.go` file of `internal/api`, so that the Check runs it. Check: `go test ./internal/api/... -run TestRouteActions -count=1`
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
