@@ -984,6 +984,62 @@ func linkBinary(t *testing.T, inst e2e.Install, _ string) {
 
 func noChange(*testing.T, e2e.Install, string) {}
 
+// TestFetchRefusesCacheArchiveWithoutMember refuses a cache entry whose
+// archive holds the sum that the checksum file names and holds no member.
+// Install swallows the error of a cache check and downloads again, so the
+// test calls the check directly. Defense in depth: the test sends the
+// hostile cache entry to the member check alone, as if the sum check and
+// the download had let the archive through.
+func TestFetchRefusesCacheArchiveWithoutMember(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	name, err := tool.ArchiveName(fakeVersion)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	member := filepath.FromSlash(tool.ArchiveBinaryName(fakeVersion))
+
+	// The archive holds a file that is not the member, so only the member
+	// check can refuse the entry.
+	archive := tarball(t, []tar.Header{
+		{Name: "README", Typeflag: tar.TypeReg, Mode: 0o644},
+	}, "not the CLI\n")
+
+	sum := sha256.Sum256(archive)
+
+	cacheDir := t.TempDir()
+
+	// The cache entry holds the archive next to its extracted directory, as
+	// a download publishes it.
+	if err = os.WriteFile(filepath.Join(cacheDir, name), archive, 0o600); err != nil {
+		t.Fatalf("write cached archive: %v", err)
+	}
+
+	dest := filepath.Join(cacheDir, strings.TrimSuffix(name, ".tar.gz"))
+
+	if err = os.MkdirAll(dest, 0o750); err != nil {
+		t.Fatalf("create cached CLI dir: %v", err)
+	}
+
+	if err = os.WriteFile(filepath.Join(dest, "README"), []byte("not the CLI\n"), 0o600); err != nil {
+		t.Fatalf("write cached file: %v", err)
+	}
+
+	err = e2e.CheckToolCache(cacheDir, tool, fakeVersion, name, hex.EncodeToString(sum[:]))
+	if !errors.Is(err, e2e.ErrCacheMismatch) {
+		t.Fatalf("check cache: got %v, want ErrCacheMismatch", err)
+	}
+
+	// The refusal names the member, so it comes from the member check, not
+	// from a later check of the extracted directory.
+	if !strings.Contains(err.Error(), member) {
+		t.Errorf("error %q does not name the member %q", err, member)
+	}
+}
+
 func TestFetchChecksCachedEntry(t *testing.T) {
 	t.Parallel()
 

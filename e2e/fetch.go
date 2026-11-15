@@ -545,6 +545,11 @@ func remapMember(want map[string]archiveEntry, wantMember, wantBinary string) er
 		return nil
 	}
 
+	// Defense in depth: the sum check above already accepted this archive
+	// against its pinned or published checksum, and the download stages the
+	// member before it publishes an entry; this check does not rely on
+	// either layer, so a cache entry whose archive lacks the member is still
+	// refused.
 	member, ok := want[wantMember]
 	if !ok {
 		return fmt.Errorf("%w: archive path %q is missing from the cache", ErrCacheMismatch, wantMember)
