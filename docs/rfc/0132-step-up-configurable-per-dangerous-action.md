@@ -68,12 +68,52 @@ option 3 above). The choice between option 2 and option 3 is open.
   required (ADR 385 decision 4)?
 - Where does the settings API show the effective value of each action, and
   where does it come from (ADR 212 decision 9)?
-- Issuing an enrollment code (ADR 301 decision 14, ADR 372 decision 14) is the
-  administrator side of the reset of a factor. Today it does not follow
-  `freshAuthEnabled`. Does it join the same configuration, and does it take
-  the value of the reset of a factor? This is for the owner to decide.
 - Which actions never become configurable? The first-administrator code (ADR
   339 decision 6) is not a step-up (ADR 385 decision 5).
+
+## Owner position of 15 November 2026
+
+One per-action step-up configuration covers break-glass, the reset of a
+factor and the issue of an enrollment code, default on for each. The issue of
+an enrollment code is the administrator side of the reset of a factor.
+
+## What main has (15 November 2026)
+
+- Recovery codes and enrollment codes are separate. The recovery codes of a
+  person are a set of `RecoveryCodeCount` (10) digests in `RecoveryCodeStore`
+  (`pkg/mfa/mfa.go:241-254`). The set changes only when the person makes a new
+  set (`ReplaceRecoveryCodes`) or uses one code (`UseRecoveryCode`). The rule
+  "at most one open code" belongs to the enrollment code (ADR 301 decision
+  14). No code of main issues an enrollment code today. The OpenSpec change
+  `app-level-second-factor-totp` has the requirement `issue-enrollment-code`
+  (`openspec/changes/app-level-second-factor-totp/specs/second-factor/spec.md`).
+  It does not say that an enrollment code leaves the recovery codes alone.
+- The administrator removal of all factors has a store port and no route.
+  `ResetStore.ResetFactors` (`internal/stepup/stepup.go:619-630`) deletes the
+  step-up keys and the active and pending TOTP factor, revokes the step-up
+  credentials, voids open challenges and appends one audit entry, in one
+  transaction. No service, route or action calls it outside tests. The reset
+  of the password (`internal/api/server/localusers.go:14`, ADR 285 decision
+  17) leaves factors and recovery codes in place. The text of ADR 46 decision
+  9 and ADR 372 decision 6 names the reset, and no code or route gives it.
+- A person with no factor can be asked to enroll. `ErrEnrollmentRequired`
+  (`pkg/mfa/mfa.go:102-105`) and the enroll-only session
+  (`pkg/session/cookie.go:136`, `pkg/mfa/mfa.go:283`) exist, with a grace
+  setting (`EnrollmentGraceDays`, `pkg/mfa/mfa.go:350-353`).
+
+## Smallest spec change for the owner to decide
+
+1. In the change `app-level-second-factor-totp`, add to `issue-enrollment-code`:
+   issuing or using an enrollment code does not delete, replace or count
+   against the recovery codes of the person. Add a test for it.
+2. Add a requirement for the administrator reset of the factors of a person:
+   a REST route under the principal, a stored grant (one action, named by the
+   ADR), a reason, a reach check, one audit entry, the end of the sessions of
+   the person, and the removal of every kind of factor (keys, TOTP, passkeys
+   and the recovery codes). At the next sign-in the person gets an enroll-only
+   session when the installation requires MFA. This uses `ResetFactors` and
+   the enroll-only session that exist. It needs a decision on whether the
+   recovery codes go with the reset.
 
 ## Checklist
 
