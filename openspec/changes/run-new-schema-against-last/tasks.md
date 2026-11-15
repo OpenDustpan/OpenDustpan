@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -11,7 +11,7 @@
 
 - [ ] 2.1 Extend in place the existing mixed-version harness in e2e/upgrade.go to build the last 2 ancestor v* tags and run `pulumi up` and `tofu apply` against each old binary. Check: `go test -tags upgrade -run TestMixedVersion ./e2e` drives `pulumi up` and `tofu apply` against each old binary through ANY /api/v2/state-versions and ANY /api/stacks/{}/{}/{}/state/{}/outputs with an access token on SQLite and PostgreSQL. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 2.2 Extend in place the existing target `mixed-version-test` of the Makefile (Makefile:310) for SQLite and for PostgreSQL with DUSTPAN_TEST_POSTGRES_URL. Check: `make mixed-version-test` passes on SQLite and with DUSTPAN_TEST_POSTGRES_URL set.
-- [ ] 2.3 Extend in place the existing step "Mixed-version test" of the CI job in .github/workflows/ci.yml (:638-673, next to the step "Upgrade test") with the tag fetch and the PostgreSQL service. Check: the CI log of the step shows all tags fetched and DUSTPAN_TEST_POSTGRES_URL set. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step (after the workflow patch is applied).
+- [x] 2.3 Extend in place the existing step "Mixed-version test" of the CI job in .github/workflows/ci.yml (:638-673, next to the step "Upgrade test") with the tag fetch and the PostgreSQL service. Check: the CI log of the step shows all tags fetched and DUSTPAN_TEST_POSTGRES_URL set. The cloud agent cannot push .github/workflows. Write the full diff of the workflow file in the pull request description under the heading 'Workflow patch (apply locally)', and leave the PR as a draft. Confirmed by: A person's step (after the workflow patch is applied).
 
 ## 3. Side effects (computed from main)
 
