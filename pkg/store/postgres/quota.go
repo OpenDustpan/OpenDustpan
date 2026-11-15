@@ -127,22 +127,7 @@ type quotaTx struct {
 func (t *quotaTx) Reserve(
 	ctx context.Context, r quota.Reservation, checks []quota.Check,
 ) (quota.Reservation, error) {
-	if err := r.Validate(); err != nil {
-		return quota.Reservation{}, err
-	}
-
-	// Defense in depth: the fence check of the transaction compares the
-	// failover version of the namespace of the fence. This check stays so
-	// that a reservation of one namespace cannot be written under the fence
-	// of another namespace, whatever the caller passes.
-	if r.Namespace != t.fence.Namespace {
-		return quota.Reservation{}, fmt.Errorf(
-			"%w: reservation %s names %q, fence names %q",
-			namespace.ErrFenced, r.ID, r.Namespace, t.fence.Namespace,
-		)
-	}
-
-	if err := checkQuotaFenceKeys(t.fence, checks); err != nil {
+	if err := checkQuotaReserveRequest(t.fence, r, checks); err != nil {
 		return quota.Reservation{}, err
 	}
 
@@ -545,6 +530,48 @@ func quotaLockOrder(keys []quota.Key) []quota.Key {
 // compareQuotaKeys orders two keys of one namespace by their parts.
 func compareQuotaKeys(a, b quota.Key) int {
 	return strings.Compare(a.String(), b.String())
+}
+
+// checkQuotaReserveRequest checks the reservation and the checks of a
+// reserve: the reservation is valid, names the namespace of the fence, and
+// each of its keys is the key of one of the checks, and each check counts in
+// the namespace of the fence.
+func checkQuotaReserveRequest(fence namespace.Fence, r quota.Reservation, checks []quota.Check) error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+
+	// Defense in depth: the fence check of the transaction compares the
+	// failover version of the namespace of the fence. This check stays so
+	// that a reservation of one namespace cannot be written under the fence
+	// of another namespace, whatever the caller passes.
+	if r.Namespace != fence.Namespace {
+		return fmt.Errorf(
+			"%w: reservation %s names %q, fence names %q",
+			namespace.ErrFenced, r.ID, r.Namespace, fence.Namespace,
+		)
+	}
+
+	if err := checkQuotaFenceKeys(fence, checks); err != nil {
+		return err
+	}
+
+	// Defense in depth: the caller builds the checks from the limits, and this
+	// check stays so that a caller cannot count a key that no limit checked.
+	return checkQuotaReservationKeys(r, checks)
+}
+
+// checkQuotaReservationKeys checks that each key of r is the key of one of
+// checks, so a caller cannot count a key that no limit checked. It returns an
+// error that wraps quota.ErrInvalid for a key without its check.
+func checkQuotaReservationKeys(r quota.Reservation, checks []quota.Check) error {
+	for _, k := range r.Keys {
+		if !slices.ContainsFunc(checks, func(c quota.Check) bool { return c.Key == k }) {
+			return fmt.Errorf("%w: no check covers key %s of reservation %s", quota.ErrInvalid, k, r.ID)
+		}
+	}
+
+	return nil
 }
 
 // checkQuotaFenceKeys checks that the key of each check counts in the
