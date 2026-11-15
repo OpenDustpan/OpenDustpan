@@ -20,7 +20,16 @@ type streamedMeta struct {
 	HasSerial       bool
 	HasLineage      bool
 	ClientEncrypted bool
+	// hasFormatVersion reports that the document holds the plain state format
+	// version member. A document that holds it and the client-encryption
+	// envelope is a hybrid that neither a plain nor an encrypted state has.
+	hasFormatVersion bool
 }
+
+// stateKeyFormatVersion is the plain state format version member of an
+// OpenTofu state. A plain state and the client-encryption envelope never hold
+// both it and the envelope.
+const stateKeyFormatVersion = "version"
 
 // maxMemberNameBytes bounds a top-level member name. A longer name is refused.
 const maxMemberNameBytes = 256
@@ -61,6 +70,14 @@ func readStateMeta(r io.Reader, grow func(int) error) (streamedMeta, error) {
 
 	if err := s.end(); err != nil {
 		return streamedMeta{}, err
+	}
+
+	// A document that holds the client-encryption envelope and the plain state
+	// format version is neither a plain state nor the envelope. Refuse it as
+	// invalid state. OpenTofu reads the member case-insensitively, so the
+	// check is not case-sensitive either.
+	if meta.ClientEncrypted && meta.hasFormatVersion {
+		return streamedMeta{}, syntaxError("state has " + encryptedStateKey + " and " + stateKeyFormatVersion)
 	}
 
 	return meta, nil
@@ -195,6 +212,13 @@ func (s *jsonScanner) topMember(name string, meta *streamedMeta) error {
 
 		return s.value()
 	default:
+		// OpenTofu reads the top-level members case-insensitively, so a member
+		// that folds to the plain format version is the format version. The
+		// member is only noted for the both-keys refusal; its value is skipped.
+		if strings.EqualFold(name, stateKeyFormatVersion) {
+			meta.hasFormatVersion = true
+		}
+
 		return s.value()
 	}
 }
@@ -287,12 +311,13 @@ type metaResult struct {
 //
 //nolint:gochecknoglobals // One shared empty value for refused streams; callers never mutate it.
 var noMeta = streamedMeta{
-	Lineage:         "",
-	Outputs:         nil,
-	Serial:          0,
-	HasSerial:       false,
-	HasLineage:      false,
-	ClientEncrypted: false,
+	Lineage:          "",
+	Outputs:          nil,
+	Serial:           0,
+	HasSerial:        false,
+	HasLineage:       false,
+	ClientEncrypted:  false,
+	hasFormatVersion: false,
 }
 
 // refusedByBudget reports whether err refuses the body budget: the budget is

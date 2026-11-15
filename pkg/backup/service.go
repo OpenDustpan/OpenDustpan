@@ -92,6 +92,14 @@ type Manifest struct {
 	// with no such blob omits it. Only a backup before a restore records
 	// damage; every other backup fails at the first damaged blob.
 	Damaged []DamagedBlob `json:"damaged,omitempty"`
+	// RegistryFiles holds the registry file section of each namespace, keyed
+	// by the stable namespace ID: one entry per unique release file with its
+	// SHA-256 content key, its size, and the release and version that name
+	// it. A restore checks each named file against its content key before it
+	// makes any of them visible. The key is written by every backup of this
+	// change: null means a backup from before registry file copy, and the
+	// restore then warns that the files are absent.
+	RegistryFiles map[string]RegistryFileSection `json:"registryFiles"`
 }
 
 // UnmarshalJSON reads a manifest. A value of installationKind that is not a
@@ -966,9 +974,16 @@ func (s *Service) backup(ctx context.Context, run backupRun) error {
 
 	ordered := orderBlobs(exported.sum.Blobs)
 
-	stored, damaged, err := s.copyBlobs(ctx, ordered, run.policy)
+	stored, damaged, err := s.copyBlobs(ctx, ordered, run.policy, exported.sum.RegistryFiles)
 	if err != nil {
 		return err
+	}
+
+	// The registry file check reads each named file after the copy and stops
+	// the backup when its bytes do not match the SHA-256 content key, so the
+	// manifest never names a file that the target copy does not hold.
+	if shaErr := s.verifyRegistryFiles(ctx, ordered, exported.sum.RegistryFiles); shaErr != nil {
+		return shaErr
 	}
 
 	if len(damaged) > 0 {
@@ -995,10 +1010,13 @@ func (s *Service) backup(ctx context.Context, run backupRun) error {
 // the manifest entries. With recordDamage, a live blob that is missing or
 // that does not match its own live row does not stop the backup: it goes to
 // the damaged list, in key order, and the backup holds no copy of it. Every
-// other error stops the backup.
+// other error stops the backup. The error of a registry file names the
+// release and the version that name the file.
 func (s *Service) copyBlobs(
-	ctx context.Context, ordered []BlobRef, policy damagePolicy,
+	ctx context.Context, ordered []BlobRef, policy damagePolicy, registryFiles map[string][]RegistryFileEntry,
 ) ([]ManifestBlob, []DamagedBlob, error) {
+	entries := registryFileEntries(registryFiles)
+
 	stored := make([]ManifestBlob, 0, len(ordered))
 
 	var damaged []DamagedBlob
@@ -1013,7 +1031,7 @@ func (s *Service) copyBlobs(
 
 		damage, ok := errors.AsType[*liveDamageError](copyErr)
 		if policy != recordDamage || !ok || damage == nil {
-			return nil, nil, copyErr
+			return nil, nil, registryFileCopyError(entries, ref.Key, copyErr)
 		}
 
 		// Defense in depth: the copy builds the entry from a key that the
@@ -1052,6 +1070,113 @@ func orderBlobs(refs []BlobRef) []BlobRef {
 	slices.SortFunc(ordered, func(a, b BlobRef) int { return strings.Compare(a.Key, b.Key) })
 
 	return ordered
+}
+
+// registryFileEntries returns the manifest entry of each blob key that the
+// registry file entries of the namespaces name, so an error of the copy or
+// of the check of a registry file names the release and the version that
+// name the file.
+func registryFileEntries(registryFiles map[string][]RegistryFileEntry) map[string]RegistryFileEntry {
+	out := make(map[string]RegistryFileEntry)
+
+	for nsID, list := range registryFiles {
+		for _, e := range list {
+			key, err := RegistryFileBlobKey(nsID, e.SHA256)
+			if err != nil {
+				continue
+			}
+
+			if _, dup := out[key]; !dup {
+				out[key] = e
+			}
+		}
+	}
+
+	return out
+}
+
+// registryFileCopyError returns cause with the release and the version that
+// name the registry file of key, or cause unchanged for any other key.
+func registryFileCopyError(entries map[string]RegistryFileEntry, key string, cause error) error {
+	e, ok := entries[key]
+	if !ok {
+		return cause
+	}
+
+	return fmt.Errorf("registry file of release %q version %q: %w", e.Release, e.Version, cause)
+}
+
+// verifyRegistryFiles streams each registry file of the backup from the live
+// store and stops the backup when the bytes do not match the SHA-256 content
+// key that the file key names. The error names the release, the version and
+// the key, so the operator finds the release that names the file. The check
+// runs after the copy, so a backup never writes a manifest that names a file
+// whose bytes it did not check.
+func (s *Service) verifyRegistryFiles(
+	ctx context.Context, refs []BlobRef, registryFiles map[string][]RegistryFileEntry,
+) error {
+	entries := registryFileEntries(registryFiles)
+
+	for _, ref := range refs {
+		hash, ok := registryFileSHAOfKey(ref.Key)
+		if !ok {
+			continue
+		}
+
+		if err := s.checkRegistryFileSHA(ctx, ref, hash); err != nil {
+			return registryFileCopyError(entries, ref.Key, err)
+		}
+	}
+
+	return nil
+}
+
+// checkRegistryFileSHA streams the live blob of ref and reports an error that
+// wraps ErrCorrupt when the bytes are not the SHA-256 that the key names.
+// Any other read error returns as it is, so the step retries.
+func (s *Service) checkRegistryFileSHA(ctx context.Context, ref BlobRef, hash string) error {
+	key, err := blob.ParseKey(ref.Key)
+	if err != nil {
+		return fmt.Errorf("backup blob key %q: %w", ref.Key, err)
+	}
+
+	reader, err := s.source.Get(ctx, key)
+	if err != nil {
+		return fmt.Errorf("read blob %q: %w", ref.Key, err)
+	}
+
+	digest := sha256.New()
+
+	_, copyErr := io.Copy(digest, reader)
+	closeErr := reader.Close()
+
+	if copyErr != nil {
+		return fmt.Errorf("read blob %q: %w", ref.Key, copyErr)
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("close blob %q: %w", ref.Key, closeErr)
+	}
+
+	if hex.EncodeToString(digest.Sum(nil)) != hash {
+		return fmt.Errorf("%w: registry file %q does not match its SHA-256 content key", ErrCorrupt, ref.Key)
+	}
+
+	return nil
+}
+
+// registryFileSHAOfKey returns the SHA-256 content key that a registry file
+// blob key names, and false for any other key: the key is
+// namespaces/<namespace ID>/registry/sha256/<hash>.
+func registryFileSHAOfKey(key string) (string, bool) {
+	segments := strings.Split(key, "/")
+
+	if len(segments) != 5 || segments[0] != "namespaces" || segments[2] != "registry" ||
+		segments[3] != "sha256" || !ValidRegistryFileHash(segments[4]) {
+		return "", false
+	}
+
+	return segments[4], true
 }
 
 // sqlExport holds the summary of a portable export with the descriptors of its
@@ -1612,6 +1737,7 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 		InstallationKind: in.kind,
 		Unverified:       slices.Clone(in.sum.Unverified),
 		Damaged:          slices.Clone(in.damaged),
+		RegistryFiles:    RegistryFilesOf(in.sum.RegistryFiles),
 	}
 
 	manifest.Blobs = append(manifest.Blobs, in.ordered...)

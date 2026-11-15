@@ -48,7 +48,7 @@ func (s *OutputStates) Latest(ctx context.Context, u identity.Object) (outputsha
 		return outputshare.State{}, fmt.Errorf("read the current state of %q: %w", u, err)
 	}
 
-	encrypted, err := s.svc.StateClientEncrypted(ctx, sv.ID)
+	encrypted, err := s.svc.ClientEncryptedOf(ctx, sv)
 	if err != nil {
 		return outputshare.State{}, fmt.Errorf("read the state marker of %q: %w", u, err)
 	}
@@ -84,8 +84,11 @@ func (s *OutputStates) Outputs(
 	// Defense in depth: the reader of the outputs route refuses a state that
 	// the client encrypted before it calls this port. This check stays so that
 	// a new caller never answers an empty list for such a state, which would
-	// read as a state with no output.
-	encrypted, err := s.svc.StateClientEncrypted(ctx, sv.ID)
+	// read as a state with no output. It streams the state blob and does not
+	// trust the stored bit: a row of another version or of a restored backup
+	// can hold a wrong plaintext bit, and a check that read that bit would fail
+	// together with the route.
+	encrypted, err := s.svc.clientEncryptedStreamed(ctx, sv)
 	if err != nil {
 		return nil, fmt.Errorf("read the state marker of %q: %w", u, err)
 	}

@@ -16,6 +16,10 @@ When a step lacks fresh authentication, the server SHALL answer 403 with the cod
 - **WHEN** a valid session has a sign-in older than the window
 - **THEN** the answer is 403 and holds the code and the path of a new sign-in
 
+#### Scenario: Stale password session
+- **WHEN** a valid session of a local user (password sign-in) has a sign-in older than the window
+- **THEN** the answer is 403 with the code mfa.fresh-step-required, and the path of a new sign-in is `POST /api/dustpan/v1/sign-in/password`, because a password sign-in has no start route and no redirect
+
 #### Scenario: Session that is not valid
 - **WHEN** a session is missing or expired
 - **THEN** the answer is 401, as before, and this change does not touch it

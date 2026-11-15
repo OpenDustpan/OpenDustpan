@@ -28,6 +28,12 @@ func TestValidateUnitsStartState(t *testing.T) {
 		}
 	}
 
+	formatName := unit(unitimport.UnitPlanned, "")
+	formatName.TargetName = "a\u202eb"
+
+	lineName := unit(unitimport.UnitPlanned, "")
+	lineName.TargetName = "a\u2028b"
+
 	tests := []struct {
 		name string
 		unit unitimport.ImportUnit
@@ -36,6 +42,8 @@ func TestValidateUnitsStartState(t *testing.T) {
 		{"planned", unit(unitimport.UnitPlanned, ""), true},
 		{"skipped with a code", unit(unitimport.UnitSkipped, "import.target-exists"), true},
 		{"failed with a code", unit(unitimport.UnitFailed, "import.source-decrypt-refused"), true},
+		{"target name with a format character", formatName, false},
+		{"target name with a line separator", lineName, false},
 		{"skipped with no code", unit(unitimport.UnitSkipped, ""), false},
 		{"failed with no code", unit(unitimport.UnitFailed, ""), false},
 		{"running", unit(unitimport.UnitRunning, ""), false},

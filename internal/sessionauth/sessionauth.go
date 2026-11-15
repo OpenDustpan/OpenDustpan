@@ -307,11 +307,12 @@ func SignInFrom(ctx context.Context) (SignIn, bool) {
 
 // Fresh reports whether a sign-in at authTime is recent enough at now: its
 // age is at most window. A sign-in after now has a negative age, for example
-// when the clock steps back, and is never fresh. A window of 0 turns the
-// check off, so any sign-in passes.
+// when the clock steps back, and is never fresh. A window of 0 asks for a
+// fresh authentication at each step, so no sign-in passes: no value turns
+// the check off.
 func Fresh(now, authTime time.Time, window time.Duration) bool {
 	if window == 0 {
-		return true
+		return false
 	}
 
 	age := now.Sub(authTime)

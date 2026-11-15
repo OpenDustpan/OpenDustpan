@@ -8,6 +8,7 @@ import (
 
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
 
@@ -18,6 +19,17 @@ import (
 // through POST on that path.
 func WithJobStore(st job.Store) Option {
 	return func(o *settings) { o.jobStore = st }
+}
+
+// WithJobTokenStore sets the store of the job tokens that the server issues to
+// the runner sessions of a job. With it, the authenticator chain resolves a
+// job token behind a failure budget of its own, and the authorizer chain
+// bounds every action of the principal to the unit of its job, so a runner
+// session reaches the unit of its job only. Without it, the server issues no
+// job token and resolves none. It needs the job store too (WithJobStore),
+// because the rule of a job token reads the unit of the job on every request.
+func WithJobTokenStore(st jobtoken.Store) Option {
+	return func(o *settings) { o.jobTokenStore = st }
 }
 
 // newJobsHandler builds the jobs API, or returns nil when no job store is

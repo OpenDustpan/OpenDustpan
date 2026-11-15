@@ -88,7 +88,7 @@ func TestHasControl(t *testing.T) {
 		t.Fatal("HasControl(plain) = true")
 	}
 
-	for _, s := range []string{"\n", "a\rb", "\x00", "\x1b[0m", "\u0085"} {
+	for _, s := range []string{"\n", "a\rb", "\x00", "\x1b[0m", "\u0085", "a\u202eb", "a\u2028b"} {
 		if !inventory.HasControl(s) {
 			t.Fatalf("HasControl(%q) = false", s)
 		}
