@@ -26,7 +26,7 @@ Gate configuration is security code. A write needs an action check, a scope chec
 
    A PUT of `off` deletes the stored setting and answers version 0, so the next PUT takes no `If-Match` (pkg/gate/store.go:154-164). A list answers the objects stored at its scope only (ADR 230 decision 3).
 
-7. **The port signatures (internal/api/server/gate_config.go:26, type GateConfig).** GateConfig gets the NEW interface `CarryOverConfig`, which mirrors the store methods of pkg/gate/store.go:154-164:
+7. **The port signatures (internal/api/server/gate_config.go:27, type GateConfig).** GateConfig gets the NEW interface `CarryOverConfig`, which mirrors the store methods of pkg/gate/store.go:154-164:
    - `CarryOver(ctx context.Context, scope gate.Scope) (gate.CarryOverSetting, error)`: `gate.CarryOverOff` with version 0 when none is stored; `gate.ErrInvalid` for a scope that is not valid.
    - `PutCarryOver(ctx context.Context, s gate.CarryOverSetting, prev int64, fence namespace.Fence, e audit.Entry) (int64, error)`: the new version (0 after a PUT of off); `gate.ErrInvalid` for `on` at the installation; `gate.ErrConflict` for a prev that is not the stored version; `namespace.ErrFenced` for a stale fence.
    The installation scope uses `gate.InstallationScope()` (pkg/gate/scope.go:92). The NEW actions `installation:read-gates` and `installation:manage-gates` go into pkg/identity/identity.go next to `ActionNamespaceReadGates` (:190), with the installation object.

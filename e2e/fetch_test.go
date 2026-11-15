@@ -11,11 +11,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -347,6 +349,7 @@ func TestFetchRejectsBadVersions(t *testing.T) {
 func TestFetchPinnedVersionFailsClosed(t *testing.T) {
 	tofu := e2e.OpenTofu()
 	pulumi := e2e.Pulumi()
+	tg := e2e.Terragrunt()
 
 	// The label is read inside each subtest, after t.Setenv: the version
 	// setting of the run (for example E2E_TOFU_VERSIONS=latest in the nightly
@@ -371,6 +374,13 @@ func TestFetchPinnedVersionFailsClosed(t *testing.T) {
 			env:       "E2E_PULUMI_VERSIONS",
 			versions:  "3.268.0",
 			checksums: func(label string) string { return "pulumi-" + label + "-checksums.txt" },
+		},
+		{
+			name:      "terragrunt default",
+			tool:      tg,
+			env:       "E2E_TERRAGRUNT_VERSIONS",
+			versions:  "",
+			checksums: func(string) string { return "SHA256SUMS" },
 		},
 	}
 
@@ -448,6 +458,165 @@ func checkPinnedFailsClosed(t *testing.T, tool e2e.Tool, label, checksumFile str
 
 	if got := latest.Load(); got != 0 {
 		t.Errorf("latest version requested %d times, want 0", got)
+	}
+}
+
+// TestFetchRefusesWrongPinnedSum proves that Install fails closed when a
+// pinned sum does not match the served archive: the download is refused with
+// ErrChecksumMismatch and no entry stays in the cache.
+func TestFetchRefusesWrongPinnedSum(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	name, err := tool.ArchiveName("1.2.1")
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	// A sum that the served archive cannot have.
+	e2e.SetPinnedSum(&tool, name, strings.Repeat("0", 64))
+
+	archive := validArchive(t)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := w.Write(archive); writeErr != nil {
+			t.Errorf("serve archive: %v", writeErr)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	if _, err := fetcher.Install(t.Context(), tool, "1.2.1"); !errors.Is(err, e2e.ErrChecksumMismatch) {
+		t.Fatalf("install with a wrong pinned sum: got error %v, want ErrChecksumMismatch", err)
+	}
+
+	entries, readErr := os.ReadDir(fetcher.CacheDir)
+	if readErr != nil {
+		t.Fatalf("read cache: %v", readErr)
+	}
+
+	// The lock file of the entry stays; nothing else may.
+	for _, entry := range entries {
+		if entry.Name() != name+".lock" {
+			t.Errorf("cache holds %q after a rejected download, want only the lock file", entry.Name())
+		}
+	}
+}
+
+// TestTerragruntPinnedSums checks the four pinned Terragrunt sums, one
+// archive for each platform, and the one pinned version 1.2.1. The archive
+// name carries no version, so the map holds one entry for each platform and
+// no other.
+func TestTerragruntPinnedSums(t *testing.T) {
+	t.Setenv("E2E_TERRAGRUNT_VERSIONS", "")
+
+	tool := e2e.Terragrunt()
+
+	want := map[string]string{
+		"terragrunt_linux_amd64.tar.gz":  "08c8844cc69e4f03451ebb8f347cb57d9bd6b8db7b16e437ae5ec6f001228ef9",
+		"terragrunt_linux_arm64.tar.gz":  "8b92d56a20b2848365e22ef94f963fbfe25fedeebcacffacbc286cfcf9966066",
+		"terragrunt_darwin_amd64.tar.gz": "29806d1708f5c54e54bc6adfcacfb710d4bb1f6f180efd751692e6fad5985640",
+		"terragrunt_darwin_arm64.tar.gz": "0aded323f844ce6567a15feb26393b67eff1400dc1722203fa4dd4e23b3bb182",
+	}
+
+	if got := e2e.PinnedSums(tool); !maps.Equal(got, want) {
+		t.Fatalf("pinned sums = %v, want %v", got, want)
+	}
+
+	if versions := tool.Versions(); !slices.Equal(versions, []string{"1.2.1"}) {
+		t.Fatalf("Versions() = %v, want the one pinned version 1.2.1", versions)
+	}
+}
+
+// TestFetchResolvesTerragruntLatest proves that Install resolves the Latest
+// label of Terragrunt from the GitHub REST API document: it reads tag_name,
+// removes the leading "v" and installs that release. The releases HTML page
+// holds no version, so a fetcher that reads it fails with ErrBadVersion.
+func TestFetchResolvesTerragruntLatest(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	const version = "9.9.9"
+
+	name, err := tool.ArchiveName(version)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	archive := tarball(t, []tar.Header{
+		{Name: tool.ArchiveBinaryName(version), Typeflag: tar.TypeReg, Mode: 0o755},
+	}, "#!/bin/sh\n")
+
+	sum := sha256.Sum256(archive)
+	e2e.SetPinnedSum(&tool, name, hex.EncodeToString(sum[:]))
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/latest", func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := fmt.Fprintf(w, "{\"tag_name\":\"v%s\"}\n", version); writeErr != nil {
+			t.Errorf("serve latest: %v", writeErr)
+		}
+	})
+	mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := w.Write(archive); writeErr != nil {
+			t.Errorf("serve archive: %v", writeErr)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.LatestURL = ts.URL + "/latest"
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	inst, err := fetcher.Install(t.Context(), tool, e2e.Latest)
+	if err != nil {
+		t.Fatalf("install latest: %v", err)
+	}
+
+	if inst.Version != version {
+		t.Fatalf("resolved version = %q, want %q", inst.Version, version)
+	}
+}
+
+// TestFetchRejectsTerragruntLatestWithoutTag proves that a latest document
+// that holds no tag_name fails with ErrBadVersion, so the fetcher never
+// installs a release that the document does not name.
+func TestFetchRejectsTerragruntLatestWithoutTag(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	if _, err := tool.ArchiveName("1.2.1"); err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/latest", func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := w.Write([]byte("<html>releases</html>\n")); writeErr != nil {
+			t.Errorf("serve latest: %v", writeErr)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.LatestURL = ts.URL + "/latest"
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	if _, err := fetcher.Install(t.Context(), tool, e2e.Latest); !errors.Is(err, e2e.ErrBadVersion) {
+		t.Fatalf("install latest without tag_name: got error %v, want ErrBadVersion", err)
 	}
 }
 
@@ -842,6 +1011,97 @@ func linkBinary(t *testing.T, inst e2e.Install, _ string) {
 
 func noChange(*testing.T, e2e.Install, string) {}
 
+// TestFetchRefusesCacheArchiveWithoutMember refuses a cache entry whose
+// archive holds the sum that the checksum file names and holds no member.
+// Install swallows the error of a cache check and downloads again, so the
+// test calls the check directly. Defense in depth: the test sends the
+// hostile cache entry to the member check alone, as if the sum check and
+// the download had let the archive through.
+func TestFetchRefusesCacheArchiveWithoutMember(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	name, err := tool.ArchiveName(fakeVersion)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	member := filepath.FromSlash(tool.ArchiveBinaryName(fakeVersion))
+
+	// The archive holds a file that is not the member, so only the member
+	// check can refuse the entry.
+	archive := tarball(t, []tar.Header{
+		{Name: "README", Typeflag: tar.TypeReg, Mode: 0o644},
+	}, "not the CLI\n")
+
+	sum := sha256.Sum256(archive)
+
+	cacheDir := t.TempDir()
+
+	// The cache entry holds the archive next to its extracted directory, as
+	// a download publishes it.
+	if err = os.WriteFile(filepath.Join(cacheDir, name), archive, 0o600); err != nil {
+		t.Fatalf("write cached archive: %v", err)
+	}
+
+	dest := filepath.Join(cacheDir, strings.TrimSuffix(name, ".tar.gz"))
+
+	if err = os.MkdirAll(dest, 0o750); err != nil {
+		t.Fatalf("create cached CLI dir: %v", err)
+	}
+
+	if err = os.WriteFile(filepath.Join(dest, "README"), []byte("not the CLI\n"), 0o600); err != nil {
+		t.Fatalf("write cached file: %v", err)
+	}
+
+	err = e2e.CheckToolCache(cacheDir, tool, fakeVersion, name, hex.EncodeToString(sum[:]))
+	if err == nil || !errors.Is(err, e2e.ErrCacheMismatch) {
+		t.Fatalf("check cache: got %v, want ErrCacheMismatch", err)
+	}
+
+	// The refusal names the member, so it comes from the member check, not
+	// from a later check of the extracted directory.
+	if !strings.Contains(err.Error(), member) {
+		t.Errorf("error %q does not name the member %q", err, member)
+	}
+}
+
+// TestRemapMember proves that the member remap of the cache check refuses an
+// unknown member name and a member name with a path part. Defense in depth:
+// the test sends each hostile name to the remap alone, as if the tool table
+// and the os.Root containment of extraction and of the cache check had let
+// it through.
+func TestRemapMember(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		member string
+		want   error
+	}{
+		{name: "unknown member", member: "terragrunt_linux_amd64", want: e2e.ErrCacheMismatch},
+		{name: "parent directory", member: "..", want: e2e.ErrUnsafeArchive},
+		{name: "parent then a name", member: "../x", want: e2e.ErrUnsafeArchive},
+		{name: "name below a directory", member: "a/b", want: e2e.ErrUnsafeArchive},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := e2e.RemapCacheMember(tc.member, "terragrunt")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("RemapCacheMember(%q, %q) = %v, want %v", tc.member, "terragrunt", err, tc.want)
+			}
+
+			if !strings.Contains(err.Error(), tc.member) {
+				t.Errorf("error %q does not name the member %q", err, tc.member)
+			}
+		})
+	}
+}
+
 func TestFetchChecksCachedEntry(t *testing.T) {
 	t.Parallel()
 
@@ -1039,6 +1299,126 @@ func TestFetchChecksArchiveWithoutBinary(t *testing.T) {
 
 	if got := downloads.Load(); got != 1 {
 		t.Errorf("archive downloaded %d times, want 1", got)
+	}
+}
+
+func TestFetchInstallsRenamedBinary(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	name, err := tool.ArchiveName(fakeVersion)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	member := tool.ArchiveBinaryName(fakeVersion)
+	if member == "terragrunt" {
+		t.Skipf("renamed binary needs a member name unlike the installed name on %s", name)
+	}
+
+	archive := tarball(t, []tar.Header{
+		{Name: member, Typeflag: tar.TypeReg, Mode: 0o755},
+	}, "#!/bin/sh\n")
+
+	sum := sha256.Sum256(archive)
+	wantSum := hex.EncodeToString(sum[:])
+	e2e.SetPinnedSum(&tool, name, wantSum)
+
+	var downloads atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) {
+		downloads.Add(1)
+
+		if _, writeErr := w.Write(archive); writeErr != nil {
+			t.Errorf("serve archive: %v", writeErr)
+		}
+	})
+	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := fmt.Fprintf(w, "%s  %s\n", wantSum, name); writeErr != nil {
+			t.Errorf("serve checksums: %v", writeErr)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	inst, err := fetcher.Install(t.Context(), tool, fakeVersion)
+	if err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	if got := filepath.Base(inst.Binary()); got != "terragrunt" {
+		t.Errorf("installed binary %q, want %q", got, "terragrunt")
+	}
+
+	data, err := os.ReadFile(inst.Binary())
+	if err != nil {
+		t.Fatalf("read binary: %v", err)
+	}
+
+	if string(data) != "#!/bin/sh\n" {
+		t.Errorf("binary holds %q, want %q", data, "#!/bin/sh\n")
+	}
+
+	if _, err := fetcher.Install(t.Context(), tool, fakeVersion); err != nil {
+		t.Fatalf("reinstall: %v", err)
+	}
+
+	if got := downloads.Load(); got != 1 {
+		t.Errorf("archive downloaded %d times, want 1", got)
+	}
+}
+
+func TestFetchRejectsArchiveWithoutRenamedBinary(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	name, err := tool.ArchiveName(fakeVersion)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	member := tool.ArchiveBinaryName(fakeVersion)
+	if member == "terragrunt" {
+		t.Skipf("renamed binary needs a member name unlike the installed name on %s", name)
+	}
+
+	archive := tarball(t, []tar.Header{
+		{Name: "other", Typeflag: tar.TypeReg, Mode: 0o755},
+	}, "#!/bin/sh\n")
+
+	sum := sha256.Sum256(archive)
+	wantSum := hex.EncodeToString(sum[:])
+	e2e.SetPinnedSum(&tool, name, wantSum)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := w.Write(archive); writeErr != nil {
+			t.Errorf("serve archive: %v", writeErr)
+		}
+	})
+	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := fmt.Fprintf(w, "%s  %s\n", wantSum, name); writeErr != nil {
+			t.Errorf("serve checksums: %v", writeErr)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	if _, err := fetcher.Install(t.Context(), tool, fakeVersion); !errors.Is(err, e2e.ErrMissingBinary) {
+		t.Fatalf("got error %v, want ErrMissingBinary", err)
 	}
 }
 
