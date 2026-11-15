@@ -3851,6 +3851,13 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 		"/v1/modules/",
 		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
 	)
+	// The provider network mirror of OpenTofu lives outside /api/, under its
+	// own prefix. A person writes it in the network_mirror block of the CLI
+	// configuration. It follows the same rules.
+	mux.Handle(
+		"/v1/mirror/",
+		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
+	)
 
 	if cfg.consoleDir != "" {
 		headers := cfg.consoleHeaders.resolve(cfg.allowedOrigins)

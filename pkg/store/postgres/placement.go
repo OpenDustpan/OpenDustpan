@@ -19,14 +19,14 @@ import (
 var _ collection.PlacementStore = (*Store)(nil)
 
 // placementCollectionError maps the missing collection of a placement rule to
-// collection.ErrPlacementCollectionMissing, with the name of the collection in
-// the text. It returns err unchanged for any other error.
-func placementCollectionError(name collection.Name, err error) error {
-	if errors.Is(err, collection.ErrNotFound) {
-		return fmt.Errorf("placement rule names collection %q: %w", name, collection.ErrPlacementCollectionMissing)
+// collection.ErrPlacementCollectionMissing, with the ID of the collection in
+// the text. It wraps any other error with the operation that failed.
+func placementCollectionError(operation, id string, err error) error {
+	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, collection.ErrNotFound) {
+		return fmt.Errorf("placement rule names collection %q: %w", id, collection.ErrPlacementCollectionMissing)
 	}
 
-	return err
+	return fmt.Errorf("%s: %w", operation, err)
 }
 
 // CreatePlacementRule implements collection.PlacementStore. The fence is
@@ -35,6 +35,7 @@ func placementCollectionError(name collection.Name, err error) error {
 func (s *Store) CreatePlacementRule(
 	ctx context.Context, r collection.Rule, fence namespace.Fence, e audit.Entry,
 ) error {
+	// Defense in depth: do not rely on the handler or service to validate IDs.
 	if err := r.Validate(); err != nil {
 		return fmt.Errorf("placement rule: %w", err)
 	}
@@ -58,8 +59,14 @@ func (s *Store) CreatePlacementRule(
 			return fmt.Errorf("place rule: %w", err)
 		}
 
-		if _, idErr := collectionID(ctx, q, collection.Ref{Namespace: r.Namespace, Name: r.Collection}); idErr != nil {
-			return placementCollectionError(r.Collection, idErr)
+		// Defense in depth: the foreign key ties the rule to a collection of
+		// the same namespace. This read stays so that a caller cannot skip
+		// it, and it tells the user which collection is missing.
+		_, idErr := q.GetPlacementCollection(ctx, db.GetPlacementCollectionParams{
+			Namespace: r.Namespace.String(), ID: r.CollectionID,
+		})
+		if idErr != nil {
+			return placementCollectionError("read placement collection", r.CollectionID, idErr)
 		}
 
 		// The row gets a position behind the others. The renumber below then
@@ -68,15 +75,15 @@ func (s *Store) CreatePlacementRule(
 		last := min(len(ids)+1, math.MaxInt32)
 
 		err = q.CreatePlacementRule(ctx, db.CreatePlacementRuleParams{
-			ID:            r.ID,
-			Namespace:     r.Namespace.String(),
-			Position:      int32(last),
-			Tool:          r.Tool,
-			Project:       r.Project.String(),
-			Stack:         r.Stack.String(),
-			CollectionKey: r.Collection.Key(),
-			CreatedBy:     r.CreatedBy,
-			CreatedAtMs:   codec.Millis(r.CreatedAt),
+			ID:           r.ID,
+			Namespace:    r.Namespace.String(),
+			Position:     int32(last),
+			Tool:         r.Tool,
+			Project:      r.Project.String(),
+			Stack:        r.Stack.String(),
+			CollectionID: r.CollectionID,
+			CreatedBy:    r.CreatedBy,
+			CreatedAtMs:  codec.Millis(r.CreatedAt),
 		})
 		if err != nil {
 			return fmt.Errorf("insert placement rule: %w", err)
@@ -94,6 +101,7 @@ func (s *Store) CreatePlacementRule(
 func (s *Store) UpdatePlacementRule(
 	ctx context.Context, r collection.Rule, fence namespace.Fence, e audit.Entry,
 ) error {
+	// Defense in depth: do not rely on the handler or service to validate IDs.
 	if err := r.Validate(); err != nil {
 		return fmt.Errorf("placement rule: %w", err)
 	}
@@ -113,17 +121,23 @@ func (s *Store) UpdatePlacementRule(
 			return fmt.Errorf("place rule: %w", err)
 		}
 
-		if _, idErr := collectionID(ctx, q, collection.Ref{Namespace: r.Namespace, Name: r.Collection}); idErr != nil {
-			return placementCollectionError(r.Collection, idErr)
+		// Defense in depth: the foreign key ties the rule to a collection of
+		// the same namespace. This read stays so that a caller cannot skip
+		// it, and it tells the user which collection is missing.
+		_, idErr := q.GetPlacementCollection(ctx, db.GetPlacementCollectionParams{
+			Namespace: r.Namespace.String(), ID: r.CollectionID,
+		})
+		if idErr != nil {
+			return placementCollectionError("read placement collection", r.CollectionID, idErr)
 		}
 
 		n, err := q.UpdatePlacementRuleContent(ctx, db.UpdatePlacementRuleContentParams{
-			Tool:          r.Tool,
-			Project:       r.Project.String(),
-			Stack:         r.Stack.String(),
-			CollectionKey: r.Collection.Key(),
-			Namespace:     r.Namespace.String(),
-			ID:            r.ID,
+			Tool:         r.Tool,
+			Project:      r.Project.String(),
+			Stack:        r.Stack.String(),
+			CollectionID: r.CollectionID,
+			Namespace:    r.Namespace.String(),
+			ID:           r.ID,
 		})
 		if err != nil {
 			return fmt.Errorf("update placement rule: %w", err)
@@ -206,15 +220,16 @@ func (s *Store) ListPlacementRules(ctx context.Context, ns namespace.Name) ([]co
 // placementRuleFromRow converts a placement_rules row into a domain rule.
 func placementRuleFromRow(row *db.GetPlacementRuleRow) collection.Rule {
 	return collection.Rule{
-		CreatedAt:  codec.FromMillis(row.CreatedAtMs),
-		ID:         row.ID,
-		Namespace:  namespace.Name(row.Namespace),
-		Tool:       row.Tool,
-		Project:    collection.Pattern(row.Project),
-		Stack:      collection.Pattern(row.Stack),
-		Collection: collection.Name(row.CollectionName),
-		CreatedBy:  row.CreatedBy,
-		Position:   int(row.Position),
+		CreatedAt:      codec.FromMillis(row.CreatedAtMs),
+		ID:             row.ID,
+		Namespace:      namespace.Name(row.Namespace),
+		Tool:           row.Tool,
+		Project:        collection.Pattern(row.Project),
+		Stack:          collection.Pattern(row.Stack),
+		CollectionID:   row.CollectionID,
+		CollectionName: collection.Name(row.CollectionName),
+		CreatedBy:      row.CreatedBy,
+		Position:       int(row.Position),
 	}
 }
 
@@ -261,8 +276,12 @@ func renumberPlacementRules(ctx context.Context, q *db.Queries, ns namespace.Nam
 func purgePlacementRules(
 	ctx context.Context, q *db.Queries, ref collection.Ref, room int,
 ) ([]audit.Change, error) {
+	id, err := collectionID(ctx, q, ref)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.ListPlacementRulesOfCollection(ctx, db.ListPlacementRulesOfCollectionParams{
-		Namespace: ref.Namespace.String(), CollectionKey: ref.Name.Key(),
+		Namespace: ref.Namespace.String(), CollectionID: id,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("select placement rules of collection: %w", err)
@@ -280,7 +299,7 @@ func purgePlacementRules(
 	}
 
 	err = q.DeletePlacementRulesOfCollection(ctx, db.DeletePlacementRulesOfCollectionParams{
-		Namespace: ref.Namespace.String(), CollectionKey: ref.Name.Key(),
+		Namespace: ref.Namespace.String(), CollectionID: id,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("delete placement rules of collection: %w", err)
