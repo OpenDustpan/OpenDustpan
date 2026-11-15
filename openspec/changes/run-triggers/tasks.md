@@ -10,6 +10,8 @@
 
 ## 2. build
 
+- [ ] 1.4 SECURITY. Add failing test `TestNoHardCodedGrantLeft` in the existing package `pkg/access` (new file `pkg/access/no_hard_coded_grant_test.go`): the authorizer has no rule in code that grants an action to a subject. Check: `TestNoHardCodedGrantLeft` (NEW symbol, not on main) fails on main because `pkg/access/authorizer.go:119` decides a subject in code.
+- [ ] 2.0 SECURITY. Remove the namespace service principal (ADR 370 decision 1) together with the run-as principal that replaces it: `pkg/identity/namespace_service.go`, `authorizeNamespaceService`, `NamespaceServiceRule`, the guard, the checks in `pkg/trigger` and `pkg/job`, and the glossary term. Check: `rg -n 'NamespaceService|namespace-service' pkg internal --type go` gives no line; `TestNoHardCodedGrantLeft` passes.
 - [ ] 2.1 Implement plan-only starter, cycle check and limits in pkg/trigger/service.go (NEW). Check: go test ./pkg/trigger/... -count=1
 - [ ] 2.2 Wire routes with declared actions and audit entries. Edit the route declaration file internal/api/triggers/routes.go and the adapter file internal/api/triggers/serve.go. Check: go test ./internal/api/triggers/... -count=1
 - [ ] 2.3 Extend the run triggers guide. Its commands use GET and POST on /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers with an access token of a person. The task adds the NEW top-level test `TestTriggersGuide` in a `_test.go` file of `e2e`, so that the Check runs it. Check: go test -tags e2e ./e2e -run TestTriggersGuide -count=1 runs each command of docs/guides/run-triggers.md as written. `make docs-lint` passes on each edited guide.

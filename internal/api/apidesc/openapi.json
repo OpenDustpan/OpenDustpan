@@ -774,6 +774,9 @@
             "format": "int64",
             "type": "integer"
           },
+          "id": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },
@@ -783,6 +786,7 @@
         },
         "required": [
           "createdAt",
+          "id",
           "name",
           "namespace"
         ],
@@ -1972,7 +1976,9 @@
           "password.letters-and-digits",
           "password.too-long",
           "password.too-short",
+          "placement.collection-id-required",
           "placement.conflict",
+          "placement.invalid-collection-id",
           "placement.invalid-pattern",
           "placement.invalid-position",
           "placement.invalid-tool",
@@ -4664,6 +4670,10 @@
           "contact": {
             "type": "string"
           },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
           "deliveredAt": {
             "format": "date-time",
             "type": "string"
@@ -4712,6 +4722,7 @@
         },
         "required": [
           "attempts",
+          "createdAt",
           "id",
           "nextAt",
           "notification",
@@ -5325,6 +5336,9 @@
           "collection": {
             "type": "string"
           },
+          "collectionID": {
+            "type": "string"
+          },
           "createdAt": {
             "format": "int64",
             "type": "integer"
@@ -5354,6 +5368,7 @@
         },
         "required": [
           "collection",
+          "collectionID",
           "createdAt",
           "createdBy",
           "id",
@@ -5367,7 +5382,7 @@
       },
       "PlacementRuleRequest": {
         "properties": {
-          "collection": {
+          "collectionID": {
             "type": "string"
           },
           "position": {
@@ -5385,7 +5400,7 @@
           }
         },
         "required": [
-          "collection",
+          "collectionID",
           "project",
           "stack",
           "tool"

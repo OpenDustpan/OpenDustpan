@@ -50,6 +50,11 @@ A caller who cannot read a namespace gets 403 on the unit list. The unit list
 holds only the units that the caller can read with `unit:read`. A caller with
 `namespace:read` and `unit:read` only gets 403 on each route that changes data.
 
+The collection create and read answers hold `id`, `namespace`, `name` and
+`createdAt` in Unix seconds. The collection list holds the same fields for each
+entry. The stable `id` has the prefix `col-`. Use it as `collectionID` in
+[placement rules](placement-rules-api.md). The name is a label only.
+
 These routes have no path under `/api/dustpan/v1` yet. Use these paths:
 
 - `POST /api/inventory/deleted-units/{tool}/{unitID}/restore?organization={namespace}`

@@ -6,6 +6,7 @@ Changed by:
 
 - ADR 323 changes decision 8: until the first release, `info.version` stays
   fixed and its test is disabled.
+- ADR 383 extends decision 3: the digest and the client version are not in the committed files. The publish step writes them.
 
 ## Context
 

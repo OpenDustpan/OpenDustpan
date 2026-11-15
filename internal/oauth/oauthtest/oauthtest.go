@@ -191,10 +191,13 @@ type grant struct {
 
 // Provider is a running test provider.
 type Provider struct {
-	server    *httptest.Server
-	cfg       Config
-	signer    crypto.Signer
-	foreign   crypto.Signer
+	server *httptest.Server
+	cfg    Config
+	signer crypto.Signer
+	// foreign is the key of the UnknownKey fault, a key that the JWKS does
+	// not hold. Most tests never use the fault, so the provider makes the
+	// key only at its first use: an RSA key takes most of the time of New.
+	foreign   func() (crypto.Signer, error)
 	keyID     string
 	mu        sync.Mutex
 	codes     map[string]grant
@@ -221,16 +224,11 @@ func New(tb testing.TB, cfg Config) *Provider {
 		tb.Fatalf("oauthtest: %v", err)
 	}
 
-	foreign, err := newKey(cfg.Algorithm)
-	if err != nil {
-		tb.Fatalf("oauthtest: %v", err)
-	}
-
 	p := &Provider{
 		server:    nil,
 		cfg:       cfg,
 		signer:    signer,
-		foreign:   foreign,
+		foreign:   sync.OnceValues(func() (crypto.Signer, error) { return newKey(cfg.Algorithm) }),
 		keyID:     "key-" + randomText(),
 		mu:        sync.Mutex{},
 		codes:     map[string]grant{},
@@ -753,7 +751,12 @@ func (p *Provider) sign(claims map[string]any, f Faults) (string, error) {
 
 	key := p.signer
 	if f.UnknownKey {
-		key = p.foreign
+		foreign, foreignErr := p.foreign()
+		if foreignErr != nil {
+			return "", fmt.Errorf("make the unknown key: %w", foreignErr)
+		}
+
+		key = foreign
 	}
 
 	sig, err := signInput(key, p.cfg.Algorithm, []byte(input))

@@ -176,7 +176,7 @@ func (h *Handler) registryRoutes() []Route {
 		return nil
 	}
 
-	return append(h.moduleRoutes(), []Route{
+	routes := append(h.moduleRoutes(), []Route{
 		{
 			Method: http.MethodGet,
 			Path:   registryPrefix + "{namespace}/{type}/versions",
@@ -212,6 +212,7 @@ func (h *Handler) registryRoutes() []Route {
 			Serve:   h.registryFile,
 		},
 	}...)
+	return append(routes, h.mirrorRoutes()...)
 }
 
 // resolveRegistryNamespace returns the namespace in the path.

@@ -520,9 +520,23 @@ func TestRedeliverableAt(t *testing.T) {
 
 	stop := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
 	base := notify.Delivery{
-		ID: "dlv-1", Notification: "ntf-1", Scope: "acme", Subscription: "sub-1", Sink: "snk-1",
-		Contact: "", Principal: "alice", State: notify.DeliveryDone, Attempts: 1, Redeliveries: 0,
-		NextAt: time.Time{}, LastError: "", DeliveredAt: stop, Owner: "", LeaseUntil: time.Time{}, Version: 1,
+		ID:           "dlv-1",
+		Notification: "ntf-1",
+		Scope:        "acme",
+		Subscription: "sub-1",
+		Sink:         "snk-1",
+		Contact:      "",
+		Principal:    "alice",
+		State:        notify.DeliveryDone,
+		Attempts:     1,
+		CreatedAt:    time.Time{},
+		Redeliveries: 0,
+		NextAt:       time.Time{},
+		LastError:    "",
+		DeliveredAt:  stop,
+		Owner:        "",
+		LeaseUntil:   time.Time{},
+		Version:      1,
 	}
 	cases := []struct {
 		name         string
@@ -569,7 +583,7 @@ func TestRedeliveriesRemaining(t *testing.T) {
 
 			d := notify.Delivery{
 				ID: "dlv-1", Notification: "ntf-1", Scope: "acme", Subscription: "sub-1", Sink: "snk-1",
-				Contact: "", Principal: "alice", State: notify.DeliveryPending, Attempts: 0,
+				Contact: "", Principal: "alice", State: notify.DeliveryPending, Attempts: 0, CreatedAt: time.Time{},
 				Redeliveries: tc.redeliveries, NextAt: time.Time{}, LastError: "", DeliveredAt: time.Time{},
 				Owner: "", LeaseUntil: time.Time{}, Version: 1,
 			}
@@ -587,7 +601,7 @@ func TestDeliveryValidate(t *testing.T) {
 		ID: "dlv-1", Notification: "ntf-1", Scope: "acme", Subscription: "sub-1", Sink: "snk-1",
 		Contact: "", Principal: "alice", State: notify.DeliveryPending, Attempts: 0, NextAt: time.Time{},
 		LastError: "", DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 1,
-		Redeliveries: 0,
+		Redeliveries: 0, CreatedAt: time.UnixMilli(1),
 	}
 
 	cases := []struct {
@@ -899,10 +913,23 @@ func TestBeforeAttempt(t *testing.T) {
 
 	d := func(principal, contact string) notify.Delivery {
 		return notify.Delivery{
-			ID: "dlv-1", Notification: "ntf-1", Scope: "shop", Subscription: "sub-1", Sink: "snk-1",
-			Contact: contact, Principal: principal, State: notify.DeliveryPending, Attempts: 1, Redeliveries: 0,
-			NextAt: time.Time{}, LastError: "", DeliveredAt: time.Time{}, Owner: "i-1", LeaseUntil: time.Time{},
-			Version: 2,
+			ID:           "dlv-1",
+			Notification: "ntf-1",
+			Scope:        "shop",
+			Subscription: "sub-1",
+			Sink:         "snk-1",
+			Contact:      contact,
+			Principal:    principal,
+			State:        notify.DeliveryPending,
+			Attempts:     1,
+			CreatedAt:    time.Time{},
+			Redeliveries: 0,
+			NextAt:       time.Time{},
+			LastError:    "",
+			DeliveredAt:  time.Time{},
+			Owner:        "i-1",
+			LeaseUntil:   time.Time{},
+			Version:      2,
 		}
 	}
 

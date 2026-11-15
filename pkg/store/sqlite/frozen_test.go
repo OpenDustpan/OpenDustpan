@@ -18,13 +18,16 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
-//go:embed migrations/*.sql migrations/*.sql.sha256
+//go:embed migrations/*.sql
 var frozenMigrations embed.FS
 
 // TestFrozenMigrations pins the SHA-256 of each migration file to the hash
 // file next to it: migrations/NNNN_name.sql.sha256 holds the hash as one hex
 // line. It fails when a file changes, when a SQL file has no hash file, and
-// when a hash file has no SQL file. Never edit an applied migration. Add a
+// when a hash file has no SQL file. The test reads the hash files from the
+// package directory, not from the embedded files, so that the package builds
+// while no hash file exists. Until the first tag the tree holds none: the
+// release writes them. Never edit an applied migration. Add a
 // new numbered SQL file and its hash file in the same change.
 func TestFrozenMigrations(t *testing.T) {
 	t.Parallel()
@@ -63,9 +66,9 @@ func TestFrozenMigrations(t *testing.T) {
 		}
 	}
 
-	entries, err := frozenMigrations.ReadDir("migrations")
+	entries, err := os.ReadDir("migrations")
 	if err != nil {
-		t.Fatalf("read embedded migrations: %v", err)
+		t.Fatalf("read migrations: %v", err)
 	}
 
 	for _, entry := range entries {
@@ -232,7 +235,7 @@ func checkTagCopy(t *testing.T, dir, name string) {
 func readFrozenHash(t *testing.T, name string) (string, bool) {
 	t.Helper()
 
-	data, err := frozenMigrations.ReadFile(path.Join("migrations", name+".sha256"))
+	data, err := fs.ReadFile(os.DirFS("migrations"), name+".sha256")
 	if err != nil {
 		t.Errorf(
 			"migration %s has no hash file: add %s.sha256 with its SHA-256; "+

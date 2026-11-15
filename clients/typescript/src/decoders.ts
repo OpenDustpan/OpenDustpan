@@ -638,6 +638,7 @@ export const decodeCheckBackupResponse: Decoder<CheckBackupResponse> = object<Ch
 /** The validator of Collection. */
 export const decodeCollection: Decoder<Collection> = object<Collection>("Collection", {
   createdAt: int64,
+  id: string,
   name: string,
   namespace: string,
 });
@@ -1741,6 +1742,7 @@ export const decodeNewAccessToken: Decoder<NewAccessToken> = object<NewAccessTok
 export const decodeNotificationDelivery: Decoder<NotificationDelivery> = object<NotificationDelivery>("NotificationDelivery", {
   attempts: int64,
   contact: optional(string),
+  createdAt: dateTime,
   deliveredAt: optional(dateTime),
   id: string,
   lastError: optional(string),
@@ -1947,6 +1949,7 @@ export const decodePasswordTooShortErrorArgs: Decoder<PasswordTooShortErrorArgs>
 /** The validator of PlacementRule. */
 export const decodePlacementRule: Decoder<PlacementRule> = object<PlacementRule>("PlacementRule", {
   collection: string,
+  collectionID: string,
   createdAt: int64,
   createdBy: string,
   id: string,
@@ -1959,7 +1962,7 @@ export const decodePlacementRule: Decoder<PlacementRule> = object<PlacementRule>
 
 /** The validator of PlacementRuleRequest. */
 export const decodePlacementRuleRequest: Decoder<PlacementRuleRequest> = object<PlacementRuleRequest>("PlacementRuleRequest", {
-  collection: string,
+  collectionID: string,
   position: optional(int64),
   project: string,
   stack: string,
