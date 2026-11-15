@@ -960,6 +960,8 @@ export const decodeGetBackupResponse: Decoder<GetBackupResponse> = object<GetBac
   startedAt: string,
   state: string,
   target: string,
+  unverifiedKeyCount: int64,
+  unverifiedKeyLimit: int64,
 });
 
 /** The validator of GetRestoreResponse. */

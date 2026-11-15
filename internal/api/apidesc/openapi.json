@@ -389,35 +389,6 @@
         ],
         "type": "object"
       },
-      "BlobFindings": {
-        "properties": {
-          "damaged": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "keys": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "missing": {
-            "format": "int64",
-            "type": "integer"
-          },
-          "named": {
-            "format": "int64",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "damaged",
-          "keys",
-          "missing",
-          "named"
-        ],
-        "type": "object"
-      },
       "BackupTooManyUnverifiedError": {
         "description": "The error answer with the code backup.too-many-unverified.",
         "properties": {
@@ -460,6 +431,35 @@
         "required": [
           "count",
           "limit"
+        ],
+        "type": "object"
+      },
+      "BlobFindings": {
+        "properties": {
+          "damaged": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "missing": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "named": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "damaged",
+          "keys",
+          "missing",
+          "named"
         ],
         "type": "object"
       },
@@ -2228,13 +2228,23 @@
           },
           "target": {
             "type": "string"
+          },
+          "unverifiedKeyCount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "unverifiedKeyLimit": {
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
           "id",
           "startedAt",
           "state",
-          "target"
+          "target",
+          "unverifiedKeyCount",
+          "unverifiedKeyLimit"
         ],
         "type": "object"
       },

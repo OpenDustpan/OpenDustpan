@@ -537,6 +537,8 @@ export interface GetBackupResponse {
   readonly startedAt: string;
   readonly state: string;
   readonly target: string;
+  readonly unverifiedKeyCount: number;
+  readonly unverifiedKeyLimit: number;
 }
 
 export interface GetRestoreResponse {
