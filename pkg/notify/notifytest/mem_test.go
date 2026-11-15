@@ -543,7 +543,7 @@ func (m *memStore) History(
 	}
 
 	slices.SortFunc(out, func(a, b notify.Delivery) int {
-		return cmp.Or(b.NextAt.Compare(a.NextAt), strings.Compare(b.ID, a.ID))
+		return cmp.Or(b.CreatedAt.Compare(a.CreatedAt), strings.Compare(b.ID, a.ID))
 	})
 
 	if after != nil {
@@ -554,9 +554,9 @@ func (m *memStore) History(
 }
 
 // afterCursor reports whether d comes after the cursor c in the history
-// order: an older NextAt, or the same NextAt and a smaller ID.
+// order: an older CreatedAt, or the same CreatedAt and a smaller ID.
 func afterCursor(d notify.Delivery, c notify.DeliveryCursor) bool {
-	if order := d.NextAt.Compare(c.NextAt); order != 0 {
+	if order := d.CreatedAt.Compare(c.CreatedAt); order != 0 {
 		return order < 0
 	}
 

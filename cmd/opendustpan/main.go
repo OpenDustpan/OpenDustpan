@@ -193,14 +193,21 @@ func (c *common) register(fs *flag.FlagSet) {
 	cli.ByFlag("installation").String(fs, &c.installation)
 }
 
-func serve(ctx context.Context, args []string, stderr io.Writer) error {
-	return serveWithIO(ctx, args, stderr, isTerminalWriter(stderr))
+// serveCommand runs the serve subcommand of the binary, with the fixed drain
+// period of production.
+func serveCommand(ctx context.Context, args []string, stderr io.Writer) error {
+	return serveWith(ctx, args, stderr, isTerminalWriter(stderr), dustpan.DefaultDrainPeriod)
 }
 
-// serveWithIO runs serve with an explicit terminal flag for stderr, so tests
-// drive the trial hint of the refusals with a fake terminal.
-func serveWithIO(ctx context.Context, args []string, stderr io.Writer, terminal bool) error {
+// serveWith runs serve with an explicit terminal flag for stderr and the drain
+// period between the stop and the shutdown. The binary passes
+// dustpan.DefaultDrainPeriod. The tests drive the trial hint of the refusals
+// with a fake terminal, and pass no drain, so that a test does not wait 10
+// seconds at each stop of the server.
+func serveWith(ctx context.Context, args []string, stderr io.Writer, terminal bool, drain time.Duration) error {
 	var f serveFlags
+
+	f.drainPeriod = drain
 
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 
@@ -268,6 +275,11 @@ type serveFlags struct {
 	// instanceID names this process in the audit entries that it writes
 	// on its own (ADR 63 decision 10).
 	instanceID string
+
+	// drainPeriod is the time between the stop and the shutdown, in which
+	// GET /health/ready answers 503. serveCommand sets
+	// dustpan.DefaultDrainPeriod; no flag sets it.
+	drainPeriod time.Duration
 
 	config                       string
 	listen                       string
@@ -936,7 +948,7 @@ func (f *serveFlags) serveWithStores(
 		return optErr
 	}
 	opts = append(opts, f.restoreOptions(ctx, logger, backupTarget)...)
-	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...), dustpan.WithDrainPeriod(dustpan.DefaultDrainPeriod))
+	opts = append(opts, dustpan.WithAuditSinks(sinks.ship...), dustpan.WithDrainPeriod(f.drainPeriod))
 
 	// After the start-up checks and before serving, write the start entry
 	// and only then start the reloader: a start that fails its checks

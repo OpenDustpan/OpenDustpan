@@ -6,8 +6,8 @@ Decision: ADR 370. Order: this change lands before the changes of triggers, sche
 
 The user path this change must make work:
 
-1. **API.** The operator lists the principals of the installation: NEW route `GET /api/dustpan/v1/principals?kind=service&source=builtin` (declared in the API description, with its adapter file named in the tasks). The answer lists one housekeeping principal for each purpose, for example `housekeeping:artifact-sweep`, with its stable ID.
-2. **API.** The operator lists the grants of one housekeeping principal: NEW route `GET /api/dustpan/v1/principals/{principal}/grants` (next to the existing `/api/server/principals/{}/grants`). Each grant has a role, an object, a creator (the install) and a time.
+1. **API.** The operator lists the principals of the installation: the existing route `GET /api/server/principals?kind=service&source=builtin` (NEW `source` filter and NEW `builtin` source; task 2.7). The answer lists one housekeeping principal for each purpose, for example `housekeeping:artifact-sweep`, with its stable ID.
+2. **API.** The operator lists the grants of one housekeeping principal: the existing route `GET /api/server/principals/{principal}/grants`. Each grant has a role, an object, a creator (the install) and a time.
 3. **API.** The operator reads the audit log: each entry of a sweep names the housekeeping principal as the actor.
 4. **API.** The operator revokes the grant of the artifact sweep. The next artifact sweep is refused and writes a denial audit entry. The other sweeps run as before.
 5. **Docs page.** `docs/explanation/housekeeping-principals.md` lists each housekeeping principal, its purpose, its role and its schedule, and how to revoke and grant again.
@@ -16,9 +16,9 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A sweep runs while its principal has no grant. | The audit entry `denied` names the housekeeping principal and the missing action. The sweep changes nothing. | `GET /api/dustpan/v1/principals/{principal}/grants` |
-| A person tries to sign in or make a token as a housekeeping principal. | 403 `principal.housekeeping` (NEW error code). | NEW route `GET /api/dustpan/v1/principals/{principal}` |
-| A grant to a housekeeping principal names a role that its purpose does not need. | 422 `access.grant-out-of-purpose` (NEW error code), with the purpose. | NEW route `GET /api/dustpan/v1/principals/{principal}` |
+| A sweep runs while its principal has no grant. | The audit entry `denied` names the housekeeping principal and the missing action. The sweep changes nothing. | `GET /api/server/principals/{principal}/grants` |
+| A person tries to sign in or make a token as a housekeeping principal. | 403 `principal.housekeeping` (NEW error code). | the existing route `GET /api/server/principals/{id}` |
+| A grant to a housekeeping principal names a role that its purpose does not need. | 422 `access.grant-out-of-purpose` (NEW error code), with the purpose. | the existing route `GET /api/server/principals/{id}` |
 
 Evidence for the claims above:
 
@@ -27,13 +27,13 @@ Evidence for the claims above:
 
 ## What Changes
 
-- The namespace service principal is removed: its subject, its authorizer rule, its guard, its checks in the trigger and job start path, and its glossary term.
+- The namespace service principal stays in this change. The first trigger change removes it (its subject, authorizer rule, guard, checks in the trigger and job start path, and its glossary term) together with the run-as principal that replaces it. Reason: the dispatcher starts every triggered plan with it today (`pkg/trigger/dispatcher.go:249`), and ADR 370 lands this change before the trigger changes "or with them".
 - NEW: one built-in service principal for each housekeeping purpose, made at the install, with the source `builtin`. A person cannot sign in as one, and no access token names one.
 - NEW: the install step writes the grants of each housekeeping principal as stored grants, with the install as the creator and the install time. A role for each purpose holds only the actions that the purpose needs.
 - NEW: each housekeeping run checks its action with the authorizer, as any principal does, and names its principal in each audit entry and run record.
 - NEW: a revoke stops only the purpose of that principal.
 - A docs page: add the new file `docs/explanation/housekeeping-principals.md`.
-- NEW routes: `GET /api/dustpan/v1/principals`, `GET /api/dustpan/v1/principals/{principal}` and `GET /api/dustpan/v1/principals/{principal}/grants`.
+- NEW: the `source` filter of `GET /api/server/principals` and the `builtin` source. The other routes exist on main.
 
 Out of scope:
 
