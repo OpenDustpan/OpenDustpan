@@ -41,6 +41,8 @@ func (s *Store) CreateHostRecovery(ctx context.Context, r *accesstoken.HostRecov
 	txErr := pgx.BeginTxFunc(ctx, s.txs, opts, func(tx pgx.Tx) error {
 		q := s.queries.WithTx(tx)
 
+		// Defense in depth: the caller reads the state that it writes under
+		// this lock, and appendAuditEntry takes the lock of @server too.
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}

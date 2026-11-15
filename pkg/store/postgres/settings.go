@@ -195,6 +195,8 @@ func (st SettingStore) Update(
 	// audit scope first, then the namespace row. No transaction takes the
 	// scope lock after a namespace row, so two writes cannot deadlock.
 	err = st.s.inTx(ctx, func(q *db.Queries) error {
+		// Defense in depth: the caller reads the state that it writes under
+		// this lock, and appendAuditEntry takes the lock of @server too.
 		if lockErr := q.LockServerAuditScope(ctx); lockErr != nil {
 			return fmt.Errorf("lock server audit scope: %w", lockErr)
 		}
@@ -258,6 +260,8 @@ func (st SettingStore) Sync(ctx context.Context, digest string) (int64, bool, er
 	)
 
 	err := st.s.inTx(ctx, func(q *db.Queries) error {
+		// Defense in depth: the caller reads the state that it writes under
+		// this lock, and appendAuditEntry takes the lock of @server too.
 		if lockErr := q.LockServerAuditScope(ctx); lockErr != nil {
 			return fmt.Errorf("lock server audit scope: %w", lockErr)
 		}

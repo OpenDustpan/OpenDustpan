@@ -419,6 +419,9 @@ func (g BreakGlassStore) breakGlassTx(
 			// transaction takes the advisory lock of the scope first, as
 			// AppendServer does: two appends must not read the same last
 			// entry.
+			// Defense in depth: the caller reads the state that it writes
+			// under this lock, and appendAuditEntry takes the lock of @server
+			// too.
 			if err := q.LockServerAuditScope(ctx); err != nil {
 				return fmt.Errorf("lock server audit scope: %w", err)
 			}

@@ -68,6 +68,8 @@ func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, e
 	var stored audit.Entry
 
 	txErr := s.inControlTx(ctx, func(q *db.Queries) error {
+		// Defense in depth: the caller reads the state that it writes under
+		// this lock, and appendAuditEntry takes the lock of @server too.
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
@@ -108,6 +110,8 @@ func (s *Store) inAuditedTxOf(ctx context.Context, e *audit.Entry, fn func(q *db
 		// principal checks the last site administrator and the last enabled
 		// break-glass account. Under READ COMMITTED, two such writes without
 		// it both pass the check. Do not move it after fn.
+		// Defense in depth: the caller reads the state that it writes under
+		// this lock, and appendAuditEntry takes the lock of @server too.
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
@@ -175,6 +179,8 @@ func (s *Store) inLockedFencedAuditedTx(
 	}
 
 	return s.inTx(ctx, func(q *db.Queries) error {
+		// Defense in depth: the caller reads the state that it writes under
+		// this lock, and appendAuditEntry takes the lock of @server too.
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
@@ -228,15 +234,23 @@ func validServerEntry(e audit.Entry) error {
 // appendAuditEntry reads the stored chain state and the last entry of the
 // scope of e in the same transaction, then inserts e as the next one, with
 // its sequence, previous hash and hash. An entry with no ObjectID gets the
-// stable ID of the live unit that its Object names. The caller runs it in a
-// transaction that orders the appends of the scope. An append computes the
-// hash (hashLink) only when the chain of its scope is open. The chain is
-// open when the stored state is on. No row also counts as on. The scope
-// has no entries, or its last entry holds a hash and is not an end entry
-// (Action == audit.ActionEndChain). Otherwise the append writes no hash
-// (hashNone). An append in a scope whose chain is closed stays unhashed
+// stable ID of the live unit that its Object names. For an entry of the
+// scope @server the function takes the advisory lock of the scope first, so
+// every append of that scope holds the lock, also when the caller did not
+// take it. An entry of a namespace keeps the row lock that its caller holds.
+// An append computes the hash (hashLink) only when the chain of its scope is
+// open. The chain is open when the stored state is on. No row also counts as
+// on. The scope has no entries, or its last entry holds a hash and is not an
+// end entry (Action == audit.ActionEndChain). Otherwise the append writes no
+// hash (hashNone). An append in a scope whose chain is closed stays unhashed
 // until a start entry. The digest of the start entry covers it.
 func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
+	if e.Namespace == audit.ServerScope {
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return audit.Entry{}, fmt.Errorf("lock server audit scope: %w", err)
+		}
+	}
+
 	rec, err := readChainRecord(ctx, q)
 	if err != nil {
 		return audit.Entry{}, err
@@ -726,6 +740,8 @@ func updateServerSetting[T any](
 	var stored T
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
+		// Defense in depth: the caller reads the state that it writes under
+		// this lock, and appendAuditEntry takes the lock of @server too.
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}

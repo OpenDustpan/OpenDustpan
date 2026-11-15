@@ -63,6 +63,8 @@ func (s *Store) ApproveChainChange(
 	var out durable.Operation
 
 	err := s.inMinimumTx(ctx, func(q *db.Queries) error {
+		// Defense in depth: the caller reads the state that it writes under
+		// this lock, and appendAuditEntry takes the lock of @server too.
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
@@ -223,6 +225,9 @@ func (s *Store) appendChainMarker(
 	var err error
 	if fence.Namespace == audit.ServerScope {
 		err = s.inMinimumTx(ctx, func(q *db.Queries) error {
+			// Defense in depth: the caller reads the state that it writes
+			// under this lock, and appendAuditEntry takes the lock of @server
+			// too.
 			if lockErr := q.LockServerAuditScope(ctx); lockErr != nil {
 				return fmt.Errorf("lock server audit scope: %w", lockErr)
 			}

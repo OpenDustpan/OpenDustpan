@@ -174,6 +174,8 @@ func (r claimRunner) InTx(ctx context.Context, e audit.Entry, fn func(groupclaim
 	}
 
 	return r.s.inTx(ctx, func(q *db.Queries) error {
+		// Defense in depth: the caller reads the state that it writes under
+		// this lock, and appendAuditEntry takes the lock of @server too.
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}

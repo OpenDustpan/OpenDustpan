@@ -496,6 +496,8 @@ func appendRestoreEntries(
 ) ([]audit.Entry, error) {
 	// The scope lock comes first, as in every append of the scope, so the
 	// appends form one sequence and no lock order can deadlock.
+	// Defense in depth: the caller reads the state that it writes under this
+	// lock, and appendAuditEntry takes the lock of @server too.
 	if err := q.LockServerAuditScope(ctx); err != nil {
 		return nil, fmt.Errorf("lock server audit scope: %w", err)
 	}

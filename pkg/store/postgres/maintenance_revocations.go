@@ -73,6 +73,8 @@ func (s *Store) inRevokingTxOf(
 		// principal checks the last site administrator and the last enabled
 		// break-glass account. Under READ COMMITTED, two such writes without
 		// it both pass the check. Do not move it after fn.
+		// Defense in depth: the caller reads the state that it writes under
+		// this lock, and appendAuditEntry takes the lock of @server too.
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
@@ -116,6 +118,8 @@ func (s *Store) inRevokingFencedTx(
 			return err
 		}
 
+		// Defense in depth: the caller reads the state that it writes under
+		// this lock, and appendAuditEntry takes the lock of @server too.
 		if err := q.LockServerAuditScope(ctx); err != nil {
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
