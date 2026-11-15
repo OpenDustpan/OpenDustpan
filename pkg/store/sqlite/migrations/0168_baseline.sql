@@ -1137,6 +1137,44 @@ CREATE TABLE self_service_blueprint_versions (
     FOREIGN KEY (namespace_id, name) REFERENCES self_service_blueprints (namespace_id, name)
 ) STRICT;
 
+CREATE TABLE quota_keys (
+    namespace_id TEXT    NOT NULL,
+    blueprint_id TEXT    NOT NULL,
+    kind         TEXT    NOT NULL CHECK (kind IN ('units', 'requests')),
+    scope        TEXT    NOT NULL,
+    settled      INTEGER NOT NULL DEFAULT 0 CHECK (settled >= 0),
+    PRIMARY KEY (namespace_id, blueprint_id, kind, scope)
+) STRICT;
+
+CREATE TABLE quota_reservations (
+    namespace_id TEXT    NOT NULL,
+    id           TEXT    NOT NULL,
+    state        TEXT    NOT NULL CHECK (state IN ('open', 'settled', 'released')),
+    at_ms        INTEGER NOT NULL,
+    ends_at_ms   INTEGER NOT NULL CHECK (ends_at_ms > at_ms),
+    PRIMARY KEY (namespace_id, id)
+) STRICT;
+
+CREATE TABLE quota_reservation_keys (
+    namespace_id   TEXT NOT NULL,
+    reservation_id TEXT NOT NULL,
+    blueprint_id   TEXT NOT NULL,
+    kind           TEXT NOT NULL,
+    scope          TEXT NOT NULL,
+    PRIMARY KEY (namespace_id, reservation_id, blueprint_id, kind, scope),
+    FOREIGN KEY (namespace_id, reservation_id) REFERENCES quota_reservations (namespace_id, id)
+) STRICT;
+
+CREATE TABLE quota_requests (
+    namespace_id    TEXT    NOT NULL,
+    blueprint_id    TEXT    NOT NULL,
+    kind            TEXT    NOT NULL,
+    scope           TEXT    NOT NULL,
+    submitted_at_ms INTEGER NOT NULL,
+    seq             INTEGER NOT NULL,
+    PRIMARY KEY (namespace_id, blueprint_id, kind, scope, submitted_at_ms, seq)
+) STRICT;
+
 CREATE TABLE store_checks (
     id            TEXT    NOT NULL PRIMARY KEY CHECK (length(id) BETWEEN 5 AND 40),
     target        TEXT    NOT NULL CHECK (target IN ('blobs', 'backup')),
@@ -1706,6 +1744,10 @@ CREATE INDEX gate_objects_namespace ON gate_objects (namespace_id, level);
 CREATE INDEX gate_objects_unit ON gate_objects (namespace_id, unit_id);
 
 CREATE INDEX gate_references_owner ON gate_references (namespace_id, scope_key, owner_kind, owner_id);
+
+CREATE INDEX quota_reservation_keys_by_key ON quota_reservation_keys (namespace_id, blueprint_id, kind, scope);
+
+CREATE INDEX quota_reservations_open ON quota_reservations (namespace_id, state, ends_at_ms);
 
 CREATE TRIGGER namespaces_id_insert BEFORE INSERT ON namespaces
 WHEN NEW.id NOT GLOB 'ns-?*'

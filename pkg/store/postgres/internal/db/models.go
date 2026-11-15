@@ -925,6 +925,39 @@ type ProfileRevision struct {
 	Reason         string
 }
 
+type QuotaKey struct {
+	NamespaceID string
+	BlueprintID string
+	Kind        string
+	Scope       string
+	Settled     int64
+}
+
+type QuotaRequest struct {
+	NamespaceID   string
+	BlueprintID   string
+	Kind          string
+	Scope         string
+	SubmittedAtMs int64
+	Seq           int64
+}
+
+type QuotaReservation struct {
+	NamespaceID string
+	ID          string
+	State       string
+	AtMs        int64
+	EndsAtMs    int64
+}
+
+type QuotaReservationKey struct {
+	NamespaceID   string
+	ReservationID string
+	BlueprintID   string
+	Kind          string
+	Scope         string
+}
+
 type RegistryKey struct {
 	NamespaceID string
 	Fingerprint string

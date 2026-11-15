@@ -5559,6 +5559,118 @@ SET expr_version = sqlc.arg(expr_version)
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
   AND self_service_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
 
+-- name: AddQuotaSettled :execrows
+-- Adds 1 to the settled count of the key of a reservation, in the
+-- transaction of the settle.
+UPDATE quota_keys
+SET settled = settled + 1
+WHERE namespace_id = sqlc.arg(namespace_id) AND blueprint_id = sqlc.arg(blueprint_id)
+  AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope);
+
+-- name: CountQuotaOpenReserved :one
+-- The open reservations of one key whose end time is after the time. An
+-- expired reservation counts in no usage.
+SELECT COUNT(*)
+FROM quota_reservation_keys AS k
+JOIN quota_reservations AS r ON r.namespace_id = k.namespace_id AND r.id = k.reservation_id
+WHERE k.namespace_id = sqlc.arg(namespace_id) AND k.blueprint_id = sqlc.arg(blueprint_id)
+  AND k.kind = sqlc.arg(kind) AND k.scope = sqlc.arg(scope)
+  AND r.state = 'open' AND r.ends_at_ms > sqlc.arg(after_ms);
+
+-- name: CountQuotaRequests :one
+-- The submits of one key inside the window (after_ms, up_to_ms].
+SELECT COUNT(*)
+FROM quota_requests
+WHERE namespace_id = sqlc.arg(namespace_id) AND blueprint_id = sqlc.arg(blueprint_id)
+  AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope)
+  AND submitted_at_ms > sqlc.arg(after_ms) AND submitted_at_ms <= sqlc.arg(up_to_ms);
+
+-- name: DeleteQuotaRequestsBefore :execrows
+-- The inline pruning of a record: the submits of one key that its window
+-- leaves out.
+DELETE FROM quota_requests
+WHERE namespace_id = sqlc.arg(namespace_id) AND blueprint_id = sqlc.arg(blueprint_id)
+  AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope)
+  AND submitted_at_ms <= sqlc.arg(before_ms);
+
+-- name: GetQuotaReservation :one
+SELECT namespace_id, id, state, at_ms, ends_at_ms
+FROM quota_reservations
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id);
+
+-- name: GetQuotaSettled :one
+SELECT settled
+FROM quota_keys
+WHERE namespace_id = sqlc.arg(namespace_id) AND blueprint_id = sqlc.arg(blueprint_id)
+  AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope);
+
+-- name: InsertQuotaKey :exec
+-- The caller holds the row lock of the key, so the row that a write locks
+-- exists after this statement.
+INSERT INTO quota_keys (namespace_id, blueprint_id, kind, scope, settled)
+VALUES (sqlc.arg(namespace_id), sqlc.arg(blueprint_id), sqlc.arg(kind), sqlc.arg(scope), 0)
+ON CONFLICT (namespace_id, blueprint_id, kind, scope) DO NOTHING;
+
+-- name: InsertQuotaRequest :exec
+-- One submit of one key. The seq keeps two submits at the same time apart.
+INSERT INTO quota_requests (namespace_id, blueprint_id, kind, scope, submitted_at_ms, seq)
+VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(blueprint_id), sqlc.arg(kind), sqlc.arg(scope), sqlc.arg(submitted_at_ms),
+    (SELECT COALESCE(MAX(q.seq), 0) + 1 FROM quota_requests AS q
+     WHERE q.namespace_id = sqlc.arg(namespace_id) AND q.blueprint_id = sqlc.arg(blueprint_id)
+       AND q.kind = sqlc.arg(kind) AND q.scope = sqlc.arg(scope)
+       AND q.submitted_at_ms = sqlc.arg(submitted_at_ms))
+);
+
+-- name: InsertQuotaReservation :exec
+INSERT INTO quota_reservations (namespace_id, id, state, at_ms, ends_at_ms)
+VALUES (sqlc.arg(namespace_id), sqlc.arg(id), sqlc.arg(state), sqlc.arg(at_ms), sqlc.arg(ends_at_ms));
+
+-- name: InsertQuotaReservationKey :exec
+INSERT INTO quota_reservation_keys (namespace_id, reservation_id, blueprint_id, kind, scope)
+VALUES (
+    sqlc.arg(namespace_id), sqlc.arg(reservation_id), sqlc.arg(blueprint_id), sqlc.arg(kind), sqlc.arg(scope)
+);
+
+-- name: ListQuotaReservationKeys :many
+-- The keys that a reservation holds, ordered, so a caller compares them
+-- with the keys of a retry.
+SELECT blueprint_id, kind, scope
+FROM quota_reservation_keys
+WHERE namespace_id = sqlc.arg(namespace_id) AND reservation_id = sqlc.arg(reservation_id)
+ORDER BY blueprint_id, kind, scope;
+
+-- name: LockQuotaKey :one
+-- Locks the row of the key until the transaction ends, so two writes on one
+-- key never both read the count and then write. INSERT ON CONFLICT DO
+-- NOTHING before it makes the row exist.
+SELECT settled
+FROM quota_keys
+WHERE namespace_id = sqlc.arg(namespace_id) AND blueprint_id = sqlc.arg(blueprint_id)
+  AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope)
+FOR UPDATE;
+
+-- name: SetQuotaReservationEnd :execrows
+-- The new end time of an open reservation. An ended reservation changes no
+-- row.
+UPDATE quota_reservations
+SET ends_at_ms = sqlc.arg(ends_at_ms)
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND state = 'open';
+
+-- name: SetQuotaReservationState :execrows
+-- The end of an open reservation. A reservation that ended another way
+-- changes no row.
+UPDATE quota_reservations
+SET state = sqlc.arg(state)
+WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND state = sqlc.arg(from_state);
+
+-- name: SetQuotaSettled :execrows
+-- Writes the settled count that the reconcile reads from the inventory.
+UPDATE quota_keys
+SET settled = sqlc.arg(settled)
+WHERE namespace_id = sqlc.arg(namespace_id) AND blueprint_id = sqlc.arg(blueprint_id)
+  AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope);
+
 -- name: GetNamespaceByID :one
 -- The namespace with the stable ID id.
 SELECT name, primary_installation, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id

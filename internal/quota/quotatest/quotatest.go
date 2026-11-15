@@ -71,6 +71,14 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a transaction that fails keeps no reservation and no request", testRollback},
 		{"a refused reservation records no request", testRefusedReserveRecordsNothing},
 		{"a refused record keeps no reservation of its transaction", testRefusedRecordKeepsNothing},
+		{"a record of no check stores nothing", testRecordEmpty},
+		{"a repeated request key counts once", testRecordRepeatedKey},
+		{"a refused record stores nothing for any key", testRecordAllOrNothing},
+		{"an old submit is pruned inline", testRecordPrune},
+		{"the release of an expired reservation is idempotent", testReleaseExpired},
+		{"the settled and the reserved counts add up", testSetSettledAndReserved},
+		{"a destroy lowers the settled count", testDestroy},
+		{"a lower max refuses without a change", testLowerMax},
 		{"set end moves the end time of an open reservation", testSetEnd},
 		{"set settled writes the count of the inventory", testSetSettled},
 		{"a stale fence writes nothing", testFenced},
@@ -481,6 +489,157 @@ func testRefusedRecordKeepsNothing(t *testing.T, h Harness, fence namespace.Fenc
 	wantUsage(t, h, k, 0, 1)
 }
 
+func testRecordEmpty(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	if err := record(t, h, fence, t0()); err != nil {
+		t.Fatalf("Record(no check) = %v", err)
+	}
+
+	c := quota.Check{Key: requestKey(), Window: time.Hour, Max: 1}
+	if u := usage(t, h, t0(), c)[0]; u.Requests != 0 {
+		t.Fatalf("Usage() = %+v, want no submit", u)
+	}
+}
+
+func testRecordRepeatedKey(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	c := quota.Check{Key: requestKey(), Window: time.Hour, Max: 2}
+	if err := record(t, h, fence, t0(), c, c); err != nil {
+		t.Fatalf("Record(the same key twice) = %v", err)
+	}
+
+	if u := usage(t, h, t0(), c)[0]; u.Requests != 1 {
+		t.Fatalf("Usage() = %+v, want 1 submit for the repeated key", u)
+	}
+}
+
+func testRecordAllOrNothing(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	ok := quota.Check{Key: requestKey(), Window: time.Hour, Max: 5}
+	full := quota.Check{
+		Key:    quota.Key{Namespace: ns, Blueprint: "postgres", Kind: quota.KindRequests, Scope: "group:dba"},
+		Window: time.Hour,
+		Max:    0,
+	}
+
+	if err := record(t, h, fence, t0(), ok, full); !errors.Is(err, quota.ErrExceeded) {
+		t.Fatalf("Record(one failing check) = %v, want ErrExceeded", err)
+	}
+
+	if u := usage(t, h, t0(), ok)[0]; u.Requests != 0 {
+		t.Fatalf("Usage(ok) = %+v, want no submit for the key whose check passed", u)
+	}
+}
+
+func testRecordPrune(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	k := requestKey()
+	narrow := quota.Check{Key: k, Window: time.Hour, Max: 10}
+	wide := quota.Check{Key: k, Window: 10 * time.Hour, Max: 10}
+
+	if err := record(t, h, fence, t0(), narrow); err != nil {
+		t.Fatalf("Record(1) = %v", err)
+	}
+
+	// The second record is after the window of the first, so it deletes the
+	// first submit for the key.
+	if err := record(t, h, fence, t0().Add(2*time.Hour), narrow); err != nil {
+		t.Fatalf("Record(2) = %v", err)
+	}
+
+	// A wider window holds the first submit at this time. The count names
+	// only the submit that the record kept, so the first is gone.
+	if u := usage(t, h, t0().Add(2*time.Hour), wide)[0]; u.Requests != 1 {
+		t.Fatalf("Usage(wide window) = %+v, want only the submit inside the window of its record", u)
+	}
+}
+
+func testReleaseExpired(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	k := key("namespace")
+	r := reservation("req-1/1", k)
+	mustReserve(t, h, fence, r, check(k, 1))
+
+	// The reservation passed its end time, so it counts no more and the same
+	// key takes a new reservation at its limit.
+	later := reservation("req-2/1", k)
+	later.At = r.EndsAt
+	later.EndsAt = r.EndsAt.Add(24 * time.Hour)
+	mustReserve(t, h, fence, later, check(k, 1))
+
+	for range 2 {
+		if err := h.Counter.Release(t.Context(), r.ID, fence); err != nil {
+			t.Fatalf("Release(expired) = %v", err)
+		}
+	}
+
+	// The release of the expired reservation changes no usage: the open one
+	// still counts.
+	if u := usage(t, h, later.At, check(k, 0))[0]; u.Reserved != 1 {
+		t.Fatalf("Usage() = %+v, want the open reservation only", u)
+	}
+}
+
+func testSetSettledAndReserved(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	k := key("namespace")
+	if err := h.Counter.SetSettled(t.Context(), k, 3, fence); err != nil {
+		t.Fatalf("SetSettled() = %v", err)
+	}
+
+	mustReserve(t, h, fence, reservation("req-1/1", k), check(k, 5))
+	mustReserve(t, h, fence, reservation("req-2/1", k), check(k, 5))
+
+	if _, err := reserve(t, h, fence, reservation("req-3/1", k), check(k, 5)); !errors.Is(err, quota.ErrExceeded) {
+		t.Fatalf("Reserve(a sixth unit) = %v, want ErrExceeded", err)
+	}
+
+	wantUsage(t, h, k, 3, 2)
+}
+
+func testDestroy(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	k := key("namespace")
+	if err := h.Counter.SetSettled(t.Context(), k, 1, fence); err != nil {
+		t.Fatalf("SetSettled(1) = %v", err)
+	}
+
+	if _, err := reserve(t, h, fence, reservation("req-1/1", k), check(k, 1)); !errors.Is(err, quota.ErrExceeded) {
+		t.Fatalf("Reserve(at the limit) = %v, want ErrExceeded", err)
+	}
+
+	// A destroy revision ends applied: the settled count drops by one, so the
+	// same key takes a reservation.
+	if err := h.Counter.SetSettled(t.Context(), k, 0, fence); err != nil {
+		t.Fatalf("SetSettled(0) = %v", err)
+	}
+
+	mustReserve(t, h, fence, reservation("req-1/1", k), check(k, 1))
+	wantUsage(t, h, k, 0, 1)
+}
+
+func testLowerMax(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	k := key("namespace")
+	if err := h.Counter.SetSettled(t.Context(), k, 3, fence); err != nil {
+		t.Fatalf("SetSettled() = %v", err)
+	}
+
+	if _, err := reserve(t, h, fence, reservation("req-1/1", k), check(k, 2)); !errors.Is(err, quota.ErrExceeded) {
+		t.Fatalf("Reserve(below the stored usage) = %v, want ErrExceeded", err)
+	}
+
+	wantUsage(t, h, k, 3, 0)
+}
+
 func testSetEnd(t *testing.T, h Harness, fence namespace.Fence) {
 	t.Helper()
 
@@ -565,6 +724,12 @@ func testFenced(t *testing.T, h Harness, fence namespace.Fence) {
 
 	if err := h.Counter.SetSettled(t.Context(), k, 1, fence); !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("SetSettled(stale fence) = %v, want ErrFenced", err)
+	}
+
+	if err := record(t, h, fence, t0(), quota.Check{Key: requestKey(), Window: time.Hour, Max: 1}); !errors.Is(
+		err, namespace.ErrFenced,
+	) {
+		t.Fatalf("Record(stale fence) = %v, want ErrFenced", err)
 	}
 
 	wantUsage(t, h, k, 0, 0)

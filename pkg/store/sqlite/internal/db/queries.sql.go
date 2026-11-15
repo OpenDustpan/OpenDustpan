@@ -158,6 +158,35 @@ func (q *Queries) AddMemberRemoval(ctx context.Context, arg AddMemberRemovalPara
 	return err
 }
 
+const addQuotaSettled = `-- name: AddQuotaSettled :execrows
+UPDATE quota_keys
+SET settled = settled + 1
+WHERE namespace_id = ?1 AND blueprint_id = ?2
+  AND kind = ?3 AND scope = ?4
+`
+
+type AddQuotaSettledParams struct {
+	NamespaceID string
+	BlueprintID string
+	Kind        string
+	Scope       string
+}
+
+// Adds 1 to the settled count of the key of a reservation, in the
+// transaction of the settle.
+func (q *Queries) AddQuotaSettled(ctx context.Context, arg AddQuotaSettledParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, addQuotaSettled,
+		arg.NamespaceID,
+		arg.BlueprintID,
+		arg.Kind,
+		arg.Scope,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const addSignInFailure = `-- name: AddSignInFailure :one
 
 INSERT INTO sign_in_failures (source, window_end_ms, count)
@@ -1513,6 +1542,70 @@ type CountPurgedImportParams struct {
 
 func (q *Queries) CountPurgedImport(ctx context.Context, arg CountPurgedImportParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countPurgedImport, arg.NamespaceID, arg.ID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countQuotaOpenReserved = `-- name: CountQuotaOpenReserved :one
+SELECT COUNT(*)
+FROM quota_reservation_keys AS k
+JOIN quota_reservations AS r ON r.namespace_id = k.namespace_id AND r.id = k.reservation_id
+WHERE k.namespace_id = ?1 AND k.blueprint_id = ?2
+  AND k.kind = ?3 AND k.scope = ?4
+  AND r.state = 'open' AND r.ends_at_ms > ?5
+`
+
+type CountQuotaOpenReservedParams struct {
+	NamespaceID string
+	BlueprintID string
+	Kind        string
+	Scope       string
+	AfterMs     int64
+}
+
+// The open reservations of one key whose end time is after the time. An
+// expired reservation counts in no usage.
+func (q *Queries) CountQuotaOpenReserved(ctx context.Context, arg CountQuotaOpenReservedParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countQuotaOpenReserved,
+		arg.NamespaceID,
+		arg.BlueprintID,
+		arg.Kind,
+		arg.Scope,
+		arg.AfterMs,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countQuotaRequests = `-- name: CountQuotaRequests :one
+SELECT COUNT(*)
+FROM quota_requests
+WHERE namespace_id = ?1 AND blueprint_id = ?2
+  AND kind = ?3 AND scope = ?4
+  AND submitted_at_ms > ?5 AND submitted_at_ms <= ?6
+`
+
+type CountQuotaRequestsParams struct {
+	NamespaceID string
+	BlueprintID string
+	Kind        string
+	Scope       string
+	AfterMs     int64
+	UpToMs      int64
+}
+
+// The submits of one key inside the window (after_ms, up_to_ms].
+func (q *Queries) CountQuotaRequests(ctx context.Context, arg CountQuotaRequestsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countQuotaRequests,
+		arg.NamespaceID,
+		arg.BlueprintID,
+		arg.Kind,
+		arg.Scope,
+		arg.AfterMs,
+		arg.UpToMs,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -3789,6 +3882,37 @@ type DeletePrincipalParams struct {
 // at the same time reads the commit of the first.
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteQuotaRequestsBefore = `-- name: DeleteQuotaRequestsBefore :execrows
+DELETE FROM quota_requests
+WHERE namespace_id = ?1 AND blueprint_id = ?2
+  AND kind = ?3 AND scope = ?4
+  AND submitted_at_ms <= ?5
+`
+
+type DeleteQuotaRequestsBeforeParams struct {
+	NamespaceID string
+	BlueprintID string
+	Kind        string
+	Scope       string
+	BeforeMs    int64
+}
+
+// The inline pruning of a record: the submits of one key that its window
+// leaves out.
+func (q *Queries) DeleteQuotaRequestsBefore(ctx context.Context, arg DeleteQuotaRequestsBeforeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteQuotaRequestsBefore,
+		arg.NamespaceID,
+		arg.BlueprintID,
+		arg.Kind,
+		arg.Scope,
+		arg.BeforeMs,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -7819,6 +7943,56 @@ func (q *Queries) GetProfileRevision(ctx context.Context, arg GetProfileRevision
 	return i, err
 }
 
+const getQuotaReservation = `-- name: GetQuotaReservation :one
+SELECT namespace_id, id, state, at_ms, ends_at_ms
+FROM quota_reservations
+WHERE namespace_id = ?1 AND id = ?2
+`
+
+type GetQuotaReservationParams struct {
+	NamespaceID string
+	ID          string
+}
+
+func (q *Queries) GetQuotaReservation(ctx context.Context, arg GetQuotaReservationParams) (QuotaReservation, error) {
+	row := q.db.QueryRowContext(ctx, getQuotaReservation, arg.NamespaceID, arg.ID)
+	var i QuotaReservation
+	err := row.Scan(
+		&i.NamespaceID,
+		&i.ID,
+		&i.State,
+		&i.AtMs,
+		&i.EndsAtMs,
+	)
+	return i, err
+}
+
+const getQuotaSettled = `-- name: GetQuotaSettled :one
+SELECT settled
+FROM quota_keys
+WHERE namespace_id = ?1 AND blueprint_id = ?2
+  AND kind = ?3 AND scope = ?4
+`
+
+type GetQuotaSettledParams struct {
+	NamespaceID string
+	BlueprintID string
+	Kind        string
+	Scope       string
+}
+
+func (q *Queries) GetQuotaSettled(ctx context.Context, arg GetQuotaSettledParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getQuotaSettled,
+		arg.NamespaceID,
+		arg.BlueprintID,
+		arg.Kind,
+		arg.Scope,
+	)
+	var settled int64
+	err := row.Scan(&settled)
+	return settled, err
+}
+
 const getRegistryKey = `-- name: GetRegistryKey :one
 SELECT n.name AS namespace, k.fingerprint, k.armored_key, k.added_by, k.added_at_ms
 FROM registry_keys AS k
@@ -11451,6 +11625,112 @@ type InsertPurgedImportParams struct {
 
 func (q *Queries) InsertPurgedImport(ctx context.Context, arg InsertPurgedImportParams) error {
 	_, err := q.db.ExecContext(ctx, insertPurgedImport, arg.NamespaceID, arg.ID, arg.PurgedAtMs)
+	return err
+}
+
+const insertQuotaKey = `-- name: InsertQuotaKey :exec
+INSERT INTO quota_keys (namespace_id, blueprint_id, kind, scope, settled)
+VALUES (?1, ?2, ?3, ?4, 0)
+ON CONFLICT (namespace_id, blueprint_id, kind, scope) DO NOTHING
+`
+
+type InsertQuotaKeyParams struct {
+	NamespaceID string
+	BlueprintID string
+	Kind        string
+	Scope       string
+}
+
+// The caller holds the write lock of the transaction, so the row that a
+// write locks exists after this statement.
+func (q *Queries) InsertQuotaKey(ctx context.Context, arg InsertQuotaKeyParams) error {
+	_, err := q.db.ExecContext(ctx, insertQuotaKey,
+		arg.NamespaceID,
+		arg.BlueprintID,
+		arg.Kind,
+		arg.Scope,
+	)
+	return err
+}
+
+const insertQuotaRequest = `-- name: InsertQuotaRequest :exec
+INSERT INTO quota_requests (namespace_id, blueprint_id, kind, scope, submitted_at_ms, seq)
+VALUES (
+    ?1, ?2, ?3, ?4, ?5,
+    (SELECT COALESCE(MAX(q.seq), 0) + 1 FROM quota_requests AS q
+     WHERE q.namespace_id = ?1 AND q.blueprint_id = ?2
+       AND q.kind = ?3 AND q.scope = ?4
+       AND q.submitted_at_ms = ?5)
+)
+`
+
+type InsertQuotaRequestParams struct {
+	NamespaceID   string
+	BlueprintID   string
+	Kind          string
+	Scope         string
+	SubmittedAtMs int64
+}
+
+// One submit of one key. The seq keeps two submits at the same time apart.
+func (q *Queries) InsertQuotaRequest(ctx context.Context, arg InsertQuotaRequestParams) error {
+	_, err := q.db.ExecContext(ctx, insertQuotaRequest,
+		arg.NamespaceID,
+		arg.BlueprintID,
+		arg.Kind,
+		arg.Scope,
+		arg.SubmittedAtMs,
+	)
+	return err
+}
+
+const insertQuotaReservation = `-- name: InsertQuotaReservation :exec
+INSERT INTO quota_reservations (namespace_id, id, state, at_ms, ends_at_ms)
+VALUES (?1, ?2, ?3, ?4, ?5)
+`
+
+type InsertQuotaReservationParams struct {
+	NamespaceID string
+	ID          string
+	State       string
+	AtMs        int64
+	EndsAtMs    int64
+}
+
+func (q *Queries) InsertQuotaReservation(ctx context.Context, arg InsertQuotaReservationParams) error {
+	_, err := q.db.ExecContext(ctx, insertQuotaReservation,
+		arg.NamespaceID,
+		arg.ID,
+		arg.State,
+		arg.AtMs,
+		arg.EndsAtMs,
+	)
+	return err
+}
+
+const insertQuotaReservationKey = `-- name: InsertQuotaReservationKey :exec
+INSERT INTO quota_reservation_keys (namespace_id, reservation_id, blueprint_id, kind, scope)
+VALUES (
+    ?1, ?2, ?3, ?4, ?5
+)
+`
+
+type InsertQuotaReservationKeyParams struct {
+	NamespaceID   string
+	ReservationID string
+	BlueprintID   string
+	Kind          string
+	Scope         string
+}
+
+func (q *Queries) InsertQuotaReservationKey(ctx context.Context, arg InsertQuotaReservationKeyParams) error {
+	_, err := q.db.ExecContext(ctx, insertQuotaReservationKey,
+		arg.NamespaceID,
+		arg.ReservationID,
+		arg.BlueprintID,
+		arg.Kind,
+		arg.Scope,
+	)
 	return err
 }
 
@@ -16420,6 +16700,49 @@ func (q *Queries) ListProfileRevisions(ctx context.Context, arg ListProfileRevis
 	return items, nil
 }
 
+const listQuotaReservationKeys = `-- name: ListQuotaReservationKeys :many
+SELECT blueprint_id, kind, scope
+FROM quota_reservation_keys
+WHERE namespace_id = ?1 AND reservation_id = ?2
+ORDER BY blueprint_id, kind, scope
+`
+
+type ListQuotaReservationKeysParams struct {
+	NamespaceID   string
+	ReservationID string
+}
+
+type ListQuotaReservationKeysRow struct {
+	BlueprintID string
+	Kind        string
+	Scope       string
+}
+
+// The keys that a reservation holds, ordered, so a caller compares them
+// with the keys of a retry.
+func (q *Queries) ListQuotaReservationKeys(ctx context.Context, arg ListQuotaReservationKeysParams) ([]ListQuotaReservationKeysRow, error) {
+	rows, err := q.db.QueryContext(ctx, listQuotaReservationKeys, arg.NamespaceID, arg.ReservationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListQuotaReservationKeysRow
+	for rows.Next() {
+		var i ListQuotaReservationKeysRow
+		if err := rows.Scan(&i.BlueprintID, &i.Kind, &i.Scope); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listReferencedBlobKeys = `-- name: ListReferencedBlobKeys :many
 SELECT CAST(COALESCE(k.blob_key, '') AS TEXT) AS blob_key
 FROM stacks AS st
@@ -18376,6 +18699,34 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockQuotaKey = `-- name: LockQuotaKey :one
+SELECT settled
+FROM quota_keys
+WHERE namespace_id = ?1 AND blueprint_id = ?2
+  AND kind = ?3 AND scope = ?4
+`
+
+type LockQuotaKeyParams struct {
+	NamespaceID string
+	BlueprintID string
+	Kind        string
+	Scope       string
+}
+
+// SQLite serializes writers with the write transaction, so this read locks
+// no row. INSERT ON CONFLICT DO NOTHING before it makes the row exist.
+func (q *Queries) LockQuotaKey(ctx context.Context, arg LockQuotaKeyParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, lockQuotaKey,
+		arg.NamespaceID,
+		arg.BlueprintID,
+		arg.Kind,
+		arg.Scope,
+	)
+	var settled int64
+	err := row.Scan(&settled)
+	return settled, err
 }
 
 const markMemberRemovalAlert = `-- name: MarkMemberRemovalAlert :exec
@@ -21279,6 +21630,86 @@ type SetPlacementRulePositionParams struct {
 func (q *Queries) SetPlacementRulePosition(ctx context.Context, arg SetPlacementRulePositionParams) error {
 	_, err := q.db.ExecContext(ctx, setPlacementRulePosition, arg.Position, arg.Namespace, arg.ID)
 	return err
+}
+
+const setQuotaReservationEnd = `-- name: SetQuotaReservationEnd :execrows
+UPDATE quota_reservations
+SET ends_at_ms = ?1
+WHERE namespace_id = ?2 AND id = ?3 AND state = 'open'
+`
+
+type SetQuotaReservationEndParams struct {
+	EndsAtMs    int64
+	NamespaceID string
+	ID          string
+}
+
+// The new end time of an open reservation. An ended reservation changes no
+// row.
+func (q *Queries) SetQuotaReservationEnd(ctx context.Context, arg SetQuotaReservationEndParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setQuotaReservationEnd, arg.EndsAtMs, arg.NamespaceID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setQuotaReservationState = `-- name: SetQuotaReservationState :execrows
+UPDATE quota_reservations
+SET state = ?1
+WHERE namespace_id = ?2 AND id = ?3 AND state = ?4
+`
+
+type SetQuotaReservationStateParams struct {
+	State       string
+	NamespaceID string
+	ID          string
+	FromState   string
+}
+
+// The end of an open reservation. A reservation that ended another way
+// changes no row.
+func (q *Queries) SetQuotaReservationState(ctx context.Context, arg SetQuotaReservationStateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setQuotaReservationState,
+		arg.State,
+		arg.NamespaceID,
+		arg.ID,
+		arg.FromState,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setQuotaSettled = `-- name: SetQuotaSettled :execrows
+UPDATE quota_keys
+SET settled = ?1
+WHERE namespace_id = ?2 AND blueprint_id = ?3
+  AND kind = ?4 AND scope = ?5
+`
+
+type SetQuotaSettledParams struct {
+	Settled     int64
+	NamespaceID string
+	BlueprintID string
+	Kind        string
+	Scope       string
+}
+
+// Writes the settled count that the reconcile reads from the inventory.
+func (q *Queries) SetQuotaSettled(ctx context.Context, arg SetQuotaSettledParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setQuotaSettled,
+		arg.Settled,
+		arg.NamespaceID,
+		arg.BlueprintID,
+		arg.Kind,
+		arg.Scope,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const setRestoreAuditEvents = `-- name: SetRestoreAuditEvents :execrows

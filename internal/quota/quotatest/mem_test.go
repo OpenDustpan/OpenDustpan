@@ -187,18 +187,33 @@ func (tx *memTx) Reserve(_ context.Context, r quota.Reservation, checks []quota.
 }
 
 func (tx *memTx) Record(_ context.Context, at time.Time, checks []quota.Check) error {
+	keys := make(map[quota.Key]bool, len(checks))
+
 	for _, c := range checks {
 		if c.Key.Kind != quota.KindRequests {
 			return fmt.Errorf("%w: record of %s", quota.ErrInvalid, c.Key)
 		}
+
+		if keys[c.Key] {
+			continue
+		}
+
+		keys[c.Key] = true
+
+		// Delete the submits that the window of this check leaves out, in the
+		// transaction, as the SQL adapter does inline.
+		cutoff := at.Add(-c.Window)
+		tx.requests[c.Key] = slices.DeleteFunc(tx.requests[c.Key], func(t time.Time) bool {
+			return !t.After(cutoff)
+		})
 	}
 
 	if x := quota.Evaluate(checks, usages(tx.settled, tx.reservations, tx.requests, checks, at), 1); x != nil {
 		return &quota.ExceededError{Exceeded: x}
 	}
 
-	for _, c := range checks {
-		tx.requests[c.Key] = append(tx.requests[c.Key], at)
+	for k := range keys {
+		tx.requests[k] = append(tx.requests[k], at)
 	}
 
 	return nil
