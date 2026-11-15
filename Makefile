@@ -10,7 +10,7 @@
 #   node 20.19 or later with npx, for openspec-validate (the CLI comes from npm at a pinned version)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check release-build release-verify ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check change-archived-check
+.PHONY: cover regenerate-baseline release-record-check release-build release-verify ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e docs-commands-check e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check change-archived-check
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint openspec-validate release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -341,6 +341,9 @@ test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs D
 
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m ./e2e/...
+
+docs-commands-check: ## Run each shell block of README, docs/guides and docs/reference as written; a failure prints page, block index, command and output. Not part of check.
+	E2E_DOCS_COMMANDS=1 go test -tags e2e -count=1 -timeout 60m -run 'TestDocsCommands|TestDocsCommandRunsAsWritten' ./e2e/
 
 e2e-ha: ## Drive three server binaries of one installation behind a round-robin proxy on PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL; E2E_HA_BACKUP_MB sets the backup size; see e2e/doc.go). Not part of check; the e2e-ha-nightly workflow (e2e/e2e-ha-nightly.workflow.yml) runs it.
 	E2E_INSTANCES=3 go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m -run '^TestHighAvailability$$' ./e2e/
