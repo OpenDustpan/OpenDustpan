@@ -61,8 +61,9 @@ On standard error it writes one note:
 note: no break-glass review opens for this temporary administrator yet: review its audit entries by hand after the expiry
 ```
 
-The expiry is at most 24 hours after the create, or the maximum lifetime of
-the token policy when that is shorter.
+The expiry is after the session limit of the installation (setting
+`tempadmin.session-limit`, default 1 hour, at most 24 hours), or at the
+maximum lifetime of the token policy when that is shorter.
 
 The command reads no token from a configuration file.
 It prints the secret once: store it in the secret store of the person.
