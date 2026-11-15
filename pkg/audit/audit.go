@@ -300,7 +300,7 @@ func checkOriginFields(args OriginArgs) error {
 			return fmt.Errorf("%w: %s longer than %d bytes", ErrInvalidOrigin, field.name, MaxAgentFieldLen)
 		case !utf8.ValidString(field.value):
 			return fmt.Errorf("%w: %s is not valid UTF-8", ErrInvalidOrigin, field.name)
-		case strings.ContainsFunc(field.value, IsHiddenRune):
+		case ident.HasHidden(field.value):
 			return fmt.Errorf("%w: %s holds a hidden character", ErrInvalidOrigin, field.name)
 		}
 	}
@@ -541,7 +541,7 @@ func (e Entry) validateAgent() error {
 			return fmt.Errorf("%w: %s longer than %d bytes", ErrInvalidEntry, field.name, MaxAgentFieldLen)
 		case !utf8.ValidString(field.value):
 			return fmt.Errorf("%w: %s is not valid UTF-8", ErrInvalidEntry, field.name)
-		case strings.ContainsFunc(field.value, IsHiddenRune):
+		case ident.HasHidden(field.value):
 			return fmt.Errorf("%w: %s holds a hidden character", ErrInvalidEntry, field.name)
 		}
 	}
