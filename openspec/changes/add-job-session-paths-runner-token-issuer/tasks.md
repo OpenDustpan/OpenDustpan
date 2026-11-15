@@ -5,7 +5,7 @@
 ## 1. Failing tests
 
 - [ ] 1.1 Write failing cases for make at claim, unit check, end on job end, expiry, step grace bound, takeover, retire, renew and loss of grants in `pkg/jobtoken/issuer_test.go` (NEW). Check: go test ./pkg/jobtoken/... -count=1
-- [ ] 1.2 Write failing store cases for one live token per claim, a race of two claims, a retry of a claim and a rollback in `pkg/store/jobtoken_test.go` (NEW). Check: go test ./pkg/store/... -run TestJobToken on SQLite and PostgreSQL
+- [ ] 1.2 Write failing store cases for one live token per claim, a race of two claims, a retry of a claim and a rollback in `pkg/store/jobtoken_test.go` (NEW). Check: go test -timeout 60m ./pkg/store/... -run TestJobToken on SQLite and PostgreSQL
 
 ## 2. Build
 

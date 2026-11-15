@@ -1,6 +1,6 @@
 ## Context
 
-The audit entry is hashed into a chain per scope. The agent data must enter the hash without a change to old hashes.
+The audit entry is hashed into a chain per scope. The agent data must enter the hash. An entry with no agent data hashes as on main, because it writes no block (ADR 380 decision 2); no compatibility path exists for other shapes, because no tag shipped.
 
 ## Decisions
 
@@ -14,7 +14,7 @@ The NEW type `audit.Origin` in pkg/audit holds the seven fields as unexported fi
 
 Why a pointer to one value type: seven more fields in Entry put it over the hugeParam limit of golangci-lint (gocritic) in the four structs that embed Entry. One pointer keeps Entry below the limit, so the embedding structs and the ports do not change, and no pointer is threaded through each port.
 
-Nil is safe in every reader: each reader of Entry.Origin checks for nil first, and `make nilaway` checks this. The store maps a nil Origin to NULL in the seven columns, and NULL in all seven columns back to nil. A row with some of the seven columns NULL and others set is refused on read with `audit.ErrInvalidOrigin` (fail closed).
+Nil is safe in every reader: each reader of Entry.Origin checks for nil first, and `make nilaway` checks this. The seven columns are not nullable and have empty defaults (`''` and false), as the other columns of audit_entries. The store maps a nil Origin to empty values and false, and six empty values and false back to nil. A row with an empty agent_run or agent_session and any other of the seven set is refused on read with `audit.ErrInvalidOrigin` (fail closed). `fromAuditRow` returns this error, and every read path returns it.
 
 ## Risks
 
@@ -29,7 +29,7 @@ Nil is safe in every reader: each reader of Entry.Origin checks for nil first, a
 | encode or contain | Each field is length-prefixed in the hash, so a joined value cannot mimic two fields. SQL uses placeholders. | TestComputeHashDiffersForEachAgentField |
 | limit | A size limit of 256 bytes for each field. | TestNewOriginRefusesOversizedField |
 | authorize at point of use | The read route keeps its existing audit read action. The block shows only to a reader of the entry. | TestAuditEntriesRouteKeepsItsAction |
-| fail closed | A write with an invalid origin fails and stores nothing. A nil Origin writes NULL columns and hashes with no block. A stored row with a partial set of the seven columns fails the read. The chain check fails on a changed field. | TestChainCheckFailsOnChangedAgentField, TestOriginNilIsNoBlock, TestStoreRefusesPartialOriginRow |
+| fail closed | A write with an invalid origin fails and stores nothing. A nil Origin writes empty columns and hashes with no block. A stored row with a partial set of the seven columns fails the read. The chain check fails on a changed field. | TestChainCheckFailsOnChangedAgentField, TestOriginNilIsNoBlock, TestStoreRefusesPartialOriginRow |
 
 ## Diagrams
 
