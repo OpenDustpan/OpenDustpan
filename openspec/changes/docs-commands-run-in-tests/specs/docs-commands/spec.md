@@ -56,9 +56,25 @@ When a block needs a running server, prior state or an access token, the docs ch
 - **WHEN** no earlier block of the same page sets the needed server, state or token
 - **THEN** the docs check requires needs-secret or needs-human on that block
 
+### Requirement: page-lists-cover-scope
+
+Where a page has a fenced block in scope, the docs check SHALL fail the gate unless the page is in exactly one of the checked-pages list and the pending-pages list.
+
+#### Scenario: Page in neither list fails
+- **WHEN** a page with an in-scope block is in neither list
+- **THEN** the docs check fails the gate with the page path
+
+#### Scenario: Page in both lists fails
+- **WHEN** a page is in both lists
+- **THEN** the docs check fails the gate with the page path
+
+#### Scenario: Stale list entry fails
+- **WHEN** a listed page does not exist or has no in-scope block
+- **THEN** the docs check fails the gate with the page path
+
 ### Requirement: unrun-block-fails
 
-Where a fenced block sits in scope, the docs check SHALL fail the gate when no RunCommands result covers that block.
+Where a fenced block of a page in the checked-pages list sits in scope, the docs check SHALL fail the gate when no RunCommands result covers that block.
 
 #### Scenario: Untested block fails the gate
 - **WHEN** a fenced block in scope has no RunCommands result
