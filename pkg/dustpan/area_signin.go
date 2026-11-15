@@ -14,7 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -52,71 +52,114 @@ func noSignInGates() signInGates {
 	return signInGates{gate: nil, signInGate: nil, passwordGate: nil, passkeyGate: nil, passkeyBeginGate: nil}
 }
 
+// gateEnv holds what every failure gate of the token lookups shares: the count
+// of the failures of the instances on one database, the logger and the clock.
+// failures is nil when the store keeps no shared count.
+type gateEnv struct {
+	failures authgate.FailureCounter
+	logger   *slog.Logger
+	now      func() time.Time
+}
+
+// newGateEnv returns the environment of the gates of cfg. A store that keeps a
+// shared failure count gives it, so every instance on one database shares the
+// budget.
+func newGateEnv(cfg *settings) gateEnv {
+	env := gateEnv{failures: nil, logger: cfg.logger, now: cfg.now}
+
+	if counter, ok := cfg.namespaceStore.(authgate.FailureCounter); ok {
+		env.failures = counter
+	}
+
+	return env
+}
+
 // gatedAuthenticator returns the authenticator that every adapter and the
 // request log use, and the gates that it builds: next first, so the
 // bootstrap admin tokens never meet the failure budget, then the stored
-// access tokens when the store keeps them, behind a gate. The gate resolves a
-// token once for each request and slows the misses of secret-shaped values
-// from one source. It never refuses a valid token. With nil tokens it returns
-// next and no gate.
+// access tokens when the store keeps them, behind a gate, and the job tokens
+// of the runner sessions when the server issues them, behind a gate of their
+// own. It never refuses a valid token. With nil tokens and nil jobs it
+// returns next and no gate.
+//
+// Each kind of token goes to the gate of its own kind only, see tokenKinds.
+// The gate of the job tokens has its own budget scope, so a guess of a job
+// token never spends the budget of the access tokens and the reverse. Its
+// budget also lives in the process when the store keeps no shared counter.
 //
 //nolint:ireturn // The adapters take the port.
 func gatedAuthenticator(
-	next identity.Authenticator, tokens *accesstoken.Service, store namespace.Store,
-	logger *slog.Logger, now func() time.Time,
+	next identity.Authenticator, tokens *accesstoken.Service, jobs *jobtoken.Service, env gateEnv,
 ) (identity.Authenticator, signInGates, error) {
-	none := noSignInGates()
-
-	if tokens == nil {
-		return next, none, nil
+	if tokens == nil && jobs == nil {
+		return next, noSignInGates(), nil
 	}
 
-	// failures shares the failure budget of every instance on one database,
-	// or keeps the budget in the process when the store keeps no counter.
-	var failures authgate.FailureCounter
-	if counter, ok := store.(authgate.FailureCounter); ok {
-		failures = counter
+	accessGate, gates, err := newAccessTokenGates(tokens, env)
+	if err != nil {
+		return nil, noSignInGates(), err
+	}
+
+	// The gate of the job tokens exists only when the server issues them.
+	var jobGate *authgate.Gate
+
+	if jobs != nil {
+		jobGate, err = newJobTokenGate(jobs, env)
+		if err != nil {
+			return nil, noSignInGates(), fmt.Errorf("job token gate: %w", err)
+		}
+	}
+
+	return chainOf(next, accessGate, jobGate), gates, nil
+}
+
+// newAccessTokenGates returns the failure gate of the access token lookups and
+// the gates of the sign-in routes. A nil tokens serves no access token: then
+// no gate and no route of a sign-in.
+func newAccessTokenGates(tokens *accesstoken.Service, env gateEnv) (*authgate.Gate, signInGates, error) {
+	if tokens == nil {
+		return nil, noSignInGates(), nil
 	}
 
 	gate, err := authgate.New(authgate.Config{
-		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: logger, Now: now,
-		Failures: failures, Window: 0, CounterErrors: nil, Scope: "",
+		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: env.logger, Now: env.now,
+		Failures: env.failures, Window: 0, CounterErrors: nil, Scope: "",
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
-		return nil, none, fmt.Errorf("authentication gate: %w", err)
+		return nil, noSignInGates(), fmt.Errorf("authentication gate: %w", err)
 	}
 
 	signInGate, err := authgate.New(authgate.Config{
-		Next: refuseAll{}, Charge: nil, Logger: logger, Now: now,
-		Failures: failures, Window: 0, CounterErrors: nil, Scope: signInGateScope,
+		Next: refuseAll{}, Charge: nil, Logger: env.logger, Now: env.now,
+		Failures: env.failures, Window: 0, CounterErrors: nil, Scope: signInGateScope,
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
-		return nil, none, fmt.Errorf("sign-in gate: %w", err)
+		return nil, noSignInGates(), fmt.Errorf("sign-in gate: %w", err)
 	}
 
 	passwordGate, err := authgate.New(authgate.Config{
-		Next: refuseAll{}, Charge: nil, Logger: logger, Now: now,
-		Failures: failures, Window: 0, CounterErrors: nil, Scope: passwordGateScope,
+		Next: refuseAll{}, Charge: nil, Logger: env.logger, Now: env.now,
+		Failures: env.failures, Window: 0, CounterErrors: nil, Scope: passwordGateScope,
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
-		return nil, none, fmt.Errorf("password gate: %w", err)
+		return nil, noSignInGates(), fmt.Errorf("password gate: %w", err)
 	}
 
-	passkeyGate, err := newPasskeyFailureGate(failures, logger, now)
+	passkeyGate, err := newPasskeyFailureGate(env.failures, env.logger, env.now)
 	if err != nil {
-		return nil, none, fmt.Errorf("passkey gate: %w", err)
+		return nil, noSignInGates(), fmt.Errorf("passkey gate: %w", err)
 	}
 
 	passkeyBeginGate, err := authgate.NewRefusing(authgate.Config{
-		Next: refuseAll{}, Charge: nil, Logger: logger, Now: now,
-		Failures: failures, Window: 0, CounterErrors: nil, Scope: passkeyBeginGateScope,
+		Next: refuseAll{}, Charge: nil, Logger: env.logger, Now: env.now,
+		Failures: env.failures, Window: 0, CounterErrors: nil, Scope: passkeyBeginGateScope,
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
-		return nil, none, fmt.Errorf("passkey begin gate: %w", err)
+		return nil, noSignInGates(), fmt.Errorf("passkey begin gate: %w", err)
 	}
 
 	gates := signInGates{
@@ -124,7 +167,87 @@ func gatedAuthenticator(
 		passkeyBeginGate: passkeyBeginGate,
 	}
 
-	return identity.Chain{next, gate}, gates, nil
+	return gate, gates, nil
+}
+
+// chainOf returns the chain of the authenticators of the server: next first,
+// so the bootstrap admin tokens never meet a failure budget, then the member
+// that resolves a token, with one gate for each kind that the server serves.
+func chainOf(next identity.Authenticator, accessGate, jobGate *authgate.Gate) identity.Chain {
+	chain := identity.Chain{next}
+
+	if accessGate != nil && jobGate != nil {
+		return append(chain, tokenKinds{access: accessGate, job: jobGate})
+	}
+
+	if accessGate != nil {
+		return append(chain, accessGate)
+	}
+
+	if jobGate != nil {
+		return append(chain, jobGate)
+	}
+
+	return chain
+}
+
+// tokenKinds resolves a token with the gate of its kind: a value with the form
+// of a job token with the gate of the job tokens, every other value with the
+// gate of the access tokens.
+//
+// One value goes to one gate only. A request keeps the answer that it resolved
+// before, keyed by the digest of the token, so a gate that saw a value of the
+// other kind would keep a failure for it and would hide that value from the
+// gate of its own kind.
+type tokenKinds struct {
+	access identity.Authenticator
+	job    identity.Authenticator
+}
+
+var _ identity.Authenticator = tokenKinds{access: nil, job: nil}
+
+// AuthenticateToken implements identity.Authenticator.
+func (k tokenKinds) AuthenticateToken(ctx context.Context, raw string) (identity.Principal, error) {
+	if jobtoken.LooksLikeSecret(raw) {
+		return k.job.AuthenticateToken(ctx, raw)
+	}
+
+	return k.access.AuthenticateToken(ctx, raw)
+}
+
+// jobTokenGateScope names the budget of the job token lookups in the shared
+// count. It is apart from the budget of the access tokens, so a flood of
+// guesses of one kind never slows the sign-in of the other.
+const jobTokenGateScope = "jobtoken"
+
+// errNoJobTokens reports a gate of job tokens with no service to resolve
+// them. A gate without a service would drop every job token, so the build
+// fails instead.
+var errNoJobTokens = errors.New("dustpan: the job token gate needs the job token service")
+
+// newJobTokenGate returns the failure gate of the job token lookups. It
+// charges only a value with the form of a job token, and its budget has its
+// own scope, so a guess of a job token never spends the budget of the access
+// tokens.
+func newJobTokenGate(jobs *jobtoken.Service, env gateEnv) (*authgate.Gate, error) {
+	// Defense in depth: gatedAuthenticator builds this gate only when the
+	// server issues job tokens. This check stays so that a new caller cannot
+	// build a gate over a nil service, which would authenticate nothing and
+	// would take the failure budget of the address with it.
+	if jobs == nil {
+		return nil, errNoJobTokens
+	}
+
+	gate, err := authgate.New(authgate.Config{
+		Next: jobs, Charge: jobtoken.LooksLikeSecret, Logger: env.logger, Now: env.now,
+		Failures: env.failures, Window: 0, CounterErrors: nil, Scope: jobTokenGateScope,
+		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("job token gate: %w", err)
+	}
+
+	return gate, nil
 }
 
 // signInGateScope names the budget of the sign-in routes in the shared
