@@ -269,10 +269,10 @@ each further redelivery, up to 1 hour. A redelivery before `redeliverableAt`
 answers 429 `sink.delivery-too-soon`, and its `Retry-After` header gives the
 wait in seconds, at most 3600. A redelivery with no redeliveries left answers
 409 `sink.delivery-redeliver-limit`. The server records each of these two
-refusals through the denial limiter: one audit entry of the outcome `denied`
-for each person, namespace and reason in one window, and the count of the
-repeats in the next entry of that key
-([Audit log](../guides/audit-log.md)).
+refusals through the denial limiter. The server writes a denied audit entry
+for each refusal. Repeated refusals in a window of 1 minute write one entry,
+and the count of the repeats is in the next entry of that key
+([Audit log](../guides/audit-log.md#the-limit-on-repeated-denials)).
 
 ## Error codes
 
