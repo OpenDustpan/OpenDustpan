@@ -195,7 +195,7 @@ func TestCheckFiles(t *testing.T) {
 			wantOutput: "# is 1048577 bytes",
 		},
 	}
-	for _, tt := range slices.Concat(tests, allowlistCases(large), controlPathCases(large, binary)) {
+	for _, tt := range slices.Concat(tests, allowlistCases(large), controlPathCases(large, binary), attributeCases(binary)) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -263,8 +263,79 @@ func controlPathCases(large, binary string) []filesCase {
 	}
 }
 
+// attributeCases are the rows where the branch tries to hide a binary file
+// from git's diff heuristic. The script reads the blob, so each one fails.
+func attributeCases(binary string) []filesCase {
+	exe := "MZ\x00\x00\x01\x02binary"
+	return []filesCase{
+		{
+			name:       "diff attribute does not hide a binary file",
+			files:      map[string]string{"tool.exe2": exe, ".gitattributes": "*.exe2 diff\n"},
+			allowlist:  "",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   1,
+			wantOutput: "tool.exe2 is a binary file outside testdata/",
+		},
+		{
+			name:       "text attribute does not hide a binary file",
+			files:      map[string]string{"tool.exe2": exe, ".gitattributes": "*.exe2 text\n"},
+			allowlist:  "",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   1,
+			wantOutput: "tool.exe2 is a binary file outside testdata/",
+		},
+		{
+			name:       "binary attribute on a text file does not refuse it",
+			files:      map[string]string{"notes.txt": "Plain text.\n", ".gitattributes": "*.txt binary\n"},
+			allowlist:  "",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   0,
+			wantOutput: "check-files: no file over",
+		},
+		{
+			name:       "NUL byte at the end of the first 8000 bytes",
+			files:      map[string]string{"edge.dat": strings.Repeat("x", 7999) + "\x00"},
+			allowlist:  "",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   1,
+			wantOutput: "edge.dat is a binary file outside testdata/",
+		},
+		{
+			name:       "NUL byte after the first 8000 bytes",
+			files:      map[string]string{"late.dat": strings.Repeat("x", 8000) + "\x00" + binary},
+			allowlist:  "",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   0,
+			wantOutput: "check-files: no file over",
+		},
+	}
+}
+
 func allowlistCases(large string) []filesCase {
 	return []filesCase{
+		{
+			name:       "allowlist control characters are not printed",
+			files:      nil,
+			allowlist:  "x\x1b[2Jy\rFAKE\n",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   1,
+			wantOutput: "lists x?[2Jy?FAKE with no reason",
+		},
+		{
+			name:       "allowlist path with leading dash",
+			files:      map[string]string{"-big.txt": large},
+			allowlist:  "-big.txt Invalid test path.\n",
+			args:       []string{"main"},
+			outside:    false,
+			wantExit:   1,
+			wantOutput: "lists invalid path -big.txt",
+		},
 		{
 			name:       "allowlist without reason",
 			files:      nil,
@@ -392,6 +463,9 @@ func checkFilesCase(t *testing.T, script string, tt filesCase) {
 	}
 	if bytes.ContainsRune(output, '\r') {
 		t.Errorf("Output contains a carriage return: %q", output)
+	}
+	if bytes.ContainsRune(output, '\x1b') {
+		t.Errorf("Output contains an escape character: %q", output)
 	}
 	if bytes.Contains(output, []byte("\ninjected")) {
 		t.Errorf("Output contains an injected line: %q", output)
