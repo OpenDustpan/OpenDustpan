@@ -210,6 +210,9 @@ func (s *Service) Put(ctx context.Context, req PutRequest) (Set, error) {
 		return Set{}, fmt.Errorf("save proxy rule set in namespace %q: %w", req.Scope.Namespace, err)
 	}
 
+	// A save without If-Match reads the set again and retries when a writer
+	// wins the race. The last write stays traceable: the audit entry of each
+	// save holds the change of the digest.
 	for range maxRetries {
 		current, readErr := s.read(ctx, req.Scope)
 		if readErr != nil {

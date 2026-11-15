@@ -181,7 +181,11 @@ func TestUnknownScopesAreNotFound(t *testing.T) {
 	other := rulestore.Scope{Namespace: "other", UnitID: ""}
 	missingUnit := rulestore.Scope{Namespace: nsAcme, UnitID: "u-none"}
 
-	for _, scope := range []rulestore.Scope{other, missingUnit} {
+	// foreignUnit is a unit of another namespace. The inventory finds it by ID,
+	// so only the namespace check of the service stops it.
+	foreignUnit := rulestore.Scope{Namespace: nsAcme, UnitID: "u-other"}
+
+	for _, scope := range []rulestore.Scope{other, missingUnit, foreignUnit} {
 		_, getErr := svc.Get(t.Context(), scope)
 		_, putErr := svc.Put(t.Context(), jobproxysvc.PutRequest{
 			Scope: scope, Document: doc("a", "a.example.com"), IfMatch: "", Entry: entryOf(),
@@ -196,6 +200,10 @@ func TestUnknownScopesAreNotFound(t *testing.T) {
 
 	if _, err := svc.Joined(t.Context(), nsAcme, "u-none"); !errors.Is(err, inventory.ErrUnitNotFound) {
 		t.Fatalf("Joined of a missing unit: error = %v, want ErrUnitNotFound", err)
+	}
+
+	if _, err := svc.Joined(t.Context(), nsAcme, "u-other"); !errors.Is(err, inventory.ErrUnitNotFound) {
+		t.Fatalf("Joined of a unit of another namespace: error = %v, want ErrUnitNotFound", err)
 	}
 }
 

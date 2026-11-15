@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	nsAcme  = namespace.Name("acme")
-	unitWeb = "u-web"
+	nsAcme    = namespace.Name("acme")
+	unitWeb   = "u-web"
+	unitOther = "u-other"
 )
 
 // errAuditAppend is the error of a store that loses the audit entry of a save.
@@ -119,11 +120,21 @@ func (fakeNamespaces) WritableHere(_ context.Context, name namespace.Name) (name
 	return ns, nil
 }
 
-// fakeUnits knows the unit u-web of acme.
+// fakeUnits knows the unit u-web of acme and the unit u-other of the namespace
+// other. The inventory finds a unit by its ID alone, so it answers for both.
 type fakeUnits struct{}
 
 func (fakeUnits) GetUnit(_ context.Context, unitID string) (inventory.Entry, error) {
 	var e inventory.Entry
+
+	if unitID == unitOther {
+		e.Namespace = "other"
+		e.Tool = "pulumi"
+		e.Name = "api/prod"
+		e.UnitID = unitOther
+
+		return e, nil
+	}
 
 	if unitID != unitWeb {
 		return e, inventory.ErrUnitNotFound
