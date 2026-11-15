@@ -596,6 +596,10 @@ func (s *Store) GetDeletedUnitFacts(
 			facts.Collection = name
 		}
 
+		if s.betweenDeletedFactsReads != nil {
+			s.betweenDeletedFactsReads(ctx)
+		}
+
 		tags, err := q.GetStackTags(ctx, unitID)
 		if err != nil {
 			return fmt.Errorf("select labels of deleted unit: %w", err)

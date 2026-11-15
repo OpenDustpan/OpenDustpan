@@ -249,6 +249,11 @@ type Store struct {
 	// inside the read transaction. Tests write there to prove that both
 	// statements read one snapshot. Nil in production.
 	betweenPageReads func(ctx context.Context)
+	// betweenDeletedFactsReads, when set, runs in GetDeletedUnitFacts after
+	// the collection select and before the labels select, inside the
+	// read-only transaction. Tests commit there to prove that both selects
+	// read one snapshot. Nil in production.
+	betweenDeletedFactsReads func(ctx context.Context)
 	// guardCancel stops the write-ahead log guard; guardDone closes when the
 	// guard ends. Close waits for the guard before it closes the connection,
 	// so no checkpoint runs on a closed handle.
@@ -408,31 +413,32 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 // newStore returns the store on conn, before the options and the migration.
 func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 	s := &Store{
-		conn:                conn,
-		queries:             db.New(conn),
-		path:                path,
-		mu:                  sync.RWMutex{},
-		sweepMu:             sync.Mutex{},
-		enterGate:           newWriteGate(),
-		enterWait:           maxEnterWait,
-		stagingMu:           sync.Mutex{},
-		stagingPath:         "",
-		guardCancel:         nil,
-		guardDone:           nil,
-		logger:              slog.New(slog.DiscardHandler),
-		lastTruncateSuccess: time.Now(),
-		busyWarned:          false,
-		keepAccessHook:      nil,
-		attemptDeadline:     secret.AttemptDeadline,
-		now:                 time.Now,
-		beforeLockDelete:    nil,
-		betweenPageReads:    nil,
-		binaryVersion:       "",
-		kind:                "",
-		noMigrate:           false,
-		processGuard:        guard,
-		stepTxBound:         DefaultStepTransactionBound,
-		gate:                nil,
+		conn:                     conn,
+		queries:                  db.New(conn),
+		path:                     path,
+		mu:                       sync.RWMutex{},
+		sweepMu:                  sync.Mutex{},
+		enterGate:                newWriteGate(),
+		enterWait:                maxEnterWait,
+		stagingMu:                sync.Mutex{},
+		stagingPath:              "",
+		guardCancel:              nil,
+		guardDone:                nil,
+		logger:                   slog.New(slog.DiscardHandler),
+		lastTruncateSuccess:      time.Now(),
+		busyWarned:               false,
+		keepAccessHook:           nil,
+		attemptDeadline:          secret.AttemptDeadline,
+		now:                      time.Now,
+		beforeLockDelete:         nil,
+		betweenPageReads:         nil,
+		betweenDeletedFactsReads: nil,
+		binaryVersion:            "",
+		kind:                     "",
+		noMigrate:                false,
+		processGuard:             guard,
+		stepTxBound:              DefaultStepTransactionBound,
+		gate:                     nil,
 	}
 	s.gate = gatestore.New(gateRunner{s: s}, gatestore.WithKindReader(s))
 

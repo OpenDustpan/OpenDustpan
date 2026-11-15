@@ -126,10 +126,11 @@ func seedSnapshotStore(t *testing.T, s *sqlite.Store) (namespace.Fence, string) 
 	return ns.Fence(), stored.ID.String()
 }
 
-// snapshotState is one consistent state of the deleted unit: the collection
-// that holds it and the value of its team label.
+// snapshotState is one consistent state of the deleted unit: the key and the
+// name of the collection that holds it, and the value of its team label.
 type snapshotState struct {
 	collectionKey string
+	collection    string
 	tag           string
 }
 
@@ -137,8 +138,8 @@ type snapshotState struct {
 // never mix. The seed writes the first.
 func snapshotStates() []snapshotState {
 	return []snapshotState{
-		{collectionKey: collection.Name("payments").Key(), tag: "core"},
-		{collectionKey: collection.Name("ledger").Key(), tag: "ops"},
+		{collectionKey: collection.Name("payments").Key(), collection: "payments", tag: "core"},
+		{collectionKey: collection.Name("ledger").Key(), collection: "ledger", tag: "ops"},
 	}
 }
 
@@ -173,10 +174,8 @@ func execOne(ctx context.Context, tx *sql.Tx, what, stmt string, args ...any) er
 // store serves no move of a deleted unit, so the test writes the two rows
 // that the fact read reads. Each write requires its one row, so a missing row
 // fails the test instead of leaving the state unchanged.
-func commitSnapshotState(t *testing.T, s *sqlite.Store, id string, st snapshotState) error {
+func commitSnapshotState(ctx context.Context, t *testing.T, s *sqlite.Store, id string, st snapshotState) error {
 	t.Helper()
-
-	ctx := t.Context()
 
 	tx, beginErr := sqlite.DB(s).BeginTx(ctx, nil)
 	if beginErr != nil {
@@ -202,40 +201,12 @@ func commitSnapshotState(t *testing.T, s *sqlite.Store, id string, st snapshotSt
 	return nil
 }
 
-// checkSnapshotFacts reads the facts of the deleted unit and fails t when
-// the collection and the labels come from two different commits.
-func checkSnapshotFacts(t *testing.T, s *sqlite.Store, fence namespace.Fence, id string) {
-	t.Helper()
-
-	got, factsErr := s.GetDeletedUnitFacts(t.Context(), fence.Namespace, "pulumi", id)
-	if factsErr != nil {
-		t.Fatalf("GetDeletedUnitFacts() = %v", factsErr)
-	}
-
-	switch got.Collection {
-	case "payments":
-		if !reflect.DeepEqual(got.Labels, map[string]string{"team": "core"}) {
-			t.Fatalf("collection = payments with labels %v, want one commit team=core", got.Labels)
-		}
-	case "ledger":
-		if !reflect.DeepEqual(got.Labels, map[string]string{"team": "ops"}) {
-			t.Fatalf("collection = ledger with labels %v, want one commit team=ops", got.Labels)
-		}
-	default:
-		t.Fatalf("GetDeletedUnitFacts().Collection = %q, want payments or ledger", got.Collection)
-	}
-}
-
-// TestDeletedUnitFactsSnapshot reads the facts of a deleted unit while
-// another caller commits a change of both the collection and the labels.
-// Every read sees the facts of one commit: a collection from before a commit
-// never comes back with labels from after it, because the call reads in one
-// read-only transaction.
-//
-// Each turn starts one commit and then reads, and it waits for that commit
-// before the next read. A commit therefore runs while every read runs, and
-// each one lands between the first read and the last, so the test never
-// passes with every commit before or after the reads.
+// TestDeletedUnitFactsSnapshot commits a change of both the collection and
+// the labels between the two selects of one fact read. Every read sees the
+// facts of one commit: the labels still read the team of the collection the
+// call read before the commit, because the call reads in one read-only
+// transaction. The hook commits synchronously between the selects, so the
+// commit lands inside the read by construction, not by timing.
 func TestDeletedUnitFactsSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -244,19 +215,46 @@ func TestDeletedUnitFactsSnapshot(t *testing.T) {
 
 	states := snapshotStates()
 
-	for i := range 50 {
-		commitDone := make(chan error, 1)
+	committed := false
 
-		go func() {
-			commitDone <- commitSnapshotState(t, s, id, states[(i+1)%len(states)])
-		}()
-
-		checkSnapshotFacts(t, s, fence, id)
-
-		commitErr := <-commitDone
-		if commitErr != nil {
-			t.Fatalf("commit the unit state: %v", commitErr)
+	sqlite.SetBetweenDeletedFactsReads(s, func(ctx context.Context) {
+		if committed {
+			return
 		}
+
+		committed = true
+
+		if err := commitSnapshotState(ctx, t, s, id, states[1]); err != nil {
+			t.Errorf("commit the unit state between the reads: %v", err)
+		}
+	})
+
+	got, factsErr := s.GetDeletedUnitFacts(t.Context(), fence.Namespace, "pulumi", id)
+	if factsErr != nil {
+		t.Fatalf("GetDeletedUnitFacts() = %v", factsErr)
+	}
+
+	if got.Collection != states[0].collection ||
+		!reflect.DeepEqual(got.Labels, map[string]string{"team": states[0].tag}) {
+		t.Fatalf("GetDeletedUnitFacts() = %+v, want the snapshot before the commit collection=%s labels team=%s",
+			got, states[0].collection, states[0].tag)
+	}
+
+	if !committed {
+		t.Fatal("the commit between the reads did not run, want one commit inside the read")
+	}
+
+	sqlite.SetBetweenDeletedFactsReads(s, nil)
+
+	again, againErr := s.GetDeletedUnitFacts(t.Context(), fence.Namespace, "pulumi", id)
+	if againErr != nil {
+		t.Fatalf("GetDeletedUnitFacts() after the commit = %v", againErr)
+	}
+
+	if again.Collection != states[1].collection ||
+		!reflect.DeepEqual(again.Labels, map[string]string{"team": states[1].tag}) {
+		t.Fatalf("GetDeletedUnitFacts() after the commit = %+v, want the committed state collection=%s labels team=%s",
+			again, states[1].collection, states[1].tag)
 	}
 }
 
