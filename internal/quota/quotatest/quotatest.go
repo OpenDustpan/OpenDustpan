@@ -58,6 +58,7 @@ func Run(t *testing.T, newHarness Factory) {
 		run  func(t *testing.T, h Harness, fence namespace.Fence)
 	}{
 		{"a reservation below the limit counts as reserved", testReserve},
+		{"a reservation key that no check covers is refused", testReserveKeyWithoutCheck},
 		{"a reservation at the limit is ErrExceeded and stores nothing", testReserveExceeded},
 		{"a reservation passes every check or stores nothing", testReserveAllOrNothing},
 		{"a reservation is idempotent by its ID", testReserveIdempotent},
@@ -189,6 +190,31 @@ func testReserve(t *testing.T, h Harness, fence namespace.Fence) {
 	}
 
 	wantUsage(t, h, k, 0, 1)
+}
+
+// testReserveKeyWithoutCheck proves that Reserve refuses a reservation with a
+// key that no check covers, stores nothing, and counts nothing.
+func testReserveKeyWithoutCheck(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	all, mine := key("namespace"), key("requester:alice")
+	r := reservation("req-1/1", all, mine)
+
+	if _, err := reserve(t, h, fence, r, check(all, 5)); !errors.Is(err, quota.ErrInvalid) {
+		t.Fatalf("Reserve(a reservation key without a check) = %v, want ErrInvalid", err)
+	}
+
+	if err := h.Counter.Release(t.Context(), r.ID, fence); !errors.Is(err, quota.ErrNotFound) {
+		t.Fatalf("Release(a refused reservation) = %v, want ErrNotFound", err)
+	}
+
+	wantUsage(t, h, all, 0, 0)
+	wantUsage(t, h, mine, 0, 0)
+
+	// The same reservation passes when a check covers each key.
+	mustReserve(t, h, fence, r, check(all, 5), check(mine, 5))
+	wantUsage(t, h, all, 0, 1)
+	wantUsage(t, h, mine, 0, 1)
 }
 
 func testReserveExceeded(t *testing.T, h Harness, fence namespace.Fence) {

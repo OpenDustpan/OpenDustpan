@@ -17,6 +17,7 @@
 - [ ] 2.2 In the existing file e2e/approval_rules_test.go, add namespace-admin step that sets authorMayApprove and checks four-eyes. Check: PUT /api/dustpan/v1/namespaces/{namespace}/approval-rules/{id} with a session credential sets authorMayApprove false; the delegator second approval is refused. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 2.3 In the NEW file pkg/dustpan/change_order_errors.go, add the NEW error codes changeorder.agent-confirm-refused and changeorder.not-ready to the error catalog. Check: The route test checks the 403 and 409 shapes.
 - [ ] 2.4 Write the docs page section for person confirmation of agent-proposed change orders. Check: Read the new confirm section of docs/guides/approval-rules.md and run each step as written. `make docs-lint` passes on each edited guide.
+- [ ] 2.5 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `changeorder.agent-confirm-refused` in the NEW file `internal/errcode/testdata/catalog/changeorder.txt`; `changeorder.not-ready` in the NEW file `internal/errcode/testdata/catalog/changeorder.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Side effects (computed from main)
 

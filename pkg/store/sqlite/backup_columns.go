@@ -655,6 +655,14 @@ func sqliteEmptiedTables() []sqliteBackupTable {
 			columns: sqlitePasskeyChallengeColumns(),
 		},
 		{
+			table: backup.TableJobTokens,
+			columns: []string{
+				backupColDigest, backupColNamespaceID, "starter_id", backupColJobID, "unit_tool",
+				backupColUnitID, "claim_operation", "claim_token", backupColExpiresAtMs,
+				backupColCreatedAtMs,
+			},
+		},
+		{
 			table: backup.TableUnitState,
 			columns: []string{
 				backupColUnitID, backupColNamespaceID, "version_id", "final_version_id", "final_commit",

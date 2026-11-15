@@ -868,7 +868,7 @@ WHERE notification_deliveries.id IN (
     LIMIT $5
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
           last_error, delivered_at_ms, owner, lease_until_ms, version
 `
 
@@ -907,6 +907,7 @@ func (q *Queries) ClaimNotificationDeliveries(ctx context.Context, arg ClaimNoti
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,
@@ -1274,6 +1275,29 @@ func (q *Queries) CountAccessTokens(ctx context.Context, arg CountAccessTokensPa
 		arg.AtMs,
 		arg.SoonMs,
 	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countActiveMembershipsInGroups = `-- name: CountActiveMembershipsInGroups :one
+SELECT COUNT(*)
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = $1 AND m.removed_at_ms IS NULL AND m.state = 'active'
+  AND g.deleted_at_ms IS NULL
+  AND m.group_id = ANY($2::text[])
+`
+
+type CountActiveMembershipsInGroupsParams struct {
+	PrincipalID string
+	GroupIds    []string
+}
+
+// The memberships of a principal that are in effect in the given groups: not ended, state active, group not deleted.
+// Defense in depth: DeleteGroup ends the memberships of the group too. The filter on the group row stays so that a
+// membership row that outlives its group gives no rights. The caller checks that the principal is enabled.
+func (q *Queries) CountActiveMembershipsInGroups(ctx context.Context, arg CountActiveMembershipsInGroupsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveMembershipsInGroups, arg.PrincipalID, arg.GroupIds)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2397,6 +2421,58 @@ SELECT COUNT(*) FROM unmanaged_targets WHERE pool_id = $1
 // exists.
 func (q *Queries) CountUnmanagedTargetsOfPool(ctx context.Context, poolID string) (int64, error) {
 	row := q.db.QueryRow(ctx, countUnmanagedTargetsOfPool, poolID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countWorkingBreakGlassPrincipals = `-- name: CountWorkingBreakGlassPrincipals :one
+SELECT COUNT(*) FROM principals p
+WHERE p.break_glass
+  AND p.kind = 'person'
+  AND p.namespace = ''
+  AND p.deleted_at_ms IS NULL
+  AND p.disabled_at_ms IS NULL
+  AND p.source = 'local'
+  AND p.created_at_ms <= $1::bigint
+  AND EXISTS (
+    SELECT 1 FROM passkeys pk
+    WHERE pk.principal_id = p.id AND pk.suspended_at_ms = 0
+      AND pk.created_at_ms <= $1::bigint
+  )
+  AND EXISTS (
+    SELECT 1 FROM grants g
+    WHERE g.object_kind = 'installation'
+      AND g.role IN ('site-administrator', 'account-administrator')
+      AND g.revoked_at_ms IS NULL
+      AND g.condition IS NULL
+      AND g.created_at_ms <= $1::bigint
+      AND (
+        (g.subject_kind = 'principal' AND g.subject_id = p.id)
+        OR (g.subject_kind = 'group' AND EXISTS (
+          SELECT 1 FROM group_members m
+          JOIN principal_groups pg ON pg.id = m.group_id
+          WHERE m.group_id = g.subject_id
+            AND m.principal_id = p.id
+            AND m.removed_at_ms IS NULL
+            AND m.state = 'active'
+            AND pg.deleted_at_ms IS NULL
+            AND m.added_at_ms <= $1::bigint
+            AND pg.created_at_ms <= $1::bigint
+        ))
+      )
+  )
+`
+
+// The working break-glass accounts of the installation: an enabled local
+// person of the installation with a passkey that is not suspended, and a
+// current grant without a condition of an administration role on the
+// installation, directly or through an active membership of a group that
+// exists. An installation-level IP allowlist must join this count when one
+// exists; the current allowlists are per namespace and do not apply to
+// installation sign-in.
+func (q *Queries) CountWorkingBreakGlassPrincipals(ctx context.Context, atMs int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkingBreakGlassPrincipals, atMs)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -7761,6 +7837,127 @@ func (q *Queries) GetJobPlan(ctx context.Context, arg GetJobPlanParams) (GetJobP
 	return i, err
 }
 
+const getJobToken = `-- name: GetJobToken :one
+SELECT t.digest, n.name AS namespace, u.namespace AS unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
+       CAST(u.name AS TEXT) AS unit_name,
+       t.claim_operation, t.claim_token, t.expires_at_ms, t.created_at_ms,
+       o.state AS operation_state, o.claim_token AS operation_claim_token,
+       o.claim_expires_at_ms AS operation_claim_expires_at_ms,
+       j.id AS job_record_id, j.state AS job_state, j.current_operation AS job_operation,
+       j.unit_id AS job_unit_id, jn.name AS job_namespace, js.id AS job_starter_id,
+       s.id AS starter_record_id, s.subject AS starter_subject, s.display_name AS starter_display_name,
+       s.kind AS starter_kind, s.disabled_at_ms AS starter_disabled_at_ms
+FROM job_tokens AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+JOIN (
+    SELECT id, 'pulumi' AS tool, namespace, project || '/' || name AS name
+    FROM stacks WHERE deleted_at_ms IS NULL
+    UNION ALL
+    SELECT id, 'opentofu' AS tool, namespace, name
+    FROM workspaces WHERE deleted_at_ms IS NULL
+) AS u ON u.id = t.unit_id AND u.tool = t.unit_tool
+JOIN durable_operations AS o ON o.id = t.claim_operation
+JOIN jobs AS j ON j.id = t.job_id
+JOIN namespaces AS jn ON jn.id = j.namespace_id
+JOIN principals AS js ON js.subject COLLATE "C" = (j.body::jsonb ->> 'startedBy') AND js.deleted_at_ms IS NULL
+JOIN principals AS s ON s.id = t.starter_id AND s.deleted_at_ms IS NULL
+WHERE t.digest = $1
+`
+
+type GetJobTokenRow struct {
+	Digest                    string
+	Namespace                 string
+	UnitNamespace             string
+	StarterID                 string
+	JobID                     string
+	UnitTool                  string
+	UnitID                    string
+	UnitName                  string
+	ClaimOperation            string
+	ClaimToken                int64
+	ExpiresAtMs               int64
+	CreatedAtMs               int64
+	OperationState            string
+	OperationClaimToken       int64
+	OperationClaimExpiresAtMs pgtype.Int8
+	JobRecordID               string
+	JobState                  string
+	JobOperation              string
+	JobUnitID                 string
+	JobNamespace              string
+	JobStarterID              string
+	StarterRecordID           string
+	StarterSubject            string
+	StarterDisplayName        string
+	StarterKind               string
+	StarterDisabledAtMs       pgtype.Int8
+}
+
+// Defense in depth: the service checks the unit ID too. Resolve only a live
+// unit row so that a restored token cannot reach a removed unit by name.
+func (q *Queries) GetJobToken(ctx context.Context, digest string) (GetJobTokenRow, error) {
+	row := q.db.QueryRow(ctx, getJobToken, digest)
+	var i GetJobTokenRow
+	err := row.Scan(
+		&i.Digest,
+		&i.Namespace,
+		&i.UnitNamespace,
+		&i.StarterID,
+		&i.JobID,
+		&i.UnitTool,
+		&i.UnitID,
+		&i.UnitName,
+		&i.ClaimOperation,
+		&i.ClaimToken,
+		&i.ExpiresAtMs,
+		&i.CreatedAtMs,
+		&i.OperationState,
+		&i.OperationClaimToken,
+		&i.OperationClaimExpiresAtMs,
+		&i.JobRecordID,
+		&i.JobState,
+		&i.JobOperation,
+		&i.JobUnitID,
+		&i.JobNamespace,
+		&i.JobStarterID,
+		&i.StarterRecordID,
+		&i.StarterSubject,
+		&i.StarterDisplayName,
+		&i.StarterKind,
+		&i.StarterDisabledAtMs,
+	)
+	return i, err
+}
+
+const getJobTokenUnitNamespace = `-- name: GetJobTokenUnitNamespace :one
+SELECT n.id
+FROM namespaces AS n
+WHERE n.name = (
+    SELECT s.namespace
+    FROM stacks AS s
+    WHERE s.id = $1 AND s.deleted_at_ms IS NULL AND $2::text = 'pulumi'
+    UNION ALL
+    SELECT w.namespace
+    FROM workspaces AS w
+    WHERE w.id = $1 AND w.deleted_at_ms IS NULL AND $2::text = 'opentofu'
+)
+`
+
+type GetJobTokenUnitNamespaceParams struct {
+	UnitID   string
+	UnitTool string
+}
+
+// The stable namespace ID of the live unit row that a job token names, by
+// tool and stable unit ID. The issue of a job token reads it to refuse a
+// token whose unit row is in another namespace.
+func (q *Queries) GetJobTokenUnitNamespace(ctx context.Context, arg GetJobTokenUnitNamespaceParams) (string, error) {
+	row := q.db.QueryRow(ctx, getJobTokenUnitNamespace, arg.UnitID, arg.UnitTool)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, n.id AS namespace_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features, c.saved_at_ms,
@@ -8342,7 +8539,7 @@ func (q *Queries) GetNotificationCursor(ctx context.Context, arg GetNotification
 }
 
 const getNotificationDelivery = `-- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = $1
@@ -8361,6 +8558,7 @@ func (q *Queries) GetNotificationDelivery(ctx context.Context, id string) (Notif
 		&i.Principal,
 		&i.State,
 		&i.Attempts,
+		&i.Redeliveries,
 		&i.NextAtMs,
 		&i.LastError,
 		&i.DeliveredAtMs,
@@ -12070,6 +12268,47 @@ func (q *Queries) InsertJobPlan(ctx context.Context, arg InsertJobPlanParams) er
 	return err
 }
 
+const insertJobToken = `-- name: InsertJobToken :exec
+INSERT INTO job_tokens (
+    digest, namespace_id, starter_id, job_id, unit_tool, unit_id, claim_operation,
+    claim_token, expires_at_ms, created_at_ms
+) VALUES (
+    $1, (SELECT n.id FROM namespaces AS n WHERE n.name = $2),
+    $3, $4, $5, $6,
+    $7, $8, $9,
+    $10
+)
+`
+
+type InsertJobTokenParams struct {
+	Digest         string
+	Namespace      string
+	StarterID      string
+	JobID          string
+	UnitTool       string
+	UnitID         string
+	ClaimOperation string
+	ClaimToken     int64
+	ExpiresAtMs    int64
+	CreatedAtMs    int64
+}
+
+func (q *Queries) InsertJobToken(ctx context.Context, arg InsertJobTokenParams) error {
+	_, err := q.db.Exec(ctx, insertJobToken,
+		arg.Digest,
+		arg.Namespace,
+		arg.StarterID,
+		arg.JobID,
+		arg.UnitTool,
+		arg.UnitID,
+		arg.ClaimOperation,
+		arg.ClaimToken,
+		arg.ExpiresAtMs,
+		arg.CreatedAtMs,
+	)
+	return err
+}
+
 const insertJournal = `-- name: InsertJournal :exec
 INSERT INTO update_journal (
     stack_id, update_id, arrival, blob_key, sha256, md5, size,
@@ -12249,11 +12488,11 @@ func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotification
 
 const insertNotificationDelivery = `-- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
     last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     $1, $2, $3, $4, $5,
-    $6, $7, 'pending', 0, $8, '', 0, '', 0, 1
+    $6, $7, 'pending', 0, 0, $8, '', 0, '', 0, 1
 )
 `
 
@@ -16648,7 +16887,7 @@ func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerG
 }
 
 const listNotificationDeliveriesOfSubscription = `-- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = $1 AND subscription_id = $2
@@ -16681,6 +16920,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,
@@ -16699,7 +16939,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 }
 
 const listNotificationDeliveriesOfSubscriptionAfter = `-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = $1 AND subscription_id = $2
@@ -16746,6 +16986,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Cont
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,
@@ -21321,19 +21562,23 @@ func (q *Queries) RecordPasskeyUse(ctx context.Context, arg RecordPasskeyUsePara
 
 const redeliverNotificationDelivery = `-- name: RedeliverNotificationDelivery :execrows
 UPDATE notification_deliveries
-SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,
-    version = notification_deliveries.version + 1
+SET state = 'pending', attempts = 0, redeliveries = notification_deliveries.redeliveries + 1,
+    last_error = '', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = $1 AND notification_deliveries.scope = $2
   AND notification_deliveries.state <> 'pending'
+  -- Defense in depth: the adapter checks the limit before the update; this predicate stays so that two
+  -- redelivers at the same time cannot pass the limit.
+  AND notification_deliveries.redeliveries < $3
 `
 
 type RedeliverNotificationDeliveryParams struct {
-	ID    string
-	Scope string
+	ID              string
+	Scope           string
+	MaxRedeliveries int64
 }
 
 func (q *Queries) RedeliverNotificationDelivery(ctx context.Context, arg RedeliverNotificationDeliveryParams) (int64, error) {
-	result, err := q.db.Exec(ctx, redeliverNotificationDelivery, arg.ID, arg.Scope)
+	result, err := q.db.Exec(ctx, redeliverNotificationDelivery, arg.ID, arg.Scope, arg.MaxRedeliveries)
 	if err != nil {
 		return 0, err
 	}
@@ -23201,17 +23446,19 @@ func (q *Queries) ShredItemKey(ctx context.Context, arg ShredItemKeyParams) (int
 
 const skipPendingNotificationDeliveriesOfSubscription = `-- name: SkipPendingNotificationDeliveriesOfSubscription :exec
 UPDATE notification_deliveries
-SET state = 'skipped', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
-WHERE scope = $1 AND subscription_id = $2 AND state = 'pending'
+SET state = 'skipped', delivered_at_ms = $1, owner = '', lease_until_ms = 0,
+    version = notification_deliveries.version + 1
+WHERE scope = $2 AND subscription_id = $3 AND state = 'pending'
 `
 
 type SkipPendingNotificationDeliveriesOfSubscriptionParams struct {
+	DeliveredAtMs  int64
 	Scope          string
 	SubscriptionID string
 }
 
 func (q *Queries) SkipPendingNotificationDeliveriesOfSubscription(ctx context.Context, arg SkipPendingNotificationDeliveriesOfSubscriptionParams) error {
-	_, err := q.db.Exec(ctx, skipPendingNotificationDeliveriesOfSubscription, arg.Scope, arg.SubscriptionID)
+	_, err := q.db.Exec(ctx, skipPendingNotificationDeliveriesOfSubscription, arg.DeliveredAtMs, arg.Scope, arg.SubscriptionID)
 	return err
 }
 

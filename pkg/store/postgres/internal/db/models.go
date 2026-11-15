@@ -628,6 +628,19 @@ type JobPlan struct {
 	CreatedAtMs int64
 }
 
+type JobToken struct {
+	Digest         string
+	NamespaceID    string
+	StarterID      string
+	JobID          string
+	UnitTool       string
+	UnitID         string
+	ClaimOperation string
+	ClaimToken     int64
+	ExpiresAtMs    int64
+	CreatedAtMs    int64
+}
+
 type LocalUser struct {
 	ID              string
 	PrincipalID     string
@@ -752,6 +765,7 @@ type NotificationDelivery struct {
 	Principal      string
 	State          string
 	Attempts       int64
+	Redeliveries   int64
 	NextAtMs       int64
 	LastError      string
 	DeliveredAtMs  int64

@@ -19,6 +19,7 @@ SECURITY: this change is security code (ADR 250). A wrong "disjoint" loses state
 - [ ] 2.3 SECURITY. Add the NEW file `internal/conflictcheck/checker.go` with the NEW type `Checker`, and turn each conflict case of `reviewrequesttest` from pending into a real test. Check: `go test -race ./internal/conflictcheck/...` runs `RunConflicts` with no skipped case.
 - [ ] 2.4 SECURITY. Wire the checker into the register route of two-disjoint-claims (NEW files `internal/claimapi/register.go` and its adapter `internal/claimapi/register_http.go`), in place of the fixed `claim.closure-unproven` answer for a replacement. Check: `TestRegisterClaimHostileReplace` passes; the route test shows the actions of the route.
 - [ ] 2.5 Add the NEW error codes `claim.overlap`, `claim.closure-unproven` and `claim.plan-invalid` (NEW: no catalog code names a closure conflict or an invalid plan) to the error catalog in `internal/errcode`, if two-disjoint-claims did not add them. Check: `go test ./internal/errcode/...` passes.
+- [ ] 2.6 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `claim.overlap` in the NEW file `internal/errcode/testdata/catalog/claim.txt`; `claim.closure-unproven` in the NEW file `internal/errcode/testdata/catalog/claim.txt`; `claim.plan-invalid` in the NEW file `internal/errcode/testdata/catalog/claim.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Definition of done
 

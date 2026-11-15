@@ -4,9 +4,9 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing test in the NEW file pkg/backup/attempt_scope_test.go: stale holder late delete after survivor finish keeps survivor files. Check: `go test ./pkg/backup -run TestStaleAttemptDeleteKeepsSurvivor -count=1` fails on main
-- [ ] 1.2 Add failing test in the NEW file pkg/backup/finish_check_test.go: truncated file fails the finish Check with `backup.corrupt`. Check: `go test ./pkg/backup -run TestFinishRefusesTruncatedFile -count=1` fails on main
-- [ ] 1.3 Add failing test in the NEW file pkg/backup/orphan_cleanup_test.go: live holder deletes the orphaned attempt prefix and re-lists a recreated stale prefix. Check: `go test ./pkg/backup -run TestOrphanPrefixCleanup -count=1` fails on main
+- [ ] 1.1 Add failing test in the NEW file pkg/backup/attempt_scope_test.go, which calls the NEW unexported `newAttemptPrefix` of task 2.2 (it does not compile on main): stale holder late delete after survivor finish keeps survivor files. Check: `go test ./pkg/backup -run TestStaleAttemptDeleteKeepsSurvivor -count=1` fails on main: the NEW symbol `newAttemptPrefix` is not defined on main, and `clearPartial` at pkg/backup/service.go:775 deletes in the unscoped prefix
+- [ ] 1.2 Add failing test in the NEW file pkg/backup/finish_check_test.go, which calls the NEW unexported `attemptPrefix` of task 2.2 to write the target (it does not compile on main): truncated file fails the finish Check with `backup.corrupt`. Check: `go test ./pkg/backup -run TestFinishRefusesTruncatedFile -count=1` fails on main: the NEW symbol `attemptPrefix` is not defined on main, and `stepFinish` at pkg/backup/service.go:833 does not call `Check` at pkg/backup/service.go:1637
+- [ ] 1.3 Add failing test in the NEW file pkg/backup/orphan_cleanup_test.go, which calls the NEW unexported `newAttemptPrefix` of task 2.2 (it does not compile on main): live holder deletes the orphaned attempt prefix and re-lists a recreated stale prefix. Check: `go test ./pkg/backup -run TestOrphanPrefixCleanup -count=1` fails on main: the NEW symbol `newAttemptPrefix` is not defined on main, and `clearPartial` at pkg/backup/service.go:775 knows no attempt prefix
 
 ## 2. Fix
 
@@ -22,6 +22,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run e2e backup plus check against the real directory through `ANY /api/server/backups/{}/check` with an access token, with a stale holder delete replayed after finish. Check: `GET /api/server/backups/{id}/check` with an access token reports complete after a stale-holder run against the real directory
+- [ ] 4.1 Run e2e backup plus check against the real directory: `POST /api/dustpan/v1/backups`, poll `GET /api/dustpan/v1/backups/{id}`, then `GET /api/dustpan/v1/backups/{id}/check`, each with the administrator bearer token (`Authorization: Bearer <token>`, the credential of the helpers in e2e/dev_backup_test.go), with a stale holder delete replayed after finish. Check: `GET /api/dustpan/v1/backups/{id}/check` with the administrator bearer token reports complete after a stale-holder run against the real directory
 - [ ] 4.2 Update the existing file docs/guides/several-instances.md for the attempt layout and the cleanup. Check: docs/guides/several-instances.md shows the attempt layout and the orphan cleanup by the live holder. `make docs-lint` passes on the edited guide (sentence cap 25 words).
 - [ ] 4.3 Run the usability check from the docs page and `make check`. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

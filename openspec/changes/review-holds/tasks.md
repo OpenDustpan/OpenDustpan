@@ -19,6 +19,7 @@
 - [ ] 2.3 Wire the audit entry for the apply request path in NEW file internal/server/changeorder_apply_gate.go. Check: Denied and stored apply requests each write one audit entry with principal and revision
 - [ ] 2.4 Wire void on new plan revision with running-job mark in NEW file internal/server/changeorder_apply_gate.go. Check: New plan revision voids the stored request in the same transaction that publishes the revision
 - [ ] 2.5 Write the Terragrunt run-all review gate docs page in NEW file docs/terragrunt-run-all-review-gate.md in the same pull request. Check: Docs page command sequence runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/review_holds_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 2.6 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `change-order.apply-gated` in the NEW file `internal/errcode/testdata/catalog/change-order.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Side effects (computed from main)
 
