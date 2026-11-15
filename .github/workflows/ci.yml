@@ -207,6 +207,10 @@ jobs:
         run: make licenses
       - name: Docs follow ASD-STE100
         run: make docs-lint
+      # The OpenSpec CLI comes from npm at the version that the Makefile pins.
+      # It runs on the node of the runner image, with telemetry off.
+      - name: OpenSpec changes and specs are valid
+        run: make openspec-validate
       - name: The release record checks pass
         run: make release-record-check
       # The files check reads the files that the change adds against the merge
