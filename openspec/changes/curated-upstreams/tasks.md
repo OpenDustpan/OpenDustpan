@@ -15,12 +15,12 @@
 ## 2. Build
 
 - [ ] 2.1 Build curator type in NEW file pkg/registry/curator.go, all-field exact host match with OR combination and path boundary, per-request snapshot, off switch with rule retention, single-flight upstream fetch with verify and limits, namespace-keyed cache with re-check, missing upstream 404 after curation check, upstream 5xx 502, and audit before serve with fail-closed log. Check: `go test ./pkg/registry/ -count=1` passes.
-- [ ] 2.2 Wire setting and rule routes under /namespaces/{namespace}/curation with namespace curation manage and read actions, and refusal text that names the registry address. Declare the routes in the route table of the adapter package (`make generate` then writes internal/api/apidesc/openapi.json; never edit it by hand) and write the adapter in NEW file internal/api/registry/curation.go. Check: `go test ./internal/api/registry/ -run TestCurationRefusalNamesAddress -count=1` passes.
-- [ ] 2.3 Wire the curation gate into the registry and tool-compatible fetch endpoints for tofu init and Pulumi CLI plugin fetch, in NEW files internal/api/tfe/curation.go and internal/api/pulumi/curation.go. Check: `go test ./internal/api/tfe/ ./internal/api/pulumi/ -run TestCurationGateWired -count=1` passes.
+- [ ] 2.2 Wire setting and rule routes under /namespaces/{namespace}/curation with namespace curation manage and read actions, and refusal text that names the registry address. Declare the routes in the route table of the adapter package (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand) and write the adapter in NEW file internal/api/registry/curation.go. The task adds the NEW top-level test `TestCurationRefusalNamesAddress` in a `_test.go` file of `internal/api/registry`, so that the Check runs it. Check: `go test ./internal/api/registry/ -run TestCurationRefusalNamesAddress -count=1` passes.
+- [ ] 2.3 Wire the curation gate into the registry and tool-compatible fetch endpoints for tofu init and Pulumi CLI plugin fetch, in NEW files internal/api/tfe/curation.go and internal/api/pulumi/curation.go. The task adds the NEW top-level test `TestCurationGateWired` in a `_test.go` file of `internal/api/tfe`, so that the Check runs it. Check: `go test ./internal/api/tfe/ ./internal/api/pulumi/ -run TestCurationGateWired -count=1` passes.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

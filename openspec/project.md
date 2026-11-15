@@ -148,6 +148,9 @@ A change that adds or changes one of these gives a section `## Contract` in
   keys and indexes;
 - CLI output that an e2e test asserts: the exact output.
 
+Each time field names its unit as the handler writes it, and each error names the
+sentinel that the conformance suite requires, with file:line.
+
 The section holds no function body and no internal detail. This rule applies to
 the changes that are made after it lands. A change made before it gets a
 Contract section only when a finding of the missing-contract kind (a port
