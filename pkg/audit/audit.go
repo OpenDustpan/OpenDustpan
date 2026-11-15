@@ -90,6 +90,14 @@ const (
 	// ChannelConfigFile is the entry of a reload of the configuration file
 	// that changed a setting (ADR 63 decision 9).
 	ChannelConfigFile Channel = "config-file"
+	// ChannelAgent is a request of the built-in agent run.
+	ChannelAgent Channel = "agent"
+	// ChannelMCP is a request of an outside agent through the MCP endpoint
+	// of the server.
+	ChannelMCP Channel = "mcp"
+	// ChannelMCPProxy is a request of an outside agent through the stdio
+	// proxy of the command-line client, which forwards to the MCP endpoint.
+	ChannelMCPProxy Channel = "mcp-proxy"
 )
 
 // Outcome names how the recorded action ended.
@@ -138,6 +146,10 @@ const (
 // MaxJobIDLen caps the job ID of an entry, in bytes.
 const MaxJobIDLen = 128
 
+// MaxAgentFieldLen caps each agent field of an entry, in bytes. A longer
+// field refuses the write.
+const MaxAgentFieldLen = 256
+
 // MaxReasonLen caps the reason of an entry, in Unicode code points.
 const MaxReasonLen = 500
 
@@ -152,6 +164,12 @@ const MaxPageSize = 200
 // log never grows the check without a bound. The walk still visits every
 // entry, one page at a time.
 const CheckPageSize = 100
+
+// ErrInvalidOrigin reports an agent origin that fails validation: a text
+// field over MaxAgentFieldLen bytes, outside valid UTF-8, with a hidden
+// character, or a partial origin that names agent details without the run
+// or the session that identifies the call.
+var ErrInvalidOrigin = errors.New("invalid audit agent origin")
 
 // Sentinel errors returned by this package and by Store implementations.
 var (
@@ -188,6 +206,173 @@ func ValidateReason(reason string) error {
 	return nil
 }
 
+// Origin names the agent that acted for the subject of an entry, if any:
+// AgentRun is the run ID of a call of the built-in agent, AgentSession is
+// the MCP session ID of a call of an outside agent or the run ID of a call
+// of the built-in agent, Tool names the tool of the call, ArgsDigest is the
+// SHA-256 of its arguments, BreakGlass is true for a break-glass
+// credential, SecretStage names the closed secret stage of the call, and
+// DelegationID names the delegation under which the agent acted, and is
+// empty when the step had no delegation.
+// The fields are unexported: NewOrigin builds an Origin and checks its
+// invariants, so no caller can store a partial or hostile block. An entry
+// holds at most one Origin, as a pointer, so an ordinary entry without
+// agent data stays small: nil names no agent and the hash writes no block.
+type Origin struct {
+	run          string
+	session      string
+	tool         string
+	argsDigest   string
+	breakGlass   bool
+	secretStage  string
+	delegationID string
+}
+
+// OriginArgs holds the fields of NewOrigin: the run and session that
+// identify the call, the tool, the arguments digest, the break-glass flag,
+// the secret stage and the delegation under which the agent acted.
+type OriginArgs struct {
+	Run          string
+	Session      string
+	Tool         string
+	ArgsDigest   string
+	BreakGlass   bool
+	SecretStage  string
+	DelegationID string
+}
+
+// NewOrigin returns the agent origin of an entry from args. All seven fields
+// empty (and BreakGlass false) answers a nil origin and a nil error: the
+// entry carries no agent data. A break-glass credential without a run or a
+// session answers an origin with only the flag set, for the entry of a
+// person who acted under break-glass. Any other origin without the run and
+// the session is partial and is refused: the tool, the digest, the stage
+// and the delegation describe a call, and without its identity they name
+// nothing. Each text field holds at most MaxAgentFieldLen bytes of valid
+// UTF-8 with no hidden character, so a joined value can never mimic another
+// field outside the length-prefixed hash.
+func NewOrigin(args OriginArgs) (*Origin, error) {
+	if args.Run == "" && args.Session == "" && args.Tool == "" &&
+		args.ArgsDigest == "" && !args.BreakGlass && args.SecretStage == "" && args.DelegationID == "" {
+		var none *Origin
+
+		return none, nil
+	}
+
+	if args.Run == "" && args.Session == "" && !args.BreakGlass {
+		return nil, fmt.Errorf("%w: the tool, the arguments digest, the secret stage and the delegation"+
+			" need the agent run or the agent session", ErrInvalidOrigin)
+	}
+
+	if err := checkOriginFields(args); err != nil {
+		return nil, err
+	}
+
+	return &Origin{
+		run:          args.Run,
+		session:      args.Session,
+		tool:         args.Tool,
+		argsDigest:   args.ArgsDigest,
+		breakGlass:   args.BreakGlass,
+		secretStage:  args.SecretStage,
+		delegationID: args.DelegationID,
+	}, nil
+}
+
+// checkOriginFields proves that each text field of an agent origin holds at
+// most MaxAgentFieldLen bytes of valid UTF-8 with no hidden character, so a
+// joined value can never mimic another field outside the length-prefixed
+// hash.
+func checkOriginFields(args OriginArgs) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "agent run", value: args.Run},
+		{name: "agent session", value: args.Session},
+		{name: "tool", value: args.Tool},
+		{name: "arguments digest", value: args.ArgsDigest},
+		{name: "secret stage", value: args.SecretStage},
+		{name: "delegation ID", value: args.DelegationID},
+	} {
+		switch {
+		case len(field.value) > MaxAgentFieldLen:
+			return fmt.Errorf("%w: %s longer than %d bytes", ErrInvalidOrigin, field.name, MaxAgentFieldLen)
+		case !utf8.ValidString(field.value):
+			return fmt.Errorf("%w: %s is not valid UTF-8", ErrInvalidOrigin, field.name)
+		case ident.HasHidden(field.value):
+			return fmt.Errorf("%w: %s holds a hidden character", ErrInvalidOrigin, field.name)
+		}
+	}
+
+	return nil
+}
+
+// Run answers the run ID of a call of the built-in agent, and empty for a
+// call of an outside agent, which names its MCP session instead.
+func (o *Origin) Run() string {
+	if o == nil {
+		return ""
+	}
+
+	return o.run
+}
+
+// Session answers the MCP session ID of a call of an outside agent, or the
+// run ID of a call of the built-in agent.
+func (o *Origin) Session() string {
+	if o == nil {
+		return ""
+	}
+
+	return o.session
+}
+
+// Tool answers the tool of the call, and empty for a job entry of an
+// agent, which records only the run and the session.
+func (o *Origin) Tool() string {
+	if o == nil {
+		return ""
+	}
+
+	return o.tool
+}
+
+// ArgsDigest answers the SHA-256 of the arguments of the call, and empty
+// for a job entry of an agent.
+func (o *Origin) ArgsDigest() string {
+	if o == nil {
+		return ""
+	}
+
+	return o.argsDigest
+}
+
+// BreakGlass reports whether a break-glass credential acted.
+func (o *Origin) BreakGlass() bool {
+	return o != nil && o.breakGlass
+}
+
+// SecretStage answers the closed secret stage of the call, and empty for a
+// job entry of an agent.
+func (o *Origin) SecretStage() string {
+	if o == nil {
+		return ""
+	}
+
+	return o.secretStage
+}
+
+// DelegationID answers the stable ID of the delegation under which the
+// agent acted, and empty when the step had no delegation.
+func (o *Origin) DelegationID() string {
+	if o == nil {
+		return ""
+	}
+
+	return o.delegationID
+}
+
 // Entry is one append-only record of an action in a namespace. Namespace and
 // Sequence order the entries of one namespace: the first entry of a
 // namespace has sequence 1. Subject names the principal that acted.
@@ -220,9 +405,10 @@ func ValidateReason(reason string) error {
 // stays empty when the action had none. PrincipalKind is the kind of the
 // principal record that acted: "person", "service", "workload" or "agent",
 // and empty when the server cannot name the kind. JobID is the job whose
-// token acted, and empty for every other credential. Origin is the agent
-// block of an entry that an agent run made; nil means an ordinary entry
-// with no agent block.
+// token acted, and empty for every other credential. Origin names the agent
+// that acted for the subject, if any, and is nil for an ordinary entry. The
+// hash covers it in the agent/1 block, which stays out of the hash for a nil
+// Origin, so an entry from before the block keeps its hash.
 type Entry struct {
 	At            time.Time
 	Namespace     namespace.Name
@@ -252,11 +438,6 @@ type Entry struct {
 	Origin        *Origin
 }
 
-// Origin is the agent block of an audit entry: it names the agent run that
-// made the entry. It holds no values yet, and no code reads it yet: ComputeHash
-// and the stores do not encode it.
-type Origin struct{}
-
 // AtMs returns the time of the entry in Unix milliseconds, as stored.
 func (e Entry) AtMs() int64 {
 	return e.At.UnixMilli()
@@ -274,6 +455,12 @@ func (e Entry) Validate() error {
 	}
 
 	return e.validateHow()
+}
+
+// HasAgentBlock reports whether the entry carries agent data: its Origin
+// is not nil. Only then does the hash hold the agent/1 block.
+func (e Entry) HasAgentBlock() bool {
+	return e.Origin != nil
 }
 
 // validateWho checks the namespace, subject and time of the entry.
@@ -330,6 +517,43 @@ func (e Entry) validatePrincipal() error {
 	return nil
 }
 
+// validateAgent checks the agent origin of the entry. NewOrigin checks the
+// same invariants at construction; this check stays so that a new caller
+// cannot skip it.
+func (e Entry) validateAgent() error {
+	if e.Origin == nil {
+		return nil
+	}
+
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "agent run", value: e.Origin.run},
+		{name: "agent session", value: e.Origin.session},
+		{name: "tool", value: e.Origin.tool},
+		{name: "arguments digest", value: e.Origin.argsDigest},
+		{name: "secret stage", value: e.Origin.secretStage},
+		{name: "delegation ID", value: e.Origin.delegationID},
+	} {
+		switch {
+		case len(field.value) > MaxAgentFieldLen:
+			return fmt.Errorf("%w: %s longer than %d bytes", ErrInvalidEntry, field.name, MaxAgentFieldLen)
+		case !utf8.ValidString(field.value):
+			return fmt.Errorf("%w: %s is not valid UTF-8", ErrInvalidEntry, field.name)
+		case ident.HasHidden(field.value):
+			return fmt.Errorf("%w: %s holds a hidden character", ErrInvalidEntry, field.name)
+		}
+	}
+
+	if e.Origin.run == "" && e.Origin.session == "" && !e.Origin.breakGlass {
+		return fmt.Errorf("%w: the tool, the arguments digest, the secret stage and the delegation"+
+			" need the agent run or the agent session", ErrInvalidEntry)
+	}
+
+	return nil
+}
+
 // knownKind reports whether k is one of the kinds of this package.
 func knownKind(k Kind) bool {
 	switch k {
@@ -355,14 +579,14 @@ func (e Entry) validateHow() error {
 	case e.Outcome != OutcomeSuccess && e.Outcome != OutcomeFailure && e.Outcome != OutcomeDenied:
 		return fmt.Errorf("%w: unknown outcome %q", ErrInvalidEntry, e.Outcome)
 	default:
-		return nil
+		return e.validateAgent()
 	}
 }
 
 // knownChannel reports whether c is one of the channels of this package.
 func knownChannel(c Channel) bool {
 	switch c {
-	case ChannelAPI, ChannelConsole, ChannelStartup, ChannelConfigFile:
+	case ChannelAPI, ChannelConsole, ChannelStartup, ChannelConfigFile, ChannelAgent, ChannelMCP, ChannelMCPProxy:
 		return true
 	default:
 		return false
@@ -389,6 +613,11 @@ const hashLengthEnd = ':'
 // field, because every field starts with a decimal digit.
 const hashNoCount = '-'
 
+// agentBlockVersion names the version of the agent block in the hash. The
+// block writes this text length-prefixed, then the seven fields in a fixed
+// order, when the entry carries agent data.
+const agentBlockVersion = "agent/1"
+
 // ComputeHash returns the hex-encoded SHA-256 over the fixed encoding of the
 // fields of e and prevHash. The encoding writes each field as its byte
 // length in decimal, a colon, and its bytes, with nothing between fields,
@@ -404,7 +633,14 @@ const hashNoCount = '-'
 // does not set writes "0:". The length prefix makes the encoding injective:
 // two different lists of field values never give the same bytes, whatever
 // bytes a field holds. The hash takes no key: any installation can compute
-// it again from the stored fields.
+// it again from the stored fields. When the entry carries agent data (see
+// HasAgentBlock), the encoding appends the agent block: the length-prefixed
+// text agent/1, then agent run, agent session, tool, arguments digest,
+// break-glass as "true" or "false", secret stage and delegation ID, each
+// length-prefixed,
+// with an empty value when it is not set. Inside the block no field is
+// optional. An entry with no agent data hashes exactly as before the block
+// existed.
 func ComputeHash(e Entry, prevHash string) string {
 	return hashWithChanges(e, prevHash, EncodeChanges(e.Changes))
 }
@@ -459,6 +695,17 @@ func hashWithChanges(e Entry, prevHash, changesText string) string {
 	write(e.PrincipalKind)
 	write(e.JobID)
 	write(e.Reason)
+
+	if e.HasAgentBlock() {
+		write(agentBlockVersion)
+		write(e.Origin.run)
+		write(e.Origin.session)
+		write(e.Origin.tool)
+		write(e.Origin.argsDigest)
+		write(strconv.FormatBool(e.Origin.breakGlass))
+		write(e.Origin.secretStage)
+		write(e.Origin.delegationID)
+	}
 
 	sum := sha256.Sum256([]byte(sb.String()))
 

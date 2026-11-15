@@ -241,7 +241,7 @@ func TestStartJob(t *testing.T) {
 
 	checkStartRequest(t, starter.requests[0])
 
-	if actor := starter.actors[0]; actor.Principal.Subject != "ada" || actor.Agent != "" || actor.Mode != "" ||
+	if actor := starter.actors[0]; actor.Principal.Subject != "ada" || !actor.Agent.IsZero() || actor.Mode != "" ||
 		actor.ConfirmAuth != "" {
 		t.Fatalf("actor = %+v, want ada acting alone", actor)
 	}
