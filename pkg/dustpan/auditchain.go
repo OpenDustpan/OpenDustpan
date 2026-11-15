@@ -504,7 +504,13 @@ func (c *auditChain) commitApproval(ctx context.Context, caller audit.Entry, cha
 // context that a canceled request does not end, so that the undo is not
 // skipped.
 func (c *auditChain) undoApprovalEntry(ctx context.Context) error {
-	if err := c.leaveAfterMigration(context.WithoutCancel(ctx)); err != nil {
+	err := c.leaveAfterMigration(context.WithoutCancel(ctx))
+	if errors.Is(err, maintenance.ErrHeld) {
+		// A change still waits, and a waiting change keeps maintenance mode.
+		return nil
+	}
+
+	if err != nil {
 		return fmt.Errorf("undo the maintenance entry of a refused approval: %w", err)
 	}
 

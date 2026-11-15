@@ -12,8 +12,10 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // chainApprovalStore is the store surface the approval tests use: the audit
@@ -422,6 +424,101 @@ func checkConflictingStartKeyLeavesNoEntryPostgres(t *testing.T) {
 	if got := approvalEntryCount(t, st); got != 0 {
 		t.Fatalf("approval entries after a failed start = %d, want none", got)
 	}
+}
+
+// errApprovalCommit is the injected failure of an approval commit.
+var errApprovalCommit = errors.New("injected commit failure")
+
+// failingApprovalStore wraps the store of a server and fails each atomic
+// approval with err. Before it fails, it clears the waiting change, as the
+// end of a migration of another approval does between the check and the
+// commit of this one.
+type failingApprovalStore struct {
+	*sqlite.Store
+
+	err error
+}
+
+func (f failingApprovalStore) ApproveChainChange(
+	ctx context.Context, e audit.Entry, fixed durable.StartRequest, retryKey string,
+) (durable.Operation, error) {
+	if f.err == nil {
+		return f.Store.ApproveChainChange(ctx, e, fixed, retryKey)
+	}
+
+	rec, err := f.ChainRecord(ctx)
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	rec.Pending = false
+
+	err = f.SaveChainRecord(ctx, rec)
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	return durable.Operation{}, f.err
+}
+
+// TestApprovalThatEntersMaintenanceAndFailsLeavesIt proves that an approval
+// that moved the installation from normal operation to maintenance mode and
+// then fails to commit puts the installation back to normal operation and
+// clears the mark in the stored record. The test puts the installation back
+// to normal operation by hand, as the end of a migration of another approval
+// does, before it sends the approval.
+func TestApprovalThatEntersMaintenanceAndFailsLeavesIt(t *testing.T) {
+	t.Parallel()
+
+	st := openChainStore(t)
+	ns := createChainNamespace(t, st)
+	appendChainEntry(t, st, ns, "req-1")
+
+	errCommit := errApprovalCommit
+	srv := runChainServer(
+		t,
+		st,
+		audit.ChainOff,
+		dustpan.WithNamespaceStore(failingApprovalStore{Store: st, err: errCommit}),
+	)
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
+	waitForMaintenance(t, st, maintenance.StateMaintenance)
+
+	rec, err := st.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("read chain record: %v", err)
+	}
+
+	rec.EnteredMaintenance = false
+
+	err = st.SaveChainRecord(t.Context(), rec)
+	if err != nil {
+		t.Fatalf("clear the maintenance mark: %v", err)
+	}
+
+	err = st.SetState(t.Context(), maintenance.StateNormal)
+	if err != nil {
+		t.Fatalf("set normal operation: %v", err)
+	}
+
+	if status, body := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status == http.StatusAccepted {
+		t.Fatalf("approve with a failing commit: %d %s, want a failure", status, body)
+	}
+
+	if got, stateErr := st.GetState(t.Context()); stateErr != nil || got != maintenance.StateNormal {
+		t.Fatalf("state after a failed approval = %q, %v, want normal", got, stateErr)
+	}
+
+	after, err := st.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("read chain record: %v", err)
+	}
+
+	if after.EnteredMaintenance {
+		t.Fatalf("record after a failed approval = %+v, want no maintenance mark", after)
+	}
+
+	srv.stop()
 }
 
 // TestApprovalAfterACanceledMigrationStartsOneOperation proves the retry of
