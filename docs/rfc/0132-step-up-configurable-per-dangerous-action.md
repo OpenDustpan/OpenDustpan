@@ -66,10 +66,6 @@ option 3 above). The choice between option 2 and option 3 is open.
   recovery path.
 - Does a weaker setting for one action need a fresh step while the action is
   required (ADR 385 decision 4)?
-- What is the precedence between the three levels? Recommendation: the
-  stricter setting wins. A lower level (federation under installation,
-  namespace under federation) can turn a requirement on and cannot turn it
-  off. The owner has not decided this. It is not in the ADR.
 - Where does the settings API show the effective value of each action, and
   where does it come from (ADR 212 decision 9)?
 - Which actions never become configurable? The first-administrator code (ADR
@@ -91,6 +87,12 @@ setting `freshAuthEnabled`, the per-action step-up settings (break-glass,
 factor reset, enrollment code) and the MFA mandate are configurable at three
 levels: the installation, the federation (see "Federation" in `GLOSSARY.md`)
 and the namespace.
+
+Precedence between the three levels (owner, 15 November 2026: "As always the
+strictest setting always applies."): across the installation, the federation
+and the namespace, the strictest setting applies. A lower level can turn a
+requirement on and cannot turn it off. ADR 385 decision 8 records it. Where a
+federation-level value is stored is not decided.
 
 ## What main has (15 November 2026)
 

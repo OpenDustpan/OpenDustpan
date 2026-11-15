@@ -45,6 +45,7 @@ The result today: an installation with an SSO provider cannot approve a `destroy
    They protect the sign-in system itself. The owner can widen the setting to them with a new decision.
 6. **The stored rules stay and show that they are not enforced (PM).** An approval rule with `freshAuthSeconds` keeps its stored value while the setting is off. A namespace with `freshAuthForApprovals` on keeps it too. The settings API and the rule API show `"enforced": false` for each of them. The server writes no silent change to a rule.
 7. **Agents (PM).** ADR 354 stays: an agent never has a fresh authentication, and an agent holds no right that a person has. The setting removes the step for a person. It gives an agent no new action.
+8. **The strictest setting applies (owner, 2026-11-15).** The setting may exist at three levels: the installation, the federation and the namespace. Across these levels, the strictest setting always applies. A lower level can turn a requirement on. It cannot turn it off. The place for a federation-level value is open (RFC 132).
 
 ## Consequences
 
