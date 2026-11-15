@@ -1443,9 +1443,30 @@ func checkWriteMinimum(minimums, binaryVersion string) error {
 
 // inReadTx runs fn in a read-only transaction. It begins as DEFERRED, not
 // IMMEDIATE, so it takes no write lock, and every read of fn sees one
-// snapshot of the database. The deferred close ends the transaction on
-// success, on error and on panic, so a panic in fn cannot leave it open.
-func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) (err error) {
+// snapshot of the database.
+func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	tx, err := s.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin read transaction: %w", err)
+	}
+
+	if err := fn(s.queries.WithTx(tx)); err != nil {
+		return errors.Join(err, rollback(tx))
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit read transaction: %w", err)
+	}
+
+	return nil
+}
+
+// inDeletedFactsReadTx runs fn in a read-only transaction like inReadTx, and
+// ends the transaction on every path: success, error and panic. Only
+// GetDeletedUnitFacts calls it, so the deferred close stays on the
+// deleted-unit facts read path. The transaction begins as DEFERRED, not
+// IMMEDIATE, so it takes no write lock.
+func (s *Store) inDeletedFactsReadTx(ctx context.Context, fn func(q *db.Queries) error) (err error) {
 	tx, beginErr := s.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
 	if beginErr != nil {
 		return fmt.Errorf("begin read transaction: %w", beginErr)

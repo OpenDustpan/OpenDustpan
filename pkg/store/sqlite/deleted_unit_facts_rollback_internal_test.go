@@ -22,7 +22,7 @@ var (
 // rollback returns rollbackErr and reports that the read transaction reached
 // Rollback. The SQLite driver does not fail the rollback of a read-only
 // transaction on demand, so the tests use this connection to reach the
-// rollback branch of inReadTx.
+// rollback branch of inDeletedFactsReadTx.
 type fakeReadConn struct {
 	rollbackErr    error
 	rollbackCalled bool
@@ -87,65 +87,66 @@ func TestDeletedUnitFactsSelectAndRollbackFailure(t *testing.T) {
 
 	store, conn := fakeReadStore(t, errFakeRollback)
 
-	err := store.inReadTx(t.Context(), func(*db.Queries) error { return errFakeSelect })
+	err := store.inDeletedFactsReadTx(t.Context(), func(*db.Queries) error { return errFakeSelect })
 
 	if !errors.Is(err, errFakeSelect) {
-		t.Fatalf("inReadTx() = %v, want the select error", err)
+		t.Fatalf("inDeletedFactsReadTx() = %v, want the select error", err)
 	}
 
 	if !errors.Is(err, errFakeRollback) {
-		t.Fatalf("inReadTx() = %v, want the rollback error in the same error", err)
+		t.Fatalf("inDeletedFactsReadTx() = %v, want the rollback error in the same error", err)
 	}
 
 	if !conn.rollbackCalled {
-		t.Fatal("inReadTx() left the read transaction open, want a rollback")
+		t.Fatal("inDeletedFactsReadTx() left the read transaction open, want a rollback")
 	}
 }
 
-// TestInReadTxRollbackThenClose proves the rollback-then-close path of the
-// read: the explicit rollback runs, the deferred close then runs as a no-op
-// on the ended transaction, and the call returns the first error, the select
-// error.
-func TestInReadTxRollbackThenClose(t *testing.T) {
+// TestInDeletedFactsReadTxRollbackThenClose proves the rollback-then-close
+// path of the read: the explicit rollback runs, the deferred close then runs
+// as a no-op on the ended transaction, and the call returns the first error,
+// the select error.
+func TestInDeletedFactsReadTxRollbackThenClose(t *testing.T) {
 	t.Parallel()
 
 	store, conn := fakeReadStore(t, nil)
 
-	err := store.inReadTx(t.Context(), func(*db.Queries) error { return errFakeSelect })
+	err := store.inDeletedFactsReadTx(t.Context(), func(*db.Queries) error { return errFakeSelect })
 
 	if !errors.Is(err, errFakeSelect) {
-		t.Fatalf("inReadTx() = %v, want the select error", err)
+		t.Fatalf("inDeletedFactsReadTx() = %v, want the select error", err)
 	}
 
 	if strings.Contains(err.Error(), "roll back transaction") {
-		t.Fatalf("inReadTx() = %v, want no rollback error on the rollback-then-close path", err)
+		t.Fatalf("inDeletedFactsReadTx() = %v, want no rollback error on the rollback-then-close path", err)
 	}
 
 	if !conn.rollbackCalled {
-		t.Fatal("inReadTx() left the read transaction open, want a rollback")
+		t.Fatal("inDeletedFactsReadTx() left the read transaction open, want a rollback")
 	}
 }
 
-// TestInReadTxClosesOnPanic proves the deferred close of the read
+// TestInDeletedFactsReadTxClosesOnPanic proves the deferred close of the read
 // transaction: a panic in fn must not leave the transaction open.
-func TestInReadTxClosesOnPanic(t *testing.T) {
+func TestInDeletedFactsReadTxClosesOnPanic(t *testing.T) {
 	t.Parallel()
 
 	store, conn := fakeReadStore(t, errFakeRollback)
 
 	defer func() {
 		if recover() == nil {
-			t.Error("inReadTx() did not panic, want the panic of fn")
+			t.Error("inDeletedFactsReadTx() did not panic, want the panic of fn")
 
 			return
 		}
 
 		if !conn.rollbackCalled {
-			t.Error("inReadTx() left the read transaction open after the panic")
+			t.Error("inDeletedFactsReadTx() left the read transaction open after the panic")
 		}
 	}()
 
-	if err := store.inReadTx(t.Context(), func(*db.Queries) error { panic("the read panicked") }); err != nil {
-		t.Errorf("inReadTx() = %v, want the panic of fn", err)
+	err := store.inDeletedFactsReadTx(t.Context(), func(*db.Queries) error { panic("the read panicked") })
+	if err != nil {
+		t.Errorf("inDeletedFactsReadTx() = %v, want the panic of fn", err)
 	}
 }
