@@ -11,8 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/blob"
 )
 
@@ -97,10 +97,11 @@ func isTransientNetwork(err error) bool {
 	return ok && netErr.Timeout()
 }
 
-// stripControl drops CR, LF and the other control characters from text.
+// stripControl drops CR, LF, the other control characters, the format
+// characters and the line and paragraph separators from text.
 func stripControl(text string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if ident.IsHiddenRune(r) {
 			return -1
 		}
 
@@ -119,9 +120,10 @@ func capText(text string, limit int) string {
 	return strings.ToValidUTF8(text[:limit-len(marker)], "") + marker
 }
 
-// logText returns err text that is safe for a log record: it drops CR, LF
-// and the other control characters and it holds at most maxLogErrorBytes
-// bytes. The text can hold data from the store, so it is untrusted.
+// logText returns err text that is safe for a log record: it drops CR, LF,
+// the other control characters, the format characters and the line and
+// paragraph separators, and it holds at most maxLogErrorBytes bytes. The
+// text can hold data from the store, so it is untrusted.
 func logText(err error) string {
 	return capText(stripControl(err.Error()), maxLogErrorBytes)
 }

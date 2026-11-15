@@ -18,9 +18,9 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/notify"
 )
 
@@ -172,26 +172,20 @@ func (c Content) validateCharacters() error {
 
 	for _, s := range texts {
 		if !utf8.ValidString(s) || strings.ContainsFunc(s, forbiddenRune) {
-			return fmt.Errorf("%w: a chat message holds only valid text with no control character", notify.ErrInvalid)
+			return fmt.Errorf("%w: a chat message holds only valid text with no control, format or separator character",
+				notify.ErrInvalid)
 		}
 	}
 
 	return nil
 }
 
-// forbiddenRune reports whether r is a control character other than a line
-// feed, or a bidirectional control character.
+// forbiddenRune reports whether r is a hidden rune other than a line feed:
+// a control, format or separator character. The format characters include
+// the bidirectional controls and the zero-width characters, which can make
+// one text read as another.
 func forbiddenRune(r rune) bool {
-	switch {
-	case r == '\n':
-		return false
-	case unicode.IsControl(r):
-		return true
-	case r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
-		return true
-	default:
-		return false
-	}
+	return ident.IsHiddenRuneExcept(r, '\n')
 }
 
 // validID reports whether id is a notification ID that is safe to use in a

@@ -49,7 +49,7 @@ var (
 	// ErrInvalidRule reports an ignore rule that fails validation.
 	ErrInvalidRule = errors.New("invalid ignore rule")
 	// ErrInvalidReason reports an ignore reason that is empty, too long or
-	// holds control characters.
+	// holds a hidden character.
 	ErrInvalidReason = errors.New("invalid reason")
 	// ErrTransition reports an event that the state table does not allow
 	// in the current state.
@@ -155,8 +155,8 @@ type ResourceKey struct {
 func (k ResourceKey) String() string { return k.Provider + "|" + k.ID }
 
 // NormalizeKey checks k and returns its normal form. It returns ErrInvalidKey
-// for an invalid provider, an empty ID, an ID above MaxKeyIDBytes or with
-// space or control characters, and an ID that does not have the form of its
+// for an invalid provider, an empty ID, an ID above MaxKeyIDBytes or with a
+// space or a hidden character, and an ID that does not have the form of its
 // known provider.
 //
 // The rules: an Azure ID is in lowercase with no trailing slash, because
@@ -167,7 +167,7 @@ func NormalizeKey(k ResourceKey) (ResourceKey, error) {
 	}
 
 	if k.ID == "" || len(k.ID) > MaxKeyIDBytes || strings.ContainsFunc(k.ID, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsControl(r)
+		return unicode.IsSpace(r) || ident.IsHiddenRune(r)
 	}) {
 		return k, fmt.Errorf("%w: ID", ErrInvalidKey)
 	}

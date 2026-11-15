@@ -23,7 +23,7 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/cron"
-	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -259,7 +259,7 @@ func validateSaver(saver string) error {
 		return fmt.Errorf("%w: a trigger has a last saver", ErrInvalid)
 	case len(saver) > MaxSaverBytes:
 		return fmt.Errorf("%w: the last saver has at most %d bytes", ErrInvalid, MaxSaverBytes)
-	case !utf8.ValidString(saver) || strings.ContainsFunc(saver, audit.IsHiddenRune):
+	case !utf8.ValidString(saver) || ident.HasHidden(saver):
 		return fmt.Errorf("%w: the last saver has a byte that is not allowed", ErrInvalid)
 	case identity.IsNamespaceServiceSubject(saver):
 		return fmt.Errorf("%w: a namespace service principal cannot be the last saver", ErrInvalid)
@@ -278,7 +278,7 @@ func validateSaverID(id string) error {
 		return fmt.Errorf("%w: a trigger has the principal ID of its last saver", ErrInvalid)
 	case len(id) > MaxSaverBytes:
 		return fmt.Errorf("%w: the principal ID of the last saver has at most %d bytes", ErrInvalid, MaxSaverBytes)
-	case !utf8.ValidString(id) || strings.ContainsFunc(id, audit.IsHiddenRune):
+	case !utf8.ValidString(id) || ident.HasHidden(id):
 		return fmt.Errorf("%w: the principal ID of the last saver has a byte that is not allowed", ErrInvalid)
 	default:
 		return nil
