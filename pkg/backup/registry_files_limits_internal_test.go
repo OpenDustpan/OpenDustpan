@@ -2,6 +2,7 @@ package backup
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -49,6 +50,35 @@ func TestRegistryFileBlobKeyRefusesHostileNamespaceIDs(t *testing.T) {
 	}
 }
 
+// countingRegistryStore is a RegistryFileStore that counts every call.
+type countingRegistryStore struct {
+	calls int
+}
+
+func (c *countingRegistryStore) Has(context.Context, string) (bool, error) {
+	c.calls++
+
+	return false, nil
+}
+
+func (c *countingRegistryStore) Read(context.Context, string) ([]byte, error) {
+	c.calls++
+
+	return nil, nil
+}
+
+func (c *countingRegistryStore) Write(context.Context, string, []byte) error {
+	c.calls++
+
+	return nil
+}
+
+func (c *countingRegistryStore) Remove(context.Context, string) error {
+	c.calls++
+
+	return nil
+}
+
 // TestRestoreRegistryFilesRefusesHostileNamespaceIDs sends a hostile target
 // namespace ID straight to the exported restore. It writes nothing.
 func TestRestoreRegistryFilesRefusesHostileNamespaceIDs(t *testing.T) {
@@ -57,9 +87,12 @@ func TestRestoreRegistryFilesRefusesHostileNamespaceIDs(t *testing.T) {
 	section := &RegistryFileSection{Version: RegistryFileSectionVersion, Files: nil}
 
 	for _, id := range []string{"", "a/b", "ns-a/../ns-b", "ns-a\nx"} {
-		warning, err := RestoreRegistryFiles(t.Context(), section, nil, id, nil)
-		if !errors.Is(err, ErrCorrupt) || warning.Code != "" {
-			t.Fatalf("RestoreRegistryFiles(%q) = %v, %v, want ErrCorrupt and no warning", id, warning, err)
+		store := &countingRegistryStore{calls: 0}
+
+		warning, err := RestoreRegistryFiles(t.Context(), section, nil, id, store)
+		if !errors.Is(err, ErrCorrupt) || warning.Code != "" || store.calls != 0 {
+			t.Fatalf("RestoreRegistryFiles(%q) = %v, %v, %d store calls, want ErrCorrupt, no warning, 0 calls",
+				id, warning, err, store.calls)
 		}
 	}
 }
