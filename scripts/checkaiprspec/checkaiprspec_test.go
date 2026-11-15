@@ -270,6 +270,24 @@ func TestCheckAIPRSpec(t *testing.T) {
 			wantPass:  false,
 			want:      "refused id",
 		},
+		{
+			name:      "id with a trailing slash is refused",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\nChange: openspec/changes/demo-ready/\n",
+			commits:   "someone@example.com\n",
+			wantPass:  false,
+			want:      "refused id",
+		},
+		{
+			name:      "sentence punctuation after the id does not join the id",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\nSee openspec/changes/demo-ready.\n",
+			commits:   "someone@example.com\n",
+			wantPass:  true,
+			want:      "demo-ready is spec-ready",
+		},
 	}
 
 	for _, tt := range tests {

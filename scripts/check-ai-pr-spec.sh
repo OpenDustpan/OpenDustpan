@@ -78,8 +78,10 @@ fi
 
 # Collect candidate ids from lines outside fenced code blocks. A fence line
 # starts with ``` or ~~~ (with an optional language tag). The id on a link
-# line is the text after openspec/changes/ up to a space, quote, bracket or
-# paren. The read loop avoids mapfile, which the bash of macOS lacks.
+# line is the text after openspec/changes/ up to a space, quote, bracket,
+# paren or sentence punctuation. The awk stops the token at that boundary,
+# so the script validates the token as the body wrote it. The read loop
+# avoids mapfile, which the bash of macOS lacks.
 link_ids=()
 while IFS= read -r link_id; do
   link_ids+=("$link_id")
@@ -88,7 +90,7 @@ done < <(awk '
   in_fence { next }
   {
     line = $0
-    while (match(line, /openspec\/changes\/[^ [:space:]"\x27`()<>]+/)) {
+    while (match(line, /openspec\/changes\/[^ [:space:]"\x27`()<>.,;:!?]*/)) {
       hit = substr(line, RSTART, RLENGTH)
       id = substr(hit, length("openspec/changes/") + 1)
       print id
@@ -97,8 +99,10 @@ done < <(awk '
   }
 ' "$body_file")
 
-# An id holds only lowercase letters, digits and hyphens. Anything else is
-# refused before the script builds a path from it.
+# An id holds only lowercase letters, digits and hyphens. The awk above stops
+# the token at sentence punctuation, so the script checks the token as it is
+# and never removes characters from it. Anything else is refused before the
+# script builds a path from it.
 # Defense in depth: the containment check below refuses a resolved path
 # outside openspec/changes too, even when this allowlist changes.
 valid_ids=()
@@ -106,21 +110,11 @@ refused_note=""
 # The guard keeps the empty-array case working on the bash of macOS (3.2),
 # where a bare "${link_ids[@]}" on an empty array with set -u fails.
 if [[ ${#link_ids[@]} -gt 0 ]]; then
-  for raw in "${link_ids[@]}"; do
-    # Strip trailing slashes and sentence punctuation that the text around
-    # the link adds. Pure bash, so the strip works the same on the bash of
-    # Linux and of macOS.
-    id="$raw"
-    while true; do
-      case "$id" in
-      *"/" | *"." | *"," | *";" | *":" | *"!" | *"?" | *")") id="${id%?}" ;;
-      *) break ;;
-      esac
-    done
-    if [[ -z "$id" ]]; then
-      refused_note="refused id \"$raw\": an id holds only lowercase letters, digits and hyphens"
-      continue
-    fi
+  for id in "${link_ids[@]}"; do
+    # A token that holds a character other than a lowercase letter, a digit
+    # or a hyphen fails this allowlist and is refused. A bare
+    # "openspec/changes/" or an id that starts with sentence punctuation
+    # gives an empty token, which also fails the allowlist.
     if [[ ! "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
       refused_note="refused id \"$id\": an id holds only lowercase letters, digits and hyphens"
       continue
