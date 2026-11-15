@@ -57,7 +57,11 @@ type zeroRow struct{}
 
 // Scan implements pgx.Row.
 func (zeroRow) Scan(dest ...any) error {
-	if p, ok := dest[0].(*int64); ok {
+	if len(dest) == 0 {
+		return nil
+	}
+
+	if p, ok := dest[0].(*int64); ok && p != nil {
 		*p = 0
 	}
 
