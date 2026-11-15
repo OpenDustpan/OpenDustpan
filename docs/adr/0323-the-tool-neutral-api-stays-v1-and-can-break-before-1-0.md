@@ -5,6 +5,7 @@ Status: accepted · 2026-11-02. Decisions 1, 2 and 4 are owner decisions. Decisi
 Changed by:
 
 - ADR 325 changes decision 2: the version test of the description skips only while the release record lists no shipped migration file.
+- ADR 383 extends decision 3: the layout of the generated files, and the resolve run of the bot that is not canceled.
 
 Changes:
 
