@@ -240,6 +240,9 @@ func startProduction(t *testing.T, bin, dir, targetDir string, extra ...string) 
 		"serve", "--database", "sqlite:" + filepath.Join(dir, "serve.db"),
 		"--key-encryption-key-file", keyFile,
 		"--listen", addr, "--blob-dir", filepath.Join(dir, "blobs"), "--backup-target", "dir:" + targetDir,
+		// The public URL names this listener, so the server signs its module
+		// file URLs for an address that the test can reach.
+		"--public-url", "http://" + addr,
 	}
 
 	args := slices.Concat(base, extra)

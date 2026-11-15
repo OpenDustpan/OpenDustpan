@@ -139,16 +139,40 @@ func newBackupFixture(
 ) backupFixture {
 	t.Helper()
 
-	return newBackupFixtureWorkers(t, stores, exporter, now, nil)
+	return newBackupFixtureWithAuthorizer(t, stores, exporter, now, nil)
 }
 
-// newBackupFixtureWorkers is newBackupFixture with the worker check of the
-// server.
-func newBackupFixtureWorkers(
+// newBackupFixtureWithAuthorizer is newBackupFixture with the authorizer the
+// caller names, so a test can deny the backup action. A nil authorizer allows
+// every action.
+func newBackupFixtureWithAuthorizer(
 	t *testing.T, stores backupStores, exporter backup.PortableExporter, now func() time.Time,
-	workers apiserver.WorkerSource,
+	authz identity.Authorizer,
 ) backupFixture {
 	t.Helper()
+
+	return newBackupFixtureWorkers(t, stores, exporter, now, backupFixtureOptions{workers: nil, authz: authz})
+}
+
+// backupFixtureOptions holds the optional parts of a backup fixture: the
+// worker source and the authorizer of the handler.
+type backupFixtureOptions struct {
+	workers apiserver.WorkerSource
+	authz   identity.Authorizer
+}
+
+// newBackupFixtureWorkers is newBackupFixture with the options of the caller:
+// the worker check of the handler and its authorizer.
+func newBackupFixtureWorkers(
+	t *testing.T, stores backupStores, exporter backup.PortableExporter, now func() time.Time,
+	opts backupFixtureOptions,
+) backupFixture {
+	t.Helper()
+
+	workers, authz := opts.workers, opts.authz
+	if authz == nil {
+		authz = selectiveAuthorizer{deny: map[identity.Action]bool{}}
+	}
 
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
@@ -203,7 +227,7 @@ func newBackupFixtureWorkers(
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Authorizer:       authz,
 		Logger:           slog.New(slog.DiscardHandler),
 		Namespaces:       namespaces,
 		Backups:          service,
@@ -692,5 +716,45 @@ func TestBackupWithoutTarget(t *testing.T) {
 			doc.Message != "no backup target is configured: set --backup-target" {
 			t.Fatalf("%s %s error = %+v, want the fixed no-target message", tc.method, tc.path, doc)
 		}
+	}
+}
+
+// TestBackupStartWithoutGrantAnswers403 proves POST /api/server/backups
+// answers 403 when the principal holds no server:backup on the installation,
+// with the one JSON error shape, and that the denied start writes no row.
+func TestBackupStartWithoutGrantAnswers403(t *testing.T) {
+	t.Parallel()
+
+	stores := openBackupDeps(t)
+	allowed := newBackupFixture(t, stores, stores.registry, nil)
+
+	denyBackup := selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionServerBackup: true}}
+	denied := newBackupFixtureWithAuthorizer(t, stores, stores.registry, nil, denyBackup)
+
+	status, body := serveBackup(t, denied.handler, http.MethodPost, "/api/server/backups")
+	if status != http.StatusForbidden {
+		t.Fatalf("POST backups without the grant answers %d, want %d (%s)",
+			status, http.StatusForbidden, body)
+	}
+
+	if doc := decodeError(t, body); doc.Code != http.StatusForbidden || doc.Message == "" {
+		t.Fatalf("POST backups error = %+v, want code 403 with a message", doc)
+	}
+
+	status, body = serveBackup(t, allowed.handler, http.MethodGet, "/api/server/backups")
+	if status != http.StatusOK {
+		t.Fatalf("GET backups answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var doc struct {
+		Backups []getBackupDoc `json:"backups"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode backup list %q: %v", body, err)
+	}
+
+	if len(doc.Backups) != 0 {
+		t.Fatalf("backup list holds %v after the denied start, want none", doc.Backups)
 	}
 }

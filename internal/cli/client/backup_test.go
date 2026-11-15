@@ -73,3 +73,56 @@ func TestBackupReadsTheManifestWithItsOwnCap(t *testing.T) {
 		})
 	}
 }
+
+// TestBackupReportsRegistryFiles proves the registry file report of the
+// backup command: the row holds the registry file sections of the manifest,
+// and the command prints the count of the copied files and their total bytes.
+// A manifest with no section prints the report of zero files. The test sets
+// the admin token, so it cannot run in parallel.
+func TestBackupReportsRegistryFiles(t *testing.T) {
+	tests := []struct {
+		name string
+		row  string
+		want string
+	}{
+		{
+			name: "one file",
+			row: `{"id":"b1","state":"succeeded","manifest":{"sqlSize":10,` +
+				`"registryFiles":{"ns-1":{"version":1,"files":[` +
+				`{"sha256":"a","size":7,"release":"net","version":"1.0.0"}]}}}}`,
+			want: "registry files: 1 files, 7 bytes\n",
+		},
+		{
+			name: "shared and empty namespaces",
+			row: `{"id":"b1","state":"succeeded","manifest":{"sqlSize":10,` +
+				`"registryFiles":{"ns-1":{"version":1,"files":[` +
+				`{"sha256":"a","size":7,"release":"net","version":"1.0.0"},` +
+				`{"sha256":"b","size":3,"release":"net","version":"1.0.0"}]},` +
+				`"ns-2":{"version":1,"files":[]}}}}`,
+			want: "registry files: 2 files, 10 bytes\n",
+		},
+		{
+			name: "no section",
+			row:  `{"id":"b1","state":"succeeded","manifest":{"sqlSize":10}}`,
+			want: "registry files: 0 files, 0 bytes\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := serveBackupRow(t, tt.row)
+
+			t.Setenv("DUSTPAN_ADMIN_TOKEN", "test-token")
+
+			var stdout, stderr bytes.Buffer
+
+			if err := client.BackupCommand(t.Context(), []string{"--server", srv.URL}, &stdout, &stderr); err != nil {
+				t.Fatalf("backup: %v\n%s", err, stderr.String())
+			}
+
+			if !strings.Contains(stdout.String(), tt.want) {
+				t.Errorf("backup output %q lacks %q", stdout.String(), tt.want)
+			}
+		})
+	}
+}

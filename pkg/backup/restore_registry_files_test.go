@@ -1,6 +1,7 @@
 package backup_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -16,12 +17,12 @@ func newMemRegistryStore() *memRegistryStore {
 	return &memRegistryStore{files: make(map[string][]byte), removed: nil}
 }
 
-func (m *memRegistryStore) Has(key string) (bool, error) {
+func (m *memRegistryStore) Has(_ context.Context, key string) (bool, error) {
 	_, ok := m.files[key]
 	return ok, nil
 }
 
-func (m *memRegistryStore) Read(key string) ([]byte, error) {
+func (m *memRegistryStore) Read(_ context.Context, key string) ([]byte, error) {
 	b, ok := m.files[key]
 	if !ok {
 		return nil, errTestMissing(key)
@@ -30,12 +31,12 @@ func (m *memRegistryStore) Read(key string) ([]byte, error) {
 	return b, nil
 }
 
-func (m *memRegistryStore) Write(key string, content []byte) error {
+func (m *memRegistryStore) Write(_ context.Context, key string, content []byte) error {
 	m.files[key] = content
 	return nil
 }
 
-func (m *memRegistryStore) Remove(key string) error {
+func (m *memRegistryStore) Remove(_ context.Context, key string) error {
 	delete(m.files, key)
 	m.removed = append(m.removed, key)
 	return nil
@@ -69,7 +70,7 @@ func TestRestoreRegistryFiles(t *testing.T) {
 	files := map[string][]byte{h: []byte("registry-file-a")}
 	store := newMemRegistryStore()
 
-	warn, err := backup.RestoreRegistryFiles(section, files, "ns-target", store)
+	warn, err := backup.RestoreRegistryFiles(t.Context(), section, files, "ns-target", store)
 	if err != nil {
 		t.Fatalf("RestoreRegistryFiles = %v", err)
 	}
@@ -100,7 +101,7 @@ func TestRestoreMissingRegistryFile(t *testing.T) {
 	section := registrySection([]string{h})
 	store := newMemRegistryStore()
 
-	warn, err := backup.RestoreRegistryFiles(section, map[string][]byte{}, "ns-target", store)
+	warn, err := backup.RestoreRegistryFiles(t.Context(), section, map[string][]byte{}, "ns-target", store)
 	if err == nil || !strings.Contains(err.Error(), h) {
 		t.Fatalf("RestoreRegistryFiles missing = %v, want error naming %q", err, h)
 	}
@@ -125,7 +126,7 @@ func TestRestorePartialManifestWritesNothing(t *testing.T) {
 	}
 	store := newMemRegistryStore()
 
-	warn, err := backup.RestoreRegistryFiles(hostile, map[string][]byte{}, "ns-target", store)
+	warn, err := backup.RestoreRegistryFiles(t.Context(), hostile, map[string][]byte{}, "ns-target", store)
 	if err == nil {
 		t.Fatal("RestoreRegistryFiles hostile = nil, want refusal before any write")
 	}
@@ -147,7 +148,7 @@ func TestRestoreCorruptBytes(t *testing.T) {
 	files := map[string][]byte{h: []byte("altered-bytes")}
 	store := newMemRegistryStore()
 
-	warn, err := backup.RestoreRegistryFiles(section, files, "ns-target", store)
+	warn, err := backup.RestoreRegistryFiles(t.Context(), section, files, "ns-target", store)
 	if err == nil || !strings.Contains(err.Error(), h) {
 		t.Fatalf("RestoreRegistryFiles corrupt = %v, want error naming %q", err, h)
 	}
@@ -166,7 +167,7 @@ func TestRestoreLegacyWithoutEntries(t *testing.T) {
 
 	store := newMemRegistryStore()
 
-	warn, err := backup.RestoreRegistryFiles(nil, map[string][]byte{}, "ns-target", store)
+	warn, err := backup.RestoreRegistryFiles(t.Context(), nil, map[string][]byte{}, "ns-target", store)
 	if err != nil {
 		t.Fatalf("RestoreRegistryFiles legacy = %v", err)
 	}
@@ -175,12 +176,12 @@ func TestRestoreLegacyWithoutEntries(t *testing.T) {
 		t.Fatalf("RestoreRegistryFiles legacy warn = %+v, want code %q", warn, backup.WarnRegistryFilesAbsent)
 	}
 
-	if !strings.Contains(warn.Text, "opendustpan backup create --namespace <namespace>") {
+	if !strings.Contains(warn.Text, "opendustpan backup") {
 		t.Fatalf("warning %q does not name the backup command", warn.Text)
 	}
 
 	empty := &backup.RegistryFileSection{Version: backup.RegistryFileSectionVersion, Files: nil}
-	warn, err = backup.RestoreRegistryFiles(empty, map[string][]byte{}, "ns-target", store)
+	warn, err = backup.RestoreRegistryFiles(t.Context(), empty, map[string][]byte{}, "ns-target", store)
 	if err != nil || warn.Code != "" {
 		t.Fatalf("RestoreRegistryFiles empty = (%+v, %v), want no warning and no error", warn, err)
 	}
@@ -195,7 +196,7 @@ func TestRestoreIdempotentRetry(t *testing.T) {
 	files := map[string][]byte{h1: []byte("registry-file-a"), h2: []byte("registry-file-b")}
 	store := newMemRegistryStore()
 
-	warn, err := backup.RestoreRegistryFiles(section, files, "ns-target", store)
+	warn, err := backup.RestoreRegistryFiles(t.Context(), section, files, "ns-target", store)
 	if err != nil {
 		t.Fatalf("first RestoreRegistryFiles = %v", err)
 	}
@@ -205,7 +206,7 @@ func TestRestoreIdempotentRetry(t *testing.T) {
 	}
 
 	// A retry over existing keys keeps matching keys and completes.
-	warn, err = backup.RestoreRegistryFiles(section, files, "ns-target", store)
+	warn, err = backup.RestoreRegistryFiles(t.Context(), section, files, "ns-target", store)
 	if err != nil {
 		t.Fatalf("retry RestoreRegistryFiles = %v", err)
 	}
@@ -229,7 +230,7 @@ func TestRestoreAuthorizedAudited(t *testing.T) {
 	files := map[string][]byte{h: []byte("registry-file-a")}
 	store := newMemRegistryStore()
 
-	warn, err := backup.RestoreRegistryFiles(section, files, "", store)
+	warn, err := backup.RestoreRegistryFiles(t.Context(), section, files, "", store)
 	if err == nil {
 		t.Fatal("RestoreRegistryFiles empty namespace = nil, want refusal")
 	}

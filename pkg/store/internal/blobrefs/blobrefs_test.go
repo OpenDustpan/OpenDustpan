@@ -345,22 +345,26 @@ func TestCollectorRelease(t *testing.T) {
 	stored := registry.StoredFile{SHA256: hashA, Size: 5, MD5: md5Hex}
 
 	tests := []struct {
-		name  string
-		files []registry.StoredFile
-		times int
-		want  collected
+		name    string
+		files   []registry.StoredFile
+		times   int
+		want    collected
+		wantErr bool
 	}{
 		{
 			name: "a file with stored values is copied", files: []registry.StoredFile{stored}, times: 1,
-			want: collected{keys: []string{key}, unverified: nil},
+			want: collected{keys: []string{key}, unverified: nil}, wantErr: false,
 		},
 		{
-			name: "a release without stored values is listed as not copied", files: nil, times: 1,
-			want: collected{keys: nil, unverified: []string{key}},
+			// A published release that names a file its row holds no stored
+			// values of stops the backup: a restored registry that names a
+			// missing file breaks installs.
+			name: "a release without stored values stops the backup", files: nil, times: 1,
+			want: collected{keys: nil, unverified: nil}, wantErr: true,
 		},
 		{
 			name: "a hash that two releases share is added once", files: []registry.StoredFile{stored}, times: 2,
-			want: collected{keys: []string{key}, unverified: nil},
+			want: collected{keys: []string{key}, unverified: nil}, wantErr: false,
 		},
 	}
 
@@ -371,13 +375,34 @@ func TestCollectorRelease(t *testing.T) {
 			var c blobrefs.Collector
 
 			for range tt.times {
-				if err := c.Release(blobrefs.ReleaseRow{NamespaceID: nsID, Release: release(tt.files)}); err != nil {
+				err := c.Release(blobrefs.ReleaseRow{NamespaceID: nsID, Release: release(tt.files)})
+
+				if tt.wantErr {
+					assertReleaseError(t, err, hashA)
+
+					assertCollected(t, &c, tt.want)
+
+					return
+				}
+
+				if err != nil {
 					t.Fatalf("Release = %v", err)
 				}
 			}
 
 			assertCollected(t, &c, tt.want)
 		})
+	}
+}
+
+// assertReleaseError checks that the refusal of a release names the release,
+// the version and the missing file key.
+func assertReleaseError(t *testing.T, err error, hash string) {
+	t.Helper()
+
+	if err == nil || !strings.Contains(err.Error(), hash) || !strings.Contains(err.Error(), `"net"`) ||
+		!strings.Contains(err.Error(), `"1.0.0"`) {
+		t.Fatalf("Release = %v, want error naming the release, the version and the missing key", err)
 	}
 }
 
@@ -414,12 +439,17 @@ func TestCollectorReleaseFiles(t *testing.T) {
 
 	entries := c.RegistryFiles()
 	if len(entries) != 1 {
-		t.Fatalf("len(RegistryFiles) = %d, want 1 (shared key stored once)", len(entries))
+		t.Fatalf("len(RegistryFiles) = %d, want 1 namespace (shared key stored once)", len(entries))
 	}
 
-	if entries[0].SHA256 != hashA || entries[0].Size != 5 || entries[0].Release != "net" ||
-		entries[0].Version != "1.0.0" {
-		t.Fatalf("entry = %+v, want hash %q size 5 release net version 1.0.0", entries[0], hashA)
+	list := entries[nsID]
+	if len(list) != 1 {
+		t.Fatalf("entries of %s = %d, want 1 (shared key stored once)", nsID, len(list))
+	}
+
+	if list[0].SHA256 != hashA || list[0].Size != 5 || list[0].Release != "net" ||
+		list[0].Version != "1.0.0" {
+		t.Fatalf("entry = %+v, want hash %q size 5 release net version 1.0.0", list[0], hashA)
 	}
 
 	var hostile blobrefs.Collector

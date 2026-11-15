@@ -19,8 +19,18 @@ import (
 // direct SQL on a second connection, as the rows of an earlier version hold them.
 type storedDigestEraser struct{ url string }
 
-// EraseStoredDigests implements storetest.StoredDigestEraser.
-func (e storedDigestEraser) EraseStoredDigests(ctx context.Context) error {
+// EraseLogChunkDigests implements storetest.StoredDigestEraser.
+func (e storedDigestEraser) EraseLogChunkDigests(ctx context.Context) error {
+	return e.erase(ctx, `UPDATE job_log_chunks SET stored_size = 0, stored_md5 = ''`)
+}
+
+// EraseRegistryReleaseFiles implements storetest.StoredDigestEraser.
+func (e storedDigestEraser) EraseRegistryReleaseFiles(ctx context.Context) error {
+	return e.erase(ctx, `UPDATE registry_releases SET stored_files_json = ''`)
+}
+
+// erase runs stmt on a second connection of the database.
+func (e storedDigestEraser) erase(ctx context.Context, stmt string) error {
 	conn, err := pgx.Connect(ctx, e.url)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -32,13 +42,8 @@ func (e storedDigestEraser) EraseStoredDigests(ctx context.Context) error {
 		}
 	}()
 
-	for _, stmt := range []string{
-		`UPDATE job_log_chunks SET stored_size = 0, stored_md5 = ''`,
-		`UPDATE registry_releases SET stored_files_json = ''`,
-	} {
-		if _, execErr := conn.Exec(ctx, stmt); execErr != nil {
-			return fmt.Errorf("erase stored digests: %w", execErr)
-		}
+	if _, execErr := conn.Exec(ctx, stmt); execErr != nil {
+		return fmt.Errorf("erase stored digests: %w", execErr)
 	}
 
 	return nil
@@ -112,4 +117,15 @@ func TestStoredBlobBackupUnverified(t *testing.T) {
 	}
 
 	storetest.RunStoredBlobBackupUnverified(t, newStoredBlobRig(base))
+}
+
+func TestStoredBlobBackupRegistryMissing(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL restore suite", envURL)
+	}
+
+	storetest.RunStoredBlobBackupRegistryMissing(t, newStoredBlobRig(base))
 }

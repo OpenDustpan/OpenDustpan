@@ -510,6 +510,17 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 	dev.report.Warnings = dev.warnings()
 	dev.report.NotHeld = dev.notHeld
 
+	if warnErr := s.warnLegacyRegistryFiles(ctx, in.BackupID, pinned, dev); warnErr != nil {
+		return nil, warnErr
+	}
+
+	return encodeStageResult(in, area, pinned, dev)
+}
+
+// encodeStageResult encodes the result of the stage step of restore in.
+func encodeStageResult(
+	in restoreInput, area StagingArea, pinned pinnedManifest, dev *devRun,
+) ([]byte, error) {
 	out, err := json.Marshal(stageResult{
 		Area: area.String(), SQLSize: pinned.sqlSize, SQLSHA: hex.EncodeToString([]byte(pinned.sqlSHA)),
 		Schema:  pinned.schema,
@@ -521,6 +532,26 @@ func (s *RestoreService) stepStage(ctx context.Context, sc durable.StepContext, 
 	}
 
 	return out, nil
+}
+
+// warnLegacyRegistryFiles appends the registry file warning to the report of
+// the stage when the backup holds registry rows and no registry file section:
+// a backup from before file copy restores rows without files, so the answer
+// warns, because installs from the restored registry would fail without a
+// clear cause.
+func (s *RestoreService) warnLegacyRegistryFiles(
+	ctx context.Context, id ID, pinned pinnedManifest, dev *devRun,
+) error {
+	legacyManifest, err := s.readPinnedManifest(ctx, id, pinned)
+	if err != nil {
+		return err
+	}
+
+	if registryFilesLegacy(legacyManifest) {
+		dev.report.Warnings = append(slices.Clone(dev.report.Warnings), WarnRegistryFilesAbsent)
+	}
+
+	return nil
 }
 
 // dropIssuerKeys removes the issuer keys of the staged namespaces that belong
@@ -940,6 +971,13 @@ func (s *RestoreService) stepCopyBlobs(ctx context.Context, sc durable.StepConte
 		if recErr := s.recordUnverifiedOverLimit(ctx, sc.Fence, in, count, limit); recErr != nil {
 			return nil, recErr
 		}
+	}
+
+	// The registry files land first: each one is checked against its SHA-256
+	// content key before it becomes visible, and the copy of the other blobs
+	// then keeps the keys that hold the same bytes.
+	if regErr := s.restoreRegistryFiles(ctx, sc.Fence, in, manifest); regErr != nil {
+		return nil, regErr
 	}
 
 	return nil, s.copyManifestBlobs(ctx, sc.Fence, in, manifest)

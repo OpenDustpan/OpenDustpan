@@ -42,17 +42,21 @@ type StoredBlobBackupRig struct {
 	}
 	Backups  *backup.Service
 	Restores *backup.RestoreService
-	// Eraser removes the stored size and MD5 of every log chunk and every
-	// registry release, as the rows of an earlier version of the server hold
-	// them.
+	// Eraser removes the stored size and MD5 of every log chunk, and the
+	// stored files of every registry release, as the rows of an earlier
+	// version of the server hold them.
 	Eraser StoredDigestEraser
 }
 
 // StoredDigestEraser clears the check values of the rows that name a blob.
 type StoredDigestEraser interface {
-	// EraseStoredDigests clears the stored size and the stored MD5 of every
-	// log chunk, and the stored files of every registry release.
-	EraseStoredDigests(ctx context.Context) error
+	// EraseLogChunkDigests clears the stored size and the stored MD5 of every
+	// log chunk.
+	EraseLogChunkDigests(ctx context.Context) error
+	// EraseRegistryReleaseFiles clears the stored files of every registry
+	// release, so a release row names its file hashes without the size and
+	// the MD5 of the stored bytes.
+	EraseRegistryReleaseFiles(ctx context.Context) error
 }
 
 // StoredBlobBackupInput is what a rig takes from the cases: the
@@ -153,7 +157,11 @@ func RunStoredBlobBackupUnverified(t *testing.T, newRig StoredBlobBackupFactory)
 	source := newRig(t, in)
 	seed := seedStoredBlobs(t, source, in.Key)
 
-	if err := source.Eraser.EraseStoredDigests(t.Context()); err != nil {
+	// Only the log chunks lose their check values: a registry release that
+	// names a file its row holds no size and MD5 of stops the backup, so the
+	// unverified path covers the chunks alone (see
+	// RunStoredBlobBackupRegistryMissing for the release).
+	if err := source.Eraser.EraseLogChunkDigests(t.Context()); err != nil {
 		t.Fatalf("erase the stored digests: %v", err)
 	}
 
@@ -206,15 +214,50 @@ func RunStoredBlobBackupUnverified(t *testing.T, newRig StoredBlobBackupFactory)
 	}
 }
 
+// RunStoredBlobBackupRegistryMissing proves the rule for a registry release
+// that names a file its row holds no size and MD5 of: the backup stops with an
+// error that names the release, the version and the SHA-256 key, and writes
+// no manifest, so no partial backup stays.
+func RunStoredBlobBackupRegistryMissing(t *testing.T, newRig StoredBlobBackupFactory) {
+	t.Helper()
+
+	in := newStoredBlobInput(t)
+	source := newRig(t, in)
+	seed := seedStoredBlobs(t, source, in.Key)
+
+	if err := source.Eraser.EraseRegistryReleaseFiles(t.Context()); err != nil {
+		t.Fatalf("erase the stored files of the releases: %v", err)
+	}
+
+	backupID := backup.ID(ident.NewID("bkp-"))
+
+	_, runErr := source.Backups.Run(t.Context(), backupID)
+	if runErr == nil {
+		t.Fatal("run backup of a release that names a file its row holds no values of: want an error")
+	}
+
+	hash := seed.releaseKey[strings.LastIndex(seed.releaseKey, "/")+1:]
+
+	for _, want := range []string{`"net"`, `"1.0.0"`, hash} {
+		if !strings.Contains(runErr.Error(), want) {
+			t.Errorf("backup error %q lacks %q", runErr.Error(), want)
+		}
+	}
+
+	if _, readErr := source.Backups.ReadManifest(t.Context(), backupID); readErr == nil {
+		t.Error("the failed backup wrote a manifest, want none")
+	}
+}
+
 // checkNotCopied checks the backup of rows without check values: the manifest
-// lists the log chunks and the registry file, the target holds none of them,
-// and the target holds the plan parts, whose values are in the plan document.
-// It returns the keys that the manifest lists.
+// lists the log chunks, the target holds none of them, and the target holds
+// the plan parts, whose values are in the plan document, and the registry
+// file, whose row kept its values. It returns the keys that the manifest lists.
 func checkNotCopied(t *testing.T, in StoredBlobBackupInput, manifest backup.Manifest, seed storedBlobSeed) []string {
 	t.Helper()
 
 	notCopied := slices.DeleteFunc(append(slices.Clone(seed.jobKeys), seed.releaseKey), func(key string) bool {
-		return strings.Contains(key, "/plan/")
+		return strings.Contains(key, "/plan/") || strings.Contains(key, "/registry/")
 	})
 	slices.Sort(notCopied)
 
@@ -237,6 +280,8 @@ func checkNotCopied(t *testing.T, in StoredBlobBackupInput, manifest backup.Mani
 			_ = readBlob(t, in.Target, "blobs/"+key)
 		}
 	}
+
+	_ = readBlob(t, in.Target, "blobs/"+seed.releaseKey)
 
 	return notCopied
 }

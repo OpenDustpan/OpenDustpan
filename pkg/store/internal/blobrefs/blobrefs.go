@@ -84,17 +84,39 @@ type Collector struct {
 	refs       []backup.BlobRef
 	added      map[string]struct{}
 	unverified map[string]struct{}
-	// regFiles holds one registry file entry per unique SHA-256 content key,
-	// so the backup manifest can name the copied files by content key while
-	// the MD5 references above keep the streamed copy path unchanged.
-	regFiles     []backup.RegistryFileEntry
+	// regFiles holds one registry file entry per unique SHA-256 content key
+	// of each namespace, so the backup manifest can name the copied files by
+	// content key while the MD5 references above keep the streamed copy path
+	// unchanged.
+	regFiles     map[string][]backup.RegistryFileEntry
 	seenRegFiles map[string]struct{}
 }
 
-// RegistryFiles returns one entry per unique registry file content hash, in
-// the order added.
-func (c *Collector) RegistryFiles() []backup.RegistryFileEntry {
-	return slices.Clone(c.regFiles)
+// RegistryFiles returns one entry per unique registry file content hash of
+// each namespace, keyed by the stable namespace ID.
+func (c *Collector) RegistryFiles() map[string][]backup.RegistryFileEntry {
+	out := make(map[string][]backup.RegistryFileEntry, len(c.regFiles))
+
+	for nsID, entries := range c.regFiles {
+		out[nsID] = slices.Clone(entries)
+	}
+
+	return out
+}
+
+// BackupRefs holds the blob references of one backup snapshot: the MD5
+// references that the backup copies, the registry file entries of each
+// namespace for the manifest section, and the keys that the backup does not
+// copy.
+type BackupRefs struct {
+	Refs          []backup.BlobRef
+	RegistryFiles map[string][]backup.RegistryFileEntry
+	Unverified    []string
+}
+
+// BackupRefs returns everything the collector gathered.
+func (c *Collector) BackupRefs() BackupRefs {
+	return BackupRefs{Refs: c.Refs(), RegistryFiles: c.RegistryFiles(), Unverified: c.Unverified()}
 }
 
 // Refs returns the references that the backup copies, in the order added.
@@ -209,9 +231,13 @@ func (c *Collector) Release(row ReleaseRow) error {
 
 		i := slices.IndexFunc(row.Release.Files, func(f registry.StoredFile) bool { return f.SHA256 == hash })
 		if i < 0 {
-			c.list(key.String())
-
-			continue
+			// A published release that names a file its row does not hold
+			// stops the backup: a restored registry that names a missing
+			// file breaks installs without a clear cause.
+			return fmt.Errorf(
+				"%w: release %q version %q names the registry file %q, and the row holds no size and MD5 of it",
+				ErrRow, row.Release.Address.Name, row.Release.Version, hash,
+			)
 		}
 
 		sum, ok := parseMD5(row.Release.Files[i].MD5)
@@ -226,19 +252,23 @@ func (c *Collector) Release(row ReleaseRow) error {
 	return nil
 }
 
-// addRegistryFile records one manifest entry per unique SHA-256 content key,
-// keeping the first release and version that names a shared key.
+// addRegistryFile records one manifest entry per unique SHA-256 content key
+// of each namespace, keeping the first release and version that names a
+// shared key.
 func (c *Collector) addRegistryFile(hash string, size int64, row ReleaseRow) {
-	if _, dup := c.seenRegFiles[hash]; dup {
+	seen := row.NamespaceID + "\x00" + hash
+
+	if _, dup := c.seenRegFiles[seen]; dup {
 		return
 	}
 
 	if c.seenRegFiles == nil {
 		c.seenRegFiles = make(map[string]struct{})
+		c.regFiles = make(map[string][]backup.RegistryFileEntry)
 	}
 
-	c.seenRegFiles[hash] = struct{}{}
-	c.regFiles = append(c.regFiles, backup.RegistryFileEntry{
+	c.seenRegFiles[seen] = struct{}{}
+	c.regFiles[row.NamespaceID] = append(c.regFiles[row.NamespaceID], backup.RegistryFileEntry{
 		SHA256:  hash,
 		Size:    size,
 		Release: row.Release.Address.Name,

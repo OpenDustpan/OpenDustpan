@@ -1,16 +1,32 @@
 package backup
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"regexp"
 	"slices"
+
+	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // backupCreateHint is the one command that helps after a registry file
 // failure. Error text names it so the operator knows the next step.
-const backupCreateHint = "opendustpan backup create --namespace <namespace>"
+const backupCreateHint = "opendustpan backup"
+
+// registryFilesAbsentText is the warning of a restore from a backup with
+// registry rows and no registry file section. The restore result carries it
+// under the code WarnRegistryFilesAbsent.
+const registryFilesAbsentText = "The backup holds registry releases without their files. The restore " +
+	"restored the release rows, and the registry serves no file of them. Run `opendustpan backup` again " +
+	"on the source installation, then restore the new backup."
 
 // RegistryFileSectionVersion is the version of the registry file manifest
 // section. A reader before this change ignores the section by its version
@@ -169,13 +185,13 @@ func RegistryFileBlobKey(namespaceID, hash string) (string, error) {
 // writes: it reads, writes, checks and removes keys by their full blob key.
 type RegistryFileStore interface {
 	// Has reports whether key holds bytes.
-	Has(key string) (bool, error)
+	Has(ctx context.Context, key string) (bool, error)
 	// Read returns the bytes under key, or an error when the key is missing.
-	Read(key string) ([]byte, error)
+	Read(ctx context.Context, key string) ([]byte, error)
 	// Write makes content visible under key.
-	Write(key string, content []byte) error
+	Write(ctx context.Context, key string, content []byte) error
 	// Remove deletes key. It reports no error when the key is already gone.
-	Remove(key string) error
+	Remove(ctx context.Context, key string) error
 }
 
 // RestoreRegistryFiles checks every named file before making any registry
@@ -187,6 +203,7 @@ type RegistryFileStore interface {
 // restores rows without files. A non-nil section, even an empty one, is a new
 // backup and restores without the file warning.
 func RestoreRegistryFiles(
+	ctx context.Context,
 	section *RegistryFileSection,
 	files map[string][]byte,
 	targetNamespaceID string,
@@ -211,7 +228,7 @@ func RestoreRegistryFiles(
 		return RestoreWarning{Code: "", Text: ""}, err
 	}
 
-	if err := stageRegistryFiles(section, files, targetNamespaceID, store); err != nil {
+	if err := stageRegistryFiles(ctx, section, files, targetNamespaceID, store); err != nil {
 		return RestoreWarning{Code: "", Text: ""}, err
 	}
 
@@ -222,13 +239,7 @@ func RestoreRegistryFiles(
 // registry rows and no registry file manifest section. It names the backup
 // command that makes a complete backup.
 func legacyRegistryFilesWarning() RestoreWarning {
-	text := fmt.Sprintf(
-		"restore holds registry rows without registry files: "+
-			"files are absent, releases are unavailable; run %s again from the source installation",
-		backupCreateHint,
-	)
-
-	return RestoreWarning{Code: WarnRegistryFilesAbsent, Text: text}
+	return RestoreWarning{Code: WarnRegistryFilesAbsent, Text: registryFilesAbsentText}
 }
 
 // checkRegistrySection rejects a manifest entry outside 64 lowercase hex
@@ -271,12 +282,13 @@ func checkRegistryFilesPresent(section *RegistryFileSection, files map[string][]
 // bytes match the SHA-256 key, and it removes only the keys this restore made
 // visible when it fails.
 func stageRegistryFiles(
+	ctx context.Context,
 	section *RegistryFileSection,
 	files map[string][]byte,
 	targetNamespaceID string,
 	store RegistryFileStore,
 ) error {
-	pending, err := planRegistryWrites(section, files, targetNamespaceID, store)
+	pending, err := planRegistryWrites(ctx, section, files, targetNamespaceID, store)
 	if err != nil {
 		return err
 	}
@@ -285,13 +297,13 @@ func stageRegistryFiles(
 
 	for _, w := range pending {
 		if err := VerifyRegistryFileContent(w.hash, w.content); err != nil {
-			removeRegistryKeys(store, visible)
+			removeRegistryKeys(ctx, store, visible)
 
 			return fmt.Errorf("restore registry files: %w, run %s again", err, backupCreateHint)
 		}
 
-		if err := store.Write(w.key, w.content); err != nil {
-			removeRegistryKeys(store, visible)
+		if err := store.Write(ctx, w.key, w.content); err != nil {
+			removeRegistryKeys(ctx, store, visible)
 
 			return fmt.Errorf("restore registry files: write %q: %w", w.key, err)
 		}
@@ -309,6 +321,7 @@ type registryWrite struct {
 }
 
 func planRegistryWrites(
+	ctx context.Context,
 	section *RegistryFileSection,
 	files map[string][]byte,
 	targetNamespaceID string,
@@ -322,7 +335,7 @@ func planRegistryWrites(
 			return nil, err
 		}
 
-		keep, err := keepExistingRegistryKey(store, key, e.SHA256)
+		keep, err := keepExistingRegistryKey(ctx, store, key, e.SHA256)
 		if err != nil {
 			return nil, err
 		}
@@ -343,8 +356,8 @@ func planRegistryWrites(
 
 // keepExistingRegistryKey reports whether key already holds bytes that match
 // the SHA-256 key. It refuses when the stored bytes differ.
-func keepExistingRegistryKey(store RegistryFileStore, key, hash string) (bool, error) {
-	has, err := store.Has(key)
+func keepExistingRegistryKey(ctx context.Context, store RegistryFileStore, key, hash string) (bool, error) {
+	has, err := store.Has(ctx, key)
 	if err != nil {
 		return false, fmt.Errorf("restore registry files: check %q: %w", hash, err)
 	}
@@ -353,7 +366,7 @@ func keepExistingRegistryKey(store RegistryFileStore, key, hash string) (bool, e
 		return false, nil
 	}
 
-	stored, err := store.Read(key)
+	stored, err := store.Read(ctx, key)
 	if err != nil {
 		return false, fmt.Errorf("restore registry files: read %q: %w", hash, err)
 	}
@@ -365,10 +378,252 @@ func keepExistingRegistryKey(store RegistryFileStore, key, hash string) (bool, e
 	return true, nil
 }
 
-func removeRegistryKeys(store RegistryFileStore, keys []string) {
+func removeRegistryKeys(ctx context.Context, store RegistryFileStore, keys []string) {
 	for _, key := range keys {
-		if err := store.Remove(key); err != nil {
+		if err := store.Remove(ctx, key); err != nil {
 			continue
 		}
 	}
+}
+
+// RegistryFilesOf groups the registry file entries of each namespace into
+// the manifest sections: one section per namespace, with the section version
+// and the entries ordered by SHA-256 key. It returns an empty map when no
+// namespace holds a published registry release, never nil, so the manifest
+// of a backup of this change always differs from a manifest from before
+// file copy.
+func RegistryFilesOf(entries map[string][]RegistryFileEntry) map[string]RegistryFileSection {
+	out := make(map[string]RegistryFileSection, len(entries))
+
+	for nsID, list := range entries {
+		out[nsID] = RegistryFileSection{Version: RegistryFileSectionVersion, Files: SortRegistryFileEntries(list)}
+	}
+
+	return out
+}
+
+// RegistryFileReportOf returns the count of the registry files that the
+// sections name and their total bytes in the manifest: the size report of a
+// backup result.
+func RegistryFileReportOf(sections map[string]RegistryFileSection) RegistryFileReport {
+	report := RegistryFileReport{Count: 0, TotalBytes: 0}
+
+	for _, section := range sections {
+		report.Count += len(section.Files)
+
+		for _, e := range section.Files {
+			report.TotalBytes += e.Size
+		}
+	}
+
+	return report
+}
+
+// registryFilesLegacy reports whether the manifest of a backup is from
+// before registry file copy: it holds no registry file section while its
+// data holds registry release rows. The restore then warns, because the
+// registry rows come back without their files.
+func registryFilesLegacy(manifest Manifest) bool {
+	return manifest.RegistryFiles == nil && manifest.RowCounts["registry_releases"] > 0
+}
+
+// registryFileNamespaces returns the namespace IDs of the manifest sections
+// in order, and refuses a section key that is not a stable namespace ID
+// before any registry file is read or written. The section keys are
+// untrusted: the manifest is not signed.
+func registryFileNamespaces(manifest Manifest) ([]string, error) {
+	for nsID := range manifest.RegistryFiles {
+		if _, err := namespace.ParseID(nsID); err != nil {
+			return nil, fmt.Errorf("the registry file section names %q, not a namespace ID: %w", nsID, ErrCorrupt)
+		}
+	}
+
+	return slices.Sorted(maps.Keys(manifest.RegistryFiles)), nil
+}
+
+// restoreRegistryFiles writes the registry files of each namespace of the
+// backup into the live store, before the copy of the other blobs. Each file
+// is hash-checked against its SHA-256 content key before it becomes visible,
+// and each write checks the claim of the restore first, as the copy of every
+// other blob does. A manifest without the registry file section is a backup
+// from before file copy: the rows come back without the files, and the stage
+// warned.
+func (s *RestoreService) restoreRegistryFiles(
+	ctx context.Context, fence durable.StepFence, in restoreInput, manifest Manifest,
+) error {
+	if manifest.RegistryFiles == nil {
+		return nil
+	}
+
+	namespaces, err := registryFileNamespaces(manifest)
+	if err != nil {
+		return fmt.Errorf("restore %s of backup %s: %w", in.ID, in.BackupID, err)
+	}
+
+	store := liveRegistryFileStore{blobs: s.blobs, live: s.live, fence: fence, id: in.ID}
+
+	for _, nsID := range namespaces {
+		section := manifest.RegistryFiles[nsID]
+
+		files, readErr := s.readRegistryFiles(ctx, in, nsID, section)
+		if readErr != nil {
+			return readErr
+		}
+
+		if _, err := RestoreRegistryFiles(ctx, &section, files, nsID, store); err != nil {
+			return fmt.Errorf("restore %s: registry files of namespace %s: %w", in.ID, nsID, err)
+		}
+	}
+
+	return nil
+}
+
+// readRegistryFiles reads the bytes of each file that the section of nsID
+// names from the backup target. A file the backup does not hold stops the
+// restore before any registry file becomes visible.
+func (s *RestoreService) readRegistryFiles(
+	ctx context.Context, in restoreInput, nsID string, section RegistryFileSection,
+) (map[string][]byte, error) {
+	// Defense in depth: RestoreRegistryFiles checks each hash too. This check
+	// stays so that a hostile hash never becomes part of a target key at this
+	// layer, whatever a later change does to the checks of the restore.
+	files := make(map[string][]byte, len(section.Files))
+
+	for _, e := range section.Files {
+		if !ValidRegistryFileHash(e.SHA256) {
+			return nil, fmt.Errorf(
+				"restore %s of backup %s: the registry file section names the key %q: %w",
+				in.ID, in.BackupID, e.SHA256, ErrCorrupt,
+			)
+		}
+
+		raw := "blobs/namespaces/" + nsID + "/registry/sha256/" + e.SHA256
+
+		key, err := blob.ParseKey(raw)
+		if err != nil {
+			return nil, fmt.Errorf("restore %s: the registry file key %q: %w", in.ID, raw, err)
+		}
+
+		content, err := readAllKey(ctx, s.target, key)
+		if err != nil {
+			return nil, fmt.Errorf("restore %s: registry file %q of namespace %s: %w", in.ID, e.SHA256, nsID, err)
+		}
+
+		files[e.SHA256] = content
+	}
+
+	return files, nil
+}
+
+// readAllKey returns the bytes that the store holds under key.
+func readAllKey(ctx context.Context, store blob.Store, key blob.Key) ([]byte, error) {
+	reader, err := store.Get(ctx, key)
+	if err != nil {
+		if errors.Is(err, blob.ErrNotFound) {
+			return nil, &MissingObjectError{Key: key}
+		}
+
+		return nil, fmt.Errorf("read %q: %w", key, err)
+	}
+
+	content, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+
+	if readErr != nil {
+		return nil, fmt.Errorf("read %q: %w", key, readErr)
+	}
+
+	if closeErr != nil {
+		return nil, fmt.Errorf("close %q: %w", key, closeErr)
+	}
+
+	return content, nil
+}
+
+// liveRegistryFileStore is the live blob store of one restore as a
+// RegistryFileStore. Each write checks the claim of the restore first, as
+// the copy of every other blob does.
+type liveRegistryFileStore struct {
+	blobs blob.Store
+	live  RestoreLive
+	fence durable.StepFence
+	id    RestoreID
+}
+
+// Has reports whether the live store holds bytes under key.
+func (s liveRegistryFileStore) Has(ctx context.Context, key string) (bool, error) {
+	parsed, err := parseRegistryFileStoreKey(key)
+	if err != nil {
+		return false, err
+	}
+
+	if _, err = s.blobs.Get(ctx, parsed); err != nil {
+		if errors.Is(err, blob.ErrNotFound) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("read registry file %q: %w", key, err)
+	}
+
+	return true, nil
+}
+
+// Read returns the bytes that the live store holds under key.
+func (s liveRegistryFileStore) Read(ctx context.Context, key string) ([]byte, error) {
+	parsed, err := parseRegistryFileStoreKey(key)
+	if err != nil {
+		return nil, err
+	}
+
+	content, err := readAllKey(ctx, s.blobs, parsed)
+	if err != nil {
+		return nil, fmt.Errorf("read registry file %q: %w", key, err)
+	}
+
+	return content, nil
+}
+
+// Write makes content visible under key, after the claim check of the
+// restore. A holder that lost its claim writes nothing.
+func (s liveRegistryFileStore) Write(ctx context.Context, key string, content []byte) error {
+	parsed, err := parseRegistryFileStoreKey(key)
+	if err != nil {
+		return err
+	}
+
+	if fenceErr := s.live.CheckRestoreFence(ctx, s.fence, s.id); fenceErr != nil {
+		return fmt.Errorf("check the claim before the write of registry file %q: %w", key, fenceErr)
+	}
+
+	if err := s.blobs.Put(ctx, parsed, bytes.NewReader(content)); err != nil {
+		return fmt.Errorf("write registry file %q: %w", key, err)
+	}
+
+	return nil
+}
+
+// Remove deletes key from the live store. A key that is already gone is no
+// error.
+func (s liveRegistryFileStore) Remove(ctx context.Context, key string) error {
+	parsed, err := parseRegistryFileStoreKey(key)
+	if err != nil {
+		return err
+	}
+
+	if err := s.blobs.Delete(ctx, parsed); err != nil && !errors.Is(err, blob.ErrNotFound) {
+		return fmt.Errorf("delete registry file %q: %w", key, err)
+	}
+
+	return nil
+}
+
+// parseRegistryFileStoreKey parses a registry file key that this package
+// built, and refuses any other key at this layer.
+func parseRegistryFileStoreKey(key string) (blob.Key, error) {
+	parsed, err := blob.ParseKey(key)
+	if err != nil {
+		return "", fmt.Errorf("registry file key %q: %w: %w", key, err, ErrCorrupt)
+	}
+
+	return parsed, nil
 }

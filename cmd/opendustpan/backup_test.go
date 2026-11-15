@@ -142,7 +142,12 @@ func succeededScript(sqlSize int64) backupScript {
 		startBody:   `{"id":"` + backupTestID + `"}`,
 		states: []backupStatusResponse{
 			{ID: backupTestID, State: "running", Error: "", Manifest: nil},
-			{ID: backupTestID, State: "succeeded", Error: "", Manifest: &backupManifest{SQLSize: sqlSize}},
+			{
+				ID:       backupTestID,
+				State:    "succeeded",
+				Error:    "",
+				Manifest: &backupManifest{SQLSize: sqlSize, RegistryFiles: nil},
+			},
 		},
 	}
 }
