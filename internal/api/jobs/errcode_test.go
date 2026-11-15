@@ -52,6 +52,14 @@ func TestEveryErrorAnswerHasACode(t *testing.T) {
 		{"agent", job.ErrAgentDenied, http.StatusForbidden, errcode.JobAgentDenied},
 		{"frozen", job.ErrFrozen, http.StatusConflict, errcode.JobFrozen},
 		{"limit", job.ErrLimit, http.StatusTooManyRequests, errcode.JobLimit},
+		{"destroy fresh step", job.ErrAuthStale, http.StatusForbidden, errcode.MFAFreshStepRequired},
+		{"self approval", job.ErrSelfApproval, http.StatusForbidden, errcode.JobSelfApproval},
+		{"repeat approval", job.ErrAlreadyApproved, http.StatusConflict, errcode.JobAlreadyApproved},
+		{"finished job", job.ErrFinished, http.StatusConflict, errcode.JobFinished},
+		{"not waiting", job.ErrTransition, http.StatusConflict, errcode.JobNotAwaitingApproval},
+		{"old digest", job.ErrPlanChanged, http.StatusConflict, errcode.JobPlanChanged},
+		{"stale plan", job.ErrPlanStale, http.StatusConflict, errcode.JobPlanStale},
+		{"write conflict", job.ErrConflict, http.StatusConflict, errcode.JobConflict},
 		{"unknown error", errUnknown, http.StatusInternalServerError, errcode.ServerInternal},
 	}
 
