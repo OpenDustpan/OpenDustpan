@@ -49,6 +49,7 @@ wait at a confirmation gate answers 409 with the code `job.wrong-state`.
 
 ## Redact a log
 
-A caller with `unit:redact` on the unit removes a secret from the log of a job
-with a post to the `log-redactions` route. A log that is in the wrong state
-answers 409 with the code `job.wrong-state`.
+The `log-redactions` route needs `unit:redact` on the unit. No role holds that action now. The server answers
+422 with the code `job.unsupported` for log redaction until an artifact store
+adapter exists. The server keeps no store for job logs now, so it refuses each
+request before it reads the job and writes nothing.
