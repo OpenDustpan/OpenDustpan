@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -60,7 +61,7 @@ func (s *service) Approve(
 
 	now := s.now().UTC()
 	ap := Approval{
-		Gate: GateApproval, Subject: a.Principal.Subject, Agent: a.Agent, Verdict: v, Comment: comment,
+		Gate: GateApproval, Subject: a.Principal.Subject, Agent: string(a.Agent), Verdict: v, Comment: comment,
 		Plan: nil, At: now, Auth: "", AuthAt: time.Time{},
 	}
 
@@ -149,7 +150,7 @@ func clip(s string) string {
 	s = strings.ToValidUTF8(s, "?")
 
 	return strings.Map(func(r rune) rune {
-		if audit.IsHiddenRune(r) {
+		if ident.IsHiddenRune(r) {
 			return '?'
 		}
 
@@ -240,7 +241,7 @@ func waitingGates(j *Job, policy gate.ApproverPolicy) ([]Gate, error) {
 // gate.
 func (s *service) checkApprover(ctx context.Context, j *Job, a Actor, gates []Gate) error {
 	if a.Agent != "" {
-		return fmt.Errorf("%w: agent %q cannot approve; only a person can", ErrAgentDenied, clip(a.Agent))
+		return fmt.Errorf("%w: agent %q cannot approve; only a person can", ErrAgentDenied, clip(string(a.Agent)))
 	}
 
 	// Defense in depth: Gate.Status does not count such a subject either, and
@@ -418,7 +419,10 @@ func (s *service) approvalEntry(j *Job, a Actor, ap *Approval, auth ConfirmAuth,
 	}
 
 	if a.Agent != "" {
-		changes = append(changes, audit.Change{Key: "agent", Old: nil, New: a.Agent, Layer: "", TakesEffect: ""})
+		changes = append(
+			changes,
+			audit.Change{Key: "agent", Old: nil, New: string(a.Agent), Layer: "", TakesEffect: ""},
+		)
 	}
 
 	if ap.Plan != nil {

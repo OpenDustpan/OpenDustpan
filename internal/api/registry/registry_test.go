@@ -128,6 +128,28 @@ func (c *countingRegistryStore) Addresses(
 	return c.Store.Addresses(ctx, ns, kind, after, limit)
 }
 
+// failingKeys wraps the key store of the fixture. After fail is set, Keys
+// returns an error that is not registry.ErrNotFound, so ServableReleases
+// fails after it has read the releases.
+type failingKeys struct {
+	registry.KeyStore
+
+	fail atomic.Bool
+}
+
+// errKeysDown is the error that failingKeys returns.
+var errKeysDown = errors.New("the key store is down")
+
+// Keys fails when fail is set, and passes the call to the wrapped store
+// otherwise.
+func (k *failingKeys) Keys(ctx context.Context, ns namespace.Name) ([]registry.KeyRecord, error) {
+	if k.fail.Load() {
+		return nil, errKeysDown
+	}
+
+	return k.KeyStore.Keys(ctx, ns)
+}
+
 type fixture struct {
 	handler *apiregistry.Handler
 	// served is the handler that the tests call: it fails a test when a
@@ -139,6 +161,8 @@ type fixture struct {
 	service *service.Service
 	// registry counts the calls that reach the address list of the store.
 	registry *countingRegistryStore
+	// keys fails the read of the trusted keys on demand.
+	keys *failingKeys
 }
 
 func newFixture(t *testing.T, deny ...identity.Action) fixture {
@@ -186,9 +210,11 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 	verifier := pgpverify.Verifier{Now: nil}
 	registryStore := &countingRegistryStore{Store: store.Registry(), addresses: atomic.Int64{}}
 
+	keys := &failingKeys{KeyStore: store.RegistryKeys(), fail: atomic.Bool{}}
+
 	svc, err := service.New(service.Config{
 		Store:                 registryStore,
-		Keys:                  store.RegistryKeys(),
+		Keys:                  keys,
 		Verifier:              verifier,
 		Inspector:             verifier,
 		Blobs:                 blobs,
@@ -238,6 +264,7 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 		store:    store,
 		service:  svc,
 		registry: registryStore,
+		keys:     keys,
 	}
 }
 
@@ -714,6 +741,48 @@ func TestGetReleaseServed(t *testing.T) {
 			// exactly when the protocol offers its download.
 			if protocol := f.protocolServed(t); rel.Served != protocol[tt.version] {
 				t.Errorf("served = %t, but the protocol serves %t", rel.Served, protocol[tt.version])
+			}
+		})
+	}
+}
+
+// TestServedVersionsReadError proves that a failed read of the servable
+// releases answers a 500 with the generic text on the list route and on the
+// route of one version, with no list and no release in the answer.
+func TestServedVersionsReadError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{"list of versions", base + "/providers/" + providerName + "/versions"},
+		{"one version", base + "/providers/" + providerName + "/versions/1.0.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			sg := pgpfixture.NewSigner(t)
+
+			f.trust(t, "acme", sg)
+			f.publishVersion(t, sg, "1.0.0")
+
+			f.keys.fail.Store(true)
+
+			got := f.call(t, "reader", http.MethodGet, tt.target, nil)
+			wantCode(t, "read with a failed key store", got, http.StatusInternalServerError)
+
+			if !strings.Contains(got.body, "internal error") {
+				t.Errorf("answer = %q, want the generic text", got.body)
+			}
+
+			for _, leak := range []string{errKeysDown.Error(), "releases", providerVersion} {
+				if strings.Contains(got.body, leak) {
+					t.Errorf("answer = %q, must not hold %q", got.body, leak)
+				}
 			}
 		})
 	}

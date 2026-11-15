@@ -310,7 +310,7 @@ func pgCopyCollectionTables() []pgCopyTable {
 		{
 			table: "placement_rules",
 			columns: []string{
-				"id", pgColNamespace, pgColPosition, pgColTool, pgColProject, "stack", "collection_key",
+				"id", pgColNamespace, pgColPosition, pgColTool, pgColProject, "stack", "collection_id",
 				"created_by", pgColCreatedAtMs,
 			},
 			orderBy: []string{pgColNamespace, pgColPosition, "id"},
@@ -387,7 +387,8 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				pgColObject, pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
-				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
+				"channel", "agent_run", "agent_session", "args_digest", "break_glass", "delegation_id",
+				"secret_stage", "tool", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
 				"changes", "object_id", "fence_version", "principal_kind", pgColJobID, pgColReason,
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},

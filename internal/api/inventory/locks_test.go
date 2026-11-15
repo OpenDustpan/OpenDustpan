@@ -353,7 +353,7 @@ func TestLockRoutes(t *testing.T) {
 					obj.path,
 					`{"reason":"a\u0000b"}`,
 					http.StatusBadRequest,
-					"control",
+					"hidden",
 				},
 				{"read before a lock", "bob", http.MethodGet, obj.path, "", http.StatusNotFound, "no manual lock"},
 				{"lock", "alice", http.MethodPut, obj.path, good, http.StatusOK, `"holder":"alice"`},

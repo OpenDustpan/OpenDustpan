@@ -555,11 +555,11 @@ func TestPasskeyNeedsAFreshSignIn(t *testing.T) {
 		token  bool
 		status int
 	}{
-		{"begin with an old sign-in", http.MethodPost, beginTarget, "", false, http.StatusUnauthorized},
+		{"begin with an old sign-in", http.MethodPost, beginTarget, "", false, http.StatusForbidden},
 		{"begin with an access token", http.MethodPost, beginTarget, "", true, http.StatusForbidden},
-		{"finish with an old sign-in", http.MethodPost, finishTarget, finishRequest, false, http.StatusUnauthorized},
+		{"finish with an old sign-in", http.MethodPost, finishTarget, finishRequest, false, http.StatusForbidden},
 		{"finish with an access token", http.MethodPost, finishTarget, finishRequest, true, http.StatusForbidden},
-		{"remove with an old sign-in", http.MethodDelete, removeTarget, "", false, http.StatusUnauthorized},
+		{"remove with an old sign-in", http.MethodDelete, removeTarget, "", false, http.StatusForbidden},
 		{"remove with an access token", http.MethodDelete, removeTarget, "", true, http.StatusForbidden},
 	}
 

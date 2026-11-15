@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
-	"unicode"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/blob/s3"
 )
 
@@ -701,7 +701,7 @@ func TestOpenProbeInnerRetryFindsStoredObject(t *testing.T) {
 	}
 }
 
-// checkCleanLines checks that each line of text holds no control character
+// checkCleanLines checks that each line of text holds no hidden character
 // and at most maxB bytes "B" (the byte that the long code repeats).
 func checkCleanLines(t *testing.T, text string, maxB int) {
 	t.Helper()
@@ -714,8 +714,8 @@ func checkCleanLines(t *testing.T, text string, maxB int) {
 	}
 
 	for _, line := range lines {
-		if i := strings.IndexFunc(line, unicode.IsControl); i >= 0 {
-			t.Fatalf("line %q holds a control character at byte %d", line, i)
+		if ident.HasHidden(line) {
+			t.Fatalf("line %q holds a hidden character", line)
 		}
 
 		if got := strings.Count(line, "B"); got > maxB {
@@ -733,6 +733,8 @@ func TestOpenErrorHoldsNoControlCharacters(t *testing.T) {
 	}{
 		{name: "CR and LF", code: "AccessDenied&#13;&#10;opendustpan: forged line"},
 		{name: "other control characters", code: "Access&#9;&#11;Denied"},
+		{name: "format characters", code: "Access&#8238;Denied&#8288;"},
+		{name: "line and paragraph separators", code: "Access&#8232;Denied&#8233;"},
 		{name: "long text", code: strings.Repeat("B", 5000)},
 	}
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -53,6 +54,11 @@ func RunPlacement(t *testing.T, newStore PlacementFactory) {
 		{name: "two writers never store a hidden rule", test: testRuleConcurrentHidden},
 		{name: "position 0 means the end for a create and the same place for an update", test: testRulePositionZero},
 		{name: "a rule of another namespace than the fence is refused", test: testRuleFenceNamespaceMismatch},
+		{name: "TestPlacementRuleRefusesForeignCollection", test: testPlacementRuleRefusesForeignCollection},
+		{
+			name: "TestPlacementRuleOfRemovedCollectionPlacesNothing",
+			test: testPlacementRuleOfRemovedCollectionPlacesNothing,
+		},
 	}
 
 	for _, tc := range cases {
@@ -60,6 +66,81 @@ func RunPlacement(t *testing.T, newStore PlacementFactory) {
 			t.Parallel()
 			tc.test(t, newStore(t))
 		})
+	}
+}
+
+func testPlacementRuleRefusesForeignCollection(t *testing.T, s PlacementStore) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	other := newNamespace(t, s, "foreign")
+	foreign := newCollection(t, other.Name, "payments")
+	if err := createColl(t, s, foreign, other.Fence()); err != nil {
+		t.Fatal(err)
+	}
+	// A name that equals an ID must not turn that ID into a local reference.
+	ensureCollection(t, s, ns, foreign.ID)
+	stored := mustAdd(t, s, ns, ruleSpec{unitName, "*", collA}, 0)
+	cases := []struct {
+		name string
+		run  func(collection.Rule) error
+	}{
+		{"create", func(r collection.Rule) error {
+			r.ID, r.Project = ident.NewID("plr-"), "other"
+			return s.CreatePlacementRule(t.Context(), r, ns.Fence(), auditFor(ns.Fence()))
+		}},
+		{"update", func(r collection.Rule) error {
+			return s.UpdatePlacementRule(t.Context(), r, ns.Fence(), auditFor(ns.Fence()))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := stored
+			r.CollectionID = foreign.ID
+			if err := tc.run(r); !errors.Is(err, collection.ErrPlacementCollectionMissing) {
+				t.Errorf("foreign collection: got %v, want ErrPlacementCollectionMissing", err)
+			}
+		})
+	}
+	got, err := s.GetPlacementRule(t.Context(), ns.Name, stored.ID)
+	if err != nil || got != stored {
+		t.Errorf("a refused write changed the rule: %+v, %v", got, err)
+	}
+	wantProjects(t, s, ns.Name, unitName)
+	wantProjects(t, s, other.Name)
+}
+
+func testPlacementRuleOfRemovedCollectionPlacesNothing(t *testing.T, s PlacementStore) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	mustAdd(t, s, ns, ruleSpec{unitName, "*", collA}, 0)
+	ref := collection.Ref{Namespace: ns.Name, Name: mustName(t, collA)}
+	old, err := s.GetCollection(t.Context(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = deleteColl(t, s, ref, ns.Fence()); err != nil {
+		t.Fatal(err)
+	}
+	replacement := newCollection(t, ns.Name, collA)
+	if err = createColl(t, s, replacement, ns.Fence()); err != nil {
+		t.Fatal(err)
+	}
+	if replacement.ID == old.ID {
+		t.Fatal("the replacement kept the removed collection ID")
+	}
+	svc, err := collection.NewPlacementService(collection.PlacementConfig{Store: s, Namespaces: s, Now: nil})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, placeErr := svc.Place(t.Context(), ns.Name, collection.ToolPulumi, unitName, "new")
+	if !errors.Is(placeErr, collection.ErrNoPlacement) {
+		t.Errorf("placement after delete and create: got %v, want ErrNoPlacement", placeErr)
+	}
+	ids, err := s.ListCollectionUnitIDs(t.Context(), ref, replacement.ID)
+	if err != nil || len(ids) != 0 {
+		t.Errorf("replacement members = %v, %v, want none", ids, err)
 	}
 }
 
@@ -86,7 +167,7 @@ func addRule(
 ) (collection.Rule, error) {
 	t.Helper()
 
-	ensureCollection(t, s, ns, spec.coll)
+	c := ensureCollection(t, s, ns, spec.coll)
 
 	list, err := s.ListPlacementRules(t.Context(), ns.Name)
 	if err != nil {
@@ -98,15 +179,16 @@ func addRule(
 	}
 
 	r := collection.Rule{
-		CreatedAt:  now(),
-		ID:         ident.NewID("plr-"),
-		Namespace:  ns.Name,
-		Tool:       collection.ToolPulumi,
-		Project:    collection.Pattern(spec.project),
-		Stack:      collection.Pattern(spec.stack),
-		Collection: mustName(t, spec.coll),
-		CreatedBy:  testSubject,
-		Position:   pos,
+		CreatedAt:      now(),
+		ID:             ident.NewID("plr-"),
+		Namespace:      ns.Name,
+		Tool:           collection.ToolPulumi,
+		Project:        collection.Pattern(spec.project),
+		Stack:          collection.Pattern(spec.stack),
+		CollectionID:   c.ID,
+		CollectionName: c.Ref.Name,
+		CreatedBy:      testSubject,
+		Position:       pos,
 	}
 
 	return r, s.CreatePlacementRule(t.Context(), r, ns.Fence(), auditFor(ns.Fence()))
@@ -125,13 +207,23 @@ func mustAdd(t *testing.T, s PlacementStore, ns namespace.Namespace, spec ruleSp
 }
 
 // ensureCollection makes the collection name in ns unless it exists.
-func ensureCollection(t *testing.T, s PlacementStore, ns namespace.Namespace, name string) {
+func ensureCollection(t *testing.T, s PlacementStore, ns namespace.Namespace, name string) collection.Collection {
 	t.Helper()
 
 	err := createColl(t, s, newCollection(t, ns.Name, name), ns.Fence())
 	if err != nil && !errors.Is(err, collection.ErrAlreadyExists) {
 		t.Fatalf("create collection %q: %v", name, err)
 	}
+	return placementCollection(t, s, ns.Name, name)
+}
+
+func placementCollection(t *testing.T, s PlacementStore, ns namespace.Name, name string) collection.Collection {
+	t.Helper()
+	c, err := s.GetCollection(t.Context(), collection.Ref{Namespace: ns, Name: mustName(t, name)})
+	if err != nil {
+		t.Fatalf("read collection: %v", err)
+	}
+	return c
 }
 
 // ruleProjects returns the project pattern of each rule in list order.
@@ -215,7 +307,8 @@ func testRuleInvalidPosition(t *testing.T, s PlacementStore) {
 
 		r := collection.Rule{
 			CreatedAt: now(), ID: ident.NewID("plr-"), Namespace: ns.Name, Tool: collection.ToolPulumi,
-			Project: "b", Stack: "*", Collection: mustName(t, collB), CreatedBy: testSubject, Position: pos,
+			Project: "b", Stack: "*", CollectionID: placementCollection(t, s, ns.Name, collB).ID,
+			CollectionName: "", CreatedBy: testSubject, Position: pos,
 		}
 
 		err := s.CreatePlacementRule(t.Context(), r, ns.Fence(), auditFor(ns.Fence()))
@@ -235,7 +328,7 @@ func testRuleMissingCollection(t *testing.T, s PlacementStore) {
 
 	ns := newNamespace(t, s, "acme")
 	stored := mustAdd(t, s, ns, ruleSpec{"a", "*", collA}, 0)
-	missing := mustName(t, "nowhere")
+	missing := ident.NewID("col-")
 
 	tests := []struct {
 		name string
@@ -246,7 +339,8 @@ func testRuleMissingCollection(t *testing.T, s PlacementStore) {
 			name: "create",
 			rule: collection.Rule{
 				CreatedAt: now(), ID: ident.NewID("plr-"), Namespace: ns.Name, Tool: collection.ToolPulumi,
-				Project: "b", Stack: "*", Collection: missing, CreatedBy: testSubject, Position: 1,
+				Project: "b", Stack: "*", CollectionID: missing, CollectionName: "",
+				CreatedBy: testSubject, Position: 1,
 			},
 			run: func(r collection.Rule) error {
 				return s.CreatePlacementRule(t.Context(), r, ns.Fence(), auditFor(ns.Fence()))
@@ -266,7 +360,7 @@ func testRuleMissingCollection(t *testing.T, s PlacementStore) {
 
 		t.Run(tt.name, func(t *testing.T) {
 			r := tt.rule
-			r.Collection = missing
+			r.CollectionID = missing
 
 			err := tt.run(r)
 			if !errors.Is(err, collection.ErrPlacementCollectionMissing) {
@@ -295,18 +389,21 @@ func testRuleCollectionCase(t *testing.T, s PlacementStore) {
 		t.Fatalf("GetPlacementRule: %v", err)
 	}
 
-	if got.Collection.String() != "Payments" {
-		t.Errorf("collection = %q, want the name as the collection was first written", got.Collection)
+	if got.CollectionName.String() != "Payments" {
+		t.Errorf("collection = %q, want the name as the collection was first written", got.CollectionName)
 	}
 }
 
-// testRuleInvalid sends content that ParsePattern and ParseName refuse
+// testRuleInvalid sends content that the pattern and ID checks refuse
 // directly to the store, as if every earlier check had failed.
 func testRuleInvalid(t *testing.T, s PlacementStore) {
 	t.Helper()
 
+	const oversizedCollectionIDSuffix = 65
+
 	ns := newNamespace(t, s, "acme")
 	ensureCollection(t, s, ns, collPayments)
+	existing := mustAdd(t, s, ns, ruleSpec{"existing", "*", collPayments}, 0)
 
 	tests := []struct {
 		name string
@@ -324,13 +421,23 @@ func testRuleInvalid(t *testing.T, s PlacementStore) {
 			r.Project = collection.Pattern(string(make([]byte, collection.MaxPatternLength+1)))
 		}, collection.ErrInvalidPattern},
 		{"tool without rules", func(r *collection.Rule) { r.Tool = "terraform" }, collection.ErrInvalidPlacementTool},
-		{"invalid collection name", func(r *collection.Rule) { r.Collection = "a" }, collection.ErrInvalidName},
+		{"collection name", func(r *collection.Rule) { r.CollectionID = "payments" }, collection.ErrInvalidName},
+		{"empty collection ID", func(r *collection.Rule) { r.CollectionID = "" }, collection.ErrInvalidName},
+		{"prefix only", func(r *collection.Rule) { r.CollectionID = "col-" }, collection.ErrInvalidName},
+		{"wrong prefix", func(r *collection.Rule) { r.CollectionID = "plr-other" }, collection.ErrInvalidName},
+		{"SQL in ID", func(r *collection.Rule) { r.CollectionID = "col-a' OR '1'='1" }, collection.ErrInvalidName},
+		{"line break in ID", func(r *collection.Rule) { r.CollectionID = "col-a\nb" }, collection.ErrInvalidName},
+		{"slash in ID", func(r *collection.Rule) { r.CollectionID = "col-a/b" }, collection.ErrInvalidName},
+		{"long ID", func(r *collection.Rule) {
+			r.CollectionID = "col-" + strings.Repeat("a", oversizedCollectionIDSuffix)
+		}, collection.ErrInvalidName},
 	}
 
 	for _, tt := range tests {
 		r := collection.Rule{
 			CreatedAt: now(), ID: ident.NewID("plr-"), Namespace: ns.Name, Tool: collection.ToolPulumi,
-			Project: "a", Stack: "*", Collection: mustName(t, collPayments), CreatedBy: testSubject, Position: 1,
+			Project: "a", Stack: "*", CollectionID: placementCollection(t, s, ns.Name, collPayments).ID,
+			CollectionName: "", CreatedBy: testSubject, Position: 1,
 		}
 		tt.edit(&r)
 
@@ -338,9 +445,14 @@ func testRuleInvalid(t *testing.T, s PlacementStore) {
 		if !errors.Is(err, tt.want) {
 			t.Errorf("%s: err = %v, want %v", tt.name, err, tt.want)
 		}
+		r.ID = existing.ID
+		err = s.UpdatePlacementRule(t.Context(), r, ns.Fence(), auditFor(ns.Fence()))
+		if !errors.Is(err, tt.want) {
+			t.Errorf("%s update: err = %v, want %v", tt.name, err, tt.want)
+		}
 	}
 
-	wantProjects(t, s, ns.Name)
+	wantProjects(t, s, ns.Name, "existing")
 }
 
 func testRuleFenced(t *testing.T, s PlacementStore) {
@@ -382,7 +494,7 @@ func testRuleUpdate(t *testing.T, s PlacementStore) {
 	ensureCollection(t, s, ns, collB)
 
 	changed := r
-	changed.Project, changed.Stack, changed.Collection = "b", "prod-*", mustName(t, collB)
+	changed.Project, changed.Stack, changed.CollectionID = "b", "prod-*", placementCollection(t, s, ns.Name, collB).ID
 	changed.CreatedBy, changed.CreatedAt = "someone else", now().Add(1)
 
 	if err := s.UpdatePlacementRule(t.Context(), changed, ns.Fence(), auditFor(ns.Fence())); err != nil {
@@ -394,7 +506,7 @@ func testRuleUpdate(t *testing.T, s PlacementStore) {
 		t.Fatalf("GetPlacementRule: %v", err)
 	}
 
-	if got.Project != "b" || got.Stack != "prod-*" || got.Collection.String() != collB {
+	if got.Project != "b" || got.Stack != "prod-*" || got.CollectionName.String() != collB {
 		t.Errorf("content = %+v, want the changed content", got)
 	}
 
@@ -597,14 +709,15 @@ func testRuleCollectionDelete(t *testing.T, s PlacementStore) {
 	wantProjects(t, s, ns.Name, "b", "d")
 }
 
-// newRule builds a rule of ns without a store call. The collection must exist.
-func newRule(t *testing.T, ns namespace.Name, spec ruleSpec) collection.Rule {
+// newRule builds a rule of ns. The collection must exist.
+func newRule(t *testing.T, s PlacementStore, ns namespace.Name, spec ruleSpec) collection.Rule {
 	t.Helper()
 
 	return collection.Rule{
 		CreatedAt: now(), ID: ident.NewID("plr-"), Namespace: ns, Tool: collection.ToolPulumi,
 		Project: collection.Pattern(spec.project), Stack: collection.Pattern(spec.stack),
-		Collection: mustName(t, spec.coll), CreatedBy: testSubject, Position: 0,
+		CollectionID: placementCollection(t, s, ns, spec.coll).ID, CollectionName: "",
+		CreatedBy: testSubject, Position: 0,
 	}
 }
 
@@ -678,8 +791,8 @@ func testRuleConcurrentHidden(t *testing.T, s PlacementStore) {
 		ensureCollection(t, s, ns, collA)
 
 		rules := []collection.Rule{
-			newRule(t, ns.Name, ruleSpec{"a", "*", collA}),
-			newRule(t, ns.Name, ruleSpec{"a", "x*", collA}),
+			newRule(t, s, ns.Name, ruleSpec{"a", "*", collA}),
+			newRule(t, s, ns.Name, ruleSpec{"a", "x*", collA}),
 		}
 
 		for _, err := range createTogether(t, s, ns, rules) {
@@ -735,7 +848,7 @@ func testRulePositionZero(t *testing.T, s PlacementStore) {
 	ns := newNamespace(t, s, "acme")
 	first := mustAdd(t, s, ns, ruleSpec{"a", "*", collA}, 0)
 	mustAdd(t, s, ns, ruleSpec{"b", "*", collB}, 0)
-	third := newRule(t, ns.Name, ruleSpec{"c", "*", collA})
+	third := newRule(t, s, ns.Name, ruleSpec{"c", "*", collA})
 
 	if err := s.CreatePlacementRule(t.Context(), third, ns.Fence(), auditFor(ns.Fence())); err != nil {
 		t.Fatalf("create at position 0: %v", err)
@@ -744,7 +857,7 @@ func testRulePositionZero(t *testing.T, s PlacementStore) {
 	wantProjects(t, s, ns.Name, "a", "b", "c")
 
 	first.Position = 0
-	first.Collection = mustName(t, collB)
+	first.CollectionID = placementCollection(t, s, ns.Name, collB).ID
 
 	if err := s.UpdatePlacementRule(t.Context(), first, ns.Fence(), auditFor(ns.Fence())); err != nil {
 		t.Fatalf("update at position 0: %v", err)
@@ -766,7 +879,7 @@ func testRuleFenceNamespaceMismatch(t *testing.T, s PlacementStore) {
 	foreign := mustAdd(t, s, other, ruleSpec{"x", "*", collB}, 0)
 
 	// Create: the rule names globex, the fence names acme.
-	stray := newRule(t, other.Name, ruleSpec{"y", "*", collB})
+	stray := newRule(t, s, other.Name, ruleSpec{"y", "*", collB})
 
 	err := s.CreatePlacementRule(t.Context(), stray, ns.Fence(), auditFor(ns.Fence()))
 	if err == nil {

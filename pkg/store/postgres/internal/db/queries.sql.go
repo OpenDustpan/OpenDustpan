@@ -868,8 +868,8 @@ WHERE notification_deliveries.id IN (
     LIMIT $5
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-          last_error, delivered_at_ms, owner, lease_until_ms, version
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+          next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 `
 
 type ClaimNotificationDeliveriesParams struct {
@@ -907,6 +907,7 @@ func (q *Queries) ClaimNotificationDeliveries(ctx context.Context, arg ClaimNoti
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.CreatedAtMs,
 			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
@@ -1695,9 +1696,8 @@ const countNotificationDeliveriesOfSubscriptionBefore = `-- name: CountNotificat
 SELECT COUNT(*) FROM (
     SELECT 1 FROM notification_deliveries
     WHERE scope = $1 AND subscription_id = $2
-      AND (next_at_ms > $3
-        OR (next_at_ms = $3 AND id COLLATE "C" >= $4))
-    ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+      AND (created_at_ms, id COLLATE "C") >= ($3::bigint, $4::text)
+    ORDER BY created_at_ms DESC, id COLLATE "C" DESC
     LIMIT $5
 ) AS within_bound
 `
@@ -1710,12 +1710,14 @@ type CountNotificationDeliveriesOfSubscriptionBeforeParams struct {
 	MaxRows        int32
 }
 
-// The number of deliveries of the subscription at or before the cursor (next
-// time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
-// the deliveries that a page after the cursor leaves behind, in byte order
-// (COLLATE "C"). The count stops at max_rows. The ORDER BY does not change
-// the count; it stays so that the plan reads the index of the history in
-// order and stops at max_rows.
+// The number of deliveries of the subscription at or before the cursor
+// (creation time, delivery ID) in the order of
+// ListNotificationDeliveriesOfSubscription: the deliveries that a page after
+// the cursor leaves behind, in byte order
+// (COLLATE "C"). The count stops at max_rows. The row
+// comparison is a bound of the index of the history, so the scan reads only
+// the rows that it counts. The ORDER BY does not change the count; it stays so
+// that the plan reads that index in order and stops at max_rows.
 func (q *Queries) CountNotificationDeliveriesOfSubscriptionBefore(ctx context.Context, arg CountNotificationDeliveriesOfSubscriptionBeforeParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countNotificationDeliveriesOfSubscriptionBefore,
 		arg.Scope,
@@ -2976,20 +2978,20 @@ func (q *Queries) CreatePasskeyChallenge(ctx context.Context, arg CreatePasskeyC
 }
 
 const createPlacementRule = `-- name: CreatePlacementRule :exec
-INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
+INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_id, created_by, created_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type CreatePlacementRuleParams struct {
-	ID            string
-	Namespace     string
-	Position      int32
-	Tool          string
-	Project       string
-	Stack         string
-	CollectionKey string
-	CreatedBy     string
-	CreatedAtMs   int64
+	ID           string
+	Namespace    string
+	Position     int32
+	Tool         string
+	Project      string
+	Stack        string
+	CollectionID string
+	CreatedBy    string
+	CreatedAtMs  int64
 }
 
 // The caller checks the fence in the same transaction and renumbers the list
@@ -3002,7 +3004,7 @@ func (q *Queries) CreatePlacementRule(ctx context.Context, arg CreatePlacementRu
 		arg.Tool,
 		arg.Project,
 		arg.Stack,
-		arg.CollectionKey,
+		arg.CollectionID,
 		arg.CreatedBy,
 		arg.CreatedAtMs,
 	)
@@ -4410,16 +4412,16 @@ func (q *Queries) DeletePlacementRule(ctx context.Context, arg DeletePlacementRu
 
 const deletePlacementRulesOfCollection = `-- name: DeletePlacementRulesOfCollection :exec
 DELETE FROM placement_rules
-WHERE namespace = $1 AND collection_key = $2
+WHERE namespace = $1 AND collection_id = $2
 `
 
 type DeletePlacementRulesOfCollectionParams struct {
-	Namespace     string
-	CollectionKey string
+	Namespace    string
+	CollectionID string
 }
 
 func (q *Queries) DeletePlacementRulesOfCollection(ctx context.Context, arg DeletePlacementRulesOfCollectionParams) error {
-	_, err := q.db.Exec(ctx, deletePlacementRulesOfCollection, arg.Namespace, arg.CollectionKey)
+	_, err := q.db.Exec(ctx, deletePlacementRulesOfCollection, arg.Namespace, arg.CollectionID)
 	return err
 }
 
@@ -5425,6 +5427,34 @@ func (q *Queries) EnsureNotificationSequence(ctx context.Context, scope string) 
 	return err
 }
 
+const ensureQuotaKey = `-- name: EnsureQuotaKey :exec
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1),
+    $2, $3, $4, 0
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope) DO NOTHING
+`
+
+type EnsureQuotaKeyParams struct {
+	Namespace string
+	Blueprint string
+	Kind      string
+	Scope     string
+}
+
+// Makes the row of a key, so that the counter can lock it. The row holds no
+// unit yet.
+func (q *Queries) EnsureQuotaKey(ctx context.Context, arg EnsureQuotaKeyParams) error {
+	_, err := q.db.Exec(ctx, ensureQuotaKey,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+	)
+	return err
+}
+
 const expireRunnerClaims = `-- name: ExpireRunnerClaims :exec
 UPDATE durable_operations
 SET claim_owner = NULL, claim_expires_at_ms = 0
@@ -6031,7 +6061,7 @@ func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow
 
 const getAuditEntry = `-- name: GetAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1 AND sequence = $2
@@ -6061,6 +6091,13 @@ func (q *Queries) GetAuditEntry(ctx context.Context, arg GetAuditEntryParams) (A
 		&i.SourceIp,
 		&i.UserAgent,
 		&i.Channel,
+		&i.AgentRun,
+		&i.AgentSession,
+		&i.ArgsDigest,
+		&i.BreakGlass,
+		&i.DelegationID,
+		&i.SecretStage,
+		&i.Tool,
 		&i.Kind,
 		&i.Outcome,
 		&i.RequestID,
@@ -8551,8 +8588,8 @@ func (q *Queries) GetNotificationCursor(ctx context.Context, arg GetNotification
 }
 
 const getNotificationDelivery = `-- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = $1
 `
@@ -8570,6 +8607,7 @@ func (q *Queries) GetNotificationDelivery(ctx context.Context, id string) (Notif
 		&i.Principal,
 		&i.State,
 		&i.Attempts,
+		&i.CreatedAtMs,
 		&i.Redeliveries,
 		&i.NextAtMs,
 		&i.LastError,
@@ -8761,10 +8799,27 @@ func (q *Queries) GetPersonPreferences(ctx context.Context, id string) (GetPerso
 	return i, err
 }
 
+const getPlacementCollection = `-- name: GetPlacementCollection :one
+SELECT id FROM collections WHERE namespace = $1 AND id = $2
+`
+
+type GetPlacementCollectionParams struct {
+	Namespace string
+	ID        string
+}
+
+// The collection ID must belong to the namespace of the rule.
+func (q *Queries) GetPlacementCollection(ctx context.Context, arg GetPlacementCollectionParams) (string, error) {
+	row := q.db.QueryRow(ctx, getPlacementCollection, arg.Namespace, arg.ID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getPlacementRule = `-- name: GetPlacementRule :one
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = $1 AND r.id = $2
 `
 
@@ -8780,6 +8835,7 @@ type GetPlacementRuleRow struct {
 	Tool           string
 	Project        string
 	Stack          string
+	CollectionID   string
 	CollectionName string
 	CreatedBy      string
 	CreatedAtMs    int64
@@ -8795,6 +8851,7 @@ func (q *Queries) GetPlacementRule(ctx context.Context, arg GetPlacementRulePara
 		&i.Tool,
 		&i.Project,
 		&i.Stack,
+		&i.CollectionID,
 		&i.CollectionName,
 		&i.CreatedBy,
 		&i.CreatedAtMs,
@@ -9009,6 +9066,41 @@ type GetQuotaReservationRow struct {
 func (q *Queries) GetQuotaReservation(ctx context.Context, arg GetQuotaReservationParams) (GetQuotaReservationRow, error) {
 	row := q.db.QueryRow(ctx, getQuotaReservation, arg.Namespace, arg.ID)
 	var i GetQuotaReservationRow
+	err := row.Scan(
+		&i.ID,
+		&i.State,
+		&i.AtMs,
+		&i.EndsAtMs,
+	)
+	return i, err
+}
+
+const getQuotaReservationForUpdate = `-- name: GetQuotaReservationForUpdate :one
+SELECT r.id, r.state, r.at_ms, r.ends_at_ms
+FROM quota_reservations AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = $1 AND r.id = $2
+FOR UPDATE OF r
+`
+
+type GetQuotaReservationForUpdateParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetQuotaReservationForUpdateRow struct {
+	ID       string
+	State    string
+	AtMs     int64
+	EndsAtMs int64
+}
+
+// The state and the times of the reservation id of a namespace, with the row
+// locked until the commit, so two ends of one reservation wait for each
+// other.
+func (q *Queries) GetQuotaReservationForUpdate(ctx context.Context, arg GetQuotaReservationForUpdateParams) (GetQuotaReservationForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getQuotaReservationForUpdate, arg.Namespace, arg.ID)
+	var i GetQuotaReservationForUpdateRow
 	err := row.Scan(
 		&i.ID,
 		&i.State,
@@ -11123,9 +11215,9 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+    at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
     fence_version, reason, principal_kind, job_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
 `
 
 type InsertAuditEntryParams struct {
@@ -11142,6 +11234,13 @@ type InsertAuditEntryParams struct {
 	SourceIp      string
 	UserAgent     string
 	Channel       string
+	AgentRun      string
+	AgentSession  string
+	ArgsDigest    string
+	BreakGlass    bool
+	DelegationID  string
+	SecretStage   string
+	Tool          string
 	Kind          string
 	Outcome       string
 	RequestID     string
@@ -11171,6 +11270,13 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.SourceIp,
 		arg.UserAgent,
 		arg.Channel,
+		arg.AgentRun,
+		arg.AgentSession,
+		arg.ArgsDigest,
+		arg.BreakGlass,
+		arg.DelegationID,
+		arg.SecretStage,
+		arg.Tool,
 		arg.Kind,
 		arg.Outcome,
 		arg.RequestID,
@@ -12490,11 +12596,12 @@ func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotification
 
 const insertNotificationDelivery = `-- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-    last_error, delivered_at_ms, owner, lease_until_ms, version
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+    next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     $1, $2, $3, $4, $5,
-    $6, $7, 'pending', 0, 0, $8, '', 0, '', 0, 1
+    $6, $7, 'pending', 0, $8, 0, $9, '', 0, '',
+    0, 1
 )
 `
 
@@ -12506,6 +12613,7 @@ type InsertNotificationDeliveryParams struct {
 	SinkID         string
 	Contact        string
 	Principal      string
+	CreatedAtMs    int64
 	NextAtMs       int64
 }
 
@@ -12518,6 +12626,7 @@ func (q *Queries) InsertNotificationDelivery(ctx context.Context, arg InsertNoti
 		arg.SinkID,
 		arg.Contact,
 		arg.Principal,
+		arg.CreatedAtMs,
 		arg.NextAtMs,
 	)
 	return err
@@ -13772,7 +13881,7 @@ func (q *Queries) LastAuditChainStartSequence(ctx context.Context, namespace str
 
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1
@@ -13799,6 +13908,13 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.SourceIp,
 		&i.UserAgent,
 		&i.Channel,
+		&i.AgentRun,
+		&i.AgentSession,
+		&i.ArgsDigest,
+		&i.BreakGlass,
+		&i.DelegationID,
+		&i.SecretStage,
+		&i.Tool,
 		&i.Kind,
 		&i.Outcome,
 		&i.RequestID,
@@ -13995,7 +14111,7 @@ func (q *Queries) ListAuditChainMarks(ctx context.Context) ([]AuditChainMark, er
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
@@ -14036,6 +14152,13 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.SourceIp,
 			&i.UserAgent,
 			&i.Channel,
+			&i.AgentRun,
+			&i.AgentSession,
+			&i.ArgsDigest,
+			&i.BreakGlass,
+			&i.DelegationID,
+			&i.SecretStage,
+			&i.Tool,
 			&i.Kind,
 			&i.Outcome,
 			&i.RequestID,
@@ -14061,7 +14184,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1
@@ -14100,6 +14223,13 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.SourceIp,
 			&i.UserAgent,
 			&i.Channel,
+			&i.AgentRun,
+			&i.AgentSession,
+			&i.ArgsDigest,
+			&i.BreakGlass,
+			&i.DelegationID,
+			&i.SecretStage,
+			&i.Tool,
 			&i.Kind,
 			&i.Outcome,
 			&i.RequestID,
@@ -16947,11 +17077,11 @@ func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerG
 }
 
 const listNotificationDeliveriesOfSubscription = `-- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = $1 AND subscription_id = $2
-ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+ORDER BY created_at_ms DESC, id COLLATE "C" DESC
 LIMIT $3
 `
 
@@ -16980,6 +17110,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.CreatedAtMs,
 			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
@@ -16999,13 +17130,12 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 }
 
 const listNotificationDeliveriesOfSubscriptionAfter = `-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = $1 AND subscription_id = $2
-  AND (next_at_ms < $3
-    OR (next_at_ms = $3 AND id COLLATE "C" < $4))
-ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+  AND (created_at_ms, id COLLATE "C") < ($3::bigint, $4::text)
+ORDER BY created_at_ms DESC, id COLLATE "C" DESC
 LIMIT $5
 `
 
@@ -17017,10 +17147,11 @@ type ListNotificationDeliveriesOfSubscriptionAfterParams struct {
 	MaxRows        int32
 }
 
-// The page of ListNotificationDeliveriesOfSubscription after the cursor (next
-// time, delivery ID): the rows with an older next time, or with the same next
-// time and a smaller ID, in byte order (COLLATE "C"), as the order of the
-// query. The bound on next_at_ms lets the index scan start at the cursor.
+// The page of ListNotificationDeliveriesOfSubscription after the cursor
+// (creation time, delivery ID): the rows with an older creation time, or with
+// the same creation time and a smaller ID, in byte order (COLLATE "C"), as
+// the order of the query. The row comparison is a bound of the
+// index of the history, so the scan starts at the cursor.
 func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Context, arg ListNotificationDeliveriesOfSubscriptionAfterParams) ([]NotificationDelivery, error) {
 	rows, err := q.db.Query(ctx, listNotificationDeliveriesOfSubscriptionAfter,
 		arg.Scope,
@@ -17046,6 +17177,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Cont
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.CreatedAtMs,
 			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
@@ -17546,9 +17678,9 @@ func (q *Queries) ListPlacementRuleIDs(ctx context.Context, namespace string) ([
 }
 
 const listPlacementRules = `-- name: ListPlacementRules :many
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = $1
 ORDER BY r.position, r.id
 `
@@ -17560,6 +17692,7 @@ type ListPlacementRulesRow struct {
 	Tool           string
 	Project        string
 	Stack          string
+	CollectionID   string
 	CollectionName string
 	CreatedBy      string
 	CreatedAtMs    int64
@@ -17581,6 +17714,7 @@ func (q *Queries) ListPlacementRules(ctx context.Context, namespace string) ([]L
 			&i.Tool,
 			&i.Project,
 			&i.Stack,
+			&i.CollectionID,
 			&i.CollectionName,
 			&i.CreatedBy,
 			&i.CreatedAtMs,
@@ -17598,13 +17732,13 @@ func (q *Queries) ListPlacementRules(ctx context.Context, namespace string) ([]L
 const listPlacementRulesOfCollection = `-- name: ListPlacementRulesOfCollection :many
 SELECT id, tool, project, stack
 FROM placement_rules
-WHERE namespace = $1 AND collection_key = $2
+WHERE namespace = $1 AND collection_id = $2
 ORDER BY position, id
 `
 
 type ListPlacementRulesOfCollectionParams struct {
-	Namespace     string
-	CollectionKey string
+	Namespace    string
+	CollectionID string
 }
 
 type ListPlacementRulesOfCollectionRow struct {
@@ -17616,7 +17750,7 @@ type ListPlacementRulesOfCollectionRow struct {
 
 // The rules that name one collection, for the audit entry of its delete.
 func (q *Queries) ListPlacementRulesOfCollection(ctx context.Context, arg ListPlacementRulesOfCollectionParams) ([]ListPlacementRulesOfCollectionRow, error) {
-	rows, err := q.db.Query(ctx, listPlacementRulesOfCollection, arg.Namespace, arg.CollectionKey)
+	rows, err := q.db.Query(ctx, listPlacementRulesOfCollection, arg.Namespace, arg.CollectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -20076,6 +20210,34 @@ func (q *Queries) LockPersonPreferences(ctx context.Context, id string) (LockPer
 	var i LockPersonPreferencesRow
 	err := row.Scan(&i.ID, &i.Document, &i.UpdatedAtMs)
 	return i, err
+}
+
+const lockQuotaKey = `-- name: LockQuotaKey :one
+SELECT settled_count FROM quota_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
+  AND blueprint = $2 AND kind = $3 AND scope = $4
+FOR UPDATE
+`
+
+type LockQuotaKeyParams struct {
+	Namespace string
+	Blueprint string
+	Kind      string
+	Scope     string
+}
+
+// Locks the row of the key until the commit, so the writes of one key wait
+// for each other and two writes never both pass a limit.
+func (q *Queries) LockQuotaKey(ctx context.Context, arg LockQuotaKeyParams) (int64, error) {
+	row := q.db.QueryRow(ctx, lockQuotaKey,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+	)
+	var settled_count int64
+	err := row.Scan(&settled_count)
+	return settled_count, err
 }
 
 const lockRunnerHandoffToken = `-- name: LockRunnerHandoffToken :one
@@ -24618,17 +24780,17 @@ func (q *Queries) UpdateNotificationSubscription(ctx context.Context, arg Update
 
 const updatePlacementRuleContent = `-- name: UpdatePlacementRuleContent :execrows
 UPDATE placement_rules
-SET tool = $1, project = $2, stack = $3, collection_key = $4
+SET tool = $1, project = $2, stack = $3, collection_id = $4
 WHERE namespace = $5 AND id = $6
 `
 
 type UpdatePlacementRuleContentParams struct {
-	Tool          string
-	Project       string
-	Stack         string
-	CollectionKey string
-	Namespace     string
-	ID            string
+	Tool         string
+	Project      string
+	Stack        string
+	CollectionID string
+	Namespace    string
+	ID           string
 }
 
 func (q *Queries) UpdatePlacementRuleContent(ctx context.Context, arg UpdatePlacementRuleContentParams) (int64, error) {
@@ -24636,7 +24798,7 @@ func (q *Queries) UpdatePlacementRuleContent(ctx context.Context, arg UpdatePlac
 		arg.Tool,
 		arg.Project,
 		arg.Stack,
-		arg.CollectionKey,
+		arg.CollectionID,
 		arg.Namespace,
 		arg.ID,
 	)

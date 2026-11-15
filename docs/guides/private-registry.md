@@ -158,6 +158,49 @@ OpenTofu downloads the files of a release without the token. The download
 document holds signed addresses for them. An address is valid for 15 minutes
 and for one file of one release.
 
+## Install through the provider mirror
+
+As an alternative to the version list and the download document above,
+`tofu init` can install the provider through the provider network mirror of
+the server. The mirror lists only the versions that the namespace still
+serves: a version whose signing key the namespace removed is left out, so
+`tofu init` with a version range selects a version that a trusted key signed.
+The address in the configuration stays the same.
+
+Add a `network_mirror` block to the CLI configuration file, next to the
+credentials of the host:
+
+```hcl
+credentials "dustpan.example.com" {
+  token = "<token>"
+}
+provider_installation {
+  network_mirror {
+    url = "https://dustpan.example.com/v1/mirror/"
+  }
+}
+```
+
+The host of the server must have no port. OpenTofu cannot build a mirror path
+from a host that has a port, such as `dustpan.example.com:8443`.
+
+Run `tofu init`. OpenTofu reads the mirror index
+`/v1/mirror/dustpan.example.com/acme/payments/index.json`, reads the version
+document `/v1/mirror/dustpan.example.com/acme/payments/1.0.0.json`,
+downloads each archive from the signed address in the document, and checks
+the `zh:` hash and the signature. The token needs the action
+`registry:read`, as for the install above. OpenTofu sends the token with the
+index and the version document, and it downloads the archives without the
+token.
+
+When the mirror answers an error, the one command that helps is:
+
+| Error | What the answer says | The command that helps |
+| --- | --- | --- |
+| An input that the address rule does not allow. | The server answers 400 with a body that names the input. List the published providers with `GET /api/dustpan/v1/namespaces/{id}/registry/providers`. | `GET /api/dustpan/v1/namespaces/{id}/registry/providers` |
+| A bad checksum, a missing signature, or a bad signature at publish. | The server answers 422 with a body that names the bad file or key. List the signing keys with `GET /api/dustpan/v1/namespaces/{id}/registry/keys`. | `GET /api/dustpan/v1/namespaces/{id}/registry/keys` |
+| An unknown address or version. | The server answers 404 with a body that names the address and version. List the versions with `GET /api/dustpan/v1/namespaces/{id}/registry/providers/{addr}/versions`. | `GET /api/dustpan/v1/namespaces/{id}/registry/providers/{addr}/versions` |
+
 ## List the providers of a namespace
 
 A token with `registry:read` lists the providers of a namespace that have at

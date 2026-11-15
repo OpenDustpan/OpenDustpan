@@ -17,9 +17,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -406,9 +406,10 @@ func checkGroups(cfg Config) error {
 	return nil
 }
 
-// validText reports whether s is UTF-8 with no control character.
+// validText reports whether s is UTF-8 with no control, format or separator
+// character.
 func validText(s string) bool {
-	return utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
+	return utf8.ValidString(s) && !ident.HasHidden(s)
 }
 
 // plainHostAllowed reports whether a plain connection to host is allowed

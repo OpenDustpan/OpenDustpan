@@ -512,14 +512,20 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 	}
 
 	h.call(http.MethodPost, "/api/server/namespaces", `{"name":"acme"}`, http.StatusCreated)
-	h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/collections", `{"name":"everything"}`, http.StatusCreated)
+	body := h.call(
+		http.MethodPost, "/api/dustpan/v1/namespaces/acme/collections", `{"name":"everything"}`, http.StatusCreated,
+	)
+	var target struct {
+		ID string `json:"id"`
+	}
+	h.decode(body, &target)
 	h.call(
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
-		`{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
+		`{"tool":"pulumi","project":"*","stack":"*","collectionID":"`+target.ID+`"}`, http.StatusCreated,
 	)
 	h.call(
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
-		`{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
+		`{"tool":"opentofu","project":"*","stack":"*","collectionID":"`+target.ID+`"}`, http.StatusCreated,
 	)
 
 	return h
@@ -1414,7 +1420,8 @@ func restoreModel() costModel {
 	return costModel{
 		fixed: 331 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
-			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips,
+			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
+			droppedRunnerCredentialTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1485,6 +1492,13 @@ const stagedTriggerClockTrips = 1
 // once for each restore. The count is fixed: it does not grow with the units
 // or the tables.
 const breakGlassFloorTrips = 3
+
+// droppedRunnerCredentialTrips is the number of round trips of the read of
+// the runner credentials that the swap drops: one read of the handoff tokens
+// and one of the job sessions whose runner the restored data does not hold,
+// under the lock of the control tables. A restore that drops a credential
+// also appends one audit entry; the restores of this test drop none.
+const droppedRunnerCredentialTrips = 2
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer

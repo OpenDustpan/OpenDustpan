@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -92,17 +93,7 @@ func checkRouteActions(t *testing.T, rt apitaudit.Route, actions, serverActions 
 
 // sameActions reports whether a and b hold the same actions in the same order.
 func sameActions(a, b []identity.Action) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-
-	return true
+	return slices.Equal(a, b)
 }
 
 // TestRoutesDeclareActions walks every registered route and fails for a
@@ -471,5 +462,52 @@ func checkServerActions(t *testing.T, rt apitaudit.Route) {
 	obj, err := rt.Resolve(rec, req)
 	if err == nil && obj.IsServer() {
 		t.Fatalf("route %q resolves @server but declares no server actions", rt.Method+" "+rt.Path)
+	}
+}
+
+// TestAuditEntriesRouteKeepsItsAction proves that GET /api/audit/entries
+// keeps its audit read action and serves a request with an access token, so
+// the agent data of an entry shows only to a reader of the entry.
+func TestAuditEntriesRouteKeepsItsAction(t *testing.T) {
+	t.Parallel()
+
+	recorder := &recordingAuthorizer{calls: nil}
+	handler, store := newEnforcingHandler(t, recorder)
+	seedEntry(t, store, "acme", "alice")
+
+	var list struct {
+		Entries []map[string]any `json:"entries"`
+	}
+
+	if status := getJSON(t, handler, "/api/audit/entries?organization=acme", &list); status != http.StatusOK {
+		t.Fatalf("list answers %d, want %d", status, http.StatusOK)
+	}
+
+	if len(list.Entries) != 1 {
+		t.Fatalf("entries = %v, want the seeded entry", list.Entries)
+	}
+
+	found := false
+
+	for _, rt := range handler.Routes() {
+		if rt.Method+" "+rt.Path != "GET /api/audit/entries" {
+			continue
+		}
+
+		found = true
+
+		if !sameActions(rt.Actions, []identity.Action{identity.ActionNamespaceReadAudit}) {
+			t.Fatalf("route actions = %v, want only %v", rt.Actions, identity.ActionNamespaceReadAudit)
+		}
+	}
+
+	if !found {
+		t.Fatal("no route GET /api/audit/entries")
+	}
+
+	want := recordedCall{action: identity.ActionNamespaceReadAudit, object: "acme"}
+
+	if len(recorder.calls) != 1 || recorder.calls[0] != want {
+		t.Fatalf("authorized %+v, want only %+v", recorder.calls, want)
 	}
 }

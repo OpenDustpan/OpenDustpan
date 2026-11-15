@@ -155,6 +155,16 @@ func TestSpecAnswerRefuses(t *testing.T) {
 			[]errcode.Value{errcode.Identifier("workspace", "a\x00b"), waiting, at},
 			errcode.ErrArgValue,
 		},
+		{
+			"format character",
+			[]errcode.Value{errcode.Identifier("workspace", "a\u202eb"), waiting, at},
+			errcode.ErrArgValue,
+		},
+		{
+			"line separator",
+			[]errcode.Value{errcode.Identifier("workspace", "a\u2028b"), waiting, at},
+			errcode.ErrArgValue,
+		},
 		{"not UTF-8", []errcode.Value{errcode.Identifier("workspace", "a\xffb"), waiting, at}, errcode.ErrArgValue},
 		{
 			"quantity above the safe range",

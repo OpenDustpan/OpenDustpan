@@ -162,7 +162,7 @@ func (s *Service) breakGlassStart(
 		return s.refuse(ctx, ref, &refusal{
 			reason: ReasonPasskeyNoReason, answer: AnswerRefused, idpSubject: "", cause: ErrReasonRequired,
 		})
-	case !validText(reason, 1, MaxBreakGlassReason) || strings.ContainsFunc(reason, audit.IsHiddenRune):
+	case !validText(reason, 1, MaxBreakGlassReason) || ident.HasHidden(reason):
 		// The reason goes to the audit entry and to the alert that the
 		// administrators read. A control, format, line separator or paragraph
 		// separator character (for example U+202E or U+200B) could show text

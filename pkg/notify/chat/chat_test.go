@@ -72,6 +72,8 @@ func TestContentValidate(t *testing.T) {
 		},
 		{"CR in the title", func(c *chat.Content) { c.Title = "a\rb" }, false},
 		{"NUL in the summary", func(c *chat.Content) { c.Summary = "a\x00b" }, false},
+		{"line separator in the summary", func(c *chat.Content) { c.Summary = "a\u2028b" }, false},
+		{"zero-width joiner in the title", func(c *chat.Content) { c.Title = "a\u200db" }, false},
 		{"tab in a label", func(c *chat.Content) { c.Fields[0].Label = "a\tb" }, false},
 		{"RLO in a value", func(c *chat.Content) { c.Fields[0].Value = "a\u202eb" }, false},
 		{"isolate in the product", func(c *chat.Content) { c.Product = "a\u2066b" }, false},

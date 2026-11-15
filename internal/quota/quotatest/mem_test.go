@@ -63,6 +63,7 @@ func (m *memCounter) InTx(_ context.Context, fence namespace.Fence, fn func(tx q
 	}
 
 	tx := &memTx{
+		namespace:    fence.Namespace,
 		settled:      maps.Clone(m.settled),
 		reservations: maps.Clone(m.reservations),
 		requests:     map[quota.Key][]time.Time{},
@@ -105,6 +106,15 @@ func (m *memCounter) SetSettled(_ context.Context, key quota.Key, count int, fen
 
 	if err := m.checkFence(fence); err != nil {
 		return err
+	}
+
+	if key.Namespace != fence.Namespace {
+		return fmt.Errorf(
+			"quota: %w: key names %q, fence names %q",
+			namespace.ErrFenced,
+			key.Namespace,
+			fence.Namespace,
+		)
 	}
 
 	m.settled[key] = count
@@ -159,6 +169,7 @@ func usages(settled map[quota.Key]int, reservations map[quota.ReservationID]quot
 
 // memTx is the state of one transaction of the reference counter.
 type memTx struct {
+	namespace    namespace.Name
 	settled      map[quota.Key]int
 	reservations map[quota.ReservationID]quota.Reservation
 	requests     map[quota.Key][]time.Time
@@ -166,6 +177,16 @@ type memTx struct {
 
 func (tx *memTx) Reserve(_ context.Context, r quota.Reservation, checks []quota.Check) (quota.Reservation, error) {
 	if err := r.Validate(); err != nil {
+		return quota.Reservation{}, err
+	}
+
+	if r.Namespace != tx.namespace {
+		return quota.Reservation{}, fmt.Errorf(
+			"quota: %w: reservation %s names %q, fence names %q", namespace.ErrFenced, r.ID, r.Namespace, tx.namespace,
+		)
+	}
+
+	if err := tx.checkKeys(checks); err != nil {
 		return quota.Reservation{}, err
 	}
 
@@ -200,6 +221,10 @@ func (tx *memTx) Reserve(_ context.Context, r quota.Reservation, checks []quota.
 }
 
 func (tx *memTx) Record(_ context.Context, at time.Time, checks []quota.Check) error {
+	if err := tx.checkKeys(checks); err != nil {
+		return err
+	}
+
 	for _, c := range checks {
 		if c.Key.Kind != quota.KindRequests {
 			return fmt.Errorf("%w: record of %s", quota.ErrInvalid, c.Key)
@@ -232,6 +257,19 @@ func (tx *memTx) SetEnd(_ context.Context, id quota.ReservationID, endsAt time.T
 
 	r.EndsAt = endsAt
 	tx.reservations[id] = r
+
+	return nil
+}
+
+// checkKeys refuses a check whose key is of another namespace than the fence.
+func (tx *memTx) checkKeys(checks []quota.Check) error {
+	for _, c := range checks {
+		if c.Key.Namespace != tx.namespace {
+			return fmt.Errorf(
+				"quota: %w: key %s names %q, fence names %q", namespace.ErrFenced, c.Key, c.Key.Namespace, tx.namespace,
+			)
+		}
+	}
 
 	return nil
 }

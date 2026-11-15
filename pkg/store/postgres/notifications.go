@@ -934,7 +934,8 @@ func enqueueDelivery(ctx context.Context, q *db.Queries, d *notify.Delivery, see
 
 	insErr := q.InsertNotificationDelivery(ctx, db.InsertNotificationDeliveryParams{
 		ID: d.ID, Scope: d.Scope.String(), NotificationID: d.Notification, SubscriptionID: d.Subscription,
-		SinkID: d.Sink, Contact: d.Contact, Principal: d.Principal, NextAtMs: notifystore.Millis(d.NextAt),
+		SinkID: d.Sink, Contact: d.Contact, Principal: d.Principal,
+		CreatedAtMs: notifystore.Millis(d.CreatedAt), NextAtMs: notifystore.Millis(d.NextAt),
 	})
 	if insErr != nil {
 		return fmt.Errorf("insert delivery: %w", insErr)
@@ -1112,10 +1113,21 @@ func deliveriesOf(rows []db.NotificationDelivery) ([]notify.Delivery, error) {
 
 func deliveryRow(r *db.NotificationDelivery) notifystore.DeliveryRow {
 	return notifystore.DeliveryRow{
-		ID: r.ID, Scope: r.Scope, NotificationID: r.NotificationID, SubscriptionID: r.SubscriptionID,
-		SinkID: r.SinkID, Contact: r.Contact, Principal: r.Principal, State: r.State, Attempts: r.Attempts,
-		Redeliveries: r.Redeliveries, NextAtMs: r.NextAtMs, LastError: r.LastError,
-		DeliveredAtMs: r.DeliveredAtMs, Owner: r.Owner, LeaseUntilMs: r.LeaseUntilMs, Version: r.Version,
+		ID:             r.ID,
+		Scope:          r.Scope,
+		NotificationID: r.NotificationID,
+		SubscriptionID: r.SubscriptionID,
+		SinkID:         r.SinkID,
+		Contact:        r.Contact,
+		Principal:      r.Principal,
+		State:          r.State,
+		Attempts:       r.Attempts,
+		CreatedAtMs:    r.CreatedAtMs,
+		Redeliveries:   r.Redeliveries, NextAtMs: r.NextAtMs,
+		LastError:     r.LastError,
+		DeliveredAtMs: r.DeliveredAtMs,
+		Owner:         r.Owner, LeaseUntilMs: r.LeaseUntilMs,
+		Version: r.Version,
 	}
 }
 
@@ -1196,7 +1208,7 @@ func (k NotificationStore) History(
 			rows, err = q.ListNotificationDeliveriesOfSubscriptionAfter(ctx,
 				db.ListNotificationDeliveriesOfSubscriptionAfterParams{
 					Scope: scope.String(), SubscriptionID: id,
-					AfterMs: after.NextAt.UnixMilli(), AfterID: after.ID, MaxRows: rowLimit(limit),
+					AfterMs: after.CreatedAt.UnixMilli(), AfterID: after.ID, MaxRows: rowLimit(limit),
 				})
 		}
 
@@ -1241,7 +1253,7 @@ func (k NotificationStore) CountBefore(
 		count, err = q.CountNotificationDeliveriesOfSubscriptionBefore(ctx,
 			db.CountNotificationDeliveriesOfSubscriptionBeforeParams{
 				Scope: scope.String(), SubscriptionID: id,
-				AfterMs: after.NextAt.UnixMilli(), AfterID: after.ID, MaxRows: rowLimit(maxCount),
+				AfterMs: after.CreatedAt.UnixMilli(), AfterID: after.ID, MaxRows: rowLimit(maxCount),
 			})
 		if err != nil {
 			return fmt.Errorf("count deliveries: %w", err)
