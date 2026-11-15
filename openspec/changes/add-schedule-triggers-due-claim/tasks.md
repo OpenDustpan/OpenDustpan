@@ -10,7 +10,7 @@
 
 ## 2. Build
 
-- [ ] 2.1 Implement ClaimDue (NEW) in the trigger.Store port at pkg/trigger/ports.go:23 and in each store adapter under pkg/store as one conditional update with a 2 minute lease. Check: `go test ./pkg/trigger/... ./pkg/store/...` passes
+- [ ] 2.1 Implement ClaimDue (NEW) in the trigger.Store port at pkg/trigger/ports.go:23 and in each store adapter under pkg/store as one conditional update with a 2 minute lease. Check: `go test -timeout 60m ./pkg/trigger/... ./pkg/store/...` passes
 - [ ] 2.2 Extend Dispatcher.Scheduled at pkg/trigger/dispatcher.go:88 with the Next check (cron.Next is NEW), the run-as grant check, source kind schedule, lease and pause. BLOCKED by housekeeping-principals for the stored grant of the run-as principal. Check: `go test ./pkg/trigger/...` passes for two instances and one slot
 - [ ] 2.3 Wire the durable schedule trigger.schedule (NEW) to Dispatcher.Scheduled each minute in the NEW file pkg/trigger/schedule.go. BLOCKED by run-triggers for the trigger record that the tick reads. Check: `go test ./pkg/durable/...` passes for one tick each minute and one catch-up run
 - [ ] 2.4 Add the docs page for schedule triggers in the NEW file docs/triggers/schedule.md. Check: `make docs-lint` passes

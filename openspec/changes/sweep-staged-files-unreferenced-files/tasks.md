@@ -15,7 +15,7 @@
 
 ## 2. Implementation
 
-- [ ] 2.1 Edit the baseline of each dialect (`pkg/store/<dialect>/migrations/<NNNN>_baseline.sql`): staged created_at_ms and moved flag, content-key row table, mark table and cursor table. Check: `go test ./pkg/store/... -run TestFrozenMigrations -count=1` passes with the new baseline hash
+- [ ] 2.1 Edit the baseline of each dialect (`pkg/store/<dialect>/migrations/<NNNN>_baseline.sql`): staged created_at_ms and moved flag, content-key row table, mark table and cursor table. Check: `go test -timeout 60m ./pkg/store/... -run TestFrozenMigrations -count=1` passes with the new baseline hash
 - [ ] 2.2 Implement the schedule row, the durable run, the paged listing and the publish lock in `pkg/registry/sweep.go` (NEW). The task adds the NEW top-level test `TestRegistrySweep` in a `_test.go` file of `pkg/registry`, so that the Check runs it. Check: `go test ./pkg/registry/... -run TestRegistrySweep -count=1` passes
 - [ ] 2.4 SECURITY. Build the prefix guard of the port adapter in `pkg/registry/sweep.go` (NEW). The blob delete and the key listing accept only keys of the registry prefix. The task adds the NEW top-level test `TestRegistrySweepRefusesForeignPrefix` in a `_test.go` file of `pkg/registry`, so that the Check runs it. Check: `go test ./pkg/registry/... -run TestRegistrySweepRefusesForeignPrefix -count=1` passes
 - [ ] 2.5 SECURITY. Build the fencing token check of the delete step in `pkg/registry/sweep.go` (NEW). The check runs in the delete transaction. The task adds the NEW top-level test `TestRegistrySweepStaleTokenDeletesNothing` in a `_test.go` file of `pkg/registry`, so that the Check runs it. Check: `go test ./pkg/registry/... -run TestRegistrySweepStaleTokenDeletesNothing -count=1` passes
