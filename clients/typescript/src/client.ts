@@ -10,6 +10,7 @@ import type {
   BeginPasskeyRegistrationInput,
   BeginPasskeySignInInput,
   BulkReplaceUnitSettingsInput,
+  CancelJobInput,
   CancelRestoreInput,
   ChangeOwnPasswordInput,
   CheckBackupInput,
@@ -225,6 +226,7 @@ import type {
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelJobRequest,
   CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
@@ -572,6 +574,10 @@ export class Client {
 
   bulkReplaceUnitSettings(input: BulkReplaceUnitSettingsInput): Promise<Answer<BulkUnitSettingsResult>> {
     return execute(this.transport, operations.bulkReplaceUnitSettings, input);
+  }
+
+  cancelJob(input: CancelJobInput): Promise<Answer<Job>> {
+    return execute(this.transport, operations.cancelJob, input);
   }
 
   cancelRestore(input: CancelRestoreInput): Promise<Answer<CancelRestoreResponse>> {

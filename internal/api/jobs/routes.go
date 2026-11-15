@@ -156,6 +156,13 @@ func (h *Handler) buildRoutes() []Route {
 			Reads: []identity.Action{identity.ActionJobRead}, Actions: []identity.Action{identity.ActionJobApprove},
 			Filters: nil, Writes: nil,
 			IdempotencyKey: false, ETag: true, Resolve: h.resolveJob, Serve: h.approveJob,
+		}, Route{
+			// The service checks job:read and job:cancel on the unit again, and
+			// the state of the job.
+			Method: http.MethodPost, Path: cancelPath, Scope: ScopeAuthorized,
+			Reads: []identity.Action{identity.ActionJobRead}, Actions: []identity.Action{identity.ActionJobCancel},
+			Filters: nil, Writes: nil,
+			IdempotencyKey: false, ETag: true, Resolve: h.resolveJob, Serve: h.cancelJob,
 		})
 	}
 

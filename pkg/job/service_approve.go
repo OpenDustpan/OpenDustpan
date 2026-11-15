@@ -2,7 +2,6 @@ package job
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -163,40 +162,7 @@ func clip(s string) string {
 // approve gets a *DeniedError, and an error of the authorizer is a denial
 // too (fail closed).
 func (s *service) authorizedJob(ctx context.Context, a Actor, id ID) (Job, error) {
-	if !strings.HasPrefix(string(id), IDPrefix) {
-		return Job{}, ErrNotFound
-	}
-
-	j, err := s.store.Get(ctx, id)
-	if err != nil {
-		return Job{}, fmt.Errorf("get job: %w", err)
-	}
-
-	err = s.authorizer.Authorize(ctx, a.Principal, ActionJobRead, j.Spec.Unit)
-
-	switch {
-	case err == nil:
-	case errors.Is(err, identity.ErrDenied):
-		return Job{}, ErrNotFound
-	default:
-		return Job{}, fmt.Errorf("authorize %s: %w", ActionJobRead, err)
-	}
-
-	err = s.authorizer.Authorize(ctx, a.Principal, ActionJobApprove, j.Spec.Unit)
-
-	switch {
-	case err == nil:
-		return j, nil
-	case errors.Is(err, identity.ErrDenied):
-		return Job{}, &DeniedError{Action: ActionJobApprove, Object: j.Spec.Unit, Err: err}
-	default:
-		// The authorizer failed. A failure allows no one, and the caller gets
-		// a denial that the audit log records.
-		return Job{}, &DeniedError{
-			Action: ActionJobApprove, Object: j.Spec.Unit,
-			Err: fmt.Errorf("%w: the authorizer failed: %w", identity.ErrDenied, err),
-		}
-	}
+	return s.authorizedFor(ctx, a, id, ActionJobApprove)
 }
 
 // waitingGates returns the gates of type GateApproval of the current phase of

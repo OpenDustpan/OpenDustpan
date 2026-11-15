@@ -162,6 +162,10 @@ export interface BulkUnitSettingsUnit {
   readonly version: number;
 }
 
+export interface CancelJobRequest {
+  readonly reason: string;
+}
+
 export interface CancelRestoreResponse {
   readonly id: string;
 }

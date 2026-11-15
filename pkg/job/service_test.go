@@ -1297,10 +1297,6 @@ func TestMethodsOfALaterVersion(t *testing.T) {
 	r := newRig(t)
 	a := actorOf("ada")
 
-	if _, err := r.svc.Cancel(t.Context(), a, "job-1", ""); !errors.Is(err, job.ErrUnsupported) {
-		t.Errorf("Cancel = %v, want ErrUnsupported", err)
-	}
-
 	if _, err := r.svc.Confirm(t.Context(), a, "job-1", job.VerdictApprove, emptyBinding()); !errors.Is(
 		err, job.ErrUnsupported,
 	) {

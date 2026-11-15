@@ -70,6 +70,13 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 
 			return probe(h, http.MethodPost, approvalsURL(testJob), goodApprove)
 		},
+		"cancelJob": func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			r := newCancelRig(t, holdsCancel()...)
+
+			return probe(r.h, http.MethodPost, cancelURL(testJob), `{}`)
+		},
 	}
 
 	h := newStartHandler(t, newAuthorizer(), newFakeJobs(), newFakeStarter(t), nil)

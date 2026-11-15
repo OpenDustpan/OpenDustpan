@@ -24,6 +24,7 @@ import {
   decodeBulkUnitSettingsRequest,
   decodeBulkUnitSettingsResult,
   decodeBulkUnitSettingsUnit,
+  decodeCancelJobRequest,
   decodeCancelRestoreResponse,
   decodeCapabilities,
   decodeChangeOwnPasswordRequest,
@@ -364,6 +365,7 @@ import type {
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelJobRequest,
   CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
@@ -725,6 +727,16 @@ export interface BulkReplaceUnitSettingsInput {
   readonly body: BulkUnitSettingsRequest;
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation cancelJob. */
+export interface CancelJobInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly job_id: string;
+  };
+  readonly body: CancelJobRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -2675,6 +2687,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeBulkUnitSettingsResult),
+  ),
+  cancelJob: operation<Job>(
+    {
+      id: "cancelJob",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/cancel",
+      pathParameters: ["namespace", "job_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeJob),
   ),
   cancelRestore: operation<CancelRestoreResponse>(
     {

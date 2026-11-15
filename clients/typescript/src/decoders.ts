@@ -43,6 +43,7 @@ import type {
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelJobRequest,
   CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
@@ -572,6 +573,11 @@ export const decodeBulkUnitSettingsResult: Decoder<BulkUnitSettingsResult> = obj
 export const decodeBulkUnitSettingsUnit: Decoder<BulkUnitSettingsUnit> = object<BulkUnitSettingsUnit>("BulkUnitSettingsUnit", {
   id: string,
   version: int64,
+});
+
+/** The validator of CancelJobRequest. */
+export const decodeCancelJobRequest: Decoder<CancelJobRequest> = object<CancelJobRequest>("CancelJobRequest", {
+  reason: string,
 });
 
 /** The validator of CancelRestoreResponse. */

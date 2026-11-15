@@ -156,9 +156,9 @@ type ServiceConfig struct {
 	MaxPlanAge time.Duration
 }
 
-// service is the Service of this package. This version starts a job and
-// reads one. It refuses the other methods, so no caller thinks that a
-// missing rule is a rule.
+// service is the Service of this package. This version starts, reads,
+// cancels and approves a job. It refuses Confirm and RedactLog, so no caller
+// thinks that a missing rule is a rule.
 type service struct {
 	store      Store
 	units      UnitResolver
@@ -382,11 +382,6 @@ func (s *service) Get(ctx context.Context, a Actor, id ID) (Job, error) {
 
 // errNotYet is the cause of the methods that this version does not have.
 var errNotYet = errors.New("the job service of this version does not do this yet")
-
-// Cancel implements Service. This version refuses it.
-func (*service) Cancel(context.Context, Actor, ID, string) (Job, error) {
-	return Job{}, fmt.Errorf("%w: cancel: %w", ErrUnsupported, errNotYet)
-}
 
 // Confirm implements Service. This version refuses it.
 func (*service) Confirm(context.Context, Actor, ID, Verdict, PlanBinding) (Job, error) {
