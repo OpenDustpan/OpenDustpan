@@ -2187,6 +2187,8 @@ CREATE INDEX object_context_owners_entry ON object_context_owners USING btree (n
 
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges USING btree (expires_at_ms);
 
+CREATE INDEX passkey_challenges_kind_expiry ON passkey_challenges USING btree (kind, expires_at_ms);
+
 CREATE INDEX passkey_challenges_source ON passkey_challenges USING btree (source, expires_at_ms);
 
 CREATE INDEX passkey_challenges_source_group ON passkey_challenges USING btree (source_group, expires_at_ms);
