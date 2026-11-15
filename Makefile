@@ -11,7 +11,7 @@
 
 .PHONY: cover regenerate-baseline release-record-check pin-frozen check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test
 
-check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check test bench journal-guard journal-test ## Everything CI checks.
+check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint release-record-check pin-frozen test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -327,10 +327,8 @@ soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one serve
 
 BASELINE_REF ?= origin/main
 
-PIN_BASE ?= origin/main
-
-pin-frozen: ## Refuse a branch that changes the API description pin or info.version before the first tag (base PIN_BASE, default origin/main).
-	./scripts/check-pin-frozen.sh $(PIN_BASE)
+pin-frozen: ## Fail when DocumentVersion, info.version or the version line of openapi.pin changes before the first tag.
+	go test ./internal/api/apidesc -run TestPinFrozen -count=1
 
 regenerate-baseline: ## Write the baseline migration of each dialect from the migrations of BASELINE_REF (default origin/main); needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Not part of check.
 	./scripts/regenerate-baseline.sh $(BASELINE_REF)
