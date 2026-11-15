@@ -748,7 +748,7 @@ func TestWriteRefusalTexts(t *testing.T) {
 			),
 			want: []string{
 				"workspace is not locked: send LOCK first",
-				"PUT /api/server/namespaces/{namespace}/override-switches", "unit:write-unlocked",
+				"PUT /api/dustpan/v1/namespaces/{namespace}/override-switches", "unit:write-unlocked",
 			},
 		},
 		{

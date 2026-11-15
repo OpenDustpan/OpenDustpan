@@ -352,7 +352,7 @@ func (f *fakeServer) start(t *testing.T) *httptest.Server {
 		})
 	})
 
-	mux.HandleFunc("GET /api/server/backups", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /api/dustpan/v1/backups", func(w http.ResponseWriter, _ *http.Request) {
 		writeFake(t, w, map[string]any{"backups": f.backups})
 	})
 

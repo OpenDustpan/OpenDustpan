@@ -21,6 +21,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/job"
 )
@@ -226,7 +227,7 @@ func hiddenRuneError(what, s string) error {
 			return fmt.Errorf("%w: %s has a line separator", ErrInvalid, what)
 		case unicode.Is(unicode.Zp, r):
 			return fmt.Errorf("%w: %s has a paragraph separator", ErrInvalid, what)
-		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+		case ident.IsHiddenRune(r):
 			return fmt.Errorf("%w: %s has a control or format character", ErrInvalid, what)
 		}
 	}

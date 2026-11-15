@@ -52,6 +52,15 @@ export interface Approvers {
   readonly users: ReadonlyArray<string>;
 }
 
+export interface AuditChain {
+  readonly changedAt?: string;
+  readonly changedBy?: string;
+  readonly migrating: boolean;
+  readonly pending: boolean;
+  readonly setting: string;
+  readonly state: string;
+}
+
 /** The error answer with the code backup.corrupt. */
 export interface BackupCorruptError {
   /** The HTTP status. */
@@ -65,6 +74,35 @@ export interface BackupCorruptError {
 /** The arguments of the text of the error with the code backup.corrupt. */
 export interface BackupCorruptErrorArgs {
   readonly backup: string;
+}
+
+export interface BackupManifest {
+  readonly blobs: ReadonlyArray<ManifestBlob>;
+  readonly createdAt: string;
+  readonly damaged?: ReadonlyArray<DamagedBlob>;
+  readonly dialect: string;
+  readonly format: number;
+  readonly id: string;
+  readonly installationKind: string;
+  readonly primaryInstallations: ReadonlyArray<string>;
+  readonly rowCounts: Readonly<Record<string, number>>;
+  readonly schemaVersion: number;
+  readonly sqlFiles: ReadonlyArray<PortableFile>;
+  readonly sqlFormat: string;
+  readonly sqlSha256: string;
+  readonly sqlSize: number;
+  readonly unverified?: ReadonlyArray<string>;
+  readonly version: string;
+  readonly wrapperIds: ReadonlyArray<string>;
+}
+
+export interface BackupSummary {
+  readonly endedAt?: string;
+  readonly error?: string;
+  readonly id: string;
+  readonly startedAt: string;
+  readonly state: string;
+  readonly target: string;
 }
 
 /** The error answer with the code backup.too-many-unverified. */
@@ -81,6 +119,13 @@ export interface BackupTooManyUnverifiedError {
 export interface BackupTooManyUnverifiedErrorArgs {
   readonly count: number;
   readonly limit: number;
+}
+
+export interface BlobFindings {
+  readonly damaged: number;
+  readonly keys: ReadonlyArray<string>;
+  readonly missing: number;
+  readonly named: number;
 }
 
 export interface BulkUnitSettingsError {
@@ -111,6 +156,10 @@ export interface BulkUnitSettingsUnit {
   readonly version: number;
 }
 
+export interface CancelRestoreResponse {
+  readonly id: string;
+}
+
 export interface Capabilities {
   readonly apiVersion: string;
   readonly installationKind?: string;
@@ -120,6 +169,12 @@ export interface Capabilities {
 export interface ChangeOwnPasswordRequest {
   readonly currentPassword: string;
   readonly newPassword: string;
+}
+
+export interface CheckBackupResponse {
+  readonly complete: boolean;
+  readonly error?: string;
+  readonly id: string;
 }
 
 export interface Collection {
@@ -314,6 +369,15 @@ export interface CreatedNotificationSink {
   readonly version: number;
 }
 
+export interface DamagedBlob {
+  readonly key: string;
+  readonly md5: string;
+  readonly reason: string;
+  readonly sealed?: boolean;
+  readonly size: number;
+  readonly state: string;
+}
+
 export interface DeletedUnit {
   readonly deletedAt: string;
   readonly name: string;
@@ -322,6 +386,21 @@ export interface DeletedUnit {
   readonly reference: string;
   readonly tool: string;
   readonly unitID: string;
+}
+
+export interface DeletedUnitSweep {
+  readonly failed: number;
+  readonly finishedBlobPurges: number;
+  readonly pendingBlobPurges: number;
+  readonly purged: ReadonlyArray<SweptUnit>;
+  readonly skipped: number;
+  readonly waitingBlobPurges: number;
+  readonly waitingFor: string;
+}
+
+export interface DevData {
+  readonly classes: Readonly<Record<string, number>>;
+  readonly principals: number;
 }
 
 export interface DriftCheck {
@@ -467,6 +546,36 @@ export interface GateApproversCountAboveErrorArgs {
 export interface GateCheckedWith {
   readonly engine: string;
   readonly schema: string;
+}
+
+export interface GetBackupResponse {
+  readonly endedAt?: string;
+  readonly error?: string;
+  readonly id: string;
+  readonly manifest?: BackupManifest;
+  readonly startedAt: string;
+  readonly state: string;
+  readonly target: string;
+  readonly unverifiedKeyCount: number;
+  readonly unverifiedKeyLimit: number;
+}
+
+export interface GetRestoreResponse {
+  readonly backupID: string;
+  readonly devData?: DevData;
+  readonly endedAt?: string;
+  readonly error?: string;
+  readonly errorCode?: string;
+  readonly id: string;
+  readonly manifest?: BackupManifest;
+  readonly missingBlobLimit: MissingBlobLimit;
+  readonly notHeld?: BlobFindings;
+  readonly preBackupFound?: BlobFindings;
+  readonly preBackupID?: string;
+  readonly requestedBy: string;
+  readonly startedAt: string;
+  readonly state: string;
+  readonly warnings: ReadonlyArray<RestoreWarning>;
 }
 
 export interface GitHostAccount {
@@ -748,6 +857,10 @@ export interface ListApprovalRulesResponse {
   readonly rules: ReadonlyArray<ApprovalRule>;
 }
 
+export interface ListBackupsResponse {
+  readonly backups: ReadonlyArray<BackupSummary>;
+}
+
 export interface ListCollectionsResponse {
   readonly collections: ReadonlyArray<Collection>;
 }
@@ -831,6 +944,10 @@ export interface ListRegistryModulesResponse {
 export interface ListRegistryProvidersResponse {
   readonly nextPageToken: string;
   readonly providers: ReadonlyArray<RegistryProvider>;
+}
+
+export interface ListRestoresResponse {
+  readonly restores: ReadonlyArray<RestoreSummary>;
 }
 
 export interface ListStoreChecksResponse {
@@ -939,6 +1056,13 @@ export interface MaintenanceState {
   readonly state: string;
 }
 
+export interface ManifestBlob {
+  readonly key: string;
+  readonly md5: string;
+  readonly sealed?: boolean;
+  readonly size: number;
+}
+
 export interface ManualLock {
   readonly holder: string;
   readonly kind: string;
@@ -960,6 +1084,12 @@ export interface MfaPasskeyLimitError {
 /** The arguments of the text of the error with the code mfa.passkey-limit. */
 export interface MfaPasskeyLimitErrorArgs {
   readonly limit: number;
+}
+
+export interface MissingBlobLimit {
+  readonly count: number;
+  readonly percent: number;
+  readonly percentAbove: number;
 }
 
 export interface ModuleRelease {
@@ -1069,6 +1199,11 @@ export interface OutputSharingRequest {
   readonly newUnitDefault: string;
 }
 
+export interface OverrideSwitches {
+  readonly allowForcedWrites: boolean;
+  readonly allowUnlockedWrites: boolean;
+}
+
 export interface Passkey {
   readonly backupEligible: boolean;
   readonly createdAt: string;
@@ -1133,6 +1268,15 @@ export interface PlacementRuleRequest {
   readonly project: string;
   readonly stack: string;
   readonly tool: string;
+}
+
+export interface PortableFile {
+  readonly columns: ReadonlyArray<string>;
+  readonly path: string;
+  readonly rows: number;
+  readonly sha256: string;
+  readonly size: number;
+  readonly table: string;
 }
 
 export interface Preferences {
@@ -1357,6 +1501,19 @@ export interface RestoreEndedErrorArgs {
   readonly restore: string;
 }
 
+export interface RestoreSummary {
+  readonly backupID: string;
+  readonly endedAt?: string;
+  readonly error?: string;
+  readonly errorCode?: string;
+  readonly id: string;
+  readonly preBackupID?: string;
+  readonly requestedBy: string;
+  readonly startedAt: string;
+  readonly state: string;
+  readonly warnings: ReadonlyArray<RestoreWarning>;
+}
+
 /** The error answer with the code restore.swapped. */
 export interface RestoreSwappedError {
   /** The HTTP status. */
@@ -1370,6 +1527,11 @@ export interface RestoreSwappedError {
 /** The arguments of the text of the error with the code restore.swapped. */
 export interface RestoreSwappedErrorArgs {
   readonly restore: string;
+}
+
+export interface RestoreWarning {
+  readonly code: string;
+  readonly text: string;
 }
 
 export interface RotateNamespaceIssuerKeysRequest {
@@ -1731,6 +1893,10 @@ export interface StagedUpload {
   readonly upload: string;
 }
 
+export interface StartBackupResponse {
+  readonly id: string;
+}
+
 export interface StartDriftCheckRequest {
   readonly location?: DriftCheckLocation;
   readonly pool?: string;
@@ -1743,6 +1909,18 @@ export interface StartJobRequest {
   readonly pool: string;
   readonly reason: string;
   readonly unit: JobUnitRequest | null;
+}
+
+export interface StartRestoreRequest {
+  readonly backupID: string;
+  readonly checkOnly: boolean;
+  readonly force: boolean;
+}
+
+export interface StartRestoreResponse {
+  readonly id: string;
+  readonly missingBlobLimit: MissingBlobLimit;
+  readonly warnings: ReadonlyArray<RestoreWarning>;
 }
 
 export interface StartStoreCheckRequest {
@@ -1839,6 +2017,13 @@ export interface StoreFailoverSettingInvalidError {
 /** The arguments of the text of the error with the code store.failover-setting-invalid. */
 export interface StoreFailoverSettingInvalidErrorArgs {
   readonly setting: string;
+}
+
+export interface SweptUnit {
+  readonly namespace: string;
+  readonly reference: string;
+  readonly tool: string;
+  readonly unitID: string;
 }
 
 export interface TerminalSchemes {

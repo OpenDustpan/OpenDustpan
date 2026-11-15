@@ -244,7 +244,7 @@ The restore answers 400 when the stored checkpoint of that version is not a depl
 `DUSTPAN_ADMIN_TOKEN`. `opendustpan restore` runs through the API in
 maintenance mode, with `--backup`, `--check-only` and `--force`. The
 [backup guide](docs/guides/backup-restore-upgrade.md) shows each command
-and its routes: `/api/server/backups`, `/api/server/restores`, and the
+and its routes: `/api/dustpan/v1/backups`, `/api/dustpan/v1/restores`, and the
 upgrade check route.
 
 The server refuses to start without a key-encryption key. Set it in
