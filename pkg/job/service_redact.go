@@ -283,7 +283,10 @@ func (s *service) redactEntry(j *Job, a Actor, lr *logRedaction, next *LogRef) a
 	}
 
 	if a.Agent != "" {
-		changes = append(changes, audit.Change{Key: changeKeyAgent, Old: nil, New: a.Agent, Layer: "", TakesEffect: ""})
+		changes = append(
+			changes,
+			audit.Change{Key: changeKeyAgent, Old: nil, New: string(a.Agent), Layer: "", TakesEffect: ""},
+		)
 	}
 
 	return s.changeEntry(j, a, ActionUnitRedact, changes, lr.reason)

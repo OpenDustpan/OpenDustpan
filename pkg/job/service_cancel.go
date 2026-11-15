@@ -145,7 +145,10 @@ func (s *service) cancelEntry(j *Job, a Actor, reason string) audit.Entry {
 	}
 
 	if a.Agent != "" {
-		changes = append(changes, audit.Change{Key: changeKeyAgent, Old: nil, New: a.Agent, Layer: "", TakesEffect: ""})
+		changes = append(
+			changes,
+			audit.Change{Key: changeKeyAgent, Old: nil, New: string(a.Agent), Layer: "", TakesEffect: ""},
+		)
 	}
 
 	return s.changeEntry(j, a, ActionJobCancel, changes, reason)

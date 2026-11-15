@@ -58,7 +58,7 @@ func (s *service) Confirm(ctx context.Context, a Actor, id ID, v Verdict, plan P
 	// recorded in silence.
 	if a.Agent != "" {
 		return Job{}, fmt.Errorf("%w: agent %q cannot confirm; only the person who asked can", ErrAgentDenied,
-			clip(a.Agent))
+			clip(string(a.Agent)))
 	}
 
 	now := s.now().UTC()
