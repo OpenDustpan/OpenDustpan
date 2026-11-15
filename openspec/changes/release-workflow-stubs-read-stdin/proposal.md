@@ -2,7 +2,9 @@
 version: 1
 ---
 
-Short form: bug (test only). It covers #3117.
+Issue: #3117.
+
+Short form: bug (test only).
 
 ## Problem
 
@@ -13,6 +15,10 @@ workflow and blocks the merge queue.
 
 ## Evidence
 
+- CI shows it: the e2e job of the merge queue of #3115 and the e2e job
+  132643492597 of #3068 fail with "build run refuses to overwrite a released
+  chart: exit code = 141, want 1", and the output lacks "refuses to
+  overwrite": the script ended at its first line, before the refusal.
 - The step "Push the chart as an OCI artifact to the forge registry"
   (.github/workflows/release.yml:212) starts with
   `echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GHCR_ACTOR" --password-stdin`
