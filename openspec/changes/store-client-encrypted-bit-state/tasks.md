@@ -23,4 +23,4 @@
 ## 4. definition of done
 
 - [ ] 4.1 Confirm the existing outputs routes use the Latest port with no new route Check: Test log shows one row read and no blob read
-- [ ] 4.2 Pass the full check Check: `make check` reports zero findings
+- [ ] 4.2 Pass the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
