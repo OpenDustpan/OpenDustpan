@@ -24,7 +24,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- Main has runner test helpers for join tokens. Proof: joinToken in pkg/runner/runnertest/runnertest.go:194 (func joinToken)
+- Main has runner test helpers for join tokens. Proof: joinToken in pkg/runner/runnertest/runnertest.go:195 (func joinToken)
 - Main has a store method for join tokens. Proof: JoinTokens in pkg/store/postgres/runner.go:419 (func Runners.JoinTokens)
 - Main has the runner pool route. Proof: ANY /api/runners/{}/pools in route table or API description
 - Main has the runner drain and retire routes. Proof: ANY /api/runners/{}/runners/{}/drain and ANY /api/runners/{}/runners/{}/retire in route table or API description
@@ -59,8 +59,8 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Test helper makes a join token for runner tests. (`pkg/runner/runnertest/runnertest.go:194 (func joinToken)`)
-- Test helper makes a join token at a fixed time. (`pkg/runner/runnertest/runnertest.go:202 (func joinTokenAt)`)
+- Test helper makes a join token for runner tests. (`pkg/runner/runnertest/runnertest.go:195 (func joinToken)`)
+- Test helper makes a join token at a fixed time. (`pkg/runner/runnertest/runnertest.go:203 (func joinTokenAt)`)
 - Postgres store lists join tokens for runners. (`pkg/store/postgres/runner.go:419 (func Runners.JoinTokens)`)
 
 ## ADR check

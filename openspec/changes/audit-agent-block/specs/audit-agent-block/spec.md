@@ -2,7 +2,7 @@
 
 ### Requirement: No block for an entry without agent data
 
-When all six agent fields of an entry are empty and breakGlass is false, the server SHALL compute the hash of the entry with ComputeHash using the same bytes as before the block existed.
+When all seven agent fields of an entry are empty and breakGlass is false, the server SHALL compute the hash of the entry with ComputeHash using the same bytes as before the block existed.
 
 #### Scenario: Old chain
 - **WHEN** the chain check runs on a chain stored before this change
@@ -10,7 +10,7 @@ When all six agent fields of an entry are empty and breakGlass is false, the ser
 
 ### Requirement: Block in the hash
 
-When any agent field of an entry is set, the server SHALL include the agent/1 block with the six fields in the hash that ComputeHash returns.
+When any agent field of an entry is set, the server SHALL include the agent/1 block with the seven fields in the hash that ComputeHash returns.
 
 #### Scenario: One field differs
 - **WHEN** ComputeHash runs on two entries that differ only in the tool field
@@ -18,7 +18,7 @@ When any agent field of an entry is set, the server SHALL include the agent/1 bl
 
 ### Requirement: Fixed field order
 
-When the agent/1 block is written, the server SHALL encode the fields in the order agentRun, agentSession, tool, argsDigest, breakGlass as true or false, secretStage, each length-prefixed.
+When the agent/1 block is written, the server SHALL encode the fields in the order agentRun, agentSession, tool, argsDigest, breakGlass as true or false, secretStage, delegationID, each length-prefixed.
 
 #### Scenario: Order
 - **WHEN** two entries swap the values of agentRun and agentSession
@@ -26,7 +26,7 @@ When the agent/1 block is written, the server SHALL encode the fields in the ord
 
 #### Scenario: Empty field inside the block
 - **WHEN** an entry sets only agentRun
-- **THEN** the block still holds all six fields, each length-prefixed
+- **THEN** the block still holds all seven fields, each length-prefixed
 
 ### Requirement: Job entry fields
 
@@ -38,11 +38,11 @@ When a job entry of an agent is written, the server SHALL leave tool, argsDigest
 
 ### Requirement: Stored columns
 
-The server SHALL store the six agent fields of an entry in columns of the audit table of each dialect.
+The server SHALL store the seven agent fields of an entry in columns of the audit table of each dialect.
 
 #### Scenario: Round trip
-- **WHEN** an entry with the six fields is written and read
-- **THEN** the read entry holds the same six values
+- **WHEN** an entry with the seven fields is written and read
+- **THEN** the read entry holds the same seven values
 
 ### Requirement: API field
 

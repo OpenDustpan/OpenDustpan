@@ -9,9 +9,9 @@
 
 ## 2. Implement
 
-- [ ] 2.1 Implement own drop step with staging name from restores row and SET LOCAL lock_timeout in the NEW file pkg/backup/restore_drop.go, and add it to the step list in pkg/backup/restore_operation.go:272 (func RestoreSteps). Check: `go test ./pkg/backup/ -run TestDropOldLive -count=1`
-- [ ] 2.2 Wire shared sink cursor lag and chain gate into readiness with 300 s bound and 30 s debounce in pkg/dustpan/health.go:36 (func readinessCheck). Check: `go test ./pkg/dustpan/ -run TestReadinessReflectsSinkLag -count=1`
-- [ ] 2.3 Keep OpenTofu retry in finalize step with no other retry path in the NEW file pkg/workspace/finalize_retry.go. Check: `go test ./pkg/workspace/ -run TestFinalizeRetryOnly -count=1`
+- [ ] 2.1 Implement own drop step with staging name from restores row and SET LOCAL lock_timeout in the NEW file pkg/backup/restore_drop.go, and add it to the step list in pkg/backup/restore_operation.go:272 (func RestoreSteps). The task adds the NEW top-level test `TestDropOldLive` in a `_test.go` file of `pkg/backup`, so that the Check runs it. Check: `go test ./pkg/backup/ -run TestDropOldLive -count=1`
+- [ ] 2.2 Wire shared sink cursor lag and chain gate into readiness with 300 s bound and 30 s debounce in pkg/dustpan/health.go:36 (func readinessCheck). The task adds the NEW top-level test `TestReadinessReflectsSinkLag` in a `_test.go` file of `pkg/dustpan`, so that the Check runs it. Check: `go test ./pkg/dustpan/ -run TestReadinessReflectsSinkLag -count=1`
+- [ ] 2.3 Keep OpenTofu retry in finalize step with no other retry path in the NEW file pkg/workspace/finalize_retry.go. The task adds the NEW top-level test `TestFinalizeRetryOnly` in a `_test.go` file of `pkg/workspace`, so that the Check runs it. Check: `go test ./pkg/workspace/ -run TestFinalizeRetryOnly -count=1`
 
 ## 3. Side effects (computed from main)
 
