@@ -66,7 +66,7 @@ The job artifact store SHALL redact the plan of a job that ended through `histor
 - **THEN** the port answers `history.ErrInProgress` and writes nothing
 
 ### Requirement: Who may redact
-The server SHALL allow `unit:redact` only to a principal that holds it by a stored grant of a role of the family `data`. The built-in roles `viewer`, `writer`, `maintainer` and `planner` SHALL NOT hold it.
+The server SHALL allow `unit:redact` only to a principal that holds it by a stored grant of a role that has the action. Of the built-in roles, only `admin` SHALL hold it. The built-in roles `viewer`, `writer`, `maintainer`, `planner`, `account-administrator` and `site-administrator` SHALL NOT hold it.
 
 #### Scenario: Administrator
 - **WHEN** a principal with the built-in role `admin` on the namespace redacts
@@ -74,6 +74,10 @@ The server SHALL allow `unit:redact` only to a principal that holds it by a stor
 
 #### Scenario: Writer
 - **WHEN** a principal with the role `writer` redacts
+- **THEN** the answer is 403 `access.denied` and nothing is written
+
+#### Scenario: Account administrator and site administrator
+- **WHEN** a principal with the built-in role `account-administrator` or `site-administrator` on the installation redacts and holds no grant of a role that has `unit:redact`
 - **THEN** the answer is 403 `access.denied` and nothing is written
 
 #### Scenario: Read only
