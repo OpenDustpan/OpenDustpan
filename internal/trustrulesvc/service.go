@@ -14,12 +14,14 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
 
@@ -28,13 +30,32 @@ import (
 const (
 	ActionCreate = "trust-rule:create"
 	ActionDelete = "trust-rule:delete"
+	// ActionUpdate is the audit action of a rule update. It is an audit
+	// value only, never an authorization action: the routes declare
+	// namespace:manage-trust-rules.
+	ActionUpdate = "trust-rule:update"
+	// ActionBundleSave is the audit action of a bundle save.
+	ActionBundleSave = "trust-bundle:save"
+	// ActionBundleRotate is the audit action of a bundle rotation.
+	ActionBundleRotate = "trust-bundle:rotate"
+	// ActionBundleDelete is the audit action of a bundle version delete.
+	ActionBundleDelete = "trust-bundle:delete"
 )
 
-// ErrSignInRequired reports a create of a rule by a caller that
-// authenticated with a stored access token. A rule lets a workload get new
-// tokens for its principal, so a token that could make a rule would outlive
-// its own expiry and its revoke.
-var ErrSignInRequired = errors.New("sign in to create a trust rule: an access token cannot")
+// ErrSignInRequired reports a write by a caller that authenticated with a
+// stored access token. A rule lets a workload get new tokens for its
+// principal, and a bundle decides which CAs the server trusts, so a token
+// that could change them would outlive its own expiry and its revoke.
+var ErrSignInRequired = errors.New("sign in to change a trust rule or bundle: an access token cannot")
+
+// ErrStaleToken reports a bundle or rule write from a console session whose
+// sign-in is too old. The caller must sign in again.
+var ErrStaleToken = errors.New("the sign-in of this console session is too old for this change")
+
+// ErrFreshRequired reports a bundle or rule write with no console session,
+// for example with an access token only. The caller needs a fresh
+// authentication inside the freshness window.
+var ErrFreshRequired = errors.New("a change needs a console session with a recent sign-in; sign in to the console again")
 
 // ErrManageTokensDenied marks the refusal of a create whose caller does not
 // hold principal:manage-tokens on the principal of the rule. The error that
@@ -82,11 +103,16 @@ type Reach interface {
 }
 
 // Config holds the dependencies of a Service. Store, Namespaces, Principals
-// and Authorizer are required.
+// and Authorizer are required. Bundles is the store of the trust bundles of
+// each namespace; nil means the server keeps no bundle, and each bundle
+// write is refused. Sessions gives the session policy of the installation:
+// nil means the default window of session.DefaultTokenFreshness.
 type Config struct {
 	Store      trustrule.Store
+	Bundles    trustrule.BundleStore
 	Namespaces Namespaces
 	Principals Principals
+	Sessions   SessionPolicy
 	// Authorizer decides principal:manage-tokens on the principal of a new
 	// rule.
 	Authorizer identity.Authorizer
@@ -120,9 +146,17 @@ type OwnIssuer interface {
 	OwnsIssuer(ctx context.Context, issuer string) (bool, error)
 }
 
+// SessionPolicy gives the session policy of the installation.
+// *session.Policies meets it.
+type SessionPolicy interface {
+	Policy(ctx context.Context) (session.Policy, error)
+}
+
 // Service implements the use cases of the trust rules.
 type Service struct {
 	store      trustrule.Store
+	bundles    trustrule.BundleStore
+	sessions   SessionPolicy
 	namespaces Namespaces
 	principals Principals
 	authz      identity.Authorizer
@@ -174,7 +208,8 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	return &Service{
-		store: cfg.Store, namespaces: cfg.Namespaces, principals: cfg.Principals, authz: cfg.Authorizer,
+		store: cfg.Store, bundles: cfg.Bundles, sessions: cfg.Sessions, namespaces: cfg.Namespaces,
+		principals: cfg.Principals, authz: cfg.Authorizer,
 		reach: cfg.Reach, ownIssuer: cfg.OwnIssuer, ownURLs: own, checkURL: checkURL, now: now,
 	}, nil
 }
@@ -183,6 +218,8 @@ func NewService(cfg Config) (*Service, error) {
 // their claim names.
 type Input struct {
 	Name        string
+	SpiffeIDPattern string
+	Bundle          string
 	Issuer      string
 	Audience    string
 	Keys        trustrule.KeySource
@@ -193,8 +230,10 @@ type Input struct {
 
 // Create makes a rule in the namespace ns for the caller, with the audit
 // entry template e: the caller fills where the request came from, and the
-// service fills the time, the action, the object and the changes. It
-// returns:
+// service fills the time, the action, the object and the changes. A create
+// needs a fresh authentication inside the freshness window: an access token
+// only gives ErrFreshRequired, and a console session with an old sign-in
+// gives ErrStaleToken. It returns:
 //   - ErrSignInRequired for a caller that authenticated with a stored access
 //     token or with a token of a trust rule.
 //   - trustrule.ErrInvalid for a rule that fails validation, or for a
@@ -215,9 +254,14 @@ func (s *Service) Create(
 		return trustrule.Rule{}, ErrSignInRequired
 	}
 
+	if err := s.requireFresh(ctx); err != nil {
+		return trustrule.Rule{}, err
+	}
+
 	r := trustrule.Rule{
 		CreatedAt: s.now().UTC().Truncate(time.Millisecond), ID: trustrule.NewID(), Namespace: ns, Name: in.Name,
-		Issuer: in.Issuer, Audience: in.Audience, Keys: in.Keys, StaticKeys: in.StaticKeys,
+		Issuer: in.Issuer, Audience: in.Audience, Keys: in.Keys, StaticKeys: in.StaticKeys, Revision: 1,
+		SpiffeIDPattern: in.SpiffeIDPattern, Bundle: in.Bundle,
 		PrincipalID: in.PrincipalID, CreatedBy: caller.Subject, Conditions: trustrule.SortConditions(in.Conditions),
 	}
 
@@ -333,8 +377,19 @@ func (s *Service) List(ctx context.Context, ns namespace.Name) ([]trustrule.Rule
 
 // Delete removes the rule id of ns, with the audit entry template e. A
 // delete only takes access away, so it needs no check on the principal of
-// the rule.
-func (s *Service) Delete(ctx context.Context, e audit.Entry, ns namespace.Name, id trustrule.ID) error {
+// the rule. Like every rule change, it needs a fresh authentication: an
+// access token only is refused before the store is reached.
+func (s *Service) Delete(
+	ctx context.Context, caller identity.Principal, e audit.Entry, ns namespace.Name, id trustrule.ID,
+) error {
+	if caller.TokenID != "" || caller.Credential == identity.CredentialTrustToken {
+		return ErrSignInRequired
+	}
+
+	if err := s.requireFresh(ctx); err != nil {
+		return err
+	}
+
 	if err := id.Validate(); err != nil {
 		return trustrule.ErrNotFound
 	}
@@ -486,6 +541,346 @@ func (s *Service) entry(e audit.Entry, ns namespace.Name, id trustrule.ID, actio
 	e.Outcome = audit.OutcomeSuccess
 
 	return e
+}
+
+// bundleEntry completes the template e for one change of the bundle id in
+// ns.
+func (s *Service) bundleEntry(e audit.Entry, ns namespace.Name, id trustrule.BundleID, action string) audit.Entry {
+	e.At = s.now().UTC()
+	e.Namespace = ns
+	e.Action = action
+	e.Object = identity.NamespaceObject(ns).String()
+	e.ObjectID = string(id)
+	e.Kind = audit.KindChange
+	e.Outcome = audit.OutcomeSuccess
+
+	return e
+}
+
+// requireFresh returns nil when the request carries a fresh authentication
+// inside the freshness window: a console session that signed in recently
+// enough. A request with no console session, for example one with an access
+// token only, gives ErrFreshRequired, and a session with an old sign-in
+// gives ErrStaleToken. Any other error fails closed.
+//
+// Defense in depth: the handler wraps the routes in a session check too, and
+// the service repeats it, so a new caller of the service cannot skip the
+// check when the handler changes.
+func (s *Service) requireFresh(ctx context.Context) error {
+	in, ok := sessionauth.SignInFrom(ctx)
+	if !ok || !sessionauth.FromSession(ctx) {
+		return ErrFreshRequired
+	}
+
+	window := session.DefaultTokenFreshness
+
+	if s.sessions != nil {
+		policy, err := s.sessions.Policy(ctx)
+		if err != nil {
+			return err
+		}
+
+		window = policy.TokenFreshness
+	}
+
+	// A sign-in after now has a negative age and is refused like an old one.
+	if sessionauth.Fresh(s.now(), in.At, window) {
+		return nil
+	}
+
+	return ErrStaleToken
+}
+
+// requireBundleStore returns the bundle store, or trustrule.ErrBundle when
+// the server keeps no bundle. A change with no store is refused before any
+// check runs.
+func (s *Service) requireBundleStore() (trustrule.BundleStore, error) {
+	if s.bundles == nil {
+		return nil, fmt.Errorf("%w: the server keeps no trust bundle", trustrule.ErrBundle)
+	}
+
+	return s.bundles, nil
+}
+
+// SaveBundle checks the fresh authentication of the caller and stores the
+// PEM text of f as a new version of the trust bundle of ns. The first save
+// makes the bundle; a later save keeps the active pointer.
+func (s *Service) SaveBundle(
+	ctx context.Context, caller identity.Principal, e audit.Entry, ns namespace.Name, f trustrule.BundleFields,
+) (trustrule.Bundle, error) {
+	if caller.TokenID != "" || caller.Credential == identity.CredentialTrustToken {
+		return trustrule.Bundle{}, ErrSignInRequired
+	}
+
+	if err := s.requireFresh(ctx); err != nil {
+		return trustrule.Bundle{}, err
+	}
+
+	st, err := s.requireBundleStore()
+	if err != nil {
+		return trustrule.Bundle{}, err
+	}
+
+	n, err := s.namespaces.WritableHere(ctx, ns)
+	if err != nil {
+		return trustrule.Bundle{}, fmt.Errorf("read namespace %s: %w", ns, err)
+	}
+
+	b, err := st.SaveBundle(ctx, ns, f, n.Fence(), s.bundleSaveEntry(e, ns, f))
+	if err != nil {
+		return trustrule.Bundle{}, fmt.Errorf("save trust bundle: %w", err)
+	}
+
+	return b, nil
+}
+
+// bundleSaveEntry is the entry of a bundle save. The PEM text is long, so
+// the entry names the version and the active pointer and not the CAs.
+func (s *Service) bundleSaveEntry(e audit.Entry, ns namespace.Name, f trustrule.BundleFields) audit.Entry {
+	out := s.bundleEntry(e, ns, "", ActionBundleSave)
+	out.Changes = []audit.Change{
+		{Key: "bytes", Old: nil, New: strconv.Itoa(len(f.PEM)), Layer: "", TakesEffect: ""},
+	}
+
+	return out
+}
+
+// RotateBundle checks the fresh authentication of the caller, the revision
+// and the overlap, stores the PEM text of f as a new version, and moves the
+// active pointer to it with overlapEndsAt = now + overlap.
+func (s *Service) RotateBundle(
+	ctx context.Context, caller identity.Principal, e audit.Entry, ns namespace.Name, f trustrule.BundleFields,
+	revision int64,
+) (trustrule.Bundle, error) {
+	if caller.TokenID != "" || caller.Credential == identity.CredentialTrustToken {
+		return trustrule.Bundle{}, ErrSignInRequired
+	}
+
+	if err := s.requireFresh(ctx); err != nil {
+		return trustrule.Bundle{}, err
+	}
+
+	st, err := s.requireBundleStore()
+	if err != nil {
+		return trustrule.Bundle{}, err
+	}
+
+	n, err := s.namespaces.WritableHere(ctx, ns)
+	if err != nil {
+		return trustrule.Bundle{}, fmt.Errorf("read namespace %s: %w", ns, err)
+	}
+
+	b, err := st.RotateBundle(ctx, ns, f, revision, n.Fence(), s.bundleRotateEntry(e, ns, f))
+	if err != nil {
+		return trustrule.Bundle{}, fmt.Errorf("rotate trust bundle: %w", err)
+	}
+
+	return b, nil
+}
+
+// bundleRotateEntry is the entry of a bundle rotation.
+func (s *Service) bundleRotateEntry(e audit.Entry, ns namespace.Name, f trustrule.BundleFields) audit.Entry {
+	out := s.bundleEntry(e, ns, "", ActionBundleRotate)
+	out.Changes = []audit.Change{
+		{Key: "bytes", Old: nil, New: strconv.Itoa(len(f.PEM)), Layer: "", TakesEffect: ""},
+		{Key: "overlap", Old: nil, New: f.Overlap.String(), Layer: "", TakesEffect: ""},
+	}
+
+	return out
+}
+
+// GetBundle returns the bundle of ns. An unknown namespace gives
+// namespace.ErrNotFound, and a namespace with no bundle gives
+// trustrule.ErrNotFound.
+func (s *Service) GetBundle(ctx context.Context, ns namespace.Name) (trustrule.Bundle, error) {
+	if _, err := s.namespaces.Get(ctx, ns); err != nil {
+		return trustrule.Bundle{}, fmt.Errorf("read namespace %s: %w", ns, err)
+	}
+
+	st, err := s.requireBundleStore()
+	if err != nil {
+		return trustrule.Bundle{}, err
+	}
+
+	b, err := st.GetBundle(ctx, ns)
+	if err != nil {
+		return trustrule.Bundle{}, fmt.Errorf("get trust bundle: %w", err)
+	}
+
+	return b, nil
+}
+
+// DeleteBundleVersion removes a retired version of the bundle of ns. The
+// active version is refused with trustrule.ErrBundleActive.
+func (s *Service) DeleteBundleVersion(
+	ctx context.Context, caller identity.Principal, e audit.Entry, ns namespace.Name, version int64,
+) error {
+	if caller.TokenID != "" || caller.Credential == identity.CredentialTrustToken {
+		return ErrSignInRequired
+	}
+
+	if err := s.requireFresh(ctx); err != nil {
+		return err
+	}
+
+	st, err := s.requireBundleStore()
+	if err != nil {
+		return err
+	}
+
+	n, err := s.namespaces.WritableHere(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("read namespace %s: %w", ns, err)
+	}
+
+	if err := st.DeleteBundleVersion(ctx, ns, version, n.Fence(), s.bundleEntry(e, ns, "", ActionBundleDelete)); err != nil {
+		return fmt.Errorf("delete trust bundle version: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateInput names the fields of a rule update. Empty fields keep the
+// stored value; the service sorts the conditions by their claim names when
+// they change. ExpectedRevision is the revision of the If-Match header.
+type UpdateInput struct {
+	Name            string
+	Issuer          string
+	Audience        string
+	Keys            trustrule.KeySource
+	KeysSet         bool
+	StaticKeys      *string
+	PrincipalID     string
+	Conditions      []trustrule.Condition
+	ConditionsSet   bool
+	SpiffeIDPattern *string
+	Bundle          *string
+	ExpectedRevision int64
+}
+
+// Update stores the changed fields of a rule when its revision is one past
+// the stored revision, with the audit entry template e. It needs the same
+// checks as a create: the fresh authentication, the issuer check, the action
+// on the principal, and the reach of the principal. It returns
+// trustrule.ErrStale for a stale revision and keeps the stored rule.
+func (s *Service) Update(
+	ctx context.Context, caller identity.Principal, e audit.Entry, ns namespace.Name, id trustrule.ID, in UpdateInput,
+) (trustrule.Rule, error) {
+	if caller.TokenID != "" || caller.Credential == identity.CredentialTrustToken {
+		return trustrule.Rule{}, ErrSignInRequired
+	}
+
+	if err := s.requireFresh(ctx); err != nil {
+		return trustrule.Rule{}, err
+	}
+
+	if _, err := s.namespaces.WritableHere(ctx, ns); err != nil {
+		return trustrule.Rule{}, fmt.Errorf("read namespace %s: %w", ns, err)
+	}
+
+	stored, err := s.store.Get(ctx, ns, id)
+	if err != nil {
+		return trustrule.Rule{}, fmt.Errorf("get trust rule: %w", err)
+	}
+
+	r := stored
+
+	if in.Name != "" {
+		r.Name = in.Name
+	}
+
+	if in.Issuer != "" {
+		r.Issuer = in.Issuer
+	}
+
+	if in.Audience != "" {
+		r.Audience = in.Audience
+	}
+
+	if in.KeysSet {
+		r.Keys = in.Keys
+	}
+
+	if in.StaticKeys != nil {
+		r.StaticKeys = *in.StaticKeys
+	}
+
+	if in.PrincipalID != "" {
+		r.PrincipalID = in.PrincipalID
+	}
+
+	if in.ConditionsSet {
+		r.Conditions = trustrule.SortConditions(in.Conditions)
+	}
+
+	if in.SpiffeIDPattern != nil {
+		r.SpiffeIDPattern = *in.SpiffeIDPattern
+	}
+
+	if in.Bundle != nil {
+		r.Bundle = *in.Bundle
+	}
+
+	r.Revision = in.ExpectedRevision + 1
+
+	if err := r.Validate(); err != nil {
+		return trustrule.Rule{}, err
+	}
+
+	if in.Issuer != "" || in.KeysSet {
+		if err := s.CheckOwnIssuer(ctx, r.Issuer); err != nil {
+			return trustrule.Rule{}, err
+		}
+
+		if r.Keys == trustrule.KeySourceDiscovery {
+			if err := s.checkURL(r.Issuer); err != nil {
+				return trustrule.Rule{}, fmt.Errorf("%w: the issuer %q: %w", trustrule.ErrInvalid, r.Issuer, err)
+			}
+		}
+	}
+
+	if err := s.authorizeCreate(ctx, caller, r.PrincipalID); err != nil {
+		return trustrule.Rule{}, err
+	}
+
+	if principalErr := s.checkPrincipal(ctx, r.PrincipalID, ns); principalErr != nil {
+		return trustrule.Rule{}, principalErr
+	}
+
+	n, err := s.namespaces.WritableHere(ctx, ns)
+	if err != nil {
+		return trustrule.Rule{}, fmt.Errorf("read namespace %s: %w", ns, err)
+	}
+
+	updated, err := s.store.Update(ctx, ns, r, n.Fence(), s.updateEntry(e, &stored, &r))
+	if err != nil {
+		return trustrule.Rule{}, fmt.Errorf("update trust rule: %w", err)
+	}
+
+	return updated, nil
+}
+
+// updateEntry is the entry of an update of a rule, with a change for each
+// field that changed.
+func (s *Service) updateEntry(e audit.Entry, old, r *trustrule.Rule) audit.Entry {
+	out := s.entry(e, r.Namespace, r.ID, ActionUpdate)
+
+	change := func(key string, before, after string) {
+		if before != after {
+			out.Changes = append(out.Changes,
+				audit.Change{Key: key, Old: &before, New: after, Layer: "", TakesEffect: ""})
+		}
+	}
+
+	change("name", old.Name, r.Name)
+	change("issuer", old.Issuer, r.Issuer)
+	change("audience", old.Audience, r.Audience)
+	change("keySource", string(old.Keys), string(r.Keys))
+	change("principal", old.PrincipalID, r.PrincipalID)
+	change("spiffeIDPattern", old.SpiffeIDPattern, r.SpiffeIDPattern)
+	change("bundle", old.Bundle, r.Bundle)
+
+	return out
 }
 
 // createEntry is the entry of the create of r, with a change for each field

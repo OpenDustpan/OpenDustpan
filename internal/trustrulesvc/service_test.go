@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -55,6 +56,15 @@ func (f *fakeStore) Delete(
 	f.entries = append(f.entries, e)
 
 	return nil
+}
+
+func (f *fakeStore) Update(
+	_ context.Context, _ namespace.Name, r trustrule.Rule, _ namespace.Fence, e audit.Entry,
+) (trustrule.Rule, error) {
+	f.created = append(f.created, r)
+	f.entries = append(f.entries, e)
+
+	return r, nil
 }
 
 // fakeNamespaces gives every namespace with failover version 1.
@@ -227,7 +237,7 @@ func TestCreateStoresTheRuleWithItsEntry(t *testing.T) {
 
 	f := newFixture(t)
 
-	r, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
+	r, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", input())
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}
@@ -267,7 +277,7 @@ func TestCreateRefusesATokenCaller(t *testing.T) {
 	for name, caller := range map[string]identity.Principal{"stored token": stored, "trust token": trust} {
 		f := newFixture(t)
 
-		_, err := f.svc.Create(t.Context(), caller, emptyEntry(), "acme", input())
+		_, err := f.svc.Create(freshSessionContext(t), caller, emptyEntry(), "acme", input())
 		if !errors.Is(err, trustrulesvc.ErrSignInRequired) {
 			t.Errorf("%s: Create = %v, want ErrSignInRequired", name, err)
 		}
@@ -308,7 +318,7 @@ func TestCreateRefusesAnIssuerOfThisInstallation(t *testing.T) {
 	in := input()
 	in.Issuer = "https://dustpan.example.com/oidc/ns-1"
 
-	_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+	_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", in)
 	if !errors.Is(err, trustrule.ErrIssuerRefused) {
 		t.Fatalf("Create = %v, want ErrIssuerRefused", err)
 	}
@@ -329,7 +339,7 @@ func TestCreateRefusesAPrincipalOutsideTheNamespace(t *testing.T) {
 		in := input()
 		in.PrincipalID = id
 
-		_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+		_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", in)
 		if !errors.Is(err, trustrule.ErrPrincipal) {
 			t.Errorf("principal %s: Create = %v, want ErrPrincipal", id, err)
 		}
@@ -352,7 +362,7 @@ func TestCreateNeedsAServicePrincipal(t *testing.T) {
 		in := input()
 		in.PrincipalID = id
 
-		_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+		_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", in)
 		if !errors.Is(err, trustrule.ErrPrincipal) || !strings.Contains(err.Error(), "not a service principal") {
 			t.Errorf("principal %s: Create = %v, want ErrPrincipal of the kind check", id, err)
 		}
@@ -377,7 +387,7 @@ func TestCreateDeniesBeforeItReadsThePrincipal(t *testing.T) {
 		in := input()
 		in.PrincipalID = id
 
-		_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+		_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", in)
 		if !errors.Is(err, identity.ErrDenied) || errors.Is(err, trustrule.ErrPrincipal) {
 			t.Errorf("principal %s: Create = %v, want ErrDenied alone", id, err)
 		}
@@ -393,7 +403,7 @@ func TestCreateNeedsManageTokensOnThePrincipal(t *testing.T) {
 	f := newFixture(t)
 	f.authz.allow = nil
 
-	_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
+	_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", input())
 	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, trustrulesvc.ErrManageTokensDenied) {
 		t.Fatalf("Create = %v, want ErrDenied and ErrManageTokensDenied", err)
 	}
@@ -412,7 +422,7 @@ func TestCreateNeedsTheReachOfThePrincipal(t *testing.T) {
 	f := newFixture(t)
 	f.reach.err = fmt.Errorf("%w: %w", identity.ErrDenied, accesstoken.ErrReachExceeded)
 
-	_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
+	_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", input())
 	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, accesstoken.ErrReachExceeded) {
 		t.Fatalf("Create = %v, want ErrDenied and ErrReachExceeded", err)
 	}
@@ -438,7 +448,7 @@ func TestCreatePassesWhenTheReachCoversThePrincipal(t *testing.T) {
 
 	f := newFixture(t)
 
-	r, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
+	r, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", input())
 	if err != nil {
 		t.Fatalf("Create = %v", err)
 	}
@@ -465,7 +475,7 @@ func TestCreateChecksTheReachBeforeItReadsThePrincipal(t *testing.T) {
 	in := input()
 	in.PrincipalID = "prn-person"
 
-	_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+	_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", in)
 	if !errors.Is(err, accesstoken.ErrReachExceeded) || errors.Is(err, trustrule.ErrPrincipal) {
 		t.Fatalf("Create = %v, want the reach refusal alone", err)
 	}
@@ -519,7 +529,7 @@ func TestCreateMarksACheckThatCouldNotRun(t *testing.T) {
 			f := newFixture(t)
 			tc.prepare(&f)
 
-			_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
+			_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", input())
 			checkCreateError(t, err, tc.want, tc.notWant)
 
 			if len(f.store.created) != 0 {
@@ -568,7 +578,7 @@ func TestCreateRefusesWithNoReachChecker(t *testing.T) {
 		t.Fatalf("service: %v", err)
 	}
 
-	_, err = svc.Create(t.Context(), person(), emptyEntry(), "acme", input())
+	_, err = svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", input())
 	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, trustrulesvc.ErrReachUnchecked) ||
 		errors.Is(err, trustrulesvc.ErrManageTokensDenied) {
 		t.Fatalf(
@@ -590,7 +600,7 @@ func TestCreateRefusesAnInvalidRule(t *testing.T) {
 	in := input()
 	in.Conditions = in.Conditions[1:]
 
-	_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+	_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", in)
 	if !errors.Is(err, trustrule.ErrInvalid) {
 		t.Fatalf("Create = %v, want ErrInvalid", err)
 	}
@@ -604,19 +614,31 @@ func TestDeleteOfAnInvalidIDIsNotFound(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
+	ctx := freshSessionContext(t)
 
-	if err := f.svc.Delete(t.Context(), emptyEntry(), "acme", "trr-a/b"); !errors.Is(err, trustrule.ErrNotFound) {
+	if err := f.svc.Delete(ctx, person(), emptyEntry(), "acme", "trr-a/b"); !errors.Is(err, trustrule.ErrNotFound) {
 		t.Fatalf("Delete = %v, want ErrNotFound", err)
 	}
 
 	id := trustrule.NewID()
-	if err := f.svc.Delete(t.Context(), emptyEntry(), "acme", id); err != nil {
+	if err := f.svc.Delete(ctx, person(), emptyEntry(), "acme", id); err != nil {
 		t.Fatalf("Delete = %v", err)
 	}
 
 	if len(f.store.deleted) != 1 || f.store.entries[0].Action != trustrulesvc.ActionDelete {
 		t.Fatalf("store got %v %+v", f.store.deleted, f.store.entries)
 	}
+}
+
+// freshSessionContext returns the context of a console session that signed
+// in at the clock of the fixture: the fresh authentication of each service
+// write passes.
+func freshSessionContext(t *testing.T) context.Context {
+	t.Helper()
+
+	ctx := sessionauth.WithSession(t.Context())
+
+	return sessionauth.WithSignIn(ctx, sessionauth.SignIn{At: time.Now(), Provider: "password"})
 }
 
 func TestNewServiceNeedsItsPorts(t *testing.T) {
@@ -671,7 +693,7 @@ func TestCreateRefusesAnIssuerThatTheEgressRulesRefuse(t *testing.T) {
 		in := input()
 		in.Issuer = issuer
 
-		_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+		_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", in)
 		if !errors.Is(err, trustrule.ErrInvalid) {
 			t.Errorf("issuer %s: Create = %v, want ErrInvalid", issuer, err)
 		}
@@ -688,7 +710,7 @@ func TestCreateRefusesAnIssuerThatTheEgressRulesRefuse(t *testing.T) {
 	in := input()
 	in.Keys, in.Issuer, in.StaticKeys = trustrule.KeySourceStatic, "https://10.0.0.1", staticKeys(t)
 
-	if _, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in); err != nil {
+	if _, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", in); err != nil {
 		t.Fatalf("a static rule with a private issuer name: Create = %v", err)
 	}
 }

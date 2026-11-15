@@ -44,4 +44,51 @@ type Store interface {
 	// of another namespace, ErrInvalid for an ID or a namespace that fails
 	// validation, and namespace.ErrFenced.
 	Delete(ctx context.Context, ns namespace.Name, id ID, fence namespace.Fence, e audit.Entry) error
+	// Update stores r over the rule id of the namespace ns when its revision
+	// is one past the stored revision, and appends e in the transaction. The
+	// name, the issuer, the audience, the key source, the conditions, the
+	// SPIFFE ID pattern and the bundle may change; the principal, the
+	// namespace and the creation time never change. It returns:
+	//   - ErrNotFound for an unknown rule and for a rule of another
+	//     namespace, and ErrInvalid for an ID or a namespace that fails
+	//     validation, or for a rule that fails validation.
+	//   - ErrStale when the revision of r is not one past the stored
+	//     revision.
+	//   - namespace.ErrFenced when the fence is stale or belongs to another
+	//     namespace than ns.
+	Update(ctx context.Context, ns namespace.Name, r Rule, fence namespace.Fence, e audit.Entry) (Rule, error)
+}
+
+// BundleStore keeps the trust bundle of each namespace: one bundle per
+// namespace with append-only versions and one active pointer.
+type BundleStore interface {
+	// SaveBundle checks the PEM text of f, stores it as a new version of the
+	// bundle of the namespace ns, and appends e in the transaction. The
+	// first save makes the bundle and marks the version active; a later save
+	// keeps the active pointer and retires versions past MaxBundleVersions.
+	// It returns ErrBundle for input that fails the checks, with the CA
+	// index in the message, and changes nothing.
+	SaveBundle(ctx context.Context, ns namespace.Name, f BundleFields, fence namespace.Fence, e audit.Entry) (Bundle, error)
+	// RotateBundle checks the PEM text of f and the overlap, stores it as a
+	// new version, and moves the active pointer to it with
+	// overlapEndsAt = now + overlap. The overlap must not exceed MaxOverlap.
+	// It returns ErrBundle for input that fails the checks, ErrStale when
+	// revision is not the current revision of the bundle, and changes
+	// nothing on any error.
+	RotateBundle(
+		ctx context.Context, ns namespace.Name, f BundleFields, revision int64, fence namespace.Fence,
+		e audit.Entry,
+	) (Bundle, error)
+	// GetBundle returns the bundle of the namespace ns, with all kept
+	// versions. It returns ErrNotFound for a namespace with no bundle, and
+	// ErrInvalid for a namespace that fails validation. A stored row that
+	// fails its checks is not served: it gives ErrNotFound.
+	GetBundle(ctx context.Context, ns namespace.Name) (Bundle, error)
+	// DeleteBundleVersion removes a retired version of the bundle of the
+	// namespace ns and appends e in the transaction. It returns
+	// ErrBundleActive for the active version, ErrNotFound for an unknown
+	// version or for a rule of another namespace, and namespace.ErrFenced.
+	DeleteBundleVersion(
+		ctx context.Context, ns namespace.Name, version int64, fence namespace.Fence, e audit.Entry,
+	) error
 }

@@ -403,7 +403,7 @@ func TestNewHandlerNeedsItsDependencies(t *testing.T) {
 	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store, Authorizer: identity.AdminOnly{},
 		Reach:            nil,
-		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil,
+		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil, Bundles: nil, Sessions: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

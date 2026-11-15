@@ -268,7 +268,10 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, _ identity.Princip
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
-	if err := h.rules.Delete(ctx, h.entryOf(r, p), obj.Namespace(), trustrule.ID(r.PathValue("rule_id"))); err != nil {
+	id := trustrule.ID(r.PathValue("rule_id"))
+	entry := h.entryOf(r, p)
+
+	if err := h.rules.Delete(ctx, p, entry, obj.Namespace(), id); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -311,6 +314,7 @@ func readCreate(w http.ResponseWriter, r *http.Request) (trustrulesvc.Input, err
 	out := trustrulesvc.Input{
 		Name: *in.Name, Issuer: *in.Issuer, Audience: *in.Audience, Keys: *in.KeySource, StaticKeys: "",
 		PrincipalID: *in.Principal, Conditions: make([]trustrule.Condition, 0, len(*in.Conditions)),
+		SpiffeIDPattern: "", Bundle: "",
 	}
 
 	if in.StaticKeys != nil {

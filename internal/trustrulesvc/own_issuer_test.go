@@ -120,7 +120,7 @@ func TestCreateRefusesAnIssuerThatTheIssuerServiceOwns(t *testing.T) {
 	in := input()
 	in.Issuer = "https://files.example.com/acme"
 
-	_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+	_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", in)
 	if !errors.Is(err, trustrule.ErrIssuerRefused) {
 		t.Fatalf("Create = %v, want ErrIssuerRefused", err)
 	}
@@ -135,7 +135,7 @@ func TestCreateRefusesAnIssuerThatTheIssuerServiceOwns(t *testing.T) {
 
 	// The same service lets an issuer through that the issuer service does not own.
 	ok := input()
-	if _, err = f.svc.Create(t.Context(), person(), emptyEntry(), "acme", ok); err != nil {
+	if _, err = f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", ok); err != nil {
 		t.Errorf("Create of an outside issuer: %v", err)
 	}
 }

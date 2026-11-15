@@ -6,19 +6,25 @@
 // audience, the conditions on the claims of the JWT, and the principal that a
 // match acts as. The grants of that principal decide what the workload can
 // do. A rule belongs to one namespace, and its principal is a principal of
-// that namespace, so a rule never gives access to another namespace.
+// that namespace, so a rule never gives access to another namespace. A rule
+// may also name the trust bundle of its namespace and a SPIFFE ID pattern,
+// for the mTLS check of a client certificate.
 //
 // Each change writes its audit entry in the same transaction as the change
 // (fail closed), and each write carries the fence of its namespace.
 package trustrule
 
 import (
+	"bytes"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -45,6 +51,14 @@ var (
 	// ErrIssuerRefused reports an issuer of this installation. A token that
 	// this installation signs never becomes an access token of it.
 	ErrIssuerRefused = errors.New("the issuer is an issuer of this installation")
+	// ErrBundle reports a trust bundle that fails its checks.
+	ErrBundle = errors.New("invalid trust bundle")
+	// ErrBundleActive reports the delete of the active version of a trust
+	// bundle. Only a retired version can be deleted.
+	ErrBundleActive = errors.New("the active version of a trust bundle cannot be deleted")
+	// ErrStale reports a write with a stale revision: the If-Match header
+	// does not match the stored revision.
+	ErrStale = errors.New("the bundle changed since it was read")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -69,10 +83,26 @@ const (
 	MaxClaimLength = 64
 	// MaxStaticKeysBytes is the largest JWKS that a rule holds.
 	MaxStaticKeysBytes = 64 << 10
+	// MaxBundleBytes is the largest trust bundle that a save accepts, in
+	// bytes of PEM text.
+	MaxBundleBytes = 64 << 10
+	// MaxBundleCAs is the most CA certificates that one trust bundle holds.
+	MaxBundleCAs = 10
+	// MaxBundleVersions is the most versions that the store keeps for one
+	// trust bundle. An older version past this count is retired.
+	MaxBundleVersions = 5
+	// MaxOverlap is the longest overlap of a rotation, from the time of the
+	// rotate to overlapEndsAt.
+	MaxOverlap = 24 * time.Hour
+	// MaxSpiffePatternLength is the longest SPIFFE ID pattern of a rule, in
+	// bytes.
+	MaxSpiffePatternLength = 512
 	// maxIDLength bounds a rule ID.
 	maxIDLength = 64
 	// maxPrincipalIDLength bounds the ID of the principal of a rule.
 	maxPrincipalIDLength = 64
+	// maxBundleIDLength bounds the ID of a trust bundle.
+	maxBundleIDLength = 64
 )
 
 // SubjectClaim is the claim that each rule must have a condition on. An
@@ -150,19 +180,186 @@ type Condition struct {
 // Audience exactly with the aud claim. Keys names the key source. StaticKeys
 // holds the JWKS of KeySourceStatic, and is empty for KeySourceDiscovery.
 // Conditions are in the order of their claim names. CreatedBy is the subject
-// of the principal that made the rule.
+// of the principal that made the rule. Revision counts the writes of the
+// rule, starting at 1. SpiffeIDPattern is the SPIFFE ID pattern of the mTLS
+// check, empty when the rule has no mTLS check. Bundle is the ID of the
+// trust bundle of the mTLS check, empty with no check.
 type Rule struct {
-	CreatedAt   time.Time
-	ID          ID
-	Namespace   namespace.Name
-	Name        string
-	Issuer      string
-	Audience    string
-	Keys        KeySource
-	StaticKeys  string
-	PrincipalID string
-	CreatedBy   string
-	Conditions  []Condition
+	CreatedAt       time.Time
+	ID              ID
+	Namespace       namespace.Name
+	Name            string
+	Issuer          string
+	Audience        string
+	Keys            KeySource
+	StaticKeys      string
+	PrincipalID     string
+	CreatedBy       string
+	Conditions      []Condition
+	Revision        int64
+	SpiffeIDPattern string
+	Bundle          string
+}
+
+// BundleID is the stable, opaque ID of a trust bundle: the prefix "trb-"
+// and 32 lower-case hex digits. Never parse it.
+type BundleID string
+
+// NewBundleID returns a new trust bundle ID from the system random source.
+func NewBundleID() BundleID {
+	var b [16]byte
+
+	// crypto/rand.Read does not return an error on any supported platform.
+	_, _ = rand.Read(b[:])
+
+	return BundleID("trb-" + hex.EncodeToString(b[:]))
+}
+
+// Validate returns ErrBundle when id is not the form of a trust bundle ID.
+func (id BundleID) Validate() error {
+	s := string(id)
+	if !strings.HasPrefix(s, "trb-") || len(s) == len("trb-") || !ident.Valid(s, maxBundleIDLength) {
+		return fmt.Errorf("%w: the ID %s is not a trust bundle ID", ErrBundle, ident.Echo(s))
+	}
+
+	return nil
+}
+
+// BundleRef returns the audit object of the bundle id:
+// "trust-bundle:<id>". An id that is not a bundle ID gives
+// "trust-bundle:invalid", so request text never reaches the audit log.
+func BundleRef(id BundleID) string {
+	if id.Validate() != nil {
+		return "trust-bundle:invalid"
+	}
+
+	return "trust-bundle:" + string(id)
+}
+
+// BundleVersion is one version of the trust bundle of a namespace.
+// Certificates holds the parsed CA certificates of the version. CreatedAt is
+// the time of the save. OverlapEndsAt is the end of the rotation overlap of
+// a rotated version, and zero for the first save.
+type BundleVersion struct {
+	Number       int64
+	Certificates []*x509.Certificate
+	CreatedAt    time.Time
+	OverlapEndsAt time.Time
+}
+
+// Bundle is the trust bundle of a namespace: the append-only versions and
+// the active pointer. Revision counts the writes of the bundle, starting at
+// 1. The ETag of a read is the revision in quotes.
+type Bundle struct {
+	ID        BundleID
+	Namespace namespace.Name
+	Active    int64
+	Versions  []BundleVersion
+	Revision  int64
+	CreatedAt time.Time
+}
+
+// ETag returns the entity tag of the bundle or of the rule revision: the
+// revision in quotes.
+func ETag(revision int64) string {
+	return `"` + strconv.FormatInt(revision, 10) + `"`
+}
+
+// BundleFields holds the fields of a trust bundle write.
+type BundleFields struct {
+	// PEM is the bundle in PEM text.
+	PEM string
+	// Overlap is the rotation overlap of a rotate, zero for a save. It must
+	// not exceed MaxOverlap.
+	Overlap time.Duration
+}
+
+// ParseBundle checks the PEM text of a bundle save and returns its CA
+// certificates: each certificate in the order of its block, with the index
+// for error text. It refuses input outside the size bounds, a block that is
+// not a certificate, a certificate that fails to parse, an expired CA and
+// more than MaxBundleCAs certificates. Now is the clock that expiry is
+// checked against.
+func ParseBundle(pemText string, now time.Time) ([]*x509.Certificate, error) {
+	if len(pemText) == 0 || len(pemText) > MaxBundleBytes {
+		return nil, fmt.Errorf("%w: the bundle is 1 to %d bytes, got %d", ErrBundle, MaxBundleBytes, len(pemText))
+	}
+
+	rest := []byte(pemText)
+
+	var out []*x509.Certificate
+
+	for i := 0; len(rest) > 0; i++ {
+		var block *pem.Block
+
+		block, rest = pem.Decode(bytes.TrimSpace(rest))
+		if block == nil {
+			return nil, fmt.Errorf("%w: CA %d is not PEM", ErrBundle, i)
+		}
+
+		if block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("%w: CA %d is a %s block, not a certificate", ErrBundle, i, block.Type)
+		}
+
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("%w: CA %d does not parse: %v", ErrBundle, i, err)
+		}
+
+		if now.After(cert.NotAfter) {
+			return nil, fmt.Errorf("%w: CA %d expired at %s", ErrBundle, i,
+				cert.NotAfter.UTC().Format(time.RFC3339))
+		}
+
+		out = append(out, cert)
+
+		if len(out) > MaxBundleCAs {
+			return nil, fmt.Errorf("%w: the bundle holds more than %d CAs", ErrBundle, MaxBundleCAs)
+		}
+	}
+
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: the bundle holds no certificate", ErrBundle)
+	}
+
+	return out, nil
+}
+
+// ValidateSpiffePattern returns ErrInvalid when pattern is not a usable
+// SPIFFE ID pattern: empty, longer than MaxSpiffePatternLength bytes, or
+// not of the form "spiffe://<trust-domain>/<path>" where the trust domain
+// is a host and the path may hold one trailing "/*" wildcard for one path
+// segment only. A "*" elsewhere matches only itself: matching is exact
+// except for a trailing "/*".
+func ValidateSpiffePattern(pattern string) error {
+	if err := checkText("spiffeIDPattern", pattern, MaxSpiffePatternLength); err != nil {
+		return err
+	}
+
+	u, err := url.Parse(pattern)
+	if err != nil || u.Scheme != "spiffe" || u.Host == "" || u.User != nil || u.RawQuery != "" ||
+		u.Fragment != "" || u.ForceQuery || u.Opaque != "" || !strings.HasPrefix(u.Path, "/") {
+		return fmt.Errorf("%w: the SPIFFE ID pattern %s is not spiffe://<trust-domain>/<path>",
+			ErrInvalid, ident.Echo(pattern))
+	}
+
+	if strings.Contains(u.Path, "*") && !strings.HasSuffix(u.Path, "/*") {
+		return fmt.Errorf("%w: the SPIFFE ID pattern %s holds * outside a trailing /*",
+			ErrInvalid, ident.Echo(pattern))
+	}
+
+	return nil
+}
+
+// CheckBundleRef returns ErrBundle when bundle is set but is not a bundle
+// ID, so the store never reads another namespace through a malformed
+// reference.
+func CheckBundleRef(bundle string) error {
+	if bundle == "" {
+		return nil
+	}
+
+	return BundleID(bundle).Validate()
 }
 
 // reservedClaims are the claims that the exchange checks on its own. A
@@ -197,6 +394,20 @@ func (r *Rule) Validate() error {
 	}
 
 	if err := checkText("audience", r.Audience, MaxAudienceLength); err != nil {
+		return err
+	}
+
+	if r.Revision < 0 {
+		return fmt.Errorf("%w: the revision %d is negative", ErrInvalid, r.Revision)
+	}
+
+	if r.SpiffeIDPattern != "" {
+		if err := ValidateSpiffePattern(r.SpiffeIDPattern); err != nil {
+			return err
+		}
+	}
+
+	if err := CheckBundleRef(r.Bundle); err != nil {
 		return err
 	}
 

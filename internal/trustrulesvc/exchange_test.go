@@ -102,6 +102,22 @@ func (f *fakeRuleStore) List(context.Context, namespace.Name) ([]trustrule.Rule,
 	return f.rules, nil
 }
 
+func (f *fakeRuleStore) Update(
+	_ context.Context, _ namespace.Name, r trustrule.Rule, _ namespace.Fence, e audit.Entry,
+) (trustrule.Rule, error) {
+	if f.err != nil {
+		return trustrule.Rule{}, f.err
+	}
+
+	if err := e.Validate(); err != nil {
+		return trustrule.Rule{}, err
+	}
+
+	f.entries = append(f.entries, e)
+
+	return r, nil
+}
+
 func (f *fakeRuleStore) RecordExchange(
 	_ context.Context, x trustrule.Exchange, _ namespace.Fence, e audit.Entry,
 ) error {

@@ -48,6 +48,12 @@ func (s *exchangeRuleStore) Delete(context.Context, namespace.Name, trustrule.ID
 	return trustrule.ErrNotFound
 }
 
+func (s *exchangeRuleStore) Update(
+	_ context.Context, _ namespace.Name, _ trustrule.Rule, _ namespace.Fence, _ audit.Entry,
+) (trustrule.Rule, error) {
+	return trustrule.Rule{}, trustrule.ErrNotFound
+}
+
 func (s *exchangeRuleStore) RecordExchange(context.Context, trustrule.Exchange, namespace.Fence,
 	audit.Entry,
 ) error {
