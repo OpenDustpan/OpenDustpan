@@ -877,7 +877,11 @@ func TestSafeText(t *testing.T) {
 
 	cases := []struct{ name, in, want string }{
 		{name: "plain", in: "freeze for audit", want: "freeze for audit"},
-		{name: "unicode letters", in: "gel \xc3\xa9t\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac", want: "gel \xc3\xa9t\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac"},
+		{
+			name: "unicode letters",
+			in:   "gel \xc3\xa9t\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac",
+			want: "gel \xc3\xa9t\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac",
+		},
 		{name: "escape", in: "a\x1bb", want: "a\\u001Bb"},
 		{name: "bidi override", in: "a\xe2\x80\xaeb", want: "a\\u202Eb"},
 		{name: "line separator", in: "a\xe2\x80\xa8b", want: "a\\u2028b"},
