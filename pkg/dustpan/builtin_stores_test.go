@@ -563,7 +563,7 @@ func TestBuiltinStoreOptionReplacesTheStoreOption(t *testing.T) {
 
 	// The switches of acme come from the store that the server reads, so a 200
 	// proves that the built-in store holds the namespace.
-	status, body = serveServerAPI(t, f, http.MethodGet, "/api/server/namespaces/acme/override-switches", "")
+	status, body = serveServerAPI(t, f, http.MethodGet, "/api/dustpan/v1/namespaces/acme/override-switches", "")
 	if status != http.StatusOK {
 		t.Fatalf("read the switches of acme: status %d, body %s", status, body)
 	}

@@ -155,7 +155,7 @@ func TestSweepDeletedUnitsAnswersTheOutcome(t *testing.T) {
 	}}
 	handler := newSweepHandler(t, sweeper, map[identity.Action]bool{})
 
-	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/deleted-units/sweep", "")
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/dustpan/v1/deleted-units/sweep", "")
 	if status != http.StatusOK {
 		t.Fatalf("sweep: status %d, want 200 (%s)", status, body)
 	}
@@ -217,7 +217,7 @@ func TestSweepDeletedUnitsRefusals(t *testing.T) {
 
 			handler := newSweepHandler(t, tc.sweeper, tc.deny)
 
-			status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/deleted-units/sweep", "")
+			status, body := serveMaintenance(t, handler, http.MethodPost, "/api/dustpan/v1/deleted-units/sweep", "")
 			if status != tc.want {
 				t.Fatalf("sweep: status %d, want %d (%s)", status, tc.want, body)
 			}

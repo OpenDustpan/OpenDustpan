@@ -70,6 +70,10 @@ func overrideSwitchesOf(ov namespace.Overrides) overrideSwitchesBody {
 	}
 }
 
+// namespaceOverrideSwitchesPath is the route of the override switches of one
+// namespace.
+const namespaceOverrideSwitchesPath = "/api/dustpan/v1/namespaces/{namespace}/override-switches"
+
 // namespaceOverrideRoutes returns the override switch rows of the namespace
 // (ADR 17, ADR 44 decision 6): a read and a change of the switches of one
 // namespace.
@@ -77,7 +81,7 @@ func (h *Handler) namespaceOverrideRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet,
-			Path:   "/api/server/namespaces/{namespace}/override-switches",
+			Path:   namespaceOverrideSwitchesPath,
 			// Reading the switches needs namespace:read on the namespace.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionNamespaceRead},
@@ -86,7 +90,7 @@ func (h *Handler) namespaceOverrideRoutes() []Route {
 		},
 		{
 			Method: http.MethodPut,
-			Path:   "/api/server/namespaces/{namespace}/override-switches",
+			Path:   namespaceOverrideSwitchesPath,
 			// Changing the switches needs namespace:set-overrides. A namespace
 			// switch is the outer bound of the switches of its units.
 			Scope:   ScopeAuthorized,
@@ -108,7 +112,7 @@ func resolveNamespacePath(_ http.ResponseWriter, r *http.Request) (identity.Obje
 	return identity.NamespaceObject(name), nil
 }
 
-// readNamespaceOverrides serves GET /api/server/namespaces/{namespace}/override-switches.
+// readNamespaceOverrides serves GET /api/dustpan/v1/namespaces/{namespace}/override-switches.
 func (h *Handler) readNamespaceOverrides(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
 ) {
@@ -124,7 +128,7 @@ func (h *Handler) readNamespaceOverrides(
 	h.writeJSON(ctx, w, http.StatusOK, overrideSwitchesOf(ns.Overrides))
 }
 
-// writeNamespaceOverrides serves PUT /api/server/namespaces/{namespace}/override-switches.
+// writeNamespaceOverrides serves PUT /api/dustpan/v1/namespaces/{namespace}/override-switches.
 // It answers 200 with the switches as stored. A body that is empty, null, lacks
 // either switch, or has an unknown field answers 400 and changes no switch.
 func (h *Handler) writeNamespaceOverrides(
