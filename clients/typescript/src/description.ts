@@ -1988,6 +1988,7 @@ export const description: string = [
   "          \"settings.locked\",",
   "          \"settings.patch-invalid\",",
   "          \"settings.retention-invalid\",",
+  "          \"settings.revision-stale\",",
   "          \"settings.static-only\",",
   "          \"settings.unavailable\",",
   "          \"settings.value-invalid\",",
