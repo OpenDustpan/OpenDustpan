@@ -43,7 +43,12 @@ concurrency:
 # commit, and a job restores the newest entry of its own job. Only push and
 # scheduled runs on main save an entry. Pull requests and merge groups only
 # restore, so they cannot change the cache that main uses. GitHub removes the
-# least recently used entries when the repository is above its cache limit.
+# least recently used entries when the repository is above its cache limit
+# (10 GB). One entry of each job was about 11.7 GB, so each run on main
+# removed the entries of the run before it, and a job often found no entry.
+# A job that builds about what another job builds sets GO_CACHE_FROM to that
+# job: it restores the entry of that job and saves none. The entries that
+# remain are about 4.5 GB, so the entries of two runs fit in the limit.
 
 # Which jobs run (the changes job sets the outputs):
 # - push and schedule: every job (schedule keeps its own limits).
@@ -166,8 +171,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      # The job id keeps the jobs apart. go.mod holds the Go version, so a
-      # new toolchain starts from a new prefix.
+      # The job id keeps the jobs apart; a job with GO_CACHE_FROM uses the
+      # entry of that job. go.mod holds the Go version, so a new toolchain
+      # starts from a new prefix.
       - &go-cache-restore
         name: Restore the Go caches
         id: go-cache
@@ -176,10 +182,10 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          key: go-${{ runner.os }}-${{ env.GO_CACHE_FROM || github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
-            go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-
-            go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-
+            go-${{ runner.os }}-${{ env.GO_CACHE_FROM || github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-${{ runner.os }}-${{ env.GO_CACHE_FROM || github.job }}-${{ strategy.job-index }}-
       # A pull request with the label nolint-approved skips this step. The
       # three-dot diff needs the history back to the merge base, so the step
       # fetches main with its history; the checkout of the job stays shallow.
@@ -237,10 +243,11 @@ jobs:
           fi
           make files-check FILES_BASE=origin/main
       # A failed job saves too: its build cache is still valid. The key is the
-      # one that the restore step computed.
+      # one that the restore step computed. A job with GO_CACHE_FROM saves no
+      # entry: the job that it names saves the entry.
       - &go-cache-save
         name: Save the Go caches
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') }}
+        if: ${{ !cancelled() && !env.GO_CACHE_FROM && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -298,6 +305,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: golangci-lint
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -399,6 +408,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.journal == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: go
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -493,6 +504,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
+      GO_CACHE_FROM: lint
       TRIVY_VERSION: 0.75.0
       TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
       TRUFFLEHOG_VERSION: 3.99.2
@@ -673,6 +685,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: e2e
     timeout-minutes: 70
     services:
       postgres: *postgres-service
@@ -695,6 +709,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: e2e
     timeout-minutes: 60
     services:
       postgres: *postgres-service
@@ -732,6 +748,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: e2e
     timeout-minutes: 40
     services:
       postgres: *postgres-service
@@ -756,6 +774,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: e2e
     timeout-minutes: 40
     services:
       postgres: *postgres-service
