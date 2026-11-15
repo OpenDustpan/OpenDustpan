@@ -19,11 +19,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/localuser"
 )
 
@@ -147,14 +147,14 @@ func parseLines(raw []byte, want int) (map[string]struct{}, error) {
 }
 
 // checkLine refuses a line that is not valid UTF-8 and a line that holds a
-// control character (CR included).
+// control, format or separator character (CR included).
 func checkLine(line []byte) error {
 	if !utf8.Valid(line) {
 		return fmt.Errorf("%w: the line is not valid UTF-8", errBadList)
 	}
 
-	if bytes.ContainsFunc(line, unicode.IsControl) {
-		return fmt.Errorf("%w: the line holds a control character", errBadList)
+	if bytes.ContainsFunc(line, ident.IsHiddenRune) {
+		return fmt.Errorf("%w: the line holds a control, format or separator character", errBadList)
 	}
 
 	return nil

@@ -292,10 +292,12 @@ func TestLoginChecksTheSubject(t *testing.T) {
 		sub  string
 		want error
 	}{
-		"empty":     {"", profile.ErrInvalid},
-		"newline":   {"namespace:acme\nx", profile.ErrInvalid},
-		"too long":  {strings.Repeat("a", 601), profile.ErrSubjectTooLong},
-		"600 bytes": {strings.Repeat("a", 600), nil},
+		"empty":            {"", profile.ErrInvalid},
+		"newline":          {"namespace:acme\nx", profile.ErrInvalid},
+		"format character": {"namespace:acme\u202ex", profile.ErrInvalid},
+		"line separator":   {"namespace:acme\u2028x", profile.ErrInvalid},
+		"too long":         {strings.Repeat("a", 601), profile.ErrSubjectTooLong},
+		"600 bytes":        {strings.Repeat("a", 600), nil},
 	} {
 		_, err := h.svc.Login(t.Context(), h.open(h.ns, tc.sub), "aws", "sts.amazonaws.com", 5*time.Minute)
 		if tc.want == nil {

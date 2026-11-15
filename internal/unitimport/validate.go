@@ -3,8 +3,8 @@ package unitimport
 import (
 	"fmt"
 	"strings"
-	"unicode"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -17,15 +17,15 @@ const MaxUnits = 1000
 const MaxTextBytes = 1024
 
 // text checks one field of a record: not empty (when needed), within
-// MaxTextBytes, and with no control character.
+// MaxTextBytes, and with no control, format or separator character.
 func text(field, v string, needed bool) error {
 	switch {
 	case v == "" && needed:
 		return fmt.Errorf("%w: %s is empty", ErrInvalid, field)
 	case len(v) > MaxTextBytes:
 		return fmt.Errorf("%w: %s is longer than %d bytes", ErrInvalid, field, MaxTextBytes)
-	case strings.IndexFunc(v, unicode.IsControl) >= 0:
-		return fmt.Errorf("%w: %s holds a control character", ErrInvalid, field)
+	case ident.HasHidden(v):
+		return fmt.Errorf("%w: %s holds a control, format or separator character", ErrInvalid, field)
 	}
 
 	return nil

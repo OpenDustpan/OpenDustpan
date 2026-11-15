@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/pagetoken"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -203,10 +204,10 @@ func decodeCursor(s, fingerprint string) (*coreinventory.DeletedCursor, error) {
 
 // validCursorField reports whether s can be the name or the unit ID of a
 // deleted unit in a cursor: not empty, at most maxCursorFieldLen bytes, valid
-// UTF-8, and without a hidden character, see audit.IsHiddenRune.
+// UTF-8, and without a hidden character, see ident.IsHiddenRune.
 func validCursorField(s string) bool {
 	return s != "" && len(s) <= maxCursorFieldLen && utf8.ValidString(s) &&
-		!strings.ContainsFunc(s, audit.IsHiddenRune)
+		!ident.HasHidden(s)
 }
 
 // intQuery parses the query value raw of the parameter name as an int from low

@@ -1,8 +1,7 @@
 package inventory
 
 import (
-	"strings"
-	"unicode"
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // Limits of the label and reference filters of a unit query. The unit list and
@@ -54,7 +53,8 @@ func labelChars(s string) bool {
 	return true
 }
 
-// HasControl reports whether s holds a control character.
+// HasControl reports whether s holds a control, format or separator
+// character.
 func HasControl(s string) bool {
-	return strings.ContainsFunc(s, unicode.IsControl)
+	return ident.HasHidden(s)
 }

@@ -793,6 +793,14 @@ func requestChecks() []requestCheck {
 			return l.post(protocol.PathSessionFinish,
 				protocol.Finish{Succeeded: false, Message: "line\x1b[31m"})
 		}, protocol.ErrorInvalid},
+		{"finish reason with a format character", func(l *launcher) lcall {
+			return l.post(protocol.PathSessionFinish,
+				protocol.Finish{Succeeded: false, Message: "line\u202e"})
+		}, protocol.ErrorInvalid},
+		{"finish reason with a line separator", func(l *launcher) lcall {
+			return l.post(protocol.PathSessionFinish,
+				protocol.Finish{Succeeded: false, Message: "line\u2028"})
+		}, protocol.ErrorInvalid},
 		{"finish reason that is too long", func(l *launcher) lcall {
 			return l.post(protocol.PathSessionFinish,
 				protocol.Finish{Succeeded: false, Message: strings.Repeat("a", 2049)})
