@@ -73,6 +73,11 @@ func (s *Service) releaseWithFence(
 	sv.Status = StatusFinalized
 	sv.FinalizedAt = sv.CreatedAt
 	sv.Size = size
+	// A fence changes the plain serial and lineage of the state, so its
+	// content is always plaintext: fenceContent refuses a state the client
+	// encrypted. The pending placeholder holds no bit; this finalize sets the
+	// plaintext bit.
+	sv.ClientEncrypted = ClientEncryptedNo
 
 	released := w.released(sv.FinalizedAt, by, ReleaseForced)
 
@@ -125,6 +130,9 @@ func (s *Service) buildFence(
 		Size:            0,
 		Force:           false,
 		Sealed:          true,
+		// The placeholder is pending: it holds no bit yet. releaseWithFence
+		// sets the plaintext bit when it finalizes the version.
+		ClientEncrypted: ClientEncryptedUnknown,
 		RestoredFrom:    "",
 		SensitiveMarks:  cur.SensitiveMarks,
 		FenceBy:         by,
