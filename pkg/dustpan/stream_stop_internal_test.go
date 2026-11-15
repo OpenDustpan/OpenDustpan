@@ -26,6 +26,7 @@ func TestDrainStopsTheLogStreams(t *testing.T) {
 		minimum:     nil,
 		writable:    nil,
 		timeout:     time.Second,
+		drainPeriod: 0,
 		failures:    nil,
 		logger:      nil,
 	})

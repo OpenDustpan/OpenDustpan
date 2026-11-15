@@ -1498,6 +1498,7 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		timeout:     readinessTimeout,
 		failures:    observed.ReadinessFailures(),
 		logger:      cfg.logger,
+		drainPeriod: cfg.drainPeriod,
 	})
 }
 
@@ -2114,6 +2115,13 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	return s.serveUntilDone(ctx, srv, ln)
+}
+
+// Draining reports whether this process drains: true from the stop signal on,
+// while GET /health/ready answers 503 and a durable start is refused, so
+// another instance serves it.
+func (s *Server) Draining() bool {
+	return s.ready != nil && s.ready.isDraining()
 }
 
 // newHTTPServer returns the HTTP server that serves the handler on ln.

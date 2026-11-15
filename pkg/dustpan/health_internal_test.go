@@ -251,6 +251,7 @@ func TestReadinessDrains(t *testing.T) {
 				minimum:     nil,
 				writable:    nil,
 				timeout:     time.Minute,
+				drainPeriod: 0,
 				failures:    failures,
 				logger:      logger,
 			})
@@ -276,6 +277,59 @@ func TestReadinessDrains(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestReadiness503DuringDrainHasRetryAfter proves that the 503 of a draining
+// readiness probe names the drain in the Retry-After header, with the body of
+// a draining process. A client that reads the header waits for the drain
+// before it sends the request again.
+func TestReadiness503DuringDrainHasRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	const drainPeriod = 9 * time.Second
+
+	api, err := ParseComponents("api")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocked := stubPinger{err: nil, block: true}
+	registry := metrics.NewRegistry()
+
+	probe := newComponentReadiness(readinessSettings{
+		streamStop:  nil,
+		components:  api,
+		store:       blocked,
+		blobs:       blocked,
+		watch:       nil,
+		chainAdmits: nil,
+		minimum:     nil,
+		writable:    nil,
+		timeout:     time.Minute,
+		failures:    registry.NewCounter(readinessFailuresName, "Failed readiness probes.", nil, 0),
+		logger:      slog.New(slog.DiscardHandler),
+		drainPeriod: drainPeriod,
+	})
+	probe.drain()
+
+	const want = `{"status":"unavailable","failed":["draining"]}`
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/health/ready", http.NoBody)
+
+	rec := httptest.NewRecorder()
+	probe.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+
+	if got := strings.TrimSpace(rec.Body.String()); got != want {
+		t.Errorf("body while draining = %s, want %s", got, want)
+	}
+
+	if got := rec.Header().Get("Retry-After"); got != "9" {
+		t.Errorf("Retry-After = %q, want %q, the drain period in whole seconds", got, "9")
 	}
 }
 

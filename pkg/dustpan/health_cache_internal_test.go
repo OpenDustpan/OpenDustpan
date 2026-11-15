@@ -49,6 +49,7 @@ func TestReadinessUnavailableIsNotCached(t *testing.T) {
 					minimum:     nil,
 					writable:    nil,
 					timeout:     time.Minute,
+					drainPeriod: 0,
 					failures:    failures,
 					logger:      slog.New(slog.DiscardHandler),
 				})

@@ -59,10 +59,11 @@ func newFakeAuditChain(setting audit.ChainSetting) *fakeAuditChain {
 	}
 }
 
-// newAuditChainHandler builds a Handler with chain, namespaces and an
-// authorizer that denies deny.
+// newAuditChainHandler builds a Handler with chain, namespaces, the worker
+// check of the start, and an authorizer that denies deny.
 func newAuditChainHandler(
-	t *testing.T, namespaces *namespace.Service, chain apiserver.AuditChain, deny ...identity.Action,
+	t *testing.T, namespaces *namespace.Service, workers apiserver.WorkerSource,
+	chain apiserver.AuditChain, deny ...identity.Action,
 ) testHandler {
 	t.Helper()
 
@@ -82,7 +83,7 @@ func newAuditChainHandler(
 		Settings:         nil,
 		GitHost:          nil,
 		Idempotency:      nil,
-		Workers:          nil,
+		Workers:          workers,
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		TempAdmins:       nil,
@@ -142,7 +143,7 @@ func TestGetAuditChainAnswersTheState(t *testing.T) {
 	t.Parallel()
 
 	namespaces := newTestNamespaces(t)
-	handler := newAuditChainHandler(t, namespaces, newFakeAuditChain(audit.ChainOff))
+	handler := newAuditChainHandler(t, namespaces, nil, newFakeAuditChain(audit.ChainOff))
 
 	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/dustpan/v1/audit/chain", "")
 	if status != http.StatusOK {
@@ -196,7 +197,7 @@ func TestApproveAuditChainNeedsTheActionsOfItsDirection(t *testing.T) {
 			t.Parallel()
 
 			chain := newFakeAuditChain(tc.setting)
-			handler := newAuditChainHandler(t, namespaces, chain, tc.deny)
+			handler := newAuditChainHandler(t, namespaces, nil, chain, tc.deny)
 
 			status, body := approveAuditChain(t, handler)
 			if status != tc.want {
@@ -244,7 +245,7 @@ func TestApproveAuditChainMapsItsErrors(t *testing.T) {
 
 			chain := newFakeAuditChain(audit.ChainOff)
 			chain.approveErr = fmt.Errorf("approve: %w", tc.err)
-			handler := newAuditChainHandler(t, namespaces, chain)
+			handler := newAuditChainHandler(t, namespaces, nil, chain)
 
 			status, body := approveAuditChain(t, handler)
 			if status != tc.want {
@@ -258,7 +259,7 @@ func TestAuditChainRoutesWithoutAChain(t *testing.T) {
 	t.Parallel()
 
 	namespaces := newTestNamespaces(t)
-	handler := newAuditChainHandler(t, namespaces, nil)
+	handler := newAuditChainHandler(t, namespaces, nil, nil)
 
 	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/dustpan/v1/audit/chain", "")
 	if status != http.StatusNotImplemented {

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,6 +53,9 @@ type readiness struct {
 	// answers 503 and runs no check, so a load balancer stops its requests
 	// while the requests in flight complete.
 	draining atomic.Bool
+	// drainPeriod is the drain before the shutdown. The 503 of the drain
+	// names it in Retry-After. See WithDrainPeriod.
+	drainPeriod time.Duration
 	// streamStop tells the log streams that the process drains, or is nil.
 	streamStop *streamStop
 }
@@ -109,8 +113,11 @@ type readinessSettings struct {
 	// store without the check.
 	writable writeChecker
 	timeout  time.Duration
-	failures *metrics.Counter
-	logger   *slog.Logger
+	// drainPeriod is the drain before the shutdown, which the 503 of the drain
+	// names in Retry-After.
+	drainPeriod time.Duration
+	failures    *metrics.Counter
+	logger      *slog.Logger
 	// streamStop tells the log streams that the process drains, or is nil.
 	streamStop *streamStop
 }
@@ -124,13 +131,14 @@ func newReadinessHandler(
 	logger *slog.Logger,
 ) http.Handler {
 	return &readiness{
-		checks:     []readinessCheck{{name: checkStore, ping: store}, {name: checkBlob, ping: blobs}},
-		timeout:    timeout,
-		failures:   failures,
-		logger:     logger,
-		parts:      nil,
-		draining:   atomic.Bool{},
-		streamStop: nil,
+		checks:      []readinessCheck{{name: checkStore, ping: store}, {name: checkBlob, ping: blobs}},
+		timeout:     timeout,
+		failures:    failures,
+		logger:      logger,
+		parts:       nil,
+		draining:    atomic.Bool{},
+		drainPeriod: 0,
+		streamStop:  nil,
 	}
 }
 
@@ -145,13 +153,14 @@ func newReadinessHandler(
 // processes to stay in the pool of the Service.
 func newComponentReadiness(cfg readinessSettings) *readiness {
 	rd := &readiness{
-		checks:     nil,
-		timeout:    cfg.timeout,
-		failures:   cfg.failures,
-		logger:     cfg.logger,
-		parts:      nil,
-		draining:   atomic.Bool{},
-		streamStop: cfg.streamStop,
+		checks:      nil,
+		timeout:     cfg.timeout,
+		failures:    cfg.failures,
+		logger:      cfg.logger,
+		parts:       nil,
+		draining:    atomic.Bool{},
+		drainPeriod: cfg.drainPeriod,
+		streamStop:  cfg.streamStop,
 	}
 
 	if cfg.components.Has(ComponentAPI) {
@@ -333,11 +342,23 @@ func (rd *readiness) drain() {
 	rd.streamStop.stop()
 }
 
+// isDraining reports whether the drain began.
+func (rd *readiness) isDraining() bool { return rd.draining.Load() }
+
 // writeDraining answers a probe of a draining process. It is not a failure of
-// a dependency, so it does not count on the failure counter.
+// a dependency, so it does not count on the failure counter. The answer names
+// the drain in Retry-After, so a client waits for it before a new try.
 func (rd *readiness) writeDraining(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Retry-After", strconv.FormatInt(drainWaitSeconds(rd.drainPeriod), 10))
+
 	rd.writeJSON(r.Context(), w, http.StatusServiceUnavailable,
 		readinessDoc{Status: statusUnavailable, Failed: []string{checkDraining}})
+}
+
+// drainWaitSeconds returns the wait of the drain in whole seconds, rounded up,
+// and at least 1, so that a client always reads a number of seconds.
+func drainWaitSeconds(period time.Duration) int64 {
+	return int64(max(1, (period+time.Second-1)/time.Second))
 }
 
 // readinessDoc is the body of the readiness probe. Failed names the checks

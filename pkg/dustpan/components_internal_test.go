@@ -55,6 +55,8 @@ func newTestWatch(store DurableStore, set Components, lease time.Duration, now f
 		cachedAt:    time.Time{},
 		cachedOK:    false,
 		watchedFrom: time.Time{},
+		draining:    nil,
+		drainPeriod: 0,
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/idempotent"
 	"opendustpan.org/opendustpan/internal/api/problem"
@@ -623,10 +624,16 @@ func forbiddenCode(f failure, err error) string {
 }
 
 // retryAfter returns the wait that the answer to err names in Retry-After: a
-// refusal of maintenance mode names maintenanceRetryAfter, any other error 0.
+// refusal of maintenance mode names maintenanceRetryAfter, a refusal of a
+// start while the instance drains names its drain period, and any other error
+// names no wait.
 func retryAfter(err error) time.Duration {
 	if errors.Is(err, maintenance.ErrInMaintenance) || errors.Is(err, maintenance.ErrBusy) {
 		return maintenanceRetryAfter
+	}
+
+	if wait, ok := admit.RetryAfter(err); ok {
+		return wait
 	}
 
 	return 0

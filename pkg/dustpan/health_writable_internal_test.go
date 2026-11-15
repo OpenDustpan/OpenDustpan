@@ -82,7 +82,7 @@ func TestReadinessStoreReadOnly(t *testing.T) {
 				streamStop: nil,
 				components: Components{api: true, worker: false}, store: tt.store,
 				blobs: stubPinger{err: nil, block: false}, watch: nil, chainAdmits: nil, minimum: nil,
-				writable: tt.writable, timeout: 50 * time.Millisecond,
+				writable: tt.writable, timeout: 50 * time.Millisecond, drainPeriod: 0,
 				failures: metrics.NewRegistry().NewCounter(readinessFailuresName, "Failed readiness probes.", nil, 0),
 				logger:   slog.New(slog.DiscardHandler),
 			})
@@ -114,7 +114,7 @@ func TestReadinessChecksWritesInEachComponent(t *testing.T) {
 		streamStop: nil,
 		components: Components{api: true, worker: true}, store: stubPinger{err: nil, block: false},
 		blobs: stubPinger{err: nil, block: false}, watch: nil, chainAdmits: nil, minimum: nil,
-		writable: stubWritable{ok: true, err: nil}, timeout: 50 * time.Millisecond,
+		writable: stubWritable{ok: true, err: nil}, timeout: 50 * time.Millisecond, drainPeriod: 0,
 		failures: metrics.NewRegistry().NewCounter(readinessFailuresName, "Failed readiness probes.", nil, 0),
 		logger:   slog.New(slog.DiscardHandler),
 	})

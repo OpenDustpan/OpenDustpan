@@ -413,8 +413,16 @@ func Shared(err error) (Problem, bool) {
 }
 
 // Worker returns the answer to a start that the worker check refused: 503
-// with the command that starts a worker.
+// with the command that starts a worker, or 503 with the drain time when the
+// instance drains.
 func Worker(err error) (Problem, bool) {
+	if wait, ok := admit.RetryAfter(err); ok {
+		p := answer(http.StatusServiceUnavailable, errcode.InstanceDraining, admit.DrainingMessage)
+		p.RetryAfter = wait
+
+		return p, true
+	}
+
 	if errors.Is(err, admit.ErrNoWorker) {
 		return answer(http.StatusServiceUnavailable, errcode.WorkerAbsent, admit.Message), true
 	}

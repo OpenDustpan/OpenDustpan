@@ -78,6 +78,7 @@ func TestReadinessReportsABinaryBelowTheMinimum(t *testing.T) {
 				minimum:     tt.minimum,
 				writable:    nil,
 				timeout:     50 * time.Millisecond,
+				drainPeriod: 0,
 				failures: metrics.NewRegistry().
 					NewCounter(readinessFailuresName, "Failed readiness probes.", nil, 0),
 				logger: slog.New(slog.DiscardHandler),
@@ -199,7 +200,7 @@ func TestStoreDownListsOnlyTheStore(t *testing.T) {
 				streamStop: nil,
 				components: Components{api: true, worker: false}, store: tt.store,
 				blobs: stubPinger{err: nil, block: false}, watch: nil, chainAdmits: nil, minimum: tt.minimum,
-				writable: nil, timeout: 50 * time.Millisecond,
+				writable: nil, timeout: 50 * time.Millisecond, drainPeriod: 0,
 				failures: metrics.NewRegistry().NewCounter(readinessFailuresName, "Failed readiness probes.", nil, 0),
 				logger:   slog.New(slog.DiscardHandler),
 			})

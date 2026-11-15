@@ -74,6 +74,11 @@ type workerWatch struct {
 	// A worker that never beat counts as silent from then on, so a start
 	// right after the process began is never a missing worker.
 	watchedFrom time.Time
+	// draining reports that this process drains, and drainPeriod is the drain
+	// before its shutdown. attach sets both from the server. A start while
+	// this process drains is refused, so another instance serves it.
+	draining    func() bool
+	drainPeriod time.Duration
 }
 
 // newWorkerWatch builds the watch of cfg. The claim loop counts as running
@@ -95,6 +100,8 @@ func newWorkerWatch(cfg *settings) *workerWatch {
 		cachedAt:    time.Time{},
 		cachedOK:    false,
 		watchedFrom: time.Time{},
+		draining:    nil,
+		drainPeriod: 0,
 	}
 
 	w.touch()
@@ -155,10 +162,17 @@ func (w *workerWatch) WorkerReport(ctx context.Context) (server.WorkerReport, er
 	return report, nil
 }
 
-// AdmitStart implements server.WorkerSource. A process that runs the worker
-// component claims for itself and admits each start. When the store cannot
-// be read, it admits the start too: a store error is not a missing worker.
+// AdmitStart implements server.WorkerSource. A draining process refuses each
+// start with the drain, so another instance serves it. A process that runs the
+// worker component claims for itself and admits each other start. When the store
+// cannot be read, it admits the start too: a store error is not a missing worker.
 func (w *workerWatch) AdmitStart(ctx context.Context) error {
+	// The drain comes before the worker check: a draining process takes no new
+	// durable operation, whatever worker state it holds.
+	if w.draining != nil && w.draining() {
+		return admit.Draining(w.drainPeriod)
+	}
+
 	if w.components.Has(ComponentWorker) {
 		return nil
 	}
@@ -176,6 +190,8 @@ func (w *workerWatch) AdmitStart(ctx context.Context) error {
 func (w *workerWatch) attach(srv *Server, registry *metrics.Registry) {
 	w.specs = srv.jobSchedules
 	w.owner = srv.durableOwner
+	w.draining = srv.Draining
+	w.drainPeriod = srv.drainPeriod
 
 	registerWatchMetrics(registry, w)
 }
