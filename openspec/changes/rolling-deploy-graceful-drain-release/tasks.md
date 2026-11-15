@@ -22,5 +22,5 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run e2e drain step against real CLI through proxy; the step calls route ANY /api/v2/state-versions through its authorization gate with access token credential. Check: Real CLI loop of `tofu apply` and `pulumi up` through proxy with no failed command during one instance drain.
+- [x] 4.1 Run e2e drain step against real CLI through proxy; the step calls route ANY /api/v2/state-versions through its authorization gate with access token credential. Check: Real CLI loop of `tofu apply` and `pulumi up` through proxy with no failed command during one instance drain.
 - [ ] 4.2 Run wiring, route with authorization actions, docs page and usability check. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
