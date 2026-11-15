@@ -175,19 +175,28 @@ func appendAgentRoundTripEntries(t *testing.T, s EntryStore, ns namespace.Namesp
 	builtIn.Channel = audit.ChannelAgent
 	builtIn.Origin = mustOrigin(
 		t,
-		audit.OriginArgs{Run: "run-1", Session: "run-1", Tool: "", ArgsDigest: "", BreakGlass: true, SecretStage: ""},
+		audit.OriginArgs{
+			Run:          "run-1",
+			Session:      "run-1",
+			Tool:         "",
+			ArgsDigest:   "",
+			BreakGlass:   true,
+			SecretStage:  "",
+			DelegationID: "",
+		},
 	)
 	appendEntry(t, s, ns.Fence(), builtIn)
 
 	mcp := newEntry(ns.Name, "ada", "req-3", now())
 	mcp.Channel = audit.ChannelMCP
 	mcp.Origin = mustOrigin(t, audit.OriginArgs{
-		Run:         "",
-		Session:     "ses-1",
-		Tool:        "read",
-		ArgsDigest:  "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-		BreakGlass:  false,
-		SecretStage: "open",
+		Run:          "",
+		Session:      "ses-1",
+		Tool:         "read",
+		ArgsDigest:   "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+		BreakGlass:   false,
+		SecretStage:  "open",
+		DelegationID: "",
 	})
 	appendEntry(t, s, ns.Fence(), mcp)
 }

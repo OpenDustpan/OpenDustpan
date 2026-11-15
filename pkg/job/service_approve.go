@@ -418,7 +418,10 @@ func (s *service) approvalEntry(j *Job, a Actor, ap *Approval, auth ConfirmAuth,
 	}
 
 	if a.Agent != "" {
-		changes = append(changes, audit.Change{Key: "agent", Old: nil, New: string(a.Agent), Layer: "", TakesEffect: ""})
+		changes = append(
+			changes,
+			audit.Change{Key: "agent", Old: nil, New: string(a.Agent), Layer: "", TakesEffect: ""},
+		)
 	}
 
 	if ap.Plan != nil {

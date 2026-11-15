@@ -328,7 +328,7 @@ func mustAgentOrigin(t *testing.T, run, session string) *audit.Origin {
 	t.Helper()
 
 	origin, err := audit.NewOrigin(audit.OriginArgs{
-		Run: run, Session: session, Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "",
+		Run: run, Session: session, Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "", DelegationID: "",
 	})
 	if err != nil {
 		t.Fatalf("new origin: %v", err)

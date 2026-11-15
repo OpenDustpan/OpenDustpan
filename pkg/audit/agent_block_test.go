@@ -122,7 +122,7 @@ func TestComputeHashAgentBlock(t *testing.T) {
 
 	oneField := testEntry()
 	oneField.Origin = mustOrigin(t, audit.OriginArgs{
-		Run: "run-1", Session: "", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "",
+		Run: "run-1", Session: "", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "", DelegationID: "",
 	})
 
 	if !oneField.HasAgentBlock() {
@@ -147,13 +147,69 @@ func TestComputeHashDiffersForEachAgentField(t *testing.T) {
 
 	digest := glass.ArgsDigest
 	cleared := []audit.OriginArgs{
-		{Run: "", Session: "run-1", Tool: "read", ArgsDigest: digest, BreakGlass: true, SecretStage: "open", DelegationID: "dlg-1"},
-		{Run: "run-1", Session: "", Tool: "read", ArgsDigest: digest, BreakGlass: true, SecretStage: "open", DelegationID: "dlg-1"},
-		{Run: "run-1", Session: "run-1", Tool: "", ArgsDigest: digest, BreakGlass: true, SecretStage: "open", DelegationID: "dlg-1"},
-		{Run: "run-1", Session: "run-1", Tool: "read", ArgsDigest: "", BreakGlass: true, SecretStage: "open", DelegationID: "dlg-1"},
-		{Run: "run-1", Session: "run-1", Tool: "read", ArgsDigest: digest, BreakGlass: false, SecretStage: "open", DelegationID: "dlg-1"},
-		{Run: "run-1", Session: "run-1", Tool: "read", ArgsDigest: digest, BreakGlass: true, SecretStage: "", DelegationID: "dlg-1"},
-		{Run: "run-1", Session: "run-1", Tool: "read", ArgsDigest: digest, BreakGlass: true, SecretStage: "open", DelegationID: ""},
+		{
+			Run:          "",
+			Session:      "run-1",
+			Tool:         "read",
+			ArgsDigest:   digest,
+			BreakGlass:   true,
+			SecretStage:  "open",
+			DelegationID: "dlg-1",
+		},
+		{
+			Run:          "run-1",
+			Session:      "",
+			Tool:         "read",
+			ArgsDigest:   digest,
+			BreakGlass:   true,
+			SecretStage:  "open",
+			DelegationID: "dlg-1",
+		},
+		{
+			Run:          "run-1",
+			Session:      "run-1",
+			Tool:         "",
+			ArgsDigest:   digest,
+			BreakGlass:   true,
+			SecretStage:  "open",
+			DelegationID: "dlg-1",
+		},
+		{
+			Run:          "run-1",
+			Session:      "run-1",
+			Tool:         "read",
+			ArgsDigest:   "",
+			BreakGlass:   true,
+			SecretStage:  "open",
+			DelegationID: "dlg-1",
+		},
+		{
+			Run:          "run-1",
+			Session:      "run-1",
+			Tool:         "read",
+			ArgsDigest:   digest,
+			BreakGlass:   false,
+			SecretStage:  "open",
+			DelegationID: "dlg-1",
+		},
+		{
+			Run:          "run-1",
+			Session:      "run-1",
+			Tool:         "read",
+			ArgsDigest:   digest,
+			BreakGlass:   true,
+			SecretStage:  "",
+			DelegationID: "dlg-1",
+		},
+		{
+			Run:          "run-1",
+			Session:      "run-1",
+			Tool:         "read",
+			ArgsDigest:   digest,
+			BreakGlass:   true,
+			SecretStage:  "open",
+			DelegationID: "",
+		},
 	}
 
 	for i, args := range cleared {
@@ -179,56 +235,61 @@ func TestNewOriginRefusesHostileFields(t *testing.T) {
 		{
 			name: "control character in the agent run",
 			args: audit.OriginArgs{
-				Run:         "run-\x00-1",
-				Session:     "run-1",
-				Tool:        "",
-				ArgsDigest:  "",
-				BreakGlass:  false,
-				SecretStage: "",
+				Run:          "run-\x00-1",
+				Session:      "run-1",
+				Tool:         "",
+				ArgsDigest:   "",
+				BreakGlass:   false,
+				SecretStage:  "",
+				DelegationID: "",
 			},
 		},
 		{
 			name: "control character in the agent session",
 			args: audit.OriginArgs{
-				Run:         "run-1",
-				Session:     "ses-\x7f-1",
-				Tool:        "",
-				ArgsDigest:  "",
-				BreakGlass:  false,
-				SecretStage: "",
+				Run:          "run-1",
+				Session:      "ses-\x7f-1",
+				Tool:         "",
+				ArgsDigest:   "",
+				BreakGlass:   false,
+				SecretStage:  "",
+				DelegationID: "",
 			},
 		},
 		{
 			name: "control character in the tool",
 			args: audit.OriginArgs{
-				Run:         "run-1",
-				Session:     "run-1",
-				Tool:        "re\x1bad",
-				ArgsDigest:  "",
-				BreakGlass:  false,
-				SecretStage: "",
+				Run:          "run-1",
+				Session:      "run-1",
+				Tool:         "re\x1bad",
+				ArgsDigest:   "",
+				BreakGlass:   false,
+				SecretStage:  "",
+				DelegationID: "",
 			},
 		},
 		{
 			name: "control character in the arguments digest",
 			args: audit.OriginArgs{
-				Run:         "run-1",
-				Session:     "run-1",
-				Tool:        "",
-				ArgsDigest:  "ab\ncd",
-				BreakGlass:  false,
-				SecretStage: "",
+				Run:          "run-1",
+				Session:      "run-1",
+				Tool:         "",
+				ArgsDigest:   "ab\ncd",
+				BreakGlass:   false,
+				SecretStage:  "",
+				DelegationID: "",
 			},
 		},
 		{
 			name: "control character in the secret stage",
 			args: audit.OriginArgs{
-				Run:         "run-1",
-				Session:     "run-1",
-				Tool:        "",
-				ArgsDigest:  "",
-				BreakGlass:  false,
-				SecretStage: "o\x1bpen",
+				Run:          "run-1",
+				Session:      "run-1",
+				Tool:         "",
+				ArgsDigest:   "",
+				BreakGlass:   false,
+				SecretStage:  "o\x1bpen",
+				DelegationID: "",
 			},
 		},
 		{
@@ -246,12 +307,13 @@ func TestNewOriginRefusesHostileFields(t *testing.T) {
 		{
 			name: "invalid UTF-8 in the agent run",
 			args: audit.OriginArgs{
-				Run:         "run-\xff-1",
-				Session:     "run-1",
-				Tool:        "",
-				ArgsDigest:  "",
-				BreakGlass:  false,
-				SecretStage: "",
+				Run:          "run-\xff-1",
+				Session:      "run-1",
+				Tool:         "",
+				ArgsDigest:   "",
+				BreakGlass:   false,
+				SecretStage:  "",
+				DelegationID: "",
 			},
 		},
 	}
@@ -287,12 +349,13 @@ func TestNewOriginRefusesOversizedField(t *testing.T) {
 	}
 
 	base := audit.OriginArgs{
-		Run:         "run-1",
-		Session:     "ses-1",
-		Tool:        "",
-		ArgsDigest:  "",
-		BreakGlass:  false,
-		SecretStage: "",
+		Run:          "run-1",
+		Session:      "ses-1",
+		Tool:         "",
+		ArgsDigest:   "",
+		BreakGlass:   false,
+		SecretStage:  "",
+		DelegationID: "",
 	}
 
 	for _, field := range fields {
@@ -307,7 +370,7 @@ func TestNewOriginRefusesOversizedField(t *testing.T) {
 
 	origin, err := audit.NewOrigin(audit.OriginArgs{
 		Run: strings.Repeat("a", audit.MaxAgentFieldLen), Session: "ses-1",
-		Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "",
+		Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "", DelegationID: "",
 	})
 	if err != nil || origin == nil {
 		t.Fatalf("new origin refused a %d-byte agent run: %v", audit.MaxAgentFieldLen, err)
@@ -370,7 +433,7 @@ func TestOriginNilIsNoBlock(t *testing.T) {
 func TestEveryOriginFieldIsHashed(t *testing.T) {
 	t.Parallel()
 
-	base := reflect.TypeOf(audit.Origin{})
+	base := reflect.TypeFor[audit.Origin]()
 	if base.Kind() != reflect.Struct {
 		t.Fatalf("audit.Origin is %s, want a struct", base.Kind())
 	}
@@ -378,9 +441,7 @@ func TestEveryOriginFieldIsHashed(t *testing.T) {
 	plain := testEntry()
 	plainHash := audit.ComputeHash(plain, "")
 
-	for i := range base.NumField() {
-		field := base.Field(i)
-
+	for field := range base.Fields() {
 		set := map[string]func(*audit.OriginArgs){
 			"run":          func(args *audit.OriginArgs) { args.Run = "run-9" },
 			"session":      func(args *audit.OriginArgs) { args.Session = "ses-9" },
@@ -394,7 +455,10 @@ func TestEveryOriginFieldIsHashed(t *testing.T) {
 			t.Fatalf("Origin holds a field %q with no setter: cover it in the hash", field.Name)
 		}
 
-		args := audit.OriginArgs{Run: "run-1", Session: "run-1"}
+		args := audit.OriginArgs{
+			Run: "run-1", Session: "run-1", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "",
+			DelegationID: "",
+		}
 		set(&args)
 
 		e := testEntry()

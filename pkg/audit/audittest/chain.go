@@ -679,7 +679,15 @@ func testChainCheckPassesOldChain(t *testing.T, ts ChainTestStore) {
 	withAgent.Channel = audit.ChannelAgent
 	withAgent.Origin = mustOrigin(
 		t,
-		audit.OriginArgs{Run: "run-1", Session: "run-1", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: ""},
+		audit.OriginArgs{
+			Run:          "run-1",
+			Session:      "run-1",
+			Tool:         "",
+			ArgsDigest:   "",
+			BreakGlass:   false,
+			SecretStage:  "",
+			DelegationID: "",
+		},
 	)
 	appendEntry(t, ts.Store, tl.ns.Fence(), withAgent)
 
