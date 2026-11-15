@@ -317,13 +317,13 @@ func TestItemKeyBackupNamesTheAttemptKey(t *testing.T) {
 				t.Fatalf("check = %v, want nil", err)
 			}
 
-			refs, _, err := blobRefs(t.Context(), s.conn)
+			refs, err := blobRefs(t.Context(), s.conn)
 			if err != nil {
 				t.Fatalf("blob refs: %v", err)
 			}
 
 			want := "/item-keys/" + string(k.ID) + tc.suffix(k)
-			if hits := countKeySuffix(refs, want); hits != 1 {
+			if hits := countKeySuffix(refs.Refs, want); hits != 1 {
 				t.Errorf("blob key %q: %d references, want 1", want, hits)
 			}
 		})

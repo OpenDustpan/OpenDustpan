@@ -1274,6 +1274,7 @@ type StateVersion struct {
 	FencedBy          string
 	UnlockedWrite     bool
 	OriginJob         string
+	ClientEncrypted   pgtype.Bool
 }
 
 type StoreCheck struct {

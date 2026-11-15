@@ -70,6 +70,7 @@ func streamSummary(refs ...backup.BlobRef) backup.Summary {
 		WrapperIDs:           []string{"kek-1"},
 		RowCounts:            map[string]int64{"namespaces": 1},
 		Blobs:                refs,
+		RegistryFiles:        nil,
 		SchemaVersion:        backup.BaselineSchemaVersion,
 		Unverified:           nil,
 	}
@@ -143,6 +144,7 @@ func restoreStreamedBackup(
 			WrapperIDs:           nil,
 			RowCounts:            map[string]int64{},
 			Blobs:                nil,
+			RegistryFiles:        nil,
 			SchemaVersion:        backup.BaselineSchemaVersion,
 			Unverified:           nil,
 		},
