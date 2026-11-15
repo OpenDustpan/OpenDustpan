@@ -1099,8 +1099,8 @@ func (h *rtHarness) runBackupAndRestoreWith(beforeRestore func() func()) backupR
 		ID string `json:"id"`
 	}
 
-	h.decode(h.call(http.MethodPost, "/api/server/backups", "", http.StatusAccepted), &started)
-	h.settle("/api/server/backups/"+started.ID, string(backup.StateRunning))
+	h.decode(h.call(http.MethodPost, "/api/dustpan/v1/backups", "", http.StatusAccepted), &started)
+	h.settle("/api/dustpan/v1/backups/"+started.ID, string(backup.StateRunning))
 	h.settleOperations()
 
 	out.backup = h.tracer.end()
@@ -1116,9 +1116,9 @@ func (h *rtHarness) runBackupAndRestoreWith(beforeRestore func() func()) backupR
 		ID string `json:"id"`
 	}
 
-	h.decode(h.call(http.MethodPost, "/api/server/restores", `{"backupID":"`+started.ID+`"}`, http.StatusAccepted),
+	h.decode(h.call(http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"`+started.ID+`"}`, http.StatusAccepted),
 		&restore)
-	h.settle("/api/server/restores/"+restore.ID, "running", "checking", "applying")
+	h.settle("/api/dustpan/v1/restores/"+restore.ID, "running", "checking", "applying")
 	h.settleOperations()
 
 	out.restore = h.tracer.end()
@@ -1367,6 +1367,11 @@ func backupModel() costModel {
 // strip counts no rows in it, and the other statements for it are the staging
 // count and the read of the backup.
 //
+// The fixed part takes 2 off for the 2 tables of the sweeps (unmanaged_targets
+// and unmanaged_scans). The dev strip counts no rows in them either, so each
+// costs 5 round trips, 4 fewer in all. The check of the staged rows reads each
+// of the 2 tables once more, 2 more in all.
+//
 // The fixed part also holds forgeStripClassTrips: the dev strip counts the rows
 // of the two Git host classes that a principal owns, one statement for each,
 // as it counts the eleven classes that were there before them.
@@ -1393,14 +1398,17 @@ func backupModel() costModel {
 // The fixed part also holds unitStateTrips: the restore derives the state
 // version of each unit from the restored rows.
 //
+// The fixed part also holds serverAuditLockTrips: the swap transaction takes
+// the advisory lock of the server audit scope.
+//
 // The fixed part also holds checkpointSupersedesTrips: the table holds no
 // marks in the run, so the restore makes 2 round trips fewer for it than the
 // model gives a table.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 341 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+		fixed: 339 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
-			checkpointSupersedesTrips,
+			serverAuditLockTrips + checkpointSupersedesTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1417,6 +1425,11 @@ func restoreModel() costModel {
 // tables of state versions are gone. The measured runs at 3 and at 30 units
 // both hold these 5 round trips, so the count does not grow with the units.
 const unitStateTrips = 5
+
+// serverAuditLockTrips is the number of round trips of the advisory lock of the
+// server audit scope in the swap transaction: one statement, once for each
+// attempt of the swap step. It does not grow with the units or the tables.
+const serverAuditLockTrips = 1
 
 // forgeStripClassTrips is the number of round trips of the two classes of the
 // Git host links that the dev strip counts for each principal class: the links

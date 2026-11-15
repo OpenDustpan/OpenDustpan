@@ -104,7 +104,7 @@ func (g *gatedTarget) waitEntered(t *testing.T, c *servertest.Cluster) {
 	}
 }
 
-// backupStatus is the part of the answer of GET /api/server/backups/{id}
+// backupStatus is the part of the answer of GET /api/dustpan/v1/backups/{id}
 // that the tests read.
 type backupStatus struct {
 	ID    string `json:"id"`
@@ -116,7 +116,7 @@ type backupStatus struct {
 func startBackup(t *testing.T, c *servertest.Cluster, i int) string {
 	t.Helper()
 
-	status, body := c.Do(t, i, http.MethodPost, "/api/server/backups", "")
+	status, body := c.Do(t, i, http.MethodPost, "/api/dustpan/v1/backups", "")
 	if status != http.StatusAccepted {
 		t.Fatalf("start backup on server %d: status %d, body %s", i, status, body)
 	}
@@ -133,7 +133,7 @@ func startBackup(t *testing.T, c *servertest.Cluster, i int) string {
 func readBackup(t *testing.T, c *servertest.Cluster, i int, id string) backupStatus {
 	t.Helper()
 
-	status, body := c.Do(t, i, http.MethodGet, "/api/server/backups/"+id, "")
+	status, body := c.Do(t, i, http.MethodGet, "/api/dustpan/v1/backups/"+id, "")
 	if status != http.StatusOK {
 		t.Fatalf("read backup on server %d: status %d, body %s", i, status, body)
 	}

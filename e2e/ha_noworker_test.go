@@ -36,7 +36,7 @@ type haNoWorkerRoute struct {
 func haNoWorkerRoutes(env *e2e.Env, console func(e2e.SessionRequest) (int, string)) []haNoWorkerRoute {
 	return []haNoWorkerRoute{
 		{"start a backup", func(ctx context.Context) (int, string, error) {
-			return env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/backups", "")
+			return env.ServerAPIStatus(ctx, http.MethodPost, "/api/dustpan/v1/backups", "")
 		}},
 		{"start a plan job", func(ctx context.Context) (int, string, error) {
 			return env.APIStatus(ctx, http.MethodPost, jobsRoute, startBody(jobsPool, "plan"))
@@ -179,7 +179,7 @@ type haBackupList struct {
 func haCheckNoBackupRuns(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/backups", "")
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/dustpan/v1/backups", "")
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("GET backups answers %d: %v (%s)", status, err, body)
 	}

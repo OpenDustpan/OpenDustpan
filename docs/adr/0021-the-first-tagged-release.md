@@ -12,6 +12,8 @@ Changed by:
 - ADR 279 changes: the When decision, the first release after milestone 2.
 - ADR 279 extends: the release gate gets the exit tests of milestones 1 to 7.
 - ADR 283 extends: the release gate gets the release workflow item.
+- ADR 381 extends: the release gate gets the item "agent sign-off rule
+  settled".
 
 ## Context
 
