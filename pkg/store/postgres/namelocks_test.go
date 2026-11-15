@@ -153,7 +153,7 @@ func placeNameLocks(t *testing.T, s *postgres.Store, k nameCount, offset time.Du
 
 	// The cast keeps each placeholder a bigint: the CASE branch of 0 alone
 	// types it an int4, and a time in milliseconds does not fit an int4.
-	_, err = postgres.Pool(s).Exec(t.Context(), `UPDATE name_locks SET
+	tag, err := postgres.Pool(s).Exec(t.Context(), `UPDATE name_locks SET
 		locked_until_ms  = CASE WHEN locked_until_ms <> 0 THEN $1::bigint ELSE 0 END,
 		last_failure_ms  = CASE WHEN last_failure_ms <> 0 THEN $1::bigint ELSE 0 END,
 		last_lock_end_ms = CASE WHEN last_lock_end_ms <> 0 THEN $1::bigint ELSE 0 END
@@ -161,5 +161,9 @@ func placeNameLocks(t *testing.T, s *postgres.Store, k nameCount, offset time.Du
 		at, k.scope, k.name, k.sub)
 	if err != nil {
 		t.Fatalf("place the name count: %v", err)
+	}
+
+	if rows := tag.RowsAffected(); rows != 1 {
+		t.Fatalf("the update of the name count %s, %s, %s changed %d rows; want 1", k.scope, k.name, k.sub, rows)
 	}
 }

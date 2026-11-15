@@ -143,7 +143,7 @@ func placeNameLocks(t *testing.T, s *sqlite.Store, k nameCount, offset time.Dura
 
 	at := now.UnixMilli() + offset.Milliseconds()
 
-	_, err = sqlite.DB(s).ExecContext(t.Context(), `UPDATE name_locks SET
+	res, err := sqlite.DB(s).ExecContext(t.Context(), `UPDATE name_locks SET
 		locked_until_ms  = CASE WHEN locked_until_ms <> 0 THEN ? ELSE 0 END,
 		last_failure_ms  = CASE WHEN last_failure_ms <> 0 THEN ? ELSE 0 END,
 		last_lock_end_ms = CASE WHEN last_lock_end_ms <> 0 THEN ? ELSE 0 END
@@ -151,5 +151,14 @@ func placeNameLocks(t *testing.T, s *sqlite.Store, k nameCount, offset time.Dura
 		at, at, at, k.scope, k.name, k.sub)
 	if err != nil {
 		t.Fatalf("place the name count: %v", err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		t.Fatalf("count the changed rows of the name count %s, %s, %s: %v", k.scope, k.name, k.sub, err)
+	}
+
+	if rows != 1 {
+		t.Fatalf("the update of the name count %s, %s, %s changed %d rows; want 1", k.scope, k.name, k.sub, rows)
 	}
 }
