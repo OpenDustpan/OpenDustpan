@@ -1339,6 +1339,7 @@ CREATE TABLE notification_deliveries (
     principal       TEXT    NOT NULL,
     state           TEXT    NOT NULL,
     attempts        INTEGER NOT NULL,
+    created_at_ms   INTEGER NOT NULL,
     redeliveries    INTEGER NOT NULL CHECK (redeliveries >= 0),
     next_at_ms      INTEGER NOT NULL,
     last_error      TEXT    NOT NULL,
@@ -1811,7 +1812,7 @@ CREATE INDEX notification_subscriptions_sink ON notification_subscriptions (scop
 
 CREATE INDEX notification_deliveries_due ON notification_deliveries (scope, next_at_ms, id) WHERE state = 'pending';
 
-CREATE INDEX notification_deliveries_subscription ON notification_deliveries (scope, subscription_id, next_at_ms DESC, id DESC);
+CREATE INDEX notification_deliveries_subscription ON notification_deliveries (scope, subscription_id, created_at_ms DESC, id DESC);
 
 CREATE INDEX unit_settings_namespace ON unit_settings (namespace_id);
 

@@ -1157,6 +1157,7 @@ export interface NamespaceIssuerRotation {
 export interface NotificationDelivery {
   readonly attempts: number;
   readonly contact?: string;
+  readonly createdAt: string;
   readonly deliveredAt?: string;
   readonly id: string;
   readonly lastError?: string;
