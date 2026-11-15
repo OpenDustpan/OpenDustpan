@@ -88,19 +88,47 @@ func settingsConfig(
 ) *apiserver.Config {
 	t.Helper()
 	return &apiserver.Config{
-		ProxyRules:  nil,
-		Cursors:     testCursors(t),
-		Reach:       noReach(),
-		LocalUsers:  nil,
-		Preferences: nil, Settings: svc, GitHost: nil, Idempotency: settingsIdempotency(t, st), Workers: nil, InstallationKind: "",
-		StateWriteGates: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		TempAdmins:      nil, Now: nil, Authenticator: tokenAuthenticator{}, Authorizer: authz,
-		Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Backups: nil, Restores: nil,
-		Maintenance: newFakeMaintenance(maintenance.StateNormal), Metrics: stubMetrics{}, Version: "",
-		Schema: stubSchema{migrations: nil}, Journal: nil, Principals: nil, Tokens: nil, Access: nil, Audit: st,
-		IPAllowlists: nil, Gates: nil, SessionPolicy: nil, CheckpointEpochs: nil, OnAuditFailure: nil,
-		AuditChain: nil, DeletedUnits: nil, AuditSinks: nil, SignIn: nil, DenialLimiter: nil, Instances: nil,
-		StoreChecks: nil, GitHostLinks: nil,
+		ProxyRules:       nil,
+		Cursors:          testCursors(t),
+		Reach:            noReach(),
+		LocalUsers:       nil,
+		Preferences:      nil,
+		Settings:         svc,
+		GitHost:          nil,
+		Idempotency:      settingsIdempotency(t, st),
+		Workers:          nil,
+		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		TempAdmins:       nil,
+		Now:              nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       authz,
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "",
+		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
+		Principals:       nil,
+		Tokens:           nil,
+		Access:           nil,
+		Audit:            st,
+		IPAllowlists:     nil,
+		Gates:            nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
+		OnAuditFailure:   nil,
+		AuditChain:       nil,
+		DeletedUnits:     nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		DenialLimiter:    nil,
+		Instances:        nil,
+		StoreChecks:      nil,
+		GitHostLinks:     nil,
 	}
 }
 
@@ -138,6 +166,8 @@ func (e settingsEnv) doKeyed(t *testing.T, c settingsCall, key string) response 
 		req.Header.Set(idempotent.Header, key)
 	case c.method == http.MethodPatch:
 		req.Header.Set(idempotent.Header, sessionKey())
+	default:
+		// A read or a delete carries no key.
 	}
 
 	rec := httptest.NewRecorder()

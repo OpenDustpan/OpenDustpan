@@ -4,11 +4,11 @@ package e2e
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
 )
 
 // TypedRequest is one request of ServerAPIStatusTyped. An empty Token sends no
@@ -31,13 +31,10 @@ func (e *Env) ServerAPIStatusTyped(ctx context.Context, in TypedRequest) (APIRes
 	return e.ServerAPIStatusKeyed(ctx, in, "")
 }
 
-// idempotencyKeys counts the keys that NewIdempotencyKey gives.
-var idempotencyKeys atomic.Uint64
-
-// NewIdempotencyKey returns an Idempotency-Key that no earlier call of this
-// process gave. A step uses it for a route that refuses a request with no key.
+// NewIdempotencyKey returns a random Idempotency-Key. A step uses it for a
+// route that refuses a request with no key.
 func NewIdempotencyKey() string {
-	return fmt.Sprintf("e2e-key-%d", idempotencyKeys.Add(1))
+	return "e2e-key-" + rand.Text()
 }
 
 // ServerAPIStatusKeyed is ServerAPIStatusTyped with the Idempotency-Key header

@@ -202,3 +202,39 @@ func resetEntry() audit.Entry {
 
 	return e
 }
+
+func TestResolveSessionLimitNeedsItsDependencies(t *testing.T) {
+	t.Parallel()
+
+	loader := stubLoader{values: map[string]string{}}
+
+	tests := []struct {
+		name string
+		src  tempadmin.SessionLimitSource
+	}{
+		{
+			"no settings",
+			tempadmin.SessionLimitSource{
+				Settings: nil,
+				Audit:    newRecordingAudit(),
+				Entry:    blankEntry(),
+				At:       baseTime(),
+			},
+		},
+		{
+			"no audit store",
+			tempadmin.SessionLimitSource{Settings: loader, Audit: nil, Entry: blankEntry(), At: baseTime()},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := tempadmin.ResolveSessionLimit(t.Context(), tc.src)
+			if !errors.Is(err, tempadmin.ErrMissingDependency) {
+				t.Fatalf("error = %v, want ErrMissingDependency", err)
+			}
+		})
+	}
+}

@@ -58,8 +58,12 @@ func ResetSessionLimit(ctx context.Context, store setting.Store, in ResetInput) 
 	// These checks stay so that a new caller cannot skip them. The mode check
 	// is an allowlist, so an unknown or an empty mode is refused.
 	if in.Mode != RecoveryModeBootstrap && in.Mode != RecoveryModeSignedRequest {
-		return refuseReset(ctx, in, fmt.Errorf("%w: the recovery mode is %q: set DUSTPAN_RECOVERY_MODE=%s on the host, "+
-			"then run the command again", ErrResetRefused, in.Mode, RecoveryModeBootstrap))
+		return refuseReset(
+			ctx,
+			in,
+			fmt.Errorf("%w: the recovery mode is %q: set DUSTPAN_RECOVERY_MODE=%s on the host, "+
+				"then run the command again", ErrResetRefused, in.Mode, RecoveryModeBootstrap),
+		)
 	}
 
 	if err := ValidateReason(in.Reason); err != nil {

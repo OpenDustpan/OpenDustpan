@@ -285,7 +285,8 @@ func TestHostIssuerSessionLimit(t *testing.T) {
 				t.Fatalf("recover with %s: err = %v, want accesstoken.ErrInvalid", tc.name, err)
 			}
 
-			if _, readErr := f.store.GetPrincipalBySubject(t.Context(), "carol@example.com"); !errors.Is(readErr, principal.ErrNotFound) {
+			_, readErr := f.store.GetPrincipalBySubject(t.Context(), "carol@example.com")
+			if !errors.Is(readErr, principal.ErrNotFound) {
 				t.Fatalf("after the refusal, read carol: err = %v, want principal.ErrNotFound", readErr)
 			}
 		})
@@ -313,7 +314,8 @@ func TestHostIssuerSessionLimit(t *testing.T) {
 				t.Fatalf("recover: %v", err)
 			}
 
-			if want := f.clock.Now().Add(tc.want); !got.Record.ExpiresAt.Equal(want) || !got.Token.ExpiresAt.Equal(want) {
+			want := f.clock.Now().Add(tc.want)
+			if !got.Record.ExpiresAt.Equal(want) || !got.Token.ExpiresAt.Equal(want) {
 				t.Fatalf("record ends at %s, token at %s, want %s", got.Record.ExpiresAt, got.Token.ExpiresAt, want)
 			}
 		})

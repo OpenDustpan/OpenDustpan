@@ -6,6 +6,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/setting"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
@@ -74,7 +75,14 @@ func checkResetRefused(t *testing.T, mode, reason string) {
 		t.Fatalf("the stored limit = %q, want 2h", stored.Values[tempadmin.SettingSessionLimit])
 	}
 
-	// The refusal writes one failure entry. A hostile reason is not in it.
+	checkResetFailureEntry(t, st)
+}
+
+// checkResetFailureEntry checks that the refused reset wrote one failure entry
+// with no reason that ValidateReason refuses.
+func checkResetFailureEntry(t *testing.T, st *sqlite.Store) {
+	t.Helper()
+
 	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list: %v", err)

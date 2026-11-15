@@ -449,7 +449,8 @@ func settingsMediaAndCredential(ctx context.Context, t *testing.T, env *e2e.Env,
 		Token: env.AdminToken(), Method: http.MethodPatch, Path: settingsRoute, ContentType: prefsPatchType,
 		Body: `{}`, IfMatch: tag,
 	})
-	if err != nil || resp.Status != http.StatusBadRequest || !strings.Contains(resp.Body, "request.idempotency-key-required") {
+	if err != nil || resp.Status != http.StatusBadRequest ||
+		!strings.Contains(resp.Body, "request.idempotency-key-required") {
 		t.Fatalf("PATCH with no Idempotency-Key = %v, %v; want 400 request.idempotency-key-required", resp, err)
 	}
 

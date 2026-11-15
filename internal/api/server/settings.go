@@ -372,12 +372,16 @@ func (h *Handler) patchSettings(w http.ResponseWriter, r *http.Request, p identi
 	})
 }
 
+// errSettingsResult reports a result of a settings change that is not a
+// setting.Result.
+var errSettingsResult = errors.New("the settings change passed a result of another type")
+
 // settingsAnswer makes the stored answer of a change from its result. The
 // stored answer and the sent answer are one.
 func settingsAnswer(result any) (idempotency.Answer, error) {
 	res, ok := result.(setting.Result)
 	if !ok {
-		return idempotency.Answer{}, errGitHostResult
+		return idempotency.Answer{}, errSettingsResult
 	}
 
 	answer, err := jsonAnswer(http.StatusOK, 0, settingsOf(res.Resource), "")

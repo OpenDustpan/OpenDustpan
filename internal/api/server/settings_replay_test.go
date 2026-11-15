@@ -32,7 +32,7 @@ func TestSettingsPatchKeyReuseHostile(t *testing.T) {
 		}
 	}
 
-	got := e.read(t, settingsURL)
+	got := e.read(t)
 	if got.header.Get("ETag") != `"1"` || decodeSettings(t, got)["test.label"]["value"] != "blue" {
 		t.Fatalf("a refused request changed the settings: ETag %q, body %s", got.header.Get("ETag"), got.body)
 	}

@@ -1,12 +1,11 @@
 package server_test
 
 import (
+	"crypto/rand"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -92,14 +91,12 @@ func tokenPatch(path, ifMatch, key, body string) keyedPatch {
 	return keyedPatch{path: path, ifMatch: ifMatch, key: key, body: body, session: false, age: 0}
 }
 
-var sessionKeys atomic.Int64
-
 // sessionKey returns a new Idempotency-Key for a PATCH of a console session.
-func sessionKey() string { return "key-session-" + strconv.FormatInt(sessionKeys.Add(1), 10) }
+func sessionKey() string { return "key-session-" + rand.Text() }
 
 // sessionPatch returns a PATCH from a console session whose sign-in is age old.
-func sessionPatch(path, ifMatch, body string, age time.Duration) keyedPatch {
-	return keyedPatch{path: path, ifMatch: ifMatch, key: sessionKey(), body: body, session: true, age: age}
+func sessionPatch(ifMatch, body string, age time.Duration) keyedPatch {
+	return keyedPatch{path: settingsURL, ifMatch: ifMatch, key: sessionKey(), body: body, session: true, age: age}
 }
 
 // patch sends p.
@@ -127,10 +124,10 @@ func (e keyedSettingsEnv) patch(t *testing.T, p keyedPatch) response {
 }
 
 // read sends a GET with the test token.
-func (e keyedSettingsEnv) read(t *testing.T, path string) response {
+func (e keyedSettingsEnv) read(t *testing.T) response {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, settingsURL, nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 
 	rec := httptest.NewRecorder()
@@ -167,14 +164,18 @@ func TestSettingsPatchFreshStep(t *testing.T) {
 	e := newKeyedSettingsEnv(t)
 
 	// A change that makes the installation more secure needs no step.
-	wantSettingsStatus(t, e.patch(t, tokenPatch(settingsURL, `"0"`, "key-more-secure", `{"test.enabled":true}`)), http.StatusOK)
+	wantSettingsStatus(
+		t,
+		e.patch(t, tokenPatch(settingsURL, `"0"`, "key-more-secure", `{"test.enabled":true}`)),
+		http.StatusOK,
+	)
 
 	weaker := `{"test.enabled":false}`
 	stale := session.DefaultTokenFreshness + time.Minute
 
 	refused := map[string]keyedPatch{
 		"an access token":               tokenPatch(settingsURL, `"1"`, "key-token-weaker", weaker),
-		"a session with an old sign-in": sessionPatch(settingsURL, `"1"`, weaker, stale),
+		"a session with an old sign-in": sessionPatch(`"1"`, weaker, stale),
 	}
 
 	for name, p := range refused {
@@ -186,12 +187,12 @@ func TestSettingsPatchFreshStep(t *testing.T) {
 		}
 	}
 
-	if got := e.read(t, settingsURL); got.header.Get("ETag") != `"1"` ||
+	if got := e.read(t); got.header.Get("ETag") != `"1"` ||
 		!isTrue(decodeSettings(t, got)[settingtest.KeyEnabled]["value"]) {
 		t.Fatalf("a refused change moved the settings: ETag %q, body %s", got.header.Get("ETag"), got.body)
 	}
 
-	fresh := e.patch(t, sessionPatch(settingsURL, `"1"`, weaker, 0))
+	fresh := e.patch(t, sessionPatch(`"1"`, weaker, 0))
 	wantSettingsStatus(t, fresh, http.StatusOK)
 
 	if fresh.header.Get("ETag") != `"2"` {
@@ -240,7 +241,7 @@ func TestSettingsPatchRequiresKey(t *testing.T) {
 
 	e := newKeyedSettingsEnv(t)
 
-	noKeySession := sessionPatch(settingsURL, `"0"`, `{"test.enabled":true}`, 0)
+	noKeySession := sessionPatch(`"0"`, `{"test.enabled":true}`, 0)
 	noKeySession.key = ""
 
 	for name, p := range map[string]keyedPatch{
@@ -256,7 +257,7 @@ func TestSettingsPatchRequiresKey(t *testing.T) {
 		}
 	}
 
-	if got := e.read(t, settingsURL); got.header.Get("ETag") != `"0"` || e.changeEntries(t) != 0 {
+	if got := e.read(t); got.header.Get("ETag") != `"0"` || e.changeEntries(t) != 0 {
 		t.Fatalf("a refused change moved the settings: ETag %q, entries %d", got.header.Get("ETag"), e.changeEntries(t))
 	}
 }
@@ -299,7 +300,7 @@ func TestSettingsPatchSessionLimitFreshStep(t *testing.T) {
 
 	refused := map[string]keyedPatch{
 		"an access token":               tokenPatch(settingsURL, `"1"`, "key-limit-token", longer),
-		"a session with an old sign-in": sessionPatch(settingsURL, `"1"`, longer, session.DefaultTokenFreshness+time.Minute),
+		"a session with an old sign-in": sessionPatch(`"1"`, longer, session.DefaultTokenFreshness+time.Minute),
 	}
 
 	for name, p := range refused {
@@ -311,9 +312,9 @@ func TestSettingsPatchSessionLimitFreshStep(t *testing.T) {
 		}
 	}
 
-	if got := e.read(t, settingsURL); got.header.Get("ETag") != `"1"` {
+	if got := e.read(t); got.header.Get("ETag") != `"1"` {
 		t.Fatalf("a refused change moved the settings: ETag %q, body %s", got.header.Get("ETag"), got.body)
 	}
 
-	wantSettingsStatus(t, e.patch(t, sessionPatch(settingsURL, `"1"`, longer, 0)), http.StatusOK)
+	wantSettingsStatus(t, e.patch(t, sessionPatch(`"1"`, longer, 0)), http.StatusOK)
 }
