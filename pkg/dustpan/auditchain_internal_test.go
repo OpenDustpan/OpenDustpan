@@ -7,8 +7,10 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -505,6 +507,103 @@ func TestFailedApprovalWritesNoEntryAndRetryWritesOne(t *testing.T) {
 
 	if got := migrationOpCount(t, chain); got != 1 {
 		t.Fatalf("operations after the retry = %d, want 1", got)
+	}
+}
+
+// holdingApproval wraps the atomic approval of a chain. Its first call
+// reports that it runs and then waits for release. A later call, which only
+// runs while the first one still waits when nothing serializes the
+// approvals, reports it in second.
+type holdingApproval struct {
+	real    chainApprovalStore
+	calls   atomic.Int32
+	inside  chan struct{}
+	release chan struct{}
+	second  chan struct{}
+}
+
+func (h *holdingApproval) ApproveChainChange(
+	ctx context.Context, e audit.Entry, fixed durable.StartRequest, retryKey string,
+) (durable.Operation, error) {
+	if h.calls.Add(1) == 1 {
+		close(h.inside)
+		<-h.release
+	} else {
+		close(h.second)
+	}
+
+	return h.real.ApproveChainChange(ctx, e, fixed, retryKey)
+}
+
+// approveParkedOnLock reports whether a goroutine that runs Approve waits
+// for a mutex. It reads the stacks of all goroutines, so it needs no timer.
+func approveParkedOnLock() bool {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+
+	for stack := range strings.SplitSeq(string(buf), "\n\n") {
+		if strings.Contains(stack, "(*auditChain).Approve(") &&
+			strings.Contains(stack, "sync.runtime_SemacquireMutex") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TestApprovalsOfOneInstanceRunOneAtATime proves that a second approval does
+// not run its checks or start its migration while a first approval of the
+// same instance is between its check of the pending change and its commit.
+// It holds the first approval in its commit, sends the second, and waits
+// until the second waits for the lock or reaches the commit.
+func TestApprovalsOfOneInstanceRunOneAtATime(t *testing.T) {
+	t.Parallel()
+
+	chain := newTestAuditChain(t, audit.ChainOff)
+	held := &holdingApproval{
+		real: chain.approve, calls: atomic.Int32{},
+		inside: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{}),
+	}
+	chain.approve = held
+
+	var wg sync.WaitGroup
+
+	errs := make([]error, 2)
+
+	wg.Go(func() { errs[0] = chain.Approve(t.Context(), approver()) })
+
+	<-held.inside
+
+	wg.Go(func() { errs[1] = chain.Approve(t.Context(), approver()) })
+
+	reached := false
+
+	for !approveParkedOnLock() && !reached {
+		select {
+		case <-held.second:
+			reached = true
+		default:
+			runtime.Gosched()
+		}
+	}
+
+	close(held.release)
+	wg.Wait()
+
+	if reached {
+		t.Fatal("a second approval reached its commit while the first one held it")
+	}
+
+	if errs[0] != nil {
+		t.Fatalf("first approval: %v, want nil", errs[0])
+	}
+
+	if !errors.Is(errs[1], audit.ErrChainMigrating) && !errors.Is(errs[1], audit.ErrNoChainChange) {
+		t.Fatalf("second approval: %v, want ErrChainMigrating or ErrNoChainChange", errs[1])
+	}
+
+	if got := approvalEntriesOf(t, chain); len(got) != 1 {
+		t.Fatalf("approval entries = %d, want 1", len(got))
 	}
 }
 
