@@ -79,7 +79,7 @@ A token has these fields:
 | `status` | `active`, `expired`, `revoked` or `disabled`. |
 | `createdAt`, `expiresAt`, `lastUsedAt` | The times. `lastUsedAt` is `null` until the first use. |
 | `revokedAt`, `disabledAt` | The time of the revoke or the disable. |
-| `expiresInDays` | The whole days left, for an active token. |
+| `expiresInDays` | The days left, rounded up, for an active token. A token in its last day answers 1. |
 | `expiryWarning` | `none`, `soon` or `imminent`. See [Expiry warnings](#expiry-warnings). |
 | `replacedBy` | The ID of the token that replaced this one, after a rotation. |
 | `createdBy` | The principal that made the token. |
