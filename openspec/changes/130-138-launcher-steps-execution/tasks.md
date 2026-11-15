@@ -16,6 +16,7 @@
 - [ ] 2.2 Wire checked StartStep (NEW), streaming, and ReportExit (NEW) through ANY /runner/v1 with handoff token at open, stream, and exit. Write the launcher side in the existing file pkg/launcher/run/step.go: extend it in place with the NEW behavior. Keep the route declaration and its adapter in the files that main has for ANY /runner/v1. Check: Assignment from route ANY /runner/v1 with credential kind handoff token starts a step with StartStep and no shell under a claim, streams ordered chunks, and ReportExit stores one code.
 - [ ] 2.3 SECURITY. Build the authorize layer in the existing file pkg/launcher/run/step.go. It checks that the handoff token owns the claim at open, stream and exit. Check: TestLauncherDeniesTokenFromOtherClaim in pkg/launcher/run/run_test.go passes and a token from another claim gets runner.retired.
 - [ ] 2.4 SECURITY. Build the fail-closed layer in the existing file pkg/launcher/run/step.go. It denies on an unknown program form or a check error and writes an audit entry with claim and step. Check: TestLauncherFailsClosedOnBadProgram in pkg/launcher/run/run_test.go passes.
+- [ ] 2.5 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `launcher.step-invalid` in the NEW file `internal/errcode/testdata/catalog/launcher.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 3. Side effects (computed from main)
 

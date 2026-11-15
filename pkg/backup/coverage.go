@@ -62,7 +62,7 @@ var ControlTables = []string{
 // a restore leaves empty: the replay records of the Idempotency-Key header and
 // the server key of their fingerprints, the heartbeats of the workers, the
 // reset codes and set-up codes of local users, the open passkey ceremonies,
-// and the state version of each unit.
+// the job tokens, and the state version of each unit.
 // A reset code that a restore
 // brought back would set a password that an administrator gave out before
 // the time of the restore. A ceremony lives 300 seconds, and a restore that
@@ -70,7 +70,8 @@ var ControlTables = []string{
 // heartbeat describes the workers that run now, and the next beat of a worker
 // makes its row again. A replay record answers for the state
 // at the time of the first request, so a replay after a restore of older state
-// would answer for state that the restore removed. A state version names the
+// would answer for state that the restore removed. A restored job token would
+// let a runner of an old job authenticate again. A state version names the
 // state that an installation holds now, so a restore derives it from the
 // restored rows and brings no stored value back. The schema holds these
 // tables and the tables of Tables and ControlTables, and no other table.
@@ -78,9 +79,10 @@ var ControlTables = []string{
 //
 //nolint:gochecknoglobals // A shared frozen table list, as Tables is.
 var EmptiedTables = []string{
+	TableDurableHeartbeats,
 	TableIdempotencyRecords,
 	TableIdempotencyServerKey,
-	TableDurableHeartbeats,
+	TableJobTokens,
 	TableLocalUserResets,
 	TablePasskeyChallenges,
 	TableUnitState,
