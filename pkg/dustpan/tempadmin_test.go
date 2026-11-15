@@ -65,6 +65,7 @@ func tempadminEntry(at time.Time, action, object string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

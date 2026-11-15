@@ -118,6 +118,7 @@ func trustRulePrincipalEntry(ns namespace.Name, id string) audit.Entry {
 		ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "",
 		Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
+		Origin: nil,
 	}
 }
 
