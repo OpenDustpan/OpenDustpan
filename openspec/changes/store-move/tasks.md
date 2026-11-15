@@ -8,6 +8,6 @@
 ## 3. Paths
 - [ ] 3.1 Update `sqlc.yaml`, the Makefile, CI paths, `.golangci.yml`, the layout in `AGENTS.md`, the docs. Check: `sqlc diff` clean, `make docs-lint` exits 0.
 ## 4. Verify
-- [ ] 4.0 The SHA-256 of each baseline is unchanged by the move: `pkg/store/sqlite/migrations/0168_baseline.sql.sha256` and `pkg/store/postgres/migrations/0168_baseline.sql.sha256` move with `git mv` and keep their bytes. Check: `TestFrozenMigrations` (in `pkg/store/sqlite/frozen_test.go` and `pkg/store/postgres/frozen_test.go` before the move) passes at its new path, and `git diff --stat -M` shows both .sha256 files as renames with no change.
+- [x] 4.0 Not applicable: the baselines have no `.sha256` file until the first tag (ADR 362 decision 4; remove-baseline-sha256-files deletes them), so the move carries none.
 - [ ] 4.1 Run the targets `check` and `e2e` of the `Makefile`. No route: the test runs the existing suites only. Check: `make check` reports zero findings and `make e2e` passes. Confirmed by: CI (the agent runs the fast checks only).
 - [ ] 4.2 Usability check: an embedder follows the SDK page `docs/reference/sdk.md` alone and starts a server with one store option. Check: the steps in the pull request. A person's step.
