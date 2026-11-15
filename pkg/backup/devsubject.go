@@ -2,8 +2,9 @@ package backup
 
 import (
 	"strings"
-	"unicode"
 	"unicode/utf8"
+
+	"opendustpan.org/opendustpan/internal/ident"
 )
 
 // CleanSubject returns subject without CR, LF and every other control
@@ -19,8 +20,7 @@ func CleanSubject(subject string) (string, bool) {
 	b.Grow(min(len(subject), MaxReportedSubjectBytes+utf8.UTFMax))
 
 	for _, r := range subject {
-		if r == utf8.RuneError || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) ||
-			r == ' ' || r == ' ' {
+		if r == utf8.RuneError || ident.IsHiddenRune(r) {
 			continue
 		}
 

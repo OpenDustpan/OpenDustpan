@@ -11,8 +11,8 @@ import (
 
 // TestListStacksRefusesRepeatedOrBinaryTagFilters proves that a tagName or a
 // tagValue sent more than one time, and a value that is not UTF-8 text or that
-// holds a control character, answer 400 in the Pulumi error shape and name the
-// command, with and without the organization.
+// holds a control, format or separator character, answer 400 in the Pulumi
+// error shape and name the command, with and without the organization.
 func TestListStacksRefusesRepeatedOrBinaryTagFilters(t *testing.T) {
 	t.Parallel()
 
@@ -24,6 +24,8 @@ func TestListStacksRefusesRepeatedOrBinaryTagFilters(t *testing.T) {
 		"tagName=%00&tagValue=%ff",
 		"tagName=team&tagValue=%ff",
 		"tagName=te%0Aam",
+		"tagName=te%E2%80%AEam",
+		"tagName=te%E2%80%A8am",
 		"tagName=team&tagValue=r%7Fd",
 	} {
 		for _, prefix := range []string{"/api/user/stacks?", "/api/user/stacks?organization=acme&"} {

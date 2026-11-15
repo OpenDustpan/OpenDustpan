@@ -10,6 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/forge"
 )
 
@@ -179,11 +180,10 @@ func checkStatus(s forge.Status) error {
 	return checkStatusURL(s.TargetURL)
 }
 
-// plainLine reports whether text is valid UTF-8 with no control character.
+// plainLine reports whether text is valid UTF-8 with no control, format or
+// separator character.
 func plainLine(text string) bool {
-	return utf8.ValidString(text) && !strings.ContainsFunc(text, func(r rune) bool {
-		return unicode.IsControl(r) || r == ' ' || r == ' '
-	})
+	return utf8.ValidString(text) && !ident.HasHidden(text)
 }
 
 // checkStatusURL checks the address of a status: empty, or an https address
@@ -199,7 +199,7 @@ func checkStatusURL(raw string) error {
 		return fmt.Errorf("%w: the status address has more than %d bytes", forge.ErrTooLarge, forge.MaxStatusURLBytes)
 	}
 
-	if strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) {
+	if strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsSpace(r) || ident.IsHiddenRune(r) }) {
 		return bad
 	}
 

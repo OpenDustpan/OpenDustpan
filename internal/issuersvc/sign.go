@@ -12,7 +12,6 @@ import (
 	"maps"
 	"strconv"
 	"time"
-	"unicode"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -165,8 +164,8 @@ func checkSubject(sub string) error {
 	}
 
 	for _, r := range sub {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("%w: the subject holds a control character", profile.ErrInvalid)
+		if ident.IsHiddenRune(r) {
+			return fmt.Errorf("%w: the subject holds a control, format or separator character", profile.ErrInvalid)
 		}
 	}
 
