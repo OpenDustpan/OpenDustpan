@@ -5,9 +5,11 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/ident"
@@ -879,6 +881,298 @@ func TestDeliveryRedeliveryLimit(t *testing.T) {
 		errcodetest.Want{Code: errcode.SinkDeliveryRedeliverLimit, Args: nil, RequestBody: nil})
 }
 
+// redeliverRefusal is one kind of refusal of the redeliver route.
+type redeliverRefusal struct {
+	name   string
+	status int
+	code   string
+	// atLimit is true when the delivery has no manual redeliveries left. It is
+	// false when the delivery stopped less than the retry wait ago.
+	atLimit bool
+}
+
+// makeSubscriptionIn creates a webhook sink and a subscription to it in the
+// namespace ns as admin.
+func (f fixture) makeSubscriptionIn(t *testing.T, ns namespace.Name) subscriptionWire {
+	t.Helper()
+
+	root := "/api/dustpan/v1/namespaces/" + ns.String()
+
+	sinkAnswer := f.do(t, send("admin", http.MethodPost, root+"/sinks", webhookBody(t, "Ops")))
+	wantCode(t, "create webhook in "+ns.String(), sinkAnswer, http.StatusCreated)
+
+	sink := decode[sinkWire](t, sinkAnswer)
+
+	got := f.do(t, send("admin", http.MethodPost, root+"/subscriptions", `{"sink":"`+sink.ID+`"}`))
+	wantCode(t, "create subscription in "+ns.String(), got, http.StatusCreated)
+
+	return decode[subscriptionWire](t, got)
+}
+
+// refusedDelivery returns a stopped delivery in ns that the route refuses in
+// the way of kind, and moves the clock of the fixture to the time of the
+// refusal.
+func (f fixture) refusedDelivery(t *testing.T, ns namespace.Name, kind redeliverRefusal) notify.Delivery {
+	t.Helper()
+
+	base := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	f.clock.Set(base)
+
+	done := f.seedDelivery(t, ns, f.makeSubscriptionIn(t, ns), notify.DeliveryDone)
+
+	if !kind.atLimit {
+		f.clock.Set(base.Add(time.Millisecond))
+
+		return done
+	}
+
+	n, err := f.namespaces.Get(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("get namespace %s: %v", ns, err)
+	}
+
+	at := base
+
+	for i := range notify.MaxAttempts {
+		at = at.Add(notify.RetryWait(i + 1))
+		f.redeliverAndStop(t, n, done, at)
+	}
+
+	f.clock.Set(at)
+
+	return done
+}
+
+// refuse sends the redeliver of d in ns as token and checks the refusal.
+func (f fixture) refuse(
+	t *testing.T, token string, ns namespace.Name, d notify.Delivery, kind redeliverRefusal,
+) {
+	t.Helper()
+
+	target := "/api/dustpan/v1/namespaces/" + ns.String() + "/deliveries/" + d.ID + "/redeliver"
+	got := f.do(t, send(token, http.MethodPost, target, ""))
+	wantCode(t, kind.name, got, kind.status)
+	errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, kind.status, []byte(got.body),
+		errcodetest.Want{Code: kind.code, Args: nil, RequestBody: nil})
+}
+
+// entriesIn returns the audit entries of the namespace ns, oldest first.
+func (f fixture) entriesIn(t *testing.T, ns namespace.Name) []audit.Entry {
+	t.Helper()
+
+	listing, err := f.store.List(t.Context(), ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list audit of %s: %v", ns, err)
+	}
+
+	out := slices.Clone(listing.Entries)
+	slices.SortFunc(out, func(a, b audit.Entry) int { return int(a.Sequence - b.Sequence) })
+
+	return out
+}
+
+// checkDeniedRefusal checks that e is the denied entry of kind by subject.
+func checkDeniedRefusal(t *testing.T, e audit.Entry, kind redeliverRefusal, subject string) {
+	t.Helper()
+
+	if e.Outcome != audit.OutcomeDenied || e.Subject != subject || e.Action != string(manage) ||
+		!strings.HasPrefix(e.Reason, kind.code) {
+		t.Errorf("entry = outcome %q subject %q action %q reason %q, want denied, %s, %s, %q",
+			e.Outcome, e.Subject, e.Action, e.Reason, subject, manage, kind.code)
+	}
+}
+
+// TestRedeliverRefusalsThroughDenialLimiter checks that the refusal of a
+// redeliver at the limit and the refusal that comes too soon both go through
+// the denial limiter of the adapter: repeats in one window write one entry,
+// and the next entry of the key carries the count.
+func TestRedeliverRefusalsThroughDenialLimiter(t *testing.T) {
+	t.Parallel()
+
+	kinds := []redeliverRefusal{
+		{name: "at the limit", status: http.StatusConflict, code: errcode.SinkDeliveryRedeliverLimit, atLimit: true},
+		{name: "too soon", status: http.StatusTooManyRequests, code: errcode.SinkDeliveryTooSoon, atLimit: false},
+	}
+
+	t.Run("both kinds share one key", func(t *testing.T) { t.Parallel(); checkRefusalMixedKinds(t) })
+
+	for _, kind := range kinds {
+		t.Run(kind.name, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("repeats in one window", func(t *testing.T) { t.Parallel(); checkRefusalRepeats(t, kind) })
+			t.Run("another person", func(t *testing.T) { t.Parallel(); checkRefusalOtherPerson(t, kind) })
+			t.Run("another namespace", func(t *testing.T) { t.Parallel(); checkRefusalOtherNamespace(t, kind) })
+		})
+	}
+}
+
+// newLimiterFixture returns a fixture whose denial limiter reads the clock
+// that the second result moves.
+func newLimiterFixture(t *testing.T) (fixture, *testClock) {
+	t.Helper()
+
+	clock := &testClock{mu: sync.Mutex{}, now: time.Now()}
+	limiter := denylimit.New(denylimit.Config{
+		Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: clock.Now,
+	})
+
+	return newFixtureWithLimiter(t, limiter), clock
+}
+
+// checkRefusalRepeats checks that n identical refusals in one window write one
+// entry, that the next entry of the key counts n-1, and that no delivery
+// changes.
+func checkRefusalRepeats(t *testing.T, kind redeliverRefusal) {
+	t.Helper()
+
+	const n = 4
+
+	f, limiterClock := newLimiterFixture(t)
+	d := f.refusedDelivery(t, "acme", kind)
+	before := len(f.entriesIn(t, "acme"))
+
+	for range n {
+		f.refuse(t, "admin", "acme", d, kind)
+	}
+
+	added := f.entriesIn(t, "acme")[before:]
+	if len(added) != 1 {
+		t.Fatalf("audit entries after %d refusals = %d, want 1: %+v", n, len(added), added)
+	}
+
+	checkDeniedRefusal(t, added[0], kind, "admin")
+
+	limiterClock.advance(2 * time.Minute)
+	f.refuse(t, "admin", "acme", d, kind)
+
+	added = f.entriesIn(t, "acme")[before:]
+	if len(added) != 2 {
+		t.Fatalf("audit entries after the next window = %d, want 2: %+v", len(added), added)
+	}
+
+	checkDeniedRefusal(t, added[1], kind, "admin")
+
+	want := fmt.Sprintf("%d further refusals since the last entry", n-1)
+	if !strings.Contains(added[1].Reason, want) {
+		t.Errorf("reason of the next entry = %q, want it to hold %q", added[1].Reason, want)
+	}
+
+	if state := f.stateOf(t, d); state != "delivered" {
+		t.Errorf("delivery state after refusals = %q, want delivered", state)
+	}
+}
+
+// checkRefusalOtherPerson checks that a refusal by another person writes an
+// entry of its own.
+func checkRefusalOtherPerson(t *testing.T, kind redeliverRefusal) {
+	t.Helper()
+
+	f, _ := newLimiterFixture(t)
+	d := f.refusedDelivery(t, "acme", kind)
+	before := len(f.entriesIn(t, "acme"))
+
+	f.refuse(t, "admin", "acme", d, kind)
+	f.refuse(t, "manageonly", "acme", d, kind)
+	f.refuse(t, "admin", "acme", d, kind)
+
+	added := f.entriesIn(t, "acme")[before:]
+	if len(added) != 2 {
+		t.Fatalf("audit entries for two people = %d, want 2: %+v", len(added), added)
+	}
+
+	checkDeniedRefusal(t, added[0], kind, "admin")
+	checkDeniedRefusal(t, added[1], kind, "manageonly")
+
+	if state := f.stateOf(t, d); state != "delivered" {
+		t.Errorf("delivery state after refusals = %q, want delivered", state)
+	}
+}
+
+// checkRefusalMixedKinds checks that one person who gets both kinds of refusal
+// in one window has one entry: the key of the limiter holds no reason.
+func checkRefusalMixedKinds(t *testing.T) {
+	t.Helper()
+
+	atLimit := redeliverRefusal{
+		name: "at the limit", status: http.StatusConflict, code: errcode.SinkDeliveryRedeliverLimit, atLimit: true,
+	}
+	tooSoon := redeliverRefusal{
+		name: "too soon", status: http.StatusTooManyRequests, code: errcode.SinkDeliveryTooSoon, atLimit: false,
+	}
+
+	f, _ := newLimiterFixture(t)
+	limited := f.refusedDelivery(t, "acme", atLimit)
+	soon := f.refusedDelivery(t, "acme", tooSoon)
+	before := len(f.entriesIn(t, "acme"))
+
+	f.refuse(t, "admin", "acme", limited, atLimit)
+	f.refuse(t, "admin", "acme", soon, tooSoon)
+	f.refuse(t, "admin", "acme", limited, atLimit)
+
+	added := f.entriesIn(t, "acme")[before:]
+	if len(added) != 1 {
+		t.Fatalf("audit entries for two kinds of refusal = %d, want 1: %+v", len(added), added)
+	}
+
+	checkDeniedRefusal(t, added[0], atLimit, "admin")
+
+	for _, d := range []*notify.Delivery{&limited, &soon} {
+		if state := f.stateOf(t, *d); state != "delivered" {
+			t.Errorf("delivery %s state after refusals = %q, want delivered", d.ID, state)
+		}
+	}
+}
+
+// checkRefusalOtherNamespace checks that a refusal in another namespace writes
+// an entry in the scope of that namespace.
+func checkRefusalOtherNamespace(t *testing.T, kind redeliverRefusal) {
+	t.Helper()
+
+	f, _ := newLimiterFixture(t)
+	inAcme := f.refusedDelivery(t, "acme", kind)
+	inOther := f.refusedDelivery(t, "other", kind)
+
+	// The refused delivery of the second namespace sets the clock: the first
+	// one must still be refused in the same way at that time.
+	acmeBefore, otherBefore := len(f.entriesIn(t, "acme")), len(f.entriesIn(t, "other"))
+
+	f.refuse(t, "admin", "acme", inAcme, kind)
+	f.refuse(t, "admin", "other", inOther, kind)
+
+	for ns, before := range map[namespace.Name]int{"acme": acmeBefore, "other": otherBefore} {
+		added := f.entriesIn(t, ns)[before:]
+		if len(added) != 1 {
+			t.Fatalf("audit entries of %s = %d, want 1: %+v", ns, len(added), added)
+		}
+
+		checkDeniedRefusal(t, added[0], kind, "admin")
+	}
+
+	// stateOf reads the history of the namespace acme only.
+	if state := f.stateOf(t, inAcme); state != "delivered" {
+		t.Errorf("delivery state after refusals = %q, want delivered", state)
+	}
+}
+
+// stateOf returns the state that the history of the subscription of d gives
+// for d.
+func (f fixture) stateOf(t *testing.T, d notify.Delivery) string {
+	t.Helper()
+
+	history := decode[historyWire](t, f.do(t, get("admin", subscriptionsBase+"/"+d.Subscription+"/deliveries")))
+
+	for i := range history.Deliveries {
+		if history.Deliveries[i].ID == d.ID {
+			return history.Deliveries[i].State
+		}
+	}
+
+	t.Fatalf("history holds no delivery %s", d.ID)
+
+	return ""
+}
+
 // redeliverAndStop makes the delivery d pending again at the time at and
 // records it as delivered.
 func (f fixture) redeliverAndStop(t *testing.T, ns namespace.Namespace, d notify.Delivery, at time.Time) {
@@ -886,11 +1180,11 @@ func (f fixture) redeliverAndStop(t *testing.T, ns namespace.Namespace, d notify
 
 	store := f.store.Notifications()
 	entry := audit.Entry{
-		At: at, Namespace: "acme", Subject: "admin", IDPSubject: "", TokenID: "",
-		Action: "delivery:redeliver", Object: "acme", Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
-		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess,
-		RequestID: "", ObjectID: d.ID, PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "",
-		PrincipalKind: "", JobID: "", Origin: nil,
+		At: at, Namespace: ns.Name, Subject: "admin", IDPSubject: "", TokenID: "",
+		Action: "delivery:redeliver", Object: ns.Name.String(), Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: d.ID, PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "", Origin: nil,
 	}
 
 	if err := store.Redeliver(t.Context(), d.ID, at, ns.Fence(), entry); err != nil {
@@ -898,7 +1192,7 @@ func (f fixture) redeliverAndStop(t *testing.T, ns namespace.Namespace, d notify
 	}
 
 	claimed, err := store.Claim(t.Context(), ns.Fence(), notify.ClaimRequest{
-		Scope: "acme", Owner: "test", Now: at, Lease: time.Minute, Limit: 10,
+		Scope: ns.Name, Owner: "test", Now: at, Lease: time.Minute, Limit: 10,
 	})
 	if err != nil {
 		t.Fatalf("Claim at %s: %v", at, err)
