@@ -99,6 +99,7 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "concurrent end entries write one entry", test: testChainConcurrentEnds},
 		{name: "each namespace entry holds its failover version under the hash", test: testChainFenceVersion},
 		{name: "a stored chain from before the change passes the check", test: testChainCheckPassesOldChain},
+		{name: "a chain of entries without a block passes the check", test: testChainCheckPassesEntriesWithoutBlock},
 		{name: "a stale fence refuses a start entry", test: testChainStaleFence},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
@@ -657,6 +658,28 @@ func testChainFenceVersion(t *testing.T, ts ChainTestStore) {
 	if res := check(t, ts.Store, tl.ns.Name); res.Valid || res.BadSequence != 1 {
 		t.Fatalf("check after a changed fence version: got %+v, want invalid at 1", res)
 	}
+}
+
+// testChainCheckPassesEntriesWithoutBlock proves that an entry with a nil
+// Origin hashes as on main (no block, ADR 380 decision 2), and that the
+// chain check passes a chain of such entries.
+func testChainCheckPassesEntriesWithoutBlock(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+
+	appended := tl.append(2)
+	for i := range appended {
+		if appended[i].HasAgentBlock() {
+			t.Fatalf("entry %d without agent data has an agent block", appended[i].Sequence)
+		}
+
+		if got, want := audit.ComputeHash(appended[i], appended[i].PrevHash), appended[i].Hash; got != want {
+			t.Fatalf("entry %d hashes to %s, want stored %s", appended[i].Sequence, got, want)
+		}
+	}
+
+	wantValid(t, check(t, ts.Store, tl.ns.Name))
 }
 
 // testChainCheckPassesOldChain proves that a chain stored before the agent
