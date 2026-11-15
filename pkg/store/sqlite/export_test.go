@@ -17,10 +17,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
-// RunWithoutForeignKeys runs query with args on one connection of db with the
-// foreign key checks off, as a restore or a failover changes a row.
-func RunWithoutForeignKeys(ctx context.Context, db *sql.DB, query string, args ...any) error {
-	pinned, err := db.Conn(ctx)
+// RunWithoutForeignKeys runs query with args on one connection of sqlDB with
+// the foreign key checks off, as a restore or a failover changes a row.
+func RunWithoutForeignKeys(ctx context.Context, sqlDB *sql.DB, query string, args ...any) error {
+	pinned, err := sqlDB.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("take a connection: %w", err)
 	}
