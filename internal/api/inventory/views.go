@@ -228,7 +228,7 @@ func (h *Handler) viewCaller(
 		audited := p
 
 		switch p.Kind {
-		case identity.KindPerson, identity.KindService, identity.KindWorkload:
+		case identity.KindPerson, identity.KindService, identity.KindWorkload, identity.KindAgent:
 		default:
 			audited.Kind = ""
 		}

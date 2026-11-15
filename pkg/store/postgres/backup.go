@@ -567,6 +567,14 @@ func pgEmptiedTables() []pgCopyTable {
 			orderBy: []string{pgColDigest},
 		},
 		{
+			table: backup.TableJobTokens,
+			columns: []string{
+				pgColDigest, pgColNamespaceID, "starter_id", pgColJobID, "unit_tool",
+				pgColUnitID, "claim_operation", "claim_token", pgColExpiresAtMs, pgColCreatedAtMs,
+			},
+			orderBy: []string{"digest"},
+		},
+		{
 			table: backup.TableUnitState,
 			columns: []string{
 				pgColUnitID, pgColNamespaceID, "version_id", "final_version_id", "final_commit", "final_job",
