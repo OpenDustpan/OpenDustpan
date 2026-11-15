@@ -13,4 +13,4 @@
 ## 3. Definition of done
 
 - [x] 3.1 In `docs/guides/audit-log.md`, say that only a person can approve turning the audit chain off, and that a refusal writes a denied entry. Check: `make docs-lint` passes.
-- [ ] 3.2 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 3.2 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

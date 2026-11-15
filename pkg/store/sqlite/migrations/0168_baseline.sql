@@ -1842,6 +1842,7 @@ CREATE INDEX placement_rules_order ON placement_rules (namespace, position);
 CREATE INDEX local_user_resets_expiry ON local_user_resets (expires_at_ms);
 
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges (expires_at_ms);
+CREATE INDEX passkey_challenges_kind_expiry ON passkey_challenges (kind, expires_at_ms);
 CREATE INDEX passkey_challenges_source ON passkey_challenges (source, expires_at_ms);
 CREATE INDEX passkey_challenges_source_group ON passkey_challenges (source_group, expires_at_ms);
 
