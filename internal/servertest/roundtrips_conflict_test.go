@@ -21,8 +21,9 @@ import (
 // counts the rows of each class of the dev strip once, so a new class adds
 // one statement. The 47 statements of the first form count the eleven classes
 // that were there before the Git host links; the two Git host classes add
-// forgeStripClassTrips more.
-const swapRetryTrips = 47 + forgeStripClassTrips
+// forgeStripClassTrips more. Each attempt takes the advisory lock of the
+// server audit scope first, so it adds serverAuditLockTrips more.
+const swapRetryTrips = 47 + forgeStripClassTrips + serverAuditLockTrips
 
 // sqlstateDeadlock is the SQLSTATE of a transaction that PostgreSQL ended to
 // break a deadlock.

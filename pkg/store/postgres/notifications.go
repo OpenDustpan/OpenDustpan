@@ -64,6 +64,10 @@ func known(scope namespace.Name) func(context.Context, *db.Queries) (namespace.N
 // then fn, then the append of the audit entry. A refused write changes
 // nothing. A fence for the scope audit.ServerScope is the zero fence.
 //
+// An entry of the scope @server takes the advisory lock of that scope first,
+// before the transaction reads the scope of its row. The write decides that
+// from the entry, before the transaction opens.
+//
 // Defense in depth: the caller checks its own input too, and the audit append
 // compares the entry with the fence again. This function stays the one place
 // that compares the fence with the scope of the row, so no write can skip it.
@@ -76,26 +80,58 @@ func (s *Store) inScopedTx(
 		}
 	}
 
+	if w.entry != nil && w.entry.Namespace == audit.ServerScope {
+		return runServerAuditTx(ctx, s.inTx, func(tx serverAuditTx) error {
+			return scopedTx(ctx, tx.q, fence, w, scopedSteps{
+				fn:     fn,
+				finish: func() error { return appendScopedServerEntry(ctx, tx, w.entry) },
+			})
+		})
+	}
+
 	return s.inTx(ctx, func(q *db.Queries) error {
-		scope, err := w.scope(ctx, q)
-		if err != nil {
-			return err
-		}
-
-		if checkErr := checkNotifyFence(ctx, q, fence, scope, w); checkErr != nil {
-			return checkErr
-		}
-
-		if w.entry != nil && w.entry.Namespace != scope {
-			return fmt.Errorf("%w: the audit entry is not in the scope %q", notify.ErrInvalid, scope)
-		}
-
-		if fnErr := fn(q, scope); fnErr != nil {
-			return fnErr
-		}
-
-		return appendScopedEntry(ctx, q, w.entry)
+		return scopedTx(ctx, q, fence, w, scopedSteps{
+			fn:     fn,
+			finish: func() error { return appendScopedEntry(ctx, q, w.entry) },
+		})
 	})
+}
+
+// scopedSteps are the two steps of the body of inScopedTx that follow its
+// checks: the write fn, and finish, the append of the audit entry of the write
+// in the transaction, which the caller names for the scope of that entry.
+type scopedSteps struct {
+	fn     func(q *db.Queries, scope namespace.Name) error
+	finish func() error
+}
+
+// scopedTx is the body of inScopedTx in the queries q: the reads and the
+// checks, then steps.fn, then steps.finish.
+func scopedTx(
+	ctx context.Context,
+	q *db.Queries,
+	fence namespace.Fence,
+	w scopedWrite,
+	steps scopedSteps,
+) error {
+	scope, err := w.scope(ctx, q)
+	if err != nil {
+		return err
+	}
+
+	if checkErr := checkNotifyFence(ctx, q, fence, scope, w); checkErr != nil {
+		return checkErr
+	}
+
+	if w.entry != nil && w.entry.Namespace != scope {
+		return fmt.Errorf("%w: the audit entry is not in the scope %q", notify.ErrInvalid, scope)
+	}
+
+	if fnErr := steps.fn(q, scope); fnErr != nil {
+		return fnErr
+	}
+
+	return steps.finish()
 }
 
 // appendScopedEntry appends e in the transaction of q. A nil entry appends
@@ -106,6 +142,20 @@ func appendScopedEntry(ctx context.Context, q *db.Queries, e *audit.Entry) error
 	}
 
 	if _, err := appendAuditEntry(ctx, q, *e); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	return nil
+}
+
+// appendScopedServerEntry appends e of the scope @server in the locked
+// transaction tx. A nil entry appends nothing.
+func appendScopedServerEntry(ctx context.Context, tx serverAuditTx, e *audit.Entry) error {
+	if e == nil {
+		return nil
+	}
+
+	if _, err := appendServerEntry(ctx, tx, *e); err != nil {
 		return fmt.Errorf("append audit entry: %w", err)
 	}
 
