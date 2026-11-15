@@ -51,7 +51,7 @@ again under the same name gets no old rule.)
 - `GET /api/dustpan/v1/namespaces/{namespace}/collections` and
   `GET /api/dustpan/v1/namespaces/{namespace}/collections/{collection}`
   (action `collection:read`, unchanged: internal/api/inventory/collections.go:67 and :87): each entry is
-  `{"id": "col-…", "namespace": "acme", "name": "web", "createdAt": 1700000000000}`.
+  `{"id": "col-…", "namespace": "acme", "name": "web", "createdAt": 1700000000}` (`createdAt` in Unix seconds: internal/api/inventory/collections.go:642).
 - `POST /api/dustpan/v1/namespaces/{namespace}/placement-rules` and
   `PUT /api/dustpan/v1/namespaces/{namespace}/placement-rules/{rule}` (action
   `namespace:manage-placement-rules`, unchanged): the body is
@@ -63,12 +63,14 @@ again under the same name gets no old rule.)
   `placement.invalid-collection-id`.
 - `GET …/placement-rules` and `GET …/placement-rules/{rule}` (action
   `namespace:read-placement-rules`, unchanged): each rule is
-  `{"id": "plr-…", "namespace": "acme", "position": 1, "tool": "pulumi", "project": "…", "stack": "…", "collectionId": "col-…", "collection": "web", "createdBy": "…", "createdAt": 1700000000000}`.
+  `{"id": "plr-…", "namespace": "acme", "position": 1, "tool": "pulumi", "project": "…", "stack": "…", "collectionId": "col-…", "collection": "web", "createdBy": "…", "createdAt": 1700000000}`.
   `collection` is the current name, read at each request, a label only.
 - Go: `collection.Rule.CollectionID string` (NEW) replaces
   `collection.Rule.Collection Name`; `collection.Rule.Validate` returns
   `collection.ErrInvalidName` for an ID without the `col-` form, and the store
-  returns `collection.ErrNotFound` for an ID of no collection of the namespace.
+  returns `collection.ErrPlacementCollectionMissing` (pkg/collection/placement.go:26, as the conformance
+  case `testRuleMissingCollection` at pkg/collection/collectiontest/placement.go:230 requires) for an ID of
+  no collection of the namespace; the handler answers it with 404 `collection.not-found`.
 - Stored schema, each dialect: `placement_rules.collection_id TEXT NOT NULL`
   with a foreign key to `collections (id)`, in place of `collection_key`.
 
