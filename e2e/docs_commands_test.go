@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -378,19 +379,22 @@ func TestDocsCommandsTimeoutKillsProcessGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	start := time.Now()
+	// The deadline bounds the run: a block that the timeout did not stop
+	// ends with the deadline of this context.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
 
-	res, err := e2e.RunCommands(t.Context(), e2e.NewDocsConfig(time.Second, nil), cmds)
+	res, err := e2e.RunCommands(ctx, e2e.NewDocsConfig(time.Second, nil), cmds)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if res[0].Status != e2e.DocsFailed || !strings.Contains(res[0].Reason, "longer than") {
-		t.Fatalf("status %s reason %q", res[0].Status, res[0].Reason)
+	if ctx.Err() != nil {
+		t.Fatal("the process group was not killed within 30s")
 	}
 
-	if time.Since(start) > 30*time.Second {
-		t.Fatal("the timeout did not stop the block")
+	if res[0].Status != e2e.DocsFailed || !strings.Contains(res[0].Reason, "longer than") {
+		t.Fatalf("status %s reason %q", res[0].Status, res[0].Reason)
 	}
 
 	_, after, ok := strings.Cut(res[0].Output, "child-pid=")
