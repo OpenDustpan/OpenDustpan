@@ -25,6 +25,32 @@ ADR 370 removes the namespace service principal and gives each housekeeping purp
 | Access service | A grant out of the purpose is refused. | `TestGrantOutOfPurposeRefused`: a grant of `namespace-admin` to a housekeeping principal is refused. |
 | Each housekeeping service | It authorizes before it acts, and names its principal. | `TestRevokeStopsOnlyItsSweep`: revoke the grant of the artifact sweep; the artifact sweep changes nothing and writes a denial; the token sweep and the retention run as before. `TestEachSweepIsAttributed`: each audit entry of each sweep names its housekeeping principal, never `@server`. |
 
+## Contract
+
+Types and functions (`pkg/principal`):
+
+- NEW type `principal.HousekeepingPurpose`, with unexported fields. A value comes only from the closed list of NEW `principal.HousekeepingPurposes()`. Each value has the subject `housekeeping:<purpose>`, a role name and the actions of that role.
+- NEW `principal.Housekeeping(purpose)` returns the `identity.Principal` of one purpose.
+- NEW source `builtin`, a constant next to `SourceLocal` (`pkg/principal/principal.go:116`). `validateSource` (`pkg/principal/principal.go:629`) accepts it. An unknown source returns `principal.ErrInvalid`.
+
+Port (`pkg/principal/store.go:58`):
+
+- `ListPrincipals` of `principal.Store` takes the source filter next to the kind. An empty source keeps every source. The total and the cursor count only the rows of the filter. It returns `principal.ErrInvalid` for an unknown source.
+
+Endpoint (existing route, NEW query parameter):
+
+- `GET /api/server/principals?kind=service&source=builtin` keeps the principals of that source. As for `kind`, a source that is not valid answers 400.
+
+Tables:
+
+- No NEW table. The install writes one row in `principals` (kind `service`, source `builtin`) for each purpose, and one stored grant of its role, with the install as the creator and the install time, in the baseline of each dialect.
+
+Error codes and audit:
+
+- 403 `principal.housekeeping` (NEW error code): a credential or a token for a housekeeping principal.
+- 422 `access.grant-out-of-purpose` (NEW error code), with the purpose: a grant of a role that the purpose does not hold.
+- A refused housekeeping run writes an audit entry with the outcome `denied`. The entry names the housekeeping principal and the missing action.
+
 ## Risks
 
 - A sweep that a person revoked stops until a person grants it again. The docs page says so, and the denial entry names the principal and the action.
