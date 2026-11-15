@@ -1,7 +1,7 @@
 # job-actions Specification
 
 ## Purpose
-TBD - created by archiving change add-job-service-routes-start-1. Update Purpose after archive.
+A job action is a request that a principal makes to start, cancel, confirm or redact a job through the job service routes. This capability covers the routes that carry these actions and the refusals that they return. It does not cover how the server plans or runs the job.
 
 ## Requirements
 
