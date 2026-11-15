@@ -490,7 +490,7 @@ func classifyProxyRules(err error) (failure, bool) {
 		return failCoded(http.StatusBadRequest, jobproxysvc.ErrOperation.Error(), errcode.RequestInvalidQuery), true
 	case errors.Is(err, jobproxy.ErrInvalid):
 		return failCoded(http.StatusUnprocessableEntity, err.Error(), errcode.RequestBodyInvalid), true
-	default:
-		return fail(0, ""), false
 	}
+
+	return fail(0, ""), false
 }
