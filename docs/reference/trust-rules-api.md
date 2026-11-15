@@ -130,9 +130,9 @@ a later part.
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
-| 428 | `request.precondition-required` | The request has no `If-Match`. Read the rule and send its `ETag`. |
-| 400 | `request.if-match-invalid` | `If-Match` is not one revision in quotes. |
-| 412 | `request.precondition-failed` | The rule changed since the read. Read it again. |
+| 428 | `request.precondition-required` | The request has no `If-Match`. To get the `ETag`, send `GET .../trust-rules/{rule_id}`. |
+| 400 | `request.if-match-invalid` | `If-Match` is not one revision in quotes. To get the `ETag`, send `GET .../trust-rules/{rule_id}`. |
+| 412 | `request.precondition-failed` | The rule changed since the read. The server keeps the stored rule. To get the new `ETag`, send `GET .../trust-rules/{rule_id}`. |
 
 ## Trust bundle
 
@@ -167,11 +167,13 @@ version writes the audit entry `trust-bundle:save`, `trust-bundle:rotate` or
 
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
-| 400 | `trust-rule.bundle-invalid` | The PEM text or the overlap fails its rules. The message names the check. |
-| 404 | `trust-rule.bundle-not-found` | The namespace has no bundle with the ID. |
+| 400 | `trust-rule.bundle-invalid` | The PEM text or the overlap fails its rules. The message names the index of the CA and the count. The server stores nothing. Change the PEM text and send it again. |
+| 403 | `trust-rule.sign-in-required` | The caller used an access token only, or signed in too long ago. Sign in to the console again, then send the request again. To see the sign-in window, send `GET /api/dustpan/v1/me/preferences`. |
+| 403 | `access.denied` | The caller lacks `namespace:manage-trust-rules`. To see the rules of the namespace, send `GET .../trust-rules`. |
+| 404 | `trust-rule.bundle-not-found` | The namespace has no bundle with the ID. To list the bundle of the namespace, send `GET .../trust-bundles`. |
 | 409 | `trust-rule.bundle-invalid` | The version is the active version. Rotate first, then delete the old version. |
-| 412 | `request.precondition-failed` | The bundle changed since the read. Read it again. |
-| 428 | `request.precondition-required` | The rotation has no `If-Match`. |
+| 412 | `request.precondition-failed` | The bundle changed since the read. To get the new `ETag`, send `GET .../trust-bundles/{bundle}`. |
+| 428 | `request.precondition-required` | The rotation has no `If-Match`. To get the `ETag`, send `GET .../trust-bundles/{bundle}`. |
 
 ## Token exchange
 
@@ -212,8 +214,8 @@ Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.
 | 400 | `trust-rule.issuer-refused` | The issuer is at or under the public URL of the server, or is an issuer URL of the OIDC issuer of the server. |
 | 400 | `trust-rule.principal-refused` | The principal does not exist, has a delete or a disable, is not a service principal, or is not a principal of the namespace. |
 | 401 | | The request has no valid credential. |
-| 403 | | The caller lacks the action of the route, or `principal:manage-tokens` on the principal. |
-| 403 | `trust-rule.sign-in-required` | The caller used an access token to create a rule. |
+| 403 | `access.denied` | The caller lacks the action of the route, or `principal:manage-tokens` on the principal. To see the rules of the namespace, send `GET .../trust-rules`. |
+| 403 | `trust-rule.sign-in-required` | The caller used an access token only, or signed in too long ago, to change a rule or a bundle. Sign in to the console again. To see the sign-in window, send `GET /api/dustpan/v1/me/preferences`. |
 | 404 | `namespace.not-found` | The namespace does not exist, or the caller cannot read it. The answer is the same for both. |
 | 404 | `trust-rule.not-found` | The namespace has no rule with the ID. |
 | 409 | `trust-rule.already-exists` | The namespace has a rule with the name. |
