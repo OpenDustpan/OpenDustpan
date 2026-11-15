@@ -72,3 +72,9 @@ func (fixedAllowlists) SetNamespaceList(
 ) error {
 	return errFixedReadOnly
 }
+
+// NamespacesWithList lists no namespace: the fixture holds the lists of the
+// test only.
+func (fixedAllowlists) NamespacesWithList(context.Context) ([]namespace.Name, error) {
+	return nil, nil
+}

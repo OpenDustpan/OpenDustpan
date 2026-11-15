@@ -44,7 +44,11 @@ const (
 	audience     = "/projects/123/global/backendServices/456"
 	groupsClaim  = "groups"
 	groupsHeader = "X-Auth-Groups"
-	keyTimeout   = 300 * time.Millisecond
+	keyTimeout   = 10 * time.Second
+	// hangTimeout is the key timeout of the method of the hang row. Only
+	// the method of the hang row uses it, so that no other row depends on
+	// a fast key read.
+	hangTimeout = 300 * time.Millisecond
 	// keyServerHits is the room of the hits channel of a key server.
 	keyServerHits = 64
 	rsaBits       = 2048
@@ -458,7 +462,17 @@ func jwtFixture(s jwtSetup, k issuerKeys) func(t *testing.T) sessiontest.Request
 			},
 			Disable: func(*testing.T) { off.Store(true) },
 			Stop:    func(*testing.T) { ks.server.Close() },
-			Hang:    func(*testing.T) { ks.hang.Store(true) },
+			Hang: func(t *testing.T) session.RequestMethod {
+				t.Helper()
+
+				ks.hang.Store(true)
+
+				hangCfg := jwtConfig(s, ks, off)
+				hangCfg.HTTPClient = ks.client(t, loopback())
+				hangCfg.KeyTimeout = hangTimeout
+
+				return newMethod(t, hangCfg)
+			},
 			Refused: func(t *testing.T) session.RequestMethod {
 				t.Helper()
 

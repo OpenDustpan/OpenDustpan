@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-11-07. Decided by the project owner on 7 November 2026
 
+Changed by:
+
+- ADR 377 extends decision 7: the ADR of the external Cedar service adapter.
+
 Changes:
 
 - Extends ADR 224 decision 13: a deny gate on a cancel or a force-unlock stays. A gate break-glass comes later.

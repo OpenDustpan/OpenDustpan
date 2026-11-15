@@ -43,24 +43,24 @@ type placementRuleList struct {
 func TestPlacementRuleAPI(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	for _, db := range databases {
@@ -98,6 +98,7 @@ func runPlacementRuleAPIOnStore(t *testing.T, cli e2e.Install, store e2e.Store) 
 	placementRulesRefusals(ctx, t, env)
 	placementRulesMoveAndDelete(ctx, t, env)
 	placementRulesDenied(ctx, t, env)
+	placementRulesCustomRole(ctx, t, env)
 }
 
 // placementCall sends s and fails unless it answers s.want. It checks that the
@@ -342,6 +343,97 @@ func placementRulesDenied(ctx context.Context, t *testing.T, env *e2e.Env) {
 	})
 }
 
+// placementRulesCustomRole proves that a custom role with
+// namespace:read-placement-rules and namespace:manage-placement-rules, and no
+// collection:create-unit, writes the rules and cannot make a stack in the
+// collection that a rule names. The role holds unit:manage, so that the stack
+// request passes the unit check and reaches the check of the collection.
+func placementRulesCustomRole(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	var role e2eRole
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles",
+		`{"name":"placements-rules-only","actions":[` +
+			`"namespace:read-placement-rules","namespace:manage-placement-rules","unit:manage"]}`,
+		http.StatusCreated,
+	}, &role)
+
+	var custom e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("placements-rules-only") + `","kind":"person"}`,
+		http.StatusCreated,
+	}, &custom)
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/" + placementNamespace + "/grants",
+		`{"subject":"principal:` + custom.ID + `","role":"` + role.ID + `"}`,
+		http.StatusCreated,
+	}, nil)
+
+	token := env.PersonalToken(ctx, t, custom.ID, "placement-rules-only-check")
+
+	project := e2e.Project
+	rule := `{"tool":"pulumi","project":"` + project + `","stack":"*","collection":"payments"}`
+
+	status, body, err := env.ServerAPIStatusAs(ctx, token.Secret, http.MethodPost, placementRules, rule)
+	if err != nil || status != http.StatusCreated {
+		t.Fatalf("custom role writes a rule = %d, %v (%s); want %d", status, err, body, http.StatusCreated)
+	}
+
+	status, body, err = env.APIStatusAs(ctx, token.Secret, http.MethodPost,
+		"/api/stacks/"+placementNamespace+"/"+project, `{"tags":{},"stackName":"dev"}`)
+	// The control below shows that the refusal comes from the collection check:
+	// the same request by a role that also holds collection:create-unit makes
+	// the stack. The body does not name the action.
+	if err != nil || status != http.StatusForbidden {
+		t.Fatalf("custom role makes a stack without collection:create-unit = %d, %v (%s); want %d",
+			status, err, body, http.StatusForbidden)
+	}
+
+	if got, found := placementCollectionOf(ctx, t, env, "dev"); found {
+		t.Fatalf("the refused stack exists in collection %q, want no unit", got)
+	}
+
+	// The control: a role that also holds collection:create-unit makes the
+	// stack.
+	var createRole e2eRole
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles",
+		`{"name":"placements-create-unit","actions":[` +
+			`"namespace:read-placement-rules","namespace:manage-placement-rules","unit:manage",` +
+			`"collection:create-unit"]}`,
+		http.StatusCreated,
+	}, &createRole)
+
+	var creator e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("placements-create-unit") + `","kind":"person"}`,
+		http.StatusCreated,
+	}, &creator)
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/" + placementNamespace + "/grants",
+		`{"subject":"principal:` + creator.ID + `","role":"` + createRole.ID + `"}`,
+		http.StatusCreated,
+	}, nil)
+
+	controlToken := env.PersonalToken(ctx, t, creator.ID, "placements-create-unit-check")
+
+	status, body, err = env.APIStatusAs(ctx, controlToken.Secret, http.MethodPost,
+		"/api/stacks/"+placementNamespace+"/"+project, `{"tags":{},"stackName":"control"}`)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("the control role makes a stack with collection:create-unit = %d, %v (%s); want %d",
+			status, err, body, http.StatusOK)
+	}
+
+	if got, found := placementCollectionOf(ctx, t, env, "control"); !found || got != "payments" {
+		t.Fatalf("the control stack is in collection %q (found %t), want %q", got, found, "payments")
+	}
+}
+
 // placementRuleOf decodes one rule from the body of an answer.
 func placementRuleOf(t *testing.T, body string) placementRule {
 	t.Helper()
@@ -362,24 +454,24 @@ func placementRuleOf(t *testing.T, body string) placementRule {
 func TestPlacement(t *testing.T) {
 	t.Parallel()
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
 
-	versions := e2e.Pulumi().Versions()
-	if len(versions) == 0 {
+	version := e2e.Pulumi().Single()
+	if version == "" {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
-	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
 	if err != nil {
-		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
 	scenarios := []struct {

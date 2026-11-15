@@ -18,6 +18,10 @@ import (
 type NameLockHarness struct {
 	// Open returns a new handle on the store of the harness.
 	Open func(t *testing.T) authgate.NameLockCounter
+	// Age moves every stored name count of the store of the harness back in
+	// time by d: each time column of a count goes back by d, and a column of
+	// 0 stays 0.
+	Age func(t *testing.T, d time.Duration)
 	// Broken returns a handle whose writes fail, for example a closed store.
 	Broken func(t *testing.T) authgate.NameLockCounter
 	// Entries returns the audit entries of the installation that the store
@@ -514,6 +518,7 @@ func clearEntry() audit.Entry {
 		Channel: audit.ChannelConsole, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
 		ObjectID: "", PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "the person called",
 		PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 }
 
@@ -686,7 +691,7 @@ func testPrune(t *testing.T, h NameLockHarness) {
 	add(t, c, key(authgate.ScopePassword, "locked", "s"), rule(1, longLock), nil)
 	add(t, c, key(authgate.ScopePasswordName, "level", ""), doubling(shortLock, longLock, longLock), nil)
 
-	pause(t, doubleLock)
+	h.Age(t, doubleLock)
 
 	// A count with a failure inside the age stays.
 	add(t, c, key(authgate.ScopePassword, "recent", "s"), rule(limitFive, longLock), nil)
@@ -743,7 +748,7 @@ func testPruneBound(t *testing.T, h NameLockHarness) {
 		add(t, c, key(authgate.ScopePassword, "n"+strconv.Itoa(i), "s"), rule(limitFive, longLock), nil)
 	}
 
-	pause(t, doubleLock)
+	h.Age(t, doubleLock)
 
 	n, err := c.PruneNameLocks(t.Context(), shortLock, limitTwo, limitTwo, pruneEntry())
 	if err != nil || n != limitTwo {
@@ -775,7 +780,7 @@ func testPruneInvalid(t *testing.T, h NameLockHarness) {
 	c := h.Open(t)
 	add(t, c, key(authgate.ScopePassword, "old", "s"), rule(limitFive, longLock), nil)
 
-	pause(t, doubleLock)
+	h.Age(t, doubleLock)
 
 	before := len(h.Entries(t))
 
@@ -820,7 +825,7 @@ func testPruneBadEntry(t *testing.T, h NameLockHarness) {
 	c := h.Open(t)
 	add(t, c, key(authgate.ScopePassword, "old", "s"), rule(limitFive, longLock), nil)
 
-	pause(t, doubleLock)
+	h.Age(t, doubleLock)
 
 	before := len(h.Entries(t))
 

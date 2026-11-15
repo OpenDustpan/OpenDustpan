@@ -85,6 +85,7 @@ func Run(ctx context.Context, cfg *Config) launcher.ExitCode {
 		cfg:      cfg,
 		log:      logger(cfg),
 		sess:     nil,
+		profile:  "",
 		mu:       sync.Mutex{},
 		lost:     false,
 		canceled: false,
@@ -106,6 +107,7 @@ func Run(ctx context.Context, cfg *Config) launcher.ExitCode {
 	}
 
 	r.sess = sess
+	r.profile = sess.Assignment.Profile
 
 	return r.runPhase(ctx)
 }
@@ -125,6 +127,9 @@ type phaseRun struct {
 	// log gets the messages of the launcher.
 	log  *slog.Logger
 	sess *session.Session
+	// profile is the profile of the assignment: the credentials that the
+	// tool steps need, or empty when they need none.
+	profile string
 	// mu guards lost and canceled, which the renewal sets.
 	mu       sync.Mutex
 	lost     bool

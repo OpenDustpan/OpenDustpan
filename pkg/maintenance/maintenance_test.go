@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -52,8 +53,8 @@ func (stubSealer) SealState(
 
 func (stubSealer) OpenState(
 	_ context.Context, _ namespace.Name, _, _ string, r io.Reader,
-) (io.Reader, error) {
-	return r, nil
+) (io.ReadCloser, error) {
+	return io.NopCloser(r), nil
 }
 
 func (stubSealer) SealOutputs(
@@ -207,7 +208,7 @@ func (*fakeStacks) UpdateStackTags(
 	return stack.ErrNotFound
 }
 
-func (*fakeStacks) RenameStack(context.Context, stack.Ref, stack.Name, namespace.Fence) error {
+func (*fakeStacks) RenameStack(context.Context, stack.Ref, stack.Name, namespace.Fence, audit.Entry) error {
 	return stack.ErrNotFound
 }
 
@@ -689,6 +690,8 @@ func addRunningUpdate(f *fixture, ref stack.Ref, id stack.UpdateID, stackID stac
 		CreatedBy:       "admin",
 		RestoredFrom:    0,
 		CheckpointBytes: 0,
+		JobID:           "",
+		GitHead:         "",
 	}
 }
 
@@ -715,7 +718,11 @@ func seedLockedWorkspace(t *testing.T, f *fixture, name string) {
 		ID:          "ws-1",
 		Ref:         workspace.Ref{Namespace: testNamespace, Name: parsed},
 		Revision:    2,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 	f.workspaces.workspaces[w.ID] = w
 }
@@ -1003,7 +1010,7 @@ type encryptedBlobs struct {
 }
 
 func (encryptedBlobs) Get(context.Context, blob.Key) (io.ReadCloser, error) {
-	return io.NopCloser(strings.NewReader(`{"encrypted_data":"c2VjcmV0"}`)), nil
+	return io.NopCloser(strings.NewReader(`{"meta":{},"encrypted_data":"c2VjcmV0","encryption_version":"v0"}`)), nil
 }
 
 // TestEnterForceLeavesClientEncryptedWorkspaceLocked checks that a force enter
@@ -1031,17 +1038,17 @@ func TestEnterForceLeavesClientEncryptedWorkspaceLocked(t *testing.T) {
 			// The size and MD5 of the document encryptedBlobs serves,
 			// as a stored row names them.
 			MD5: [16]byte{
-				0x32, 0xdd, 0x0c, 0x61, 0x5e, 0xc2, 0x98, 0xbc,
-				0x44, 0x68, 0xd1, 0xbd, 0xb8, 0x10, 0xd6, 0xc0,
+				0x64, 0x20, 0xd9, 0x71, 0x90, 0x04, 0x23, 0xf8,
+				0x43, 0x33, 0x65, 0x89, 0xb9, 0xb1, 0x95, 0x80,
 			},
 			Serial:         1,
-			Size:           29,
+			Size:           65,
 			Force:          false,
 			Sealed:         false,
 			RestoredFrom:   "",
 			SensitiveMarks: nil,
 			FenceBy:        "",
-			UnlockedWrite:  false,
+			UnlockedWrite:  false, Origin: identity.StateOrigin{Job: "", Commit: ""},
 		},
 	}
 

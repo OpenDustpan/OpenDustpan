@@ -2,6 +2,10 @@
 
 Status: accepted · 2026-10-22. Decisions 1 to 3 are owner decisions. Supersedes decision 1 of ADR 35 in part. Amends ADR 2 and ADR 35 (the rule on ports and services). Accepts RFC 103
 
+Changed by:
+
+- ADR 364 extends decision 4: the care for the exported surface applies to packages under `internal/` too, not only to the SDK.
+
 ## Context
 
 ADR 35 puts the SDK in `pkg/`. It lists the entry point, the domain packages,

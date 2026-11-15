@@ -189,6 +189,8 @@ func newBackupFixtureWorkers(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,
@@ -322,13 +324,15 @@ func startBackup(t *testing.T, handler testHandler) string {
 
 // getBackupDoc decodes one backup in tests.
 type getBackupDoc struct {
-	ID        string         `json:"id"`
-	State     string         `json:"state"`
-	StartedAt string         `json:"startedAt"`
-	EndedAt   string         `json:"endedAt"`
-	Target    string         `json:"target"`
-	Error     string         `json:"error"`
-	Manifest  backupManifest `json:"manifest"`
+	ID                 string         `json:"id"`
+	State              string         `json:"state"`
+	StartedAt          string         `json:"startedAt"`
+	EndedAt            string         `json:"endedAt"`
+	Target             string         `json:"target"`
+	Error              string         `json:"error"`
+	Manifest           backupManifest `json:"manifest"`
+	UnverifiedKeyLimit int            `json:"unverifiedKeyLimit"`
+	UnverifiedKeyCount int            `json:"unverifiedKeyCount"`
 }
 
 // backupManifest holds the manifest fields the route tests check.
@@ -622,6 +626,8 @@ func TestBackupWithoutTarget(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		Cursors:          testCursors(t),
+		Reach:            noReach(),
 		LocalUsers:       nil,
 		Preferences:      nil,
 		GitHostLinks:     nil,

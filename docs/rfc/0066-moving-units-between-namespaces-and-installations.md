@@ -81,6 +81,32 @@ says "move", "export" and "import" (GLOSSARY.md).
 - How does each new feature that binds to a unit add its check, so that the
   list does not go out of date?
 
+## Owner direction (2026-11-07)
+
+The owner decided part of this RFC on 2026-11-07
+([ADR 346](../adr/0346-a-unit-moves-between-collections-never-between-namespaces.md)):
+
+- No one-click move of a unit between namespaces, because it would break
+  grants. A person exports and imports, with the move check of ADR 244.
+- A person can move a unit between collections of one namespace. The server
+  lists what breaks, and the person confirms the list.
+
+A move between installations stays open.
+[RFC 126](0126-placement-replication-and-moves.md) part C proposes the rest:
+
+- The list of effects of a move between collections: one provider for each
+  domain that stores a collection reference, with a test that fails when a
+  provider is missing, and a confirm digest so that a person never confirms
+  a list that is no longer true.
+- A unit between installations: export and import, as between namespaces.
+- A namespace between installations: with federation, a replica, then a
+  planned failover, then a detach with the revocation of the old copy's
+  keys; without federation, an offline move from the namespace backup
+  (ADR 218) with a "restore as a move" mode. The source keeps a moved
+  marker, so the old URL answers 421 with the target.
+- New carry-over findings of the move check of a whole namespace for the
+  references to the installation scope that do not move.
+
 ## Outcome
 
 Empty until the RFC is accepted (link the ADR) or dropped (say why).

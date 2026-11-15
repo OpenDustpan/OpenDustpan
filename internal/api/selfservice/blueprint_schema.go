@@ -51,6 +51,7 @@ func blueprintTypes() []apidesc.Declaration {
 			keyDescription: "The Expr version that compiled the blueprint. Set by the server; a draft that names it is refused.",
 		}),
 		apidesc.Declare[selfservice.ScalarValue](map[string]any{
+			"type":         []any{"string", "number", "boolean"},
 			keyDescription: "A JSON scalar: a string, a number or a boolean. The server refuses an object or an array.",
 		}),
 	}

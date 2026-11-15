@@ -210,7 +210,9 @@ func (w *contextWorld) seed(t *testing.T) {
 		t.Fatalf("parse workspace name: %v", err)
 	}
 
-	ws, err := w.srv.Workspaces().Create(t.Context(), workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := w.srv.Workspaces().Create(
+		t.Context(), workspace.Ref{Namespace: "acme", Name: name}, placeWorkspace(t, w.store, "acme"),
+	)
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
@@ -526,6 +528,7 @@ func TestContextWorkspaceSurvivesRename(t *testing.T) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	if err = w.srv.Workspaces().Delete(t.Context(), workspace.Ref{Namespace: "acme", Name: oldName}, e); err != nil {

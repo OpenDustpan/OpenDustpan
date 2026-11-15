@@ -113,10 +113,10 @@ func (b Body) IsSet() bool { return b.kind != bodyUnset }
 // Name returns the name of the schema, or "" for a body with no type.
 func (b Body) Name() string { return b.name }
 
-// Declaration states the schema of a Go type with its own JSON form: a type
-// with MarshalJSON or MarshalText, or an interface. The reflector refuses
-// such a type unless a declaration covers it, because the Go type does not
-// tell the JSON.
+// Declaration changes the schema of a Go type: it states the schema of a type
+// with its own JSON form (a type with MarshalJSON or MarshalText, or an
+// interface), gives a type the name of its schema, or states the description
+// of one field of a struct.
 type Declaration struct {
 	typ    reflect.Type
 	schema object
@@ -127,6 +127,15 @@ type Declaration struct {
 	name string
 	// as is the type that stands for this type on the wire, or nil.
 	as reflect.Type
+	// describe is the description of one field of a struct, or nil.
+	describe *fieldDescription
+}
+
+// fieldDescription names one field of a struct type and the text of its
+// description.
+type fieldDescription struct {
+	name string
+	text string
 }
 
 // openEnum is the declared value set of a named string type.
@@ -139,13 +148,35 @@ type openEnum struct {
 // name. A body names its own type. Use Named for a type that sits inside a
 // body, when its Go name is not the name that a client should show.
 func Named[T any](name string) Declaration {
-	return Declaration{typ: reflect.TypeFor[T](), schema: nil, enum: nil, name: name, as: nil}
+	return Declaration{typ: reflect.TypeFor[T](), schema: nil, enum: nil, name: name, as: nil, describe: nil}
 }
 
 // Declare states the schema of the type T. The schema is a map in the form of
 // the subset, and Build checks it: only the members of the subset are allowed.
 func Declare[T any](schema map[string]any) Declaration {
-	return Declaration{typ: reflect.TypeFor[T](), schema: schema, enum: nil, name: "", as: nil}
+	return Declaration{typ: reflect.TypeFor[T](), schema: schema, enum: nil, name: "", as: nil, describe: nil}
+}
+
+// DescribeField states the description of one field of the struct type T, in
+// the schema of T. jsonName is the wire name of the field: the name in its
+// json tag, or its Go name. The field must exist in the schema of T, and the
+// text must not be empty. Two different texts for one field are refused.
+//
+// The text of the field wins over the description of the type of the field.
+// The text of a field whose schema is a reference stands next to the $ref, as
+// the only member beside it: {"$ref": "...", "description": "..."}. The
+// reflector writes no described reference today. The subset holds description
+// already, and the form allOf of the reference would add allOf to the subset,
+// so the text beside the $ref is the form with the smaller change.
+func DescribeField[T any](jsonName, text string) Declaration {
+	return Declaration{
+		typ:      reflect.TypeFor[T](),
+		schema:   nil,
+		enum:     nil,
+		name:     "",
+		as:       nil,
+		describe: &fieldDescription{name: jsonName, text: text},
+	}
 }
 
 // DeclareAs states that the JSON of T is the JSON of W, a type that is only a
@@ -153,7 +184,9 @@ func Declare[T any](schema map[string]any) Declaration {
 // shape the description can show: W mirrors that shape. VerifyAs proves in a
 // test that W and T agree.
 func DeclareAs[T, W any]() Declaration {
-	return Declaration{typ: reflect.TypeFor[T](), schema: nil, enum: nil, name: "", as: reflect.TypeFor[W]()}
+	return Declaration{
+		typ: reflect.TypeFor[T](), schema: nil, enum: nil, name: "", as: reflect.TypeFor[W](), describe: nil,
+	}
 }
 
 // DeclareString states that T is a JSON string. It is the form of a type with
@@ -168,11 +201,12 @@ func DeclareString[T any]() Declaration {
 // it does not know. A value that is listed twice is refused.
 func DeclareOpenEnum[T ~string](name string, values ...string) Declaration {
 	return Declaration{
-		typ:    reflect.TypeFor[T](),
-		schema: nil,
-		enum:   &openEnum{name: name, values: slices.Clone(values)},
-		name:   "",
-		as:     nil,
+		typ:      reflect.TypeFor[T](),
+		schema:   nil,
+		enum:     &openEnum{name: name, values: slices.Clone(values)},
+		name:     "",
+		as:       nil,
+		describe: nil,
 	}
 }
 

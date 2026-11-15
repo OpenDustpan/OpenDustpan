@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -69,11 +70,15 @@ type RecorderParts struct {
 	Wrapper secret.Wrapper
 }
 
-// noRefusals is a scopeaudit.Recorder that drops every refusal: the cases read
-// a refusal as the error of the call.
+// noRefusals is a scopeaudit.Recorder and a scopeaudit.IntegrityRecorder that
+// drops every refusal: the cases read a refusal as the error of the call.
 type noRefusals struct{}
 
 func (noRefusals) RecordOutOfScope(context.Context, namespace.ID, string, scopeaudit.Where) error {
+	return nil
+}
+
+func (noRefusals) RecordMismatch(context.Context, namespace.ID, string) error {
 	return nil
 }
 
@@ -112,7 +117,7 @@ func NewRecorderHarnessWithRetention(
 		}
 	}
 
-	itemBlobs, err := secret.NewItemKeyBlobs(parts.Blobs, noRefusals{})
+	itemBlobs, err := secret.NewItemKeyBlobs(parts.Blobs, noRefusals{}, noRefusals{})
 	if err != nil {
 		t.Fatalf("item key blobs: %v", err)
 	}
@@ -133,6 +138,7 @@ func NewRecorderHarnessWithRetention(
 	rec, err := job.NewRecorder(job.RecorderConfig{
 		Store: parts.Records, Jobs: parts.Harness.Jobs, Blobs: artifacts, Sealer: sealer,
 		Namespaces: parts.Harness.Namespaces, Retention: retention, Now: time.Now,
+		Log: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
@@ -172,8 +178,23 @@ type recorderCase struct {
 func RunRecorder(t *testing.T, newHarness RecorderFactory) {
 	t.Helper()
 
-	cases := slices.Concat(stepCases(), claimRuleCases(), logCases(), logReadCases(), planCases(), planReadCases(),
-		deliveryCases(), keyTxCases(), chunkKeyCases())
+	cases := slices.Concat(stepCases(), claimRuleCases(), logCases(), logReadCases(), planCases(), planPartCases(),
+		planReadCases(), reserveBindingCases(), deliveryCases(), keyTxCases(), chunkKeyCases())
+
+	runRecorderCases(t, newHarness, cases)
+
+	// A state version comes from the store of a tool. A harness without one
+	// runs no case that reads a version.
+	if newHarness(t).WriteState == nil {
+		return
+	}
+
+	runRecorderCases(t, newHarness, slices.Concat(statePlanCases(), statePlanPartCases(), statePlanReadCases()))
+}
+
+// runRecorderCases runs each case against a fresh harness.
+func runRecorderCases(t *testing.T, newHarness RecorderFactory, cases []recorderCase) {
+	t.Helper()
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

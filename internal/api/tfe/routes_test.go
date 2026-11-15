@@ -274,7 +274,10 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -326,7 +329,7 @@ func (stubWorkspaces) Delete(_ context.Context, ref workspace.Ref, _ audit.Entry
 	}
 }
 
-func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Workspace, error) {
+func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref, _ workspace.Placement) (workspace.Workspace, error) {
 	if ref.Namespace.String() != "acme" {
 		return workspace.Workspace{}, namespace.ErrNotFound
 	}
@@ -354,7 +357,11 @@ func (stubWorkspaces) Create(_ context.Context, ref workspace.Ref) (workspace.Wo
 		ID:          workspace.ID("ws-" + name.String()),
 		Ref:         workspace.Ref{Namespace: ns, Name: name},
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }
 
@@ -465,7 +472,7 @@ func (stubWorkspaces) BeginState(
 			RestoredFrom:    "",
 			SensitiveMarks:  nil,
 			FenceBy:         "",
-			UnlockedWrite:   false,
+			UnlockedWrite:   false, Origin: identity.StateOrigin{Job: "", Commit: ""},
 		},
 	}, nil
 }
@@ -543,7 +550,7 @@ func stubStateVersion() workspace.StateVersion {
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
-		UnlockedWrite:   false,
+		UnlockedWrite:   false, Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 }
 
@@ -586,8 +593,8 @@ func stubResourceState() string {
 // stubEncryptedState is a state file the client encrypted: the resources
 // hide inside the envelope, so the resource routes answer 409.
 func stubEncryptedState() string {
-	return `{"version":4,"terraform_version":"1.11.0","serial":3,"lineage":"seed-lineage",` +
-		`"encrypted_data":{"iv":"QUJD","data":"R0hJ"},"outputs":{},"resources":[]}`
+	return `{"serial":3,"lineage":"seed-lineage","meta":{},` +
+		`"encrypted_data":"x","encryption_version":"v0"}`
 }
 
 // stubResourceMarks are the kept json-state marks of the stub state: the
@@ -931,7 +938,11 @@ func stubWorkspaceByID(id workspace.ID) (workspace.Workspace, error) {
 		ID:          id,
 		Ref:         workspace.Ref{Namespace: ns, Name: parsed},
 		Revision:    1,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}, nil
 }
 
@@ -953,7 +964,10 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -980,7 +994,10 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1009,7 +1026,10 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1210,7 +1230,7 @@ func validateRoute(route tfe.Route, public map[string]bool) error {
 	switch route.Scope {
 	case tfe.ScopePublic:
 		return validatePublicRoute(route, public)
-	case tfe.ScopeAuthorized:
+	case tfe.ScopeAuthorized, tfe.ScopeDiscovery:
 		return validateAuthorizedRoute(route, public)
 	case tfe.ScopeConsole:
 		if route.Method+" "+route.Path != revealPattern() {
@@ -1769,7 +1789,7 @@ func TestErrorDocuments(t *testing.T) {
 // the 500 path stays covered now that the workspace service is required.
 type errorWorkspaces struct{}
 
-func (errorWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+func (errorWorkspaces) Create(_ context.Context, _ workspace.Ref, _ workspace.Placement) (workspace.Workspace, error) {
 	return workspace.Workspace{}, errTestInternal
 }
 
@@ -1942,7 +1962,10 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 		MaxStateBytes:  0,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
-		Sessions:       nil, SessionPolicy: nil, StateGuard: stategate.Off("the test keeps no gates"),
+		Sessions:       nil,
+		SessionPolicy:  nil,
+		StateGuard:     stategate.Off("the test keeps no gates"),
+		Placer:         testPlacer(),
 	}, tfe.ExtraRoutes)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -2040,7 +2063,7 @@ func checkRouteObject(t *testing.T, route tfe.Route) {
 		checkUploadRouteObject(t, route)
 
 		return
-	case tfe.ScopeAuthorized, tfe.ScopeConsole:
+	case tfe.ScopeAuthorized, tfe.ScopeConsole, tfe.ScopeDiscovery:
 		checkAuthorizedRouteObject(t, route)
 
 		return
@@ -2519,6 +2542,117 @@ func TestUnknownPathAnswersJSONAPI404(t *testing.T) {
 	}
 
 	checkJSONAPIError(t, rec, http.StatusNotFound)
+}
+
+// collectionGrantAuthorizer denies every action, but reports a grant on one
+// collection of acme for the read actions: a caller who holds a grant inside
+// the namespace but cannot read the workspace.
+type collectionGrantAuthorizer struct{}
+
+func (collectionGrantAuthorizer) Authorize(
+	_ context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+func (collectionGrantAuthorizer) ListObjects(
+	_ context.Context, _ identity.Principal, _ identity.Action,
+) (identity.Scope, error) {
+	ns, err := namespace.ParseName("acme")
+	if err != nil {
+		return identity.Scope{}, err
+	}
+
+	return identity.Scope{
+		Namespaces:  nil,
+		Collections: []identity.Object{identity.CollectionObject(ns, "team-a")},
+		Units:       nil,
+		Principals:  nil,
+	}, nil
+}
+
+// TestCollectionGrantHidesOtherWorkspace proves a caller with a grant on one
+// collection who reads a workspace of another collection gets the same 404
+// body as for an unknown workspace: the grant opens only the entitlement set,
+// never a workspace, state version or output read.
+func TestCollectionGrantHidesOtherWorkspace(t *testing.T) {
+	t.Parallel()
+
+	handler := newEnforcingHandler(t, collectionGrantAuthorizer{})
+
+	get := func(target string) (int, string) {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		return rec.Code, rec.Body.String()
+	}
+
+	deniedCode, deniedBody := get("/api/v2/organizations/acme/workspaces/web")
+	missingCode, missingBody := get("/api/v2/organizations/acme/workspaces/missing")
+
+	if deniedCode != http.StatusNotFound {
+		t.Fatalf("workspace of another collection answers %d, want %d", deniedCode, http.StatusNotFound)
+	}
+
+	if missingCode != http.StatusNotFound {
+		t.Fatalf("unknown workspace answers %d, want %d", missingCode, http.StatusNotFound)
+	}
+
+	if deniedBody != missingBody {
+		t.Fatalf("hidden refusal body differs from unknown workspace body:\n%s\nwant:\n%s", deniedBody, missingBody)
+	}
+
+	if !strings.Contains(deniedBody, "not found") {
+		t.Fatalf("hidden refusal body %q holds no %q", deniedBody, "not found")
+	}
+}
+
+// workspaceListItemID is one entry of a workspace list in tests.
+type workspaceListItemID struct {
+	ID string `json:"id"`
+}
+
+// workspaceListIDs is a workspace list with only IDs in tests.
+type workspaceListIDs struct {
+	Data []workspaceListItemID `json:"data"`
+}
+
+// TestCollectionGrantListsOnlyReadableWorkspaces proves a caller with a grant
+// on one collection lists the organization workspaces and sees no workspace
+// the caller may not unit:read: the list filters to the readable items.
+func TestCollectionGrantListsOnlyReadableWorkspaces(t *testing.T) {
+	t.Parallel()
+
+	handler := newEnforcingHandler(t, collectionGrantAuthorizer{})
+
+	req := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/api/v2/organizations/acme/workspaces",
+		http.NoBody,
+	)
+	req.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("workspace list answers %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var doc workspaceListIDs
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode list body: %v", err)
+	}
+
+	if len(doc.Data) != 0 {
+		t.Fatalf("workspace list holds %d items, want 0", len(doc.Data))
+	}
 }
 
 // SetOverrides is not used by this fake.

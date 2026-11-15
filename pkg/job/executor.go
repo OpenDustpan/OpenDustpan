@@ -124,6 +124,9 @@ type Assignment struct {
 	// Plan is the plan that an apply phase applies, with the hashes of its
 	// parts, or nil.
 	Plan *PlanRef
+	// Profile names the profile whose credentials the tool steps need, or is
+	// empty when they need none.
+	Profile string
 }
 
 // Outcome is how an executor ends a phase.

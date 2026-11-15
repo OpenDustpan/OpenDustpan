@@ -24,6 +24,7 @@ func restoreOperationCases() []restoreCase {
 		{name: "a restore start stores the row and the operation together", test: testRestoreOpStart},
 		{name: "a restore start refuses a second running restore", test: testRestoreOpStartRunning},
 		{name: "the running work read counts a checking or applying restore", test: testRunningRestore},
+		{name: "a lease take waits while a restore checks or applies", test: testRunningLeaseRestore},
 		{name: "a restore start refuses a bad ID or a foreign operation", test: testRestoreOpStartRefused},
 		{name: "fenced restore writes record their steps", test: testRestoreOpFencedWrites},
 		{name: "a stale, canceled or foreign fence cannot write a restore row", test: testRestoreOpFenceRefused},
@@ -942,9 +943,12 @@ func testRestoreOpEnterRefused(t *testing.T, newStore RestoreFactory) {
 		name string
 		end  func(t *testing.T, s durable.Store, held durable.Operation)
 		want error
+		// recorded is true when the enter step is recorded before the end.
+		recorded bool
 	}{
-		{name: "replaced", end: replaceAndForget, want: durable.ErrClaimLost},
-		{name: "canceled", end: cancelOnly, want: durable.ErrCanceled},
+		{name: "replaced", end: replaceAndForget, want: durable.ErrClaimLost, recorded: false},
+		{name: "canceled", end: cancelOnly, want: durable.ErrCanceled, recorded: false},
+		{name: "canceled after the enter step", end: cancelOnly, want: durable.ErrCanceled, recorded: true},
 	}
 
 	for _, tc := range cases {
@@ -956,6 +960,11 @@ func testRestoreOpEnterRefused(t *testing.T, newStore RestoreFactory) {
 			durableOps := s.DurableOperationsPort()
 			id := mustStartRestoreOp(t, ops)
 			held := mustClaimRestoreOp(t, durableOps, "instance-a")
+
+			if tc.recorded {
+				recordEnterStep(t, durableOps, held)
+			}
+
 			tc.end(t, durableOps, held)
 
 			enter := held.Claim.Step(backup.RestoreStepEnterMaintenance)
@@ -979,7 +988,12 @@ func testRestoreOpEnterRefused(t *testing.T, newStore RestoreFactory) {
 			}
 
 			mustState(t, s, maintenance.StateNormal)
-			mustLackStep(t, durableOps, held.ID, backup.RestoreStepEnterMaintenance)
+
+			if tc.recorded {
+				mustHaveStep(t, durableOps, held.ID, backup.RestoreStepEnterMaintenance)
+			} else {
+				mustLackStep(t, durableOps, held.ID, backup.RestoreStepEnterMaintenance)
+			}
 		})
 	}
 }
@@ -1095,5 +1109,15 @@ func cancelOnly(t *testing.T, s durable.Store, held durable.Operation) {
 
 	if err := s.Cancel(t.Context(), held.ID); err != nil {
 		t.Fatalf("cancel: %v", err)
+	}
+}
+
+// recordEnterStep records the enter-maintenance step of held with no result,
+// so that the step is done before a later cancel.
+func recordEnterStep(t *testing.T, s durable.Store, held durable.Operation) {
+	t.Helper()
+
+	if err := s.RecordStep(t.Context(), held.Claim.Step(backup.RestoreStepEnterMaintenance), nil); err != nil {
+		t.Fatalf("record the enter step: %v", err)
 	}
 }

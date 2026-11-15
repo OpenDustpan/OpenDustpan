@@ -41,11 +41,16 @@ func TestIPAllowlistsNeedStore(t *testing.T) {
 func newIPAllowlistServer(t *testing.T, includeBootstrap bool) *dustpan.Server {
 	t.Helper()
 
-	return newIPAllowlistServerWith(t, includeBootstrap)
+	srv, _ := newIPAllowlistServerWith(t, includeBootstrap)
+
+	return srv
 }
 
-// newIPAllowlistServerWith is newIPAllowlistServer with more options.
-func newIPAllowlistServerWith(t *testing.T, includeBootstrap bool, extra ...dustpan.Option) *dustpan.Server {
+// newIPAllowlistServerWith is newIPAllowlistServer with more options. It also
+// returns the store.
+func newIPAllowlistServerWith(
+	t *testing.T, includeBootstrap bool, extra ...dustpan.Option,
+) (*dustpan.Server, *sqlite.Store) {
 	t.Helper()
 
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -129,6 +134,7 @@ func newIPAllowlistServerWith(t *testing.T, includeBootstrap bool, extra ...dust
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	fence := namespace.Fence{Namespace: nsName, FailoverVersion: 1}
@@ -164,7 +170,7 @@ func newIPAllowlistServerWith(t *testing.T, includeBootstrap bool, extra ...dust
 
 	registerServer(srv, st, func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) })
 
-	return srv
+	return srv, st
 }
 
 // serveNamespaceRead serves one namespace read request from remote.

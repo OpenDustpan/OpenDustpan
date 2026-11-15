@@ -40,6 +40,20 @@ type patternsHandler struct {
 
 func (h patternsHandler) RegisteredPatterns() []string { return h.patterns }
 
+// concreteHandler is a handler whose type is concrete, so a check that matches
+// only the interface type exactly misses it.
+type concreteHandler struct{}
+
+func (concreteHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
+
+// nestedHandler is a struct that is itself a handler and holds a concrete
+// handler field, so the field check must traverse it.
+type nestedHandler struct {
+	Concrete concreteHandler
+}
+
+func (nestedHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
+
 // TestDescribeOperationsRefusesAHandlerThatHidesItsRoutes proves that the
 // server refuses a mounted handler that serves a route under the prefix and
 // lists no operations, and a handler that lists no patterns. Without this, a
@@ -215,16 +229,16 @@ func TestPatternPathIgnoresTheHost(t *testing.T) {
 }
 
 // handlerFieldNames returns the lower-case names of the fields of t, a struct
-// type, that have the type http.Handler, with embedded structs included.
+// type, whose types implement http.Handler, with embedded structs included.
 func handlerFieldNames(t reflect.Type) []string {
 	var out []string
 
 	for field := range t.Fields() {
 		switch {
-		case field.Type == reflect.TypeFor[http.Handler]():
-			out = append(out, strings.ToLower(field.Name))
 		case field.Anonymous && field.Type.Kind() == reflect.Struct:
 			out = append(out, handlerFieldNames(field.Type)...)
+		case field.Type.Implements(reflect.TypeFor[http.Handler]()):
+			out = append(out, strings.ToLower(field.Name))
 		default:
 		}
 	}
@@ -256,21 +270,25 @@ func unlistedFields(t reflect.Type, names []string) []string {
 	return problems
 }
 
-// TestEveryHandlerFieldIsListed proves that each http.Handler field of the
-// adapters that the server mounts has a row in allHandlers, which feeds the
-// description and the class check. The check reads the types and not a
-// server, so a module that a test server has off cannot hide a field from it.
-// A handler that production mounts under the prefix and that the list lacks
-// fails here.
+// TestEveryHandlerFieldIsListed proves that each handler field of the adapters
+// that the server mounts has a row in allHandlers, which feeds the description
+// and the class check, or is the readiness probe on the root mux. The check
+// reads the types and not a server, so a module that a test server has off
+// cannot hide a field from it. A handler that production mounts under the
+// prefix and that the list lacks fails here.
 func TestEveryHandlerFieldIsListed(t *testing.T) {
 	t.Parallel()
 
 	var a adapters
 
-	names := make([]string, 0, len(a.allHandlers()))
+	names := make([]string, 0, len(a.allHandlers())+1)
 	for _, h := range a.allHandlers() {
 		names = append(names, h.name)
 	}
+
+	// The readiness probe serves the health routes on the root mux outside the
+	// API prefix, so it feeds neither the description nor the class check.
+	names = append(names, "ready")
 
 	if problems := unlistedFields(reflect.TypeFor[adapters](), names); len(problems) > 0 {
 		t.Fatalf("handlers of adapters and the list differ: %v", problems)
@@ -289,6 +307,18 @@ func TestUnlistedHandlerFieldFails(t *testing.T) {
 		Note   string
 	}
 
+	type concreteMounts struct {
+		Listed   http.Handler
+		Concrete concreteHandler
+		Note     string
+	}
+
+	type nestedMounts struct {
+		nestedHandler
+
+		Listed http.Handler
+	}
+
 	if got := unlistedFields(reflect.TypeFor[mounts](), []string{"listed"}); len(got) != 1 ||
 		!strings.HasPrefix(got[0], "hidden ") {
 		t.Fatalf("problems = %v, want the hidden field", got)
@@ -301,5 +331,66 @@ func TestUnlistedHandlerFieldFails(t *testing.T) {
 
 	if got := unlistedFields(reflect.TypeFor[mounts](), []string{"listed", "hidden"}); len(got) != 0 {
 		t.Fatalf("problems = %v, want none", got)
+	}
+
+	if got := unlistedFields(reflect.TypeFor[concreteMounts](), []string{"listed"}); len(got) != 1 ||
+		!strings.HasPrefix(got[0], "concrete ") {
+		t.Fatalf("problems = %v, want the concrete field", got)
+	}
+
+	if got := unlistedFields(reflect.TypeFor[concreteMounts](), []string{"listed", "concrete"}); len(got) != 0 {
+		t.Fatalf("problems = %v, want none", got)
+	}
+
+	if got := unlistedFields(reflect.TypeFor[nestedMounts](), []string{"listed"}); len(got) != 1 ||
+		!strings.HasPrefix(got[0], "concrete ") {
+		t.Fatalf("problems = %v, want the concrete field of the embedded struct", got)
+	}
+}
+
+// sentinelHandler is a handler that a test can recognize after a setter
+// stores it in an adapter field.
+type sentinelHandler struct{ name string }
+
+func (*sentinelHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
+
+// TestEveryHandlerNameHasASetter proves that each name that allHandlers lists
+// has a setter in adapterHandlerSetter, and that the setter stores the handler
+// under that name. Without this, a name that the list has and the setters lack
+// would make WrappedRoute return the server unchanged.
+func TestEveryHandlerNameHasASetter(t *testing.T) {
+	t.Parallel()
+
+	var zero adapters
+
+	for _, h := range zero.allHandlers() {
+		t.Run(h.name, func(t *testing.T) {
+			t.Parallel()
+
+			var a adapters
+
+			sentinel := &sentinelHandler{name: h.name}
+
+			set := adapterHandlerSetter(&a, h.name)
+			if set == nil {
+				t.Fatalf("adapterHandlerSetter(%q) = nil, want a setter", h.name)
+			}
+
+			set(sentinel)
+
+			for _, got := range a.allHandlers() {
+				if got.name != h.name {
+					continue
+				}
+
+				if got.handler != http.Handler(sentinel) {
+					t.Fatalf("allHandlers() entry %q = %T, want the sentinel", h.name, got.handler)
+				}
+
+				return
+			}
+
+			t.Fatalf("allHandlers() lists no entry named %q", h.name)
+		})
 	}
 }

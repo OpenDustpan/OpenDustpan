@@ -1,8 +1,7 @@
 package backup
 
-// portableJobTables is the portable description of the tables of jobs,
-// change freezes and the state records that the job rules read, in the order
-// of Tables.
+// portableJobTables is the portable description of the tables of jobs and
+// change freezes, in the order of Tables.
 func portableJobTables() []PortableTable {
 	return []PortableTable{
 		{
@@ -37,28 +36,6 @@ func portableJobTables() []PortableTable {
 				{Name: "ends_at_ms", Kind: KindTime},
 				{Name: portColCreatedBy, Kind: KindText},
 				{Name: "ended_by", Kind: KindText},
-			},
-		},
-		{
-			Table:   "unit_state_versions",
-			OrderBy: []string{portColUnitID},
-			Columns: []Column{
-				{Name: portColUnitID, Kind: KindText},
-				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "version_id", Kind: KindText},
-				{Name: portColUpdatedAtMs, Kind: KindTime},
-			},
-		},
-		{
-			Table:   "unit_final_versions",
-			OrderBy: []string{portColUnitID},
-			Columns: []Column{
-				{Name: portColUnitID, Kind: KindText},
-				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "version_id", Kind: KindText},
-				{Name: "commit_id", Kind: KindText},
-				{Name: portColJobID, Kind: KindText},
-				{Name: "at_ms", Kind: KindTime},
 			},
 		},
 	}

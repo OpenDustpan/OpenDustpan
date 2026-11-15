@@ -121,7 +121,7 @@ func TestMaintenanceStopsWritesOnEveryServer(t *testing.T) {
 		request{
 			server: 0,
 			method: http.MethodPost,
-			path:   "/api/server/maintenance/enter",
+			path:   "/api/dustpan/v1/maintenance/enter",
 			body:   "",
 			want:   http.StatusOK,
 		},
@@ -143,7 +143,7 @@ func TestMaintenanceStopsWritesOnEveryServer(t *testing.T) {
 		request{
 			server: 1,
 			method: http.MethodPost,
-			path:   "/api/server/maintenance/leave",
+			path:   "/api/dustpan/v1/maintenance/leave",
 			body:   "",
 			want:   http.StatusOK,
 		},
@@ -210,7 +210,7 @@ func TestSplitTopology(t *testing.T) {
 		request{server: 1, method: http.MethodGet, path: "/health/ready/api", body: "", want: http.StatusNotFound},
 		request{server: 1, method: http.MethodGet, path: "/api/server/metrics", body: "", want: http.StatusOK},
 		request{server: 0, method: http.MethodGet, path: "/health/ready/api", body: "", want: http.StatusOK},
-		request{server: 0, method: http.MethodGet, path: "/api/server/worker", body: "", want: http.StatusOK},
+		request{server: 0, method: http.MethodGet, path: "/api/dustpan/v1/worker", body: "", want: http.StatusOK},
 	)
 }
 
@@ -269,9 +269,10 @@ func send(t *testing.T, c *servertest.Cluster, requests ...request) {
 	}
 }
 
-// seedPlacement makes a collection and a placement rule for Pulumi stacks of
-// any project and any name in the namespace that body creates. The server
-// refuses a new stack that no rule places.
+// seedPlacement makes a collection, a placement rule for Pulumi stacks of any
+// project and any name, and a placement rule for OpenTofu workspaces of any
+// name in the namespace that body creates. The server refuses a new stack or
+// workspace that no rule places.
 func seedPlacement(t *testing.T, c *servertest.Cluster, server int, namespaceBody string) {
 	t.Helper()
 
@@ -281,6 +282,7 @@ func seedPlacement(t *testing.T, c *servertest.Cluster, server int, namespaceBod
 	for _, step := range []struct{ path, body string }{
 		{base + "/collections", `{"name":"everything"}`},
 		{base + "/placement-rules", `{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`},
+		{base + "/placement-rules", `{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}`},
 	} {
 		if status, body := c.Do(t, server, http.MethodPost, step.path, step.body); status != http.StatusCreated {
 			t.Fatalf("POST %s = %d %s, want %d", step.path, status, body, http.StatusCreated)
