@@ -3,6 +3,7 @@ package sqlite //nolint:testpackage // The white-box template state is unexporte
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -15,6 +16,32 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
+
+// RunWithoutForeignKeys runs query with args on one connection of sqlDB with
+// the foreign key checks off, as a restore or a failover changes a row.
+func RunWithoutForeignKeys(ctx context.Context, sqlDB *sql.DB, query string, args ...any) error {
+	pinned, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("take a connection: %w", err)
+	}
+
+	runErr := func() error {
+		if _, err := pinned.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+			return fmt.Errorf("turn foreign key checks off: %w", err)
+		}
+
+		if _, err := pinned.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf("%s: %w", query, err)
+		}
+
+		return nil
+	}()
+	if closeErr := pinned.Close(); closeErr != nil {
+		return fmt.Errorf("release the connection: %w", errors.Join(runErr, closeErr))
+	}
+
+	return runErr
+}
 
 // DB returns the database handle of s, so a test can read or change rows
 // with direct SQL.
@@ -51,6 +78,19 @@ func MarkSupersededCheckpointInTx(
 	return s.inTx(ctx, func(q *db.Queries) error {
 		return markSuperseded(ctx, q, cp, stackID.String(), readKey)
 	})
+}
+
+// AgeSupersededMarks moves every mark of the stack before at, with a direct
+// SQL update. The cases of the superseded sweep need marks older than the
+// grace period without a wait.
+func (s *Store) AgeSupersededMarks(ctx context.Context, stackID stack.ID, at time.Time) error {
+	const stmt = `UPDATE checkpoint_supersedes SET superseded_at_ms = ? WHERE stack_id = ?`
+
+	if _, err := s.conn.ExecContext(ctx, stmt, at.UnixMilli(), stackID.String()); err != nil {
+		return fmt.Errorf("age superseded marks: %w", err)
+	}
+
+	return nil
 }
 
 // SettingWrite is the input of WriteSettingInTx.

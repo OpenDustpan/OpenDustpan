@@ -646,6 +646,26 @@ CREATE TABLE job_plans (
     created_at_ms bigint NOT NULL
 );
 
+CREATE TABLE job_tokens (
+    digest text NOT NULL,
+    namespace_id text NOT NULL,
+    starter_id text NOT NULL,
+    job_id text NOT NULL,
+    unit_tool text NOT NULL,
+    unit_id text NOT NULL,
+    claim_operation text NOT NULL,
+    claim_token bigint NOT NULL,
+    expires_at_ms bigint NOT NULL,
+    created_at_ms bigint NOT NULL,
+    CONSTRAINT job_tokens_claim_operation_check CHECK ((claim_operation <> ''::text)),
+    CONSTRAINT job_tokens_claim_token_check CHECK ((claim_token > 0)),
+    CONSTRAINT job_tokens_digest_check CHECK ((digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT job_tokens_job_id_check CHECK ((job_id <> ''::text)),
+    CONSTRAINT job_tokens_starter_id_check CHECK ((starter_id <> ''::text)),
+    CONSTRAINT job_tokens_unit_id_check CHECK ((unit_id <> ''::text)),
+    CONSTRAINT job_tokens_unit_tool_check CHECK ((unit_tool <> ''::text))
+);
+
 CREATE TABLE jobs (
     id text NOT NULL,
     namespace_id text NOT NULL,
@@ -1381,6 +1401,37 @@ CREATE TABLE unit_state (
     final_at_ms bigint NOT NULL DEFAULT 0
 );
 
+CREATE TABLE unmanaged_scans (
+    id text NOT NULL,
+    namespace_id text NOT NULL,
+    seq bigint NOT NULL,
+    target text NOT NULL,
+    kind text NOT NULL,
+    status text NOT NULL,
+    started_by text NOT NULL,
+    reason text NOT NULL,
+    scopes_json text NOT NULL,
+    counts_json text NOT NULL,
+    created_at_ms bigint NOT NULL,
+    ended_at_ms bigint NOT NULL,
+    CONSTRAINT unmanaged_scans_kind_check CHECK ((kind = ANY (ARRAY['cloud'::text, 'state'::text]))),
+    CONSTRAINT unmanaged_scans_seq_check CHECK ((seq >= 1)),
+    CONSTRAINT unmanaged_scans_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'dispatched'::text, 'running'::text, 'matching'::text, 'succeeded'::text, 'failed'::text, 'canceled'::text, 'expired'::text])))
+);
+
+CREATE TABLE unmanaged_targets (
+    namespace_id text NOT NULL,
+    name text NOT NULL,
+    pool_id text NOT NULL,
+    scopes_json text NOT NULL,
+    command_json text NOT NULL,
+    every_ms bigint NOT NULL,
+    timeout_ms bigint NOT NULL,
+    enabled boolean NOT NULL,
+    CONSTRAINT unmanaged_targets_every_ms_check CHECK ((every_ms >= 0)),
+    CONSTRAINT unmanaged_targets_timeout_ms_check CHECK ((timeout_ms >= 0))
+);
+
 CREATE TABLE update_events (
     update_id text NOT NULL,
     sequence bigint NOT NULL,
@@ -1684,6 +1735,9 @@ ALTER TABLE ONLY job_logs
 ALTER TABLE ONLY job_plans
     ADD CONSTRAINT job_plans_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY job_tokens
+    ADD CONSTRAINT job_tokens_pkey PRIMARY KEY (digest);
+
 ALTER TABLE ONLY jobs
     ADD CONSTRAINT jobs_pkey PRIMARY KEY (id);
 
@@ -1899,6 +1953,15 @@ ALTER TABLE ONLY unit_settings
 
 ALTER TABLE ONLY unit_state
     ADD CONSTRAINT unit_state_pkey PRIMARY KEY (unit_id);
+
+ALTER TABLE ONLY unmanaged_scans
+    ADD CONSTRAINT unmanaged_scans_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY unmanaged_scans
+    ADD CONSTRAINT unmanaged_scans_namespace_id_seq_key UNIQUE (namespace_id, seq);
+
+ALTER TABLE ONLY unmanaged_targets
+    ADD CONSTRAINT unmanaged_targets_pkey PRIMARY KEY (namespace_id, name);
 
 ALTER TABLE ONLY update_events
     ADD CONSTRAINT update_events_pkey PRIMARY KEY (stack_id, update_id, sequence);
@@ -2124,6 +2187,8 @@ CREATE INDEX trust_rules_principal ON trust_rules USING btree (principal_id);
 
 CREATE INDEX unit_settings_namespace ON unit_settings USING btree (namespace_id);
 
+CREATE INDEX unmanaged_scans_target ON unmanaged_scans USING btree (namespace_id, target, seq DESC);
+
 CREATE INDEX updates_history ON updates USING btree (stack_id, version) WHERE ((status <> 'not started'::text) AND (NOT dry_run) AND (kind <> 'preview'::text));
 
 CREATE UNIQUE INDEX updates_one_running ON updates USING btree (stack_id) WHERE ((status = 'running'::text) AND (NOT dry_run) AND (kind <> 'preview'::text));
@@ -2132,6 +2197,15 @@ CREATE INDEX used_tickets_until ON used_tickets USING btree (until_ms);
 
 CREATE INDEX workspace_resource_changes_address ON workspace_resource_changes USING btree (workspace_id, address, ordinal DESC);
 
+-- The partial index holds the live rows alone (deleted_at_ms IS NULL), so the
+-- deleted workspaces are not in it. A list of the live workspaces of a
+-- namespace walks the index in name order, and the offset pagination of the
+-- list skips index entries and reads no deleted row. The unique constraint on
+-- (namespace, name) has no predicate, so it covers the deleted rows too. A
+-- soft delete moves the name to deleted_name and sets name to "deleted:" plus
+-- the ID, so the deleted row keeps an entry in that index. That index holds
+-- the deleted entries with the live ones, so a walk of it reads the deleted
+-- rows to skip them. It cannot give the same live-only walk.
 CREATE INDEX workspaces_live_name ON workspaces USING btree (namespace, name) WHERE (deleted_at_ms IS NULL);
 
 ALTER TABLE ONLY access_tokens
@@ -2211,6 +2285,12 @@ ALTER TABLE ONLY job_logs
 
 ALTER TABLE ONLY job_plans
     ADD CONSTRAINT job_plans_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY job_tokens
+    ADD CONSTRAINT job_tokens_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY job_tokens
+    ADD CONSTRAINT job_tokens_starter_id_fkey FOREIGN KEY (starter_id) REFERENCES principals(id);
 
 ALTER TABLE ONLY jobs
     ADD CONSTRAINT jobs_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
@@ -2307,6 +2387,15 @@ ALTER TABLE ONLY unit_settings
 
 ALTER TABLE ONLY unit_state
     ADD CONSTRAINT unit_state_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY unmanaged_scans
+    ADD CONSTRAINT unmanaged_scans_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY unmanaged_targets
+    ADD CONSTRAINT unmanaged_targets_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
+ALTER TABLE ONLY unmanaged_targets
+    ADD CONSTRAINT unmanaged_targets_pool_id_fkey FOREIGN KEY (pool_id) REFERENCES runner_pools(id);
 
 ALTER TABLE ONLY update_events
     ADD CONSTRAINT update_events_stack_id_fkey FOREIGN KEY (stack_id) REFERENCES stacks(id) ON DELETE CASCADE;

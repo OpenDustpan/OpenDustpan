@@ -319,15 +319,16 @@ func TestLegacyFieldNamesAreExactlyTheKnownOnes(t *testing.T) {
 	want := []string{
 		"appID",
 		"collectionID",
+	"backupID",
 		"effectiveIssuerURL",
 		"hookID",
 		"installationID",
 		"issuerURL",
 		"objectID",
 		"poolID",
+		"preBackupID",
 		"setID",
-		"unitID",
-		"versionID",
+		"unitID", "versionID",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("LegacyFieldNames() = %v, want %v", got, want)

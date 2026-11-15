@@ -628,6 +628,19 @@ type JobPlan struct {
 	CreatedAtMs int64
 }
 
+type JobToken struct {
+	Digest         string
+	NamespaceID    string
+	StarterID      string
+	JobID          string
+	UnitTool       string
+	UnitID         string
+	ClaimOperation string
+	ClaimToken     int64
+	ExpiresAtMs    int64
+	CreatedAtMs    int64
+}
+
 type LocalUser struct {
 	ID              string
 	PrincipalID     string
@@ -1307,6 +1320,32 @@ type UnitState struct {
 	FinalCommit    string
 	FinalJob       string
 	FinalAtMs      int64
+}
+
+type UnmanagedScan struct {
+	ID          string
+	NamespaceID string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+type UnmanagedTarget struct {
+	NamespaceID string
+	Name        string
+	PoolID      string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
 }
 
 type Update struct {

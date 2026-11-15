@@ -285,11 +285,15 @@ type PlacementError struct {
 
 func (e *PlacementError) Error() string {
 	return fmt.Sprintf(
-		"no placement rule matches %s stack %s/%s in namespace %s: add a rule with "+
-			"POST /api/dustpan/v1/namespaces/%s/placement-rules, "+
-			"or create a collection with POST /api/dustpan/v1/namespaces/%s/collections "+
-			"and put the unit into it with PUT /api/inventory/unit-collection",
+		"no placement rule matches %s stack %s/%s in namespace %s: "+
+			"create a collection with POST /api/dustpan/v1/namespaces/%s/collections, "+
+			"add a rule with POST /api/dustpan/v1/namespaces/%s/placement-rules, for example "+
+			"curl -X POST -H \"Authorization: Bearer $TOKEN\" -d '{\"tool\":\"%s\",\"project\":\"*\",\"stack\":\"*\","+
+			"\"collection\":\"<collection>\"}' <server>/api/dustpan/v1/namespaces/%s/placement-rules, "+
+			"or move an existing unit into a collection with PUT /api/inventory/unit-collection "+
+			"(see docs/guides/quickstart.md)",
 		e.Tool, quoteName(e.Project), quoteName(e.Stack), e.Namespace, e.Namespace, e.Namespace,
+		e.Tool, e.Namespace,
 	)
 }
 

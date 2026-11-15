@@ -135,6 +135,33 @@ func TestWithSQLiteAlone(t *testing.T) {
 	}
 }
 
+// TestBuiltinStoreServesBlueprints proves that WithSQLite alone mounts the
+// self-service blueprint routes: a server whose only store option is
+// WithSQLite answers the list route with 200 and an empty list, not 404 with
+// server.route-not-found. Without the option of sqliteStoreOptions the server
+// serves no blueprint route.
+func TestBuiltinStoreServesBlueprints(t *testing.T) {
+	t.Parallel()
+
+	f := newBuiltinSQLiteFixture(t)
+
+	create := `{"name":"acme"}`
+
+	status, body := serveServerAPI(t, f, http.MethodPost, "/api/server/namespaces", create)
+	if status != http.StatusCreated {
+		t.Fatalf("create namespace: status %d, body %s", status, body)
+	}
+
+	status, body = f.do(t, http.MethodGet, "/api/dustpan/v1/self-service/blueprints/acme", adminToken, "")
+	if status != http.StatusOK {
+		t.Fatalf("list the blueprints: status %d, body %s", status, body)
+	}
+
+	if !strings.Contains(body, `{"versions":[]}`) || strings.Contains(body, "server.route-not-found") {
+		t.Fatalf("list the blueprints: body %s, want an empty list", body)
+	}
+}
+
 // TestBuiltinStoreOpenError proves that NewServer names the built-in store
 // option that fails to open.
 func TestBuiltinStoreOpenError(t *testing.T) {
@@ -537,7 +564,7 @@ func TestBuiltinStoreOptionReplacesTheStoreOption(t *testing.T) {
 
 	// The switches of acme come from the store that the server reads, so a 200
 	// proves that the built-in store holds the namespace.
-	status, body = serveServerAPI(t, f, http.MethodGet, "/api/server/namespaces/acme/override-switches", "")
+	status, body = serveServerAPI(t, f, http.MethodGet, "/api/dustpan/v1/namespaces/acme/override-switches", "")
 	if status != http.StatusOK {
 		t.Fatalf("read the switches of acme: status %d, body %s", status, body)
 	}

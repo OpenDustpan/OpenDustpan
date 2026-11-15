@@ -27,7 +27,7 @@ type DeletedUnitSweeper interface {
 }
 
 // deletedSweepPath is the route that runs one retention sweep now.
-const deletedSweepPath = "/api/server/deleted-units/sweep"
+const deletedSweepPath = "/api/dustpan/v1/deleted-units/sweep"
 
 // sweptUnitResponse is one unit that a sweep purged.
 //
@@ -75,7 +75,7 @@ func (h *Handler) deletedUnitRoutes() []Route {
 	}
 }
 
-// sweepDeletedUnits serves POST /api/server/deleted-units/sweep: it runs the
+// sweepDeletedUnits serves POST /api/dustpan/v1/deleted-units/sweep: it runs the
 // retention sweep once and answers 200 with its outcome, or 409 at once when
 // another sweep of this server runs. Each purge writes
 // its audit entry in its own transaction, with the caller as the subject
