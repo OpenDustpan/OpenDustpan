@@ -58,16 +58,20 @@ func Run(t *testing.T, newHarness Factory) {
 		run  func(t *testing.T, h Harness, fence namespace.Fence)
 	}{
 		{"a reservation below the limit counts as reserved", testReserve},
+		{"a reservation key that no check covers is refused", testReserveKeyWithoutCheck},
 		{"a reservation at the limit is ErrExceeded and stores nothing", testReserveExceeded},
 		{"a reservation passes every check or stores nothing", testReserveAllOrNothing},
 		{"a reservation is idempotent by its ID", testReserveIdempotent},
 		{"a known ID with other keys is ErrConflict", testReserveConflict},
 		{"two reservations at the same time never both take the last unit", testReserveRace},
+		{"two records at the same time never both take the last request", testRecordRace},
 		{"settle moves a unit from reserved to settled", testSettle},
+		{"two settles of one reservation at the same time add one settled unit", testSettleRace},
 		{"release ends a reservation with no unit", testRelease},
 		{"an unknown reservation is ErrNotFound", testUnknown},
 		{"a reservation after its end time counts no more", testExpired},
 		{"requests count in their window only", testRecord},
+		{"a record of a key that is not a requests key is ErrInvalid", testRecordInvalidKind},
 		{"a transaction that fails keeps no reservation and no request", testRollback},
 		{"a refused reservation records no request", testRefusedReserveRecordsNothing},
 		{"a refused record keeps no reservation of its transaction", testRefusedRecordKeepsNothing},
@@ -188,6 +192,31 @@ func testReserve(t *testing.T, h Harness, fence namespace.Fence) {
 	wantUsage(t, h, k, 0, 1)
 }
 
+// testReserveKeyWithoutCheck proves that Reserve refuses a reservation with a
+// key that no check covers, stores nothing, and counts nothing.
+func testReserveKeyWithoutCheck(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	all, mine := key("namespace"), key("requester:alice")
+	r := reservation("req-1/1", all, mine)
+
+	if _, err := reserve(t, h, fence, r, check(all, 5)); !errors.Is(err, quota.ErrInvalid) {
+		t.Fatalf("Reserve(a reservation key without a check) = %v, want ErrInvalid", err)
+	}
+
+	if err := h.Counter.Release(t.Context(), r.ID, fence); !errors.Is(err, quota.ErrNotFound) {
+		t.Fatalf("Release(a refused reservation) = %v, want ErrNotFound", err)
+	}
+
+	wantUsage(t, h, all, 0, 0)
+	wantUsage(t, h, mine, 0, 0)
+
+	// The same reservation passes when a check covers each key.
+	mustReserve(t, h, fence, r, check(all, 5), check(mine, 5))
+	wantUsage(t, h, all, 0, 1)
+	wantUsage(t, h, mine, 0, 1)
+}
+
 func testReserveExceeded(t *testing.T, h Harness, fence namespace.Fence) {
 	t.Helper()
 
@@ -284,6 +313,46 @@ func testReserveRace(t *testing.T, h Harness, fence namespace.Fence) {
 	wantUsage(t, h, k, 0, 1)
 }
 
+func testRecordRace(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	const tries = 2
+
+	k := requestKey()
+	c := quota.Check{Key: k, Window: time.Hour, Max: 1}
+	errs := make([]error, tries)
+
+	var wg sync.WaitGroup
+
+	for i := range tries {
+		wg.Go(func() {
+			errs[i] = record(t, h, fence, t0(), c)
+		})
+	}
+
+	wg.Wait()
+
+	passed := 0
+
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			passed++
+		case !errors.Is(err, quota.ErrExceeded):
+			t.Fatalf("Record() = %v, want nil or ErrExceeded", err)
+		default:
+		}
+	}
+
+	if passed != 1 {
+		t.Fatalf("%d of %d records passed a limit of 1", passed, tries)
+	}
+
+	if u := usage(t, h, t0(), c)[0]; u.Requests != 1 {
+		t.Fatalf("Usage() = %+v, want 1 request", u)
+	}
+}
+
 func testSettle(t *testing.T, h Harness, fence namespace.Fence) {
 	t.Helper()
 
@@ -301,6 +370,35 @@ func testSettle(t *testing.T, h Harness, fence namespace.Fence) {
 	if err := h.Counter.Release(t.Context(), "req-1/1", fence); !errors.Is(err, quota.ErrEnded) {
 		t.Fatalf("Release(settled) = %v, want ErrEnded", err)
 	}
+}
+
+func testSettleRace(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	const tries = 2
+
+	k := key("namespace")
+	mustReserve(t, h, fence, reservation("req-1/1", k), check(k, 1))
+
+	errs := make([]error, tries)
+
+	var wg sync.WaitGroup
+
+	for i := range tries {
+		wg.Go(func() {
+			errs[i] = h.Counter.Settle(t.Context(), "req-1/1", fence)
+		})
+	}
+
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Settle() %d = %v, want nil", i, err)
+		}
+	}
+
+	wantUsage(t, h, k, 1, 0)
 }
 
 func testRelease(t *testing.T, h Harness, fence namespace.Fence) {
@@ -388,6 +486,31 @@ func testRecord(t *testing.T, h Harness, fence namespace.Fence) {
 
 	if u := usage(t, h, t0().Add(2*time.Hour), g)[0]; u.Requests != 1 {
 		t.Fatalf("Usage(group) = %+v, want 1 request", u)
+	}
+}
+
+func testRecordInvalidKind(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	k := requestKey()
+	c := quota.Check{Key: k, Window: time.Hour, Max: 5}
+
+	for _, kind := range []quota.Kind{quota.KindUnits, quota.KindExpr} {
+		bad := quota.Key{Namespace: ns, Blueprint: "postgres", Kind: kind, Scope: "namespace"}
+
+		if err := record(t, h, fence, t0(), check(bad, 1)); !errors.Is(err, quota.ErrInvalid) {
+			t.Fatalf("Record(%s key) = %v, want ErrInvalid", kind, err)
+		}
+	}
+
+	// One check of another kind refuses the whole record, so the request of
+	// the check of the request kind is not stored.
+	if err := record(t, h, fence, t0(), c, check(key("namespace"), 1)); !errors.Is(err, quota.ErrInvalid) {
+		t.Fatalf("Record(a requests key and a units key) = %v, want ErrInvalid", err)
+	}
+
+	if u := usage(t, h, t0(), c)[0]; u.Requests != 0 {
+		t.Fatalf("Usage() = %+v, want no request", u)
 	}
 }
 

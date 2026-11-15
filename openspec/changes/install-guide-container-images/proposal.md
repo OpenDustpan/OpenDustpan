@@ -23,7 +23,7 @@ No test runs the commands of the page.
 - `README.md` has no link to the install page (`grep -n install.md README.md`
   finds no line).
 - The release workflow writes the image digest of each tag to the summary of
-  its run only (`.github/workflows/release.yml:210`,
+  its run only (`.github/workflows/release.yml:211`,
   `echo "digest=$FORGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"`). The comment at
   `.github/workflows/release.yml:16-18` records why: the job keeps
   `contents:read`, and an edit of the release notes needs `contents:write`
@@ -48,7 +48,7 @@ No test runs the commands of the page.
 
 ## Check
 
-`go test ./e2e/ -run 'TestInstallPageListsBothPullCommands|TestInstallGuideCommands' -count=1`
+`go test -tags e2e -count=1 -run 'TestInstallPageListsBothPullCommands|TestInstallGuideCommands' ./e2e/`
 passes, and `make docs-lint` reports nothing.
 
 ## ADR check

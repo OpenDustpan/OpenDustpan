@@ -34,6 +34,7 @@ const (
 	tokenAdmin    = "admin-token"
 	tokenService  = "service-token"
 	tokenWorkload = "workload-token"
+	tokenAgent    = "agent-token"
 	tokenJob      = "job-token"
 	tokenUnknown  = "unknown-kind-token"
 	tokenNoRecord = "no-record-token"
@@ -49,38 +50,41 @@ const (
 type viewCallers struct{}
 
 func (viewCallers) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
-	p := identity.Principal{
-		Subject: "", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
-		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
-		Credential: "", JobID: "",
-	}
-
-	switch token {
-	case tokenAna:
-		p.Subject = "ana"
-	case tokenBob:
-		p.Subject = "bob"
-	case tokenAdmin:
-		p.Subject, p.Admin, p.Kind = "root", true, ""
-	case tokenService:
-		p.Subject, p.Kind = "ci-deploy", identity.KindService
-	case tokenWorkload:
-		p.Subject, p.Kind = "pod", identity.KindWorkload
-	case tokenJob:
-		p.Subject, p.JobID = "ana", "job-1"
-	case tokenUnknown:
-		p.Subject, p.Kind = "ana", "robot"
-	case tokenNoRecord:
-		p.Subject = "ghost"
-	case tokenDisabled:
-		p.Subject = "disabled"
-	case tokenOther:
-		p.Subject = "service-record"
-	default:
+	p, ok := viewCallerOf(token)
+	if !ok {
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
 	return p, nil
+}
+
+// viewCallerOf returns the caller that one token of a view fixture names.
+func viewCallerOf(token string) (identity.Principal, bool) {
+	callers := map[string]identity.Principal{
+		tokenAna:      viewCaller("ana", identity.KindPerson, "", false),
+		tokenBob:      viewCaller("bob", identity.KindPerson, "", false),
+		tokenAdmin:    viewCaller("root", "", "", true),
+		tokenService:  viewCaller("ci-deploy", identity.KindService, "", false),
+		tokenWorkload: viewCaller("pod", identity.KindWorkload, "", false),
+		tokenAgent:    viewCaller("agent-bot", identity.KindAgent, "", false),
+		tokenJob:      viewCaller("ana", identity.KindPerson, "job-1", false),
+		tokenUnknown:  viewCaller("ana", "robot", "", false),
+		tokenNoRecord: viewCaller("ghost", identity.KindPerson, "", false),
+		tokenDisabled: viewCaller("disabled", identity.KindPerson, "", false),
+		tokenOther:    viewCaller("service-record", identity.KindPerson, "", false),
+	}
+
+	p, ok := callers[token]
+
+	return p, ok
+}
+
+// viewCaller builds one caller of a view fixture.
+func viewCaller(subject string, kind identity.Kind, jobID string, admin bool) identity.Principal {
+	return identity.Principal{
+		Subject: subject, DisplayName: "", Admin: admin, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: kind, Credential: "", JobID: jobID,
+	}
 }
 
 // viewPeople is the principal directory of a view fixture: the records of the

@@ -67,7 +67,7 @@ var ErrDraining = errors.New("the instance drains") // NEW; Start returns it wra
 func (s *Server) Draining() bool // NEW: true from the start of the drain on (readiness.draining)
 ```
 
-- Error code `instance.draining` (NEW, internal/errcode): 503 with `Retry-After: <drain period in whole seconds>` on each durable start route (`POST /api/server/backups`, the restore, audit chain and store check starts, and the job, drift and trigger starts) while the instance drains. The authorization action of each route does not change.
+- Error code `instance.draining` (NEW, internal/errcode): 503 with `Retry-After: <drain period in whole seconds>` on each durable start route (`POST /api/dustpan/v1/backups`, the restore, audit chain and store check starts, and the job, drift and trigger starts) while the instance drains. The authorization action of each route does not change.
 - `GET /health/ready` while draining: 503, the body of main (failed: draining) and `Retry-After`.
 
 ## Contracts
