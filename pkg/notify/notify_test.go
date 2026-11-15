@@ -477,6 +477,170 @@ func TestRetryAt(t *testing.T) {
 	}
 }
 
+func TestRetryWait(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name    string
+		n       int
+		wait    time.Duration
+		retryAt bool
+	}{
+		{"first", 1, 30 * time.Second, true},
+		{"second", 2, time.Minute, true},
+		{"third", 3, 2 * time.Minute, true},
+		{"at the cap", 8, time.Hour, true},
+		{"past the cap", 1000, time.Hour, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := notify.RetryWait(tc.n)
+			if got != tc.wait {
+				t.Fatalf("RetryWait(%d) = %s, want %s", tc.n, got, tc.wait)
+			}
+
+			retryAt, ok := notify.RetryAt(tc.n, at, notify.ErrTemporary)
+			if ok != tc.retryAt {
+				t.Fatalf("RetryAt(%d) = %s, %t; want an attempt %t", tc.n, retryAt.Sub(at), ok, tc.retryAt)
+			}
+
+			if ok && retryAt.Sub(at) != got {
+				t.Fatalf("RetryAt(%d) = %s; want the wait of RetryWait %s", tc.n, retryAt.Sub(at), got)
+			}
+		})
+	}
+}
+
+func TestRedeliverableAt(t *testing.T) {
+	t.Parallel()
+
+	stop := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	base := notify.Delivery{
+		ID: "dlv-1", Notification: "ntf-1", Scope: "acme", Subscription: "sub-1", Sink: "snk-1",
+		Contact: "", Principal: "alice", State: notify.DeliveryDone, Attempts: 1, Redeliveries: 0,
+		NextAt: time.Time{}, LastError: "", DeliveredAt: stop, Owner: "", LeaseUntil: time.Time{}, Version: 1,
+	}
+	cases := []struct {
+		name         string
+		state        notify.DeliveryState
+		redeliveries int
+	}{
+		{"a delivered delivery", notify.DeliveryDone, 0},
+		{"an abandoned delivery", notify.DeliveryAbandoned, 0},
+		{"a skipped delivery", notify.DeliverySkipped, 0},
+		{"a delivery after three redeliveries", notify.DeliveryDone, 3},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := base
+			d.State, d.Redeliveries = tc.state, tc.redeliveries
+
+			want := stop.Add(notify.RetryWait(tc.redeliveries + 1))
+			if got := notify.RedeliverableAt(d); !got.Equal(want) {
+				t.Fatalf("RedeliverableAt = %s, want %s", got, want)
+			}
+		})
+	}
+}
+
+func TestRedeliveriesRemaining(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		redeliveries int
+		want         int
+	}{
+		{"none yet", 0, notify.MaxAttempts},
+		{"at the cap", notify.MaxAttempts, 0},
+		{"above the cap", notify.MaxAttempts + 1, 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := notify.Delivery{
+				ID: "dlv-1", Notification: "ntf-1", Scope: "acme", Subscription: "sub-1", Sink: "snk-1",
+				Contact: "", Principal: "alice", State: notify.DeliveryPending, Attempts: 0,
+				Redeliveries: tc.redeliveries, NextAt: time.Time{}, LastError: "", DeliveredAt: time.Time{},
+				Owner: "", LeaseUntil: time.Time{}, Version: 1,
+			}
+			if got := notify.RedeliveriesRemaining(d); got != tc.want {
+				t.Fatalf("RedeliveriesRemaining = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeliveryValidate(t *testing.T) {
+	t.Parallel()
+
+	ok := notify.Delivery{
+		ID: "dlv-1", Notification: "ntf-1", Scope: "acme", Subscription: "sub-1", Sink: "snk-1",
+		Contact: "", Principal: "alice", State: notify.DeliveryPending, Attempts: 0, NextAt: time.Time{},
+		LastError: "", DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 1,
+		Redeliveries: 0,
+	}
+
+	cases := []struct {
+		name   string
+		change func(d *notify.Delivery)
+		valid  bool
+	}{
+		{"a delivery with no redeliveries", func(*notify.Delivery) {}, true},
+		{"a delivery at the limit", func(d *notify.Delivery) { d.Redeliveries = notify.MaxAttempts }, true},
+		{"a negative count of redeliveries", func(d *notify.Delivery) { d.Redeliveries = -1 }, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := ok
+			tc.change(&d)
+
+			if err := d.Validate(); tc.valid != (err == nil) || (!tc.valid && !errors.Is(err, notify.ErrInvalid)) {
+				t.Fatalf("Validate = %v, want valid %t", err, tc.valid)
+			}
+		})
+	}
+}
+
+func TestTooSoonError(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		wait time.Duration
+		text string
+	}{
+		{time.Millisecond, "the delivery stopped too recently: wait 1ms"},
+		{30 * time.Second, "the delivery stopped too recently: wait 30s"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.wait.String(), func(t *testing.T) {
+			t.Parallel()
+
+			err := error(&notify.TooSoonError{Wait: tc.wait})
+			if !errors.Is(err, notify.ErrTooSoon) {
+				t.Fatalf("TooSoonError = %v, want ErrTooSoon", err)
+			}
+
+			if got := err.Error(); got != tc.text {
+				t.Fatalf("Error = %q, want %q", got, tc.text)
+			}
+		})
+	}
+}
+
 func TestClass(t *testing.T) {
 	t.Parallel()
 
@@ -736,7 +900,7 @@ func TestBeforeAttempt(t *testing.T) {
 	d := func(principal, contact string) notify.Delivery {
 		return notify.Delivery{
 			ID: "dlv-1", Notification: "ntf-1", Scope: "shop", Subscription: "sub-1", Sink: "snk-1",
-			Contact: contact, Principal: principal, State: notify.DeliveryPending, Attempts: 1,
+			Contact: contact, Principal: principal, State: notify.DeliveryPending, Attempts: 1, Redeliveries: 0,
 			NextAt: time.Time{}, LastError: "", DeliveredAt: time.Time{}, Owner: "i-1", LeaseUntil: time.Time{},
 			Version: 2,
 		}

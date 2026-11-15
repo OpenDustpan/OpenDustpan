@@ -43,7 +43,7 @@ or from a Unicode category table, on the head of #2584, outside
 - control or space: `pkg/forge/forge.go:1122`, `pkg/forge/github/status.go:185`
   and `:202`, `internal/unmanaged/unmanaged.go:170`, `pkg/forgelink/forgelink.go:161`;
 - change or drop a character instead of refusing: `pkg/notify/chat/chat.go:188`,
-  `pkg/backup/devsubject.go:22`, `internal/clientgen/conformance/process.go:414`;
+  `pkg/backup/devsubject.go:22`; `internal/clientgen/conformance/process.go` (the client generator unit keeps its own copy, see Fix boundary);
 - a password: `internal/localusersvc/password.go:44`;
 - a second definition: `audit.IsHiddenRune` in `pkg/audit/audit.go` on
   #2584, which only calls `ident.IsHiddenRune`.
@@ -67,12 +67,19 @@ each difference.
 - The semgrep rule `.semgrep/hidden-rune-copy.yml` is removed. One
   `forbidigo` pattern in `.golangci.yml` refuses `unicode.IsControl` and the
   tables `unicode.Cc`, `unicode.Cf`, `unicode.Zl` and `unicode.Zp` outside
-  `internal/ident` and tests, the place for such rules.
+  `internal/ident` and tests, the place for such rules. The pattern applies
+  to server code only. The client generator and its conformance suite
+  (`**/internal/clientgen/**`, `**/cmd/clientgen/**`) are a separate unit by
+  design (depguard rule `clientgen`: they read only the published API
+  description and import no server code). They keep their own copy of the
+  check in `internal/clientgen/conformance/process.go`. This is a boundary,
+  not a per-file exception, so the `forbidigo` exclusion uses the same globs
+  as the depguard rule and `process.go` does not import `internal/ident`.
 - Every check that changes is stricter or the same, never looser.
 
 ## Check
 
-`rg -n 'unicode\.(IsControl|Cc|Cf|Zl|Zp)\b' --type go -g '!*_test.go' -g '!internal/ident/**'`
+`rg -n 'unicode\.(IsControl|Cc|Cf|Zl|Zp)\b' --type go -g '!*_test.go' -g '!internal/ident/**' -g '!internal/clientgen/**'`
 finds no line, and `make check` reports zero findings (Confirmed by: CI).
 
 ## ADR check

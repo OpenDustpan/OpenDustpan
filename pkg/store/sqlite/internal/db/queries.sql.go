@@ -158,6 +158,35 @@ func (q *Queries) AddMemberRemoval(ctx context.Context, arg AddMemberRemovalPara
 	return err
 }
 
+const addQuotaSettled = `-- name: AddQuotaSettled :exec
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = ?1),
+    ?2, ?3, ?4, 1
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope)
+DO UPDATE SET settled_count = quota_keys.settled_count + 1
+`
+
+type AddQuotaSettledParams struct {
+	Namespace string
+	Blueprint string
+	Kind      string
+	Scope     string
+}
+
+// Moves one unit of the key from reserved to settled, in the transaction of
+// the settle of its reservation.
+func (q *Queries) AddQuotaSettled(ctx context.Context, arg AddQuotaSettledParams) error {
+	_, err := q.db.ExecContext(ctx, addQuotaSettled,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+	)
+	return err
+}
+
 const addSignInFailure = `-- name: AddSignInFailure :one
 
 INSERT INTO sign_in_failures (source, window_end_ms, count)
@@ -541,7 +570,7 @@ WHERE notification_deliveries.id IN (
     ORDER BY d.next_at_ms, d.id
     LIMIT ?5
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
           last_error, delivered_at_ms, owner, lease_until_ms, version
 `
 
@@ -580,6 +609,7 @@ func (q *Queries) ClaimNotificationDeliveries(ctx context.Context, arg ClaimNoti
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,
@@ -1621,6 +1651,68 @@ type CountPurgedImportParams struct {
 
 func (q *Queries) CountPurgedImport(ctx context.Context, arg CountPurgedImportParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countPurgedImport, arg.NamespaceID, arg.ID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countQuotaRequests = `-- name: CountQuotaRequests :one
+SELECT COUNT(*) FROM quota_requests
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1)
+  AND blueprint = ?2 AND kind = ?3 AND scope = ?4
+  AND at_ms > ?5 AND at_ms <= ?6
+`
+
+type CountQuotaRequestsParams struct {
+	Namespace string
+	Blueprint string
+	Kind      string
+	Scope     string
+	AfterMs   int64
+	AtMs      int64
+}
+
+// The requests of the key in the window that ends at at_ms: after
+// at_ms - window_ms, and not after at_ms.
+func (q *Queries) CountQuotaRequests(ctx context.Context, arg CountQuotaRequestsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countQuotaRequests,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+		arg.AfterMs,
+		arg.AtMs,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countQuotaReserved = `-- name: CountQuotaReserved :one
+SELECT COUNT(*) FROM quota_reservation_keys AS k
+JOIN quota_reservations AS r ON r.namespace_id = k.namespace_id AND r.id = k.reservation_id
+WHERE k.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1)
+  AND k.blueprint = ?2 AND k.kind = ?3 AND k.scope = ?4
+  AND r.state = 'open' AND r.ends_at_ms > ?5
+`
+
+type CountQuotaReservedParams struct {
+	Namespace string
+	Blueprint string
+	Kind      string
+	Scope     string
+	AtMs      int64
+}
+
+// The open reservations of the key that end after at_ms.
+func (q *Queries) CountQuotaReserved(ctx context.Context, arg CountQuotaReservedParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countQuotaReserved,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+		arg.AtMs,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -7681,7 +7773,7 @@ func (q *Queries) GetNotificationCursor(ctx context.Context, arg GetNotification
 }
 
 const getNotificationDelivery = `-- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = ?1
@@ -7700,6 +7792,7 @@ func (q *Queries) GetNotificationDelivery(ctx context.Context, id string) (Notif
 		&i.Principal,
 		&i.State,
 		&i.Attempts,
+		&i.Redeliveries,
 		&i.NextAtMs,
 		&i.LastError,
 		&i.DeliveredAtMs,
@@ -8110,6 +8203,64 @@ func (q *Queries) GetProfileRevision(ctx context.Context, arg GetProfileRevision
 		&i.Reason,
 	)
 	return i, err
+}
+
+const getQuotaReservation = `-- name: GetQuotaReservation :one
+SELECT r.id, r.state, r.at_ms, r.ends_at_ms
+FROM quota_reservations AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = ?1 AND r.id = ?2
+`
+
+type GetQuotaReservationParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetQuotaReservationRow struct {
+	ID       string
+	State    string
+	AtMs     int64
+	EndsAtMs int64
+}
+
+// The state and the times of the reservation id of a namespace.
+func (q *Queries) GetQuotaReservation(ctx context.Context, arg GetQuotaReservationParams) (GetQuotaReservationRow, error) {
+	row := q.db.QueryRowContext(ctx, getQuotaReservation, arg.Namespace, arg.ID)
+	var i GetQuotaReservationRow
+	err := row.Scan(
+		&i.ID,
+		&i.State,
+		&i.AtMs,
+		&i.EndsAtMs,
+	)
+	return i, err
+}
+
+const getQuotaSettled = `-- name: GetQuotaSettled :one
+SELECT settled_count FROM quota_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1)
+  AND blueprint = ?2 AND kind = ?3 AND scope = ?4
+`
+
+type GetQuotaSettledParams struct {
+	Namespace string
+	Blueprint string
+	Kind      string
+	Scope     string
+}
+
+// The settled count of the key. No row means the counter does not know the key.
+func (q *Queries) GetQuotaSettled(ctx context.Context, arg GetQuotaSettledParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getQuotaSettled,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+	)
+	var settled_count int64
+	err := row.Scan(&settled_count)
+	return settled_count, err
 }
 
 const getRegistryKey = `-- name: GetRegistryKey :one
@@ -11632,11 +11783,11 @@ func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotification
 
 const insertNotificationDelivery = `-- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
     last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     ?1, ?2, ?3, ?4, ?5,
-    ?6, ?7, 'pending', 0, ?8, '', 0, '', 0, 1
+    ?6, ?7, 'pending', 0, 0, ?8, '', 0, '', 0, 1
 )
 `
 
@@ -11892,6 +12043,93 @@ type InsertPurgedImportParams struct {
 
 func (q *Queries) InsertPurgedImport(ctx context.Context, arg InsertPurgedImportParams) error {
 	_, err := q.db.ExecContext(ctx, insertPurgedImport, arg.NamespaceID, arg.ID, arg.PurgedAtMs)
+	return err
+}
+
+const insertQuotaRequest = `-- name: InsertQuotaRequest :exec
+INSERT INTO quota_requests (id, namespace_id, blueprint, kind, scope, at_ms)
+VALUES (
+    ?1,
+    (SELECT n.id FROM namespaces AS n WHERE n.name = ?2),
+    ?3, ?4, ?5, ?6
+)
+`
+
+type InsertQuotaRequestParams struct {
+	ID        string
+	Namespace string
+	Blueprint string
+	Kind      string
+	Scope     string
+	AtMs      int64
+}
+
+// One request of the key, recorded at at_ms.
+func (q *Queries) InsertQuotaRequest(ctx context.Context, arg InsertQuotaRequestParams) error {
+	_, err := q.db.ExecContext(ctx, insertQuotaRequest,
+		arg.ID,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+		arg.AtMs,
+	)
+	return err
+}
+
+const insertQuotaReservation = `-- name: InsertQuotaReservation :exec
+INSERT INTO quota_reservations (namespace_id, id, state, at_ms, ends_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = ?1),
+    ?2, ?3, ?4, ?5
+)
+`
+
+type InsertQuotaReservationParams struct {
+	Namespace string
+	ID        string
+	State     string
+	AtMs      int64
+	EndsAtMs  int64
+}
+
+// One reservation of a namespace, open at at_ms.
+func (q *Queries) InsertQuotaReservation(ctx context.Context, arg InsertQuotaReservationParams) error {
+	_, err := q.db.ExecContext(ctx, insertQuotaReservation,
+		arg.Namespace,
+		arg.ID,
+		arg.State,
+		arg.AtMs,
+		arg.EndsAtMs,
+	)
+	return err
+}
+
+const insertQuotaReservationKey = `-- name: InsertQuotaReservationKey :exec
+INSERT INTO quota_reservation_keys (namespace_id, reservation_id, blueprint, kind, scope)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = ?1),
+    ?2, ?3, ?4, ?5
+)
+`
+
+type InsertQuotaReservationKeyParams struct {
+	Namespace     string
+	ReservationID string
+	Blueprint     string
+	Kind          string
+	Scope         string
+}
+
+// One key that the reservation holds.
+func (q *Queries) InsertQuotaReservationKey(ctx context.Context, arg InsertQuotaReservationKeyParams) error {
+	_, err := q.db.ExecContext(ctx, insertQuotaReservationKey,
+		arg.Namespace,
+		arg.ReservationID,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+	)
 	return err
 }
 
@@ -16080,7 +16318,7 @@ func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerG
 }
 
 const listNotificationDeliveriesOfSubscription = `-- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = ?1 AND subscription_id = ?2
@@ -16113,6 +16351,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,
@@ -16134,7 +16373,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 }
 
 const listNotificationDeliveriesOfSubscriptionAfter = `-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = ?1 AND subscription_id = ?2
@@ -16181,6 +16420,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Cont
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
 			&i.DeliveredAtMs,
@@ -16937,6 +17177,49 @@ func (q *Queries) ListProfileRevisions(ctx context.Context, arg ListProfileRevis
 			&i.CreatedAtMs,
 			&i.Reason,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listQuotaReservationKeys = `-- name: ListQuotaReservationKeys :many
+SELECT blueprint, kind, scope
+FROM quota_reservation_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1)
+  AND reservation_id = ?2
+ORDER BY blueprint, kind, scope
+`
+
+type ListQuotaReservationKeysParams struct {
+	Namespace     string
+	ReservationID string
+}
+
+type ListQuotaReservationKeysRow struct {
+	Blueprint string
+	Kind      string
+	Scope     string
+}
+
+// Every key of the reservation, by name.
+func (q *Queries) ListQuotaReservationKeys(ctx context.Context, arg ListQuotaReservationKeysParams) ([]ListQuotaReservationKeysRow, error) {
+	rows, err := q.db.QueryContext(ctx, listQuotaReservationKeys, arg.Namespace, arg.ReservationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListQuotaReservationKeysRow
+	for rows.Next() {
+		var i ListQuotaReservationKeysRow
+		if err := rows.Scan(&i.Blueprint, &i.Kind, &i.Scope); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -20536,19 +20819,23 @@ func (q *Queries) RecordPasskeyUse(ctx context.Context, arg RecordPasskeyUsePara
 
 const redeliverNotificationDelivery = `-- name: RedeliverNotificationDelivery :execrows
 UPDATE notification_deliveries
-SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,
-    version = notification_deliveries.version + 1
+SET state = 'pending', attempts = 0, redeliveries = notification_deliveries.redeliveries + 1,
+    last_error = '', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = ?1 AND notification_deliveries.scope = ?2
   AND notification_deliveries.state <> 'pending'
+  -- Defense in depth: the adapter checks the limit before the update; this predicate stays so that two
+  -- redelivers at the same time cannot pass the limit.
+  AND notification_deliveries.redeliveries < ?3
 `
 
 type RedeliverNotificationDeliveryParams struct {
-	ID    string
-	Scope string
+	ID              string
+	Scope           string
+	MaxRedeliveries int64
 }
 
 func (q *Queries) RedeliverNotificationDelivery(ctx context.Context, arg RedeliverNotificationDeliveryParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, redeliverNotificationDelivery, arg.ID, arg.Scope)
+	result, err := q.db.ExecContext(ctx, redeliverNotificationDelivery, arg.ID, arg.Scope, arg.MaxRedeliveries)
 	if err != nil {
 		return 0, err
 	}
@@ -22145,6 +22432,83 @@ func (q *Queries) SetPlacementRulePosition(ctx context.Context, arg SetPlacement
 	return err
 }
 
+const setQuotaReservationEnd = `-- name: SetQuotaReservationEnd :execrows
+UPDATE quota_reservations
+SET ends_at_ms = ?1
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?2)
+  AND quota_reservations.id = ?3 AND state = 'open'
+`
+
+type SetQuotaReservationEndParams struct {
+	EndsAtMs  int64
+	Namespace string
+	ID        string
+}
+
+// Moves the end time of the open reservation id. A reservation that ended
+// matches no row.
+func (q *Queries) SetQuotaReservationEnd(ctx context.Context, arg SetQuotaReservationEndParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setQuotaReservationEnd, arg.EndsAtMs, arg.Namespace, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setQuotaReservationState = `-- name: SetQuotaReservationState :execrows
+UPDATE quota_reservations
+SET state = ?1
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?2)
+  AND quota_reservations.id = ?3 AND state = 'open'
+`
+
+type SetQuotaReservationStateParams struct {
+	State     string
+	Namespace string
+	ID        string
+}
+
+// Ends the open reservation id, settled or released. A reservation that ended
+// matches no row.
+func (q *Queries) SetQuotaReservationState(ctx context.Context, arg SetQuotaReservationStateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setQuotaReservationState, arg.State, arg.Namespace, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setQuotaSettled = `-- name: SetQuotaSettled :exec
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = ?1),
+    ?2, ?3, ?4, ?5
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope)
+DO UPDATE SET settled_count = excluded.settled_count
+`
+
+type SetQuotaSettledParams struct {
+	Namespace    string
+	Blueprint    string
+	Kind         string
+	Scope        string
+	SettledCount int64
+}
+
+// Writes the settled count of the key, as the reconcile of the inventory
+// counts it.
+func (q *Queries) SetQuotaSettled(ctx context.Context, arg SetQuotaSettledParams) error {
+	_, err := q.db.ExecContext(ctx, setQuotaSettled,
+		arg.Namespace,
+		arg.Blueprint,
+		arg.Kind,
+		arg.Scope,
+		arg.SettledCount,
+	)
+	return err
+}
+
 const setRestoreAuditEvents = `-- name: SetRestoreAuditEvents :execrows
 UPDATE restores
 SET audit_events = ?
@@ -22370,17 +22734,19 @@ func (q *Queries) ShredItemKey(ctx context.Context, arg ShredItemKeyParams) (int
 
 const skipPendingNotificationDeliveriesOfSubscription = `-- name: SkipPendingNotificationDeliveriesOfSubscription :exec
 UPDATE notification_deliveries
-SET state = 'skipped', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
-WHERE scope = ?1 AND subscription_id = ?2 AND state = 'pending'
+SET state = 'skipped', delivered_at_ms = ?1, owner = '', lease_until_ms = 0,
+    version = notification_deliveries.version + 1
+WHERE scope = ?2 AND subscription_id = ?3 AND state = 'pending'
 `
 
 type SkipPendingNotificationDeliveriesOfSubscriptionParams struct {
+	DeliveredAtMs  int64
 	Scope          string
 	SubscriptionID string
 }
 
 func (q *Queries) SkipPendingNotificationDeliveriesOfSubscription(ctx context.Context, arg SkipPendingNotificationDeliveriesOfSubscriptionParams) error {
-	_, err := q.db.ExecContext(ctx, skipPendingNotificationDeliveriesOfSubscription, arg.Scope, arg.SubscriptionID)
+	_, err := q.db.ExecContext(ctx, skipPendingNotificationDeliveriesOfSubscription, arg.DeliveredAtMs, arg.Scope, arg.SubscriptionID)
 	return err
 }
 

@@ -4581,11 +4581,12 @@ WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AN
 
 -- name: SkipPendingNotificationDeliveriesOfSubscription :exec
 UPDATE notification_deliveries
-SET state = 'skipped', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
+SET state = 'skipped', delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '', lease_until_ms = 0,
+    version = notification_deliveries.version + 1
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
 
 -- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = sqlc.arg(id);
@@ -4597,11 +4598,11 @@ WHERE scope = sqlc.arg(scope) AND notification_id = sqlc.arg(notification_id)
 
 -- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
     last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     sqlc.arg(id), sqlc.arg(scope), sqlc.arg(notification_id), sqlc.arg(subscription_id), sqlc.arg(sink_id),
-    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
+    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
 );
 
 -- name: ListDueNotificationDeliveryScopes :many
@@ -4622,7 +4623,7 @@ WHERE notification_deliveries.id IN (
     ORDER BY d.next_at_ms, d.id
     LIMIT sqlc.arg(max_rows)
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
           last_error, delivered_at_ms, owner, lease_until_ms, version;
 
 -- name: RecordNotificationAttempt :execrows
@@ -4652,7 +4653,7 @@ SELECT COUNT(*) FROM (
 ) AS within_bound;
 
 -- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
@@ -4664,7 +4665,7 @@ LIMIT sqlc.arg(max_rows);
 -- time, delivery ID): the rows with an older next time, or with the same next
 -- time and a smaller ID. The bound on next_at_ms lets the index scan start at
 -- the cursor.
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, next_at_ms,
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
        last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
@@ -4675,10 +4676,13 @@ LIMIT sqlc.arg(max_rows);
 
 -- name: RedeliverNotificationDelivery :execrows
 UPDATE notification_deliveries
-SET state = 'pending', attempts = 0, last_error = '', owner = '', lease_until_ms = 0,
-    version = notification_deliveries.version + 1
+SET state = 'pending', attempts = 0, redeliveries = notification_deliveries.redeliveries + 1,
+    last_error = '', owner = '', lease_until_ms = 0, version = notification_deliveries.version + 1
 WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scope = sqlc.arg(scope)
-  AND notification_deliveries.state <> 'pending';
+  AND notification_deliveries.state <> 'pending'
+  -- Defense in depth: the adapter checks the limit before the update; this predicate stays so that two
+  -- redelivers at the same time cannot pass the limit.
+  AND notification_deliveries.redeliveries < sqlc.arg(max_redeliveries);
 
 -- name: UpsertTrigger :execrows
 -- The caller checks the fence in the same transaction. A row that exists keeps
@@ -5267,6 +5271,106 @@ UPDATE self_service_blueprint_versions
 SET expr_version = sqlc.arg(expr_version)
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
   AND self_service_blueprint_versions.name = sqlc.arg(name) AND number = sqlc.arg(number);
+
+-- name: AddQuotaSettled :exec
+-- Moves one unit of the key from reserved to settled, in the transaction of
+-- the settle of its reservation.
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), 1
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope)
+DO UPDATE SET settled_count = quota_keys.settled_count + 1;
+
+-- name: CountQuotaRequests :one
+-- The requests of the key in the window that ends at at_ms: after
+-- at_ms - window_ms, and not after at_ms.
+SELECT COUNT(*) FROM quota_requests
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND blueprint = sqlc.arg(blueprint) AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope)
+  AND at_ms > sqlc.arg(after_ms) AND at_ms <= sqlc.arg(at_ms);
+
+-- name: CountQuotaReserved :one
+-- The open reservations of the key that end after at_ms.
+SELECT COUNT(*) FROM quota_reservation_keys AS k
+JOIN quota_reservations AS r ON r.namespace_id = k.namespace_id AND r.id = k.reservation_id
+WHERE k.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND k.blueprint = sqlc.arg(blueprint) AND k.kind = sqlc.arg(kind) AND k.scope = sqlc.arg(scope)
+  AND r.state = 'open' AND r.ends_at_ms > sqlc.arg(at_ms);
+
+-- name: GetQuotaReservation :one
+-- The state and the times of the reservation id of a namespace.
+SELECT r.id, r.state, r.at_ms, r.ends_at_ms
+FROM quota_reservations AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.id = sqlc.arg(id);
+
+-- name: GetQuotaSettled :one
+-- The settled count of the key. No row means the counter does not know the key.
+SELECT settled_count FROM quota_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND blueprint = sqlc.arg(blueprint) AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope);
+
+-- name: InsertQuotaRequest :exec
+-- One request of the key, recorded at at_ms.
+INSERT INTO quota_requests (id, namespace_id, blueprint, kind, scope, at_ms)
+VALUES (
+    sqlc.arg(id),
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), sqlc.arg(at_ms)
+);
+
+-- name: InsertQuotaReservation :exec
+-- One reservation of a namespace, open at at_ms.
+INSERT INTO quota_reservations (namespace_id, id, state, at_ms, ends_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(id), sqlc.arg(state), sqlc.arg(at_ms), sqlc.arg(ends_at_ms)
+);
+
+-- name: InsertQuotaReservationKey :exec
+-- One key that the reservation holds.
+INSERT INTO quota_reservation_keys (namespace_id, reservation_id, blueprint, kind, scope)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(reservation_id), sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope)
+);
+
+-- name: ListQuotaReservationKeys :many
+-- Every key of the reservation, by name.
+SELECT blueprint, kind, scope
+FROM quota_reservation_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND reservation_id = sqlc.arg(reservation_id)
+ORDER BY blueprint, kind, scope;
+
+-- name: SetQuotaReservationEnd :execrows
+-- Moves the end time of the open reservation id. A reservation that ended
+-- matches no row.
+UPDATE quota_reservations
+SET ends_at_ms = sqlc.arg(ends_at_ms)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND quota_reservations.id = sqlc.arg(id) AND state = 'open';
+
+-- name: SetQuotaReservationState :execrows
+-- Ends the open reservation id, settled or released. A reservation that ended
+-- matches no row.
+UPDATE quota_reservations
+SET state = sqlc.arg(state)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND quota_reservations.id = sqlc.arg(id) AND state = 'open';
+
+-- name: SetQuotaSettled :exec
+-- Writes the settled count of the key, as the reconcile of the inventory
+-- counts it.
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), sqlc.arg(settled_count)
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope)
+DO UPDATE SET settled_count = excluded.settled_count;
 
 -- name: GetNamespaceByID :one
 -- The namespace with the stable ID id.
