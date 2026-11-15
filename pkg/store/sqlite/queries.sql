@@ -396,6 +396,35 @@ LEFT JOIN (
 WHERE st.id = sqlc.arg('stack_id') AND st.deleted_at_ms IS NULL
 ORDER BY 1;
 
+-- name: ListSupersededBlobs :many
+-- Every mark of one live stack, ordered by blob key: the blob that a later
+-- save of the same update replaced, with the size of the stored blob and the
+-- time of the save that replaced it. The stack is the driving table, so one
+-- statement tells a stack without marks (one row with an empty key) from a
+-- stack that is missing or soft-deleted (no row).
+SELECT CAST(COALESCE(m.blob_key, '') AS TEXT) AS blob_key,
+       CAST(COALESCE(m.size, 0) AS INTEGER) AS size,
+       CAST(COALESCE(m.superseded_at_ms, 0) AS INTEGER) AS superseded_at_ms
+FROM stacks AS st
+LEFT JOIN checkpoint_supersedes AS m ON m.stack_id = st.id
+WHERE st.id = sqlc.arg('stack_id') AND st.deleted_at_ms IS NULL
+ORDER BY 1;
+
+-- name: MarkSupersededCheckpoint :exec
+-- Marks the checkpoint blob that a save of the update replaces, with the time
+-- of the database clock, from the same expression as the checkpoint upsert.
+-- It marks only the row that still names the key that the sequence check read:
+-- the row is not locked, and a concurrent attempt can replace it between the
+-- read and the mark. The mark names the blob of that row and the size of the
+-- stored blob, and a mark of an earlier save stays as it is.
+INSERT INTO checkpoint_supersedes (blob_key, stack_id, update_id, size, superseded_at_ms)
+SELECT c.blob_key, c.stack_id, c.update_id, COALESCE(c.blob_size, 0),
+       CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+FROM checkpoints AS c
+WHERE c.stack_id = ? AND c.update_id = ? AND c.blob_key <> ?
+  AND c.blob_key = sqlc.arg('read_key')
+ON CONFLICT (blob_key) DO NOTHING;
+
 -- name: SoftDeleteStack :execrows
 -- Moves the name to deleted_name and frees it (ADR 47). A stack name cannot
 -- hold ":", so "deleted:" and the ID never match a lookup by name.
@@ -4606,30 +4635,33 @@ WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scop
 -- its unit, its kind and its creation time.
 INSERT INTO triggers (
     namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
-    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms, next_slot_ms
 )
 SELECT
     n.id, sqlc.arg(id), sqlc.arg(unit_tool), sqlc.arg(unit_id), sqlc.arg(kind), sqlc.arg(preset), sqlc.arg(cron),
     sqlc.arg(source_namespace), sqlc.arg(source_tool), sqlc.arg(source_unit_id), sqlc.arg(enabled),
-    sqlc.arg(last_saver_subject), sqlc.arg(last_saver_id), sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms)
+    sqlc.arg(last_saver_subject), sqlc.arg(last_saver_id), sqlc.arg(created_at_ms), sqlc.arg(updated_at_ms),
+    sqlc.arg(next_slot_ms)
 FROM namespaces AS n
 WHERE n.name = sqlc.arg(namespace)
 ON CONFLICT (namespace_id, id) DO UPDATE SET
     preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
     source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
     last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
-    updated_at_ms = MAX(triggers.updated_at_ms, excluded.updated_at_ms);
+    updated_at_ms = MAX(triggers.updated_at_ms, excluded.updated_at_ms), next_slot_ms = excluded.next_slot_ms;
 
 -- name: GetTrigger :one
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.id = sqlc.arg(id);
 
 -- name: ListTriggersOfUnit :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.unit_tool = sqlc.arg(unit_tool) AND t.unit_id = sqlc.arg(unit_id)
@@ -4637,7 +4669,8 @@ ORDER BY t.id;
 
 -- name: ListTriggerFollowers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.kind = 'follows' AND t.enabled = 1
@@ -4647,11 +4680,24 @@ ORDER BY t.id;
 
 -- name: ListEnabledFollowTriggers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND t.kind = 'follows' AND t.enabled = 1
 ORDER BY t.id;
+
+-- name: MoveTriggerNextSlot :execrows
+-- Moves the next slot of a schedule trigger from the value that the caller read
+-- to the value after the claim. The compare on the old value is a layer of its
+-- own: the transaction of the caller already serializes the writes of the
+-- namespace, and this statement still changes no row when the slot moved.
+UPDATE triggers
+SET next_slot_ms = sqlc.arg(next_slot_ms)
+WHERE triggers.id = sqlc.arg(id)
+  AND triggers.kind = 'schedule' AND triggers.enabled = 1
+  AND triggers.next_slot_ms = sqlc.arg(old_next_slot_ms)
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace));
 
 -- name: DeleteTrigger :execrows
 DELETE FROM triggers

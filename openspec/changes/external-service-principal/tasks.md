@@ -16,6 +16,7 @@ SECURITY: this change is security code (ADR 250): identity, classification and t
 
 ## 2. Build
 
+- [ ] 2.0 After the owner's decision: the preflight PR adds `ExternalID` and `ExternalSource` to `principal.Principal` (pkg/principal/principal.go) in every existing literal; this change does not touch those files.
 - [ ] 2.1 SECURITY. In `pkg/principal/principal.go` add NEW `ClassificationRule`, NEW `Classification`, the external key and the owner to `pkg/principal`, and the baseline columns of each dialect (ADR 322). Check: `go test -race ./pkg/principal/...` passes; the mutation list of each guard is in the pull request.
 - [ ] 2.2 SECURITY. In the NEW file `internal/principalsvc/service.go` add the classification service with the four values, the digest and the rename rules. Check: `TestReclassifyModes` passes.
 - [ ] 2.3 SECURITY. In `internal/trustrulesvc/exchange.go` give the exchange the kind of actor, as the NEW field `ExchangeResult.ActorKind` (`ExchangeResult` at :151 has none), and the active check through the NEW read port `trustrule.AccountReader` (read the account of the source by its external ID; an inactive account, a failed read or an unreadable answer maps to 401 `auth.unauthenticated` and no token, design decision 7). Check: `TestExchangeAutomatedNeverPerson` and `TestExchangeInactiveAccount` pass.

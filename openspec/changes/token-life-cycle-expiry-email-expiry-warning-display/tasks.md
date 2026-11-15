@@ -9,12 +9,12 @@
 
 ## 2. Build
 
-- [ ] 2.1 Add the warning fields to GET /api/server/caller/tokens with a personal token. Edit the route row in internal/api/server/tokens.go:543, the handler serveTokenRead in internal/api/server/tokens.go:232 and the declaration in the route table of internal/api/server (`make generate` then writes internal/api/apidesc/openapi.json; never edit it by hand). Check: API test returns expiry, seconds left and level
-- [ ] 2.2 Add the same fields to the list reads under /api/server/tokens and /api/server/principals/{}/tokens. Edit the route rows and handlers in internal/api/server/tokens.go and the declaration in the route table of internal/api/server (`make generate` then writes internal/api/apidesc/openapi.json; never edit it by hand). Check: API test returns a level for each token
+- [ ] 2.1 Add the warning fields to GET /api/server/caller/tokens with a personal token. Edit the route row in internal/api/server/tokens.go:543, the handler serveTokenRead in internal/api/server/tokens.go:232 and the declaration in the route table of internal/api/server (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand). Check: API test returns expiry, seconds left and level
+- [ ] 2.2 Add the same fields to the list reads under /api/server/tokens and /api/server/principals/{}/tokens. Edit the route rows and handlers in internal/api/server/tokens.go and the declaration in the route table of internal/api/server (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand). Check: API test returns a level for each token
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

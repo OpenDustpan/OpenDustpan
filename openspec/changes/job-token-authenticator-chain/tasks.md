@@ -14,4 +14,4 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Run the local checks (`Makefile`). The e2e step with a real runner job is BLOCKED by add-job-session-paths-runner-token-issuer, which issues the token. Check: `make check` reports zero findings. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.1 No route: the test runs the local checks (`Makefile`) only. The e2e step with a real runner job is task 4.2 of add-job-session-paths-runner-token-issuer, which issues the token and depends on this change; this change lands with its handler and service tests. Task 2.4 needs no issuer: the handler test of 1.4 builds its own job token. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

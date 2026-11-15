@@ -174,6 +174,14 @@ CREATE TABLE checkpoints (
     CONSTRAINT checkpoints_blob_key_check CHECK ((blob_key <> ''::text))
 );
 
+CREATE TABLE checkpoint_supersedes (
+    blob_key text NOT NULL,
+    stack_id text NOT NULL,
+    update_id text NOT NULL,
+    size bigint NOT NULL,
+    superseded_at_ms bigint NOT NULL
+);
+
 CREATE TABLE collection_members (
     unit_id text NOT NULL,
     namespace text NOT NULL,
@@ -1326,6 +1334,8 @@ CREATE TABLE triggers (
     last_saver_id text NOT NULL,
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
+    next_slot_ms bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT triggers_check CHECK (((next_slot_ms >= 0) AND ((kind <> 'schedule'::text) OR (enabled = 0) OR (next_slot_ms > 0)))),
     CONSTRAINT triggers_enabled_check CHECK ((enabled = ANY (ARRAY[(0)::bigint, (1)::bigint]))),
     CONSTRAINT triggers_kind_check CHECK ((kind = ANY (ARRAY['review-request-push'::text, 'schedule'::text, 'follows'::text])))
 );
@@ -1542,6 +1552,9 @@ ALTER TABLE ONLY break_glass_reviews
 
 ALTER TABLE ONLY checkpoints
     ADD CONSTRAINT checkpoints_pkey PRIMARY KEY (stack_id, update_id);
+
+ALTER TABLE ONLY checkpoint_supersedes
+    ADD CONSTRAINT checkpoint_supersedes_pkey PRIMARY KEY (blob_key);
 
 ALTER TABLE ONLY collection_members
     ADD CONSTRAINT collection_members_pkey PRIMARY KEY (unit_id);
@@ -1935,6 +1948,8 @@ CREATE INDEX break_glass_reviews_due ON break_glass_reviews USING btree (state, 
 
 CREATE UNIQUE INDEX break_glass_reviews_use ON break_glass_reviews USING btree (use_kind, use_ref);
 
+CREATE INDEX checkpoint_supersedes_age ON checkpoint_supersedes USING btree (stack_id, superseded_at_ms);
+
 CREATE INDEX collection_members_collection ON collection_members USING btree (namespace, collection_key);
 
 CREATE UNIQUE INDEX drift_results_job ON drift_results USING btree (job_id);
@@ -2125,6 +2140,12 @@ ALTER TABLE ONLY checkpoints
 
 ALTER TABLE ONLY checkpoints
     ADD CONSTRAINT checkpoints_update_fkey FOREIGN KEY (stack_id, update_id) REFERENCES updates(stack_id, id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY checkpoint_supersedes
+    ADD CONSTRAINT checkpoint_supersedes_stack_id_fkey FOREIGN KEY (stack_id) REFERENCES stacks(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY checkpoint_supersedes
+    ADD CONSTRAINT checkpoint_supersedes_update_fkey FOREIGN KEY (stack_id, update_id) REFERENCES updates(stack_id, id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY collection_members
     ADD CONSTRAINT collection_members_namespace_collection_key_fkey FOREIGN KEY (namespace, collection_key) REFERENCES collections(namespace, name_key);

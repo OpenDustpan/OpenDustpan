@@ -1224,6 +1224,7 @@ func testRenameEntry(ns namespace.Name, ref stack.Ref) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 }
 
@@ -1688,6 +1689,13 @@ func (exportPanicsStore) ReferencedBlobKeys(
 	panic("delete must not read checkpoint keys")
 }
 
+// SupersededBlobs panics: the delete route must not read state.
+func (exportPanicsStore) SupersededBlobs(
+	_ context.Context, _ stack.ID,
+) ([]stack.SupersededBlob, error) {
+	panic("delete must not read checkpoint marks")
+}
+
 // unusedStackResolver panics: routes that never save checkpoints never
 // resolve stacks.
 type unusedStackResolver struct{}
@@ -1759,6 +1767,7 @@ func newDeleteHandlerWithAudit(
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -2132,6 +2141,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -2184,6 +2194,12 @@ func (emptyCheckpointStore) ReferencedBlobKeys(
 	return nil, nil
 }
 
+func (emptyCheckpointStore) SupersededBlobs(
+	_ context.Context, _ stack.ID,
+) ([]stack.SupersededBlob, error) {
+	return nil, nil
+}
+
 // newEnforcingUpdates returns an Updates service whose export finds no state,
 // for handlers whose tested routes delete stacks without resources.
 func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Updates {
@@ -2208,6 +2224,7 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
 		Replayer:           nil,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)

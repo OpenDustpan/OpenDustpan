@@ -965,6 +965,7 @@ func TestSinkChangedNotice(t *testing.T) {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 
 	n := notify.SinkChangedNotice(sub, 4, e)

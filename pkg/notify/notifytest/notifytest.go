@@ -145,6 +145,7 @@ func entry(scope namespace.Name) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

@@ -9,11 +9,11 @@
 
 ## 2. Implementation
 
-- [ ] 2.1 Add the field to the response in the state version handler of internal/api/tfe (the handler of the route GET /api/v2/workspaces/{}/state-versions). Add the field to the API description in internal/api/apidesc/openapi.json with `make generate`. The handler calls Service.StateClientEncrypted (pkg/workspace/state_encrypted.go:14). Check: make generate gives no diff. Confirmed by: the driver's gates.
+- [ ] 2.1 Add the field to the response in the state version handler of internal/api/tfe (the handler of the route GET /api/v2/workspaces/{}/state-versions). Add the field to the API description in internal/api/apidesc/openapi.json with `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`. The handler calls Service.StateClientEncrypted (pkg/workspace/state_encrypted.go:14). Check: make generate gives no diff. Confirmed by: the driver's gates.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

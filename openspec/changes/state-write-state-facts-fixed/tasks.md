@@ -14,7 +14,7 @@
 - [ ] 2.5 SECURITY. Make the state.write guard in pkg/gate/statewrite.go refuse the write when an enforce gate needs state facts and the facts are unavailable for a reason other than a client-encrypted body. Check: `go test ./pkg/gate/...` passes
 
 - [ ] 2.1 Fill facts, write records and list fixed controls in pkg/gate/statewrite.go:284 and pkg/gate/statechange.go:28. Check: `go test ./pkg/gate/...` passes
-- [ ] 2.2 Wire LimitedAuthorizer (pkg/gate/service.go:322) for every route. Name the route table of the adapter package (`make generate` then writes internal/api/apidesc/openapi.json; never edit it by hand) and the adapter file internal/api/pulumi/ (NEW file internal/api/pulumi/limited_authorizer.go). Check: `go test ./...` passes for touched packages
+- [ ] 2.2 Wire LimitedAuthorizer (pkg/gate/service.go:322) for every route. Name the route table of the adapter package (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` then writes internal/api/apidesc/openapi.json; never edit it by hand) and the adapter file internal/api/pulumi/ (NEW file internal/api/pulumi/limited_authorizer.go). Check: `go test ./...` passes for touched packages
 - [ ] 2.3 E2e step with the real tofu CLI: lock a workspace, run tofu apply with a personal access token against the TFE-compatible route POST /api/v2/workspaces/{id}/state-versions. The step expects the refusal with the record ID. The Pulumi step is BLOCKED by the exact route name of the update start in internal/api/pulumi, which the author checks in the route table. Check: `make e2e` state.write slice passes. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 2.4 Document facts, records, defaults and limits in NEW file docs/state-write-gates.md. Check: `make docs-lint` passes
 

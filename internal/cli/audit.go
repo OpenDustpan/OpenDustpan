@@ -56,5 +56,6 @@ func SettingsEntry(channel audit.Channel, instanceID string, at time.Time, chang
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }

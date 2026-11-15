@@ -9650,7 +9650,8 @@ func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (Te
 
 const getTrigger = `-- name: GetTrigger :one
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.id = $2
@@ -9677,6 +9678,7 @@ type GetTriggerRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTriggerRow, error) {
@@ -9698,6 +9700,7 @@ func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTrig
 		&i.LastSaverID,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
+		&i.NextSlotMs,
 	)
 	return i, err
 }
@@ -13688,7 +13691,8 @@ func (q *Queries) ListDurableSteps(ctx context.Context, ids []string) ([]Durable
 
 const listEnabledFollowTriggers = `-- name: ListEnabledFollowTriggers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
@@ -13711,6 +13715,7 @@ type ListEnabledFollowTriggersRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace string) ([]ListEnabledFollowTriggersRow, error) {
@@ -13738,6 +13743,7 @@ func (q *Queries) ListEnabledFollowTriggers(ctx context.Context, namespace strin
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -18060,6 +18066,48 @@ func (q *Queries) ListStoreChecks(ctx context.Context) ([]StoreCheck, error) {
 	return items, nil
 }
 
+const listSupersededBlobs = `-- name: ListSupersededBlobs :many
+SELECT CAST(COALESCE(m.blob_key, '') AS TEXT) AS blob_key,
+       CAST(COALESCE(m.size, 0) AS BIGINT) AS size,
+       CAST(COALESCE(m.superseded_at_ms, 0) AS BIGINT) AS superseded_at_ms
+FROM stacks AS st
+LEFT JOIN checkpoint_supersedes AS m ON m.stack_id = st.id
+WHERE st.id = $1 AND st.deleted_at_ms IS NULL
+ORDER BY 1
+`
+
+type ListSupersededBlobsRow struct {
+	BlobKey        string
+	Size           int64
+	SupersededAtMs int64
+}
+
+// Every mark of one live stack, ordered by blob key: the blob that a later
+// save of the same update replaced, with the size of the stored blob and the
+// time of the save that replaced it. The stack is the driving table, so one
+// statement tells a stack without marks (one row with an empty key) from a
+// stack that is missing or soft-deleted (no row), and the read needs no
+// transaction.
+func (q *Queries) ListSupersededBlobs(ctx context.Context, stackID string) ([]ListSupersededBlobsRow, error) {
+	rows, err := q.db.Query(ctx, listSupersededBlobs, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSupersededBlobsRow
+	for rows.Next() {
+		var i ListSupersededBlobsRow
+		if err := rows.Scan(&i.BlobKey, &i.Size, &i.SupersededAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTempAdmins = `-- name: ListTempAdmins :many
 SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
 FROM temp_admins ORDER BY expires_at_ms, principal_id
@@ -18135,7 +18183,8 @@ func (q *Queries) ListTempAdminsAwaitingReview(ctx context.Context) ([]TempAdmin
 
 const listTriggerFollowers = `-- name: ListTriggerFollowers :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.kind = 'follows' AND t.enabled = 1
@@ -18167,6 +18216,7 @@ type ListTriggerFollowersRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollowersParams) ([]ListTriggerFollowersRow, error) {
@@ -18199,6 +18249,7 @@ func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollo
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -18212,7 +18263,8 @@ func (q *Queries) ListTriggerFollowers(ctx context.Context, arg ListTriggerFollo
 
 const listTriggersOfUnit = `-- name: ListTriggersOfUnit :many
 SELECT n.name AS namespace, t.id, t.unit_tool, t.unit_id, t.kind, t.preset, t.cron, t.source_namespace,
-    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms
+    t.source_tool, t.source_unit_id, t.enabled, t.last_saver_subject, t.last_saver_id, t.created_at_ms, t.updated_at_ms,
+    t.next_slot_ms
 FROM triggers AS t
 JOIN namespaces AS n ON n.id = t.namespace_id
 WHERE n.name = $1 AND t.unit_tool = $2 AND t.unit_id = $3
@@ -18241,6 +18293,7 @@ type ListTriggersOfUnitRow struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 }
 
 func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnitParams) ([]ListTriggersOfUnitRow, error) {
@@ -18268,6 +18321,7 @@ func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnit
 			&i.LastSaverID,
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
+			&i.NextSlotMs,
 		); err != nil {
 			return nil, err
 		}
@@ -19083,6 +19137,39 @@ func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyi
 	return result.RowsAffected(), nil
 }
 
+const markSupersededCheckpoint = `-- name: MarkSupersededCheckpoint :exec
+INSERT INTO checkpoint_supersedes (blob_key, stack_id, update_id, size, superseded_at_ms)
+SELECT c.blob_key, c.stack_id, c.update_id, COALESCE(c.blob_size, 0),
+       FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+FROM checkpoints AS c
+WHERE c.stack_id = $1 AND c.update_id = $2
+  AND c.blob_key <> $3 AND c.blob_key = $4
+ON CONFLICT (blob_key) DO NOTHING
+`
+
+type MarkSupersededCheckpointParams struct {
+	StackID  string
+	UpdateID string
+	BlobKey  string
+	ReadKey  string
+}
+
+// Marks the checkpoint blob that a save of the update replaces, with the time
+// of the database clock, from the same expression as the checkpoint upsert.
+// It marks only the row that still names the key that the sequence check read:
+// the row is not locked, and a concurrent attempt can replace it between the
+// read and the mark. The mark names the blob of that row and the size of the
+// stored blob, and a mark of an earlier save stays as it is.
+func (q *Queries) MarkSupersededCheckpoint(ctx context.Context, arg MarkSupersededCheckpointParams) error {
+	_, err := q.db.Exec(ctx, markSupersededCheckpoint,
+		arg.StackID,
+		arg.UpdateID,
+		arg.BlobKey,
+		arg.ReadKey,
+	)
+	return err
+}
+
 const markTempAdminReviewOpened = `-- name: MarkTempAdminReviewOpened :execrows
 UPDATE temp_admins SET review_opened_at_ms = $1::bigint
 WHERE principal_id = $2 AND ended_at_ms IS NOT NULL AND review_opened_at_ms IS NULL
@@ -19252,6 +19339,39 @@ func (q *Queries) MoveProfileLatest(ctx context.Context, arg MoveProfileLatestPa
 		arg.NamespaceID,
 		arg.ID,
 		arg.Base,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const moveTriggerNextSlot = `-- name: MoveTriggerNextSlot :execrows
+UPDATE triggers
+SET next_slot_ms = $1::bigint
+WHERE triggers.id = $2
+  AND triggers.kind = 'schedule' AND triggers.enabled = 1
+  AND triggers.next_slot_ms = $3::bigint
+  AND triggers.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $4)
+`
+
+type MoveTriggerNextSlotParams struct {
+	NextSlotMs    int64
+	ID            string
+	OldNextSlotMs int64
+	Namespace     string
+}
+
+// Moves the next slot of a schedule trigger from the value that the caller read
+// to the value after the claim. The compare on the old value is a layer of its
+// own: the transaction of the caller already serializes the writes of the
+// namespace, and this statement still changes no row when the slot moved.
+func (q *Queries) MoveTriggerNextSlot(ctx context.Context, arg MoveTriggerNextSlotParams) (int64, error) {
+	result, err := q.db.Exec(ctx, moveTriggerNextSlot,
+		arg.NextSlotMs,
+		arg.ID,
+		arg.OldNextSlotMs,
+		arg.Namespace,
 	)
 	if err != nil {
 		return 0, err
@@ -23782,19 +23902,20 @@ func (q *Queries) UpsertSettingsRevision(ctx context.Context, arg UpsertSettings
 const upsertTrigger = `-- name: UpsertTrigger :execrows
 INSERT INTO triggers (
     namespace_id, id, unit_tool, unit_id, kind, preset, cron, source_namespace, source_tool, source_unit_id, enabled,
-    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms
+    last_saver_subject, last_saver_id, created_at_ms, updated_at_ms, next_slot_ms
 )
 SELECT
     n.id, $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10::bigint,
-    $11, $12, $13::bigint, $14::bigint
+    $11, $12, $13::bigint, $14::bigint,
+    $15::bigint
 FROM namespaces AS n
-WHERE n.name = $15
+WHERE n.name = $16
 ON CONFLICT (namespace_id, id) DO UPDATE SET
     preset = excluded.preset, cron = excluded.cron, source_namespace = excluded.source_namespace,
     source_tool = excluded.source_tool, source_unit_id = excluded.source_unit_id, enabled = excluded.enabled,
     last_saver_subject = excluded.last_saver_subject, last_saver_id = excluded.last_saver_id,
-    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms)
+    updated_at_ms = GREATEST(triggers.updated_at_ms, excluded.updated_at_ms), next_slot_ms = excluded.next_slot_ms
 `
 
 type UpsertTriggerParams struct {
@@ -23812,6 +23933,7 @@ type UpsertTriggerParams struct {
 	LastSaverID      string
 	CreatedAtMs      int64
 	UpdatedAtMs      int64
+	NextSlotMs       int64
 	Namespace        string
 }
 
@@ -23833,6 +23955,7 @@ func (q *Queries) UpsertTrigger(ctx context.Context, arg UpsertTriggerParams) (i
 		arg.LastSaverID,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.NextSlotMs,
 		arg.Namespace,
 	)
 	if err != nil {
