@@ -65,13 +65,32 @@ fix_line='the pull request names no spec-ready change: add a line "Change: opens
 # The disclosure signal: a line that starts with "Tool:" or "AI tool:".
 # This check and the commit-email check below are independent signals; the
 # pull request needs only one of them to count as AI-authored.
+#
+# grep reports 0 for a match, 1 for no match and 2 for an error. An error is
+# not "no signal": the check stops, because a body or a commit list that the
+# check cannot read must not pass as a person's pull request.
+# Defense in depth: the file checks above refuse a missing file; this check
+# stays so that a file that the check cannot read, which those checks do not
+# see, cannot pass as a person's pull request.
+body_status=0
+grep -Eq '^[[:space:]]*(Tool|AI tool):' "$body_file" || body_status=$?
+if [[ "$body_status" -ge 2 ]]; then
+  echo "check-ai-pr-spec: cannot read body file $body_file" >&2
+  exit 2
+fi
 ai_by_body=0
-if grep -Eq '^[[:space:]]*(Tool|AI tool):' "$body_file"; then
+if [[ "$body_status" -eq 0 ]]; then
   ai_by_body=1
 fi
 
+commits_status=0
+grep -Eq '^[[:space:]]*noreply@anthropic\.com[[:space:]]*$' "$commits_file" || commits_status=$?
+if [[ "$commits_status" -ge 2 ]]; then
+  echo "check-ai-pr-spec: cannot read commits file $commits_file" >&2
+  exit 2
+fi
 ai_by_commit=0
-if grep -Eq '^[[:space:]]*noreply@anthropic\.com[[:space:]]*$' "$commits_file"; then
+if [[ "$commits_status" -eq 0 ]]; then
   ai_by_commit=1
 fi
 
@@ -82,14 +101,14 @@ fi
 
 # Collect candidate ids from lines outside fenced code blocks and outside HTML
 # comments. A fence line starts with ``` or ~~~ (with an optional language
-# tag). A comment starts with <!-- and ends with -->, and it may span lines.
+# tag); the opening fence records its marker character and its length, and only
+# a line of at least that many of the same character closes it. A comment
+# starts with <!-- and ends with -->, and it may span lines.
 # The id on a link line is the text after openspec/changes/ up to a space, a
-# quote, a bracket, a paren or an angle bracket. The awk removes one sentence
-# mark at the end of the token only when a space or the end of the line follows
-# it, so "openspec/changes/demo-ready." gives "demo-ready" and
-# "openspec/changes/demo-ready..x" keeps its dots. The script then validates
-# the token as the body wrote it, and the allowlist refuses the rest. The
-# read loop avoids mapfile, which the bash of macOS lacks.
+# quote, a bracket, a paren or an angle bracket. The script passes the token
+# as the body wrote it, with no change to the text, and the allowlist refuses
+# a token that is not an id, such as "openspec/changes/demo-ready." with its
+# sentence mark. The read loop avoids mapfile, which the bash of macOS lacks.
 link_ids=()
 while IFS= read -r link_id; do
   link_ids+=("$link_id")
@@ -97,9 +116,13 @@ done < <(awk '
   {
     line = $0
     # Inside a fence the text is literal, so a comment marker has no effect and
-    # only a fence line ends the fence.
+    # only the closing fence ends the fence. The closing fence holds the marker
+    # character of the opening fence, at least as many times; GitHub keeps the
+    # fence open on any other line, such as a ~~~ line inside a ``` block.
     if (in_fence) {
-      if (line ~ /^(```|~~~)/) { in_fence = 0 }
+      run = 0
+      while (substr(line, run + 1, 1) == fence_char) { run++ }
+      if (run >= fence_len) { in_fence = 0 }
       next
     }
     # A comment opened on an earlier line ends at the first -->. The text
@@ -121,31 +144,31 @@ done < <(awk '
       if (cend == 0) { in_comment = 1; break }
       line = substr(line, cend + 3)
     }
-    # A fence line toggles the fence. The check runs on the visible text, so a
-    # marker inside a comment does not open a fence.
-    if (visible ~ /^(```|~~~)/) { in_fence = 1; next }
+    # A fence line opens a fence. The check records the marker character and
+    # its length, because only that character and that many of it close the
+    # fence. The check runs on the visible text, so a marker inside a comment
+    # does not open a fence.
+    if (visible ~ /^(```|~~~)/) {
+      fence_char = substr(visible, 1, 1)
+      fence_len = 0
+      while (substr(visible, fence_len + 1, 1) == fence_char) { fence_len++ }
+      in_fence = 1
+      next
+    }
     line = visible
     while (match(line, /openspec\/changes\/[^[:space:]"\x27`()<>]*/)) {
       hit = substr(line, RSTART, RLENGTH)
       id = substr(hit, length("openspec/changes/") + 1)
       rest = substr(line, RSTART + RLENGTH)
-      # Remove one sentence mark at the end of the token only when a space
-      # or the end of the line follows it. "demo-ready." gives "demo-ready";
-      # "demo-ready..x" keeps its dots and the allowlist refuses it.
-      if ((rest == "" || rest ~ /^[[:space:]]/) && id ~ /[.,;:!?]$/) {
-        id = substr(id, 1, length(id) - 1)
-      }
       print id
       line = rest
     }
   }
 ' "$body_file")
 
-# An id holds only lowercase letters, digits and hyphens. The awk above
-# removes at most one sentence mark at the end of the token, and only when a
-# space or the end of the line follows it, so the script checks the token as
-# the body wrote it. Anything else is refused before the script builds a
-# path from it.
+# An id holds only lowercase letters, digits and hyphens. The script checks
+# the token as the body wrote it, with no change to the text, and refuses
+# anything else before it builds a path from it.
 # Defense in depth: the containment check below refuses a resolved path
 # outside openspec/changes too, even when this allowlist changes.
 

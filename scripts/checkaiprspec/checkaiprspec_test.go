@@ -255,6 +255,24 @@ func TestCheckAIPRSpec(t *testing.T) {
 			want:      "add a line",
 		},
 		{
+			name:      "tilde line inside a backtick fence does not close it",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\n```\n~~~\nChange: openspec/changes/demo-ready\n```\n",
+			commits:   "someone@example.com\n",
+			wantPass:  false,
+			want:      "add a line",
+		},
+		{
+			name:      "short backtick line inside a long backtick fence does not close it",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\n````\n```\nChange: openspec/changes/demo-ready\n````\n",
+			commits:   "someone@example.com\n",
+			wantPass:  false,
+			want:      "add a line",
+		},
+		{
 			name:      "AI tool signal alone makes the pull request AI-authored",
 			proposals: notReady,
 			archived:  nil,
@@ -309,13 +327,13 @@ func TestCheckAIPRSpec(t *testing.T) {
 			want:      "refused id",
 		},
 		{
-			name:      "sentence punctuation after the id does not join the id",
+			name:      "sentence punctuation after the id is refused",
 			proposals: ready,
 			archived:  nil,
 			body:      "Tool: test harness\n\nSee openspec/changes/demo-ready.\n",
 			commits:   "someone@example.com\n",
-			wantPass:  true,
-			want:      "demo-ready is spec-ready",
+			wantPass:  false,
+			want:      "refused id",
 		},
 		{
 			name:      "link inside a single-line HTML comment fails",
@@ -359,6 +377,57 @@ func TestCheckAIPRSpec(t *testing.T) {
 			}
 			if !strings.Contains(out, tt.want) {
 				t.Errorf("the check said:\n%s\nwant %q", out, tt.want)
+			}
+		})
+	}
+}
+
+// TestCheckAIPRSpecUnreadableFileFailsClosed proves that the check fails
+// closed when it cannot read the body or the commit list. grep reports 2 on a
+// read error, and the check must not treat that as "no AI signal" and pass the
+// pull request as a person's pull request. The commit list holds no agent
+// email, so a fail-open run on the body case exits 0 as a person's pull
+// request.
+func TestCheckAIPRSpecUnreadableFileFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		file string
+	}{
+		{name: "unreadable body file", file: "body.md"},
+		{name: "unreadable commits file", file: "commits.txt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			writeFile(t, dir, filepath.Join("openspec", "changes", "demo-ready", "proposal.md"), readyProposal())
+			writeFile(t, dir, "body.md", "Tool: test harness\n\nChange: openspec/changes/demo-ready\n")
+			writeFile(t, dir, "commits.txt", "someone@example.com\n")
+
+			unreadable := filepath.Join(dir, tt.file)
+			if err := os.Chmod(unreadable, 0); err != nil {
+				t.Fatal(err)
+			}
+			// The test process owns the file, so mode 000 denies its read.
+			// A process with CAP_DAC_OVERRIDE (root) reads it anyway, so this
+			// case needs a user that the mode denies.
+			if os.Geteuid() == 0 {
+				t.Skipf(
+					"this user reads a mode-000 file; the %s case needs a user that the mode denies",
+					tt.file,
+				)
+			}
+
+			out, err := runCheckInRoot(t, dir)
+			if err == nil {
+				t.Fatalf("the check passed on %s, want a failure:\n%s", tt.file, out)
+			}
+			if !strings.Contains(out, "cannot read") {
+				t.Errorf("the check said:\n%s\nwant a cannot-read message", out)
 			}
 		})
 	}
