@@ -32,26 +32,6 @@ When an entry holds an agent block, the server SHALL cover the block bytes in ch
 - **WHEN** one byte of the agent block changes
 - **THEN** the chain check refuses the chain
 
-### Requirement: Read legacy change-key entries
-
-Where an old start entry carries the agent change key and no block, the server SHALL return the legacy agent value on read and verify its chain.
-
-#### Scenario: Legacy start entry
-- **WHEN** an old start entry carries the agent change key and no block
-- **THEN** the read returns the legacy agent value and the chain verifies
-
-### Requirement: Block wins over legacy key
-
-When an entry carries both the agent block and the legacy agent change key, the server SHALL return the agent ref from the block.
-
-#### Scenario: Both shapes present
-- **WHEN** an entry carries both the agent block and the legacy agent change key
-- **THEN** the read returns the agent ref from the block
-
-#### Scenario: Tampered block with both shapes
-- **WHEN** one byte of the block changes on an entry that also carries the legacy key
-- **THEN** the chain check refuses the chain
-
 ### Requirement: Keep agent approval refused
 
 When an agent attempts an approval, a confirmation, or a break-glass, the server SHALL refuse the attempt.
@@ -60,18 +40,3 @@ When an agent attempts an approval, a confirmation, or a break-glass, the server
 - **WHEN** an agent attempts an approval, a confirmation, or a break-glass
 - **THEN** the server refuses the approval and writes no approval entry
 
-### Requirement: Answer a missing entry
-
-If an entry id does not exist in the namespace scope, then the server SHALL answer 404 with the error code audit.entry-not-found.
-
-#### Scenario: Unknown entry id
-- **WHEN** a caller reads an entry id that does not exist
-- **THEN** the server answers 404 with audit.entry-not-found
-
-### Requirement: Answer an unreadable entry
-
-If an entry cannot be read during a chain check, then the server SHALL answer with the error code audit.entry-read-unavailable.
-
-#### Scenario: Unreadable entry in chain check
-- **WHEN** the chain check meets an entry that the store cannot read
-- **THEN** the server answers with audit.entry-read-unavailable and the check changes nothing
