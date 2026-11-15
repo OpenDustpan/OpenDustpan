@@ -168,7 +168,8 @@ version writes the audit entry `trust-bundle:save`, `trust-bundle:rotate` or
 | Status | `errorCode` | Cause |
 | --- | --- | --- |
 | 400 | `trust-rule.bundle-invalid` | The PEM text or the overlap fails its rules. The message names the index of the CA and the count. The server stores nothing. Change the PEM text and send it again. |
-| 403 | `trust-rule.sign-in-required` | The caller used an access token only, or signed in too long ago. Sign in to the console again, then send the request again. To see the sign-in window, send `GET /api/dustpan/v1/me/preferences`. |
+| 403 | `trust-rule.sign-in-required` | The caller used an access token only. Sign in to the console, then send the request again. |
+| 403 | `mfa.fresh-step-required` | The caller signed in too long ago. Sign in to the console again, then send the request again. To see the sign-in window, send `GET /api/dustpan/v1/me/preferences`. |
 | 403 | `access.denied` | The caller lacks `namespace:manage-trust-rules`. To see the rules of the namespace, send `GET .../trust-rules`. |
 | 404 | `trust-rule.bundle-not-found` | The namespace has no bundle with the ID. To list the bundle of the namespace, send `GET .../trust-bundles`. |
 | 409 | `trust-rule.bundle-invalid` | The version is the active version. Rotate first, then delete the old version. |
@@ -215,7 +216,8 @@ Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.
 | 400 | `trust-rule.principal-refused` | The principal does not exist, has a delete or a disable, is not a service principal, or is not a principal of the namespace. |
 | 401 | | The request has no valid credential. |
 | 403 | `access.denied` | The caller lacks the action of the route, or `principal:manage-tokens` on the principal. To see the rules of the namespace, send `GET .../trust-rules`. |
-| 403 | `trust-rule.sign-in-required` | The caller used an access token only, or signed in too long ago, to change a rule or a bundle. Sign in to the console again. To see the sign-in window, send `GET /api/dustpan/v1/me/preferences`. |
+| 403 | `trust-rule.sign-in-required` | The caller used an access token only to change a rule or a bundle. Sign in to the console. |
+| 403 | `mfa.fresh-step-required` | The caller signed in too long ago to change a rule or a bundle. Sign in to the console again. To see the sign-in window, send `GET /api/dustpan/v1/me/preferences`. |
 | 404 | `namespace.not-found` | The namespace does not exist, or the caller cannot read it. The answer is the same for both. |
 | 404 | `trust-rule.not-found` | The namespace has no rule with the ID. |
 | 409 | `trust-rule.already-exists` | The namespace has a rule with the name. |

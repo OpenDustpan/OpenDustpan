@@ -59,10 +59,10 @@ func caPEM(t *testing.T, cn string) string {
 	// The template sets only the fields that a CA needs, so it is not a
 	// literal that names every field of the type.
 	tmpl := new(x509.Certificate)
-	tmpl.SerialNumber = big.NewInt(time.Now().UnixNano())
+	tmpl.SerialNumber = big.NewInt(1_700_000_000)
 	tmpl.Subject.CommonName = cn
-	tmpl.NotBefore = time.Now().Add(-time.Hour)
-	tmpl.NotAfter = time.Now().Add(24 * time.Hour)
+	tmpl.NotBefore = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	tmpl.NotAfter = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 	tmpl.IsCA = true
 	tmpl.BasicConstraintsValid = true
 	tmpl.KeyUsage = x509.KeyUsageCertSign
