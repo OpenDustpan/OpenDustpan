@@ -29,7 +29,7 @@ const maxRuleIDLength = 64
 // is the error of the 400 answer.
 var errPlacementBody = errors.New(
 	`invalid placement rule body: provide {"tool":"pulumi","project":"<pattern>","stack":"<pattern>",` +
-		`"collectionId":"<collection ID>"} and optionally "position"`,
+		`"collectionID":"<collection ID>"} and optionally "position"`,
 )
 
 var (
@@ -86,7 +86,7 @@ type placementRuleEntry struct {
 	Tool         string `json:"tool"`
 	Project      string `json:"project"`
 	Stack        string `json:"stack"`
-	CollectionID string `json:"collectionId"`
+	CollectionID string `json:"collectionID"`
 	Collection   string `json:"collection"`
 	CreatedBy    string `json:"createdBy"`
 	CreatedAt    int64  `json:"createdAt"`
@@ -105,7 +105,7 @@ type placementRuleRequest struct {
 	Tool         *string `dustpan:"required" json:"tool"`
 	Project      *string `dustpan:"required" json:"project"`
 	Stack        *string `dustpan:"required" json:"stack"`
-	CollectionID *string `dustpan:"required" json:"collectionId"`
+	CollectionID *string `dustpan:"required" json:"collectionID"`
 	Position     *int    `dustpan:"optional" json:"position"`
 }
 
@@ -297,14 +297,14 @@ func checkPlacementFields(body []byte) error {
 		return errPlacementBody
 	}
 	if _, legacy := fields["collection"]; legacy {
-		if _, present := fields["collectionId"]; !present {
+		if _, present := fields["collectionID"]; !present {
 			return errPlacementCollectionIDRequired
 		}
 		return errPlacementBody
 	}
 	for field := range fields {
 		switch field {
-		case "tool", "project", "stack", "collectionId", "position":
+		case "tool", "project", "stack", "collectionID", "position":
 		default:
 			return errPlacementBody
 		}

@@ -1294,12 +1294,12 @@ func (e *Env) SeedCatchAllPlacement(ctx context.Context, tb testing.TB, ns strin
 
 	base := "/api/dustpan/v1/namespaces/" + ns
 
-	status, body, err := e.serverStatus(ctx, e.token, http.MethodPost,
+	status, _, err := e.serverStatus(ctx, e.token, http.MethodPost,
 		base+"/collections", `{"name":"`+CatchAllCollection+`"}`)
 	if err != nil || (status != http.StatusCreated && status != http.StatusConflict) {
 		tb.Fatalf("create the placement collection: status %d, %v", status, err)
 	}
-	status, body, err = e.serverStatus(ctx, e.token, http.MethodGet,
+	status, body, err := e.serverStatus(ctx, e.token, http.MethodGet,
 		base+"/collections/"+CatchAllCollection, "")
 	var c struct {
 		ID string `json:"id"`
@@ -1313,11 +1313,11 @@ func (e *Env) SeedCatchAllPlacement(ctx context.Context, tb testing.TB, ns strin
 	for _, step := range []struct{ path, body string }{
 		{
 			base + "/placement-rules",
-			`{"tool":"pulumi","project":"*","stack":"*","collectionId":"` + c.ID + `"}`,
+			`{"tool":"pulumi","project":"*","stack":"*","collectionID":"` + c.ID + `"}`,
 		},
 		{
 			base + "/placement-rules",
-			`{"tool":"opentofu","project":"*","stack":"*","collectionId":"` + c.ID + `"}`,
+			`{"tool":"opentofu","project":"*","stack":"*","collectionID":"` + c.ID + `"}`,
 		},
 	} {
 		status, body, err := e.serverStatus(ctx, e.token, http.MethodPost, step.path, step.body)

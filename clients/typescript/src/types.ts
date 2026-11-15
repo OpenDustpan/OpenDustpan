@@ -1275,7 +1275,7 @@ export interface PasswordTooShortErrorArgs {
 
 export interface PlacementRule {
   readonly collection: string;
-  readonly collectionId: string;
+  readonly collectionID: string;
   readonly createdAt: number;
   readonly createdBy: string;
   readonly id: string;
@@ -1287,7 +1287,7 @@ export interface PlacementRule {
 }
 
 export interface PlacementRuleRequest {
-  readonly collectionId: string;
+  readonly collectionID: string;
   readonly position?: number;
   readonly project: string;
   readonly stack: string;

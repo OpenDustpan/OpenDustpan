@@ -700,7 +700,7 @@ func (s *Store) CreateStackPlaced(
 		}
 
 		if err := setUnitCollection(ctx, q, placementMove(st, p), e); err != nil {
-			return placementCollectionError(p.CollectionID, err)
+			return placementCollectionError("set placement collection", p.CollectionID, err)
 		}
 
 		return nil

@@ -79,7 +79,7 @@ func withoutCatchAllRule(t *testing.T, env *e2e.Env, tool string, fn func()) {
 	// context of the test is canceled before a cleanup runs, so the restore
 	// uses a context that is not canceled.
 	t.Cleanup(func() {
-		again := `{"tool":` + strconv.Quote(tool) + `,"project":"*","stack":"*","collectionId":` +
+		again := `{"tool":` + strconv.Quote(tool) + `,"project":"*","stack":"*","collectionID":` +
 			strconv.Quote(collectionID) + `}`
 
 		restoreStatus, restoreBody, restoreErr := env.ServerAPIStatus(

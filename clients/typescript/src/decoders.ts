@@ -1784,7 +1784,7 @@ export const decodePasswordTooShortErrorArgs: Decoder<PasswordTooShortErrorArgs>
 /** The validator of PlacementRule. */
 export const decodePlacementRule: Decoder<PlacementRule> = object<PlacementRule>("PlacementRule", {
   collection: string,
-  collectionId: string,
+  collectionID: string,
   createdAt: int64,
   createdBy: string,
   id: string,
@@ -1797,7 +1797,7 @@ export const decodePlacementRule: Decoder<PlacementRule> = object<PlacementRule>
 
 /** The validator of PlacementRuleRequest. */
 export const decodePlacementRuleRequest: Decoder<PlacementRuleRequest> = object<PlacementRuleRequest>("PlacementRuleRequest", {
-  collectionId: string,
+  collectionID: string,
   position: optional(int64),
   project: string,
   stack: string,

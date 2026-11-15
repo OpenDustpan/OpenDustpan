@@ -109,12 +109,12 @@ with the code `collection.changed`. Read the unit again, and retry.
 ## Placement rules
 
 A placement rule names the collection of a new stack. A rule has a `tool`, a
-`project` pattern, a `stack` pattern and a `collectionId`. The rules of a namespace
+`project` pattern, a `stack` pattern and a `collectionID`. The rules of a namespace
 are ordered. The first rule that matches a new stack names its collection. A
 later rule does not apply.
 
-Rule reads return both `collectionId` and `collection`, the current name.
-Writes require `collectionId` and refuse `collection`, also when both fields
+Rule reads return both `collectionID` and `collection`, the current name.
+Writes require `collectionID` and refuse `collection`, also when both fields
 are present. The ID must belong to a collection in the same namespace.
 If someone deletes a collection and makes it again, the new collection gets
 a different ID. It does not take the placement rules of the old collection.
@@ -155,7 +155,7 @@ PLATFORM_COLLECTION_ID=$(curl -s -H "Authorization: Bearer $TOKEN" \
 
 curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"tool\":\"opentofu\",\"project\":\"*\",\"stack\":\"*\",\"collectionId\":\"$PLATFORM_COLLECTION_ID\"}" \
+  -d "{\"tool\":\"opentofu\",\"project\":\"*\",\"stack\":\"*\",\"collectionID\":\"$PLATFORM_COLLECTION_ID\"}" \
   https://dustpan.example.com/api/dustpan/v1/namespaces/acme/placement-rules
 ```
 
@@ -196,7 +196,7 @@ PAYMENTS_PROD_COLLECTION_ID=$(curl -s -H "Authorization: Bearer $TOKEN" \
 
 curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"tool\":\"pulumi\",\"project\":\"payments\",\"stack\":\"prod*\",\"collectionId\":\"$PAYMENTS_PROD_COLLECTION_ID\"}" \
+  -d "{\"tool\":\"pulumi\",\"project\":\"payments\",\"stack\":\"prod*\",\"collectionID\":\"$PAYMENTS_PROD_COLLECTION_ID\"}" \
   https://dustpan.example.com/api/dustpan/v1/namespaces/acme/placement-rules
 ```
 
@@ -212,7 +212,7 @@ with the project `payments` and the stack `*` hides a later rule with the projec
 
 ### Change and delete a rule
 
-`PUT` replaces the `tool`, `project`, `stack` and `collectionId`. All four are
+`PUT` replaces the `tool`, `project`, `stack` and `collectionID`. All four are
 required. A `position` moves the rule.
 
 `DELETE` deletes the rule and closes the gap in the positions. The stacks that
@@ -237,7 +237,7 @@ stack.
 | `collection.not-empty` | `409` | The collection holds a live unit. |
 | `collection.changed` | `409` | The source collection of a move is not the one the caller expects. |
 | `unit.no-collection` | `409` | A step needs a unit that is in a collection, and the unit is in none. |
-| `placement.collection-id-required` | `400` | The rule needs `collectionId`. A name in `collection` is not a write field. |
+| `placement.collection-id-required` | `400` | The rule needs `collectionID`. A name in `collection` is not a write field. |
 | `placement.invalid-collection-id` | `400` | The ID has an invalid form. Read the collection to get its `id`. |
 | `placement.conflict` | `409` | A rule is hidden by an earlier rule. |
 | `placement.no-match` | `422` | No rule matches a new stack, so the server does not make it. |
