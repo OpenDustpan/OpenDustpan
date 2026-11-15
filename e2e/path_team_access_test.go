@@ -295,7 +295,7 @@ func teamAccessPlacementTofuHTTP(ctx context.Context, t *testing.T, env *e2e.Env
 	// and the server makes no unit.
 	status, body, err := env.TFEStatusA(ctx, "LOCK", "/tofu/state/"+teamAccessNamespace+"/orphan",
 		tofuHTTPLockInfo())
-	if err != nil || status != http.StatusUnprocessableEntity || !strings.Contains(body, "placement-rules") {
+	if err != nil || status != http.StatusUnprocessableEntity || !strings.Contains(body, "opendustpan placement add") {
 		t.Fatalf("lock of the workspace that no rule matches = %d %s %v, want 422 that names the rules",
 			status, body, err)
 	}

@@ -86,6 +86,7 @@ func settingsConfig(
 ) *apiserver.Config {
 	t.Helper()
 	return &apiserver.Config{
+		ProxyRules:  nil,
 		Cursors:     testCursors(t),
 		Reach:       noReach(),
 		LocalUsers:  nil,

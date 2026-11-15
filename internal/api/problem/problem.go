@@ -413,8 +413,17 @@ func Shared(err error) (Problem, bool) {
 }
 
 // Worker returns the answer to a start that the worker check refused: 503
-// with the command that starts a worker.
+// with the command that starts a worker, or with Retry-After when the
+// instance drains. The drain period comes from the error: the sentinel
+// carries it, so the answer names the wait of this drain.
 func Worker(err error) (Problem, bool) {
+	if errors.Is(err, admit.ErrDraining) {
+		p := answer(http.StatusServiceUnavailable, errcode.InstanceDraining, admit.DrainingMessage)
+		p.RetryAfter = admit.DrainRetryAfter(err)
+
+		return p, true
+	}
+
 	if errors.Is(err, admit.ErrNoWorker) {
 		return answer(http.StatusServiceUnavailable, errcode.WorkerAbsent, admit.Message), true
 	}

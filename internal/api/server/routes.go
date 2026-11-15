@@ -134,6 +134,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.settingsRoutes()...)
 	routes = append(routes, h.gitHostRoutes()...)
 	routes = append(routes, h.gitHostLinkRoutes()...)
+	routes = append(routes, h.proxyRuleRoutes()...)
 
 	return routes
 }

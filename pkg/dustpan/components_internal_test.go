@@ -48,6 +48,8 @@ func newTestWatch(store DurableStore, set Components, lease time.Duration, now f
 		owner:       "test-" + time.Now().Format("150405.000000"),
 		logger:      slog.New(slog.DiscardHandler),
 		now:         now,
+		draining:    nil,
+		drainPeriod: 0,
 		lastActive:  atomic.Int64{},
 		lastBeat:    atomic.Int64{},
 		mu:          sync.Mutex{},

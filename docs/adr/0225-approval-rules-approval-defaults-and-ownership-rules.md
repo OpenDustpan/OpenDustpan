@@ -8,6 +8,7 @@ Changed by:
   failover.
 - ADR 299 changes decisions 1, 7 and 12: review requests, mode 1 and the
   binding level.
+- ADR 385 changes decision 5: "always" holds only when the setting `freshAuthEnabled` is on.
 
 ## Context
 

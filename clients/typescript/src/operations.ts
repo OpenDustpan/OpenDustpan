@@ -115,6 +115,7 @@ import {
   decodeJobTrigger,
   decodeJobUnit,
   decodeJobUnitRequest,
+  decodeJoinedProxyRule,
   decodeListAccessLimitsResponse,
   decodeListApprovalRulesResponse,
   decodeListBackupsResponse,
@@ -194,6 +195,8 @@ import {
   decodeProfileRevision,
   decodeProviderRelease,
   decodeProviderReleaseFile,
+  decodeProxyRule,
+  decodeProxyRuleSet,
   decodePublishFile,
   decodePublishModuleReleaseRequest,
   decodePublishProviderReleaseRequest,
@@ -207,6 +210,7 @@ import {
   decodeRegistryKey,
   decodeRegistryModule,
   decodeRegistryProvider,
+  decodeRenderedProxyRules,
   decodeReplaceNotificationSinkRequest,
   decodeReplaceNotificationSubscriptionRequest,
   decodeRequestBodyTooLargeError,
@@ -222,6 +226,7 @@ import {
   decodeRestoreSwappedErrorArgs,
   decodeRestoreWarning,
   decodeRotateNamespaceIssuerKeysRequest,
+  decodeSaveProxyRuleSetRequest,
   decodeSaveTriggerRequest,
   decodeSchemaBinaryBelowMinimumError,
   decodeSchemaBinaryBelowMinimumErrorArgs,
@@ -317,6 +322,7 @@ import {
   decodeUnitNoStateErrorArgs,
   decodeUnitOutputEntry,
   decodeUnitOutputs,
+  decodeUnitProxyRules,
   decodeUnitSettings,
   decodeUnitSettingsBoolField,
   decodeUnitSettingsCodeLocation,
@@ -462,6 +468,7 @@ import type {
   JobTrigger,
   JobUnit,
   JobUnitRequest,
+  JoinedProxyRule,
   ListAccessLimitsResponse,
   ListApprovalRulesResponse,
   ListBackupsResponse,
@@ -541,6 +548,8 @@ import type {
   ProfileRevision,
   ProviderRelease,
   ProviderReleaseFile,
+  ProxyRule,
+  ProxyRuleSet,
   PublishFile,
   PublishModuleReleaseRequest,
   PublishProviderReleaseRequest,
@@ -554,6 +563,7 @@ import type {
   RegistryKey,
   RegistryModule,
   RegistryProvider,
+  RenderedProxyRules,
   ReplaceNotificationSinkRequest,
   ReplaceNotificationSubscriptionRequest,
   RequestBodyTooLargeError,
@@ -569,6 +579,7 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  SaveProxyRuleSetRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
@@ -664,6 +675,7 @@ import type {
   UnitNoStateErrorArgs,
   UnitOutputEntry,
   UnitOutputs,
+  UnitProxyRules,
   UnitSettings,
   UnitSettingsBoolField,
   UnitSettingsCodeLocation,
@@ -1487,6 +1499,14 @@ export interface GetNamespaceOverrideSwitchesInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getNamespaceProxyRules. */
+export interface GetNamespaceProxyRulesInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getNamespaceSettings. */
 export interface GetNamespaceSettingsInput {
   readonly path: {
@@ -1568,6 +1588,19 @@ export interface GetProviderReleaseInput {
     readonly namespace: string;
     readonly name: string;
     readonly version: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getRenderedProxyRules. */
+export interface GetRenderedProxyRulesInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly unit_id: string;
+  };
+  readonly query?: {
+    /** The operation to render: plan, apply, destroy or refresh. */
+    readonly operation?: string;
   };
   readonly signal?: AbortSignal;
 }
@@ -1674,6 +1707,15 @@ export interface GetUnitGateInput {
 
 /** The input of the operation getUnitOutputs. */
 export interface GetUnitOutputsInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly unit_id: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getUnitProxyRules. */
+export interface GetUnitProxyRulesInput {
   readonly path: {
     readonly namespace: string;
     readonly unit_id: string;
@@ -2306,6 +2348,29 @@ export interface RotateNamespaceIssuerKeysInput {
     readonly namespace: string;
   };
   readonly body: RotateNamespaceIssuerKeysRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation saveNamespaceProxyRules. */
+export interface SaveNamespaceProxyRulesInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly body: SaveProxyRuleSetRequest;
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation saveUnitProxyRules. */
+export interface SaveUnitProxyRulesInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly unit_id: string;
+  };
+  readonly body: SaveProxyRuleSetRequest;
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -4046,6 +4111,23 @@ export const operations = {
     },
     ref(() => decodeOverrideSwitches),
   ),
+  getNamespaceProxyRules: operation<ProxyRuleSet>(
+    {
+      id: "getNamespaceProxyRules",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/proxy-rules",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeProxyRuleSet),
+  ),
   getNamespaceSettings: operation<Settings>(
     {
       id: "getNamespaceSettings",
@@ -4198,6 +4280,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeProviderRelease),
+  ),
+  getRenderedProxyRules: operation<RenderedProxyRules>(
+    {
+      id: "getRenderedProxyRules",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules/rendered",
+      pathParameters: ["namespace", "unit_id"],
+      queryParameters: ["operation"],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeRenderedProxyRules),
   ),
   getRestore: operation<GetRestoreResponse>(
     {
@@ -4402,6 +4501,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeUnitOutputs),
+  ),
+  getUnitProxyRules: operation<UnitProxyRules>(
+    {
+      id: "getUnitProxyRules",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules",
+      pathParameters: ["namespace", "unit_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeUnitProxyRules),
   ),
   getUnitSettings: operation<UnitSettings>(
     {
@@ -5456,6 +5572,40 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeNamespaceIssuerRotation),
+  ),
+  saveNamespaceProxyRules: operation<ProxyRuleSet>(
+    {
+      id: "saveNamespaceProxyRules",
+      method: "PUT",
+      path: "/api/dustpan/v1/namespaces/{namespace}/proxy-rules",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "optional",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeProxyRuleSet),
+  ),
+  saveUnitProxyRules: operation<ProxyRuleSet>(
+    {
+      id: "saveUnitProxyRules",
+      method: "PUT",
+      path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules",
+      pathParameters: ["namespace", "unit_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "optional",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeProxyRuleSet),
   ),
   setAccessLimit: operation<AccessLimit>(
     {

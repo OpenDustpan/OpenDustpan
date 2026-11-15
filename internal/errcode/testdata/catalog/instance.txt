@@ -1,2 +1,3 @@
+instance.draining
 instance.invalid-id
 instance.not-found

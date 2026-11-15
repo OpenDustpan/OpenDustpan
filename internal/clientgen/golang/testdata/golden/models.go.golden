@@ -150,6 +150,7 @@ const (
 	ErrorCodeGitHostLinkRequestNotFound            ErrorCode = "git-host.link-request-not-found"
 	ErrorCodeGitHostLinkRequestUsed                ErrorCode = "git-host.link-request-used"
 	ErrorCodeGitHostLinkUnavailable                ErrorCode = "git-host.link-unavailable"
+	ErrorCodeInstanceDraining                      ErrorCode = "instance.draining"
 	ErrorCodeInstanceInvalidId                     ErrorCode = "instance.invalid-id"
 	ErrorCodeInstanceNotFound                      ErrorCode = "instance.not-found"
 	ErrorCodeIssuerConflict                        ErrorCode = "issuer.conflict"
