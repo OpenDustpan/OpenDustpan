@@ -31,7 +31,8 @@ Evidence for the claims above:
 
 - pkg/audit Entry gets one NEW field `Origin`, a pointer to the NEW value type `audit.Origin` that holds the seven fields agentRun, agentSession, tool, argsDigest, breakGlass, secretStage and delegationID; nil for an ordinary entry. The channels agent, mcp and mcp-proxy.
 - The portable backup column list of audit_entries gets the seven columns.
-- ComputeHash writes the agent/1 block only when Entry.Origin is not nil, in the fixed order of ADR 126 decision 10.
+- ComputeHash writes the agent/1 block only when Entry.Origin is not nil, in the fixed order of ADR 126 decision 10 with ADR 380.
+- The store read paths (`fromAuditRow` and its callers in the audit, chain, entries and feed files of each dialect) read the seven columns and refuse a partial set. The store backup lists of audit_entries get the seven columns. The revoke entry of a grant keeps the Origin of its step.
 - The baseline of each SQL dialect gets the seven columns, edited in place in name order.
 - The API entry gets an agent block and toAuditEntry fills it.
 - pkg/job replaces Actor.Agent string with job.AgentRef, and the job entries write the block instead of a change key. For a job entry, tool, argsDigest and secretStage are empty.
@@ -40,7 +41,6 @@ Out of scope:
 
 - The agent-tool audit kind and the tool call entries.
 - The audit list filters channel, agentRun and tool, and the CEF mapping.
-- The delegation in the hash block.
 - The agent runs, the MCP endpoint and the model connection.
 
 ## Usability

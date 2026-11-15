@@ -96,7 +96,8 @@ const MaxSinkSeries = 16
 // families of the reload of the configuration file (ADR 63 decision 5),
 // and counts the runs of the inactivity disable by result (ADR 53).
 // It also holds the audit chain families: the scopes whose check failed,
-// and the restores whose restored log failed the check.
+// and the restores whose restored log failed the check. It also counts the
+// blob deletes that wait, by reason.
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
@@ -112,6 +113,7 @@ type ServerMetrics struct {
 	reloadOK *Gauge
 	sweeps   *Counter
 	deleted  *Counter
+	blobWait *Counter
 	signin   *Counter
 	gitHost  *Counter
 }
@@ -170,10 +172,11 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		sweeps:  newSweepCounter(reg),
-		deleted: newDeletedSweepCounter(reg),
-		signin:  newSignInCounterErrors(reg),
-		gitHost: newGitHostRefusedCounter(reg),
+		sweeps:   newSweepCounter(reg),
+		deleted:  newDeletedSweepCounter(reg),
+		blobWait: newBlobDeleteWaitCounter(reg),
+		signin:   newSignInCounterErrors(reg),
+		gitHost:  newGitHostRefusedCounter(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
@@ -537,6 +540,60 @@ func (m *ServerMetrics) ObserveDeletedSweep(result string, n int) {
 	if n > 0 {
 		m.deleted.Add(uint64(n), result)
 	}
+}
+
+// Reasons of dustpan_blob_deletes_waiting_total.
+const (
+	// BlobDeleteWaitBackup counts a blob delete that waits for a backup.
+	BlobDeleteWaitBackup = "backup"
+	// BlobDeleteWaitRestore counts a blob delete that waits for a restore.
+	BlobDeleteWaitRestore = "restore"
+	// BlobDeleteWaitNoGuard counts a blob delete of a deleter that has no
+	// guard.
+	BlobDeleteWaitNoGuard = "no-guard"
+	// BlobDeleteWaitGuardError counts a blob delete that a failed take, an
+	// unknown answer or another guard failure kept back.
+	BlobDeleteWaitGuardError = "guard-error"
+)
+
+// maxBlobDeleteWaitReasons holds one series for each reason.
+const maxBlobDeleteWaitReasons = 4
+
+// newBlobDeleteWaitCounter creates dustpan_blob_deletes_waiting_total in reg.
+// It registers the four reasons at zero, so an alert sees them before the
+// first wait.
+func newBlobDeleteWaitCounter(reg *Registry) *Counter {
+	c := reg.NewCounter(
+		"dustpan_blob_deletes_waiting_total",
+		"Blob deletes that did not run because a backup or a restore runs, or because the guard failed, by reason.",
+		[]string{labelReason},
+		maxBlobDeleteWaitReasons,
+	)
+
+	for _, reason := range []string{
+		BlobDeleteWaitBackup, BlobDeleteWaitRestore, BlobDeleteWaitNoGuard, BlobDeleteWaitGuardError,
+	} {
+		c.Add(0, reason)
+	}
+
+	return c
+}
+
+// IncBlobDeleteWaiting adds one to the blob deletes that a refused take kept
+// back, for reason: one of the BlobDeleteWait constants. Any other value
+// counts as BlobDeleteWaitGuardError, so the label set stays fixed.
+// Operators alert when a series keeps growing while no backup or restore
+// runs: the deletes do not drain.
+func (m *ServerMetrics) IncBlobDeleteWaiting(reason string) {
+	// Defense in depth: blobguard.ReasonOf returns the four values already.
+	// This check stays so that a new caller cannot add a label value.
+	switch reason {
+	case BlobDeleteWaitBackup, BlobDeleteWaitRestore, BlobDeleteWaitNoGuard:
+	default:
+		reason = BlobDeleteWaitGuardError
+	}
+
+	m.blobWait.Inc(reason)
 }
 
 // ObserveConfigReload records one reload of the configuration file (ADR 63
