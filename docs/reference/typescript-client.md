@@ -112,21 +112,59 @@ go run ./cmd/clientgen -target typescript -description openapi.json -out clients
 | `-description` | The path of the API description. |
 | `-out` | The output directory. |
 | `-package` | The package name. The default is `@opendustpan/client`. |
-| `-client-version` | The package version. The default is `info.version`. Its major and minor parts must be those of `info.version`. |
+| `-publish` | Write the files of a published package. See "Publish the package". |
+| `-client-version` | The package version. It needs `-publish`. The default is `info.version`. Its major and minor parts must be those of `info.version`. |
 | `-server-release` | The server release. Before the first release, use the commit. The package records it in `metadata`. The default is `development`. |
 | `-server-commit` | The Git commit of the server, 40 lowercase hexadecimal digits. The package records it in `metadata.serverCommit`. The default is `development`, for a run that is not a release. |
 | `-check` | Write nothing. Exit with 1 and list the differences. |
 
-The package records the SHA-256 of the description in `metadata.descriptionSha256`.
-`info.version` alone is not a safe pin. The subpath
-`@opendustpan/client/description` exports `description`, the text of the
-description. The SHA-256 of its UTF-8 bytes is `metadata.descriptionSha256`.
-The root of the package does not export it, so an import of the client does
-not load the text:
+The subpath `@opendustpan/client/description` exports `description`, the text
+of the description. The root of the package does not export it, so an import
+of the client does not load the text:
 
 ```ts
 import { description } from "@opendustpan/client/description";
 ```
+
+The file `src/description.ts` holds the text as an array with one string for
+each line of the description. The module joins the strings with a line feed,
+so the UTF-8 bytes of `description` are the bytes of the description file. A
+change of one line of the description changes one line of `description.ts`.
+
+## What the files in the repository leave out
+
+A change of the description must not change a line that it does not touch.
+Then two pull requests that change different parts of the description do not
+conflict in `clients/typescript`. For this reason, a run without `-publish`
+writes these files:
+
+- `package.json` has the version `0.0.0`.
+- `metadata.ts` has no `clientVersion` and no `descriptionSha256`. Both are
+  optional members of `Metadata`.
+
+The default transport sends the user agent `opendustpan-client-ts/<version>`.
+The version is `metadata.clientVersion`, or `unpublished` when the member is
+not there.
+
+## Publish the package
+
+The publish step runs the generator with `-publish` into a directory that is
+not in the repository, and publishes that directory:
+
+```sh
+go run ./cmd/clientgen -target typescript -publish \
+  -description internal/api/apidesc/openapi.json \
+  -server-release v0.36.0 -server-commit <40 hexadecimal digits> \
+  -client-version 0.36.0 -out /var/tmp/client-package
+```
+
+A run with `-publish` writes the client version in `package.json` and in
+`metadata.clientVersion`. It also writes the SHA-256 of the description in
+`metadata.descriptionSha256`, in lowercase hexadecimal. The digest is the
+SHA-256 of the UTF-8 bytes of `description`. Use the digest and the version of
+the published package as the pin of the description, because `info.version`
+alone is not a safe pin. The generator computes the digest from the bytes that
+it writes, and refuses to write a package whose digest does not name them.
 
 ## Error answers by code
 

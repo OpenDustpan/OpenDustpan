@@ -71,7 +71,7 @@ func targetNames() []string {
 // config holds the flags of one run.
 type config struct {
 	target, description, out, pkg, release, commit, version string
-	check                                                   bool
+	check, publish                                          bool
 }
 
 // sayf writes one line of the report. A failed write to the terminal has no
@@ -97,7 +97,10 @@ func parse(args []string, stderr io.Writer) (config, int, bool) {
 		"the server release, or the commit before the first release, that the description comes from")
 	fs.StringVar(&c.commit, "server-commit", DefaultServerCommit,
 		"the Git commit of the server that the description comes from (40 hexadecimal digits)")
-	fs.StringVar(&c.version, "client-version", "", "the client version; the default is info.version of the description")
+	fs.StringVar(&c.version, "client-version", "",
+		"the client version; needs -publish; the default is info.version of the description")
+	fs.BoolVar(&c.publish, "publish", false,
+		"write the files of a published package, with the client version and the digest of the description")
 	fs.BoolVar(&c.check, "check", false,
 		"write nothing; exit with 1 and list the differences if the output directory is not what a run gives")
 
@@ -111,6 +114,12 @@ func parse(args []string, stderr io.Writer) (config, int, bool) {
 
 	if fs.NArg() != 0 || c.target == "" || c.description == "" || c.out == "" {
 		sayf(stderr, "clientgen: -target, -description and -out are required, and no argument follows the flags")
+
+		return c, ExitUsage, false
+	}
+
+	if c.version != "" && !c.publish {
+		sayf(stderr, "clientgen: -client-version needs -publish. A run without -publish writes no client version")
 
 		return c, ExitUsage, false
 	}
@@ -140,7 +149,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	lang := t.lang()
 
 	files, err := generate(lang, c.description, clientgen.Options{
-		Package: c.pkg, ClientVersion: c.version, ServerRelease: c.release,
+		Package: c.pkg, Publish: c.publish, ClientVersion: c.version, ServerRelease: c.release,
 		ServerCommit: c.commit, Description: nil,
 		GeneratorVersion: clientgen.GeneratorVersion, DescriptionSHA256: "",
 	})
@@ -180,7 +189,7 @@ func generate(lang clientgen.Language, path string, opts clientgen.Options) ([]c
 	digest := sha256.Sum256(raw)
 	opts.DescriptionSHA256, opts.Description = hex.EncodeToString(digest[:]), raw
 
-	if opts.ClientVersion == "" {
+	if opts.Publish && opts.ClientVersion == "" {
 		opts.ClientVersion = api.Version
 	}
 
