@@ -74,12 +74,12 @@ func TestBackupReadsTheManifestWithItsOwnCap(t *testing.T) {
 	}
 }
 
-// TestBackupReportsRegistryFiles proves the registry file report of the
+// TestBackupReportRegistryFiles proves the registry file report of the
 // backup command: the row holds the registry file sections of the manifest,
 // and the command prints the count of the copied files and their total bytes.
 // A manifest with no section prints the report of zero files. The test sets
 // the admin token, so it cannot run in parallel.
-func TestBackupReportsRegistryFiles(t *testing.T) {
+func TestBackupReportRegistryFiles(t *testing.T) {
 	tests := []struct {
 		name string
 		row  string

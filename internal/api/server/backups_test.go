@@ -719,7 +719,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 	}
 }
 
-// TestBackupStartWithoutGrantAnswers403 proves POST /api/server/backups
+// TestBackupStartWithoutGrantAnswers403 proves POST /api/dustpan/v1/backups
 // answers 403 when the principal holds no server:backup on the installation,
 // with the one JSON error shape, and that the denied start writes no row.
 func TestBackupStartWithoutGrantAnswers403(t *testing.T) {
@@ -731,7 +731,7 @@ func TestBackupStartWithoutGrantAnswers403(t *testing.T) {
 	denyBackup := selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionServerBackup: true}}
 	denied := newBackupFixtureWithAuthorizer(t, stores, stores.registry, nil, denyBackup)
 
-	status, body := serveBackup(t, denied.handler, http.MethodPost, "/api/server/backups")
+	status, body := serveBackup(t, denied.handler, http.MethodPost, "/api/dustpan/v1/backups")
 	if status != http.StatusForbidden {
 		t.Fatalf("POST backups without the grant answers %d, want %d (%s)",
 			status, http.StatusForbidden, body)
@@ -741,7 +741,7 @@ func TestBackupStartWithoutGrantAnswers403(t *testing.T) {
 		t.Fatalf("POST backups error = %+v, want code 403 with a message", doc)
 	}
 
-	status, body = serveBackup(t, allowed.handler, http.MethodGet, "/api/server/backups")
+	status, body = serveBackup(t, allowed.handler, http.MethodGet, "/api/dustpan/v1/backups")
 	if status != http.StatusOK {
 		t.Fatalf("GET backups answers %d, want %d (%s)", status, http.StatusOK, body)
 	}

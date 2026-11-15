@@ -72,7 +72,7 @@ func TestBackupRestoresRegistryFiles(t *testing.T) {
 
 	id := backupIDOf(t, out)
 
-	_, row := get(t, server.url, "/api/server/backups/"+id)
+	_, row := get(t, server.url, "/api/dustpan/v1/backups/"+id)
 	if !strings.Contains(row, `"registryFiles"`) || !strings.Contains(row, contentKey) {
 		t.Fatalf("backup row names no registry file %q: %s", contentKey, row)
 	}
@@ -198,7 +198,7 @@ func waitProductionRestoreSucceeded(t *testing.T, server *productionServer, id s
 	deadline := time.Now().Add(2 * time.Minute)
 
 	for time.Now().Before(deadline) {
-		_, body := get(t, server.url, "/api/server/restores/"+id)
+		_, body := get(t, server.url, "/api/dustpan/v1/restores/"+id)
 
 		var doc restoreDoc
 		if err := json.Unmarshal([]byte(body), &doc); err != nil {

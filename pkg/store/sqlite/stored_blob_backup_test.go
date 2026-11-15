@@ -133,3 +133,9 @@ func TestStoredBlobBackupRegistryMissing(t *testing.T) {
 
 	storetest.RunStoredBlobBackupRegistryMissing(t, newStoredBlobRig)
 }
+
+func TestStoredBlobBackupRegistryFiles(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunStoredBlobBackupRegistryFiles(t, newStoredBlobRig)
+}

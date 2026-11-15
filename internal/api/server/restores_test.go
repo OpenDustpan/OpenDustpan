@@ -687,7 +687,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	}
 }
 
-// TestStartRestoreWithoutGrantAnswers403 proves POST /api/server/restores
+// TestStartRestoreWithoutGrantAnswers403 proves POST /api/dustpan/v1/restores
 // answers 403 when the principal holds no server:restore on the installation,
 // with the one JSON error shape, and that the denied start writes no row.
 func TestStartRestoreWithoutGrantAnswers403(t *testing.T) {
@@ -701,7 +701,7 @@ func TestStartRestoreWithoutGrantAnswers403(t *testing.T) {
 	denied := newRestoreFixtureWorkers(t, stores, stores.target, nil, opts)
 
 	status, body := serveRestore(
-		t, denied.handler, http.MethodPost, "/api/server/restores", `{"backupID":"bkp-missing000000000001"}`,
+		t, denied.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-missing000000000001"}`,
 	)
 	if status != http.StatusForbidden {
 		t.Fatalf("POST restores without the grant answers %d, want %d (%s)", status, http.StatusForbidden, body)
@@ -711,7 +711,7 @@ func TestStartRestoreWithoutGrantAnswers403(t *testing.T) {
 		t.Fatalf("POST restores error = %+v, want code 403 with a message", doc)
 	}
 
-	listStatus, listBody := serveRestore(t, allowed.handler, http.MethodGet, "/api/server/restores", "")
+	listStatus, listBody := serveRestore(t, allowed.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
 	if listStatus != http.StatusOK || strings.Contains(listBody, `"id":"rst-`) {
 		t.Fatalf("GET restores answers %d %s after the denied start, want 200 with no row", listStatus, listBody)
 	}

@@ -129,3 +129,14 @@ func TestStoredBlobBackupRegistryMissing(t *testing.T) {
 
 	storetest.RunStoredBlobBackupRegistryMissing(t, newStoredBlobRig(base))
 }
+
+func TestStoredBlobBackupRegistryFiles(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL restore suite", envURL)
+	}
+
+	storetest.RunStoredBlobBackupRegistryFiles(t, newStoredBlobRig(base))
+}

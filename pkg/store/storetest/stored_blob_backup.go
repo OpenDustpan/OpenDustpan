@@ -249,6 +249,104 @@ func RunStoredBlobBackupRegistryMissing(t *testing.T, newRig StoredBlobBackupFac
 	}
 }
 
+// RunStoredBlobBackupRegistryFiles proves the three rules of the registry file
+// copy: the manifest reports the count and the bytes of the copied files, a
+// restore refuses a backup that names a registry file the backup does not
+// hold, and a backup refuses a release file whose live bytes do not match
+// their key.
+func RunStoredBlobBackupRegistryFiles(t *testing.T, newRig StoredBlobBackupFactory) {
+	t.Helper()
+
+	in := newStoredBlobInput(t)
+	source := newRig(t, in)
+	seed := seedStoredBlobs(t, source, in.Key)
+	backupID := backup.ID(ident.NewID("bkp-"))
+
+	if _, err := source.Backups.Run(t.Context(), backupID); err != nil {
+		t.Fatalf("run backup: %v", err)
+	}
+
+	manifest, err := source.Backups.ReadManifest(t.Context(), backupID)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+
+	report := backup.RegistryFileReportOf(manifest.RegistryFiles)
+	if report.Count != 1 || report.TotalBytes != int64(len(registryFileBody)) {
+		t.Errorf("registry file report = %+v, want 1 file and %d bytes", report, len(registryFileBody))
+	}
+
+	// The backup loses the copy of the registry file: a restore must refuse it
+	// and write nothing.
+	fileKey := mustBlobKey(t, "blobs/"+seed.releaseKey)
+	if delErr := in.Target.Delete(t.Context(), fileKey); delErr != nil {
+		t.Fatalf("remove the copy of the registry file: %v", delErr)
+	}
+
+	dest := newRig(t, in)
+	restoreID := backup.RestoreID(ident.NewID("rst-"))
+
+	if err = dest.Restores.Start(t.Context(), restoreID, restoreRequest(backupID)); err != nil {
+		t.Fatalf("start restore: %v", err)
+	}
+
+	waitRestoreFailed(t, dest.Restores, restoreID)
+
+	// The live bytes of the file change, so they no longer match the SHA-256
+	// key. A new backup refuses them and writes no manifest.
+	liveKey := mustBlobKey(t, seed.releaseKey)
+	if delErr := source.Recorder.Blobs.Delete(t.Context(), liveKey); delErr != nil {
+		t.Fatalf("remove the live registry file: %v", delErr)
+	}
+
+	if putErr := source.Recorder.Blobs.Put(t.Context(), liveKey, strings.NewReader("other bytes")); putErr != nil {
+		t.Fatalf("overwrite the live registry file: %v", putErr)
+	}
+
+	badID := backup.ID(ident.NewID("bkp-"))
+	if _, runErr := source.Backups.Run(t.Context(), badID); runErr == nil {
+		t.Error("backup of a release file with other bytes than its key: want an error")
+	}
+
+	if _, readErr := source.Backups.ReadManifest(t.Context(), badID); readErr == nil {
+		t.Error("the refused backup wrote a manifest, want none")
+	}
+}
+
+// waitRestoreFailed runs the restore operation until the restore ends, and
+// fails the case unless it ended as failed.
+func waitRestoreFailed(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) {
+	t.Helper()
+
+	deadline := time.Now().Add(StuckTestLimit)
+
+	for {
+		row, err := restores.Get(t.Context(), id)
+		if err != nil {
+			t.Fatalf("get restore: %v", err)
+		}
+
+		switch row.State {
+		case backup.RestoreFailed:
+			return
+		case backup.RestoreSucceeded:
+			t.Fatalf("restore %s succeeded, want a refusal of the backup without its registry file", id)
+		}
+
+		runRestoreWorker(t, restores)
+
+		if time.Now().After(deadline) {
+			t.Fatalf("restore %s never ended", id)
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("restore %s: %v", id, t.Context().Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 // checkNotCopied checks the backup of rows without check values: the manifest
 // lists the log chunks, the target holds none of them, and the target holds
 // the plan parts, whose values are in the plan document, and the registry
