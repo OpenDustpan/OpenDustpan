@@ -51,9 +51,7 @@ func TestSettingsKeyedReplay(t *testing.T) {
 	keys := st.Idempotency(idempotencytest.TestWrapper(t, 1))
 	ref := idempotency.Ref{Principal: "alice", Method: http.MethodPatch, Path: "/api/v1/settings", Key: "key-one"}
 	material := []byte("body-one")
-	now := time.Now()
-
-	started, err := keys.Begin(t.Context(), ref, material, now)
+	started, err := keys.Begin(t.Context(), ref, material, settingsKeyedNow())
 	if err != nil || started.Outcome != idempotency.Started {
 		t.Fatalf("begin = %+v, %v, want Started", started, err)
 	}
@@ -88,12 +86,12 @@ func checkSettingsKeyedReplay(
 ) {
 	t.Helper()
 
-	replay, err := keys.Begin(t.Context(), ref, material, time.Time{})
+	replay, err := keys.Begin(t.Context(), ref, material, settingsKeyedNow())
 	if err != nil || replay.Outcome != idempotency.Replayed || string(replay.Answer.Body) != `{"stored":true}` {
 		t.Fatalf("replay = %+v, %v, want Replayed with the stored answer", replay, err)
 	}
 
-	reused, err := keys.Begin(t.Context(), ref, []byte("body-two"), time.Time{})
+	reused, err := keys.Begin(t.Context(), ref, []byte("body-two"), settingsKeyedNow())
 	if err != nil || reused.Outcome != idempotency.Reused {
 		t.Fatalf("key reuse = %+v, %v, want Reused", reused, err)
 	}
@@ -119,7 +117,7 @@ func TestSettingsKeyedChangeRollsBackWithALostRecord(t *testing.T) {
 	keys := st.Idempotency(idempotencytest.TestWrapper(t, 1))
 	ref := idempotency.Ref{Principal: "alice", Method: http.MethodPatch, Path: "/api/v1/settings", Key: "key-lost"}
 
-	started, err := keys.Begin(t.Context(), ref, []byte("body"), time.Now())
+	started, err := keys.Begin(t.Context(), ref, []byte("body"), settingsKeyedNow())
 	if err != nil || started.Outcome != idempotency.Started {
 		t.Fatalf("begin = %+v, %v, want Started", started, err)
 	}
@@ -149,3 +147,9 @@ func TestSettingsKeyedChangeRollsBackWithALostRecord(t *testing.T) {
 // errSettingsKeyedResult is the error of a build function that gets a result
 // of another type.
 var errSettingsKeyedResult = errors.New("the change passed a result of another type")
+
+// settingsKeyedNow is the fixed instant of the keyed replay cases: no case
+// reads the wall clock.
+func settingsKeyedNow() time.Time {
+	return time.UnixMilli(1_700_000_000_000)
+}
