@@ -33,6 +33,11 @@ import (
 // renewals of a loaded machine under the race detector.
 const workerLease = 10 * time.Second
 
+// heldLease is the lease of a case that must keep one claim live for its
+// whole run. It is longer than any case runs, so that no case depends on how
+// much CPU time the renewals get on a loaded machine.
+const heldLease = 10 * time.Minute
+
 // laterNamespace is the namespace that a worker rig creates after its backup:
 // a restored store does not hold it, and a store that the restore did not
 // change still holds it.
@@ -140,6 +145,9 @@ type workerRig struct {
 	// failover is the failover version of the namespace acme before a
 	// restore that a case cancels.
 	failover int64
+	// lease is the lease of the restore operations of the services of the
+	// rig: workerLease, unless a case sets another.
+	lease time.Duration
 }
 
 // newWorkerRig opens a store, seeds a namespace with a data key and an item
@@ -183,6 +191,7 @@ func newWorkerRig(t *testing.T, newStore RestoreFactory) *workerRig {
 		backupID: "",
 		seed:     noSeed(),
 		failover: 0,
+		lease:    workerLease,
 	}
 
 	r.seed = seedItemKeyBackup(
@@ -273,7 +282,7 @@ func (r *workerRig) service(t *testing.T, w workerService) *backup.RestoreServic
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live: w.live, Operations: w.ops, Backups: r.backups, Maintenance: w.maint, Blobs: w.blobs,
 		Leases: r.st, Target: r.target, Key: r.key, Installation: "local", AfterApply: w.afterApply, Admit: nil,
-		AllowDevBackups: false, AllowDevHint: "", Owner: w.owner, Lease: workerLease,
+		AllowDevBackups: false, AllowDevHint: "", Owner: w.owner, Lease: r.lease,
 		CleanupLockWait: w.lockWait, RetryBase: time.Millisecond, Now: nil, Logger: nil,
 	})
 	if err != nil {
@@ -917,11 +926,15 @@ func testWorkerStaleHolder(t *testing.T, newStore RestoreFactory, step string) {
 
 // testWorkerOtherStart pauses the holder of instance a before step, and keeps
 // its claim. Another instance starts and runs its worker: it claims nothing
-// and fails no row. Then a ends the restore once.
+// and fails no row. Then a ends the restore once. The claim of a has a long
+// lease, so that it is live for the whole case without a renewal: the case
+// does not wait for the clock, and CPU load cannot end the claim. The
+// renewal of a claim over time has its own tests in the durable package.
 func testWorkerOtherStart(t *testing.T, newStore RestoreFactory, step string) {
 	t.Helper()
 
 	r := newWorkerRig(t, newStore)
+	r.lease = heldLease
 	gate := newStepGate(t, r, step, gatePauseLive)
 
 	var live backup.RestoreLive
@@ -944,7 +957,11 @@ func testWorkerOtherStart(t *testing.T, newStore RestoreFactory, step string) {
 		t,
 		workerService{owner: "instance-c", ops: nil, live: nil, maint: nil, blobs: nil, lockWait: 0, afterApply: nil},
 	)
-	workFor(t, c, 2*workerLease)
+
+	// One pass of the worker of c, with the claim of a live: nothing to claim.
+	if err := c.RunOnce(t.Context()); !errors.Is(err, durable.ErrNoWork) {
+		t.Fatalf("run of instance c while a holds the claim = %v, want %v", err, durable.ErrNoWork)
+	}
 
 	row, err := r.st.GetRestore(t.Context(), id)
 	if err != nil {
@@ -964,16 +981,6 @@ func testWorkerOtherStart(t *testing.T, newStore RestoreFactory, step string) {
 	<-aDone
 
 	r.mustRestoredOnce(t, id, restoredCheck{areas: true})
-}
-
-// workFor runs the worker of restores for d, as an instance that starts.
-func workFor(t *testing.T, restores *backup.RestoreService, d time.Duration) {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), d)
-	defer cancel()
-
-	restores.Work(ctx)
 }
 
 // swapKiller stops the holder in the swap transaction: it cancels the
