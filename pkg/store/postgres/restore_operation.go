@@ -168,6 +168,13 @@ func (s *Store) StartRestore(ctx context.Context, r backup.RestoreRecord, start 
 	}
 
 	return s.inControlTx(ctx, func(q *db.Queries) error {
+		// The exclusive form of the lease lock, before the insert of the
+		// checking row: a take that the lock ordered before this start sees
+		// the row, and a later take waits for this start.
+		if err := q.LockBlobDeleteLeaseExclusive(ctx, blobDeleteLockClass); err != nil {
+			return fmt.Errorf("lock the blob delete leases: %w", err)
+		}
+
 		return insertRestoreWithOperation(ctx, q, r, start, report)
 	})
 }
@@ -341,6 +348,13 @@ func (s *Store) MarkRestoreApplying(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, preBackupID backup.ID, result []byte,
 ) error {
 	return s.inControlTx(ctx, func(q *db.Queries) error {
+		// The exclusive form of the lease lock, before the write that moves
+		// the row to applying: a take that the lock ordered before this
+		// write sees the row, and a later take waits for this write.
+		if err := q.LockBlobDeleteLeaseExclusive(ctx, blobDeleteLockClass); err != nil {
+			return fmt.Errorf("lock the blob delete leases: %w", err)
+		}
+
 		if err := recordedRestoreWith(ctx, q, f, id, result); err != nil {
 			return err
 		}

@@ -175,7 +175,10 @@ func knownScopes() map[reflect.Type]scopeValues {
 			credential: ints(int64(pulumi.ScopeUpdateLease)),
 		},
 		reflect.TypeFor[tfe.Scope](): {
-			public: ints(int64(tfe.ScopePublic)), signedIn: ints(int64(tfe.ScopeAuthorized)),
+			public: ints(int64(tfe.ScopePublic)),
+			signedIn: ints(
+				int64(tfe.ScopeAuthorized), int64(tfe.ScopeDiscovery),
+			),
 			credential: ints(
 				int64(tfe.ScopeUpload), int64(tfe.ScopeRegistry), int64(tfe.ScopeSigned), int64(tfe.ScopeConsole),
 			),

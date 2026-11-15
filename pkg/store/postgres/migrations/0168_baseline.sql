@@ -115,11 +115,46 @@ CREATE TABLE audit_sink_leases (
     expires_at_ms bigint NOT NULL
 );
 
+CREATE TABLE blob_delete_leases (
+    holder text NOT NULL,
+    expires_at_ms bigint NOT NULL
+);
+
 CREATE TABLE blob_purges (
     tool text NOT NULL,
     unit_id text NOT NULL,
     purged_at_ms bigint NOT NULL,
     namespace_id text NOT NULL
+);
+
+CREATE TABLE break_glass_reviews (
+    id text NOT NULL,
+    use_kind text NOT NULL,
+    use_ref text NOT NULL,
+    use_scope text NOT NULL,
+    use_object text NOT NULL,
+    use_subject text NOT NULL,
+    use_people text NOT NULL,
+    use_reason text NOT NULL,
+    use_at_ms bigint NOT NULL,
+    use_until_ms bigint NOT NULL,
+    state text NOT NULL,
+    created_at_ms bigint NOT NULL,
+    due_at_ms bigint NOT NULL,
+    calendar text NOT NULL,
+    calendar_from_namespace text NOT NULL,
+    calendar_from_group text NOT NULL,
+    step bigint NOT NULL,
+    next_notice_at_ms bigint NOT NULL,
+    verdict_reviewer text NOT NULL,
+    verdict_note text NOT NULL,
+    verdict_auth text NOT NULL,
+    verdict_auth_at_ms bigint NOT NULL,
+    verdict_reviewed_at_ms bigint NOT NULL,
+    verdict_act_as text NOT NULL,
+    version bigint NOT NULL,
+    CONSTRAINT break_glass_reviews_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'accepted'::text, 'disputed'::text]))),
+    CONSTRAINT break_glass_reviews_use_kind_check CHECK ((use_kind = ANY (ARRAY['freeze-break'::text, 'account-session'::text, 'temp-admin'::text])))
 );
 
 CREATE TABLE checkpoints (
@@ -547,6 +582,8 @@ CREATE TABLE item_keys (
     blob_version bigint NOT NULL,
     blob_size bigint NOT NULL,
     blob_md5 bytea NOT NULL,
+    blob_attempt text NOT NULL,
+    CONSTRAINT item_keys_blob_attempt_check CHECK ((blob_attempt ~ '^[a-z0-9]{20}$'::text)),
     CONSTRAINT item_keys_blob_md5_check CHECK ((length(blob_md5) = 16)),
     CONSTRAINT item_keys_blob_size_check CHECK ((blob_size >= 1)),
     CONSTRAINT item_keys_blob_version_check CHECK ((blob_version >= 1)),
@@ -924,7 +961,8 @@ CREATE TABLE principal_groups (
     source text DEFAULT 'local'::text NOT NULL,
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
-    deleted_at_ms bigint
+    deleted_at_ms bigint,
+    closed_to_identity_provider boolean DEFAULT false NOT NULL
 );
 
 CREATE TABLE principal_session_generations (
@@ -1256,7 +1294,8 @@ CREATE TABLE state_versions (
     sealed boolean DEFAULT false NOT NULL,
     sensitive_marks bytea,
     fenced_by text DEFAULT ''::text NOT NULL,
-    unlocked_write boolean DEFAULT false NOT NULL
+    unlocked_write boolean DEFAULT false NOT NULL,
+    origin_job text DEFAULT ''::text NOT NULL
 );
 
 CREATE TABLE temp_admins (
@@ -1286,6 +1325,8 @@ CREATE TABLE triggers (
     last_saver_id text NOT NULL,
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
+    next_slot_ms bigint DEFAULT 0 NOT NULL,
+    CONSTRAINT triggers_check CHECK (((next_slot_ms >= 0) AND ((kind <> 'schedule'::text) OR (enabled = 0) OR (next_slot_ms > 0)))),
     CONSTRAINT triggers_enabled_check CHECK ((enabled = ANY (ARRAY[(0)::bigint, (1)::bigint]))),
     CONSTRAINT triggers_kind_check CHECK ((kind = ANY (ARRAY['review-request-push'::text, 'schedule'::text, 'follows'::text])))
 );
@@ -1313,15 +1354,6 @@ CREATE TABLE unit_defaults (
     CONSTRAINT unit_defaults_version_check CHECK ((version >= 1))
 );
 
-CREATE TABLE unit_final_versions (
-    unit_id text NOT NULL,
-    namespace_id text NOT NULL,
-    version_id text NOT NULL,
-    commit_id text NOT NULL,
-    job_id text NOT NULL,
-    at_ms bigint NOT NULL
-);
-
 CREATE TABLE unit_settings (
     unit_id text NOT NULL,
     namespace_id text NOT NULL,
@@ -1331,11 +1363,14 @@ CREATE TABLE unit_settings (
     CONSTRAINT unit_settings_version_check CHECK ((version >= 1))
 );
 
-CREATE TABLE unit_state_versions (
+CREATE TABLE unit_state (
     unit_id text NOT NULL,
     namespace_id text NOT NULL,
-    version_id text NOT NULL,
-    updated_at_ms bigint NOT NULL
+    version_id text NOT NULL DEFAULT '',
+    final_version_id text NOT NULL DEFAULT '',
+    final_commit text NOT NULL DEFAULT '',
+    final_job text NOT NULL DEFAULT '',
+    final_at_ms bigint NOT NULL DEFAULT 0
 );
 
 CREATE TABLE unmanaged_scans (
@@ -1425,7 +1460,9 @@ CREATE TABLE updates (
     journal_version bigint DEFAULT 0 NOT NULL,
     journal_closed boolean DEFAULT false NOT NULL,
     token_id text DEFAULT ''::text NOT NULL,
-    journal_records_changed boolean DEFAULT false NOT NULL
+    journal_records_changed boolean DEFAULT false NOT NULL,
+    job_id text DEFAULT ''::text NOT NULL,
+    git_head text DEFAULT ''::text NOT NULL
 );
 
 CREATE TABLE used_tickets (
@@ -1526,8 +1563,14 @@ ALTER TABLE ONLY audit_sink_cursors
 ALTER TABLE ONLY audit_sink_leases
     ADD CONSTRAINT audit_sink_leases_pkey PRIMARY KEY (sink);
 
+ALTER TABLE ONLY blob_delete_leases
+    ADD CONSTRAINT blob_delete_leases_pkey PRIMARY KEY (holder);
+
 ALTER TABLE ONLY blob_purges
     ADD CONSTRAINT blob_purges_pkey PRIMARY KEY (tool, unit_id);
+
+ALTER TABLE ONLY break_glass_reviews
+    ADD CONSTRAINT break_glass_reviews_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY checkpoints
     ADD CONSTRAINT checkpoints_pkey PRIMARY KEY (stack_id, update_id);
@@ -1868,14 +1911,11 @@ ALTER TABLE ONLY trust_rules
 ALTER TABLE ONLY unit_defaults
     ADD CONSTRAINT unit_defaults_pkey PRIMARY KEY (namespace_id);
 
-ALTER TABLE ONLY unit_final_versions
-    ADD CONSTRAINT unit_final_versions_pkey PRIMARY KEY (unit_id);
-
 ALTER TABLE ONLY unit_settings
     ADD CONSTRAINT unit_settings_pkey PRIMARY KEY (unit_id);
 
-ALTER TABLE ONLY unit_state_versions
-    ADD CONSTRAINT unit_state_versions_pkey PRIMARY KEY (unit_id);
+ALTER TABLE ONLY unit_state
+    ADD CONSTRAINT unit_state_pkey PRIMARY KEY (unit_id);
 
 ALTER TABLE ONLY unmanaged_scans
     ADD CONSTRAINT unmanaged_scans_pkey PRIMARY KEY (id);
@@ -1931,6 +1971,10 @@ CREATE INDEX access_tokens_principal ON access_tokens USING btree (principal_id,
 CREATE INDEX audit_entries_ns_time ON audit_entries USING btree (namespace, at_ms DESC, sequence DESC);
 
 CREATE INDEX blob_purges_age ON blob_purges USING btree (purged_at_ms, tool COLLATE "C", unit_id COLLATE "C");
+
+CREATE INDEX break_glass_reviews_due ON break_glass_reviews USING btree (state, next_notice_at_ms);
+
+CREATE UNIQUE INDEX break_glass_reviews_use ON break_glass_reviews USING btree (use_kind, use_ref);
 
 CREATE INDEX collection_members_collection ON collection_members USING btree (namespace, collection_key);
 
@@ -2278,14 +2322,11 @@ ALTER TABLE ONLY trust_rules
 ALTER TABLE ONLY unit_defaults
     ADD CONSTRAINT unit_defaults_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
-ALTER TABLE ONLY unit_final_versions
-    ADD CONSTRAINT unit_final_versions_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
-
 ALTER TABLE ONLY unit_settings
     ADD CONSTRAINT unit_settings_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
-ALTER TABLE ONLY unit_state_versions
-    ADD CONSTRAINT unit_state_versions_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+ALTER TABLE ONLY unit_state
+    ADD CONSTRAINT unit_state_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
 ALTER TABLE ONLY unmanaged_scans
     ADD CONSTRAINT unmanaged_scans_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);

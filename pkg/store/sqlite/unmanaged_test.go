@@ -98,6 +98,7 @@ func poolEntry(ns namespace.Name, at time.Time) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 
@@ -158,6 +159,7 @@ func sweepEntry(ns namespace.Name, action string, at time.Time) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 }
 
@@ -466,7 +468,7 @@ func unmanagedBackupServices(
 
 	restores, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live: st, Operations: st.DurableOperationsPort(), Backups: backups,
-		Maintenance: storetest.StateMaintenance{State: st, Hold: false}, Blobs: live,
+		Maintenance: storetest.StateMaintenance{State: st, Hold: false}, Blobs: live, Leases: st,
 		Target: target, Key: nil, Installation: "test", AfterApply: nil, Admit: nil, AllowDevBackups: false,
 		AllowDevHint: "", Owner: "", Lease: 0, CleanupLockWait: 0, RetryBase: time.Millisecond, Now: nil, Logger: nil,
 	})

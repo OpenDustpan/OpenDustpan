@@ -14,24 +14,31 @@ import (
 )
 
 // planPartCases returns the cases of BeginPlan, PutPlanPart and CommitPlan, and
-// of the reserve that they repeat.
+// of the reserve that they repeat, that need no state write.
 func planPartCases() []recorderCase {
 	return []recorderCase{
-		{"plan parts: parts upload one by one and the commit stores the plan", testPartsRoundTrip},
 		{"plan parts: an upload that repeats a stored part changes nothing", testPartsRepeat},
 		{"plan parts: an upload with another hash than the stated one is refused and leaves no blob", testPartsBadHash},
 		{"plan parts: a part above the size limit is ErrInvalid and leaves no blob", testPartsTooLarge},
 		{"plan parts: a commit with a wrong hash, size or part changes nothing", testCommitMismatch},
+		{"plan parts: parts of an uncommitted plan do not read", testPartsUncommittedUnreadable},
+		{"plan parts: a claim that is not live is ErrClaimLost on each call", testPartsClaimLost},
+		{"plan parts: a job cannot stage into or commit the plan of another job", testPartsOtherJob},
+		{"plan parts: a repeated reserve is the same plan and makes no second key", testReserveRepeat},
+		{"plan parts: invalid kinds and hashes are ErrInvalid", testPartsInvalidInput},
+	}
+}
+
+// statePlanPartCases returns the cases of BeginPlan, PutPlanPart and
+// CommitPlan that need a state write.
+func statePlanPartCases() []recorderCase {
+	return []recorderCase{
+		{"plan parts: parts upload one by one and the commit stores the plan", testPartsRoundTrip},
 		{
 			"plan parts: a second commit with the same parts is the same plan, with other parts ErrConflict",
 			testCommitTwice,
 		},
-		{"plan parts: parts of an uncommitted plan do not read", testPartsUncommittedUnreadable},
-		{"plan parts: a claim that is not live is ErrClaimLost on each call", testPartsClaimLost},
 		{"plan parts: a state write after the claim is ErrPlanStale on the commit", testCommitStale},
-		{"plan parts: a job cannot stage into or commit the plan of another job", testPartsOtherJob},
-		{"plan parts: a repeated reserve is the same plan and makes no second key", testReserveRepeat},
-		{"plan parts: invalid kinds and hashes are ErrInvalid", testPartsInvalidInput},
 	}
 }
 
@@ -91,9 +98,7 @@ func testPartsRoundTrip(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	version := writeState(t, h.Harness, f, false)
 
 	a := openPlan(t, h, f, "")
 	pr := planRecorder(t, h)
@@ -119,8 +124,8 @@ func testPartsRoundTrip(t *testing.T, h RecorderHarness) {
 		t.Fatalf("CommitPlan = %v", err)
 	}
 
-	if p.ID != begun.ID || p.ItemKey != begun.ItemKey || p.StateVersion != svOne {
-		t.Fatalf("CommitPlan = %+v, want the begun plan %+v with state version %s", p, begun, svOne)
+	if p.ID != begun.ID || p.ItemKey != begun.ItemKey || p.StateVersion != version {
+		t.Fatalf("CommitPlan = %+v, want the begun plan %+v with state version %s", p, begun, version)
 	}
 
 	checkPlanParts(t, &p)
@@ -256,9 +261,7 @@ func testCommitTwice(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	writeState(t, h.Harness, f, false)
 
 	a := openPlan(t, h, f, "")
 	putStandardParts(t, h, a)
@@ -352,16 +355,12 @@ func testCommitStale(t *testing.T, h RecorderHarness) {
 	t.Helper()
 
 	f := setUp(t, h.Harness)
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svOne); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	writeState(t, h.Harness, f, false)
 
 	a := openPlan(t, h, f, "")
 	putStandardParts(t, h, a)
 
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
-		t.Fatalf("SetStateVersion = %v", err)
-	}
+	writeState(t, h.Harness, f, false)
 
 	_, err := planRecorder(t, h).CommitPlan(t.Context(), a.Claim, standardClaim())
 	if !errors.Is(err, job.ErrPlanStale) {

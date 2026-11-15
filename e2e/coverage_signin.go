@@ -97,7 +97,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		SignIn: coverageSignIn(
 			coverageSignInService(tb, st, principals, sessions), sessions, admin, code, coveragePasskeys(tb, st),
 		),
-		CheckpointEpochs: nil,
+		CheckpointEpochs: nil, Cursors: nil,
 		InstallationKind: installation.KindDev,
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
 		DenialLimiter:    nil,
@@ -116,7 +116,8 @@ func coverageSignInServices(tb testing.TB, st *sqlite.Store) (*principal.Service
 
 	principals, err := principal.NewService(principal.Config{
 		TempAdmins: nil,
-		Store:      st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		Store:      st, Guard: principal.AdminOnlyGuard{}, Namespaces: nil, Tokens: nil, GroupReach: nil,
+		Now: nil, NewID: nil,
 	})
 	if err != nil {
 		tb.Fatalf("principal service: %v", err)
@@ -235,6 +236,36 @@ func (coveragePasswordLimiter) Admit(context.Context) error { return nil }
 
 func (coveragePasswordLimiter) Fail(context.Context) {}
 
+// coveragePasswordMethod is the method of the password provider of the
+// coverage handler. The coverage test calls no route, so it checks nothing.
+type coveragePasswordMethod struct{}
+
+func (coveragePasswordMethod) Kind() session.MethodKind { return session.MethodLDAP }
+
+func (coveragePasswordMethod) Verify(
+	context.Context,
+	session.Credentials,
+	session.BindGate,
+) (session.Assertion, error) {
+	var none session.Assertion
+
+	return none, session.ErrMethodUnavailable
+}
+
+// coveragePasswordProvider returns the LDAP provider of the coverage handler,
+// so the route table holds the password sign-in of a provider.
+func coveragePasswordProvider() serverapi.PasswordProvider {
+	return serverapi.PasswordProvider{
+		Method: coveragePasswordMethod{}, ID: "coverage-ldap", DisplayName: "", AutoCreate: false,
+		LDAP: serverapi.LDAPSettings{
+			AllowedRanges: nil, URL: "", BindDN: "", BaseDN: "", UserFilter: "", UserNameAttribute: "",
+			EmailAttribute: "", NameAttribute: "", Subject: "", DisabledAttribute: "", Groups: "", GroupBaseDN: "",
+			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
+			StartTLS: false,
+		},
+	}
+}
+
 // coverageSignInService returns the sign-in service over st.
 func coverageSignInService(
 	tb testing.TB, st *sqlite.Store, principals *principal.Service, sessions *session.Sessions,
@@ -244,7 +275,7 @@ func coverageSignInService(
 	service, err := signinsvc.New(signinsvc.Config{
 		Principals: principals, Disabler: st, Generations: st, Sessions: sessions, Audit: st,
 		TempAdmins: st, Groups: nil,
-		Removals: nil, States: st, Logger: slog.New(slog.DiscardHandler),
+		Removals: nil, States: st, Locks: st, NameKeys: st, Logger: slog.New(slog.DiscardHandler),
 		OnAuditFailure: nil,
 	})
 	if err != nil {
@@ -262,14 +293,14 @@ func coverageSignIn(
 	passkeys *mfasvc.Service,
 ) *serverapi.SignIn {
 	return &serverapi.SignIn{
-		Service:         service,
-		OnDevRefused:    nil,
-		Sessions:        sessions,
-		Limiter:         nil,
-		Stored:          nil,
-		Admin:           admin,
-		Providers:       nil,
-		Origins:         nil,
+		Service:           service,
+		OnDevRefused:      nil,
+		Sessions:          sessions,
+		Limiter:           nil,
+		Stored:            nil,
+		Admin:             admin,
+		Providers:         nil,
+		PasswordProviders: []serverapi.PasswordProvider{coveragePasswordProvider()}, Origins: nil,
 		PasswordLimiter: coveragePasswordLimiter{},
 		Passkeys:        passkeys,
 		PasskeySignIn:   passkeys,
@@ -356,6 +387,17 @@ func signInAllowEntries() []AllowEntry {
 	}
 
 	return out
+}
+
+// ldapSignInAllowEntries returns the password sign-in of a provider. The steps
+// of TestLDAPSignIn drive it against a test LDAP directory on each store.
+func ldapSignInAllowEntries() []AllowEntry {
+	return []AllowEntry{{
+		Method: http.MethodPost, Path: "/api/dustpan/v1/sign-in/providers/{provider}/password",
+		CoveringTest: "TestLDAPSignIn",
+		Reason: "Console route: no CLI signs in with the password of a directory. The harness step signs " +
+			"in over TLS and with no TLS, before and after the change of the setting of plain connections.",
+	}}
 }
 
 // signInProviderAllowEntries returns the operator and console routes of

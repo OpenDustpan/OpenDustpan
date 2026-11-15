@@ -163,7 +163,7 @@ func mustCreateMemberGroup(t *testing.T, s reachStore, id, name, principalID str
 
 	g := principal.Group{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: id, Name: name, Description: "",
-		Source: principal.SourceLocal, MemberCount: 0,
+		Source: principal.SourceLocal, MemberCount: 0, ClosedToIdentityProvider: false,
 	}
 	if err := s.CreateGroup(ctx, g, entry()); err != nil {
 		t.Fatalf("create group %q: %v", name, err)
@@ -660,11 +660,18 @@ func mustCreateWorkspace(t *testing.T, s access.Store, ws interface {
 
 	w := workspace.Workspace{
 		NamespaceID: "",
-		CreatedAt:   at(0), UpdatedAt: at(0),
+		CreatedAt:   at(0),
+		UpdatedAt:   at(0),
 		Lock:        workspace.Lock{LockedAt: at(0), ID: "", Holder: "", Reason: ""},
 		LastRelease: workspace.NoRelease(),
-		ID:          workspace.ID(id), Ref: workspace.Ref{Namespace: "acme", Name: parsed},
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+		ID:          workspace.ID(id),
+		Ref:         workspace.Ref{Namespace: "acme", Name: parsed},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Revision: 1,
+		Origin:   identity.StateOrigin{Job: "", Commit: ""},
 	}
 
 	if err := ws.CreateWorkspace(t.Context(), w, fenceOf(t, s, "acme")); err != nil {
@@ -1039,6 +1046,41 @@ func (f failingGrants) GrantsOf(context.Context, access.Subject) ([]access.Grant
 	return nil, f.err
 }
 
+func (f failingGrants) GrantsOfSubjects(context.Context, []access.Subject) ([]access.Grant, error) {
+	return nil, f.err
+}
+
+// failingGrantsOfOne answers the batch read of the grants and fails each
+// read of the grants of one subject, so that the walk of a group fails after
+// its seed.
+type failingGrantsOfOne struct {
+	access.GrantLookups
+
+	err error
+}
+
+func (f failingGrantsOfOne) GrantsOf(context.Context, access.Subject) ([]access.Grant, error) {
+	return nil, f.err
+}
+
+// strayGrants adds to the batch read of the grants one grant of a subject
+// that the read did not ask for.
+type strayGrants struct {
+	access.GrantLookups
+}
+
+func (f strayGrants) GrantsOfSubjects(ctx context.Context, subjects []access.Subject) ([]access.Grant, error) {
+	grants, err := f.GrantLookups.GrantsOfSubjects(ctx, subjects)
+	if err != nil {
+		return nil, err
+	}
+
+	stray := newGrant("grt-stray", access.Subject{Kind: access.SubjectGroup, ID: "grp-stray"},
+		access.RoleInstallationOperator, identity.ServerObject())
+
+	return append(grants, stray), nil
+}
+
 // failingGrantsAfterSeed answers the first read of the grants and fails
 // each later read, so that the seed of a group succeeds and the walker then
 // fails.
@@ -1231,6 +1273,91 @@ func checkGroupProtectedEdges(t *testing.T, s reachStore, server identity.Object
 	}
 }
 
+// checkProtectedGroups reads the protected flag of every group of cases
+// with one ProtectedGroups call, and checks that it answers the flag that
+// Protected answers for each group alone.
+func checkProtectedGroups(t *testing.T, cfg access.ReachConfig, cases []protectedCase) {
+	t.Helper()
+
+	ids := make([]string, 0, len(cases))
+	for i := range cases {
+		ids = append(ids, cases[i].group)
+	}
+
+	got, err := access.ProtectedGroups(t.Context(), cfg, ids)
+	if err != nil {
+		t.Fatalf("protected groups: %v", err)
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+
+		flag, ok := got[tc.group]
+		if !ok || flag != tc.want {
+			t.Errorf("%s: protected groups answers %t (present %t) for group %q, want %t",
+				tc.name, flag, ok, tc.group, tc.want)
+		}
+	}
+}
+
+// checkProtectedGroupsErrors proves that ProtectedGroups fails closed as
+// Protected does: an invalid group ID, a list that is too long, a failed
+// batch read, a failed read of the walk after the seed, a failed read of a
+// collection, and a grant of a subject that the batch read did not ask for
+// each answer an error and no flag.
+func checkProtectedGroupsErrors(t *testing.T, s reachStore) {
+	t.Helper()
+
+	ctx := t.Context()
+	cfg := reachConfig(s)
+
+	tooMany := make([]string, principal.MaxLimit+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("grp-%05d", i)
+	}
+
+	failing := cfg
+	failing.Grants = failingGrants{GrantLookups: s, err: errGrantsDown}
+
+	walk := cfg
+	walk.Grants = failingGrantsOfOne{GrantLookups: s, err: errGrantsDown}
+
+	collections := cfg
+	collections.Collections = failingCollections{UnitCollections: testCollections(), err: errCollectionsDown}
+
+	stray := cfg
+	stray.Grants = strayGrants{GrantLookups: s}
+
+	cases := []struct {
+		name string
+		cfg  access.ReachConfig
+		ids  []string
+		want error
+	}{
+		{"an empty group ID", cfg, []string{"grp-none", ""}, access.ErrInvalid},
+		{"a malformed group ID", cfg, []string{"grp bad"}, access.ErrInvalid},
+		{"an overlong group ID", cfg, []string{"grp-" + strings.Repeat("g", 64)}, access.ErrInvalid},
+		{"more groups than one page", cfg, tooMany, access.ErrInvalid},
+		{"a failed batch read of the grants", failing, []string{"grp-none"}, errGrantsDown},
+		{"a failed read of the walk after the seed", walk, []string{"grp-none", "grp-act-as"}, errGrantsDown},
+		{"a failed read of a collection", collections, []string{"grp-collection"}, errCollectionsDown},
+		{"a grant of a subject that the read did not ask for", stray, []string{"grp-none"}, access.ErrInvalid},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+
+		got, err := access.ProtectedGroups(ctx, tc.cfg, tc.ids)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("protected groups with %s = %v, want %v", tc.name, err, tc.want)
+		}
+
+		if got != nil {
+			t.Errorf("protected groups with %s = %v with an error, want no flags", tc.name, got)
+		}
+	}
+}
+
 // checkGroupProtectedErrors proves that an empty, a malformed and an
 // overlong group ID answer an error, and that a failed read at each step of
 // the walk answers an error: the seed of the group, the walker, and the
@@ -1407,11 +1534,14 @@ func testGroupProtected(t *testing.T, s access.Store) {
 		}
 	}
 
+	checkProtectedGroups(t, cfg, cases)
+
 	checkGroupProtectedObjects(t, rs, []protectedObjectCase{
 		{group: inNamespace.ID, obj: acme}, {group: collection.ID, obj: payments},
 	})
 	checkGroupProtectedEdges(t, rs, server)
 	checkGroupProtectedErrors(t, rs)
+	checkProtectedGroupsErrors(t, rs)
 
 	// The delegation grant on a principal of a namespace is live: the object
 	// of the grant keeps the group unprotected, not the grant itself.
@@ -1450,6 +1580,12 @@ func testGroupProtectedUnknownAction(t *testing.T, s access.Store) {
 
 	if protected {
 		t.Error("protected of a group with an unclassified action = true with an error, want false")
+	}
+
+	flags, err := access.ProtectedGroups(ctx, reachConfig(rs), []string{"grp-unknown"})
+	if !errors.Is(err, access.ErrUnknownAction) || flags != nil {
+		t.Errorf("protected groups with an unclassified action = %v, %v; want access.ErrUnknownAction and no flags",
+			flags, err)
 	}
 }
 
@@ -1510,6 +1646,12 @@ func testReachConfigPorts(t *testing.T, s access.Store) {
 		protected, err := access.Protected(t.Context(), tc.cfg, "grp-none")
 		if !errors.Is(err, access.ErrMissingDependency) {
 			t.Errorf("protected of a config without %s = %v, want access.ErrMissingDependency", tc.name, err)
+		}
+
+		flags, err := access.ProtectedGroups(t.Context(), tc.cfg, []string{"grp-none"})
+		if !errors.Is(err, access.ErrMissingDependency) || flags != nil {
+			t.Errorf("protected groups of a config without %s = %v, %v; want access.ErrMissingDependency",
+				tc.name, flags, err)
 		}
 
 		if protected {

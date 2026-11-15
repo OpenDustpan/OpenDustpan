@@ -261,6 +261,7 @@ func (c *Checker) recordDenial(ctx context.Context, caller identity.Principal, d
 		Channel: audit.NormalizeChannel(""), Kind: audit.KindToolOperation, Outcome: audit.OutcomeDenied,
 		RequestID: "", ObjectID: denied.Producer.UnitID(), PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0,
 		PrincipalKind: string(caller.Kind), JobID: caller.JobID, Reason: denialReasonPrefix + denied.Check,
+		Origin: nil,
 	}
 
 	if _, err := c.audit.Append(ctx, ns.Fence(), entry); err != nil {

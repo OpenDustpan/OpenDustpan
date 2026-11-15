@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,7 +38,7 @@ func TestBackupCrossDialect(t *testing.T) {
 		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the cross-dialect restore test")
 	}
 
-	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+	fetcher := sharedFetcher(t)
 
 	pulumiVersions := e2e.Pulumi().Versions()
 	tofuVersions := e2e.OpenTofu().Versions()

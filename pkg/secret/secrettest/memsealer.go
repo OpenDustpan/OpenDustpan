@@ -79,7 +79,7 @@ func (m *MemorySealer) NewItemKey(
 
 	rec := secret.ItemKey{
 		CreatedAt: time.Now().UTC(), ShreddedAt: time.Time{}, Ref: ref, ID: secret.NewItemKeyID(),
-		WrapperID: "memory", Blob: secret.ItemKeyBlobInfo{MD5: [16]byte{}, Size: 0, Version: 0},
+		WrapperID: "memory", Blob: secret.ItemKeyBlobInfo{MD5: [16]byte{}, Size: 0, Version: 0, Attempt: ""},
 	}
 	m.keys[ref] = &memoryKey{aead: aead, record: rec, shredded: false}
 

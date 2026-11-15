@@ -20,6 +20,7 @@ func coverageJobRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 		Namespaces:     namespaces,
 		Workers:        nil,
 		Jobs:           struct{ job.Store }{nil},
+		Units:          nil,
 		Artifacts:      struct{ job.ArtifactReader }{nil},
 		Logs:           nil,
 		Cursors:        nil,

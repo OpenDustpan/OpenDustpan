@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/gate/cedargo"
+	"opendustpan.org/opendustpan/pkg/gate/limitgroups"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -69,6 +70,20 @@ func newCollectionAndGateServices(
 	}
 
 	return collections, gates, nil
+}
+
+// accessLimitGroups returns the reader through which the guard of a group
+// reads the access limits of every scope, or nil when the store keeps none.
+// An access limit of a scope that names a group holds for the members of
+// that group, so a change of its members that can lift the limit needs a
+// site administrator.
+func accessLimitGroups(cfg *settings, groups access.Directory) *limitgroups.Reader {
+	store, ok := cfg.namespaceStore.(gate.Store)
+	if !ok {
+		return nil
+	}
+
+	return limitgroups.New(store, groups)
 }
 
 // newStateWriteGates returns the state.write gates of the server: the gate

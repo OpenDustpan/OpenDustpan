@@ -54,12 +54,15 @@ type memStore struct {
 	// key check. A test uses it to remove a key between the checks of the
 	// service and the commit.
 	beforeCommit func()
+	// publishErr, when it is not nil, is the answer of the next Publish call
+	// after beforeCommit. A test uses it for a write that fails in the commit.
+	publishErr error
 }
 
 func newMemStore() *memStore {
 	return &memStore{
 		mu: sync.Mutex{}, releases: map[string]registry.Release{}, keys: map[namespace.Name][]registry.KeyRecord{},
-		audits: nil, addressCalls: nil, beforeCommit: nil,
+		audits: nil, addressCalls: nil, beforeCommit: nil, publishErr: nil,
 	}
 }
 
@@ -78,6 +81,13 @@ func (m *memStore) Publish(_ context.Context, r registry.Release, _ namespace.Fe
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.publishErr != nil {
+		err := m.publishErr
+		m.publishErr = nil
+
+		return err
+	}
 
 	// The contract of the port: the key is trusted at the time of the write.
 	// A module has no signature and no key.

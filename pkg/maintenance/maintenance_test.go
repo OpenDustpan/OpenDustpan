@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup/blobguard/blobguardtest"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -207,7 +208,7 @@ func (*fakeStacks) UpdateStackTags(
 	return stack.ErrNotFound
 }
 
-func (*fakeStacks) RenameStack(context.Context, stack.Ref, stack.Name, namespace.Fence) error {
+func (*fakeStacks) RenameStack(context.Context, stack.Ref, stack.Name, namespace.Fence, audit.Entry) error {
 	return stack.ErrNotFound
 }
 
@@ -689,6 +690,8 @@ func addRunningUpdate(f *fixture, ref stack.Ref, id stack.UpdateID, stackID stac
 		CreatedBy:       "admin",
 		RestoredFrom:    0,
 		CheckpointBytes: 0,
+		JobID:           "",
+		GitHead:         "",
 	}
 }
 
@@ -715,7 +718,11 @@ func seedLockedWorkspace(t *testing.T, f *fixture, name string) {
 		ID:          "ws-1",
 		Ref:         workspace.Ref{Namespace: testNamespace, Name: parsed},
 		Revision:    2,
-		Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+		Overrides: namespace.Overrides{
+			Forced:   false,
+			Unlocked: false,
+		},
+		Origin: identity.StateOrigin{Job: "", Commit: ""},
 	}
 	f.workspaces.workspaces[w.ID] = w
 }
@@ -1041,7 +1048,7 @@ func TestEnterForceLeavesClientEncryptedWorkspaceLocked(t *testing.T) {
 			RestoredFrom:   "",
 			SensitiveMarks: nil,
 			FenceBy:        "",
-			UnlockedWrite:  false,
+			UnlockedWrite:  false, Origin: identity.StateOrigin{Job: "", Commit: ""},
 		},
 	}
 
