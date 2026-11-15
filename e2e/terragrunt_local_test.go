@@ -36,6 +36,14 @@ const tgLocalUnitHCL = `include "root" {
 // Terragrunt unit talks to its own workspace in this namespace.
 const tgLocalNamespace = "terragrunt-local"
 
+// tgLocalScope names the server, the access token and the namespace that one
+// local run-all scenario reads and writes.
+type tgLocalScope struct {
+	env       *e2e.Env
+	token     string
+	namespace string
+}
+
 // sharedNameAttempts bounds the retries of the shared name landing run: two
 // units that name one workspace share its lock, so the run-all at parallelism
 // 3 with no lock timeout refuses the unit that loses the lock race. The loop
@@ -106,8 +114,10 @@ func tgLocalThreeWorkspaces(ctx context.Context, t *testing.T, cli, tg e2e.Insta
 	env.CreateNamespace(ctx, t, tgLocalNamespace)
 
 	token := env.TokenA()
+	scope := tgLocalScope{env: env, token: token, namespace: tgLocalNamespace}
+
 	for _, unit := range tgLocalUnits() {
-		tgLocalCreateWorkspace(ctx, t, env, token, unit)
+		scope.createWorkspace(ctx, t, unit)
 	}
 
 	runner := tgLocalRunner(ctx, t, env, cli, token)
@@ -115,7 +125,7 @@ func tgLocalThreeWorkspaces(ctx context.Context, t *testing.T, cli, tg e2e.Insta
 	live := tgLocalApplyAll(ctx, t, runner)
 
 	for i, unit := range tgLocalUnits() {
-		tgLocalCheckOneVersion(ctx, t, env, token, unit)
+		scope.checkOneVersion(ctx, t, unit)
 		runner.checkOneOutput(ctx, t, live, i, unit)
 	}
 }
@@ -168,10 +178,11 @@ func tgLocalLockError(ctx context.Context, t *testing.T, cli e2e.Install, store 
 
 	token := env.TokenA()
 	const unit = "terragrunt-local-locked"
+	scope := tgLocalScope{env: env, token: token, namespace: tgLocalNamespace}
 
-	tgLocalCreateWorkspace(ctx, t, env, token, unit)
+	scope.createWorkspace(ctx, t, unit)
 
-	id := tgLocalWorkspaceID(ctx, t, env, token, unit)
+	id := scope.workspaceID(ctx, t, unit)
 
 	if status, body, err := env.TFEStatus(ctx, token, http.MethodPost, lockRoute(id), `{"data":{}}`); err != nil ||
 		status != http.StatusOK {
@@ -265,7 +276,7 @@ func tgLocalNotFound(ctx context.Context, t *testing.T, cli e2e.Install, store e
 		t.Fatalf("missing workspace error code = %q, want workspace.not-found: %s", got, body)
 	}
 
-	status, body, err = env.TFEStatus(ctx, token, http.MethodGet, tgLocalHistoryPath(missing), "")
+	status, body, err = env.TFEStatus(ctx, token, http.MethodGet, tgLocalHistoryPath(tgLocalNamespace, missing), "")
 	if err != nil {
 		t.Fatalf("list state versions of the missing workspace: %v", err)
 	}
@@ -331,19 +342,22 @@ func tgLocalRefusedUnit(ctx context.Context, t *testing.T, cli, tg e2e.Install, 
 	env.CreateNamespace(ctx, t, tgLocalNamespace)
 
 	adminToken := env.TokenA()
+	admin := tgLocalScope{env: env, token: adminToken, namespace: tgLocalNamespace}
+
 	for _, unit := range tgLocalUnits() {
-		tgLocalCreateWorkspace(ctx, t, env, adminToken, unit)
+		admin.createWorkspace(ctx, t, unit)
 	}
 
 	units := tgLocalUnits()
 	runner := tgLocalIssueUnitPerson(ctx, t, env, "dee", units[:2])
+	run := tgLocalScope{env: env, token: runner, namespace: tgLocalNamespace}
 
 	// The ungranted unit is refused with the access token of the run. The
 	// token holds no read on that workspace, so the server hides it and
 	// answers the 404 of a workspace that does not exist, with the
 	// workspace.not-found code: it never answers 200, and a 403, a 404 of
 	// another code or any other status fails this check.
-	status, body, err := env.TFEStatus(ctx, runner, http.MethodGet, tgLocalHistoryPath(units[2]), "")
+	status, body, err := env.TFEStatus(ctx, runner, http.MethodGet, tgLocalHistoryPath(tgLocalNamespace, units[2]), "")
 	if err != nil {
 		t.Fatalf("list state versions of the ungranted unit: %v", err)
 	}
@@ -356,32 +370,42 @@ func tgLocalRefusedUnit(ctx context.Context, t *testing.T, cli, tg e2e.Install, 
 		t.Fatalf("ungranted unit error code = %q, want workspace.not-found: %s", got, body)
 	}
 
-	// The granted units apply through the real `terragrunt run --all` with
-	// the token of the run, with the OpenTofu binary of the fetcher as the
-	// TG_TF_PATH: each granted workspace holds one new state version and one
-	// history entry.
+	// The three unit directories all reach the real `terragrunt run --all`
+	// with the token of the run, with the OpenTofu binary of the fetcher as
+	// the TG_TF_PATH. The server refuses the ungranted unit, so the run exits
+	// non-zero while the two granted units apply.
 	granted := tgLocalRunner(ctx, t, env, cli, runner)
 	granted.tg = tg
 	live := filepath.Join(env.Home(), "tg-local-refused-live")
 	tgLocalLiveRoot(t, live)
 
 	dirs := tgLocalLiveDirs()
-	for i, unit := range units[:2] {
-		granted.writeLiveUnit(t, live, dirs[i], unit)
+	for i, unit := range units {
+		granted.writeLiveUnit(t, live, tgLocalNamespace, dirs[i], unit)
 	}
 
-	granted.runAll(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
+	res, runErr := granted.runAllResult(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
 		"--", "apply", "-input=false", "-auto-approve", "-lock-timeout=0s")
+	if runErr != nil {
+		t.Fatalf("terragrunt run --all over the ungranted unit: %v", runErr)
+	}
 
+	if res.ExitCode == 0 {
+		t.Fatalf("the run-all over an ungranted unit exits 0, want a refusal:\n%s\n%s", res.Stdout, res.Stderr)
+	}
+
+	// Each granted workspace holds one new state version and one history
+	// entry, and its state names its own unit alone, so the server served the
+	// granted units while it refused the ungranted one.
 	for i, unit := range units[:2] {
-		tgLocalCheckOneVersion(ctx, t, env, runner, unit)
+		run.checkOneVersion(ctx, t, unit)
 		granted.checkOneOutput(ctx, t, live, i, unit)
 	}
 
 	// The refused workspace holds no new state version: the refusal recorded
 	// nothing there. The check uses the admin token, because the token of the
 	// run cannot list that workspace at all.
-	if got := tgLocalVersionTotal(ctx, t, env, adminToken, units[2]); got != 0 {
+	if got := admin.versionTotal(ctx, t, units[2]); got != 0 {
 		t.Fatalf("refused workspace holds %d state versions, want 0", got)
 	}
 }
@@ -440,8 +464,9 @@ func tgLocalSharedName(ctx context.Context, t *testing.T, cli, tg e2e.Install, s
 
 	token := env.TokenA()
 	const unit = "terragrunt-local-shared"
+	scope := tgLocalScope{env: env, token: token, namespace: tgLocalNamespace}
 
-	tgLocalCreateWorkspace(ctx, t, env, token, unit)
+	scope.createWorkspace(ctx, t, unit)
 
 	// Both live units name the one workspace, under the root fixture, so the
 	// real `terragrunt run --all apply` reaches the same workspace twice at
@@ -450,10 +475,10 @@ func tgLocalSharedName(ctx context.Context, t *testing.T, cli, tg e2e.Install, s
 	runner.tg = tg
 	live := filepath.Join(env.Home(), "tg-local-shared-live")
 	tgLocalLiveRoot(t, live)
-	runner.writeLiveUnit(t, live, "shared-a", unit)
-	runner.writeLiveUnit(t, live, "shared-b", unit)
+	runner.writeLiveUnit(t, live, tgLocalNamespace, "shared-a", unit)
+	runner.writeLiveUnit(t, live, tgLocalNamespace, "shared-b", unit)
 
-	id := tgLocalWorkspaceID(ctx, t, env, token, unit)
+	id := scope.workspaceID(ctx, t, unit)
 
 	// The first unit holds the lock, as its apply would.
 	if status, body, err := env.TFEStatus(ctx, token, http.MethodPost, lockRoute(id), `{"data":{}}`); err != nil ||
@@ -609,8 +634,10 @@ func tgLocalNoOrder(ctx context.Context, t *testing.T, cli, tg e2e.Install, stor
 	env.CreateNamespace(ctx, t, tgLocalNamespace)
 
 	token := env.TokenA()
+	scope := tgLocalScope{env: env, token: token, namespace: tgLocalNamespace}
+
 	for _, unit := range tgLocalUnits() {
-		tgLocalCreateWorkspace(ctx, t, env, token, unit)
+		scope.createWorkspace(ctx, t, unit)
 	}
 
 	runner := tgLocalRunner(ctx, t, env, cli, token)
@@ -632,7 +659,7 @@ func tgLocalNoOrder(ctx context.Context, t *testing.T, cli, tg e2e.Install, stor
 			t.Fatalf("units list lacks %s: %+v", unit, units)
 		}
 
-		tgLocalCheckOneVersion(ctx, t, env, token, unit)
+		scope.checkOneVersion(ctx, t, unit)
 		runner.checkOneOutput(ctx, t, live, i, unit)
 	}
 
@@ -717,18 +744,19 @@ func tgLocalListUnits(ctx context.Context, t *testing.T, env *e2e.Env, token str
 	return names, nil
 }
 
-// tgLocalHistoryPath returns the state-version history list of a workspace.
-func tgLocalHistoryPath(name string) string {
-	return "/api/v2/state-versions?filter[organization][name]=" + tgLocalNamespace + "&filter[workspace][name]=" + name
+// tgLocalHistoryPath returns the state-version history list of a workspace in
+// the namespace.
+func tgLocalHistoryPath(namespace, name string) string {
+	return "/api/v2/state-versions?filter[organization][name]=" + namespace + "&filter[workspace][name]=" + name
 }
 
-// tgLocalCreateWorkspace pre-creates one workspace, so no creation race
-// occurs during the run.
-func tgLocalCreateWorkspace(ctx context.Context, t *testing.T, env *e2e.Env, token, name string) {
+// createWorkspace pre-creates one workspace, so no creation race occurs
+// during the run.
+func (s tgLocalScope) createWorkspace(ctx context.Context, t *testing.T, name string) {
 	t.Helper()
 
-	status, body, err := env.TFEStatus(ctx, token, http.MethodPost,
-		"/api/v2/organizations/"+tgLocalNamespace+"/workspaces",
+	status, body, err := s.env.TFEStatus(ctx, s.token, http.MethodPost,
+		"/api/v2/organizations/"+s.namespace+"/workspaces",
 		`{"data":{"type":"workspaces","attributes":{"name":"`+name+`"}}}`)
 	if err != nil {
 		t.Fatalf("create workspace %s: %v", name, err)
@@ -739,12 +767,12 @@ func tgLocalCreateWorkspace(ctx context.Context, t *testing.T, env *e2e.Env, tok
 	}
 }
 
-// tgLocalWorkspaceID reads the ID of a workspace by name.
-func tgLocalWorkspaceID(ctx context.Context, t *testing.T, env *e2e.Env, token, name string) string {
+// workspaceID reads the ID of a workspace by name.
+func (s tgLocalScope) workspaceID(ctx context.Context, t *testing.T, name string) string {
 	t.Helper()
 
-	status, body, err := env.TFEStatus(ctx, token, http.MethodGet,
-		"/api/v2/organizations/"+tgLocalNamespace+"/workspaces/"+name, "")
+	status, body, err := s.env.TFEStatus(ctx, s.token, http.MethodGet,
+		"/api/v2/organizations/"+s.namespace+"/workspaces/"+name, "")
 	if err != nil {
 		t.Fatalf("read workspace %s: %v", name, err)
 	}
@@ -857,11 +885,12 @@ func tgLocalDataLen(t *testing.T, body string) int {
 	return len(data)
 }
 
-// tgLocalVersionTotal counts the finalized state versions of a workspace.
-func tgLocalVersionTotal(ctx context.Context, t *testing.T, env *e2e.Env, token, name string) int {
+// versionTotal counts the finalized state versions of a workspace in the
+// namespace.
+func (s tgLocalScope) versionTotal(ctx context.Context, t *testing.T, name string) int {
 	t.Helper()
 
-	status, body, err := env.TFEStatus(ctx, token, http.MethodGet, tgLocalHistoryPath(name), "")
+	status, body, err := s.env.TFEStatus(ctx, s.token, http.MethodGet, tgLocalHistoryPath(s.namespace, name), "")
 	if err != nil {
 		t.Fatalf("list state versions of %s: %v", name, err)
 	}
@@ -887,7 +916,7 @@ func tgLocalStateWriters(
 ) map[string]bool {
 	t.Helper()
 
-	status, body, err := env.TFEStatusA(ctx, http.MethodGet, tgLocalHistoryPath(name), "")
+	status, body, err := env.TFEStatusA(ctx, http.MethodGet, tgLocalHistoryPath(tgLocalNamespace, name), "")
 	if err != nil {
 		t.Fatalf("list state versions of %s: %v", name, err)
 	}
@@ -916,16 +945,16 @@ func tgLocalStateWriters(
 	return writers
 }
 
-// tgLocalCheckOneVersion proves that a workspace holds one state version and
-// one history entry: the current version reads back, and the history list
-// holds one entry.
-func tgLocalCheckOneVersion(ctx context.Context, t *testing.T, env *e2e.Env, token, name string) {
+// checkOneVersion proves that a workspace in the namespace holds one state
+// version and one history entry: the current version reads back, and the
+// history list holds one entry.
+func (s tgLocalScope) checkOneVersion(ctx context.Context, t *testing.T, name string) {
 	t.Helper()
 
-	id := tgLocalWorkspaceID(ctx, t, env, token, name)
+	id := s.workspaceID(ctx, t, name)
 
-	status, body, err := env.TFEStatus(
-		ctx, token, http.MethodGet, "/api/v2/workspaces/"+id+"/current-state-version", "",
+	status, body, err := s.env.TFEStatus(
+		ctx, s.token, http.MethodGet, "/api/v2/workspaces/"+id+"/current-state-version", "",
 	)
 	if err != nil {
 		t.Fatalf("read the current state version of %s: %v", name, err)
@@ -935,7 +964,7 @@ func tgLocalCheckOneVersion(ctx context.Context, t *testing.T, env *e2e.Env, tok
 		t.Fatalf("current state version of %s answers %d, want 200: %s", name, status, body)
 	}
 
-	if got := tgLocalVersionTotal(ctx, t, env, token, name); got != 1 {
+	if got := s.versionTotal(ctx, t, name); got != 1 {
 		t.Fatalf("workspace %s holds %d state versions, want 1 new state version and 1 history entry", name, got)
 	}
 }
@@ -1082,9 +1111,9 @@ func tgLocalLiveRoot(t *testing.T, live string) {
 }
 
 // writeLiveUnit writes one unit directory under the live directory with a
-// backend that names the workspace and the per-unit Terragrunt configuration
-// of the fixture.
-func (c tgLocalCLI) writeLiveUnit(t *testing.T, live, dir, workspace string) {
+// backend that names the namespace, the workspace and the per-unit Terragrunt
+// configuration of the fixture.
+func (c tgLocalCLI) writeLiveUnit(t *testing.T, live, namespace, dir, workspace string) {
 	t.Helper()
 
 	unitDir := filepath.Join(live, dir)
@@ -1092,7 +1121,7 @@ func (c tgLocalCLI) writeLiveUnit(t *testing.T, live, dir, workspace string) {
 		t.Fatalf("mkdir %s: %v", unitDir, err)
 	}
 	config := "terraform {\n  cloud {\n    hostname     = " + fmt.Sprintf("%q", c.env.Host()) + "\n" +
-		"    organization = " + fmt.Sprintf("%q", tgLocalNamespace) + "\n" +
+		"    organization = " + fmt.Sprintf("%q", namespace) + "\n" +
 		"    workspaces {\n      name = " + fmt.Sprintf("%q", workspace) + "\n    }\n  }\n}\n\n" +
 		"output \"unit\" {\n  value = " + fmt.Sprintf("%q", dir) + "\n}\n"
 	c.env.WriteFile(t, filepath.Join(unitDir, "main.tf"), config)
@@ -1112,7 +1141,7 @@ func tgLocalApplyAll(ctx context.Context, t *testing.T, runner tgLocalCLI) strin
 	dirs := tgLocalLiveDirs()
 
 	for i, unit := range tgLocalUnits() {
-		runner.writeLiveUnit(t, live, dirs[i], unit)
+		runner.writeLiveUnit(t, live, tgLocalNamespace, dirs[i], unit)
 	}
 
 	runner.runAll(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
