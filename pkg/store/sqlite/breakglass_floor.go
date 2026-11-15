@@ -61,8 +61,9 @@ func replayStagedRevocations(ctx context.Context, tx *sql.Tx) error {
 	return checkWorkingBreakGlassFloor(before, after)
 }
 
-// breakGlassSchema names a schema of the connection: the database of the
-// store, or the staged file that a restore attaches as live.
+// breakGlassSchema names a schema of the connection. Outside a restore, main
+// is the database of the store. In the restore connection, main is the staged
+// file and live is the live database that the restore attaches.
 type breakGlassSchema string
 
 const (
