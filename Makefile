@@ -317,8 +317,8 @@ e2e-journal: ## Drive the real Pulumi CLI through the journal route on the recor
 upgrade-test: ## Restart the current binary on the same database and check data, secrets and the held lock survive (downloads CLIs; empty-database case without a v* tag, previous-tag case with one). Not part of check.
 	E2E_SERVER=binary go test -tags "e2e upgrade" $(RACE_TEST_FLAGS) -count=1 -v -timeout 20m ./e2e/ -run TestUpgrade
 
-mixed-version-test: ## Serve the current binary and the binary of each of the last 2 v* tags on one database and drive the real Pulumi CLI and OpenTofu through both (downloads CLIs; a second current process without a v* tag). Not part of check.
-	E2E_SERVER=binary go test -tags "e2e upgrade" $(RACE_TEST_FLAGS) -count=1 -v -timeout 30m ./e2e/ -run 'TestMixedVersion'
+mixed-version-test: ## Serve the current binary and the binary of each of the last 2 v* tags on one database and drive the real Pulumi CLI and OpenTofu through both (downloads CLIs; SQLite serves one binary at a time; a second current process without a v* tag; set DUSTPAN_TEST_POSTGRES_URL for the PostgreSQL matrix). Not part of check.
+	E2E_SERVER=binary go test -tags "e2e upgrade" $(RACE_TEST_FLAGS) -count=1 -v -timeout 45m ./e2e/ -run 'TestMixedVersion'
 
 crash-test: ## Stop the server binary with SIGKILL during a Pulumi checkpoint save, an OpenTofu upload and a lock, then check recovery on the same database and blobs (downloads CLIs; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check.
 	E2E_SERVER=binary go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -v -timeout 20m ./e2e/ -run TestBinaryCrash
