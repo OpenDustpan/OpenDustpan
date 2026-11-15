@@ -39,6 +39,7 @@ Out of scope:
 Depends on:
 
 - person-delegates-dusty
+- agent-shapes-before-first-tag (it adds the NEW name `identity.KindAgent` and makes `principalSubjects.Subject` refuse it with `identity.ErrDenied`; this change replaces that refusal with the mapping to `gate.PrincipalAgent`)
 
 ## Usability
 

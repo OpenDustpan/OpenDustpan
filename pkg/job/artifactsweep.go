@@ -101,6 +101,10 @@ type ArtifactSweeperConfig struct {
 	// Guard holds the leases of the blob deletes. The sweep deletes nothing
 	// while a backup or a restore runs.
 	Guard blobguard.Leases
+	// OnDeleteWait receives the reason of each refused take of the guard, so
+	// an operator can see the blob deletes that wait. A nil hook counts
+	// nothing.
+	OnDeleteWait blobguard.WaitCounter
 	// Clock reads the clock of the database. The sweep takes now from it.
 	Clock blob.DatabaseClock
 	// Operations reads the durable operation of a plan phase, to tell whether
@@ -181,16 +185,17 @@ func (r *ArtifactSweepResult) merge(one *ArtifactSweepResult) {
 // read of the names, and again before each delete: a running backup or
 // restore, or a failed read, keeps every blob for the next run.
 type ArtifactSweeper struct {
-	jobs       Store
-	names      ArtifactKeyStore
-	blobs      *ArtifactBlobs
-	namespaces NamespaceReader
-	guard      blobguard.Leases
-	clock      blob.DatabaseClock
-	operations PhaseOperations
-	audit      audit.ServerStore
-	logger     *slog.Logger
-	now        func() time.Time
+	jobs         Store
+	names        ArtifactKeyStore
+	blobs        *ArtifactBlobs
+	namespaces   NamespaceReader
+	guard        blobguard.Leases
+	onDeleteWait blobguard.WaitCounter
+	clock        blob.DatabaseClock
+	operations   PhaseOperations
+	audit        audit.ServerStore
+	logger       *slog.Logger
+	now          func() time.Time
 }
 
 // NewArtifactSweeper returns the sweep of the artifact blobs.
@@ -225,8 +230,17 @@ func NewArtifactSweeper(cfg ArtifactSweeperConfig) (*ArtifactSweeper, error) {
 	}
 
 	return &ArtifactSweeper{
-		jobs: cfg.Jobs, names: cfg.Names, blobs: cfg.Blobs, namespaces: cfg.Namespaces, guard: cfg.Guard,
-		clock: cfg.Clock, operations: cfg.Operations, audit: cfg.Audit, logger: logger, now: now,
+		jobs:         cfg.Jobs,
+		names:        cfg.Names,
+		blobs:        cfg.Blobs,
+		namespaces:   cfg.Namespaces,
+		guard:        cfg.Guard,
+		onDeleteWait: cfg.OnDeleteWait,
+		clock:        cfg.Clock,
+		operations:   cfg.Operations,
+		audit:        cfg.Audit,
+		logger:       logger,
+		now:          now,
 	}, nil
 }
 
@@ -482,6 +496,8 @@ func (s *ArtifactSweeper) sweepPage(
 func (s *ArtifactSweeper) deleteUnderLease(ctx context.Context, at sweepAt, rel string) error {
 	leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 	if holdErr != nil {
+		s.onDeleteWait.Count(holdErr)
+
 		return fmt.Errorf("%w: %w", errHeld, holdErr)
 	}
 
