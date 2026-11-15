@@ -259,6 +259,31 @@ func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) error 
 	return err
 }
 
+const blobKeyNamed = `-- name: BlobKeyNamed :one
+SELECT CAST(EXISTS (
+    SELECT 1 FROM checkpoints AS c
+    WHERE c.stack_id = ?1 AND c.blob_key = ?2
+    UNION ALL
+    SELECT 1 FROM update_journal AS j
+    WHERE j.stack_id = ?1 AND j.blob_key = ?2
+) AS INTEGER) AS named
+`
+
+type BlobKeyNamedParams struct {
+	StackID string
+	BlobKey string
+}
+
+// Reports whether a checkpoint row or a journal batch row of the stack names
+// the blob key. The sweep reads it in the transaction that drops a mark, so a
+// row that still names the key keeps the blob.
+func (q *Queries) BlobKeyNamed(ctx context.Context, arg BlobKeyNamedParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, blobKeyNamed, arg.StackID, arg.BlobKey)
+	var named int64
+	err := row.Scan(&named)
+	return named, err
+}
+
 const bumpFailoverVersions = `-- name: BumpFailoverVersions :execrows
 UPDATE namespaces
 SET failover_version = failover_version + 1
@@ -435,6 +460,34 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 		return nil, err
 	}
 	return items, nil
+}
+
+const cancelUnmanagedScansOfTarget = `-- name: CancelUnmanagedScansOfTarget :execrows
+
+UPDATE unmanaged_scans SET status = 'canceled', ended_at_ms = ?1
+WHERE namespace_id = ?2 AND target = ?3
+  AND status IN ('queued', 'dispatched', 'running')
+`
+
+type CancelUnmanagedScansOfTargetParams struct {
+	EndedAtMs   int64
+	NamespaceID string
+	Target      string
+}
+
+// Sweep targets and sweeps. A target names a runner pool of its namespace and
+// the account scopes that a sweep reads. A sweep is one run of a target, or one
+// state check of the namespace, and it keeps the name of a target that a person
+// deleted. A row holds the namespace ID, and the reads join the name of the
+// namespace, because a caller names a namespace by its name.
+// Cancels the sweeps of target that a cancel event allows: a sweep in the match
+// keeps its status. The caller appends one audit entry for the delete.
+func (q *Queries) CancelUnmanagedScansOfTarget(ctx context.Context, arg CancelUnmanagedScansOfTargetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, cancelUnmanagedScansOfTarget, arg.EndedAtMs, arg.NamespaceID, arg.Target)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const claimDurableScheduleTick = `-- name: ClaimDurableScheduleTick :execrows
@@ -1468,6 +1521,27 @@ func (q *Queries) CountOpenRunnerJoinTokens(ctx context.Context, arg CountOpenRu
 	return count, err
 }
 
+const countOpenUnmanagedScansOfTarget = `-- name: CountOpenUnmanagedScansOfTarget :one
+SELECT COUNT(*) FROM unmanaged_scans
+WHERE namespace_id = ?1 AND target = ?2 AND kind = ?3
+  AND status NOT IN ('succeeded', 'failed', 'canceled', 'expired')
+`
+
+type CountOpenUnmanagedScansOfTargetParams struct {
+	NamespaceID string
+	Target      string
+	Kind        string
+}
+
+// The sweeps of target that did not end. A start of a sweep refuses while one
+// exists.
+func (q *Queries) CountOpenUnmanagedScansOfTarget(ctx context.Context, arg CountOpenUnmanagedScansOfTargetParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countOpenUnmanagedScansOfTarget, arg.NamespaceID, arg.Target, arg.Kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPasskeys = `-- name: CountPasskeys :one
 SELECT COUNT(*) FROM passkeys WHERE principal_id = ?
 `
@@ -1873,6 +1947,31 @@ SELECT COUNT(*) FROM trust_rules WHERE namespace = ?1
 
 func (q *Queries) CountTrustRulesInNamespace(ctx context.Context, namespace string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTrustRulesInNamespace, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUnmanagedTargets = `-- name: CountUnmanagedTargets :one
+SELECT COUNT(*) FROM unmanaged_targets WHERE namespace_id = ?1
+`
+
+// The targets of a namespace, for the limit of MaxTargets.
+func (q *Queries) CountUnmanagedTargets(ctx context.Context, namespaceID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countUnmanagedTargets, namespaceID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUnmanagedTargetsOfPool = `-- name: CountUnmanagedTargetsOfPool :one
+SELECT COUNT(*) FROM unmanaged_targets WHERE pool_id = ?1
+`
+
+// The targets that name a runner pool. A delete of the pool refuses while one
+// exists.
+func (q *Queries) CountUnmanagedTargetsOfPool(ctx context.Context, poolID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countUnmanagedTargetsOfPool, poolID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -4024,6 +4123,26 @@ func (q *Queries) DeleteStateVersionsOfWorkspace(ctx context.Context, workspaceI
 	return err
 }
 
+const deleteSupersededMark = `-- name: DeleteSupersededMark :execrows
+DELETE FROM checkpoint_supersedes
+WHERE stack_id = ?1 AND blob_key = ?2
+`
+
+type DeleteSupersededMarkParams struct {
+	StackID string
+	BlobKey string
+}
+
+// Deletes the mark of the blob key of the stack. A missing mark deletes no
+// row, which is not an error.
+func (q *Queries) DeleteSupersededMark(ctx context.Context, arg DeleteSupersededMarkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteSupersededMark, arg.StackID, arg.BlobKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteTempAdmin = `-- name: DeleteTempAdmin :execrows
 DELETE FROM temp_admins WHERE principal_id = ?
 `
@@ -4157,6 +4276,23 @@ type DeleteUnitSettingsOfUnitParams struct {
 func (q *Queries) DeleteUnitSettingsOfUnit(ctx context.Context, arg DeleteUnitSettingsOfUnitParams) error {
 	_, err := q.db.ExecContext(ctx, deleteUnitSettingsOfUnit, arg.UnitID, arg.Namespace)
 	return err
+}
+
+const deleteUnmanagedTarget = `-- name: DeleteUnmanagedTarget :execrows
+DELETE FROM unmanaged_targets WHERE namespace_id = ?1 AND name = ?2
+`
+
+type DeleteUnmanagedTargetParams struct {
+	NamespaceID string
+	Name        string
+}
+
+func (q *Queries) DeleteUnmanagedTarget(ctx context.Context, arg DeleteUnmanagedTargetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteUnmanagedTarget, arg.NamespaceID, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteUpdatesOfStack = `-- name: DeleteUpdatesOfStack :exec
@@ -8312,6 +8448,30 @@ func (q *Queries) GetRunnerPool(ctx context.Context, id string) (GetRunnerPoolRo
 	return i, err
 }
 
+const getRunnerPoolByName = `-- name: GetRunnerPoolByName :one
+SELECT id, purpose FROM runner_pools
+WHERE namespace_id = ?1 AND name = ?2
+`
+
+type GetRunnerPoolByNameParams struct {
+	NamespaceID string
+	Name        string
+}
+
+type GetRunnerPoolByNameRow struct {
+	ID      string
+	Purpose string
+}
+
+// The pool of a namespace with the name, for a caller that names a pool as a
+// person does. It returns no row for a pool of another namespace.
+func (q *Queries) GetRunnerPoolByName(ctx context.Context, arg GetRunnerPoolByNameParams) (GetRunnerPoolByNameRow, error) {
+	row := q.db.QueryRowContext(ctx, getRunnerPoolByName, arg.NamespaceID, arg.Name)
+	var i GetRunnerPoolByNameRow
+	err := row.Scan(&i.ID, &i.Purpose)
+	return i, err
+}
+
 const getRunnerSession = `-- name: GetRunnerSession :one
 SELECT s.id, s.operation_id, s.token, s.runner_id, s.key_public, s.key_created_at_ms, s.created_at_ms,
        CAST(COALESCE((SELECT r.retired_at_ms FROM runners r WHERE r.id = s.runner_id), 1) AS INTEGER) AS runner_retired_at_ms
@@ -9247,6 +9407,83 @@ func (q *Queries) GetUnitState(ctx context.Context, arg GetUnitStateParams) (Get
 		&i.FinalJob,
 		&i.FinalAtMs,
 	)
+	return i, err
+}
+
+const getUnmanagedScan = `-- name: GetUnmanagedScan :one
+SELECT s.id, n.name AS namespace, s.seq, s.target, s.kind, s.status, s.started_by, s.reason, s.scopes_json,
+       s.counts_json, s.created_at_ms, s.ended_at_ms
+FROM unmanaged_scans AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = ?1 AND s.id = ?2
+`
+
+type GetUnmanagedScanParams struct {
+	Namespace string
+	ID        string
+}
+
+type GetUnmanagedScanRow struct {
+	ID          string
+	Namespace   string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+func (q *Queries) GetUnmanagedScan(ctx context.Context, arg GetUnmanagedScanParams) (GetUnmanagedScanRow, error) {
+	row := q.db.QueryRowContext(ctx, getUnmanagedScan, arg.Namespace, arg.ID)
+	var i GetUnmanagedScanRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Seq,
+		&i.Target,
+		&i.Kind,
+		&i.Status,
+		&i.StartedBy,
+		&i.Reason,
+		&i.ScopesJson,
+		&i.CountsJson,
+		&i.CreatedAtMs,
+		&i.EndedAtMs,
+	)
+	return i, err
+}
+
+const getUnmanagedTarget = `-- name: GetUnmanagedTarget :one
+SELECT t.pool_id, p.purpose, p.namespace_id AS pool_namespace_id
+FROM unmanaged_targets AS t
+JOIN runner_pools AS p ON p.id = t.pool_id
+WHERE t.namespace_id = ?1 AND t.name = ?2
+  AND p.namespace_id = t.namespace_id
+`
+
+type GetUnmanagedTargetParams struct {
+	NamespaceID string
+	Name        string
+}
+
+type GetUnmanagedTargetRow struct {
+	PoolID          string
+	Purpose         string
+	PoolNamespaceID string
+}
+
+// The pool of a target and its purpose, for a write of the target and for the
+// kind of the durable operation of a sweep. A target whose pool belongs to
+// another namespace gives no row.
+func (q *Queries) GetUnmanagedTarget(ctx context.Context, arg GetUnmanagedTargetParams) (GetUnmanagedTargetRow, error) {
+	row := q.db.QueryRowContext(ctx, getUnmanagedTarget, arg.NamespaceID, arg.Name)
+	var i GetUnmanagedTargetRow
+	err := row.Scan(&i.PoolID, &i.Purpose, &i.PoolNamespaceID)
 	return i, err
 }
 
@@ -12034,6 +12271,90 @@ func (q *Queries) InsertUnitSettings(ctx context.Context, arg InsertUnitSettings
 		arg.Namespace,
 		arg.Body,
 		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const insertUnmanagedScan = `-- name: InsertUnmanagedScan :exec
+INSERT INTO unmanaged_scans (
+    id, namespace_id, seq, target, kind, status, started_by, reason, scopes_json, counts_json,
+    created_at_ms, ended_at_ms
+) VALUES (
+    ?1, ?2, ?3, ?4, ?5, ?6,
+    ?7, ?8, ?9, ?10,
+    ?11, ?12
+)
+`
+
+type InsertUnmanagedScanParams struct {
+	ID          string
+	NamespaceID string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+func (q *Queries) InsertUnmanagedScan(ctx context.Context, arg InsertUnmanagedScanParams) error {
+	_, err := q.db.ExecContext(ctx, insertUnmanagedScan,
+		arg.ID,
+		arg.NamespaceID,
+		arg.Seq,
+		arg.Target,
+		arg.Kind,
+		arg.Status,
+		arg.StartedBy,
+		arg.Reason,
+		arg.ScopesJson,
+		arg.CountsJson,
+		arg.CreatedAtMs,
+		arg.EndedAtMs,
+	)
+	return err
+}
+
+const insertUnmanagedTarget = `-- name: InsertUnmanagedTarget :execrows
+INSERT INTO unmanaged_targets (
+    namespace_id, name, pool_id, scopes_json, command_json, every_ms, timeout_ms, enabled
+) VALUES (
+    ?1, ?2, ?3, ?4, ?5,
+    ?6, ?7, ?8
+)
+ON CONFLICT (namespace_id, name) DO NOTHING
+`
+
+type InsertUnmanagedTargetParams struct {
+	NamespaceID string
+	Name        string
+	PoolID      string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
+}
+
+// The caller checks the fence in the same transaction. A target of the same
+// name in the namespace is not written.
+func (q *Queries) InsertUnmanagedTarget(ctx context.Context, arg InsertUnmanagedTargetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertUnmanagedTarget,
+		arg.NamespaceID,
+		arg.Name,
+		arg.PoolID,
+		arg.ScopesJson,
+		arg.CommandJson,
+		arg.EveryMs,
+		arg.TimeoutMs,
+		arg.Enabled,
 	)
 	if err != nil {
 		return 0, err
@@ -17761,6 +18082,117 @@ func (q *Queries) ListStoreChecks(ctx context.Context) ([]StoreCheck, error) {
 	return items, nil
 }
 
+const listSupersededBlobs = `-- name: ListSupersededBlobs :many
+SELECT CAST(COALESCE(m.blob_key, '') AS TEXT) AS blob_key,
+       CAST(COALESCE(m.size, 0) AS INTEGER) AS size,
+       CAST(COALESCE(m.superseded_at_ms, 0) AS INTEGER) AS superseded_at_ms
+FROM stacks AS st
+LEFT JOIN checkpoint_supersedes AS m ON m.stack_id = st.id
+WHERE st.id = ?1 AND st.deleted_at_ms IS NULL
+ORDER BY 1
+`
+
+type ListSupersededBlobsRow struct {
+	BlobKey        string
+	Size           int64
+	SupersededAtMs int64
+}
+
+// Every mark of one live stack, ordered by blob key: the blob that a later
+// save of the same update replaced, with the size of the stored blob and the
+// time of the save that replaced it. The stack is the driving table, so one
+// statement tells a stack without marks (one row with an empty key) from a
+// stack that is missing or soft-deleted (no row).
+func (q *Queries) ListSupersededBlobs(ctx context.Context, stackID string) ([]ListSupersededBlobsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSupersededBlobs, stackID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSupersededBlobsRow
+	for rows.Next() {
+		var i ListSupersededBlobsRow
+		if err := rows.Scan(&i.BlobKey, &i.Size, &i.SupersededAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSupersededMarks = `-- name: ListSupersededMarks :many
+SELECT m.stack_id, n.id AS namespace_id, m.blob_key, m.size,
+       CAST(m.superseded_at_ms AS INTEGER) AS superseded_at_ms
+FROM checkpoint_supersedes AS m
+JOIN stacks AS st ON st.id = m.stack_id
+JOIN namespaces AS n ON n.name = st.namespace
+WHERE st.deleted_at_ms IS NULL
+  AND m.superseded_at_ms < ?1
+  AND (m.stack_id > ?2
+    OR (m.stack_id = ?2 AND m.blob_key > ?3))
+ORDER BY m.stack_id, m.blob_key
+LIMIT ?4
+`
+
+type ListSupersededMarksParams struct {
+	OlderThanMs  int64
+	AfterStackID string
+	AfterBlobKey string
+	PageLimit    int64
+}
+
+type ListSupersededMarksRow struct {
+	StackID        string
+	NamespaceID    string
+	BlobKey        string
+	Size           int64
+	SupersededAtMs int64
+}
+
+// One page of the marks of every live stack whose save replaced the blob
+// before the given time, ordered by stack ID and blob key. The read starts
+// after the cursor, so a sweep goes page by page. A soft-deleted stack has no
+// marks in the result.
+func (q *Queries) ListSupersededMarks(ctx context.Context, arg ListSupersededMarksParams) ([]ListSupersededMarksRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSupersededMarks,
+		arg.OlderThanMs,
+		arg.AfterStackID,
+		arg.AfterBlobKey,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSupersededMarksRow
+	for rows.Next() {
+		var i ListSupersededMarksRow
+		if err := rows.Scan(
+			&i.StackID,
+			&i.NamespaceID,
+			&i.BlobKey,
+			&i.Size,
+			&i.SupersededAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTempAdmins = `-- name: ListTempAdmins :many
 SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by, reason, ended_at_ms, review_opened_at_ms
 FROM temp_admins ORDER BY expires_at_ms, principal_id
@@ -18070,6 +18502,142 @@ func (q *Queries) ListUnitGateObjectKeys(ctx context.Context, arg ListUnitGateOb
 	for rows.Next() {
 		var i ListUnitGateObjectKeysRow
 		if err := rows.Scan(&i.Kind, &i.ID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnmanagedScans = `-- name: ListUnmanagedScans :many
+SELECT s.id, n.name AS namespace, s.seq, s.target, s.kind, s.status, s.started_by, s.reason, s.scopes_json,
+       s.counts_json, s.created_at_ms, s.ended_at_ms
+FROM unmanaged_scans AS s
+JOIN namespaces AS n ON n.id = s.namespace_id
+WHERE n.name = ?1
+  AND (CAST(?2 AS TEXT) = '' OR s.target = ?2)
+  AND (CAST(?3 AS TEXT) = '' OR s.seq < (
+      SELECT c.seq FROM unmanaged_scans AS c
+      WHERE c.namespace_id = s.namespace_id AND c.id = ?3))
+ORDER BY s.seq DESC
+LIMIT ?4
+`
+
+type ListUnmanagedScansParams struct {
+	Namespace string
+	Target    string
+	After     string
+	PageSize  int64
+}
+
+type ListUnmanagedScansRow struct {
+	ID          string
+	Namespace   string
+	Seq         int64
+	Target      string
+	Kind        string
+	Status      string
+	StartedBy   string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	CreatedAtMs int64
+	EndedAtMs   int64
+}
+
+// The sweeps of a namespace for target, newest first, or of every target when
+// target is empty. It starts after the sweep whose ID is after, and an unknown
+// after gives no row.
+func (q *Queries) ListUnmanagedScans(ctx context.Context, arg ListUnmanagedScansParams) ([]ListUnmanagedScansRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUnmanagedScans,
+		arg.Namespace,
+		arg.Target,
+		arg.After,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnmanagedScansRow
+	for rows.Next() {
+		var i ListUnmanagedScansRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Seq,
+			&i.Target,
+			&i.Kind,
+			&i.Status,
+			&i.StartedBy,
+			&i.Reason,
+			&i.ScopesJson,
+			&i.CountsJson,
+			&i.CreatedAtMs,
+			&i.EndedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnmanagedTargets = `-- name: ListUnmanagedTargets :many
+SELECT n.name AS namespace, t.name, p.name AS pool_name, t.scopes_json, t.command_json, t.every_ms,
+       t.timeout_ms, t.enabled
+FROM unmanaged_targets AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+JOIN runner_pools AS p ON p.id = t.pool_id
+WHERE n.name = ?1
+  AND p.namespace_id = t.namespace_id
+ORDER BY t.name
+`
+
+type ListUnmanagedTargetsRow struct {
+	Namespace   string
+	Name        string
+	PoolName    string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
+}
+
+// The targets of a namespace with the name of their pool, ordered by name. A
+// target whose pool belongs to another namespace gives no row.
+func (q *Queries) ListUnmanagedTargets(ctx context.Context, namespace string) ([]ListUnmanagedTargetsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listUnmanagedTargets, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnmanagedTargetsRow
+	for rows.Next() {
+		var i ListUnmanagedTargetsRow
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Name,
+			&i.PoolName,
+			&i.ScopesJson,
+			&i.CommandJson,
+			&i.EveryMs,
+			&i.TimeoutMs,
+			&i.Enabled,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -18498,6 +19066,39 @@ func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyi
 	return result.RowsAffected()
 }
 
+const markSupersededCheckpoint = `-- name: MarkSupersededCheckpoint :exec
+INSERT INTO checkpoint_supersedes (blob_key, stack_id, update_id, size, superseded_at_ms)
+SELECT c.blob_key, c.stack_id, c.update_id, COALESCE(c.blob_size, 0),
+       CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+FROM checkpoints AS c
+WHERE c.stack_id = ? AND c.update_id = ? AND c.blob_key <> ?
+  AND c.blob_key = ?4
+ON CONFLICT (blob_key) DO NOTHING
+`
+
+type MarkSupersededCheckpointParams struct {
+	StackID  string
+	UpdateID string
+	BlobKey  string
+	ReadKey  string
+}
+
+// Marks the checkpoint blob that a save of the update replaces, with the time
+// of the database clock, from the same expression as the checkpoint upsert.
+// It marks only the row that still names the key that the sequence check read:
+// the row is not locked, and a concurrent attempt can replace it between the
+// read and the mark. The mark names the blob of that row and the size of the
+// stored blob, and a mark of an earlier save stays as it is.
+func (q *Queries) MarkSupersededCheckpoint(ctx context.Context, arg MarkSupersededCheckpointParams) error {
+	_, err := q.db.ExecContext(ctx, markSupersededCheckpoint,
+		arg.StackID,
+		arg.UpdateID,
+		arg.BlobKey,
+		arg.ReadKey,
+	)
+	return err
+}
+
 const markTempAdminReviewOpened = `-- name: MarkTempAdminReviewOpened :execrows
 UPDATE temp_admins SET review_opened_at_ms = CAST(?1 AS INTEGER)
 WHERE principal_id = ?2 AND ended_at_ms IS NOT NULL AND review_opened_at_ms IS NULL
@@ -18805,6 +19406,21 @@ func (q *Queries) NextRefusalArrival(ctx context.Context, arg NextRefusalArrival
 	var arrival int64
 	err := row.Scan(&arrival)
 	return arrival, err
+}
+
+const nextUnmanagedScanSeq = `-- name: NextUnmanagedScanSeq :one
+SELECT CAST(COALESCE(MAX(s.seq), 0) + 1 AS INTEGER) AS seq
+FROM unmanaged_scans AS s
+WHERE s.namespace_id = ?1
+`
+
+// The sequence number of the next sweep of a namespace. The write transaction
+// orders it, and the unique index on (namespace_id, seq) refuses a duplicate.
+func (q *Queries) NextUnmanagedScanSeq(ctx context.Context, namespaceID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextUnmanagedScanSeq, namespaceID)
+	var seq int64
+	err := row.Scan(&seq)
+	return seq, err
 }
 
 const pageNamespaces = `-- name: PageNamespaces :many
@@ -22948,6 +23564,74 @@ func (q *Queries) UpdateUnitSettings(ctx context.Context, arg UpdateUnitSettings
 		arg.UpdatedAtMs,
 		arg.UnitID,
 		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateUnmanagedScan = `-- name: UpdateUnmanagedScan :exec
+UPDATE unmanaged_scans SET status = ?1, reason = ?2,
+    scopes_json = ?3, counts_json = ?4, ended_at_ms = ?5
+WHERE namespace_id = ?6 AND id = ?7
+`
+
+type UpdateUnmanagedScanParams struct {
+	Status      string
+	Reason      string
+	ScopesJson  string
+	CountsJson  string
+	EndedAtMs   int64
+	NamespaceID string
+	ID          string
+}
+
+// It replaces the status, the reason, the scopes, the counts and the end of the
+// sweep. The caller read the sweep in the same transaction.
+func (q *Queries) UpdateUnmanagedScan(ctx context.Context, arg UpdateUnmanagedScanParams) error {
+	_, err := q.db.ExecContext(ctx, updateUnmanagedScan,
+		arg.Status,
+		arg.Reason,
+		arg.ScopesJson,
+		arg.CountsJson,
+		arg.EndedAtMs,
+		arg.NamespaceID,
+		arg.ID,
+	)
+	return err
+}
+
+const updateUnmanagedTarget = `-- name: UpdateUnmanagedTarget :execrows
+UPDATE unmanaged_targets SET pool_id = ?1, scopes_json = ?2,
+    command_json = ?3, every_ms = ?4, timeout_ms = ?5,
+    enabled = ?6
+WHERE namespace_id = ?7 AND name = ?8
+`
+
+type UpdateUnmanagedTargetParams struct {
+	PoolID      string
+	ScopesJson  string
+	CommandJson string
+	EveryMs     int64
+	TimeoutMs   int64
+	Enabled     bool
+	NamespaceID string
+	Name        string
+}
+
+// It replaces the target of the same name. It changes no row when the target is
+// not there.
+func (q *Queries) UpdateUnmanagedTarget(ctx context.Context, arg UpdateUnmanagedTargetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateUnmanagedTarget,
+		arg.PoolID,
+		arg.ScopesJson,
+		arg.CommandJson,
+		arg.EveryMs,
+		arg.TimeoutMs,
+		arg.Enabled,
+		arg.NamespaceID,
+		arg.Name,
 	)
 	if err != nil {
 		return 0, err

@@ -4265,3 +4265,17 @@ decisions:
   accepted_artifact: "docs/adr/0380-the-delegation-in-the-agent-block-of-an-audit-entry.md"
   evidence:
   - "docs/adr/0380-the-delegation-in-the-agent-block-of-an-audit-entry.md"
+- id: "adr-0381"
+  title: "ADR 381: Agent sign-off until the first tag"
+  decision: "1. **Until the first tag, the agent signs off (owner, 2026-11-15).** Until the first tag, each agent commit keeps a `Signed-off-by:` line with the commit author identity of the agent, as ADR 76 decision 8 and ADR 317 decision 2 say.\n2. **The owner cleans up the history before the first tag (owner, 2026-11-15).** ADR 76 decision 8 already planned this cleanup. Nothing waits for it.\n3. **After the first tag, the owner signs off (owner, 2026-11-15).** After the first tag, each agent commit carries the `Signed-off-by:` line of the project owner. The owner gives one standing statement for the agent sessions that the owner runs.\n4. **The release gate gets an item (owner, 2026-11-15).** The gate of the first release gets the item \"agent sign-off rule settled\"."
+  reason: "ADR 76 decision 8 (owner, 2026-10-17) says: \"until the push ends on 2026-10-22, each agent commit carries a `Signed-off-by:` line with the commit author identity of the agent. The owner cleans up the history later. Nothing waits for this cleanup.\" ADR 317 decision 2 (owner, 2026-10-20) sets that identity for the author and the DCO sign-off. ADR 319 changes only the trailer part of ADR 317 decision 2."
+  scope:
+  - "CLAUDE.md"
+  - "CONTRIBUTING.md"
+  - "docs/roadmap.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-15"
+  accepted_artifact: "docs/adr/0381-agent-sign-off-until-the-first-tag.md"
+  evidence:
+  - "docs/adr/0381-agent-sign-off-until-the-first-tag.md"

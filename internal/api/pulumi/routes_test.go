@@ -1689,6 +1689,27 @@ func (exportPanicsStore) ReferencedBlobKeys(
 	panic("delete must not read checkpoint keys")
 }
 
+// SupersededBlobs panics: the delete route must not read state.
+func (exportPanicsStore) SupersededBlobs(
+	_ context.Context, _ stack.ID,
+) ([]stack.SupersededBlob, error) {
+	panic("delete must not read checkpoint marks")
+}
+
+// SupersededMarks panics: the delete route must not read state.
+func (exportPanicsStore) SupersededMarks(
+	_ context.Context, _ stack.SupersededCursor, _ time.Time, _ int,
+) ([]stack.SupersededMark, error) {
+	panic("delete must not read checkpoint marks")
+}
+
+// DropSupersededMark panics: the delete route must not write state.
+func (exportPanicsStore) DropSupersededMark(
+	_ context.Context, _ stack.ID, _ blob.Key,
+) (bool, error) {
+	panic("delete must not drop a checkpoint mark")
+}
+
 // unusedStackResolver panics: routes that never save checkpoints never
 // resolve stacks.
 type unusedStackResolver struct{}
@@ -2185,6 +2206,24 @@ func (emptyCheckpointStore) ReferencedBlobKeys(
 	_ context.Context, _ stack.ID,
 ) ([]blob.Key, error) {
 	return nil, nil
+}
+
+func (emptyCheckpointStore) SupersededBlobs(
+	_ context.Context, _ stack.ID,
+) ([]stack.SupersededBlob, error) {
+	return nil, nil
+}
+
+func (emptyCheckpointStore) SupersededMarks(
+	_ context.Context, _ stack.SupersededCursor, _ time.Time, _ int,
+) ([]stack.SupersededMark, error) {
+	return nil, nil
+}
+
+func (emptyCheckpointStore) DropSupersededMark(
+	_ context.Context, _ stack.ID, _ blob.Key,
+) (bool, error) {
+	return false, nil
 }
 
 // newEnforcingUpdates returns an Updates service whose export finds no state,

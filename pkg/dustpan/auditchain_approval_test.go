@@ -142,7 +142,7 @@ func checkConcurrentApprovalsLeaveOneSQLite(t *testing.T) {
 
 	for range approvals {
 		wg.Go(func() {
-			status, _ := srv.do(t, http.MethodPost, "/api/server/audit/chain")
+			status, _ := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain")
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -203,7 +203,7 @@ func checkConcurrentApprovalsLeaveOnePostgres(t *testing.T) {
 
 	for range approvals {
 		wg.Go(func() {
-			status, _ := srv.do(t, http.MethodPost, "/api/server/audit/chain")
+			status, _ := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain")
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -275,7 +275,7 @@ func checkLateApprovalWritesNoEntrySQLite(t *testing.T) {
 
 	srv = runChainServer(t, st, audit.ChainOff)
 
-	if status, _ := srv.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusConflict {
+	if status, _ := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status != http.StatusConflict {
 		t.Fatalf("late approval: %d, want 409", status)
 	}
 
@@ -306,7 +306,7 @@ func checkLateApprovalWritesNoEntryPostgres(t *testing.T) {
 	srv := runPostgresChainServer(t, st)
 	waitForPostgresRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
 
-	if status, body := srv.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusAccepted {
+	if status, body := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status != http.StatusAccepted {
 		t.Fatalf("approve: %d %s, want 202", status, body)
 	}
 
@@ -322,7 +322,7 @@ func checkLateApprovalWritesNoEntryPostgres(t *testing.T) {
 
 	srv = runPostgresChainServer(t, st)
 
-	if status, _ := srv.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusConflict {
+	if status, _ := srv.do(t, http.MethodPost, "/api/dustpan/v1/audit/chain"); status != http.StatusConflict {
 		t.Fatalf("late approval: %d, want 409", status)
 	}
 
