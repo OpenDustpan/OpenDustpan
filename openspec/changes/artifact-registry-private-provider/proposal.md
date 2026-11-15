@@ -40,7 +40,7 @@ Main already has these parts:
 
 This change adds:
 
-- The OpenTofu provider network mirror protocol: the NEW routes GET /api/dustpan/v1/namespaces/{namespace}/registry/mirror/{addr}/index.json and GET /api/dustpan/v1/namespaces/{namespace}/registry/mirror/{addr}/{version}.json.
+- The OpenTofu provider network mirror protocol in the TFE adapter, outside the tool-neutral API (ADR 12): the NEW routes GET /v1/mirror/{hostname}/{namespace}/{type}/index.json and GET /v1/mirror/{hostname}/{namespace}/{type}/{file} (for `<version>.json`). The archive URLs are the existing signed file route of the provider registry protocol.
 - Tests for the mirror protocol, an e2e step and a docs section.
 
 Out of scope:

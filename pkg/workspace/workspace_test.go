@@ -1183,14 +1183,14 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 
 // newFixtureGuarded is newFixtureWithBlobs with guard as the guard of the
 // blob deletes.
-func newFixtureGuarded(t *testing.T, blobs blob.Store, guard blobguard.Watch) fixture {
+func newFixtureGuarded(t *testing.T, blobs blob.Store, guard blobguard.Leases) fixture {
 	t.Helper()
 
 	return newFixtureSized(t, blobs, guard, 64)
 }
 
 // newFixtureSized is newFixtureGuarded with a state size limit of maxState.
-func newFixtureSized(t *testing.T, blobs blob.Store, guard blobguard.Watch, maxState int64) fixture {
+func newFixtureSized(t *testing.T, blobs blob.Store, guard blobguard.Leases, maxState int64) fixture {
 	t.Helper()
 
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)

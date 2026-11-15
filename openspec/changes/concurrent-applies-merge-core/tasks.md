@@ -13,12 +13,15 @@
 - [ ] 1.7 Add failing test for each of the six strict cases with 423 in NEW file pkg/workspace/claim_merge_test.go. Check: TestStrictCase_HoldsWholeUnitLock fails on main
 - [ ] 1.8 Add failing test for capability retry, force upload fence, and orphan safety in NEW file pkg/workspace/claim_merge_test.go. Check: TestCapabilityRetry_SameContentSucceeds fails on main
 - [ ] 1.9 NEW. Write a failing test in NEW file pkg/gate/facts_claims_test.go that an access limit on `ref_protected` refuses an upload under an apply claim from an unprotected branch. Check: NEW test TestStateWriteLimitReadsTokenClaims fails on main
+- [ ] 1.10 SECURITY. Add a hostile adapter test in NEW file internal/api/tfe/claim_merge_adapter_test.go that sends a mismatched fence, a foreign claim, a bad lineage and malformed JSON straight to the adapter. Check: NEW test TestClaimMergeAdapter_HostileInput fails on main and expects 409, 422 or 400 with no state change
 
 ## 2. Merge core
 
 - [ ] 2.1 Serve reads under a claim from the named base version and latest without a claim in NEW file pkg/workspace/claim_merge.go. Check: `go test ./pkg/workspace/... -run TestServeClaimBase -count=1` passes
 - [ ] 2.2 Merge uploads one resource instance at a time under fence with conflict refusal in NEW file pkg/workspace/claim_merge.go. Check: `go test ./pkg/workspace/... -run TestMergeDisjoint -count=1` passes
 - [ ] 2.3 Enforce refuse rules, empty uploads, fail-closed behavior, and six strict whole-unit cases in NEW file pkg/workspace/claim_merge.go. Check: `go test ./pkg/workspace/... -run TestStrictCase -count=1` passes
+
+- [ ] 2.4 SECURITY. Fill the token claim facts `ref`, `ref_protected` and the event source at state.write in `pkg/gate/facts.go:487 (AccessFacts)`. Check: `go test ./pkg/gate/... -run TestStateWriteLimitReadsTokenClaims -count=1` passes
 
 ## 3. Definition of done
 

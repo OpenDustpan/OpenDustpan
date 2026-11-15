@@ -117,8 +117,14 @@ func (b *stateBlobs) delete(ctx context.Context, ns namespace.ID, ws ID, key blo
 }
 
 // deleteRetried is delete with a retry of a transient failure after a short
-// backoff (blob.DeleteRetried). A refusal is not retried.
+// backoff (blob.DeleteRetried). A refusal is not retried. A context that
+// ended deletes nothing: the check comes before the first attempt, and
+// blob.DeleteRetried watches the context before each retry.
 func (b *stateBlobs) deleteRetried(ctx context.Context, ns namespace.ID, ws ID, key blob.Key) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("delete state blob: %w", err)
+	}
+
 	v, err := b.scopedKey(ctx, ns, ws, key, opDelete)
 	if err != nil {
 		return err

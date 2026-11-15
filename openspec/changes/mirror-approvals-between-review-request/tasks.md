@@ -5,6 +5,7 @@
 ## 1. Failing tests
 
 - [ ] 1.1 Add failing table tests in NEW file internal/changeordersvc/mirror_test.go for pending review, mirror out, unlinked refusal, revoked link, stale proof, replay, supersede, post failure, request-changes and window 0. Check: `go test ./internal/changeordersvc -run TestMirrorForgeApproveToPending -count=1` fails on main
+- [ ] 1.3 SECURITY. Add the hostile test TestMirrorIntakeHostile in internal/changeordersvc/mirror_test.go. It sends a forged secret and a malformed event straight to the intake. Check: `go test ./internal/changeordersvc -run TestMirrorIntakeHostile -count=1` shows no pending review, no signature and no state change in each case
 - [ ] 1.2 Add failing window edge tests in NEW file internal/changeordersvc/freshwindow_test.go for switch on, switch off, narrower rule window and window 0. Check: `go test ./internal/changeordersvc -run TestFreshAuthWindowEdges -count=1` fails on main
 
 ## 2. Build
@@ -15,7 +16,7 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 

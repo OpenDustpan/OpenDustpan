@@ -13,6 +13,8 @@
 - [ ] 2.2 Add runner coverage in e2e/docs_commands_test.go (NEW) for the production install page blocks in page order. Check: The corpus runner test runs the install page blocks as written in a clean work directory with no edits. BLOCKED by no server route: the runner runs shell text only with no authorization gate and no credential. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 2.3 Add the make target docs-commands-check to Makefile (NEW) with its failure report format. Check: `make docs-commands-check` prints page path, block index, command text and captured output for a failing block.
 
+- [ ] 2.4 SECURITY. Add hostile runner tests in e2e/docs_commands_test.go (NEW) named TestDocsCommandsRefuseSudo, TestDocsCommandsTimeoutKillsProcessGroup, TestDocsCommandsOutputCap and TestDocsCommandsUnknownSkipReason. Each test sends hostile input straight to RunCommands or CollectCommands: a block with sudo, a block with sleep 600 and a background child, a block that prints more than 1048576 bytes, and a skip marker with a reason outside the closed allowlist. Check: TestDocsCommandsRefuseSudo requires a refusal without host change. TestDocsCommandsTimeoutKillsProcessGroup requires both processes dead. TestDocsCommandsOutputCap requires at most 1048576 bytes of captured output. TestDocsCommandsUnknownSkipReason requires a gate failure with page path and block index. BLOCKED by no server route: the tests run shell text only with no authorization gate and no credential. Confirmed by: CI (the agent writes the e2e test).
+
 ## 3. Definition of done
 
 - [ ] 3.1 Fix pages whose commands fail and document the skip markers. Check: The operator install page shows only commands covered by the corpus test.
