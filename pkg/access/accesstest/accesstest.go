@@ -16,6 +16,7 @@ package accesstest
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -62,6 +63,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "taken namespace stores no grant", test: testNamespaceWithGrantTaken},
 		{name: "delete of a principal or group revokes its grants", test: testDeleteSubjectGrants},
 		{name: "a revoked grant gives nothing and frees its tuple", test: testRevokedGrant},
+		{name: "a revoke keeps the agent origin of its entry", test: testSubjectRevokeKeepsOrigin},
 		{name: "a deleted role frees its name and its grants give nothing", test: testDeletedRole},
 		{name: "get roles reads several custom roles", test: testGetRoles},
 		{name: "subjects of a caller are its principal and current groups", test: testSubjectsOf},
@@ -838,6 +840,77 @@ func testRevokedGrant(t *testing.T, s access.Store) {
 	}
 
 	mustCreateGrant(t, s, newGrant("grt-2", principalSubject("prn-a"), access.RoleViewer, acme))
+}
+
+// testSubjectRevokeKeepsOrigin proves that the audit entry of a grant that
+// the delete of its principal revokes carries the agent origin of the entry
+// that the caller passed.
+func testSubjectRevokeKeepsOrigin(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ps, ok := s.(principal.Store)
+	log, logOK := s.(audit.Store)
+
+	if !ok || !logOK {
+		t.Skip("the store keeps no principals or no audit log")
+	}
+
+	ctx := t.Context()
+
+	prn := principal.Principal{
+		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
+		DisabledAt: time.Time{},
+	}
+	if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
+		t.Fatalf("create principal: %v", err)
+	}
+
+	acme := identity.NamespaceObject("acme")
+	mustCreateGrant(t, s, newGrant("grt-1", principalSubject("prn-a"), access.RoleViewer, acme))
+
+	origin, err := audit.NewOrigin(audit.OriginArgs{
+		Run: "run-1", Session: "run-1", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "", DelegationID: "",
+	})
+	if err != nil {
+		t.Fatalf("new origin: %v", err)
+	}
+
+	e := entry()
+	e.Channel = audit.ChannelAgent
+	e.Origin = origin
+
+	if err = ps.DeletePrincipal(ctx, "prn-a", e); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+
+	checkRevokeEntryOrigin(t, log, origin)
+}
+
+// checkRevokeEntryOrigin fails the test unless the revoke entry of the grant
+// grt-1 in acme carries want.
+func checkRevokeEntryOrigin(t *testing.T, log audit.Store, want *audit.Origin) {
+	t.Helper()
+
+	listing, err := log.List(t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list audit of acme: %v", err)
+	}
+
+	for i := range listing.Entries {
+		got := listing.Entries[i]
+		if got.ObjectID != "grt-1" || got.Kind != audit.KindChange || got.Sequence == 1 {
+			continue
+		}
+
+		if got.Origin == nil || !reflect.DeepEqual(got.Origin, want) {
+			t.Fatalf("revoke entry origin = %+v, want %+v", got.Origin, want)
+		}
+
+		return
+	}
+
+	t.Fatalf("no revoke entry of grt-1 in %+v", listing.Entries)
 }
 
 func testDeletedRole(t *testing.T, s access.Store) {
