@@ -655,7 +655,7 @@ func pageRequest(r *http.Request) (principal.PageRequest, error) {
 
 // createPrincipal serves POST /api/server/principals: it answers 201 with
 // the new principal. A taken subject answers 409. A bad or reserved subject,
-// an unknown kind or a bad body answers 400.
+// a kind that this route does not make or a bad body answers 400.
 func createPrincipal(
 	w http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
 ) (principalResult, error) {
@@ -671,6 +671,14 @@ func createPrincipal(
 	kind, err := principal.ParseKind(*req.Kind)
 	if err != nil {
 		return failed("principals"), err
+	}
+
+	// An agent record comes from the model connect request, with its
+	// sponsors. This route makes a person, a service and a workload only.
+	if kind == principal.KindAgent {
+		return failed("principals"), fmt.Errorf(
+			"%w: the kind %q is not one that this route makes", principal.ErrInvalid, kind,
+		)
 	}
 
 	in := principal.Input{Subject: *req.Subject, DisplayName: "", Kind: kind}

@@ -924,6 +924,76 @@ func refusalCases(aliceID, groupID string) []refusalCase {
 	}
 }
 
+// TestCreatePrincipalRefusesAgentAndUnknownKinds proves that the create route
+// makes a person, a service and a workload only: an agent record needs its
+// sponsors and comes from the model connect request, and a kind that the
+// server does not know is refused. Each refusal answers 400 principal.invalid
+// and stores no row.
+func TestCreatePrincipalRefusesAgentAndUnknownKinds(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		subject string
+		kind    string
+	}{
+		{"agent", "new-agent", `"agent"`},
+		{"unknown kind", "new-robot", `"robot"`},
+		{"upper case", "new-agent-upper", `"Agent"`},
+		{"empty kind", "new-empty", `""`},
+		{"agent with a newline", "new-agent-newline", `"agent\n"`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			principals := newTestPrincipals(t)
+			handler := newPrincipalHandler(t, principals)
+
+			status, body := createPrincipalAsSession(t, handler,
+				`{"subject":"`+tc.subject+`","kind":`+tc.kind+`}`)
+			if status != http.StatusBadRequest {
+				t.Fatalf("create of the kind %s answers %d, want 400 (%s)", tc.kind, status, body)
+			}
+
+			if !strings.Contains(body, `"errorCode":"principal.invalid"`) {
+				t.Fatalf("create of the kind %s = %s, want the code principal.invalid", tc.kind, body)
+			}
+
+			// The refusal stores no row. The only row is the person "tester",
+			// made by the sign-in.
+			page, err := principals.ListPrincipals(
+				t.Context(), principal.PageRequest{Prefix: "", Cursor: "", Limit: 0}, "",
+			)
+			if err != nil {
+				t.Fatalf("list principals: %v", err)
+			}
+
+			if page.Total != 1 {
+				t.Fatalf("the store holds %d principals, want only the person tester", page.Total)
+			}
+		})
+	}
+}
+
+// createPrincipalAsSession sends one principal create with a fresh console
+// session of "tester", the credential of a site administrator, and returns
+// the status and the body.
+func createPrincipalAsSession(t *testing.T, h testHandler, body string) (int, string) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(
+		t.Context(), http.MethodPost, "/api/server/principals", strings.NewReader(body),
+	)
+	startSession(t, h, req, 0)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	return rec.Code, rec.Body.String()
+}
+
 // TestPrincipalRoutesWithoutStore answers 501 that names the cause when the
 // store keeps no principals.
 func TestPrincipalRoutesWithoutStore(t *testing.T) {

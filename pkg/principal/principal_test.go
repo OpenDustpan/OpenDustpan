@@ -106,6 +106,32 @@ func TestParseKind(t *testing.T) {
 	}
 }
 
+// TestParseKindTable proves that ParseKind knows the kind agent, and that a
+// kind that differs in any byte is refused.
+func TestParseKindTable(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		kind principal.Kind
+	}{
+		{"person", principal.KindPerson},
+		{"service", principal.KindService},
+		{"workload", principal.KindWorkload},
+		{"agent", principal.KindAgent},
+	} {
+		if k, err := principal.ParseKind(tc.name); err != nil || k != tc.kind {
+			t.Fatalf("ParseKind(%q) = %q, %v, want %q", tc.name, k, err, tc.kind)
+		}
+	}
+
+	for _, s := range []string{"robot", "Agent", " agent", "agent\x00"} {
+		if _, err := principal.ParseKind(s); !errors.Is(err, principal.ErrInvalid) {
+			t.Fatalf("ParseKind(%q) = %v, want ErrInvalid", s, err)
+		}
+	}
+}
+
 func TestValidateGroupName(t *testing.T) {
 	t.Parallel()
 
