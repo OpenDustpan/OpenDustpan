@@ -6,8 +6,6 @@ Changed by:
 
 - ADR 273 changes decision 8: a sharing rule needs no acceptance of both
   namespaces.
-- ADR 384 extends decision 17: the family `redaction` is not in the built-in
-  roles `account-administrator` and `site-administrator`.
 
 ## Context
 
