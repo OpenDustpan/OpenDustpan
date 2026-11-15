@@ -59,7 +59,30 @@ type suiteCase struct {
 func Run(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	cases := slices.Concat(indexCases(), linkCases(), findingCases(), scanCases())
+	runCases(t, newHarness, slices.Concat(indexCases(), linkCases(), findingCases(), scanCases()))
+}
+
+// RunSweepStore runs the cases of the findings and of the sweeps. An adapter
+// that holds the finding store and the sweep store runs it: the harness
+// leaves Index and Links nil, and the sweep store starts the sweeps that the
+// finding cases need.
+func RunSweepStore(t *testing.T, newHarness Factory) {
+	t.Helper()
+
+	runCases(t, newHarness, slices.Concat(findingCases(), scanCases()))
+}
+
+// RunScanStore runs the cases of the sweeps alone. An adapter that holds the
+// sweep store runs it, and the harness leaves Index, Links and Findings nil.
+func RunScanStore(t *testing.T, newHarness Factory) {
+	t.Helper()
+
+	runCases(t, newHarness, scanCases())
+}
+
+// runCases runs each case of cases in its own subtest.
+func runCases(t *testing.T, newHarness Factory, cases []suiteCase) {
+	t.Helper()
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

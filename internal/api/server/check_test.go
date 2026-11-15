@@ -22,7 +22,7 @@ type checkBackupDoc struct {
 func readBackupCheck(t *testing.T, fix backupFixture, id string) (int, checkBackupDoc) {
 	t.Helper()
 
-	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/server/backups/"+id+"/check")
+	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/dustpan/v1/backups/"+id+"/check")
 
 	var doc checkBackupDoc
 
@@ -104,7 +104,7 @@ func TestBackupCheckCorrupt(t *testing.T) {
 }
 
 // TestBackupCheckUnknown proves the check of a well-formed ID with no backup
-// row answers 404 like GET /api/server/backups/{id}: callers can tell
+// row answers 404 like GET /api/dustpan/v1/backups/{id}: callers can tell
 // unknown from corrupt.
 func TestBackupCheckUnknown(t *testing.T) {
 	t.Parallel()
@@ -113,7 +113,7 @@ func TestBackupCheckUnknown(t *testing.T) {
 
 	const id = "bkp-missing000000000001"
 
-	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/server/backups/"+id+"/check")
+	status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/dustpan/v1/backups/"+id+"/check")
 	if status != http.StatusNotFound {
 		t.Fatalf("GET backup %s check answers %d, want %d (%s)", id, status, http.StatusNotFound, body)
 	}
@@ -141,7 +141,7 @@ func TestBackupCheckInvalidID(t *testing.T) {
 	}
 
 	for _, id := range ids {
-		status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/server/backups/"+id+"/check")
+		status, body := serveBackup(t, fix.handler, http.MethodGet, "/api/dustpan/v1/backups/"+id+"/check")
 		if status != http.StatusBadRequest {
 			t.Fatalf("GET backup %q check answers %d, want %d (%s)", id, status, http.StatusBadRequest, body)
 		}

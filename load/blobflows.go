@@ -12,8 +12,8 @@ import (
 
 // Server API paths of the backup and restore runs.
 const (
-	backupsPath  = "/api/server/backups/"
-	restoresPath = "/api/server/restores/"
+	backupsPath  = "/api/dustpan/v1/backups/"
+	restoresPath = "/api/dustpan/v1/restores/"
 )
 
 // Default dimensions of the blob flow run.
