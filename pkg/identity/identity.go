@@ -87,11 +87,12 @@ const (
 	KindPerson   Kind = "person"
 	KindService  Kind = "service"
 	KindWorkload Kind = "workload"
+	KindAgent    Kind = "agent"
 )
 
 // Kinds returns every kind of a principal, in a new slice.
 func Kinds() []Kind {
-	return []Kind{KindPerson, KindService, KindWorkload}
+	return []Kind{KindPerson, KindService, KindWorkload, KindAgent}
 }
 
 // Known reports whether k is one of Kinds. The comparison is exact, so a

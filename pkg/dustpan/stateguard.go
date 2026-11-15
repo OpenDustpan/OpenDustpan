@@ -337,9 +337,9 @@ func (s principalSubjects) Subject(ctx context.Context, p identity.Principal) (g
 		return gate.Subject{}, fmt.Errorf("%w: the principal has no subject", identity.ErrDenied)
 	}
 
-	kind := gate.PrincipalPerson
-	if p.Kind == identity.KindService || p.Kind == identity.KindWorkload {
-		kind = gate.PrincipalService
+	kind, err := subjectKind(p.Kind)
+	if err != nil {
+		return gate.Subject{}, err
 	}
 
 	credential, err := credentialKind(p.Credential)
@@ -382,6 +382,25 @@ func (s principalSubjects) Subject(ctx context.Context, p identity.Principal) (g
 		ID: p.Subject, Groups: groups, Kind: kind, Credential: credential, AuthAt: authAt(ctx, credential),
 		BreakGlassAccount: breakGlass, Job: nil,
 	}, nil
+}
+
+// subjectKind returns the kind of the gate subject of a request principal. It
+// refuses any kind that the gates do not know, so that no such principal
+// reaches a gate as a person. The empty kind stays a person: the server cannot
+// name the kind of the bootstrap token, and an unnamed kind is no kind.
+func subjectKind(k identity.Kind) (gate.PrincipalKind, error) {
+	switch k {
+	case "", identity.KindPerson:
+		return gate.PrincipalPerson, nil
+	case identity.KindService, identity.KindWorkload:
+		return gate.PrincipalService, nil
+	case identity.KindAgent:
+		// The gates have no kind of subject for an agent yet. Until a gate
+		// names it, the gates deny it: fail closed.
+		return "", fmt.Errorf("%w: the gates do not know an agent principal", identity.ErrDenied)
+	default:
+		return "", fmt.Errorf("%w: the gates do not know the principal kind %q", identity.ErrDenied, k)
+	}
 }
 
 // credentialKind returns the credential of the gates for c. The empty
