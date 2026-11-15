@@ -4,17 +4,18 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing entry-shape test in the NEW file `pkg/job/agent_audit_test.go`: an agent start entry (`pkg/job/service_start.go:623`) has the agent block and no agent change key. Check: TestAuditAgentBlockHasNoAgentField fails on main, passes after fix against GET /api/audit/entries with an access token.
-- [ ] 1.2 Add failing hash test in the NEW file `pkg/job/agent_audit_test.go`: entries with no agent keep the same hash (`pkg/audit/audit.go:408`, func ComputeHash). Check: TestAuditHashStableWithoutAgent fails on main, passes after fix.
-- [ ] 1.3 Add failing legacy test in the NEW file `pkg/job/agent_audit_test.go`: an old start entry with the change key reads and verifies, and the block wins when both exist. Check: TestAuditLegacyChangeKeyDualRead fails on main, passes after fix.
-- [ ] 1.4 Add failing tamper test in `pkg/audit/audittest/chain.go`: one changed byte of the block refuses the chain. Check: TestAuditTamperedBlockFailsCheck fails on main, passes after fix against GET /api/audit/check with an access token.
-- [ ] 1.5 Add failing test in `internal/api/audit/audit.go`'s test file: a missing entry id answers audit.entry-not-found. Check: TestAuditEntryNotFoundCode fails on main, passes after fix against GET /api/audit/entries/{} with an access token.
-- [ ] 1.6 Add failing test in `internal/api/audit/audit.go`'s test file: an unreadable entry during the chain check answers audit.entry-read-unavailable. Check: TestAuditEntryReadUnavailableCode fails on main, passes after fix against GET /api/audit/check with an access token.
+Tests that main already passes are regression checks. They pass on main and after the change, because the change `audit-agent-block` landed that behavior. Task 0.1 confirms each one on the current main.
+
+- [ ] 1.1 Add a failing test in the NEW file `pkg/job/agent_audit_test.go`: the approval entry of an agent (`pkg/job/service_approve.go:424`) holds the agent in the agent block and holds no agent change key. Check: TestApprovalEntryAgentInBlock fails on main, passes after fix. If the fix of issue #3271 (an agent cannot reject) has landed and no code path writes an agent on the approval entry, drop this task and task 2.1 and state that in the pull request body.
+- [ ] 1.2 Regression check, no new test: `TestStartWritesAgentBlock` (`pkg/job/service_test.go:1124`) and `TestComputeHashAgentBlock` (`pkg/audit/agent_block_test.go:52`) pass on main and after the change. Check: both pass in `go test ./pkg/job/... ./pkg/audit/...`.
+- [ ] 1.3 Add a regression test in `pkg/audit/audittest/chain.go`: one changed byte of the agent block refuses the chain. Check: TestAuditTamperedBlockFailsCheck passes on main and after the change. Add it only if no existing test covers a changed block byte; task 0.1 records which.
 
 ## 2. Build
 
-- [ ] 2.1 In `pkg/job/service_start.go:623`, remove the agent change key and write the agent block in the same transaction for start entries with an agent ref. Check: Job start with an agent ref, then GET /api/audit/entries with an access token shows the block and no change key.
+- [ ] 2.1 In `pkg/job/service_approve.go:424`, remove the agent change key and write the agent block in the same transaction as the approval entry. Check: an approval entry with an agent ref, read with GET /api/audit/entries and an access token, shows the block and no change key.
 - [ ] 2.2 Document the agent block of a job entry on `docs/guides/audit-log.md`, with one example; the field of the entry read API comes from the change audit-agent-block. Check: GET /api/audit/entries with an access token returns the block of a job start entry; the docs page shows the example. `make docs-lint` passes on each edited guide.
+
+The start path (`pkg/job/service_start.go`) already writes the block on main. Tasks 2.3 to 2.6 check the guards of that write and of the approval write of task 2.1. A test of 2.5 or 2.6 that already passes on main is a regression test; keep it, and say so in the pull request body.
 
 - [ ] 2.3 SECURITY. Build the service ref validation in `pkg/job/service_start.go:623`: refuse a malformed agent ref before any write and pass only the supplied ref and digest to the block writer. Check: Job start with a malformed agent ref is refused and GET /api/audit/entries with an access token shows no new entry.
 - [ ] 2.4 SECURITY. Build the same-transaction write in `pkg/job/service_start.go:623`: write the block and the entry in one transaction and roll back the job change when the block write fails. Check: Job start with a failed block write fails and GET /api/audit/entries with an access token shows no orphan entry.

@@ -47,6 +47,9 @@ const (
 	// Gate.Groups. This version does not check them when an approval is
 	// recorded.
 	ActionJobApprove = identity.ActionJobApprove
+	// ActionUnitRedact allows the redaction of a job log version. Its object is
+	// a unit. The job model has no redact action of its own.
+	ActionUnitRedact = identity.ActionUnitRedact
 	// ActionNamespaceManageFreezes allows creating and ending the change
 	// freezes of a namespace. Its object is a namespace.
 	ActionNamespaceManageFreezes = identity.ActionNamespaceManageFreezes

@@ -427,6 +427,10 @@ func (c *auditChain) Status(ctx context.Context) (serverapi.AuditChainStatus, er
 // entry exists.
 func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 	if err := c.checkApprovalGate(ctx, caller); err != nil {
+		if errors.Is(err, audit.ErrChainNeedsPerson) {
+			return c.auditRefusal(ctx, caller, err)
+		}
+
 		return err
 	}
 
@@ -468,9 +472,26 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 	return nil
 }
 
+// auditRefusal writes one denied entry in the server scope for a refused
+// approval of caller, then answers refusal. An error of the write is joined
+// with the refusal.
+func (c *auditChain) auditRefusal(ctx context.Context, caller audit.Entry, refusal error) error {
+	e := audit.ChainSetEntry(caller, audit.ChainChange{At: c.chainNow(), By: caller.Subject, To: c.setting.State()})
+	e.Outcome = audit.OutcomeDenied
+	e.Kind = audit.KindSecurity
+	e.PrincipalKind = caller.PrincipalKind
+	e.Reason = audit.ErrChainNeedsPerson.Error()
+
+	if _, err := c.server.AppendServer(ctx, e); err != nil {
+		return errors.Join(refusal, fmt.Errorf("write the denied audit chain entry: %w", err))
+	}
+
+	return refusal
+}
+
 // checkApprovalGate refuses an approval while the migration loop stops,
-// by a caller whose kind may not approve a change to off, or without a fresh
-// MFA step.
+// by a caller who is not a person when the change is to off, or without a
+// fresh MFA step.
 func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) error {
 	if c.runsMigrations && !c.migrationsRunning.Load() {
 		return audit.ErrChainMigrationsStopped
@@ -480,7 +501,7 @@ func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) 
 		return nil
 	}
 
-	if err := c.refuseServiceCaller(ctx, caller.Subject); err != nil {
+	if err := c.requirePersonApprover(ctx, caller.Subject); err != nil {
 		return err
 	}
 
@@ -547,34 +568,31 @@ func auditChainRetryKey() string {
 	return auditChainKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
-// refuseServiceCaller refuses an approval of a change to off by a caller
-// whose kind may not approve it. The check is an allowlist of the caller
-// kind: the kind person and the kind workload may approve, and every other
-// kind, including the kind service and the kind agent, is refused. A new kind
-// fails closed until this list names it. A subject with no principal row is a
-// person and passes. A workload passed this check on main, when the check
-// refused only the kind service, and it still passes.
+// requirePersonApprover refuses an approval of a change to off unless the
+// caller is a person. The check is an allowlist of the caller kind: only the
+// kind person passes. Every other kind, a subject with no principal row, a
+// failed read and a missing principal reader fail closed with
+// audit.ErrChainNeedsPerson. A read error is joined with it.
 //
-// Defense in depth: the HTTP handler checks the actions of the caller and the
-// fresh MFA step too. This check stays so that a new caller cannot skip it,
-// and it does not rely on those checks.
-func (c *auditChain) refuseServiceCaller(ctx context.Context, subject string) error {
+// Defense in depth: the route asks for a console session with a fresh
+// authentication and the actions of the caller. This check stays so that a
+// caller without a session or of another kind cannot approve, and it does
+// not rely on the route, the actions or the MFA check.
+func (c *auditChain) requirePersonApprover(ctx context.Context, subject string) error {
 	if c.principals == nil {
-		return nil
+		return audit.ErrChainNeedsPerson
 	}
 
 	got, err := c.principals.GetPrincipalBySubject(ctx, subject)
 	if errors.Is(err, principal.ErrNotFound) {
-		return nil
+		return audit.ErrChainNeedsPerson
 	}
 
 	if err != nil {
-		return fmt.Errorf("read principal: %w", err)
+		return errors.Join(audit.ErrChainNeedsPerson, fmt.Errorf("read principal: %w", err))
 	}
 
-	// The allowlist of the kinds that may approve a change to off. A kind
-	// that this list does not name fails closed.
-	if got.Kind != principal.KindPerson && got.Kind != principal.KindWorkload {
+	if got.Kind != principal.KindPerson {
 		return audit.ErrChainNeedsPerson
 	}
 

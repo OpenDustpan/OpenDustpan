@@ -35,3 +35,6 @@ coverage.out
 # Repowise local files. decisions.yaml stays tracked.
 /.repowise/*
 !/.repowise/decisions.yaml
+
+# The baseline hash files return at the first tag; the release writes them.
+pkg/store/*/migrations/*.sql.sha256
