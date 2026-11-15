@@ -752,7 +752,7 @@ func TestFreshAuthRefusesAForgedFreshTimeHeader(t *testing.T) {
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	// The header claims a sign-in now. The server reads no fresh time from a
 	// header: it ignores this one, like each other header.
-	req.Header.Set("X-Dustpan-Auth-Time", time.Now().UTC().Format(time.RFC3339))
+	req.Header.Set("X-Dustpan-Auth-Time", e.clock.Now().UTC().Format(time.RFC3339))
 
 	rec := httptest.NewRecorder()
 	e.handler.ServeHTTP(rec, req)
