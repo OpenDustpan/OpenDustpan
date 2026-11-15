@@ -2,15 +2,19 @@ package postgres
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/pgtest"
+	"opendustpan.org/opendustpan/internal/unmanaged"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/store/internal/unmanagedstore"
+	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
 // unmanagedSeedStatements returns the SQL that writes one runner pool of sweeps
@@ -249,5 +253,153 @@ func TestUnmanagedDeletePoolOfATarget(t *testing.T) {
 
 	if _, err = s.Runners().Pool(t.Context(), "rpl-1"); err != nil {
 		t.Fatalf("the pool after the refused delete: %v", err)
+	}
+}
+
+// TestCheckTargetPool proves the checks of a start on the stored pool of a
+// target: the pool must belong to the namespace of the target and run sweeps.
+func TestCheckTargetPool(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		row  db.GetUnmanagedTargetRow
+		want error
+	}{
+		{
+			name: "a pool of this namespace that runs sweeps",
+			row: db.GetUnmanagedTargetRow{
+				PoolID: "rpl-1", Purpose: string(runner.PurposeSweeps), PoolNamespaceID: "ns-1",
+			},
+			want: nil,
+		},
+		{
+			name: "a pool of another namespace",
+			row: db.GetUnmanagedTargetRow{
+				PoolID: "rpl-1", Purpose: string(runner.PurposeSweeps), PoolNamespaceID: "ns-2",
+			},
+			want: unmanaged.ErrInvalidTarget,
+		},
+		{
+			name: "a pool that runs jobs",
+			row: db.GetUnmanagedTargetRow{
+				PoolID: "rpl-1", Purpose: string(runner.PurposeJobs), PoolNamespaceID: "ns-1",
+			},
+			want: unmanaged.ErrInvalidTarget,
+		},
+		{
+			name: "a pool with no namespace",
+			row: db.GetUnmanagedTargetRow{
+				PoolID: "rpl-1", Purpose: string(runner.PurposeSweeps), PoolNamespaceID: "",
+			},
+			want: unmanaged.ErrInvalidTarget,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := checkTargetPool(tc.row, "ns-1", "aws")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("check = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// unmanagedScansURLEnv names the variable that holds the PostgreSQL URL of
+// the unmanaged scan tests. The tests skip when it is empty.
+const unmanagedScansURLEnv = "DUSTPAN_TEST_POSTGRES_URL"
+
+// unmanagedScansURL returns the URL of the test database, or skips the test
+// when the environment names no database.
+func unmanagedScansURL(t *testing.T) string {
+	t.Helper()
+
+	base := os.Getenv(unmanagedScansURLEnv)
+	if base == "" {
+		t.Skipf("set %s to run the unmanaged scan tests", unmanagedScansURLEnv)
+	}
+
+	return base
+}
+
+// openUnmanagedScansInternalStore opens a store in a migrated schema of a
+// database of its own, cloned from the template database.
+func openUnmanagedScansInternalStore(t *testing.T) *Store {
+	t.Helper()
+
+	s, err := Open(t.Context(), pgtest.MigratedURL(t, unmanagedScansURL(t)))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	return s
+}
+
+// repointTargetPg points the target aws of the namespace acme at poolID with
+// raw SQL, as a damaged row does.
+func repointTargetPg(t *testing.T, s *Store, poolID string) {
+	t.Helper()
+
+	acme, err := s.GetNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("get namespace acme: %v", err)
+	}
+
+	_, err = s.pool.Exec(t.Context(),
+		`UPDATE unmanaged_targets SET pool_id = $1 WHERE namespace_id = $2 AND name = 'aws'`,
+		poolID, acme.ID)
+	if err != nil {
+		t.Fatalf("point the target at pool %s: %v", poolID, err)
+	}
+}
+
+// cloudScanInPg returns a cloud sweep of the target aws of the namespace ns.
+func cloudScanInPg(ns string) unmanaged.Scan {
+	return unmanaged.Scan{
+		Namespace: namespace.Name(ns),
+		Kind:      unmanaged.ScanCloud,
+		Target:    "aws",
+		CreatedAt: time.UnixMilli(1_800_000_000_000).UTC(),
+		EndedAt:   time.Time{},
+		ID:        "",
+		Status:    "",
+		StartedBy: "",
+		Reason:    "",
+		Scopes:    nil,
+		Counts: unmanaged.ScanCounts{
+			Records: 0, Managed: 0, Elsewhere: 0, NotInAnyUnit: 0, LeftBehind: 0, ManagedTwice: 0, Resolved: 0,
+			Rejected: 0, OutOfScope: 0,
+		},
+	}
+}
+
+// TestSweepPoolOfRefusesAJobPool proves the purpose check of a start.
+func TestSweepPoolOfRefusesAJobPool(t *testing.T) {
+	t.Parallel()
+
+	s := openUnmanagedScansInternalStore(t)
+	seedUnmanaged(t, s)
+
+	jobs, err := s.Runners().CreatePool(t.Context(), runner.Pool{
+		ID: "", Namespace: "acme", Name: "builders", Purpose: runner.PurposeJobs, Lease: runner.DefaultLease,
+		Concurrency: 2, Isolation: []runner.Isolation{runner.IsolationKubernetes},
+		GitCredentials: runner.GitCredentials{Mode: runner.GitCredentialsForge, Helper: ""},
+		CreatedAt:      time.UnixMilli(1_800_000_000_000).UTC(), UpdatedAt: time.UnixMilli(1_800_000_000_000).UTC(),
+	}, namespace.Fence{Namespace: "acme", FailoverVersion: 1},
+		[]audit.Entry{unmanagedEntry("acme", "namespace:manage-runners")})
+	if err != nil {
+		t.Fatalf("create the jobs pool: %v", err)
+	}
+
+	repointTargetPg(t, s, jobs.ID)
+
+	_, err = s.UnmanagedScans().StartScan(t.Context(), cloudScanInPg("acme"),
+		namespace.Fence{Namespace: "acme", FailoverVersion: 1},
+		unmanagedEntry("acme", "namespace:start-sweep"))
+	if !errors.Is(err, unmanaged.ErrInvalidTarget) {
+		t.Fatalf("start = %v, want ErrInvalidTarget", err)
 	}
 }
