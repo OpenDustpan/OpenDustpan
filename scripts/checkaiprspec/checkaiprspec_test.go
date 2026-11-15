@@ -113,21 +113,40 @@ func runCheckInRoot(t *testing.T, dir string) (string, error) {
 	return string(out), err
 }
 
+// aiCase is one row of the TestCheckAIPRSpec table.
+type aiCase struct {
+	name      string
+	proposals map[string]string
+	archived  map[string]string
+	body      string
+	commits   string
+	wantPass  bool
+	want      string
+}
+
+// runCase runs the script on one row of the table and checks the result.
+func runCase(t *testing.T, tt aiCase) {
+	t.Helper()
+
+	out, err := runCheck(t, tt.proposals, tt.archived, tt.body, tt.commits)
+	if tt.wantPass && err != nil {
+		t.Fatalf("the check failed, want a pass:\n%s", out)
+	}
+	if !tt.wantPass && err == nil {
+		t.Fatalf("the check passed, want a failure:\n%s", out)
+	}
+	if !strings.Contains(out, tt.want) {
+		t.Errorf("the check said:\n%s\nwant %q", out, tt.want)
+	}
+}
+
 func TestCheckAIPRSpec(t *testing.T) {
 	t.Parallel()
 
 	ready := map[string]string{"demo-ready": readyProposal()}
 	notReady := map[string]string{"demo-open": notReadyProposal()}
 
-	tests := []struct {
-		name      string
-		proposals map[string]string
-		archived  map[string]string
-		body      string
-		commits   string
-		wantPass  bool
-		want      string
-	}{
+	tests := []aiCase{
 		{
 			name:      "agent pull request with a spec-ready link",
 			proposals: ready,
@@ -300,6 +319,15 @@ func TestCheckAIPRSpec(t *testing.T) {
 			want:      "refused id",
 		},
 		{
+			name:      "id with a dot-dot and a slash is refused",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\nChange: openspec/changes/../x\n",
+			commits:   "someone@example.com\n",
+			wantPass:  false,
+			want:      "refused id",
+		},
+		{
 			name:      "id with capital letters is refused",
 			proposals: ready,
 			archived:  nil,
@@ -307,6 +335,36 @@ func TestCheckAIPRSpec(t *testing.T) {
 			commits:   "someone@example.com\n",
 			wantPass:  false,
 			want:      "refused id",
+		},
+		{
+			name:      "id with a space is refused",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\nChange: openspec/changes/bad id\n",
+			commits:   "someone@example.com\n",
+			wantPass:  false,
+			want:      "refused id",
+		},
+		{
+			name:      "id of 81 bytes is refused at the length cap",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\nChange: openspec/changes/" + strings.Repeat("a", 81) + "\n",
+			commits:   "someone@example.com\n",
+			wantPass:  false,
+			want:      "an id holds at most 80 bytes",
+		},
+		{
+			// The want names the log form of the id: the check removed the
+			// CR and the ESC. TestCheckAIPRSpecRefusedIDHoldsNoControlByte
+			// proves that the whole refusal line stays one plain line.
+			name:      "refused id with CR and an ANSI escape writes one plain line",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\nChange: openspec/changes/de\rmo\x1b[2jdemo\n",
+			commits:   "someone@example.com\n",
+			wantPass:  false,
+			want:      `refused id "demo[2jdemo"`,
 		},
 		{
 			name:      "id of only dots is refused",
@@ -368,16 +426,7 @@ func TestCheckAIPRSpec(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			out, err := runCheck(t, tt.proposals, tt.archived, tt.body, tt.commits)
-			if tt.wantPass && err != nil {
-				t.Fatalf("the check failed, want a pass:\n%s", out)
-			}
-			if !tt.wantPass && err == nil {
-				t.Fatalf("the check passed, want a failure:\n%s", out)
-			}
-			if !strings.Contains(out, tt.want) {
-				t.Errorf("the check said:\n%s\nwant %q", out, tt.want)
-			}
+			runCase(t, tt)
 		})
 	}
 }
@@ -576,29 +625,34 @@ func TestCheckAIPRSpecQuestionsLineHoldsNoControlByte(t *testing.T) {
 	}
 }
 
-// TestCheckAIPRSpecRefusedIDHoldsNoControlByte sends an id that holds an
-// escape byte. The allowlist refuses it, and the refusal line must not carry
-// the byte into the log.
+// TestCheckAIPRSpecRefusedIDHoldsNoControlByte sends an id that holds a
+// carriage return and an escape byte. The allowlist refuses it, and the
+// refusal line must be one plain line: the log form removes CR, LF and ESC,
+// so a hostile id cannot add a line or a terminal sequence to the log.
 func TestCheckAIPRSpecRefusedIDHoldsNoControlByte(t *testing.T) {
 	t.Parallel()
 
-	id := "demo-\x1bready"
+	id := "de\rmo-\x1bready"
 	out, err := runCheck(t, map[string]string{"demo-ready": readyProposal()}, nil,
 		"Tool: test harness\n\nChange: openspec/changes/"+id+"\n",
 		"someone@example.com\n")
 	if err == nil {
 		t.Fatalf("the check passed, want a failure:\n%s", out)
 	}
-	if strings.ContainsRune(out, '\x1b') {
-		t.Errorf("the check output holds an escape byte:\n%q", out)
+	if strings.ContainsAny(out, "\r\x1b") {
+		t.Errorf("the check output holds a control byte:\n%q", out)
 	}
-	if !strings.Contains(out, "refused id") {
-		t.Errorf("the check output does not refuse the id:\n%q", out)
+	trimmed := strings.TrimRight(out, "\n")
+	if strings.ContainsRune(trimmed, '\n') {
+		t.Errorf("the check output holds more than one plain line:\n%q", out)
+	}
+	if !strings.Contains(out, `refused id "demo-ready"`) {
+		t.Errorf("the check output does not refuse the id in its log form:\n%q", out)
 	}
 }
 
-// TestCheckAIPRSpecRefusedIDIsBounded sends a 500-character id. The allowlist
-// refuses it, and the refusal line must hold at most 64 bytes of it.
+// TestCheckAIPRSpecRefusedIDIsBounded sends a 500-character id. The length
+// cap refuses it, and the refusal line must hold at most 80 bytes of it.
 func TestCheckAIPRSpecRefusedIDIsBounded(t *testing.T) {
 	t.Parallel()
 
@@ -620,8 +674,8 @@ func TestCheckAIPRSpecRefusedIDIsBounded(t *testing.T) {
 	if !ok {
 		t.Fatalf("the check output has no closing quote:\n%q", out)
 	}
-	if len(quoted) > 64 {
-		t.Errorf("the refused id holds %d bytes, want at most 64:\n%q", len(quoted), out)
+	if len(quoted) > 80 {
+		t.Errorf("the refused id holds %d bytes, want at most 80:\n%q", len(quoted), out)
 	}
 }
 
@@ -664,5 +718,33 @@ func TestMakeAIPRSpecCheckQuoteInValue(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "demo-ready is spec-ready") {
 		t.Errorf("the check said:\n%s\nwant a spec-ready pass", out)
+	}
+}
+
+// TestMakeAIPRSpecCheckUsageWithoutVariables proves that the target refuses
+// to run when one of the two variables is unset, and prints its usage line.
+// The environment holds neither variable.
+func TestMakeAIPRSpecCheckUsageWithoutVariables(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skipf("make is not on PATH: %v", err)
+	}
+
+	cmd := exec.CommandContext(
+		t.Context(),
+		"make",
+		"--no-print-directory",
+		"-C", "../..",
+		"ai-pr-spec-check",
+	)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("the target passed with no variables, want a failure:\n%s", out)
+	}
+	if !strings.Contains(string(out), "usage: make ai-pr-spec-check PR_BODY_FILE=") {
+		t.Errorf("the target said:\n%s\nwant the usage line", out)
 	}
 }

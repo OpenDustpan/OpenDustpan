@@ -20,14 +20,16 @@
 # proposal.md exists, and its "Open questions" section reads "none".
 # At least one link must count.
 #
-# Defense in depth: the id is checked against an allowlist before the
-# script builds a path from it, and the script reads only under
-# openspec/changes; a later containment check refuses a path that leaves
-# that directory, so a new caller cannot pass a hostile id through. The
-# log prints at most 64 bytes of printable ASCII for an id and replaces
-# a non-printable byte of the quoted open-questions line with "?", so a
-# body cannot write a terminal sequence or a very long line into the CI
-# log.
+# Defense in depth: the id that the script reads from the body goes through
+# three layers. The length cap refuses an id over 80 bytes before any regex
+# runs; the allowlist ^[a-z0-9][a-z0-9-]{0,79}$ refuses every other token
+# before the script builds a path from it; the log form removes CR, LF and
+# ESC and cuts the text to 80 bytes before the script writes a refused id.
+# The script also reads only under openspec/changes, and a later containment
+# check refuses a path that leaves that directory, so a new caller cannot
+# pass a hostile id through. The quoted open-questions line replaces a
+# non-printable byte with "?", so a proposal cannot write a terminal
+# sequence or a very long line into the CI log.
 set -euo pipefail
 
 if [[ $# -gt 3 ]]; then
@@ -104,17 +106,24 @@ fi
 # tag); the opening fence records its marker character and its length, and only
 # a line of at least that many of the same character closes it. A comment
 # starts with <!-- and ends with -->, and it may span lines.
-# The id on a link line is the text after openspec/changes/ up to a space, a
-# quote, a bracket, a paren or an angle bracket. The script passes the token
-# as the body wrote it, with no change to the text, and the allowlist refuses
-# a token that is not an id, such as "openspec/changes/demo-ready." with its
-# sentence mark. The read loop avoids mapfile, which the bash of macOS lacks.
+# The id on a link line is the text after openspec/changes/ up to a quote,
+# a paren or an angle bracket. A space, a slash, a dot and every other
+# character stay in the token, because the script passes the token as the
+# body wrote it, with no change to the text, and the allowlist refuses a
+# token that is not an id: "openspec/changes/bad id" with its space,
+# "openspec/changes/../x" with its dots, or "openspec/changes/demo-ready."
+# with its sentence mark. The read loop avoids mapfile, which the bash of
+# macOS lacks.
 link_ids=()
 while IFS= read -r link_id; do
   link_ids+=("$link_id")
 done < <(awk '
   {
     line = $0
+    # Trailing blank space of a line is never part of an id: a CRLF line end
+    # or a stray space at the end must not turn a valid link into a refused
+    # one. Blank space inside the token stays, and the allowlist refuses it.
+    sub(/[[:space:]]+$/, "", line)
     # Inside a fence the text is literal, so a comment marker has no effect and
     # only the closing fence ends the fence. The closing fence holds the marker
     # character of the opening fence, at least as many times; GitHub keeps the
@@ -156,7 +165,7 @@ done < <(awk '
       next
     }
     line = visible
-    while (match(line, /openspec\/changes\/[^[:space:]"\x27`()<>]*/)) {
+    while (match(line, /openspec\/changes\/[^"\x27`()<>]*/)) {
       hit = substr(line, RSTART, RLENGTH)
       id = substr(hit, length("openspec/changes/") + 1)
       rest = substr(line, RSTART + RLENGTH)
@@ -166,21 +175,18 @@ done < <(awk '
   }
 ' "$body_file")
 
-# An id holds only lowercase letters, digits and hyphens. The script checks
-# the token as the body wrote it, with no change to the text, and refuses
-# anything else before it builds a path from it.
-# Defense in depth: the containment check below refuses a resolved path
-# outside openspec/changes too, even when this allowlist changes.
+# An id goes through three layers before the script builds a path from it:
+# the length cap, then the allowlist, and the log form for a refused id.
 
-# The id in a log line. The id comes from the pull request body, so the
-# printed form holds only printable ASCII and at most 64 bytes. A hostile
-# body can then not write a terminal control sequence or a very long line
-# into the CI log.
-# Defense in depth: the allowlist below refuses a hostile id before the
-# script builds a path from it; this bound stays so that a new caller
-# cannot print a raw id through this path.
+# The id in a log line. The id comes from the pull request body, so before
+# the script writes a refused id to its log or its error, it removes CR,
+# LF and ESC and cuts the text to 80 bytes. A hostile body can then not
+# write a terminal control sequence or a second line into the CI log.
+# Defense in depth: the length cap and the allowlist below refuse a hostile
+# id before the script builds a path from it; this encoding stays so that a
+# new caller cannot print a raw id through this path.
 printable_id() {
-  printf '%s' "$1" | LC_ALL=C tr -c '[:print:]' '?' | LC_ALL=C cut -c1-64
+  printf '%s' "$1" | LC_ALL=C tr -d '\r\n\033' | LC_ALL=C cut -c1-80
 }
 
 valid_ids=()
@@ -189,11 +195,27 @@ refused_note=""
 # where a bare "${link_ids[@]}" on an empty array with set -u fails.
 if [[ ${#link_ids[@]} -gt 0 ]]; then
   for id in "${link_ids[@]}"; do
-    # A token that holds a character other than a lowercase letter, a digit
-    # or a hyphen fails this allowlist and is refused. A bare
-    # "openspec/changes/" also fails it, because the empty token does not
-    # match.
-    if [[ ! "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+    # The length cap: at most 80 bytes. It runs before the allowlist, so an
+    # over-long id is refused with no regex run. The cap looks redundant
+    # with the {0,79} bound of the allowlist below and with the 80-byte cut
+    # of printable_id above; it stays so that neither of those layers ever
+    # sees an over-long id. Defense in depth: this cap does not rely on the
+    # allowlist or on the log form.
+    id_bytes="$(printf '%s' "$id" | wc -c)"
+    if [[ "$id_bytes" -gt 80 ]]; then
+      refused_note="refused id \"$(printable_id "$id")\": an id holds at most 80 bytes"
+      continue
+    fi
+    # The allowlist: only a lowercase letter, a digit or a hyphen, 1 to 80
+    # of them. A token that holds any other character fails it, and a bare
+    # "openspec/changes/" fails it too, because the empty token does not
+    # match. The length cap above already refused an over-long id, and the
+    # containment check below refuses a resolved path outside
+    # openspec/changes; this allowlist stays so that a "../x", an
+    # upper-case id, an id with a space or a sentence mark never becomes a
+    # path at all. Defense in depth: this allowlist does not rely on the
+    # length cap or on the containment check.
+    if [[ ! "$id" =~ ^[a-z0-9][a-z0-9-]{0,79}$ ]]; then
       refused_note="refused id \"$(printable_id "$id")\": an id holds only lowercase letters, digits and hyphens"
       continue
     fi
