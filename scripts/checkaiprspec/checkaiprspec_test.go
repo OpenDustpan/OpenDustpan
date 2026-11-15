@@ -190,13 +190,31 @@ func TestCheckAIPRSpec(t *testing.T) {
 			want:      "demo-asked is spec-ready",
 		},
 		{
-			name:      "archive suffix match does not count",
+			name:      "archive match without the hyphen boundary does not count",
 			proposals: nil,
-			archived:  map[string]string{"ai-pr-spec": readyProposal()},
+			archived:  map[string]string{"specx": readyProposal()},
 			body:      "Tool: test harness\n\nChange: openspec/changes/spec\n",
 			commits:   "someone@example.com\n",
 			wantPass:  false,
 			want:      "no change openspec/changes/spec",
+		},
+		{
+			name:      "valid link plus a refused id passes",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\nChange: openspec/changes/demo-ready\n\nSee openspec/changes/../demo-ready for context.\n",
+			commits:   "someone@example.com\n",
+			wantPass:  true,
+			want:      "demo-ready is spec-ready",
+		},
+		{
+			name:      "valid link plus a missing change passes",
+			proposals: ready,
+			archived:  nil,
+			body:      "Tool: test harness\n\nChange: openspec/changes/demo-missing\n\nChange: openspec/changes/demo-ready\n",
+			commits:   "someone@example.com\n",
+			wantPass:  true,
+			want:      "demo-ready is spec-ready",
 		},
 		{
 			name:      "link only inside a tilde fenced block fails",
@@ -260,6 +278,29 @@ func TestCheckAIPRSpec(t *testing.T) {
 				t.Errorf("the check said:\n%s\nwant %q", out, tt.want)
 			}
 		})
+	}
+}
+
+func TestCheckAIPRSpecLongQuestionsLineIsBounded(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("q", 500)
+	proposal := "# Title\n\n## Open questions\n\n" + long + "\n"
+	out, err := runCheck(t, map[string]string{"demo-long": proposal}, nil,
+		"Tool: test harness\n\nChange: openspec/changes/demo-long\n",
+		"someone@example.com\n")
+	if err == nil {
+		t.Fatalf("the check passed, want a failure:\n%s", out)
+	}
+	quoted := out
+	if _, after, ok := strings.Cut(out, "open questions: "); ok {
+		quoted = strings.TrimRight(after, "\n")
+	}
+	if len(quoted) > 200 {
+		t.Errorf("the quoted open-questions line holds %d characters, want at most 200:\n%s", len(quoted), out)
+	}
+	if !strings.Contains(out, long[:200]) {
+		t.Errorf("the check output does not hold the first 200 characters:\n%s", out)
 	}
 }
 

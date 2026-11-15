@@ -16,7 +16,7 @@
 # A link is a line of the body, outside a fenced code block, that names
 # openspec/changes/<id>, where <id> holds only lowercase letters, digits
 # and hyphens. The link counts when openspec/changes/<id>/proposal.md
-# exists, or when an archived change openspec/changes/archive/<date>-<id>/
+# exists, or when an archived change openspec/changes/archive/*-<id>/
 # proposal.md exists, and its "Open questions" section reads "none".
 # At least one link must count.
 #
@@ -102,6 +102,7 @@ done < <(awk '
 # Defense in depth: the containment check below refuses a resolved path
 # outside openspec/changes too, even when this allowlist changes.
 valid_ids=()
+refused_note=""
 for raw in ${link_ids[@]+"${link_ids[@]}"}; do
   # Strip trailing slashes and sentence punctuation that the text around
   # the link adds. Pure bash, so the strip works the same on the bash of
@@ -114,12 +115,12 @@ for raw in ${link_ids[@]+"${link_ids[@]}"}; do
     esac
   done
   if [[ -z "$id" ]]; then
-    echo "check-ai-pr-spec: refused id \"$raw\": an id holds only lowercase letters, digits and hyphens" >&2
-    exit 1
+    refused_note="refused id \"$raw\": an id holds only lowercase letters, digits and hyphens"
+    continue
   fi
   if [[ ! "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
-    echo "check-ai-pr-spec: refused id \"$id\": an id holds only lowercase letters, digits and hyphens" >&2
-    exit 1
+    refused_note="refused id \"$id\": an id holds only lowercase letters, digits and hyphens"
+    continue
   fi
   valid_ids+=("$id")
 done
@@ -157,31 +158,39 @@ resolve_proposal() {
     printf '%s' "$direct"
     return 0
   fi
-  # An archived change lives in a directory named <date>-<id>. The
-  # directory name must match exactly: a suffix match on a longer id, such
-  # as "spec" in "2026-01-01-ai-pr-spec", does not count.
+  # An archived change lives in a directory named *-<id>, per the proposal's
+  # Fix boundary (openspec/changes/archive/*-<id>/proposal.md). The match
+  # needs the hyphen boundary: id "spec" does not match directory
+  # "2026-01-01-specx", but it matches "2026-01-01-ai-pr-spec".
   local candidate
   while IFS= read -r candidate; do
-    if [[ "$(basename "$(dirname "$candidate")")" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-"$id"$ ]]; then
+    case "$(basename "$(dirname "$candidate")")" in
+    *-"$id")
       printf '%s' "$candidate"
       return 0
-    fi
+      ;;
+    esac
   done < <(find "$changes_dir/archive" -maxdepth 2 -name proposal.md 2>/dev/null | sort || true)
   return 1
 }
 
 if [[ ${#valid_ids[@]} -eq 0 ]]; then
-  echo "check-ai-pr-spec: $fix_line" >&2
+  if [[ -n "$refused_note" ]]; then
+    echo "check-ai-pr-spec: $refused_note: $fix_line" >&2
+  else
+    echo "check-ai-pr-spec: $fix_line" >&2
+  fi
   exit 1
 fi
 
 seen_not_ready=""
 seen_questions=""
+seen_missing=""
 for id in "${valid_ids[@]}"; do
   proposal=""
   if ! proposal="$(resolve_proposal "$id")"; then
-    echo "check-ai-pr-spec: no change openspec/changes/$id: $fix_line" >&2
-    exit 1
+    seen_missing="no change openspec/changes/$id"
+    continue
   fi
   # Defense in depth: the path must stay under openspec/changes, so a
   # hostile id cannot read another file even when the allowlist above is
@@ -207,5 +216,20 @@ for id in "${valid_ids[@]}"; do
   seen_questions="${seen_questions:0:200}"
 done
 
-echo "check-ai-pr-spec: openspec/changes/$seen_not_ready is not spec-ready: open questions: $seen_questions" >&2
+if [[ -n "$seen_not_ready" ]]; then
+  echo "check-ai-pr-spec: openspec/changes/$seen_not_ready is not spec-ready: open questions: $seen_questions" >&2
+  exit 1
+fi
+
+if [[ -n "$seen_missing" ]]; then
+  echo "check-ai-pr-spec: $seen_missing: $fix_line" >&2
+  exit 1
+fi
+
+if [[ -n "$refused_note" ]]; then
+  echo "check-ai-pr-spec: $refused_note: $fix_line" >&2
+  exit 1
+fi
+
+echo "check-ai-pr-spec: $fix_line" >&2
 exit 1
