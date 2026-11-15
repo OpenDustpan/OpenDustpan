@@ -378,3 +378,52 @@ func TestCheckAIPRSpecSymlinkLeavesChanges(t *testing.T) {
 		t.Errorf("the check said:\n%s\nwant %q", out, "resolved path leaves")
 	}
 }
+
+// TestCheckAIPRSpecRefusedIDHoldsNoControlByte sends an id that holds an
+// escape byte. The allowlist refuses it, and the refusal line must not carry
+// the byte into the log.
+func TestCheckAIPRSpecRefusedIDHoldsNoControlByte(t *testing.T) {
+	t.Parallel()
+
+	id := "demo-\x1bready"
+	out, err := runCheck(t, map[string]string{"demo-ready": readyProposal()}, nil,
+		"Tool: test harness\n\nChange: openspec/changes/"+id+"\n",
+		"someone@example.com\n")
+	if err == nil {
+		t.Fatalf("the check passed, want a failure:\n%s", out)
+	}
+	if strings.ContainsRune(out, '\x1b') {
+		t.Errorf("the check output holds an escape byte:\n%q", out)
+	}
+	if !strings.Contains(out, "refused id") {
+		t.Errorf("the check output does not refuse the id:\n%q", out)
+	}
+}
+
+// TestCheckAIPRSpecRefusedIDIsBounded sends a 500-character id. The allowlist
+// refuses it, and the refusal line must hold at most 64 bytes of it.
+func TestCheckAIPRSpecRefusedIDIsBounded(t *testing.T) {
+	t.Parallel()
+
+	id := strings.Repeat("A", 500)
+	out, err := runCheck(t, map[string]string{"demo-ready": readyProposal()}, nil,
+		"Tool: test harness\n\nChange: openspec/changes/"+id+"\n",
+		"someone@example.com\n")
+	if err == nil {
+		t.Fatalf("the check passed, want a failure:\n%s", out)
+	}
+	if strings.ContainsRune(out, '\x1b') {
+		t.Errorf("the check output holds an escape byte:\n%q", out)
+	}
+	_, after, ok := strings.Cut(out, `refused id "`)
+	if !ok {
+		t.Fatalf("the check output does not refuse the id:\n%q", out)
+	}
+	quoted, _, ok := strings.Cut(after, `"`)
+	if !ok {
+		t.Fatalf("the check output has no closing quote:\n%q", out)
+	}
+	if len(quoted) > 64 {
+		t.Errorf("the refused id holds %d bytes, want at most 64:\n%q", len(quoted), out)
+	}
+}

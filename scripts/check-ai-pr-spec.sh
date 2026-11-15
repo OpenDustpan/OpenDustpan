@@ -23,7 +23,9 @@
 # Defense in depth: the id is checked against an allowlist before the
 # script builds a path from it, and the script reads only under
 # openspec/changes; a later containment check refuses a path that leaves
-# that directory, so a new caller cannot pass a hostile id through.
+# that directory, so a new caller cannot pass a hostile id through. The
+# log prints at most 64 bytes of printable ASCII for an id, so a body
+# cannot write a terminal sequence or a very long line into the CI log.
 set -euo pipefail
 
 if [[ $# -gt 3 ]]; then
@@ -105,6 +107,18 @@ done < <(awk '
 # script builds a path from it.
 # Defense in depth: the containment check below refuses a resolved path
 # outside openspec/changes too, even when this allowlist changes.
+
+# The id in a log line. The id comes from the pull request body, so the
+# printed form holds only printable ASCII and at most 64 bytes. A hostile
+# body can then not write a terminal control sequence or a very long line
+# into the CI log.
+# Defense in depth: the allowlist below refuses a hostile id before the
+# script builds a path from it; this bound stays so that a new caller
+# cannot print a raw id through this path.
+printable_id() {
+  printf '%s' "$1" | LC_ALL=C tr -c '[:print:]' '?' | LC_ALL=C cut -c1-64
+}
+
 valid_ids=()
 refused_note=""
 # The guard keeps the empty-array case working on the bash of macOS (3.2),
@@ -116,7 +130,7 @@ if [[ ${#link_ids[@]} -gt 0 ]]; then
     # "openspec/changes/" or an id that starts with sentence punctuation
     # gives an empty token, which also fails the allowlist.
     if [[ ! "$id" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
-      refused_note="refused id \"$id\": an id holds only lowercase letters, digits and hyphens"
+      refused_note="refused id \"$(printable_id "$id")\": an id holds only lowercase letters, digits and hyphens"
       continue
     fi
     valid_ids+=("$id")
@@ -188,7 +202,7 @@ seen_missing=""
 for id in "${valid_ids[@]}"; do
   proposal=""
   if ! proposal="$(resolve_proposal "$id")"; then
-    seen_missing="no change openspec/changes/$id"
+    seen_missing="no change openspec/changes/$(printable_id "$id")"
     continue
   fi
   # Defense in depth: the path must stay under openspec/changes, so a
@@ -199,11 +213,11 @@ for id in "${valid_ids[@]}"; do
   proposal_dir="$(dirname "$proposal")"
   resolved_dir="$(cd -P "$proposal_dir" 2>/dev/null && pwd -P || printf '%s' "$proposal_dir")"
   if [[ "$resolved_dir" != "$resolved_changes" && "$resolved_dir" != "$resolved_changes"/* ]]; then
-    echo "check-ai-pr-spec: refused id \"$id\": the resolved path leaves openspec/changes" >&2
+    echo "check-ai-pr-spec: refused id \"$(printable_id "$id")\": the resolved path leaves openspec/changes" >&2
     exit 1
   fi
   if spec_ready "$proposal"; then
-    echo "check-ai-pr-spec: openspec/changes/$id is spec-ready"
+    echo "check-ai-pr-spec: openspec/changes/$(printable_id "$id") is spec-ready"
     exit 0
   fi
   seen_not_ready="$id"
@@ -216,7 +230,7 @@ for id in "${valid_ids[@]}"; do
 done
 
 if [[ -n "$seen_not_ready" ]]; then
-  echo "check-ai-pr-spec: openspec/changes/$seen_not_ready is not spec-ready: open questions: $seen_questions" >&2
+  echo "check-ai-pr-spec: openspec/changes/$(printable_id "$seen_not_ready") is not spec-ready: open questions: $seen_questions" >&2
   exit 1
 fi
 
