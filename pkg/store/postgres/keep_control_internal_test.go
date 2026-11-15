@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
+	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
 // connectKeepControl connects to the test database and closes the
@@ -136,7 +137,7 @@ func TestKeepControlTablesKeepsTheLiveRows(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 
-	if keepErr := keepControlTables(ctx, tx, live, previous); keepErr != nil {
+	if keepErr := keepControlTables(ctx, tx, serverAuditTx{q: db.New(tx)}, live, previous); keepErr != nil {
 		_ = tx.Rollback(ctx) //nolint:errcheck // The test fails on the keep error.
 		t.Fatalf("keep control tables: %v", keepErr)
 	}

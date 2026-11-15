@@ -281,7 +281,7 @@ func (s *Store) swapIn(
 	ctx context.Context, tx pgx.Tx, srv serverAuditTx, in swapInTarget, dropped *int64,
 ) error {
 	if in.plan.keepAccess {
-		n, err := s.keepAccessTx(ctx, tx, in.live, in.plan)
+		n, err := s.keepAccessTx(ctx, tx, srv, in.live, in.plan)
 
 		*dropped = n
 
@@ -347,7 +347,7 @@ func (s *Store) finishSwap(ctx context.Context, tx pgx.Tx, srv serverAuditTx, na
 		return err
 	}
 
-	if err := keepControlTables(ctx, tx, live, previous); err != nil {
+	if err := keepControlTables(ctx, tx, srv, live, previous); err != nil {
 		return err
 	}
 
@@ -443,15 +443,17 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 }
 
 // keepControlTables replaces the rows of the durable control tables in the
-// restored schema live with the rows of the schema previous, in tx. A
-// restore keeps the control tables of the live installation: the claim
-// tokens of durable operations only grow, and an older token from a backup
-// would let a stale holder write. The installation, backups and restores
-// control tables live in the control schema, which the swap never renames,
-// so they stay with no copy. The lock holds every durable operation write
-// of another instance out until the swap commits, so the copy has the last
-// committed rows.
-func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) error {
+// restored schema live with the rows of the schema previous, in tx, and
+// records the runner credentials that the copy does not keep, in the audit
+// scope @server through srv, the locked server audit transaction of tx. A restore
+// keeps the control tables of the live installation: the claim tokens of
+// durable operations only grow, and an older token from a backup would let a
+// stale holder write. The installation, backups and restores control tables
+// live in the control schema, which the swap never renames, so they stay
+// with no copy. The lock holds every durable operation write of another
+// instance out until the swap commits, so the copy has the last committed
+// rows.
+func keepControlTables(ctx context.Context, tx pgx.Tx, srv serverAuditTx, live, previous string) error {
 	kept, err := keptControlTables()
 	if err != nil {
 		return err
@@ -462,7 +464,24 @@ func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) er
 		locks = append(locks, pgIdent(previous)+"."+spec.table)
 	}
 
-	stmts := []string{"LOCK TABLE " + strings.Join(locks, ", ") + " IN EXCLUSIVE MODE"}
+	// The lock holds every durable operation write of another instance out
+	// until the swap commits, so the copy has the last committed rows.
+	lock := "LOCK TABLE " + strings.Join(locks, ", ") + " IN EXCLUSIVE MODE"
+
+	if _, lockErr := tx.Exec(ctx, lock); lockErr != nil {
+		return fmt.Errorf("keep control tables: %w", lockErr)
+	}
+
+	// The copy drops the live handoff tokens and job sessions whose runner
+	// the restored schema does not hold. Read them under the lock, before
+	// the copy: the copy removes them, and this read is the only record of
+	// them.
+	dropped, err := droppedRunnerCredentials(ctx, tx, live, previous)
+	if err != nil {
+		return err
+	}
+
+	stmts := make([]string, 0, len(kept))
 
 	// The deletes run children first, the copies parents first: backup.ControlTables
 	// lists the parents first.
@@ -472,8 +491,9 @@ func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) er
 
 	for _, spec := range kept {
 		columns := strings.Join(spec.columns, ", ")
+
 		stmts = append(stmts, "INSERT INTO "+pgIdent(live)+"."+spec.table+" ("+columns+") SELECT "+
-			columns+" FROM "+pgIdent(previous)+"."+spec.table)
+			columns+" FROM "+keepFrom(live, previous, spec))
 	}
 
 	for _, stmt := range stmts {
@@ -482,7 +502,106 @@ func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) er
 		}
 	}
 
+	return appendDroppedRunnerCredentials(ctx, srv, dropped)
+}
+
+// droppedRunnerCredentials returns the live handoff tokens and job sessions
+// whose runner the restored schema live does not hold. It reads them in tx,
+// after the lock of the control tables and before the copy replaces their
+// rows. The runner IDs come back sorted and with no repetition.
+func droppedRunnerCredentials(
+	ctx context.Context, tx pgx.Tx, live, previous string,
+) (backup.DroppedRunnerCredentials, error) {
+	dropped := " WHERE NOT EXISTS (SELECT 1 FROM " + pgIdent(live) + ".runners r WHERE r.id = t.runner_id)"
+
+	tokens := "SELECT t.runner_id FROM " + pgIdent(previous) + ".runner_handoff_tokens t" + dropped
+	sessions := "SELECT t.runner_id FROM " + pgIdent(previous) + ".runner_sessions t" + dropped
+
+	tokenRunners, err := runnerIDsOf(ctx, tx, tokens)
+	if err != nil {
+		return backup.DroppedRunnerCredentials{}, err
+	}
+
+	sessionRunners, err := runnerIDsOf(ctx, tx, sessions)
+	if err != nil {
+		return backup.DroppedRunnerCredentials{}, err
+	}
+
+	return backup.NewDroppedRunnerCredentials(
+		int64(len(tokenRunners)), int64(len(sessionRunners)), append(tokenRunners, sessionRunners...),
+	), nil
+}
+
+// runnerIDsOf runs query in tx and returns the runner_id of every row.
+func runnerIDsOf(ctx context.Context, tx pgx.Tx, query string) ([]string, error) {
+	rows, err := tx.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("read dropped runner credentials: %w", err)
+	}
+
+	defer rows.Close()
+
+	var out []string
+
+	for rows.Next() {
+		var id string
+
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("read dropped runner credentials: %w", err)
+		}
+
+		out = append(out, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read dropped runner credentials: %w", err)
+	}
+
+	return out, nil
+}
+
+// appendDroppedRunnerCredentials appends the audit entry of the dropped
+// runner credentials in srv, the locked server audit transaction of the
+// swap, after the copy replaced the rows of the restored schema. The entry is
+// of the scope @server, so it goes through appendServerEntry. It writes no
+// entry when the copy dropped nothing. The entry follows the chain state that
+// the swap kept.
+func appendDroppedRunnerCredentials(
+	ctx context.Context,
+	srv serverAuditTx,
+	dropped backup.DroppedRunnerCredentials,
+) error {
+	if dropped.Empty() {
+		return nil
+	}
+
+	nowMs, err := storeNow(ctx, srv.q)
+	if err != nil {
+		return err
+	}
+
+	if _, err := appendServerEntry(ctx, srv, dropped.Entry(codec.FromMillis(nowMs))); err != nil {
+		return fmt.Errorf("append dropped runner credentials entry: %w", err)
+	}
+
 	return nil
+}
+
+// keepFrom returns the FROM item of the copy of the control table spec from
+// the schema previous into the restored schema live, with its WHERE clause. A
+// handoff token and a job session name the runner of the claim of a live
+// durable operation: the restored data can predate that runner, so the copy
+// keeps the credential only while the restored schema holds its runner. A
+// credential of a runner that the restored schema does not hold names no
+// runner, and a later use must fail as unknown, never with a store error.
+func keepFrom(live, previous string, spec pgCopyTable) string {
+	from := pgIdent(previous) + "." + spec.table
+
+	if spec.table == "runner_handoff_tokens" || spec.table == "runner_sessions" {
+		return from + " t WHERE EXISTS (SELECT 1 FROM " + pgIdent(live) + ".runners r WHERE r.id = t.runner_id)"
+	}
+
+	return from
 }
 
 // errNoColumnList reports a control table with no column list in the adapter.
