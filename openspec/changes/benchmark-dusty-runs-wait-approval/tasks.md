@@ -1,5 +1,6 @@
 ## 0. Confirm against the code first
 
+- [ ] 0.0 BLOCKED: needs a model adapter on main. Tasks 1.2 to 1.5 need a running server with a real model and a token ledger, but no adapter implements the port `Model` (internal/agent/model.go:64), internal/agent has no production importer, and no open change wires a model adapter (the changes of M10 list the model connection as out of scope). Check: a change that wires a model adapter is merged, and this change names it in "Depends on".
 - [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Benchmark runs

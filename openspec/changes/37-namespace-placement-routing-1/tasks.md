@@ -5,7 +5,7 @@
 ## 1. Failing tests first
 
 - [ ] 1.1 Write the failing domain test in the NEW file pkg/namespace/primary_test.go for the contract of GetPrimary (NEW) and RequirePrimary (NEW), including a missing primary and an unknown caller ID. Check: `go test ./pkg/namespace/... -run TestRequirePrimaryFailsClosed -count=1` fails on main.
-- [ ] 1.2 Write the failing server test in the NEW file internal/servertest/nonprimary_test.go: a lock, a state write and a settings PATCH on a non-primary installation answer 421 on the Pulumi, TFE-compatible and OpenTofu routes. Credential kind: access token. Gate: the namespace write gate of each route. A read of GET /api/dustpan/v1/namespaces/{namespace}/settings answers 200. Check: `go test ./internal/servertest/... -run TestNonPrimaryWriteAnswers421 -count=1` fails on main.
+- [ ] 1.2 Write the failing server test in the NEW file internal/servertest/nonprimary_test.go: a lock, a state write and a settings PATCH on a non-primary installation answer 421 on the Pulumi, TFE-compatible and OpenTofu routes. Credential kind: access token. Gate: the namespace write gate of each route. A read of GET /api/dustpan/v1/namespaces/{namespace}/settings answers 200. The task adds the NEW top-level test `TestNonPrimaryWriteAnswers` in a `_test.go` file of `internal/servertest`, so that the Check runs it. Check: `go test ./internal/servertest/... -run TestNonPrimaryWriteAnswers421 -count=1` fails on main.
 
 ## 2. Build
 

@@ -64,7 +64,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Console control paths have a test (`pkg/dustpan/console_control_test.go:14 (TestConsoleControlPaths)`)
-- Blueprint read refuses hostile rows in the postgres store (`pkg/store/postgres/self_service_blueprints_internal_test.go:93 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
+- Blueprint read refuses hostile rows in the postgres store (`pkg/store/postgres/self_service_blueprints_internal_test.go:94 (TestSelfServiceBlueprintReadRefusesHostileRows)`)
 
 ## ADR check
 

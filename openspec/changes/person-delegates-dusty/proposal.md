@@ -58,7 +58,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Grants on a principal take delegation actions only in a pin test. (`pkg/access/delegation_pin_test.go:58 (TestGrantOnAPrincipalTakesDelegationActionsOnly)`)
 - Revoke checks the object before it revokes. (`pkg/access/access_test.go:1098 (TestRevokeChecksTheObject)`)
-- Token scopes fit the principal kind. (`pkg/accesstoken/accesstoken_test.go:904 (TestScopesFitTheKind)`)
+- Token scopes fit the principal kind. (`pkg/accesstoken/accesstoken_test.go:905 (TestScopesFitTheKind)`)
 
 ## ADR check
 

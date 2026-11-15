@@ -69,7 +69,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - Main tests that a second factor accepts no user verification in the WebAuthn adapter. (`pkg/mfa/gowebauthn/gowebauthn_test.go:375 (TestSecondFactorAcceptsNoUserVerification)`)
 - Main tests that WebAuthn gates use the resolved source address. (`pkg/dustpan/passkey_source_test.go:104 (TestWebauthnGatesUseTheResolvedSourceAddress)`)
-- Main tests the freshness hook for token creation. (`pkg/accesstoken/accesstoken_test.go:779 (TestFreshnessHook)`)
+- Main tests the freshness hook for token creation. (`pkg/accesstoken/accesstoken_test.go:780 (TestFreshnessHook)`)
 
 ## ADR check
 
