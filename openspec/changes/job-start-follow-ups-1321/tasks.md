@@ -14,7 +14,7 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Confirm that no request flow changed, so the round-trip budgets stand: the change adds no route and no caller of a route. Check: the round-trip tests in `internal/servertest/roundtrips_test.go` pass unchanged. Confirmed by: CI (the round-trip tests pass unchanged).
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 

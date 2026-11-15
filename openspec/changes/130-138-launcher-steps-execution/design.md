@@ -22,6 +22,8 @@ Unexported type checkedCommand with constructor CheckCommand that checks bounds 
 | --- | --- | --- |
 | boundary check | Allowlist check of program and arguments at intake. | Send a step with zero args and see a refusal. |
 | contain step process | Start with argument list and no shell. | Send semicolon text as one argument and see one argument with no shell run. |
+| authorize at point of use | Check that the handoff token owns the claim at open, stream and exit. | Use a token from another claim and see denial with runner.retired. |
+| fail closed | Deny on unknown program form or check error and write an audit entry with claim and step. | Send a program that is neither bare nor clean absolute path and see denial plus audit entry. |
 
 ## Diagrams
 

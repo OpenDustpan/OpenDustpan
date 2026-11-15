@@ -9,6 +9,8 @@
 - [ ] 1.3 Write failing renderer and summary tests in pkg/reviewrequest/render_test.go (NEW): pending, failed, no change, zero units, stale head, Git host error, deleted comment, duplicate marker, foreign marker, long list. Check: renderer table test fails on main.
 - [ ] 1.4 Write failing timing tests in pkg/unitsettings/timing_test.go (NEW) across three levels, with an unset level, a later forbid, a bad value and audit entries. Check: unitsettings timing matrix test fails on main.
 
+- [ ] 1.5 SECURITY. Write a failing hostile test for the webhook intake layer in pkg/reviewrequest/report_test.go (NEW), test name TestWebhookIntakeRefusesBadSignatureAndReplay. It sends a payload with a bad signature and a replayed payload straight to the intake. Check: the test fails on main and passes when the intake reports nothing for both payloads.
+
 ## 2. Definition of done
 
 - [ ] 2.1 Implement the report service, renderer, GitHub adapter and timing setting. Check: go test ./pkg/reviewrequest/... ./pkg/forge/... ./pkg/unitsettings/... passes.

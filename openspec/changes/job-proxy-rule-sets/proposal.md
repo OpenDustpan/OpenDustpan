@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 4
 ---
 
 Roadmap: `docs/roadmap.md:393` (Manage namespace and unit proxy rule sets.).

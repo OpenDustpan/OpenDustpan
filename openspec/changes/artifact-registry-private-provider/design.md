@@ -86,6 +86,22 @@ end
 | store boundary | I | Cross-namespace read or checksum bypass serves another namespace file. | authorize at point of use | Each read carries a namespace predicate. | Read cross-namespace address; store returns no rows. |
 | store boundary | I | Cross-namespace read or checksum bypass serves another namespace file. | fail closed | Serve-time checksum failure gives 500, audit entry and flagged file. | Corrupt stored file then download; serve answers 500. |
 
+## Contract
+
+The provider network mirror protocol is a wire protocol of OpenTofu with fixed paths (`index.json`, `{version}.json`), so it lives in the TFE adapter next to the provider registry protocol, under its own prefix outside `/api/` and outside the API description (PM decision, 14 Nov 2026). The base URL is what a person writes in `network_mirror { url = "https://<host>/v1/mirror/" }`; the CLI adds `:hostname/:namespace/:type/index.json` and `:hostname/:namespace/:type/:version.json` (RFC 101, "Facts").
+
+| Route (NEW) | Scope | Action and object | Answer |
+| --- | --- | --- | --- |
+| `GET /v1/mirror/{hostname}/{namespace}/{type}/index.json` | `ScopeRegistry` | `registry:read` (identity.ActionRegistryRead) on the namespace, through `resolveRegistryNamespace` (internal/api/tfe/registry.go:218) | `{"versions": {"<version>": {}}}` of the active, servable releases |
+| `GET /v1/mirror/{hostname}/{namespace}/{type}/{file}` | `ScopeRegistry` | `registry:read` on the namespace, through `resolveRegistryNamespace` | for `{file}` = `<version>.json`: `{"archives": {"<os>_<arch>": {"url": ..., "hashes": [...]}}}`; any other `{file}` answers 404 |
+
+- The `{file}` wildcard holds the whole last segment, because `ServeMux` takes no wildcard inside a segment. The handler accepts only a `.json` suffix on a valid version, and refuses every other value with 404 (an allowlist at the boundary).
+- A `{hostname}` other than the configured host answers 404 through the registry host gate (`registryHostGateSubject`, internal/api/tfe/registry.go:41), as for `/v1/providers/`.
+- Each archive `url` is the existing signed file route `GET /v1/providers/{namespace}/{type}/{version}/files/{sha256}` (`ScopeSigned`, internal/api/tfe/registry.go:204): OpenTofu sends no credential for an archive, and the signature in the query is the credential. No new archive route.
+- Mount: `pkg/dustpan/dustpan.go` mounts `/v1/mirror/` next to `/v1/providers/` (:3787) and `/v1/modules/` (:3793), through `withMaintenance` with `shapeTFE`.
+- Route test entry: the `want` map of `TestRegistryRoutesDeclareScopes` (internal/api/tfe/registry_test.go:689) gets the two routes with `tfe.ScopeRegistry`, and `registryRoutesOf` (:669) reads the `/v1/mirror/` prefix too, so each route must declare exactly `registry:read`.
+- Not in the dustpan API description, not in the `undescribed` list, and no change to the description grammar.
+
 ## Contracts
 
 **registry release**
