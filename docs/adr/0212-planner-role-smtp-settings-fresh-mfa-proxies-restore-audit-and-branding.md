@@ -14,6 +14,7 @@ Changed by:
 - ADR 365 changes decision 5: a wording refinement, the restore entries
   follow the audit switch.
 - ADR 373 extends decision 1: the job and runner actions in the built-in roles.
+- ADR 385 changes decision 3: a fresh step is opt-in. The sentence on built-in MFA off and no SSO provider is replaced.
 
 ## Context
 
