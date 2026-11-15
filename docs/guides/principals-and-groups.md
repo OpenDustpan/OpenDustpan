@@ -21,6 +21,7 @@ A change that needs a fresh sign-in is made in the console. The console sends th
 | `person` | A person who signs in to the console or the CLI. Only a person can be a break-glass account. |
 | `service` | A machine that uses a service token. |
 | `workload` | A machine that proves its identity with a JWT or a client certificate. |
+| `agent` | An agent that acts for a person. A person cannot create it through this API. `GET /api/server/principals` filters by it. |
 
 ## Create a principal
 

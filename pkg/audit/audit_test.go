@@ -516,7 +516,7 @@ func TestValidateChecksThePrincipalFields(t *testing.T) {
 		{"person", audit.PrincipalKindPerson, "", false},
 		{"service", audit.PrincipalKindService, "", false},
 		{"workload with a job", audit.PrincipalKindWorkload, "job-7", false},
-		{"unknown kind", "agent", "", true},
+		{"unknown kind", "robot", "", true},
 		{"job ID at the limit", "", strings.Repeat("j", audit.MaxJobIDLen), false},
 		{"job ID over the limit", "", strings.Repeat("j", audit.MaxJobIDLen+1), true},
 	}
@@ -534,6 +534,28 @@ func TestValidateChecksThePrincipalFields(t *testing.T) {
 				t.Fatalf("validate error = %v, want invalid = %t", err, tc.invalid)
 			}
 		})
+	}
+}
+
+// TestValidatePrincipalKinds proves that an entry accepts the principal kind
+// agent, and that a kind that the audit log does not know is refused.
+func TestValidatePrincipalKinds(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []string{audit.PrincipalKindAgent, audit.PrincipalKindPerson} {
+		e := testEntry()
+		e.PrincipalKind = kind
+
+		if err := e.Validate(); err != nil {
+			t.Fatalf("validate a %q entry: %v", kind, err)
+		}
+	}
+
+	e := testEntry()
+	e.PrincipalKind = "robot"
+
+	if err := e.Validate(); !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("validate a robot entry = %v, want ErrInvalidEntry", err)
 	}
 }
 
