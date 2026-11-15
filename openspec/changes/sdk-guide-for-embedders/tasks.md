@@ -12,7 +12,7 @@
 ## 2. Guide work
 
 - [ ] 2.1 Add the NEW constructors under pkg/dustpan and the NEW example with the guide page Check: `go test ./pkg/dustpan -run TestGuideExampleBuilds -count=1` for the NEW test `TestGuideExampleBuilds` passes
-- [ ] 2.2 Document conformance runs for own store, blob and secret adapters in the NEW file docs/guides/sdk-embedders.md Check: `go test ./pkg/dustpan -run TestGuideStoreDoc -count=1` for the NEW test `TestGuideStoreDoc` passes
+- [ ] 2.2 Document conformance runs for own store, blob and secret adapters in the NEW file docs/guides/sdk-embedders.md Check: `go test ./pkg/dustpan -run TestGuideStoreDoc -count=1` for the NEW test `TestGuideStoreDoc` passes. `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 

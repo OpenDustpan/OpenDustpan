@@ -11,7 +11,7 @@
 ## 2. Path and docs
 
 - [ ] 2.1 Run the hostile cross-workspace credential check in pkg/accesstoken/terragrunt_ci_test.go (NEW in task 1.3) against the per-workspace authorization gate with an access token; BLOCKED by the per-workspace backend route named in local-run-all. Check: The token granted on workspace A is denied on workspace B; BLOCKED by the per-workspace backend route named in local-run-all, uses access token
-- [ ] 2.2 Write the team CI section of the Terragrunt guide in NEW file docs/guides/terragrunt.md with non-interactive access-token setup, the per-unit backend block and the note that profiles and blueprints stay the first choice. Check: Docs commands run as written in a clean CI container. Confirmed by: CI (an e2e step in the NEW file e2e/run_all_in_ci_team_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 2.2 Write the team CI section of the Terragrunt guide in NEW file docs/guides/terragrunt.md with non-interactive access-token setup, the per-unit backend block and the note that profiles and blueprints stay the first choice. Check: Docs commands run as written in a clean CI container. Confirmed by: CI (an e2e step in the NEW file e2e/run_all_in_ci_team_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 

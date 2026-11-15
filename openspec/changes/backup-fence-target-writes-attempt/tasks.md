@@ -17,10 +17,11 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
+- [ ] 3.2 Set Attempt in each existing literal of backup.Record: the attempt column of task 2.1 is the NEW field `Attempt` of `backup.Record` (pkg/backup/backup.go:263), and exhaustruct asks for it in each non-empty literal on main: `internal/api/server/routes_test.go`, `pkg/backup/service.go`, `pkg/dustpan/dustpan_test.go`, `pkg/store/internal/codec/codec.go`, `pkg/store/postgres/backup.go`, `pkg/store/storetest/backup.go`, `pkg/store/storetest/backup_test.go`, `pkg/store/storetest/control_minimum.go`, `pkg/store/storetest/shared_running.go`. No lint exception and no linter suppression comment. Check: `golangci-lint run ./...` reports no exhaustruct finding.
 - [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Run e2e backup plus check against the real directory through `ANY /api/server/backups/{}/check` with an access token, with a stale holder delete replayed after finish. Check: `GET /api/server/backups/{id}/check` with an access token reports complete after a stale-holder run against the real directory
-- [ ] 4.2 Update the existing file docs/guides/several-instances.md for the attempt layout and the cleanup. Check: docs/guides/several-instances.md shows the attempt layout and the orphan cleanup by the live holder
+- [ ] 4.2 Update the existing file docs/guides/several-instances.md for the attempt layout and the cleanup. Check: docs/guides/several-instances.md shows the attempt layout and the orphan cleanup by the live holder. `make docs-lint` passes on the edited guide (sentence cap 25 words).
 - [ ] 4.3 Run the usability check from the docs page and `make check`. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
