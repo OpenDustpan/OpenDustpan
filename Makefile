@@ -10,7 +10,7 @@
 #   node 20.19 or later with npx, for openspec-validate (the CLI comes from npm at a pinned version)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check
+.PHONY: cover regenerate-baseline release-record-check ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check change-archived-check
 
 check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint openspec-validate release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
 
@@ -212,6 +212,15 @@ ifeq ($(strip $(PR_BODY_FILE)),)
 	@exit 1
 else
 	./scripts/check-pr-body.sh '$(PR_BODY_FILE)'
+endif
+
+# The base ref has no default: the target refuses to run without it.
+change-archived-check: ## Fail when this branch completes an OpenSpec change and does not archive it (BASE_REF=origin/main).
+ifeq ($(strip $(BASE_REF)),)
+	@echo "usage: make change-archived-check BASE_REF=<base ref, for example origin/main>" >&2
+	@exit 1
+else
+	./scripts/check-change-archived.sh '$(BASE_REF)'
 endif
 
 adr-index: ## Write docs/adr/INDEX.md from the change links of the ADRs.
