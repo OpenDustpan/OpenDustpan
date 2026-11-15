@@ -11,7 +11,7 @@ Changes:
 
 Two OpenSpec changes stopped on a question that no ADR answered. The project owner answered both on 15 November 2026.
 
-- `job-artifact-store-redaction` puts `unit:redact` in a family so that the stored grant of the built-in role `admin` counts. ADR 151 decision 29 says: "The built-in roles of a namespace administrator and of a unit administrator get it (ADR 52). No other built-in role gets it." The family `data` also gives the action to `account-administrator` and `site-administrator`, because the code builds their built-in sets from the families (`pkg/access/roles.go`). The words of the two ADRs allowed two readings.
+- `job-artifact-store-redaction` puts `unit:redact` in a family so that the stored grant of the built-in role `admin` counts. ADR 151 decision 29 says: "The built-in roles of a namespace administrator and of a unit administrator get it (ADR 52). No other built-in role gets it." The family `data` also gives the action to `account-administrator` and `site-administrator`. The code builds their built-in sets from the families (`pkg/access/roles.go`). The words of the two ADRs allowed two readings.
 - A rejection stops a job as a cancel does. Today a rejection needs `job:approve` only (`pkg/job/service_approve.go`), so a person without `job:cancel` can stop the job of another person.
 
 ## Decision
