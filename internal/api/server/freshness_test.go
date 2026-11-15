@@ -772,25 +772,45 @@ func TestFreshAuthRefusesAForgedFreshTimeHeader(t *testing.T) {
 func TestFreshAuthRefusesAnOutOfRangeStoredWindow(t *testing.T) {
 	t.Parallel()
 
-	e := newSignInEnv(t, true)
-	sess := e.signIn(t)
-
-	_, err := e.store.UpdateSessionPolicy(t.Context(), func(old session.Policy) (session.Policy, audit.Entry, error) {
-		old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = 100000*time.Second, false, e.clock.Now()
-
-		return old, policyChangeEntry(e.clock.Now()), nil
-	})
-	if err != nil {
-		t.Fatalf("store an out-of-range window: %v", err)
+	tests := []struct {
+		name string
+		d    time.Duration
+	}{
+		{"30 seconds", 30 * time.Second},
+		{"59 seconds", 59 * time.Second},
+		{"901 seconds", 901 * time.Second},
+		{"1000 seconds", 1000 * time.Second},
+		{"100000 seconds", 100000 * time.Second},
+		{"negative", -time.Second},
+		{"fraction of a second", 61*time.Second + time.Millisecond},
 	}
 
-	rec := e.postWithSession(t, sess, "/api/server/caller/tokens", ownTokenBody())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	got := decodeErrorBody(t, rec)
-	if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode ||
-		got.Reauthenticate != "/api/server/sign-in/corp?fresh=1" {
-		t.Fatalf("own token with an out-of-range window = %d %s, want 403 with the code and the path",
-			rec.Code, rec.Body.String())
+			e := newSignInEnv(t, true)
+			sess := e.signIn(t)
+
+			_, err := e.store.UpdateSessionPolicy(t.Context(),
+				func(old session.Policy) (session.Policy, audit.Entry, error) {
+					old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = tc.d, false, e.clock.Now()
+
+					return old, policyChangeEntry(e.clock.Now()), nil
+				})
+			if err != nil {
+				t.Fatalf("store an out-of-range window: %v", err)
+			}
+
+			rec := e.postWithSession(t, sess, "/api/server/caller/tokens", ownTokenBody())
+
+			got := decodeErrorBody(t, rec)
+			if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode ||
+				got.Reauthenticate != "/api/server/sign-in/corp?fresh=1" {
+				t.Fatalf("own token with window %s = %d %s, want 403 with the code and the path",
+					tc.d, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
