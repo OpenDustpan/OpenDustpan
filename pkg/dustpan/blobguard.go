@@ -1,6 +1,20 @@
 package dustpan
 
-import "opendustpan.org/opendustpan/pkg/backup/blobguard"
+import (
+	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/pkg/backup/blobguard"
+)
+
+// blobDeleteWait returns the hook that counts each refused blob delete take
+// on observed, or nil when the server has no metrics. A nil hook counts
+// nothing.
+func blobDeleteWait(observed *metrics.ServerMetrics) blobguard.WaitCounter {
+	if observed == nil {
+		return nil
+	}
+
+	return func(reason blobguard.WaitReason) { observed.IncBlobDeleteWaiting(string(reason)) }
+}
 
 // attachBlobGuard keeps the guard of the blob deletes in cfg: the namespace
 // store, which reads the backups table and the restores table and holds the
