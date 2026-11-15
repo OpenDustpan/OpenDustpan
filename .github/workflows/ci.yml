@@ -245,6 +245,11 @@ jobs:
             git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           fi
           make files-check FILES_BASE=origin/main
+      # A pull request that completes an OpenSpec change archives it. The step
+      # before this one fetched main with its history.
+      - name: A completed OpenSpec change is archived
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        run: make change-archived-check BASE_REF=origin/main
       # A failed job saves too: its build cache is still valid. The key is the
       # one that the restore step computed. A job with GO_CACHE_FROM saves no
       # entry: the job that it names saves the entry.
