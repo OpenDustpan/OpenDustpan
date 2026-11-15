@@ -1,7 +1,7 @@
 ## 1. Tests first
 
 - [ ] 1.1 Add the hostile handler tests TestPlacementRuleRefusesCollectionName, TestPlacementRuleRefusesMalformedID and TestPlacementRuleWriteNeedsTheAction to the existing file internal/api/inventory/placement_routes_test.go, and TestCollectionListAnswersTheID to the existing file internal/api/inventory/collections_test.go. Check: `go test ./internal/api/inventory/ -run 'TestPlacementRule|TestCollectionListAnswersTheID' -count=1` fails on main
-- [ ] 1.2 Add the store cases TestPlacementRuleRefusesForeignCollection and TestPlacementRuleOfRemovedCollectionPlacesNothing to the conformance suite in pkg/collection/collectiontest, run by both dialects. Check: `go test -timeout 60m ./pkg/store/... -run PlacementRule -count=1` fails on main
+- [ ] 1.2 Add the store cases TestPlacementRuleRefusesForeignCollection and TestPlacementRuleOfRemovedCollectionPlacesNothing (a regression test: the delete already removes the rules on main) to the conformance suite in pkg/collection/collectiontest, run by both dialects. Check: `go test -timeout 60m ./pkg/store/... -run PlacementRule -count=1` shows TestPlacementRuleRefusesForeignCollection fail on main (it sets `collection.Rule.CollectionID`, which main does not have: `type Rule struct` at pkg/collection/placement.go:182 holds `Collection Name` only), and TestPlacementRuleOfRemovedCollectionPlacesNothing pass on main and after the change
 
 ## 2. Build
 

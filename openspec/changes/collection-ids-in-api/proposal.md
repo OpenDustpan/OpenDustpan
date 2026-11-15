@@ -1,6 +1,8 @@
 ---
-version: 1
+version: 2
 ---
+
+Issue: #3118.
 
 Short form: a missing stable ID in the API. It is a prerequisite of
 cli-collections-and-placement-commands (#2623).
@@ -11,10 +13,13 @@ cli-collections-and-placement-commands (#2623).
 of new stacks and workspaces into collections. ADR 362 (owner) says that each
 stored reference to an entity that a user can rename, or remove and make
 again, uses the stable ID. On main, the collection list and read answer no
-collection ID, and a placement rule names its collection by name: the rule
-stores the name key, so a collection that is removed and made again under the
-same name takes over the rules of the old one, and a script cannot name a
-collection by an ID that does not change.
+collection ID, and a placement rule names its collection by name (the rule
+stores the name key). A script cannot name a collection by an ID that does not
+change. (A collection delete removes its placement rules in both stores,
+pkg/store/sqlite/collections.go:132 and pkg/store/postgres/collections.go:121,
+as the conformance case `testRuleCollectionDelete` at
+pkg/collection/collectiontest/placement.go:583-597 checks, so a collection made
+again under the same name gets no old rule.)
 
 ## Evidence
 
@@ -45,7 +50,7 @@ collection by an ID that does not change.
 
 - `GET /api/dustpan/v1/namespaces/{namespace}/collections` and
   `GET /api/dustpan/v1/namespaces/{namespace}/collections/{collection}`
-  (action `namespace:read`, unchanged): each entry is
+  (action `collection:read`, unchanged: internal/api/inventory/collections.go:67 and :87): each entry is
   `{"id": "col-…", "namespace": "acme", "name": "web", "createdAt": 1700000000000}`.
 - `POST /api/dustpan/v1/namespaces/{namespace}/placement-rules` and
   `PUT /api/dustpan/v1/namespaces/{namespace}/placement-rules/{rule}` (action
