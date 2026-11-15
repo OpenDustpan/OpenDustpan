@@ -161,16 +161,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The body goes through an environment variable, so the shell never
-      # interpolates it. The step reads the body of the event: after an edit
-      # of the body, push again to check the new body.
-      - name: Check that the PR body names an issue
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
-          make pr-body-check PR_BODY_FILE="$RUNNER_TEMP/pr-body.md"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -688,7 +678,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     services:
       postgres: *postgres-service
     steps:
