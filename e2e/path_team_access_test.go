@@ -99,7 +99,7 @@ func TestPathTeamAccess(t *testing.T) {
 
 	// The OpenTofu http backend step needs the real OpenTofu CLI, and Go
 	// honors SSL_CERT_FILE only on Linux.
-	tofuCLI := e2e.Install{}
+	tofuCLI := e2e.NoCLI()
 	if runtime.GOOS == "linux" {
 		tofuVersions := e2e.OpenTofu().Versions()
 		if len(tofuVersions) == 0 {
@@ -229,6 +229,29 @@ func teamAccessPlacementPulumi(ctx context.Context, t *testing.T, env *e2e.Env) 
 	}
 }
 
+// teamAccessTofuHTTPApply runs "tofu init" and "tofu apply" with the real
+// CLI in the project directory of the path, through the http backend. It
+// fails unless the init names the http backend and both commands exit zero.
+func teamAccessTofuHTTPApply(ctx context.Context, t *testing.T, env *e2e.Env, tofuCLI e2e.Install, project string) {
+	t.Helper()
+
+	backend := []string{"TF_HTTP_USERNAME=dustpan", "TF_HTTP_PASSWORD=" + env.TokenA()}
+
+	res, err := env.RunAs(ctx, tofuCLI, project, backend, "init", "-input=false", "-no-color")
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("tofu init exits %d, %v:\n%s", res.ExitCode, err, res.Stderr)
+	}
+
+	if !strings.Contains(res.Stdout, `Successfully configured the backend "http"`) {
+		t.Fatalf("tofu init did not configure the http backend:\n%s", res.Stdout)
+	}
+
+	res, err = env.RunAs(ctx, tofuCLI, project, backend, "apply", "-input=false", "-auto-approve", "-no-color")
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("tofu apply exits %d, %v:\n%s", res.ExitCode, err, res.Stderr)
+	}
+}
+
 // teamAccessPlacementTofuHTTP proves that the OpenTofu http backend places a
 // new workspace: a rule sends the workspace db into payments, the real CLI
 // writes state through the backend, and a first lock for a workspace that no
@@ -249,21 +272,7 @@ func teamAccessPlacementTofuHTTP(ctx context.Context, t *testing.T, env *e2e.Env
 
 	writeTofuHTTPConfig(t, project, env.URL+"/tofu/state/"+teamAccessNamespace+"/db")
 
-	backend := []string{"TF_HTTP_USERNAME=dustpan", "TF_HTTP_PASSWORD=" + env.TokenA()}
-
-	res, err := env.RunAs(ctx, tofuCLI, project, backend, "init", "-input=false", "-no-color")
-	if err != nil || res.ExitCode != 0 {
-		t.Fatalf("tofu init exits %d, %v:\n%s", res.ExitCode, err, res.Stderr)
-	}
-
-	if !strings.Contains(res.Stdout, `Successfully configured the backend "http"`) {
-		t.Fatalf("tofu init did not configure the http backend:\n%s", res.Stdout)
-	}
-
-	res, err = env.RunAs(ctx, tofuCLI, project, backend, "apply", "-input=false", "-auto-approve", "-no-color")
-	if err != nil || res.ExitCode != 0 {
-		t.Fatalf("tofu apply exits %d, %v:\n%s", res.ExitCode, err, res.Stderr)
-	}
+	teamAccessTofuHTTPApply(ctx, t, env, tofuCLI, project)
 
 	got, found := teamAccessCollectionOf(ctx, t, env, "opentofu", "db")
 	if !found || got != "payments" {
@@ -296,7 +305,9 @@ func teamAccessSignIn(ctx context.Context, t *testing.T, env *e2e.Env) string {
 
 	var session e2eSession
 
-	status, body := c.send(ctx, t, http.MethodGet, "/api/server/session", "", "")
+	status, body := c.send(ctx, t, browserRequest{
+		method: http.MethodGet, path: "/api/server/session", body: "", csrf: "",
+	})
 	if status != http.StatusOK {
 		t.Fatalf("read the session of ana = %d %s, want 200", status, body)
 	}
@@ -429,9 +440,9 @@ func teamAccessOutsider(ctx context.Context, t *testing.T, env *e2e.Env) {
 	}
 }
 
-// teamAccessCollectionOf returns the collection of the unit that tool and
-// name name in the team access namespace, and false when the namespace holds
-// no such unit.
+// teamAccessCollectionOf returns the collection of the unit that the
+// arguments tool and name identify in the team access namespace, and false
+// when the namespace holds no such unit.
 func teamAccessCollectionOf(ctx context.Context, t *testing.T, env *e2e.Env, tool, name string) (string, bool) {
 	t.Helper()
 
@@ -511,33 +522,40 @@ type teamAccessBrowser struct {
 	browser *http.Client
 }
 
+// browserRequest is one request of the console browser: the method, the
+// path, the body and the CSRF value of the session of ana.
+type browserRequest struct {
+	method string
+	path   string
+	body   string
+	csrf   string
+}
+
 // send sends one request with the browser, with the CSRF value of the
-// session when csrf is not empty, and answers its status and body.
-func (c teamAccessBrowser) send(
-	ctx context.Context, t *testing.T, method, path, body, csrf string,
-) (int, string) {
+// session when the request holds one, and answers its status and body.
+func (c teamAccessBrowser) send(ctx context.Context, t *testing.T, req browserRequest) (int, string) {
 	t.Helper()
 
-	req, err := http.NewRequestWithContext(ctx, method, c.env.URL+path, strings.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, req.method, c.env.URL+req.path, strings.NewReader(req.body))
 	if err != nil {
-		t.Fatalf("build %s %s: %v", method, path, err)
+		t.Fatalf("build %s %s: %v", req.method, req.path, err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
 
-	if csrf != "" {
-		req.Header.Set("X-Dustpan-Csrf", csrf)
+	if req.csrf != "" {
+		request.Header.Set("X-Dustpan-Csrf", req.csrf)
 	}
 
-	resp, err := c.browser.Do(req)
+	resp, err := c.browser.Do(request)
 	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
+		t.Fatalf("%s %s: %v", req.method, req.path, err)
 	}
 
 	raw, readErr := io.ReadAll(resp.Body)
 	if closeErr := resp.Body.Close(); readErr != nil || closeErr != nil {
-		t.Fatalf("%s %s: read the answer: %v, %v", method, path, readErr, closeErr)
+		t.Fatalf("%s %s: read the answer: %v, %v", req.method, req.path, readErr, closeErr)
 	}
 
 	return resp.StatusCode, string(raw)
@@ -550,8 +568,11 @@ func (c teamAccessBrowser) signIn(ctx context.Context, t *testing.T) {
 
 	body := fmt.Sprintf(`{"userName":%q,"password":%q}`, teamAccessAnaUserName, teamAccessAnaPassword)
 
-	status, got := c.send(ctx, t, http.MethodPost,
-		"/api/dustpan/v1/sign-in/providers/"+e2e.LDAPTLSProvider+"/password", body, "")
+	status, got := c.send(ctx, t, browserRequest{
+		method: http.MethodPost,
+		path:   "/api/dustpan/v1/sign-in/providers/" + e2e.LDAPTLSProvider + "/password",
+		body:   body, csrf: "",
+	})
 	if status != http.StatusNoContent {
 		t.Fatalf("the sign-in of ana = %d %s, want 204", status, got)
 	}
@@ -566,7 +587,9 @@ func (c teamAccessBrowser) signIn(ctx context.Context, t *testing.T) {
 func (c teamAccessBrowser) makeToken(ctx context.Context, t *testing.T, name string) string {
 	t.Helper()
 
-	status, body := c.send(ctx, t, http.MethodGet, "/api/server/session", "", "")
+	status, body := c.send(ctx, t, browserRequest{
+		method: http.MethodGet, path: "/api/server/session", body: "", csrf: "",
+	})
 	if status != http.StatusOK {
 		t.Fatalf("read the session of ana = %d %s, want 200", status, body)
 	}
@@ -577,8 +600,10 @@ func (c teamAccessBrowser) makeToken(ctx context.Context, t *testing.T, name str
 		t.Fatalf("decode the session of ana %s: %v", body, err)
 	}
 
-	status, body = c.send(ctx, t, http.MethodPost, "/api/server/caller/tokens",
-		`{"name":"`+name+`"}`, session.CSRFToken)
+	status, body = c.send(ctx, t, browserRequest{
+		method: http.MethodPost, path: "/api/server/caller/tokens",
+		body: `{"name":"` + name + `"}`, csrf: session.CSRFToken,
+	})
 	if status != http.StatusCreated {
 		t.Fatalf("ana makes a personal token with her session = %d %s, want 201", status, body)
 	}

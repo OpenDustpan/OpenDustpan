@@ -64,13 +64,10 @@ func runRunnerApplyOnStore(t *testing.T, store e2e.Store) {
 	ctx := t.Context()
 	env := e2e.NewEnvWithSignIn(ctx, t, e2e.NoCLI(), store)
 
-	var (
-		poolID string
-		runner *e2e.FakeRunner
-	)
+	var runner *e2e.FakeRunner
 
 	t.Run("pool_and_join", func(t *testing.T) {
-		poolID, runner = runnerApplyPool(ctx, t, env)
+		runner = runnerApplyPool(ctx, t, env)
 	})
 
 	t.Run("apply_job_starts", func(t *testing.T) {
@@ -79,7 +76,7 @@ func runRunnerApplyOnStore(t *testing.T, store e2e.Store) {
 	})
 
 	t.Run("plan_runs_on_runner", func(t *testing.T) {
-		runnerApplyPlanRun(ctx, t, env, poolID, runner, "path-runner-apply-plan")
+		runnerApplyPlanRun(ctx, t, env, runner, "path-runner-apply-plan")
 	})
 
 	t.Run("gate_waits_for_two", func(t *testing.T) {
@@ -93,7 +90,7 @@ func runRunnerApplyOnStore(t *testing.T, store e2e.Store) {
 	})
 
 	t.Run("run_log_read", func(t *testing.T) {
-		runnerApplyLogRun(ctx, t, env, poolID, runner, "path-runner-apply-log")
+		runnerApplyLogRun(ctx, t, env, runner, "path-runner-apply-log")
 	})
 
 	t.Run("decision_record_read", func(t *testing.T) {
@@ -106,11 +103,22 @@ func runRunnerApplyOnStore(t *testing.T, store e2e.Store) {
 	})
 }
 
+// runnerListDoc is the runner list of one pool.
+type runnerListDoc struct {
+	Runners []runnerOfPool `json:"runners"`
+}
+
+// runnerOfPool is one runner of the runner list of a pool.
+type runnerOfPool struct {
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Isolation string `json:"isolation"`
+}
+
 // runnerApplyPool makes the OpenTofu unit of the path, creates the runner
 // pool ci, joins one fake runner to it, and proves that the runner list of
-// the pool names the runner. It answers the ID of the pool and the runner
-// that joined.
-func runnerApplyPool(ctx context.Context, t *testing.T, env *e2e.Env) (string, *e2e.FakeRunner) {
+// the pool names the runner. It answers the runner that joined the pool.
+func runnerApplyPool(ctx context.Context, t *testing.T, env *e2e.Env) *e2e.FakeRunner {
 	t.Helper()
 
 	var poolID string
@@ -147,13 +155,7 @@ func runnerApplyPool(ctx context.Context, t *testing.T, env *e2e.Env) (string, *
 		Path: "/api/runners/" + e2e.Namespace + "/pools/" + poolID + "/runners", Body: "",
 		Want: http.StatusOK, Scheme: "token",
 		Check: func(body string) error {
-			var doc struct {
-				Runners []struct {
-					Name      string `json:"name"`
-					Kind      string `json:"kind"`
-					Isolation string `json:"isolation"`
-				} `json:"runners"`
-			}
+			var doc runnerListDoc
 
 			if err := json.Unmarshal([]byte(body), &doc); err != nil {
 				return fmt.Errorf("decode the runner list %s: %w", body, err)
@@ -169,24 +171,24 @@ func runnerApplyPool(ctx context.Context, t *testing.T, env *e2e.Env) (string, *
 		},
 	})
 
-	return poolID, runner
+	return runner
 }
 
 // runnerApplyPlanRun starts a plan job, claims its phase with the runner of
 // the pool, writes one step of the run log, uploads and commits the two plan
 // parts, reads the job with its stored plan, and finishes the phase.
 func runnerApplyPlanRun(
-	ctx context.Context, t *testing.T, env *e2e.Env, poolID string, runner *e2e.FakeRunner, key string,
+	ctx context.Context, t *testing.T, env *e2e.Env, runner *e2e.FakeRunner, key string,
 ) {
 	t.Helper()
 
-	run := runnerApplyClaim(ctx, t, env, poolID, runner, key)
+	run := runnerApplyClaim(ctx, t, env, runner, key)
 	step := run.launcher.Assignment.Steps[0].Name
 
-	run.writesTheStep(t, step, []byte("plan output of the unit\n"))
+	run.writesTheStep(ctx, t, step, []byte("plan output of the unit\n"))
 
 	display := planPartOf("plan-display", []byte(runnerApplyPlanDisplay))
-	apply := planPartOf("plan-apply", []byte(runnerApplyPlanApply + run.job))
+	apply := planPartOf("plan-apply", []byte(runnerApplyPlanApply+run.job))
 
 	wantNoContent(t, "upload the display part", func() (int, []byte) {
 		return run.launcher.PutLog(ctx, t, planPartPath(protocol.PathSessionPlanUpload, "plan-display"),
@@ -215,7 +217,7 @@ func runnerApplyPlanRun(
 		},
 	})
 
-	run.finishesTwice(t, "the plan phase ended")
+	run.finishesTwice(ctx, t, "the plan phase ended")
 }
 
 // runnerApplyLogRun starts a plan job, claims its phase with the runner of
@@ -223,11 +225,11 @@ func runnerApplyPlanRun(
 // before the phase ends, the log of the apply phase answers 404 because that
 // phase did not start, and a read from a sequence number resumes the log.
 func runnerApplyLogRun(
-	ctx context.Context, t *testing.T, env *e2e.Env, poolID string, runner *e2e.FakeRunner, key string,
+	ctx context.Context, t *testing.T, env *e2e.Env, runner *e2e.FakeRunner, key string,
 ) {
 	t.Helper()
 
-	run := runnerApplyClaim(ctx, t, env, poolID, runner, key)
+	run := runnerApplyClaim(ctx, t, env, runner, key)
 	step := run.launcher.Assignment.Steps[0].Name
 	first, second := []byte("first plan line\n"), []byte("second plan line\n")
 
@@ -238,7 +240,7 @@ func runnerApplyLogRun(
 		t.Fatalf("log of the apply phase = %d %s %v, want 404 job.log-not-available", status, body, err)
 	}
 
-	run.streamsWhileTheStepRuns(t, step, first, second)
+	run.streamsWhileTheStepRuns(ctx, t, step, first, second)
 
 	resumed := openLogStream(ctx, t, env, run.job, "?after=1")
 	defer closeStream(t, resumed)
@@ -255,7 +257,7 @@ func runnerApplyLogRun(
 // runnerApplyClaim starts a plan job with the Idempotency-Key key, claims its
 // phase with the runner of the pool, and opens the session of the claim.
 func runnerApplyClaim(
-	ctx context.Context, t *testing.T, env *e2e.Env, poolID string, runner *e2e.FakeRunner, key string,
+	ctx context.Context, t *testing.T, env *e2e.Env, runner *e2e.FakeRunner, key string,
 ) *launched {
 	t.Helper()
 
