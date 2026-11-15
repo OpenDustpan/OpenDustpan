@@ -98,6 +98,7 @@ func (e *passkeySignInEnv) seedPerson(t *testing.T, id, subject string, breakGla
 		Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 
 	if err := e.f.store.CreatePrincipal(t.Context(), p, entry); err != nil {
@@ -115,6 +116,7 @@ func (e *passkeySignInEnv) register(t *testing.T, id string) *webauthntest.Crede
 		Object: "", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
 		UserAgent: "test", Channel: audit.ChannelConsole, Kind: "", Outcome: "", RequestID: "", ObjectID: "",
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 	actor := mfasvc.Actor{Entry: entry, PrincipalID: id, SessionID: "ses-" + id}
 	person := mfa.Person{ID: id, Name: id, DisplayName: id}
@@ -468,6 +470,7 @@ func disableEntry() audit.Entry {
 		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI,
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "",
 		Sequence: 0, FenceVersion: 0, Reason: "", PrincipalKind: "", JobID: "",
+		Origin: nil,
 	}
 }
 

@@ -111,5 +111,6 @@ func stateWriteOffEntry(eff stategate.Effective, at time.Time) audit.Entry {
 		Reason:        eff.Reason,
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }

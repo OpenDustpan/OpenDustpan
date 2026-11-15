@@ -77,6 +77,7 @@ func (l exportLine) entry() audit.Entry {
 		PrincipalKind: l.PrincipalKind,
 		JobID:         l.JobID,
 		Reason:        l.Reason,
+		Origin:        nil,
 	}
 }
 

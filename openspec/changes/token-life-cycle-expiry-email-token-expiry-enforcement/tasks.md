@@ -26,6 +26,6 @@
 
 - [ ] 4.1 Check the route actions Check: Route test lists `ANY /api/server/caller/tokens` and `ANY /api/server/tokens` with their actions
 - [ ] 4.2 Run an e2e step over TLS on SQLite and PostgreSQL: create a personal access token through `ANY /api/server/caller/tokens`, then run pulumi up and tofu apply with that token Check: e2e runs both CLIs with the token past its expiry and checks 401 and the audit entries. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Write the docs page in the same pull request: edit docs/guides/access-tokens.md (exists on main) Check: The access tokens guide documents expiry, lifetime, inactivity disable, the rotation overlap and the status filter
+- [ ] 4.3 Write the docs page in the same pull request: edit docs/guides/access-tokens.md (exists on main) Check: The access tokens guide documents expiry, lifetime, inactivity disable, the rotation overlap and the status filter. `make docs-lint` passes on each edited guide.
 - [ ] 4.4 Run the usability check Check: A Developer completes create, rotate, CLI use and the ended list from the docs page alone. A person's step.
 - [ ] 4.5 Run the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

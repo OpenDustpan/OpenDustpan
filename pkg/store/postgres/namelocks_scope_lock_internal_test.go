@@ -209,6 +209,7 @@ func serverScopeEntry(action string) audit.Entry {
 		PrincipalKind: "",
 		JobID:         "",
 		Reason:        "",
+		Origin:        nil,
 	}
 }
 
