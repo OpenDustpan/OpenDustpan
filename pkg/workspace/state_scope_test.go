@@ -650,6 +650,7 @@ func serviceWith(t *testing.T, f fixture, states workspace.StateStore) *workspac
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
