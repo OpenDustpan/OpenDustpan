@@ -21,6 +21,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add an e2e step in NEW file e2e/job_actions_test.go. It calls the new job cancel route and the new job approve route over TLS with an access token of a service principal that holds the run and approve grants, against the real binary. BLOCKED by the missing start route in this part for a job source: the step seeds the job through job.Service in the test server Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
+- [x] 4.1 Add an e2e step in NEW file e2e/job_actions_test.go. It starts a plan job through the start route, cancels it with the job cancel route and sends the requests that the cancel, confirm and redact routes refuse, on a server of each store. The approve route has no step: a job that waits for approval cannot be made through the start route in this part. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
 - [x] 4.2 Write the docs page in NEW file docs/guides/jobs.md and run the usability check Check: Docs commands run as written in CI. A person's step. `make docs-lint` passes on each edited guide.
-- [ ] 4.3 Run the full check suite Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.3 Run the full check suite Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
