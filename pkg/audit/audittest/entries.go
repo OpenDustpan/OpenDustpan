@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // EntryStore is every port the entry reader cases exercise.
@@ -34,6 +35,7 @@ func RunEntryReader(t *testing.T, newStore EntryFactory) {
 		{name: "last entry answers the newest entry", test: testLastEntry},
 		{name: "last entry of an empty scope is not found", test: testLastEntryEmpty},
 		{name: "the server scope reads as a scope", test: testEntryReaderServerScope},
+		{name: "the six agent fields round-trip in both dialects", test: testAgentRoundTripEntries},
 	}
 
 	for _, tc := range cases {
@@ -143,6 +145,137 @@ func testEntryReaderServerScope(t *testing.T, s EntryStore) {
 	last, found, err := s.LastEntry(t.Context(), audit.ServerScope)
 	if err != nil || !found || last.Sequence != 1 {
 		t.Fatalf("last server entry: got %+v, %v, want sequence 1", last, err)
+	}
+}
+
+// testAgentRoundTripEntries appends an entry without agent data, one with
+// the built-in agent block and one with the MCP block: each lists back as
+// written, and the chain stays valid, so the six columns round-trip in both
+// dialects and the hash covers them.
+func testAgentRoundTripEntries(t *testing.T, s EntryStore) {
+	t.Helper()
+
+	ns := newNamespace(t, s)
+	appendAgentRoundTripEntries(t, s, ns)
+	got := listAgentRoundTripEntries(t, s, ns)
+	checkOldestAgentEntry(t, got[2])
+	checkBuiltInAgentEntry(t, got[1])
+	checkMCPAgentEntry(t, got[0])
+	checkAgentRoundTripChain(t, s, ns, got)
+}
+
+// appendAgentRoundTripEntries appends an entry without agent data, one with
+// the built-in agent block and one with the MCP block.
+func appendAgentRoundTripEntries(t *testing.T, s EntryStore, ns namespace.Namespace) {
+	t.Helper()
+
+	appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", "req-1", now()))
+
+	builtIn := newEntry(ns.Name, "ada", "req-2", now())
+	builtIn.Channel = audit.ChannelAgent
+	builtIn.Origin = mustOrigin(
+		t,
+		audit.OriginArgs{
+			Run:          "run-1",
+			Session:      "run-1",
+			Tool:         "",
+			ArgsDigest:   "",
+			BreakGlass:   true,
+			SecretStage:  "",
+			DelegationID: "",
+		},
+	)
+	appendEntry(t, s, ns.Fence(), builtIn)
+
+	mcp := newEntry(ns.Name, "ada", "req-3", now())
+	mcp.Channel = audit.ChannelMCP
+	mcp.Origin = mustOrigin(t, audit.OriginArgs{
+		Run:          "",
+		Session:      "ses-1",
+		Tool:         "read",
+		ArgsDigest:   "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+		BreakGlass:   false,
+		SecretStage:  "open",
+		DelegationID: "",
+	})
+	appendEntry(t, s, ns.Fence(), mcp)
+}
+
+// mustOrigin builds the agent origin of a conformance entry and fails the
+// test when its fields are not valid.
+func mustOrigin(t *testing.T, fields audit.OriginArgs) *audit.Origin {
+	t.Helper()
+
+	origin, err := audit.NewOrigin(fields)
+	if err != nil {
+		t.Fatalf("new origin: %v", err)
+	}
+
+	return origin
+}
+
+// listAgentRoundTripEntries lists the three entries oldest first.
+func listAgentRoundTripEntries(t *testing.T, s EntryStore, ns namespace.Namespace) []audit.Entry {
+	t.Helper()
+
+	listing, err := s.List(t.Context(), ns.Name, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	if len(listing.Entries) != 3 {
+		t.Fatalf("listing has %d entries, want 3", len(listing.Entries))
+	}
+
+	return listing.Entries
+}
+
+// checkOldestAgentEntry proves that the oldest entry has no agent block.
+func checkOldestAgentEntry(t *testing.T, got audit.Entry) {
+	t.Helper()
+
+	if got.HasAgentBlock() {
+		t.Fatalf("oldest entry has an agent block: %+v", got)
+	}
+}
+
+// checkBuiltInAgentEntry proves that the middle entry lists back as written.
+func checkBuiltInAgentEntry(t *testing.T, got audit.Entry) {
+	t.Helper()
+
+	o := got.Origin
+	if o == nil || o.Run() != "run-1" || o.Session() != "run-1" || !o.BreakGlass() ||
+		o.Tool() != "" || o.ArgsDigest() != "" || o.SecretStage() != "" {
+		t.Fatalf("built-in agent entry = %+v, want the block as written", got)
+	}
+}
+
+// checkMCPAgentEntry proves that the newest entry lists back as written.
+func checkMCPAgentEntry(t *testing.T, got audit.Entry) {
+	t.Helper()
+
+	o := got.Origin
+	if o == nil || o.Session() != "ses-1" || o.Tool() != "read" ||
+		o.ArgsDigest() != "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" ||
+		o.SecretStage() != "open" || o.Run() != "" || o.BreakGlass() {
+		t.Fatalf("MCP entry = %+v, want the block as written", got)
+	}
+}
+
+// checkAgentRoundTripChain proves that a chain of the three entries checks
+// valid through the store and over their hashes.
+func checkAgentRoundTripChain(t *testing.T, s EntryStore, ns namespace.Namespace, got []audit.Entry) {
+	t.Helper()
+
+	checkValidChain(t, []audit.Entry{got[2], got[1], got[0]})
+
+	check, err := s.Check(t.Context(), ns.Name)
+	if err != nil {
+		t.Fatalf("check audit chain: %v", err)
+	}
+
+	if !check.Valid || check.Checked != 3 {
+		t.Fatalf("check = %+v, want 3 valid entries", check)
 	}
 }
 
