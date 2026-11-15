@@ -80,6 +80,17 @@ func TestCheckFiles(t *testing.T) {
 			allowlist: "", state: "", wantExit: 1, wantOutput: "-x.txt is 1048577 bytes",
 		},
 		{
+			name: "large file with a name like a stage reference",
+			files:     map[string]string{"0:big.txt": large, "big.txt": "Small text file.\n"},
+			allowlist: "", state: "", wantExit: 1,
+			wantOutput: "0:big.txt is 1048577 bytes",
+		},
+		{
+			name: "binary file with a name like a stage reference",
+			files:     map[string]string{"1:x.bin": binary},
+			allowlist: "", state: "", wantExit: 1, wantOutput: "1:x.bin is binary",
+		},
+		{
 			name:      "binary with diff attribute",
 			files:     map[string]string{".gitattributes": "*.exe2 diff\n", "tool.exe2": binary},
 			allowlist: "", state: "", wantExit: 1, wantOutput: "tool.exe2 is binary",
@@ -117,6 +128,15 @@ func TestCheckFiles(t *testing.T) {
 		{
 			name: "git listing error", files: nil, allowlist: "", state: "bad index",
 			wantExit: 1, wantOutput: "cannot list tracked files",
+		},
+		{
+			name: "allowlist is a directory", files: nil, allowlist: "", state: "allowlist directory",
+			wantExit: 1, wantOutput: "cannot read .large-files-allowlist",
+		},
+		{
+			name: "allowlist is a link to a missing file", files: nil, allowlist: "",
+			state: "allowlist dangling link", wantExit: 1,
+			wantOutput: "cannot read .large-files-allowlist",
 		},
 		{
 			name: "unreadable blob", files: map[string]string{"unreadable\ninjected.txt": "Missing blob.\n"},
@@ -327,6 +347,14 @@ func prepareState(t *testing.T, dir string, env []string, tt filesCase) string {
 		return t.TempDir()
 	case "bad index":
 		writeFile(t, filepath.Join(dir, ".git", "index"), "Invalid index.\n")
+	case "allowlist directory":
+		if err := os.Mkdir(filepath.Join(dir, ".large-files-allowlist"), 0o700); err != nil {
+			t.Fatalf("Create allowlist directory: %v", err)
+		}
+	case "allowlist dangling link":
+		if err := os.Symlink("missing-allowlist-target", filepath.Join(dir, ".large-files-allowlist")); err != nil {
+			t.Fatalf("Create allowlist link: %v", err)
+		}
 	case "missing blob":
 		for path := range tt.files {
 			hash := strings.TrimSpace(string(runGit(t, dir, env, "rev-parse", ":"+path)))

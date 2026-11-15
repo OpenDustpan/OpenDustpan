@@ -1,4 +1,4 @@
 # Files that scripts/check-files.sh allows although they are over 1 MiB or are binary.
 # Each entry has the form: path # reason. Blank lines and lines that start with "#" are comments.
-# This generated decision index must match the output of make adr-decisions.
+# The path must match the tracked file exactly. The reason must say why the file stays.
 .repowise/decisions.yaml # Generated from docs/adr by make adr-decisions. make docs-lint checks the output.
