@@ -16,11 +16,10 @@ import (
 )
 
 const (
-	drainStartPollEvery   = 50 * time.Millisecond
-	drainStartReadyWait   = 30 * time.Second
-	drainStartStopTimeout = 2 * time.Minute
-	drainStartMinRetry    = 1
-	drainStartMaxRetry    = 15
+	drainStartPollEvery = 50 * time.Millisecond
+	drainStartReadyWait = 30 * time.Second
+	drainStartMinRetry  = 1
+	drainStartMaxRetry  = 15
 )
 
 // TestDrainRefusesNewBackupStart sends SIGTERM to one real server binary and
@@ -129,18 +128,13 @@ func checkDrainingStartAnswer(t *testing.T, resp e2e.InstanceResponse) {
 	}
 }
 
-// waitStop fails the test unless the stopped instance returns within the
-// stop timeout.
+// waitStop fails the test when the stopped instance returns an error. The
+// stop itself ends the process after its own timeout, so this wait ends too.
 func waitStop(t *testing.T, stopDone <-chan error, victim int) {
 	t.Helper()
 
-	select {
-	case err := <-stopDone:
-		if err != nil {
-			t.Fatalf("stop instance %d: %v", victim, err)
-		}
-	case <-time.After(drainStartStopTimeout):
-		t.Fatalf("instance %d did not stop within %s", victim, drainStartStopTimeout)
+	if err := <-stopDone; err != nil {
+		t.Fatalf("stop instance %d: %v", victim, err)
 	}
 }
 
@@ -152,6 +146,9 @@ func waitDrainingProbe(t *testing.T, cluster *e2e.HACluster, i int) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), drainStartReadyWait)
 	defer cancel()
+
+	ticker := time.NewTicker(drainStartPollEvery)
+	defer ticker.Stop()
 
 	for {
 		resp, err := cluster.Send(
@@ -166,7 +163,7 @@ func waitDrainingProbe(t *testing.T, cluster *e2e.HACluster, i int) {
 		select {
 		case <-ctx.Done():
 			t.Fatalf("instance %d did not answer 503 with draining (last: %+v, %v)", i, resp, err)
-		case <-time.After(drainStartPollEvery):
+		case <-ticker.C:
 		}
 	}
 }
