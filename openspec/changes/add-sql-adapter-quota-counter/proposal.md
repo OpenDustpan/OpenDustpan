@@ -2,7 +2,7 @@
 version: 4
 ---
 
-Issue: #1030.
+Issue: #1030. Also: #3158 (Reserve checks that each key of a reservation has a check).
 
 ## Why
 
