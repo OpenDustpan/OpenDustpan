@@ -11,11 +11,11 @@
 
 - [ ] 2.1 Map identity.KindAgent to gate.PrincipalAgent in principalSubjects.Subject with fail-closed unknown handling through the NEW function newSubjectKind. Check: rg shows identity.KindAgent defined by person-delegates-dusty and its use in pkg/dustpan/stateguard.go through the NEW function newSubjectKind with a fail-closed unknown branch.
 - [ ] 2.2 Apply the same kind mapping at the access-limit schema and the change.propose decision point in pkg/dustpan/stateguard.go through the NEW function newSubjectKind. Check: Same hostile unknown-kind test passes at the adapter, service and handler layers with the NEW error code gate.unknown-principal-kind, covering the access-limit schema and the change.propose decision point.
-- [ ] 2.3 Update docs/guides/state-write-gates.md to state that state.write sets agent for agent principals. Check: docs/guides/state-write-gates.md no longer says the server does not set agent, and its example runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/state_write_gates_context_principal_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 2.3 Update docs/guides/state-write-gates.md to state that state.write sets agent for agent principals. Check: docs/guides/state-write-gates.md no longer says the server does not set agent, and its example runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/state_write_gates_context_principal_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 

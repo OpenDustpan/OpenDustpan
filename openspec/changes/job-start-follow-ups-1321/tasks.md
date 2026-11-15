@@ -8,13 +8,13 @@
 
 ## 2. Fix
 
-- [ ] 2.1 Correct the Route.IdempotencyKey comment in internal/api/registry/operations.go:14 and in the route files of the operations packages. Check: rg -n -F 'Route.IdempotencyKey' internal shows the fixed text
+- [ ] 2.1 Correct the Route.IdempotencyKey comment in internal/api/registry/operations.go:14 and in the route files of the operations packages: internal/api/registry/routes.go, internal/api/profile/routes.go, internal/api/profile/operations.go, internal/api/notifications/routes.go and internal/api/notifications/operations.go. Check: rg -n -F 'Route.IdempotencyKey' internal shows the fixed text
 - [ ] 2.2 Count and log the operations skipped by the bound where the bound is, in pkg/job/claimer.go (DurableClaimer.Claim, :137-166): add the NEW port `job.ClaimObserver` (`interface{ SkippedClaims(n int) }`) and the NEW no-op `job.NoopClaimObserver`, the default; the NEW option `job.WithClaimObserver` sets it, and a nil observer is refused (the no-op stays), as WithClaimerLogger does for a nil logger. The log line uses the claimer's injected slog logger (the option WithClaimerLogger sets it). pkg/job imports no metrics code (depguard). Check: `go test ./pkg/job/... -count=1` passes
 
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Confirm that no request flow changed, so the round-trip budgets stand: the change adds no route and no caller of a route. Check: the round-trip tests in `internal/servertest/roundtrips_test.go` pass unchanged. Confirmed by: CI (the round-trip tests pass unchanged).
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 

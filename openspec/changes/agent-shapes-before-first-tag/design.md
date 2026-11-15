@@ -20,8 +20,8 @@ Unexported principalKind type with constructor parsePrincipalKind that accepts o
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| boundary check | Allowlist kinds at the boundary and reject unknown kinds with the NEW error code principal.kind-invalid. | Send kind robot to the principal service and check rejection. |
-| encode or contain | Contain audit reason text to plain text with bounded length and reject control characters except space on write. | Submit reason with newlines and control characters and check rejection. |
+| boundary check | Allowlist kinds at the boundary and reject unknown kinds with the NEW error code principal.kind-invalid. | TestCreateRejectsUnknownKind in pkg/principal/kind_hostile_test.go sends kind robot to the principal service and checks rejection. |
+| encode or contain | Contain audit reason text to plain text with bounded length and reject control characters except space on write. | TestAppendRejectsControlCharactersInAgentReason in pkg/audit/agent_reason_hostile_test.go submits reason with newlines and control characters and checks rejection. |
 | limit | Bound reason to 1024 characters per entry and agent subject to 256 characters per entry. | Submit an overlong reason and check rejection. |
 | authorize at point of use | No authorization change in this change; existing grants still decide access. | Act as an agent-kind principal with no grant and confirm denial under current rules. |
 | fail closed | Unknown kind or malformed agent data fails closed with no store write of the bad value. | Send an unknown kind and confirm denial with stored data unchanged. |

@@ -333,6 +333,7 @@ func appendPostgresEntry(t *testing.T, st *postgres.Store, ns namespace.Namespac
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	})
 	if err != nil {
 		t.Fatalf("append audit entry: %v", err)

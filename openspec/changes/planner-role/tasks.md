@@ -11,10 +11,10 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
 
 ## 3. Definition of done
 
 - [ ] 3.1 Run the e2e planner step with the real Pulumi CLI and OpenTofu, a personal access token, route /api/stacks/{}/{}/{}/state/{}/reveal and the masked state route GET /api/v2/state-versions/{state_version_id}/resources. Check: make e2e planner step passes.
-- [ ] 3.2 Update docs/guides/planner-role.md and run its commands. Check: Each command runs as written.
+- [ ] 3.2 Update docs/guides/planner-role.md and run its commands. Check: Each command runs as written. `make docs-lint` passes on each edited guide.
 - [ ] 3.3 Run the full check. Check: `make check` reports zero findings.

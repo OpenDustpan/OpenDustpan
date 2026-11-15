@@ -12,9 +12,9 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 2.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 3. Definition of done
 
-- [ ] 3.1 Update docs/guides/high-availability.md with the three-instance proxy layout Check: High-availability guide names the alternation topology, proxy TLS trust setup for both CLIs, shared S3 bucket check, and the proxy record check
+- [ ] 3.1 Update docs/guides/high-availability.md with the three-instance proxy layout Check: High-availability guide names the alternation topology, proxy TLS trust setup for both CLIs, shared S3 bucket check, and the proxy record check. `make docs-lint` passes on each edited guide.
 - [ ] 3.2 Run full definition of done: wiring through proxy, real CLI traffic, docs page, usability check from docs page, make check Check: `make check` reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

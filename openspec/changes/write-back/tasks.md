@@ -9,12 +9,12 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 2.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 3. Definition of done
 
 - [ ] 3.1 Implement the write-back deliver phase on the durable runner with base-commit read and job trailer. Check: `go test ./internal/jobsvc/ -run TestWriteBack -count=1`
 - [ ] 3.2 Wire the edit route with the unit write action and the audit entry. Check: `go test ./internal/api/ -run TestWriteBackRoutes -count=1`
 - [ ] 3.3 Add e2e step with the real binary over TLS against the fake forge: edit, commit with trailer, plan shows edit, retryable error retries, refused error fails. Check: BLOCKED by the job start route of add-job-service-routes-start-1 and the fake GitHub forge connection credential of docs/guides/connect-github.md; once both exist, run `make e2e E2E_RUN=write-back`. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 3.4 Write the docs page for API config edits and write-back commits. Check: Add the new file docs/guides/unit-config-edits.md and check each command renders as written.
+- [ ] 3.4 Write the docs page for API config edits and write-back commits. Check: Add the new file docs/guides/unit-config-edits.md and check each command renders as written. `make docs-lint` passes on each edited guide.
 - [ ] 3.5 Run the usability check from the docs page alone and the full check. Check: `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

@@ -18,12 +18,21 @@
 - [ ] 1.12 Write failing test TestRequestLimits in NEW file internal/api/runnerapi/limits_test.go for Dustpan-Release mismatch, 4 MiB oversize and wrong-pool key. Check: `go test ./internal/api/runnerapi -run TestRequestLimits` fails on main, passes after.
 - [ ] 1.13 Write failing test TestLiveLogReadStream in NEW file internal/api/jobs/log_read_stream_test.go for ordered log read with unit:read-logs and resume from a chunk number. Check: `go test ./internal/api/jobs -run TestLiveLogReadStream` fails on main, passes after.
 
+## 1A. Build tasks for the guarded layers
+
+- [ ] 1.14 SECURITY. Build the proof check in NEW file internal/api/runnerapi/proof_check.go: it checks the Dustpan-Proof signature, the time window, the nonce cache and the Dustpan-Release header before any state read. Check: `go build ./internal/api/runnerapi` passes and TestProofReplayRefused passes.
+- [ ] 1.15 SECURITY. Build the one-transaction join in NEW file pkg/runner/join.go: it checks token hash, expiry, prior use and pool match, then consumes the token and inserts the runner in one transaction. Check: `go build ./pkg/runner` passes and TestJoinTokenOneUse passes.
+- [ ] 1.16 SECURITY. Build the conditional claim write in NEW file pkg/runner/claim_lease.go: the claim insert uses a conditional write on lease owner and expiry, and newClaimLease checks pool, owner, expiry and monotonic renew. Check: `go build ./pkg/runner` passes and TestClaimBothTools passes.
+- [ ] 1.17 SECURITY. Build the renew owner check in NEW file pkg/runner/renew.go: renew refuses a caller that does not own the live claim. Check: `go build ./pkg/runner` passes and TestRenewOwnerCheck passes.
+- [ ] 1.18 SECURITY. Write hostile test TestJoinConcurrentOneWins in NEW file pkg/runner/runnertest/join_concurrent_test.go: two concurrent joins with one token send hostile input straight to the store layer; one wins and the other gets token-used. Check: `go test ./pkg/runner/runnertest -run TestJoinConcurrentOneWins` fails on main, passes after.
+- [ ] 1.19 SECURITY. Write hostile test TestClaimLeaseConditionalWrite in NEW file pkg/runner/runnertest/claim_conditional_test.go: a claim write against a live lease of another owner goes straight to the claim layer and is refused. Check: `go test ./pkg/runner/runnertest -run TestClaimLeaseConditionalWrite` fails on main, passes after.
+
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 3. Definition of done
 
-- [ ] 3.1 Wire routes for pool join tokens under /api/dustpan/v1/namespaces/{namespace}/runner-pools (declared in internal/api/runnerapi/join_token_routes.go, NEW), poll, claim, renew and heartbeat under ANY /runner/v1, and live log read; each route declares its authorization action. Write the runner join guide page NEW docs/guides/runner-join.md with each error command, and run each command on the page. Check: `make e2e` runner slice passes on SQLite and PostgreSQL over TLS with a real runner: join with a token, claim Pulumi and OpenTofu jobs, takeover after kill, TFE agent token refusal, live log read. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.1 Wire routes for pool join tokens under /api/dustpan/v1/namespaces/{namespace}/runner-pools (declared in internal/api/runnerapi/join_token_routes.go, NEW), poll, claim, renew and heartbeat under ANY /runner/v1, and live log read; each route declares its authorization action. Write the runner join guide page NEW docs/guides/runner-join.md with each error command, and run each command on the page. Check: `make e2e` runner slice passes on SQLite and PostgreSQL over TLS with a real runner: join with a token, claim Pulumi and OpenTofu jobs, takeover after kill, TFE agent token refusal, live log read. Confirmed by: CI (the agent writes the e2e test). `make docs-lint` passes on each edited guide.
 - [ ] 3.2 Usability check: a runner operator completes the join from docs/guides/runner-join.md alone, and each error names its one command. Check: Manual walk-through recorded in the pull request body. A person's step.
 - [ ] 3.3 Run full check with race, lint and conformance suites. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

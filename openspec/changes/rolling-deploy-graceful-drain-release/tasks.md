@@ -11,11 +11,11 @@
 
 - [ ] 2.1 Add the `Retry-After` header to the draining 503 of GET /health/ready in pkg/dustpan/health.go:338 (func readiness.writeDraining), with the value of the drain period in whole seconds (at most 15 s). Keep the constants of main: shutdownTimeout 30 s (the bound for in-flight requests and the claim release), DefaultDrainPeriod 10 s, maxStopTime 45 s (pkg/dustpan/dustpan.go:130-142), checked by checkDrainPeriod (pkg/dustpan/health.go:493). Add no drain timer and no new constant. Check: the test of task 1.2 passes
 - [ ] 2.2 Prove the claim release of the existing shutdown path: no new code unless the test of task 1.1 fails; then fix the release in pkg/dustpan/dustpan.go (the backup worker, :2094) only. No route: the test drives two test servers and the store only. Check: `go test ./internal/servertest/ -run 'TestDrainReleasesBackupForTakeover|TestReadinessDuringDrain' -count=1` passes
-- [ ] 2.3 Document the drain, the bounds and the claim takeover in the existing guide docs/guides/several-instances.md. Check: Docs page runs as written in review and states proxy timeouts exceed drain timeout. Confirmed by: CI (an e2e step in the NEW file e2e/rolling_deploy_graceful_drain_release_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 2.3 Document the drain, the bounds and the claim takeover in the existing guide docs/guides/several-instances.md. Check: Docs page runs as written in review and states proxy timeouts exceed drain timeout. Confirmed by: CI (an e2e step in the NEW file e2e/rolling_deploy_graceful_drain_release_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 

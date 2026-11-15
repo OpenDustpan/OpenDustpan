@@ -15,4 +15,4 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Implement the four changes in pkg/store/postgres/maintenance_revocations.go (swap wait warning), pkg/store/postgres/inventory_query.go (QueryUnits labels) and pkg/store/postgres/state_at.go (StateAt and WorkspaceStateAt conflict mapping). Add the swap wait to the existing docs page docs/guides/high-availability.md. The change adds no route. The existing restore routes keep their access token authorization. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.1 Implement the four changes in pkg/store/postgres/maintenance_revocations.go (swap wait warning), pkg/store/postgres/inventory_query.go (QueryUnits labels) and pkg/store/postgres/state_at.go (StateAt and WorkspaceStateAt conflict mapping). Add the swap wait to the existing docs page docs/guides/high-availability.md. The change adds no route. The existing restore routes keep their access token authorization. Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only). `make docs-lint` passes on each edited guide.

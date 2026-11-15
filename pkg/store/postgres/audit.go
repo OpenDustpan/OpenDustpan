@@ -678,6 +678,7 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		PrincipalKind: row.PrincipalKind,
 		JobID:         row.JobID,
 		Reason:        row.Reason,
+		Origin:        nil,
 	}
 }
 

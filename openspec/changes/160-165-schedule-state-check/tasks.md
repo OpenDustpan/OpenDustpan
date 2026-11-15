@@ -16,10 +16,10 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Run schedule Tick against the real store with fence move hostile case. Check: Servertest calls existing route `GET /api/audit/entries` with an access token and shows one start per due item plus fence-move refusal.
-- [ ] 4.2 Write docs page for schedule interval, offset spread, and state check output in NEW file docs/guides/schedule-state-check.md. Check: Docs page commands run as written against a dev server. Confirmed by: CI (an e2e step in the NEW file e2e/160_165_schedule_state_check_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.2 Write docs page for schedule interval, offset spread, and state check output in NEW file docs/guides/schedule-state-check.md. Check: Docs page commands run as written against a dev server. Confirmed by: CI (an e2e step in the NEW file e2e/160_165_schedule_state_check_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 4.3 Usability check, e2e step on the real store path, and full check. Check: E2E calls existing route `GET /api/audit/entries` with an access token and lists state-check rows; `make check` reports zero findings. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

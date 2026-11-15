@@ -42,6 +42,6 @@
 ## 4. Definition of done
 
 - [ ] 4.1 Add e2e step for compare then promote with OpenTofu and Pulumi CLI and plan apply The step calls `GET /api/dustpan/v1/namespaces/{namespace}/units/compare` and `POST /api/dustpan/v1/namespaces/{namespace}/promotions` (both added by this change) with an access token. Check: make e2e runs e2e/unit_settings_test.go on these routes, then tofu and pulumi plan and apply. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write docs page for compare and promote in NEW file docs/guides/promote-environment-config.md. Check: docs page command sequence runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/environment_promotion_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.2 Write docs page for compare and promote in NEW file docs/guides/promote-environment-config.md. Check: docs page command sequence runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/environment_promotion_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 4.3 Run usability check of full path Check: Developer completes compare and promote from docs page alone. A person's step.
 - [ ] 4.4 Run full check suite Check: make check passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).

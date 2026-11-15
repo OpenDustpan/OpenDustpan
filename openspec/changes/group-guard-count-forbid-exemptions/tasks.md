@@ -17,9 +17,9 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Write the docs page NEW file docs/guides/group-guard-forbid-limits.md. It lists the rule for a widening membership change and the limit ID in the error. Do the usability check from this page alone. Check: the page exists and states the rule.
+- [ ] 4.1 Write the docs page NEW file docs/guides/group-guard-forbid-limits.md. It lists the rule for a widening membership change and the limit ID in the error. Do the usability check from this page alone. Check: the page exists and states the rule. `make docs-lint` passes on each edited guide.
 - [ ] 4.2 Write the e2e step in NEW file e2e/group_guard_forbid_test.go. It uses POST /api/server/groups/{group}/members with an access token of a person principal that has group rights only, over TLS, then a real Pulumi CLI read and a real OpenTofu read. Check: `make e2e` and `make check` with zero findings. A person's step. Confirmed by: CI (the agent writes the e2e test). Confirmed by: CI (the agent runs the fast checks only).

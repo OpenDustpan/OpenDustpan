@@ -14,12 +14,12 @@
 ## 2. Wiring and docs
 
 - [ ] 2.0 Add NEW func Terragrunt() Tool and the NEW constant ToolTerragrunt = "terragrunt" in the existing file `e2e/tool.go`, next to the pinned OpenTofu tool. Use version 1.2.1 (released 2026-10-23) as the one default and the one pinned version. Set ReleaseURL to https://github.com/gruntwork-io/terragrunt/releases/download/v%[1]s/%[2]s, the archive to terragrunt_<goos>_<arch>.tar.gz (no version in the name, so one pinned version only) and versionsEnv to E2E_TERRAGRUNT_VERSIONS. Pin these sha256 sums from SHA256SUMS of the GitHub release v1.2.1: terragrunt_linux_amd64.tar.gz 08c8844cc69e4f03451ebb8f347cb57d9bd6b8db7b16e437ae5ec6f001228ef9, terragrunt_linux_arm64.tar.gz 8b92d56a20b2848365e22ef94f963fbfe25fedeebcacffacbc286cfcf9966066, terragrunt_darwin_amd64.tar.gz 29806d1708f5c54e54bc6adfcacfb710d4bb1f6f180efd751692e6fad5985640, terragrunt_darwin_arm64.tar.gz 0aded323f844ce6567a15feb26393b67eff1400dc1722203fa4dd4e23b3bb182. Add the version to the version list in `e2e/doc.go`. Add the test in the existing file `e2e/tool_test.go`. This task has no e2e step: it is a unit test of the fetcher. Check: the test checks the pinned sums of each platform and the one version, and a download with a wrong sum is refused. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 2.1 Write the section "Run Terragrunt locally" of the NEW guide `docs/guides/terragrunt.md`, in the layout of the existing guides (for example `docs/guides/run-triggers.md`), and link it from the existing `docs/guides/quickstart.md`. Check: The docs page command block runs as written in a clean checkout. Confirmed by: CI (an e2e step in the NEW file e2e/local_run_all_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 2.1 Write the section "Run Terragrunt locally" of the NEW guide `docs/guides/terragrunt.md`, in the layout of the existing guides (for example `docs/guides/run-triggers.md`), and link it from the existing `docs/guides/quickstart.md`. Check: The docs page command block runs as written in a clean checkout. Confirmed by: CI (an e2e step in the NEW file e2e/local_run_all_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 2.2 Write the NEW explanation page `docs/explanation/profiles-and-blueprints.md`, in the layout of the existing `docs/explanation/security-model.md`, which says why profiles and blueprints stay the recommended path; link it from `docs/guides/terragrunt.md` and `docs/guides/publish-a-blueprint.md`. Check: `make docs-lint` passes and both links resolve. A person's step.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Run `make adr-index` (`Makefile`); this change adds no ADR. Check: `make adr-index` leaves the tree clean. Confirmed by: the driver's gates.
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 

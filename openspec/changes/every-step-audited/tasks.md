@@ -13,11 +13,11 @@
 
 - [ ] 2.1 Write the delegation and reason in NEW file pkg/audit/delegation.go on each delegated step in the same transaction as an allowed step, and the denial entry in its own transaction for a denied step, with the database sequence per entry. Check: GET /api/audit/entries with an access token returns the NEW delegation and reason fields alongside the agent block of audit-entry-has-no-agent for each delegated step.
 - [ ] 2.2 Include the NEW fields and the hash-input version in the hash chain input in pkg/audit/chain.go, keep old entries verifiable with their stored input, and expose the fields on the read paths with their declared actions and objects. Check: GET /api/audit/check with an access token verifies a chain that holds delegation entries and names the first bad sequence number.
-- [ ] 2.3 Document the delegation audit fields in the audit log guide at docs/guides/audit-log.md. Check: Docs page lists the delegation and reason fields with one copy-paste read command.
+- [ ] 2.3 Document the delegation audit fields in the audit log guide at docs/guides/audit-log.md. Check: Docs page lists the delegation and reason fields with one copy-paste read command. `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 

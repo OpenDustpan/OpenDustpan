@@ -504,6 +504,7 @@ func auditProbeEntry(ns namespace.Name, requestID string) audit.Entry {
 		Reason:        "",
 		PrincipalKind: "",
 		JobID:         "",
+		Origin:        nil,
 	}
 }
 

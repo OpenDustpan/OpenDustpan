@@ -20,10 +20,10 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the new file docs/guides/idp-membership-and-alerts.md and update the protected-groups guide sentence. Check: Each command on the page runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/one_membership_function_identity_provider_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.1 Add the new file docs/guides/idp-membership-and-alerts.md and update the protected-groups guide sentence. Check: Each command on the page runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/one_membership_function_identity_provider_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 4.2 Full e2e of a refused SCIM add and a refused claim. Check: BLOCKED by the SCIM adapter and the sign-in claim adapters, which are not on main.
 - [ ] 4.3 Run the full checks and the usability check from the docs page alone. Check: `make check` reports zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

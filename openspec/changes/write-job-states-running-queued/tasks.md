@@ -16,10 +16,10 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Add e2e step against the real CLI in the NEW file e2e/write_job_states_running_queued_test.go. BLOCKED by the states slice (#1196): the inventory units route does not yet return a states field. Until it lands, the step starts jobs with POST /api/dustpan/v1/namespaces/{namespace}/jobs using an access token of a principal with the unit:run-apply action, runs one Pulumi and one OpenTofu change, and checks the stored rows through the store provider. Check: make e2e run with real CLI; after #1196, GET /api/dustpan/v1/namespaces/{namespace}/units with the same access token shows running, queued and failed transitions. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.2 Write the docs page for the five states in the NEW file docs/guides/unit-states.md in the same pull request. Check: Docs page for unit states lists the five writers and the latest-wins rule; commands on the page run as written. Confirmed by: CI (an e2e step in the NEW file e2e/write_job_states_running_queued_docs_test.go runs each command of the docs page against the e2e test server).
+- [ ] 4.2 Write the docs page for the five states in the NEW file docs/guides/unit-states.md in the same pull request. Check: Docs page for unit states lists the five writers and the latest-wins rule; commands on the page run as written. Confirmed by: CI (an e2e step in the NEW file e2e/write_job_states_running_queued_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 - [ ] 4.3 Run usability check from the docs page alone and make check with zero findings. Check: make check passes with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).
