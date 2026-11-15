@@ -532,19 +532,33 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request, _ identity.Pri
 	h.writeJSON(ctx, w, resp)
 }
 
+// recordRedeliverRefusal records a refusal of the redeliver route with the
+// reason through the denial limiter. Both refusals of the route share one key
+// of the limiter for one person and one namespace.
+func (h *Handler) recordRedeliverRefusal(
+	ctx context.Context, r *http.Request, p identity.Principal, obj identity.Object, reason string,
+) {
+	h.guard.Record(ctx, r, p, refusal.Denial{
+		Action: identity.ActionNamespaceManageNotifications, Object: obj,
+		Reason: reason, ReasonWithin: nil, Window: 0,
+	})
+}
+
 // redeliver serves POST /deliveries/{delivery_id}/redeliver.
 func (h *Handler) redeliver(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 	id := r.PathValue("delivery_id")
 
 	if err := h.subscriptions.Redeliver(ctx, subscriptionCaller(r, p), obj.Namespace(), id); err != nil {
-		// A refusal that comes too soon is a denial. The service writes no entry
-		// for it, so the adapter records it through the shared denial limiter.
-		if errors.Is(err, subscriptionsvc.ErrRedeliverTooSoon) {
-			h.guard.Record(ctx, r, p, refusal.Denial{
-				Action: identity.ActionNamespaceManageNotifications, Object: obj,
-				Reason: errcode.SinkDeliveryTooSoon, ReasonWithin: nil, Window: 0,
-			})
+		// A refusal at the limit and a refusal that comes too soon are denials
+		// that a caller can repeat. The service writes no entry for them, so the
+		// adapter records them through the shared denial limiter.
+		switch {
+		case errors.Is(err, subscriptionsvc.ErrRedeliverLimit):
+			h.recordRedeliverRefusal(ctx, r, p, obj, errcode.SinkDeliveryRedeliverLimit)
+		case errors.Is(err, subscriptionsvc.ErrRedeliverTooSoon):
+			h.recordRedeliverRefusal(ctx, r, p, obj, errcode.SinkDeliveryTooSoon)
+		default:
 		}
 
 		h.writeDeliveryError(ctx, w, err)

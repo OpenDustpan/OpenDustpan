@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -67,8 +66,6 @@ type Config struct {
 	Subscriptions notify.Subscriptions
 	Deliveries    notify.Deliveries
 	Namespaces    Namespaces
-	// Audit keeps the entry of a redeliver that the limit refuses.
-	Audit audit.Store
 	// Now is the clock. Nil means time.Now.
 	Now func() time.Time
 }
@@ -78,15 +75,14 @@ type Service struct {
 	subs       notify.Subscriptions
 	deliveries notify.Deliveries
 	namespaces Namespaces
-	audit      audit.Store
 	now        func() time.Time
 }
 
 // NewService returns a Service. It returns ErrMissingDependency when a port is
 // missing.
 func NewService(cfg Config) (*Service, error) {
-	if cfg.Subscriptions == nil || cfg.Deliveries == nil || cfg.Namespaces == nil || cfg.Audit == nil {
-		return nil, fmt.Errorf("%w: subscriptions, deliveries, namespaces and audit", ErrMissingDependency)
+	if cfg.Subscriptions == nil || cfg.Deliveries == nil || cfg.Namespaces == nil {
+		return nil, fmt.Errorf("%w: subscriptions, deliveries and namespaces", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -95,7 +91,7 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	return &Service{
-		subs: cfg.Subscriptions, deliveries: cfg.Deliveries, namespaces: cfg.Namespaces, audit: cfg.Audit, now: now,
+		subs: cfg.Subscriptions, deliveries: cfg.Deliveries, namespaces: cfg.Namespaces, now: now,
 	}, nil
 }
 
@@ -333,16 +329,7 @@ func (s *Service) Redeliver(ctx context.Context, c *Caller, ns namespace.Name, i
 	err = s.deliveries.Redeliver(ctx, id, s.now().UTC(), fence, s.entry(c, ns, actionRedeliver, id))
 	switch {
 	case errors.Is(err, notify.ErrRedeliverLimit):
-		e := s.entry(c, ns, actionRedeliver, id)
-		e.Outcome = audit.OutcomeDenied
-		e.Kind = audit.KindChange
-		e.Reason = errcode.SinkDeliveryRedeliverLimit
-
-		if _, appendErr := s.audit.Append(ctx, fence, e); appendErr != nil {
-			return fmt.Errorf("redeliver %s: %w", id,
-				errors.Join(ErrRedeliverLimit, err, fmt.Errorf("append audit entry: %w", appendErr)))
-		}
-
+		// The adapter records this refusal through the denial limiter.
 		return fmt.Errorf("redeliver %s: %w", id, errors.Join(ErrRedeliverLimit, err))
 	case errors.Is(err, notify.ErrConflict):
 		return fmt.Errorf("redeliver %s: %w", id, errors.Join(ErrNotRedeliverable, err))
