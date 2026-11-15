@@ -459,6 +459,140 @@ func checkPinnedFailsClosed(t *testing.T, tool e2e.Tool, label, checksumFile str
 	}
 }
 
+// TestFetchRefusesWrongPinnedSum proves that Install fails closed when a
+// pinned sum does not match the served archive: the download is refused with
+// ErrChecksumMismatch and no entry stays in the cache.
+func TestFetchRefusesWrongPinnedSum(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	name, err := tool.ArchiveName("1.2.1")
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	// A sum that the served archive cannot have.
+	e2e.SetPinnedSum(&tool, name, strings.Repeat("0", 64))
+
+	archive := validArchive(t)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := w.Write(archive); writeErr != nil {
+			t.Errorf("serve archive: %v", writeErr)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	if _, err := fetcher.Install(t.Context(), tool, "1.2.1"); !errors.Is(err, e2e.ErrChecksumMismatch) {
+		t.Fatalf("install with a wrong pinned sum: got error %v, want ErrChecksumMismatch", err)
+	}
+
+	entries, readErr := os.ReadDir(fetcher.CacheDir)
+	if readErr != nil {
+		t.Fatalf("read cache: %v", readErr)
+	}
+
+	// The lock file of the entry stays; nothing else may.
+	for _, entry := range entries {
+		if entry.Name() != name+".lock" {
+			t.Errorf("cache holds %q after a rejected download, want only the lock file", entry.Name())
+		}
+	}
+}
+
+// TestFetchResolvesTerragruntLatest proves that Install resolves the Latest
+// label of Terragrunt from the GitHub REST API document: it reads tag_name,
+// removes the leading "v" and installs that release. The releases HTML page
+// holds no version, so a fetcher that reads it fails with ErrBadVersion.
+func TestFetchResolvesTerragruntLatest(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	const version = "9.9.9"
+
+	name, err := tool.ArchiveName(version)
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	archive := tarball(t, []tar.Header{
+		{Name: tool.ArchiveBinaryName(version), Typeflag: tar.TypeReg, Mode: 0o755},
+	}, "#!/bin/sh\n")
+
+	sum := sha256.Sum256(archive)
+	e2e.SetPinnedSum(&tool, name, hex.EncodeToString(sum[:]))
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/latest", func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := fmt.Fprintf(w, "{\"tag_name\":\"v%s\"}\n", version); writeErr != nil {
+			t.Errorf("serve latest: %v", writeErr)
+		}
+	})
+	mux.HandleFunc("/"+name, func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := w.Write(archive); writeErr != nil {
+			t.Errorf("serve archive: %v", writeErr)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.LatestURL = ts.URL + "/latest"
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	inst, err := fetcher.Install(t.Context(), tool, e2e.Latest)
+	if err != nil {
+		t.Fatalf("install latest: %v", err)
+	}
+
+	if inst.Version != version {
+		t.Fatalf("resolved version = %q, want %q", inst.Version, version)
+	}
+}
+
+// TestFetchRejectsTerragruntLatestWithoutTag proves that a latest document
+// that holds no tag_name fails with ErrBadVersion, so the fetcher never
+// installs a release that the document does not name.
+func TestFetchRejectsTerragruntLatestWithoutTag(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.Terragrunt()
+
+	if _, err := tool.ArchiveName("1.2.1"); err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/latest", func(w http.ResponseWriter, _ *http.Request) {
+		if _, writeErr := w.Write([]byte("<html>releases</html>\n")); writeErr != nil {
+			t.Errorf("serve latest: %v", writeErr)
+		}
+	})
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	tool.LatestURL = ts.URL + "/latest"
+	tool.ReleaseURL = ts.URL + "/%[2]s"
+
+	fetcher := &e2e.Fetcher{Client: ts.Client(), CacheDir: filepath.Join(t.TempDir(), "cache")}
+
+	if _, err := fetcher.Install(t.Context(), tool, e2e.Latest); !errors.Is(err, e2e.ErrBadVersion) {
+		t.Fatalf("install latest without tag_name: got error %v, want ErrBadVersion", err)
+	}
+}
+
 // errUnexpectedRequest fails every request of countingErrorTransport.
 var errUnexpectedRequest = errors.New("unexpected network request")
 

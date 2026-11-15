@@ -36,6 +36,12 @@ const tgLocalUnitHCL = `include "root" {
 // Terragrunt unit talks to its own workspace in this namespace.
 const tgLocalNamespace = "terragrunt-local"
 
+// sharedNameAttempts bounds the retries of the shared name landing run: two
+// units that name one workspace share its lock, so the run-all at parallelism
+// 3 with no lock timeout refuses the unit that loses the lock race, and each
+// retry lands the refused unit.
+const sharedNameAttempts = 6
+
 // tgLocalUnits returns the three units of the run, each with its own
 // workspace of the same name.
 func tgLocalUnits() []string {
@@ -297,16 +303,21 @@ func TestE2ETerragruntLocalRunAllRefusedUnit(t *testing.T) {
 		t.Fatalf("install %s: %v", e2e.OpenTofu().Name, err)
 	}
 
+	tg, tgErr := fetcher.Install(installCtx, e2e.Terragrunt(), e2e.Terragrunt().Single())
+	if tgErr != nil {
+		t.Fatalf("install %s: %v", e2e.Terragrunt().Name, tgErr)
+	}
+
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			tgLocalRefusedUnit(t.Context(), t, cli, db)
+			tgLocalRefusedUnit(t.Context(), t, cli, tg, db)
 		})
 	}
 }
 
 // tgLocalRefusedUnit runs the ungranted unit scenario on one store.
-func tgLocalRefusedUnit(ctx context.Context, t *testing.T, cli e2e.Install, store e2e.Store) {
+func tgLocalRefusedUnit(ctx context.Context, t *testing.T, cli, tg e2e.Install, store e2e.Store) {
 	t.Helper()
 
 	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
@@ -326,33 +337,44 @@ func tgLocalRefusedUnit(ctx context.Context, t *testing.T, cli e2e.Install, stor
 	units := tgLocalUnits()
 	runner := tgLocalIssueUnitPerson(ctx, t, env, "dee", units[:2])
 
-	// The ungranted unit is refused on its state versions with the access
-	// token of the run.
-	status, _, err := env.TFEStatus(ctx, runner, http.MethodGet, tgLocalHistoryPath(units[2]), "")
+	// The ungranted unit is refused with the access token of the run. The
+	// token holds no read on that workspace, so the server hides it and
+	// answers the 404 of a workspace that does not exist, with the
+	// workspace.not-found code: it never answers 200, and a 403, a 404 of
+	// another code or any other status fails this check.
+	status, body, err := env.TFEStatus(ctx, runner, http.MethodGet, tgLocalHistoryPath(units[2]), "")
 	if err != nil {
 		t.Fatalf("list state versions of the ungranted unit: %v", err)
 	}
 
-	if status == http.StatusOK {
-		t.Fatal("ungranted unit lists state versions, want a refusal")
+	if status != http.StatusNotFound {
+		t.Fatalf("ungranted unit answers %d, want 404: %s", status, body)
 	}
 
-	// The granted units apply with the same token, and each holds one new
-	// state version and one history entry.
+	if got := tgLocalErrorCode(t, body); got != "workspace.not-found" {
+		t.Fatalf("ungranted unit error code = %q, want workspace.not-found: %s", got, body)
+	}
+
+	// The granted units apply through the real `terragrunt run --all` with
+	// the token of the run, with the OpenTofu binary of the fetcher as the
+	// TG_TF_PATH: each granted workspace holds one new state version and one
+	// history entry.
 	granted := tgLocalRunner(ctx, t, env, cli, runner)
-	for i, unit := range units[:2] {
-		dir := "granted"
-		if i == 1 {
-			dir = "granted-second"
-		}
+	granted.tg = tg
+	live := filepath.Join(env.Home(), "tg-local-refused-live")
+	tgLocalLiveRoot(t, live)
 
-		granted.writeUnit(t, dir, unit)
-		granted.tofu(ctx, t, dir, "init", "-input=false", "-no-color")
-		granted.tofu(ctx, t, dir, "apply", "-input=false", "-auto-approve", "-no-color")
+	dirs := tgLocalLiveDirs()
+	for i, unit := range units[:2] {
+		granted.writeLiveUnit(t, live, dirs[i], unit)
 	}
 
-	for _, unit := range units[:2] {
+	granted.runAll(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
+		"--", "apply", "-input=false", "-auto-approve", "-lock-timeout=0s")
+
+	for i, unit := range units[:2] {
 		tgLocalCheckOneVersion(ctx, t, env, runner, unit)
+		granted.checkOneOutput(ctx, t, live, i, unit)
 	}
 
 	// The refused workspace holds no new state version: the refusal recorded
@@ -366,7 +388,7 @@ func tgLocalRefusedUnit(ctx context.Context, t *testing.T, cli e2e.Install, stor
 // TestE2ETerragruntLocalRunAllSharedName proves that two unit directories
 // that name one workspace share its lock and its state-version chain: the
 // second writer is refused with workspace.locked at parallelism 3 with no
-// lock timeout, and its write lands after the first apply releases the lock.
+// lock timeout, and the refused write lands on a retry, in the one chain.
 func TestE2ETerragruntLocalRunAllSharedName(t *testing.T) {
 	t.Parallel()
 
@@ -427,8 +449,8 @@ func tgLocalSharedName(ctx context.Context, t *testing.T, cli, tg e2e.Install, s
 	runner.tg = tg
 	live := filepath.Join(env.Home(), "tg-local-shared-live")
 	tgLocalLiveRoot(t, live)
-	runner.writeLiveUnit(t, live, "shared-a", unit, tgLocalUnitHCL)
-	runner.writeLiveUnit(t, live, "shared-b", unit, tgLocalUnitHCL)
+	runner.writeLiveUnit(t, live, "shared-a", unit)
+	runner.writeLiveUnit(t, live, "shared-b", unit)
 
 	id := tgLocalWorkspaceID(ctx, t, env, token, unit)
 
@@ -449,11 +471,26 @@ func tgLocalSharedName(ctx context.Context, t *testing.T, cli, tg e2e.Install, s
 
 	tgLocalRefusedSharedApply(ctx, t, runner, live)
 	tgLocalReleaseSharedLock(ctx, t, env, token, id)
-	// Both units apply now that the lock is released. They share one
-	// workspace, so they run one at a time: at parallelism 3 the second
-	// writer would lose the same lock race the refused run just proved.
-	runner.runAll(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "1",
-		"--", "apply", "-input=false", "-auto-approve", "-lock-timeout=0s")
+
+	// Both writes land in the one workspace chain, at the same parallelism 3
+	// with no lock timeout. The two units still share the one workspace
+	// lock, so a run lands one unit and can refuse the unit that loses the
+	// lock race. Each retry is the same run-all at parallelism 3 with no
+	// lock timeout: it retries the refused unit, and the run that lands the
+	// last write ends the loop.
+	for attempt := 1; attempt <= sharedNameAttempts; attempt++ {
+		res, err := runner.runAllResult(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",
+			"--", "apply", "-input=false", "-auto-approve", "-lock-timeout=0s")
+		if err != nil {
+			t.Fatalf("terragrunt run --all attempt %d: %v", attempt, err)
+		}
+
+		if got := tgLocalVersionTotal(ctx, t, env, token, unit); got >= 2 {
+			break
+		}
+
+		t.Logf("shared run attempt %d exits %d; retry the refused unit:\n%s", attempt, res.ExitCode, res.Stderr)
+	}
 
 	if got := tgLocalVersionTotal(ctx, t, env, token, unit); got != 2 {
 		t.Fatalf("shared workspace holds %d state versions, want 2 in one chain", got)
@@ -925,38 +962,6 @@ func (c tgLocalCLI) useToken(t *testing.T, token string) {
 	c.env.WriteFile(t, c.creds, creds)
 }
 
-// writeUnit writes one unit directory with a backend that names the
-// workspace.
-func (c tgLocalCLI) writeUnit(t *testing.T, dir, workspace string) {
-	t.Helper()
-
-	unitDir := filepath.Join(c.env.Home(), "tg-local-"+dir)
-	if err := os.MkdirAll(unitDir, 0o750); err != nil {
-		t.Fatalf("mkdir %s: %v", unitDir, err)
-	}
-	config := "terraform {\n  cloud {\n    hostname     = " + fmt.Sprintf("%q", c.env.Host()) + "\n" +
-		"    organization = " + fmt.Sprintf("%q", tgLocalNamespace) + "\n" +
-		"    workspaces {\n      name = " + fmt.Sprintf("%q", workspace) + "\n    }\n  }\n}\n\n" +
-		"output \"unit\" {\n  value = " + fmt.Sprintf("%q", dir) + "\n}\n"
-	c.env.WriteFile(t, filepath.Join(unitDir, "main.tf"), config)
-}
-
-// tofu runs one OpenTofu command in one unit directory, and fails the test
-// when the command fails.
-func (c tgLocalCLI) tofu(ctx context.Context, t *testing.T, dir string, args ...string) {
-	t.Helper()
-
-	res, err := c.env.RunAs(ctx, c.cli, filepath.Join(c.env.Home(), "tg-local-"+dir),
-		[]string{"TF_CLI_CONFIG_FILE=" + c.creds}, args...)
-	if err != nil {
-		t.Fatalf("tofu %s in %s: %v", strings.Join(args, " "), dir, err)
-	}
-
-	if res.ExitCode != 0 {
-		t.Fatalf("tofu %s in %s exits %d:\n%s\n%s", strings.Join(args, " "), dir, res.ExitCode, res.Stdout, res.Stderr)
-	}
-}
-
 // runAllResult runs `terragrunt run --all` with args in the live directory.
 // returns what it printed. A non-zero exit is reported in the Result, not as
 // an error.
@@ -1016,12 +1021,8 @@ func tgLocalLiveRoot(t *testing.T, live string) {
 // writeLiveUnit writes one unit directory under the live directory with a
 // backend that names the workspace and the per-unit Terragrunt configuration
 // of the fixture.
-func (c tgLocalCLI) writeLiveUnit(t *testing.T, live, dir, workspace, unitHCL string) {
+func (c tgLocalCLI) writeLiveUnit(t *testing.T, live, dir, workspace string) {
 	t.Helper()
-
-	if unitHCL == "" {
-		t.Fatalf("fixture terragrunt.hcl of %s is empty", dir)
-	}
 
 	unitDir := filepath.Join(live, dir)
 	if err := os.MkdirAll(unitDir, 0o750); err != nil {
@@ -1032,7 +1033,7 @@ func (c tgLocalCLI) writeLiveUnit(t *testing.T, live, dir, workspace, unitHCL st
 		"    workspaces {\n      name = " + fmt.Sprintf("%q", workspace) + "\n    }\n  }\n}\n\n" +
 		"output \"unit\" {\n  value = " + fmt.Sprintf("%q", dir) + "\n}\n"
 	c.env.WriteFile(t, filepath.Join(unitDir, "main.tf"), config)
-	c.env.WriteFile(t, filepath.Join(unitDir, "terragrunt.hcl"), unitHCL)
+	c.env.WriteFile(t, filepath.Join(unitDir, "terragrunt.hcl"), tgLocalUnitHCL)
 }
 
 // tgLocalApplyAll writes the three unit directories under one live directory,
@@ -1048,7 +1049,7 @@ func tgLocalApplyAll(ctx context.Context, t *testing.T, runner tgLocalCLI) strin
 	dirs := tgLocalLiveDirs()
 
 	for i, unit := range tgLocalUnits() {
-		runner.writeLiveUnit(t, live, dirs[i], unit, tgLocalUnitHCL)
+		runner.writeLiveUnit(t, live, dirs[i], unit)
 	}
 
 	runner.runAll(ctx, t, live, "run", "--all", "--non-interactive", "--parallelism", "3",

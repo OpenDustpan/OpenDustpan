@@ -151,7 +151,7 @@ func OpenTofu() Tool {
 // and it is not in the shipped binary.
 func Terragrunt() Tool {
 	return Tool{
-		parseLatest: func(body string) (string, error) { return strings.TrimSpace(body), nil },
+		parseLatest: gruntworkLatest,
 		archive: func(_, goos, arch string) string {
 			return fmt.Sprintf("terragrunt_%s_%s.tar.gz", goos, arch)
 		},
@@ -163,8 +163,11 @@ func Terragrunt() Tool {
 			"terragrunt_darwin_amd64.tar.gz": "29806d1708f5c54e54bc6adfcacfb710d4bb1f6f180efd751692e6fad5985640",
 			"terragrunt_darwin_arm64.tar.gz": "0aded323f844ce682a715feb26393b67eff1400dc1722203fa4dd4e23b3bb182",
 		},
-		Name:        ToolTerragrunt,
-		LatestURL:   "https://github.com/gruntwork-io/terragrunt/releases/latest",
+		Name: ToolTerragrunt,
+		// The GitHub releases HTML page of /latest is not a version: it is a
+		// document. The REST API answers JSON whose tag_name holds the release
+		// tag, which parseLatest reads.
+		LatestURL:   "https://api.github.com/repos/gruntwork-io/terragrunt/releases/latest",
 		ReleaseURL:  "https://github.com/gruntwork-io/terragrunt/releases/download/v%[1]s/%[2]s",
 		versionsEnv: "E2E_TERRAGRUNT_VERSIONS",
 		binary:      "terragrunt",
@@ -348,6 +351,26 @@ func newestStable(body string) (string, error) {
 	}
 
 	return bestID, nil
+}
+
+// gruntworkLatest reads the release tag of the newest Terragrunt release from
+// the GitHub REST API document that LatestURL answers. The document field is
+// "tag_name", which no Go field name matches, so the document reads as a map
+// and not as a struct. The tag carries a leading "v", which the caller
+// removes. A body that is not the document fails with ErrBadVersion.
+func gruntworkLatest(body string) (string, error) {
+	var doc map[string]any
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrBadVersion, err)
+	}
+
+	tag, ok := doc["tag_name"].(string)
+	if !ok || tag == "" {
+		return "", fmt.Errorf("%w: the release document holds no tag_name", ErrBadVersion)
+	}
+
+	return tag, nil
 }
 
 // semver parses a plain "x.y.z" release; pre-releases return nil.
