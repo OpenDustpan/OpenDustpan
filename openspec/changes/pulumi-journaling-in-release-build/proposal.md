@@ -4,12 +4,9 @@ version: 1
 
 Issue: #2041.
 
-Closes the release gate of work item 19 (#423) when it lands.
-
-Waits for: #456
-Waits for: #672
-Waits for: #419
-Waits for: #3207
+Records the release gate of work item 19 (#423) in the first-tag checklist.
+Journaling turns on in `main` now; the first tag that ships it waits for
+#456, #672, #419 and #3207.
 
 SECURITY: yes. The change makes the journal batch route, a parser of
 untrusted input, reachable in the release build. The pull request keeps a
@@ -98,6 +95,9 @@ Evidence for the claims above:
   coverage allowlist stop saying that the release build answers 0.
 - `make journal-guard`, `make lint-journal-build` and `make journal-test`
   go away. `make e2e-journal` stays and runs the verified CLI list.
+- The release gate moves from the build to the first-tag checklist. The
+  gate of the first tagged release in `docs/roadmap.md` gets one open item:
+  no tag ships journaling before #456, #672, #419 and #3207 are done.
 
 Out of scope:
 
@@ -108,7 +108,9 @@ Out of scope:
 - The output reads of #1642 (change `output-reads-during-journaled-pulumi`).
 - The upstream watch (work item 16, #420). Work item 19 does not name it.
 
-Depends on:
+Depends on: none for the switch on `main`. The first tag that ships
+journaling depends on these issues (the release checklist item of this
+change records them):
 
 - #456: the build holds no full copy of the base for kinds 7 and 10, and
   the memory benchmark covers a state migration (decisions 7.3 and 9.4).
@@ -201,7 +203,7 @@ too.
 | 16 Upstream watch (#420) | not done, not a precondition | work item 19 does not name it |
 | 17 Upgrade report (#421) | done | `internal/api/server/upgrade.go:27` |
 | 18 Operator reference and glossary (#422) | done, text changes here | `docs/reference/journaling.md`, `GLOSSARY.md:749-754` |
-| 19 Release gate (#423) | this change | the "Waits for" lines hold the switch until the items above are done |
+| 19 Release gate (#423) | this change | the first-tag checklist in `docs/roadmap.md` holds the tag until the open items above are done |
 
 Why the release build answers 0: the build tag split came with the journal
 route in #453 (commit 202271801, "The recording build answers journal
@@ -246,8 +248,17 @@ decision 6.1 (one key for each attempt) without a change link (#2187).
 - Work item 19: "A release answers a non-zero journal version only after
   the work finishes items 11 to 15 and 18 (decision 2.4)."
 
-This change follows decisions 1.1, 1.2, 1.5, 2.1 and 11.4, and it waits for the
-open items of decision 2.4 and work item 19. No conflict.
+This change follows decisions 1.1, 1.2, 1.5, 2.1 and 11.4. It meets
+decision 2.4 and work item 19 although it lands before their open items:
+both restrict a release ("No release answers a non-zero journal version";
+"A release answers a non-zero journal version only after"), and no tag
+exists (`git tag -l 'v*'` prints nothing; ADR 279: no release before
+milestone 7). A build of `main` is not a release. The change moves the gate
+from the build tag to the first-tag checklist in `docs/roadmap.md`, which
+names #456, #672, #419 and #3207 as open items of the first tag. So no tag
+can answer a non-zero journal version before the work meets decisions 2.2,
+2.3, 9 and 10.4. The PM decided this order on 2026-11-15 under the owner's
+delegation. No conflict.
 
 **ADR 151, Redaction, and an item key for each history item.** Owner-tagged:
 "The owner approved every decision of this ADR on 2026-10-17". Changed by:
@@ -281,11 +292,11 @@ Questions considered and answered:
 
 - Does the switch need an owner decision? No. ADR 43 decision 1.1 decides
   the default, and the owner confirmed it on 2026-11-15. Decision 2.4 and
-  work item 19 decide the order. The "Waits for" lines hold the switch.
-- Can the switch land on `main` before the preconditions, because decision
-  2.4 names a release and no tag exists? Not in this change. The change
-  follows work item 19 as written and waits. A later decision may change
-  the order.
+  work item 19 restrict a release, and the first-tag checklist holds them.
+- Can the switch land on `main` before the preconditions? Yes. Decision 2.4
+  names a release, and no tag exists. With journaling on in `main`, every
+  `make e2e` run and the nightly run exercise the journal path before the
+  first tag, which the open items need anyway.
 - Must ADR 151 sealing of journal batches land first? No. ADR 43 and
   ADR 151 do not put it in the release gate. Checkpoint blobs carry the
   same content and are not sealed on main either. Journal blobs live only

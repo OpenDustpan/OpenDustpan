@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" and each row of "Preconditions of ADR 43" in the proposal at its file and line on the current main. Confirm that #456, #672, #419 and #3207 are closed with their work merged. Record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" and each row of "Preconditions of ADR 43" in the proposal at its file and line on the current main. Record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -28,7 +28,8 @@
 
 - [ ] 4.1 `docs/reference/journaling.md`: replace "The release build does not offer journaling yet. It answers journal version 0 to every update, so the CLI saves checkpoints." with the default (on), the verified CLI range, and the cost of decision 5.2 (a newer CLI saves checkpoints). Change the "Setting" section so it applies to every build. Check: `make docs-lint` passes, and `rg -n 'release build|recording' docs/reference/journaling.md` prints nothing.
 - [ ] 4.2 `docs/guides/load.md`: remove the release build paragraph and the `-tags journalrecording` command. Check: `go run ./load -out /var/tmp/load-report.json` runs as written in the guide and reports `journal.supported` as `true`.
-- [ ] 4.3 `docs/reference/journal-limits.md` and the bounds table of `docs/reference/journaling.md`: the build time row gives the measurement of #672 in place of "The project has not yet checked whether the CLI waits past 20 minutes". Check: `rg -n 'not yet checked' docs/reference` prints nothing.
+- [ ] 4.3 Record the release gate in the first-tag checklist: in `docs/roadmap.md`, section "First tagged release: `v0.1.0`", add one open item: "Pulumi journaling is ready for a release ([ADR 43](adr/0043-pulumi-journaling-support.md), decision 2.4 and work item 19): the build of the checkpoint holds no full copy of the base and its memory bound is measured (#456), the build time bound is measured against the wait of the CLI at `complete` (#672), the nightly run covers journaling on and off (#419), and the recorded corpus covers each verified CLI release (#3207)." The item stays open until the four issues close. Check: `rg -n '#456.*#672.*#419.*#3207|#3207' docs/roadmap.md` shows the item in that section, and `make docs-lint` passes.
+- [ ] 4.4 Leave the "not yet checked" sentence of the build time row in `docs/reference/journal-limits.md` and `docs/reference/journaling.md` as it is; #672 changes it with its measurement. Check: the diff of this pull request does not touch that row.
 
 ## 5. Definition of done
 
@@ -36,4 +37,4 @@
 - [ ] 5.2 `make e2e` passes with the default matrix: v3.262.0 and v3.250.0 journal in the on run, v3.200.0 answers 0. Check: the CI job `e2e` is green on the pull request. Confirmed by: CI.
 - [ ] 5.3 Usability check: an operator follows `docs/reference/journaling.md` alone, turns journaling off with `DUSTPAN_DISABLE_PULUMI_JOURNALING=true`, restarts, and a `pulumi up` saves checkpoints. Check: `TestPulumiJournalingBothModes` covers the off run with that variable; the pull request body records the walk of the page. A person's step.
 - [ ] 5.4 `make check` passes with zero findings. Check: the CI jobs of `make check` are green. Confirmed by: CI (the agent runs the fast checks only).
-- [ ] 5.5 Close #423 and #2041 with the pull request. Check: the pull request body has "Closes #423" and "Closes #2041".
+- [ ] 5.5 Close #2041 with the pull request. Keep #423 open until the first-tag item of 4.3 is ticked. Check: the pull request body has "Closes #2041" and "Part of #423".

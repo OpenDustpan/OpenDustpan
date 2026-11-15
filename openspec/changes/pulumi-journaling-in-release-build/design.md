@@ -57,7 +57,11 @@ negotiated version of decision 2.1.
    computer that has workflow rights, and merges first. Each removed call
    still passes on main before this change, so main stays green between the
    two merges.
-9. **The load harness.** `load/harness.go` drops its build tag check, and
+9. **The release gate is a checklist item.** The build tag held decision
+   2.4 until now. After this change, the first-tag checklist in
+   `docs/roadmap.md` holds it: one open item names #456, #672, #419 and
+   #3207. The first tag waits for each item of that list.
+10. **The load harness.** `load/harness.go` drops its build tag check, and
    `docs/guides/load.md` drops the `-tags journalrecording` command.
 
 ## Structure
