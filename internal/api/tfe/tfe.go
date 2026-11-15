@@ -410,7 +410,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	catch := &notFoundWriter{
 		ResponseWriter: w,
 		notFound:       false,
-		registry:       strings.HasPrefix(r.URL.Path, registryPrefix) || strings.HasPrefix(r.URL.Path, modulesPrefix),
+		registry: strings.HasPrefix(r.URL.Path, registryPrefix) || strings.HasPrefix(r.URL.Path, modulesPrefix) ||
+			strings.HasPrefix(r.URL.Path, mirrorPrefix),
 	}
 
 	h.mux.ServeHTTP(catch, r)

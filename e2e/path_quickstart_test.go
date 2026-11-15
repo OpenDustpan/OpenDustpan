@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -36,6 +38,9 @@ const quickstartWorkspace = "web"
 
 // quickstartFileMode is the mode of the files that the steps write.
 const quickstartFileMode = 0o600
+
+// quickstartMaxAnswer is the most bytes that the test reads of an answer.
+const quickstartMaxAnswer = 1 << 20
 
 // TestQuickstartFirstStack runs the commands of docs/guides/quickstart.md in
 // their order on a server that holds no placement rule except the one of the
@@ -105,7 +110,11 @@ func runQuickstartOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2
 	// The harness made "acme" with a rule, so this namespace stands in for it.
 	// "opendustpan namespace create" makes a namespace through this route of the
 	// installation API.
-	quickstartCall(ctx, t, env, quickstartRequest{"/api/server/namespaces", `{"name":"` + quickstartNamespace + `"}`})
+	quickstartCall(ctx, t, env, quickstartRequest{
+		path:             "/api/server/namespaces",
+		body:             `{"name":"` + quickstartNamespace + `"}`,
+		setsCollectionID: false,
+	})
 
 	stackRef := quickstartNamespace + "/" + e2e.Project + "/dev"
 
@@ -125,8 +134,13 @@ func runQuickstartOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2
 
 	// The three curl commands of the guide. The test reads them from the guide,
 	// so it fails when the guide loses a step or changes a route or a body.
+	var collectionID string
+
 	for _, req := range quickstartGuideRequests(t, quickstartNamespace) {
-		quickstartCall(ctx, t, env, req)
+		answer := quickstartCall(ctx, t, env, req.withCollectionID(t, collectionID))
+		if req.setsCollectionID {
+			collectionID = quickstartCollectionID(t, answer)
+		}
 	}
 
 	env.Step(ctx, t, step("stack init after the rule", nil, "stack", "init", stackRef, "--no-select"))
@@ -135,8 +149,9 @@ func runQuickstartOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, store e2
 }
 
 // quickstartCall sends one installation API request with the admin token, as
-// the curl commands of the guide do, and fails unless it answers want.
-func quickstartCall(ctx context.Context, t *testing.T, env *e2e.Env, c quickstartRequest) {
+// the curl commands of the guide do, and fails unless it answers 201. It
+// returns the body of the answer.
+func quickstartCall(ctx context.Context, t *testing.T, env *e2e.Env, c quickstartRequest) string {
 	t.Helper()
 
 	status, answer, err := env.ServerAPIStatus(ctx, http.MethodPost, c.path, c.body)
@@ -147,19 +162,70 @@ func quickstartCall(ctx context.Context, t *testing.T, env *e2e.Env, c quickstar
 	if status != http.StatusCreated {
 		t.Fatalf("POST %s answers %d, want %d (%s)", c.path, status, http.StatusCreated, answer)
 	}
+
+	return answer
 }
+
+// quickstartSetCollectionID is the start of a curl command of the guide that
+// sets the collection ID from the answer.
+const quickstartSetCollectionID = "COLLECTION_ID=$("
+
+// quickstartCollectionIDVar is the shell variable of the guide that holds the
+// ID of the collection. The guide sets it from the answer of the collection
+// request and uses it in the body of each placement rule request.
+const quickstartCollectionIDVar = "$COLLECTION_ID"
 
 // quickstartRequest is one POST request of the guide.
 type quickstartRequest struct {
 	path string
 	body string
+	// setsCollectionID is true when the guide reads the collection ID from
+	// the answer of this request.
+	setsCollectionID bool
+}
+
+// withCollectionID returns the request with the collection ID in place of the
+// shell variable of the guide. It fails when the body uses the variable
+// before a request of the guide has set it.
+func (r quickstartRequest) withCollectionID(t *testing.T, id string) quickstartRequest {
+	t.Helper()
+
+	if !strings.Contains(r.body, quickstartCollectionIDVar) {
+		return r
+	}
+
+	if id == "" {
+		t.Fatalf("the body %s uses %s before the guide sets it", r.body, quickstartCollectionIDVar)
+	}
+
+	r.body = strings.ReplaceAll(r.body, quickstartCollectionIDVar, id)
+
+	return r
+}
+
+// quickstartCollectionID reads the collection ID from the answer of the
+// collection request.
+func quickstartCollectionID(t *testing.T, answer string) string {
+	t.Helper()
+
+	var created struct {
+		ID string `json:"id"`
+	}
+
+	if err := json.Unmarshal([]byte(answer), &created); err != nil || created.ID == "" {
+		t.Fatalf("the answer of the collection request holds no collection ID: %v (%s)", err, answer)
+	}
+
+	return created.ID
 }
 
 var (
 	// quickstartCurlURL finds the route in a curl command of the guide.
 	quickstartCurlURL = regexp.MustCompile(`https://localhost:8080(/api/dustpan/v1/namespaces/\S+)`)
-	// quickstartCurlBody finds the JSON body in a curl command of the guide.
-	quickstartCurlBody = regexp.MustCompile(`-d '([^']*)'`)
+	// quickstartCurlBody finds the JSON body in a curl command of the guide:
+	// in single quotes, or in double quotes with escaped double quotes when
+	// the body uses a shell variable.
+	quickstartCurlBody = regexp.MustCompile(`-d (?:'([^']*)'|"((?:[^"\\]|\\.)*)")`)
 )
 
 // quickstartGuideRequests reads the curl commands of the guide that call the
@@ -194,7 +260,9 @@ func quickstartGuideRequests(t *testing.T, namespace string) []quickstartRequest
 
 	for line := range strings.Lines(text) {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "curl ") {
+
+		setsID := strings.HasPrefix(line, quickstartSetCollectionID+"curl ")
+		if !setsID && !strings.HasPrefix(line, "curl ") {
 			continue
 		}
 
@@ -207,7 +275,11 @@ func quickstartGuideRequests(t *testing.T, namespace string) []quickstartRequest
 
 		from := "/namespaces/" + quickstartGuideNamespace + "/"
 		to := "/namespaces/" + namespace + "/"
-		req := quickstartRequest{path: strings.Replace(route[1], from, to, 1), body: body[1]}
+		req := quickstartRequest{
+			path:             strings.Replace(route[1], from, to, 1),
+			body:             quickstartBody(body),
+			setsCollectionID: setsID,
+		}
 
 		if !slices.Contains(requests, req) {
 			requests = append(requests, req)
@@ -219,21 +291,37 @@ func quickstartGuideRequests(t *testing.T, namespace string) []quickstartRequest
 	return requests
 }
 
+// quickstartBody returns the body of a match of quickstartCurlBody. A body in
+// double quotes loses the backslash before each escaped double quote, as the
+// shell removes it.
+func quickstartBody(match []string) string {
+	if match[1] != "" {
+		return match[1]
+	}
+
+	return strings.ReplaceAll(match[2], `\"`, `"`)
+}
+
 // wantQuickstartGuideRequests fails unless requests hold the requests of the
-// guide in order: the collection, the Pulumi placement rule, the OpenTofu
-// placement rule.
+// guide in order: the collection, which sets the collection ID, then the
+// Pulumi placement rule and the OpenTofu placement rule, which use it.
 func wantQuickstartGuideRequests(t *testing.T, requests []quickstartRequest) {
 	t.Helper()
 
+	wantRule := `"collectionID":"` + quickstartCollectionIDVar + `"`
+
 	if len(requests) != 3 ||
 		!strings.HasSuffix(requests[0].path, "/collections") ||
+		!requests[0].setsCollectionID ||
 		!strings.HasSuffix(requests[1].path, "/placement-rules") ||
 		!strings.HasSuffix(requests[2].path, "/placement-rules") ||
 		!strings.Contains(requests[1].body, `"tool":"pulumi"`) ||
-		!strings.Contains(requests[2].body, `"tool":"opentofu"`) {
-		t.Fatalf("the guide %s must hold a curl command for the collection, then one for the "+
-			"Pulumi placement rule, then one for the OpenTofu placement rule, got %v",
-			quickstartGuide, requests)
+		!strings.Contains(requests[2].body, `"tool":"opentofu"`) ||
+		!strings.Contains(requests[1].body, wantRule) ||
+		!strings.Contains(requests[2].body, wantRule) {
+		t.Fatalf("the guide %s must hold a curl command for the collection that sets %s, then one for the "+
+			"Pulumi placement rule, then one for the OpenTofu placement rule, both with %s, got %v",
+			quickstartGuide, quickstartCollectionIDVar, wantRule, requests)
 	}
 }
 
@@ -321,30 +409,56 @@ func quickstartPlacement(ctx context.Context, t *testing.T, host, token, cert st
 	}}
 	t.Cleanup(client.CloseIdleConnections)
 
-	for _, call := range quickstartGuideRequests(t, composeNamespace) {
-		target := "https://" + host + call.path
+	var collectionID string
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(call.body))
-		if err != nil {
-			t.Fatalf("build the request for %s: %v", call.path, err)
-		}
+	for _, guideCall := range quickstartGuideRequests(t, composeNamespace) {
+		call := guideCall.withCollectionID(t, collectionID)
+		call.path = "https://" + host + call.path
 
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatalf("POST %s: %v", call.path, err)
-		}
-
-		status := resp.StatusCode
-
-		if err := resp.Body.Close(); err != nil {
-			t.Fatalf("close the answer of %s: %v", call.path, err)
-		}
-
-		if status != http.StatusCreated {
-			t.Fatalf("POST %s answers %d, want %d", call.path, status, http.StatusCreated)
+		answer := quickstartPost(ctx, t, client, token, call)
+		if call.setsCollectionID {
+			collectionID = quickstartCollectionID(t, answer)
 		}
 	}
+}
+
+// quickstartPost sends one POST request of the guide with token. The path of
+// call is the full URL. It fails unless the server answers 201, and returns
+// the body of the answer.
+func quickstartPost(
+	ctx context.Context, t *testing.T, client *http.Client, token string, call quickstartRequest,
+) string {
+	t.Helper()
+
+	target := call.path
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(call.body))
+	if err != nil {
+		t.Fatalf("build the request for %s: %v", call.path, err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", call.path, err)
+	}
+
+	status := resp.StatusCode
+	answer, readErr := io.ReadAll(io.LimitReader(resp.Body, quickstartMaxAnswer))
+
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close the answer of %s: %v", call.path, err)
+	}
+
+	if readErr != nil {
+		t.Fatalf("read the answer of %s: %v", call.path, readErr)
+	}
+
+	if status != http.StatusCreated {
+		t.Fatalf("POST %s answers %d, want %d (%s)", call.path, status, http.StatusCreated, answer)
+	}
+
+	return string(answer)
 }
