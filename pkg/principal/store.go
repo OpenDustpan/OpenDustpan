@@ -81,7 +81,7 @@ type RecordStore interface {
 	// write runs in maintenance mode, as a revocation does. It returns
 	// ErrNotFound when no such principal exists, ErrDisabled when it is
 	// disabled, access.ErrLastSiteAdministrator when it disables the last
-	// site administrator (see Store), and ErrLastBreakGlass when it disables
+	// site administrator (see Store), and ErrNoWorkingBreakGlass when it disables
 	// the last enabled break-glass account. The store checks this in the
 	// transaction of the write, so two concurrent disables of the last two
 	// accounts disable one.
@@ -192,7 +192,21 @@ type MemberStore interface {
 	// each once. It returns ErrNotFound when the principal does not exist or
 	// was deleted.
 	ListActiveGroupNamesOf(ctx context.Context, principalID string) ([]string, error)
+	// IsActiveMemberOfAny reports whether the principal principalID has an
+	// active membership in at least one of the groups with these IDs. A
+	// membership counts when it is not ended and its state is
+	// MembershipStateActive: a suspended membership gives no rights, so it
+	// does not count. A group that was deleted does not count either. A
+	// principal or a group that does not exist, and an empty list, give false
+	// and no error. It returns ErrInvalid for more than MaxMembershipGroupIDs
+	// group IDs. It does not check whether the principal is disabled: the
+	// caller does.
+	IsActiveMemberOfAny(ctx context.Context, principalID string, groupIDs []string) (bool, error)
 }
+
+// MaxMembershipGroupIDs is the most group IDs that IsActiveMemberOfAny takes.
+// The groups of an approval gate are far fewer.
+const MaxMembershipGroupIDs = 100
 
 // GroupChange is the change that a caller makes to a group.
 type GroupChange int

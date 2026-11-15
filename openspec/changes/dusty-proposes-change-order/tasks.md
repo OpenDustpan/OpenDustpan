@@ -5,6 +5,7 @@
 ## 1. Failing tests
 
 - [ ] 1.1 Write failing tests of the scenarios: draft then confirm-draft, scope denials, once per key, confirm-draft window. Write them in the NEW file internal/agent/propose_test.go. Check: TestDustyDraftThenConfirmDraft and TestDustyConfirmDraftWindow fail on main
+- [ ] 1.2 Add the line of each NEW error code (the code and its arguments, as `TestNewCodesHaveTheirLine` prints it) in its place in the name order: `delegation.expired` in the NEW file `internal/errcode/testdata/catalog/delegation.txt`; `changeorder.denied` in the NEW file `internal/errcode/testdata/catalog/changeorder.txt`. No route: the test reads the catalog only. Check: `go test ./internal/errcode/ -run TestNewCodesHaveTheirLine -count=1` passes.
 
 ## 2. Side effects (computed from main)
 

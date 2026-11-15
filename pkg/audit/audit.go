@@ -132,6 +132,7 @@ const (
 	PrincipalKindPerson   = "person"
 	PrincipalKindService  = "service"
 	PrincipalKindWorkload = "workload"
+	PrincipalKindAgent    = "agent"
 )
 
 // MaxJobIDLen caps the job ID of an entry, in bytes.
@@ -217,11 +218,11 @@ func ValidateReason(reason string) error {
 // free text that a person gave for the action, for example for a force-unlock,
 // at most MaxReasonLen Unicode code points with no control characters; it
 // stays empty when the action had none. PrincipalKind is the kind of the
-// principal record that acted: "person", "service" or "workload", and empty
-// when the server cannot name the kind. JobID is the job whose token acted,
-// and empty for every other credential. Origin is the agent block of an
-// entry that an agent run made; nil means an ordinary entry with no agent
-// block.
+// principal record that acted: "person", "service", "workload" or "agent",
+// and empty when the server cannot name the kind. JobID is the job whose
+// token acted, and empty for every other credential. Origin is the agent
+// block of an entry that an agent run made; nil means an ordinary entry
+// with no agent block.
 type Entry struct {
 	At            time.Time
 	Namespace     namespace.Name
@@ -317,7 +318,7 @@ func (e Entry) validateWhat() error {
 // validatePrincipal checks the principal kind and the job ID of the entry.
 func (e Entry) validatePrincipal() error {
 	switch e.PrincipalKind {
-	case "", PrincipalKindPerson, PrincipalKindService, PrincipalKindWorkload:
+	case "", PrincipalKindPerson, PrincipalKindService, PrincipalKindWorkload, PrincipalKindAgent:
 	default:
 		return fmt.Errorf("%w: unknown principal kind %q", ErrInvalidEntry, e.PrincipalKind)
 	}
