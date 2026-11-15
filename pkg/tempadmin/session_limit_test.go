@@ -158,7 +158,7 @@ func TestHostResetSessionLimit(t *testing.T) {
 	}
 
 	err = tempadmin.ResetSessionLimit(t.Context(), st.SettingStore(), tempadmin.ResetInput{
-		Mode: "bootstrap", Reason: "the stored limit is wrong", Entry: resetEntry(), Now: nil,
+		Mode: "bootstrap", Reason: "the stored limit is wrong", Audit: st, Entry: resetEntry(), Now: nil,
 	})
 	if err != nil {
 		t.Fatalf("reset: %v", err)

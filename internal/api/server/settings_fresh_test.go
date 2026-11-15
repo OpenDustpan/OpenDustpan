@@ -18,6 +18,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/setting/settingtest"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 // keyedSettingsEnv is a handler over a real store with the settings routes, a
@@ -32,6 +33,13 @@ type keyedSettingsEnv struct {
 // tester. A console session of tester gives the fresh step when its sign-in is
 // young.
 func newKeyedSettingsEnv(t *testing.T) keyedSettingsEnv {
+	t.Helper()
+
+	return newKeyedSettingsEnvWith(t, settingtest.Registry())
+}
+
+// newKeyedSettingsEnvWith is newKeyedSettingsEnv over the registry reg.
+func newKeyedSettingsEnvWith(t *testing.T, reg *setting.Registry) keyedSettingsEnv {
 	t.Helper()
 
 	st := openRouteTestStore(t)
@@ -50,7 +58,7 @@ func newKeyedSettingsEnv(t *testing.T) keyedSettingsEnv {
 
 	cfg := settingsConfig(
 		t, st, namespaces, allowAll{},
-		setting.NewService(st.SettingStore(), settingtest.Registry(), nil, st, nil),
+		setting.NewService(st.SettingStore(), reg, nil, st, nil),
 	)
 
 	signIn, sessions := signInOf(t, st)
@@ -267,4 +275,45 @@ func settingsIdempotency(t *testing.T, st *sqlite.Store) *idempotent.Middleware 
 	}
 
 	return mw
+}
+
+// TestSettingsPatchSessionLimitFreshStep checks that a longer session limit of
+// a temporary administrator needs the fresh step: an access token that moves
+// the limit to 24 hours gets 403 and changes nothing, a shorter limit passes,
+// and a console session with a young sign-in passes.
+func TestSettingsPatchSessionLimitFreshStep(t *testing.T) {
+	t.Parallel()
+
+	reg, err := setting.NewRegistry(append(settingtest.Declarations(), tempadmin.SessionLimitSettingDeclarations()...))
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	e := newKeyedSettingsEnvWith(t, reg)
+
+	// The stored limit is the default of 1 hour. A shorter limit is stronger.
+	shorter := e.patch(t, tokenPatch(settingsURL, `"0"`, "key-limit-shorter", `{"tempadmin.session-limit":"30m"}`))
+	wantSettingsStatus(t, shorter, http.StatusOK)
+
+	longer := `{"tempadmin.session-limit":"24h"}`
+
+	refused := map[string]keyedPatch{
+		"an access token":               tokenPatch(settingsURL, `"1"`, "key-limit-token", longer),
+		"a session with an old sign-in": sessionPatch(settingsURL, `"1"`, longer, session.DefaultTokenFreshness+time.Minute),
+	}
+
+	for name, p := range refused {
+		r := e.patch(t, p)
+		wantSettingsStatus(t, r, http.StatusForbidden)
+
+		if !strings.Contains(r.body, settingsFreshCode) {
+			t.Fatalf("%s: body = %s, want the code mfa.fresh-step-required", name, r.body)
+		}
+	}
+
+	if got := e.read(t, settingsURL); got.header.Get("ETag") != `"1"` {
+		t.Fatalf("a refused change moved the settings: ETag %q, body %s", got.header.Get("ETag"), got.body)
+	}
+
+	wantSettingsStatus(t, e.patch(t, sessionPatch(settingsURL, `"1"`, longer, 0)), http.StatusOK)
 }

@@ -227,7 +227,7 @@ func TestHostIssuerRecover(t *testing.T) {
 	ctx := t.Context()
 
 	got, err := f.issuer.Recover(ctx, hostAuditEntry(), accesstoken.HostInput{
-		Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator", SessionLimit: 0,
+		Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator", SessionLimit: tempadmin.Lifetime,
 	})
 	if err != nil {
 		t.Fatalf("recover: %v", err)
@@ -247,7 +247,7 @@ func TestHostIssuerRecover(t *testing.T) {
 	}
 
 	_, err = f.issuer.Recover(ctx, hostAuditEntry(), accesstoken.HostInput{
-		Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator", SessionLimit: 0,
+		Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator", SessionLimit: tempadmin.Lifetime,
 	})
 	if !errors.Is(err, principal.ErrAlreadyExists) {
 		t.Fatalf("second recovery of carol: err = %v, want principal.ErrAlreadyExists", err)
@@ -256,3 +256,66 @@ func TestHostIssuerRecover(t *testing.T) {
 
 // hostReason is the reason of the recoveries of the tests.
 const hostReason = "every administrator lost access"
+
+// TestHostIssuerSessionLimit proves the limit of a recovery at the issuer,
+// with no help from the host command: a limit that is not positive makes no
+// record, a limit above the longest record lifetime is cut to it, and a
+// shorter limit sets the end of the record.
+func TestHostIssuerSessionLimit(t *testing.T) {
+	t.Parallel()
+
+	refused := []struct {
+		name  string
+		limit time.Duration
+	}{
+		{"no limit", 0},
+		{"a negative limit", -time.Hour},
+	}
+
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newHostFixture(t)
+
+			_, err := f.issuer.Recover(t.Context(), hostAuditEntry(), accesstoken.HostInput{
+				Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator", SessionLimit: tc.limit,
+			})
+			if !errors.Is(err, accesstoken.ErrInvalid) {
+				t.Fatalf("recover with %s: err = %v, want accesstoken.ErrInvalid", tc.name, err)
+			}
+
+			if _, readErr := f.store.GetPrincipalBySubject(t.Context(), "carol@example.com"); !errors.Is(readErr, principal.ErrNotFound) {
+				t.Fatalf("after the refusal, read carol: err = %v, want principal.ErrNotFound", readErr)
+			}
+		})
+	}
+
+	ends := []struct {
+		name  string
+		limit time.Duration
+		want  time.Duration
+	}{
+		{"a limit above the longest lifetime", 1000 * tempadmin.Lifetime, tempadmin.Lifetime},
+		{"a shorter limit", 30 * time.Minute, 30 * time.Minute},
+	}
+
+	for _, tc := range ends {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newHostFixture(t)
+
+			got, err := f.issuer.Recover(t.Context(), hostAuditEntry(), accesstoken.HostInput{
+				Subject: "carol@example.com", Reason: hostReason, CreatedBy: "operator", SessionLimit: tc.limit,
+			})
+			if err != nil {
+				t.Fatalf("recover: %v", err)
+			}
+
+			if want := f.clock.Now().Add(tc.want); !got.Record.ExpiresAt.Equal(want) || !got.Token.ExpiresAt.Equal(want) {
+				t.Fatalf("record ends at %s, token at %s, want %s", got.Record.ExpiresAt, got.Token.ExpiresAt, want)
+			}
+		})
+	}
+}

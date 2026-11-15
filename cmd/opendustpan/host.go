@@ -328,7 +328,7 @@ func hostResetSessionLimit(ctx context.Context, r hostReset, stdout, stderr io.W
 	defer st.close()
 
 	err = tempadmin.ResetSessionLimit(ctx, st.builtin().SettingStore(), tempadmin.ResetInput{
-		Mode: strings.TrimSpace(f.mode), Reason: reason, Entry: hostEntry(""), Now: nil,
+		Mode: strings.TrimSpace(f.mode), Reason: reason, Audit: st, Entry: hostEntry(""), Now: nil,
 	})
 	if err != nil {
 		return fmt.Errorf("host create-temp-admin: %w", err)

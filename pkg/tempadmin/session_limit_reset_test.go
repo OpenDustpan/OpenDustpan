@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/setting"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
@@ -20,6 +21,11 @@ func TestHostResetSessionLimitHostile(t *testing.T) {
 		{"a blank reason", "bootstrap", "   "},
 		{"a reason with a control character", "bootstrap", "bad\x00reason"},
 		{"recovery mode none", tempadmin.RecoveryModeNone, "the stored limit is wrong"},
+		{"an empty recovery mode", "", "the stored limit is wrong"},
+		{"a recovery mode with a space", " none", "the stored limit is wrong"},
+		{"a recovery mode in capitals", "NONE", "the stored limit is wrong"},
+		{"an unknown recovery mode", "anything", "the stored limit is wrong"},
+		{"a recovery mode in capitals that names a real one", "BOOTSTRAP", "the stored limit is wrong"},
 	}
 
 	for _, tc := range tests {
@@ -53,7 +59,7 @@ func checkResetRefused(t *testing.T, mode, reason string) {
 	}
 
 	err = tempadmin.ResetSessionLimit(t.Context(), st.SettingStore(), tempadmin.ResetInput{
-		Mode: mode, Reason: reason, Entry: resetEntry(), Now: nil,
+		Mode: mode, Reason: reason, Audit: st, Entry: resetEntry(), Now: nil,
 	})
 	if !errors.Is(err, tempadmin.ErrResetRefused) {
 		t.Fatalf("reset = %v, want ErrResetRefused", err)
@@ -66,5 +72,44 @@ func checkResetRefused(t *testing.T, mode, reason string) {
 
 	if stored.Values[tempadmin.SettingSessionLimit] != "2h" {
 		t.Fatalf("the stored limit = %q, want 2h", stored.Values[tempadmin.SettingSessionLimit])
+	}
+
+	// The refusal writes one failure entry. A hostile reason is not in it.
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	failures := 0
+
+	for i := range listing.Entries {
+		e := listing.Entries[i]
+		if e.Outcome != audit.OutcomeFailure || e.Action != tempadmin.Action {
+			continue
+		}
+
+		failures++
+
+		if tempadmin.ValidateReason(e.Reason) != nil && e.Reason != "" {
+			t.Fatalf("the failure entry holds the reason %q that ValidateReason refuses", e.Reason)
+		}
+	}
+
+	if failures != 1 {
+		t.Fatalf("failure entries after the refused reset = %d, want 1 in %+v", failures, listing.Entries)
+	}
+}
+
+func TestResetSessionLimitNeedsAnAuditStore(t *testing.T) {
+	t.Parallel()
+
+	st := openSettingsStore(t)
+
+	err := tempadmin.ResetSessionLimit(t.Context(), st.SettingStore(), tempadmin.ResetInput{
+		Mode: tempadmin.RecoveryModeBootstrap, Reason: "the stored limit is wrong", Audit: nil,
+		Entry: resetEntry(), Now: nil,
+	})
+	if !errors.Is(err, tempadmin.ErrMissingDependency) {
+		t.Fatalf("reset with no audit store = %v, want ErrMissingDependency", err)
 	}
 }
