@@ -328,12 +328,12 @@ func TestPrincipalSubjects(t *testing.T) {
 	}
 }
 
-// TestPrincipalSubjectsRefuseKindsTheGatesDoNotKnow proves that the reader of
+// TestSubjectRefusesAgentKind proves that the reader of
 // the kind of a principal knows the kind agent and refuses it, and refuses a
 // kind that the gates do not know, so that neither reaches a gate as a person.
 // The empty kind of the bootstrap token stays a person; the table of
 // TestPrincipalSubjects covers it.
-func TestPrincipalSubjectsRefuseKindsTheGatesDoNotKnow(t *testing.T) {
+func TestSubjectRefusesAgentKind(t *testing.T) {
 	t.Parallel()
 
 	for _, kind := range []identity.Kind{identity.KindAgent, "robot"} {
