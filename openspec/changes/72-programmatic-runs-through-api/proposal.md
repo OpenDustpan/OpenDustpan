@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -38,11 +38,12 @@ Out of scope:
 Depends on:
 
 - runners (RFC 6)
-- run model (milestone 5)
 - 107-run-limits-run-queue
 - 108-run-options-re-runs
-- `107-run-limits-run-queue` (order of the milestone review)
-- `108-run-options-re-runs` (order of the milestone review)
+
+Builds on (not a change):
+
+- run model (milestone 5)
 
 ## Usability
 

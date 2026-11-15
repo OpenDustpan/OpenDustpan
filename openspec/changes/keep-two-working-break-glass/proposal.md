@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 6
 ---
 
 Issue: #623, #627, #633.
@@ -63,8 +63,6 @@ Depends on:
 
 - add-setting-lets-server-restore
 - fresh-authentication-window-0-turns
-- `add-setting-lets-server-restore` (order of the milestone review)
-- `fresh-authentication-window-0-turns` (order of the milestone review)
 
 ## Usability
 

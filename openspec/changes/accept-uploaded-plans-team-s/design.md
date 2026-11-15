@@ -5,7 +5,9 @@ The server never sees the CI run. The design stores the uploaded bytes as a stor
 ## Decisions
 
 1. **Upload makes a marked change order.** The upload makes one change order with one unit plan, sealed with one item key. Approvals bind to the plan ID, both hashes and the state version.
-2. **Apply checks both hashes at the write.** The write compares both hashes in the write transaction and refuses a mismatch or a missing hash with the change order ID.
+2. **Apply presents the hash at its apply claim.** ADR 378 decision 3: "The apply presents the hash through its apply claim (owner, 2026-11-14)." The apply presents the hash when it opens its apply claim through the local wrapper, with the launcher token of ADR 369 decision 1. The hash is not in the tool request. The server refuses to open the claim when the hash is not the hash of the approved plan, and names the change order.
+3. **State version binds the plan.** ADR 378 decision 1: "An uploaded plan binds to both part hashes and to the state version at upload (owner, 2026-11-14)." ADR 378 decision 2: "A state write after the upload makes the plan stale (owner, 2026-11-14)." An apply of a stale plan fails with 409. The error tells the person to upload the current plan.
+4. **No self-approval, no destroy plan.** ADR 378 decision 4: "No self-approval and no destroy plan for an upload (owner, 2026-11-14)."
 
 ## Structure
 
@@ -22,7 +24,7 @@ Unexported type uploadedPlan; only its constructor checkUploadedPlan makes a val
 | --- | --- | --- |
 | API boundary | The route checks unit:run-plan and the size limit. | Upload with no grant and with an oversize part; both fail. |
 | service | The service checks SHA-256 of each part. | Upload with a wrong claimed hash; refused. |
-| store write | The write compares both hashes in the transaction. | Write with an old hash and with none; both fail. |
+| apply claim | The claim open compares the presented hash with the approved plan hash. | Open the claim with an old hash and with none; both fail. |
 
 ## Diagrams
 
@@ -45,7 +47,7 @@ planning --> in-review: upload stored
 
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
-| integrity | 100 | percent of mismatched hashes refused | state write and update start |
+| integrity | 100 | percent of mismatched hashes refused | apply claim open |
 
 ## Threat model
 
@@ -82,7 +84,8 @@ C --> D
 
 - Invariant: One unit plan holds two parts.
 - Invariant: Approvals bind to both hashes.
-- `upload`: pre: caller holds unit:run-plan. Post: stored plan holds both hashes.
+- `upload`: pre: caller holds unit:run-plan. Post: stored plan holds both hashes and the state version at upload.
+- Invariant: A state write after the upload makes the plan stale.
 
 ## Failure modes
 

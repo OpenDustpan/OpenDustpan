@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:141` (Sign-in methods).
@@ -53,7 +53,6 @@ Out of scope:
 Depends on:
 
 - add-one-generic-settings-api
-- `add-one-generic-settings-api` (order of the milestone review)
 
 ## Usability
 

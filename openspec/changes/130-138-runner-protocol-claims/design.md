@@ -21,6 +21,7 @@ Unexported type `claimLease` with constructor `newClaimLease`; no public fields 
 | --- | --- | --- |
 | authorize at point of use | Handler checks runner key, pool membership, purpose, and retirement before `ClaimWork`. | Poll with a retired runner key gets `runner.retired` and no work. |
 | fail closed | Store checks the fence in the same transaction for claim, heartbeat, upload, complete, and fail. | Heartbeat with a moved fence gets a fence error and keeps the old holder. |
+| claim lease constructor | `newClaimLease` rejects an empty holder, a stale fence and a non-positive expiry. | `TestNewClaimLeaseRejectsHostileInput` calls `newClaimLease` with each bad input. |
 
 ## Diagrams
 

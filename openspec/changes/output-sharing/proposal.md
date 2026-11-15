@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 9
 ---
 
 Roadmap: `docs/roadmap.md:315` (Output sharing).
@@ -32,9 +32,16 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Enforce producer sharing-rule plus starter-grant checks on each cross-tool outputs read
-- Serve Pulumi reads of OpenTofu outputs and OpenTofu reads of Pulumi outputs through the covered output routes
-- Deny with 403 and audit when no rule names the consumer or the starter lacks unit:read-secrets for secret outputs
+Main already has these parts:
+
+- The Checker and the Reader in `internal/outputsharesvc/checker.go:52` (type Checker) and `internal/outputsharesvc/reader.go`, wired in `pkg/dustpan/outputsharing.go:59` and `:82`.
+- The tests TestCheckerDecisions, TestCheckerAuditsADenialInTheProducerNamespace, TestReaderRefusals and TestReaderStripsASecretValueFromASource.
+- The e2e tests TestOutputReadPaths and TestOutputSharingRules in `e2e/output_sharing_test.go`.
+
+This change adds these parts:
+
+- The Checker reads the sharing rules that the server stores (the rules store comes from the depended change).
+- The docs update in `docs/guides/output-sharing.md`. The guide on main says that the server does not keep sharing rules yet.
 
 Out of scope:
 
@@ -45,8 +52,6 @@ Out of scope:
 Depends on:
 
 - add-output-sharing-setting-new
-- `add-output-sharing-setting-new` (order of the milestone review)
-- `job-service-unit-settings-pool` (order of the milestone review)
 
 ## Usability
 

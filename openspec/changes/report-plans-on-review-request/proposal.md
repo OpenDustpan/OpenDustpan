@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 7
 ---
 
 Issue: #890, #891, #894.
@@ -52,8 +52,6 @@ Depends on:
 - start-plan-on-push-review
 - git-host-webhook-intake-post
 - add-job-service-routes-start-1
-- `start-plan-on-push-review` (order of the milestone review)
-- `git-host-webhook-intake-post` (order of the milestone review)
 
 ## Usability
 

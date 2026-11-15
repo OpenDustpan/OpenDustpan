@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -26,6 +26,10 @@ Out of scope:
 - Runners, jobs, profiles and inventory queries
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - OpenTofu support (milestone 2)
 

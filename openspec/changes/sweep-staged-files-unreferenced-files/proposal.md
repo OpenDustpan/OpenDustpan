@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 6
 ---
 
 Issue: #1290.
@@ -52,11 +52,8 @@ Out of scope:
 
 Depends on:
 
-- artifact-registry
 - h1-hash-provider-archive-registry
 - backups-do-not-copy-files
-- `h1-hash-provider-archive-registry` (order of the milestone review)
-- `backups-do-not-copy-files` (order of the milestone review)
 
 ## Usability
 
@@ -69,12 +66,12 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The registry package exists and holds the registry service. (`pkg/registry/`, package on main with tests `leak_test.go` and `registry_test.go`)
-- The registry upload route exists. (`POST /api/dustpan/v1/namespaces/{}/registry/uploads`, declared in `internal/api/apidesc/openapi.json`)
-- The registry error code registry.not-staged exists. (`internal/errcode/catalog_registry.go:23`)
-- A sweep of unreferenced blobs exists for stack updates and is a model for the test. (`pkg/stack/updates_test.go:1628 (func TestSweepDeletesUnreferencedBlobs)`)
-- Components start background work by component. (`pkg/dustpan/components_internal_test.go:71 (func TestStartBackgroundByComponent)`)
-- An installation sweep route exists for deleted units. (`ANY /api/server/deleted-units/sweep`, declared in `internal/api/apidesc/openapi.json`)
+- The registry package exists with its tests (`pkg/registry/registry_test.go:54 (TestAddressValidate)`)
+- The registry upload route POST /api/dustpan/v1/namespaces/{namespace}/registry/uploads exists (`internal/api/registry/routes.go:60 (buildRoutes)`)
+- The registry error code registry.not-staged exists (`internal/errcode/catalog_registry.go:23 (RegistryNotStaged)`)
+- A sweep of unreferenced blobs exists for stack updates and is a model for the test (`pkg/stack/updates_test.go:1628 (TestSweepDeletesUnreferencedBlobs)`)
+- Components start background work by component (`pkg/dustpan/components_internal_test.go:71 (TestStartBackgroundByComponent)`)
+- An installation sweep route POST /api/server/deleted-units/sweep exists for deleted units (`internal/api/server/deleted.go:30 (deletedSweepPath)`)
 
 ## Owner decisions that apply
 
@@ -117,7 +114,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 ## Open questions
 
-Not spec-ready: a code check fails: main_facts[0]: "where" is not file:line (func Name); a code check fails: main_facts[1]: "where" is not file:line (func Name); a code check fails: main_facts[5]: "where" is not file:line (func Name).
+none
 
 Questions considered and answered:
 

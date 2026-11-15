@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 6
 ---
 
 Issue: #1212.
@@ -52,7 +52,6 @@ Depends on:
 
 - run-triggers
 - housekeeping-principals
-- `run-triggers` (order of the milestone review)
 
 ## Usability
 

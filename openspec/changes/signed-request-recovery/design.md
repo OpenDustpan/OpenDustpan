@@ -173,10 +173,10 @@ at the expiry, and a review after use.
    with the reason `person`, in the transaction, which rolls back and creates
    nothing. The server log line holds the same reason code and no request
    text. The refusal audit entries go through `internal/denylimit`. The key
-   names the source group in `Key.Principal`, as `recovery-source:` followed
-   by the IPv4 address or the IPv6 /64 group. `Key.Action` is
-   `recovery:use-signed-request`, `Key.Kind` is the refusal reason, and
-   `Key.Scope` is empty. The per-principal bound (`MaxKeysPerPrincipal`)
+   names the source group in `denylimit.Key` field `Principal`, as `recovery-source:` followed
+   by the IPv4 address or the IPv6 /64 group. the field `Action` is
+   `recovery:use-signed-request`, the field `Kind` is the refusal reason, and
+   the field `Scope` is empty. The per-principal bound (the field MaxKeysPerPrincipal of `denylimit.Config`)
    applies to one source group, and one source group holds at most 16 keys,
    one for each reason. The limiter writes the first refusal of each window,
    counts the later refusals and records the count of suppressed entries. A
@@ -305,7 +305,7 @@ The depguard rules in `.golangci.yml`: only `cmd/opendustpan` and
   in `--trusted-proxies`, any caller at all, because each request then carries
   the address of the proxy. The help for the operator: set `--trusted-proxies`
   when the server sits behind a proxy, submit from another source group, or use
-  the host command (bootstrap recovery).
+  the host command (`opendustpan host`).
 - `recovery sign` uses `golang.org/x/crypto/ssh` to read an encrypted OpenSSH
   key file. The module is already in `go.mod`. The package is new in the
   binary of the CLI.
@@ -321,7 +321,7 @@ The depguard rules in `.golangci.yml`: only `cmd/opendustpan` and
 | First boot (`serve`) | The content of `--recovery-public-key-file` must parse as exactly one `ssh-ed25519` public key, with the same parse and key type rule as the add route. In signed-request recovery, `serve` also refuses to start when `--public-url` (the audience of a request) is empty. On a malformed or wrong-type file or an empty `--public-url`, `serve` fails closed: it refuses to start, stores nothing and writes no recovery settings, and logs one error that names the file and the reason. | Start `serve` with a key file that holds an `ssh-rsa` key, two `ssh-ed25519` keys, text that does not parse and no content. Start `serve` in signed-request recovery with no `--public-url`. Expect no start, no stored mode and no stored key. |
 | Answer | HPKE to the key of the request, sealed in the transaction. A failed seal fails closed. | Decrypt with another key, and force a seal failure. Expect a failure, a refusal with reason `answer`, and no temporary administrator. |
 | Authorizer | Each later request checks the stored grant of the temporary administrator. The two recovery steps read the stored record. | Call a third fresh-step route as a temporary administrator. Expect `mfa.fresh-step-required`. |
-| Audit | Each refusal and each use writes an entry; the use entry holds the mode, the time, the client address, the `keyId` of the signing key and the action `recovery:use-signed-request`; a repeat holds the result `answer resent` too. The refusal entries go through `internal/denylimit`, keyed by the source group in `Key.Principal` (`recovery-source:` and the group), the action `recovery:use-signed-request`, the reason in `Key.Kind` and an empty `Key.Scope`; one source group holds at most 16 keys, one for each reason. A refusal beyond `MaxKeys` goes into one aggregate entry that names no source group and no reason. Each refusal writes one server log line with its reason. | Break the store after the checks. Expect `recovery.refused` with reason `store` and one audit entry. Send N refusals from one source: expect a bounded number of entries, one entry for each reason, and one count of suppressed entries. |
+| Audit | Each refusal and each use writes an entry; the use entry holds the mode, the time, the client address, the `keyId` of the signing key and the action `recovery:use-signed-request`; a repeat holds the result `answer resent` too. The refusal entries go through `internal/denylimit`, keyed by the source group in `denylimit.Key` field `Principal` (`recovery-source:` and the group), the action `recovery:use-signed-request`, the reason in the field `Kind` and an empty the field `Scope`; one source group holds at most 16 keys, one for each reason. A refusal beyond `MaxKeys` goes into one aggregate entry that names no source group and no reason. Each refusal writes one server log line with its reason. | Break the store after the checks. Expect `recovery.refused` with reason `store` and one audit entry. Send N refusals from one source: expect a bounded number of entries, one entry for each reason, and one count of suppressed entries. |
 
 ## Quality attributes
 

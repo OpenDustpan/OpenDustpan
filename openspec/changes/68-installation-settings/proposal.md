@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -38,6 +38,10 @@ Out of scope:
 - Console views for installation settings
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - RFC 59 shape of the installation API
 

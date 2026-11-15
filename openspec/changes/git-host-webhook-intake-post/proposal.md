@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 8
 ---
 
 Issue: #1299, #1300, #1301.
@@ -64,6 +64,15 @@ Each fact names its file, line and function on main. The change specifies only t
 ## ADR check
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
+
+
+**ADR 374: Namespace discovery from inside, and the window of the old event secret** (owner-tagged: decisions 1 and 2, owner, 2026-11-14).
+
+- Decisions that apply: 2 (current). Changes: extends ADR 271 decision 8.
+- Changed by: none. Current rule: this ADR.
+- Quote: "During a rotation, the old event secret is valid for the check of an event only. It ends after 7 days, or earlier when the operator ends the rotation (the confirmation of the rotation). Each event that the server accepts with the old secret writes an audit entry. The API shows the effective end of the window. The server refuses an event signed with the old secret after the end, or after the confirmation. A secret older than the old secret is never valid: a registration keeps at most two event secrets."
+- Effect: design decision 5: three old columns with a CHECK, the rotation in the UPDATE of the new secret, the confirm route, the check order, the audit entries, the field oldSecretEndsAt.
+- Conflict: none.
 
 **ADR 271: The Forge port, Git host connections and the installation-level GitHub App** (owner-tagged: decision 2, 3, 4, 8, 9, 11).
 

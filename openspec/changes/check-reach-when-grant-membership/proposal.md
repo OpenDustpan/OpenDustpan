@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 8
 ---
 
 Issue: #609, #610, #616, #622.
@@ -57,8 +57,6 @@ Depends on:
 
 - groups-roles-grants
 - move-caller-routes-api-server
-- `groups-roles-grants` (order of the milestone review)
-- `move-caller-routes-api-server` (order of the milestone review)
 
 ## Usability
 

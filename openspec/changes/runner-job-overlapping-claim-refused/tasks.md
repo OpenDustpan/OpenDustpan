@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -16,12 +16,12 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [x] 3.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 
 - [ ] 4.1 Wire the refusal into the server and declare the authorization actions of the routes. Check: The route test finds an action and an object for each route
-- [ ] 4.2 Add the e2e step with real OpenTofu and a fake provider. Check: BLOCKED by the register route and claim record of two-disjoint-claims; after that, make e2e shows two claim records, job C blocked and no provider call from job C
-- [ ] 4.3 Write the docs page for refused claims and the blocked status. Check: make docs-lint passes and each command on the page runs
-- [ ] 4.4 Run the usability check of the refusal path. Check: A developer finishes the path from the docs page alone, and each error names one command
-- [ ] 4.5 Run make check. Check: make check reports zero findings
+- [ ] 4.2 Add the e2e step with real OpenTofu and a fake provider in the existing file `e2e/claim_gate_test.go`. It uses the register route of the dependency item and the job token of each runner phase. Check: BLOCKED by the register route and claim record of two-disjoint-claims; after that, make e2e shows two claim records, job C blocked and no provider call from job C. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.3 Write the docs page for refused claims and the blocked status in the NEW file `docs/guides/refused-claims.md`. Check: make docs-lint passes and each command on the page runs
+- [ ] 4.4 Run the usability check of the refusal path. Check: A developer finishes the path from the docs page alone, and each error names one command. A person's step.
+- [ ] 4.5 Run make check. Check: make check reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

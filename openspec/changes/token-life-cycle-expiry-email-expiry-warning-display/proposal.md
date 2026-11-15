@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 6
 ---
 
 Roadmap: `docs/roadmap.md:171` (Show token expiry warnings in API and CLIs.).

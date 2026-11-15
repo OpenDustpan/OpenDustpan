@@ -2,7 +2,7 @@ SECURITY: this change is security code (ADR 250). A wrong "disjoint" loses state
 
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -22,7 +22,7 @@ SECURITY: this change is security code (ADR 250). A wrong "disjoint" loses state
 
 ## 3. Definition of done
 
-- [ ] 3.1 BLOCKED by the register route of two-disjoint-claims, which is not on main. E2e with real OpenTofu: job A replaces an instance with its closure, job B updates a disjoint resource, both claims are accepted; job C reads the replaced instance and is refused. Check: `make e2e` passes.
+- [ ] 3.1 BLOCKED by the register route of two-disjoint-claims, which is not on main. E2e with real OpenTofu: job A replaces an instance with its closure, job B updates a disjoint resource, both claims are accepted; job C reads the replaced instance and is refused. Check: `make e2e` passes. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.2 Docs page, add the new file `docs/explanation/plan-conflicts.md`: the closure of a replacement, the three reasons, and the command that shows them. Check: `make docs-lint` passes, and a test runs each command of the page.
-- [ ] 3.3 Usability check: the developer finds the reason of a refusal from the docs page alone. Check: each error row names `GET /api/v2/workspaces/{id}/state-versions` or `tofu show -json plan.tfplan`.
-- [ ] 3.4 Full check. Check: `make check` reports zero findings.
+- [ ] 3.3 Usability check: the developer finds the reason of a refusal from the docs page alone. Check: each error row names `GET /api/v2/workspaces/{id}/state-versions` or `tofu show -json plan.tfplan`. A person's step.
+- [ ] 3.4 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

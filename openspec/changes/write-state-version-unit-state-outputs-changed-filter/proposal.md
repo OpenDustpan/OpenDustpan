@@ -1,5 +1,5 @@
 ---
-version: 3
+version: 7
 ---
 
 Issue: #1215.
@@ -45,7 +45,7 @@ Out of scope:
 Depends on:
 
 - write-state-version-unit-state-follows-trigger-start
-- write-state-version-unit-state
+- write-state-version-unit-state-1
 - `write-state-version-unit-state-trigger-caps-depth` (the part before it in the split)
 
 ## Usability

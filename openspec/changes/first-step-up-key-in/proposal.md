@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 4
 ---
 
 Issue: #1329.
@@ -53,9 +53,6 @@ Depends on:
 - mfa
 - app-level-second-factor-totp
 - signed-request-recovery
-- `mfa` (order of the milestone review)
-- `app-level-second-factor-totp` (order of the milestone review)
-- `signed-request-recovery` (order of the milestone review)
 
 ## What main already does
 

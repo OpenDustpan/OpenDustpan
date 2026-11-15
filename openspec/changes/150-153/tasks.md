@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. failing tests first
 
@@ -11,6 +11,9 @@
 - [ ] 1.5 Failing server test for retention, the repair pass and the Restore window, in pkg/history/retention_test.go. Check: TestRetentionDeletesOldArtifacts; calls ANY /api/server/deleted-units/sweep with an access token
 - [ ] 1.6 Failing server test for the fail-closed read, the rate limit and the page limit, in pkg/history/leak_test.go. Check: TestHistoryUnavailableFailsClosed; BLOCKED by the NEW history route; access token
 
+- [ ] 1.7 SECURITY. Failing test that sends tool admin straight to the history service and expects an error, in pkg/history/history_test.go. Check: TestHistoryRejectsUnknownTool
+- [ ] 1.8 SECURITY. Failing test that sends a history read with no grant straight to the history service and expects a denial, in pkg/history/leak_test.go. Check: TestHistoryReadDeniedWithoutGrant
+
 ## 2. build
 
 - [ ] 2.1 Implement the sqlite and postgres adapters with the fence and data-key encryption, in NEW pkg/store/sqlite/history.go and NEW pkg/store/postgres/history.go. Check: go test ./pkg/store/... -run History -timeout 60m
@@ -18,14 +21,17 @@
 - [ ] 2.3 Wire artifact expiry and Restore to the existing schedules and restore routes, in pkg/dustpan/schedules.go and pkg/workspace/service.go:1771 (func Restore). Check: the existing ANY /api/inventory/deleted-units/{}/{}/restore returns success inside 30 days with an access token
 - [ ] 2.4 Add the CLI history read and redact steps in NEW cmd/dustpan/history.go. Check: CLI redact with reason secret-exposure prints the redaction record
 
+- [ ] 2.5 SECURITY. Build the allowlist of the tool values pulumi and tofu and of the reasons secret-exposure, personal-data and other in the history service, in NEW pkg/history/allowlist.go. Check: go test ./pkg/history -run TestHistoryRejectsUnknownTool
+- [ ] 2.6 SECURITY. Check the NEW actions namespace:read-history and namespace:redact-history at the point of use in the history service, in NEW pkg/history/authorize.go. Check: go test ./pkg/history -run TestHistoryReadDeniedWithoutGrant
+
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `internal/db` (`make generate`, sqlc); `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [ ] 3.2 Regenerate `internal/api/apidesc/openapi.json` and the clients (`make generate`, `make clients-generate`); `internal/db` (`make generate`, sqlc). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
 
 ## 4. definition of done
 
-- [ ] 4.1 E2E step against the real CLI for history after an update Check: make e2e step; BLOCKED by the NEW history route until it ships
+- [ ] 4.1 E2E step against the real CLI for history after an update Check: make e2e step; BLOCKED by the NEW history route until it ships. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.2 Docs page for history, blame, point-in-time, redaction and retention Check: docs page in the same pull request; make docs-lint
-- [ ] 4.3 Usability check Check: a developer completes the path from the docs page alone
-- [ ] 4.4 Full checks Check: make check with zero findings
+- [ ] 4.3 Usability check Check: a developer completes the path from the docs page alone. A person's step.
+- [ ] 4.4 Full checks Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).

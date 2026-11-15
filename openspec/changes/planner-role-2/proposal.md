@@ -1,5 +1,5 @@
 ---
-version: 4
+version: 9
 ---
 
 Roadmap: `docs/roadmap.md:269` (The planner role).
@@ -46,9 +46,6 @@ Depends on:
 - add-job-service-routes-start-1
 - job-service-unit-settings-pool
 - open-profile-serve-open-sessions
-- `job-service-unit-settings-pool` (order of the milestone review)
-- `git-host-webhook-intake-post` (order of the milestone review)
-- `open-profile-serve-open-sessions` (order of the milestone review)
 
 ## Usability
 

@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 4
 ---
 
 ## Why
@@ -48,8 +48,6 @@ Depends on:
 - docs-commands-run-in-tests
 - release-artifacts-image-install-docs
 - key-encryption-key-rotation
-- `docs-commands-run-in-tests` (order of the milestone review)
-- `key-encryption-key-rotation` (order of the milestone review)
 
 ## Usability
 

@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -34,6 +34,10 @@ Out of scope:
 - Kubernetes operator resources
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - runs (milestone 5)
 

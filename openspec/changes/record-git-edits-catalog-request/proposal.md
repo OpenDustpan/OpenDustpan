@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 3
 ---
 
 Issue: #896.
@@ -50,9 +50,11 @@ Out of scope:
 
 Depends on:
 
-- #886
 - blueprints
-- `blueprints` (order of the milestone review)
+
+Builds on (not a change):
+
+- #886
 
 ## Usability
 

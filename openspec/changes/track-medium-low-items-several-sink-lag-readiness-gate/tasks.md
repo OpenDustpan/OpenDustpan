@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in design.md before the first test. Check: design.md lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
 
@@ -16,9 +16,9 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Regenerate `docs/adr/INDEX.md` (`make adr-index`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add operator guide page and e2e step on ANY /api/server/restores/{} with access token for swap wait and readiness reason Check: e2e step on ANY /api/server/restores/{} with access token checks drop retry then done, plus `curl -s http://127.0.0.1:8080/health/ready` shows reason
-- [ ] 4.2 Run PostgreSQL restore path on ANY /api/server/restores/{} with access token, hostile input tests for constructor and schema guard, usability check, and full check Check: `DUSTPAN_TEST_POSTGRES_URL=$DB go test ./pkg/store/postgres/ -run Restore -count=1` plus `make check` with zero findings
+- [ ] 4.1 Add the NEW guide page docs/guides/restore-swap-and-readiness.md and the NEW e2e step file e2e/restore_drop_readiness_test.go on ANY /api/server/restores/{} with access token for swap wait and readiness reason Check: e2e step on ANY /api/server/restores/{} with access token checks drop retry then done, plus `curl -s http://127.0.0.1:8080/health/ready` shows reason. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.2 Run PostgreSQL restore path on ANY /api/server/restores/{} with access token, hostile input tests for constructor and schema guard, usability check, and full check Check: `DUSTPAN_TEST_POSTGRES_URL=$DB go test ./pkg/store/postgres/ -run Restore -count=1` plus `make check` with zero findings. A person's step. Confirmed by: CI (the agent runs the fast checks only).

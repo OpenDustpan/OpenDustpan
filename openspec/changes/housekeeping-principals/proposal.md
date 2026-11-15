@@ -6,8 +6,8 @@ Decision: ADR 370. Order: this change lands before the changes of triggers, sche
 
 The user path this change must make work:
 
-1. **API.** The operator lists the principals of the installation: `GET /api/dustpan/v1/principals?kind=service&source=builtin`. The answer lists one housekeeping principal for each purpose, for example `housekeeping:artifact-sweep`, with its stable ID.
-2. **API.** The operator lists the grants of one housekeeping principal: `GET /api/dustpan/v1/principals/{principal}/grants`. Each grant has a role, an object, a creator (the install) and a time.
+1. **API.** The operator lists the principals of the installation: NEW route `GET /api/dustpan/v1/principals?kind=service&source=builtin` (declared in the API description, with its adapter file named in the tasks). The answer lists one housekeeping principal for each purpose, for example `housekeeping:artifact-sweep`, with its stable ID.
+2. **API.** The operator lists the grants of one housekeeping principal: NEW route `GET /api/dustpan/v1/principals/{principal}/grants` (next to the existing `/api/server/principals/{}/grants`). Each grant has a role, an object, a creator (the install) and a time.
 3. **API.** The operator reads the audit log: each entry of a sweep names the housekeeping principal as the actor.
 4. **API.** The operator revokes the grant of the artifact sweep. The next artifact sweep is refused and writes a denial audit entry. The other sweeps run as before.
 5. **Docs page.** `docs/explanation/housekeeping-principals.md` lists each housekeeping principal, its purpose, its role and its schedule, and how to revoke and grant again.
@@ -17,8 +17,8 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | A sweep runs while its principal has no grant. | The audit entry `denied` names the housekeeping principal and the missing action. The sweep changes nothing. | `GET /api/dustpan/v1/principals/{principal}/grants` |
-| A person tries to sign in or make a token as a housekeeping principal. | 403 `principal.housekeeping`. | `GET /api/dustpan/v1/principals/{principal}` |
-| A grant to a housekeeping principal names a role that its purpose does not need. | 422 `access.grant-out-of-purpose`, with the purpose. | `GET /api/dustpan/v1/principals/{principal}` |
+| A person tries to sign in or make a token as a housekeeping principal. | 403 `principal.housekeeping` (NEW error code). | NEW route `GET /api/dustpan/v1/principals/{principal}` |
+| A grant to a housekeeping principal names a role that its purpose does not need. | 422 `access.grant-out-of-purpose` (NEW error code), with the purpose. | NEW route `GET /api/dustpan/v1/principals/{principal}` |
 
 Evidence for the claims above:
 
@@ -32,7 +32,8 @@ Evidence for the claims above:
 - NEW: the install step writes the grants of each housekeeping principal as stored grants, with the install as the creator and the install time. A role for each purpose holds only the actions that the purpose needs.
 - NEW: each housekeeping run checks its action with the authorizer, as any principal does, and names its principal in each audit entry and run record.
 - NEW: a revoke stops only the purpose of that principal.
-- A docs page.
+- A docs page: add the new file `docs/explanation/housekeeping-principals.md`.
+- NEW routes: `GET /api/dustpan/v1/principals`, `GET /api/dustpan/v1/principals/{principal}` and `GET /api/dustpan/v1/principals/{principal}/grants`.
 
 Out of scope:
 
@@ -40,6 +41,10 @@ Out of scope:
 - A route to make a new housekeeping principal. The set is fixed by the code, and only their grants are data.
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - ADR 370 on main (pull request #3058)
 
@@ -64,10 +69,10 @@ Each fact names its file, line and function on main. The change specifies only t
 - The trigger and job start checks. (`pkg/trigger/manager.go:459`, `pkg/trigger/trigger.go:264`, `pkg/job/trigger.go:47`, `pkg/job/trigger.go:77`)
 - The artifact sweep writes as `@server`. (`pkg/job/artifactsweep.go:617`)
 - The reconcile of jobs writes as `@server`. (`pkg/job/reconcile.go:673`)
-- The cleanup of saved views writes as `@server`. (`pkg/savedview/service.go:292 (cleanupSubject)`)
+- The cleanup of saved views writes as `@server`. (`pkg/savedview/service.go:292 (Service.systemEntry)`)
 - The sweep of access tokens writes as `@server`. (`pkg/accesstoken/policy.go:197 (SweepEntry)`)
 - The expiry of temporary administrators writes as `@server`. (`pkg/tempadmin/service.go:148 (Service.Sweep)`)
-- The retention of history writes as `@server`. (`pkg/history/history.go:156 (ServerSubject)`)
+- The retention of history writes as `@server`. (`pkg/history/history.go:156 (ItemRef.KeyRef)`)
 - The locks of local users write as `@server`. (`internal/localusersvc/locks.go:415`)
 - The reaper of agent runs. (`internal/agent/reaper.go:53 (Reap)`)
 

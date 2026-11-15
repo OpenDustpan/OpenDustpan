@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 ## Why
@@ -24,6 +24,10 @@ Out of scope:
 - Backup and restore rules for customer keys
 
 Depends on:
+
+- none
+
+Builds on (not a change):
 
 - secrets (RFC 3, part 2)
 

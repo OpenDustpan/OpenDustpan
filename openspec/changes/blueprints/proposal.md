@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 5
 ---
 
 Roadmap: `docs/roadmap.md:360` (Blueprints).
@@ -53,7 +53,7 @@ Out of scope:
 Depends on:
 
 - add-sql-adapter-quota-counter
-- `add-sql-adapter-quota-counter` (order of the milestone review)
+- wire-self-service-blueprints-binary (the binary serves the blueprint routes that task 4.2 drives)
 
 ## Usability
 
