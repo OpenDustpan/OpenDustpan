@@ -101,13 +101,16 @@ func (s Scope) String() string {
 }
 
 // aadSource gives the associated data that binds a sealed stream to what it
-// seals: a Scope for a stream under a data key, an ItemRef for a stream under
-// an item key.
+// seals: a Scope for a stream under a data key, an itemContent (the item and
+// the ID of its key record) for a stream under an item key.
 type aadSource interface {
 	aad() []byte
 }
 
-// aad is the associated data that binds keys and values to the scope.
+// aad is the associated data that binds keys and values to the scope. It
+// separates its parts with a zero byte, and it relies on NewScope to refuse a
+// namespace or a scope ID with a zero byte. The encoding itself does not
+// enforce that.
 func (s Scope) aad() []byte {
 	return []byte(aadLabel + "\x00" + s.Namespace.String() + "\x00" + s.ID)
 }

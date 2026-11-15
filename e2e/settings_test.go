@@ -154,10 +154,25 @@ func settingsScenario(t *testing.T, env *e2e.Env) {
 	resp, doc := settingsRead(ctx, t, env, settingsRoute)
 	first := resp.Header.Get("ETag")
 
+	settingsDefaults(t, doc)
+	settingsChange(ctx, t, env, first)
+	settingsRefusals(ctx, t, env)
+	settingsRemovalAlert(ctx, t, env)
+	settingsNamespace(ctx, t, env)
+	settingsAudit(ctx, t, env)
+}
+
+// settingsDefaults checks the settings of the first read: the defaults, the
+// locks, the layers and a secret that shows no value.
+func settingsDefaults(t *testing.T, doc settingsDoc) {
+	t.Helper()
+
 	preset := settingFor(t, doc, "branding.preset")
 	if preset.Source != "default" || preset.Locked || !preset.DatabaseLayer || preset.Value != "" {
 		t.Fatalf("branding.preset = %+v, want the default, unlocked, with a database layer", preset)
 	}
+
+	settingsPlainDefault(t, doc)
 
 	if listen := settingFor(t, doc, "listen"); !listen.Locked || listen.DatabaseLayer || listen.Apply != "restart" {
 		t.Fatalf("listen = %+v, want a setting that only the static layer sets", listen)
@@ -167,11 +182,20 @@ func settingsScenario(t *testing.T, env *e2e.Env) {
 	if !database.Secret || database.Value != nil || database.DatabaseValue != nil || database.DatabaseLayer {
 		t.Fatalf("database = %+v, want a secret that shows no value", database)
 	}
+}
 
-	settingsChange(ctx, t, env, first)
-	settingsRefusals(ctx, t, env)
-	settingsNamespace(ctx, t, env)
-	settingsAudit(ctx, t, env)
+// settingsPlainDefault checks that the first read shows plain connections as
+// refused by default, unlocked, with a database layer, and applied live.
+func settingsPlainDefault(t *testing.T, doc settingsDoc) {
+	t.Helper()
+
+	plain := settingFor(t, doc, "egress.allowPlainConnections")
+	allowed, isBool := plain.Value.(bool)
+
+	if plain.Source != "default" || plain.Locked || !plain.DatabaseLayer || !isBool || allowed ||
+		plain.Apply != "live" {
+		t.Fatalf("egress.allowPlainConnections = %+v, want the default, unlocked, with a database layer", plain)
+	}
 }
 
 // settingFor returns the setting key of doc.
@@ -310,6 +334,58 @@ func settingsRefusals(ctx context.Context, t *testing.T, env *e2e.Env) {
 	settingsMediaAndCredential(ctx, t, env, tag)
 }
 
+// settingsRemovalAlert proves the three settings of the removal alert: one
+// patch sets them, the resource shows each value from the database, and each
+// one refuses a value outside its bounds. Each value is tighter than the
+// default, so no change reduces security and none needs a fresh
+// authentication.
+func settingsRemovalAlert(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	read, _ := settingsRead(ctx, t, env, settingsRoute)
+	tag := read.Header.Get("ETag")
+
+	set, doc := settingsPatch(ctx, t, env, settingsReq{
+		path: settingsRoute, ifMatch: tag,
+		body: `{"principal.removalAlertCount":5,"principal.removalAlertPercent":5,` +
+			`"principal.removalAlertWindow":"20m"}`,
+	})
+	if set.Status != http.StatusOK {
+		t.Fatalf("PATCH of the removal alert settings answers %d %s, want 200", set.Status, set.Body)
+	}
+
+	want := map[string]any{
+		"principal.removalAlertCount":   float64(5),
+		"principal.removalAlertPercent": float64(5),
+		"principal.removalAlertWindow":  "20m",
+	}
+
+	for key, value := range want {
+		item := settingFor(t, doc, key)
+		if item.Source != "database" || item.Value != value || item.DatabaseValue != value {
+			t.Fatalf("%s = %+v, want %v from the database", key, item, value)
+		}
+	}
+
+	tag = set.Header.Get("ETag")
+
+	refusals := []struct {
+		name string
+		body string
+	}{
+		{"a count above the bounds", `{"principal.removalAlertCount":10001}`},
+		{"a count that is not a whole number", `{"principal.removalAlertCount":1.5}`},
+		{"a percent below the bounds", `{"principal.removalAlertPercent":0}`},
+		{"a window above the bounds", `{"principal.removalAlertWindow":"25h"}`},
+		{"a window that is not whole seconds", `{"principal.removalAlertWindow":"10m0.5s"}`},
+	}
+
+	for _, tc := range refusals {
+		settingsWant(ctx, t, env, settingsReq{path: settingsRoute, ifMatch: tag, body: tc.body},
+			settingsAnswer{status: http.StatusBadRequest, code: "settings.value-invalid"})
+	}
+}
+
 // settingsMediaAndCredential proves that a request with the wrong content
 // type is refused, and that a request with no credential is refused.
 func settingsMediaAndCredential(ctx context.Context, t *testing.T, env *e2e.Env, tag string) {
@@ -380,11 +456,12 @@ func settingsAudit(ctx context.Context, t *testing.T, env *e2e.Env) {
 		}
 	}
 
-	// Two changes (the set and the delete), and nine refusals that the server
-	// attributes to a change: the eight of settingsRefusals and the request
-	// with the wrong media type. A stale revision changes nothing and writes
+	// Three changes (the set, the delete and the removal alert settings), and
+	// fourteen refusals that the server attributes to a change: the eight of
+	// settingsRefusals, the request with the wrong media type and the five of
+	// the removal alert settings. A stale revision changes nothing and writes
 	// none. The refusal in the scope of the namespace is not in this scope.
-	if counts["success"] != 2 || counts["failure"] != 9 {
-		t.Fatalf("settings entries by outcome = %v, want 2 successes and 9 failures", counts)
+	if counts["success"] != 3 || counts["failure"] != 14 {
+		t.Fatalf("settings entries by outcome = %v, want 3 successes and 14 failures", counts)
 	}
 }

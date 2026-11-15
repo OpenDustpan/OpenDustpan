@@ -46,3 +46,9 @@ func WritableKeyForTest(key string) bool {
 func CheckRestoreKeyForTest(key string) error {
 	return checkRestoreKey(key)
 }
+
+// SetMaxUnverifiedKeysForTest sets the bound on the unverified keys of a
+// backup of s to limit, so a test proves the refusal with few keys.
+func SetMaxUnverifiedKeysForTest(s *Service, limit int) {
+	s.maxUnverified = limit
+}

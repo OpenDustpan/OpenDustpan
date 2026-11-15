@@ -12,7 +12,8 @@ import (
 func validDecl() setting.Declaration {
 	return setting.Declaration{
 		Key: "a.b", Level: setting.LevelInstallation, Kind: setting.KindInt, Default: "1", Secret: false,
-		Database: true, Apply: setting.ApplyLive, Check: nil, ReducesSecurity: nil, Doc: "A setting.",
+		Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive, Check: nil, ReducesSecurity: nil,
+		Doc: "A setting.",
 	}
 }
 
@@ -59,6 +60,69 @@ func TestDeclarationValidate(t *testing.T) {
 				t.Fatalf("Validate = %v, want ok = %v", err, tc.ok)
 			}
 		})
+	}
+}
+
+// TestDeclarationRefusesAStaticCredentialHostInTheDatabaseLayer proves the
+// rule that a setting which names a host that receives a static credential
+// is static only.
+func TestDeclarationRefusesAStaticCredentialHostInTheDatabaseLayer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		database bool
+		host     bool
+		ok       bool
+	}{
+		{name: "a static-credential host in the database layer", database: true, host: true, ok: false},
+		{name: "a static-credential host with no database layer", database: false, host: true, ok: true},
+		{name: "a database setting that is no static-credential host", database: true, host: false, ok: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := validDecl()
+			d.Database, d.StaticCredentialHost = tc.database, tc.host
+
+			err := d.Validate()
+			if tc.ok {
+				if err != nil {
+					t.Fatalf("Validate = %v, want no error", err)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, setting.ErrInvalidDeclaration) {
+				t.Fatalf("Validate = %v, want ErrInvalidDeclaration", err)
+			}
+
+			if !strings.Contains(err.Error(), d.Key) {
+				t.Fatalf("Validate = %q, want the key %s in the text", err, d.Key)
+			}
+		})
+	}
+}
+
+// TestNewRegistryRefusesAStaticCredentialHostInTheDatabaseLayer proves that
+// the build of the registry refuses the declaration, so the settings service
+// that is built from the registry can never serve it.
+func TestNewRegistryRefusesAStaticCredentialHostInTheDatabaseLayer(t *testing.T) {
+	t.Parallel()
+
+	d := validDecl()
+	d.StaticCredentialHost = true
+
+	_, err := setting.NewRegistry([]setting.Declaration{d})
+	if !errors.Is(err, setting.ErrInvalidDeclaration) {
+		t.Fatalf("NewRegistry = %v, want ErrInvalidDeclaration", err)
+	}
+
+	if !strings.Contains(err.Error(), d.Key) {
+		t.Fatalf("NewRegistry = %q, want the key %s in the text", err, d.Key)
 	}
 }
 

@@ -2,6 +2,7 @@ package drift
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -94,6 +95,20 @@ type CheckRequest struct {
 	SourceIP  string
 	UserAgent string
 	RequestID string
+}
+
+// Validate reports whether r names a unit and has a reason that the server can
+// keep. An empty reason is valid. It returns an error that wraps ErrInvalid.
+func (r CheckRequest) Validate() error {
+	if !r.Unit.IsUnit() {
+		return fmt.Errorf("%w: a drift check needs a unit", ErrInvalid)
+	}
+
+	if err := validateText(r.Reason); err != nil {
+		return fmt.Errorf("reason: %w", err)
+	}
+
+	return nil
 }
 
 // Checker starts a drift check that a person asks for, through the job

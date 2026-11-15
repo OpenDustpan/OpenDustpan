@@ -257,6 +257,7 @@ func Open(ctx context.Context, c *Client, handoff string) (*Session, error) {
 // HTTP methods and statuses that the protocol uses. The package names them
 // so that it links no HTTP package.
 const (
+	methodGet       = "GET"
 	methodPost      = "POST"
 	methodPut       = "PUT"
 	statusOK        = 200
@@ -316,6 +317,13 @@ func (s *Session) Post(ctx context.Context, path string, body any) (*Response, e
 
 	return s.client.Signed(ctx, s.key, s.ID, &Request{Method: methodPost, Path: path, Body: raw, Header: jsonHeader()},
 		nil)
+}
+
+// Get sends a signed GET of the session, for example the read of a plan part,
+// and returns the answer of any status. The proof signs the hash of the empty
+// body.
+func (s *Session) Get(ctx context.Context, path string) (*Response, error) {
+	return s.client.Signed(ctx, s.key, s.ID, &Request{Method: methodGet, Path: path, Body: nil, Header: nil}, nil)
 }
 
 // PutLogChunk uploads one chunk of a log and returns the answer of any

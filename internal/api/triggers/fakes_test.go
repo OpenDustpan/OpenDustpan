@@ -16,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/admit"
 	"opendustpan.org/opendustpan/internal/api/triggers"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -432,6 +433,24 @@ func newRigLogged(t *testing.T, authz identity.Authorizer, logger *slog.Logger) 
 func newRigWorkers(t *testing.T, authz identity.Authorizer, logger *slog.Logger, workers admit.Source) *rig {
 	t.Helper()
 
+	return newRigGuarded(t, authz, logger, workers, guardOptions{
+		records: &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil}, limiter: nil,
+	})
+}
+
+// guardOptions sets the audit store and the limiter of the refusals of a rig.
+type guardOptions struct {
+	records audit.Store
+	limiter *denylimit.Limiter
+}
+
+// newRigGuarded is newRigWorkers with the audit store and the limiter of the
+// refusals.
+func newRigGuarded(
+	t *testing.T, authz identity.Authorizer, logger *slog.Logger, workers admit.Source, guard guardOptions,
+) *rig {
+	t.Helper()
+
 	r := &rig{
 		h:      nil,
 		store:  newStore(),
@@ -475,9 +494,9 @@ func newRigWorkers(t *testing.T, authz identity.Authorizer, logger *slog.Logger,
 		Workers:        workers,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
-		Audit:          &recordingAudit{Store: nil, mu: sync.Mutex{}, entries: nil},
+		Audit:          guard.records,
 		OnAuditFailure: nil,
-		DenialLimiter:  nil,
+		DenialLimiter:  guard.limiter,
 		Sessions:       nil,
 		Logger:         logger,
 	})
@@ -555,4 +574,23 @@ func (a *recordingAudit) Append(_ context.Context, _ namespace.Fence, e audit.En
 	a.entries = append(a.entries, e)
 
 	return e, nil
+}
+
+// AppendServer keeps an entry of the installation scope, so that a test counts
+// the refusals of a namespace that does not exist.
+func (a *recordingAudit) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.entries = append(a.entries, e)
+
+	return e, nil
+}
+
+// denied returns the entries that the handler kept.
+func (a *recordingAudit) denied() []audit.Entry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return slices.Clone(a.entries)
 }

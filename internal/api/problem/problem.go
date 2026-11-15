@@ -56,8 +56,13 @@ type Problem struct {
 	// Code is the code of the catalog.
 	Code string
 	// Values are the arguments that the code declares, or nil.
-	Values  []errcode.Value
-	Message string
+	Values []errcode.Value
+	// denialArgs are the arguments of the answer of a denial that the catalog
+	// does not declare: the action that the caller lacks and the kind of the
+	// object. denied sets them for a denial that names the two, and the writer
+	// adds them to the body of a code that declares no argument.
+	denialArgs map[string]any
+	Message    string
 	// RetryAfter is the wait that the answer names in the Retry-After header,
 	// or 0 for none. The code names the same wait in its own argument.
 	RetryAfter time.Duration
@@ -247,8 +252,19 @@ func (wr Writer) WriteProblem(ctx context.Context, w http.ResponseWriter, p Prob
 		w.Header().Set("Retry-After", strconv.FormatInt(RetryAfterSeconds(p.RetryAfter), 10))
 	}
 
+	args := made.Args()
+	if p.denialArgs != nil {
+		// Defense in depth: the catalog declares the arguments of a code, and
+		// it gives every declared argument to every answer of the code. The
+		// arguments of a denial belong to a code that declares none, so a code
+		// that declares arguments keeps the arguments of the catalog only.
+		if spec, known := errcode.Lookup(made.Code()); known && len(spec.Args) == 0 {
+			args = p.denialArgs
+		}
+	}
+
 	WriteJSON(ctx, wr.Logger, w, p.Status, Body{
-		Message: p.Message, Code: p.Status, ErrorCode: made.Code(), ErrorArgs: made.Args(),
+		Message: p.Message, Code: p.Status, ErrorCode: made.Code(), ErrorArgs: args,
 		Reauthenticate: p.Reauthenticate, Units: p.Units,
 	})
 }
@@ -323,6 +339,25 @@ func (wr Writer) denied(err error) Problem {
 		// conflict, and it does not rely on the review of each adapter.
 		if p, ok := wr.KeepDenied(err); ok &&
 			(p.Status == http.StatusForbidden || p.Status == http.StatusNotFound) {
+			return p
+		}
+	}
+
+	// A denial of the typed error names the missing action and the kind of
+	// the object. It never names the object itself: the caller may not see
+	// it. The arguments stay out of the catalog, because a denial that does
+	// not carry the action answers without them, and every answer of a code
+	// carries each argument that the code declares.
+	if denial, ok := errors.AsType[*identity.DeniedError](err); ok && denial != nil &&
+		errcode.Forbidden(err) == errcode.AccessDenied {
+		// Defense in depth: a value that an argument cannot hold must not
+		// turn the denial into a 500 or into a body with an invalid
+		// argument. The standard answer below stays a 403.
+		if args, argErr := errcode.DeniedArgs(string(denial.Action), denial.ObjectKind()); argErr == nil {
+			p := answer(http.StatusForbidden, errcode.AccessDenied,
+				"forbidden: you need the action "+string(denial.Action)+" on this "+denial.ObjectKind())
+			p.denialArgs = args
+
 			return p
 		}
 	}
@@ -494,8 +529,8 @@ func Built(status int, message, code string, a errcode.Answer, err error) Proble
 // answer returns a Problem whose code takes no argument.
 func answer(status int, code, message string) Problem {
 	return Problem{
-		Status: status, Code: code, Values: nil, Message: message, RetryAfter: 0, Reauthenticate: "",
-		Units: nil, answer: errcode.Answer{}, cause: "",
+		Status: status, Code: code, Values: nil, denialArgs: nil, Message: message, RetryAfter: 0,
+		Reauthenticate: "", Units: nil, answer: errcode.Answer{}, cause: "",
 	}
 }
 

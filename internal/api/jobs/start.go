@@ -117,7 +117,9 @@ func (h *Handler) startJob(w http.ResponseWriter, r *http.Request, p identity.Pr
 		// limit and a gate refuse the person too.
 		if reason, ok := refusalReason(err); ok {
 			action, object := deniedTarget(err, req.Unit)
-			h.guard.Record(ctx, r, p, refusal.Denial{Action: action, Object: object, Reason: reason, Window: 0})
+			h.guard.Record(ctx, r, p, refusal.Denial{
+				Action: action, Object: object, Reason: reason, ReasonWithin: nil, Window: 0,
+			})
 		}
 
 		h.writeError(ctx, w, err)
@@ -241,8 +243,7 @@ func idempotencyKey(r *http.Request) (string, error) {
 
 		// The keys of drift checks share the key space of the jobs. The server
 		// makes them, so a caller key with the prefix is refused.
-		if len(k) >= len(driftsvc.CheckKeyPrefix) &&
-			strings.EqualFold(string(k[:len(driftsvc.CheckKeyPrefix)]), driftsvc.CheckKeyPrefix) {
+		if driftsvc.ReservedKey(string(k)) {
 			return "", fmt.Errorf(
 				"%w: the prefix %q is reserved for the server",
 				idempotency.ErrInvalidKey,
