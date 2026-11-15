@@ -331,6 +331,10 @@ func waitRestoreFailed(t *testing.T, restores *backup.RestoreService, id backup.
 			return
 		case backup.RestoreSucceeded:
 			t.Fatalf("restore %s succeeded, want a refusal of the backup without its registry file", id)
+		case backup.RestoreChecking, backup.RestoreApplying:
+			// Still running: the worker below moves it on.
+		default:
+			t.Fatalf("restore %s has the unknown state %q", id, row.State)
 		}
 
 		runRestoreWorker(t, restores)
