@@ -1,0 +1,44 @@
+# The PR body check, apart from the CI suite. The lint job of ci.yml checks
+# the body of the pull request event, but the default activity types of the
+# pull_request event do not include edited: after an edit of the body, a new
+# push was needed to check the new body, because a re-run reads the body that
+# the old event holds. This workflow runs the same check also on edited, so an
+# edit of the body needs no new commit. It keeps opened, synchronize and
+# reopened, so the check reports the newest event and a maintainer can add it
+# to the required checks of the branch.
+name: pr-body-check
+
+on:
+  pull_request:
+    types: [ opened, edited, synchronize, reopened ]
+
+permissions:
+  contents: read
+
+# This run must not join the group ci-<pull request number> of ci.yml: it must
+# not cancel the run of a push, and the workflow that cancels the CI run of a
+# closed pull request cancels only that group. Repeated edits of the body
+# replace the run of the older edit.
+concurrency:
+  group: pr-body-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # The job name is the check name, so a maintainer can add it to the
+  # required checks of the branch.
+  pr-body-check:
+    name: pr-body-check
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The body goes through an environment variable, so the shell never
+      # interpolates it. The step reads the body of the event.
+      - name: Check that the PR body names an issue
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          make pr-body-check PR_BODY_FILE="$RUNNER_TEMP/pr-body.md"

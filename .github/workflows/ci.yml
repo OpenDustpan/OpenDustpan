@@ -136,8 +136,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The body goes through an environment variable, so the shell never
-      # interpolates it. The step reads the body of the event: after an edit
-      # of the body, push again to check the new body.
+      # interpolates it. The step reads the body of the event, which holds
+      # the body at the time of the event. The workflow pr-body-check.yml
+      # runs the same check again after an edit of the body.
       - name: Check that the PR body names an issue
         if: ${{ github.event_name == 'pull_request' }}
         env:
