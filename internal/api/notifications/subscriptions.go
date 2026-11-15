@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/problem"
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/pagetoken"
@@ -535,6 +536,15 @@ func (h *Handler) redeliver(w http.ResponseWriter, r *http.Request, p identity.P
 	id := r.PathValue("delivery_id")
 
 	if err := h.subscriptions.Redeliver(ctx, subscriptionCaller(r, p), obj.Namespace(), id); err != nil {
+		// A refusal that comes too soon is a denial. The service writes no entry
+		// for it, so the adapter records it through the shared denial limiter.
+		if errors.Is(err, subscriptionsvc.ErrRedeliverTooSoon) {
+			h.guard.Record(ctx, r, p, refusal.Denial{
+				Action: identity.ActionNamespaceManageNotifications, Object: obj,
+				Reason: errcode.SinkDeliveryTooSoon, ReasonWithin: nil, Window: 0,
+			})
+		}
+
 		h.writeDeliveryError(ctx, w, err)
 
 		return
