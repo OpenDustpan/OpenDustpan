@@ -30,7 +30,7 @@ Evidence for the claims above:
 
 - The gate domain package exists. Proof: Pack path pkg/gate exists: true.
 - The reference docs directory exists. Proof: Pack path docs/reference exists: true.
-- A ConfigService is wired in the SDK and declared by the server API. Proof: rg gate.ConfigService gives pkg/dustpan/gateconfig.go:21 and internal/api/server/gate_config.go:24.
+- A ConfigService is wired in the SDK and declared by the server API. Proof: rg gate.ConfigService gives pkg/dustpan/gateconfig.go:21 and internal/api/server/gate_config.go:25.
 - The store has a delete of the approval default. Proof: rg Settings.DeleteApprovalDefault gives pkg/gate/gatetest/gatetest.go:634; the pack lists pkg/store/internal/gatestore/settings.go:129.
 - No MinApprovals remains in non-test code. Proof: rg -n -F --glob '!*_test.go' 'MinApprovals' pkg internal cmd gives 0 matches.
 - The gate error codes exist in the catalog. Proof: The pack lists gate.not-found at internal/errcode/catalog_gate.go:31 and gate.version-conflict at internal/errcode/catalog_gate.go:36.
@@ -80,7 +80,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - gate.ConfigService is the service type of gate configuration. (`pkg/gate/config.go:69 (type ConfigService)`)
 - The SDK builds the ConfigService for the server API. (`pkg/dustpan/gateconfig.go:21 (func newGateConfig)`)
-- The server API declares the port that ConfigService implements. (`internal/api/server/gate_config.go:24 (type GateConfig)`)
+- The server API declares the port that ConfigService implements. (`internal/api/server/gate_config.go:27 (type GateConfig)`)
 - The store implements the delete of the approval default. (`pkg/store/internal/gatestore/settings.go:129 (func Settings.DeleteApprovalDefault)`)
 - ConfigService has a delete of the approval default. (`pkg/gate/config.go:183 (func ConfigService.DeleteApprovalDefault)`)
 - The error code for a missing fresh step is in the catalog. (`internal/errcode/catalog_mfa.go:15 (const mfa.fresh-step-required)`)
