@@ -75,6 +75,7 @@ func newAuditChainHandler(
 	sessions := newStoreSessions(t, openRouteTestStore(t))
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,

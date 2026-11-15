@@ -98,6 +98,7 @@ func newIPAllowHandler(
 	signIn, sessions := signInOf(t, st)
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,

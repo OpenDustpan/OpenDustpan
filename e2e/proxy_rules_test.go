@@ -78,6 +78,8 @@ func runProxyRulesOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	ae := approvalAdmin(ctx, t, env)
 
+	env.SeedCatchAllPlacement(ctx, t, "approvals")
+
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		UserAgent: proxyRulesAgent, Name: "create the workspace web", Method: http.MethodPost,
 		Path: "/api/v2/organizations/approvals/workspaces",
@@ -90,6 +92,11 @@ func runProxyRulesOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkProxyRulesSaveAndRead(ctx, t, ae, namespace, unit)
 	checkProxyRulesRefusals(ctx, t, ae, namespace, unit)
+}
+
+// proxyStep returns one step of a proxy rule route.
+func proxyStep(step, method, path, body string, want int) approvalStep {
+	return approvalStep{step: step, method: method, path: path, body: body, want: want}
 }
 
 // proxyRulesUnitID returns the unit ID of the workspace web.
@@ -121,45 +128,32 @@ func proxyRulesUnitID(ctx context.Context, t *testing.T, env *e2e.Env) string {
 func checkProxyRulesSaveAndRead(ctx context.Context, t *testing.T, env approvalEnv, namespace, unit string) {
 	t.Helper()
 
-	body := approvalCall(ctx, t, env, approvalStep{
-		step: "read a namespace with no set", method: http.MethodGet, path: namespace, want: http.StatusOK,
-	})
+	call := func(step, method, path, body string) string {
+		return approvalCall(ctx, t, env, proxyStep(step, method, path, body, http.StatusOK))
+	}
+
+	body := call("read a namespace with no set", http.MethodGet, namespace, "")
 	wantBodyHas(t, "read a namespace with no set", body, `"version":0`, `"rules":[]`)
 
-	body = approvalCall(ctx, t, env, approvalStep{
-		step: "save the namespace set", method: http.MethodPut, path: namespace, body: proxyRulesNamespaceDoc,
-		want: http.StatusOK,
-	})
+	body = call("save the namespace set", http.MethodPut, namespace, proxyRulesNamespaceDoc)
 	wantBodyHas(t, "save the namespace set", body, `"version":1`, `"id":"status"`, `"port":443`, `"digest":"`)
 
-	body = approvalCall(ctx, t, env, approvalStep{
-		step: "read the namespace set", method: http.MethodGet, path: namespace, want: http.StatusOK,
-	})
+	body = call("read the namespace set", http.MethodGet, namespace, "")
 	wantBodyHas(t, "read the namespace set", body, `"version":1`, `"id":"status"`)
 
-	approvalCall(ctx, t, env, approvalStep{
-		step: "save the unit set", method: http.MethodPut, path: unit, body: proxyRulesUnitDoc, want: http.StatusOK,
-	})
+	call("save the unit set", http.MethodPut, unit, proxyRulesUnitDoc)
 
-	body = approvalCall(ctx, t, env, approvalStep{
-		step: "read the unit set and the joined set", method: http.MethodGet, path: unit, want: http.StatusOK,
-	})
+	body = call("read the unit set and the joined set", http.MethodGet, unit, "")
 	wantBodyHas(t, "read the unit set and the joined set", body, `"joined":[`, `"scope":"namespace"`, `"scope":"unit"`)
 
 	if strings.Index(body, `"id":"status"`) > strings.LastIndex(body, `"id":"registry"`) {
 		t.Fatalf("joined set %s lists the unit rule before the namespace rule", body)
 	}
 
-	body = approvalCall(ctx, t, env, approvalStep{
-		step: "render the plan view", method: http.MethodGet, path: unit + "/rendered?operation=plan",
-		want: http.StatusOK,
-	})
+	body = call("render the plan view", http.MethodGet, unit+"/rendered?operation=plan", "")
 	wantBodyHas(t, "render the plan view", body, `"operation":"plan"`, `"id":"status"`, `"id":"registry"`)
 
-	body = approvalCall(ctx, t, env, approvalStep{
-		step: "render the apply view", method: http.MethodGet, path: unit + "/rendered?operation=apply",
-		want: http.StatusOK,
-	})
+	body = call("render the apply view", http.MethodGet, unit+"/rendered?operation=apply", "")
 	wantBodyHas(t, "render the apply view", body, `"id":"registry"`)
 
 	if strings.Contains(body, `"id":"status"`) {
@@ -171,15 +165,14 @@ func checkProxyRulesSaveAndRead(ctx context.Context, t *testing.T, env approvalE
 func checkProxyRulesRefusals(ctx context.Context, t *testing.T, env approvalEnv, namespace, unit string) {
 	t.Helper()
 
-	approvalCall(ctx, t, env, approvalStep{
-		step: "save a bad host", method: http.MethodPut, path: namespace,
-		body: strings.Replace(proxyRulesNamespaceDoc, "status.example.com", "Status.Example.com", 1),
-		want: http.StatusUnprocessableEntity,
-	})
-	approvalCall(ctx, t, env, approvalStep{
-		step: "render a bad operation", method: http.MethodGet, path: unit + "/rendered?operation=deploy",
-		want: http.StatusBadRequest,
-	})
+	call := func(step, method, path, body string, want int) string {
+		return approvalCall(ctx, t, env, proxyStep(step, method, path, body, want))
+	}
+
+	badHost := strings.Replace(proxyRulesNamespaceDoc, "status.example.com", "Status.Example.com", 1)
+
+	call("save a bad host", http.MethodPut, namespace, badHost, http.StatusUnprocessableEntity)
+	call("render a bad operation", http.MethodGet, unit+"/rendered?operation=deploy", "", http.StatusBadRequest)
 
 	for _, path := range []string{namespace, unit} {
 		status, body, err := env.env.ServerAPIStatus(ctx, http.MethodPut, path, proxyRulesNamespaceDoc)
@@ -188,13 +181,10 @@ func checkProxyRulesRefusals(ctx context.Context, t *testing.T, env approvalEnv,
 		}
 
 		if status != http.StatusForbidden || !strings.Contains(body, "recent sign-in") {
-			t.Fatalf("save %s with a token answers %d (%s), want 403 that asks for a recent sign-in", path, status, body)
+			t.Fatalf("save %s with a token answers %d (%s), want 403 that asks for a sign-in", path, status, body)
 		}
 	}
 
-	body := approvalCall(ctx, t, env, approvalStep{
-		step: "read the namespace set after the refusals", method: http.MethodGet, path: namespace,
-		want: http.StatusOK,
-	})
+	body := call("read the namespace set after the refusals", http.MethodGet, namespace, "", http.StatusOK)
 	wantBodyHas(t, "read the namespace set after the refusals", body, `"version":1`, `"id":"status"`)
 }

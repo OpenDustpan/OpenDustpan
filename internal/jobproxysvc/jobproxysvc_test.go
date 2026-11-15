@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/jobproxysvc"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/jobproxy"
 	"opendustpan.org/opendustpan/pkg/jobproxy/rulestore"
@@ -21,17 +22,8 @@ func TestJoinNamespaceAndUnitProxyRuleSets(t *testing.T) {
 
 	// The unit is saved first, so the order of the result is not the order of the saves.
 	// The two sets use one id: the scope tells the entries apart.
-	if _, err := svc.Put(t.Context(), jobproxysvc.PutRequest{
-		Scope: unitScope(), Document: doc("api", "unit.example.com"), IfMatch: "", Entry: entryOf(),
-	}); err != nil {
-		t.Fatalf("Put unit: %v", err)
-	}
-
-	if _, err := svc.Put(t.Context(), jobproxysvc.PutRequest{
-		Scope: nsScope(), Document: doc("api", "ns.example.com"), IfMatch: "", Entry: entryOf(),
-	}); err != nil {
-		t.Fatalf("Put namespace: %v", err)
-	}
+	mustPut(t, svc, unitScope(), doc("api", "unit.example.com"))
+	mustPut(t, svc, nsScope(), doc("api", "ns.example.com"))
 
 	got, err := svc.Joined(t.Context(), nsAcme, unitWeb)
 	if err != nil {
@@ -101,29 +93,31 @@ func TestSaveWritesTheOldAndTheNewDigestToTheAuditEntry(t *testing.T) {
 		t.Fatalf("got %d audit entries, want 2", len(entries))
 	}
 
-	check := func(i int, wantOld *string, wantNew string) {
-		t.Helper()
-
-		changes := entries[i].Changes
-		last := len(changes) - 1
-
-		if last != 1 || changes[0].Key != "session" || changes[last].Key != "digest" || changes[last].New != wantNew {
-			t.Fatalf("entry %d changes = %+v, want the change of the caller and one digest change to %q", i, changes, wantNew)
-		}
-
-		if (wantOld == nil) != (changes[last].Old == nil) || (wantOld != nil && *wantOld != *changes[last].Old) {
-			t.Fatalf("entry %d old = %v, want %v", i, changes[last].Old, wantOld)
-		}
-
-		if entries[i].Namespace != nsAcme || entries[i].At.IsZero() {
-			t.Fatalf("entry %d = %+v, want the namespace and the time of the service", i, entries[i])
-		}
-	}
-
 	none := ""
 
-	check(0, &none, first.Digest)
-	check(1, &first.Digest, second.Digest)
+	checkDigestEntry(t, entries[0], &none, first.Digest)
+	checkDigestEntry(t, entries[1], &first.Digest, second.Digest)
+}
+
+// checkDigestEntry checks that entry holds the change of the caller and one
+// digest change from wantOld to wantNew, with the namespace and the time.
+func checkDigestEntry(t *testing.T, entry audit.Entry, wantOld *string, wantNew string) {
+	t.Helper()
+
+	changes := entry.Changes
+	last := len(changes) - 1
+
+	if last != 1 || changes[0].Key != "session" || changes[last].Key != "digest" || changes[last].New != wantNew {
+		t.Fatalf("changes = %+v, want the change of the caller and one digest change to %q", changes, wantNew)
+	}
+
+	if (wantOld == nil) != (changes[last].Old == nil) || (wantOld != nil && *wantOld != *changes[last].Old) {
+		t.Fatalf("old = %v, want %v", changes[last].Old, wantOld)
+	}
+
+	if entry.Namespace != nsAcme || entry.At.IsZero() {
+		t.Fatalf("entry = %+v, want the namespace and the time of the service", entry)
+	}
 }
 
 func TestSequentialSavesWithoutIfMatchKeepTheLastWrite(t *testing.T) {
@@ -133,11 +127,7 @@ func TestSequentialSavesWithoutIfMatchKeepTheLastWrite(t *testing.T) {
 	svc := newService(t, store)
 
 	for _, host := range []string{"a.example.com", "b.example.com"} {
-		if _, err := svc.Put(t.Context(), jobproxysvc.PutRequest{
-			Scope: unitScope(), Document: doc("a", host), IfMatch: "", Entry: entryOf(),
-		}); err != nil {
-			t.Fatalf("Put %s: %v", host, err)
-		}
+		mustPut(t, svc, unitScope(), doc("a", host))
 	}
 
 	got, err := svc.Get(t.Context(), unitScope())
@@ -166,11 +156,7 @@ func TestRenderedViewHoldsTheRulesOfOneOperation(t *testing.T) {
 		{nsScope(), doc("plan-only", "plan.example.com", jobproxy.OperationPlan)},
 		{unitScope(), doc("apply-too", "apply.example.com", jobproxy.OperationPlan, jobproxy.OperationApply)},
 	} {
-		if _, err := svc.Put(t.Context(), jobproxysvc.PutRequest{
-			Scope: tc.scope, Document: tc.doc, IfMatch: "", Entry: entryOf(),
-		}); err != nil {
-			t.Fatalf("Put: %v", err)
-		}
+		mustPut(t, svc, tc.scope, tc.doc)
 	}
 
 	plan, err := svc.Rendered(t.Context(), nsAcme, unitWeb, jobproxy.OperationPlan)
@@ -226,9 +212,10 @@ func TestPutRefusesHostileDocuments(t *testing.T) {
 			paths = append(paths, fmt.Sprintf(`"/p%d/%d"`, i, j))
 		}
 
-		manyPaths = append(manyPaths, fmt.Sprintf(
-			`{"id":"r%d","operations":["plan"],"host":"h%d.example.com","mode":"inspect","methods":["GET"],"paths":[%s]}`,
-			i, i, strings.Join(paths, ",")))
+		const rule = `{"id":"r%d","operations":["plan"],"host":"h%d.example.com","mode":"inspect",` +
+			`"methods":["GET"],"paths":[%s]}`
+
+		manyPaths = append(manyPaths, fmt.Sprintf(rule, i, i, strings.Join(paths, ",")))
 	}
 
 	cases := map[string]string{
@@ -245,7 +232,7 @@ func TestPutRefusesHostileDocuments(t *testing.T) {
 			`{"id":"a","operations":["plan"],"host":"b.example.com","mode":"tunnel"}]}`,
 		"bad method": `{"rules":[{"id":"a","operations":["plan"],"host":"a.example.com","mode":"inspect",` +
 			`"methods":["CONNECT"],"paths":["/a"]}]}`,
-		"dot dot path": `{"rules":[{"id":"a","operations":["plan"],"host":"a.example.com","mode":"inspect",` +
+		"parent segment": `{"rules":[{"id":"a","operations":["plan"],"host":"a.example.com","mode":"inspect",` +
 			`"methods":["GET"],"paths":["/a/../b"]}]}`,
 		"over the pattern limit": `{"rules":[` + strings.Join(manyPaths, ",") + `]}`,
 		"not json":               `not json`,
@@ -276,7 +263,7 @@ func TestPutFailsClosedOnAStoreError(t *testing.T) {
 	t.Parallel()
 
 	store := newMemStore()
-	store.failPut = errors.New("audit append failed")
+	store.failPut = errAuditAppend
 	svc := newService(t, store)
 
 	_, err := svc.Put(t.Context(), jobproxysvc.PutRequest{

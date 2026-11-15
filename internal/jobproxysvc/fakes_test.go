@@ -3,6 +3,8 @@ package jobproxysvc_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +22,21 @@ const (
 	unitWeb = "u-web"
 )
 
+// errAuditAppend is the error of a store that loses the audit entry of a save.
+var errAuditAppend = errors.New("audit append failed")
+
+// mustPut saves document at scope and fails the test when the save fails.
+func mustPut(t *testing.T, svc *jobproxysvc.Service, scope rulestore.Scope, document []byte) {
+	t.Helper()
+
+	_, err := svc.Put(t.Context(), jobproxysvc.PutRequest{
+		Scope: scope, Document: document, IfMatch: "", Entry: entryOf(),
+	})
+	if err != nil {
+		t.Fatalf("Put %+v: %v", scope, err)
+	}
+}
+
 // memStore is an in-memory rulestore.RuleStore that keeps the audit entries.
 type memStore struct {
 	mu      sync.Mutex
@@ -30,7 +47,7 @@ type memStore struct {
 }
 
 func newMemStore() *memStore {
-	return &memStore{sets: map[rulestore.Scope]rulestore.Stored{}}
+	return &memStore{mu: sync.Mutex{}, sets: map[rulestore.Scope]rulestore.Stored{}, entries: nil, failPut: nil}
 }
 
 func (m *memStore) Get(_ context.Context, scope rulestore.Scope) (rulestore.Stored, error) {
@@ -85,27 +102,39 @@ func (m *memStore) auditEntries() []audit.Entry {
 // fakeNamespaces knows the namespace acme only.
 type fakeNamespaces struct{}
 
-func (fakeNamespaces) Get(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
-	return fakeNamespaces{}.WritableHere(context.Background(), name)
+func (f fakeNamespaces) Get(ctx context.Context, name namespace.Name) (namespace.Namespace, error) {
+	return f.WritableHere(ctx, name)
 }
 
 func (fakeNamespaces) WritableHere(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
+	var ns namespace.Namespace
+
 	if name != nsAcme {
-		return namespace.Namespace{}, namespace.ErrNotFound
+		return ns, namespace.ErrNotFound
 	}
 
-	return namespace.Namespace{Name: nsAcme, FailoverVersion: 1}, nil
+	ns.Name = nsAcme
+	ns.FailoverVersion = 1
+
+	return ns, nil
 }
 
 // fakeUnits knows the unit u-web of acme.
 type fakeUnits struct{}
 
 func (fakeUnits) GetUnit(_ context.Context, unitID string) (inventory.Entry, error) {
+	var e inventory.Entry
+
 	if unitID != unitWeb {
-		return inventory.Entry{}, inventory.ErrUnitNotFound
+		return e, inventory.ErrUnitNotFound
 	}
 
-	return inventory.Entry{Namespace: nsAcme, Tool: "pulumi", Name: "web/prod", UnitID: unitWeb}, nil
+	e.Namespace = nsAcme
+	e.Tool = "pulumi"
+	e.Name = "web/prod"
+	e.UnitID = unitWeb
+
+	return e, nil
 }
 
 func newService(t *testing.T, store *memStore) *jobproxysvc.Service {
@@ -124,9 +153,12 @@ func newService(t *testing.T, store *memStore) *jobproxysvc.Service {
 
 // entryOf returns the audit entry that the handler would hand to the service.
 func entryOf() audit.Entry {
+	session := audit.Change{Key: "session", Old: nil, New: "console", Layer: "", TakesEffect: ""}
+
 	return audit.Entry{
-		At: time.Time{}, Namespace: "", Subject: "alice", IDPSubject: "", TokenID: "", Action: "namespace:manage-proxy-rules",
-		Object: "acme", Version: "", ValuePath: "", ValueCount: nil, Changes: []audit.Change{{Key: "session", Old: nil, New: "console", Layer: "", TakesEffect: ""}}, SourceIP: "", UserAgent: "",
+		At: time.Time{}, Namespace: "", Subject: "alice", IDPSubject: "", TokenID: "",
+		Action: "namespace:manage-proxy-rules", Object: "acme", Version: "", ValuePath: "", ValueCount: nil,
+		Changes: []audit.Change{session}, SourceIP: "", UserAgent: "",
 		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "",
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "", Origin: nil,
 	}
@@ -142,15 +174,12 @@ func doc(id, host string, ops ...jobproxy.Operation) []byte {
 		ops = []jobproxy.Operation{jobproxy.OperationPlan}
 	}
 
-	list := ""
-
-	for i, op := range ops {
-		if i > 0 {
-			list += ","
-		}
-
-		list += `"` + string(op) + `"`
+	quoted := make([]string, 0, len(ops))
+	for _, op := range ops {
+		quoted = append(quoted, `"`+string(op)+`"`)
 	}
+
+	list := strings.Join(quoted, ",")
 
 	return []byte(`{"rules":[{"id":"` + id + `","operations":[` + list + `],"host":"` + host +
 		`","mode":"inspect","methods":["GET"],"paths":["/v1/**"]}]}`)

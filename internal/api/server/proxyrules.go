@@ -31,6 +31,12 @@ const (
 // maxProxyRulesBodyBytes bounds the body of a save of a proxy rule set.
 const maxProxyRulesBodyBytes = 64 * 1024
 
+// proxyRulesJSON is the one content type of a save of a proxy rule set.
+const proxyRulesJSON = "application/json"
+
+// errStoredProxyRuleSet is the answer for a stored set that no longer parses.
+var errStoredProxyRuleSet = errors.New("the stored proxy rule set is not valid")
+
 // digestPattern is the shape of the digest of a stored proxy rule set: the
 // lowercase hex SHA-256 of its document.
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -172,7 +178,8 @@ func (h *Handler) proxyRuleRoutes() []Route {
 	}
 
 	return []Route{
-		authorizedRoute(http.MethodGet, namespaceProxyRulesPath, nsRead, resolveNamespacePath, h.readNamespaceProxyRules),
+		authorizedRoute(http.MethodGet, namespaceProxyRulesPath, nsRead, resolveNamespacePath,
+			h.readNamespaceProxyRules),
 		authorizedRoute(http.MethodPut, namespaceProxyRulesPath, nsManage, resolveNamespacePath,
 			h.fresh(identity.ActionNamespaceManageProxyRules, h.saveNamespaceProxyRules)),
 		unitRow(http.MethodGet, unitProxyRulesPath, unitRead, h.readUnitProxyRules),
@@ -192,7 +199,8 @@ func (h *Handler) resolveProxyUnit(_ http.ResponseWriter, r *http.Request) (iden
 	}
 
 	unitID := r.PathValue("unit_id")
-	if err := rulestore.ValidScope(rulestore.Scope{Namespace: ns, UnitID: unitID}); err != nil || unitID == "" {
+	scopeErr := rulestore.ValidScope(rulestore.Scope{Namespace: ns, UnitID: unitID})
+	if scopeErr != nil || unitID == "" {
 		return identity.Object{}, errProxyRulesUnitPath
 	}
 
@@ -202,8 +210,9 @@ func (h *Handler) resolveProxyUnit(_ http.ResponseWriter, r *http.Request) (iden
 	}
 
 	ctx := r.Context()
-	if err := h.guard.Authorize(ctx, r, p, identity.ActionNamespaceRead, identity.NamespaceObject(ns)); err != nil {
-		return identity.Object{}, err
+	authErr := h.guard.Authorize(ctx, r, p, identity.ActionNamespaceRead, identity.NamespaceObject(ns))
+	if authErr != nil {
+		return identity.Object{}, authErr
 	}
 
 	entry, err := h.proxyRules.Unit(ctx, ns, unitID)
@@ -243,7 +252,7 @@ func proxyRuleSetOf(set jobproxysvc.Set) (proxyRuleSetBody, error) {
 	if err != nil {
 		// The cause names a field of a stored document, not of this request, so
 		// it must not answer as a 422 of the caller: the answer is a 500.
-		return proxyRuleSetBody{}, errors.New("the stored proxy rule set is not valid")
+		return proxyRuleSetBody{}, errStoredProxyRuleSet
 	}
 
 	for i := range parsed.Rules {
@@ -370,25 +379,33 @@ func (h *Handler) readRenderedProxyRules(
 func (h *Handler) saveNamespaceProxyRules(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
-	h.saveProxyRules(w, r, p, obj, rulestore.Scope{Namespace: obj.Namespace(), UnitID: ""},
-		identity.ActionNamespaceManageProxyRules)
+	h.saveProxyRules(w, r, p, obj, proxyRuleSave{
+		scope:  rulestore.Scope{Namespace: obj.Namespace(), UnitID: ""},
+		action: identity.ActionNamespaceManageProxyRules,
+	})
 }
 
 // saveUnitProxyRules serves PUT /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules.
 func (h *Handler) saveUnitProxyRules(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
-	h.saveProxyRules(w, r, p, obj, unitScope(r, obj), identity.ActionUnitManageProxyRules)
+	h.saveProxyRules(w, r, p, obj, proxyRuleSave{scope: unitScope(r, obj), action: identity.ActionUnitManageProxyRules})
+}
+
+// proxyRuleSave names the scope of a save and the action that the route declared.
+type proxyRuleSave struct {
+	scope  rulestore.Scope
+	action identity.Action
 }
 
 // saveProxyRules reads the request, saves the document and answers the stored
 // set. The digest of the If-Match header, when it is sent, must be the stored
 // digest. Without it, the last write wins.
 func (h *Handler) saveProxyRules(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
-	scope rulestore.Scope, action identity.Action,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object, save proxyRuleSave,
 ) {
 	ctx := r.Context()
+	scope, action := save.scope, save.action
 
 	doc, err := readProxyRulesBody(w, r)
 	if err != nil {
@@ -425,7 +442,7 @@ func (h *Handler) saveProxyRules(
 // and the size is at most maxProxyRulesBodyBytes.
 func readProxyRulesBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	mediaType, _, err := mime.ParseMediaType(apidesc.Header(r, "Content-Type"))
-	if err != nil || mediaType != "application/json" {
+	if err != nil || mediaType != proxyRulesJSON {
 		return nil, errProxyRulesMediaType
 	}
 

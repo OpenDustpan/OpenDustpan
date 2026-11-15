@@ -38,6 +38,9 @@ const maxRetries = 3
 // refresh.
 var ErrOperation = errors.New("the operation must be plan, apply, destroy or refresh")
 
+// ErrMissing reports a dependency that the Config of New does not give.
+var ErrMissing = errors.New("a dependency is missing")
+
 // Namespaces gives the namespace of a read, and the namespace of a write
 // with its current fence. *namespace.Service meets it.
 type Namespaces interface {
@@ -80,11 +83,11 @@ type Service struct {
 func New(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Store == nil:
-		return nil, errors.New("job proxy service: the rule store is missing")
+		return nil, fmt.Errorf("job proxy service: %w: the rule store", ErrMissing)
 	case cfg.Namespaces == nil:
-		return nil, errors.New("job proxy service: the namespace service is missing")
+		return nil, fmt.Errorf("job proxy service: %w: the namespace service", ErrMissing)
 	case cfg.Units == nil:
-		return nil, errors.New("job proxy service: the unit reader is missing")
+		return nil, fmt.Errorf("job proxy service: %w: the unit reader", ErrMissing)
 	}
 
 	now := cfg.Now
@@ -146,27 +149,6 @@ func (s *Service) Unit(ctx context.Context, ns namespace.Name, unitID string) (i
 	return e, nil
 }
 
-// checkScope checks that the namespace and, for a unit scope, the unit exist.
-func (s *Service) checkScope(ctx context.Context, scope rulestore.Scope) error {
-	if err := rulestore.ValidScope(scope); err != nil {
-		return fmt.Errorf("proxy rule set: %w", err)
-	}
-
-	if _, err := s.namespaces.Get(ctx, scope.Namespace); err != nil {
-		return fmt.Errorf("find namespace %q: %w", scope.Namespace, err)
-	}
-
-	if scope.UnitID == "" {
-		return nil
-	}
-
-	if _, err := s.Unit(ctx, scope.Namespace, scope.UnitID); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // Get returns the proxy rule set of scope. A scope that exists and holds no
 // set gives an empty Set. It returns namespace.ErrNotFound or
 // inventory.ErrUnitNotFound for a scope that does not exist.
@@ -176,20 +158,6 @@ func (s *Service) Get(ctx context.Context, scope rulestore.Scope) (Set, error) {
 	}
 
 	return s.read(ctx, scope)
-}
-
-// read returns the stored set of scope, or the empty set.
-func (s *Service) read(ctx context.Context, scope rulestore.Scope) (Set, error) {
-	stored, err := s.store.Get(ctx, scope)
-	if errors.Is(err, rulestore.ErrNotFound) {
-		return Set{Scope: scope, Document: nil, Digest: "", Version: 0, UpdatedAt: 0}, nil
-	}
-
-	if err != nil {
-		return Set{}, fmt.Errorf("read proxy rule set: %w", err)
-	}
-
-	return setOf(stored), nil
 }
 
 // setOf converts a stored set.
@@ -271,42 +239,6 @@ func (s *Service) Put(ctx context.Context, req PutRequest) (Set, error) {
 	return Set{}, fmt.Errorf("save proxy rule set: %w", rulestore.ErrConflict)
 }
 
-// entryOf returns the audit entry of a save with the old and the new digest.
-func (s *Service) entryOf(req PutRequest, oldDigest string) audit.Entry {
-	e := req.Entry
-	e.At = s.now().UTC()
-	e.Namespace = req.Scope.Namespace
-	e.ObjectID = req.Scope.UnitID
-	e.Changes = append(slices.Clone(req.Entry.Changes), audit.Change{
-		Key: "digest", Old: &oldDigest, New: rulestore.DocumentDigest(req.Document), Layer: "", TakesEffect: "",
-	})
-
-	return e
-}
-
-// parsed returns the proxy rules of the stored set of scope, in their order.
-// A scope with no set gives none.
-func (s *Service) parsed(ctx context.Context, scope rulestore.Scope) ([]jobproxy.Rule, error) {
-	set, err := s.read(ctx, scope)
-	if err != nil {
-		return nil, err
-	}
-
-	if set.Version == 0 {
-		return nil, nil
-	}
-
-	// Defense in depth: the store parses the document when it reads it. This
-	// check stays so that a store that does not cannot give a bad document to a
-	// reader.
-	rules, err := jobproxy.Parse(set.Document)
-	if err != nil {
-		return nil, fmt.Errorf("stored proxy rule set: %w", err)
-	}
-
-	return rules.Rules, nil
-}
-
 // Joined returns the proxy rules of the namespace set, then the proxy rules of
 // the unit set, each with its scope. Two scopes can use one ID: the scope tells
 // the entries apart. A unit with no set in both scopes has no proxy rules.
@@ -363,4 +295,75 @@ func (s *Service) Rendered(
 	}
 
 	return out, nil
+}
+
+// checkScope checks that the namespace and, for a unit scope, the unit exist.
+func (s *Service) checkScope(ctx context.Context, scope rulestore.Scope) error {
+	if err := rulestore.ValidScope(scope); err != nil {
+		return fmt.Errorf("proxy rule set: %w", err)
+	}
+
+	if _, err := s.namespaces.Get(ctx, scope.Namespace); err != nil {
+		return fmt.Errorf("find namespace %q: %w", scope.Namespace, err)
+	}
+
+	if scope.UnitID == "" {
+		return nil
+	}
+
+	if _, err := s.Unit(ctx, scope.Namespace, scope.UnitID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// read returns the stored set of scope, or the empty set.
+func (s *Service) read(ctx context.Context, scope rulestore.Scope) (Set, error) {
+	stored, err := s.store.Get(ctx, scope)
+	if errors.Is(err, rulestore.ErrNotFound) {
+		return Set{Scope: scope, Document: nil, Digest: "", Version: 0, UpdatedAt: 0}, nil
+	}
+
+	if err != nil {
+		return Set{}, fmt.Errorf("read proxy rule set: %w", err)
+	}
+
+	return setOf(stored), nil
+}
+
+// entryOf returns the audit entry of a save with the old and the new digest.
+func (s *Service) entryOf(req PutRequest, oldDigest string) audit.Entry {
+	e := req.Entry
+	e.At = s.now().UTC()
+	e.Namespace = req.Scope.Namespace
+	e.ObjectID = req.Scope.UnitID
+	e.Changes = append(slices.Clone(req.Entry.Changes), audit.Change{
+		Key: "digest", Old: &oldDigest, New: rulestore.DocumentDigest(req.Document), Layer: "", TakesEffect: "",
+	})
+
+	return e
+}
+
+// parsed returns the proxy rules of the stored set of scope, in their order.
+// A scope with no set gives none.
+func (s *Service) parsed(ctx context.Context, scope rulestore.Scope) ([]jobproxy.Rule, error) {
+	set, err := s.read(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+
+	if set.Version == 0 {
+		return nil, nil
+	}
+
+	// Defense in depth: the store parses the document when it reads it. This
+	// check stays so that a store that does not cannot give a bad document to a
+	// reader.
+	rules, err := jobproxy.Parse(set.Document)
+	if err != nil {
+		return nil, fmt.Errorf("stored proxy rule set: %w", err)
+	}
+
+	return rules.Rules, nil
 }

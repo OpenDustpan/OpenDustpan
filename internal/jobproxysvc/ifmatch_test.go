@@ -38,7 +38,8 @@ func TestProxyRuleSetStaleVersionRefused(t *testing.T) {
 	}
 
 	got, err := svc.Get(t.Context(), unitScope())
-	if err != nil || got.Digest != second.Digest || got.Version != 2 || strings.Contains(string(got.Document), "c.example.com") {
+	if err != nil || got.Digest != second.Digest || got.Version != 2 ||
+		strings.Contains(string(got.Document), "c.example.com") {
 		t.Fatalf("Get = %+v, %v, want the set of the second writer", got, err)
 	}
 
@@ -53,7 +54,8 @@ func TestProxyRuleSetIfMatchOfAMissingSetIsRefused(t *testing.T) {
 	svc := newService(t, newMemStore())
 
 	_, err := svc.Put(t.Context(), jobproxysvc.PutRequest{
-		Scope: nsScope(), Document: doc("a", "a.example.com"), IfMatch: rulestore.DocumentDigest([]byte("x")), Entry: entryOf(),
+		Scope: nsScope(), Document: doc("a", "a.example.com"),
+		IfMatch: rulestore.DocumentDigest([]byte("x")), Entry: entryOf(),
 	})
 	if !errors.Is(err, rulestore.ErrConflict) {
 		t.Fatalf("Put with a digest for a scope with no set: error = %v, want ErrConflict", err)

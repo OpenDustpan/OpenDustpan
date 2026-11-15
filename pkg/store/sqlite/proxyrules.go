@@ -33,13 +33,14 @@ type ProxyRuleStore struct {
 
 var _ rulestore.RuleStore = (*ProxyRuleStore)(nil)
 
-// proxyScopeColumns returns the scope_kind and unit_id columns of scope.
-func proxyScopeColumns(scope rulestore.Scope) (string, string) {
+// proxyScopeKind returns the scope_kind column of scope. The unit_id column is
+// scope.UnitID, which is empty for a namespace scope.
+func proxyScopeKind(scope rulestore.Scope) string {
 	if scope.UnitID == "" {
-		return proxyScopeNamespace, ""
+		return proxyScopeNamespace
 	}
 
-	return proxyScopeUnit, scope.UnitID
+	return proxyScopeUnit
 }
 
 // checkProxyWrite runs the checks that Put and Delete share before the
@@ -78,7 +79,7 @@ func (p *ProxyRuleStore) Get(ctx context.Context, scope rulestore.Scope) (rulest
 
 // getProxyRuleSet reads the proxy rule set of scope with q.
 func getProxyRuleSet(ctx context.Context, q *db.Queries, scope rulestore.Scope) (rulestore.Stored, error) {
-	kind, unit := proxyScopeColumns(scope)
+	kind, unit := proxyScopeKind(scope), scope.UnitID
 
 	row, err := q.GetProxyRuleSet(ctx, db.GetProxyRuleSetParams{
 		Namespace: scope.Namespace.String(), ScopeKind: kind, UnitID: unit,
@@ -119,7 +120,7 @@ func (p *ProxyRuleStore) Put(
 		return rulestore.Stored{}, fmt.Errorf("proxy rule set: %w", err)
 	}
 
-	kind, unit := proxyScopeColumns(c.Scope)
+	kind, unit := proxyScopeKind(c.Scope), c.Scope.UnitID
 	digest := rulestore.DocumentDigest(c.Document)
 	at := e.At.UnixMilli()
 
@@ -172,7 +173,7 @@ func (p *ProxyRuleStore) Delete(
 		return err
 	}
 
-	kind, unit := proxyScopeColumns(scope)
+	kind, unit := proxyScopeKind(scope), scope.UnitID
 
 	p.s.mu.RLock()
 	defer p.s.mu.RUnlock()
