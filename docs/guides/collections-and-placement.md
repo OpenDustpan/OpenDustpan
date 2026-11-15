@@ -37,7 +37,13 @@ are these:
 An invalid name gets `400` with the code `collection.invalid-name`. A name that
 is taken gets `409` with the code `collection.already-exists`.
 
-The answer holds `namespace`, `name` and `createdAt` in Unix seconds.
+The answer holds `id`, `namespace`, `name` and `createdAt` in Unix seconds:
+
+```json
+{"id":"col-payments","namespace":"acme","name":"payments","createdAt":1767225600}
+```
+
+The server makes the ID. The value above is an example, not an ID to choose.
 
 ## Read collections
 
@@ -47,7 +53,8 @@ The answer holds `namespace`, `name` and `createdAt` in Unix seconds.
 | `GET /api/dustpan/v1/namespaces/{namespace}/collections/{collection}` | `collection:read` on the collection | `200` |
 
 The list returns every collection of the namespace, ordered by name. It has no
-paging parameters in this release.
+paging parameters in this release. Both read routes return the stable `id`.
+Use this ID in placement rules. A name is a label only.
 
 ## Delete a collection
 
@@ -102,9 +109,15 @@ with the code `collection.changed`. Read the unit again, and retry.
 ## Placement rules
 
 A placement rule names the collection of a new stack. A rule has a `tool`, a
-`project` pattern, a `stack` pattern and a `collection`. The rules of a namespace
+`project` pattern, a `stack` pattern and a `collectionId`. The rules of a namespace
 are ordered. The first rule that matches a new stack names its collection. A
 later rule does not apply.
+
+Rule reads return both `collectionId` and `collection`, the current name.
+Writes require `collectionId` and refuse `collection`, also when both fields
+are present. The ID must belong to a collection in the same namespace.
+If someone deletes a collection and makes it again, the new collection gets
+a different ID. It does not take the placement rules of the old collection.
 
 A pattern is a glob. A `*` matches any run of characters, and nothing else is a
 wildcard. The full rules are in the [placement rules reference](../reference/placement-rules-api.md).
@@ -133,10 +146,16 @@ with the same rules. A workspace has no project, so the server matches the rules
 with the project `*`. A rule for a workspace has the `tool` `opentofu`. The
 `stack` pattern of the rule matches the name of the workspace.
 
+This example uses a collection named `platform`. Create it first.
+Read its ID, then write the rule. These commands use `jq` to read the JSON:
+
 ```sh
+PLATFORM_COLLECTION_ID=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  https://dustpan.example.com/api/dustpan/v1/namespaces/acme/collections/platform | jq -r '.id')
+
 curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"tool":"opentofu","project":"*","stack":"*","collection":"platform"}' \
+  -d "{\"tool\":\"opentofu\",\"project\":\"*\",\"stack\":\"*\",\"collectionId\":\"$PLATFORM_COLLECTION_ID\"}" \
   https://dustpan.example.com/api/dustpan/v1/namespaces/acme/placement-rules
 ```
 
@@ -169,10 +188,15 @@ repeat the request.
 Without `position`, a new rule goes to the end of the list. With `position`, the
 rule goes to that place, and the rules from that place move down by one.
 
+This example uses a collection named `payments-prod`. Create it first.
+
 ```sh
+PAYMENTS_PROD_COLLECTION_ID=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  https://dustpan.example.com/api/dustpan/v1/namespaces/acme/collections/payments-prod | jq -r '.id')
+
 curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"tool":"pulumi","project":"payments","stack":"prod*","collection":"payments-prod"}' \
+  -d "{\"tool\":\"pulumi\",\"project\":\"payments\",\"stack\":\"prod*\",\"collectionId\":\"$PAYMENTS_PROD_COLLECTION_ID\"}" \
   https://dustpan.example.com/api/dustpan/v1/namespaces/acme/placement-rules
 ```
 
@@ -188,7 +212,7 @@ with the project `payments` and the stack `*` hides a later rule with the projec
 
 ### Change and delete a rule
 
-`PUT` replaces the `tool`, `project`, `stack` and `collection`. All four are
+`PUT` replaces the `tool`, `project`, `stack` and `collectionId`. All four are
 required. A `position` moves the rule.
 
 `DELETE` deletes the rule and closes the gap in the positions. The stacks that
@@ -213,6 +237,8 @@ stack.
 | `collection.not-empty` | `409` | The collection holds a live unit. |
 | `collection.changed` | `409` | The source collection of a move is not the one the caller expects. |
 | `unit.no-collection` | `409` | A step needs a unit that is in a collection, and the unit is in none. |
+| `placement.collection-id-required` | `400` | The rule needs `collectionId`. A name in `collection` is not a write field. |
+| `placement.invalid-collection-id` | `400` | The ID has an invalid form. Read the collection to get its `id`. |
 | `placement.conflict` | `409` | A rule is hidden by an earlier rule. |
 | `placement.no-match` | `422` | No rule matches a new stack, so the server does not make it. |
 | `placement.unavailable` | `501` | The server keeps no placement rules, so it cannot place a new stack. |

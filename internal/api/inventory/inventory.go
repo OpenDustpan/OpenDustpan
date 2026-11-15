@@ -715,6 +715,10 @@ func classifyCollection(err error) (problem.Problem, bool) {
 // classifyPlacement maps the errors of the placement rules.
 func classifyPlacement(err error) (problem.Problem, bool) {
 	switch {
+	case errors.Is(err, errPlacementCollectionIDRequired):
+		return problem.New(http.StatusBadRequest, errcode.PlacementCollectionIDRequired, err.Error()), true
+	case errors.Is(err, errPlacementCollectionID):
+		return problem.New(http.StatusBadRequest, errcode.PlacementInvalidCollectionID, err.Error()), true
 	case errors.Is(err, collection.ErrInvalidPattern):
 		return problem.New(http.StatusBadRequest, errcode.PlacementInvalidPattern, err.Error()), true
 	case errors.Is(err, collection.ErrInvalidPlacementTool):

@@ -3,6 +3,10 @@ package errcode
 // The codes of the area. A code is never removed and never changes its
 // meaning.
 const (
+	// PlacementCollectionIDRequired means that a placement write has no collection ID.
+	PlacementCollectionIDRequired = "placement.collection-id-required"
+	// PlacementInvalidCollectionID means that the collection ID has an invalid form.
+	PlacementInvalidCollectionID = "placement.invalid-collection-id"
 	// PlacementConflict means that a placement rule is hidden by an earlier rule, or hides a later rule.
 	PlacementConflict = "placement.conflict"
 	// PlacementInvalidPattern means that a pattern of a placement rule is not valid.
@@ -26,6 +30,8 @@ const (
 // placementSpecs are the codes of the placement rules of collections.
 func placementSpecs() []Spec {
 	return []Spec{
+		{Code: PlacementCollectionIDRequired, Meaning: "the placement rule needs a collection ID", Args: nil},
+		{Code: PlacementInvalidCollectionID, Meaning: "the collection ID has an invalid form", Args: nil},
 		{
 			Code:    PlacementConflict,
 			Meaning: "a placement rule is hidden by an earlier rule, or hides a later rule",

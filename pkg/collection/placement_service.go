@@ -15,11 +15,11 @@ import (
 // the place in the list from 1. Zero means the end of the list for a new rule
 // and the current place for a changed rule.
 type RuleInput struct {
-	Tool       string
-	Project    Pattern
-	Stack      Pattern
-	Collection Name
-	Position   int
+	Tool         string
+	Project      Pattern
+	Stack        Pattern
+	CollectionID string
+	Position     int
 }
 
 // PlacementConfig holds the dependencies of a PlacementService.
@@ -74,7 +74,8 @@ func (s *PlacementService) Create(
 	at := s.now().UTC()
 	r := Rule{
 		CreatedAt: at, ID: ident.NewID("plr-"), Namespace: ns, Tool: in.Tool, Project: in.Project,
-		Stack: in.Stack, Collection: in.Collection, CreatedBy: by.Subject, Position: in.Position,
+		Stack: in.Stack, CollectionID: in.CollectionID, CollectionName: "",
+		CreatedBy: by.Subject, Position: in.Position,
 	}
 
 	by.At = at
@@ -105,7 +106,7 @@ func (s *PlacementService) Update(
 
 	r := Rule{
 		ID: id, Namespace: ns, Tool: in.Tool, Project: in.Project, Stack: in.Stack,
-		Collection: in.Collection, Position: in.Position,
+		CollectionID: in.CollectionID, CollectionName: "", Position: in.Position,
 		// The store keeps the creator and the creation time of the stored rule.
 		CreatedAt: time.Time{}, CreatedBy: "",
 	}
@@ -177,11 +178,22 @@ func (s *PlacementService) Place(
 		return Rule{}, &PlacementError{Namespace: ns, Tool: tool, Project: project, Stack: stack}
 	}
 
+	// Defense in depth: store writes validate each rule too. This check does
+	// not trust stored rows or another implementation of the port.
+	if err := r.Validate(); err != nil {
+		return Rule{}, fmt.Errorf("placement rule: %w", err)
+	}
+	// Defense in depth: the store scopes its reads to the namespace. Do not
+	// trust a foreign rule from another implementation of the port.
+	if r.Namespace != ns {
+		return Rule{}, ErrPlacementCollectionMissing
+	}
+
 	return r, nil
 }
 
 // checkRuleInput rejects a rule with a tool that has no placement rules, with
-// an invalid pattern or collection name, or with a negative position. Defense
+// an invalid pattern or collection ID, or with a negative position. Defense
 // in depth: the HTTP handler parses the same fields, and the store validates
 // the rule again; this check stays so that a new caller of the service gets a
 // clear error before any read.
@@ -190,7 +202,7 @@ func checkRuleInput(in RuleInput) error {
 		return fmt.Errorf("%w: %d", ErrInvalidPosition, in.Position)
 	}
 
-	return validateRuleFields(in.Tool, in.Project, in.Stack, in.Collection)
+	return validateRuleFields(in.Tool, in.Project, in.Stack, in.CollectionID)
 }
 
 func (s *PlacementService) fence(ctx context.Context, ns namespace.Name) (namespace.Fence, error) {

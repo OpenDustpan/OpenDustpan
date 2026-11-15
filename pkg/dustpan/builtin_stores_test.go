@@ -102,10 +102,11 @@ func TestWithSQLiteAlone(t *testing.T) {
 		method: http.MethodPost, path: "/api/dustpan/v1/namespaces/acme/collections", body: `{"name":"default"}`,
 	}, http.StatusCreated)
 
+	id := placementCollectionID(t, f, "acme", "default")
 	for _, tool := range []string{"pulumi", "opentofu"} {
 		mustDo(t, f, call{
 			method: http.MethodPost, path: "/api/dustpan/v1/namespaces/acme/placement-rules",
-			body: `{"tool":"` + tool + `","project":"*","stack":"*","collection":"default"}`,
+			body: `{"tool":"` + tool + `","project":"*","stack":"*","collectionId":"` + id + `"}`,
 		}, http.StatusCreated)
 	}
 

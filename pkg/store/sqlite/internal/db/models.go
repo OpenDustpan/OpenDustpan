@@ -882,15 +882,15 @@ type PersonPreference struct {
 }
 
 type PlacementRule struct {
-	ID            string
-	Namespace     string
-	Position      int64
-	Tool          string
-	Project       string
-	Stack         string
-	CollectionKey string
-	CreatedBy     string
-	CreatedAtMs   int64
+	ID           string
+	Namespace    string
+	Position     int64
+	Tool         string
+	Project      string
+	Stack        string
+	CollectionID string
+	CreatedBy    string
+	CreatedAtMs  int64
 }
 
 type Principal struct {

@@ -2,6 +2,7 @@ package inventory_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -72,8 +73,51 @@ func (m *memCollections) GetCollection(_ context.Context, ref collection.Ref) (c
 	}, nil
 }
 
-func (m *memCollections) ListCollections(_ context.Context, _ namespace.Name) ([]collection.Collection, error) {
-	return nil, nil
+func (m *memCollections) ListCollections(ctx context.Context, ns namespace.Name) ([]collection.Collection, error) {
+	out := make([]collection.Collection, 0)
+	for key, name := range m.collections {
+		if key != collectionKey(ns, name) {
+			continue
+		}
+		c, err := m.GetCollection(ctx, collection.Ref{Namespace: ns, Name: name})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+func TestCollectionListAnswersTheID(t *testing.T) {
+	t.Parallel()
+
+	f := newMoveFixture(t, selectiveAuthorizer{deny: nil})
+	base := "/api/dustpan/v1/namespaces/acme/collections"
+	code, body := placementCall(t, f.handler, http.MethodGet, base, "")
+	expectStatus(t, code, body, http.StatusOK)
+
+	var doc struct {
+		Collections []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"collections"`
+	}
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Collections) != 2 {
+		t.Fatalf("list has %d collections, want 2", len(doc.Collections))
+	}
+	for _, c := range doc.Collections {
+		if c.ID != "col-"+c.Name {
+			t.Errorf("collection %q has ID %q, want its stored ID", c.Name, c.ID)
+		}
+		code, body = placementCall(t, f.handler, http.MethodGet, base+"/"+c.Name, "")
+		expectStatus(t, code, body, http.StatusOK)
+		if got := idOf(t, body); got != "col-"+c.Name {
+			t.Errorf("read ID = %q, want the stored ID", got)
+		}
+	}
 }
 
 func (m *memCollections) DeleteCollection(

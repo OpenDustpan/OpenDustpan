@@ -512,14 +512,20 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 	}
 
 	h.call(http.MethodPost, "/api/server/namespaces", `{"name":"acme"}`, http.StatusCreated)
-	h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/collections", `{"name":"everything"}`, http.StatusCreated)
+	body := h.call(
+		http.MethodPost, "/api/dustpan/v1/namespaces/acme/collections", `{"name":"everything"}`, http.StatusCreated,
+	)
+	var target struct {
+		ID string `json:"id"`
+	}
+	h.decode(body, &target)
 	h.call(
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
-		`{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
+		`{"tool":"pulumi","project":"*","stack":"*","collectionId":"`+target.ID+`"}`, http.StatusCreated,
 	)
 	h.call(
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
-		`{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
+		`{"tool":"opentofu","project":"*","stack":"*","collectionId":"`+target.ID+`"}`, http.StatusCreated,
 	)
 
 	return h
