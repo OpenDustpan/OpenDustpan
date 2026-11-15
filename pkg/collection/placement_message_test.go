@@ -8,10 +8,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// TestPlacementErrorNamesTheRoutes: the collection route is listed in the API
-// description, and the unit route is registered in the inventory API. The test
-// checks that the no-match error names both.
-func TestPlacementErrorNamesTheRoutes(t *testing.T) {
+// TestPlacementErrorNamesTheCommand checks that the no-match error names
+// the command that adds a placement rule.
+func TestPlacementErrorNamesTheCommand(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -20,12 +19,10 @@ func TestPlacementErrorNamesTheRoutes(t *testing.T) {
 		want      []string
 	}{
 		{
-			name:      "names the collection route and the unit route",
+			name:      "names the placement command",
 			namespace: "acme",
 			want: []string{
-				"POST /api/dustpan/v1/namespaces/acme/collections",
-				"PUT /api/inventory/unit-collection",
-				"POST /api/dustpan/v1/namespaces/acme/placement-rules",
+				"opendustpan placement add",
 			},
 		},
 	}
