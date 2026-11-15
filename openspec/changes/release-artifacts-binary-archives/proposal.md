@@ -8,7 +8,7 @@ version: 2
 
 The user path this change must make work:
 
-1. **CLI.** Run the NEW Make target `release-build` for a version to produce four archives and SHA256SUMS
+1. **CLI.** Run the NEW Make target `release-build`, which calls the script `scripts/release-build.sh` of main (changed in place), for a version to produce four archives and SHA256SUMS
 2. **CLI.** Run the NEW Make target `release-verify` for the same version to check checksums, files, licenses, and stamp
 
 Errors the person may hit, and the one command that helps:
@@ -28,7 +28,7 @@ Evidence for the claims above:
 ## What Changes
 
 - Version stamped Linux and macOS tar.gz archives with SHA256SUMS and license files
-- The NEW Make targets `release-build` and `release-verify` with reproducible tar order
+- The NEW Make targets `release-build` and `release-verify`. The script `scripts/release-build.sh` of main changes in place (no second build script): sorted tar order, fixed owner, mode and mtime, `gzip -n`, `-buildvcs=false`. The archive names stay `opendustpan_<version>_<os>_<arch>.tar.gz` and the record check stays first. The NEW script `scripts/release-verify.sh` checks a set
 - Refusal of bad version, missing license, checksum mismatch, missing file, and bad stamp
 
 Out of scope:
@@ -50,6 +50,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
+- The script `scripts/release-build.sh` already builds the four platforms, packs the binary, LICENSE, README.md and third_party_licenses/, writes SHA256SUMS, and runs `scripts/check-release-record.sh` first (`scripts/release-build.sh:33`; `internal/releaserecord/releaserecord_test.go:801 (TestReleaseBuildChecksTheRecordFirst)`)
 - Release build variant is already tested against journal version zero (`internal/api/pulumi/journal_release_internal_test.go:10 (TestReleaseBuildAnswersJournalVersionZero)`)
 - Backup check already refuses a manifest with no checksum (`pkg/backup/check_checksum_test.go:78 (TestCheckRefusesAManifestWithNoChecksum)`)
 - OpenAPI route is already checked to be the same for every build (`pkg/dustpan/apidesc_test.go:644 (TestOpenAPIRouteIsTheSameForEveryBuild)`)

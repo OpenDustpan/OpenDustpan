@@ -68,6 +68,7 @@ var rootPrefixes = map[string]string{
 	"/oidc/":          "issuer",
 	"/v1/providers/":  "tfe",
 	"/v1/modules/":    "tfe",
+	"/v1/mirror/":     "tfe",
 }
 
 // rootMethods lists the patterns with a method that code may register

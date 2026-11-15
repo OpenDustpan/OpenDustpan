@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -96,12 +97,13 @@ func (h *Handler) choosePlacement(
 	}
 
 	if err != nil {
+		h.recordPlacementRefusal(r, p, ref.Namespace)
 		h.writeError(ctx, w, err)
 
 		return none, false
 	}
 
-	target := identity.CollectionObject(ref.Namespace, rule.Collection.String())
+	target := identity.CollectionObject(ref.Namespace, rule.CollectionName.String())
 
 	err = h.guard.Authorize(ctx, r, p, identity.ActionCollectionCreateUnit, target)
 	if err != nil {
@@ -110,22 +112,38 @@ func (h *Handler) choosePlacement(
 		return none, false
 	}
 
-	id, found, err := h.placer.Collections.CollectionID(ctx, target)
-
-	switch {
-	case err != nil:
+	id, err := h.readPlacementCollection(ctx, target, &rule)
+	if err != nil {
+		h.recordPlacementRefusal(r, p, ref.Namespace)
 		h.writeError(ctx, w, err)
 
 		return none, false
-	case !found:
-		h.writeError(ctx, w, fmt.Errorf("placement rule %s names collection %q: %w",
-			rule.ID, rule.Collection, collection.ErrPlacementCollectionMissing))
-
-		return none, false
-	default:
 	}
 
 	return placement{rule: rule, id: id}, true
+}
+
+func (h *Handler) readPlacementCollection(
+	ctx context.Context, target identity.Object, rule *collection.Rule,
+) (string, error) {
+	id, found, err := h.placer.Collections.CollectionID(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("read placement collection: %w", err)
+	}
+	// Defense in depth: the service selects an ID, and the store checks it
+	// on the write. A name read here must still return that same ID.
+	if !found || id != rule.CollectionID || collection.ValidateCollectionID(rule.CollectionID) != nil {
+		return "", fmt.Errorf("placement rule %s names collection %q (%s): %w",
+			rule.ID, rule.CollectionName, rule.CollectionID, collection.ErrPlacementCollectionMissing)
+	}
+	return id, nil
+}
+
+func (h *Handler) recordPlacementRefusal(r *http.Request, p identity.Principal, ns namespace.Name) {
+	h.guard.Record(r.Context(), r, p, refusal.Denial{
+		Action: identity.ActionCollectionCreateUnit, Object: identity.NamespaceObject(ns),
+		Reason: "stack placement failed", ReasonWithin: nil, Window: 0,
+	})
 }
 
 // errPlacementOff reports a server with no Placer: it keeps no placement
@@ -145,10 +163,10 @@ func stackPlacement(r *http.Request, p identity.Principal, ref stack.Ref, at pla
 	entry := changeEntry(r.Context(), changeAudit{
 		request: r, principal: p, object: obj, action: identity.ActionCollectionCreateUnit,
 	})
-	entry.Version = "from=none;to=" + at.rule.Collection.String() + ";rule=" + at.rule.ID
+	entry.Version = "from=none;to=" + at.rule.CollectionID + ";rule=" + at.rule.ID
 
 	return stack.Placement{
-		Collection:   collection.Ref{Namespace: ref.Namespace, Name: at.rule.Collection},
+		Collection:   collection.Ref{Namespace: ref.Namespace, Name: at.rule.CollectionName},
 		CollectionID: at.id,
 		Entry:        entry,
 	}, nil

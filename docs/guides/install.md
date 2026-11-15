@@ -24,6 +24,21 @@ docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:v0.1.0
 docker buildx imagetools inspect docker.io/opendustpan/opendustpan:v0.1.0
 ```
 
+## Pull by digest
+
+A tag can name another image later. A digest cannot. Name the digest when
+the image of a deployment must stay the same:
+
+```sh
+docker pull ghcr.io/opendustpan/opendustpan@sha256:<digest>
+```
+
+Read the digest of a release in two places:
+
+- The summary of the release workflow run for the tag, on the GitHub
+  Actions page of the repository.
+- The output of `docker buildx imagetools inspect ghcr.io/opendustpan/opendustpan:<tag>`.
+
 ## Install with Helm
 
 Make the two Secrets first. The chart refuses an install without both

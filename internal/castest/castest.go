@@ -74,10 +74,14 @@ const (
 	// proxies and a proxy-granting ticket.
 	AnswerProxy
 	// AnswerSlow is a success answer that the server sends after the time
-	// of Config.SlowFor, or never when the request ends first.
+	// of Config.SlowFor. When the request ends first, the server ends the
+	// connection and sends no answer, as a real server that does not answer
+	// in time does.
 	AnswerSlow
 	// AnswerBroken is an answer that is not a CAS service response.
 	AnswerBroken
+	// AnswerEmpty is a status 200 with an empty body.
+	AnswerEmpty
 	// AnswerRedirect is a redirect to Config.RedirectTo.
 	AnswerRedirect
 	// AnswerTwoUsers is a success answer with two user elements.
@@ -318,7 +322,10 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, tk ticket) {
 	case AnswerSlow:
 		select {
 		case <-r.Context().Done():
-			return
+			// A plain return here makes net/http send a status 200 with an
+			// empty body, which the client can read as an answer. Abort the
+			// response so that the client sees no answer at all.
+			panic(http.ErrAbortHandler)
 		case <-time.After(s.slowFor):
 		}
 
@@ -328,6 +335,8 @@ func (s *Server) answer(w http.ResponseWriter, r *http.Request, tk ticket) {
 		w.WriteHeader(http.StatusFound)
 	case AnswerBroken:
 		write(w, `{"serviceResponse": "not XML"}`)
+	case AnswerEmpty:
+		w.WriteHeader(http.StatusOK)
 	case AnswerInternalError:
 		writeFailure(w, "INTERNAL_ERROR")
 	case AnswerSuccess, AnswerNoAuthenticationDate, AnswerNotFromNewLogin, AnswerDTD, AnswerEntityExpansion,
@@ -406,7 +415,7 @@ func userXML(tk ticket) userParts {
 	case AnswerTwoUsers:
 		return userParts{prolog: "", user: plain + "<cas:user>mallory</cas:user>"}
 	case AnswerSuccess, AnswerNoAuthenticationDate, AnswerNotFromNewLogin, AnswerDeep, AnswerOversized,
-		AnswerProxy, AnswerSlow, AnswerBroken, AnswerRedirect, AnswerInternalError:
+		AnswerProxy, AnswerSlow, AnswerBroken, AnswerEmpty, AnswerRedirect, AnswerInternalError:
 		return userParts{prolog: "", user: plain}
 	default:
 		return userParts{prolog: "", user: ""}

@@ -6,7 +6,8 @@ Backup target writes run on two or more instances behind one load balancer on on
 
 1. **Attempt prefix as a type.** Attempt-scoped layout `backups/<id>/<attempt>/` makes cross-attempt damage impossible by shape. NEW unexported type `attemptPrefix` in `pkg/backup` with NEW constructor `newAttemptPrefix` checks allowlist for each part and refuses dot-dot and slash. Clear, put, delete, and manifest-write helpers take `attemptPrefix`, never a plain string. The attempt equals the claim fencing token, stored in the backups baseline row and in the manifest. Each Put and each Delete re-reads the claim token right before the target call and skips the call when the claim moved. Finish calls `Check` on that prefix with sizes and blob copies, then commits in the fenced transaction that compares manifest attempt with live claim attempt. The manifest write is fenced too.
 2. **Cleanup under the live claim.** Only the live-claim holder deletes old prefixes, after its own finish commit. The live holder lists the parent `backups/<id>/`, deletes only non-live attempt prefixes of the same backup, and re-checks the claim before each delete batch. It never deletes the live prefix named by the finished manifest. A stale writer that resumes after the delete recreates only its own stale prefix; the next list by the live holder removes it again. A backup that never finishes leaves its prefixes in the target. Main has no backup retention and no backup delete, so they stay until an operator deletes them; the several-instances guide names the attempt layout so that the operator can find them.
-3. **Baseline edit.** Schema change is an in-place edit of the baseline of each dialect adding the backups attempt column, per ADR 322. No numbered migration and no old-layout read path because no tag shipped the old layout.
+3. **Live pointer.** A reader that has only the target and the backup id cannot find the live attempt prefix from the manifest, because the manifest lies inside that prefix (a restore into a fresh installation is such a reader: `Check` at pkg/backup/service.go and `readManifestLimit` read `backups/<id>/manifest.json` today). So the live holder writes the fixed object `backups/<id>/live.json`. It holds only the attempt. The holder writes it once, after its fenced finish commit succeeded, and it re-checks the claim right before the put. A reader reads the pointer with a size limit, builds the attempt prefix with `newAttemptPrefix` (allowlist), reads the manifest in that prefix, and requires that the manifest names the same attempt and the same backup id. No pointer, an unreadable pointer, a pointer that fails the allowlist, a missing manifest and a mismatch each report `backup.corrupt`. There is no fallback to a listing of the parent prefix. Cleanup (decision 2) runs only after the pointer write and never deletes the prefix that the pointer names.
+4. **Baseline edit.** Schema change is an in-place edit of the baseline of each dialect adding the backups attempt column, per ADR 322. No numbered migration and no old-layout read path because no tag shipped the old layout.
 
 ## Structure
 
@@ -14,7 +15,8 @@ NEW unexported type `attemptPrefix` in `pkg/backup` built only by NEW `newAttemp
 
 ## Risks
 
-- Manifest must name the attempt or a reader cannot tell which prefix is live.
+- The manifest must name the attempt, and the pointer must name the same attempt, or a reader cannot tell which prefix is live. A reader refuses a pointer and a manifest that differ.
+- A crash between the finish commit and the pointer write leaves a finished row with no pointer. The backup reads corrupt until the live holder writes the pointer again on its next pass; the finish step is idempotent for the pointer.
 - Each takeover leaves one orphaned prefix until the live holder deletes it.
 
 ## Diagrams
@@ -29,6 +31,9 @@ participant T as pkg/blob
 W->>T: Put attempt prefix files
 W->>T: List attempt prefix against manifest
 W->>D: Fenced finish write with attempt compare
+W->>D: Re-check the claim
+W->>T: Put live.json with the attempt
+W->>T: Delete non-live attempt prefixes
 ```
 
 Modules that the change touches, and their imports on main:
@@ -91,20 +96,27 @@ A --> D
 | store boundary | I | A stale holder commits finish or cleanup for an attempt it no longer holds. | limit | Only the live-claim holder deletes non-live prefixes of the same backup. | Delete a live prefix from a stale claim and check it is refused. |
 | store boundary | I | A stale holder commits finish or cleanup for an attempt it no longer holds. | authorize at point of use | Cleanup delete checks the live claim at the point of use before each batch. | Run cleanup with a stale token and check no delete happens. |
 | store boundary | I | A stale holder commits finish or cleanup for an attempt it no longer holds. | fail closed | Deny cleanup on fence loss and leave the prefixes for the live holder. | Lose the claim mid-cleanup and check that the remaining prefixes stay. |
+| worker boundary | T | A stale holder writes or replaces the live pointer after a survivor finished. | boundary check | The pointer holds only the attempt, and the writer builds it from the attemptPrefix type. | Send a pointer with dot-dot, a slash or an oversized attempt and check the reader refuses it. |
+| worker boundary | T | A stale holder writes or replaces the live pointer after a survivor finished. | limit | Only the live-claim holder writes the pointer, once, after its fenced finish commit. | Replay a pointer write from a stale holder and check the pointer still names the survivor. |
+| worker boundary | T | A stale holder writes or replaces the live pointer after a survivor finished. | authorize at point of use | The writer re-checks the claim right before the put and skips the put when the claim moved. | Move the claim between the check and the put in a fake store and check no pointer is written by the stale holder. |
+| worker boundary | T | A stale holder writes or replaces the live pointer after a survivor finished. | fail closed | No pointer, an unreadable pointer, a pointer that fails the allowlist and a manifest that names another attempt or backup id each report corrupt, with no fallback to a listing. | Remove the pointer, truncate it, and change the manifest attempt, and check Check reports `backup.corrupt` each time. |
+| worker boundary | T | A cleanup deletes the prefix that the pointer names. | limit | Cleanup runs only after the pointer write and never deletes the prefix that the pointer names. | Run cleanup with a pointer that names a listed prefix and check that prefix stays. |
 
 ## Contracts
 
 **backup**
 
 - Invariant: A finished backup id names exactly one live attempt prefix and its manifest names that attempt.
+- Invariant: A finished backup id has one fixed pointer `backups/<id>/live.json` that names its live attempt, and the manifest in that attempt prefix names the same attempt and backup id.
 - Invariant: A stale attempt writes or deletes only under its own attempt prefix.
 - Invariant: Only the holder of the live claim deletes a non-live attempt prefix of the same backup.
-- `Check`: pre: Manifest names the attempt prefix of the backup.. Post: Reports corrupt when a listed file of the attempt prefix is missing or its size differs from the manifest..
+- `Check`: pre: The pointer names an attempt prefix and the manifest in it names the same attempt and backup id.. Post: Reports corrupt when a listed file of the attempt prefix is missing or its size differs from the manifest..
 
 ## Failure modes
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
 | Backup target write | Instance killed between target writes and finish commit | Another worker instance reclaims after lease expiry and runs the next attempt under a new prefix | Backup stays running; old prefix is orphaned until the live holder deletes it |
+| Backup finish pointer | Instance killed after the finish commit and before the pointer write | The live holder writes the pointer again on its next pass, after it re-checks the claim | Backup reads corrupt (no pointer) until then; no listing fallback |
 | Backup finish | Stale holder resumes with blob delete in flight after survivor finish | No retry; delete lands under the stale attempt prefix only | Finished backup stays complete; Check passes |
 | Backup finish cleanup | Cleanup lists parent while a stale writer still runs | Live holder re-lists the parent and deletes the recreated stale prefix | Live prefix stays readable; stale prefix is removed on the next pass |

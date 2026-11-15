@@ -4,13 +4,13 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add failing test in the NEW file scripts/release/release_build_test.go (package release, NEW) for sorted tar order, fixed owner mode mtime, gzip -n level 9, and byte equal rebuild Check: TestReleaseArchivesAreReproducible fails on main, passes after
-- [ ] 1.2 Add failing test in the NEW file scripts/release/release_verify_test.go (package release, NEW) for bad version, missing license, missing or extra file, checksum mismatch, traversal entry, and stamp mismatch without execution Check: TestReleaseVerifyRefusesBadInput fails on main, passes after
+- [ ] 1.1 Add failing test in the NEW file internal/releaserecord/release_archives_test.go (package releaserecord_test, NEW; it builds in a temporary copy of the work tree whose release record the test extends with a line for the test version) for sorted tar order, fixed owner mode mtime, gzip -n level 9, and byte equal rebuild Check: TestReleaseArchivesAreReproducible (NEW symbol, not on main) fails on main because scripts/release-build.sh:60 runs tar -czf with no sorted order, fixed owner or mtime and no gzip -n, passes after
+- [ ] 1.2 Add failing test in the NEW file internal/releaserecord/release_verify_test.go (package releaserecord_test, NEW) for bad version, missing license, missing or extra file, checksum mismatch, traversal entry, and stamp mismatch without execution Check: TestReleaseVerifyRefusesBadInput (NEW symbol, not on main) fails on main because scripts/release-verify.sh (NEW) does not exist, passes after
 
 ## 2. Build
 
-- [ ] 2.1 Add the NEW build script scripts/release/build.sh (NEW) and the NEW Make target release-build in Makefile with CGO_ENABLED=0, -trimpath, -buildvcs=false, and ldflags stamp Check: The NEW Make target `make release-build VERSION=v0.1.0` writes four archives plus SHA256SUMS
-- [ ] 2.2 Add the NEW verify script scripts/release/verify.sh (NEW) and the NEW Make target release-verify in Makefile with read only fail closed checks and string based stamp check Check: The NEW Make target `make release-verify VERSION=v0.1.0` passes on a good set and fails on each corrupt set
+- [ ] 2.1 Change the script scripts/release-build.sh in place (no second build script; keep the record check before the first `go build`, the names `opendustpan_<version>_<os>_<arch>.tar.gz`, and the four platforms), and add the NEW Make target release-build in Makefile that calls it with VERSION and an output directory, with CGO_ENABLED=0, -trimpath, -buildvcs=false, and ldflags stamp Check: `go test ./internal/releaserecord -run 'TestReleaseArchivesAreReproducible|TestReleaseBuildChecksTheRecordFirst' -count=1` passes, and `make release-build VERSION=v0.1.0` refuses with the record message until the release record lists v0.1.0 (the tag step adds that line)
+- [ ] 2.2 Add the NEW verify script scripts/release-verify.sh (NEW) and the NEW Make target release-verify in Makefile with read only fail closed checks and string based stamp check Check: The NEW Make target `make release-verify VERSION=v0.1.0` passes on a good set and fails on each corrupt set
 
 ## 3. Side effects (computed from main)
 

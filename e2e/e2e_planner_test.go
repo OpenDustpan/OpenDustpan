@@ -104,9 +104,12 @@ func plannerSetup(ctx context.Context, t *testing.T, env *e2e.Env) {
 		http.MethodPost, base + "/collections", collectionBody(t, "team"), http.StatusCreated,
 	}, nil)
 
+	// A rule names its collection by ID, read after the create above.
+	team := placementCollectionID(ctx, t, env, plannerNamespace, "team")
+
 	for _, rule := range []string{
-		`{"tool":"pulumi","project":"scope","stack":"a","collection":"team"}`,
-		`{"tool":"opentofu","project":"*","stack":"a","collection":"team"}`,
+		fmt.Sprintf(`{"tool":"pulumi","project":"scope","stack":"a","collectionID":%q}`, team),
+		fmt.Sprintf(`{"tool":"opentofu","project":"*","stack":"a","collectionID":%q}`, team),
 	} {
 		principalCall(ctx, t, env, principalStep{
 			http.MethodPost, base + "/placement-rules", rule, http.StatusCreated,

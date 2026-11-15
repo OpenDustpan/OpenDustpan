@@ -191,3 +191,17 @@ func registryAllowEntries() []AllowEntry {
 		},
 	}
 }
+
+// registryMirrorAllowEntries covers the routes of the provider network mirror.
+func registryMirrorAllowEntries() []AllowEntry {
+	const (
+		test = "TestRegistryMirrorHTTP"
+		base = "/v1/mirror/{hostname}/{namespace}/{type}"
+		why  = "OpenTofu calls it for a network mirror, but its mirror path cannot hold a host with a port, and the test server has a port. The steps of TestRegistryMirrorHTTP send the requests that the CLI sends."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodGet, Path: base + "/index.json", CoveringTest: test, Reason: why},
+		{Method: http.MethodGet, Path: base + "/{file}", CoveringTest: test, Reason: why},
+	}
+}
