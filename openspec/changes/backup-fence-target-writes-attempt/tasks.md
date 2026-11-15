@@ -17,7 +17,7 @@
 ## 3. Side effects (computed from main)
 
 - [ ] 3.1 Set the round-trip budgets of each request flow that the change adds or changes, in `internal/servertest/roundtrips_conflict_test.go`, `internal/servertest/roundtrips_model_test.go`, `internal/servertest/roundtrips_test.go`. Check: the named files change in the same pull request
-- [ ] 3.2 Set Attempt in each existing literal of backup.Record: the attempt column of task 2.1 is the NEW field `Attempt` of `backup.Record` (pkg/backup/backup.go:263), and exhaustruct asks for it in each non-empty literal on main: `internal/api/server/routes_test.go`, `pkg/backup/service.go`, `pkg/dustpan/dustpan_test.go`, `pkg/store/internal/codec/codec.go`, `pkg/store/postgres/backup.go`, `pkg/store/storetest/backup.go`, `pkg/store/storetest/backup_test.go`, `pkg/store/storetest/control_minimum.go`, `pkg/store/storetest/shared_running.go`. No lint exception and no `//nolint`. Check: `golangci-lint run ./...` reports no exhaustruct finding.
+- [ ] 3.2 Set Attempt in each existing literal of backup.Record: the attempt column of task 2.1 is the NEW field `Attempt` of `backup.Record` (pkg/backup/backup.go:263), and exhaustruct asks for it in each non-empty literal on main: `internal/api/server/routes_test.go`, `pkg/backup/service.go`, `pkg/dustpan/dustpan_test.go`, `pkg/store/internal/codec/codec.go`, `pkg/store/postgres/backup.go`, `pkg/store/storetest/backup.go`, `pkg/store/storetest/backup_test.go`, `pkg/store/storetest/control_minimum.go`, `pkg/store/storetest/shared_running.go`. No lint exception and no linter suppression comment. Check: `golangci-lint run ./...` reports no exhaustruct finding.
 - [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
