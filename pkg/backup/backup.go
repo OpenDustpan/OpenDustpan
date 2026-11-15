@@ -120,6 +120,7 @@ var Tables = []string{
 	"stack_tags",
 	"updates",
 	"checkpoints",
+	"checkpoint_supersedes",
 	"update_events",
 	"update_journal",
 	"update_journal_sequences",
@@ -216,6 +217,8 @@ var Tables = []string{
 	"quota_reservation_keys",
 	"quota_requests",
 	TableTrustRules,
+	"unmanaged_targets",
+	"unmanaged_scans",
 	"break_glass_reviews",
 }
 

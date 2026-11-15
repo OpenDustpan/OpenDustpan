@@ -86,6 +86,8 @@ const (
 	pgColProviderID  = "provider_id"
 	pgColSink        = "sink"
 	pgColExpiresAtMs = "expires_at_ms"
+	pgColPoolID      = "pool_id"
+	pgColEnabled     = "enabled"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -110,6 +112,7 @@ type pgCopyTable struct {
 // new table in backup.Tables breaks loudly until its columns land here.
 func pgCopyTables() []pgCopyTable {
 	tables := append([]pgCopyTable{}, pgCopyStackTables()...)
+	tables = append(tables, pgCopyUpdateTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
 	tables = append(tables, pgCopyCollectionTables()...)
 	tables = append(tables, pgCopyGateTables()...)
@@ -139,6 +142,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyQuotaTables()...)
 	tables = append(tables, pgCopyTrustRuleTables()...)
 	tables = append(tables, pgCopyBreakGlassReviewTables()...)
+	tables = append(tables, pgCopyUnmanagedTables()...)
 
 	return tables
 }
@@ -179,6 +183,13 @@ func pgCopyStackTables() []pgCopyTable {
 			},
 			orderBy: []string{pgColStackID, "id"},
 		},
+	}
+}
+
+// pgCopyUpdateTables holds the COPY columns of the update, checkpoint and
+// journal tables, in foreign-key order.
+func pgCopyUpdateTables() []pgCopyTable {
+	return []pgCopyTable{
 		{
 			table: "checkpoints",
 			columns: []string{
@@ -187,6 +198,13 @@ func pgCopyStackTables() []pgCopyTable {
 				pgColBlobKey, pgColSize, "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
+		},
+		{
+			table: "checkpoint_supersedes",
+			columns: []string{
+				pgColBlobKey, pgColStackID, pgColUpdateID, pgColSize, "superseded_at_ms",
+			},
+			orderBy: []string{pgColStackID, pgColBlobKey},
 		},
 		{
 			table:   "update_events",
@@ -593,7 +611,7 @@ func pgCopySessionTables() []pgCopyTable {
 			table: "sign_in_providers",
 			columns: []string{
 				pgColProviderID, "issuer", pgColDisplayName, "client_id", "client_secret", "scopes", "auto_create",
-				"enabled", pgColCreatedAtMs, pgColUpdatedAtMs, "version", "mode", "authorization_url", "token_url",
+				pgColEnabled, pgColCreatedAtMs, pgColUpdatedAtMs, "version", "mode", "authorization_url", "token_url",
 				"userinfo_url", "subject_claim", "name_claim", "username_claim", "email_claim",
 			},
 			orderBy: []string{pgColProviderID},
@@ -2042,8 +2060,8 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 
 // checkStagedFeatureRows checks the rows of the staged features that have rules
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
-// the notification sinks, the triggers, the self-service blueprints, the trust rules and the
-// break-glass reviews.
+// the notification sinks, the triggers, the self-service blueprints, the trust rules, the
+// break-glass reviews, the sweep targets and the sweeps.
 func checkStagedFeatureRows(ctx context.Context, pool db.DBTX, staging string) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
 		return err
@@ -2085,9 +2103,19 @@ func checkStagedFeatureRows(ctx context.Context, pool db.DBTX, staging string) e
 		return err
 	}
 
-	if err := checkStagedBreakGlassReviews(ctx, pool, staging); err != nil {
+	if err := checkStagedBreakGlassAndUnmanaged(ctx, pool, staging); err != nil {
 		return err
 	}
 
 	return checkStagedForgeLinks(ctx, pool, staging)
+}
+
+// checkStagedBreakGlassAndUnmanaged checks the rows of the staged break-glass
+// reviews and of the unmanaged resource sweeps.
+func checkStagedBreakGlassAndUnmanaged(ctx context.Context, pool pgQuerier, staging string) error {
+	if err := checkStagedBreakGlassReviews(ctx, pool, staging); err != nil {
+		return err
+	}
+
+	return checkStagedUnmanaged(ctx, pool, staging)
 }

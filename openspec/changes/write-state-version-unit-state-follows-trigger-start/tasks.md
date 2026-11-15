@@ -10,7 +10,7 @@
 ## 2. Implementation
 
 - [ ] 2.1 Implement Dispatcher.Upstream with per-trigger error capture in pkg/trigger/dispatcher.go:110 (func (d *dispatcher) Upstream). Check: go test ./pkg/trigger/... passes; the acceptance path is the route POST /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/triggers/{trigger_id}/fire called with a personal access token
-- [ ] 2.2 Send the upstream event when OpenTofu writes a final state version in pkg/dustpan/triggers_versions.go (NEW). Check: go test ./pkg/store/... ./pkg/dustpan/... passes
+- [ ] 2.2 Send the upstream event when OpenTofu writes a final state version in pkg/dustpan/triggers_versions.go (NEW). Check: go test -timeout 60m ./pkg/store/... ./pkg/dustpan/... passes
 - [ ] 2.3 Publish the declared follower edge to the graph in pkg/trigger/edges.go (NEW). Check: go test ./internal/graph/... passes
 - [ ] 2.4 Carry the trigger ID on the job and check source output reads against the last saver in pkg/outputshare/saver_check.go (NEW). Check: go test ./pkg/outputshare/... passes
 

@@ -124,12 +124,12 @@ func newAuditChainHandler(
 	return handler
 }
 
-// approveAuditChain sends POST /api/server/audit/chain from a console session
+// approveAuditChain sends POST /api/dustpan/v1/audit/chain from a console session
 // that signed in just now: the change needs a fresh authentication.
 func approveAuditChain(t *testing.T, handler testHandler) (int, string) {
 	t.Helper()
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/audit/chain", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/audit/chain", http.NoBody)
 	startSession(t, handler, req, 0)
 
 	rec := httptest.NewRecorder()
@@ -144,7 +144,7 @@ func TestGetAuditChainAnswersTheState(t *testing.T) {
 	namespaces := newTestNamespaces(t)
 	handler := newAuditChainHandler(t, namespaces, newFakeAuditChain(audit.ChainOff))
 
-	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/server/audit/chain", "")
+	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/dustpan/v1/audit/chain", "")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (%s)", status, body)
 	}
@@ -260,7 +260,7 @@ func TestAuditChainRoutesWithoutAChain(t *testing.T) {
 	namespaces := newTestNamespaces(t)
 	handler := newAuditChainHandler(t, namespaces, nil)
 
-	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/server/audit/chain", "")
+	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/dustpan/v1/audit/chain", "")
 	if status != http.StatusNotImplemented {
 		t.Fatalf("GET: status = %d, want 501 (%s)", status, body)
 	}

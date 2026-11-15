@@ -1,7 +1,7 @@
 package cli
 
 // AuditChainStatusCommand answers the audit-chain status row of the command
-// table with run: a client of GET /api/server/audit/chain.
+// table with run: a client of GET /api/dustpan/v1/audit/chain.
 func AuditChainStatusCommand(run RunFunc) Command {
 	return Command{
 		Path:     []string{commandAuditChain, commandStatus},

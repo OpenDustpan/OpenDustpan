@@ -5,10 +5,13 @@ import type { Answer } from "./execute.js";
 import { operations } from "./operations.js";
 import type {
   AddRegistryKeyInput,
+  ApproveAuditChainInput,
   BeginPasskeyRegistrationInput,
   BeginPasskeySignInInput,
   BulkReplaceUnitSettingsInput,
+  CancelRestoreInput,
   ChangeOwnPasswordInput,
+  CheckBackupInput,
   CheckGitHostConnectionInput,
   CheckNamespaceIssuerCopyInput,
   CreateCollectionInput,
@@ -58,6 +61,8 @@ import type {
   GetApiDescriptionInput,
   GetApprovalDefaultInput,
   GetApprovalRuleInput,
+  GetAuditChainInput,
+  GetBackupInput,
   GetBlueprintDraftInput,
   GetBlueprintVersionInput,
   GetCapabilitiesInput,
@@ -79,6 +84,7 @@ import type {
   GetNamespaceContextInput,
   GetNamespaceIssuerInput,
   GetNamespaceLockInput,
+  GetNamespaceOverrideSwitchesInput,
   GetNamespaceSettingsInput,
   GetNotificationSinkInput,
   GetNotificationSubscriptionInput,
@@ -88,6 +94,7 @@ import type {
   GetProfileInput,
   GetProfileRevisionInput,
   GetProviderReleaseInput,
+  GetRestoreInput,
   GetSettingsInput,
   GetSourceFilterInput,
   GetStoreCheckInput,
@@ -107,6 +114,7 @@ import type {
   LeaveMaintenanceInput,
   ListAccessLimitsInput,
   ListApprovalRulesInput,
+  ListBackupsInput,
   ListBlueprintsInput,
   ListCollectionAccessLimitsInput,
   ListCollectionGatesInput,
@@ -129,6 +137,7 @@ import type {
   ListRegistryKeysInput,
   ListRegistryModulesInput,
   ListRegistryProvidersInput,
+  ListRestoresInput,
   ListStoreChecksInput,
   ListTrustRulesInput,
   ListUnitAccessLimitsInput,
@@ -164,6 +173,7 @@ import type {
   SetCollectionAccessLimitInput,
   SetCollectionGateInput,
   SetGateInput,
+  SetNamespaceOverrideSwitchesInput,
   SetOutputSharingInput,
   SetSourceFilterInput,
   SetUnitAccessLimitInput,
@@ -171,9 +181,12 @@ import type {
   SignInWithPasswordInput,
   SignInWithProviderPasswordInput,
   StageRegistryUploadInput,
+  StartBackupInput,
   StartDriftCheckInput,
   StartJobInput,
+  StartRestoreInput,
   StartStoreCheckInput,
+  SweepDeletedUnitsInput,
   TestNotificationSinkInput,
   UnlockCollectionInput,
   UnlockLocalUserInput,
@@ -197,17 +210,23 @@ import type {
   ApprovalDefault,
   ApprovalRule,
   Approvers,
+  AuditChain,
   BackupCorruptError,
   BackupCorruptErrorArgs,
+  BackupManifest,
+  BackupSummary,
   BackupTooManyUnverifiedError,
   BackupTooManyUnverifiedErrorArgs,
+  BlobFindings,
   BulkUnitSettingsError,
   BulkUnitSettingsItem,
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
+  CheckBackupResponse,
   Collection,
   Components,
   ContextAnswer,
@@ -235,7 +254,10 @@ import type {
   CreateTrustRuleRequest,
   CreateViewRequest,
   CreatedNotificationSink,
+  DamagedBlob,
   DeletedUnit,
+  DeletedUnitSweep,
+  DevData,
   DriftCheck,
   DriftCheckLocation,
   DriftResource,
@@ -255,6 +277,8 @@ import type {
   GateApproversCountAboveError,
   GateApproversCountAboveErrorArgs,
   GateCheckedWith,
+  GetBackupResponse,
+  GetRestoreResponse,
   GitHostAccount,
   GitHostApp,
   GitHostCheck,
@@ -288,6 +312,7 @@ import type {
   JobUnitRequest,
   ListAccessLimitsResponse,
   ListApprovalRulesResponse,
+  ListBackupsResponse,
   ListCollectionsResponse,
   ListDeletedUnitsResponse,
   ListGatesResponse,
@@ -307,6 +332,7 @@ import type {
   ListRegistryKeysResponse,
   ListRegistryModulesResponse,
   ListRegistryProvidersResponse,
+  ListRestoresResponse,
   ListStoreChecksResponse,
   ListUnitsResponse,
   ListViewsResponse,
@@ -323,9 +349,11 @@ import type {
   MaintenanceActiveWorkError,
   MaintenanceActiveWorkErrorArgs,
   MaintenanceState,
+  ManifestBlob,
   ManualLock,
   MfaPasskeyLimitError,
   MfaPasskeyLimitErrorArgs,
+  MissingBlobLimit,
   ModuleRelease,
   ModuleReleaseArchive,
   NamespaceIssuer,
@@ -340,6 +368,7 @@ import type {
   NotificationSubscription,
   OutputSharing,
   OutputSharingRequest,
+  OverrideSwitches,
   Passkey,
   PasskeyCreationOptions,
   PasskeyRequestOptions,
@@ -349,6 +378,7 @@ import type {
   PasswordTooShortErrorArgs,
   PlacementRule,
   PlacementRuleRequest,
+  PortableFile,
   Preferences,
   PreferencesFieldInvalidError,
   PreferencesFieldInvalidErrorArgs,
@@ -378,8 +408,10 @@ import type {
   ResetLocalUserPasswordResponse,
   RestoreEndedError,
   RestoreEndedErrorArgs,
+  RestoreSummary,
   RestoreSwappedError,
   RestoreSwappedErrorArgs,
+  RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
@@ -430,8 +462,11 @@ import type {
   StackRevealPathTooLongError,
   StackRevealPathTooLongErrorArgs,
   StagedUpload,
+  StartBackupResponse,
   StartDriftCheckRequest,
   StartJobRequest,
+  StartRestoreRequest,
+  StartRestoreResponse,
   StartStoreCheckRequest,
   StartStoreCheckResponse,
   StateVersionRevealPathTooLongError,
@@ -445,6 +480,7 @@ import type {
   StoreCheckReport,
   StoreFailoverSettingInvalidError,
   StoreFailoverSettingInvalidErrorArgs,
+  SweptUnit,
   TerminalSchemes,
   TerminalSchemesPatch,
   Trigger,
@@ -515,6 +551,10 @@ export class Client {
     return execute(this.transport, operations.addRegistryKey, input);
   }
 
+  approveAuditChain(input: ApproveAuditChainInput = {}): Promise<Answer<AuditChain>> {
+    return execute(this.transport, operations.approveAuditChain, input);
+  }
+
   beginPasskeyRegistration(input: BeginPasskeyRegistrationInput = {}): Promise<Answer<PasskeyCreationOptions>> {
     return execute(this.transport, operations.beginPasskeyRegistration, input);
   }
@@ -527,8 +567,16 @@ export class Client {
     return execute(this.transport, operations.bulkReplaceUnitSettings, input);
   }
 
+  cancelRestore(input: CancelRestoreInput): Promise<Answer<CancelRestoreResponse>> {
+    return execute(this.transport, operations.cancelRestore, input);
+  }
+
   changeOwnPassword(input: ChangeOwnPasswordInput): Promise<Answer<void>> {
     return execute(this.transport, operations.changeOwnPassword, input);
+  }
+
+  checkBackup(input: CheckBackupInput): Promise<Answer<CheckBackupResponse>> {
+    return execute(this.transport, operations.checkBackup, input);
   }
 
   checkGitHostConnection(input: CheckGitHostConnectionInput): Promise<Answer<GitHostCheck>> {
@@ -727,6 +775,14 @@ export class Client {
     return execute(this.transport, operations.getApprovalRule, input);
   }
 
+  getAuditChain(input: GetAuditChainInput = {}): Promise<Answer<AuditChain>> {
+    return execute(this.transport, operations.getAuditChain, input);
+  }
+
+  getBackup(input: GetBackupInput): Promise<Answer<GetBackupResponse>> {
+    return execute(this.transport, operations.getBackup, input);
+  }
+
   getBlueprintDraft(input: GetBlueprintDraftInput): Promise<Answer<SelfServiceDraft>> {
     return execute(this.transport, operations.getBlueprintDraft, input);
   }
@@ -811,6 +867,10 @@ export class Client {
     return execute(this.transport, operations.getNamespaceLock, input);
   }
 
+  getNamespaceOverrideSwitches(input: GetNamespaceOverrideSwitchesInput): Promise<Answer<OverrideSwitches>> {
+    return execute(this.transport, operations.getNamespaceOverrideSwitches, input);
+  }
+
   getNamespaceSettings(input: GetNamespaceSettingsInput): Promise<Answer<Settings>> {
     return execute(this.transport, operations.getNamespaceSettings, input);
   }
@@ -845,6 +905,10 @@ export class Client {
 
   getProviderRelease(input: GetProviderReleaseInput): Promise<Answer<ProviderRelease>> {
     return execute(this.transport, operations.getProviderRelease, input);
+  }
+
+  getRestore(input: GetRestoreInput): Promise<Answer<GetRestoreResponse>> {
+    return execute(this.transport, operations.getRestore, input);
   }
 
   getSettings(input: GetSettingsInput = {}): Promise<Answer<Settings>> {
@@ -921,6 +985,10 @@ export class Client {
 
   listApprovalRules(input: ListApprovalRulesInput): Promise<Answer<ListApprovalRulesResponse>> {
     return execute(this.transport, operations.listApprovalRules, input);
+  }
+
+  listBackups(input: ListBackupsInput = {}): Promise<Answer<ListBackupsResponse>> {
+    return execute(this.transport, operations.listBackups, input);
   }
 
   listBlueprints(input: ListBlueprintsInput): Promise<Answer<SelfServiceVersionList>> {
@@ -1009,6 +1077,10 @@ export class Client {
 
   listRegistryProviders(input: ListRegistryProvidersInput): Promise<Answer<ListRegistryProvidersResponse>> {
     return execute(this.transport, operations.listRegistryProviders, input);
+  }
+
+  listRestores(input: ListRestoresInput = {}): Promise<Answer<ListRestoresResponse>> {
+    return execute(this.transport, operations.listRestores, input);
   }
 
   listStoreChecks(input: ListStoreChecksInput = {}): Promise<Answer<ListStoreChecksResponse>> {
@@ -1151,6 +1223,10 @@ export class Client {
     return execute(this.transport, operations.setGate, input);
   }
 
+  setNamespaceOverrideSwitches(input: SetNamespaceOverrideSwitchesInput): Promise<Answer<OverrideSwitches>> {
+    return execute(this.transport, operations.setNamespaceOverrideSwitches, input);
+  }
+
   setOutputSharing(input: SetOutputSharingInput): Promise<Answer<OutputSharing>> {
     return execute(this.transport, operations.setOutputSharing, input);
   }
@@ -1179,6 +1255,10 @@ export class Client {
     return execute(this.transport, operations.stageRegistryUpload, input);
   }
 
+  startBackup(input: StartBackupInput = {}): Promise<Answer<StartBackupResponse>> {
+    return execute(this.transport, operations.startBackup, input);
+  }
+
   startDriftCheck(input: StartDriftCheckInput): Promise<Answer<DriftCheck>> {
     return execute(this.transport, operations.startDriftCheck, input);
   }
@@ -1187,8 +1267,16 @@ export class Client {
     return execute(this.transport, operations.startJob, input);
   }
 
+  startRestore(input: StartRestoreInput): Promise<Answer<StartRestoreResponse>> {
+    return execute(this.transport, operations.startRestore, input);
+  }
+
   startStoreCheck(input: StartStoreCheckInput): Promise<Answer<StartStoreCheckResponse>> {
     return execute(this.transport, operations.startStoreCheck, input);
+  }
+
+  sweepDeletedUnits(input: SweepDeletedUnitsInput = {}): Promise<Answer<DeletedUnitSweep>> {
+    return execute(this.transport, operations.sweepDeletedUnits, input);
   }
 
   testNotificationSink(input: TestNotificationSinkInput): Promise<Answer<NotificationSinkTest>> {
