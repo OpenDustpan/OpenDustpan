@@ -268,7 +268,13 @@ func TestPrincipalSubjects(t *testing.T) {
 		wantKind   gate.PrincipalKind
 		wantCred   gate.CredentialKind
 	}{
-		{"unknown kind counts as a person", "", "", gate.PrincipalPerson, gate.CredentialAccessToken},
+		{
+			"the empty kind of the bootstrap token counts as a person",
+			"",
+			"",
+			gate.PrincipalPerson,
+			gate.CredentialAccessToken,
+		},
 		{
 			"person with a session",
 			identity.KindPerson,
@@ -317,6 +323,39 @@ func TestPrincipalSubjects(t *testing.T) {
 			if err != nil || s.ID != "alice" || s.Kind != tc.wantKind || s.Credential != tc.wantCred ||
 				s.BreakGlassAccount || !s.AuthAt.IsZero() {
 				t.Fatalf("Subject() = %+v, %v, want kind %s and credential %s", s, err, tc.wantKind, tc.wantCred)
+			}
+		})
+	}
+}
+
+// TestPrincipalSubjectsRefuseKindsTheGatesDoNotKnow proves that the reader of
+// the kind of a principal knows the kind agent and refuses it, and refuses a
+// kind that the gates do not know, so that neither reaches a gate as a person.
+// The empty kind of the bootstrap token stays a person; the table of
+// TestPrincipalSubjects covers it.
+func TestPrincipalSubjectsRefuseKindsTheGatesDoNotKnow(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []identity.Kind{identity.KindAgent, "robot"} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+
+			reads := &fakePrincipalReads{
+				record: principal.Principal{
+					CreatedAt: time.Time{}, UpdatedAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-alice",
+					Subject: "alice", DisplayName: "Alice", Kind: principal.KindPerson, Source: principal.SourceLocal,
+					Namespace: "", GroupCount: 0, BreakGlass: false,
+				},
+				recordErr: nil, groups: nil, groupsErr: nil, calls: 0,
+			}
+
+			s, err := principalSubjects{principals: reads}.Subject(
+				t.Context(), gatePrincipal("alice", kind, identity.CredentialAccessToken),
+			)
+
+			if !errors.Is(err, identity.ErrDenied) || reads.calls != 0 {
+				t.Fatalf("Subject() = %+v, %v, after %d group reads, want %v and no read",
+					s, err, reads.calls, identity.ErrDenied)
 			}
 		})
 	}
