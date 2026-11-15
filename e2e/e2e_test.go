@@ -10111,16 +10111,17 @@ func replayArgsOrgs(pair *e2e.Pair, srcOrg, dstOrg string) []string {
 }
 
 // replayScriptPath returns the path of scripts/import-tfe-state.sh from the
-// directory of this test file.
+// package directory, the working directory of go test. The path is absolute,
+// because the replay command runs in a temporary directory.
 func replayScriptPath(t *testing.T) string {
 	t.Helper()
 
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("find the test file for the script path")
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
 	}
 
-	return filepath.Join(filepath.Dir(file), "..", "scripts", "import-tfe-state.sh")
+	return filepath.Join(dir, "..", "scripts", "import-tfe-state.sh")
 }
 
 // runReplayScript runs the replay script with args and tokens from the pair,
