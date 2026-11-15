@@ -1767,6 +1767,16 @@ WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
   AND g.name_key COLLATE "C" >= @low::text
   AND (@high::text = '' OR g.name_key COLLATE "C" < @high::text);
 
+-- name: CountActiveMembershipsInGroups :one
+-- The memberships of a principal that are in effect in the given groups: not ended, state active, group not deleted.
+-- Defense in depth: DeleteGroup ends the memberships of the group too. The filter on the group row stays so that a
+-- membership row that outlives its group gives no rights. The caller checks that the principal is enabled.
+SELECT COUNT(*)
+FROM group_members m JOIN principal_groups g ON g.id = m.group_id
+WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL AND m.state = 'active'
+  AND g.deleted_at_ms IS NULL
+  AND m.group_id = ANY(@group_ids::text[]);
+
 -- name: LockNamespaceCreatesShared :exec
 -- A create of a workspace takes this lock, in the shared form, before it reads
 -- the manual lock of its namespace. The put of a manual lock on a namespace
@@ -5359,6 +5369,61 @@ JOIN job_logs AS l ON l.id = c.log_id AND l.namespace_id = c.namespace_id
 JOIN namespaces AS n ON n.id = c.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND l.job_id = sqlc.arg(job_id) AND c.confirmed = 1
 ORDER BY c.blob_key;
+
+-- name: InsertJobToken :exec
+INSERT INTO job_tokens (
+    digest, namespace_id, starter_id, job_id, unit_tool, unit_id, claim_operation,
+    claim_token, expires_at_ms, created_at_ms
+) VALUES (
+    sqlc.arg(digest), (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(starter_id), sqlc.arg(job_id), sqlc.arg(unit_tool), sqlc.arg(unit_id),
+    sqlc.arg(claim_operation), sqlc.arg(claim_token), sqlc.arg(expires_at_ms),
+    sqlc.arg(created_at_ms)
+);
+
+-- name: GetJobToken :one
+SELECT t.digest, n.name AS namespace, u.namespace AS unit_namespace, t.starter_id, t.job_id, t.unit_tool, t.unit_id,
+       CAST(u.name AS TEXT) AS unit_name,
+       t.claim_operation, t.claim_token, t.expires_at_ms, t.created_at_ms,
+       o.state AS operation_state, o.claim_token AS operation_claim_token,
+       o.claim_expires_at_ms AS operation_claim_expires_at_ms,
+       j.id AS job_record_id, j.state AS job_state, j.current_operation AS job_operation,
+       j.unit_id AS job_unit_id, jn.name AS job_namespace, js.id AS job_starter_id,
+       s.id AS starter_record_id, s.subject AS starter_subject, s.display_name AS starter_display_name,
+       s.kind AS starter_kind, s.disabled_at_ms AS starter_disabled_at_ms
+FROM job_tokens AS t
+JOIN namespaces AS n ON n.id = t.namespace_id
+-- Defense in depth: the service checks the unit ID too. Resolve only a live
+-- unit row so that a restored token cannot reach a removed unit by name.
+JOIN (
+    SELECT id, 'pulumi' AS tool, namespace, project || '/' || name AS name
+    FROM stacks WHERE deleted_at_ms IS NULL
+    UNION ALL
+    SELECT id, 'opentofu' AS tool, namespace, name
+    FROM workspaces WHERE deleted_at_ms IS NULL
+) AS u ON u.id = t.unit_id AND u.tool = t.unit_tool
+JOIN durable_operations AS o ON o.id = t.claim_operation
+JOIN jobs AS j ON j.id = t.job_id
+JOIN namespaces AS jn ON jn.id = j.namespace_id
+JOIN principals AS js ON js.subject COLLATE "C" = (j.body::jsonb ->> 'startedBy') AND js.deleted_at_ms IS NULL
+JOIN principals AS s ON s.id = t.starter_id AND s.deleted_at_ms IS NULL
+WHERE t.digest = sqlc.arg(digest);
+
+-- name: GetJobTokenUnitNamespace :one
+-- The stable namespace ID of the live unit row that a job token names, by
+-- tool and stable unit ID. The issue of a job token reads it to refuse a
+-- token whose unit row is in another namespace.
+SELECT n.id
+FROM namespaces AS n
+WHERE n.name = (
+    SELECT s.namespace
+    FROM stacks AS s
+    WHERE s.id = sqlc.arg(unit_id) AND s.deleted_at_ms IS NULL AND sqlc.arg(unit_tool)::text = 'pulumi'
+    UNION ALL
+    SELECT w.namespace
+    FROM workspaces AS w
+    WHERE w.id = sqlc.arg(unit_id) AND w.deleted_at_ms IS NULL AND sqlc.arg(unit_tool)::text = 'opentofu'
+);
 
 -- name: UpsertInstanceVersion :exec
 -- Writes the version row of one server process. A row with the same ID is

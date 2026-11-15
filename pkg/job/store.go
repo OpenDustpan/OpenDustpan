@@ -238,6 +238,11 @@ type Store interface {
 	// ErrNotFound for an unknown job, ErrConflict when the job is not at
 	// c.Version, and the error of Next for an event that the state does not
 	// allow. It checks these rules in the transaction of the change:
+	//   - An approval of a destroy needs an MFA proof with no agent. The
+	//     proof must not be after the approval or the database clock, and
+	//     its age on that clock must not exceed ConfirmFreshness. A missing,
+	//     unknown or expired proof returns ErrAuthStale. A rejection needs
+	//     no proof.
 	//   - EventDispatch of any phase, also a plan phase: ErrLocked while a
 	//     manual lock covers the unit (its own lock, the lock of its
 	//     collection now, or the lock of its namespace). Break-glass does not
@@ -458,8 +463,14 @@ type Service interface {
 	// Approve records verdicts for the gates of type GateApproval. A
 	// confirmation goes through Confirm.
 	//
-	// This version does not implement the contract below: each call returns
-	// ErrUnsupported and changes nothing.
+	// It returns ErrNotFound for a job that the principal cannot read, a
+	// *DeniedError for a principal that cannot approve on the unit (also when
+	// the authorizer fails), ErrInvalid for a verdict or a comment that is not
+	// valid, and ErrAuthStale for the approval of a destroy with no fresh MFA
+	// step. The first approvals keep the job in awaiting-approval
+	// (EventApprovalRecorded). The approval that opens every gate moves it to
+	// queued (EventApproved), and a rejection ends it rejected. Each verdict
+	// and its audit entry commit together.
 	Approve(ctx context.Context, a Actor, id ID, v Verdict, plan PlanBinding, comment string) (Job, error)
 	// Confirm records the verdict of the person who asked the agent, on the
 	// confirmation gate of the current phase. It needs the start action of
