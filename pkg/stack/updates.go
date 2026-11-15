@@ -87,6 +87,15 @@ type UpdateStore interface {
 	ListUpdates(ctx context.Context, ref Ref, page Page) ([]Update, error)
 }
 
+// SupersededBlob is the mark of one checkpoint blob that a later save of the
+// same update replaced: the key of the blob, the size in bytes of the stored
+// blob and the time of the save that replaced it.
+type SupersededBlob struct {
+	Key  blob.Key
+	Size int64
+	At   time.Time
+}
+
 // CheckpointStore persists checkpoint metadata, one row for each mutating
 // update. Each write of the running update overwrites the row of that update.
 // The content lives in the blob store under the row's blob key. The store
@@ -135,6 +144,17 @@ type CheckpointStore interface {
 	// this set against the stored objects to find blobs that no row
 	// references.
 	ReferencedBlobKeys(ctx context.Context, stackID ID) ([]blob.Key, error)
+	// SupersededBlobs returns the marks of the stack, ordered by key: the
+	// blob of a checkpoint that a later save of the same update replaced,
+	// with the size of the stored blob and the time of the save that
+	// replaced it. A sweep deletes a marked blob after a grace period. The
+	// stack is named by its ID, the key that a sweep lists the blobs by, so
+	// a rename between the listing and this read changes nothing. A live
+	// stack without such rows yields an empty list. A stack that does not
+	// exist, or that is soft-deleted, returns ErrNotFound: an empty mark set
+	// would let a sweep delete the marked blobs of the stack without the
+	// grace period of a mark.
+	SupersededBlobs(ctx context.Context, stackID ID) ([]SupersededBlob, error)
 }
 
 // EventStore persists engine events.
@@ -205,6 +225,10 @@ type UpdatesConfig struct {
 	// when nothing runs. Nil is a guard that never lets a delete run: the
 	// blobs stay for a later sweep.
 	BlobGuard blobguard.Leases
+	// OnDeleteWait receives the reason of each refused take of BlobGuard, so
+	// an operator can see the blob deletes that wait. A nil hook counts
+	// nothing.
+	OnDeleteWait blobguard.WaitCounter
 }
 
 // ManualLocks is the read side of the manual locks of the shared core. The
@@ -243,6 +267,7 @@ type Updates struct {
 	replayer       JournalReplayer
 	manual         ManualLocks
 	guard          blobguard.Leases
+	onDeleteWait   blobguard.WaitCounter
 	sealer         secret.ItemSealer
 	skipMu         sync.Mutex
 	skipLogged     string
@@ -311,6 +336,7 @@ func buildUpdates(cfg *UpdatesConfig, access blobAccess) *Updates {
 		replayer:       cfg.Replayer,
 		manual:         cfg.ManualLocks,
 		guard:          cfg.BlobGuard,
+		onDeleteWait:   cfg.OnDeleteWait,
 		sealer:         cfg.Sealer,
 		skipMu:         sync.Mutex{},
 		skipLogged:     "",
@@ -512,7 +538,6 @@ type checkpointSave struct {
 	lease   token.Digest
 	in      CheckpointInput
 	digest  [sha256.Size]byte
-	prev    *Checkpoint
 	key     blob.Key
 	// origin is the writer of the state version that the save publishes: the
 	// one of the update.
@@ -528,8 +553,10 @@ type checkpointSave struct {
 // namespaces/<namespace ID>/pulumi/<stack ID>/<update ID>/<sequence>-<attempt ID>; then the fenced SQL row names it.
 // A row never names a missing blob: a crash between the blob write and the
 // commit leaves only an unreferenced blob, which the sweep below collects.
-// After the commit, the blob of the previous save of the same update is
-// deleted. The deployment bytes travel exactly as received: the server never
+// After the commit, the blob of the previous save of the same update stays in
+// the store: the store marks the blob of the row that a save replaces, and a
+// sweep deletes a marked blob after the grace period of a mark. The deployment
+// bytes travel exactly as received: the server never
 // decodes and encodes them again. The save path holds one decompressed copy
 // (the input) with one compressed copy (the gzip buffer).
 func (s *Updates) SaveCheckpoint(
@@ -585,7 +612,7 @@ func (s *Updates) SaveCheckpoint(
 
 	return s.storeNewCheckpoint(ctx, checkpointSave{
 		ref: ref, id: id, stackID: st.ID, fence: ns.Fence(), lease: u.Lease.Digest,
-		in: in, digest: digest, prev: prev, key: key, origin: u.Origin(), blobs: bl,
+		in: in, digest: digest, key: key, origin: u.Origin(), blobs: bl,
 	})
 }
 
@@ -619,6 +646,8 @@ func (s *Updates) DeleteStackBlobs(ctx context.Context, ns namespace.ID, stackID
 		// row names the delete that holds it.
 		leaseCtx, release, holdErr := blobguard.HoldLease(ctx, s.guard, ident.NewID("dlt-"), s.now)
 		if holdErr != nil {
+			s.onDeleteWait.Count(holdErr)
+
 			guardErr = holdErr
 
 			return holdErr
@@ -1199,49 +1228,14 @@ func (s *Updates) commitCheckpointRow(
 	return s.checkpoints.PutCheckpoint(ctx, cp, save.fence)
 }
 
-// afterCheckpointSave deletes the blob of the previous save of the same
-// update and sweeps its orphan blobs. Both are best effort: a cleanup
-// failure never fails the save, and the rows stay for the next sweep. No log
-// line names a blob key.
+// afterCheckpointSave sweeps the orphan blobs of the update. The sweep is
+// best effort: a failure never fails the save, and the rows stay for the next
+// sweep. No log line names a blob key. The blob of the previous save of the
+// same update is not deleted here: the store marks the blob of the row that a
+// save replaces, and a sweep deletes a marked blob after the grace period of a
+// mark.
 func (s *Updates) afterCheckpointSave(ctx context.Context, save checkpointSave) {
-	// The lease comes after the commit of the new row. A running backup or
-	// restore keeps the previous blob. It is then an orphan of the update, and
-	// the next sweep deletes it when nothing runs.
-	if save.prev != nil && save.prev.BlobKey != save.key {
-		s.deleteSupersededBlob(ctx, save)
-	}
-
 	s.sweepUpdateBlobs(ctx, save.blobs, save.ref, save.stackID, save.id)
-}
-
-// deleteSupersededBlob deletes the blob of the previous checkpoint of save,
-// with the lease of one blob delete around it. save.prev is not nil. The key
-// comes from a row. It must name a save of this update in this stack, so the
-// access is narrowed to the directory of the update.
-func (s *Updates) deleteSupersededBlob(ctx context.Context, save checkpointSave) {
-	leaseCtx, release, ok := s.takeDeleteLease(ctx, "checkpoint replace", save.ref)
-	if !ok {
-		return
-	}
-
-	own := save.blobs.narrow(save.blobs.updatePrefix(save.stackID, save.id))
-
-	delErr := s.deleteBlobRetried(leaseCtx, own, save.prev.BlobKey)
-
-	if releaseErr := release(ctx); releaseErr != nil {
-		s.logger.WarnContext(ctx, "blob delete lease not released",
-			slog.String("stack", save.ref.String()), slog.String("update", save.id.String()),
-			slog.String("error", releaseErr.Error()))
-	}
-
-	if delErr != nil {
-		s.logger.WarnContext(
-			ctx,
-			"delete superseded checkpoint blob",
-			slog.String("stack", save.ref.String()),
-			slog.String("update", save.id.String()),
-		)
-	}
 }
 
 // previousCheckpoint returns the checkpoint the update saved before, or nil
@@ -1353,6 +1347,8 @@ func (s *Updates) takeDeleteLease(
 	if err == nil {
 		return leaseCtx, release, true
 	}
+
+	s.onDeleteWait.Count(err)
 
 	wait, isWait := errors.AsType[*blobguard.WaitError](err)
 	if !isWait {

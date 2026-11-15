@@ -8,9 +8,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/outputshare"
+	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/internal/jobstore"
+	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
 // Pool returns the connection pool of s, so a test can read or change rows
@@ -23,6 +26,23 @@ func Pool(s *Store) *pgxpool.Pool {
 // SetSetting makes before it opens a transaction.
 func CheckSettingFence(ns namespace.Name, fence namespace.Fence) error {
 	return settingFenceBinds(ns, fence)
+}
+
+// MarkSupersededCheckpointInTx runs the mark of the replaced checkpoint in its
+// own transaction. cp names the write, and readKey is the key that the sequence
+// check read.
+func MarkSupersededCheckpointInTx(
+	ctx context.Context, s *Store, stackID stack.ID, cp stack.Checkpoint, readKey blob.Key,
+) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		return markSuperseded(ctx, q, cp, stackID.String(), readKey)
+	})
+}
+
+// SetAfterSequenceCheck sets the hook that sequenceWrite runs after
+// checkSequence returns and before the mark.
+func SetAfterSequenceCheck(s *Store, hook func(stackID string)) {
+	s.afterSequenceCheck = hook
 }
 
 // SettingWrite is the input of WriteSettingInTx.

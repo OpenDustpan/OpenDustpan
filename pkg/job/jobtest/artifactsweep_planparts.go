@@ -188,7 +188,7 @@ func newSweeperOver(
 	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
 		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: newGuardSwitch(clk),
 		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Operations: ops, Audit: h.Audit, Logger: nil,
-		Now: func() time.Time { return clk.Now().Add(ahead) },
+		Now: func() time.Time { return clk.Now().Add(ahead) }, OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("artifact sweeper: %v", err)

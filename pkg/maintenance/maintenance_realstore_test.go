@@ -83,7 +83,7 @@ func newRealStack(t *testing.T) *realStack {
 		BlobGuard:   blobguardtest.None{},
 		ManualLocks: nil, Updates: st, Tokens: nil, Checkpoints: st, Events: st, Namespaces: namespaces,
 		Stacks: stacks, Blobs: newTestBlobs(t), Now: nil, Logger: nil, MaxCheckpointBytes: 0, Journal: nil,
-		Replayer: nil, Refusals: stacktest.NewRefusals(),
+		Replayer: nil, Refusals: stacktest.NewRefusals(), OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -94,6 +94,7 @@ func newRealStack(t *testing.T) *realStack {
 		ManualLocks: nil, Workspaces: st, States: st, Blobs: newTestBlobs(t), Namespaces: namespaces,
 		OutOfScope: workspacetest.NewRefusals(),
 		Sealer:     stubSealer{}, Logger: nil, Now: nil, MaxStateBytes: 0, MaxPendingVersions: 0, Retention: 0,
+		OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)

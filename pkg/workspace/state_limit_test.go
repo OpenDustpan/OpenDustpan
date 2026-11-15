@@ -76,6 +76,7 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 		MaxStateBytes:      maxState,
 		MaxPendingVersions: 0,
 		Retention:          0,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

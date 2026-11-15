@@ -189,7 +189,7 @@ func (m *journalMemStore) JournalSequences(
 
 // PutBuiltCheckpoint implements stack.BuiltCheckpointStore.
 func (m *journalMemStore) PutBuiltCheckpoint(
-	_ context.Context, cp stack.Checkpoint, fence namespace.Fence,
+	ctx context.Context, cp stack.Checkpoint, fence namespace.Fence,
 ) ([]blob.Key, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -204,6 +204,12 @@ func (m *journalMemStore) PutBuiltCheckpoint(
 
 	if !m.updates[cp.Update].Mutates() {
 		return nil, stack.ErrWrongUpdateState
+	}
+
+	// The built checkpoint replaces the row of the update: the blob of the
+	// row is superseded when the built write names another key.
+	if last, ok := m.checkpoints[cp.Update]; ok {
+		m.markSuperseded(ctx, last, cp)
 	}
 
 	m.checkpoints[cp.Update] = cp
@@ -471,6 +477,7 @@ func newBuildFixtureGuarded(
 		Journal:            journal,
 		Replayer:           replayer,
 		Refusals:           refusals,
+		OnDeleteWait:       nil,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)

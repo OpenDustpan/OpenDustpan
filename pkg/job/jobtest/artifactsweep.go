@@ -127,7 +127,7 @@ func newSweeper(
 	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
 		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: g,
 		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Operations: h.Durable, Audit: h.Audit, Logger: nil,
-		Now: func() time.Time { return clk.Now().Add(ahead) },
+		Now: func() time.Time { return clk.Now().Add(ahead) }, OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("artifact sweeper: %v", err)
@@ -598,7 +598,7 @@ func tappedSweeper(
 	s, err := job.NewArtifactSweeper(job.ArtifactSweeperConfig{
 		Jobs: h.Jobs, Names: h.Names, Blobs: artifacts, Namespaces: h.Namespaces, Guard: newGuardSwitch(clk),
 		Clock: aheadClock{inner: h.Clock, ahead: ahead}, Operations: h.Durable, Audit: tap, Logger: nil,
-		Now: func() time.Time { return clk.Now().Add(ahead + instance) },
+		Now: func() time.Time { return clk.Now().Add(ahead + instance) }, OnDeleteWait: nil,
 	})
 	if err != nil {
 		t.Fatalf("artifact sweeper: %v", err)
