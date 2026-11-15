@@ -29,7 +29,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-Main already has the behavior of this change, so the change only adds the tests that prove it:
+Main already has most of the behavior of this change. The change is the production edit in `pkg/store/sqlite/sqlite.go` and `pkg/store/sqlite/inventory.go` that the design describes, plus the tests that prove it:
 
 - SQLite GetDeletedUnitFacts already reads in one read-only transaction (`pkg/store/sqlite/inventory.go:573`, through `inReadTx` at `pkg/store/sqlite/sqlite.go:1447`). The change adds its snapshot, read-failure and rollback tests.
 - The start log lines and the audit entry are on main (`pkg/dustpan/stategates_start.go:58-67`) and are proven by `TestStateWriteGatesOffIsRecordedAtStart` (`pkg/dustpan/stategates_start_internal_test.go:64`). Nothing is left to do for them.
