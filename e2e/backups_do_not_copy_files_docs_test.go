@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -195,9 +196,13 @@ func publishRegistryModule(t *testing.T, server *productionServer, archive []byt
 func waitProductionRestoreSucceeded(t *testing.T, server *productionServer, id string) {
 	t.Helper()
 
-	deadline := time.Now().Add(2 * time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
 
-	for time.Now().Before(deadline) {
+	ticker := time.NewTicker(devPollInterval)
+	defer ticker.Stop()
+
+	for {
 		_, body := get(t, server.url, "/api/dustpan/v1/restores/"+id)
 
 		var doc restoreDoc
@@ -216,16 +221,14 @@ func waitProductionRestoreSucceeded(t *testing.T, server *productionServer, id s
 			return
 		case "checking", "applying":
 			select {
-			case <-t.Context().Done():
-				t.Fatalf("wait for restore %s: %v", id, t.Context().Err())
-			case <-time.After(devPollInterval):
+			case <-ctx.Done():
+				t.Fatalf("wait for restore %s: %v", id, ctx.Err())
+			case <-ticker.C:
 			}
 		default:
 			t.Fatalf("restore ends %q (%s), want succeeded", doc.State, doc.Error)
 		}
 	}
-
-	t.Fatalf("restore %s never ended", id)
 }
 
 // downloadRegistryModule fetches the archive of the module release through
