@@ -2310,7 +2310,8 @@ CREATE TABLE backups (
     started_at_ms bigint NOT NULL,
     ended_at_ms bigint,
     target text NOT NULL,
-    error text DEFAULT ''::text NOT NULL
+    error text DEFAULT ''::text NOT NULL,
+    attempt text DEFAULT ''::text NOT NULL
 );
 
 CREATE TABLE installation (

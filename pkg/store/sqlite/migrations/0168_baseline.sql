@@ -131,7 +131,8 @@ CREATE TABLE backups (
     started_at_ms INTEGER NOT NULL,
     ended_at_ms   INTEGER,
     target        TEXT    NOT NULL DEFAULT '',
-    error         TEXT    NOT NULL DEFAULT ''
+    error         TEXT    NOT NULL DEFAULT '',
+    attempt       TEXT    NOT NULL DEFAULT ''
 ) STRICT;
 
 CREATE TABLE installation (

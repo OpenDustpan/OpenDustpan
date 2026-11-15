@@ -55,11 +55,16 @@ func flipByte(t *testing.T, target *memStore, key string) {
 func TestCheckFindsAChangedByte(t *testing.T) {
 	t.Parallel()
 
-	for which, key := range map[string]string{"table file": sqlPartKey("bkp-sum"), "blob": "blobs/" + sumBlobKey} {
+	for _, which := range []string{"table file", "blob"} {
 		t.Run(which, func(t *testing.T) {
 			t.Parallel()
 
 			fix := checkedBackup(t)
+
+			key := "blobs/" + sumBlobKey
+			if which == "table file" {
+				key = attemptPartKey(t, fix.target, "bkp-sum")
+			}
 
 			flipByte(t, fix.target, key)
 
@@ -79,7 +84,7 @@ func TestCheckRefusesAManifestWithNoChecksum(t *testing.T) {
 	t.Parallel()
 
 	fix := checkedBackup(t)
-	key := "backups/bkp-sum/manifest.json"
+	key := attemptManifestKey(t, fix.target, "bkp-sum")
 
 	var manifest map[string]any
 	if err := json.Unmarshal(fix.target.readObject(t, key), &manifest); err != nil {

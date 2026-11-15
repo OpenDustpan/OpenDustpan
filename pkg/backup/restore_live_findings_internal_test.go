@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/durable/durabletest"
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
@@ -79,7 +81,7 @@ func testManifest(t *testing.T, blobs []ManifestBlob, damaged []DamagedBlob) Man
 	}
 
 	return Manifest{
-		CreatedAt: time.Unix(1700000000, 0).UTC(), ID: preBackupID, Dialect: DialectSQLite,
+		CreatedAt: time.Unix(1700000000, 0).UTC(), ID: preBackupID, Attempt: "", Dialect: DialectSQLite,
 		PrimaryInstallations: nil, WrapperIDs: nil, Blobs: blobs, Version: "test",
 		SQLSHA256: hex.EncodeToString(sha[:]),
 		Format:    FormatVersion, SchemaVersion: BaselineSchemaVersion, SQLSize: size, RowCounts: counts,
@@ -530,9 +532,36 @@ func (errStore) Get(context.Context, blob.Key) (io.ReadCloser, error) {
 func backupService(source, target blob.Store, opener StateOpener) *Service {
 	return &Service{
 		exporter: nil, kinds: nil, registry: nil, source: source, opener: opener, target: target, targetName: "",
-		now: nil, version: "", maxSQL: 0, maxUnverified: 0, runner: nil, operations: nil, lease: 0,
+		now: nil, version: "", maxSQL: 0, maxUnverified: 0, runner: nil, operations: durabletest.NewMem().Store(),
+		lease:  0,
 		logger: slog.New(slog.DiscardHandler),
 	}
+}
+
+// copyFence starts the backup operation of id on ops and claims it, so a
+// direct copyBlobs call runs under a live claim.
+func copyFence(t *testing.T, ops durable.Store, id ID) durable.StepFence {
+	t.Helper()
+
+	_, _, err := ops.Start(t.Context(), durable.StartRequest{
+		Key: OperationKey(id), Kind: OperationKind, Version: OperationVersion, Input: nil,
+	})
+	if err != nil {
+		t.Fatalf("start backup operation %s: %v", id, err)
+	}
+
+	op, err := ops.Claim(t.Context(), durable.ClaimRequest{
+		Owner:        "test",
+		Kinds:        []durable.Kind{OperationKind},
+		MaxVersions:  nil,
+		Lease:        time.Minute,
+		TakeCanceled: false,
+	})
+	if err != nil {
+		t.Fatalf("claim backup operation %s: %v", id, err)
+	}
+
+	return op.Claim.Step(StepWrite)
 }
 
 // TestBackupCopyBlobsRecordsMissingAndDamagedBlobs proves that the backup
@@ -556,7 +585,13 @@ func TestBackupCopyBlobsRecordsMissingAndDamagedBlobs(t *testing.T) {
 
 	s := backupService(source, target, nil)
 
-	stored, entries, err := s.copyBlobs(t.Context(), refs, recordDamage)
+	stored, entries, err := s.copyBlobs(
+		t.Context(),
+		copyFence(t, s.operations, "bkp-copy"),
+		"bkp-copy",
+		refs,
+		recordDamage,
+	)
 	if err != nil {
 		t.Fatalf("copyBlobs = %v", err)
 	}
@@ -580,7 +615,15 @@ func TestBackupCopyBlobsRecordsMissingAndDamagedBlobs(t *testing.T) {
 
 	strict := backupService(source, newMapStore(true, nil), nil)
 
-	if _, _, err := strict.copyBlobs(t.Context(), refs, stopAtDamage); err == nil {
+	_, _, strictErr := strict.copyBlobs(
+		t.Context(),
+		copyFence(t, strict.operations, "bkp-copy-strict"),
+		"bkp-copy-strict",
+		refs,
+		stopAtDamage,
+	)
+
+	if strictErr == nil {
 		t.Fatal("copyBlobs of a backup that does not record damage = nil, want the error of the damaged blob")
 	}
 }
@@ -593,7 +636,13 @@ func TestBackupCopyBlobsStopsAtAReadError(t *testing.T) {
 
 	s := backupService(errStore{mapStore: newMapStore(true, nil)}, newMapStore(true, nil), nil)
 
-	_, _, err := s.copyBlobs(t.Context(), []BlobRef{blobRef(liveKey, wantBytes(), false)}, recordDamage)
+	_, _, err := s.copyBlobs(
+		t.Context(),
+		copyFence(t, s.operations, "bkp-copy-err"),
+		"bkp-copy-err",
+		[]BlobRef{blobRef(liveKey, wantBytes(), false)},
+		recordDamage,
+	)
 	if err == nil || !strings.Contains(err.Error(), "throttled") {
 		t.Fatalf("copyBlobs = %v, want the read error", err)
 	}
@@ -632,7 +681,13 @@ func TestBackupCopyBlobsClassifiesSealedErrors(t *testing.T) {
 		s := backupService(source, newMapStore(true, nil), fakeOpener{err: tc.err, source: source})
 		ref := blobRef(liveKey, wantBytes(), true)
 
-		_, entries, err := s.copyBlobs(t.Context(), []BlobRef{ref}, recordDamage)
+		_, entries, err := s.copyBlobs(
+			t.Context(),
+			copyFence(t, s.operations, "bkp-copy-sealed"),
+			"bkp-copy-sealed",
+			[]BlobRef{ref},
+			recordDamage,
+		)
 		mustSealedEntry(t, tc.name, entries, err, tc.want)
 	}
 }

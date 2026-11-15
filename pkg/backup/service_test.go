@@ -466,8 +466,8 @@ func (f *fakeRegistry) ListBackups(_ context.Context) ([]backup.Record, error) {
 	defer f.mu.Unlock()
 
 	out := make([]backup.Record, 0, len(f.rows))
-	for _, row := range f.rows {
-		out = append(out, row)
+	for id := range f.rows {
+		out = append(out, f.rows[id])
 	}
 
 	slices.SortFunc(out, func(a, b backup.Record) int { return b.StartedAt.Compare(a.StartedAt) })
@@ -525,8 +525,8 @@ func (f *fakeRegistry) insertLocked(r backup.Record) error {
 	}
 
 	if r.State == backup.StateRunning {
-		for _, row := range f.rows {
-			if row.State == backup.StateRunning {
+		for id := range f.rows {
+			if f.rows[id].State == backup.StateRunning {
 				return fmt.Errorf("create backup %s: %w", r.ID, backup.ErrAlreadyRunning)
 			}
 		}
@@ -663,9 +663,20 @@ func assertFailed(t *testing.T, registry *fakeRegistry, id backup.ID) {
 func assertNoManifest(t *testing.T, target *memStore, id backup.ID) {
 	t.Helper()
 
-	if target.has("backups/" + id.String() + "/manifest.json") {
-		t.Fatalf("target holds a manifest of failed backup %s, want none", id)
+	head := "backups/" + id.String() + "/"
+
+	target.mu.Lock()
+
+	for key := range target.objects {
+		if rest, ok := strings.CutPrefix(key, head); ok {
+			if _, tail, found := strings.Cut(rest, "/"); found && tail == "manifest.json" {
+				target.mu.Unlock()
+				t.Fatalf("target holds a manifest of failed backup %s at %s, want none", id, key)
+			}
+		}
 	}
+
+	target.mu.Unlock()
 
 	if err := backup.Check(t.Context(), target, id); err == nil {
 		t.Fatalf("check of failed backup %s succeeded, want an error", id)
@@ -715,7 +726,7 @@ func assertBackupObjects(
 ) {
 	t.Helper()
 
-	if got := target.readObject(t, sqlPartKey(id)); !bytes.Equal(got, sql) {
+	if got := target.readObject(t, attemptPartKey(t, target, id)); !bytes.Equal(got, sql) {
 		t.Fatalf("backup db = %q, want %q", got, sql)
 	}
 
@@ -741,6 +752,7 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 	return backup.Manifest{
 		CreatedAt:            now,
 		ID:                   id,
+		Attempt:              "",
 		Dialect:              backup.DialectSQLite,
 		PrimaryInstallations: []string{"eu-west"},
 		WrapperIDs:           []string{"kek-1"},
@@ -778,12 +790,15 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 func assertWholeManifest(t *testing.T, target *memStore, id backup.ID, want backup.Manifest) {
 	t.Helper()
 
+	dir := attemptDir(t, target, id)
+	want.Attempt = strings.TrimPrefix(dir, "backups/"+id.String()+"/")
+
 	wantData, err := json.Marshal(want)
 	if err != nil {
 		t.Fatalf("encode want manifest: %v", err)
 	}
 
-	if got := target.readObject(t, "backups/"+id.String()+"/manifest.json"); !bytes.Equal(got, wantData) {
+	if got := target.readObject(t, dir+"/manifest.json"); !bytes.Equal(got, wantData) {
 		t.Fatalf("manifest = %s, want %s", got, wantData)
 	}
 
@@ -797,7 +812,7 @@ func assertManifestKeys(t *testing.T, target *memStore, id backup.ID) {
 
 	var raw map[string]any
 
-	if err := json.Unmarshal(target.readObject(t, "backups/"+id.String()+"/manifest.json"), &raw); err != nil {
+	if err := json.Unmarshal(target.readObject(t, attemptManifestKey(t, target, id)), &raw); err != nil {
 		t.Fatalf("parse manifest as keys: %v", err)
 	}
 
@@ -809,6 +824,7 @@ func assertManifestKeys(t *testing.T, target *memStore, id backup.ID) {
 	slices.Sort(keys)
 
 	want := []string{
+		"attempt",
 		"blobs",
 		"createdAt",
 		"dialect",
@@ -890,7 +906,7 @@ func TestRunSecondBackupReusesBlobs(t *testing.T) {
 		t.Fatalf("reused blob = %q, want the first copy %q", got, content)
 	}
 
-	if got := fix.target.readObject(t, sqlPartKey("bkp-second")); !bytes.Equal(got, sql) {
+	if got := fix.target.readObject(t, attemptPartKey(t, fix.target, "bkp-second")); !bytes.Equal(got, sql) {
 		t.Fatalf("second backup db = %q, want %q", got, sql)
 	}
 
@@ -1014,7 +1030,7 @@ func TestRunFailsWhenDatabaseWriteFails(t *testing.T) {
 		0,
 	)
 	seedSource(t, fix.source, map[string][]byte{"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": content})
-	fix.target.failPut[sqlPartKey("bkp-db")] = errTargetUnavailable
+	fix.target.failPut["backups/bkp-db/1/"+backup.PortablePath(sqlPartTable)] = errTargetUnavailable
 
 	finished := make(chan error, 1)
 
@@ -1051,7 +1067,7 @@ func TestRunWritesManifestLast(t *testing.T) {
 		0,
 	)
 	seedSource(t, fix.source, map[string][]byte{"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": content})
-	fix.target.failPut["backups/bkp-partial/manifest.json"] = errTargetUnavailable
+	fix.target.failPut["backups/bkp-partial/1/manifest.json"] = errTargetUnavailable
 
 	if _, err := fix.service.Run(t.Context(), "bkp-partial"); err == nil {
 		t.Fatal("run with a failing manifest write succeeded, want an error")
@@ -1059,7 +1075,9 @@ func TestRunWritesManifestLast(t *testing.T) {
 
 	assertFailed(t, fix.registry, "bkp-partial")
 
-	if got := fix.target.readObject(t, sqlPartKey("bkp-partial")); !bytes.Equal(got, sql) {
+	got := fix.target.readObject(t, "backups/bkp-partial/1/"+backup.PortablePath(sqlPartTable))
+
+	if !bytes.Equal(got, sql) {
 		t.Fatalf("backup db = %q, want %q: the manifest is last, so earlier objects stay", got, sql)
 	}
 
@@ -1232,7 +1250,7 @@ func TestRunFinishesTableFilesTheExporterLeavesOpen(t *testing.T) {
 				t.Fatalf("target Puts running after Run returned = %d, want 0", n)
 			}
 
-			key := "backups/bkp-open/" + backup.PortablePath(backup.Tables[0])
+			key := "backups/bkp-open/1/" + backup.PortablePath(backup.Tables[0])
 			if target.has(key) {
 				t.Fatalf("target holds %s, want no object for an aborted file", key)
 			}
@@ -1288,15 +1306,18 @@ func TestCheck(t *testing.T) {
 			wantKey: "blobs/namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1",
 		},
 		{
-			name:    "missing database",
-			breakIt: func(t *testing.T, target *memStore) { t.Helper(); mustDelete(t, target, sqlPartKey("bkp-check")) },
-			wantKey: sqlPartKey("bkp-check"),
+			name: "missing database",
+			breakIt: func(t *testing.T, target *memStore) {
+				t.Helper()
+				mustDelete(t, target, attemptPartKey(t, target, "bkp-check"))
+			},
+			wantKey: "backups/bkp-check/1/" + backup.PortablePath(sqlPartTable),
 		},
 		{
 			name: "missing manifest",
 			breakIt: func(t *testing.T, target *memStore) {
 				t.Helper()
-				mustDelete(t, target, "backups/bkp-check/manifest.json")
+				mustDelete(t, target, attemptManifestKey(t, target, "bkp-check"))
 			},
 			wantKey: "manifest.json",
 		},

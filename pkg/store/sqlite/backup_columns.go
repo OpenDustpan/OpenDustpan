@@ -515,6 +515,7 @@ func sqliteControlTables() []sqliteBackupTable {
 				backupColEndedAtMs,
 				backupColTarget,
 				"error",
+				"attempt",
 			},
 		},
 		{

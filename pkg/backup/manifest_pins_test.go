@@ -69,7 +69,7 @@ func TestCheckRefusesManifestTotalsThatDoNotMatch(t *testing.T) {
 			t.Parallel()
 
 			fix := checkedBackup(t)
-			key := "backups/bkp-sum/manifest.json"
+			key := attemptManifestKey(t, fix.target, "bkp-sum")
 
 			var manifest backup.Manifest
 			if err := json.Unmarshal(fix.target.readObject(t, key), &manifest); err != nil {

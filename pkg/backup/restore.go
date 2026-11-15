@@ -163,9 +163,10 @@ func CheckStageSchema(backupVersion, liveVersion int) error {
 
 // verifySQLPart reads each table file of the SQL part and checks its size and
 // SHA-256 against its descriptor. It writes nothing: the bytes go to the hash
-// only.
-func verifySQLPart(ctx context.Context, target blob.Store, id ID, files []PortableFile) error {
-	open := portableOpener(ctx, target, id)
+// only. Table files read from the attempt prefix the manifest names, or from
+// the unscoped layout for a manifest without an attempt.
+func verifySQLPart(ctx context.Context, target blob.Store, id ID, attempt string, files []PortableFile) error {
+	open := portableOpener(ctx, target, id, attempt)
 
 	for _, file := range files {
 		reader, err := open(file.Path)
@@ -194,10 +195,11 @@ func verifySQLPart(ctx context.Context, target blob.Store, id ID, files []Portab
 }
 
 // portableOpener opens the table files of backup id from the target. A missing
-// object is an incomplete backup.
-func portableOpener(ctx context.Context, target blob.Store, id ID) PortableOpener {
+// object is an incomplete backup. Files open under the attempt prefix when
+// attempt names one, else under the unscoped layout.
+func portableOpener(ctx context.Context, target blob.Store, id ID, attempt string) PortableOpener {
 	return func(path string) (io.ReadCloser, error) {
-		key, err := blob.ParseKey("backups/" + id.String() + "/" + path)
+		key, err := blob.ParseKey(tableBase(id, attempt) + path)
 		if err != nil {
 			return nil, fmt.Errorf("restore backup %s: %w", id, err)
 		}

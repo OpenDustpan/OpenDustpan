@@ -31,7 +31,7 @@ func writeKindManifest(t *testing.T, change func(manifest string) string) (*fixt
 
 	mustRun(t, fix.service, id)
 
-	key := "backups/" + id.String() + "/manifest.json"
+	key := attemptManifestKey(t, fix.target, id)
 	edited := change(string(fix.target.readObject(t, key)))
 
 	if err := fix.target.Delete(t.Context(), mustKey(t, key)); err != nil {

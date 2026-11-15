@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"runtime"
 	"slices"
@@ -1144,6 +1145,12 @@ type backupSize struct {
 func TestRoundTripsOfBackup(t *testing.T) {
 	t.Parallel()
 
+	// Without PostgreSQL the harness skips each size, and the cleanup would
+	// check empty runs. Skip the whole flow instead.
+	if os.Getenv(servertest.EnvURL) == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the multi-instance tests")
+	}
+
 	sizes := backupSizes()
 	runs := make([]measuredRun, len(sizes))
 
@@ -1317,9 +1324,28 @@ func (m costModel) count(c schemaCounts) int {
 // backupModel is the cost model of a backup. Its coefficients were fitted to
 // three commits that differ in tables, control tables and migrations, and a
 // fourth commit checks them (see TestCostModelFitsMeasuredHistory).
+//
+// The fixed part holds the two claim checks of the attempt: one before the
+// write step clears its prefix, and one before the fenced manifest write.
+// Each table file costs one more round trip, for the claim check before the
+// sink opens it. Each unit costs fenceReadsPerUnit more, for the claim check
+// before each blob copy.
 func backupModel() costModel {
-	return costModel{fixed: 47, perTable: 3, perOther: 1, perMigration: 0, perUnit: stateVersionReads}
+	return costModel{
+		fixed:        47 + 2,
+		perTable:     3 + 1,
+		perOther:     1,
+		perMigration: 0,
+		perUnit:      stateVersionReads + fenceReadsPerUnit,
+	}
 }
+
+// fenceReadsPerUnit is the number of claim checks that a backup makes for
+// the blobs of each unit: one for the checkpoint blob of its stack update
+// and one for the state blob of its workspace. The seed makes one update per
+// stack and one state version per workspace, so the count grows with the
+// units, and the growth allowance names the statement.
+const fenceReadsPerUnit = 2
 
 // restoreModel is the cost model of a restore, fitted the same way. The cost of
 // a migration and of a unit (the maintenance scans and the state version
@@ -1331,7 +1357,9 @@ func backupModel() costModel {
 // The fixed part holds the backup before the swap, with the work of its
 // durable operation: the restore starts that backup with its own claim and
 // runs it on its own goroutine, so the count holds the start, the steps, the
-// end of the claim and the two reads of the wait for the row. It also holds 4
+// end of the claim and the two reads of the wait for the row. The backup
+// writes under an attempt prefix, so the count also holds its two claim
+// checks. It also holds 4
 // round trips for the name locks: the restore keeps the name_locks and
 // name_lock_key tables of the installation, so that a restore cannot clear a
 // lockout, and each kept table costs one delete and one copy.
@@ -1371,12 +1399,12 @@ func backupModel() costModel {
 // version of each unit from the restored rows.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 342 + 1 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips + removalAlertTrips +
-			stagedPrincipalCheckTrips + unitStateTrips,
-		perTable:     7,
+		fixed: 342 + 1 + 2 + forgeStripClassTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+			removalAlertTrips + stagedPrincipalCheckTrips + unitStateTrips,
+		perTable:     7 + 1,
 		perOther:     2,
 		perMigration: 2,
-		perUnit:      maintenanceScans + stateVersionReads,
+		perUnit:      maintenanceScans + stateVersionReads + fenceReadsPerUnit,
 	}
 }
 
@@ -1468,9 +1496,10 @@ const stateVersionReads = 3
 // extraUnits is the difference of units between the two runs.
 func backupGrowthAllowance(extraUnits int) map[string]int {
 	return map[string]int{
-		"query GetStateVersion":   extraUnits,
-		"query ReadWorkspaceByID": extraUnits,
-		"query GetSecretKey":      extraUnits,
+		"query GetStateVersion":       extraUnits,
+		"query ReadWorkspaceByID":     extraUnits,
+		"query GetSecretKey":          extraUnits,
+		"query ListDurableOperations": fenceReadsPerUnit * extraUnits,
 	}
 }
 

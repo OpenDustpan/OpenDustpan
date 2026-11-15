@@ -266,7 +266,10 @@ type Record struct {
 	ID        ID
 	Target    string
 	Error     string
-	State     State
+	// Attempt is the decimal claim fencing token of the attempt that wrote
+	// the backup. It stays empty until the finish write records it.
+	Attempt string
+	State   State
 }
 
 // BlobRef names one blob that the SQL data references: the content key of a

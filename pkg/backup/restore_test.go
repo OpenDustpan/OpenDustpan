@@ -148,6 +148,7 @@ func writeRestoreManifest(
 	manifest := backup.Manifest{
 		CreatedAt:            time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
 		ID:                   id,
+		Attempt:              "",
 		Dialect:              backup.DialectSQLite,
 		PrimaryInstallations: in.installations,
 		WrapperIDs:           wrappers,

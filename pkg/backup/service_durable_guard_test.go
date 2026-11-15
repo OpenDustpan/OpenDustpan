@@ -105,12 +105,11 @@ func TestRunFailsAnOperationThatEndedWithoutAWorker(t *testing.T) {
 	}
 }
 
-// dropAfterManifest deletes dropKey as soon as the manifest lands, as the
-// late delete of a holder that lost its claim does after the write step.
+// dropAfterManifest deletes the first table file of the attempt as soon as
+// its manifest lands, as the late delete of a holder that lost its claim
+// does after the write step.
 type dropAfterManifest struct {
 	*memStore
-
-	dropKey string
 }
 
 func (d *dropAfterManifest) Put(ctx context.Context, key blob.Key, r io.Reader) error {
@@ -119,7 +118,9 @@ func (d *dropAfterManifest) Put(ctx context.Context, key blob.Key, r io.Reader) 
 	}
 
 	if strings.HasSuffix(key.String(), "/manifest.json") {
-		dropKey, err := blob.ParseKey(d.dropKey)
+		dropKey, err := blob.ParseKey(
+			strings.TrimSuffix(key.String(), "manifest.json") + backup.PortablePath(backup.Tables[0]),
+		)
 		if err != nil {
 			return err
 		}
@@ -135,8 +136,7 @@ func TestFinishFailsABackupThatLostAFile(t *testing.T) {
 
 	setup := newDurableSetup()
 	id := backup.ID("bkp-lost-file")
-	dropped := "backups/" + id.String() + "/" + backup.PortablePath(backup.Tables[0])
-	target := &dropAfterManifest{memStore: setup.target, dropKey: dropped}
+	target := &dropAfterManifest{memStore: setup.target}
 	svc := setup.serviceOver(t, &stubExporter{sum: testSummary(), data: tableData, err: nil}, target)
 
 	_, err := svc.Run(t.Context(), id)

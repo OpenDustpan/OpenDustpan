@@ -335,14 +335,17 @@ func TestTakeoverAfterTheHolderStopsWithoutRelease(t *testing.T) {
 }
 
 // assertCompleteBackup proves that the target holds exactly one complete
-// backup id: every table file once, the manifest, and nothing else under the
-// directory of the backup.
+// backup id: every table file once and the manifest under one attempt
+// prefix, and nothing else under the directory of the backup. The orphan
+// cleanup of the finish step deletes the prefixes of older attempts.
 func assertCompleteBackup(t *testing.T, target *memStore, id backup.ID) {
 	t.Helper()
 
 	if err := backup.Check(t.Context(), target, id); err != nil {
 		t.Fatalf("check backup %s: %v", id, err)
 	}
+
+	dir := attemptDir(t, target, id)
 
 	objects, err := blobtest.ListAll(t.Context(), target, "backups/"+id.String())
 	if err != nil {
@@ -354,9 +357,9 @@ func assertCompleteBackup(t *testing.T, target *memStore, id backup.ID) {
 		got[obj.Key.String()] = true
 	}
 
-	want := map[string]bool{"backups/" + id.String() + "/manifest.json": true}
+	want := map[string]bool{dir + "/manifest.json": true}
 	for _, table := range backup.Tables {
-		want["backups/"+id.String()+"/"+backup.PortablePath(table)] = true
+		want[dir+"/"+backup.PortablePath(table)] = true
 	}
 
 	if len(got) != len(want) || len(objects) != len(want) {
@@ -452,8 +455,10 @@ func TestWriteStepFailureEndsRowAndOperationFailed(t *testing.T) {
 		t.Fatalf("operation state = %s, want failed", op.State)
 	}
 
-	if setup.target.has("backups/" + id.String() + "/manifest.json") {
-		t.Fatal("target holds a manifest of the failed backup, want none")
+	for _, obj := range mustListPrefix(t, setup.target, "backups/"+id.String()+"/") {
+		if strings.HasSuffix(obj.Key.String(), "/manifest.json") {
+			t.Fatalf("target holds a manifest of the failed backup at %s, want none", obj.Key)
+		}
 	}
 }
 

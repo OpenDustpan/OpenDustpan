@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +45,7 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 		EndedAtMs:   optionalMillis(r.EndedAt),
 		Target:      row.Target,
 		Error:       row.Error,
+		Attempt:     r.Attempt,
 	})
 	if err != nil {
 		return fmt.Errorf("insert backup: %w", err)
@@ -188,6 +190,7 @@ func startBackupTx(
 		EndedAtMs:   optionalMillis(r.EndedAt),
 		Target:      row.Target,
 		Error:       "",
+		Attempt:     r.Attempt,
 	})
 	if err != nil {
 		return durable.Operation{}, fmt.Errorf("insert backup: %w", err)
@@ -244,7 +247,7 @@ func (s *Store) FinishBackup(
 			return err
 		}
 
-		rec, err := finishRow(ctx, q, id, state, errText, endedAt)
+		rec, err := finishRow(ctx, q, f, id, state, errText, endedAt)
 		out = rec
 
 		return err
@@ -277,7 +280,8 @@ func ownsBackup(ctx context.Context, q *db.Queries, f durable.StepFence, id back
 //
 //nolint:revive // argument-limit: the transaction, the row and the three fields of its end are one write; a struct would only move the fields.
 func finishRow(
-	ctx context.Context, q *db.Queries, id backup.ID, state backup.State, errText string, endedAt time.Time,
+	ctx context.Context, q *db.Queries, f durable.StepFence, id backup.ID, state backup.State, errText string,
+	endedAt time.Time,
 ) (backup.Record, error) {
 	if _, err := q.GetBackup(ctx, id.String()); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -291,6 +295,7 @@ func finishRow(
 		State:     string(state),
 		Error:     errText,
 		EndedAtMs: optionalMillis(endedAt),
+		Attempt:   strconv.FormatInt(f.Token, 10),
 		ID:        id.String(),
 	})
 	if err != nil {
@@ -338,7 +343,7 @@ func backupFromRow(row db.Backup) (backup.Record, error) {
 		endedAt = codec.FromMillis(row.EndedAtMs.Int64)
 	}
 
-	return codec.FromBackupRow(codec.BackupRow{
+	rec, err := codec.FromBackupRow(codec.BackupRow{
 		ID:          row.ID,
 		State:       row.State,
 		Target:      row.Target,
@@ -346,6 +351,13 @@ func backupFromRow(row db.Backup) (backup.Record, error) {
 		StartedAtMs: row.StartedAtMs,
 		EndedAtMs:   codec.OptionalMillis(endedAt),
 	})
+	if err != nil {
+		return backup.Record{}, err
+	}
+
+	rec.Attempt = row.Attempt
+
+	return rec, nil
 }
 
 // optionalMillis encodes t as a nullable Unix millisecond column. The zero

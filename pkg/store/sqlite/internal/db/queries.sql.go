@@ -1890,8 +1890,8 @@ func (q *Queries) CreateAccessToken(ctx context.Context, arg CreateAccessTokenPa
 }
 
 const createBackup = `-- name: CreateBackup :execrows
-INSERT INTO backups (id, state, started_at_ms, ended_at_ms, target, error)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO backups (id, state, started_at_ms, ended_at_ms, target, error, attempt)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
@@ -1902,6 +1902,7 @@ type CreateBackupParams struct {
 	EndedAtMs   sql.NullInt64
 	Target      string
 	Error       string
+	Attempt     string
 }
 
 func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int64, error) {
@@ -1912,6 +1913,7 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int
 		arg.EndedAtMs,
 		arg.Target,
 		arg.Error,
+		arg.Attempt,
 	)
 	if err != nil {
 		return 0, err
@@ -4882,7 +4884,7 @@ func (q *Queries) FindGateRefusal(ctx context.Context, arg FindGateRefusalParams
 
 const finishBackup = `-- name: FinishBackup :execrows
 UPDATE backups
-SET state = ?, error = ?, ended_at_ms = ?
+SET state = ?, error = ?, ended_at_ms = ?, attempt = ?
 WHERE id = ? AND state = 'running'
 `
 
@@ -4890,6 +4892,7 @@ type FinishBackupParams struct {
 	State     string
 	Error     string
 	EndedAtMs sql.NullInt64
+	Attempt   string
 	ID        string
 }
 
@@ -4900,6 +4903,7 @@ func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (int
 		arg.State,
 		arg.Error,
 		arg.EndedAtMs,
+		arg.Attempt,
 		arg.ID,
 	)
 	if err != nil {
@@ -5288,7 +5292,7 @@ func (q *Queries) GetAuditSinkCursor(ctx context.Context, arg GetAuditSinkCursor
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 WHERE id = ?
 `
@@ -5303,6 +5307,7 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 		&i.EndedAtMs,
 		&i.Target,
 		&i.Error,
+		&i.Attempt,
 	)
 	return i, err
 }
@@ -12685,7 +12690,7 @@ func (q *Queries) ListAwaitingJobsOfUnit(ctx context.Context, arg ListAwaitingJo
 }
 
 const listBackups = `-- name: ListBackups :many
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 ORDER BY started_at_ms DESC, id ASC
 `
@@ -12706,6 +12711,7 @@ func (q *Queries) ListBackups(ctx context.Context) ([]Backup, error) {
 			&i.EndedAtMs,
 			&i.Target,
 			&i.Error,
+			&i.Attempt,
 		); err != nil {
 			return nil, err
 		}

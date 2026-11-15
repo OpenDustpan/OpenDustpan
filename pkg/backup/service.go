@@ -55,8 +55,14 @@ var (
 // JSON keys are stable: Check and restore parse them, so a new field needs a
 // new optional key, never a rename.
 type Manifest struct {
-	CreatedAt            time.Time      `json:"createdAt"`
-	ID                   ID             `json:"id"`
+	CreatedAt time.Time `json:"createdAt"`
+	ID        ID        `json:"id"`
+	// Attempt is the fencing token of the claim that wrote the backup, as
+	// decimal. It names the attempt prefix backups/<id>/<attempt>/ that
+	// holds the manifest and the SQL part. The finish step commits only when
+	// it matches the live claim, and the cleanup deletes only other
+	// prefixes. Empty means a manifest written before attempt prefixes.
+	Attempt              string         `json:"attempt,omitempty"`
 	Dialect              Dialect        `json:"dialect"`
 	PrimaryInstallations []string       `json:"primaryInstallations"`
 	WrapperIDs           []string       `json:"wrapperIds"`
@@ -434,23 +440,20 @@ type operationInput struct {
 }
 
 // readInput decodes and checks the input of a backup operation. An input
-// that fails is permanent: no retry changes it.
-func readInput(op durable.Operation) (operationInput, blob.Key, error) {
+// that fails is permanent: no retry changes it. The attempt prefix comes from
+// the fence of the step that runs, not from the input, so each claim writes
+// its own prefix.
+func readInput(op durable.Operation) (operationInput, error) {
 	var in operationInput
 	if err := json.Unmarshal(op.Input, &in); err != nil {
-		return operationInput{}, "", durable.Permanent(fmt.Errorf("decode backup input: %w", err))
+		return operationInput{}, durable.Permanent(fmt.Errorf("decode backup input: %w", err))
 	}
 
 	if _, err := ParseID(in.ID.String()); err != nil {
-		return operationInput{}, "", durable.Permanent(err)
+		return operationInput{}, durable.Permanent(err)
 	}
 
-	manifestKey, err := blob.ParseKey("backups/" + in.ID.String() + "/manifest.json")
-	if err != nil {
-		return operationInput{}, "", durable.Permanent(fmt.Errorf("backup %s: %w", in.ID, err))
-	}
-
-	return in, manifestKey, nil
+	return in, nil
 }
 
 // MaxSQLBytes returns the SQL part limit the service enforces. Zero means
@@ -667,6 +670,7 @@ func (s *Service) request(
 		Target:    s.targetName,
 		Error:     "",
 		State:     StateRunning,
+		Attempt:   "",
 	}
 
 	return create, start, nil
@@ -735,23 +739,34 @@ func (s *Service) failEnded(ctx context.Context) {
 	}
 }
 
-// stepWrite writes the SQL part, the blobs and the manifest to the target.
-// Every write goes to a key that depends on the backup ID only, so a second
-// run of the step after a takeover writes the same keys again and the
-// target needs no fence. A stop of the runner (the context ends) returns
-// with no write to the row: the next claim runs the step again. Any other
-// error marks the row failed with the fence of this claim and ends the
-// operation.
+// stepWrite writes the SQL part, the blobs and the manifest to the attempt
+// prefix of its own claim. Each claim writes a new prefix, so a second run of
+// the step after a takeover never touches the keys of the first run, and a
+// stale holder that resumes late deletes only under its own prefix. Every
+// target call carries the fence of this claim: a holder that lost its claim
+// stops before the next write. A stop of the runner (the context ends)
+// returns with no write to the row: the next claim runs the step again under
+// a new prefix. Any other error marks the row failed with the fence of this
+// claim and ends the operation.
 func (s *Service) stepWrite(ctx context.Context, sc durable.StepContext) ([]byte, error) {
-	in, manifestKey, err := readInput(sc.Operation)
+	in, err := readInput(sc.Operation)
 	if err != nil {
 		return nil, err
 	}
 
-	backupErr := s.clearPartial(ctx, in.ID, manifestKey)
+	prefix, err := newAttemptPrefix(in.ID, attemptOf(sc.Fence))
+	if err != nil {
+		return nil, durable.Permanent(err)
+	}
+
+	backupErr := s.checkClaim(ctx, sc.Fence, in.ID)
+	if backupErr == nil {
+		backupErr = s.clearPartial(ctx, sc.Fence, prefix)
+	}
+
 	if backupErr == nil {
 		backupErr = s.backup(ctx, backupRun{
-			id: in.ID, startedAt: in.StartedAt, manifestKey: manifestKey, policy: policyOf(in),
+			id: in.ID, startedAt: in.StartedAt, prefix: prefix, fence: sc.Fence, policy: policyOf(in),
 		})
 	}
 
@@ -766,16 +781,24 @@ func (s *Service) stepWrite(ctx context.Context, sc durable.StepContext) ([]byte
 	return nil, s.failRow(ctx, sc.Fence, in.ID, backupErr)
 }
 
-// clearPartial removes the objects under backups/<id>/ that an earlier run of
-// the step left, the manifest first. The target creates each key once, so a
-// run after a takeover would fail with blob.ErrExists on the table files
-// otherwise. The manifest goes first, so a half-cleared backup never looks
-// complete. The copies under blobs/ stay: the copy keeps the first copy of a
-// blob and checks it against the live bytes.
-func (s *Service) clearPartial(ctx context.Context, id ID, manifestKey blob.Key) error {
-	left, err := listObjects(ctx, s.target, "backups/"+id.String())
+// clearPartial removes the objects under the attempt prefix that an earlier
+// run of the same attempt left, the manifest first. The target creates each
+// key once, so a retry of the same attempt would fail with blob.ErrExists on
+// the table files otherwise. The manifest goes first, so a half-cleared
+// prefix never looks complete. The step scopes the list to its own attempt
+// prefix, never to the whole backup: another attempt, live or stale, keeps
+// its files. The copies under blobs/ stay: the copy keeps the first copy of
+// a blob and checks it against the live bytes. Each delete re-checks the
+// claim, so a holder that lost its claim deletes nothing more.
+func (s *Service) clearPartial(ctx context.Context, fence durable.StepFence, prefix attemptPrefix) error {
+	left, err := listObjects(ctx, s.target, prefix.prefix())
 	if err != nil {
-		return fmt.Errorf("list objects of backup %s: %w", id, err)
+		return fmt.Errorf("list objects of backup %s: %w", prefix.id, err)
+	}
+
+	manifestKey, err := prefix.manifestKey()
+	if err != nil {
+		return err
 	}
 
 	keys := make([]blob.Key, 0, len(left))
@@ -790,20 +813,28 @@ func (s *Service) clearPartial(ctx context.Context, id ID, manifestKey blob.Key)
 		keys = slices.Insert(keys, 0, manifestKey)
 	}
 
-	prefix := "backups/" + id.String() + "/"
-
 	for _, key := range keys {
 		// Defense in depth: List filters by prefix, but a target whose List
 		// matches "backups/<id>" as a plain string prefix also returns the
 		// keys of another backup (for example "backups/<id>0/..."). This
 		// check stays so that a List that is too wide never deletes the files
 		// of another backup. It does not rely on the List layer.
-		if !strings.HasPrefix(key.String(), prefix) {
-			return fmt.Errorf("refuse to delete object %s outside %s of backup %s: %w", key, prefix, id, ErrCorrupt)
+		if !strings.HasPrefix(key.String(), prefix.prefix()) {
+			return fmt.Errorf(
+				"refuse to delete object %s outside %s of backup %s: %w",
+				key,
+				prefix.prefix(),
+				prefix.id,
+				ErrCorrupt,
+			)
+		}
+
+		if err := s.checkClaim(ctx, fence, prefix.id); err != nil {
+			return err
 		}
 
 		if err := s.target.Delete(ctx, key); err != nil {
-			return fmt.Errorf("delete object %s of backup %s: %w", key, id, err)
+			return fmt.Errorf("delete object %s of backup %s: %w", key, prefix.id, err)
 		}
 	}
 
@@ -830,28 +861,52 @@ func (s *Service) failRow(ctx context.Context, fence durable.StepFence, id ID, b
 // stepFinish moves the row to succeeded and records the step in one
 // transaction. A claim that was lost writes nothing. A row that is not
 // running any more ends the operation failed.
+//
+// The step runs Check over the attempt prefix of its own claim before the
+// commit: a stale holder that resumes late touches only its own prefix, and
+// the commit compares the manifest attempt with the live claim, so a stale
+// finish never marks the backup succeeded. After the commit the holder
+// deletes the orphaned attempt prefixes of the same backup under the live
+// claim.
+//
+// Deletes covered: the finish cleanup deletes only attempt prefixes of this
+// backup id other than the live prefix that the finished manifest names. It
+// never deletes the live prefix, never deletes keys of another backup, and
+// never deletes the unscoped layout. Each delete batch re-checks the live
+// claim first: when the claim moved, the cleanup stops without deletes, and
+// the next live holder or retention expiry removes the rest.
 func (s *Service) stepFinish(ctx context.Context, sc durable.StepContext) ([]byte, error) {
-	in, _, err := readInput(sc.Operation)
+	in, err := readInput(sc.Operation)
 	if err != nil {
 		return nil, err
 	}
 
+	prefix, err := newAttemptPrefix(in.ID, attemptOf(sc.Fence))
+	if err != nil {
+		return nil, durable.Permanent(err)
+	}
+
 	// A holder that lost its claim can still run clearPartial late and delete
-	// files of the backup that the survivor completed. The row would then
-	// read succeeded with files missing, so the step checks the files first
-	// and fails the backup closed.
-	if presentErr := s.checkPresent(ctx, in.ID); presentErr != nil {
+	// files of the backup that the survivor completed. Attempt prefixes keep
+	// that delete inside the stale prefix, and the step checks the files of
+	// its own prefix first and fails the backup closed.
+	if checkErr := s.checkAttempt(ctx, prefix); checkErr != nil {
 		if ctx.Err() != nil {
-			return nil, presentErr
+			return nil, checkErr
 		}
 
-		return nil, s.failRow(ctx, sc.Fence, in.ID, presentErr)
+		return nil, s.failRow(ctx, sc.Fence, in.ID, checkErr)
 	}
 
 	_, finishErr := s.registry.FinishBackup(ctx, sc.Fence, in.ID, StateSucceeded, "", s.now().UTC())
 
 	switch {
 	case finishErr == nil:
+		if cleanErr := s.cleanupOrphans(ctx, sc.Fence, prefix); cleanErr != nil {
+			s.logger.WarnContext(ctx, "backup left orphaned attempt prefixes",
+				slog.String("backup", in.ID.String()), slog.String("error", durable.ErrorClass(cleanErr)))
+		}
+
 		return nil, nil
 	case errors.Is(finishErr, durable.ErrClaimLost), errors.Is(finishErr, durable.ErrCanceled):
 		return nil, finishErr
@@ -860,39 +915,107 @@ func (s *Service) stepFinish(ctx context.Context, sc durable.StepContext) ([]byt
 	}
 }
 
-// checkPresent lists the objects under backups/<id>/ and compares them to the
-// manifest: the manifest and each table file it names must exist. A missing
-// file reports ErrCorrupt.
-func (s *Service) checkPresent(ctx context.Context, id ID) error {
-	manifest, err := s.ReadManifest(ctx, id)
+// checkAttempt runs Check over the attempt prefix: the manifest of the
+// prefix must name the prefix, and every object it names must be whole.
+// A missing or truncated file fails with backup.corrupt.
+func (s *Service) checkAttempt(ctx context.Context, prefix attemptPrefix) error {
+	if err := CheckAttempt(ctx, s.target, prefix); err != nil {
+		return fmt.Errorf("backup %s lost the object before it finished: %w", prefix.id, err)
+	}
+
+	manifest, err := readAttemptManifest(ctx, s.target, prefix)
 	if err != nil {
-		return err
+		return fmt.Errorf("check backup %s: %w", prefix.id, err)
 	}
 
-	listed, err := listObjects(ctx, s.target, "backups/"+id.String())
+	if err := checkDamagedOrigin(ctx, s, manifest); err != nil {
+		return fmt.Errorf("check backup %s: %w", prefix.id, err)
+	}
+
+	return nil
+}
+
+// cleanupOrphans deletes every attempt prefix of the backup except the live
+// one, under the live claim. Only the holder of the live claim deletes, and
+// it re-checks the claim before each delete batch. A stale writer that
+// recreates its prefix after the delete loses it on the next pass. When the
+// claim moved, the cleanup stops without deletes.
+func (s *Service) cleanupOrphans(ctx context.Context, fence durable.StepFence, live attemptPrefix) error {
+	left, err := listObjects(ctx, s.target, "backups/"+live.id.String()+"/")
 	if err != nil {
-		return fmt.Errorf("list objects of backup %s: %w", id, err)
+		return fmt.Errorf("list attempts of backup %s: %w", live.id, err)
 	}
 
-	have := make(map[string]struct{}, len(listed))
-	for _, obj := range listed {
-		have[obj.Key.String()] = struct{}{}
-	}
+	orphans := orphanPrefixes(live, left)
 
-	want := make([]string, 0, len(manifest.SQLFiles)+1)
-	want = append(want, "backups/"+id.String()+"/manifest.json")
+	for _, dir := range orphans {
+		if err := s.checkClaim(ctx, fence, live.id); err != nil {
+			return err
+		}
 
-	for _, file := range manifest.SQLFiles {
-		want = append(want, "backups/"+id.String()+"/"+file.Path)
-	}
+		for _, obj := range dir {
+			// Defense in depth: the list names only keys under the orphan
+			// prefix; this check stays so that a List that is too wide never
+			// deletes the live prefix or the files of another backup.
+			if !strings.HasPrefix(obj.Key.String(), "backups/"+live.id.String()+"/") ||
+				obj.Key.String() == live.prefix()+"manifest.json" ||
+				strings.HasPrefix(obj.Key.String(), live.prefix()) {
+				return fmt.Errorf(
+					"refuse to delete object %s outside the orphan prefixes of backup %s: %w",
+					obj.Key,
+					live.id,
+					ErrCorrupt,
+				)
+			}
 
-	for _, key := range want {
-		if _, ok := have[key]; !ok {
-			return fmt.Errorf("backup %s lost the object %s before it finished: %w", id, key, ErrCorrupt)
+			if err := s.target.Delete(ctx, obj.Key); err != nil {
+				return fmt.Errorf("delete orphan object %s of backup %s: %w", obj.Key, live.id, err)
+			}
 		}
 	}
 
 	return nil
+}
+
+// orphanPrefixes groups the listed objects by attempt prefix and returns the
+// groups that are not the live prefix and not the unscoped layout. Each group
+// holds the objects of one orphaned attempt.
+func orphanPrefixes(live attemptPrefix, left []blob.Object) [][]blob.Object {
+	byAttempt := map[string][]blob.Object{}
+	order := []string{}
+
+	head := "backups/" + live.id.String() + "/"
+
+	for _, obj := range left {
+		rest, ok := strings.CutPrefix(obj.Key.String(), head)
+		if !ok {
+			continue
+		}
+
+		seg, _, found := strings.Cut(rest, "/")
+		if !found || seg == "" {
+			// The unscoped layout and the bare prefix: never an orphan.
+			continue
+		}
+
+		if seg == live.attempt {
+			continue
+		}
+
+		if _, ok := byAttempt[seg]; !ok {
+			order = append(order, seg)
+		}
+
+		byAttempt[seg] = append(byAttempt[seg], obj)
+	}
+
+	out := make([][]blob.Object, 0, len(order))
+
+	for _, seg := range order {
+		out = append(out, byAttempt[seg])
+	}
+
+	return out
 }
 
 // damagePolicy says what a backup does at a live blob that is missing or
@@ -917,12 +1040,15 @@ func policyOf(in operationInput) damagePolicy {
 	return stopAtDamage
 }
 
-// backupRun holds the input of one run of a backup.
+// backupRun holds the input of one run of a backup. The writes go to the
+// attempt prefix of the fence that runs them, and each target call re-checks
+// that fence first.
 type backupRun struct {
-	startedAt   time.Time
-	id          ID
-	manifestKey blob.Key
-	policy      damagePolicy
+	startedAt time.Time
+	id        ID
+	prefix    attemptPrefix
+	fence     durable.StepFence
+	policy    damagePolicy
 }
 
 // backup exports the SQL part, copies the named blobs, and writes the
@@ -937,7 +1063,7 @@ func (s *Service) backup(ctx context.Context, run backupRun) error {
 		return err
 	}
 
-	exported, err := s.exportPortable(ctx, id)
+	exported, err := s.exportPortable(ctx, run)
 	if err != nil {
 		return err
 	}
@@ -966,7 +1092,7 @@ func (s *Service) backup(ctx context.Context, run backupRun) error {
 
 	ordered := orderBlobs(exported.sum.Blobs)
 
-	stored, damaged, err := s.copyBlobs(ctx, ordered, run.policy)
+	stored, damaged, err := s.copyBlobs(ctx, run.fence, run.id, ordered, run.policy)
 	if err != nil {
 		return err
 	}
@@ -977,17 +1103,18 @@ func (s *Service) backup(ctx context.Context, run backupRun) error {
 			slog.String("first", truncateKey(damaged[0].Key)))
 	}
 
-	return s.writeManifest(ctx, manifestInput{
+	return s.writeManifest(ctx, run.fence, manifestInput{
 		startedAt: run.startedAt,
 		kind:      kind,
 		id:        id,
+		attempt:   run.prefix.attempt,
 		sum:       exported.sum,
 		ordered:   stored,
 		files:     exported.files,
 		damaged:   damaged,
 		size:      exported.size,
 		sha:       exported.sha,
-		key:       run.manifestKey,
+		prefix:    run.prefix,
 	})
 }
 
@@ -996,15 +1123,24 @@ func (s *Service) backup(ctx context.Context, run backupRun) error {
 // that does not match its own live row does not stop the backup: it goes to
 // the damaged list, in key order, and the backup holds no copy of it. Every
 // other error stops the backup.
+// copyTarget carries the claim and the identity of one backup blob copy,
+// so every target call of the copy re-checks the same claim.
+type copyTarget struct {
+	fence durable.StepFence
+	id    ID
+}
+
 func (s *Service) copyBlobs(
-	ctx context.Context, ordered []BlobRef, policy damagePolicy,
+	ctx context.Context, fence durable.StepFence, id ID, ordered []BlobRef, policy damagePolicy,
 ) ([]ManifestBlob, []DamagedBlob, error) {
 	stored := make([]ManifestBlob, 0, len(ordered))
 
 	var damaged []DamagedBlob
 
+	target := copyTarget{fence: fence, id: id}
+
 	for _, ref := range ordered {
-		copied, copyErr := s.copyBlob(ctx, ref)
+		copied, copyErr := s.copyBlob(ctx, target, ref)
 		if copyErr == nil {
 			stored = append(stored, copied)
 
@@ -1064,24 +1200,32 @@ type sqlExport struct {
 }
 
 // exportPortable writes one object for each table file of the SQL part, under
-// backups/<id>/sql, and returns the summary with the descriptors. Each file
+// the attempt prefix, and returns the summary with the descriptors. Each file
 // streams into the target while the export writes it, so the SQL part never sits
 // in memory whole. A file that fails before it completes is aborted in the
-// target, so no partial table file stays there as a good one.
+// target, so no partial table file stays there as a good one. The sink
+// re-checks the claim before each file, so a holder that lost its claim
+// opens no more files.
 //
 // The service finishes every file it opened before it returns, also when the
 // exporter returns without a Close or an Abort of a file. An open file keeps
 // its target Put waiting on the pipe, so it must never outlive the export.
-func (s *Service) exportPortable(ctx context.Context, id ID) (sqlExport, error) {
+func (s *Service) exportPortable(ctx context.Context, run backupRun) (sqlExport, error) {
+	id := run.id
+
 	var (
 		mu     sync.Mutex
 		opened []*targetWriter
 	)
 
 	sink := func(path string) (io.WriteCloser, error) {
-		key, err := blob.ParseKey("backups/" + id.String() + "/" + path)
+		if err := s.checkClaim(ctx, run.fence, id); err != nil {
+			return nil, err
+		}
+
+		key, err := run.prefix.join(path)
 		if err != nil {
-			return nil, fmt.Errorf("name table file %q: %w", path, err)
+			return nil, err
 		}
 
 		w := newTargetWriter(ctx, s.target, key, s.maxSQL)
@@ -1265,17 +1409,21 @@ const copyBufferSize = 32 * 1024
 // bytes, so plain state never reaches the backup target. A blob the target
 // already holds keeps its first copy, after the live bytes still pass the
 // check.
-func (s *Service) copyBlob(ctx context.Context, ref BlobRef) (ManifestBlob, error) {
+func (s *Service) copyBlob(ctx context.Context, target copyTarget, ref BlobRef) (ManifestBlob, error) {
+	if err := s.checkClaim(ctx, target.fence, target.id); err != nil {
+		return ManifestBlob{}, err
+	}
+
 	keys, keysErr := copyKeys(ref.Key)
 	if keysErr != nil {
 		return ManifestBlob{}, keysErr
 	}
 
 	if ref.Sealed {
-		return s.copySealedBlob(ctx, keys.dest, keys.source, ref)
+		return s.copySealedBlob(ctx, target, keys.dest, keys.source, ref)
 	}
 
-	return s.copyPlainBlob(ctx, keys.dest, keys.source, ref)
+	return s.copyPlainBlob(ctx, target, keys.dest, keys.source, ref)
 }
 
 // copyKeysResult holds the live key and the target key of one blob
@@ -1305,7 +1453,7 @@ func copyKeys(key string) (copyKeysResult, error) {
 // against the size and MD5 in the SQL data. On a mismatch it deletes the
 // copied object and reports ErrCorrupt.
 func (s *Service) copyPlainBlob(
-	ctx context.Context, dest, source blob.Key, ref BlobRef,
+	ctx context.Context, target copyTarget, dest, source blob.Key, ref BlobRef,
 ) (ManifestBlob, error) {
 	copied, err := s.streamCopy(ctx, dest, source, ref)
 	if err != nil {
@@ -1326,6 +1474,10 @@ func (s *Service) copyPlainBlob(
 
 		// A bad copy that stays in the target is not damage of the live
 		// blob: the backup stops.
+		if err := s.checkClaim(ctx, target.fence, target.id); err != nil {
+			return ManifestBlob{}, err
+		}
+
 		if delErr := s.target.Delete(ctx, dest); delErr != nil {
 			return ManifestBlob{}, errors.Join(
 				corrupt,
@@ -1351,8 +1503,11 @@ func (s *Service) copyPlainBlob(
 // the sealed side ever sits in memory whole. A blob the target already holds
 // keeps its first copy.
 func (s *Service) copySealedBlob(
-	ctx context.Context, dest, source blob.Key, ref BlobRef,
+	ctx context.Context, target copyTarget, dest, source blob.Key, ref BlobRef,
 ) (ManifestBlob, error) {
+	if err := s.checkClaim(ctx, target.fence, target.id); err != nil {
+		return ManifestBlob{}, err
+	}
 	if s.opener == nil {
 		size, sum, err := s.hashStoredBlob(ctx, source, ref)
 		if err != nil {
@@ -1568,23 +1723,28 @@ func corruptBlobError(key string, size int64, sum []byte, ref BlobRef) error {
 	return fmt.Errorf("%w: blob %q does not match the SQL data", ErrCorrupt, key)
 }
 
-// manifestInput groups the manifest fields writeManifest needs.
+// manifestInput groups the manifest fields writeManifest needs. The manifest
+// lands in the attempt prefix and names the attempt, so the finish step can
+// tell which claim wrote it.
 type manifestInput struct {
 	startedAt time.Time
 	kind      installation.Kind
 	id        ID
+	attempt   string
 	sum       Summary
 	files     []PortableFile
 	ordered   []ManifestBlob
 	damaged   []DamagedBlob
 	size      int64
 	sha       [sha256.Size]byte
-	key       blob.Key
+	prefix    attemptPrefix
 }
 
-// writeManifest writes backups/<id>/manifest.json last, after the SQL part
-// and every blob, so a backup without a manifest never counts as complete.
-func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
+// writeManifest writes the manifest of the attempt last, after the SQL part
+// and every blob, so a prefix without a manifest never counts as complete.
+// The write is fenced: it re-checks the claim first, so a holder that lost
+// its claim writes no manifest, not even under its own prefix.
+func (s *Service) writeManifest(ctx context.Context, fence durable.StepFence, in manifestInput) error {
 	// Defense in depth: backup refuses the bound before the first copy, so no
 	// manifest above the bound reaches this write. This check stays so that no
 	// caller writes such a manifest. It reads only the summary of this run,
@@ -1593,9 +1753,19 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 		return boundErr
 	}
 
+	if err := s.checkClaim(ctx, fence, in.id); err != nil {
+		return err
+	}
+
+	key, err := in.prefix.manifestKey()
+	if err != nil {
+		return err
+	}
+
 	manifest := Manifest{
 		CreatedAt:            in.startedAt,
 		ID:                   in.id,
+		Attempt:              in.attempt,
 		Dialect:              in.sum.Dialect,
 		PrimaryInstallations: in.sum.PrimaryInstallations,
 		WrapperIDs:           in.sum.WrapperIDs,
@@ -1621,7 +1791,7 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 		return fmt.Errorf("encode manifest of backup %s: %w", in.id, err)
 	}
 
-	if err := s.target.Put(ctx, in.key, bytes.NewReader(data)); err != nil {
+	if err := s.target.Put(ctx, key, bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("write manifest of backup %s: %w", in.id, err)
 	}
 
@@ -1633,7 +1803,9 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 // SHA-256 of a table file and the MD5 of a blob. The blob port has no Stat
 // and no List, so it Gets each object, counts the bytes and hashes them. It
 // returns nil when the backup is complete, else the first object by key that
-// is missing, has another size or has another checksum.
+// is missing, has another size or has another checksum. Table files read
+// from the attempt prefix the manifest names, or from the unscoped layout
+// for a manifest without an attempt.
 func Check(ctx context.Context, target blob.Store, id ID) error {
 	if target == nil {
 		return fmt.Errorf("check backup %s: %w", id, ErrMissingDependency)
@@ -1644,8 +1816,35 @@ func Check(ctx context.Context, target blob.Store, id ID) error {
 		return err
 	}
 
+	return checkManifestObjects(ctx, target, id, manifest, tableBase(id, manifest.Attempt))
+}
+
+// CheckAttempt checks the attempt prefix: its manifest must name the prefix,
+// and the target must hold every object it names with the recorded size and
+// checksum. A listed file of the prefix that is missing or whose size
+// differs from the manifest fails with backup.corrupt. The finish step runs
+// it before the fenced finish write.
+func CheckAttempt(ctx context.Context, target blob.Store, prefix attemptPrefix) error {
+	if target == nil {
+		return fmt.Errorf("check backup %s: %w", prefix.id, ErrMissingDependency)
+	}
+
+	manifest, err := readAttemptManifest(ctx, target, prefix)
+	if err != nil {
+		return err
+	}
+
+	return checkManifestObjects(ctx, target, prefix.id, manifest, prefix.prefix())
+}
+
+// checkManifestObjects checks every object manifest names: each table file
+// under base and each blob under blobs/. It returns the first object that is
+// missing, short or changed.
+func checkManifestObjects(
+	ctx context.Context, target blob.Store, id ID, manifest Manifest, base string,
+) error {
 	for _, file := range manifest.SQLFiles {
-		key, err := blob.ParseKey("backups/" + id.String() + "/" + file.Path)
+		key, err := blob.ParseKey(base + file.Path)
 		if err != nil {
 			return fmt.Errorf("check backup %s: %w", id, err)
 		}
@@ -1669,27 +1868,193 @@ func Check(ctx context.Context, target blob.Store, id ID) error {
 	return nil
 }
 
+// tableBase returns the target prefix of the table files of backup id: the
+// attempt prefix when the manifest names an attempt, else the unscoped
+// layout of a manifest written before attempt prefixes.
+func tableBase(id ID, attempt string) string {
+	if attempt == "" {
+		return "backups/" + id.String() + "/"
+	}
+
+	return "backups/" + id.String() + "/" + attempt + "/"
+}
+
 // maxManifestBytes bounds the manifest that readManifest reads from a target.
 // The write path sets no limit on the number of blob entries, so the bound is
 // a fixed size, not a count. A larger object is refused before it is parsed, so
 // a hostile or broken target cannot grow the read without bound.
 const maxManifestBytes = 64 << 20
 
-// readManifest reads and parses backups/<id>/manifest.json. A backup without
-// a readable manifest of the current format never counts as complete.
+// readManifest reads and parses the manifest of backup id: the manifest of
+// the live attempt prefix when the target holds one, else the manifest of
+// the unscoped layout of a backup written before attempt prefixes. A backup
+// without a readable manifest of the current format never counts as
+// complete.
 func readManifest(ctx context.Context, target blob.Store, id ID) (Manifest, error) {
 	return readManifestLimit(ctx, target, id, maxManifestBytes)
+}
+
+// readAttemptManifest reads and parses the manifest of the attempt prefix.
+// The manifest must name the prefix: a manifest of another attempt never
+// counts for this one.
+func readAttemptManifest(ctx context.Context, target blob.Store, prefix attemptPrefix) (Manifest, error) {
+	key, err := prefix.manifestKey()
+	if err != nil {
+		return Manifest{}, err
+	}
+
+	manifest, err := readManifestKey(ctx, target, prefix.id, key, maxManifestBytes)
+	if err != nil {
+		return Manifest{}, err
+	}
+
+	if err := checkManifestAttempt(prefix.id, prefix.attempt, manifest); err != nil {
+		return Manifest{}, err
+	}
+
+	return manifest, nil
 }
 
 // readManifestLimit is readManifest with the size bound as a parameter, so a
 // test can reach the bound with a small limit instead of maxManifestBytes.
 // readManifest passes maxManifestBytes.
 func readManifestLimit(ctx context.Context, target blob.Store, id ID, limit int64) (Manifest, error) {
+	if manifest, err := readLiveManifest(ctx, target, id, limit); err == nil {
+		return manifest, nil
+	} else if !errors.Is(err, errNoAttemptManifest) {
+		return Manifest{}, err
+	}
+
 	key, err := blob.ParseKey("backups/" + id.String() + "/manifest.json")
 	if err != nil {
 		return Manifest{}, fmt.Errorf("check backup %s: %w", id, err)
 	}
 
+	return readManifestKey(ctx, target, id, key, limit)
+}
+
+// errNoAttemptManifest reports that the target holds no readable manifest
+// under an attempt prefix of the backup, so the read falls back to the
+// unscoped layout.
+var errNoAttemptManifest = errors.New("no attempt manifest")
+
+// readLiveManifest reads the manifest of the live attempt prefix of backup
+// id: it lists backups/<id>/ and returns the manifest of the highest attempt
+// prefix. It returns errNoAttemptManifest when the target holds no manifest
+// under an attempt prefix. A manifest that is present but unreadable, or
+// that names another attempt, fails closed: the read never falls back to the
+// unscoped layout then. A list failure is not errNoAttemptManifest either.
+func readLiveManifest(
+	ctx context.Context, target blob.Store, id ID, limit int64,
+) (Manifest, error) {
+	left, err := listObjects(ctx, target, "backups/"+id.String()+"/")
+	if err != nil {
+		return Manifest{}, fmt.Errorf("list attempts of backup %s: %w", id, err)
+	}
+
+	best := highestAttempt(id, left)
+	if best == "" {
+		return Manifest{}, errNoAttemptManifest
+	}
+
+	prefix, err := newAttemptPrefix(id, best)
+	if err != nil {
+		return Manifest{}, errNoAttemptManifest
+	}
+
+	key, err := prefix.manifestKey()
+	if err != nil {
+		return Manifest{}, err
+	}
+
+	manifest, err := readManifestKey(ctx, target, id, key, limit)
+	if err != nil {
+		return Manifest{}, err
+	}
+
+	if err := checkManifestAttempt(id, best, manifest); err != nil {
+		return Manifest{}, err
+	}
+
+	return manifest, nil
+}
+
+// checkManifestAttempt refuses a manifest that does not name the attempt
+// prefix that holds it: only the manifest of the live attempt counts for a
+// backup.
+func checkManifestAttempt(id ID, attempt string, manifest Manifest) error {
+	if manifest.Attempt != attempt {
+		return fmt.Errorf(
+			"backup %s manifest names attempt %q, want %q: %w",
+			id,
+			manifest.Attempt,
+			attempt,
+			ErrCorrupt,
+		)
+	}
+
+	return nil
+}
+
+// longerAttempt reports whether a names a higher attempt than b. Attempts are
+// decimal tokens without leading zeros, so the longer one is higher.
+func longerAttempt(a, b string) bool {
+	if len(a) != len(b) {
+		return len(a) > len(b)
+	}
+
+	return a > b
+}
+
+// highestAttempt returns the highest attempt segment with a manifest under
+// backups/<id>/, or empty when the target holds none. A segment counts only
+// when it passes the attempt allowlist.
+func highestAttempt(id ID, left []blob.Object) string {
+	head := "backups/" + id.String() + "/"
+	best := ""
+
+	for _, obj := range left {
+		seg := attemptSegment(id, head, obj.Key.String())
+		if seg == "" {
+			continue
+		}
+
+		if best == "" || longerAttempt(seg, best) {
+			best = seg
+		}
+	}
+
+	return best
+}
+
+// attemptSegment returns the attempt segment of key when key is the manifest
+// of an attempt prefix under head, else empty. A segment counts only when it
+// passes the attempt allowlist, so a hostile directory name never reads as
+// an attempt.
+func attemptSegment(id ID, head, key string) string {
+	rest, ok := strings.CutPrefix(key, head)
+	if !ok {
+		return ""
+	}
+
+	seg, tail, found := strings.Cut(rest, "/")
+	if !found || seg == "" || tail != "manifest.json" {
+		return ""
+	}
+
+	if _, err := newAttemptPrefix(id, seg); err != nil {
+		return ""
+	}
+
+	return seg
+}
+
+// readManifestKey reads and parses the manifest at key with the size bound
+// limit. A backup without a readable manifest of the current format never
+// counts as complete.
+func readManifestKey(
+	ctx context.Context, target blob.Store, id ID, key blob.Key, limit int64,
+) (Manifest, error) {
 	reader, err := target.Get(ctx, key)
 	if err != nil {
 		if errors.Is(err, blob.ErrNotFound) {
@@ -1717,6 +2082,41 @@ func readManifestLimit(ctx context.Context, target blob.Store, id ID, limit int6
 	return parseManifest(id, data)
 }
 
+// checkManifestIdentity checks the format, the ID, the attempt and the kind
+// of a decoded manifest. The attempt names the prefix that holds the
+// manifest, so only decimal digits count: a hostile manifest never addresses
+// another prefix.
+func checkManifestIdentity(id ID, manifest Manifest) error {
+	if manifest.Attempt != "" {
+		if _, err := newAttemptPrefix(id, manifest.Attempt); err != nil {
+			return fmt.Errorf("backup %s has a corrupt manifest: %w: %w", id, err, ErrCorrupt)
+		}
+	}
+
+	switch {
+	case manifest.Format != FormatVersion || manifest.SQLFormat != PortableFormat:
+		return fmt.Errorf(
+			"backup %s uses manifest format %d with SQL format %q, this server reads format %d with %q: %w",
+			id,
+			manifest.Format,
+			manifest.SQLFormat,
+			FormatVersion,
+			PortableFormat,
+			ErrCorrupt,
+		)
+	case manifest.ID != id:
+		return fmt.Errorf("backup %s holds a manifest of %s: %w", id, manifest.ID, ErrCorrupt)
+	}
+
+	// The kind is a claim, and an unknown value is not valid. There is no
+	// conversion and no default.
+	if _, err := installation.ParseKind(string(manifest.InstallationKind)); err != nil {
+		return fmt.Errorf("backup %s: %w", id, ErrManifestKindInvalid)
+	}
+
+	return nil
+}
+
 // parseManifest decodes the bytes of the manifest of backup id and checks the
 // format, the ID, the kind and the file descriptors.
 func parseManifest(id ID, data []byte) (Manifest, error) {
@@ -1730,25 +2130,8 @@ func parseManifest(id ID, data []byte) (Manifest, error) {
 		return Manifest{}, fmt.Errorf("backup %s has a corrupt manifest: %w", id, ErrCorrupt)
 	}
 
-	switch {
-	case manifest.Format != FormatVersion || manifest.SQLFormat != PortableFormat:
-		return Manifest{}, fmt.Errorf(
-			"backup %s uses manifest format %d with SQL format %q, this server reads format %d with %q: %w",
-			id,
-			manifest.Format,
-			manifest.SQLFormat,
-			FormatVersion,
-			PortableFormat,
-			ErrCorrupt,
-		)
-	case manifest.ID != id:
-		return Manifest{}, fmt.Errorf("backup %s holds a manifest of %s: %w", id, manifest.ID, ErrCorrupt)
-	}
-
-	// The kind is a claim, and an unknown value is not valid. There is no
-	// conversion and no default.
-	if _, err := installation.ParseKind(string(manifest.InstallationKind)); err != nil {
-		return Manifest{}, fmt.Errorf("backup %s: %w", id, ErrManifestKindInvalid)
+	if err := checkManifestIdentity(id, manifest); err != nil {
+		return Manifest{}, err
 	}
 
 	// The descriptors name the objects that Check, restore and the key peek
