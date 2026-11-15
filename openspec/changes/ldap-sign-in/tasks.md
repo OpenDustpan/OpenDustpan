@@ -6,7 +6,7 @@
 
 - [ ] 2.1 In NEW file cmd/opendustpan/ldap_settings.go, add `ldap.subjectFailureLimit` as static configuration: flag, `DUSTPAN_LDAP_*` variable and file key, 5 by default, 1 to 100, outside the range stops the start. Check: `go test ./cmd/opendustpan/ ./internal/cli/` with a table of values 0, 1, 100, 101, a text and an empty value.
 - [ ] 2.2 In internal/signinsvc/service_test.go (test) and NEW file cmd/opendustpan/ldap_provider_list.go, pass the limit to `signinsvc` and show its effective value and source in `GET /api/server/sign-in-providers`. Check: a test locks a subject after exactly the limit, and the list shows the value and the source.
-- [ ] 2.3 Regenerate the API description and the clients (`make generate`). It writes internal/api/apidesc/openapi.json and the clients under clients/. Check: `make clients-check` and `sqlc diff` are clean. Confirmed by: the driver's gates.
+- [ ] 2.3 Regenerate the API description with `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` (it writes internal/api/apidesc/openapi.json), then the clients with `make generate` (it writes clients/typescript/ and the sqlc code). Check: `make clients-check` and `sqlc diff` are clean. Confirmed by: the driver's gates.
 
 ## 3. Verification
 

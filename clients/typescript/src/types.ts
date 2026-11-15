@@ -91,6 +91,7 @@ export interface BackupManifest {
   readonly id: string;
   readonly installationKind: string;
   readonly primaryInstallations: ReadonlyArray<string>;
+  readonly registryFiles: Readonly<Record<string, RegistryFileSection>> | null;
   readonly rowCounts: Readonly<Record<string, number>> | null;
   readonly schemaVersion: number;
   readonly sqlFiles: ReadonlyArray<PortableFile>;
@@ -1432,6 +1433,18 @@ export interface PutGitHostInstallationRequest {
 export interface RedeemLocalUserCodeRequest {
   readonly oneTimeCode: string;
   readonly password: string;
+}
+
+export interface RegistryFileEntry {
+  readonly release: string;
+  readonly sha256: string;
+  readonly size: number;
+  readonly version: string;
+}
+
+export interface RegistryFileSection {
+  readonly files: ReadonlyArray<RegistryFileEntry>;
+  readonly version: number;
 }
 
 export interface RegistryKey {

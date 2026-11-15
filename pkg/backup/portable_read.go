@@ -158,10 +158,32 @@ func portableRowValues(table PortableTable, obj map[string]json.RawMessage) ([]a
 			return nil, checkErr
 		}
 
-		values[i] = value
+		values[i] = clearImportedValue(table.Table, column.Name, value)
 	}
 
 	return values, nil
+}
+
+// portTableStateVersions is the table of the state versions.
+const portTableStateVersions = "state_versions"
+
+// portColClientEncrypted is the column of the client-encryption bit of a state
+// version.
+const portColClientEncrypted = "client_encrypted"
+
+// clearImportedValue returns the value to load for one column of one table. A
+// column whose stored value is a cache that a reader derives again from its
+// source loads NULL, so a restored row never carries a cached value that has
+// gone stale. The client-encryption bit of a state version is such a cache: a
+// reader derives it from the state blob, and a tampered or an inconsistent
+// backup could mark an encrypted state as plaintext. Clearing it makes every
+// restored version stream its blob to decide.
+func clearImportedValue(table, column string, value any) any {
+	if table == portTableStateVersions && column == portColClientEncrypted {
+		return nil
+	}
+
+	return value
 }
 
 // checkManualLockReason refuses a manual lock row whose reason a person could

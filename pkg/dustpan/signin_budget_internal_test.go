@@ -85,7 +85,7 @@ func newBudgetFixture(t *testing.T) budgetFixture {
 	cfg.authenticator, cfg.namespaceStore = refuseAll{}, st
 	cfg.logger, cfg.now = slog.New(slog.DiscardHandler), func() time.Time { return now }
 
-	chain, gates, err := gatedAuthenticator(cfg.authenticator, tokens, cfg.namespaceStore, cfg.logger, cfg.now)
+	chain, gates, err := gatedAuthenticator(cfg.authenticator, tokens, nil, newGateEnv(cfg))
 	if err != nil {
 		t.Fatalf("gated authenticator: %v", err)
 	}

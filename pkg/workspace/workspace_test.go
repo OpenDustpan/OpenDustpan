@@ -589,6 +589,13 @@ func (m *memStore) CreateStateVersion(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// The store creates pending versions only, as the adapters do, so a
+	// finalized row never enters through this path with no client-encryption
+	// bit.
+	if sv.Status != workspace.StatusPending {
+		return fmt.Errorf("%w: state version %s is %s", workspace.ErrStateNotPending, sv.ID, sv.Status)
+	}
+
 	if err := m.checkFence(fence); err != nil {
 		return err
 	}
@@ -655,6 +662,12 @@ func (m *memStore) FenceAndUnlock(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// The fence version finalizes through the same constructor as a finalize,
+	// so it too carries the client-encryption bit of its row.
+	if !sv.ClientEncrypted.Known() {
+		return fmt.Errorf("%w: state version %s", workspace.ErrStateBitUnknown, sv.ID)
+	}
+
 	if err := m.checkFence(fence); err != nil {
 		return err
 	}
@@ -678,6 +691,7 @@ func (m *memStore) FenceAndUnlock(
 	staged.Status = sv.Status
 	staged.FinalizedAt = sv.FinalizedAt
 	staged.Size = sv.Size
+	staged.ClientEncrypted = sv.ClientEncrypted
 	m.versions[sv.ID] = staged
 	m.current[w.ID] = sv.ID
 	m.workspaces[w.ID] = w
@@ -706,6 +720,13 @@ func memFinalize(
 ) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// The store refuses a version with no client-encryption bit, as the
+	// finalize constructor of the adapters does, so no finalized row lacks
+	// the bit.
+	if !sv.ClientEncrypted.Known() {
+		return fmt.Errorf("%w: state version %s", workspace.ErrStateBitUnknown, sv.ID)
+	}
 
 	if m.failFinalize != nil {
 		err := m.failFinalize
@@ -1708,6 +1729,23 @@ func sum(content string) string {
 	s := md5.Sum([]byte(content)) //nolint:gosec // The protocol under test uses MD5 for integrity.
 
 	return hex.EncodeToString(s[:])
+}
+
+// rawSum returns the raw MD5 of content, as a state version row stores it. It
+// reuses sum, so a test that needs the bytes of the sum makes no second weak
+// hash call.
+func rawSum(content string) [md5.Size]byte {
+	var out [md5.Size]byte
+
+	raw, err := hex.DecodeString(sum(content))
+	if err != nil {
+		// sum returns the hex of an MD5, so this cannot fail.
+		return out
+	}
+
+	copy(out[:], raw)
+
+	return out
 }
 
 func newState(lineage string, serial int64, content string) workspace.NewState {
@@ -5419,6 +5457,34 @@ func (m *memStore) SaveReleased(
 	}
 
 	return nil
+}
+
+// legacyRow rewrites the stored version id as a row that a server wrote before
+// it kept the client-encryption bit: the bit is null, and the MD5 and the size
+// are those of content, so a test builds a row whose blob holds content.
+func (m *memStore) legacyRow(id workspace.StateVersionID, content string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sv := m.versions[id]
+	sv.ClientEncrypted = workspace.ClientEncryptedUnknown
+	sv.MD5 = rawSum(content)
+	sv.Size = int64(len(content))
+	m.versions[id] = sv
+}
+
+// plainRow rewrites the stored version id as a row whose client-encryption bit
+// says plaintext, while its blob holds content, so a test drives a read that
+// must not trust the row.
+func (m *memStore) plainRow(id workspace.StateVersionID, content string) {
+	m.legacyRow(id, content)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sv := m.versions[id]
+	sv.ClientEncrypted = workspace.ClientEncryptedNo
+	m.versions[id] = sv
 }
 
 // keepReleaseEntry validates the audit entry of a release like the adapters
