@@ -329,6 +329,7 @@ func newAccessFixtureAll(t *testing.T, parts accessFixtureParts) accessFixture {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		LocalUsers:       newRouteLocalUsers(t, st),
 		Preferences:      nil,

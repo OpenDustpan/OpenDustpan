@@ -4439,6 +4439,34 @@ func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams
 	return result.RowsAffected(), nil
 }
 
+const deleteProxyRuleSet = `-- name: DeleteProxyRuleSet :execrows
+DELETE FROM proxy_rule_sets
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $1)
+  AND scope_kind = $2 AND unit_id = $3 AND version = $4::BIGINT
+`
+
+type DeleteProxyRuleSetParams struct {
+	Namespace string
+	ScopeKind string
+	UnitID    string
+	Version   int64
+}
+
+// The caller checks the fence in the same transaction. A row of another
+// version is not removed.
+func (q *Queries) DeleteProxyRuleSet(ctx context.Context, arg DeleteProxyRuleSetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteProxyRuleSet,
+		arg.Namespace,
+		arg.ScopeKind,
+		arg.UnitID,
+		arg.Version,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteRegistryKey = `-- name: DeleteRegistryKey :execrows
 DELETE FROM registry_keys
 WHERE registry_keys.fingerprint = $1
@@ -6024,7 +6052,7 @@ func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow
 
 const getAuditEntry = `-- name: GetAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1 AND sequence = $2
@@ -6054,6 +6082,13 @@ func (q *Queries) GetAuditEntry(ctx context.Context, arg GetAuditEntryParams) (A
 		&i.SourceIp,
 		&i.UserAgent,
 		&i.Channel,
+		&i.AgentRun,
+		&i.AgentSession,
+		&i.ArgsDigest,
+		&i.BreakGlass,
+		&i.DelegationID,
+		&i.SecretStage,
+		&i.Tool,
 		&i.Kind,
 		&i.Outcome,
 		&i.RequestID,
@@ -8999,6 +9034,40 @@ func (q *Queries) GetProfileRevision(ctx context.Context, arg GetProfileRevision
 	return i, err
 }
 
+const getProxyRuleSet = `-- name: GetProxyRuleSet :one
+SELECT p.document, p.digest, p.version, p.updated_at_ms
+FROM proxy_rule_sets AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = $1 AND p.scope_kind = $2 AND p.unit_id = $3
+`
+
+type GetProxyRuleSetParams struct {
+	Namespace string
+	ScopeKind string
+	UnitID    string
+}
+
+type GetProxyRuleSetRow struct {
+	Document    string
+	Digest      string
+	Version     int64
+	UpdatedAtMs int64
+}
+
+// The namespace, the kind and the unit ID are the whole key: a unit scope never
+// reads the row of its namespace.
+func (q *Queries) GetProxyRuleSet(ctx context.Context, arg GetProxyRuleSetParams) (GetProxyRuleSetRow, error) {
+	row := q.db.QueryRow(ctx, getProxyRuleSet, arg.Namespace, arg.ScopeKind, arg.UnitID)
+	var i GetProxyRuleSetRow
+	err := row.Scan(
+		&i.Document,
+		&i.Digest,
+		&i.Version,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const getQuotaReservation = `-- name: GetQuotaReservation :one
 SELECT r.id, r.state, r.at_ms, r.ends_at_ms
 FROM quota_reservations AS r
@@ -11147,9 +11216,9 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+    at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
     fence_version, reason, principal_kind, job_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
 `
 
 type InsertAuditEntryParams struct {
@@ -11166,6 +11235,13 @@ type InsertAuditEntryParams struct {
 	SourceIp      string
 	UserAgent     string
 	Channel       string
+	AgentRun      string
+	AgentSession  string
+	ArgsDigest    string
+	BreakGlass    bool
+	DelegationID  string
+	SecretStage   string
+	Tool          string
 	Kind          string
 	Outcome       string
 	RequestID     string
@@ -11195,6 +11271,13 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.SourceIp,
 		arg.UserAgent,
 		arg.Channel,
+		arg.AgentRun,
+		arg.AgentSession,
+		arg.ArgsDigest,
+		arg.BreakGlass,
+		arg.DelegationID,
+		arg.SecretStage,
+		arg.Tool,
 		arg.Kind,
 		arg.Outcome,
 		arg.RequestID,
@@ -12764,6 +12847,41 @@ func (q *Queries) InsertProfileRevision(ctx context.Context, arg InsertProfileRe
 	return err
 }
 
+const insertProxyRuleSet = `-- name: InsertProxyRuleSet :execrows
+INSERT INTO proxy_rule_sets (namespace_id, scope_kind, unit_id, document, digest, version, updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = $1),
+    $2, $3, $4, $5, 1, $6
+)
+ON CONFLICT (namespace_id, scope_kind, unit_id) DO NOTHING
+`
+
+type InsertProxyRuleSetParams struct {
+	Namespace   string
+	ScopeKind   string
+	UnitID      string
+	Document    string
+	Digest      string
+	UpdatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A scope that has a set
+// is not written.
+func (q *Queries) InsertProxyRuleSet(ctx context.Context, arg InsertProxyRuleSetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertProxyRuleSet,
+		arg.Namespace,
+		arg.ScopeKind,
+		arg.UnitID,
+		arg.Document,
+		arg.Digest,
+		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertPurgedImport = `-- name: InsertPurgedImport :exec
 INSERT INTO imports_purged (namespace_id, id, purged_at_ms)
 VALUES ($1, $2, $3)
@@ -13742,7 +13860,7 @@ func (q *Queries) LastAuditChainStartSequence(ctx context.Context, namespace str
 
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1
@@ -13769,6 +13887,13 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.SourceIp,
 		&i.UserAgent,
 		&i.Channel,
+		&i.AgentRun,
+		&i.AgentSession,
+		&i.ArgsDigest,
+		&i.BreakGlass,
+		&i.DelegationID,
+		&i.SecretStage,
+		&i.Tool,
 		&i.Kind,
 		&i.Outcome,
 		&i.RequestID,
@@ -13965,7 +14090,7 @@ func (q *Queries) ListAuditChainMarks(ctx context.Context) ([]AuditChainMark, er
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
@@ -14006,6 +14131,13 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.SourceIp,
 			&i.UserAgent,
 			&i.Channel,
+			&i.AgentRun,
+			&i.AgentSession,
+			&i.ArgsDigest,
+			&i.BreakGlass,
+			&i.DelegationID,
+			&i.SecretStage,
+			&i.Tool,
 			&i.Kind,
 			&i.Outcome,
 			&i.RequestID,
@@ -14031,7 +14163,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1
@@ -14070,6 +14202,13 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.SourceIp,
 			&i.UserAgent,
 			&i.Channel,
+			&i.AgentRun,
+			&i.AgentSession,
+			&i.ArgsDigest,
+			&i.BreakGlass,
+			&i.DelegationID,
+			&i.SecretStage,
+			&i.Tool,
 			&i.Kind,
 			&i.Outcome,
 			&i.RequestID,
@@ -24627,6 +24766,41 @@ func (q *Queries) UpdatePrincipal(ctx context.Context, arg UpdatePrincipalParams
 		arg.UpdatedAtMs,
 		arg.ID,
 		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateProxyRuleSet = `-- name: UpdateProxyRuleSet :execrows
+UPDATE proxy_rule_sets
+SET document = $1, digest = $2, version = $3::BIGINT + 1,
+    updated_at_ms = $4
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = $5)
+  AND scope_kind = $6 AND unit_id = $7 AND version = $3::BIGINT
+`
+
+type UpdateProxyRuleSetParams struct {
+	Document    string
+	Digest      string
+	Version     int64
+	UpdatedAtMs int64
+	Namespace   string
+	ScopeKind   string
+	UnitID      string
+}
+
+// A row of another version than the one that the caller read is not written.
+func (q *Queries) UpdateProxyRuleSet(ctx context.Context, arg UpdateProxyRuleSetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateProxyRuleSet,
+		arg.Document,
+		arg.Digest,
+		arg.Version,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+		arg.ScopeKind,
+		arg.UnitID,
 	)
 	if err != nil {
 		return 0, err

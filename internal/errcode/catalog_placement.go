@@ -49,7 +49,7 @@ func placementSpecs() []Spec {
 		{Code: PlacementInvalidTool, Meaning: "the tool of the placement rule has no placement rules", Args: nil},
 		{
 			Code:    PlacementNoMatch,
-			Meaning: "no placement rule of the namespace matches the new unit, so the server does not make it",
+			Meaning: "no placement rule matches the new stack or workspace, so the server refuses it. Run opendustpan placement add",
 			Args:    nil,
 		},
 		{

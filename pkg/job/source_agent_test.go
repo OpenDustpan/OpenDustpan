@@ -7,6 +7,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
+// agentRefOf returns the agent reference of the named test agent, or zero
+// for no agent.
+func agentRefOf(name string) job.AgentRef {
+	return job.AgentRef(name)
+}
+
 // TestStartSourceOfAnAgent proves that the start of an agent has the source
 // kind agent, also when the caller gives that kind.
 func TestStartSourceOfAnAgent(t *testing.T) {
@@ -18,7 +24,7 @@ func TestStartSourceOfAnAgent(t *testing.T) {
 
 			r := newRig(t)
 			a := actorOf("ada")
-			a.Agent = "dusty"
+			a.Agent = agentRefOf("dusty")
 
 			req := r.plan("")
 			req.Source = source
@@ -48,7 +54,7 @@ func TestStartSourceOfAnAgentRefused(t *testing.T) {
 
 			r := newRig(t)
 			a := actorOf("ada")
-			a.Agent = "dusty"
+			a.Agent = agentRefOf("dusty")
 
 			req := r.plan("")
 			req.Source = source

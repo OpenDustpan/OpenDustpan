@@ -245,6 +245,11 @@ jobs:
             git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           fi
           make files-check FILES_BASE=origin/main
+      # A pull request that completes an OpenSpec change archives it. The step
+      # before this one fetched main with its history.
+      - name: A completed OpenSpec change is archived
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        run: make change-archived-check BASE_REF=origin/main
       # A failed job saves too: its build cache is still valid. The key is the
       # one that the restore step computed. A job with GO_CACHE_FROM saves no
       # entry: the job that it names saves the entry.
@@ -477,7 +482,17 @@ jobs:
       # test run needs less disk time. These settings change only what
       # PostgreSQL keeps after a crash of the machine, not what a query
       # returns. The crash-test job keeps the defaults.
-      - name: Turn off fsync in the test PostgreSQL
+      # make test-ci-store runs 16 cases at a time (STORE_TEST_PARALLEL), and a
+      # case can hold the pools of up to 3 stores, so the server takes 300
+      # connections instead of the 100 of the default. A drop of the schema of
+      # a case takes one lock for each object in it, about a thousand, and the
+      # lock table holds max_locks_per_transaction times max_connections
+      # locks: with the default of 64, 16 drops at a time filled it ("out of
+      # shared memory", SQLSTATE 53200). 256 gives 76,800 locks. Both settings
+      # apply only at a start, so the step restarts the container and waits
+      # for it. The port mapping 5432:5432 is fixed, so the restart keeps the
+      # port.
+      - name: Tune the test PostgreSQL
         env:
           PG_CONTAINER: ${{ job.services.postgres.id }}
         run: |
@@ -485,7 +500,15 @@ jobs:
             -c "ALTER SYSTEM SET fsync = off" \
             -c "ALTER SYSTEM SET synchronous_commit = off" \
             -c "ALTER SYSTEM SET full_page_writes = off" \
-            -c "SELECT pg_reload_conf()"
+            -c "ALTER SYSTEM SET max_connections = 300" \
+            -c "ALTER SYSTEM SET max_locks_per_transaction = 256"
+          docker restart "$PG_CONTAINER" > /dev/null
+          for _ in $(seq 60); do
+            docker exec "$PG_CONTAINER" pg_isready -U postgres -q && break
+            sleep 1
+          done
+          docker exec "$PG_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 -tA \
+            -c "SHOW max_connections" -c "SHOW max_locks_per_transaction"
       # The runner throws the service container away after the job, so the
       # PostgreSQL tests keep their database at the end
       # (DUSTPAN_TEST_SKIP_FINAL_DROP). The variable also keeps the test

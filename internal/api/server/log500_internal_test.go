@@ -139,7 +139,7 @@ func TestRefusedCodeLogsThroughFaultlog(t *testing.T) {
 	h.logger = slog.New(slog.NewTextHandler(&buf, nil))
 
 	status, _, _ := h.answer(requestid.WithContext(t.Context(), "0123abcd"),
-		failure{status: 409, message: "m", code: "no.such.code", args: nil})
+		failure{status: 409, message: "m", code: "no.such.code", args: nil, retryAfter: 0})
 	if status != 500 {
 		t.Fatalf("status = %d, want 500", status)
 	}

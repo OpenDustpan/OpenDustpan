@@ -388,6 +388,7 @@ func newListNoAccessHandler(t *testing.T, names []string, cursors secret.Wrapper
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          cursors,
 		Reach:            noReach(),
 		LocalUsers:       nil,
@@ -748,6 +749,7 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,

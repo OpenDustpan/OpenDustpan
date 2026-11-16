@@ -15,6 +15,7 @@ Changed by:
 - ADR 227 changes decision 4: the window can be only 0 or 60 to 900 seconds.
 - ADR 301 extends decision 5: the rule applies when MFA is on, as for every
   other method.
+- ADR 385 extends decision 5: a step is asked for only when the setting `freshAuthEnabled` is on.
 
 ## Context
 

@@ -32,7 +32,9 @@ Evidence for the claims above:
 
 - Keep audit.Entry with no Agent field.
 - Record the agent of each job audit entry in the agent block.
-- Remove the temporary agent change key from new job entries and dual-read old entries with the block winning.
+- Remove the agent change key from the one job audit entry that still writes it on main (the approval entry, `pkg/job/service_approve.go:424`), and write that agent in the agent block. The start entry already does this on main (`startChanges` in `pkg/job/service_start.go`, test `TestStartWritesAgentBlock` at `pkg/job/service_test.go:1124`), because `audit-agent-block` landed it.
+- Add regression checks for the block (hash stability, one changed byte of the block refuses the chain). They pass on main and after the change.
+- Write no reader for the old change key: no tag shipped that shape, so the project writes no compatibility code for it.
 
 Out of scope:
 
@@ -100,7 +102,7 @@ none
 Questions considered and answered:
 
 - Does this change add an Agent field to audit.Entry? No. ADR 128 decision 17 says audit.Entry gets no field Agent. The agent goes in the agent block named by ADR 126 decision 10.
-- What happens to the temporary agent change key in old job start entries? New entries stop writing it. Readers accept old entries; where both shapes exist the block wins. No stored row is rewritten.
+- What happens to the temporary agent change key in old job start entries? New entries stop writing it. No reader accepts it and no stored row is rewritten: no tag shipped that shape, so the project writes no compatibility code for it.
 - Does this change define how an agent ref is validated? No. Agent identity and delegations belong to RFC 121 and later ADRs. This change passes the ref the caller supplies and fails closed on entry validation failure.
 - How are agent approval and break-glass attempts handled? They stay refused per ADR 103 decision 7. This change adds no approval path for agents.
 

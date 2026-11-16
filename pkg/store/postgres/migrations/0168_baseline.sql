@@ -88,6 +88,13 @@ CREATE TABLE audit_entries (
     source_ip text DEFAULT ''::text NOT NULL,
     user_agent text DEFAULT ''::text NOT NULL,
     channel text NOT NULL,
+    agent_run text DEFAULT ''::text NOT NULL,
+    agent_session text DEFAULT ''::text NOT NULL,
+    args_digest text DEFAULT ''::text NOT NULL,
+    break_glass boolean DEFAULT false NOT NULL,
+    delegation_id text DEFAULT ''::text NOT NULL,
+    secret_stage text DEFAULT ''::text NOT NULL,
+    tool text DEFAULT ''::text NOT NULL,
     kind text NOT NULL,
     outcome text NOT NULL,
     request_id text DEFAULT ''::text NOT NULL,
@@ -1041,6 +1048,19 @@ CREATE TABLE profiles (
     CONSTRAINT profiles_latest_check CHECK ((latest >= 1))
 );
 
+CREATE TABLE proxy_rule_sets (
+    namespace_id text NOT NULL,
+    scope_kind text NOT NULL,
+    unit_id text NOT NULL,
+    document text NOT NULL,
+    digest text NOT NULL,
+    version bigint NOT NULL,
+    updated_at_ms bigint NOT NULL,
+    CONSTRAINT proxy_rule_sets_check CHECK ((((scope_kind = 'namespace'::text) AND (unit_id = ''::text)) OR ((scope_kind = 'unit'::text) AND (unit_id <> ''::text)))),
+    CONSTRAINT proxy_rule_sets_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['namespace'::text, 'unit'::text]))),
+    CONSTRAINT proxy_rule_sets_version_check CHECK ((version >= 1))
+);
+
 CREATE TABLE quota_keys (
     namespace_id text NOT NULL,
     blueprint text NOT NULL,
@@ -1894,6 +1914,9 @@ ALTER TABLE ONLY profile_revisions
 ALTER TABLE ONLY profiles
     ADD CONSTRAINT profiles_pkey PRIMARY KEY (namespace_id, id);
 
+ALTER TABLE ONLY proxy_rule_sets
+    ADD CONSTRAINT proxy_rule_sets_pkey PRIMARY KEY (namespace_id, scope_kind, unit_id);
+
 ALTER TABLE ONLY quota_keys
     ADD CONSTRAINT quota_keys_pkey PRIMARY KEY (namespace_id, blueprint, kind, scope);
 
@@ -2187,6 +2210,8 @@ CREATE INDEX object_context_owners_entry ON object_context_owners USING btree (n
 
 CREATE INDEX passkey_challenges_expiry ON passkey_challenges USING btree (expires_at_ms);
 
+CREATE INDEX passkey_challenges_kind_expiry ON passkey_challenges USING btree (kind, expires_at_ms);
+
 CREATE INDEX passkey_challenges_source ON passkey_challenges USING btree (source, expires_at_ms);
 
 CREATE INDEX passkey_challenges_source_group ON passkey_challenges USING btree (source_group, expires_at_ms);
@@ -2385,6 +2410,9 @@ ALTER TABLE ONLY principal_session_generations
 
 ALTER TABLE ONLY profile_revisions
     ADD CONSTRAINT profile_revisions_namespace_id_profile_id_fkey FOREIGN KEY (namespace_id, profile_id) REFERENCES profiles(namespace_id, id);
+
+ALTER TABLE ONLY proxy_rule_sets
+    ADD CONSTRAINT proxy_rule_sets_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
 ALTER TABLE ONLY quota_keys
     ADD CONSTRAINT quota_keys_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);

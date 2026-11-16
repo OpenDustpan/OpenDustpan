@@ -143,6 +143,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyTrustRuleTables()...)
 	tables = append(tables, pgCopyBreakGlassReviewTables()...)
 	tables = append(tables, pgCopyUnmanagedTables()...)
+	tables = append(tables, pgCopyProxyRuleTables()...)
 
 	return tables
 }
@@ -386,7 +387,8 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				pgColObject, pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
-				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
+				"channel", "agent_run", "agent_session", "args_digest", "break_glass", "delegation_id",
+				"secret_stage", "tool", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
 				"changes", "object_id", "fence_version", "principal_kind", pgColJobID, pgColReason,
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},

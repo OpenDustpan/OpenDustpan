@@ -72,6 +72,13 @@ type AuditEntry struct {
 	SourceIp      string
 	UserAgent     string
 	Channel       string
+	AgentRun      string
+	AgentSession  string
+	ArgsDigest    string
+	BreakGlass    bool
+	DelegationID  string
+	SecretStage   string
+	Tool          string
 	Kind          string
 	Outcome       string
 	RequestID     string
@@ -947,6 +954,16 @@ type ProfileRevision struct {
 	Author         string
 	CreatedAtMs    int64
 	Reason         string
+}
+
+type ProxyRuleSet struct {
+	NamespaceID string
+	ScopeKind   string
+	UnitID      string
+	Document    string
+	Digest      string
+	Version     int64
+	UpdatedAtMs int64
 }
 
 type QuotaKey struct {

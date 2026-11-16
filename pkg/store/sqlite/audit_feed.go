@@ -28,7 +28,12 @@ func (s *Store) After(ctx context.Context, ns namespace.Name, after int64, limit
 
 	entries := make([]audit.Entry, 0, len(rows))
 	for i := range rows {
-		entries = append(entries, fromAuditRow(rows[i]))
+		e, err := fromAuditRow(rows[i])
+		if err != nil {
+			return nil, err
+		}
+
+		entries = append(entries, e)
 	}
 
 	return entries, nil

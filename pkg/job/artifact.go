@@ -329,14 +329,26 @@ type ArtifactStore interface {
 	history.Redactor
 	ArtifactReader
 	// ReplaceLog writes the next version of the log whose current version
-	// is from, with the content body and a new item key, and makes it the
-	// current version. by is the subject of the redaction. It returns
-	// history.ErrInProgress for a log that is not closed, ErrConflict when
-	// from is not the current version, and secret.ErrShredded when the item
-	// key of from is shredded. The caller then redacts from through
-	// history.Redactor, with history.CauseRequest.
-	ReplaceLog(ctx context.Context, ns namespace.Name, from string, body io.Reader, by string,
-		fence namespace.Fence) (LogRef, error)
+	// is r.From, with the content r.Body and a new item key, and makes it
+	// the current version. It returns history.ErrInProgress for a log that is
+	// not closed, ErrConflict when r.From is not the current version, and
+	// secret.ErrShredded when the item key of r.From is shredded. The caller
+	// then redacts r.From through history.Redactor, with
+	// history.CauseRequest.
+	ReplaceLog(ctx context.Context, r LogReplacement) (LogRef, error)
+}
+
+// LogReplacement is the request of ArtifactStore.ReplaceLog.
+type LogReplacement struct {
+	// Namespace is the namespace of the log, and Fence is its fence.
+	Namespace namespace.Name
+	Fence     namespace.Fence
+	// From is the ID of the current version of the log.
+	From string
+	// Body is the content of the next version.
+	Body io.Reader
+	// By is the subject of the redaction.
+	By string
 }
 
 // ArtifactKey is what a blob key in the directory of one job names: one part
