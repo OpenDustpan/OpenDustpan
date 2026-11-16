@@ -38,7 +38,7 @@ func replayTwice(t *testing.T, secretID func(any) string) (replayOutcome, int) {
 	mw := newMiddleware(t, store, 1<<20)
 	runs := 0
 	c := idempotent.Call{
-		Principal: caller, Build: builds(full), SecretAnswer: secretID, Required: false, Reducing: false,
+		Principal: caller, Build: builds(full), SecretAnswer: secretID, Required: false,
 		Serve: func(w http.ResponseWriter, r *http.Request) {
 			runs++
 
@@ -145,7 +145,7 @@ func TestRequiredKey(t *testing.T) {
 			mw := newMiddleware(t, idempotencytest.NewMemory(), 1<<20)
 			runs := 0
 			c := idempotent.Call{
-				Principal: caller, Build: noAnswer, SecretAnswer: nil, Required: tc.required, Reducing: false,
+				Principal: caller, Build: noAnswer, SecretAnswer: nil, Required: tc.required,
 				Serve: func(w http.ResponseWriter, _ *http.Request) {
 					runs++
 
@@ -180,7 +180,7 @@ func TestIfMatchIsPartOfTheRequest(t *testing.T) {
 	mw := newMiddleware(t, store, 1<<20)
 	answer := idempotency.Answer{Status: http.StatusOK, Headers: nil, Body: nil}
 	c := idempotent.Call{
-		Principal: caller, Build: builds(answer), SecretAnswer: nil, Required: false, Reducing: false,
+		Principal: caller, Build: builds(answer), SecretAnswer: nil, Required: false,
 		Serve: func(w http.ResponseWriter, r *http.Request) {
 			finish(t, store, r)
 			idempotent.Write(w, answer)
@@ -218,7 +218,7 @@ func TestTheFingerprintFramesQueryAndBody(t *testing.T) {
 	mw := newMiddleware(t, store, 1<<20)
 	answer := idempotency.Answer{Status: http.StatusOK, Headers: nil, Body: nil}
 	c := idempotent.Call{
-		Principal: caller, Build: builds(answer), SecretAnswer: nil, Required: false, Reducing: false,
+		Principal: caller, Build: builds(answer), SecretAnswer: nil, Required: false,
 		Serve: func(w http.ResponseWriter, r *http.Request) {
 			finish(t, store, r)
 			idempotent.Write(w, answer)
@@ -256,7 +256,7 @@ func TestEveryIfMatchValueIsPartOfTheRequest(t *testing.T) {
 	mw := newMiddleware(t, store, 1<<20)
 	answer := idempotency.Answer{Status: http.StatusOK, Headers: nil, Body: nil}
 	c := idempotent.Call{
-		Principal: caller, Build: builds(answer), SecretAnswer: nil, Required: false, Reducing: false,
+		Principal: caller, Build: builds(answer), SecretAnswer: nil, Required: false,
 		Serve: func(w http.ResponseWriter, r *http.Request) {
 			finish(t, store, r)
 			idempotent.Write(w, answer)
