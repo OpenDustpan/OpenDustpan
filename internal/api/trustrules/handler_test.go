@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/route"
@@ -13,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/trustrule"
 )
 
 // TestTrustRuleRoundTrip creates two rules, reads them one by one and as a
@@ -111,8 +113,10 @@ func TestTrustRuleChangesWriteAuditEntries(t *testing.T) {
 }
 
 // TestTrustRuleCreateRefusals sends creates that the service or the store
-// refuses, and checks the status, the code, and that no rule and no entry
-// remain.
+// refuses, and checks the status, the code, and that no rule remains. A
+// refusal that names the caller (a principal of another namespace, a caller
+// with an access token only) writes one audit entry; a refusal of the input
+// writes none.
 func TestTrustRuleCreateRefusals(t *testing.T) {
 	t.Parallel()
 
@@ -125,44 +129,73 @@ func TestTrustRuleCreateRefusals(t *testing.T) {
 	}
 
 	cases := []struct {
-		name, body, token string
-		status            int
-		code              string
+		name, body, token, reason string
+		status                    int
+		code                      string
+		wantEntry                 bool
 	}{
-		{"missing field", `{"name":"x"}`, adminToken, http.StatusBadRequest, "request.body-invalid"},
-		{"unknown field", `{"name":"x","jku":"https://x"}`, adminToken, http.StatusBadRequest, "request.body-invalid"},
+		{"missing field", `{"name":"x"}`, adminToken, "", http.StatusBadRequest, "request.body-invalid", false},
+		{
+			"unknown field", `{"name":"x","jku":"https://x"}`, adminToken, "",
+			http.StatusBadRequest, "request.body-invalid", false,
+		},
 		{
 			"no subject condition",
 			`{"name":"x","issuer":"https://token.actions.example.com","audience":"a","keySource":"discovery",` +
 				`"principal":` + quote(e.worker) + `,"conditions":[{"claim":"repository","values":["acme/infra"]}]}`,
-			adminToken, http.StatusBadRequest, "trust-rule.invalid",
+			adminToken, "", http.StatusBadRequest, "trust-rule.invalid", false,
 		},
 		{
 			"issuer of this installation",
 			`{"name":"x","issuer":"https://DUSTPAN.example.com/oidc/ns-1","audience":"a","keySource":"discovery",` +
 				`"principal":` + quote(e.worker) + `,"conditions":[{"claim":"sub","values":["s"]}]}`,
-			adminToken, http.StatusBadRequest, "trust-rule.issuer-refused",
+			adminToken, "", http.StatusBadRequest, "trust-rule.issuer-refused", false,
 		},
-		{"a person", ruleBody("x", person), adminToken, http.StatusBadRequest, "trust-rule.principal-refused"},
+		{
+			"a person", ruleBody("x", person), adminToken, "", http.StatusBadRequest,
+			"trust-rule.principal-refused", false,
+		},
 		{
 			"a principal of the installation", ruleBody("x", installationService), adminToken,
-			http.StatusBadRequest, "trust-rule.principal-refused",
+			"", http.StatusBadRequest, "trust-rule.principal-refused", false,
 		},
 		{
 			"a principal of another namespace", ruleBody("x", e.stranger), adminToken,
-			http.StatusBadRequest, "trust-rule.principal-refused",
+			trustrule.ErrCrossNamespace.Error(), http.StatusForbidden, "trust-rule.principal-refused", true,
 		},
-		{"a taken name", ruleBody("taken", e.worker), adminToken, http.StatusConflict, "trust-rule.already-exists"},
+		{
+			"a taken name", ruleBody("taken", e.worker), adminToken, "", http.StatusConflict,
+			"trust-rule.already-exists", false,
+		},
 		{
 			"a stored access token", ruleBody("x", e.worker), storedToken,
-			http.StatusForbidden, "trust-rule.sign-in-required",
+			trustrulesvc.ErrSignInRequired.Error(), http.StatusForbidden, "trust-rule.sign-in-required", true,
 		},
 	}
 
 	for _, tc := range cases {
+		before := len(createFailureEntries(t, e))
+
 		status, body := e.do(http.MethodPost, rulesURL, tc.token, tc.body)
 		if status != tc.status || errorCode(t, body) != tc.code {
 			t.Errorf("%s: create = %d %s, want %d %s", tc.name, status, body, tc.status, tc.code)
+		}
+
+		entries := createFailureEntries(t, e)
+		if tc.wantEntry {
+			if len(entries) != before+1 {
+				t.Errorf("%s: failure entries = %d, want one more: the refusal left no trace", tc.name, len(entries))
+			} else if entries[len(entries)-1].Reason != tc.reason {
+				t.Errorf("%s: entry reason = %q, want %q", tc.name, entries[len(entries)-1].Reason, tc.reason)
+			}
+
+			continue
+		}
+
+		if len(entries) != before {
+			t.Errorf(
+				"%s: failure entries = %d, want none: the refusal of the input wrote an entry", tc.name, len(entries),
+			)
 		}
 	}
 
@@ -305,7 +338,8 @@ func TestTrustRuleRefusesTheCredential(t *testing.T) {
 
 // TestTrustRuleWritesNeedAConsoleSession proves that each write of a rule or a
 // bundle with a valid token and no console session answers 403 with the code
-// of a missing fresh sign-in, and changes nothing. The service checks this
+// of a missing fresh sign-in, changes nothing, and writes its audit entry of
+// outcome denied with the action of the change. The service checks this
 // too: this test sends the hostile request to the handler.
 func TestTrustRuleWritesNeedAConsoleSession(t *testing.T) {
 	t.Parallel()
@@ -334,6 +368,39 @@ func TestTrustRuleWritesNeedAConsoleSession(t *testing.T) {
 
 	if got := len(e.ruleEntries()); got != 1 {
 		t.Errorf("audit entries = %d, want only the first create", got)
+	}
+
+	// Each refused write left its trace: the create as a failure entry of
+	// the create path, each other write as a denied entry through the
+	// shared denial limiter, with the action of its change.
+	if got := len(createFailureEntries(t, e)); got != 1 {
+		t.Errorf("failure entries = %d, want the one of the refused create", got)
+	}
+
+	entries := denialEntries(t, e)
+	actions := make([]string, 0, len(entries))
+
+	for i := range entries {
+		actions = append(actions, entries[i].Action)
+	}
+
+	want := []string{
+		trustrulesvc.ActionUpdate, trustrulesvc.ActionDelete, trustrulesvc.ActionBundleSave,
+		trustrulesvc.ActionBundleRotate, trustrulesvc.ActionBundleDelete,
+	}
+	slices.Sort(actions)
+	slices.Sort(want)
+
+	if !slices.Equal(actions, want) {
+		t.Errorf("denied entry actions = %v, want %v", actions, want)
+	}
+
+	for i := range entries {
+		if entries[i].Subject != "ada" || entries[i].Namespace != "acme" ||
+			!strings.Contains(entries[i].Reason, trustrulesvc.ErrFreshRequired.Error()) {
+			t.Errorf("entry of %s = %+v, want the refusal of ada in acme with the fresh sign-in reason",
+				entries[i].Action, entries[i])
+		}
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
@@ -153,6 +154,10 @@ func (h *Handler) saveBundle(w http.ResponseWriter, r *http.Request, p identity.
 		PEM: *in.PEM, Overlap: 0, Revision: 0,
 	})
 	if err != nil {
+		h.recordWriteRefusal(ctx, writeRefusal{
+			r: r, p: p, ns: obj.Namespace(), action: trustrulesvc.ActionBundleSave,
+			principalID: "", err: err,
+		})
 		h.writeError(ctx, w, err)
 
 		return
@@ -250,6 +255,10 @@ func (h *Handler) rotateBundle(w http.ResponseWriter, r *http.Request, p identit
 		PEM: *in.PEM, Overlap: overlap, Revision: revision,
 	})
 	if err != nil {
+		h.recordWriteRefusal(ctx, writeRefusal{
+			r: r, p: p, ns: obj.Namespace(), action: trustrulesvc.ActionBundleRotate,
+			principalID: "", err: err,
+		})
 		h.writeBundleError(ctx, w, err)
 
 		return
@@ -280,6 +289,10 @@ func (h *Handler) deleteBundleVersion(
 	}
 
 	if err := h.rules.DeleteBundleVersion(ctx, p, h.entryOf(r, p), obj.Namespace(), version); err != nil {
+		h.recordWriteRefusal(ctx, writeRefusal{
+			r: r, p: p, ns: obj.Namespace(), action: trustrulesvc.ActionBundleDelete,
+			principalID: "", err: err,
+		})
 		h.writeBundleError(ctx, w, err)
 
 		return

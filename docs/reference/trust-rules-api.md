@@ -132,6 +132,7 @@ a later part.
 | --- | --- | --- |
 | 428 | `request.precondition-required` | The request has no `If-Match`. To get the `ETag`, send `GET .../trust-rules/{rule_id}`. |
 | 400 | `request.if-match-invalid` | `If-Match` is not one revision in quotes. To get the `ETag`, send `GET .../trust-rules/{rule_id}`. |
+| 403 | `trust-rule.principal-refused` | The update points the rule at a principal of another namespace. |
 | 412 | `request.precondition-failed` | The rule changed since the read. The server keeps the stored rule. To get the new `ETag`, send `GET .../trust-rules/{rule_id}`. |
 
 ## Trust bundle
@@ -213,7 +214,8 @@ Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.
 | 400 | `request.body-invalid` | The body is not one JSON object. It has an unknown field, a missing field, or data after the object. |
 | 400 | `trust-rule.invalid` | A field fails its rules. The message names the field. |
 | 400 | `trust-rule.issuer-refused` | The issuer is at or under the public URL of the server, or is an issuer URL of the OIDC issuer of the server. |
-| 400 | `trust-rule.principal-refused` | The principal does not exist, has a delete or a disable, is not a service principal, or is not a principal of the namespace. |
+| 400 | `trust-rule.principal-refused` | The principal does not exist, has a delete or a disable, is not a service principal, or is a principal of the installation. |
+| 403 | `trust-rule.principal-refused` | The principal is a principal of another namespace. The write names an object outside the namespace of the path. The refusal writes an audit entry. |
 | 401 | | The request has no valid credential. |
 | 403 | `access.denied` | The caller lacks the action of the route, or `principal:manage-tokens` on the principal. To see the rules of the namespace, send `GET .../trust-rules`. |
 | 403 | `trust-rule.sign-in-required` | The caller used an access token only to change a rule or a bundle. Sign in to the console. |
@@ -223,7 +225,11 @@ Errors have the body `{"message": "...", "code": 400, "errorCode": "..."}`.
 | 409 | `trust-rule.already-exists` | The namespace has a rule with the name. |
 | 409 | `trust-rule.limit` | The namespace has 100 rules. |
 
-A refused create stores nothing and writes no audit entry of a change.
+A refused create stores nothing. A create that the server refused because it
+names the caller (a missing action or reach, a principal of another
+namespace, or no fresh authentication) writes one audit entry with the caller
+and the cause. A create that the server refused because its input is not
+valid writes no audit entry.
 
 ## Backup
 

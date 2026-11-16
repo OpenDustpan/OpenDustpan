@@ -307,12 +307,21 @@ func testNow() time.Time {
 }
 
 // withTestSession wraps h so that a request with sessionHeader carries a
-// fresh console session in its context.
+// console session in its context. The value "1" signs in at the fixed now of
+// the service, and the value "old" signs in 16 minutes before it: one minute
+// past the default freshness window of 15 minutes, so a write that needs a
+// fresh authentication is refused as stale and not as missing.
 func withTestSession(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(sessionHeader) == "1" {
+		at := testNow()
+
+		if r.Header.Get(sessionHeader) == "old" {
+			at = testNow().Add(-16 * time.Minute)
+		}
+
+		if v := r.Header.Get(sessionHeader); v == "1" || v == "old" {
 			ctx := sessionauth.WithSession(r.Context())
-			ctx = sessionauth.WithSignIn(ctx, sessionauth.SignIn{At: testNow(), Provider: "local"})
+			ctx = sessionauth.WithSignIn(ctx, sessionauth.SignIn{At: at, Provider: "local"})
 			r = r.WithContext(ctx)
 		}
 

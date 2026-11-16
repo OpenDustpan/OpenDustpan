@@ -196,15 +196,48 @@ func createFailureReason(err error, principalID string) (string, bool) {
 	}}), true
 }
 
+// writeFailureReason returns the audit reason of a refused write of a rule or
+// a bundle: a missing fresh authentication, a principal of another
+// namespace, a missing action, or a check that could not run. It returns
+// false for any other error: a body that is not valid, an unknown object and
+// a write that is not current are not refusals of the caller.
+func writeFailureReason(err error, principalID string) (string, bool) {
+	switch {
+	case errors.Is(err, trustrulesvc.ErrSignInRequired):
+		return trustrulesvc.ErrSignInRequired.Error(), true
+	case errors.Is(err, trustrulesvc.ErrFreshRequired):
+		return trustrulesvc.ErrFreshRequired.Error(), true
+	case errors.Is(err, trustrulesvc.ErrStaleToken):
+		return trustrulesvc.ErrStaleToken.Error(), true
+	case errors.Is(err, trustrule.ErrCrossNamespace):
+		return trustrule.ErrCrossNamespace.Error(), true
+	}
+
+	if reason, ok := createFailureReason(err, principalID); ok {
+		return reason, true
+	}
+
+	// A denial of principal:manage-tokens on a principal that the request
+	// does not name, for example an update that keeps the stored principal,
+	// still names the action that the caller lacks.
+	if errors.Is(err, trustrulesvc.ErrManageTokensDenied) {
+		return trustrulesvc.ErrManageTokensDenied.Error(), true
+	}
+
+	return "", false
+}
+
 // appendCreateFailure writes one failure entry of a refused create: the
 // caller, the action of a create and the principal of the rule, in the
 // namespace of the path or in the installation scope when it cannot be read.
-// A lost entry does not change the answer: it logs one line and calls the
-// audit failure callback.
+// The refusal names the caller when it is a denial of a right, a denial of a
+// fresh authentication, or a write that names another namespace. A lost
+// entry does not change the answer: it logs one line and calls the audit
+// failure callback.
 func (h *Handler) appendCreateFailure(
 	r *http.Request, p identity.Principal, ns namespace.Name, principalID string, err error,
 ) {
-	reason, ok := createFailureReason(err, principalID)
+	reason, ok := writeFailureReason(err, principalID)
 	if !ok {
 		return
 	}
@@ -234,6 +267,36 @@ func (h *Handler) appendCreateFailure(
 	if _, appendErr := appender.Append(r.Context(), n.Fence(), entry); appendErr != nil {
 		h.failAudit(r.Context())
 	}
+}
+
+// writeRefusal names one refused change of a rule or a bundle that the
+// handler records: the request, its caller, the namespace, the audit action
+// of the change, the principal that the change named, and the refusal.
+type writeRefusal struct {
+	r           *http.Request
+	p           identity.Principal
+	ns          namespace.Name
+	action      string
+	principalID string
+	err         error
+}
+
+// recordWriteRefusal writes the audit entry of one refused change of a rule
+// or a bundle, for example an update that points a rule at a principal that
+// the caller may not act as. It goes through the shared denial limiter, as a
+// refusal of a route action does: for one caller, change and namespace, one
+// entry of each window names the caller and the reason. A lost entry does
+// not change the answer: the recorder logs it and counts the failure.
+func (h *Handler) recordWriteRefusal(ctx context.Context, f writeRefusal) {
+	reason, ok := writeFailureReason(f.err, f.principalID)
+	if !ok {
+		return
+	}
+
+	h.guard.Record(ctx, f.r, f.p, refusal.Denial{
+		Action: identity.Action(f.action), Object: identity.NamespaceObject(f.ns),
+		Reason: reason, ReasonWithin: nil, Window: 0,
+	})
 }
 
 // appendServerFailure writes entry in the installation scope. A lost entry
@@ -327,6 +390,10 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request, p identity.Prin
 
 	rule, err := h.rules.Update(ctx, p, h.entryOf(r, p), obj.Namespace(), input)
 	if err != nil {
+		h.recordWriteRefusal(ctx, writeRefusal{
+			r: r, p: p, ns: obj.Namespace(), action: trustrulesvc.ActionUpdate,
+			principalID: input.PrincipalID, err: err,
+		})
 		h.writeError(ctx, w, err)
 
 		return
@@ -355,6 +422,10 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request, p identity.Prin
 	entry := h.entryOf(r, p)
 
 	if err := h.rules.Delete(ctx, p, entry, obj.Namespace(), id); err != nil {
+		h.recordWriteRefusal(ctx, writeRefusal{
+			r: r, p: p, ns: obj.Namespace(), action: trustrulesvc.ActionDelete,
+			principalID: "", err: err,
+		})
 		h.writeError(ctx, w, err)
 
 		return
@@ -501,6 +572,14 @@ func classifyRefusal(err error) (problem.Problem, bool) {
 	case errors.Is(err, trustrule.ErrIssuerRefused):
 		return problem.RefusedText(
 			problem.Detail(err, trustrule.ErrIssuerRefused), http.StatusBadRequest, errcode.TrustRuleIssuerRefused,
+		), true
+	case errors.Is(err, trustrule.ErrCrossNamespace):
+		// A write that names an object of another namespace is a refusal
+		// of the caller, not input that is not valid: the caller may not
+		// write outside the namespace of the path. The check comes before
+		// the ErrPrincipal case, because the error wraps both.
+		return problem.RefusedText(
+			problem.Detail(err, trustrule.ErrCrossNamespace), http.StatusForbidden, errcode.TrustRulePrincipalRefused,
 		), true
 	case errors.Is(err, trustrule.ErrPrincipal):
 		return problem.RefusedText(

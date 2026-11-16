@@ -245,6 +245,8 @@ type Input struct {
 //   - trustrule.ErrIssuerRefused for an issuer of this installation.
 //   - trustrule.ErrPrincipal for a principal that is unknown, deleted,
 //     disabled, a person, or not a principal of ns.
+//   - trustrule.ErrCrossNamespace, with trustrule.ErrPrincipal, for a
+//     principal of another namespace.
 //   - identity.ErrDenied when the caller does not hold principal:manage-tokens
 //     on the principal, and when the caller holds it on the installation only
 //     and the reach of the principal is not inside the reach of the caller.
@@ -411,7 +413,8 @@ func (s *Service) Delete(
 }
 
 // checkPrincipal returns trustrule.ErrPrincipal when the principal id cannot
-// be the principal of a rule of ns.
+// be the principal of a rule of ns, and also trustrule.ErrCrossNamespace when
+// the principal is a principal of another namespace.
 //
 // Defense in depth: the store checks the principal again in the transaction
 // of the create. This check stays so that a disabled principal, which the
@@ -431,6 +434,16 @@ func (s *Service) checkPrincipal(ctx context.Context, id string, ns namespace.Na
 	case p.Kind != principal.KindService:
 		return fmt.Errorf("%w: principal %q is a %s, not a service principal", trustrule.ErrPrincipal, id, p.Kind)
 	case p.Namespace != ns:
+		// A principal of another namespace names that namespace, so the
+		// refusal carries the cross-namespace mark too: the caller asked
+		// for a write outside the namespace of the path. A principal of
+		// the installation (no namespace) is input that a rule of the
+		// namespace cannot name, not a write of another namespace.
+		if p.Namespace != "" {
+			return fmt.Errorf("%w: %w: principal %q is a principal of the namespace %q, not of %q",
+				trustrule.ErrPrincipal, trustrule.ErrCrossNamespace, id, p.Namespace, ns)
+		}
+
 		return fmt.Errorf("%w: principal %q is not a principal of the namespace %q", trustrule.ErrPrincipal, id, ns)
 	case !p.DisabledAt.IsZero():
 		return fmt.Errorf("%w: principal %q is disabled", trustrule.ErrPrincipal, id)

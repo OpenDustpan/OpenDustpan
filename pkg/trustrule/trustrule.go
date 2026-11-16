@@ -47,6 +47,12 @@ var (
 	// exist, it is not a principal of the namespace of the rule, it is not
 	// a service principal, or it is disabled.
 	ErrPrincipal = errors.New("the principal cannot be the principal of a trust rule")
+	// ErrCrossNamespace reports a write of one namespace that names an
+	// object of another namespace: for example a rule whose principal is a
+	// principal of another namespace. It also wraps ErrPrincipal. The
+	// caller may not write outside the namespace of the path, so the write
+	// is refused as a denial, not as input that is not valid.
+	ErrCrossNamespace = errors.New("the write names an object of another namespace")
 	// ErrIssuerRefused reports an issuer of this installation. A token that
 	// this installation signs never becomes an access token of it.
 	ErrIssuerRefused = errors.New("the issuer is an issuer of this installation")
