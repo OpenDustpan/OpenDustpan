@@ -39,12 +39,14 @@ func provider() registry.Release {
 				FileName: "terraform-provider-payments_1.2.3_linux_amd64.zip",
 				SHA256:   sum,
 				Size:     10,
+				H1:       "h1:stored-digest-value",
 			},
 			{
 				Platform: "darwin_arm64",
 				FileName: "terraform-provider-payments_1.2.3_darwin_arm64.zip",
 				SHA256:   sum,
 				Size:     10,
+				H1:       "h1:stored-digest-value",
 			},
 		},
 		Files: nil,
@@ -107,22 +109,22 @@ func TestAddressValidate(t *testing.T) {
 		{
 			"namespace upper case",
 			registry.Address{Namespace: "Acme", Kind: registry.KindProvider, Name: "p", System: ""},
-			false,
+			true,
 		},
 		{
 			"namespace with dot",
 			registry.Address{Namespace: "acme.io", Kind: registry.KindProvider, Name: "p", System: ""},
-			false,
+			true,
 		},
 		{
 			"namespace with underscore",
 			registry.Address{Namespace: "acme_co", Kind: registry.KindProvider, Name: "p", System: ""},
-			false,
+			true,
 		},
 		{
 			"namespace with double dash",
 			registry.Address{Namespace: "acme--co", Kind: registry.KindProvider, Name: "p", System: ""},
-			false,
+			true,
 		},
 		{
 			"namespace leading dash",
@@ -132,7 +134,7 @@ func TestAddressValidate(t *testing.T) {
 		{
 			"namespace trailing dash",
 			registry.Address{Namespace: "acme-", Kind: registry.KindProvider, Name: "p", System: ""},
-			false,
+			true,
 		},
 		{
 			"name with dot",
@@ -183,12 +185,12 @@ func TestAddressValidate(t *testing.T) {
 	}
 }
 
-// TestAddressRuleInError checks that the refusal of a namespace that cannot
+// TestAddressRuleInError checks that the refusal of a name that cannot
 // publish names the rule.
 func TestAddressRuleInError(t *testing.T) {
 	t.Parallel()
 
-	err := registry.Address{Namespace: "Acme", Kind: registry.KindProvider, Name: "p", System: ""}.Validate()
+	err := registry.Address{Namespace: "acme", Kind: registry.KindProvider, Name: "Payments", System: ""}.Validate()
 	if err == nil || !strings.Contains(err.Error(), "lowercase letters, digits and single dashes") {
 		t.Fatalf("Validate = %v, want the rule in the text", err)
 	}
@@ -259,8 +261,14 @@ func TestReleaseValidate(t *testing.T) {
 			Protocols:       nil,
 			PublishedBy:     "user-1",
 			PublishedAt:     time.UnixMilli(1_800_000_000_000).UTC(),
-			Archives:        []registry.Archive{{Platform: "", FileName: "vpc-1.0.0.zip", SHA256: sum, Size: 5}},
-			Files:           nil,
+			Archives: []registry.Archive{{
+				Platform: "",
+				FileName: "vpc-1.0.0.zip",
+				SHA256:   sum,
+				Size:     5,
+				H1:       "", // Fixture that no install reads.
+			}},
+			Files: nil,
 		}
 	}
 
@@ -382,6 +390,7 @@ func TestReleaseValidate(t *testing.T) {
 					FileName: "p" + strconv.Itoa(i) + ".zip",
 					SHA256:   sum,
 					Size:     1,
+					H1:       "", // Fixture that no install reads.
 				}
 			}
 		}, "64 platforms", true},

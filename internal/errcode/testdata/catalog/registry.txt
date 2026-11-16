@@ -1,1 +1,2 @@
+registry.bad-archive
 registry.module-archive-refused

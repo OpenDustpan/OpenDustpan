@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -345,6 +346,40 @@ func buildSetFor(t *testing.T, sg pgpfixture.Signer, name string) archiveSet {
 	return buildSetVersion(t, sg, name, providerVersion)
 }
 
+// zipBytes returns the bytes of a provider archive with one binary and a
+// manifest with protocol 5.0, as a publisher sends it.
+func zipBytes(t *testing.T, binary []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	w := zip.NewWriter(&buf)
+
+	for _, entry := range []struct{ name, body string }{
+		{"terraform-provider-binary", string(binary)},
+		{"terraform-registry-manifest.json", `{"version":1,"metadata":{"protocol_versions":["5.0"]}}` + `}`},
+	} {
+		header := new(zip.FileHeader)
+		header.Name = entry.name
+		header.Method = zip.Deflate
+
+		out, err := w.CreateHeader(header)
+		if err != nil {
+			t.Fatalf("create zip entry %s: %v", entry.name, err)
+		}
+
+		if _, err := out.Write([]byte(entry.body)); err != nil {
+			t.Fatalf("write zip entry %s: %v", entry.name, err)
+		}
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+
+	return buf.Bytes()
+}
+
 // buildSetVersion builds the archive set of version of the provider name.
 func buildSetVersion(t *testing.T, sg pgpfixture.Signer, name, version string) archiveSet {
 	t.Helper()
@@ -355,7 +390,7 @@ func buildSetVersion(t *testing.T, sg pgpfixture.Signer, name, version string) a
 
 	for _, p := range []string{"linux_amd64", "darwin_arm64"} {
 		file := fmt.Sprintf("terraform-provider-%s_%s_%s.zip", name, version, p)
-		data := []byte("zip bytes of " + file)
+		data := zipBytes(t, []byte("zip bytes of "+file))
 		sum := sha256.Sum256(data)
 		fmt.Fprintf(&sums, "%s  %s\n", hex.EncodeToString(sum[:]), file)
 

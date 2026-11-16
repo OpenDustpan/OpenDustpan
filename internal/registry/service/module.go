@@ -167,7 +167,7 @@ func (s *Service) stagedModuleRelease(c *Caller, addr registry.Address, version 
 	return registry.Release{
 		PublishedAt: s.now().UTC(), Address: addr, Version: version, SumsFile: "", SumsSHA256: "",
 		SignatureFile: "", SignatureSHA256: "", KeyFingerprint: "", PublishedBy: c.Principal.Subject, Protocols: nil,
-		Archives: []registry.Archive{{Platform: "", FileName: f.Name, SHA256: f.sum, Size: f.size}},
+		Archives: []registry.Archive{{Platform: "", FileName: f.Name, SHA256: f.sum, Size: f.size, H1: ""}},
 		Files:    storedFiles([]measured{f}),
 	}
 }

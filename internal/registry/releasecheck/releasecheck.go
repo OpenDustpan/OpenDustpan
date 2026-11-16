@@ -163,7 +163,7 @@ func Check(addr registry.Address, version string, set Set, sums map[string]strin
 		}
 
 		rel.Archives = append(rel.Archives, registry.Archive{
-			Platform: platform, FileName: a.Name, SHA256: a.SHA256, Size: a.Size,
+			Platform: platform, FileName: a.Name, SHA256: a.SHA256, Size: a.Size, H1: "",
 		})
 	}
 

@@ -101,6 +101,7 @@ func provider(name, version string) registry.Release {
 			FileName: "terraform-provider-" + name + "_" + version + "_linux_amd64.zip",
 			SHA256:   sumA,
 			Size:     archiveSize,
+			H1:       "", // Fixture that no install reads.
 		}},
 		Files: nil,
 	}
@@ -331,6 +332,21 @@ func testPublishConflict(t *testing.T, h Harness) {
 	if err != nil || got.Archives[0].SHA256 != sumA {
 		t.Fatalf("the conflict changed the record: %+v, %v", got, err)
 	}
+
+	// The same hashes with another H1 are other content: H1 counts in
+	// SameContent, so the store refuses the republish in its transaction.
+	changed := provider("payments", v100)
+	changed.Archives[0].H1 = "h1:other-unpacked-tree"
+
+	publishErr := h.Store.Publish(t.Context(), changed, f, entry(acme))
+	if !errors.Is(publishErr, registry.ErrVersionExists) {
+		t.Fatalf("Publish with another H1 = %v, want ErrVersionExists", publishErr)
+	}
+
+	again, err := h.Store.Get(t.Context(), r.Address, r.Version)
+	if err != nil || again.Archives[0].H1 != "" {
+		t.Fatalf("the H1 conflict changed the record: %+v, %v", again, err)
+	}
 }
 
 func testIsolation(t *testing.T, h Harness) {
@@ -363,8 +379,14 @@ func testKinds(t *testing.T, h Harness) {
 		Protocols:       nil,
 		PublishedBy:     publisher,
 		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
-		Archives:        []registry.Archive{{Platform: "", FileName: "vpc.zip", SHA256: sumB, Size: 1}},
-		Files:           nil,
+		Archives: []registry.Archive{{
+			Platform: "",
+			FileName: "vpc.zip",
+			SHA256:   sumB,
+			Size:     1,
+			H1:       "", // Fixture that no install reads.
+		}},
+		Files: nil,
 	}
 	mustPublish(t, h, mod, f)
 
@@ -663,8 +685,14 @@ func moduleRelease(name, system string) registry.Release {
 		Protocols:       nil,
 		PublishedBy:     publisher,
 		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
-		Archives:        []registry.Archive{{Platform: "", FileName: name + ".zip", SHA256: sumB, Size: 1}},
-		Files:           nil,
+		Archives: []registry.Archive{{
+			Platform: "",
+			FileName: name + ".zip",
+			SHA256:   sumB,
+			Size:     1,
+			H1:       "", // Fixture that no install reads.
+		}},
+		Files: nil,
 	}
 }
 

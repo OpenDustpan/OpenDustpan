@@ -449,7 +449,9 @@ func (s *Service) limitOf(role FileRole) int64 {
 }
 
 // measureOne reads one staged file, computes its SHA-256 and size, and keeps
-// the bytes of a checksums file and of a signature file.
+// the bytes of a checksums file, of a signature file and of an archive: the
+// unpack of a provider archive reads the archive bytes, bounded by the limits
+// of the request and of the release.
 func (s *Service) measureOne(ctx context.Context, view *blob.Scoped, f *measured) error {
 	r, err := view.Get(ctx, f.key)
 	if errors.Is(err, blob.ErrNotFound) {
@@ -463,11 +465,7 @@ func (s *Service) measureOne(ctx context.Context, view *blob.Scoped, f *measured
 	digest := blob.NewDigestReader(r)
 	m := newMeasure(digest, s.limitOf(f.Role))
 
-	if f.Role == RoleArchive {
-		_, err = io.Copy(io.Discard, m)
-	} else {
-		f.bytes, err = io.ReadAll(m)
-	}
+	f.bytes, err = io.ReadAll(m)
 
 	closeErr := r.Close()
 
@@ -564,11 +562,81 @@ func (s *Service) check(
 		return registry.Release{}, fmt.Errorf("check the archive set: %w", err)
 	}
 
+	// Defense in depth: the checksums cover the archive bytes, and the unpack
+	// reads the same bytes that the store keeps. A stated protocol that the
+	// manifest does not hold is refused, so a publisher cannot state a
+	// protocol that OpenTofu would fail to start. It does not rely on the
+	// request carrying the manifest protocols.
+	if err := checkManifests(req.Protocols, files, &rel); err != nil {
+		return registry.Release{}, err
+	}
+
 	rel.KeyFingerprint = fingerprint
-	rel.Protocols = slices.Clone(req.Protocols)
 	rel.Files = storedFiles(files)
 
 	return rel, nil
+}
+
+// checkManifests unpacks each archive with the unpack bounds, writes the H1
+// digest of the unpacked bytes on the archive of the release, and checks the
+// stated protocols against the manifest as an exact set with duplicates
+// ignored. The stored protocols are the manifest protocols. A stated value
+// without a manifest fails closed.
+func checkManifests(stated []string, files []measured, rel *registry.Release) error {
+	byName := map[string]int{}
+
+	for i := range rel.Archives {
+		byName[rel.Archives[i].FileName] = i
+	}
+
+	for i := range files {
+		f := &files[i]
+		if f.Role != RoleArchive {
+			continue
+		}
+
+		facts, err := unpackProviderArchive(f.bytes)
+		if err != nil {
+			return err
+		}
+
+		at, ok := byName[f.Name]
+		if !ok {
+			return fmt.Errorf("%w: archive %s is not in the release", ErrBadRequest, f.Name)
+		}
+
+		if !sameProtocolSet(stated, facts.protocols) {
+			return fmt.Errorf(
+				"%w: stated protocols %q differ from the manifest %q",
+				registry.ErrInvalid,
+				stated,
+				facts.protocols,
+			)
+		}
+
+		rel.Archives[at].H1 = facts.h1
+		rel.Protocols = facts.protocols
+	}
+
+	return nil
+}
+
+// sameProtocolSet reports whether stated and manifest hold the same protocol
+// versions as sets, with duplicates ignored.
+func sameProtocolSet(stated, manifest []string) bool {
+	if len(stated) == 0 || len(manifest) == 0 {
+		return len(stated) == 0 && len(manifest) == 0
+	}
+
+	manifestSet := slices.Clone(manifest)
+	slices.Sort(manifestSet)
+	manifestSet = slices.Compact(manifestSet)
+
+	statedSet := slices.Clone(stated)
+	slices.Sort(statedSet)
+	statedSet = slices.Compact(statedSet)
+
+	return slices.Equal(statedSet, manifestSet)
 }
 
 // move copies each staged file to its content key. The reader that feeds the

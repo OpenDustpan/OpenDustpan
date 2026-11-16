@@ -291,6 +291,7 @@ type env struct {
 	ids    map[namespace.Name]namespace.ID
 	caller *service.Caller
 	now    time.Time
+	ns     nsStub
 	aud    *memAudit
 	// logs holds the log lines of the service; failures counts the audit failures.
 	logs     *bytes.Buffer
@@ -436,7 +437,7 @@ func newEnv(t *testing.T, flip bool) *env {
 	}
 
 	return &env{
-		svc: svc, store: store, blobs: blobs, ids: ids, caller: callerOf(subject), now: now, aud: aud,
+		svc: svc, store: store, blobs: blobs, ids: ids, caller: callerOf(subject), now: now, ns: ns, aud: aud,
 		logs: logs, failures: failures,
 	}
 }
@@ -475,7 +476,10 @@ func buildSet(t *testing.T, sg pgpfixture.Signer, name, version string, platform
 
 	for _, p := range platforms {
 		file := fmt.Sprintf("terraform-provider-%s_%s_%s.zip", name, version, p)
-		data := []byte("zip bytes of " + file)
+		data := makeZip(t, []zipFile{
+			fileEntry("terraform-provider-"+name, []byte("zip bytes of "+file)),
+			fileEntry("terraform-registry-manifest.json", manifestJSON("5.0")),
+		})
 
 		fmt.Fprintf(&sums, "%s  %s\n", hashOf(data), file)
 

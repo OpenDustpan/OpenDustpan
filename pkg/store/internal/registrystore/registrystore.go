@@ -102,6 +102,7 @@ type archiveDoc struct {
 	FileName string `json:"fileName"`
 	SHA256   string `json:"sha256"`
 	Size     int64  `json:"size"`
+	H1       string `json:"h1"`
 }
 
 // EncodeArchives returns the JSON of the archives of a release. The list keeps

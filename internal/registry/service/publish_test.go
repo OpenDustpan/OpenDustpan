@@ -115,7 +115,10 @@ func TestPublishRepeat(t *testing.T) {
 
 	// Other bytes for the same version are refused.
 	other := buildSet(t, sg, "payments", "1.0.0", "linux_amd64")
-	other.archives[other.order[0]] = []byte("other bytes")
+	other.archives[other.order[0]] = makeZip(t, []zipFile{
+		fileEntry("terraform-provider-payments", []byte("other bytes")),
+		fileEntry("terraform-registry-manifest.json", manifestJSON("5.0")),
+	})
 	other.sums = []byte(hashOf(other.archives[other.order[0]]) + "  " + other.order[0] + "\n")
 	other.sig = sg.Detach(t, other.sums)
 
@@ -424,7 +427,10 @@ func TestPublishOfAnExistingVersionWritesNoContentKey(t *testing.T) {
 				t.Helper()
 
 				other := buildSet(t, sg, "payments", "1.0.0", "linux_amd64")
-				other.archives[other.order[0]] = []byte("other bytes")
+				other.archives[other.order[0]] = makeZip(t, []zipFile{
+					fileEntry("terraform-provider-payments", []byte("other bytes")),
+					fileEntry("terraform-registry-manifest.json", manifestJSON("5.0")),
+				})
 				other.sums = []byte(hashOf(other.archives[other.order[0]]) + "  " + other.order[0] + "\n")
 				other.sig = sg.Detach(t, other.sums)
 
@@ -442,7 +448,9 @@ func TestPublishOfAnExistingVersionWritesNoContentKey(t *testing.T) {
 
 				return req
 			},
-			want: registry.ErrVersionExists,
+			// The manifest of the staged archive holds 5.0, so the stated
+			// 6.0 is refused before the version check.
+			want: registry.ErrInvalid,
 		},
 		{
 			name: "same content",

@@ -49,6 +49,10 @@ var (
 	// cannot sign, or it is weak. The text names the rule and holds no byte of
 	// the key.
 	ErrBadKey = errors.New("public key cannot be registered")
+	// ErrBadArchive reports a provider archive that fails the unpack check:
+	// a path that leaves the staging directory, a symlink, a duplicate name
+	// or a size, count or ratio above the limit. The text names the rule.
+	ErrBadArchive = errors.New("provider archive fails the unpack check")
 )
 
 // Bounds of a release. The limits of the upload are a setting of the
@@ -87,8 +91,10 @@ var (
 	sha256RE   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	md5RE      = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	platformRE = regexp.MustCompile(`^[a-z0-9]+_[a-z0-9]+$`)
-	// slugRE is the registry-safe subset of a name: lowercase letters and
-	// digits, with single dashes inside. A name outside it cannot publish.
+	// slugRE is the registry-safe subset of a provider or module name:
+	// lowercase letters and digits, with single dashes inside. A name
+	// outside it cannot publish. A namespace name may hold more characters;
+	// the registry serves it under its slug (see SlugOf).
 	slugRE = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	// systemRE is the target system of a module. OpenTofu allows only ASCII
 	// letters and digits there.
@@ -115,18 +121,21 @@ type Address struct {
 // Validate reports whether a holds an allowed namespace, kind, name and
 // system. It uses an allowlist and returns ErrInvalid otherwise.
 //
-// The namespace and the name use only the registry-safe subset: lowercase
-// letters, digits and single dashes, with no dash at the start or the end,
-// at most 64 characters. A namespace whose name is outside the subset cannot
-// publish. The check does not fold case, so "Acme" and "acme" never meet.
+// The name uses only the registry-safe subset: lowercase letters, digits
+// and single dashes, with no dash at the start or the end, at most 64
+// characters. The check does not fold case, so "Acme" and "acme" never meet.
 // A module name refuses "_" too, although OpenTofu allows it. The system of a
-// module is lowercase letters and digits only, as OpenTofu asks.
+// module is lowercase letters and digits only, as OpenTofu asks. A namespace
+// name may hold more characters: the registry serves the provider releases
+// of the namespace under its slug (see SlugOf), which never changes on a
+// rename. A module address keeps the subset rule for the namespace, because
+// the module paths serve the namespace name itself.
 func (a Address) Validate() error {
 	if _, err := namespace.ParseName(a.Namespace.String()); err != nil {
 		return fmt.Errorf("%w: namespace: %w", ErrInvalid, err)
 	}
 
-	if !validSlug(a.Namespace.String()) {
+	if a.Kind == KindModule && !validSlug(a.Namespace.String()) {
 		return fmt.Errorf("%w: namespace %q cannot publish: %s", ErrInvalid, a.Namespace, slugRule)
 	}
 
@@ -212,6 +221,46 @@ func validSlug(s string) bool {
 	return len(s) <= MaxNameLength && slugRE.MatchString(s)
 }
 
+// SlugOf returns the registry slug of the namespace with the given stable
+// ID: the ID in lowercase with each run of characters outside the safe
+// subset replaced by one dash, with no dash at the start or the end. The
+// slug never changes on a rename, because the ID never changes. A namespace
+// ID holds only lowercase letters, digits, "-" and "_", so the slug keeps
+// the ID with "_" runs as dashes. An ID that strips to the empty string
+// gets the slug "ns-0".
+func SlugOf(id namespace.ID) string {
+	lower := strings.ToLower(string(id))
+
+	var out strings.Builder
+
+	dash := false
+
+	for _, r := range lower {
+		safe := r >= 'a' && r <= 'z' || r >= '0' && r <= '9'
+
+		if !safe {
+			if out.Len() > 0 {
+				dash = true
+			}
+
+			continue
+		}
+
+		if dash {
+			out.WriteByte('-')
+			dash = false
+		}
+
+		out.WriteRune(r)
+	}
+
+	if out.Len() == 0 {
+		return "ns-0"
+	}
+
+	return out.String()
+}
+
 // ValidateVersion reports whether v is a semantic version without build
 // metadata, with numbers that fit 64 bits. It returns ErrInvalid otherwise.
 func ValidateVersion(v string) error {
@@ -234,6 +283,10 @@ type Archive struct {
 	SHA256 string
 	// Size is the size in bytes.
 	Size int64
+	// H1 is the h1 digest of the unpacked archive bytes, for example the
+	// value that tofu providers lock reports. Publish sets it from the
+	// bounded unpack of the archive.
+	H1 string
 }
 
 // BlobKey returns the content key of the bytes with the given SHA-256 in the
@@ -392,8 +445,8 @@ func (r Release) Validate() error {
 }
 
 // SameContent reports whether r and other hold the same address, version,
-// hashes, signature, key fingerprint and protocols. The publisher and the time do not count. Publish uses it to tell a
-// repeat from a conflict.
+// hashes, H1 digests, signature, key fingerprint and protocols. The publisher
+// and the time do not count. Publish uses it to tell a repeat from a conflict.
 func (r Release) SameContent(other Release) bool {
 	if r.Address != other.Address || r.Version != other.Version ||
 		r.SumsFile != other.SumsFile || r.SumsSHA256 != other.SumsSHA256 ||

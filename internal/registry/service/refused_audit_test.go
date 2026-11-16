@@ -598,6 +598,7 @@ func storedRelease(t *testing.T, sg pgpfixture.Signer, name, version string) reg
 			FileName: "terraform-provider-" + name + "_" + version + "_linux_arm64.zip",
 			SHA256:   sum,
 			Size:     int64(len("other content")),
+			H1:       "", // Fixture that no install reads.
 		}},
 		Files: nil,
 	}
@@ -626,6 +627,7 @@ func storedModuleRelease(t *testing.T, name, system, version string) registry.Re
 			FileName: name + "-" + system + "-" + version + ".zip",
 			SHA256:   sum,
 			Size:     int64(len("other module archive")),
+			H1:       "", // Fixture that no install reads.
 		}},
 		Files: nil,
 	}
