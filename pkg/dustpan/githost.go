@@ -136,14 +136,17 @@ func WithGitHostRootCAs(pool *x509.CertPool) Option {
 }
 
 // newGitHostParts returns the Git host service and the middleware of the
-// Idempotency-Key header that its routes use. Both are nil when no Git host
-// store is set.
+// Idempotency-Key header that its routes and the settings route use. The
+// service is nil when no Git host store is set. The middleware is nil when no
+// idempotency store is set.
 func newGitHostParts(cfg *settings, deps installationDeps) (*forge.Service, *idempotent.Middleware, error) {
 	svc, err := newGitHostService(cfg, deps)
-	if err != nil || svc == nil {
+	if err != nil {
 		return nil, nil, err
 	}
 
+	// The middleware does not depend on the Git host service: the settings
+	// route needs it with no Git host store set.
 	idem, err := idempotencyMiddleware(cfg)
 	if err != nil {
 		return nil, nil, err

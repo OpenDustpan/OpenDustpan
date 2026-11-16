@@ -1,6 +1,7 @@
 package dustpan_test
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
@@ -47,6 +48,7 @@ func startSettingsServer(t *testing.T, period time.Duration) *httptest.Server {
 
 	opts := append(fullServerOptions(t, p.st, p.blobs, p.authn),
 		dustpan.WithSettings(p.st.SettingStore(), nil, nil),
+		dustpan.WithIdempotencyStore(p.st.Idempotency(testWrapper(t))),
 		dustpan.WithDrainPeriod(period),
 	)
 
@@ -127,6 +129,7 @@ func patchSettings(t *testing.T, base, etag, body string) (int, string) {
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	req.Header.Set("Content-Type", "application/merge-patch+json")
 	req.Header.Set("If-Match", etag)
+	req.Header.Set("Idempotency-Key", "test-key-"+rand.Text())
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 // brandingPresetKey is the key of the branding preset in the settings
@@ -46,6 +47,7 @@ func SettingDeclarations() []setting.Declaration {
 	held = append(held, access.SettingDeclarations()...)
 	held = append(held, plainconn.SettingDeclarations()...)
 	held = append(held, principal.RemovalAlertSettingDeclarations()...)
+	held = append(held, tempadmin.SessionLimitSettingDeclarations()...)
 	held = append(held, brandingPresetDeclaration())
 
 	declared := make(map[string]bool, len(held))

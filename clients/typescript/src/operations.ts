@@ -2733,6 +2733,8 @@ export interface UpdateNamespaceSettingsInput {
   readonly body: UpdateSettingsRequest;
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch: string;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -2759,6 +2761,8 @@ export interface UpdateSettingsInput {
   readonly body: UpdateSettingsRequest;
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch: string;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -6279,7 +6283,7 @@ export const operations = {
       pathParameters: ["namespace"],
       queryParameters: [],
       security: "caller",
-      idempotencyKey: "none",
+      idempotencyKey: "optional",
       ifMatch: "required",
       requiredQueryParameters: [],
       requestBody: "application/merge-patch+json",
@@ -6330,7 +6334,7 @@ export const operations = {
       pathParameters: [],
       queryParameters: [],
       security: "caller",
-      idempotencyKey: "none",
+      idempotencyKey: "optional",
       ifMatch: "required",
       requiredQueryParameters: [],
       requestBody: "application/merge-patch+json",

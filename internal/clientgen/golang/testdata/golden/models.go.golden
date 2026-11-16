@@ -346,6 +346,7 @@ const (
 	ErrorCodeSettingsLocked                        ErrorCode = "settings.locked"
 	ErrorCodeSettingsPatchInvalid                  ErrorCode = "settings.patch-invalid"
 	ErrorCodeSettingsRetentionInvalid              ErrorCode = "settings.retention-invalid"
+	ErrorCodeSettingsRevisionStale                 ErrorCode = "settings.revision-stale"
 	ErrorCodeSettingsStaticOnly                    ErrorCode = "settings.static-only"
 	ErrorCodeSettingsUnavailable                   ErrorCode = "settings.unavailable"
 	ErrorCodeSettingsValueInvalid                  ErrorCode = "settings.value-invalid"

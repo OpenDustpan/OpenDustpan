@@ -174,8 +174,9 @@ func (h *Handler) readGitHostApp(w http.ResponseWriter, r *http.Request, _ ident
 // write replaces that version only. A console session needs a recent sign-in.
 func (h *Handler) putGitHostApp(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	h.keyed(w, r, p, keyedCall{
-		build: gitHostAppAnswer,
-		serve: func(w http.ResponseWriter, r *http.Request) { h.writeGitHostApp(w, r, p) },
+		build:    gitHostAppAnswer,
+		serve:    func(w http.ResponseWriter, r *http.Request) { h.writeGitHostApp(w, r, p) },
+		required: false,
 	})
 }
 
@@ -254,8 +255,9 @@ func statusOfVersion(version int64) int {
 // answers 204. A registration with an assigned installation answers 409.
 func (h *Handler) deleteGitHostApp(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	h.keyed(w, r, p, keyedCall{
-		build: noContentAnswer,
-		serve: func(w http.ResponseWriter, r *http.Request) { h.removeGitHostApp(w, r, p) },
+		build:    noContentAnswer,
+		serve:    func(w http.ResponseWriter, r *http.Request) { h.removeGitHostApp(w, r, p) },
+		required: false,
 	})
 }
 
@@ -405,8 +407,9 @@ func (h *Handler) putGitHostInstallation(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
 ) {
 	h.keyed(w, r, p, keyedCall{
-		build: gitHostInstallationAnswer,
-		serve: func(w http.ResponseWriter, r *http.Request) { h.assignGitHostInstallation(w, r, p) },
+		build:    gitHostInstallationAnswer,
+		serve:    func(w http.ResponseWriter, r *http.Request) { h.assignGitHostInstallation(w, r, p) },
+		required: false,
 	})
 }
 
@@ -476,8 +479,9 @@ func (h *Handler) deleteGitHostInstallation(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
 ) {
 	h.keyed(w, r, p, keyedCall{
-		build: noContentAnswer,
-		serve: func(w http.ResponseWriter, r *http.Request) { h.unassignGitHostInstallation(w, r, p) },
+		build:    noContentAnswer,
+		serve:    func(w http.ResponseWriter, r *http.Request) { h.unassignGitHostInstallation(w, r, p) },
+		required: false,
 	})
 }
 

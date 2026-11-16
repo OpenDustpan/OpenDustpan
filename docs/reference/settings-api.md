@@ -198,7 +198,7 @@ An error has the fields `code` (the HTTP status), `message` and `errorCode`.
 | 404 | `namespace.not-found` | The namespace does not exist |
 | 409 | `settings.locked` | The static layer sets the key. `errorArgs.key` and `errorArgs.source` name them. |
 | 409 | `settings.static-only` | Only the static layer can set the key. `errorArgs.key` names it. |
-| 412 | `request.precondition-failed` | The revision changed since your read |
+| 412 | `settings.revision-stale` | The revision changed since your read |
 | 413 | `request.body-too-large` | The body is over 16384 bytes |
 | 415 | `request.content-type-unsupported` | The `Content-Type` is not the merge patch type |
 | 428 | `request.precondition-required` | The request has no `If-Match` header |
