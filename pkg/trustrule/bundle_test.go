@@ -5,6 +5,8 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"errors"
 	"math/big"
@@ -76,6 +78,7 @@ func TestBundleSaveRefusesBadPEM(t *testing.T) {
 	leaf := testCert(t, false, x509.KeyUsageDigitalSignature, now.Add(-time.Hour), now.Add(24*time.Hour))
 	noSign := testCert(t, true, x509.KeyUsageDigitalSignature, now.Add(-time.Hour), now.Add(24*time.Hour))
 	early := testCert(t, true, x509.KeyUsageCertSign, now.Add(24*time.Hour), now.Add(48*time.Hour))
+	notCA := testCert(t, false, x509.KeyUsageCertSign, now.Add(-time.Hour), now.Add(24*time.Hour))
 	headered := strings.Replace(good, "-----BEGIN CERTIFICATE-----\n",
 		"-----BEGIN CERTIFICATE-----\nHdr: v\n\n", 1)
 
@@ -89,6 +92,8 @@ func TestBundleSaveRefusesBadPEM(t *testing.T) {
 		{"oversize bundle", strings.Repeat("a", trustrule.MaxBundleBytes+1)},
 		{"non-certificate block", "-----BEGIN FOO-----\nZm9v\n-----END FOO-----\n"},
 		{"self-signed leaf", leaf},
+		{"basic constraints without CA flag, with cert sign", notCA},
+		{"valid CAs over the byte bound", bigBundle(t, trustrule.MaxBundleCAs)},
 		{"CA without cert sign", noSign},
 		{"CA not yet valid", early},
 		{"text before block", "garbage text here\n" + good},
@@ -209,4 +214,55 @@ func TestBundleDeleteActive(t *testing.T) {
 // the wall clock.
 func bundleTestNow() time.Time {
 	return time.Unix(1_700_000_000, 0).UTC()
+}
+
+// bigBundle returns n valid CA certificates, each padded with an extension so
+// that together they pass MaxBundleBytes while the count stays within
+// MaxBundleCAs. The byte bound must refuse the bundle on its own: every
+// other check accepts each certificate.
+func bigBundle(t *testing.T, n int) string {
+	t.Helper()
+
+	var out strings.Builder
+
+	for range n {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("generate key: %v", err)
+		}
+
+		serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+		if err != nil {
+			t.Fatalf("serial: %v", err)
+		}
+
+		var tmpl x509.Certificate
+
+		tmpl.SerialNumber = serial
+		tmpl.Subject.CommonName = "big CA"
+		tmpl.NotBefore = bundleTestNow().Add(-time.Hour)
+		tmpl.NotAfter = bundleTestNow().Add(24 * time.Hour)
+		tmpl.KeyUsage = x509.KeyUsageCertSign
+		tmpl.BasicConstraintsValid = true
+		tmpl.IsCA = true
+		tmpl.ExtraExtensions = []pkix.Extension{{
+			Id:       asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 1},
+			Critical: false,
+			Value:    make([]byte, 5500),
+		}}
+
+		der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+		if err != nil {
+			t.Fatalf("create certificate: %v", err)
+		}
+
+		var block pem.Block
+
+		block.Type = "CERTIFICATE"
+		block.Bytes = der
+
+		out.Write(pem.EncodeToMemory(&block))
+	}
+
+	return out.String()
 }

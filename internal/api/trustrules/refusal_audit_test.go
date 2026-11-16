@@ -99,6 +99,31 @@ func TestUpdateRefusalWritesAuditEntry(t *testing.T) {
 		"outside the reach of the caller: principal:manage-tokens on principal:"+e.worker)
 }
 
+// TestUpdateKeepingThePrincipalRefusalNamesTheMissingAction proves that an
+// update that keeps the stored principal, for a caller without
+// principal:manage-tokens on it, is refused with 403 and that the denied entry
+// names the action that the caller lacks. The request names no principal, so
+// only the fallback of the failure reason can name the cause.
+func TestUpdateKeepingThePrincipalRefusalNamesTheMissingAction(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, allActions())
+	existing := e.mustCreate("guarded")
+
+	e.serve(holdsOnly{actions: []identity.Action{
+		identity.ActionNamespaceRead, identity.ActionNamespaceReadAccess,
+		identity.ActionNamespaceManageTrustRules,
+	}}, nil)
+
+	status, body := e.send(http.MethodPatch, rulesURL+"/"+existing.ID, adminToken,
+		`{"name":"renamed"}`, map[string]string{"If-Match": `"1"`, sessionHeader: "1"})
+	if status != http.StatusForbidden {
+		t.Fatalf("update = %d %s, want 403", status, body)
+	}
+
+	checkDenialEntry(t, e, trustrulesvc.ActionUpdate, "ada", trustrulesvc.ErrManageTokensDenied.Error())
+}
+
 // TestUpdateReachRefusalWritesAuditEntry proves that an update whose caller
 // does not reach the reach of the principal writes the denied entry with the
 // missing actions of the reach check.
