@@ -7,9 +7,10 @@ serve. With the default flags, the binary answers 404 with the code
 `server.route-not-found` on more routes than the blueprint routes. The blueprint
 pages are one case: `docs/guides/publish-a-blueprint.md` and
 `docs/reference/self-service-api.md` name six blueprint routes. A run on main
-(M8, 14 Nov 2026) found 15 more documented routes that answer 404 with the
+(M8, 14 Nov 2026) found 13 more documented routes that answer 404 with the
 default flags: 5 sign-in provider routes, 2 passkey sign-in routes,
-`GET /api/server/session`, `POST /api/server/sign-out`, and 6 passkey routes.
+`GET /api/server/session`, `POST /api/server/sign-out`, and 4 passkey routes
+under `/me/passkeys` (the 2 passkey sign-in routes are counted once, above).
 They mount only when the server has a sign-in provider, the passkey service and
 a public URL. A test that reads only the server of the default flags would mark
 them all, and a test that skips them would not catch a page that names a route
@@ -56,7 +57,13 @@ that no option mounts. A reader follows the guide and gets a 404.
   `-X` and the URL after `$SERVER` (`docs/guides/publish-a-blueprint.md:27-29`).
   A relative path takes the prefix of the page (`docs/reference/drift-api.md:14`,
   `:20`: `POST /namespaces/{namespace}/units/{unit_id}/drift-checks`) or of the
-  section (`docs/reference/issuer-api.md:66`).
+  section (`docs/reference/issuer-api.md:66`, `docs/reference/registry-api.md:11-12`).
+  A path can also be absolute: `docs/reference/registry-api.md:173` names
+  `GET /v1/providers/{namespace}/{type}/versions` under a heading that sets no
+  prefix, and `docs/reference/settings-api.md:218` names `GET /health/ready` in
+  a page that sets a prefix. `internal/api/registry/routes.go:39-42` mounts the
+  registry rows at `/api/dustpan/v1/namespaces/{namespace}/registry`, so the
+  sentence at `registry-api.md:11-12` is correct and stays.
 - **The marker is already in the docs.**
   `docs/reference/git-host-links-api.md:49` writes `(not available yet)` after
   the route, and `:66` writes it in the heading
@@ -71,11 +78,18 @@ that no option mounts. A reader follows the guide and gets a 404.
   - `extractDocRoutes` reads both doc directories. It takes a method and a path
     from a code span `METHOD /path`, from a table row with a path cell and a
     method cell in either order, and from a curl block with `$SERVER` and `-X`
-    (no `-X` means GET). A relative path takes the most recent "The paths ...
-    start with `<prefix>`" sentence. A path with `...` is skipped.
+    (no `-X` means GET). The prefix rule has three parts, in this order, with no
+    list of paths and no exclusion by name. (1) A path that starts with `/api/`
+    is absolute and takes no prefix. (2) Any other path takes the prefix of the
+    nearest sentence that sets one, "relative to `<prefix>`" first, else "start
+    with `<prefix>`". A sentence before the first `##` heading of a page sets
+    the prefix of the page. A sentence under a heading sets the prefix of that
+    section, up to the next heading of the same or a higher level. (3) A path
+    with no such sentence in scope is used as written, so the rows of
+    `registry-api.md:173-175` under `## Provider registry protocol` are
+    `/v1/providers/...`. A path with `...` is skipped.
   - `routeIsMarked` marks a route when its row, its list item or its nearest
-    heading holds `(not available yet)`, or when the page says "not available
-    yet" for all of its routes.
+    heading holds `(not available yet)`. There is no page-level marker.
   - `checkDocRoutes` sends each extracted route to a handler with no credential
     and returns each `server.route-not-found` that the route does not mark, with
     its `path:line`.
@@ -93,6 +107,17 @@ that no option mounts. A reader follows the guide and gets a 404.
     and passes on the same route with the marker.
 - `docs/reference/self-service-api.md` and `docs/guides/publish-a-blueprint.md`:
   the marker `(not available yet)` only on a route that no option mounts.
+- `docs/reference/settings-api.md:218`: write the route as a path with no
+  method, ``the route `/health/ready` answers 503 to a GET request``, so that the
+  line is not a `METHOD /path` span that takes the page prefix. The route is
+  served; no marker. Change no other line.
+- The six blueprint rows are a known gap. `cmd/opendustpan` mounts no blueprint
+  route, because no option list of the binary holds
+  `dustpan.WithSelfServiceBlueprints`. The test builds the server through the SDK
+  with that option, so it finds the six routes served and fails on none of them.
+  They get no marker and no skip, and the page text does not say "not available
+  yet". The pull request body records the gap: the binary answers 404
+  `server.route-not-found` on those routes until a later change mounts them.
 - `docs/guides/backup-restore-upgrade.md:74`: change `GET /api/server/backups/{id}`
   to `GET /api/dustpan/v1/backups/{id}`, the path that
   `internal/api/server/backups.go:31-33` serves (`backupPath`). No marker: the
