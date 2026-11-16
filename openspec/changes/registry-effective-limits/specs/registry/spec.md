@@ -6,7 +6,7 @@ Where a namespace owns releases, the server SHALL show the request and unpack li
 
 #### Scenario: Limits visible
 - **WHEN** a caller with the read grant reads the registry limits of a namespace.
-- **THEN** the API reports the request limit, the unpacked size limit, the file count limit, the size limit of one file and the expansion limit, each as a number with its unit.
+- **THEN** the API reports the request limit, the unpacked size limit, the file count limit, the size limit of one file, the expansion limit and the size limit of the manifest file, each as a number with its unit.
 
 #### Scenario: Shown value equals the check
 - **WHEN** a publish exceeds a limit that the route shows.

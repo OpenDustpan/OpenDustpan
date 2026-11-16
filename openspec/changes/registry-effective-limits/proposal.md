@@ -1,5 +1,5 @@
 ---
-version: 1
+version: 2
 ---
 
 Issue: #1228.
@@ -31,14 +31,14 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Add GET /api/dustpan/v1/namespaces/{namespace}/registry/limits. It returns the request limit, the unpacked size limit, the file count limit, the size limit of one file and the expansion limit, as numbers with units.
+- Add GET /api/dustpan/v1/namespaces/{namespace}/registry/limits. It returns the request limit, the unpacked size limit, the file count limit, the size limit of one file, the expansion limit and the size limit of the manifest file, as numbers with units.
 - Make one source for each limit: a value type of `pkg/registry` that the handler, the unpack and the new route all read, so that the route cannot show a value that a check does not use.
 - Add the page section, the e2e step and the route to the API description and the clients.
 
 Out of scope:
 
 - A way to change a limit (a limit stays a constant of the build, and the route shows it)
-- The unpack checks themselves (change `h1-hash-provider-archive-registry`)
+- The unpack checks themselves and the checks of the manifest file (change `h1-hash-provider-archive-registry`); this change shows the manifest size limit, 65536 bytes, as one more effective value
 - Console views of the limits
 
 ## Usability

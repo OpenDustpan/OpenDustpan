@@ -1,11 +1,11 @@
 ## Context
 
-Provider archives are untrusted zip files. The server unpacks with limits, computes the h1 hash, and reads the registry manifest for protocols.
+Provider archives are untrusted zip files. The server unpacks with limits, computes the h1 hash, and reads the registry manifest file, a separate release file, for protocols.
 
 ## Decisions
 
-1. **Bounded unpack as structure.** Add an unexported unpack function that opens the staged zip, rejects absolute paths and dot-dot entries, enforces limits on unpacked size, file count, entry size and compression ratio, counts real decompressed bytes while it reads, rejects duplicate names after case folding, and returns the manifest bytes and the h1 digest.
-2. **Archive truth from bytes.** Store H1 on registry.Archive at publish time from the unpack result, include H1 in SameContent (every release gets H1 at publish; no backfill, because no tag shipped a release without it), and derive protocols only from terraform-registry-manifest.json inside the archive with order-insensitive set match.
+1. **Bounded unpack as structure.** Add an unexported unpack function that opens the staged zip, rejects absolute paths and dot-dot entries, enforces limits on unpacked size, file count, entry size and compression ratio, counts real decompressed bytes while it reads, rejects duplicate names after case folding, and returns the h1 digest. It never reads a manifest from the zip.
+2. **Archive truth from bytes.** Store H1 on registry.Archive at publish time from the unpack result, include H1 in SameContent (every release gets H1 at publish; no backfill, because no tag shipped a release without it), and derive protocols only from the manifest file (the fourth file role `manifest`, beside sums, signature and archive) with order-insensitive set match. The manifest is bounded (size limit, JSON only, version 1, protocol values 5.0 or 6.0, no empty list), is read by the bounded reader class of the archive, and is checked against the SHA256SUMS file when that file lists it (fail closed on a mismatch). No fallback to a manifest inside the zip: the public release tools publish the manifest as a separate release asset and the zip holds the binary only.
 
 ## Structure
 
@@ -22,7 +22,7 @@ Unexported type archiveFacts with constructor openArchiveFacts(stagedKey) that c
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
 | port adapter | Unpack rejects entries with absolute paths, dot-dot segments, and symlink bits, and stops past 64 MB unpacked size, 1024 files, 16 MB per file, and 100 times expansion of compressed size counted on real bytes. | Publish a zip with ../../evil, absolute /tmp/evil, symlink entry, and zip bomb entries; each publish fails with 400 and no file leaves the staging directory. |
-| service | Service compares stated protocols to manifest protocols with exact set match and refuses mismatch; a stated protocol value without a manifest fails closed. | Publish a provider that states protocols 5.0 while the manifest states 6.0, and one that states protocols without a manifest; the service returns invalid protocols and stores nothing. |
+| service | Service compares stated protocols to manifest protocols with exact set match and refuses mismatch; a request without a manifest file states the protocols or fails closed; a manifest over its size limit, not JSON, not version 1 or with an unknown value is refused; a manifest that the SHA256SUMS file lists with another digest is refused. | Publish a provider that states protocols 5.0 while the manifest states 6.0, one with an oversize, malformed, version 2 or empty-list manifest, one with a manifest that the sums file lists with another digest, and one with no manifest and no stated protocols; the service returns registry.invalid and stores nothing. |
 | HTTP handler | Registry HTTP handlers check publish authorization first, then the octet-stream content type of an upload, then count request bytes during read to 32 MB, and stage bytes only after those checks. The handler does not know the role of a file, so the type of the bytes is checked at publish (service layer). | Send an oversize archive and a wrong content type with a principal without publish grant; the handler returns 403, 415, and 413 without unpacking. |
 | service | Publish checks that a file with the archive role is a zip by its content, and refuses a file that is not with registry.bad-archive before it computes the hash. A client header does not decide it. | Stage a non-zip body and publish it as the archive role; publish returns 400 registry.bad-archive and stores nothing. |
 
@@ -39,7 +39,7 @@ participant Service
 participant Store
 Publisher->>API: POST uploads archive
 API->>Unpack: open staged zip with bounds
-Unpack->>Service: H1 and manifest protocols
+Unpack->>Service: H1
 Service->>Store: compare SameContent and store
 ```
 
@@ -109,14 +109,14 @@ end
 **registry release**
 
 - Invariant: H1 identifies unpacked bytes; SameContent includes H1.
-- Invariant: Stored protocols equal manifest protocols or empty when no manifest and no stated protocols.
+- Invariant: Stored protocols equal the manifest file protocols when a manifest file is sent, else the stated protocols; a release never stores an empty list.
 - `compute h1 hash`: pre: caller holds publish grant on namespace. Post: release stored with H1 over unpacked tree.
-- `read protocols from manifest`: pre: archive unpack passed bounds. Post: stored protocols equal manifest set or empty.
+- `read protocols from manifest`: pre: the manifest file passed its bounds and the sums check. Post: stored protocols equal the manifest set.
 
 ## Failure modes
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
 | Bounded unpack | Unpack exceeds limit mid-stream | Fix archive and publish again; staged bytes deleted. | No release stored, staged bytes deleted. |
-| Protocol check | Stated protocols differ from manifest | Rebuild request from manifest and publish again. | No release stored. |
+| Protocol check | Stated protocols differ from the manifest file | Rebuild request from manifest and publish again. | No release stored. |
 | Compare and store in one transaction | Changed-bytes republish race | Publish a new version with changed bytes. | One winner stored, loser gets 409. |
