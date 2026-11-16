@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc/headertest"
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -68,10 +69,11 @@ func newSettingsEnvWith(
 		denied[action] = true
 	}
 
-	handler, err := newCheckedHandler(t, settingsConfig(
+	cfg := settingsConfig(
 		t, st, namespaces, selectiveAuthorizer{deny: denied},
 		setting.NewService(st.SettingStore(), reg, static, st, nil),
-	))
+	)
+	handler, err := newCheckedHandler(t, cfg)
 	if err != nil {
 		t.Fatalf("handler: %v", err)
 	}
@@ -86,19 +88,47 @@ func settingsConfig(
 ) *apiserver.Config {
 	t.Helper()
 	return &apiserver.Config{
-		ProxyRules:  nil,
-		Cursors:     testCursors(t),
-		Reach:       noReach(),
-		LocalUsers:  nil,
-		Preferences: nil, Settings: svc, GitHost: nil, Idempotency: nil, Workers: nil, InstallationKind: "",
-		StateWriteGates: stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
-		TempAdmins:      nil, Now: nil, Authenticator: tokenAuthenticator{}, Authorizer: authz,
-		Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Backups: nil, Restores: nil,
-		Maintenance: newFakeMaintenance(maintenance.StateNormal), Metrics: stubMetrics{}, Version: "",
-		Schema: stubSchema{migrations: nil}, Journal: nil, Principals: nil, Tokens: nil, Access: nil, Audit: st,
-		IPAllowlists: nil, Gates: nil, SessionPolicy: nil, CheckpointEpochs: nil, OnAuditFailure: nil,
-		AuditChain: nil, DeletedUnits: nil, AuditSinks: nil, SignIn: nil, DenialLimiter: nil, Instances: nil,
-		StoreChecks: nil, GitHostLinks: nil,
+		ProxyRules:       nil,
+		Cursors:          testCursors(t),
+		Reach:            noReach(),
+		LocalUsers:       nil,
+		Preferences:      nil,
+		Settings:         svc,
+		GitHost:          nil,
+		Idempotency:      settingsIdempotency(t, st),
+		Workers:          nil,
+		InstallationKind: "",
+		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
+		TempAdmins:       nil,
+		Now:              nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       authz,
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "",
+		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
+		Principals:       nil,
+		Tokens:           nil,
+		Access:           nil,
+		Audit:            st,
+		IPAllowlists:     nil,
+		Gates:            nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
+		OnAuditFailure:   nil,
+		AuditChain:       nil,
+		DeletedUnits:     nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		DenialLimiter:    nil,
+		Instances:        nil,
+		StoreChecks:      nil,
+		GitHostLinks:     nil,
 	}
 }
 
@@ -111,6 +141,14 @@ type settingsCall struct {
 func (e settingsEnv) do(t *testing.T, c settingsCall) response {
 	t.Helper()
 
+	return e.doKeyed(t, c, "")
+}
+
+// doKeyed sends the request with the Idempotency-Key key. A PATCH with an
+// empty key gets a new key.
+func (e settingsEnv) doKeyed(t *testing.T, c settingsCall, key string) response {
+	t.Helper()
+
 	req := httptest.NewRequestWithContext(t.Context(), c.method, c.path, strings.NewReader(c.body))
 	req.Header.Set("Authorization", "Bearer test-token")
 
@@ -120,6 +158,16 @@ func (e settingsEnv) do(t *testing.T, c settingsCall) response {
 
 	if c.ifMatch != "" {
 		req.Header.Set("If-Match", c.ifMatch)
+	}
+
+	// The settings routes refuse a PATCH with no Idempotency-Key.
+	switch {
+	case key != "":
+		req.Header.Set(idempotent.Header, key)
+	case c.method == http.MethodPatch:
+		req.Header.Set(idempotent.Header, sessionKey())
+	default:
+		// A read or a delete carries no key.
 	}
 
 	rec := httptest.NewRecorder()
@@ -342,12 +390,12 @@ func TestSettingsPatchRefusals(t *testing.T) {
 		{
 			"a stale revision",
 			settingsCall{http.MethodPatch, settingsURL, `{"test.label":"a"}`, mergePatchType, `"9"`},
-			http.StatusPreconditionFailed, "request.precondition-failed",
+			http.StatusPreconditionFailed, "settings.revision-stale",
 		},
 		{
 			"a weak tag",
 			settingsCall{http.MethodPatch, settingsURL, `{}`, mergePatchType, `W/"0"`},
-			http.StatusPreconditionFailed, "request.precondition-failed",
+			http.StatusPreconditionFailed, "settings.revision-stale",
 		},
 		{
 			"an If-Match that is not a revision",
@@ -699,6 +747,7 @@ func TestSettingsChangeThatReducesSecurityNeedsAFreshStep(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+tokenAdmin)
 		req.Header.Set("Content-Type", mergePatchType)
 		req.Header.Set("If-Match", ifMatch)
+		req.Header.Set(idempotent.Header, sessionKey())
 
 		rec := httptest.NewRecorder()
 		e.h.ServeHTTP(rec, req)
@@ -765,10 +814,10 @@ func settingsScenarios() map[string]headertest.Scenario {
 						contentType = mergePatchType
 					}
 
-					got := e.do(t, settingsCall{
+					got := e.doKeyed(t, settingsCall{
 						method: method, path: path, body: body, contentType: contentType,
 						ifMatch: headers["If-Match"],
-					})
+					}, headers["Idempotency-Key"])
 
 					return headertest.Answer{Status: got.status, Header: got.header, Body: got.body}
 				},

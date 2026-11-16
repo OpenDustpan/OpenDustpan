@@ -185,8 +185,8 @@ func checkHostExpiry(t *testing.T, creds hostCredentials) {
 		t.Fatalf("person = %q, want alice", creds.person)
 	}
 
-	if got := time.Until(creds.expires); got <= 23*time.Hour || got > tempadmin.Lifetime {
-		t.Fatalf("expiry is in %s, want about %s", got, tempadmin.Lifetime)
+	if got := time.Until(creds.expires); got <= 59*time.Minute || got > tempadmin.DefaultSessionLimit {
+		t.Fatalf("expiry is in %s, want about %s", got, tempadmin.DefaultSessionLimit)
 	}
 }
 
@@ -969,5 +969,122 @@ func TestHostReadsTheModeThroughLookup(t *testing.T) { //nolint:paralleltest // 
 	err := hostCreateTempAdminWithIO(t.Context(), []string{"--reason", "lost access", "alice"}, in, &stdout, &stderr)
 	if !errors.Is(err, errHostModeNone) {
 		t.Fatalf("host run with DUSTPAN_RECOVERY_MODE=none: err = %v, want errHostModeNone", err)
+	}
+}
+
+// TestHostCreateRecordsTheSessionLimit proves the audit entry of the
+// temporary administrator names the limit in force.
+func TestHostCreateRecordsTheSessionLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	db := hostTestDB(t)
+
+	runHost(ctx, t, "host", "create-temp-admin", "--reason", "test recovery", "--database", db, "alice")
+
+	entries := hostServerEntries(ctx, t, openHostStore(ctx, t, db))
+
+	for i := range entries {
+		if entries[i].Action != tempadmin.Action {
+			continue
+		}
+
+		for _, c := range entries[i].Changes {
+			if c.Key == "session-limit-seconds" && c.New == "3600" {
+				return
+			}
+		}
+	}
+
+	t.Fatalf("no %s entry has the change session-limit-seconds 3600 in %+v", tempadmin.Action, entries)
+}
+
+// TestHostResetRefusesAPersonName proves the reset takes no person name
+// and changes nothing.
+func TestHostResetRefusesAPersonName(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	db := hostTestDB(t)
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"host",
+		"create-temp-admin",
+		"--reset-session-limit",
+		"--reason",
+		"test recovery",
+		"--database",
+		db,
+		"alice",
+	}
+
+	err := run(ctx, args, &stdout, &stderr)
+	if !errors.Is(err, errHostResetWithPerson) {
+		t.Fatalf("reset with a person = %v, want errHostResetWithPerson", err)
+	}
+
+	if _, err := openHostStore(ctx, t, db).GetPrincipalBySubject(ctx, "alice"); err == nil {
+		t.Fatal("the refused reset made a principal for alice")
+	}
+}
+
+// TestHostCreateRefusesAStoredLimitOutsideTheRange proves that a stored
+// limit nobody can use makes no record, writes one failure entry and names
+// the reset command.
+func TestHostCreateRefusesAStoredLimitOutsideTheRange(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	db := hostTestDB(t)
+
+	// The database holds a value that the check of the setting refuses: a
+	// restore or another version could leave it there.
+	raw, err := sql.Open("sqlite", strings.TrimPrefix(db, "sqlite:"))
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	_, err = raw.ExecContext(ctx,
+		`INSERT INTO settings (scope_id, key, value, updated_at_ms) VALUES (?, ?, ?, 0)`,
+		string(audit.ServerScope), tempadmin.SettingSessionLimit, "48h")
+	if err != nil {
+		t.Fatalf("store the limit: %v", err)
+	}
+
+	if err = raw.Close(); err != nil {
+		t.Fatalf("close raw database: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+
+	args := []string{"host", "create-temp-admin", "--reason", "test recovery", "--database", db, "alice"}
+
+	err = run(ctx, args, &stdout, &stderr)
+	if err == nil || !errors.Is(err, tempadmin.ErrSessionLimit) {
+		t.Fatalf("create = %v, want ErrSessionLimit", err)
+	}
+
+	if !strings.Contains(err.Error(), "--reset-session-limit") {
+		t.Fatalf("create = %v, want the error to name the reset", err)
+	}
+
+	st := openHostStore(ctx, t, db)
+
+	if _, getErr := st.GetTempAdminBySubject(ctx, "alice"); getErr == nil {
+		t.Fatal("a record exists after the refused create")
+	}
+
+	failures := 0
+
+	for _, e := range hostServerEntries(ctx, t, st) {
+		if e.Action == tempadmin.Action && e.Outcome == audit.OutcomeFailure {
+			failures++
+		}
+	}
+
+	if failures != 1 {
+		t.Fatalf("failure entries = %d, want 1", failures)
 	}
 }

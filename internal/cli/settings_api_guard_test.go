@@ -33,6 +33,7 @@ func TestOnlyKnownSettingsTakeDatabaseValues(t *testing.T) {
 		"principal.removalAlertWindow",
 		"session.breakGlassMaxLength",
 		"signIn.localPassword.enabled",
+		"tempadmin.session-limit",
 	}
 
 	known := map[string]bool{}
