@@ -247,7 +247,9 @@ func TestBundleRefusesACorruptRow(t *testing.T) {
 	t.Parallel()
 
 	now := time.UnixMilli(1_700_000_000_000).UTC()
-	vs := []trustrulestore.VersionRow{{Version: 1, PEM: bundleCAPEM(t, now), CreatedAtMs: now.UnixMilli(), OverlapEndsAtMs: 0}}
+	vs := []trustrulestore.VersionRow{
+		{Version: 1, PEM: bundleCAPEM(t, now), CreatedAtMs: now.UnixMilli(), OverlapEndsAtMs: 0},
+	}
 	good := trustrulestore.BundleRow{
 		ID: string(trustrule.NewBundleID()), Namespace: "acme", Active: 1, Revision: 1,
 		CreatedAtMs: now.UnixMilli(),
@@ -279,7 +281,14 @@ func TestBundleRefusesACorruptRow(t *testing.T) {
 func TestCheckBundleOfNamespace(t *testing.T) {
 	t.Parallel()
 
-	b := trustrule.Bundle{ID: trustrule.NewBundleID(), Namespace: "other", Active: 0, Versions: nil, Revision: 0, CreatedAt: time.Time{}}
+	b := trustrule.Bundle{
+		ID:        trustrule.NewBundleID(),
+		Namespace: "other",
+		Active:    0,
+		Versions:  nil,
+		Revision:  0,
+		CreatedAt: time.Time{},
+	}
 
 	if err := trustrulestore.CheckBundleOfNamespace(b, "acme"); !errors.Is(err, trustrule.ErrNotFound) {
 		t.Errorf("check of the bundle of another namespace = %v, want ErrNotFound", err)
