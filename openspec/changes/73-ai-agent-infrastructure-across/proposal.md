@@ -16,7 +16,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Agent asks for an action outside its grants | 403 with error code `access.denied`. The answer names the denied action. | `ANY /api/server/caller/access` |
+| Agent asks for an action outside its grants | 403 with error code `access.denied`. The answer names the denied action. | `ANY /api/dustpan/v1/me/access` |
 | Agent calls with an expired access token | 401 with error code `token.ended`. The answer names the expired token. | `POST /token` |
 
 Evidence for the claims above:

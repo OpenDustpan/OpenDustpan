@@ -18,13 +18,13 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Agent lists caller tokens with an invalid access token. | Server answers 401 with error code token.invalid and changes nothing. | `GET /api/server/caller/tokens` |
-| Agent lists caller tokens with an expired access token. | Server answers 401 with error code token.ended and changes nothing. | `GET /api/server/caller/tokens` |
+| Agent lists caller tokens with an invalid access token. | Server answers 401 with error code token.invalid and changes nothing. | `GET /api/dustpan/v1/me/tokens` |
+| Agent lists caller tokens with an expired access token. | Server answers 401 with error code token.ended and changes nothing. | `GET /api/dustpan/v1/me/tokens` |
 
 Evidence for the claims above:
 
 - Main has an internal agent package and no agent REST route in the pack. Proof: internal/agent
-- Main has caller token routes. Proof: ANY /api/server/caller/tokens
+- Main has caller token routes. Proof: ANY /api/dustpan/v1/me/tokens
 - Main has token error codes for invalid and ended tokens. Proof: internal/errcode/catalog_token.go:11
 - Main tests read-only reach and namespace principal tokens. Proof: pkg/access/access_test.go:1787
 

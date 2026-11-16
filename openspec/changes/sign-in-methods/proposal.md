@@ -12,7 +12,7 @@ The user path this change must make work:
 
 1. **Docs page.** Read the sign-in docs page for the method and its provider settings.
 2. **Console.** Sign in in the browser with OIDC, LDAP, SAML, CAS, plain OAuth, trusted header, or a passwordless passkey.
-3. **API.** Create a personal access token from the session with `POST /api/server/caller/tokens` and export it for the CLIs.
+3. **API.** Create a personal access token from the session with `POST /api/dustpan/v1/me/tokens` and export it for the CLIs.
 4. **CLI.** Run `pulumi up` and `tofu apply` with the token.
 5. **E2e.** Run the matrix of the seven methods over TLS against the real binary, with MFA off, with test identity providers, and check the audit entries.
 
