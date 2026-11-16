@@ -2015,6 +2015,7 @@
           "settings.locked",
           "settings.patch-invalid",
           "settings.retention-invalid",
+          "settings.revision-stale",
           "settings.static-only",
           "settings.unavailable",
           "settings.value-invalid",
@@ -15843,6 +15844,9 @@
             }
           },
           {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
             "$ref": "#/components/parameters/IfMatchRequired"
           }
         ],
@@ -20049,6 +20053,9 @@
       "patch": {
         "operationId": "updateSettings",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
           {
             "$ref": "#/components/parameters/IfMatchRequired"
           }

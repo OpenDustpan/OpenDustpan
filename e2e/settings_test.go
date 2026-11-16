@@ -90,7 +90,7 @@ func (r settingsReq) typed(method, token string) e2e.TypedRequest {
 func settingsPatch(ctx context.Context, t *testing.T, env *e2e.Env, in settingsReq) (e2e.APIResponse, settingsDoc) {
 	t.Helper()
 
-	return settingsSend(ctx, t, env, in.typed(http.MethodPatch, env.AdminToken()))
+	return settingsSendKeyed(ctx, t, env, in.typed(http.MethodPatch, env.AdminToken()), e2e.NewIdempotencyKey())
 }
 
 // settingsSend sends the request and decodes the answer.
@@ -99,7 +99,17 @@ func settingsSend(
 ) (e2e.APIResponse, settingsDoc) {
 	t.Helper()
 
-	resp, err := env.ServerAPIStatusTyped(ctx, in)
+	return settingsSendKeyed(ctx, t, env, in, "")
+}
+
+// settingsSendKeyed is settingsSend with the Idempotency-Key header key. An
+// empty key sends no header.
+func settingsSendKeyed(
+	ctx context.Context, t *testing.T, env *e2e.Env, in e2e.TypedRequest, key string,
+) (e2e.APIResponse, settingsDoc) {
+	t.Helper()
+
+	resp, err := env.ServerAPIStatusKeyed(ctx, in, key)
 	if err != nil {
 		t.Fatalf("%s %s: %v", in.Method, in.Path, err)
 	}
@@ -160,6 +170,42 @@ func settingsScenario(t *testing.T, env *e2e.Env) {
 	settingsRemovalAlert(ctx, t, env)
 	settingsNamespace(ctx, t, env)
 	settingsAudit(ctx, t, env)
+	settingsFreshStep(ctx, t, env)
+}
+
+// settingsFreshStep proves the fresh step of a change that reduces security.
+// Allowing plain connections is weaker. An access token never gives the step,
+// so the change answers 403 and the revision stays. A console session with a
+// fresh sign-in makes the same change. The step runs after the audit counts,
+// because it writes one more failure entry.
+func settingsFreshStep(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	read, _ := settingsRead(ctx, t, env, settingsRoute)
+	tag := read.Header.Get("ETag")
+	weaker := `{"egress.allowPlainConnections":true}`
+
+	resp, doc := settingsPatch(ctx, t, env, settingsReq{path: settingsRoute, ifMatch: tag, body: weaker})
+	if resp.Status != http.StatusForbidden || doc.ErrorCode != "mfa.fresh-step-required" {
+		t.Fatalf("PATCH with an access token answers %d %q (%s), want 403 mfa.fresh-step-required",
+			resp.Status, doc.ErrorCode, resp.Body)
+	}
+
+	if after, _ := settingsRead(ctx, t, env, settingsRoute); after.Header.Get("ETag") != tag {
+		t.Fatalf("ETag after the refused change = %q, want %q", after.Header.Get("ETag"), tag)
+	}
+
+	status, body := env.FreshAdminMergePatch(ctx, t, settingsRoute, tag, weaker)
+	if status != http.StatusOK {
+		t.Fatalf("PATCH with a fresh console session answers %d %s, want 200", status, body)
+	}
+
+	_, changed := settingsRead(ctx, t, env, settingsRoute)
+	plain := settingFor(t, changed, "egress.allowPlainConnections")
+
+	if allowed, isBool := plain.Value.(bool); !isBool || !allowed || plain.Source != "database" {
+		t.Fatalf("egress.allowPlainConnections = %+v, want true from the database", plain)
+	}
 }
 
 // settingsDefaults checks the settings of the first read: the defaults, the
@@ -234,7 +280,7 @@ func settingsChange(ctx context.Context, t *testing.T, env *e2e.Env, first strin
 
 	// The old revision no longer matches, and nothing changes.
 	settingsWant(ctx, t, env, settingsReq{path: settingsRoute, ifMatch: first, body: `{"branding.preset":"other"}`},
-		settingsAnswer{status: http.StatusPreconditionFailed, code: "request.precondition-failed"})
+		settingsAnswer{status: http.StatusPreconditionFailed, code: "settings.revision-stale"})
 
 	if read, _ := settingsRead(ctx, t, env, settingsRoute); read.Header.Get("ETag") != second {
 		t.Fatalf("ETag after a refused change = %q, want %q", read.Header.Get("ETag"), second)
@@ -391,12 +437,21 @@ func settingsRemovalAlert(ctx context.Context, t *testing.T, env *e2e.Env) {
 func settingsMediaAndCredential(ctx context.Context, t *testing.T, env *e2e.Env, tag string) {
 	t.Helper()
 
-	resp, err := env.ServerAPIStatusTyped(ctx, e2e.TypedRequest{
+	resp, err := env.ServerAPIStatusKeyed(ctx, e2e.TypedRequest{
 		Token: env.AdminToken(), Method: http.MethodPatch, Path: settingsRoute, ContentType: "application/json",
 		Body: `{}`, IfMatch: tag,
-	})
+	}, e2e.NewIdempotencyKey())
 	if err != nil || resp.Status != http.StatusUnsupportedMediaType {
 		t.Fatalf("PATCH as application/json = %v, %v; want 415", resp, err)
+	}
+
+	resp, err = env.ServerAPIStatusTyped(ctx, e2e.TypedRequest{
+		Token: env.AdminToken(), Method: http.MethodPatch, Path: settingsRoute, ContentType: prefsPatchType,
+		Body: `{}`, IfMatch: tag,
+	})
+	if err != nil || resp.Status != http.StatusBadRequest ||
+		!strings.Contains(resp.Body, "request.idempotency-key-required") {
+		t.Fatalf("PATCH with no Idempotency-Key = %v, %v; want 400 request.idempotency-key-required", resp, err)
 	}
 
 	resp, err = env.ServerAPIStatusTyped(ctx, e2e.TypedRequest{

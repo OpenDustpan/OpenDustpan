@@ -289,6 +289,7 @@ func (e *Env) FreshAdminMergePatch(ctx context.Context, tb testing.TB, path, ifM
 	header := sessionHeader(csrf)
 	header.Set("Content-Type", "application/merge-patch+json")
 	header.Set("If-Match", ifMatch)
+	header.Set("Idempotency-Key", NewIdempotencyKey())
 
 	return e.browserDo(ctx, tb, browser, browserRequest{
 		method: http.MethodPatch, target: e.URL + path, body: body, header: header,
