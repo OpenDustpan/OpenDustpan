@@ -20,9 +20,16 @@ The path after this change (setting on):
 ## Evidence
 
 - Both handlers send an empty proof. Proof: `rg -n 'ConfirmAuth: ""' internal/api/jobs` shows `approve.go:161` and `confirm.go:73` on main (16 Nov 2026).
-- The sealed access cookie already holds the fact. `session.Claims` has `MFAAt`, `FreshAt` and `FreshKind` (pkg/session/cookie.go:224-247). `FreshKind` is `passkey`, `mfa`, `password` or `sso` (cookie.go:193-208).
+- The type of the fact exists, its source does not. `session.Claims` has `MFAAt`, `FreshAt` and `FreshKind` (pkg/session/cookie.go:224-247), and `Sealer` (cookie.go:378) and `KeyStore` (cookie.go:435) are ports. On main no code issues a sealed access cookie: `rg -n 'SealAccess\(' --glob '*.go'` finds only the interface line. `sessionauth.Checker.Authenticate` (internal/sessionauth/sessionauth.go:109) reads a stored session (`c.sessions.Authenticate`), and the stored `session.Session` has no factor kind. So no request carries the fact today.
+- The owner chose a sealed session cookie as the source of the fresh-auth fact (issue 3257, question 2; ADR 297). This change therefore depends on the change `session-fresh-cookie`, which issues the cookie at sign-in and at each step and reads it in `sessionauth`. That change is planned next. This change starts only when it is on main.
 - The job service checks the proof three times and needs no change in its rules: `newDestroyFresh` (pkg/job/service_approve.go:325), `checkConfirmation` (pkg/job/service_confirm.go:140) and `checkDestroyProof` on the store clock (pkg/store/internal/jobstore/events.go:52).
 - No session store is shared between instances. The fact is read from the cookie of the request, so it works behind any instance.
+
+## Order of work
+
+1. `session-fresh-cookie` (issue and read of the sealed cookie, with the factor kind and time).
+2. `fresh-auth-enabled-setting`, task 2.4 (the approval route reads the policy; with the setting off it records `auth: none`). Merged in #3300 as a spec; its code lands first.
+3. This change.
 
 ## Fix boundary
 
@@ -49,7 +56,7 @@ The path after this change (setting on):
 
 - The service refuses a destroy approval with no MFA proof (`newDestroyFresh`, pkg/job/service_approve.go:325) and a confirmation with no valid proof (pkg/job/service_confirm.go:140).
 - The store checks the age again on its own clock (`checkDestroyProof`, pkg/store/internal/jobstore/events.go:52).
-- The handler refuses a destroy approval of a request with no session (`freshErr`, internal/api/jobs/approve.go:155).
+- The handler refuses every destroy approval with an approve verdict, with no regard to the session (`approveJob`, internal/api/jobs/approve.go:143-165): it answers `ErrAuthStale` in a job that awaits approval. After task 2.4 of `fresh-auth-enabled-setting` it refuses only when the policy asks for the step.
 - The two handlers send an empty proof (approve.go:161, confirm.go:73).
 
 ## ADR check
