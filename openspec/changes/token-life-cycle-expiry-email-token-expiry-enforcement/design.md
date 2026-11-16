@@ -27,7 +27,7 @@ An unexported refusal function in pkg/accesstoken is the only path that builds a
 
 ## Diagrams
 
-Today: `GET /api/server/caller/tokens` on main (from the route table and the handler body, route row internal/api/server/tokens.go:543, handler internal/api/server/tokens.go:232).
+Today: `GET /api/dustpan/v1/me/tokens` on main (from the route table and the handler body, path constant internal/api/server/tokens.go:202, handler listOwnTokens at internal/api/server/tokens.go:789).
 
 ```mermaid
 sequenceDiagram
@@ -35,7 +35,7 @@ participant C as Client
 participant R as GET route
 participant H as serveTokenRead
 participant AZ as Authorizer
-C->>R: GET /api/server/caller/tokens
+C->>R: GET /api/dustpan/v1/me/tokens
 R->>AZ: ActionTokenManageOwn (ScopeAuthorized)
 R->>H: serveTokenRead
 H-->>C: answer

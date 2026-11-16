@@ -12,7 +12,7 @@ The user path this change must make work:
 
 1. **API.** Developer creates an access token through the API with a picked expiry date
 2. **CLI.** Developer runs pulumi up and tofu apply with the token
-3. **API.** Developer lists the ended tokens with GET /api/server/caller/tokens?status=ended to see the cause of a 401
+3. **API.** Developer lists the ended tokens with GET /api/dustpan/v1/me/tokens?status=ended to see the cause of a 401
 4. **Docs page.** Developer reads the access tokens guide for expiry, lifetime, inactivity disable, rotation and the status filter
 5. **API.** Developer rotates the token through the API before expiry and retries the CLI
 
@@ -20,7 +20,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Developer runs pulumi up or tofu apply with an expired, revoked or disabled token | 401 unauthenticated, with no detail about the token. The bytes and headers equal those for an unknown token. The audit entry holds the real reason and the token ID. | `GET /api/server/caller/tokens?status=ended` |
+| Developer runs pulumi up or tofu apply with an expired, revoked or disabled token | 401 unauthenticated, with no detail about the token. The bytes and headers equal those for an unknown token. The audit entry holds the real reason and the token ID. | `GET /api/dustpan/v1/me/tokens?status=ended` |
 | Developer requests a token with an expiry past the maximum lifetime | The server refuses the create with error code token.invalid and a message that names the maximum lifetime. | `GET /api/dustpan/v1/settings` |
 
 Evidence for the claims above:
