@@ -352,9 +352,9 @@ restore applies. These writes run, each with its audit entry:
   revocation in normal operation stay in force: the fence of the namespace,
   and the rule that the caller holds every action that the grant gives.
 - the revocation of a join token of a runner pool
-  (`POST /api/runners/{namespace}/pools/{pool}/join-tokens/{id}/revoke`).
+  (`POST /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens/{id}/revoke`).
 - the retire of a runner
-  (`POST /api/runners/{namespace}/runners/{runner}/retire`), which also ends
+  (`POST /api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire`), which also ends
   the live claims of the runner. The other routes of the runner management API
   answer 503 in maintenance mode.
 - the disable of a sign-in provider, which also ends its sessions. A change of

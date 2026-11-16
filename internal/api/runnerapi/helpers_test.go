@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	"opendustpan.org/opendustpan/internal/api/runnerpools"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -350,7 +351,24 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 		t.Fatalf("handler: %v", err)
 	}
 
-	srv := httptest.NewServer(h)
+	// The management API of the pools lives in its own adapter. The server
+	// mounts both, so a test that makes a pool or a join token uses the same
+	// mux.
+	pools, err := runnerpools.NewHandler(runnerpools.Config{
+		Namespaces: cfg.Namespaces, Pools: cfg.Pools, Members: cfg.Members,
+		Authenticator: cfg.Authenticator, Authorizer: cfg.Authorizer,
+		Audit: cfg.Audit, OnAuditFailure: cfg.OnAuditFailure, DenialLimiter: cfg.DenialLimiter,
+		Sessions: cfg.Sessions, Logger: cfg.Logger, ServerURL: cfg.ServerURL, Now: cfg.Now,
+	})
+	if err != nil {
+		t.Fatalf("pools handler: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/api/dustpan/v1/", pools)
+	mux.Handle("/", h)
+
+	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
 	return h, srv, claimer
@@ -408,8 +426,8 @@ func configFor(t *testing.T, s stores, opts serveOptions) (runnerapi.Config, *op
 	return cfg, claimer
 }
 
-// admin sends a request of the management API as the administrator.
-func (e *env) admin(method, path string, body any) (int, []byte) {
+// admin sends a POST request of the management API as the administrator.
+func (e *env) admin(path string, body any) (int, []byte) {
 	e.t.Helper()
 
 	var reader io.Reader = http.NoBody
@@ -423,7 +441,7 @@ func (e *env) admin(method, path string, body any) (int, []byte) {
 		reader = bytes.NewReader(raw)
 	}
 
-	req, err := http.NewRequestWithContext(e.t.Context(), method, e.server.URL+path, reader)
+	req, err := http.NewRequestWithContext(e.t.Context(), http.MethodPost, e.server.URL+path, reader)
 	if err != nil {
 		e.t.Fatalf("request: %v", err)
 	}
@@ -459,7 +477,7 @@ func (e *env) send(req *http.Request) (int, []byte) {
 func (e *env) createPool() string {
 	e.t.Helper()
 
-	status, body := e.admin(http.MethodPost, "/api/runners/acme/pools",
+	status, body := e.admin("/api/dustpan/v1/namespaces/acme/runner-pools",
 		map[string]any{"name": "prod", "purpose": "jobs"})
 	if status != http.StatusCreated {
 		e.t.Fatalf("create pool = %d %s, want 201", status, body)
@@ -478,26 +496,7 @@ func (e *env) createPool() string {
 func (e *env) joinToken(pool string) string {
 	e.t.Helper()
 
-	status, body := e.admin(http.MethodPost, "/api/runners/acme/pools/"+pool+"/join-tokens", nil)
-	if status != http.StatusCreated {
-		e.t.Fatalf("create join token = %d %s, want 201", status, body)
-	}
-
-	var tok struct {
-		Token string `json:"token"`
-	}
-
-	decode(e.t, body, &tok)
-
-	return tok.Token
-}
-
-// joinToken2 makes a join token of a pool of the namespace globex and
-// returns its secret.
-func (e *env) joinToken2(pool string) string {
-	e.t.Helper()
-
-	status, body := e.admin(http.MethodPost, "/api/runners/globex/pools/"+pool+"/join-tokens", nil)
+	status, body := e.admin("/api/dustpan/v1/namespaces/acme/runner-pools/"+pool+"/join-tokens", nil)
 	if status != http.StatusCreated {
 		e.t.Fatalf("create join token = %d %s, want 201", status, body)
 	}
@@ -728,29 +727,6 @@ func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 
 	return hex.EncodeToString(sum[:])
-}
-
-// auditActions returns the events that the audit entries of acme record in
-// their first change.
-func (e *env) auditActions() map[string]bool {
-	e.t.Helper()
-
-	out := map[string]bool{}
-
-	listing, err := e.store.audit.List(e.t.Context(), "acme", audit.Page{Number: 1, Size: audit.MaxPageSize})
-	if err != nil {
-		e.t.Fatalf("list audit: %v", err)
-	}
-
-	for i := range listing.Entries {
-		for _, c := range listing.Entries[i].Changes {
-			if c.Key == "event" {
-				out[c.New] = true
-			}
-		}
-	}
-
-	return out
 }
 
 // loggerOf returns the logger of the options, or a logger that discards.

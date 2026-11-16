@@ -635,7 +635,8 @@ func (h *rtHarness) startPlanJob() string {
 	h.t.Helper()
 
 	if !h.jobPool {
-		h.call(http.MethodPost, "/api/runners/acme/pools", `{"name":"ci","purpose":"jobs"}`, http.StatusCreated)
+		h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools",
+			`{"name":"ci","purpose":"jobs"}`, http.StatusCreated)
 
 		h.jobPool = true
 	}

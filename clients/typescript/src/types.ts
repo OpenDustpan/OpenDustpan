@@ -363,6 +363,19 @@ export interface CreateProfileRevisionRequest {
   readonly reason?: string;
 }
 
+export interface CreateRunnerJoinTokenRequest {
+  readonly ttl: number;
+}
+
+export interface CreateRunnerPoolRequest {
+  readonly concurrency: number;
+  readonly gitCredentials: RunnerGitCredentials;
+  readonly isolation: ReadonlyArray<string>;
+  readonly lease: number;
+  readonly name: string;
+  readonly purpose: string;
+}
+
 export interface CreateTrustRuleRequest {
   readonly audience: string;
   readonly bundle?: string;
@@ -392,6 +405,19 @@ export interface CreatedNotificationSink {
   readonly target: string;
   readonly urlSet: boolean;
   readonly version: number;
+}
+
+export interface CreatedRunnerJoinToken {
+  readonly command: string;
+  readonly createdAt: string;
+  readonly createdBy: string;
+  readonly expiresAt: string;
+  readonly id: string;
+  readonly pool: string;
+  readonly revokedAt?: string;
+  readonly token: string;
+  readonly usedAt?: string;
+  readonly usedBy?: string;
 }
 
 export interface DamagedBlob {
@@ -426,6 +452,10 @@ export interface DeletedUnitSweep {
 export interface DevData {
   readonly classes: Readonly<Record<string, number>> | null;
   readonly principals: number;
+}
+
+export interface DrainRunnerRequest {
+  readonly draining: boolean | null;
 }
 
 export interface DriftCheck {
@@ -1639,6 +1669,65 @@ export interface RotateTrustBundleRequest {
   readonly pem: string;
 }
 
+export interface Runner {
+  readonly draining: boolean;
+  readonly id: string;
+  readonly isolation: string;
+  readonly joinedAt: string;
+  readonly keyExpires: string;
+  readonly keyIdentifier: string;
+  readonly kind: string;
+  readonly labels: Readonly<Record<string, string>> | null;
+  readonly lastSeenAt: string;
+  readonly name: string;
+  readonly pool: string;
+  readonly rejoinCommand?: ReadonlyArray<string>;
+  readonly release: string;
+  readonly status: string;
+}
+
+export interface RunnerGitCredentials {
+  readonly helper?: string;
+  readonly mode: string;
+}
+
+export interface RunnerJoinToken {
+  readonly createdAt: string;
+  readonly createdBy: string;
+  readonly expiresAt: string;
+  readonly id: string;
+  readonly pool: string;
+  readonly revokedAt?: string;
+  readonly usedAt?: string;
+  readonly usedBy?: string;
+}
+
+export interface RunnerJoinTokenList {
+  readonly joinTokens: ReadonlyArray<RunnerJoinToken>;
+}
+
+export interface RunnerList {
+  readonly runners: ReadonlyArray<Runner>;
+}
+
+export interface RunnerPool {
+  readonly concurrency: number;
+  readonly createdAt: string;
+  readonly gitCredentials: RunnerGitCredentials;
+  readonly id: string;
+  readonly isolation: ReadonlyArray<string>;
+  readonly lease: number;
+  readonly name: string;
+  readonly namespace: string;
+  readonly purpose: string;
+  readonly readOnly: boolean;
+  readonly updatedAt: string;
+}
+
+export interface RunnerPoolList {
+  readonly pools: ReadonlyArray<RunnerPool>;
+}
+
 export interface SaveProxyRuleSetRequest {
   readonly rules: ReadonlyArray<ProxyRule>;
 }
@@ -2494,6 +2583,15 @@ export interface UpdatePreferencesRequest {
   readonly terminalSchemes?: TerminalSchemesPatch | null;
   readonly theme?: string | null;
   readonly timeZone?: string | null;
+}
+
+export interface UpdateRunnerPoolRequest {
+  readonly concurrency: number | null;
+  readonly gitCredentials: RunnerGitCredentials | null;
+  readonly isolation: ReadonlyArray<string> | null;
+  readonly lease: number | null;
+  readonly name: string | null;
+  readonly purpose: string | null;
 }
 
 export type UpdateSettingsRequest = Readonly<Record<string, unknown>>;

@@ -102,8 +102,13 @@ func TestWrongRunnerIsAClaimLoss(t *testing.T) {
 type producer struct {
 	event  runner.Event
 	made   func() runner.Event
+	dir    string
 	file   string
 	symbol string
+}
+
+func producerIn(dir, file, symbol string, event runner.Event) producer {
+	return producer{event: event, made: nil, dir: dir, file: file, symbol: symbol}
 }
 
 func producers() []producer {
@@ -112,23 +117,25 @@ func producers() []producer {
 	rejoined.Rejoined = true
 
 	return []producer{
-		{runner.EventPoolCreated, nil, "admin.go", "runner.EventPoolCreated"},
-		{runner.EventPoolChanged, nil, "admin.go", "runner.EventPoolChanged"},
-		{runner.EventPoolDeleted, nil, "admin.go", "runner.EventPoolDeleted"},
-		{runner.EventJoinTokenCreated, nil, "admin.go", "runner.EventJoinTokenCreated"},
-		{runner.EventJoinTokenRevoked, nil, "admin.go", "runner.EventJoinTokenRevoked"},
-		{runner.EventRunnerDrained, nil, "admin.go", "runner.EventRunnerDrained"},
-		{runner.EventRunnerRetired, nil, "admin.go", "runner.EventRunnerRetired"},
-		{runner.EventKeyRotated, nil, "protocol.go", "runner.EventKeyRotated"},
-		{runner.EventRunnerJoined, func() runner.Event { return runner.JoinEvent(new(runner.Joined)) }, "", ""},
-		{runner.EventRunnerRejoined, func() runner.Event { return runner.JoinEvent(rejoined) }, "", ""},
-		{runner.EventHandoffRefused, refusal.Event, "handoffaudit.go", "ref.Event()"},
+		producerIn("runnerpools", "admin.go", "runner.EventPoolCreated", runner.EventPoolCreated),
+		producerIn("runnerpools", "admin.go", "runner.EventPoolChanged", runner.EventPoolChanged),
+		producerIn("runnerpools", "admin.go", "runner.EventPoolDeleted", runner.EventPoolDeleted),
+		producerIn("runnerpools", "admin.go", "runner.EventJoinTokenCreated", runner.EventJoinTokenCreated),
+		producerIn("runnerpools", "admin.go", "runner.EventJoinTokenRevoked", runner.EventJoinTokenRevoked),
+		producerIn("runnerpools", "admin.go", "runner.EventRunnerDrained", runner.EventRunnerDrained),
+		producerIn("runnerpools", "admin.go", "runner.EventRunnerRetired", runner.EventRunnerRetired),
+		producerIn("runnerapi", "protocol.go", "runner.EventKeyRotated", runner.EventKeyRotated),
+		{runner.EventRunnerJoined, func() runner.Event { return runner.JoinEvent(new(runner.Joined)) }, "", "", ""},
+		{runner.EventRunnerRejoined, func() runner.Event { return runner.JoinEvent(rejoined) }, "", "", ""},
+		{runner.EventHandoffRefused, refusal.Event, "runnerapi", "handoffaudit.go", "ref.Event()"},
 	}
 }
 
-// check reports the problems of one case: the producer made another event, the
-// event has no rule, or the adapter file does not name it.
-func (p *producer) check(adapter *os.Root) []string {
+// check reports the problems of one case: the producer made another event,
+// the event has no rule, or the adapter file does not name it. Management
+// events live in internal/api/runnerpools; protocol events live in
+// internal/api/runnerapi.
+func (p *producer) check(_ *os.Root) []string {
 	var problems []string
 
 	if _, ok := runner.AuditRules()[p.event]; !ok {
@@ -143,9 +150,21 @@ func (p *producer) check(adapter *os.Root) []string {
 		return problems
 	}
 
-	src, err := fs.ReadFile(adapter.FS(), p.file)
+	repo, err := os.OpenRoot(filepath.Join("..", ".."))
+	if err != nil {
+		return []string{fmt.Sprintf("event %s: open the repository: %v", p.event, err)}
+	}
+
+	defer func() {
+		if closeErr := repo.Close(); closeErr != nil {
+			problems = append(problems, fmt.Sprintf("close the repository: %v", closeErr))
+		}
+	}()
+
+	src, err := fs.ReadFile(repo.FS(), filepath.Join("internal", "api", p.dir, p.file))
 	if err != nil || !strings.Contains(string(src), p.symbol) {
-		problems = append(problems, fmt.Sprintf("event %s: %s does not name %s (%v)", p.event, p.file, p.symbol, err))
+		problems = append(problems, fmt.Sprintf("event %s: %s/%s does not name %s (%v)",
+			p.event, p.dir, p.file, p.symbol, err))
 	}
 
 	return problems
@@ -158,7 +177,7 @@ func (p *producer) check(adapter *os.Root) []string {
 func TestEveryAuditEventHasAProducer(t *testing.T) {
 	t.Parallel()
 
-	adapter, err := os.OpenRoot(filepath.Join("..", "..", "internal", "api", "runnerapi"))
+	adapter, err := os.OpenRoot(filepath.Join("..", "..", "internal", "api", "runnerpools"))
 	if err != nil {
 		t.Fatalf("open the adapter directory: %v", err)
 	}

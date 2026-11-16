@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/internal/api/problem"
-	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
@@ -32,10 +30,10 @@ type fencedScope struct {
 }
 
 // TestWriteErrorFencedCopy proves that a fenced write answers the sentence of
-// the sentinel and nothing else on the runner protocol and on the management
-// API, also when code wraps the sentinel: the context of the wrap stays in the
-// log. The runner protocol answers 503 with a Retry-After time on purpose: a
-// runner retries it. An error that is not a fence keeps its own answer.
+// the sentinel and nothing else on the runner protocol, also when code wraps
+// the sentinel: the context of the wrap stays in the log. The runner protocol
+// answers 503 with a Retry-After time on purpose: a runner retries it. An
+// error that is not a fence keeps its own answer.
 func TestWriteErrorFencedCopy(t *testing.T) {
 	t.Parallel()
 
@@ -46,16 +44,6 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 		t.Fatalf("marshal protocol error: %v", err)
 	}
 
-	managementBody, err := json.Marshal(
-		problem.Body{
-			Message: namespace.ErrFenced.Error(), Code: http.StatusConflict, ErrorCode: errcode.NamespaceFenced,
-			ErrorArgs: nil, Reauthenticate: "", Units: nil,
-		},
-	)
-	if err != nil {
-		t.Fatalf("marshal management error: %v", err)
-	}
-
 	otherProtocol := protocol.Error{
 		Code: protocol.ErrorRateLimited, Message: runner.ErrLimit.Error(), Supported: "",
 	}
@@ -63,18 +51,6 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 	otherProtocolBody, err := json.Marshal(otherProtocol)
 	if err != nil {
 		t.Fatalf("marshal protocol error: %v", err)
-	}
-
-	otherManagementBody, err := json.Marshal(
-		problem.Body{
-			Message:   "the runner is retired",
-			Code:      http.StatusConflict,
-			ErrorCode: errcode.RunnerRetired,
-			ErrorArgs: nil, Reauthenticate: "", Units: nil,
-		},
-	)
-	if err != nil {
-		t.Fatalf("marshal management error: %v", err)
 	}
 
 	scopes := []fencedScope{
@@ -87,11 +63,6 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 			other:       runner.ErrLimit,
 			otherStatus: http.StatusTooManyRequests,
 			otherBody:   string(otherProtocolBody) + "\n",
-		},
-		{
-			name: "management", scope: ScopeAuthorized,
-			status: http.StatusConflict, body: string(managementBody) + "\n", retryAfter: false,
-			other: runner.ErrRetired, otherStatus: http.StatusConflict, otherBody: string(otherManagementBody) + "\n",
 		},
 	}
 
@@ -132,8 +103,9 @@ func TestWriteErrorFencedCopy(t *testing.T) {
 }
 
 // writeErrorOf answers err through a handler that holds only a logger, the one
+// writeErrorOf answers err through a handler that holds only a logger, the one
 // field writeError reads, and returns the answer and the log text.
-func writeErrorOf(t *testing.T, scope Scope, err error) (*httptest.ResponseRecorder, string) {
+func writeErrorOf(t *testing.T, err error) (*httptest.ResponseRecorder, string) {
 	t.Helper()
 
 	var (
@@ -144,7 +116,7 @@ func writeErrorOf(t *testing.T, scope Scope, err error) (*httptest.ResponseRecor
 	h.logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	rec := httptest.NewRecorder()
-	h.writeError(t.Context(), rec, scope, err)
+	h.writeError(t.Context(), rec, err)
 
 	return rec, buf.String()
 }
@@ -154,7 +126,7 @@ func writeErrorOf(t *testing.T, scope Scope, err error) (*httptest.ResponseRecor
 func checkFencedAnswer(t *testing.T, sc fencedScope, err error, wrap string) {
 	t.Helper()
 
-	rec, logged := writeErrorOf(t, sc.scope, err)
+	rec, logged := writeErrorOf(t, err)
 
 	if rec.Code != sc.status {
 		t.Fatalf("status = %d, want %d", rec.Code, sc.status)
@@ -190,7 +162,7 @@ func checkFencedAnswer(t *testing.T, sc fencedScope, err error, wrap string) {
 func checkOtherAnswer(t *testing.T, sc fencedScope) {
 	t.Helper()
 
-	rec, logged := writeErrorOf(t, sc.scope, sc.other)
+	rec, logged := writeErrorOf(t, sc.other)
 
 	if rec.Code != sc.otherStatus {
 		t.Fatalf("status = %d, want %d", rec.Code, sc.otherStatus)

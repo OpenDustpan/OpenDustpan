@@ -1,5 +1,5 @@
 ---
-version: 5
+version: 6
 ---
 
 Issue: #1293.
@@ -10,13 +10,13 @@ Issue: #1293.
 
 The user path this change must make work:
 
-1. **Docs page.** Read the registry docs page and follow the link to the new ADR for the OpenPGP dependency and the vulnerability disposition.
+1. **Docs page.** Read the registry docs page. It names the OpenPGP library that checks signatures and the command that shows its version. The page holds no ADR reference (the rule for user docs).
 
 Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| The registry docs link to the OpenPGP ADR points to no ADR file. | The docs check names the dead link. Add the ADR file and the index entry. | `make docs-lint` |
+| The version that the docs page names differs from the build. | The version check shows each module that differs. Change the page so that it names the command and no fixed version. | `go list -m github.com/ProtonMail/go-crypto` |
 | The ADR module versions differ from go.mod. | The version check shows each module that differs. Update the ADR or the build so they match. | `go list -m github.com/ProtonMail/go-crypto github.com/cloudflare/circl golang.org/x/crypto` |
 
 Evidence for the claims above:
@@ -30,7 +30,7 @@ Evidence for the claims above:
 ## What Changes
 
 - Verify ADR 379 (docs/adr/0379-the-openpgp-dependency-of-the-registry.md). It records the module versions, the owner approval, and the GO-2026-5932 disposition. ADR 379 decision 1: "The three modules are approved at the versions in `go.mod` (owner, 2026-11-14)."
-- Add the ADR index entry and the registry docs link in the same change.
+- Add the ADR index entry, and one plain statement to the registry docs page: the library and the command that shows its version, with no ADR reference.
 
 Out of scope:
 
@@ -42,7 +42,7 @@ Out of scope:
 
 Where the path still costs the person time or surprises them:
 
-- The registry docs page shows the ADR link next to the signature text. A dead link fails the docs check before release.
+- The registry docs page names the library next to the signature text and the command that shows its version. It holds no reference to an ADR.
 
 ## What main already does
 

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
-	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
 
@@ -24,21 +23,13 @@ func TestAnonymousRefusalLogHoldsNoText(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		scope runnerapi.Scope
-		err   error
+		name string
+		err  error
 	}{
 		{
-			"no sign-in",
-			runnerapi.ScopeAuthorized,
-			fmt.Errorf("sign-in: %s: %w", debugSecret, identity.ErrUnauthenticated),
-		},
-		{
 			"proof that does not verify",
-			runnerapi.ScopeRunnerKey,
 			fmt.Errorf("verify: %s: %w", debugSecret, runner.ErrBadProof),
 		},
-		{"unknown runner", runnerapi.ScopeAuthorized, fmt.Errorf("lookup: %s: %w", debugSecret, runner.ErrNotFound)},
 	}
 
 	for _, tc := range tests {
@@ -50,7 +41,7 @@ func TestAnonymousRefusalLogHoldsNoText(t *testing.T) {
 			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 			rec := httptest.NewRecorder()
 
-			runnerapi.WriteError(t.Context(), rec, logger, tc.scope, tc.err)
+			runnerapi.WriteError(t.Context(), rec, logger, tc.err)
 
 			logs := buf.String()
 			if !strings.Contains(logs, "level=DEBUG") || !strings.Contains(logs, `msg="runner request refused"`) {

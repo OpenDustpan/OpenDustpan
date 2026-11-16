@@ -167,7 +167,7 @@ value that it does not know. A new value is an additive change.
 ## Routes that are not in the description
 
 The routes of some areas still sit under the old paths `/api/server`,
-`/api/inventory`, `/api/audit` and `/api/runners`. They are not in the
+`/api/inventory` and `/api/audit`. They are not in the
 description. Each route joins the description when it moves under
 `/api/dustpan/v1`.
 

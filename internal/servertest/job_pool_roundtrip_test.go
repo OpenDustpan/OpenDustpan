@@ -79,7 +79,7 @@ func clusterWithPool(t *testing.T) *servertest.Cluster {
 	c := servertest.Start(t, 1, dustpan.WithPublicURL("https://dustpan.example.com"))
 	for _, step := range []struct{ path, body string }{
 		{"/api/server/namespaces", `{"name":"acme"}`},
-		{"/api/runners/acme/pools", `{"name":"main","purpose":"jobs"}`},
+		{"/api/dustpan/v1/namespaces/acme/runner-pools", `{"name":"main","purpose":"jobs"}`},
 	} {
 		if status, body := c.Do(t, 0, http.MethodPost, step.path, step.body); status != http.StatusCreated {
 			t.Fatalf("POST %s = %d %s, want %d", step.path, status, body, http.StatusCreated)

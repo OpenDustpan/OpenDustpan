@@ -80,30 +80,6 @@ When terraform-registry-manifest.json lists a protocol value outside the known s
 - **WHEN** the manifest lists a protocol value outside the known set of 5.0 and 6.0.
 - **THEN** the server refuses the request with 400 registry.invalid.
 
-### Requirement: serve releases under slug
-
-Where a namespace owns releases, the server SHALL serve its releases under the slug formed as the lowercase stable ID with unsafe characters removed.
-
-#### Scenario: Slug install
-- **WHEN** a namespace holds a name outside the registry-safe subset of lowercase letters, digits, and hyphen.
-- **THEN** clients fetch the release under the slug path with 200.
-
-#### Scenario: Slug stable after rename
-- **WHEN** a namespace renames its display name.
-- **THEN** the registry slug path stays identical after the rename and the prior name path still serves existing releases.
-
-#### Scenario: Unknown slug refused
-- **WHEN** a client requests a slug that maps to no namespace.
-- **THEN** the server refuses with 404 registry.not-found.
-
-#### Scenario: Slug collision resolved
-- **WHEN** two namespace IDs strip to the same slug or to an empty string.
-- **THEN** the second namespace receives the slug with a short suffix and each slug maps to one namespace.
-
-#### Scenario: Slug wins on conflict
-- **WHEN** a slug equals the prior name path of another namespace.
-- **THEN** the slug path serves the slug owner and the prior name path serves existing releases of the other namespace.
-
 ### Requirement: Count H1 in equality
 
 When the server compares a republished release with the stored release, the server SHALL include the H1 digest in the SameContent result.
@@ -130,15 +106,19 @@ While a release version exists, the server SHALL refuse a changed-bytes republis
 
 ### Requirement: Request guards
 
-When a publish request lacks authorization, carries a wrong content type, or exceeds the request size, the server SHALL refuse in the order 403 then 415 then 413 before unpacking.
+When a publish request lacks authorization, carries a wrong content type, or exceeds the request size, the server SHALL refuse in the order 403 then 415 then 413 before unpacking. When a staged provider archive is not a zip, the server SHALL refuse it at publish with registry.bad-archive before it computes the hash.
 
 #### Scenario: Oversize request refused
 - **WHEN** a publish body exceeds 32 MB by content length or by counted chunked bytes.
 - **THEN** the server refuses with 413 without unpacking and deletes staged bytes.
 
 #### Scenario: Wrong content type refused
-- **WHEN** a publish request carries a content type other than application/zip.
+- **WHEN** an upload request carries a content type other than application/octet-stream.
 - **THEN** the server refuses with 415 without unpacking.
+
+#### Scenario: Archive that is not a zip refused
+- **WHEN** a publish request names a staged file as the provider archive and the bytes are not a zip.
+- **THEN** the server refuses with 400 registry.bad-archive before the hash and stores nothing.
 
 #### Scenario: Denied principal refused before unpack
 - **WHEN** a principal without the publish grant sends a publish request.
@@ -147,14 +127,6 @@ When a publish request lacks authorization, carries a wrong content type, or exc
 #### Scenario: Staged bytes cleaned
 - **WHEN** a publish crashes or a staged delete fails before the release stores.
 - **THEN** no staged bytes remain after the restart scan.
-
-### Requirement: Show limits as effective values
-
-Where a namespace owns releases, the server SHALL show the request and unpack limits as effective values in the API.
-
-#### Scenario: Limits visible
-- **WHEN** a caller reads the registry settings of a namespace.
-- **THEN** the API reports 32 MB request, 64 MB unpacked, 1024 files, and 16 MB per file.
 
 ### Requirement: Module uploads skip archive checks
 

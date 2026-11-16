@@ -261,7 +261,7 @@ func (r *blobDeleteRig) buildServices(t *testing.T, nsSvc *namespace.Service) {
 	r.backups, err = backup.NewService(backup.Config{
 		Exporter: r.store, Kinds: r.store, Registry: r.store, Blobs: r.gate, StateOpener: r.workspaces,
 		Target: r.target, TargetName: "dir:test", Now: nil, Version: "test", MaxSQLBytes: 0,
-		Operations: r.store.DurableOperationsPort(), Owner: "", Lease: 0, Logger: nil,
+		Operations: r.store.DurableOperationsPort(), Owner: "", Lease: backupLongLease, Logger: nil,
 	})
 	if err != nil {
 		t.Fatalf("backup service: %v", err)
@@ -296,7 +296,8 @@ func (r *blobDeleteRig) startHeldBackup(t *testing.T) *runningBackup {
 	case <-r.gate.reached:
 	case err := <-b.done:
 		t.Fatalf("backup ended before it copied a blob: %v", err)
-	case <-time.After(backupWaitLimit):
+	case <-time.After(StuckTestLimit):
+		// The wait ends on the gate signal. The limit only ends a stuck test.
 		t.Fatal("backup did not reach its first blob copy")
 	}
 
@@ -324,7 +325,8 @@ func (r *blobDeleteRig) finish(t *testing.T, b *runningBackup, want []blob.Key) 
 		if err != nil {
 			t.Fatalf("backup %s ended with an error: %v", b.id, err)
 		}
-	case <-time.After(backupWaitLimit):
+	case <-time.After(StuckTestLimit):
+		// The wait ends when the backup ends. The limit only ends a stuck test.
 		t.Fatalf("backup %s did not end", b.id)
 	}
 

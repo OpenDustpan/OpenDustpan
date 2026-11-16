@@ -102,7 +102,7 @@ func (c crashingLive) SetRestoreMaintenance(
 	}
 
 	if c.at == crashAfterEnterWrite && next == maintenance.StateMaintenance && c.fired.CompareAndSwap(false, true) {
-		c.gate.crash()
+		c.gate.crash(ctx)
 
 		return durable.ErrClaimLost
 	}
@@ -119,14 +119,14 @@ func (c crashingLive) RecordRestoreEvent(
 	}
 
 	if c.at == crashAfterCancelEvent && c.fired.CompareAndSwap(false, true) {
-		c.gate.crash()
+		c.gate.crash(ctx)
 
 		return durable.ErrClaimLost
 	}
 
 	if c.at == crashAfterUnverifiedEvent && strings.Contains(object, unverifiedEventObjectPart) &&
 		c.fired.CompareAndSwap(false, true) {
-		c.gate.crash()
+		c.gate.crash(ctx)
 
 		return durable.ErrClaimLost
 	}
@@ -139,7 +139,7 @@ func (c crashingLive) AppendRestoreAudit(
 	ctx context.Context, f durable.StepFence, id backup.RestoreID, entries []audit.Entry,
 ) ([]audit.Entry, error) {
 	if c.at == crashBeforeAuditAppend && c.fired.CompareAndSwap(false, true) {
-		c.gate.crash()
+		c.gate.crash(ctx)
 
 		return nil, durable.ErrClaimLost
 	}
@@ -168,7 +168,7 @@ func (c crashingLive) CleanRestoreAreas(
 			}
 		}
 
-		c.gate.crash()
+		c.gate.crash(ctx)
 
 		return nil, durable.ErrClaimLost
 	}
