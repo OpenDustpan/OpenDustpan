@@ -57,7 +57,7 @@ func (e *Env) PersonalToken(ctx context.Context, tb testing.TB, principalID, nam
 	}
 
 	status, answer := e.browserDo(ctx, tb, browser, browserRequest{
-		method: http.MethodPost, target: e.URL + "/api/server/caller/tokens", body: string(body),
+		method: http.MethodPost, target: e.URL + "/api/dustpan/v1/me/tokens", body: string(body),
 		header: sessionHeader(csrf),
 	})
 	if status != http.StatusCreated {
