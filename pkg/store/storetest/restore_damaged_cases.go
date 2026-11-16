@@ -400,7 +400,7 @@ func testWorkerForgedDamagedList(t *testing.T, newStore RestoreFactory) {
 
 	// A person with access to the target moves the blob of an ordinary backup
 	// from its blobs to a damaged list.
-	key := mustBlobKey(t, "backups/"+r.backupID.String()+"/manifest.json")
+	key := manifestKey(t, r.target, r.backupID)
 
 	var manifest backup.Manifest
 	if err := json.Unmarshal(readBlob(t, r.target, key.String()), &manifest); err != nil {

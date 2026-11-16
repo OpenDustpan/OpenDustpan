@@ -289,26 +289,8 @@ func (s *Store) RecordBackupAttempt(
 			return err
 		}
 
-		row, err := q.GetBackup(ctx, id.String())
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return backup.ErrNotFound
-			}
-
-			return fmt.Errorf("select backup: %w", err)
-		}
-
-		if row.State != string(backup.StateRunning) {
-			return backup.ErrNotRunning
-		}
-
-		// Defense in depth: the fence check above already refused a claim
-		// that another holder took, and only the write step of the live
-		// claim reaches this point. This check stays so that a second record
-		// of another attempt never overwrites the attempt that the row
-		// names.
-		if row.Attempt != "" && row.Attempt != attempt {
-			return durable.ErrClaimLost
+		if err := checkRecordRow(ctx, q, id, attempt); err != nil {
+			return err
 		}
 
 		n, err := q.RecordBackupAttempt(ctx, db.RecordBackupAttemptParams{Attempt: attempt, ID: id.String()})
@@ -333,6 +315,36 @@ func ownsBackup(ctx context.Context, q *db.Queries, f durable.StepFence, id back
 	}
 
 	if op.Kind != string(backup.OperationKind) || op.StartKey != backup.OperationKey(id) {
+		return durable.ErrClaimLost
+	}
+
+	return nil
+}
+
+// checkRecordRow reads the backup row id for a record of the write-step
+// attempt and compares attempt with the attempt that the row records. A
+// missing row reports backup.ErrNotFound, a row that is not running reports
+// backup.ErrNotRunning, and a row that names another attempt reports
+// durable.ErrClaimLost and keeps its attempt.
+func checkRecordRow(ctx context.Context, q *db.Queries, id backup.ID, attempt string) error {
+	row, err := q.GetBackup(ctx, id.String())
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return backup.ErrNotFound
+		}
+
+		return fmt.Errorf("select backup: %w", err)
+	}
+
+	if row.State != string(backup.StateRunning) {
+		return backup.ErrNotRunning
+	}
+
+	// Defense in depth: the fence check of the caller already refused a claim
+	// that another holder took, and only the write step of the live claim
+	// reaches this point. This check stays so that a second record of
+	// another attempt never overwrites the attempt that the row names.
+	if row.Attempt != "" && row.Attempt != attempt {
 		return durable.ErrClaimLost
 	}
 

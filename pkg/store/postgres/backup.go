@@ -1896,18 +1896,8 @@ func (s *Store) FinishBackup(
 			return err
 		}
 
-		row, err := q.GetBackup(ctx, id.String())
-		if err != nil {
-			return fmt.Errorf("select backup: %w", err)
-		}
-
-		// Defense in depth: the fence check above already refused a claim
-		// that another holder took over, and only a write step under a new
-		// live claim can change the row attempt. This check stays so that
-		// the row can never read succeeded on an attempt whose manifest the
-		// caller did not check.
-		if state == backup.StateSucceeded && row.Attempt != attempt {
-			return durable.ErrClaimLost
+		if err := checkFinishRow(ctx, q, id, state, attempt); err != nil {
+			return err
 		}
 
 		n, err := q.FinishBackup(ctx, db.FinishBackupParams{
@@ -1924,7 +1914,7 @@ func (s *Store) FinishBackup(
 			return finishFailure(ctx, q, id)
 		}
 
-		row, err = q.GetBackup(ctx, id.String())
+		row, err := q.GetBackup(ctx, id.String())
 		if err != nil {
 			return fmt.Errorf("select finished backup: %w", err)
 		}
@@ -1961,22 +1951,8 @@ func (s *Store) RecordBackupAttempt(
 			return err
 		}
 
-		row, err := q.GetBackup(ctx, id.String())
-		if err != nil {
-			return fmt.Errorf("select backup: %w", err)
-		}
-
-		if row.State != string(backup.StateRunning) {
-			return backup.ErrNotRunning
-		}
-
-		// Defense in depth: the fence check above already refused a claim
-		// that another holder took, and only the write step of the live
-		// claim reaches this point. This check stays so that a second record
-		// of another attempt never overwrites the attempt that the row
-		// names.
-		if row.Attempt != "" && row.Attempt != attempt {
-			return durable.ErrClaimLost
+		if err := checkRecordRow(ctx, q, id, attempt); err != nil {
+			return err
 		}
 
 		n, err := q.RecordBackupAttempt(ctx, db.RecordBackupAttemptParams{Attempt: attempt, ID: id.String()})
@@ -1990,6 +1966,63 @@ func (s *Store) RecordBackupAttempt(
 
 		return nil
 	})
+}
+
+// checkFinishRow reads the backup row id for a finish when state is
+// StateSucceeded, and compares attempt, the attempt of the manifest that the
+// caller checked, with the attempt that the row records. A missing row
+// reports backup.ErrNotFound, and a row that names another attempt reports
+// durable.ErrClaimLost and stays running.
+func checkFinishRow(ctx context.Context, q *db.Queries, id backup.ID, state backup.State, attempt string) error {
+	row, err := q.GetBackup(ctx, id.String())
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return backup.ErrNotFound
+		}
+
+		return fmt.Errorf("select backup: %w", err)
+	}
+
+	// Defense in depth: the fence check of the caller already refused a claim
+	// that another holder took over, and only a write step under a new live
+	// claim can change the row attempt. This check stays so that the row can
+	// never read succeeded on an attempt whose manifest the caller did not
+	// check.
+	if state == backup.StateSucceeded && row.Attempt != attempt {
+		return durable.ErrClaimLost
+	}
+
+	return nil
+}
+
+// checkRecordRow reads the backup row id for a record of the write-step
+// attempt and compares attempt with the attempt that the row records. A
+// missing row reports backup.ErrNotFound, a row that is not running reports
+// backup.ErrNotRunning, and a row that names another attempt reports
+// durable.ErrClaimLost and keeps its attempt.
+func checkRecordRow(ctx context.Context, q *db.Queries, id backup.ID, attempt string) error {
+	row, err := q.GetBackup(ctx, id.String())
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return backup.ErrNotFound
+		}
+
+		return fmt.Errorf("select backup: %w", err)
+	}
+
+	if row.State != string(backup.StateRunning) {
+		return backup.ErrNotRunning
+	}
+
+	// Defense in depth: the fence check of the caller already refused a claim
+	// that another holder took, and only the write step of the live claim
+	// reaches this point. This check stays so that a second record of
+	// another attempt never overwrites the attempt that the row names.
+	if row.Attempt != "" && row.Attempt != attempt {
+		return durable.ErrClaimLost
+	}
+
+	return nil
 }
 
 // ownsBackup returns durable.ErrClaimLost unless the operation of f is the

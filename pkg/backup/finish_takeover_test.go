@@ -11,6 +11,16 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
+// finishGate holds a succeeded finish before the row write, after the caller
+// wrote the live pointer. The hook runs inside FinishBackup of the fake
+// registry, so the gate needs no extra port method here.
+type finishGate struct {
+	entered chan struct{}
+	release chan struct{}
+	done    <-chan struct{}
+	gated   atomic.Bool
+}
+
 // gateRegistry wraps the fake registry of the durable setup. Its gates stop a
 // holder at the two points of the finish flow that a takeover hits: after the
 // write step recorded its attempt, and between the live pointer write and the
@@ -26,13 +36,10 @@ type gateRegistry struct {
 	attemptEntered chan struct{}
 	attemptRelease chan struct{}
 
-	// finishEntered closes when a succeeded finish reached the registry, after
-	// the live pointer is in the target. The holder then waits on
-	// finishRelease, as an instance that stopped between the pointer write
-	// and the commit.
-	finishEntered chan struct{}
-	finishRelease chan struct{}
-	finishGated   atomic.Bool
+	// finish stops a succeeded finish before the row write, after the live
+	// pointer is in the target, as an instance that stopped between the
+	// pointer write and the commit.
+	finish *finishGate
 }
 
 // RecordBackupAttempt stores the attempt and then holds the holder, so the
@@ -54,42 +61,22 @@ func (g *gateRegistry) RecordBackupAttempt(
 	return err
 }
 
-// FinishBackup holds a succeeded finish before the row write, after the
-// caller wrote the live pointer.
-func (g *gateRegistry) FinishBackup(
-	ctx context.Context,
-	fence durable.StepFence,
-	id backup.ID,
-	state backup.State,
-	errText string,
-	endedAt time.Time,
-	attempt string,
-) (backup.Record, error) {
-	if state == backup.StateSucceeded && g.finishGated.CompareAndSwap(true, false) {
-		close(g.finishEntered)
+// armFinishGate holds the first succeeded finish of the fake registry of g
+// before the row write, after the caller wrote the live pointer. The hook
+// runs inside FinishBackup of the fake, so the gate needs no extra port
+// method here.
+func armFinishGate(g *gateRegistry, gate *finishGate) {
+	gate.gated.Store(true)
+	g.beforeFinish = func(state backup.State, _ string) {
+		if state == backup.StateSucceeded && gate.gated.CompareAndSwap(true, false) {
+			close(gate.entered)
 
-		select {
-		case <-g.finishRelease:
-		case <-g.testDone:
+			select {
+			case <-gate.release:
+			case <-gate.done:
+			}
 		}
 	}
-
-	return g.finishBackup(ctx, fence, id, state, errText, endedAt, attempt)
-}
-
-// finishBackup forwards the finish to the fake registry. The method keeps
-// FinishBackup at the four calls that the tests need: gate checks first,
-// then the forward, with no other logic between them.
-func (g *gateRegistry) finishBackup(
-	ctx context.Context,
-	fence durable.StepFence,
-	id backup.ID,
-	state backup.State,
-	errText string,
-	endedAt time.Time,
-	attempt string,
-) (backup.Record, error) {
-	return g.fakeRegistry.FinishBackup(ctx, fence, id, state, errText, endedAt, attempt)
 }
 
 // gatedService builds one instance over the shared registry and target with a
@@ -146,9 +133,7 @@ func TestFinishAfterTakeover(t *testing.T) {
 		testDone:       t.Context().Done(),
 		attemptEntered: make(chan struct{}),
 		attemptRelease: make(chan struct{}),
-		finishEntered:  nil,
-		finishRelease:  nil,
-		finishGated:    atomic.Bool{},
+		finish:         nil,
 	}
 
 	// The instance A holds the claim and stops inside the record of the
@@ -238,13 +223,16 @@ func TestFinishAfterPointerWriteBeforeCommit(t *testing.T) {
 		testDone:       t.Context().Done(),
 		attemptEntered: nil,
 		attemptRelease: nil,
-		finishEntered:  make(chan struct{}),
-		finishRelease:  make(chan struct{}),
-		finishGated:    atomic.Bool{},
+		finish: &finishGate{
+			entered: make(chan struct{}),
+			release: make(chan struct{}),
+			done:    t.Context().Done(),
+			gated:   atomic.Bool{},
+		},
 	}
 
 	// Gate the first succeeded finish only: the one of the instance A.
-	reg.finishGated.Store(true)
+	armFinishGate(reg, reg.finish)
 
 	// The instance A reaches the finish commit with the pointer already in
 	// the target, and stops there.
@@ -256,7 +244,7 @@ func TestFinishAfterPointerWriteBeforeCommit(t *testing.T) {
 		t.Fatalf("start backup: %v", err)
 	}
 
-	<-reg.finishEntered
+	<-reg.finish.entered
 
 	if !setup.target.has(livePointerKeyOf(id)) {
 		t.Fatal("the live pointer is not in the target at the finish commit")
@@ -288,7 +276,7 @@ func TestFinishAfterPointerWriteBeforeCommit(t *testing.T) {
 	assertCompleteBackup(t, setup.target, id)
 
 	// A resumes: the commit refuses its dead claim and changes nothing.
-	close(reg.finishRelease)
+	close(reg.finish.release)
 	waitFor(t, "the refused finish of the first instance", func() bool { return setup.reg.lostFinishes.Load() == 1 })
 	workerA.stop()
 

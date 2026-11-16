@@ -2390,6 +2390,17 @@ func testBackupRecordAttempt(t *testing.T, newStore BackupFactory) {
 
 	s := newStore(t)
 	r := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
+	first, attempt := recordFreshBackupAttempt(t, s, r)
+	live := refuseOtherBackupAttempt(t, s, r.ID, attempt, first)
+	refuseFinishedBackupAttempt(t, s, r.ID, attempt, live)
+}
+
+// recordFreshBackupAttempt stores the write attempt on the fresh running row
+// r and proves that a repeat of the same claim reports durable.ErrStepDone.
+// It returns the first claim and the recorded attempt.
+func recordFreshBackupAttempt(t *testing.T, s BackupStore, r backup.Record) (durable.Claim, string) {
+	t.Helper()
+
 	mustStartBackup(t, s, r)
 	first := claimBackupOperation(t, s, r.ID, "first", 100*time.Millisecond)
 	attempt := backup.AttemptOf(first.Token)
@@ -2414,27 +2425,38 @@ func testBackupRecordAttempt(t *testing.T, newStore BackupFactory) {
 		t.Fatalf("record the attempt twice: err = %v, want durable.ErrStepDone", err)
 	}
 
+	return first, attempt
+}
+
+// refuseOtherBackupAttempt proves that a stale fence, a fence of another
+// operation and a live claim that names another attempt change nothing, and
+// that a missing row reports ErrNotFound. It returns the live claim.
+func refuseOtherBackupAttempt(
+	t *testing.T, s BackupStore, id backup.ID, attempt string, first durable.Claim,
+) durable.Claim {
+	t.Helper()
+
 	// A stale fence records no step and no attempt.
 	stale := durable.StepFence{Operation: first.Operation, Token: first.Token - 1, Step: backup.StepWrite}
 
-	if err := s.RecordBackupAttempt(t.Context(), stale, r.ID, "9"); !errors.Is(err, durable.ErrClaimLost) {
+	if err := s.RecordBackupAttempt(t.Context(), stale, id, "9"); !errors.Is(err, durable.ErrClaimLost) {
 		t.Fatalf("record with a stale fence: err = %v, want durable.ErrClaimLost", err)
 	}
 
-	if got := mustGetBackup(t, s, r.ID); got.Attempt != attempt {
+	if got := mustGetBackup(t, s, id); got.Attempt != attempt {
 		t.Fatalf("attempt after a stale record = %q, want %q", got.Attempt, attempt)
 	}
 
 	// A fence of the operation of another backup records nothing.
 	other := bareBackupClaim(t, s, backup.ID(ident.NewID("bkp-")))
 
-	if err := s.RecordBackupAttempt(t.Context(), other.Step(backup.StepWrite), r.ID, "9"); !errors.Is(
+	if err := s.RecordBackupAttempt(t.Context(), other.Step(backup.StepWrite), id, "9"); !errors.Is(
 		err, durable.ErrClaimLost,
 	) {
 		t.Fatalf("record with a fence of another backup: err = %v, want durable.ErrClaimLost", err)
 	}
 
-	if got := mustGetBackup(t, s, r.ID); got.Attempt != attempt {
+	if got := mustGetBackup(t, s, id); got.Attempt != attempt {
 		t.Fatalf("attempt after a foreign record = %q, want %q", got.Attempt, attempt)
 	}
 
@@ -2442,15 +2464,15 @@ func testBackupRecordAttempt(t *testing.T, newStore BackupFactory) {
 	// fence names an unrecorded step, so the call reaches the compare of the
 	// row: with the recorded write step the call would stop at ErrStepDone
 	// before the row check, as the runner never runs a recorded step again.
-	live := claimBackupWhenExpired(t, s, r.ID, "second")
+	live := claimBackupWhenExpired(t, s, id, "second")
 
-	if err := s.RecordBackupAttempt(t.Context(), live.Step("probe"), r.ID, "9"); !errors.Is(
+	if err := s.RecordBackupAttempt(t.Context(), live.Step("probe"), id, "9"); !errors.Is(
 		err, durable.ErrClaimLost,
 	) {
 		t.Fatalf("record another attempt over the stored one: err = %v, want durable.ErrClaimLost", err)
 	}
 
-	if got := mustGetBackup(t, s, r.ID); got.Attempt != attempt {
+	if got := mustGetBackup(t, s, id); got.Attempt != attempt {
 		t.Fatalf("attempt after a record of another attempt = %q, want %q", got.Attempt, attempt)
 	}
 
@@ -2464,13 +2486,23 @@ func testBackupRecordAttempt(t *testing.T, newStore BackupFactory) {
 		t.Fatalf("record the attempt of a missing backup: err = %v, want ErrNotFound", err)
 	}
 
+	return live
+}
+
+// refuseFinishedBackupAttempt finishes the running row id and proves that a
+// finished row reports ErrNotRunning and records no step.
+func refuseFinishedBackupAttempt(
+	t *testing.T, s BackupStore, id backup.ID, attempt string, live durable.Claim,
+) {
+	t.Helper()
+
 	// A row that is not running reports ErrNotRunning and records no step.
 	// The running row finishes first: one backup runs at a time.
 	_, liveErr := s.FinishBackup(
-		t.Context(), live.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", now(), attempt,
+		t.Context(), live.Step(backup.StepFinish), id, backup.StateSucceeded, "", now(), attempt,
 	)
 	if liveErr != nil {
-		t.Fatalf("finish backup %s: %v", r.ID, liveErr)
+		t.Fatalf("finish backup %s: %v", id, liveErr)
 	}
 
 	failed := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))

@@ -2257,46 +2257,26 @@ func (s *fakeBackupStore) FinishBackup(
 
 	var out backup.Record
 
-	finish := func() error {
-		r, ok := s.data.backups[id.String()]
-		if !ok {
-			return backup.ErrNotFound
+	finishAfter := func() error {
+		rec, err := s.finishRow(id, state, errText, endedAt, attempt)
+		if err != nil {
+			return err
 		}
 
-		if state != backup.StateSucceeded && state != backup.StateFailed {
-			return backup.ErrNotRunning
-		}
-
-		if r.State != backup.StateRunning && !s.allowRefinish {
-			return backup.ErrNotRunning
-		}
-
-		// The finish commits only on the attempt that the row records.
-		// Defense in depth: the fence check above already refused a claim
-		// that another holder took. This check stays so that the row never
-		// reads succeeded on an attempt that the caller did not check.
-		if state == backup.StateSucceeded && r.Attempt != attempt {
-			return durable.ErrClaimLost
-		}
-
-		r.State = state
-		r.Error = errText
-		r.EndedAt = endedAt
-		s.data.backups[id.String()] = r
-		out = r
+		out = rec
 
 		return nil
 	}
 
 	if s.ignoreFence {
-		if err := finish(); err != nil {
+		if err := finishAfter(); err != nil {
 			return backup.Record{}, err
 		}
 
 		return out, nil
 	}
 
-	hooks := durabletest.Hooks{Before: nil, After: finish}
+	hooks := durabletest.Hooks{Before: nil, After: finishAfter}
 
 	zero := namespace.Fence{Namespace: "", FailoverVersion: 0}
 
@@ -2307,6 +2287,11 @@ func (s *fakeBackupStore) FinishBackup(
 	return out, nil
 }
 
+// finishRow moves the running row id to state with the error text and the
+// end time, and returns the finished row. A missing row reports
+// backup.ErrNotFound, a row that is not running or another state reports
+// backup.ErrNotRunning. A succeeded finish commits only on the attempt that
+// the row records, and reports durable.ErrClaimLost otherwise.
 // RecordBackupAttempt implements backup.Registry: it records the step of f
 // and stores the attempt of the running row in one write, with the fence
 // rules of the port.
@@ -3225,6 +3210,43 @@ func (s *fakeBackupStore) SaveReleased(
 	ctx context.Context, w workspace.Workspace, fence namespace.Fence, _ audit.Entry,
 ) error {
 	return s.SaveWorkspace(ctx, w, fence)
+}
+
+// finishRow moves the running row id to state with the error text and the
+// end time, and returns the finished row. A missing row reports
+// backup.ErrNotFound, a row that is not running or another state reports
+// backup.ErrNotRunning. A succeeded finish commits only on the attempt that
+// the row records, and reports durable.ErrClaimLost otherwise.
+func (s *fakeBackupStore) finishRow(
+	id backup.ID, state backup.State, errText string, endedAt time.Time, attempt string,
+) (backup.Record, error) {
+	r, ok := s.data.backups[id.String()]
+	if !ok {
+		return backup.Record{}, backup.ErrNotFound
+	}
+
+	if state != backup.StateSucceeded && state != backup.StateFailed {
+		return backup.Record{}, backup.ErrNotRunning
+	}
+
+	if r.State != backup.StateRunning && !s.allowRefinish {
+		return backup.Record{}, backup.ErrNotRunning
+	}
+
+	// The finish commits only on the attempt that the row records.
+	// Defense in depth: the fence check of the caller already refused a claim
+	// that another holder took. This check stays so that the row never
+	// reads succeeded on an attempt that the caller did not check.
+	if state == backup.StateSucceeded && r.Attempt != attempt {
+		return backup.Record{}, durable.ErrClaimLost
+	}
+
+	r.State = state
+	r.Error = errText
+	r.EndedAt = endedAt
+	s.data.backups[id.String()] = r
+
+	return r, nil
 }
 
 // fenceOwnsRow reports whether the operation of f is the operation of backup

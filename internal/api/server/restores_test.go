@@ -366,11 +366,11 @@ func TestRestoreRoutesDeclareRestoreAction(t *testing.T) {
 	}
 }
 
-// gatedRestoreTarget wraps a blob store and blocks every Get except the first
+// gatedRestoreTarget wraps a blob store and blocks every Get from the third
 // until gate closes, so a test holds a restore before it reads the backup
-// target. The first Get is the read of the manifest at the start of the
-// restore, which refuses a dev backup at once. It honors ctx, so a test that
-// never opens the gate still ends.
+// target. The first two Gets are the reads of the live pointer and of the
+// manifest at the start of the restore, which refuse a dev backup at once.
+// It honors ctx, so a test that never opens the gate still ends.
 type gatedRestoreTarget struct {
 	inner blob.Store
 	gate  chan struct{}
@@ -378,7 +378,7 @@ type gatedRestoreTarget struct {
 }
 
 func (g *gatedRestoreTarget) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
-	if g.reads.Add(1) == 1 {
+	if g.reads.Add(1) <= 2 {
 		return g.inner.Get(ctx, key)
 	}
 

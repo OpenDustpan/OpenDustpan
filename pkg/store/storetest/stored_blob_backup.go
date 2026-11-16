@@ -639,12 +639,35 @@ func checkRestoreOverTheBound(
 	}
 }
 
+// manifestKey returns the key of the manifest of backup id in target. It
+// reads the live pointer that names the live attempt, so a helper never
+// builds the old unscoped key.
+func manifestKey(t *testing.T, target blob.Store, id backup.ID) blob.Key {
+	t.Helper()
+
+	live := mustBlobKey(t, "backups/"+id.String()+"/live.json")
+
+	var pointer struct {
+		Attempt string `json:"attempt"`
+	}
+
+	if err := json.Unmarshal(readBlob(t, target, live.String()), &pointer); err != nil {
+		t.Fatalf("decode the live pointer of backup %s: %v", id, err)
+	}
+
+	if pointer.Attempt == "" {
+		t.Fatalf("the live pointer of backup %s names no attempt", id)
+	}
+
+	return mustBlobKey(t, "backups/"+id.String()+"/"+pointer.Attempt+"/manifest.json")
+}
+
 // dropUnverified rewrites the manifest of the backup id in target without its
 // list of blobs that the backup does not hold.
 func dropUnverified(t *testing.T, target blob.Store, id backup.ID) {
 	t.Helper()
 
-	key := mustBlobKey(t, "backups/"+id.String()+"/manifest.json")
+	key := manifestKey(t, target, id)
 
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(readBlob(t, target, key.String()), &doc); err != nil {
@@ -679,7 +702,7 @@ func dropUnverified(t *testing.T, target blob.Store, id backup.ID) {
 func fillUnverified(t *testing.T, target blob.Store, id backup.ID, count int) {
 	t.Helper()
 
-	key := mustBlobKey(t, "backups/"+id.String()+"/manifest.json")
+	key := manifestKey(t, target, id)
 
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(readBlob(t, target, key.String()), &doc); err != nil {

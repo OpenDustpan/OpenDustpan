@@ -340,6 +340,10 @@ type fakeRegistry struct {
 	gets         int
 	// lostFinishes counts the FinishBackup calls that a lost claim refused.
 	lostFinishes atomic.Int64
+	// beforeFinish runs before the finish write of FinishBackup, with the
+	// state and the attempt of the call. A test sets it to hold the holder
+	// between two steps of the finish flow. It runs with no lock held.
+	beforeFinish func(state backup.State, attempt string)
 }
 
 func newFakeRegistry() *fakeRegistry {
@@ -365,6 +369,8 @@ func newFakeRegistry() *fakeRegistry {
 		failGetAfter: 0,
 		gets:         0,
 		lostFinishes: atomic.Int64{},
+
+		beforeFinish: nil,
 	}
 }
 
@@ -436,6 +442,10 @@ func (f *fakeRegistry) FinishBackup(
 	attempt string,
 ) (backup.Record, error) {
 	var finished backup.Record
+
+	if hook := f.beforeFinish; hook != nil {
+		hook(state, attempt)
+	}
 
 	err := f.domain.WriteStep(ctx, fence, f.fence, "", durabletest.Hooks{
 		Before: nil,
