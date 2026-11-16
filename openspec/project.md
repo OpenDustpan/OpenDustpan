@@ -124,6 +124,13 @@ and the check, with the log or the command output as evidence.
      the first time, with no manual step.
    - A production installation from the docs works without special knowledge.
      A dev server alone does not prove a feature.
+8. **A test that scans files.** A spec for a test that reads files (docs pages,
+   source files, route tables) carries, in its proposal, the output of a small
+   prototype run on `main`. The output lists each item that the scan extracts,
+   with its resolved value (for example each docs route with the path that the
+   test checks). The counts and the rules in the proposal come from that
+   output, not from a reading of the files. A proposal for such a test without
+   this output counts as unchecked, and the gate refuses it.
 
 ### Design
 
