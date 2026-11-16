@@ -26,7 +26,7 @@ The sealer SHALL seal with AES-256-GCM and a random 96-bit nonce, and the associ
 
 ### Requirement: A superseded version retires
 
-A version that the next version superseded SHALL retire after the longest maximum length that the session policy allows plus one reload interval, and the server SHALL write `session:key-retired`.
+A version that the next version superseded SHALL retire after the longest maximum length that the session policy allows plus one reload interval, and the server SHALL stop opening it at that time in memory, whatever the result of the write that records the retirement, and SHALL retry a failed write. The server SHALL write `session:key-retired` when the write succeeds.
 
 #### Scenario: Superseded version retires
 - **WHEN** a version was superseded for longer than the longest maximum length plus one reload interval
