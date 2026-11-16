@@ -2402,7 +2402,10 @@ func recordFreshBackupAttempt(t *testing.T, s BackupStore, r backup.Record) (dur
 	t.Helper()
 
 	mustStartBackup(t, s, r)
-	first := claimBackupOperation(t, s, r.ID, "first", 100*time.Millisecond)
+	// The lease outlasts the slowest store round trips of the case below: a
+	// claim that expires before the repeat of the record reports
+	// durable.ErrClaimLost instead of durable.ErrStepDone.
+	first := claimBackupOperation(t, s, r.ID, "first", 2*time.Second)
 	attempt := backup.AttemptOf(first.Token)
 
 	if err := s.RecordBackupAttempt(t.Context(), first.Step(backup.StepWrite), r.ID, attempt); err != nil {
