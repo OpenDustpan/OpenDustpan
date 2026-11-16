@@ -125,12 +125,13 @@ func runPlannerRefusedOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, stor
 }
 
 // plannerTofuWriteRefused proves a planner cannot write with OpenTofu. The
-// CLI reads the organization settings before it plans, and that read needs
-// namespace:read on the organization, which a grant on a collection does not
-// give. So the CLI stops with a not-found organization and never reaches the
-// write: the run must exit non-zero. The server-side refusal is then proved
-// on the write itself: locking the workspace needs unit:write and answers
-// 403 with access.denied for the planner token.
+// entitlement-set read answers a caller who holds a grant on a collection in
+// the namespace, which the planner holds, so the CLI reaches the write. The
+// write needs unit:write, which the role does not hold, so the run must exit
+// non-zero with the server refusal and never with a not-found organization.
+// The server-side refusal is then proved on the write itself: locking the
+// workspace needs unit:write and answers 403 with access.denied for the
+// planner token.
 func plannerTofuWriteRefused(ctx context.Context, t *testing.T, env *e2e.Env, tofu *scopeRunner, dev *scopePerson) {
 	t.Helper()
 
@@ -139,9 +140,23 @@ func plannerTofuWriteRefused(ctx context.Context, t *testing.T, env *e2e.Env, to
 		{"destroy", "-input=false", "-auto-approve"},
 	} {
 		res := tofu.run(ctx, "opentofu", "a", args...)
+		out := res.Stdout + "\n" + res.Stderr
+
 		if res.ExitCode == 0 {
 			t.Fatalf("tofu %s as planner succeeds, want a refusal:\n%s",
 				strings.Join(args, " "), res.Stdout)
+		}
+
+		// OpenTofu prints the refusal as text, without the status number.
+		if !strings.Contains(out, "access.denied") && !strings.Contains(out, "403") &&
+			!strings.Contains(out, "forbidden") {
+			t.Fatalf("tofu %s as planner exits %d without the server refusal, want access.denied or its 403 text:\n%s",
+				strings.Join(args, " "), res.ExitCode, out)
+		}
+
+		if strings.Contains(out, `organization "`+plannerNamespace+`"`) && strings.Contains(out, "not found") {
+			t.Fatalf("tofu %s as planner exits %d with the organization not found, want the server refusal:\n%s",
+				strings.Join(args, " "), res.ExitCode, out)
 		}
 	}
 
