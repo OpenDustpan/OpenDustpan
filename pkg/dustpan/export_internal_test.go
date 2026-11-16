@@ -323,6 +323,7 @@ func adapterHandlerSetter(a *adapters, name string) func(http.Handler) {
 		"audit":        func(h http.Handler) { a.audit = h },
 		"context":      func(h http.Handler) { a.context = h },
 		"runners":      func(h http.Handler) { a.runners = h },
+		"runnerpools":  func(h http.Handler) { a.runnerPools = h },
 		"profiles":     func(h http.Handler) { a.profiles = h },
 		"issuer":       func(h http.Handler) { a.issuer = h },
 		"sinks":        func(h http.Handler) { a.sinks = h },

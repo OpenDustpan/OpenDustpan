@@ -1301,8 +1301,10 @@ type neutralHandlers struct {
 	inventory http.Handler
 	audit     http.Handler
 	context   http.Handler
-	// runners is the runner protocol and its management API, or nil.
+	// runners is the runner protocol, or nil.
 	runners http.Handler
+	// runnerPools is the management API of runner pools, join tokens and runners, or nil.
+	runnerPools http.Handler
 	// profiles is nil when no profile store is set.
 	profiles http.Handler
 	// issuer is nil when no issuer store is set.
@@ -1351,7 +1353,7 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	runners, err := newRunnerHandler(cfg, svc, onFailure)
+	runners, runnerPools, err := newRunnerHandler(cfg, svc, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1386,6 +1388,7 @@ func newNeutralHandlers(
 		audit:        entries,
 		context:      contexts,
 		runners:      runners,
+		runnerPools:  runnerPools,
 		profiles:     profileAPI.profiles,
 		issuer:       profileAPI.issuer,
 		sinks:        profileAPI.sinkAPI,
@@ -3788,7 +3791,7 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 		mux.Handle("/runner/v1/", withMaintenance(a.runners, a.maintenance, shapeRunner, cfg.logger))
 		// The management routes are under v1Prefix. Only the reducing routes
 		// pass in maintenance mode.
-		mountV1(mux, a.runners, func(h http.Handler) http.Handler {
+		mountV1(mux, a.runnerPools, func(h http.Handler) http.Handler {
 			return withCORS(withRunnerMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
 		})
 	}

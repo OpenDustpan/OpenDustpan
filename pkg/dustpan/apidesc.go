@@ -33,6 +33,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{"audit", a.audit},
 		{"context", a.context},
 		{"runners", a.runners},
+		{"runnerpools", a.runnerPools},
 		{"profiles", a.profiles},
 		{"issuer", a.issuer},
 		{"sinks", a.sinks},

@@ -64,7 +64,8 @@ func (h *Handler) logRefused(ctx context.Context, err error, status int, code, s
 // that a caller without credentials can cause: no sign-in, an unknown
 // runner. All other refusals are Warn.
 func refusedLevel(err error) slog.Level {
-	if errors.Is(err, identity.ErrUnauthenticated) || errors.Is(err, runner.ErrNotFound) {
+	if errors.Is(err, identity.ErrUnauthenticated) || errors.Is(err, runner.ErrBadProof) ||
+		errors.Is(err, runner.ErrNotFound) {
 		return slog.LevelDebug
 	}
 

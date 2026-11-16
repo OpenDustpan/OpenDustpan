@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	"opendustpan.org/opendustpan/internal/api/runnerpools"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -104,15 +105,16 @@ func WithJobRecorder(r job.CheckedRecorder) Option {
 // or returns nil when the server has no runner stores or no public URL. The
 // join challenge names the public URL without a trailing slash, so a runner
 // cannot join without it.
-func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handler, error) {
+func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handler, http.Handler, error) {
 	neutralAudit, err := auditStoreOf(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	publicURL := strings.TrimRight(strings.TrimSpace(cfg.publicURL), "/")
 	if cfg.runners == nil || publicURL == "" {
-		return nil, nil //nolint:nilnil // No runner protocol: the server has no runner stores or no public URL.
+		// No runner protocol: the server has no runner stores or no public URL.
+		return nil, nil, nil
 	}
 
 	release, err := runner.ParseRelease(cfg.version)
@@ -129,7 +131,7 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 	if cfg.jobClaimer != nil {
 		guard, claimErr := claimGates(cfg, svc.stateWrite)
 		if claimErr != nil {
-			return nil, claimErr
+			return nil, nil, claimErr
 		}
 
 		claimer = cfg.jobClaimer(guard)
@@ -144,7 +146,7 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 			retention: cfg.jobRetention,
 		})
 		if buildErr != nil {
-			return nil, buildErr
+			return nil, nil, buildErr
 		}
 
 		if ok {
@@ -154,7 +156,7 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 
 	deps, err := planDepsOf(recorder, svc, cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	handler, err := runnerapi.NewHandler(runnerapi.Config{
@@ -167,10 +169,20 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 		Plans: deps.plans, Artifacts: deps.artifacts, OnHandoffRefusalSuppressed: nil,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("runner api: %w", err)
+		return nil, nil, fmt.Errorf("runner api: %w", err)
 	}
 
-	return handler, nil
+	pools, err := runnerpools.NewHandler(runnerpools.Config{
+		Namespaces: svc.namespaces, Pools: cfg.runners, Members: cfg.runners,
+		Authenticator: cfg.authenticator, Authorizer: cfg.authorizer,
+		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,
+		Sessions: cfg.sessionCookies, Logger: cfg.logger, ServerURL: publicURL, Now: cfg.now,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("runner pools api: %w", err)
+	}
+
+	return handler, pools, nil
 }
 
 // planDeps are what the plan paths of a launcher need. A part that the server

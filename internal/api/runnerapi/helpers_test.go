@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	"opendustpan.org/opendustpan/internal/api/runnerpools"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -350,7 +351,24 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 		t.Fatalf("handler: %v", err)
 	}
 
-	srv := httptest.NewServer(h)
+	// The management API of the pools lives in its own adapter. The server
+	// mounts both, so a test that makes a pool or a join token uses the same
+	// mux.
+	pools, err := runnerpools.NewHandler(runnerpools.Config{
+		Namespaces: cfg.Namespaces, Pools: cfg.Pools, Members: cfg.Members,
+		Authenticator: cfg.Authenticator, Authorizer: cfg.Authorizer,
+		Audit: cfg.Audit, OnAuditFailure: cfg.OnAuditFailure, DenialLimiter: cfg.DenialLimiter,
+		Sessions: cfg.Sessions, Logger: cfg.Logger, ServerURL: cfg.ServerURL, Now: cfg.Now,
+	})
+	if err != nil {
+		t.Fatalf("pools handler: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/api/dustpan/v1/", pools)
+	mux.Handle("/", h)
+
+	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
 	return h, srv, claimer

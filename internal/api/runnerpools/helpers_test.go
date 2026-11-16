@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -280,10 +279,7 @@ func serve(
 	mux := http.NewServeMux()
 	mux.Handle("/runner/v1/", proto)
 
-	for _, pattern := range mgmt.RegisteredPatterns() {
-		_, path, _ := strings.Cut(pattern, " ")
-		mux.Handle(path, mgmt)
-	}
+	mux.Handle("/api/dustpan/v1/", mgmt)
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -348,20 +344,20 @@ func protocolConfigFor(
 	}
 
 	return runnerapi.Config{
-		Namespaces: service,
-		Pools:      s.runners,
-		Members:    s.runners,
-		Handoffs:   s.runners,
-		Claimer:    phases,
-		Operations: s.operations,
+		Namespaces:    service,
+		Pools:         s.runners,
+		Members:       s.runners,
+		Handoffs:      s.runners,
+		Claimer:       phases,
+		Operations:    s.operations,
 		Authenticator: adminAuthenticator{},
-		Authorizer: opts.authz,
-		Audit: newTestAudit(),
-		Logger: loggerOf(opts),
-		Release: serverRelease(),
-		ServerURL: serverURL,
-		Now: opts.now,
-		PollInterval: 20 * time.Millisecond,
+		Authorizer:    opts.authz,
+		Audit:         newTestAudit(),
+		Logger:        loggerOf(opts),
+		Release:       serverRelease(),
+		ServerURL:     serverURL,
+		Now:           opts.now,
+		PollInterval:  20 * time.Millisecond,
 	}
 }
 

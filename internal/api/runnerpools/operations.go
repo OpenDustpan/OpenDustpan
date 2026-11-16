@@ -16,29 +16,29 @@ const tagRunners = "runners"
 // the server at start.
 func operationLabels() map[string]apidesc.Label {
 	return map[string]apidesc.Label{
-	apidesc.Pattern(http.MethodGet, poolsPath): apidesc.Name("listRunnerPools", tagRunners).
-		On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, poolListSchema()),
-	apidesc.Pattern(http.MethodPost, poolsPath): apidesc.Name("createRunnerPool", tagRunners).
-		On(apidesc.KindNamespace).WithStatus(http.StatusCreated).WithBodies(poolCreateSchema(), poolSchema()),
-	apidesc.Pattern(http.MethodGet, poolPath): apidesc.Name("getRunnerPool", tagRunners).
-		On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, poolSchema()),
-	apidesc.Pattern(http.MethodPatch, poolPath): apidesc.Name("updateRunnerPool", tagRunners).
-		On(apidesc.KindNamespace).WithBodies(poolPatchSchema(), poolSchema()),
-	apidesc.Pattern(http.MethodDelete, poolPath): apidesc.Name("deleteRunnerPool", tagRunners).
-		On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.NoBody),
-	apidesc.Pattern(http.MethodGet, joinTokensPath): apidesc.Name("listRunnerJoinTokens", tagRunners).
-		On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, joinTokenListSchema()),
-	apidesc.Pattern(http.MethodPost, joinTokensPath): apidesc.Name("createRunnerJoinToken", tagRunners).
-		On(apidesc.KindNamespace).WithStatus(http.StatusCreated).
-		WithBodies(joinTokenCreateSchema(), joinTokenCreatedSchema()),
-	apidesc.Pattern(http.MethodPost, joinTokenPath): apidesc.Name("revokeRunnerJoinToken", tagRunners).
-		On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.NoBody),
-	apidesc.Pattern(http.MethodGet, poolRunnersPath): apidesc.Name("listPoolRunners", tagRunners).
-		On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, runnerListSchema()),
-	apidesc.Pattern(http.MethodPost, drainPath): apidesc.Name("drainRunner", tagRunners).
-		On(apidesc.KindNamespace).WithBodies(drainSchema(), apidesc.NoBody),
-	apidesc.Pattern(http.MethodPost, retirePath): apidesc.Name("retireRunner", tagRunners).
-		On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.NoBody),
+		apidesc.Pattern(http.MethodGet, poolsPath): apidesc.Name("listRunnerPools", tagRunners).
+			On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, poolListSchema()),
+		apidesc.Pattern(http.MethodPost, poolsPath): apidesc.Name("createRunnerPool", tagRunners).
+			On(apidesc.KindNamespace).WithStatus(http.StatusCreated).WithBodies(poolCreateSchema(), poolSchema()),
+		apidesc.Pattern(http.MethodGet, poolPath): apidesc.Name("getRunnerPool", tagRunners).
+			On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, poolSchema()),
+		apidesc.Pattern(http.MethodPatch, poolPath): apidesc.Name("updateRunnerPool", tagRunners).
+			On(apidesc.KindNamespace).WithBodies(poolPatchSchema(), poolSchema()),
+		apidesc.Pattern(http.MethodDelete, poolPath): apidesc.Name("deleteRunnerPool", tagRunners).
+			On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.NoBody),
+		apidesc.Pattern(http.MethodGet, joinTokensPath): apidesc.Name("listRunnerJoinTokens", tagRunners).
+			On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, joinTokenListSchema()),
+		apidesc.Pattern(http.MethodPost, joinTokensPath): apidesc.Name("createRunnerJoinToken", tagRunners).
+			On(apidesc.KindNamespace).WithStatus(http.StatusCreated).
+			WithBodies(joinTokenCreateSchema(), joinTokenCreatedSchema()),
+		apidesc.Pattern(http.MethodPost, joinTokenPath): apidesc.Name("revokeRunnerJoinToken", tagRunners).
+			On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.NoBody),
+		apidesc.Pattern(http.MethodGet, poolRunnersPath): apidesc.Name("listPoolRunners", tagRunners).
+			On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, runnerListSchema()),
+		apidesc.Pattern(http.MethodPost, drainPath): apidesc.Name("drainRunner", tagRunners).
+			On(apidesc.KindNamespace).WithBodies(drainSchema(), apidesc.NoBody),
+		apidesc.Pattern(http.MethodPost, retirePath): apidesc.Name("retireRunner", tagRunners).
+			On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.NoBody),
 	}
 }
 

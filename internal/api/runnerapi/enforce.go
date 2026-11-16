@@ -19,9 +19,9 @@ import (
 // key sets the runner and the key of its proof. Every route sets the body,
 // which is read once because the proof signs its hash.
 type call struct {
-	runner    runner.Runner
-	signer    runner.Key
-	proof     runner.Proof
+	runner runner.Runner
+	signer runner.Key
+	proof  runner.Proof
 	// session is the job session of a route of ScopeSessionKey, and handoff
 	// the checked request of the route of ScopeHandoffToken.
 	session runner.Session
