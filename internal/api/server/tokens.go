@@ -593,6 +593,11 @@ func (h *Handler) ownTokenRoutes() []Route {
 			Actions:    own,
 			Resolve:    resolveCaller,
 			ActionsFor: nil, OpaqueDenial: false,
+			// The revoke passes no secretID on purpose: its answer is 204
+			// with no body, so the stored record holds no secret. Defense in
+			// depth: ownTokenEndedAnswer and the store do not rely on this
+			// call site. If the answer of a revoke ever holds a secret, add a
+			// secretID here in the same change, with a review.
 			Serve: h.keyedOwnToken(
 				h.serveTokenChange(identity.ActionTokenManageOwn, revokeToken(accesstoken.ScopeOwn)),
 				ownTokenEndedAnswer, nil,

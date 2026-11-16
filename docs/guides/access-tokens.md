@@ -52,12 +52,23 @@ Later reads show no secret.
 
 ## List and read tokens
 
-A person lists its own tokens with `GET /api/dustpan/v1/me/tokens`. The list
-ignores a `principal` value. An administrator with `server:read-tokens` lists
-every token with `GET /api/server/tokens`. A service principal's tokens are listed
-with `GET /api/server/principals/{principal}/tokens`.
+A person lists its own tokens with `GET /api/dustpan/v1/me/tokens`. An
+administrator with `server:read-tokens` lists every token with
+`GET /api/server/tokens`. A service principal's tokens are listed with
+`GET /api/server/principals/{principal}/tokens`.
 
-These query values work on the lists:
+The own list takes these query values. Any other name, for example `status`,
+`principal`, `limit` or `cursor`, gets `400`.
+
+| Query | Meaning |
+| --- | --- |
+| `pageSize` | From 1 to 200. The default is 50. |
+| `pageToken` | The `nextPageToken` of the page before. |
+
+The own list is ordered with the newest token first. The answer has `tokens`
+and `nextPageToken`. It has no `total`.
+
+These query values work on the administrator lists:
 
 | Query | Meaning |
 | --- | --- |
@@ -66,8 +77,8 @@ These query values work on the lists:
 | `limit` | From 1 to 1000. The default is 100. |
 | `cursor` | The `nextCursor` of the page before. |
 
-The lists are ordered with the newest token first. Each page shows `total`, which
-counts every match, and `nextCursor`.
+The administrator lists are ordered with the newest token first. Each page shows
+`total`, which counts every match, and `nextCursor`.
 
 A token has these fields:
 
