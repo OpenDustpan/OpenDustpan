@@ -1375,6 +1375,15 @@ func (m costModel) count(c schemaCounts) int {
 		m.perUnit*c.units
 }
 
+// withoutClaimReads returns the model as it was before the write step read
+// the claim before each put: the measured history predates those reads.
+func (m costModel) withoutClaimReads() costModel {
+	m.fixed -= attemptClaimTrips
+	m.perTable -= claimReadTrips
+
+	return m
+}
+
 // backupModel is the cost model of a backup. Its coefficients were fitted to
 // three commits that differ in tables, control tables and migrations, and a
 // fourth commit checks them (see TestCostModelFitsMeasuredHistory).
