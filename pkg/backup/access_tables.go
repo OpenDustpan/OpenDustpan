@@ -79,6 +79,14 @@ const (
 	// restore without server:restore-access never brings in a rule that
 	// gives a new way to act as a principal.
 	TableTrustRules = "trust_rules"
+	// TableTrustBundles holds the trust bundle of each namespace. A bundle
+	// names the CAs that the server trusts for a workload, so the table moves
+	// with the principals table: a restore without server:restore-access never
+	// brings in a new CA.
+	TableTrustBundles = "trust_bundles"
+	// TableTrustBundleVersions holds the stored versions of each trust
+	// bundle, with the PEM text. It moves with TableTrustBundles.
+	TableTrustBundleVersions = "trust_bundle_versions"
 )
 
 // AccessTables lists the tables that a restore replaces only when the
@@ -108,6 +116,8 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TableSessionGenerations,
 	TablePasskeys,
 	TableTrustRules,
+	TableTrustBundles,
+	TableTrustBundleVersions,
 }
 
 // ErrRestoreAccessMismatch reports that the backup names access data that

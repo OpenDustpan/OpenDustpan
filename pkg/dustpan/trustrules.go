@@ -9,6 +9,7 @@ import (
 	"opendustpan.org/opendustpan/internal/trustkeys"
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/egress"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
 
@@ -55,7 +56,9 @@ func trustRuleEgress(cfg *settings) egress.Rules {
 // issuer, the service asks it whether an issuer URL is one that this
 // installation signs for itself, so a rule never trusts the issuer of the
 // server.
-func newTrustRuleService(svc services, cfg *settings) (*trustrulesvc.Service, error) {
+func newTrustRuleService(
+	svc services, cfg *settings, policies *session.Policies,
+) (*trustrulesvc.Service, error) {
 	principals, ok := cfg.namespaceStore.(trustrulesvc.Principals)
 	if !ok {
 		return nil, fmt.Errorf("namespace store keeps no principals for the trust rules: %w", ErrMissingOption)
@@ -77,7 +80,20 @@ func newTrustRuleService(svc services, cfg *settings) (*trustrulesvc.Service, er
 
 	rules := trustRuleEgress(cfg)
 
+	// A nil store or a nil *session.Policies must not become a non-nil
+	// interface. A store that keeps no bundles refuses each bundle write.
+	var bundles trustrule.BundleStore
+	if b, isBundles := cfg.trustRules.store.(trustrule.BundleStore); isBundles {
+		bundles = b
+	}
+
+	var sessionPolicy trustrulesvc.SessionPolicy
+	if policies != nil {
+		sessionPolicy = policies
+	}
+
 	ruleSvc, err := trustrulesvc.NewService(trustrulesvc.Config{
+		Bundles: bundles, Sessions: sessionPolicy,
 		Store: cfg.trustRules.store, Namespaces: svc.namespaces, Principals: principals, Authorizer: cfg.authorizer,
 		Reach:            reach,
 		InstallationURLs: []string{cfg.publicURL}, OwnIssuer: own,
@@ -93,13 +109,15 @@ func newTrustRuleService(svc services, cfg *settings) (*trustrulesvc.Service, er
 
 // newTrustRuleHandler builds the trust rule API. The caller builds it only
 // when the server has a trust rule store.
-func newTrustRuleHandler(svc services, cfg *settings, onFailure func()) (http.Handler, error) {
+func newTrustRuleHandler(
+	svc services, cfg *settings, onFailure func(), policies *session.Policies,
+) (http.Handler, error) {
 	neutralAudit, err := auditStoreOf(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	ruleSvc, err := newTrustRuleService(svc, cfg)
+	ruleSvc, err := newTrustRuleService(svc, cfg, policies)
 	if err != nil {
 		return nil, err
 	}

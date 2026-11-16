@@ -1378,7 +1378,7 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	settingAPIs, err := newNamespaceSettingHandlers(svc, cfg, onFailure)
+	settingAPIs, err := newNamespaceSettingHandlers(svc, cfg, onFailure, policies)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1453,7 +1453,9 @@ type namespaceSettingHandlers struct {
 
 // newNamespaceSettingHandlers builds the source filter API and the trust rule
 // API of the stores that cfg sets.
-func newNamespaceSettingHandlers(svc services, cfg *settings, onFailure func()) (namespaceSettingHandlers, error) {
+func newNamespaceSettingHandlers(
+	svc services, cfg *settings, onFailure func(), policies *session.Policies,
+) (namespaceSettingHandlers, error) {
 	var (
 		out namespaceSettingHandlers
 		err error
@@ -1467,7 +1469,7 @@ func newNamespaceSettingHandlers(svc services, cfg *settings, onFailure func()) 
 	}
 
 	if cfg.trustRules.store != nil {
-		out.trustRules, err = newTrustRuleHandler(svc, cfg, onFailure)
+		out.trustRules, err = newTrustRuleHandler(svc, cfg, onFailure, policies)
 		if err != nil {
 			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil, selfService: nil}, err
 		}

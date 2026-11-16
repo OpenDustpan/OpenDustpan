@@ -113,6 +113,7 @@ func NewExchanger(cfg ExchangeConfig) (*Exchanger, error) {
 		Store: cfg.Rules, Namespaces: cfg.Namespaces, Principals: cfg.Principals, Authorizer: denyAll{},
 		Reach:            nil,
 		InstallationURLs: cfg.InstallationURLs, OwnIssuer: cfg.OwnIssuer, CheckURL: nil, Now: now,
+		Bundles: nil, Sessions: nil,
 	})
 	if err != nil {
 		return nil, err

@@ -56,7 +56,9 @@ secret reveal answers 403 with the error code `access.denied`. The server
 records each refusal.
 
 - `pulumi up` or `pulumi destroy` as planner is refused.
-- `tofu apply` or `tofu destroy` as planner is refused.
+- `tofu apply` or `tofu destroy` as planner is refused. The server answers
+  403 with the error code `access.denied`. The command exits non-zero and
+  prints the refusal text, `access.denied` or `forbidden`.
 - A read of the plain text of a secret value as planner is refused.
 
 ## Give the role

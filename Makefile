@@ -10,9 +10,9 @@
 #   node 20.19 or later with npx, for openspec-validate (the CLI comes from npm at a pinned version)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check release-build release-verify ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e docs-commands-check e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check change-archived-check
+.PHONY: cover regenerate-baseline release-record-check release-build release-verify ai-pr-spec-check pin-frozen files-check ignored-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-changed test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e docs-commands-check e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check change-archived-check
 
-check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint openspec-validate release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
+check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint openspec-validate release-record-check pin-frozen files-check ignored-check test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -41,9 +41,11 @@ nolint-check: ## Fail when the lines added since BASE (default origin/main) carr
 
 # Extra flags for golangci-lint, for example LINT_FLAGS=--timeout=15m in CI.
 LINT_FLAGS ?=
+# The packages of lint-journal-build; test-changed sets only the changed ones.
+LINT_PKGS ?= ./...
 
 lint-journal-build: ## Lint the journal recording build: some files are left out of it, so it needs its own run.
-	golangci-lint run $(LINT_FLAGS) --build-tags e2e,journalrecording ./...
+	golangci-lint run $(LINT_FLAGS) --build-tags e2e,journalrecording $(LINT_PKGS)
 
 # The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
 ANALYSIS_TAGS := e2e,upgrade,soak
@@ -57,8 +59,11 @@ GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.8.0
 NILAWAY_GOGC      ?= 25
 NILAWAY_GOMEMLIMIT ?= 12GiB
 
+# The packages that nilaway reports on; test-changed sets only the changed ones.
+NILAWAY_PKGS ?= ./...
+
 nilaway: ## Nil-panic analysis of our packages; dependencies are read but not reported.
-	GOGC=$(NILAWAY_GOGC) GOMEMLIMIT=$(NILAWAY_GOMEMLIMIT) GOFLAGS=-tags=$(ANALYSIS_TAGS) $(NILAWAY) -include-pkgs=opendustpan.org/opendustpan ./...
+	GOGC=$(NILAWAY_GOGC) GOMEMLIMIT=$(NILAWAY_GOMEMLIMIT) GOFLAGS=-tags=$(ANALYSIS_TAGS) $(NILAWAY) -include-pkgs=opendustpan.org/opendustpan $(NILAWAY_PKGS)
 
 vuln: ## Known vulnerabilities in the code paths we call (reads the database at vuln.go.dev).
 	$(GOVULNCHECK) -tags $(ANALYSIS_TAGS) ./...
@@ -275,6 +280,9 @@ RACE_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0'
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
 	go test $(RACE_TEST_FLAGS) -timeout $(TEST_TIMEOUT) ./...
 
+test-changed: ## Quick local check, not complete; CI runs all checks. go build ./..., the fast repository checks, golangci-lint and nilaway on the packages changed since the merge base with BASE (default origin/main), and go test without -race on them and on the packages whose tests import them. The store suites run only when pkg/store/ changes.
+	python3 -I scripts/test-changed.py --base '$(BASE)' --timeout $(GO_TEST_TIMEOUT)
+
 test-nocache: ## Go tests as in test, but every package runs again. CI does the same on main every 2 hours, with test-ci-other and test-ci-store, to find flaky tests.
 	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./...
 
@@ -404,6 +412,9 @@ FILES_BASE ?= origin/main
 
 files-check: ## Refuse a branch that adds a file over 1 MiB or a binary file outside testdata/ without an allowlist line (base FILES_BASE, default origin/main).
 	./scripts/check-files.sh $(FILES_BASE)
+
+ignored-check: ## Fail when a tracked file matches a rule of a .gitignore file.
+	./scripts/check-ignored-files.sh
 
 regenerate-baseline: ## Write the baseline migration of each dialect from the migrations of BASELINE_REF (default origin/main); needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Not part of check.
 	./scripts/regenerate-baseline.sh $(BASELINE_REF)

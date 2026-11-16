@@ -12,6 +12,11 @@ const (
 	// TrustRuleAlreadyExists means that the namespace already has a trust rule
 	// with the name.
 	TrustRuleAlreadyExists = "trust-rule.already-exists"
+	// TrustRuleBundleInvalid means that the trust bundle input is not valid.
+	TrustRuleBundleInvalid = "trust-rule.bundle-invalid"
+	// TrustRuleBundleNotFound means that the namespace has no trust bundle
+	// with the ID.
+	TrustRuleBundleNotFound = "trust-rule.bundle-not-found"
 	// TrustRuleInvalid means that the trust rule is not valid.
 	TrustRuleInvalid = "trust-rule.invalid"
 	// TrustRuleIssuerRefused means that the issuer of the trust rule is an
@@ -41,6 +46,8 @@ func trustRuleSpecs() []Spec {
 		},
 		{TrustRuleNoMatch, "no trust rule of the namespace accepts the token of an exchange"},
 		{TrustRuleAlreadyExists, "the namespace already has a trust rule with the name"},
+		{TrustRuleBundleInvalid, "the trust bundle input is not valid"},
+		{TrustRuleBundleNotFound, "the namespace has no trust bundle with the ID"},
 		{TrustRuleInvalid, "the trust rule is not valid"},
 		{TrustRuleIssuerRefused, "the issuer of the trust rule is an issuer of this installation"},
 		{TrustRuleLimit, "the namespace already has the largest number of trust rules"},
