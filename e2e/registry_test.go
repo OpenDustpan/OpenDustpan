@@ -480,7 +480,9 @@ func (sc *registryScenario) refuseHostileReleases(ctx context.Context, t *testin
 	tampered := buildProvider(t, sc.signer, "1.0.1")
 	up := tampered.asBuilt()
 	up.archive = bytes.Clone(tampered.archive)
-	up.archive[len(up.archive)-1] ^= 0xff
+	// Flip a byte of the first entry data, behind its local file header. The
+	// archive stays a zip file, so the publish reaches the hash check.
+	up.archive[30+len(fmt.Sprintf("terraform-provider-%s_v%s", providerName, "1.0.1"))] ^= 0xff
 
 	resp := sc.api.publish(ctx, t, tampered, up)
 	if resp.Status != http.StatusUnprocessableEntity || !strings.Contains(resp.Body, tampered.archiveName) {
