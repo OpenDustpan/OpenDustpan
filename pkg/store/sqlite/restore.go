@@ -483,7 +483,7 @@ const durableScheduleColumns = `name, interval_ms, next_run_at_ms, last_claimed_
 
 // backupColumns lists the columns of backups, for the copy of the control
 // tables.
-const backupColumns = `id, state, started_at_ms, ended_at_ms, target, error`
+const backupColumns = `id, state, started_at_ms, ended_at_ms, target, error, attempt`
 
 // restoreColumns lists the columns of restores, for the copy of the control
 // tables.

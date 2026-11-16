@@ -2234,7 +2234,13 @@ func (s *fakeBackupStore) StartBackupClaimed(
 //
 //nolint:revive // The signature of the backup.Registry port.
 func (s *fakeBackupStore) FinishBackup(
-	ctx context.Context, f durable.StepFence, id backup.ID, state backup.State, errText string, endedAt time.Time,
+	ctx context.Context,
+	f durable.StepFence,
+	id backup.ID,
+	state backup.State,
+	errText string,
+	endedAt time.Time,
+	attempt string,
 ) (backup.Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2265,6 +2271,14 @@ func (s *fakeBackupStore) FinishBackup(
 			return backup.ErrNotRunning
 		}
 
+		// The finish commits only on the attempt that the row records.
+		// Defense in depth: the fence check above already refused a claim
+		// that another holder took. This check stays so that the row never
+		// reads succeeded on an attempt that the caller did not check.
+		if state == backup.StateSucceeded && r.Attempt != attempt {
+			return durable.ErrClaimLost
+		}
+
 		r.State = state
 		r.Error = errText
 		r.EndedAt = endedAt
@@ -2291,6 +2305,61 @@ func (s *fakeBackupStore) FinishBackup(
 	}
 
 	return out, nil
+}
+
+// RecordBackupAttempt implements backup.Registry: it records the step of f
+// and stores the attempt of the running row in one write, with the fence
+// rules of the port.
+func (s *fakeBackupStore) RecordBackupAttempt(
+	ctx context.Context, f durable.StepFence, id backup.ID, attempt string,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errFakeClosed
+	}
+
+	if !s.fenceOwnsRow(ctx, f, id) {
+		return durable.ErrClaimLost
+	}
+
+	record := func() error {
+		r, ok := s.data.backups[id.String()]
+		if !ok {
+			return backup.ErrNotFound
+		}
+
+		if r.State != backup.StateRunning {
+			return backup.ErrNotRunning
+		}
+
+		// Defense in depth: the fence check above already refused a claim
+		// that another holder took. This check stays so that a second record
+		// never overwrites the attempt that the row names.
+		if r.Attempt != "" && r.Attempt != attempt {
+			return durable.ErrClaimLost
+		}
+
+		r.Attempt = attempt
+		s.data.backups[id.String()] = r
+
+		return nil
+	}
+
+	if s.ignoreFence {
+		return record()
+	}
+
+	hooks := durabletest.Hooks{Before: nil, After: record}
+
+	zero := namespace.Fence{Namespace: "", FailoverVersion: 0}
+
+	if err := s.mem.Harness().Domain.WriteStep(ctx, f, zero, "", hooks); err != nil {
+		return fmt.Errorf("record backup attempt step: %w", err)
+	}
+
+	return nil
 }
 
 // GetBackup implements backup.Registry.
@@ -2321,8 +2390,8 @@ func (s *fakeBackupStore) ListBackups(_ context.Context) ([]backup.Record, error
 	}
 
 	out := make([]backup.Record, 0, len(s.data.backups))
-	for _, r := range s.data.backups {
-		out = append(out, r)
+	for id := range s.data.backups {
+		out = append(out, s.data.backups[id])
 	}
 
 	oldestFirst := s.oldestFirst
@@ -2366,8 +2435,8 @@ func (s *fakeBackupStore) Running(_ context.Context) (blobguard.Work, bool, erro
 
 	var ids []string
 
-	for id, r := range s.data.backups {
-		if r.State == backup.StateRunning {
+	for id := range s.data.backups {
+		if s.data.backups[id].State == backup.StateRunning {
 			ids = append(ids, id)
 		}
 	}
@@ -2476,7 +2545,8 @@ func (s *fakeBackupStore) FailEndedBackups(ctx context.Context, endedAt time.Tim
 
 	changed := 0
 
-	for id, r := range s.data.backups {
+	for id := range s.data.backups {
+		r := s.data.backups[id]
 		op, ok := byKey[backup.OperationKey(r.ID)]
 		if !ok || r.State != backup.StateRunning {
 			continue
@@ -2836,6 +2906,7 @@ func fakeBackupRecord(id backup.ID, startedAt time.Time) backup.Record {
 		Target:    "dir:/var/backups",
 		Error:     "",
 		State:     backup.StateRunning,
+		Attempt:   "",
 	}
 }
 
@@ -2915,13 +2986,15 @@ func TestBackupDetectsRefinishAllowed(t *testing.T) {
 	claim := fakeOperationClaim(t, s, r, "test", time.Hour)
 
 	_, finishErr := s.FinishBackup(
-		t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(),
+		t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(), "",
 	)
 	if finishErr != nil {
 		t.Fatalf("finish backup: %v", finishErr)
 	}
 
-	redone, err := s.FinishBackup(t.Context(), claim.Step("probe"), r.ID, backup.StateFailed, "again", fakeTime())
+	redone, err := s.FinishBackup(
+		t.Context(), claim.Step("probe"), r.ID, backup.StateFailed, "again", fakeTime(), "",
+	)
 	if err != nil {
 		t.Fatalf("finish a finished backup without the running check: %v", err)
 	}
@@ -2957,7 +3030,7 @@ func TestBackupDetectsOldestFirst(t *testing.T) {
 		claim := fakeOperationClaim(t, s, r, "test", time.Hour)
 
 		_, finishErr := s.FinishBackup(
-			t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(),
+			t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(), "",
 		)
 		if finishErr != nil {
 			t.Fatalf("finish backup: %v", finishErr)
@@ -3079,7 +3152,9 @@ func staleFinish(t *testing.T, s *fakeBackupStore) error {
 		}
 	}
 
-	_, err := s.FinishBackup(t.Context(), stale.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime())
+	_, err := s.FinishBackup(
+		t.Context(), stale.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(), "",
+	)
 
 	return err
 }

@@ -5169,8 +5169,9 @@ type FinishBackupParams struct {
 	ID        string
 }
 
-// Moves one running backup to its end state. A finished backup matches no
-// row, so a retry reports no change.
+// Moves one running backup to its end state. The attempt stays the one that
+// the write step recorded. A finished backup matches no row, so a retry
+// reports no change.
 func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, finishBackup,
 		arg.State,
@@ -5564,7 +5565,7 @@ func (q *Queries) GetAuditSinkCursor(ctx context.Context, arg GetAuditSinkCursor
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 WHERE id = ?
 `
@@ -5579,6 +5580,7 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 		&i.EndedAtMs,
 		&i.Target,
 		&i.Error,
+		&i.Attempt,
 	)
 	return i, err
 }
@@ -13462,7 +13464,7 @@ func (q *Queries) ListAwaitingJobsOfUnit(ctx context.Context, arg ListAwaitingJo
 }
 
 const listBackups = `-- name: ListBackups :many
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 ORDER BY started_at_ms DESC, id ASC
 `
@@ -13483,6 +13485,7 @@ func (q *Queries) ListBackups(ctx context.Context) ([]Backup, error) {
 			&i.EndedAtMs,
 			&i.Target,
 			&i.Error,
+			&i.Attempt,
 		); err != nil {
 			return nil, err
 		}
@@ -20717,6 +20720,28 @@ func (q *Queries) ReadWorkspaces(ctx context.Context, namespace string) ([]ReadW
 		return nil, err
 	}
 	return items, nil
+}
+
+const recordBackupAttempt = `-- name: RecordBackupAttempt :execrows
+UPDATE backups
+SET attempt = ?
+WHERE id = ? AND state = 'running'
+`
+
+type RecordBackupAttemptParams struct {
+	Attempt string
+	ID      string
+}
+
+// Stores the attempt of the write step on the running row. The Go code
+// checks the fence and records the step in the same transaction, and the
+// finish compares the attempt before it moves the row.
+func (q *Queries) RecordBackupAttempt(ctx context.Context, arg RecordBackupAttemptParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordBackupAttempt, arg.Attempt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const recordMaintenanceRevocation = `-- name: RecordMaintenanceRevocation :exec

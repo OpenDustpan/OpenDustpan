@@ -33,16 +33,24 @@ var (
 )
 
 // memStore is an in-memory blob.Store. failPut injects a Put error per key.
-// attempts records every Put key, including failed ones.
+// attempts records every Put key, including failed ones. lists counts every
+// list call, so a test can prove that a reader lists no prefix.
 type memStore struct {
 	mu       sync.Mutex
 	objects  map[string][]byte
 	failPut  map[string]error
 	attempts []string
+	lists    atomic.Int64
 }
 
 func newMemStore() *memStore {
-	return &memStore{mu: sync.Mutex{}, objects: map[string][]byte{}, failPut: map[string]error{}, attempts: nil}
+	return &memStore{
+		mu:       sync.Mutex{},
+		objects:  map[string][]byte{},
+		failPut:  map[string]error{},
+		attempts: nil,
+		lists:    atomic.Int64{},
+	}
 }
 
 func (m *memStore) Put(ctx context.Context, key blob.Key, r io.Reader) error {
@@ -127,7 +135,16 @@ func (m *memStore) Ping(_ context.Context) error {
 // List implements blob.Store: it returns the objects under the key directory
 // prefix, ordered by key. A prefix that is a name start only, such as
 // "backups/bkp-a", does not match "backups/bkp-ab/...".
-func (m *memStore) list(_ context.Context, prefix string) ([]blob.Object, error) {
+// list implements the shared prefix read of ListPage. It counts the call, so
+// a test can prove that a reader lists no prefix. It refuses a canceled
+// context, as Put, Get and Delete do.
+func (m *memStore) list(ctx context.Context, prefix string) ([]blob.Object, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("list %s: %w", prefix, err)
+	}
+
+	m.lists.Add(1)
+
 	dir := strings.TrimSuffix(prefix, "/") + "/"
 
 	m.mu.Lock()
@@ -195,6 +212,11 @@ func (m *memStore) putAttempts(key string) int {
 	}
 
 	return attempts
+}
+
+// listCount returns the number of list calls that the store served.
+func (m *memStore) listCount() int64 {
+	return m.lists.Load()
 }
 
 func mustGet(t *testing.T, s blob.Store, key string) io.ReadCloser {
@@ -405,7 +427,13 @@ func (f *fakeRegistry) StartBackupClaimed(
 //
 //nolint:revive // The method implements backup.Registry, whose signature has six parameters.
 func (f *fakeRegistry) FinishBackup(
-	ctx context.Context, fence durable.StepFence, id backup.ID, state backup.State, errText string, endedAt time.Time,
+	ctx context.Context,
+	fence durable.StepFence,
+	id backup.ID,
+	state backup.State,
+	errText string,
+	endedAt time.Time,
+	attempt string,
 ) (backup.Record, error) {
 	var finished backup.Record
 
@@ -422,6 +450,15 @@ func (f *fakeRegistry) FinishBackup(
 
 			if row.State != backup.StateRunning || (state != backup.StateSucceeded && state != backup.StateFailed) {
 				return fmt.Errorf("finish backup %s: %w", id, backup.ErrNotRunning)
+			}
+
+			// The finish commits only on the attempt that the row records.
+			// Defense in depth: the fence check of WriteStep already refused
+			// a claim that another holder took. This check stays so that the
+			// row never reads succeeded on an attempt that the caller did
+			// not check.
+			if state == backup.StateSucceeded && row.Attempt != attempt {
+				return durable.ErrClaimLost
 			}
 
 			row.State = state
@@ -442,6 +479,41 @@ func (f *fakeRegistry) FinishBackup(
 	}
 
 	return finished, nil
+}
+
+// RecordBackupAttempt records the step of fence and stores the attempt of the
+// row in one write, with the fence rules of the port.
+func (f *fakeRegistry) RecordBackupAttempt(
+	ctx context.Context, fence durable.StepFence, id backup.ID, attempt string,
+) error {
+	return f.domain.WriteStep(ctx, fence, f.fence, "", durabletest.Hooks{
+		Before: nil,
+		After: func() error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+
+			row, ok := f.rows[id]
+			if !ok {
+				return fmt.Errorf("record the attempt of backup %s: %w", id, backup.ErrNotFound)
+			}
+
+			if row.State != backup.StateRunning {
+				return fmt.Errorf("record the attempt of backup %s: %w", id, backup.ErrNotRunning)
+			}
+
+			// Defense in depth: the fence check of WriteStep already refused
+			// a claim that another holder took. This check stays so that a
+			// second record never overwrites the attempt that the row names.
+			if row.Attempt != "" && row.Attempt != attempt {
+				return durable.ErrClaimLost
+			}
+
+			row.Attempt = attempt
+			f.rows[id] = row
+
+			return nil
+		},
+	})
 }
 
 func (f *fakeRegistry) GetBackup(_ context.Context, id backup.ID) (backup.Record, error) {
@@ -466,8 +538,8 @@ func (f *fakeRegistry) ListBackups(_ context.Context) ([]backup.Record, error) {
 	defer f.mu.Unlock()
 
 	out := make([]backup.Record, 0, len(f.rows))
-	for _, row := range f.rows {
-		out = append(out, row)
+	for id := range f.rows {
+		out = append(out, f.rows[id])
 	}
 
 	slices.SortFunc(out, func(a, b backup.Record) int { return b.StartedAt.Compare(a.StartedAt) })
@@ -525,8 +597,8 @@ func (f *fakeRegistry) insertLocked(r backup.Record) error {
 	}
 
 	if r.State == backup.StateRunning {
-		for _, row := range f.rows {
-			if row.State == backup.StateRunning {
+		for id := range f.rows {
+			if f.rows[id].State == backup.StateRunning {
 				return fmt.Errorf("create backup %s: %w", r.ID, backup.ErrAlreadyRunning)
 			}
 		}
@@ -663,8 +735,8 @@ func assertFailed(t *testing.T, registry *fakeRegistry, id backup.ID) {
 func assertNoManifest(t *testing.T, target *memStore, id backup.ID) {
 	t.Helper()
 
-	if target.has("backups/" + id.String() + "/manifest.json") {
-		t.Fatalf("target holds a manifest of failed backup %s, want none", id)
+	if target.has(manifestKeyOf(id)) || target.has(livePointerKeyOf(id)) {
+		t.Fatalf("target holds a manifest or a live pointer of failed backup %s, want none", id)
 	}
 
 	if err := backup.Check(t.Context(), target, id); err == nil {
@@ -741,6 +813,7 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 	return backup.Manifest{
 		CreatedAt:            now,
 		ID:                   id,
+		Attempt:              fixtureAttempt,
 		Dialect:              backup.DialectSQLite,
 		PrimaryInstallations: []string{"eu-west"},
 		WrapperIDs:           []string{"kek-1"},
@@ -783,7 +856,7 @@ func assertWholeManifest(t *testing.T, target *memStore, id backup.ID, want back
 		t.Fatalf("encode want manifest: %v", err)
 	}
 
-	if got := target.readObject(t, "backups/"+id.String()+"/manifest.json"); !bytes.Equal(got, wantData) {
+	if got := target.readObject(t, manifestKeyOf(id)); !bytes.Equal(got, wantData) {
 		t.Fatalf("manifest = %s, want %s", got, wantData)
 	}
 
@@ -797,7 +870,7 @@ func assertManifestKeys(t *testing.T, target *memStore, id backup.ID) {
 
 	var raw map[string]any
 
-	if err := json.Unmarshal(target.readObject(t, "backups/"+id.String()+"/manifest.json"), &raw); err != nil {
+	if err := json.Unmarshal(target.readObject(t, manifestKeyOf(id)), &raw); err != nil {
 		t.Fatalf("parse manifest as keys: %v", err)
 	}
 
@@ -809,6 +882,7 @@ func assertManifestKeys(t *testing.T, target *memStore, id backup.ID) {
 	slices.Sort(keys)
 
 	want := []string{
+		"attempt",
 		"blobs",
 		"createdAt",
 		"dialect",
@@ -1051,7 +1125,7 @@ func TestRunWritesManifestLast(t *testing.T) {
 		0,
 	)
 	seedSource(t, fix.source, map[string][]byte{"namespaces/ns-aaaaaaaaaaaaaaaaaaaa/tofu/ws1/sv1/a1": content})
-	fix.target.failPut["backups/bkp-partial/manifest.json"] = errTargetUnavailable
+	fix.target.failPut[manifestKeyOf("bkp-partial")] = errTargetUnavailable
 
 	if _, err := fix.service.Run(t.Context(), "bkp-partial"); err == nil {
 		t.Fatal("run with a failing manifest write succeeded, want an error")
@@ -1232,7 +1306,7 @@ func TestRunFinishesTableFilesTheExporterLeavesOpen(t *testing.T) {
 				t.Fatalf("target Puts running after Run returned = %d, want 0", n)
 			}
 
-			key := "backups/bkp-open/" + backup.PortablePath(backup.Tables[0])
+			key := attemptDir("bkp-open") + backup.PortablePath(backup.Tables[0])
 			if target.has(key) {
 				t.Fatalf("target holds %s, want no object for an aborted file", key)
 			}
@@ -1296,7 +1370,7 @@ func TestCheck(t *testing.T) {
 			name: "missing manifest",
 			breakIt: func(t *testing.T, target *memStore) {
 				t.Helper()
-				mustDelete(t, target, "backups/bkp-check/manifest.json")
+				mustDelete(t, target, manifestKeyOf("bkp-check"))
 			},
 			wantKey: "manifest.json",
 		},

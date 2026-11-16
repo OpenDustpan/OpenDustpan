@@ -1014,7 +1014,7 @@ VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetBackup :one
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 WHERE id = ?;
 
@@ -1061,13 +1061,22 @@ WHERE NOT EXISTS (
 ON CONFLICT (holder) DO UPDATE SET expires_at_ms = excluded.expires_at_ms;
 
 -- name: ListBackups :many
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 ORDER BY started_at_ms DESC, id ASC;
 
+-- name: RecordBackupAttempt :execrows
+-- Stores the attempt of the write step on the running row. The Go code
+-- checks the fence and records the step in the same transaction, and the
+-- finish compares the attempt before it moves the row.
+UPDATE backups
+SET attempt = ?
+WHERE id = ? AND state = 'running';
+
 -- name: FinishBackup :execrows
--- Moves one running backup to its end state. A finished backup matches no
--- row, so a retry reports no change.
+-- Moves one running backup to its end state. The attempt stays the one that
+-- the write step recorded. A finished backup matches no row, so a retry
+-- reports no change.
 UPDATE backups
 SET state = ?, error = ?, ended_at_ms = ?
 WHERE id = ? AND state = 'running';

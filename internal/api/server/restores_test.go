@@ -1252,7 +1252,7 @@ func TestStartRestoreRefusesADevBackupWith409(t *testing.T) {
 
 	// The manifest is not authenticated: a person who can write to the
 	// target changes the kind.
-	key, err := blob.ParseKey("backups/" + backupID.String() + "/manifest.json")
+	key, err := blob.ParseKey("backups/" + backupID.String() + "/1/manifest.json")
 	if err != nil {
 		t.Fatalf("manifest key: %v", err)
 	}

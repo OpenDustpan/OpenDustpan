@@ -181,8 +181,8 @@ func TestManifestDigestCoversTheBlobList(t *testing.T) {
 // manifestWith returns a manifest that holds blobs and nothing else.
 func manifestWith(blobs ...ManifestBlob) Manifest {
 	return Manifest{
-		CreatedAt: time.Time{}, ID: "bkp-1", Dialect: "", PrimaryInstallations: nil, WrapperIDs: nil, Blobs: blobs,
-		Version: "", SQLSHA256: "", Format: 0, SchemaVersion: 0, SQLSize: 0, RowCounts: nil, SQLFormat: "",
-		SQLFiles: nil, InstallationKind: "", Unverified: nil, Damaged: nil,
+		CreatedAt: time.Time{}, ID: "bkp-1", Attempt: "", Dialect: "", PrimaryInstallations: nil, WrapperIDs: nil,
+		Blobs: blobs, Version: "", SQLSHA256: "", Format: 0, SchemaVersion: 0, SQLSize: 0, RowCounts: nil,
+		SQLFormat: "", SQLFiles: nil, InstallationKind: "", Unverified: nil, Damaged: nil,
 	}
 }

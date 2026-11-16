@@ -148,6 +148,7 @@ type BackupRow struct {
 	State       string
 	Target      string
 	Error       string
+	Attempt     string
 	StartedAtMs int64
 	EndedAtMs   int64
 }
@@ -159,6 +160,7 @@ func ToBackupRow(r backup.Record) BackupRow {
 		State:       string(r.State),
 		Target:      r.Target,
 		Error:       r.Error,
+		Attempt:     r.Attempt,
 		StartedAtMs: Millis(r.StartedAt),
 		EndedAtMs:   OptionalMillis(r.EndedAt),
 	}
@@ -175,6 +177,7 @@ func FromBackupRow(row BackupRow) (backup.Record, error) {
 			Target:    row.Target,
 			Error:     row.Error,
 			State:     state,
+			Attempt:   row.Attempt,
 		}, nil
 	default:
 		return backup.Record{}, fmt.Errorf("%w: unknown backup state %q", ErrCorruptRow, row.State)

@@ -17,7 +17,7 @@ import (
 func setManifestUnverified(t *testing.T, setup *restoreServiceSetup, keys []string) {
 	t.Helper()
 
-	key := "backups/" + setup.id.String() + "/manifest.json"
+	key := manifestKeyOf(setup.id)
 
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(setup.target.readObject(t, key), &doc); err != nil {

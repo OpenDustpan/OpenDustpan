@@ -374,14 +374,28 @@ func pollBackupSucceeded(t *testing.T, handler testHandler, id string) getBackup
 	defer timer.Stop()
 
 	for {
-		doc := readBackup(t, handler, id)
-		if doc.State == string(backup.StateSucceeded) {
-			return doc
+		// The row reads succeeded one commit before the finish step writes the
+		// live pointer. In that window the read answers 409 and the poll goes on.
+		status, body := serveBackup(t, handler, http.MethodGet, "/api/dustpan/v1/backups/"+id)
+		if status != http.StatusOK && status != http.StatusConflict {
+			t.Fatalf("GET backup %s answers %d, want 200 or 409 (%s)", id, status, body)
+		}
+
+		var doc getBackupDoc
+
+		if status == http.StatusOK {
+			if err := json.Unmarshal([]byte(body), &doc); err != nil {
+				t.Fatalf("decode backup %s %q: %v", id, body, err)
+			}
+
+			if doc.State == string(backup.StateSucceeded) {
+				return doc
+			}
 		}
 
 		select {
 		case <-ctx.Done():
-			t.Fatalf("backup %s stays %q, want succeeded", id, doc.State)
+			t.Fatalf("backup %s stays %q (status %d), want succeeded", id, doc.State, status)
 		case <-timer.C:
 			timer.Reset(pollInterval)
 		}

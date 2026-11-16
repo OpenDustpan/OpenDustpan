@@ -139,6 +139,7 @@ func recordRunningBackup(t *testing.T, st *sqlite.Store) {
 		Target:    "dir:/var/backups",
 		Error:     "",
 		State:     backup.StateRunning,
+		Attempt:   "",
 	}
 
 	if err := st.CreateBackup(t.Context(), running); err != nil {

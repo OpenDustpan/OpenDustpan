@@ -208,11 +208,11 @@ func (s *checkSetup) rewriteCheckManifest(t *testing.T) {
 		t.Fatalf("encode manifest: %v", err)
 	}
 
-	if err := s.target.Delete(t.Context(), mustKey(t, "backups/"+s.id.String()+"/manifest.json")); err != nil {
+	if err := s.target.Delete(t.Context(), mustKey(t, manifestKeyOf(s.id))); err != nil {
 		t.Fatalf("delete manifest: %v", err)
 	}
 
-	s.target.storeObject(t, "backups/"+s.id.String()+"/manifest.json", data)
+	s.target.storeObject(t, manifestKeyOf(s.id), data)
 	s.live.staged = stagedSummary(t, s.manifest)
 }
 
@@ -354,7 +354,7 @@ func TestCheckRestoreMissingManifest(t *testing.T) {
 	t.Parallel()
 
 	s := newCheckSetup(t)
-	mustDelete(t, s.target, "backups/"+s.id.String()+"/manifest.json")
+	mustDelete(t, s.target, manifestKeyOf(s.id))
 
 	_, _, err := s.check(t, testWrapper(), "")
 	if !errors.Is(err, backup.ErrCorrupt) {

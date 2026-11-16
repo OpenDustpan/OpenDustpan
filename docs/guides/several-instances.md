@@ -122,6 +122,12 @@ A restore is a durable operation too. The `api` process that took the request st
 
 A backup is a durable operation. The `api` process that took the request stores it. A `worker` process runs it and renews its claim while it works. A start, a restart or a rolling update of an instance never fails a backup that another instance runs. When the instance that runs a backup stops with SIGTERM, it gives the claim back, and another `worker` process continues the backup at once. When the instance dies with no clean stop, another `worker` process continues the backup after the lease ends. The lease is 30 seconds by default. Run at least one `worker` process, or the backup waits. Any instance answers the state of a backup, because the state is in the database.
 
+Each run of a backup writes to its own directory in the target: `backups/<id>/<attempt>/`. The attempt is the number of the claim of the run. A run that lost its claim can write or delete only in its own directory. It never changes the directory of the run that finished the backup. Each put and each delete reads the claim again right before the call.
+
+The finish step checks the size and the checksum of each file of its directory. A file that is missing or short fails the backup. After the finish step commits the row, it writes `backups/<id>/live.json`. This file names the attempt of the finished backup. A read of the backup, a check and a restore use only the directory that `live.json` names. A backup with no `live.json` is not complete. In the short time between the commit and the write of `live.json`, a read of the backup answers 409 with `backup.corrupt`. Read it again after a second.
+
+Then the same instance deletes the other attempt directories of the same backup. It checks its claim before each delete. It never deletes the directory that `live.json` names. A takeover leaves one old directory until this cleanup runs. A backup that never finishes leaves its directories in the target. The server has no retention for backups. Delete these directories by hand when you do not need them. Find them under `backups/<id>/`.
+
 ## Roll out a new release
 
 You can replace the instances of one installation one at a time. A release can set a minimum binary version in the schema. An instance with a binary below the minimum must stop writing, because the schema no longer holds what that binary needs.

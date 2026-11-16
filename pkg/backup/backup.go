@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -280,6 +281,18 @@ type Record struct {
 	Target    string
 	Error     string
 	State     State
+	// Attempt is the claim fencing token of the run that wrote the target,
+	// as text. It names the prefix backups/<id>/<attempt>/ that holds the
+	// files. The write step records it in the same fenced transaction that
+	// records its step, and the finish commit confirms it, so the row decides
+	// which attempt counts. It is empty while the backup runs and no write
+	// step recorded.
+	Attempt string
+}
+
+// AttemptOf returns the attempt text of a claim fencing token.
+func AttemptOf(token int64) string {
+	return strconv.FormatInt(token, 10)
 }
 
 // BlobRef names one blob that the SQL data references: the content key of a
@@ -422,15 +435,30 @@ type Registry interface {
 	// FinishBackup moves the running backup id to state, which is
 	// StateSucceeded or StateFailed, with the error text and the end time,
 	// and records the step f.Step, in one transaction that checks the claim
-	// of f first. It returns the finished row. It returns durable.ErrClaimLost
-	// when f is not the live claim, durable.ErrCanceled after a cancel, and
-	// durable.ErrStepDone when the operation already recorded the step; then
-	// it changes nothing. It returns ErrNotFound if id does not exist, and
-	// ErrNotRunning if the row is not running or state is another state; then
-	// it records no step. Callers must handle the result.
+	// of f first. When state is StateSucceeded, attempt is the attempt of
+	// the manifest that the caller checked, and the transaction refuses the
+	// finish when the row records another attempt: the row can end only on
+	// the attempt that it names, and it keeps the attempt that it holds. It
+	// returns the finished row. It returns durable.ErrClaimLost when f is
+	// not the live claim or when the row records another attempt,
+	// durable.ErrCanceled after a cancel, and durable.ErrStepDone when the
+	// operation already recorded the step; then it changes nothing. It
+	// returns ErrNotFound if id does not exist, and ErrNotRunning if the row
+	// is not running or state is another state; then it records no step.
+	// Callers must handle the result.
 	FinishBackup(
-		ctx context.Context, f durable.StepFence, id ID, state State, errText string, endedAt time.Time,
+		ctx context.Context, f durable.StepFence, id ID, state State, errText string, endedAt time.Time, attempt string,
 	) (Record, error)
+	// RecordBackupAttempt stores attempt, the claim fencing token of the
+	// holder that runs the write step, as the attempt of the running backup
+	// id, and records the step f.Step, in one transaction that checks the
+	// claim of f first: the database decides which attempt counts. It
+	// returns durable.ErrClaimLost when f is not the live claim,
+	// durable.ErrCanceled after a cancel, and durable.ErrStepDone when the
+	// operation already recorded the step; then the attempt is already
+	// stored and nothing changes. It returns ErrNotFound if id does not
+	// exist, and ErrNotRunning if the row is not running.
+	RecordBackupAttempt(ctx context.Context, f durable.StepFence, id ID, attempt string) error
 	// GetBackup returns the backup row id, or ErrNotFound.
 	GetBackup(ctx context.Context, id ID) (Record, error)
 	// ListBackups returns every backup row, newest first.

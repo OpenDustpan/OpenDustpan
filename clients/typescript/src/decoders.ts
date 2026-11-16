@@ -490,6 +490,7 @@ export const decodeBackupCorruptErrorArgs: Decoder<BackupCorruptErrorArgs> = obj
 
 /** The validator of BackupManifest. */
 export const decodeBackupManifest: Decoder<BackupManifest> = object<BackupManifest>("BackupManifest", {
+  attempt: string,
   blobs: array(ref(() => decodeManifestBlob)),
   createdAt: dateTime,
   damaged: optional(array(ref(() => decodeDamagedBlob))),

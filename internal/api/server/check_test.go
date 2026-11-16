@@ -80,7 +80,7 @@ func TestBackupCheckCorrupt(t *testing.T) {
 	id := startBackup(t, held.fixture.handler)
 	pollBackupSucceeded(t, held.fixture.handler, id)
 
-	key, err := blob.ParseKey("backups/" + id + "/manifest.json")
+	key, err := blob.ParseKey("backups/" + id + "/1/manifest.json")
 	if err != nil {
 		t.Fatalf("parse manifest key: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestBackupCheckOtherFormat(t *testing.T) {
 	id := startBackup(t, held.fixture.handler)
 	pollBackupSucceeded(t, held.fixture.handler, id)
 
-	key, err := blob.ParseKey("backups/" + id + "/manifest.json")
+	key, err := blob.ParseKey("backups/" + id + "/1/manifest.json")
 	if err != nil {
 		t.Fatalf("parse manifest key: %v", err)
 	}

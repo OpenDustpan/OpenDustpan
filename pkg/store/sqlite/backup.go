@@ -214,11 +214,20 @@ func startBackupTx(
 // FinishBackup implements backup.Registry: it checks the fence f, records
 // its step and moves the running backup id to state with the error text and
 // the end time, in one transaction. A fence that is not the live claim
-// reports the durable sentinel and changes nothing.
+// reports the durable sentinel and changes nothing. When state is
+// StateSucceeded, the transaction compares attempt, the attempt of the
+// manifest that the caller checked, with the attempt that the row records,
+// and refuses the finish when they differ.
 //
 //nolint:revive // argument-limit: the fence, the row and the three fields of its end are one write; a struct would only move the fields.
 func (s *Store) FinishBackup(
-	ctx context.Context, f durable.StepFence, id backup.ID, state backup.State, errText string, endedAt time.Time,
+	ctx context.Context,
+	f durable.StepFence,
+	id backup.ID,
+	state backup.State,
+	errText string,
+	endedAt time.Time,
+	attempt string,
 ) (backup.Record, error) {
 	if state != backup.StateSucceeded && state != backup.StateFailed {
 		return backup.Record{}, backup.ErrNotRunning
@@ -244,7 +253,7 @@ func (s *Store) FinishBackup(
 			return err
 		}
 
-		rec, err := finishRow(ctx, q, id, state, errText, endedAt)
+		rec, err := finishRow(ctx, q, id, state, errText, endedAt, attempt)
 		out = rec
 
 		return err
@@ -254,6 +263,65 @@ func (s *Store) FinishBackup(
 	}
 
 	return out, nil
+}
+
+// RecordBackupAttempt implements backup.Registry: it checks the fence f,
+// records its step and stores attempt on the running backup id, in one
+// transaction. A fence that is not the live claim records nothing.
+func (s *Store) RecordBackupAttempt(
+	ctx context.Context, f durable.StepFence, id backup.ID, attempt string,
+) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inStepTx(ctx, func(ctx context.Context, _ *sql.Tx, q *db.Queries) error {
+		// The fence comes first: a stale claim changes nothing and learns
+		// nothing about the row.
+		if err := recordStep(ctx, q, f, nil); err != nil {
+			return err
+		}
+
+		// Defense in depth: the fence checked above is live, but it must
+		// belong to the operation of this backup. The service passes the
+		// right fence; this check stays so that no caller records a step of
+		// one backup under the claim of another operation.
+		if err := ownsBackup(ctx, q, f, id); err != nil {
+			return err
+		}
+
+		row, err := q.GetBackup(ctx, id.String())
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return backup.ErrNotFound
+			}
+
+			return fmt.Errorf("select backup: %w", err)
+		}
+
+		if row.State != string(backup.StateRunning) {
+			return backup.ErrNotRunning
+		}
+
+		// Defense in depth: the fence check above already refused a claim
+		// that another holder took, and only the write step of the live
+		// claim reaches this point. This check stays so that a second record
+		// of another attempt never overwrites the attempt that the row
+		// names.
+		if row.Attempt != "" && row.Attempt != attempt {
+			return durable.ErrClaimLost
+		}
+
+		n, err := q.RecordBackupAttempt(ctx, db.RecordBackupAttemptParams{Attempt: attempt, ID: id.String()})
+		if err != nil {
+			return fmt.Errorf("set the attempt of backup %s: %w", id, err)
+		}
+
+		if n == 0 {
+			return backup.ErrNotRunning
+		}
+
+		return nil
+	})
 }
 
 // ownsBackup returns durable.ErrClaimLost unless the operation of f is the
@@ -272,19 +340,38 @@ func ownsBackup(ctx context.Context, q *db.Queries, f durable.StepFence, id back
 }
 
 // finishRow moves the running row id to state in the transaction of q, and
-// returns the finished row. It reports ErrNotFound for a missing row and
-// ErrNotRunning for a row that is not running.
+// returns the finished row with the attempt that it already holds. It reports
+// ErrNotFound for a missing row and ErrNotRunning for a row that is not
+// running. When state is StateSucceeded, the row must record attempt, the
+// attempt of the manifest that the caller checked; a row that names another
+// attempt stays running and reports durable.ErrClaimLost.
 //
 //nolint:revive // argument-limit: the transaction, the row and the three fields of its end are one write; a struct would only move the fields.
 func finishRow(
-	ctx context.Context, q *db.Queries, id backup.ID, state backup.State, errText string, endedAt time.Time,
+	ctx context.Context,
+	q *db.Queries,
+	id backup.ID,
+	state backup.State,
+	errText string,
+	endedAt time.Time,
+	attempt string,
 ) (backup.Record, error) {
-	if _, err := q.GetBackup(ctx, id.String()); err != nil {
+	row, err := q.GetBackup(ctx, id.String())
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return backup.Record{}, backup.ErrNotFound
 		}
 
 		return backup.Record{}, fmt.Errorf("select backup: %w", err)
+	}
+
+	// Defense in depth: the fence check of the caller already refused a claim
+	// that another holder took over, and only a write step under a new live
+	// claim can change the row attempt. This check stays so that the row can
+	// never read succeeded on an attempt whose manifest the caller did not
+	// check.
+	if state == backup.StateSucceeded && row.Attempt != attempt {
+		return backup.Record{}, durable.ErrClaimLost
 	}
 
 	n, err := q.FinishBackup(ctx, db.FinishBackupParams{
@@ -301,7 +388,7 @@ func finishRow(
 		return backup.Record{}, backup.ErrNotRunning
 	}
 
-	row, err := q.GetBackup(ctx, id.String())
+	row, err = q.GetBackup(ctx, id.String())
 	if err != nil {
 		return backup.Record{}, fmt.Errorf("select finished backup: %w", err)
 	}
@@ -343,6 +430,7 @@ func backupFromRow(row db.Backup) (backup.Record, error) {
 		State:       row.State,
 		Target:      row.Target,
 		Error:       row.Error,
+		Attempt:     row.Attempt,
 		StartedAtMs: row.StartedAtMs,
 		EndedAtMs:   codec.OptionalMillis(endedAt),
 	})

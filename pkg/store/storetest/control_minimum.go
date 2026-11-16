@@ -25,7 +25,13 @@ const ControlMinimum = "v0.5.0"
 type ControlBackups interface {
 	StartBackup(ctx context.Context, r backup.Record, start durable.StartRequest) error
 	FinishBackup(
-		ctx context.Context, f durable.StepFence, id backup.ID, state backup.State, errText string, endedAt time.Time,
+		ctx context.Context,
+		f durable.StepFence,
+		id backup.ID,
+		state backup.State,
+		errText string,
+		endedAt time.Time,
+		attempt string,
 	) (backup.Record, error)
 }
 
@@ -268,6 +274,7 @@ func controlBackup(t *testing.T) (backup.Record, durable.StartRequest) {
 		Target:    "dir:/var/backups",
 		Error:     "",
 		State:     backup.StateRunning,
+		Attempt:   "",
 	}
 
 	return rec, durable.StartRequest{
@@ -301,7 +308,13 @@ func backupPaths() []controlPath {
 
 				return func(ctx context.Context) error {
 					_, err := s.Backups.FinishBackup(
-						ctx, claim.Step("finish"), rec.ID, backup.StateSucceeded, "", rec.StartedAt.Add(time.Minute),
+						ctx,
+						claim.Step("finish"),
+						rec.ID,
+						backup.StateSucceeded,
+						"",
+						rec.StartedAt.Add(time.Minute),
+						"",
 					)
 
 					return err

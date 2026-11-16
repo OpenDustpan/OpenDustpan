@@ -83,6 +83,7 @@ export interface BackupCorruptErrorArgs {
 }
 
 export interface BackupManifest {
+  readonly attempt: string;
   readonly blobs: ReadonlyArray<ManifestBlob>;
   readonly createdAt: string;
   readonly damaged?: ReadonlyArray<DamagedBlob>;

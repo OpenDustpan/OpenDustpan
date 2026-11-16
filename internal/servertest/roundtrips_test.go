@@ -1330,9 +1330,24 @@ func (m costModel) count(c schemaCounts) int {
 // backupModel is the cost model of a backup. Its coefficients were fitted to
 // three commits that differ in tables, control tables and migrations, and a
 // fourth commit checks them (see TestCostModelFitsMeasuredHistory).
+//
+// The write step reads the claim again right before each put under
+// backups/<id>/<attempt>/ and before each delete, with one read of the
+// operation. A table file costs 1 round trip more, so perTable counts 4. The
+// fixed part holds 2 more: the write of the manifest and the write of
+// backups/<id>/live.json after the commit of the finish step. The copy of a blob
+// under blobs/ reads no claim, so perUnit does not change. The first run
+// deletes nothing, because the directory of the attempt is new and no old
+// directory exists.
 func backupModel() costModel {
-	return costModel{fixed: 47, perTable: 3, perOther: 1, perMigration: 0, perUnit: stateVersionReads}
+	return costModel{
+		fixed: 47 + attemptClaimReads, perTable: 3 + 1, perOther: 1, perMigration: 0, perUnit: stateVersionReads,
+	}
 }
+
+// attemptClaimReads is the number of reads of the claim that the write of the
+// manifest and the write of the live pointer of a backup add to its fixed part.
+const attemptClaimReads = 2
 
 // restoreModel is the cost model of a restore, fitted the same way. The cost of
 // a migration and of a unit (the maintenance scans and the state version
@@ -1410,12 +1425,16 @@ func backupModel() costModel {
 // The fixed part also holds checkpointSupersedesTrips: the table holds no
 // marks in the run, so the restore makes 2 round trips fewer for it than the
 // model gives a table.
+//
+// The fixed part also holds attemptClaimReads, and perTable holds the 1 read
+// of the claim for the table file of each table: the backup that the restore
+// holds reads the claim before each put under backups/.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 331 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+		fixed: 331 + 1 + attemptClaimReads + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips,
-		perTable:     7,
+		perTable:     7 + 1,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
