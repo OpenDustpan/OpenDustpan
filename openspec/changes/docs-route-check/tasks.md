@@ -20,7 +20,8 @@
   marker: `dustpan.WithSelfServiceBlueprints` mounts them in task 1.2. Change
   no route and serve no new route. Check: the test passes, and its output lists
   each marked route, or no route.
-- [ ] 2.3 `make docs-lint` reports zero findings on `docs/reference/self-service-api.md` and `docs/guides/publish-a-blueprint.md`. Check: the command exits 0. Confirmed by: CI (the agent runs the fast checks only). Credential: none. BLOCKED by: none.
+- [ ] 2.2a In `docs/guides/backup-restore-upgrade.md:74`, change `GET /api/server/backups/{id}` to `GET /api/dustpan/v1/backups/{id}`, the route that `internal/api/server/backups.go:31-33` serves. Add no marker. Change no other line. Check: `TestDocsRoutesAreServed` reports no `server.route-not-found` for `docs/guides/backup-restore-upgrade.md`.
+- [ ] 2.3 `make docs-lint` reports zero findings on `docs/reference/self-service-api.md`, `docs/guides/publish-a-blueprint.md` and `docs/guides/backup-restore-upgrade.md`. Check: the command exits 0. Confirmed by: CI (the agent runs the fast checks only). Credential: none. BLOCKED by: none.
 
 ## 3. Verification
 
