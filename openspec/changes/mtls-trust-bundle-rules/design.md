@@ -5,7 +5,7 @@ Main has pkg/trustrule, internal/trustrulesvc and the routes in internal/api/tru
 ## Decisions
 
 1. **Extend the trust rule domain.** Bundle versions and the rule fields go into pkg/trustrule. Save, rotate, update and the fresh-authentication check go into internal/trustrulesvc. Routes extend internal/api/trustrules.
-2. **Wire shapes.** Paths follow the trust-rules routes. JSON is camelCase. Bundle fields: id, namespace, active, versions, overlapEndsAt, revision, createdAt. Rule fields added: spiffeIDPattern, bundle. Times are RFC 3339.
+2. **Wire shapes.** Paths follow the trust-rules routes. JSON is camelCase. Bundle fields: id, namespace, active, versions, overlapEndsAt, revision, createdAt. Rule fields added: spiffePattern, bundle. Times are RFC 3339.
 3. **Actions.** Writes use a namespace action on the namespace. Reads use the existing read action of the trust-rule reads.
 4. **ETag and revision.** ETag is the revision in quotes, PATCH needs If-Match, a stale value answers 412.
 5. **Tables.** trust_bundles and trust_bundle_versions, with Unix millisecond BIGINT times, go after triggers and before trust_rules in the baseline of each dialect. No numbered migration.

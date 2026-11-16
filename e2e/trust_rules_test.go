@@ -66,10 +66,13 @@ func captureID(dst *string) func(string) error {
 	}
 }
 
+// trustRuleIssuer is the issuer of the rules of the scenarios.
+const trustRuleIssuer = "https://token.actions.example.com"
+
 // trustRuleBody returns the body of a create of a rule called name for the
 // principal principalID, with the conditions conds as JSON.
-func trustRuleBody(name, issuer, principalID, conds string) string {
-	return `{"name":"` + name + `","issuer":"` + issuer + `","audience":"https://dustpan.example.com",` +
+func trustRuleBody(name, principalID, conds string) string {
+	return `{"name":"` + name + `","issuer":"` + trustRuleIssuer + `","audience":"https://dustpan.example.com",` +
 		`"keySource":"discovery","principal":"` + principalID + `","conditions":` + conds + `}`
 }
 
@@ -83,9 +86,11 @@ func trustRuleScenario(t *testing.T, env *e2e.Env) {
 	ctx := t.Context()
 
 	step := func(name, method, path, body string, want int, check func(string) error) {
-		env.APIStepA(ctx, t, e2e.APIStepSpec{
-			UserAgent: trustRuleAgent, Name: name, Method: method, Path: path, Body: body,
-			Want: want, Check: check, Scheme: "token",
+		trustSessionStep(ctx, t, env, &trustStep{
+			name: name, want: want, check: check,
+			req: e2e.HeaderedSessionRequest{
+				Method: method, Path: path, Body: body, IfMatch: "", UserAgent: trustRuleAgent,
+			},
 		})
 	}
 
@@ -102,17 +107,15 @@ func trustRuleScenario(t *testing.T, env *e2e.Env) {
 
 	var rule string
 
-	issuer := "https://token.actions.example.com"
-
 	step("a rule with no condition on the subject is refused", http.MethodPost, trustRulesPath,
-		trustRuleBody("deploy", issuer, worker.ID, `[{"claim":"repository","values":["acme/infra"]}]`),
+		trustRuleBody("deploy", worker.ID, `[{"claim":"repository","values":["acme/infra"]}]`),
 		http.StatusBadRequest, bodyHolds("trust-rule.invalid"))
 	step("a rule for a person is refused", http.MethodPost, trustRulesPath,
-		trustRuleBody("deploy", issuer, person.ID, trustRuleSubject),
+		trustRuleBody("deploy", person.ID, trustRuleSubject),
 		http.StatusBadRequest, bodyHolds("trust-rule.principal-refused"))
 	step("the refused creates made no rule", http.MethodGet, trustRulesPath, "", http.StatusOK,
 		bodyHolds(`{"rules":[]}`))
-	step("create a rule", http.MethodPost, trustRulesPath, trustRuleBody("deploy", issuer, worker.ID, trustRuleSubject),
+	step("create a rule", http.MethodPost, trustRulesPath, trustRuleBody("deploy", worker.ID, trustRuleSubject),
 		http.StatusCreated, captureID(&rule))
 	step("read the rule", http.MethodGet, trustRulesPath+"/"+rule, "", http.StatusOK, bodyHolds(`"name":"deploy"`))
 	step("list the rules", http.MethodGet, trustRulesPath, "", http.StatusOK, bodyHolds(rule))

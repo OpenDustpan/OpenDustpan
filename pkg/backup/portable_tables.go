@@ -18,6 +18,7 @@ const (
 	portTableNamespaces  = "namespaces"
 	portTableManualLocks = "manual_locks"
 	portColVersion       = "version"
+	portColBundleID      = "bundle_id"
 	portColStackID       = "stack_id"
 	portColStatus        = "status"
 	portColStartedAtMs   = "started_at_ms"

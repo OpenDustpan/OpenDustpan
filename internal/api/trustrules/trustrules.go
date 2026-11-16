@@ -194,8 +194,32 @@ func (h *Handler) buildRoutes() []Route {
 			Actions: read, Resolve: resolveNamespace, Serve: h.get,
 		},
 		{
+			Method: http.MethodPatch, Path: RulePath, Scope: route.ScopeAuthorized,
+			Actions: manage, Resolve: resolveNamespace, Serve: h.update,
+		},
+		{
 			Method: http.MethodDelete, Path: RulePath, Scope: route.ScopeAuthorized,
 			Actions: manage, Resolve: resolveNamespace, Serve: h.delete,
+		},
+		{
+			Method: http.MethodGet, Path: BundlesPath, Scope: route.ScopeAuthorized,
+			Actions: read, Resolve: resolveNamespace, Serve: h.listBundles,
+		},
+		{
+			Method: http.MethodPost, Path: BundlesPath, Scope: route.ScopeAuthorized,
+			Actions: manage, Resolve: resolveNamespace, Serve: h.saveBundle,
+		},
+		{
+			Method: http.MethodGet, Path: BundlePath, Scope: route.ScopeAuthorized,
+			Actions: read, Resolve: resolveNamespace, Serve: h.getBundle,
+		},
+		{
+			Method: http.MethodPatch, Path: BundlePath, Scope: route.ScopeAuthorized,
+			Actions: manage, Resolve: resolveNamespace, Serve: h.rotateBundle,
+		},
+		{
+			Method: http.MethodDelete, Path: BundleVersionPath, Scope: route.ScopeAuthorized,
+			Actions: manage, Resolve: resolveNamespace, Serve: h.deleteBundleVersion,
 		},
 	}
 

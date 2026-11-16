@@ -46,7 +46,7 @@ func newCIKey(t *testing.T) ciKey {
 func (k ciKey) token(t *testing.T, sub string) string {
 	t.Helper()
 
-	now := time.Now()
+	now := testNow()
 
 	claims, err := json.Marshal(map[string]any{
 		"iss": ciIssuer, "aud": "https://dustpan.example.com/acme", "sub": sub, "repository": "acme/infra",
@@ -162,7 +162,7 @@ func checkExchanged(t *testing.T, e *env, got *exchangeAnswer) {
 	}
 
 	expires, err := time.Parse(time.RFC3339, got.ExpiresAt)
-	if err != nil || time.Until(expires) > time.Hour || time.Until(expires) < 59*time.Minute {
+	if err != nil || !expires.Equal(testNow().Add(time.Hour)) {
 		t.Fatalf("expiresAt = %q, %v; want one hour from now", got.ExpiresAt, err)
 	}
 

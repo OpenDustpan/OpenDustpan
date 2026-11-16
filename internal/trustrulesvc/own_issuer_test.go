@@ -38,7 +38,8 @@ func ownFixture(t *testing.T, own trustrulesvc.OwnIssuer) fixture {
 	svc, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: store, Namespaces: fakeNamespaces{}, Principals: people, Authorizer: authz,
 		Reach:            reach,
-		InstallationURLs: []string{"https://dustpan.example.com"}, OwnIssuer: own, CheckURL: nil, Now: nil,
+		InstallationURLs: []string{"https://dustpan.example.com"}, OwnIssuer: own, CheckURL: nil, Now: exchangeNow,
+		Bundles: nil, Sessions: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -120,7 +121,7 @@ func TestCreateRefusesAnIssuerThatTheIssuerServiceOwns(t *testing.T) {
 	in := input()
 	in.Issuer = "https://files.example.com/acme"
 
-	_, err := f.svc.Create(t.Context(), person(), emptyEntry(), "acme", in)
+	_, err := f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", in)
 	if !errors.Is(err, trustrule.ErrIssuerRefused) {
 		t.Fatalf("Create = %v, want ErrIssuerRefused", err)
 	}
@@ -135,7 +136,7 @@ func TestCreateRefusesAnIssuerThatTheIssuerServiceOwns(t *testing.T) {
 
 	// The same service lets an issuer through that the issuer service does not own.
 	ok := input()
-	if _, err = f.svc.Create(t.Context(), person(), emptyEntry(), "acme", ok); err != nil {
+	if _, err = f.svc.Create(freshSessionContext(t), person(), emptyEntry(), "acme", ok); err != nil {
 		t.Errorf("Create of an outside issuer: %v", err)
 	}
 }

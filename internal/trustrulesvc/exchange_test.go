@@ -102,6 +102,22 @@ func (f *fakeRuleStore) List(context.Context, namespace.Name) ([]trustrule.Rule,
 	return f.rules, nil
 }
 
+func (f *fakeRuleStore) Update(
+	_ context.Context, _ namespace.Name, r trustrule.Rule, _ namespace.Fence, e audit.Entry,
+) (trustrule.Rule, error) {
+	if f.err != nil {
+		return trustrule.Rule{}, f.err
+	}
+
+	if err := e.Validate(); err != nil {
+		return trustrule.Rule{}, err
+	}
+
+	f.entries = append(f.entries, e)
+
+	return r, nil
+}
+
 func (f *fakeRuleStore) RecordExchange(
 	_ context.Context, x trustrule.Exchange, _ namespace.Fence, e audit.Entry,
 ) error {
@@ -313,7 +329,7 @@ func staticRule(jwks, name, principalID string) trustrule.Rule {
 	return trustrule.Rule{
 		CreatedAt: exchangeNow(), ID: trustrule.NewID(), Namespace: "acme", Name: name, Issuer: staticIssuer,
 		Audience: "https://dustpan.example.com", Keys: trustrule.KeySourceStatic, StaticKeys: jwks,
-		PrincipalID: principalID, CreatedBy: "ada",
+		PrincipalID: principalID, CreatedBy: "ada", Revision: 0, SpiffeIDPattern: "", Bundle: "",
 		Conditions: []trustrule.Condition{{Claim: "sub", Values: []string{"repo:acme/infra:ref:refs/heads/main"}}},
 	}
 }

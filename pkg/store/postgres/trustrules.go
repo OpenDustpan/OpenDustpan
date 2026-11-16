@@ -37,22 +37,15 @@ func (t TrustRules) Create(ctx context.Context, r trustrule.Rule, fence namespac
 	}
 
 	return t.s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		p, pErr := q.GetTrustRulePrincipal(ctx, r.PrincipalID)
-		if pErr != nil && !errors.Is(pErr, pgx.ErrNoRows) {
-			return fmt.Errorf("select the principal of the trust rule: %w", pErr)
-		}
-
-		check := trustrulestore.PrincipalRow{
-			Kind: p.Kind, Namespace: p.Namespace, DeletedAtMs: p.DeletedAtMs, Found: pErr == nil,
-		}
-		if checkErr := trustrulestore.CheckPrincipal(check, r.Namespace); checkErr != nil {
-			return checkErr
+		if refErr := checkRuleRefs(ctx, q, &row, r.Namespace); refErr != nil {
+			return refErr
 		}
 
 		n, insErr := q.InsertTrustRule(ctx, db.InsertTrustRuleParams{
 			ID: row.ID, Namespace: row.Namespace, Name: row.Name, Issuer: row.Issuer, Audience: row.Audience,
 			KeySource: row.KeySource, StaticKeys: row.StaticKeys, ConditionsJson: row.ConditionsJSON,
 			PrincipalID: row.PrincipalID, CreatedBy: row.CreatedBy, CreatedAtMs: row.CreatedAtMs,
+			Revision: row.Revision, SpiffeIDPattern: row.SpiffeIDPattern, BundleID: row.BundleID,
 		})
 		if insErr != nil {
 			return fmt.Errorf("insert trust rule: %w", insErr)
@@ -90,7 +83,7 @@ func (t TrustRules) Get(ctx context.Context, ns namespace.Name, id trustrule.ID)
 		return trustrule.Rule{}, fmt.Errorf("select trust rule: %w", err)
 	}
 
-	r, err := trustrulestore.Rule(trustRuleRow(&row))
+	r, err := trustrulestore.Rule(trustRuleRow(row))
 	if err != nil {
 		return trustrule.Rule{}, trustrule.ErrNotFound
 	}
@@ -118,7 +111,7 @@ func (t TrustRules) List(ctx context.Context, ns namespace.Name) ([]trustrule.Ru
 	out := make([]trustrule.Rule, 0, len(rows))
 
 	for i := range rows {
-		r, ruleErr := trustrulestore.Rule(trustRuleRow(&rows[i]))
+		r, ruleErr := trustrulestore.Rule(trustRuleListRow(rows[i]))
 		// Defense in depth: the query matched the namespace. This check stays
 		// so that a change of the query cannot list a rule of another
 		// namespace.
@@ -154,12 +147,149 @@ func (t TrustRules) Delete(
 	})
 }
 
-// trustRuleRow returns the shared form of a stored row.
-func trustRuleRow(r *db.TrustRule) trustrulestore.Row {
+// Update implements trustrule.Store.
+func (t TrustRules) Update(
+	ctx context.Context, ns namespace.Name, r trustrule.Rule, fence namespace.Fence, e audit.Entry,
+) (trustrule.Rule, error) {
+	row, err := trustrulestore.CheckUpdate(ns, &r, fence)
+	if err != nil {
+		return trustrule.Rule{}, err
+	}
+
+	var out trustrule.Rule
+
+	err = t.s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
+		stored, getErr := q.GetTrustRule(ctx, db.GetTrustRuleParams{Namespace: ns.String(), ID: string(r.ID)})
+		if errors.Is(getErr, pgx.ErrNoRows) {
+			return trustrule.ErrNotFound
+		}
+
+		if getErr != nil {
+			return fmt.Errorf("select trust rule: %w", getErr)
+		}
+
+		if refErr := checkRuleRefs(ctx, q, &row, ns); refErr != nil {
+			return refErr
+		}
+
+		if writeErr := writeRuleUpdate(ctx, q, &row, stored.Revision); writeErr != nil {
+			return writeErr
+		}
+
+		// The creator and the creation time are the stored ones.
+		row.CreatedBy, row.CreatedAtMs = stored.CreatedBy, stored.CreatedAtMs
+
+		rule, ruleErr := trustrulestore.Rule(row)
+		if ruleErr != nil {
+			return ruleErr
+		}
+
+		out = rule
+
+		return nil
+	})
+	if err != nil {
+		return trustrule.Rule{}, err
+	}
+
+	return out, nil
+}
+
+// checkRuleRefs checks the principal and the bundle that a rule row names, for
+// a write in the namespace ns.
+func checkRuleRefs(ctx context.Context, q *db.Queries, row *trustrulestore.Row, ns namespace.Name) error {
+	p, err := q.GetTrustRulePrincipal(ctx, row.PrincipalID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("select the principal of the trust rule: %w", err)
+	}
+
+	check := trustrulestore.PrincipalRow{
+		Kind: p.Kind, Namespace: p.Namespace, DeletedAtMs: p.DeletedAtMs, Found: err == nil,
+	}
+	if checkErr := trustrulestore.CheckPrincipal(check, ns); checkErr != nil {
+		return checkErr
+	}
+
+	return checkRuleBundle(ctx, q, row.BundleID, ns)
+}
+
+// writeRuleUpdate writes the rule row over the stored revision. A name that
+// another rule of the namespace has gives trustrule.ErrExists, and a revision
+// that is not one past the stored one gives trustrule.ErrStale.
+func writeRuleUpdate(ctx context.Context, q *db.Queries, row *trustrulestore.Row, storedRevision int64) error {
+	taken, err := q.CountTrustRulesNamedInNamespace(ctx, db.CountTrustRulesNamedInNamespaceParams{
+		Namespace: row.Namespace, Name: row.Name, ExceptID: row.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("count the trust rules with the name: %w", err)
+	}
+
+	if taken > 0 {
+		return trustrule.ErrExists
+	}
+
+	if row.Revision != storedRevision+1 {
+		return trustrule.ErrStale
+	}
+
+	n, err := q.UpdateTrustRule(ctx, db.UpdateTrustRuleParams{
+		Name: row.Name, Issuer: row.Issuer, Audience: row.Audience, KeySource: row.KeySource,
+		StaticKeys: row.StaticKeys, ConditionsJson: row.ConditionsJSON, PrincipalID: row.PrincipalID,
+		Revision: row.Revision, SpiffeIDPattern: row.SpiffeIDPattern, BundleID: row.BundleID,
+		Namespace: row.Namespace, ID: row.ID, StoredRevision: storedRevision,
+	})
+	if err != nil {
+		return fmt.Errorf("update trust rule: %w", err)
+	}
+
+	if n == 0 {
+		return trustrule.ErrStale
+	}
+
+	return nil
+}
+
+// checkRuleBundle returns trustrule.ErrBundle when a rule names a bundle that
+// is not the bundle of its namespace. An empty bundle ID names no bundle.
+func checkRuleBundle(ctx context.Context, q *db.Queries, bundleID string, ns namespace.Name) error {
+	if bundleID == "" {
+		return nil
+	}
+
+	b, err := q.GetTrustBundleOfNamespace(ctx, ns.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: the namespace has no trust bundle", trustrule.ErrBundle)
+	}
+
+	if err != nil {
+		return fmt.Errorf("select the trust bundle of the namespace: %w", err)
+	}
+
+	if b.ID != bundleID {
+		return fmt.Errorf("%w: the bundle is not the bundle of the namespace", trustrule.ErrBundle)
+	}
+
+	return nil
+}
+
+// trustRuleRow returns the shared form of a stored row. The selects read the
+// nullable bundle ID with COALESCE, so it is never NULL here.
+func trustRuleRow(r db.GetTrustRuleRow) trustrulestore.Row {
 	return trustrulestore.Row{
 		ID: r.ID, Namespace: r.Namespace, Name: r.Name, Issuer: r.Issuer, Audience: r.Audience,
 		KeySource: r.KeySource, StaticKeys: r.StaticKeys, ConditionsJSON: r.ConditionsJson,
 		PrincipalID: r.PrincipalID, CreatedBy: r.CreatedBy, CreatedAtMs: r.CreatedAtMs,
+		Revision: r.Revision, SpiffeIDPattern: r.SpiffeIDPattern, BundleID: r.BundleID,
+	}
+}
+
+// trustRuleListRow returns the shared form of a stored row of a list.
+func trustRuleListRow(r db.ListTrustRulesOfNamespaceRow) trustrulestore.Row {
+	return trustrulestore.Row{
+		ID: r.ID, Namespace: r.Namespace, Name: r.Name, Issuer: r.Issuer, Audience: r.Audience,
+		KeySource: r.KeySource, StaticKeys: r.StaticKeys, ConditionsJSON: r.ConditionsJson,
+		PrincipalID: r.PrincipalID, CreatedBy: r.CreatedBy, CreatedAtMs: r.CreatedAtMs,
+		Revision: r.Revision, SpiffeIDPattern: r.SpiffeIDPattern, BundleID: r.BundleID,
 	}
 }
 
@@ -183,7 +313,7 @@ func (t TrustRules) RecordExchange(
 			return fmt.Errorf("select the trust rule of the exchange: %w", err)
 		}
 
-		if ruleErr := trustrulestore.CheckExchangeRule(trustRuleRow(&row), x.Token.PrincipalID); ruleErr != nil {
+		if ruleErr := trustrulestore.CheckExchangeRule(trustRuleRow(row), x.Token.PrincipalID); ruleErr != nil {
 			return ruleErr
 		}
 
