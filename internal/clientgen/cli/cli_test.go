@@ -13,7 +13,6 @@ import (
 // descriptionPath is the published description, from this package.
 const descriptionPath = "../../api/apidesc/openapi.json"
 
-
 const syntheticPath = "../typescript/testdata/synthetic.json"
 
 //nolint:revive // The three results have different meanings, and every caller names them.
