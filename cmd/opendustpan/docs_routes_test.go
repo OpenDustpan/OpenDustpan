@@ -45,7 +45,7 @@ var (
 	docMethodPath = regexp.MustCompile("`([A-Z]+) ((?:/[^`\\s<>?]*|<[^`>]*>)+)(?:\\?[^`\\s]*)?`")
 	docMethodCell = regexp.MustCompile("`([A-Z]+)`")
 	docPathCell   = regexp.MustCompile("`((?:/[^`\\s<>?]*|<[^`>]*>)+)(?:\\?[^`\\s]*)?`")
-	docPrefixSent = regexp.MustCompile("(?i)the paths? .* start with `([^`]+)`")
+	docPrefixSent = regexp.MustCompile("(?i)(?:the paths? .* start with|relative to) `([^`]+)`")
 	docCurlURL    = regexp.MustCompile(`\$SERVER(/[^\s"']*)`)
 	docCurlMethod = regexp.MustCompile(`-X\s+([A-Z]+)`)
 	docVar        = regexp.MustCompile(`\$[A-Z_]+`)
@@ -71,8 +71,8 @@ func parseDocContent(path, content string) []docRoute {
 		page.addLine(i+1, line)
 	}
 
+	// Curl URLs start at the server root, so they take no page prefix.
 	page.out = append(page.out, curlDocRoutes(path, content)...)
-	page.applyPrefix()
 
 	kept := page.out[:0]
 
@@ -97,22 +97,25 @@ func (p *docPage) addLine(line int, text string) {
 	}
 
 	marked := p.headingMarked || strings.Contains(text, docRouteMark)
-	p.out = append(p.out, tableDocRoutes(p.path, line, text, marked)...)
+	p.out = append(p.out, p.prefixRoutes(tableDocRoutes(p.path, line, text, marked))...)
 
 	if strings.Contains(text, "|") {
 		return
 	}
 
-	p.out = append(p.out, spanDocRoutes(p.path, line, text, marked)...)
+	p.out = append(p.out, p.prefixRoutes(spanDocRoutes(p.path, line, text, marked))...)
 }
 
-// applyPrefix gives each relative path the prefix that the page states.
-func (p *docPage) applyPrefix() {
-	for i := range p.out {
-		if !strings.HasPrefix(p.out[i].path, "/") {
-			p.out[i].path = p.prefix + p.out[i].path
+// prefixRoutes gives each relative path the prefix that the page states last.
+// A path that already starts with the prefix is left as it is.
+func (p *docPage) prefixRoutes(routes []docRoute) []docRoute {
+	for i := range routes {
+		if p.prefix != "" && !strings.HasPrefix(routes[i].path, p.prefix) {
+			routes[i].path = p.prefix + routes[i].path
 		}
 	}
+
+	return routes
 }
 
 // tableDocRoutes reads the routes of one Markdown table row. The path cell
@@ -661,11 +664,23 @@ func TestExtractDocRoutes(t *testing.T) {
 		{
 			name: "relative path with page prefix",
 			path: "docs/reference/example.md",
-			doc: "The paths of this API start with `/api/dustpan/v1/things`.\n\n" +
+			doc: "The paths of this API start with `/api/dustpan/v1`.\n\n" +
 				"- `GET /namespaces/{namespace}/units` lists the units.\n",
 			want: []docRoute{{
-				method: "GET", path: "/namespaces/{namespace}/units",
+				method: "GET", path: "/api/dustpan/v1/namespaces/{namespace}/units",
 				file: "docs/reference/example.md", line: 3, marked: false,
+			}},
+		},
+		{
+			name: "relative path with relative-to base",
+			path: "docs/reference/example.md",
+			doc: "The paths of the API start with `/api/dustpan/v1`. Each path in this table is\n" +
+				"relative to `/api/dustpan/v1/namespaces/{namespace}/registry`.\n\n" +
+				"| Method and path | Action |\n| --- | --- |\n" +
+				"| `GET /v1/providers/{type}/versions` | `registry:read` |\n",
+			want: []docRoute{{
+				method: "GET", path: "/api/dustpan/v1/namespaces/{namespace}/registry/v1/providers/{type}/versions",
+				file: "docs/reference/example.md", line: 6, marked: false,
 			}},
 		},
 		{
