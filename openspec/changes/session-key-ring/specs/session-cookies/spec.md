@@ -2,7 +2,7 @@
 
 ### Requirement: The server keeps a ring of session keys
 
-The server SHALL keep each session key version random, wrapped by the key-encryption key, in SQL, and SHALL refuse to start when a stored version does not unwrap. A new version SHALL open at once and seal after its `SealsFrom`. The ring SHALL rotate each `session.keyRotationDays` days, at the seal count of a replica, and on `retireAll`. Each change SHALL write an audit entry. A version that the next version superseded SHALL retire after the longest maximum length that the session policy allows plus one reload interval. A backup SHALL hold no version, and no log, error or audit entry SHALL hold key material. The fresh step of `retireAll` SHALL follow the fresh-step policy of the installation.
+The server SHALL keep each session key version random, wrapped by the key-encryption key, in SQL, and SHALL refuse to start when a stored version does not unwrap. A new version SHALL open at once and seal after its `SealsFrom`. The ring SHALL rotate each `session.keyRotationDays` days, at the seal count of a replica, and on `retireAll`. Each change SHALL write an audit entry.
 
 #### Scenario: Start with no ring
 - **WHEN** the server starts and no version exists
@@ -24,9 +24,25 @@ The sealer SHALL seal with AES-256-GCM and a random 96-bit nonce, and the associ
 - **WHEN** a refresh cookie value is given as an access cookie
 - **THEN** the open fails with `ErrCookieOpen`
 
+### Requirement: A superseded version retires
+
+A version that the next version superseded SHALL retire after the longest maximum length that the session policy allows plus one reload interval, and the server SHALL write `session:key-retired`.
+
 #### Scenario: Superseded version retires
 - **WHEN** a version was superseded for longer than the longest maximum length plus one reload interval
 - **THEN** the server retires it, writes `session:key-retired`, and a cookie that names it fails to open
+
+### Requirement: Key material stays out of backups and output
+
+A backup SHALL hold no session key version. No log record, error, audit entry or route body SHALL hold a key, a wrapped key or a part of either.
+
+#### Scenario: Export of a ring
+- **WHEN** the server exports a backup of a database with a ring
+- **THEN** the archive holds no key ID, wrapped key or wrapper ID of a version
+
+### Requirement: Retire all follows the fresh-step policy
+
+The fresh step of `retireAll` SHALL follow the fresh-step policy of the installation.
 
 #### Scenario: Retire all with the fresh-step setting off
 - **WHEN** the installation does not require a fresh step and an administrator with the action and a reason rotates with `retireAll`
