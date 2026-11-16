@@ -1436,6 +1436,30 @@ func testOtherNamespace(t *testing.T, h Harness) {
 	}
 }
 
+func testPoolStoreCrossNamespaceWriteRefused(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	other, err := h.Domain.CreateNamespace(t.Context(), "globex")
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	err = h.Pools.DeletePool(t.Context(), f.pool.ID, other, entries(other))
+	wantErr(t, "DeletePool with the fence of another namespace", err, runner.ErrNotFound)
+
+	got, err := h.Pools.Pool(t.Context(), f.pool.ID)
+	if err != nil || got.Name != f.pool.Name || got.Namespace != "acme" {
+		t.Fatalf("Pool after the refused delete = %+v, %v, want it unchanged", got, err)
+	}
+
+	audit, err := h.Domain.AuditEntries(t.Context(), "globex")
+	if err != nil || len(audit) != 0 {
+		t.Fatalf("AuditEntries of the other namespace = %d, %v, want none", len(audit), err)
+	}
+}
+
 func testSessionOfDeletedRunner(t *testing.T, h Harness) {
 	t.Helper()
 
