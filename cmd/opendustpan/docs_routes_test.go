@@ -57,14 +57,19 @@ var (
 type docPage struct {
 	path          string
 	headingMarked bool
-	prefix        string
-	out           []docRoute
+	// headingLevel is the level of the last heading, 0 before the first one.
+	headingLevel int
+	prefix       string
+	// prefixLevel is the level of the heading under which prefix was stated,
+	// 0 for a sentence before the first heading (the page prefix).
+	prefixLevel int
+	out         []docRoute
 }
 
 // parseDocContent reads the routes of one documentation page. content is the
 // page text and path names the page.
 func parseDocContent(path, content string) []docRoute {
-	page := docPage{path: path, headingMarked: false, prefix: "", out: nil}
+	page := docPage{path: path, headingMarked: false, headingLevel: 0, prefix: "", prefixLevel: 0, out: nil}
 	lines := strings.Split(content, "\n")
 
 	for i, line := range lines {
@@ -90,10 +95,19 @@ func (p *docPage) addLine(line int, text string) {
 	trimmed := strings.TrimSpace(text)
 	if strings.HasPrefix(trimmed, "#") {
 		p.headingMarked = strings.Contains(text, docRouteMark)
+		level := len(trimmed) - len(strings.TrimLeft(trimmed, "#"))
+		p.headingLevel = level
+		// A heading of the same or a higher level ends the section that set
+		// the prefix. The page prefix (prefixLevel 0) lasts for the whole page.
+		if p.prefixLevel > 0 && level <= p.prefixLevel {
+			p.prefix = ""
+			p.prefixLevel = 0
+		}
 	}
 
 	if m := docPrefixSent.FindStringSubmatch(text); m != nil {
 		p.prefix = m[1]
+		p.prefixLevel = p.headingLevel
 	}
 
 	marked := p.headingMarked || strings.Contains(text, docRouteMark)
@@ -106,11 +120,13 @@ func (p *docPage) addLine(line int, text string) {
 	p.out = append(p.out, p.prefixRoutes(spanDocRoutes(p.path, line, text, marked))...)
 }
 
-// prefixRoutes gives each relative path the prefix that the page states last.
-// A path that already starts with the prefix is left as it is.
+// prefixRoutes gives each relative path the prefix in scope. A path that starts
+// with /api/ is absolute and takes no prefix. A path that already starts with
+// the prefix is left as it is.
 func (p *docPage) prefixRoutes(routes []docRoute) []docRoute {
 	for i := range routes {
-		if p.prefix != "" && !strings.HasPrefix(routes[i].path, p.prefix) {
+		if p.prefix != "" && !strings.HasPrefix(routes[i].path, "/api/") &&
+			!strings.HasPrefix(routes[i].path, p.prefix) {
 			routes[i].path = p.prefix + routes[i].path
 		}
 	}
@@ -548,6 +564,7 @@ func docTestServer(t *testing.T, issuer string) *dustpan.Server {
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithSecretWrapper(wrapper),
+		dustpan.WithSelfServiceBlueprints(st.SelfServiceBlueprints()),
 		dustpan.WithPublicURL("https://dustpan.example.invalid"),
 		dustpan.WithDurableStore(st.DurableOperations()),
 		dustpan.WithJobStore(st.Jobs()),
@@ -582,7 +599,6 @@ func docTestServer(t *testing.T, issuer string) *dustpan.Server {
 			HTTPClient: nil, ID: "corp-oidc", DisplayName: "Corp", Issuer: issuer,
 			ClientID: "dustpan", ClientSecret: "doc-route-check", Scopes: nil, AutoCreate: true,
 		}),
-		dustpan.WithSelfServiceBlueprints(st.SelfServiceBlueprints()),
 	}
 
 	srv, err := dustpan.NewServer(opts...)
