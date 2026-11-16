@@ -7,7 +7,10 @@ copy them from a public registry.
 
 Each version of a provider is signed. The server checks the signature when you
 publish, and OpenTofu checks it again when it installs the provider. A module
-has no signature: see [Publish a module](#publish-a-module).
+has no signature: see [Publish a module](#publish-a-module). The server checks
+the signature with the OpenPGP library `github.com/ProtonMail/go-crypto`
+(version 1.5.2). The project approves each version of the library before an
+upgrade.
 
 The paths of the API in this guide are under `/api/dustpan/v1`. See
 `docs/reference/registry-api.md` for the list of paths, the actions and the
