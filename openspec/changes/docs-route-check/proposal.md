@@ -93,6 +93,13 @@ that no option mounts. A reader follows the guide and gets a 404.
     and passes on the same route with the marker.
 - `docs/reference/self-service-api.md` and `docs/guides/publish-a-blueprint.md`:
   the marker `(not available yet)` only on a route that no option mounts.
+- `docs/guides/backup-restore-upgrade.md:74`: change `GET /api/server/backups/{id}`
+  to `GET /api/dustpan/v1/backups/{id}`, the path that
+  `internal/api/server/backups.go:31-33` serves (`backupPath`). No marker: the
+  route is served, and the page names the wrong path. A check of every
+  `METHOD /api/server/...` path in `docs/guides`, `docs/reference` and
+  `docs/explanation` against the route constants of `internal/api/server` found
+  no other path that the server does not serve.
 - No Makefile change: `make check` runs `go test ./...` at `Makefile:214-215`.
 
 **OUT**
