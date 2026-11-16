@@ -54,10 +54,10 @@ type scopeFiles struct {
 }
 
 // putScopeAttempt writes manifest and its table files to the attempt
-// directory of scopeID. The layout belongs to the scope, only the manifest
-// name varies. A test that puts the manifest of another backup there checks
-// that the reader refuses it.
-func putScopeAttempt(t *testing.T, store *memStore, manifest backup.Manifest, files scopeFiles) {
+// directory of scopeID named by attempt. The layout belongs to the scope, only
+// the manifest varies. A test that puts the manifest of another backup or
+// another attempt there checks that the reader refuses it.
+func putScopeAttempt(t *testing.T, store *memStore, attempt string, manifest backup.Manifest, files scopeFiles) {
 	t.Helper()
 
 	raw, err := json.Marshal(manifest)
@@ -65,7 +65,7 @@ func putScopeAttempt(t *testing.T, store *memStore, manifest backup.Manifest, fi
 		t.Fatalf("encode the manifest: %v", err)
 	}
 
-	store.storeObject(t, scopeKey("5", "manifest.json"), raw)
+	store.storeObject(t, scopeKey(attempt, "manifest.json"), raw)
 
 	for i, file := range manifest.SQLFiles {
 		content := files.data
@@ -73,7 +73,7 @@ func putScopeAttempt(t *testing.T, store *memStore, manifest backup.Manifest, fi
 			content = files.first
 		}
 
-		store.storeObject(t, scopeKey("5", file.Path), content)
+		store.storeObject(t, scopeKey(attempt, file.Path), content)
 	}
 }
 
