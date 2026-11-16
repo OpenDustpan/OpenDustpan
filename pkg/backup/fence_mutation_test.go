@@ -2,9 +2,11 @@ package backup_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/durable"
 )
 
 // staleDeleteReachesTarget runs the clear of a holder that lost its claim with
@@ -35,7 +37,8 @@ func stalePointerPutReachesTarget(t *testing.T, check func(context.Context) erro
 
 	store := newMemStore()
 
-	if err := backup.WriteLivePointerForTest(t.Context(), store, scopeID, "5", check); err != nil {
+	err := backup.WriteLivePointerForTest(t.Context(), store, scopeID, "5", check)
+	if err != nil && !errors.Is(err, durable.ErrClaimLost) {
 		t.Fatalf("write the live pointer: %v", err)
 	}
 

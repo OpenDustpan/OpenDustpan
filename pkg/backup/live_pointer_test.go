@@ -291,18 +291,18 @@ func rerunPointerOnBothStores(t *testing.T) {
 
 // lostPutTo writes the pointer with a store whose first put plants winner
 // and reports blob.ErrExists, then checks the pointer bytes.
-func lostPutTo(t *testing.T, winner, want string) {
+func lostPutTo(t *testing.T, winner, want string, wantErr error) {
 	t.Helper()
 
 	base := newMemStore()
 	store := &lostPutStore{memStore: base, winner: []byte(winner), putRaced: atomic.Bool{}}
 
 	err := backup.WriteLivePointerForTest(t.Context(), store, scopeID, "5", claimHeld)
-	if want == "" && err != nil {
+	if wantErr == nil && err != nil {
 		t.Fatalf("write after a lost put = %v, want nil: ErrExists alone never decides", err)
 	}
 
-	if want != "" && !errors.Is(err, backup.ErrCorrupt) {
+	if wantErr != nil && !errors.Is(err, wantErr) {
 		t.Fatalf("write after a lost put of another attempt = %v, want ErrCorrupt", err)
 	}
 
@@ -345,13 +345,13 @@ func TestLivePointerOneResultOnEveryStore(t *testing.T) {
 	t.Run("a put that loses to an equal pointer succeeds", func(t *testing.T) {
 		t.Parallel()
 
-		lostPutTo(t, pointerBytes5, pointerBytes5)
+		lostPutTo(t, pointerBytes5, pointerBytes5, nil)
 	})
 
 	t.Run("a put that loses to another attempt fails closed", func(t *testing.T) {
 		t.Parallel()
 
-		lostPutTo(t, `{"attempt":"6"}`, `{"attempt":"6"}`)
+		lostPutTo(t, `{"attempt":"6"}`, `{"attempt":"6"}`, backup.ErrCorrupt)
 	})
 
 	t.Run("a seeded pointer of another attempt stays", func(t *testing.T) {

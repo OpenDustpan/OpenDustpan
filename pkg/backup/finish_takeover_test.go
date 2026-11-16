@@ -65,7 +65,7 @@ func (g *gateRegistry) FinishBackup(
 	endedAt time.Time,
 	attempt string,
 ) (backup.Record, error) {
-	if state == backup.StateSucceeded && g.finishGated.Load() {
+	if state == backup.StateSucceeded && g.finishGated.CompareAndSwap(true, false) {
 		close(g.finishEntered)
 
 		select {
@@ -242,6 +242,9 @@ func TestFinishAfterPointerWriteBeforeCommit(t *testing.T) {
 		finishRelease:  make(chan struct{}),
 		finishGated:    atomic.Bool{},
 	}
+
+	// Gate the first succeeded finish only: the one of the instance A.
+	reg.finishGated.Store(true)
 
 	// The instance A reaches the finish commit with the pointer already in
 	// the target, and stops there.
