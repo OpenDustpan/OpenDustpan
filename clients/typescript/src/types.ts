@@ -1662,10 +1662,6 @@ export interface RotateNamespaceIssuerKeysRequest {
   readonly reason: string;
 }
 
-export interface SaveProxyRuleSetRequest {
-  readonly rules: ReadonlyArray<ProxyRule>;
-}
-
 export interface Runner {
   readonly draining: boolean;
   readonly id: string;
@@ -1723,6 +1719,10 @@ export interface RunnerPool {
 
 export interface RunnerPoolList {
   readonly pools: ReadonlyArray<RunnerPool>;
+}
+
+export interface SaveProxyRuleSetRequest {
+  readonly rules: ReadonlyArray<ProxyRule>;
 }
 
 export interface SaveTriggerRequest {

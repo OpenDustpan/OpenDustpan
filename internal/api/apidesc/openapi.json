@@ -6090,20 +6090,6 @@
         ],
         "type": "object"
       },
-      "SaveProxyRuleSetRequest": {
-        "properties": {
-          "rules": {
-            "items": {
-              "$ref": "#/components/schemas/ProxyRule"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "rules"
-        ],
-        "type": "object"
-      },
       "Runner": {
         "properties": {
           "draining": {
@@ -6329,6 +6315,20 @@
         },
         "required": [
           "pools"
+        ],
+        "type": "object"
+      },
+      "SaveProxyRuleSetRequest": {
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ProxyRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
         ],
         "type": "object"
       },

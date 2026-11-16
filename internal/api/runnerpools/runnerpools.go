@@ -10,14 +10,15 @@ package runnerpools
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
-	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -55,7 +56,7 @@ type Config struct {
 	// gives every adapter the same limiter, so its bound on keys holds for all
 	// of them. Nil means a limiter of this handler only.
 	DenialLimiter *denylimit.Limiter
-	Sessions      SessionChecker
+	Sessions      *sessionauth.Checker
 	Logger        *slog.Logger
 
 	// ServerURL is the public URL of the server, as a join and a rejoin
@@ -64,18 +65,6 @@ type Config struct {
 	// Now is the clock of this instance. Nil takes time.Now. The handler uses
 	// each time in UTC at millisecond precision.
 	Now func() time.Time
-}
-
-// SessionChecker checks the console session cookie of a request with no
-// Authorization header. It is the narrowed surface of sessionauth.Checker
-// that this package needs.
-type SessionChecker interface {
-	Authenticate(r *http.Request) (identity.Principal, sessionMark, error)
-}
-
-// sessionMark reports whether the request is signed in with a session.
-type sessionMark interface {
-	Session() bool
 }
 
 // Handler serves the runner management API.
@@ -88,11 +77,10 @@ type Handler struct {
 	guard      *refusal.Recorder
 	audit      audit.Store
 	onAuditErr func()
-	sessions   SessionChecker
+	sessions   *sessionauth.Checker
 	logger     *slog.Logger
 	serverURL  string
 	now        func() time.Time
-	polls      sync.Map
 	mux        *patternMux
 	routes     []Route
 }
@@ -101,21 +89,21 @@ type Handler struct {
 func (cfg Config) validate() error {
 	switch {
 	case cfg.Audit == nil:
-		return errors.New("missing dependency: audit store")
+		return fmt.Errorf("%w: audit store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
-		return errors.New("missing dependency: namespace service")
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
 	case cfg.Pools == nil:
-		return errors.New("missing dependency: runner pool store")
+		return fmt.Errorf("%w: runner pool store", ErrMissingDependency)
 	case cfg.Members == nil:
-		return errors.New("missing dependency: runner member store")
+		return fmt.Errorf("%w: runner member store", ErrMissingDependency)
 	case cfg.Authenticator == nil:
-		return errors.New("missing dependency: authenticator")
+		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
 	case cfg.Authorizer == nil:
-		return errors.New("missing dependency: authorizer")
+		return fmt.Errorf("%w: authorizer", ErrMissingDependency)
 	case cfg.Logger == nil:
-		return errors.New("missing dependency: logger")
+		return fmt.Errorf("%w: logger", ErrMissingDependency)
 	case cfg.ServerURL == "":
-		return errors.New("missing dependency: server URL")
+		return fmt.Errorf("%w: server URL", ErrMissingDependency)
 	}
 
 	return nil
@@ -156,7 +144,6 @@ func NewHandler(cfg Config) (*Handler, error) {
 		onAuditErr: cfg.OnAuditFailure,
 		serverURL:  cfg.ServerURL,
 		now:        now,
-		polls:      sync.Map{},
 		mux:        newPatternMux(),
 		routes:     nil,
 	}
@@ -170,8 +157,34 @@ func NewHandler(cfg Config) (*Handler, error) {
 	return h, nil
 }
 
-// requireCall is the checked request it serves.
-var _ = route.Checks{}
+// patternMux is an http.ServeMux that records every pattern registered on
+// it, so the route test can list every served route.
+type patternMux struct {
+	servemux *http.ServeMux
+
+	patterns []string
+}
+
+// newPatternMux returns a patternMux ready to register routes.
+func newPatternMux() *patternMux {
+	return &patternMux{servemux: http.NewServeMux(), patterns: nil}
+}
+
+// HandleFunc registers pattern and records it.
+func (m *patternMux) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	m.patterns = append(m.patterns, pattern)
+	m.servemux.Handle(pattern, requestid.WithRoute(pattern, http.HandlerFunc(handler)))
+}
+
+// ServeHTTP implements http.Handler.
+func (m *patternMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	m.servemux.ServeHTTP(w, r)
+}
+
+// Patterns returns a copy of the recorded patterns.
+func (m *patternMux) Patterns() []string {
+	return append([]string(nil), m.patterns...)
+}
 
 // ServeHTTP implements http.Handler. It reports the release of the protocol
 // package, as the protocol handler does, so a caller sees one server.

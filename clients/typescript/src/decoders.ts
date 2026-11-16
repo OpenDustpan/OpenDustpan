@@ -2220,11 +2220,6 @@ export const decodeRotateNamespaceIssuerKeysRequest: Decoder<RotateNamespaceIssu
   reason: string,
 });
 
-/** The validator of SaveProxyRuleSetRequest. */
-export const decodeSaveProxyRuleSetRequest: Decoder<SaveProxyRuleSetRequest> = object<SaveProxyRuleSetRequest>("SaveProxyRuleSetRequest", {
-  rules: array(ref(() => decodeProxyRule)),
-});
-
 /** The validator of Runner. */
 export const decodeRunner: Decoder<Runner> = object<Runner>("Runner", {
   draining: boolean,
@@ -2289,6 +2284,11 @@ export const decodeRunnerPool: Decoder<RunnerPool> = object<RunnerPool>("RunnerP
 /** The validator of RunnerPoolList. */
 export const decodeRunnerPoolList: Decoder<RunnerPoolList> = object<RunnerPoolList>("RunnerPoolList", {
   pools: array(ref(() => decodeRunnerPool)),
+});
+
+/** The validator of SaveProxyRuleSetRequest. */
+export const decodeSaveProxyRuleSetRequest: Decoder<SaveProxyRuleSetRequest> = object<SaveProxyRuleSetRequest>("SaveProxyRuleSetRequest", {
+  rules: array(ref(() => decodeProxyRule)),
 });
 
 /** The validator of SaveTriggerRequest. */
