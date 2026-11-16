@@ -277,7 +277,6 @@ func TestRetiredRunnerIsRefused(t *testing.T) {
 	}
 
 	status, body := e.admin(
-		http.MethodPost,
 		"/api/dustpan/v1/namespaces/acme/runners/"+r.id+"/retire",
 		nil,
 	)

@@ -478,14 +478,12 @@ func TestOtherNamespaceIsNotFound(t *testing.T) {
 	}
 
 	// The same stores, behind an authorizer that holds acme only.
-	_, _, srv, _ := serve(
-		t,
-		e.store,
-		serveOptions{
-			authz: onlyIn{ns: "acme"},
-		},
-	)
-	acme := &env{t: t, store: e.store, server: srv, handler: nil, protocol: nil, claimer: nil, fence: e.fence}
+	sv := serve(t, e.store, serveOptions{
+		now: nil, authz: onlyIn{ns: "acme"}, claimer: nil, logger: nil, mutate: nil,
+	})
+	acme := &env{
+		t: t, store: e.store, server: sv.srv, handler: nil, protocol: nil, claimer: nil, fence: e.fence, clock: nil,
+	}
 	acmePool := acme.createPool()
 
 	tests := []struct {

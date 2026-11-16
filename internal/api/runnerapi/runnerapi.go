@@ -129,7 +129,6 @@ type Handler struct {
 	// limiter bounds the audit entries of refused handoff tokens.
 	limiter             *denylimit.Limiter
 	onHandoffSuppressed func()
-	sessions            *sessionauth.Checker
 	logger              *slog.Logger
 	release             runner.Release
 	serverURL           string

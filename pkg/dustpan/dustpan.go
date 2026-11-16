@@ -1353,7 +1353,7 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	runners, runnerPools, err := newRunnerHandler(cfg, svc, onFailure)
+	runners, err := newRunnerHandlers(cfg, svc, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1387,8 +1387,8 @@ func newNeutralHandlers(
 		inventory:    units,
 		audit:        entries,
 		context:      contexts,
-		runners:      runners,
-		runnerPools:  runnerPools,
+		runners:      runners.protocol,
+		runnerPools:  runners.pools,
 		profiles:     profileAPI.profiles,
 		issuer:       profileAPI.issuer,
 		sinks:        profileAPI.sinkAPI,

@@ -95,7 +95,13 @@ func (e *Env) JoinFakeRunner(ctx context.Context, tb testing.TB, ns, poolID, nam
 		Token string `json:"token"`
 	}
 
-	e.apiCreated(ctx, tb, http.MethodPost, "/api/dustpan/v1/namespaces/"+ns+"/runner-pools/"+poolID+"/join-tokens", &created)
+	e.apiCreated(
+		ctx,
+		tb,
+		http.MethodPost,
+		"/api/dustpan/v1/namespaces/"+ns+"/runner-pools/"+poolID+"/join-tokens",
+		&created,
+	)
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

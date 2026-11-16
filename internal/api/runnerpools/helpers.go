@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -27,7 +28,7 @@ func (h *Handler) entry(
 	return audit.Entry{
 		At: at, Namespace: ns, Subject: subject, IDPSubject: "", TokenID: "", Action: string(rule.Action),
 		Object: identity.NamespaceObject(ns).String(), Version: "", ValuePath: "", ValueCount: nil,
-		Changes: nil, SourceIP: clientip.String(r), UserAgent: audit.TruncateUserAgent(r.UserAgent()),
+		Changes: nil, SourceIP: clientip.String(r), UserAgent: audit.TruncateUserAgent(apidesc.Header(r, "User-Agent")),
 		Channel: sessionauth.AuditChannel(r, channelHeader), Kind: rule.Kind, Outcome: audit.OutcomeSuccess,
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",

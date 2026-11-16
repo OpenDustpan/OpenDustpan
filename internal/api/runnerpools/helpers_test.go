@@ -25,13 +25,11 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
-	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // phaseKey is the key of the phase that the tests start.
@@ -155,12 +153,6 @@ type stores struct {
 	}
 }
 
-// unitStore makes the units that a job names. Both SQL stores implement it.
-type unitStore interface {
-	CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error
-	ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.Entry, error)
-}
-
 func openSQLite(t *testing.T) stores {
 	t.Helper()
 
@@ -220,15 +212,15 @@ func newEnvServing(t *testing.T, open func(t *testing.T) stores, set func(s stor
 		set(s, &opts)
 	}
 
-	mgmt, proto, srv, ops := serve(t, s, opts)
+	sv := serve(t, s, opts)
 
 	return &env{
 		t:        t,
 		store:    s,
-		server:   srv,
-		handler:  mgmt,
-		protocol: proto,
-		claimer:  ops,
+		server:   sv.srv,
+		handler:  sv.mgmt,
+		protocol: sv.proto,
+		claimer:  sv.ops,
 		fence:    ns.Fence(),
 		clock:    clock,
 	}
@@ -241,6 +233,14 @@ type skewClock struct {
 }
 
 func (c *skewClock) now() time.Time { return time.Now().Add(time.Duration(c.offset.Load())) }
+
+// served holds what serve starts: the two handlers, the server and the claimer.
+type served struct {
+	mgmt  *runnerpools.Handler
+	proto *runnerapi.Handler
+	srv   *httptest.Server
+	ops   *opsClaimer
+}
 
 // serveOptions are the settings of serve.
 type serveOptions struct {
@@ -259,9 +259,7 @@ type serveOptions struct {
 // one test server: the management handler serves the runner-pools routes,
 // and the protocol handler serves /runner/v1/ so that a test can join a
 // runner and poll through the same server.
-func serve(
-	t *testing.T, s stores, opts serveOptions,
-) (*runnerpools.Handler, *runnerapi.Handler, *httptest.Server, *opsClaimer) {
+func serve(t *testing.T, s stores, opts serveOptions) served {
 	t.Helper()
 
 	mgmtCfg, claimer := configFor(t, s, opts)
@@ -284,7 +282,7 @@ func serve(
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	return mgmt, proto, srv, claimer
+	return served{mgmt: mgmt, proto: proto, srv: srv, ops: claimer}
 }
 
 // configFor returns the configuration of the management handler that serve
@@ -358,6 +356,9 @@ func protocolConfigFor(
 		ServerURL:     serverURL,
 		Now:           opts.now,
 		PollInterval:  20 * time.Millisecond,
+
+		Sweeps: nil, Recorder: nil, Jobs: nil, OnAuditFailure: nil, DenialLimiter: nil,
+		OnHandoffRefusalSuppressed: nil, Sessions: nil, Plans: nil, Artifacts: nil,
 	}
 }
 
