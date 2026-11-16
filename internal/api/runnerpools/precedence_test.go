@@ -1,4 +1,4 @@
-package runnerapi_test
+package runnerpools_test
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	"opendustpan.org/opendustpan/internal/api/runnerpools"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -23,8 +23,8 @@ func TestDenialWinsOverTheRefusals(t *testing.T) {
 	t.Parallel()
 
 	sentinels := []error{
-		runnerapi.ErrNotFound, runner.ErrNotFound, namespace.ErrNotFound,
-		runner.ErrInvalid, runnerapi.ErrBadBody,
+		runnerpools.ErrNotFound, runner.ErrNotFound, namespace.ErrNotFound,
+		runner.ErrInvalid, runnerpools.ErrBadBody,
 		runner.ErrAlreadyExists, runner.ErrImmutable, runner.ErrPoolInUse, runner.ErrTokenUsed,
 		runner.ErrLimit, runner.ErrRetired,
 		namespace.ErrFenced, namespace.ErrNotHome, maintenance.ErrInMaintenance,
@@ -39,7 +39,7 @@ func TestDenialWinsOverTheRefusals(t *testing.T) {
 				t.Parallel()
 
 				rec := httptest.NewRecorder()
-				runnerapi.WriteManagementError(t.Context(), rec, err)
+				runnerpools.WriteManagementError(t.Context(), rec, err)
 
 				checkDenied(t, rec, sentinel)
 			})

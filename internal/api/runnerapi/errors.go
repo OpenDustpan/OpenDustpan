@@ -11,8 +11,6 @@ import (
 	"strconv"
 
 	"opendustpan.org/opendustpan/internal/api/faultlog"
-	"opendustpan.org/opendustpan/internal/api/problem"
-	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -30,16 +28,8 @@ var errNotFound = errors.New("not found")
 // retryAfterSeconds is the Retry-After value of a 503.
 const retryAfterSeconds = 5
 
-// writeError answers err in the error shape of the scope: the protocol shape
-// for a runner request, and the shape of the tool-neutral API for the
-// management API.
-func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope Scope, err error) {
-	if scope == ScopeAuthorized {
-		h.writeManagement(ctx, w, err)
-
-		return
-	}
-
+// writeError answers err in the error shape of the protocol.
+func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err error) {
 	status, body := classifyProtocol(err)
 	h.logFailure(ctx, status, err)
 
@@ -51,15 +41,6 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, scope S
 	}
 
 	h.writeJSON(ctx, w, status, body)
-}
-
-// writeManagement answers err in the error shape of the management API.
-func (h *Handler) writeManagement(ctx context.Context, w http.ResponseWriter, err error) {
-	wr := problem.Writer{Logger: h.logger, KeepDenied: nil, Classify: classifyManagement}
-
-	p := wr.Problem(err)
-	h.logRefused(ctx, err, p.Status, p.Code, p.Message)
-	wr.Write(ctx, w, err)
 }
 
 // logFenced logs a fenced write with its wrap context, which the answer never
@@ -235,50 +216,6 @@ func classifyProtocolOther(
 
 // errBadBody reports a body that is not the JSON object of its path.
 var errBadBody = errors.New("the body is not the JSON object of this path")
-
-// classifyManagement maps the errors of the runner domain to their answer in
-// the management API. The refusals of the credential and a denial are answered
-// before it, and the shared classes of problem.Shared run after it: an error of
-// none of them answers 500 with server.internal.
-func classifyManagement(err error) (problem.Problem, bool) {
-	switch {
-	case errors.Is(err, errNotFound), errors.Is(err, runner.ErrNotFound), errors.Is(err, namespace.ErrNotFound):
-		return problem.New(http.StatusNotFound, errcode.RunnerNotFound, errNotFound.Error()), true
-	case errors.Is(err, runner.ErrInvalid):
-		return problem.New(
-			http.StatusBadRequest, errcode.RunnerInvalid,
-			sentenceOf(err, []error{runner.ErrInvalidHelper, runner.ErrInvalid}),
-		), true
-	case errors.Is(err, errBadBody):
-		return problem.New(http.StatusBadRequest, errcode.RequestBodyInvalid, errBadBody.Error()), true
-	default:
-		return classifyManagementConflict(err)
-	}
-}
-
-// classifyManagementConflict maps the errors of a refused change of the runner
-// domain.
-func classifyManagementConflict(err error) (problem.Problem, bool) {
-	switch {
-	case errors.Is(err, runner.ErrAlreadyExists):
-		return problem.New(http.StatusConflict, errcode.RunnerPoolExists,
-			"a runner pool with this name exists: choose another name"), true
-	case errors.Is(err, runner.ErrImmutable):
-		return problem.New(http.StatusConflict, errcode.RunnerImmutable, runner.ErrImmutable.Error()), true
-	case errors.Is(err, runner.ErrPoolInUse):
-		return problem.New(http.StatusConflict, errcode.RunnerPoolInUse, runner.ErrPoolInUse.Error()), true
-	case errors.Is(err, runner.ErrTokenUsed):
-		return problem.New(http.StatusConflict, errcode.RunnerTokenUsed, runner.ErrTokenUsed.Error()), true
-	case errors.Is(err, runner.ErrLimit):
-		return problem.New(http.StatusConflict, errcode.RunnerLimit, runner.ErrLimit.Error()), true
-	case errors.Is(err, runner.ErrRetired):
-		return problem.New(http.StatusConflict, errcode.RunnerRetired, "the runner is retired"), true
-	}
-
-	// The namespace, maintenance and idempotency answers that every API shares
-	// come from problem.Shared, after this classifier.
-	return problem.Pass()
-}
 
 func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")

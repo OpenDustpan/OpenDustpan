@@ -27,6 +27,8 @@ import type {
   CreatePlacementRuleInput,
   CreateProfileInput,
   CreateProfileRevisionInput,
+  CreateRunnerJoinTokenInput,
+  CreateRunnerPoolInput,
   CreateTrustRuleInput,
   CreateUnitTriggerInput,
   CreateViewInput,
@@ -48,12 +50,14 @@ import type {
   DeletePlacementRuleInput,
   DeletePrincipalGitHostLinkInput,
   DeleteProfileInput,
+  DeleteRunnerPoolInput,
   DeleteTriggerInput,
   DeleteTrustRuleInput,
   DeleteUnitAccessLimitInput,
   DeleteUnitContextInput,
   DeleteUnitGateInput,
   DeleteViewInput,
+  DrainRunnerInput,
   EnterMaintenanceInput,
   ExchangeWorkloadTokenInput,
   ExportNamespaceIssuerInput,
@@ -103,6 +107,7 @@ import type {
   GetProviderReleaseInput,
   GetRenderedProxyRulesInput,
   GetRestoreInput,
+  GetRunnerPoolInput,
   GetSettingsInput,
   GetSourceFilterInput,
   GetStoreCheckInput,
@@ -143,6 +148,7 @@ import type {
   ListOwnTokensInput,
   ListPasskeysInput,
   ListPlacementRulesInput,
+  ListPoolRunnersInput,
   ListProfileRevisionsInput,
   ListProfilesInput,
   ListProviderReleasesInput,
@@ -150,6 +156,8 @@ import type {
   ListRegistryModulesInput,
   ListRegistryProvidersInput,
   ListRestoresInput,
+  ListRunnerJoinTokensInput,
+  ListRunnerPoolsInput,
   ListStoreChecksInput,
   ListTrustRulesInput,
   ListUnitAccessLimitsInput,
@@ -179,6 +187,8 @@ import type {
   ResetLocalUserPasswordInput,
   ResetUnitSettingsInput,
   RetireBlueprintVersionInput,
+  RetireRunnerInput,
+  RevokeRunnerJoinTokenInput,
   RotateNamespaceIssuerKeysInput,
   RotateOwnTokenInput,
   SaveNamespaceProxyRulesInput,
@@ -212,6 +222,7 @@ import type {
   UpdateNamespaceSettingsInput,
   UpdatePlacementRuleInput,
   UpdatePreferencesInput,
+  UpdateRunnerPoolInput,
   UpdateSettingsInput,
   UpdateUnitContextInput,
   WriteBlueprintDraftInput,
@@ -272,13 +283,17 @@ import type {
   CreateOwnTokenRequest,
   CreateProfileRequest,
   CreateProfileRevisionRequest,
+  CreateRunnerJoinTokenRequest,
+  CreateRunnerPoolRequest,
   CreateTrustRuleRequest,
   CreateViewRequest,
   CreatedNotificationSink,
+  CreatedRunnerJoinToken,
   DamagedBlob,
   DeletedUnit,
   DeletedUnitSweep,
   DevData,
+  DrainRunnerRequest,
   DriftCheck,
   DriftCheckLocation,
   DriftResource,
@@ -457,6 +472,13 @@ import type {
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
   RotateOwnTokenRequest,
+  Runner,
+  RunnerGitCredentials,
+  RunnerJoinToken,
+  RunnerJoinTokenList,
+  RunnerList,
+  RunnerPool,
+  RunnerPoolList,
   SaveProxyRuleSetRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
@@ -574,6 +596,7 @@ import type {
   UpdateContextRequest,
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
+  UpdateRunnerPoolRequest,
   UpdateSettingsRequest,
   UpgradeCheck,
   View,
@@ -685,6 +708,14 @@ export class Client {
     return execute(this.transport, operations.createProfileRevision, input);
   }
 
+  createRunnerJoinToken(input: CreateRunnerJoinTokenInput): Promise<Answer<CreatedRunnerJoinToken>> {
+    return execute(this.transport, operations.createRunnerJoinToken, input);
+  }
+
+  createRunnerPool(input: CreateRunnerPoolInput): Promise<Answer<RunnerPool>> {
+    return execute(this.transport, operations.createRunnerPool, input);
+  }
+
   createTrustRule(input: CreateTrustRuleInput): Promise<Answer<TrustRule>> {
     return execute(this.transport, operations.createTrustRule, input);
   }
@@ -769,6 +800,10 @@ export class Client {
     return execute(this.transport, operations.deleteProfile, input);
   }
 
+  deleteRunnerPool(input: DeleteRunnerPoolInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.deleteRunnerPool, input);
+  }
+
   deleteTrigger(input: DeleteTriggerInput): Promise<Answer<void>> {
     return execute(this.transport, operations.deleteTrigger, input);
   }
@@ -791,6 +826,10 @@ export class Client {
 
   deleteView(input: DeleteViewInput): Promise<Answer<void>> {
     return execute(this.transport, operations.deleteView, input);
+  }
+
+  drainRunner(input: DrainRunnerInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.drainRunner, input);
   }
 
   enterMaintenance(input: EnterMaintenanceInput): Promise<Answer<EnterMaintenanceResponse>> {
@@ -989,6 +1028,10 @@ export class Client {
     return execute(this.transport, operations.getRestore, input);
   }
 
+  getRunnerPool(input: GetRunnerPoolInput): Promise<Answer<RunnerPool>> {
+    return execute(this.transport, operations.getRunnerPool, input);
+  }
+
   getSettings(input: GetSettingsInput = {}): Promise<Answer<Settings>> {
     return execute(this.transport, operations.getSettings, input);
   }
@@ -1149,6 +1192,10 @@ export class Client {
     return execute(this.transport, operations.listPlacementRules, input);
   }
 
+  listPoolRunners(input: ListPoolRunnersInput): Promise<Answer<RunnerList>> {
+    return execute(this.transport, operations.listPoolRunners, input);
+  }
+
   listProfileRevisions(input: ListProfileRevisionsInput): Promise<Answer<ListProfileRevisionsResponse>> {
     return execute(this.transport, operations.listProfileRevisions, input);
   }
@@ -1175,6 +1222,14 @@ export class Client {
 
   listRestores(input: ListRestoresInput = {}): Promise<Answer<ListRestoresResponse>> {
     return execute(this.transport, operations.listRestores, input);
+  }
+
+  listRunnerJoinTokens(input: ListRunnerJoinTokensInput): Promise<Answer<RunnerJoinTokenList>> {
+    return execute(this.transport, operations.listRunnerJoinTokens, input);
+  }
+
+  listRunnerPools(input: ListRunnerPoolsInput): Promise<Answer<RunnerPoolList>> {
+    return execute(this.transport, operations.listRunnerPools, input);
   }
 
   listStoreChecks(input: ListStoreChecksInput = {}): Promise<Answer<ListStoreChecksResponse>> {
@@ -1291,6 +1346,14 @@ export class Client {
 
   retireBlueprintVersion(input: RetireBlueprintVersionInput): Promise<Answer<void>> {
     return execute(this.transport, operations.retireBlueprintVersion, input);
+  }
+
+  retireRunner(input: RetireRunnerInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.retireRunner, input);
+  }
+
+  revokeRunnerJoinToken(input: RevokeRunnerJoinTokenInput): Promise<Answer<void>> {
+    return execute(this.transport, operations.revokeRunnerJoinToken, input);
   }
 
   rotateNamespaceIssuerKeys(input: RotateNamespaceIssuerKeysInput): Promise<Answer<NamespaceIssuerRotation>> {
@@ -1423,6 +1486,10 @@ export class Client {
 
   updatePreferences(input: UpdatePreferencesInput): Promise<Answer<Preferences>> {
     return execute(this.transport, operations.updatePreferences, input);
+  }
+
+  updateRunnerPool(input: UpdateRunnerPoolInput): Promise<Answer<RunnerPool>> {
+    return execute(this.transport, operations.updateRunnerPool, input);
   }
 
   updateSettings(input: UpdateSettingsInput): Promise<Answer<Settings>> {

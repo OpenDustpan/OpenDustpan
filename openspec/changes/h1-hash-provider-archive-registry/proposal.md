@@ -1,5 +1,5 @@
 ---
-version: 7
+version: 8
 ---
 
 Issue: #1228, #1291.
@@ -38,6 +38,7 @@ Evidence for the claims above:
 Out of scope:
 
 - The registry slug of each namespace (change `registry-namespace-slug`, which waits for this change)
+- The route that shows the effective request and unpack limits (change `registry-effective-limits`, which waits for this change)
 - Curated upstreams curation rules
 - Upgrade pull requests
 - Provider signature and checksum checks past the h1 addition

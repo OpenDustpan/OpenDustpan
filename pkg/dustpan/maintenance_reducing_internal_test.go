@@ -25,18 +25,33 @@ func TestIsReducingRunnerRoute(t *testing.T) {
 		path   string
 		want   bool
 	}{
-		{"retire", http.MethodPost, "/api/runners/acme/runners/rn-1/retire", true},
-		{"revoke", http.MethodPost, "/api/runners/acme/pools/pool-1/join-tokens/rjt-1/revoke", true},
-		{"retire with GET", http.MethodGet, "/api/runners/acme/runners/rn-1/retire", false},
-		{"drain", http.MethodPost, "/api/runners/acme/runners/rn-1/drain", false},
-		{"pools", http.MethodPost, "/api/runners/acme/pools", false},
-		{"retire with dot segments", http.MethodPost, "/api/runners/acme/runners/../runners/rn-1/retire", false},
-		{"retire with a double slash", http.MethodPost, "/api/runners/acme//runners/rn-1/retire", false},
-		{"retire with a trailing path", http.MethodPost, "/api/runners/acme/runners/rn-1/retire/extra", false},
+		{"retire", http.MethodPost, "/api/dustpan/v1/namespaces/acme/runners/rn-1/retire", true},
+		{
+			"revoke",
+			http.MethodPost,
+			"/api/dustpan/v1/namespaces/acme/runner-pools/pool-1/join-tokens/rjt-1/revoke",
+			true,
+		},
+		{"retire with GET", http.MethodGet, "/api/dustpan/v1/namespaces/acme/runners/rn-1/retire", false},
+		{"drain", http.MethodPost, "/api/dustpan/v1/namespaces/acme/runners/rn-1/drain", false},
+		{"pools", http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools", false},
+		{
+			"retire with dot segments",
+			http.MethodPost,
+			"/api/dustpan/v1/namespaces/acme/runners/../runners/rn-1/retire",
+			false,
+		},
+		{"retire with a double slash", http.MethodPost, "/api/dustpan/v1/namespaces/acme//runners/rn-1/retire", false},
+		{
+			"retire with a trailing path",
+			http.MethodPost,
+			"/api/dustpan/v1/namespaces/acme/runners/rn-1/retire/extra",
+			false,
+		},
 		{
 			"retire with an encoded dot segment",
 			http.MethodPost,
-			"/api/runners/acme/runners/%2e%2e/runners/rn-1/retire",
+			"/api/dustpan/v1/namespaces/acme/runners/%2e%2e/runners/rn-1/retire",
 			false,
 		},
 		{"retire under another prefix", http.MethodPost, "/api/other/acme/runners/rn-1/retire", false},
@@ -104,8 +119,8 @@ func TestRunnerMaintenanceGateRefusesEncodedPaths(t *testing.T) {
 	t.Parallel()
 
 	const (
-		retire = "/api/runners/acme/runners/rn-1/retire"
-		revoke = "/api/runners/acme/pools/pool-1/join-tokens/rjt-1/revoke"
+		retire = "/api/dustpan/v1/namespaces/acme/runners/rn-1/retire"
+		revoke = "/api/dustpan/v1/namespaces/acme/runner-pools/pool-1/join-tokens/rjt-1/revoke"
 	)
 
 	tests := []struct {
@@ -116,17 +131,24 @@ func TestRunnerMaintenanceGateRefusesEncodedPaths(t *testing.T) {
 	}{
 		{"retire", retire, "", http.StatusNoContent},
 		{"revoke", revoke, "", http.StatusNoContent},
-		{"encoded dot segments", "/api/runners/acme/runners/../runners/rn-1/retire", "", http.StatusServiceUnavailable},
 		{
-			"encoded dot segments in RawPath", "/api/runners/acme/runners/../runners/rn-1/retire",
-			"/api/runners/acme/runners/%2e%2e/runners/rn-1/retire", http.StatusServiceUnavailable,
-		},
-		{
-			"encoded slash", "/api/runners/acme/runners/rn-1/x/retire", "/api/runners/acme/runners/rn-1%2Fx/retire",
+			"encoded dot segments",
+			"/api/dustpan/v1/namespaces/acme/runners/../runners/rn-1/retire",
+			"",
 			http.StatusServiceUnavailable,
 		},
 		{
-			"RawPath that differs from Path", retire, "/api/runners/acme/runners/rn%2D1/retire",
+			"encoded dot segments in RawPath", "/api/dustpan/v1/namespaces/acme/runners/../runners/rn-1/retire",
+			"/api/dustpan/v1/namespaces/acme/runners/%2e%2e/runners/rn-1/retire", http.StatusServiceUnavailable,
+		},
+		{
+			"encoded slash",
+			"/api/dustpan/v1/namespaces/acme/runners/rn-1/x/retire",
+			"/api/dustpan/v1/namespaces/acme/runners/rn-1%2Fx/retire",
+			http.StatusServiceUnavailable,
+		},
+		{
+			"RawPath that differs from Path", retire, "/api/dustpan/v1/namespaces/acme/runners/rn%2D1/retire",
 			http.StatusServiceUnavailable,
 		},
 	}

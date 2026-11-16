@@ -40,13 +40,13 @@ func runnerReducingRoutes() []ReducingRoute {
 	return []ReducingRoute{
 		{
 			Method:  methodPost,
-			Pattern: "/api/runners/{namespace}/runners/{runner}/retire",
+			Pattern: "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire",
 			Actions: []string{"namespace:manage-runners"},
 			Kind:    RevokedRunner,
 		},
 		{
 			Method:  methodPost,
-			Pattern: "/api/runners/{namespace}/pools/{pool}/join-tokens/{id}/revoke",
+			Pattern: "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens/{id}/revoke",
 			Actions: []string{"namespace:manage-runners"},
 			Kind:    RevokedJoinToken,
 		},

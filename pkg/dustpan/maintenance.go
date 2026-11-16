@@ -65,7 +65,7 @@ func withMaintenance(
 
 // runnerAPIPrefix is the path prefix of the runner management API. The
 // gate of that API lets the routes of the list under this prefix pass.
-const runnerAPIPrefix = "/api/runners/"
+const runnerAPIPrefix = "/api/dustpan/v1/namespaces/"
 
 // maintenanceAPIPath is the path of the maintenance routes of the
 // installation API. They stay available while the audit chain gate refuses
@@ -228,8 +228,7 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 		return shapePulumi, false
 	case strings.HasPrefix(path, "/runner/v1/"):
 		return shapeRunner, true
-	case strings.HasPrefix(path, "/api/inventory/"), strings.HasPrefix(path, v1Prefix),
-		strings.HasPrefix(path, "/api/runners/"):
+	case strings.HasPrefix(path, "/api/inventory/"), strings.HasPrefix(path, v1Prefix):
 		// The backup and restore routes under v1Prefix stay gated like the
 		// other tool-neutral routes. The gate does not read maintenance
 		// mode. While the gate refuses, only the paths of the first case
