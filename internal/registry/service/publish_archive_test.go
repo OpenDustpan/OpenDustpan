@@ -1,6 +1,9 @@
 package service_test
 
 import (
+	"bytes"
+	crand "crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,8 +20,17 @@ type archiveCase struct {
 }
 
 // hostileArchives holds one archive for each unpack rule.
-func hostileArchives() []archiveCase {
+func hostileArchives(t *testing.T) []archiveCase {
+	t.Helper()
+
 	zeros := make([]byte, 66<<20)
+
+	// The test env stages at most 1 MB of zip. Five entries of 15.5 MB, each
+	// with 170 KB of random bytes and zeros after them, give 77.5 MB unpacked
+	// in about 0.93 MB of zip. Each entry stays under the per-file bound, and
+	// the ratio stays under 100 for every prefix, so only the total bound
+	// refuses the fifth entry.
+	noise := randomThenZeros(t, 170<<10, 15<<20+512<<10)
 
 	many := make([]zipFile, 0, 1030)
 	for i := range 1030 {
@@ -43,8 +55,14 @@ func hostileArchives() []archiveCase {
 		{name: "too many files", files: many},
 		{name: "file over limit", files: []zipFile{fileEntry("big.bin", zeros)}},
 		{
-			name:  "total over limit",
-			files: []zipFile{fileEntry("a.bin", zeros[:33<<20]), fileEntry("b.bin", zeros[:33<<20])},
+			name: "total over limit",
+			files: []zipFile{
+				fileEntry("a.bin", noise),
+				fileEntry("b.bin", noise),
+				fileEntry("c.bin", noise),
+				fileEntry("d.bin", noise),
+				fileEntry("e.bin", noise),
+			},
 		},
 		{name: "ratio", files: []zipFile{fileEntry("zeros.bin", make([]byte, 300<<10))}},
 	}
@@ -57,7 +75,7 @@ func hostileArchives() []archiveCase {
 func TestPublish_refusesUnsafeArchive(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range hostileArchives() {
+	for _, tc := range hostileArchives(t) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -72,7 +90,7 @@ func TestPublish_refusesUnsafeArchive(t *testing.T) {
 				t.Fatalf("publish of %s: got %v, want %v", tc.name, err, registry.ErrBadArchive)
 			}
 
-			requireNoRelease(t, e, "1.0.0")
+			requireNoRelease(t, e)
 
 			for _, left := range e.listing(t, e.ids[acme], "staging") {
 				if !strings.HasSuffix(left, "/") {
@@ -81,4 +99,60 @@ func TestPublish_refusesUnsafeArchive(t *testing.T) {
 			}
 		})
 	}
+}
+
+// randomThenZeros returns size bytes: random bytes first, then zeros. The
+// random bytes do not compress, and the zeros compress about 1000 times, so
+// the whole buffer compresses to about the size of its random prefix.
+func randomThenZeros(t *testing.T, random, size int) []byte {
+	t.Helper()
+
+	out := make([]byte, size)
+	if _, err := crand.Read(out[:random]); err != nil {
+		t.Fatalf("make random bytes: %v", err)
+	}
+
+	return out
+}
+
+// declareCompressedSize returns a copy of the zip bytes data with the
+// compressed size of its first central directory entry set to declared. The
+// header then claims a size that the entry does not have.
+func declareCompressedSize(t *testing.T, data []byte, declared uint32) []byte {
+	t.Helper()
+
+	// The central directory header starts with its signature, and the
+	// compressed size is the field at byte 20 of that header.
+	at := bytes.Index(data, []byte("PK\x01\x02"))
+	if at < 0 {
+		t.Fatal("the archive has no central directory header")
+	}
+
+	out := bytes.Clone(data)
+	binary.LittleEndian.PutUint32(out[at+20:], declared)
+
+	return out
+}
+
+// TestPublish_refusesLyingDeclaredSize checks that a header which declares a
+// large compressed size does not get the archive past the unpack. The entry
+// is 4 MB of zeros, so its real compressed bytes give a ratio far over the
+// bound. The refusal can come from the zip reader or from the ratio bound;
+// either one is a registry.ErrBadArchive, and the release is not stored.
+func TestPublish_refusesLyingDeclaredSize(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, false)
+	sg := newSigner(t)
+	e.trust(t, acme, sg)
+
+	zipped := makeZip(t, []zipFile{fileEntry("zeros.bin", make([]byte, 4<<20))})
+	s := buildZipSet(t, sg, declareCompressedSize(t, zipped, 0xFFFFFFFE))
+
+	_, err := e.publish(t, acme, s)
+	if !errors.Is(err, registry.ErrBadArchive) {
+		t.Fatalf("publish with a lying header: got %v, want %v", err, registry.ErrBadArchive)
+	}
+
+	requireNoRelease(t, e)
 }

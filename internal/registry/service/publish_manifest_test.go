@@ -29,7 +29,7 @@ func TestPublish_refusesStatedProtocolsWithoutManifest(t *testing.T) {
 			t.Fatalf("publish without manifest with protocols %q: got %v, want %v", protocols, err, registry.ErrInvalid)
 		}
 
-		requireNoRelease(t, e, "1.0.0")
+		requireNoRelease(t, e)
 	}
 }
 

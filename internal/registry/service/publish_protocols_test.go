@@ -27,7 +27,7 @@ func TestPublish_refusesProtocolMismatch(t *testing.T) {
 		t.Fatalf("publish with stated 5.0 and manifest 6.0: got %v, want %v", err, registry.ErrInvalid)
 	}
 
-	requireNoRelease(t, e, "1.0.0")
+	requireNoRelease(t, e)
 }
 
 // TestPublish_storesManifestProtocols checks that stated protocols that match

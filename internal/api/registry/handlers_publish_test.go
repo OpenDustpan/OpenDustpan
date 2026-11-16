@@ -164,6 +164,13 @@ func TestPublish_handlerGuards(t *testing.T) {
 		t.Fatalf("chunked oversize body: got %d, want %d", chunkedCode, http.StatusRequestEntityTooLarge)
 	}
 
+	// The declared length is over the bound, with the right media type: the
+	// guard refuses it before any byte is staged.
+	declaredCode, _ := f.stage(t, "publisher", "application/octet-stream", big, int64(len(big)))
+	if declaredCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("declared oversize length: got %d, want %d", declaredCode, http.StatusRequestEntityTooLarge)
+	}
+
 	if left := f.staged(t); len(left) != 0 {
 		t.Fatalf("staged blobs after refused uploads: %v", left)
 	}

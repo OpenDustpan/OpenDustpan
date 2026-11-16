@@ -109,22 +109,22 @@ func TestAddressValidate(t *testing.T) {
 		{
 			"namespace upper case",
 			registry.Address{Namespace: "Acme", Kind: registry.KindProvider, Name: "p", System: ""},
-			true,
+			false,
 		},
 		{
 			"namespace with dot",
 			registry.Address{Namespace: "acme.io", Kind: registry.KindProvider, Name: "p", System: ""},
-			true,
+			false,
 		},
 		{
 			"namespace with underscore",
 			registry.Address{Namespace: "acme_co", Kind: registry.KindProvider, Name: "p", System: ""},
-			true,
+			false,
 		},
 		{
 			"namespace with double dash",
 			registry.Address{Namespace: "acme--co", Kind: registry.KindProvider, Name: "p", System: ""},
-			true,
+			false,
 		},
 		{
 			"namespace leading dash",
@@ -134,7 +134,7 @@ func TestAddressValidate(t *testing.T) {
 		{
 			"namespace trailing dash",
 			registry.Address{Namespace: "acme-", Kind: registry.KindProvider, Name: "p", System: ""},
-			true,
+			false,
 		},
 		{
 			"name with dot",
@@ -185,12 +185,12 @@ func TestAddressValidate(t *testing.T) {
 	}
 }
 
-// TestAddressRuleInError checks that the refusal of a name that cannot
+// TestAddressRuleInError checks that the refusal of a namespace that cannot
 // publish names the rule.
 func TestAddressRuleInError(t *testing.T) {
 	t.Parallel()
 
-	err := registry.Address{Namespace: "acme", Kind: registry.KindProvider, Name: "Payments", System: ""}.Validate()
+	err := registry.Address{Namespace: "Acme", Kind: registry.KindProvider, Name: "p", System: ""}.Validate()
 	if err == nil || !strings.Contains(err.Error(), "lowercase letters, digits and single dashes") {
 		t.Fatalf("Validate = %v, want the rule in the text", err)
 	}

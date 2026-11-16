@@ -156,7 +156,9 @@ func (c *collector) observe(entry checkedEntry, read readEntry) error {
 		return fmt.Errorf("%w: more than %d unpacked bytes", registry.ErrBadArchive, maxUnpackedBytes)
 	}
 
-	if c.totalCompress > 0 && c.totalReal > maxUnpackRatio*c.totalCompress {
+	// Defense in depth: a zero compressed count with real bytes is refused
+	// here too, so the ratio fails closed.
+	if c.totalReal > maxUnpackRatio*c.totalCompress {
 		return fmt.Errorf(
 			"%w: expansion of more than %d times the compressed size",
 			registry.ErrBadArchive,
@@ -263,7 +265,12 @@ func readFileEntry(f *zip.File, name string) (readEntry, error) {
 		return none, fmt.Errorf("%w: entry %q is over %d bytes", registry.ErrBadArchive, f.Name, maxUnpackedFileBytes)
 	}
 
-	out := readEntry{sum: hash.Sum(nil), size: size, compressed: int64(f.CompressedSize64), held: nil}
+	compressed, err := rawCompressedBytes(f)
+	if err != nil {
+		return none, fmt.Errorf("%w: entry %q cannot be read", registry.ErrBadArchive, f.Name)
+	}
+
+	out := readEntry{sum: hash.Sum(nil), size: size, compressed: compressed, held: nil}
 
 	if name != manifestName {
 		return out, nil
@@ -286,6 +293,25 @@ func readFileEntry(f *zip.File, name string) (readEntry, error) {
 	out.held = held
 
 	return out, nil
+}
+
+// rawCompressedBytes counts the compressed bytes of one entry that the zip
+// reader feeds to the decoder. It does not use the header size: the header
+// is the publisher's claim, and a lying header must not change the ratio.
+// A header that claims less than the stream holds makes the decode fail, and
+// a header that claims more reads only the bytes that the archive holds.
+func rawCompressedBytes(f *zip.File) (int64, error) {
+	raw, err := f.OpenRaw()
+	if err != nil {
+		return 0, fmt.Errorf("open raw entry: %w", err)
+	}
+
+	n, err := io.Copy(io.Discard, raw)
+	if err != nil {
+		return 0, fmt.Errorf("count raw entry: %w", err)
+	}
+
+	return n, nil
 }
 
 // readAllEntry returns the bytes of one entry, bounded.
