@@ -333,8 +333,14 @@ func release(files []registry.StoredFile) registry.Release {
 		Address:     registry.Address{Namespace: "acme", Kind: registry.KindModule, Name: "net", System: "aws"},
 		Version:     "1.0.0", SumsFile: "", SumsSHA256: "", SignatureFile: "", SignatureSHA256: "",
 		KeyFingerprint: "", Protocols: nil, PublishedBy: "al",
-		Archives: []registry.Archive{{Platform: "", FileName: "net.zip", SHA256: hashA, Size: 5}},
-		Files:    files,
+		Archives: []registry.Archive{{
+			Platform: "",
+			FileName: "net.zip",
+			SHA256:   hashA,
+			Size:     5,
+			H1:       "", // Fixture that no install reads.
+		}},
+		Files: files,
 	}
 }
 

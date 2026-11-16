@@ -55,6 +55,7 @@ func fixtureRelease() registry.Release {
 				FileName: "terraform-provider-payments_1.0.0_linux_amd64.zip",
 				SHA256:   zipHash,
 				Size:     3,
+				H1:       "", // Fixture that no install reads.
 			},
 		},
 		Files: nil,
@@ -99,7 +100,13 @@ func fixtureModule() registry.Release {
 		Address:     registry.Address{Namespace: "acme", Kind: registry.KindModule, Name: "vpc", System: "aws"},
 		Version:     "1.0.0", SumsFile: "", SumsSHA256: "", SignatureFile: "", SignatureSHA256: "",
 		KeyFingerprint: "", PublishedBy: "ada", Protocols: nil, Files: nil,
-		Archives: []registry.Archive{{Platform: "", FileName: "vpc-aws-1.0.0.tar.gz", SHA256: moduleHash, Size: 4}},
+		Archives: []registry.Archive{{
+			Platform: "",
+			FileName: "vpc-aws-1.0.0.tar.gz",
+			SHA256:   moduleHash,
+			Size:     4,
+			H1:       "", // Fixture that no install reads.
+		}},
 	}
 }
 

@@ -49,6 +49,10 @@ var (
 	// cannot sign, or it is weak. The text names the rule and holds no byte of
 	// the key.
 	ErrBadKey = errors.New("public key cannot be registered")
+	// ErrBadArchive reports a provider archive that fails the unpack check:
+	// a path that leaves the staging directory, a symlink, a duplicate name
+	// or a size, count or ratio above the limit. The text names the rule.
+	ErrBadArchive = errors.New("provider archive fails the unpack check")
 )
 
 // Bounds of a release. The limits of the upload are a setting of the
@@ -87,8 +91,8 @@ var (
 	sha256RE   = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	md5RE      = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	platformRE = regexp.MustCompile(`^[a-z0-9]+_[a-z0-9]+$`)
-	// slugRE is the registry-safe subset of a name: lowercase letters and
-	// digits, with single dashes inside. A name outside it cannot publish.
+	// slugRE is the registry-safe subset: lowercase letters and digits, with
+	// single dashes inside. A name outside it cannot publish.
 	slugRE = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	// systemRE is the target system of a module. OpenTofu allows only ASCII
 	// letters and digits there.
@@ -96,6 +100,9 @@ var (
 	fingerprintRE = regexp.MustCompile(`^[0-9A-F]{40,64}$`)
 	protocolRE    = regexp.MustCompile(`^\d{1,2}\.\d{1,2}$`)
 	uploadIDRE    = regexp.MustCompile(`^[a-z0-9]{20,64}$`)
+	// h1RE is the form of an H1 digest: "h1:" and the standard base64 of one
+	// SHA-256.
+	h1RE = regexp.MustCompile(`^h1:[A-Za-z0-9+/]{43}=$`)
 )
 
 const slugRule = "use lowercase letters, digits and single dashes, with no dash at the start or the end"
@@ -234,6 +241,10 @@ type Archive struct {
 	SHA256 string
 	// Size is the size in bytes.
 	Size int64
+	// H1 is the h1 digest of the unpacked archive bytes, for example the
+	// value that tofu providers lock reports. Publish sets it from the
+	// bounded unpack of the archive.
+	H1 string
 }
 
 // BlobKey returns the content key of the bytes with the given SHA-256 in the
@@ -392,8 +403,8 @@ func (r Release) Validate() error {
 }
 
 // SameContent reports whether r and other hold the same address, version,
-// hashes, signature, key fingerprint and protocols. The publisher and the time do not count. Publish uses it to tell a
-// repeat from a conflict.
+// hashes, H1 digests, signature, key fingerprint and protocols. The publisher
+// and the time do not count. Publish uses it to tell a repeat from a conflict.
 func (r Release) SameContent(other Release) bool {
 	if r.Address != other.Address || r.Version != other.Version ||
 		r.SumsFile != other.SumsFile || r.SumsSHA256 != other.SumsSHA256 ||
@@ -584,7 +595,23 @@ func validateArchive(a Archive) error {
 		return fmt.Errorf("%w: archive %q hash or size", ErrInvalid, a.FileName)
 	}
 
+	// Defense in depth: publish computes H1 from the unpacked bytes, and the
+	// store decode checks the stored value too. This check stays so that a
+	// new caller or a restored row cannot store a value of another form. It
+	// does not rely on the unpack or on the store. An empty H1 is a module, or
+	// a release that a server stored before it computed H1.
+	if !ValidH1(a.H1) {
+		return fmt.Errorf("%w: archive %q H1 digest", ErrInvalid, a.FileName)
+	}
+
 	return nil
+}
+
+// ValidH1 reports whether h1 is a stored H1 value that is allowed: empty, or
+// "h1:" and the standard base64 of one SHA-256. The empty value is the H1 of a
+// module, or of a release that a server stored before it computed H1.
+func ValidH1(h1 string) bool {
+	return h1 == "" || h1RE.MatchString(h1)
 }
 
 // CompareVersions orders two valid versions by semantic version precedence:
