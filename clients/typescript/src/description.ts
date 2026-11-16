@@ -1954,6 +1954,7 @@ export const description: string = [
   "          \"profile.routing-change-needs-open\",",
   "          \"profile.schema-version\",",
   "          \"registry.archive-set-refused\",",
+  "          \"registry.bad-archive\",",
   "          \"registry.invalid\",",
   "          \"registry.key-exists\",",
   "          \"registry.key-invalid\",",
