@@ -28,7 +28,9 @@ type replayStore struct {
 }
 
 // Begin answers the replay.
-func (s replayStore) Begin(context.Context, idempotency.Ref, []byte, time.Time) (idempotency.Result, error) {
+func (s replayStore) Begin(
+	context.Context, idempotency.Ref, []byte, time.Time, ...idempotency.BeginOption,
+) (idempotency.Result, error) {
 	answer := idempotency.Answer{
 		Status: http.StatusCreated, Headers: map[string]string{"X-Dustpan-Replay-Object": s.id}, Body: nil,
 	}

@@ -52,6 +52,8 @@ type e2eReview struct {
 	AsOfMs     *int64         `json:"asOfMs"`
 	Grants     []e2eReviewRow `json:"grants"`
 	NextCursor string         `json:"nextCursor"`
+	// NextPageToken is the paging name of the grants of the caller.
+	NextPageToken string `json:"nextPageToken"`
 }
 
 // e2eAccess and e2eAccessObjects decode the two forms of the access of the
@@ -77,10 +79,10 @@ type e2eGrantedBy struct {
 }
 
 type e2eAccessObjects struct {
-	Objects    []e2eAccessObject `json:"objects"`
-	NextCursor string            `json:"nextCursor"`
-	Total      int64             `json:"total"`
-	All        bool              `json:"all"`
+	Objects       []e2eAccessObject `json:"objects"`
+	NextPageToken string            `json:"nextPageToken"`
+	Total         int64             `json:"total"`
+	All           bool              `json:"all"`
 }
 
 type e2eAccessObject struct {
@@ -584,7 +586,7 @@ func checkCallerAccess(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	var one e2eAccess
 	principalCall(ctx, t, env, principalStep{
-		http.MethodGet, "/api/server/caller/access?object=review", "", http.StatusOK,
+		http.MethodGet, "/api/dustpan/v1/me/access?object=review", "", http.StatusOK,
 	}, &one)
 
 	if one.Object != "review" || len(one.Actions) == 0 || len(one.Grants) != 0 {
@@ -593,17 +595,23 @@ func checkCallerAccess(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	var kinds e2eAccessObjects
 	principalCall(ctx, t, env, principalStep{
-		http.MethodGet, "/api/server/caller/access?type=unit&limit=10", "", http.StatusOK,
+		http.MethodGet, "/api/dustpan/v1/me/access/objects?type=unit&pageSize=10", "", http.StatusOK,
 	}, &kinds)
 
 	if !kinds.All || len(kinds.Objects) != 0 || kinds.Total != 0 {
 		t.Fatalf("access by type = %+v, want all", kinds)
 	}
 
-	for _, query := range []string{"", "object=review&type=unit", "type=group", "object=a%20b", "type=unit&action=nope"} {
-		principalCall(ctx, t, env, principalStep{
-			http.MethodGet, "/api/server/caller/access?" + query, "", http.StatusBadRequest,
-		}, nil)
+	for _, path := range []string{
+		"/api/dustpan/v1/me/access",
+		"/api/dustpan/v1/me/access?object=review&type=unit",
+		"/api/dustpan/v1/me/access?object=a%20b",
+		"/api/dustpan/v1/me/access/objects",
+		"/api/dustpan/v1/me/access/objects?type=group",
+		"/api/dustpan/v1/me/access/objects?type=unit&action=nope",
+		"/api/dustpan/v1/me/access/objects?type=unit&limit=1",
+	} {
+		principalCall(ctx, t, env, principalStep{http.MethodGet, path, "", http.StatusBadRequest}, nil)
 	}
 }
 
@@ -637,7 +645,7 @@ func checkCallerAccessRoles(ctx context.Context, t *testing.T, env *e2e.Env) {
 	// The built-in roles that hold unit:read-secrets, in catalog order.
 	builtIn := []string{"secret-viewer", "writer", "maintainer", "admin", "account-administrator", "site-administrator"}
 
-	got := callerAccessAs(ctx, t, env, erinSecret, "/api/server/caller/access?object=roles")
+	got := callerAccessAs(ctx, t, env, erinSecret, "/api/dustpan/v1/me/access?object=roles")
 	if got.Object != "roles" || len(got.Actions) != 0 || len(got.Grants) != 0 {
 		t.Fatalf("access of erin on roles = %+v, want no action and no grant", got)
 	}
@@ -723,7 +731,7 @@ func checkCallerGrants(ctx context.Context, t *testing.T, env *e2e.Env, secret s
 
 	var got []string
 
-	path := "/api/server/caller/grants?limit=2"
+	path := "/api/dustpan/v1/me/grants?pageSize=2"
 
 	for page := 0; path != ""; page++ {
 		doc := callerGrantsCall(ctx, t, env, secret, path)
@@ -735,8 +743,8 @@ func checkCallerGrants(ctx context.Context, t *testing.T, env *e2e.Env, secret s
 		got = append(got, callerGrantRows(doc)...)
 
 		path = ""
-		if doc.NextCursor != "" {
-			path = "/api/server/caller/grants?limit=2&cursor=" + doc.NextCursor
+		if doc.NextPageToken != "" {
+			path = "/api/dustpan/v1/me/grants?pageSize=2&pageToken=" + doc.NextPageToken
 		}
 	}
 
@@ -748,14 +756,16 @@ func checkCallerGrants(ctx context.Context, t *testing.T, env *e2e.Env, secret s
 
 	var admin e2eReview
 	principalCall(ctx, t, env, principalStep{
-		http.MethodGet, "/api/server/caller/grants", "", http.StatusOK,
+		http.MethodGet, "/api/dustpan/v1/me/grants", "", http.StatusOK,
 	}, &admin)
 
 	if admin.Total == nil || *admin.Total != 0 || len(admin.Grants) != 0 {
 		t.Fatalf("grants of the bootstrap admin = %+v, want none", admin)
 	}
 
-	status, body, err := env.ServerAPIStatusAs(ctx, secret, http.MethodGet, "/api/server/caller/grants?cursor=%21", "")
+	bad := "/api/dustpan/v1/me/grants?pageToken=%21"
+
+	status, body, err := env.ServerAPIStatusAs(ctx, secret, http.MethodGet, bad, "")
 	if err != nil || status != http.StatusBadRequest {
 		t.Fatalf("bad cursor = %d, %v (%s), want 400", status, err, body)
 	}

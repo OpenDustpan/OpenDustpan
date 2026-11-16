@@ -75,7 +75,7 @@ func serverReducingKeys() []string {
 			continue
 		}
 
-		if strings.HasPrefix(r.Pattern, "/api/server/") {
+		if strings.HasPrefix(r.Pattern, "/api/server/") || strings.HasPrefix(r.Pattern, "/api/dustpan/v1/me/") {
 			keys = append(keys, r.Method+" "+r.Pattern)
 		}
 	}
@@ -172,7 +172,7 @@ func TestReducingListMatchesRoutes(t *testing.T) {
 	}
 
 	for _, r := range maintenance.ReducingRoutes() {
-		if !strings.HasPrefix(r.Pattern, "/api/server/") {
+		if !strings.HasPrefix(r.Pattern, "/api/server/") && !strings.HasPrefix(r.Pattern, "/api/dustpan/v1/me/") {
 			continue
 		}
 

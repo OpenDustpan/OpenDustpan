@@ -21,8 +21,8 @@ func TestPersonalTokenOnAServiceRouteNamesTheRightRoute(t *testing.T) {
 		http.MethodPost, "/api/server/principals/prn-alice/tokens", `{"name":"ci"}`, http.StatusBadRequest,
 	}, &doc)
 
-	if !strings.Contains(doc.Message, "/api/server/caller/tokens") ||
+	if !strings.Contains(doc.Message, "/api/dustpan/v1/me/tokens") ||
 		strings.HasSuffix(doc.Message, "goes through /api/server/tokens") {
-		t.Fatalf("message = %q, want the route /api/server/caller/tokens", doc.Message)
+		t.Fatalf("message = %q, want the route /api/dustpan/v1/me/tokens", doc.Message)
 	}
 }

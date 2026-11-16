@@ -70,7 +70,7 @@ func serverReducingRoutes() []ReducingRoute {
 		},
 		{
 			Method:  methodDelete,
-			Pattern: "/api/server/caller/tokens/{id}",
+			Pattern: "/api/dustpan/v1/me/tokens/{id}",
 			Actions: []string{"token:manage-own"},
 			Kind:    RevokedToken,
 		},

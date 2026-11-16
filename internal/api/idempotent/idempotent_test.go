@@ -52,7 +52,9 @@ func call(t *testing.T, mw *idempotent.Middleware, serve http.HandlerFunc) (*htt
 // plainCall returns the Call of a route with an answer that holds no secret
 // and a key that is optional.
 func plainCall(build func(any) (idempotency.Answer, error), serve http.HandlerFunc) idempotent.Call {
-	return idempotent.Call{Principal: caller, Build: build, Serve: serve, SecretAnswer: nil, Required: false}
+	return idempotent.Call{
+		Principal: caller, Build: build, Serve: serve, SecretAnswer: nil, Required: false,
+	}
 }
 
 // callWith runs one request with the key key1 and the body body1 through

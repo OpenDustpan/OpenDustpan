@@ -138,7 +138,7 @@ func checkTokenNeedsFreshAuth(ctx context.Context, t *testing.T, env *e2e.Env, d
 	for _, step := range []principalStep{
 		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + deploy.ID + `","name":"refused"}`, 0},
 		{http.MethodPost, "/api/server/principals/" + deploy.ID + "/tokens", `{"name":"refused"}`, 0},
-		{http.MethodPost, "/api/server/caller/tokens", `{"name":"refused"}`, 0},
+		{http.MethodPost, "/api/dustpan/v1/me/tokens", `{"name":"refused"}`, 0},
 	} {
 		status, body, callErr := env.ServerAPIStatus(ctx, step.method, step.path, step.body)
 		if callErr != nil || status != http.StatusForbidden ||
@@ -411,7 +411,7 @@ func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 		http.MethodPost, "/api/server/service-tokens/" + personal.ID + "/rotate", `{}`, http.StatusForbidden,
 	}, nil)
 
-	own := "/api/server/caller/tokens"
+	own := "/api/dustpan/v1/me/tokens"
 	for _, step := range []principalStep{
 		{http.MethodGet, own, "", http.StatusForbidden},
 		{http.MethodPost, own, `{"name":"mine"}`, http.StatusForbidden},
@@ -420,14 +420,15 @@ func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 	}
 
 	for _, step := range []struct {
-		method, path, body, total string
+		method, path, body, holds string
 		want                      int
 	}{
-		{http.MethodGet, own + "?status=active", "", `"total":2`, http.StatusOK},
+		{http.MethodGet, own, "", `"nextPageToken":""`, http.StatusOK},
+		{http.MethodGet, own + "?status=active", "", "", http.StatusBadRequest},
 		{http.MethodPost, own, `{"name":"mine"}`, "", http.StatusForbidden},
 		{http.MethodPost, own + "/" + personal.ID + "/rotate", `{}`, "", http.StatusForbidden},
 		{http.MethodDelete, own + "/" + spare.ID, "", "", http.StatusNoContent},
-		{http.MethodGet, own + "?status=ended", "", `"total":1`, http.StatusOK},
+		{http.MethodGet, own + "?status=ended", "", "", http.StatusBadRequest},
 	} {
 		status, body, err := env.ServerAPIStatusAs(ctx, personal.Secret, step.method, step.path, step.body)
 		if err != nil || status != step.want {
@@ -435,8 +436,8 @@ func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 				step.method, step.path, status, err, body, step.want)
 		}
 
-		if !strings.Contains(body, step.total) {
-			t.Fatalf("%s %s = %s, want %s", step.method, step.path, body, step.total)
+		if step.holds != "" && !strings.Contains(body, step.holds) {
+			t.Fatalf("%s %s = %s, want %s", step.method, step.path, body, step.holds)
 		}
 	}
 }

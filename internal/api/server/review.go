@@ -35,16 +35,17 @@ package server
 // 52, decision 13): in the namespace of a namespace or unit export, in
 // @server for the installation. A failed append answers 500 with no rows.
 //
-// GET /api/server/caller/access answers the access of the caller: on one
-// object (?object=), or the objects of one kind where it can do an action
-// (?type=&action=), paged. It needs caller:read only, so every signed-in
+// GET /api/dustpan/v1/me/access answers the access of the caller on one
+// object (?object=). GET /api/dustpan/v1/me/access/objects answers the
+// objects of one kind where it can do an action (?type=&action=), paged.
+// Both need caller:read only, so every signed-in
 // principal reads its own access. With type=principal, the default action
 // is principal:manage-tokens: the answer lists the service principals whose
 // tokens the caller can make. There, all=true means every service principal
 // of the installation, because principal:manage-tokens gives no right on a
 // person; the answer never lists a person.
 //
-// GET /api/server/caller/grants answers the current grants of the caller,
+// GET /api/dustpan/v1/me/grants answers the current grants of the caller,
 // paged: its own grants and the grants of its groups, with the group
 // named. It needs caller:read only, and writes no audit entry. Each page
 // reads the groups of the caller at its request, and the memberships and
@@ -74,10 +75,64 @@ var (
 	)
 	errExpandQuery       = errors.New(`invalid access review query: "expand" takes the value "members" only`)
 	errCallerAccessQuery = errors.New(
-		`invalid access query: provide "object=<object>", or "type=namespace|collection|unit|principal" ` +
-			`and an optional "action"`,
+		`invalid access query: provide "object=<object>"; to list objects by type, use /api/dustpan/v1/me/access/objects`,
 	)
+	errCallerObjectsQuery = errors.New(
+		`invalid access objects query: provide "type=namespace|collection|unit|principal" and an optional "action"`,
+	)
+	errCallerQuery = errors.New(
+		"invalid query: the names of this route are pageSize and pageToken; cursor and limit are not names of this route",
+	)
+	errCallerPageSize = errors.New(
+		"invalid pageSize: send a number from 1 to " + strconv.Itoa(audit.MaxPageSize) +
+			", or send no pageSize for " + strconv.Itoa(audit.DefaultPageSize),
+	)
+	errCallerPageToken = errors.New("invalid pageToken: send the nextPageToken of the page before")
 )
+
+// callerPage is the page of a caller list: the opaque token of the page
+// before and the size of the page.
+type callerPage struct {
+	token string
+	size  int
+}
+
+// callerPageOf reads the paging names of a caller list. A name that the
+// label of the route does not declare answers 400, so that a client that sends
+// cursor or limit learns the names pageSize and pageToken.
+func callerPageOf(r *http.Request) (callerPage, error) {
+	q := queryOf(r)
+
+	// Defense in depth: the label of the route declares the names, and a read
+	// of another name gives "". This check refuses the other names.
+	if q.Err() != nil || len(q.Undeclared()) > 0 {
+		return callerPage{}, errCallerQuery
+	}
+
+	page := callerPage{token: q.Get("pageToken"), size: audit.DefaultPageSize}
+
+	if raw := q.Get("pageSize"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > audit.MaxPageSize {
+			return callerPage{}, errCallerPageSize
+		}
+
+		page.size = n
+	}
+
+	return page, nil
+}
+
+// callerPageFault maps the error of a page of a caller list: when the
+// request sent a pageToken, the service refuses only that token, so the
+// invalid answer is the page token error.
+func callerPageFault(err error, page callerPage) error {
+	if page.token != "" && errors.Is(err, access.ErrInvalid) {
+		return errCallerPageToken
+	}
+
+	return err
+}
 
 // Route paths of the access review and the caller access.
 const (
@@ -88,8 +143,10 @@ const (
 	// principalReviewPath answers who holds principal:manage-tokens on one
 	// service principal, and so can act as it.
 	principalReviewPath = "/api/server/principals/{principal}/access-review"
-	callerAccessPath    = "/api/server/caller/access"
-	callerGrantsPath    = "/api/server/caller/grants"
+	callerAccessPath    = "/api/dustpan/v1/me/access"
+	callerGrantsPath    = "/api/dustpan/v1/me/grants"
+	// callerObjectsPath lists, by kind, the objects where the caller can do an action.
+	callerObjectsPath = "/api/dustpan/v1/me/access/objects"
 )
 
 // reviewRowResponse is one row of an access-review export on the wire.
@@ -205,12 +262,22 @@ type grantedByResponse struct {
 // installation covers every object. An object of a containing kind covers
 // each object of the type inside it.
 type accessObjectsResponse struct {
-	Type       string                 `json:"type"`
-	Action     string                 `json:"action"`
-	NextCursor string                 `json:"nextCursor"`
-	Objects    []accessObjectResponse `json:"objects"`
-	Total      int64                  `json:"total"`
-	All        bool                   `json:"all"`
+	Type          string                 `json:"type"`
+	Action        string                 `json:"action"`
+	NextPageToken string                 `json:"nextPageToken"`
+	Objects       []accessObjectResponse `json:"objects"`
+	Total         int64                  `json:"total"`
+	All           bool                   `json:"all"`
+}
+
+// callerGrantsResponse is one page of the grants of the caller, with the
+// paging names of the tool-neutral API. NextPageToken is empty on the last
+// page.
+type callerGrantsResponse struct {
+	Total         *int64              `json:"total"`
+	AsOfMs        *int64              `json:"asOfMs"`
+	Grants        []reviewRowResponse `json:"grants"`
+	NextPageToken string              `json:"nextPageToken"`
 }
 
 type accessObjectResponse struct {
@@ -245,6 +312,18 @@ func (h *Handler) reviewRoutes() []Route {
 			ActionsFor:   nil,
 			OpaqueDenial: false,
 			Serve:        h.serveAccessRead(callerAccess),
+		},
+		{
+			Method: http.MethodGet,
+			Path:   callerObjectsPath,
+			Scope:  ScopeAuthorized,
+			Actions: []identity.Action{
+				identity.ActionCallerRead,
+			},
+			Resolve:      resolveCaller,
+			ActionsFor:   nil,
+			OpaqueDenial: false,
+			Serve:        h.serveAccessRead(callerAccessObjects),
 		},
 		{
 			Method: http.MethodGet,
@@ -615,22 +694,50 @@ func millisOf(t *time.Time) *int64 {
 	return &ms
 }
 
-// callerAccess serves GET /api/server/caller/access: the access of the
+// callerAccess serves GET /api/dustpan/v1/me/access: the access of the
 // caller on one object, or by object kind.
 func callerAccess(
 	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	q := queryOf(r)
-	object, kind := q.Get("object"), q.Get("type")
 
-	switch {
-	case object != "" && kind == "":
-		return callerAccessOn(r, svc, c.p, object)
-	case object == "" && kind != "":
-		return callerAccessByType(r, svc, c.p, access.ObjectKind(kind))
-	default:
+	if q.Err() != nil || len(q.Undeclared()) > 0 || q.Get("object") == "" {
 		return failed(""), errCallerAccessQuery
 	}
+
+	return callerAccessOn(r, svc, c.p, q.Get("object"))
+}
+
+// callerAccessObjects serves GET /api/dustpan/v1/me/access/objects: one page
+// of the objects of one kind where the caller can do an action.
+func callerAccessObjects(
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
+) (principalResult, error) {
+	// Defense in depth: the service refuses an empty type, an unknown type
+	// and an unknown action too (access.Service.Objects). These checks stay
+	// so that a new caller cannot skip them, and they answer the coded error
+	// that names the allowed types and the optional action.
+	q := queryOf(r)
+
+	// The kinds that the list serves. An installation is not one of them, and
+	// a kind that the map does not hold is refused too.
+	kinds := map[access.ObjectKind]bool{
+		access.ObjectNamespace:  true,
+		access.ObjectCollection: true,
+		access.ObjectUnit:       true,
+		access.ObjectPrincipal:  true,
+	}
+	if !kinds[access.ObjectKind(q.Get("type"))] {
+		return failed(""), errCallerObjectsQuery
+	}
+
+	if action := q.Get("action"); action != "" {
+		if _, classified := access.FamilyOf(identity.Action(action)); !classified {
+			return failed(""), errCallerObjectsQuery
+		}
+	}
+
+	return callerAccessByType(r, svc, c.p, access.ObjectKind(q.Get("type")))
 }
 
 // callerAccessOn answers the access of p on the object with the wire form
@@ -785,25 +892,25 @@ func grantableActions() []identity.Action {
 func callerAccessByType(
 	r *http.Request, svc *access.Service, p identity.Principal, kind access.ObjectKind,
 ) (principalResult, error) {
-	page, err := pageRequest(r)
+	page, err := callerPageOf(r)
 	if err != nil {
 		return failed(""), err
 	}
 
 	got, err := svc.Objects(r.Context(), p, access.ObjectsRequest{
-		Kind: kind, Action: identity.Action(queryOf(r).Get("action")), Cursor: page.Cursor, Limit: page.Limit,
+		Kind: kind, Action: identity.Action(queryOf(r).Get("action")), Cursor: page.token, Limit: page.size,
 	})
 	if err != nil {
-		return failed(""), err
+		return failed(""), callerPageFault(err, page)
 	}
 
 	out := accessObjectsResponse{
-		Type:       string(kind),
-		Action:     string(got.Action),
-		NextCursor: got.NextCursor,
-		Objects:    make([]accessObjectResponse, 0, len(got.Objects)),
-		Total:      got.Total,
-		All:        got.All,
+		Type:          string(kind),
+		Action:        string(got.Action),
+		NextPageToken: got.NextCursor,
+		Objects:       make([]accessObjectResponse, 0, len(got.Objects)),
+		Total:         got.Total,
+		All:           got.All,
 	}
 
 	for i := range got.Objects {
@@ -815,19 +922,19 @@ func callerAccessByType(
 	return ok(http.StatusOK, out, ""), nil
 }
 
-// callerGrants serves GET /api/server/caller/grants: one page of the
+// callerGrants serves GET /api/dustpan/v1/me/grants: one page of the
 // current grants of the caller, in the shape of an access-review snapshot.
 func callerGrants(
 	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
-	page, err := pageRequest(r)
+	page, err := callerPageOf(r)
 	if err != nil {
 		return failed(""), err
 	}
 
-	got, err := svc.CallerGrants(r.Context(), c.p, access.CallerGrantsRequest{Cursor: page.Cursor, Limit: page.Limit})
+	got, err := svc.CallerGrants(r.Context(), c.p, access.CallerGrantsRequest{Cursor: page.token, Limit: page.size})
 	if err != nil {
-		return failed(""), err
+		return failed(""), callerPageFault(err, page)
 	}
 
 	wire, err := reviewPageOf(got)
@@ -835,5 +942,7 @@ func callerGrants(
 		return failed(""), err
 	}
 
-	return ok(http.StatusOK, wire, ""), nil
+	return ok(http.StatusOK, callerGrantsResponse{
+		Total: wire.Total, AsOfMs: wire.AsOfMs, Grants: wire.Grants, NextPageToken: wire.NextCursor,
+	}, ""), nil
 }

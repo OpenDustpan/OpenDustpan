@@ -68,7 +68,7 @@ persons and services.
   principal, so a personal token for another person would be a grant by
   proxy. No principal makes or rotates a personal token of another person,
   an administrator included. A person makes and rotates its own tokens after
-  a sign-in, through `/api/server/caller/tokens`. A holder of
+  a sign-in, through `/api/dustpan/v1/me/tokens`. A holder of
   `server:manage-tokens` can revoke the personal token of any person.
 - **A service token needs `principal:manage-tokens` on its service
   principal.** A holder can make, rotate and revoke the tokens of that
