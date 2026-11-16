@@ -53,6 +53,15 @@ func buildProvider(t *testing.T, sg pgpfixture.Signer, version string) registryP
 		t.Fatalf("write the archive: %v", err)
 	}
 
+	m, err := zw.Create("terraform-registry-manifest.json")
+	if err != nil {
+		t.Fatalf("make the manifest: %v", err)
+	}
+
+	if _, err = m.Write([]byte(`{"version":1,"metadata":{"protocol_versions":["5.0"]}}`)); err != nil {
+		t.Fatalf("write the manifest: %v", err)
+	}
+
 	if err = zw.Close(); err != nil {
 		t.Fatalf("close the archive: %v", err)
 	}
