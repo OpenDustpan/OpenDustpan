@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -26,11 +27,46 @@ var errPlaceFailed = errors.New("the store is down")
 // "payments".
 type fakePlacer struct {
 	missing bool
+	remade  bool
+	invalid bool
+}
+
+func TestPlacementRefusalsAreAudited(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, project string
+		placer        *fakePlacer
+	}{
+		{"no matching rule", "other", newFake()},
+		{"removed collection", "web", &fakePlacer{missing: true, remade: false, invalid: false}},
+		{"replacement collection", "web", &fakePlacer{missing: false, remade: true, invalid: false}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			log := newTestAudit()
+			h, stores := newPlacingHandler(t, selectiveAuthorizer{deny: nil}, log,
+				stategate.Off("the test keeps no gates"), tc.placer.placer())
+			postStack(t, h, tc.project, unknownStackName)
+			entries, err := log.List(t.Context(), "acme", audit.Page{Number: 0, Size: 0})
+			if err != nil || len(entries.Entries) != 1 {
+				t.Fatalf("refusal audit has %d entries, %v, want 1", len(entries.Entries), err)
+			}
+			e := entries.Entries[0]
+			if e.Outcome != audit.OutcomeDenied || e.Action != string(identity.ActionCollectionCreateUnit) ||
+				e.Namespace != "acme" || e.Subject != "tester" || e.Reason == "" {
+				t.Errorf("refusal audit = %+v", e)
+			}
+			if len(stores.created) != 0 {
+				t.Fatal("a refused placement created a stack")
+			}
+		})
+	}
 }
 
 // newFake returns a fakePlacer whose collection exists.
 func newFake() *fakePlacer {
-	return &fakePlacer{missing: false}
+	return &fakePlacer{missing: false, remade: false, invalid: false}
 }
 
 func (f *fakePlacer) Place(
@@ -42,15 +78,25 @@ func (f *fakePlacer) Place(
 		}
 	}
 
+	id := "col-1"
+	if f.invalid {
+		id = "payments"
+	}
 	return collection.Rule{
 		CreatedAt: time.Unix(1, 0), ID: "plr-1", Namespace: ns, Tool: tool, Project: "web", Stack: "*",
-		Collection: "payments", CreatedBy: "tester", Position: 1,
+		CollectionID: id, CollectionName: "payments", CreatedBy: "tester", Position: 1,
 	}, nil
 }
 
 func (f *fakePlacer) CollectionID(_ context.Context, _ identity.Object) (string, bool, error) {
 	if f.missing {
 		return "", false, nil
+	}
+	if f.remade {
+		return "col-2", true, nil
+	}
+	if f.invalid {
+		return "payments", true, nil
 	}
 
 	return "col-1", true, nil
@@ -95,7 +141,7 @@ func checkErrorCode(t *testing.T, body []byte, want string) {
 		t.Fatalf("errorCode = %q (%v), want %q", doc.ErrorCode, err, want)
 	}
 
-	if want == errcode.PlacementNoMatch && !strings.Contains(doc.Message, "placement-rules") {
+	if want == errcode.PlacementNoMatch && !strings.Contains(doc.Message, "opendustpan placement add") {
 		t.Fatalf("message %q does not name the placement rules", doc.Message)
 	}
 }
@@ -159,7 +205,20 @@ func TestCreateStackPlacement(t *testing.T) {
 		},
 		{
 			name: "a missing collection refuses the stack", project: "web", stackName: "prod", authz: allow,
-			placer: (&fakePlacer{missing: true}).placer(), placeErr: nil, wantStatus: http.StatusConflict,
+			placer:   (&fakePlacer{missing: true, remade: false, invalid: false}).placer(),
+			placeErr: nil, wantStatus: http.StatusConflict,
+			wantCode: errcode.CollectionNotFound, wantCreated: 0,
+		},
+		{
+			name: "a remade collection refuses the stack", project: "web", stackName: "prod", authz: allow,
+			placer:   (&fakePlacer{missing: false, remade: true, invalid: false}).placer(),
+			placeErr: nil, wantStatus: http.StatusConflict,
+			wantCode: errcode.CollectionNotFound, wantCreated: 0,
+		},
+		{
+			name: "an invalid stored ID refuses the stack", project: "web", stackName: "prod", authz: allow,
+			placer:   (&fakePlacer{missing: false, remade: false, invalid: true}).placer(),
+			placeErr: nil, wantStatus: http.StatusConflict,
 			wantCode: errcode.CollectionNotFound, wantCreated: 0,
 		},
 		{
@@ -210,7 +269,7 @@ func TestCreateStackPlacementMissingCollection(t *testing.T) {
 
 	h, _ := newPlacingHandler(
 		t, selectiveAuthorizer{deny: nil}, nil, stategate.Off("the test keeps no gates"),
-		(&fakePlacer{missing: true}).placer(),
+		(&fakePlacer{missing: true, remade: false, invalid: false}).placer(),
 	)
 
 	rec := postStack(t, h, "web", "prod")
@@ -288,7 +347,7 @@ func TestCreateStackPlacementRecordsRule(t *testing.T) {
 	}
 
 	entry := got.Entry
-	if entry.Version != "from=none;to=payments;rule=plr-1" || entry.Subject != "tester" ||
+	if entry.Version != "from=none;to=col-1;rule=plr-1" || entry.Subject != "tester" ||
 		entry.Action != string(identity.ActionCollectionCreateUnit) || entry.Object != "pulumi:acme/web/prod" {
 		t.Fatalf("entry = %+v", entry)
 	}

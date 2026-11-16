@@ -241,7 +241,7 @@ export function createFetchTransport(options: FetchTransportOptions): ApiTranspo
   const limit = options.maxResponseBytes ?? defaultMaxResponseBytes;
   const userAgent =
     options.userAgent ??
-    `opendustpan-client-ts/${metadata.clientVersion} (description ${metadata.descriptionVersion}; server ${metadata.serverRelease})`;
+    `opendustpan-client-ts/${metadata.clientVersion ?? "unpublished"} (description ${metadata.descriptionVersion}; server ${metadata.serverRelease})`;
 
   return {
     async send(call) {

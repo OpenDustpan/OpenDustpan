@@ -107,6 +107,7 @@ func newGateEnvWith(t *testing.T, authz identity.Authorizer, noEngine bool) gate
 		hostile:        nil,
 		passwords:      nil,
 		namespaces:     []namespace.Name{"acme", "beta"},
+		failPolicyRead: nil,
 	})
 	sess := e.freshSignIn(t)
 
@@ -219,6 +220,7 @@ func gateHandler(
 	t.Helper()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
@@ -1158,8 +1160,8 @@ func TestGateConfigNeedsFreshSignIn(t *testing.T) {
 	}
 
 	for _, rec := range refused {
-		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "reauthenticate") {
-			t.Fatalf("change from a stale session = %d %s, want 401 with reauthenticate", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "reauthenticate") {
+			t.Fatalf("change from a stale session = %d %s, want 403 with reauthenticate", rec.Code, rec.Body.String())
 		}
 	}
 

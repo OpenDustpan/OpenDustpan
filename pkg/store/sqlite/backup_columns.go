@@ -362,6 +362,13 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"source_ip",
 				"user_agent",
 				"channel",
+				"agent_run",
+				"agent_session",
+				"args_digest",
+				"break_glass",
+				"delegation_id",
+				"secret_stage",
+				"tool",
 				backupColKind,
 				"outcome",
 				"request_id",
@@ -435,6 +442,7 @@ func sqliteWorkspaceBackupTables() []sqliteBackupTable {
 				"fenced_by",
 				"unlocked_write",
 				"origin_job",
+				"client_encrypted",
 			},
 		},
 	}
@@ -470,6 +478,7 @@ func sqliteLaterBackupTables() []sqliteBackupTable {
 		sqliteTrustRuleBackupTables(),
 		sqliteUnmanagedBackupTables(),
 		sqliteBreakGlassReviewBackupTables(),
+		sqliteProxyRuleBackupTables(),
 	)
 }
 
@@ -480,7 +489,7 @@ func sqlitePlacementBackupTables() []sqliteBackupTable {
 			table: "placement_rules",
 			columns: []string{
 				"id", backupColNamespace, backupColPosition, backupColTool, backupColProject, "stack",
-				"collection_key", "created_by", backupColCreatedAtMs,
+				"collection_id", "created_by", backupColCreatedAtMs,
 			},
 		},
 	}

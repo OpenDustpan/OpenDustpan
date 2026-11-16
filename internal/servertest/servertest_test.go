@@ -1,6 +1,7 @@
 package servertest_test
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"strings"
@@ -279,13 +280,18 @@ func seedPlacement(t *testing.T, c *servertest.Cluster, server int, namespaceBod
 	name := strings.TrimSuffix(strings.TrimPrefix(namespaceBody, `{"name":"`), `"}`)
 	base := "/api/dustpan/v1/namespaces/" + name
 
-	for _, step := range []struct{ path, body string }{
-		{base + "/collections", `{"name":"everything"}`},
-		{base + "/placement-rules", `{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`},
-		{base + "/placement-rules", `{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}`},
-	} {
-		if status, body := c.Do(t, server, http.MethodPost, step.path, step.body); status != http.StatusCreated {
-			t.Fatalf("POST %s = %d %s, want %d", step.path, status, body, http.StatusCreated)
+	status, body := c.Do(t, server, http.MethodPost, base+"/collections", `{"name":"everything"}`)
+	var target struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(body), &target); status != http.StatusCreated || err != nil || target.ID == "" {
+		t.Fatalf("create placement collection = %d %s, %v", status, body, err)
+	}
+	for _, tool := range []string{"pulumi", "opentofu"} {
+		rule := `{"tool":"` + tool + `","project":"*","stack":"*","collectionID":"` + target.ID + `"}`
+		status, body := c.Do(t, server, http.MethodPost, base+"/placement-rules", rule)
+		if status != http.StatusCreated {
+			t.Fatalf("POST placement rule = %d %s, want %d", status, body, http.StatusCreated)
 		}
 	}
 }

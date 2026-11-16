@@ -43,12 +43,14 @@ import type {
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelJobRequest,
   CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
   CheckBackupResponse,
   Collection,
   Components,
+  ConfirmJobRequest,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -122,6 +124,7 @@ import type {
   JobLocationRequest,
   JobLog,
   JobLogEntry,
+  JobLogSubstitution,
   JobPhase,
   JobPlan,
   JobPlanBinding,
@@ -131,6 +134,7 @@ import type {
   JobTrigger,
   JobUnit,
   JobUnitRequest,
+  JoinedProxyRule,
   ListAccessLimitsResponse,
   ListApprovalRulesResponse,
   ListBackupsResponse,
@@ -210,15 +214,22 @@ import type {
   ProfileRevision,
   ProviderRelease,
   ProviderReleaseFile,
+  ProxyRule,
+  ProxyRuleSet,
   PublishFile,
   PublishModuleReleaseRequest,
   PublishProviderReleaseRequest,
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
+  RedactJobLogRequest,
+  RedactJobLogResponse,
   RedeemLocalUserCodeRequest,
+  RegistryFileEntry,
+  RegistryFileSection,
   RegistryKey,
   RegistryModule,
   RegistryProvider,
+  RenderedProxyRules,
   ReplaceNotificationSinkRequest,
   ReplaceNotificationSubscriptionRequest,
   RequestBodyTooLargeError,
@@ -234,6 +245,7 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  SaveProxyRuleSetRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
@@ -329,6 +341,7 @@ import type {
   UnitNoStateErrorArgs,
   UnitOutputEntry,
   UnitOutputs,
+  UnitProxyRules,
   UnitSettings,
   UnitSettingsBoolField,
   UnitSettingsCodeLocation,
@@ -499,6 +512,7 @@ export const decodeBackupManifest: Decoder<BackupManifest> = object<BackupManife
   id: string,
   installationKind: string,
   primaryInstallations: array(string),
+  registryFiles: nullable(record(ref(() => decodeRegistryFileSection))),
   rowCounts: nullable(record(int64)),
   schemaVersion: int64,
   sqlFiles: array(ref(() => decodePortableFile)),
@@ -575,6 +589,11 @@ export const decodeBulkUnitSettingsUnit: Decoder<BulkUnitSettingsUnit> = object<
   version: int64,
 });
 
+/** The validator of CancelJobRequest. */
+export const decodeCancelJobRequest: Decoder<CancelJobRequest> = object<CancelJobRequest>("CancelJobRequest", {
+  reason: string,
+});
+
 /** The validator of CancelRestoreResponse. */
 export const decodeCancelRestoreResponse: Decoder<CancelRestoreResponse> = object<CancelRestoreResponse>("CancelRestoreResponse", {
   id: string,
@@ -603,6 +622,7 @@ export const decodeCheckBackupResponse: Decoder<CheckBackupResponse> = object<Ch
 /** The validator of Collection. */
 export const decodeCollection: Decoder<Collection> = object<Collection>("Collection", {
   createdAt: int64,
+  id: string,
   name: string,
   namespace: string,
 });
@@ -610,6 +630,12 @@ export const decodeCollection: Decoder<Collection> = object<Collection>("Collect
 /** The validator of Components. */
 export const decodeComponents: Decoder<Components> = object<Components>("Components", {
   components: array(string),
+});
+
+/** The validator of ConfirmJobRequest. */
+export const decodeConfirmJobRequest: Decoder<ConfirmJobRequest> = object<ConfirmJobRequest>("ConfirmJobRequest", {
+  planBinding: nullable(ref(() => decodeJobPlanBinding)),
+  verdict: string,
 });
 
 /** The validator of ContextAnswer. */
@@ -1252,6 +1278,11 @@ export const decodeJobLogEntry: Decoder<JobLogEntry> = object<JobLogEntry>("JobL
   text: string,
 });
 
+/** The validator of JobLogSubstitution. */
+export const decodeJobLogSubstitution: Decoder<JobLogSubstitution> = object<JobLogSubstitution>("JobLogSubstitution", {
+  match: string,
+});
+
 /** The validator of JobPhase. */
 export const decodeJobPhase: Decoder<JobPhase> = object<JobPhase>("JobPhase", {
   approvals: array(ref(() => decodeJobApproval)),
@@ -1326,6 +1357,12 @@ export const decodeJobUnit: Decoder<JobUnit> = object<JobUnit>("JobUnit", {
 export const decodeJobUnitRequest: Decoder<JobUnitRequest> = object<JobUnitRequest>("JobUnitRequest", {
   name: string,
   tool: string,
+});
+
+/** The validator of JoinedProxyRule. */
+export const decodeJoinedProxyRule: Decoder<JoinedProxyRule> = object<JoinedProxyRule>("JoinedProxyRule", {
+  rule: ref(() => decodeProxyRule),
+  scope: string,
 });
 
 /** The validator of ListAccessLimitsResponse. */
@@ -1654,6 +1691,7 @@ export const decodeNamespaceIssuerRotation: Decoder<NamespaceIssuerRotation> = o
 export const decodeNotificationDelivery: Decoder<NotificationDelivery> = object<NotificationDelivery>("NotificationDelivery", {
   attempts: int64,
   contact: optional(string),
+  createdAt: dateTime,
   deliveredAt: optional(dateTime),
   id: string,
   lastError: optional(string),
@@ -1781,6 +1819,7 @@ export const decodePasswordTooShortErrorArgs: Decoder<PasswordTooShortErrorArgs>
 /** The validator of PlacementRule. */
 export const decodePlacementRule: Decoder<PlacementRule> = object<PlacementRule>("PlacementRule", {
   collection: string,
+  collectionID: string,
   createdAt: int64,
   createdBy: string,
   id: string,
@@ -1793,7 +1832,7 @@ export const decodePlacementRule: Decoder<PlacementRule> = object<PlacementRule>
 
 /** The validator of PlacementRuleRequest. */
 export const decodePlacementRuleRequest: Decoder<PlacementRuleRequest> = object<PlacementRuleRequest>("PlacementRuleRequest", {
-  collection: string,
+  collectionID: string,
   position: optional(int64),
   project: string,
   stack: string,
@@ -1914,6 +1953,28 @@ export const decodeProviderReleaseFile: Decoder<ProviderReleaseFile> = object<Pr
   size: optional(int64),
 });
 
+/** The validator of ProxyRule. */
+export const decodeProxyRule: Decoder<ProxyRule> = object<ProxyRule>("ProxyRule", {
+  clientCertificate: optional(string),
+  credential: optional(string),
+  host: string,
+  id: string,
+  methods: optional(array(string)),
+  mode: string,
+  operations: array(string),
+  paths: optional(array(string)),
+  port: int64,
+  serverTrust: string,
+});
+
+/** The validator of ProxyRuleSet. */
+export const decodeProxyRuleSet: Decoder<ProxyRuleSet> = object<ProxyRuleSet>("ProxyRuleSet", {
+  digest: string,
+  rules: array(ref(() => decodeProxyRule)),
+  updatedAt: int64,
+  version: int64,
+});
+
 /** The validator of PublishFile. */
 export const decodePublishFile: Decoder<PublishFile> = object<PublishFile>("PublishFile", {
   name: string,
@@ -1945,10 +2006,38 @@ export const decodePutGitHostInstallationRequest: Decoder<PutGitHostInstallation
   namespace: nullable(string),
 });
 
+/** The validator of RedactJobLogRequest. */
+export const decodeRedactJobLogRequest: Decoder<RedactJobLogRequest> = object<RedactJobLogRequest>("RedactJobLogRequest", {
+  reason: string,
+  substitutions: array(ref(() => decodeJobLogSubstitution)),
+  version: string,
+});
+
+/** The validator of RedactJobLogResponse. */
+export const decodeRedactJobLogResponse: Decoder<RedactJobLogResponse> = object<RedactJobLogResponse>("RedactJobLogResponse", {
+  log: ref(() => decodeJobLog),
+  matches: int64,
+  redactedVersion: string,
+});
+
 /** The validator of RedeemLocalUserCodeRequest. */
 export const decodeRedeemLocalUserCodeRequest: Decoder<RedeemLocalUserCodeRequest> = object<RedeemLocalUserCodeRequest>("RedeemLocalUserCodeRequest", {
   oneTimeCode: string,
   password: string,
+});
+
+/** The validator of RegistryFileEntry. */
+export const decodeRegistryFileEntry: Decoder<RegistryFileEntry> = object<RegistryFileEntry>("RegistryFileEntry", {
+  release: string,
+  sha256: string,
+  size: int64,
+  version: string,
+});
+
+/** The validator of RegistryFileSection. */
+export const decodeRegistryFileSection: Decoder<RegistryFileSection> = object<RegistryFileSection>("RegistryFileSection", {
+  files: array(ref(() => decodeRegistryFileEntry)),
+  version: int64,
 });
 
 /** The validator of RegistryKey. */
@@ -1970,6 +2059,12 @@ export const decodeRegistryModule: Decoder<RegistryModule> = object<RegistryModu
 export const decodeRegistryProvider: Decoder<RegistryProvider> = object<RegistryProvider>("RegistryProvider", {
   name: string,
   namespace: string,
+});
+
+/** The validator of RenderedProxyRules. */
+export const decodeRenderedProxyRules: Decoder<RenderedProxyRules> = object<RenderedProxyRules>("RenderedProxyRules", {
+  operation: string,
+  rules: array(ref(() => decodeJoinedProxyRule)),
 });
 
 /** The validator of ReplaceNotificationSinkRequest. */
@@ -2078,6 +2173,11 @@ export const decodeRestoreWarning: Decoder<RestoreWarning> = object<RestoreWarni
 export const decodeRotateNamespaceIssuerKeysRequest: Decoder<RotateNamespaceIssuerKeysRequest> = object<RotateNamespaceIssuerKeysRequest>("RotateNamespaceIssuerKeysRequest", {
   emergency: boolean,
   reason: string,
+});
+
+/** The validator of SaveProxyRuleSetRequest. */
+export const decodeSaveProxyRuleSetRequest: Decoder<SaveProxyRuleSetRequest> = object<SaveProxyRuleSetRequest>("SaveProxyRuleSetRequest", {
+  rules: array(ref(() => decodeProxyRule)),
 });
 
 /** The validator of SaveTriggerRequest. */
@@ -2761,6 +2861,15 @@ export const decodeUnitOutputs: Decoder<UnitOutputs> = object<UnitOutputs>("Unit
   stateId: string,
   tool: string,
   unitId: string,
+});
+
+/** The validator of UnitProxyRules. */
+export const decodeUnitProxyRules: Decoder<UnitProxyRules> = object<UnitProxyRules>("UnitProxyRules", {
+  digest: string,
+  joined: array(ref(() => decodeJoinedProxyRule)),
+  rules: array(ref(() => decodeProxyRule)),
+  updatedAt: int64,
+  version: int64,
 });
 
 /** The validator of UnitSettings. */

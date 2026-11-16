@@ -1002,7 +1002,7 @@ INSERT INTO state_versions (
 -- name: GetStateVersion :one
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE id = $1;
 
@@ -1011,7 +1011,7 @@ WHERE id = $1;
 -- break by ID, as the port comment promises. The caller normalizes the page.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized'
 ORDER BY finalized_at_ms DESC, id ASC
@@ -1090,7 +1090,7 @@ WHERE w.id = $1;
 -- expiry break by ID, as the port comment promises.
 SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
        force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job
+       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write, origin_job, client_encrypted
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'pending' AND upload_expires_at_ms < $2
 ORDER BY upload_expires_at_ms ASC, id ASC;
@@ -1122,7 +1122,7 @@ WHERE id = $2;
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
        sv.holder, sv.lock_id, sv.created_at_ms, sv.finalized_at_ms, sv.restored_from, sv.sealed,
-       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job
+       sv.sensitive_marks, sv.fenced_by, unlocked_write, origin_job, sv.client_encrypted
 FROM state_versions AS sv
 JOIN workspaces AS w ON w.current_state_version_id = sv.id
 WHERE w.id = $1;
@@ -1132,11 +1132,11 @@ WHERE w.id = $1;
 -- matches only the recorded content key, so a superseded attempt reports no
 -- change instead of finalizing over a newer one; a finalized version also
 -- matches no row, so a retry reports no change. It also sets the declared
--- serial, lineage, MD5 and outputs: a streamed write declares them only after
--- its content is read (ADR 49, decision 7), and its row holds placeholders
--- until then.
+-- serial, lineage, MD5 and outputs, and the client-encryption bit of the
+-- document: a streamed write declares them only after its content is read
+-- and its row holds placeholders until then.
 UPDATE state_versions
-SET serial = @serial, lineage = @lineage, md5 = @md5, outputs = @outputs, status = 'finalized', finalized_at_ms = @finalized_at_ms, size = @size
+SET serial = @serial, lineage = @lineage, md5 = @md5, outputs = @outputs, status = 'finalized', finalized_at_ms = @finalized_at_ms, size = @size, client_encrypted = @client_encrypted
 WHERE id = @id AND status = 'pending' AND content_key = @content_key;
 
 -- name: SetWorkspaceCurrent :exec
@@ -1443,7 +1443,7 @@ ORDER BY content_key;
 -- The entry of a scope at one sequence, for the check of signed
 -- checkpoints. A missing entry matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1 AND sequence = $2;
@@ -1452,7 +1452,7 @@ WHERE namespace = $1 AND sequence = $2;
 -- The entry with the highest sequence of a namespace, for the next append.
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1
@@ -1462,15 +1462,15 @@ LIMIT 1;
 -- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+    at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
     fence_version, reason, principal_kind, job_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25);
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1
@@ -1488,7 +1488,7 @@ WHERE namespace = $1;
 -- audit.CheckPageSize entries after the last sequence it saw, so a namespace
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
@@ -4190,6 +4190,39 @@ SET deleted_at_ms = sqlc.arg(deleted_at_ms)
 WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND COALESCE(deleted_at_ms, -1) = 0
   AND (CAST(sqlc.arg(if_latest) AS BIGINT) = 0 OR latest = CAST(sqlc.arg(if_latest) AS BIGINT));
 
+-- name: DeleteProxyRuleSet :execrows
+-- The caller checks the fence in the same transaction. A row of another
+-- version is not removed.
+DELETE FROM proxy_rule_sets
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND scope_kind = sqlc.arg(scope_kind) AND unit_id = sqlc.arg(unit_id) AND version = sqlc.arg(version)::BIGINT;
+
+-- name: GetProxyRuleSet :one
+-- The namespace, the kind and the unit ID are the whole key: a unit scope never
+-- reads the row of its namespace.
+SELECT p.document, p.digest, p.version, p.updated_at_ms
+FROM proxy_rule_sets AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND p.scope_kind = sqlc.arg(scope_kind) AND p.unit_id = sqlc.arg(unit_id);
+
+-- name: InsertProxyRuleSet :execrows
+-- The caller checks the fence in the same transaction. A scope that has a set
+-- is not written.
+INSERT INTO proxy_rule_sets (namespace_id, scope_kind, unit_id, document, digest, version, updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(scope_kind), sqlc.arg(unit_id), sqlc.arg(document), sqlc.arg(digest), 1, sqlc.arg(updated_at_ms)
+)
+ON CONFLICT (namespace_id, scope_kind, unit_id) DO NOTHING;
+
+-- name: UpdateProxyRuleSet :execrows
+-- A row of another version than the one that the caller read is not written.
+UPDATE proxy_rule_sets
+SET document = sqlc.arg(document), digest = sqlc.arg(digest), version = sqlc.arg(version)::BIGINT + 1,
+    updated_at_ms = sqlc.arg(updated_at_ms)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND scope_kind = sqlc.arg(scope_kind) AND unit_id = sqlc.arg(unit_id) AND version = sqlc.arg(version)::BIGINT;
+
 -- name: InsertManualLock :execrows
 -- Records the manual lock of one object. A row that exists for the object is
 -- not written. The caller checks the fence in the same transaction.
@@ -5087,8 +5120,8 @@ SET state = 'skipped', delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '', 
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
 
 -- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = sqlc.arg(id);
 
@@ -5099,11 +5132,12 @@ WHERE scope = sqlc.arg(scope) AND notification_id = sqlc.arg(notification_id)
 
 -- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-    last_error, delivered_at_ms, owner, lease_until_ms, version
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+    next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     sqlc.arg(id), sqlc.arg(scope), sqlc.arg(notification_id), sqlc.arg(subscription_id), sqlc.arg(sink_id),
-    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
+    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, sqlc.arg(created_at_ms), 0, sqlc.arg(next_at_ms), '', 0, '',
+    0, 1
 );
 
 -- name: ListDueNotificationDeliveryScopes :many
@@ -5126,8 +5160,8 @@ WHERE notification_deliveries.id IN (
     LIMIT sqlc.arg(max_rows)
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-          last_error, delivered_at_ms, owner, lease_until_ms, version;
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+          next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version;
 
 -- name: RecordNotificationAttempt :execrows
 -- Stores the result for the live claim only: the owner and the version of the
@@ -5141,41 +5175,42 @@ WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scop
   AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
 
 -- name: CountNotificationDeliveriesOfSubscriptionBefore :one
--- The number of deliveries of the subscription at or before the cursor (next
--- time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
--- the deliveries that a page after the cursor leaves behind, in byte order
--- (COLLATE "C"). The count stops at max_rows. The ORDER BY does not change
--- the count; it stays so that the plan reads the index of the history in
--- order and stops at max_rows.
+-- The number of deliveries of the subscription at or before the cursor
+-- (creation time, delivery ID) in the order of
+-- ListNotificationDeliveriesOfSubscription: the deliveries that a page after
+-- the cursor leaves behind, in byte order
+-- (COLLATE "C"). The count stops at max_rows. The row
+-- comparison is a bound of the index of the history, so the scan reads only
+-- the rows that it counts. The ORDER BY does not change the count; it stays so
+-- that the plan reads that index in order and stops at max_rows.
 SELECT COUNT(*) FROM (
     SELECT 1 FROM notification_deliveries
     WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
-      AND (next_at_ms > sqlc.arg(after_ms)
-        OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" >= sqlc.arg(after_id)))
-    ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+      AND (created_at_ms, id COLLATE "C") >= (sqlc.arg(after_ms)::bigint, sqlc.arg(after_id)::text)
+    ORDER BY created_at_ms DESC, id COLLATE "C" DESC
     LIMIT sqlc.arg(max_rows)
 ) AS within_bound;
 
 -- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
-ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+ORDER BY created_at_ms DESC, id COLLATE "C" DESC
 LIMIT sqlc.arg(max_rows);
 
 -- name: ListNotificationDeliveriesOfSubscriptionAfter :many
--- The page of ListNotificationDeliveriesOfSubscription after the cursor (next
--- time, delivery ID): the rows with an older next time, or with the same next
--- time and a smaller ID, in byte order (COLLATE "C"), as the order of the
--- query. The bound on next_at_ms lets the index scan start at the cursor.
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+-- The page of ListNotificationDeliveriesOfSubscription after the cursor
+-- (creation time, delivery ID): the rows with an older creation time, or with
+-- the same creation time and a smaller ID, in byte order (COLLATE "C"), as
+-- the order of the query. The row comparison is a bound of the
+-- index of the history, so the scan starts at the cursor.
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
-  AND (next_at_ms < sqlc.arg(after_ms)
-    OR (next_at_ms = sqlc.arg(after_ms) AND id COLLATE "C" < sqlc.arg(after_id)))
-ORDER BY next_at_ms DESC, id COLLATE "C" DESC
+  AND (created_at_ms, id COLLATE "C") < (sqlc.arg(after_ms)::bigint, sqlc.arg(after_id)::text)
+ORDER BY created_at_ms DESC, id COLLATE "C" DESC
 LIMIT sqlc.arg(max_rows);
 
 -- name: RedeliverNotificationDelivery :execrows
@@ -5603,19 +5638,23 @@ WHERE version = sqlc.arg(expected)::bigint
 -- name: CreatePlacementRule :exec
 -- The caller checks the fence in the same transaction and renumbers the list
 -- after the insert.
-INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
+INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_id, created_by, created_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 
+-- name: GetPlacementCollection :one
+-- The collection ID must belong to the namespace of the rule.
+SELECT id FROM collections WHERE namespace = $1 AND id = $2;
+
 -- name: GetPlacementRule :one
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = $1 AND r.id = $2;
 
 -- name: ListPlacementRules :many
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = $1
 ORDER BY r.position, r.id;
 
@@ -5628,7 +5667,7 @@ ORDER BY position, id;
 
 -- name: UpdatePlacementRuleContent :execrows
 UPDATE placement_rules
-SET tool = $1, project = $2, stack = $3, collection_key = $4
+SET tool = $1, project = $2, stack = $3, collection_id = $4
 WHERE namespace = $5 AND id = $6;
 
 -- name: SetPlacementRulePosition :exec
@@ -5644,12 +5683,12 @@ WHERE namespace = $1 AND id = $2;
 -- The rules that name one collection, for the audit entry of its delete.
 SELECT id, tool, project, stack
 FROM placement_rules
-WHERE namespace = $1 AND collection_key = $2
+WHERE namespace = $1 AND collection_id = $2
 ORDER BY position, id;
 
 -- name: DeletePlacementRulesOfCollection :exec
 DELETE FROM placement_rules
-WHERE namespace = $1 AND collection_key = $2;
+WHERE namespace = $1 AND collection_id = $2;
 
 -- name: CreateStoreCheck :execrows
 INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
@@ -5805,12 +5844,32 @@ WHERE k.namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg
   AND k.blueprint = sqlc.arg(blueprint) AND k.kind = sqlc.arg(kind) AND k.scope = sqlc.arg(scope)
   AND r.state = 'open' AND r.ends_at_ms > sqlc.arg(at_ms);
 
+-- name: EnsureQuotaKey :exec
+-- Makes the row of a key, so that the counter can lock it. The row holds no
+-- unit yet.
+INSERT INTO quota_keys (namespace_id, blueprint, kind, scope, settled_count)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(blueprint), sqlc.arg(kind), sqlc.arg(scope), 0
+)
+ON CONFLICT (namespace_id, blueprint, kind, scope) DO NOTHING;
+
 -- name: GetQuotaReservation :one
 -- The state and the times of the reservation id of a namespace.
 SELECT r.id, r.state, r.at_ms, r.ends_at_ms
 FROM quota_reservations AS r
 JOIN namespaces AS n ON n.id = r.namespace_id
 WHERE n.name = sqlc.arg(namespace) AND r.id = sqlc.arg(id);
+
+-- name: GetQuotaReservationForUpdate :one
+-- The state and the times of the reservation id of a namespace, with the row
+-- locked until the commit, so two ends of one reservation wait for each
+-- other.
+SELECT r.id, r.state, r.at_ms, r.ends_at_ms
+FROM quota_reservations AS r
+JOIN namespaces AS n ON n.id = r.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND r.id = sqlc.arg(id)
+FOR UPDATE OF r;
 
 -- name: GetQuotaSettled :one
 -- The settled count of the key. No row means the counter does not know the key.
@@ -5850,6 +5909,14 @@ FROM quota_reservation_keys
 WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
   AND reservation_id = sqlc.arg(reservation_id)
 ORDER BY blueprint, kind, scope;
+
+-- name: LockQuotaKey :one
+-- Locks the row of the key until the commit, so the writes of one key wait
+-- for each other and two writes never both pass a limit.
+SELECT settled_count FROM quota_keys
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND blueprint = sqlc.arg(blueprint) AND kind = sqlc.arg(kind) AND scope = sqlc.arg(scope)
+FOR UPDATE;
 
 -- name: SetQuotaReservationEnd :execrows
 -- Moves the end time of the open reservation id. A reservation that ended

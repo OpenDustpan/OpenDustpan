@@ -128,6 +128,11 @@ type auditChain struct {
 	runner *durable.Runner
 	// migrationsRunning reports whether the runner loop runs.
 	migrationsRunning atomic.Bool
+	// approveMu serializes Approve from the check of the pending change to
+	// the commit of the approval in this instance. A second approval then
+	// reads the state that the first one left, and answers its refusal before
+	// it enters maintenance mode.
+	approveMu sync.Mutex
 	// readWarnAt is the time in Unix nanoseconds of the last warning about a
 	// failed read of the stored result, or 0 when none was logged.
 	readWarnAt atomic.Int64
@@ -225,6 +230,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		durableOps:        nil,
 		runner:            nil,
 		migrationsRunning: atomic.Bool{},
+		approveMu:         sync.Mutex{},
 		readWarnAt:        atomic.Int64{},
 		runsMigrations:    cfg.components.Has(ComponentWorker),
 		limit:             maintenance.DefaultCacheLimit,
@@ -427,8 +433,15 @@ func (c *auditChain) Status(ctx context.Context) (serverapi.AuditChainStatus, er
 // entry exists.
 func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 	if err := c.checkApprovalGate(ctx, caller); err != nil {
+		if errors.Is(err, audit.ErrChainNeedsPerson) {
+			return c.auditRefusal(ctx, caller, err)
+		}
+
 		return err
 	}
+
+	c.approveMu.Lock()
+	defer c.approveMu.Unlock()
 
 	if err := c.requirePendingChange(ctx); err != nil {
 		return err
@@ -444,10 +457,28 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 
 	change := audit.ChainChange{At: c.chainNow(), By: caller.Subject, To: c.setting.State()}
 
-	if err := c.enterForApproval(ctx); err != nil {
+	entered, err := c.enterForApproval(ctx)
+	if err != nil {
 		return err
 	}
 
+	if err := c.commitApproval(ctx, caller, change); err != nil {
+		// The approval did not commit, so no migration runs and none leaves
+		// maintenance mode. Undo the entry of this call, also when another
+		// instance won the approval.
+		if entered {
+			err = errors.Join(err, c.undoApprovalEntry(ctx))
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// commitApproval starts the migration request and appends the entry of the
+// approval in one transaction.
+func (c *auditChain) commitApproval(ctx context.Context, caller audit.Entry, change audit.ChainChange) error {
 	input, err := json.Marshal(change)
 	if err != nil {
 		return fmt.Errorf("encode audit chain change: %w", err)
@@ -468,9 +499,44 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 	return nil
 }
 
+// undoApprovalEntry leaves maintenance mode and clears the mark after an
+// approval that entered maintenance mode and did not commit. It runs with a
+// context that a canceled request does not end, so that the undo is not
+// skipped.
+func (c *auditChain) undoApprovalEntry(ctx context.Context) error {
+	err := c.leaveAfterMigration(context.WithoutCancel(ctx))
+	if errors.Is(err, maintenance.ErrHeld) {
+		// A change still waits, and a waiting change keeps maintenance mode.
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("undo the maintenance entry of a refused approval: %w", err)
+	}
+
+	return nil
+}
+
+// auditRefusal writes one denied entry in the server scope for a refused
+// approval of caller, then answers refusal. An error of the write is joined
+// with the refusal.
+func (c *auditChain) auditRefusal(ctx context.Context, caller audit.Entry, refusal error) error {
+	e := audit.ChainSetEntry(caller, audit.ChainChange{At: c.chainNow(), By: caller.Subject, To: c.setting.State()})
+	e.Outcome = audit.OutcomeDenied
+	e.Kind = audit.KindSecurity
+	e.PrincipalKind = caller.PrincipalKind
+	e.Reason = audit.ErrChainNeedsPerson.Error()
+
+	if _, err := c.server.AppendServer(ctx, e); err != nil {
+		return errors.Join(refusal, fmt.Errorf("write the denied audit chain entry: %w", err))
+	}
+
+	return refusal
+}
+
 // checkApprovalGate refuses an approval while the migration loop stops,
-// by a caller whose kind may not approve a change to off, or without a fresh
-// MFA step.
+// by a caller who is not a person when the change is to off, or without a
+// fresh MFA step.
 func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) error {
 	if c.runsMigrations && !c.migrationsRunning.Load() {
 		return audit.ErrChainMigrationsStopped
@@ -480,7 +546,7 @@ func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) 
 		return nil
 	}
 
-	if err := c.refuseServiceCaller(ctx, caller.Subject); err != nil {
+	if err := c.requirePersonApprover(ctx, caller.Subject); err != nil {
 		return err
 	}
 
@@ -547,34 +613,31 @@ func auditChainRetryKey() string {
 	return auditChainKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
-// refuseServiceCaller refuses an approval of a change to off by a caller
-// whose kind may not approve it. The check is an allowlist of the caller
-// kind: the kind person and the kind workload may approve, and every other
-// kind, including the kind service and the kind agent, is refused. A new kind
-// fails closed until this list names it. A subject with no principal row is a
-// person and passes. A workload passed this check on main, when the check
-// refused only the kind service, and it still passes.
+// requirePersonApprover refuses an approval of a change to off unless the
+// caller is a person. The check is an allowlist of the caller kind: only the
+// kind person passes. Every other kind, a subject with no principal row, a
+// failed read and a missing principal reader fail closed with
+// audit.ErrChainNeedsPerson. A read error is joined with it.
 //
-// Defense in depth: the HTTP handler checks the actions of the caller and the
-// fresh MFA step too. This check stays so that a new caller cannot skip it,
-// and it does not rely on those checks.
-func (c *auditChain) refuseServiceCaller(ctx context.Context, subject string) error {
+// Defense in depth: the route asks for a console session with a fresh
+// authentication and the actions of the caller. This check stays so that a
+// caller without a session or of another kind cannot approve, and it does
+// not rely on the route, the actions or the MFA check.
+func (c *auditChain) requirePersonApprover(ctx context.Context, subject string) error {
 	if c.principals == nil {
-		return nil
+		return audit.ErrChainNeedsPerson
 	}
 
 	got, err := c.principals.GetPrincipalBySubject(ctx, subject)
 	if errors.Is(err, principal.ErrNotFound) {
-		return nil
+		return audit.ErrChainNeedsPerson
 	}
 
 	if err != nil {
-		return fmt.Errorf("read principal: %w", err)
+		return errors.Join(audit.ErrChainNeedsPerson, fmt.Errorf("read principal: %w", err))
 	}
 
-	// The allowlist of the kinds that may approve a change to off. A kind
-	// that this list does not name fails closed.
-	if got.Kind != principal.KindPerson && got.Kind != principal.KindWorkload {
+	if got.Kind != principal.KindPerson {
 		return audit.ErrChainNeedsPerson
 	}
 
@@ -1140,26 +1203,31 @@ func (c *auditChain) leaveAfterMigration(ctx context.Context) error {
 }
 
 // enterForApproval enters maintenance mode for an approval. It notes in the
-// stored record when the chain entered maintenance mode itself.
-func (c *auditChain) enterForApproval(ctx context.Context) error {
+// stored record when the chain entered maintenance mode itself, and answers
+// true then.
+func (c *auditChain) enterForApproval(ctx context.Context) (bool, error) {
 	if c.maint == nil {
-		return nil
+		return false, nil
 	}
 
 	before, err := c.maint.Get(ctx)
 	if err != nil {
-		return fmt.Errorf("enter maintenance mode: %w", err)
+		return false, fmt.Errorf("enter maintenance mode: %w", err)
 	}
 
 	if _, err := c.maint.Enter(ctx, false); err != nil {
-		return fmt.Errorf("enter maintenance mode: %w", err)
+		return false, fmt.Errorf("enter maintenance mode: %w", err)
 	}
 
 	if before != maintenance.StateNormal {
-		return nil
+		return false, nil
 	}
 
-	return c.markEnteredMaintenance(ctx)
+	if err := c.markEnteredMaintenance(ctx); err != nil {
+		return true, err
+	}
+
+	return true, nil
 }
 
 // refuseWhileRestoring reports backup.ErrRestoreRunning while a restore

@@ -397,8 +397,8 @@ func TestGitHostLinkAcceptNeedsAFreshSignIn(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []linkAcceptCase{
-		{"stale session", false, true, http.StatusUnauthorized, freshErrorCode, 0, 0},
-		{"stale session takes over no link", true, true, http.StatusUnauthorized, freshErrorCode, 1, 0},
+		{"stale session", false, true, http.StatusForbidden, freshErrorCode, 0, 0},
+		{"stale session takes over no link", true, true, http.StatusForbidden, freshErrorCode, 1, 0},
 		{"fresh session", false, false, http.StatusCreated, "", 0, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -528,7 +528,7 @@ func TestGitHostLinkStaleAcceptNamesNoAccount(t *testing.T) {
 
 	var refusal staleAcceptRefusal
 	f.asSessionCookie(t, cookie, csrf, apiCall{
-		http.MethodPost, linksURL, `{"token":"` + token + `","previousPrincipal":"prn-alice"}`, http.StatusUnauthorized,
+		http.MethodPost, linksURL, `{"token":"` + token + `","previousPrincipal":"prn-alice"}`, http.StatusForbidden,
 	}, &refusal)
 
 	named := []string{"4711", "github.com", "alice-gh", "prn-alice", token}

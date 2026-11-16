@@ -8,7 +8,7 @@ ADR 370 removes the namespace service principal and gives each housekeeping purp
 2. **The install writes principals and grants.** In the transaction that makes the installation, the store writes one principal of kind `service` and source `builtin` for each purpose, and one stored grant of its role on its object, with the install as the creator and the install time. Code defines the role. The grant row decides who holds it.
 3. **Each run authorizes.** Each housekeeping service takes its `identity.Principal` from NEW `principal.Housekeeping(purpose)` and calls the authorizer before it acts, as any caller does. A denial changes nothing and writes an audit entry with the outcome `denied`. The audit entry of each run names the principal.
 4. **No path in from outside.** The authenticator refuses a credential that names a `builtin` principal. The token services refuse to make a token for one. A grant to a housekeeping principal of a role that its purpose does not hold is refused.
-5. **The namespace service principal goes.** Delete `pkg/identity/namespace_service.go`, `authorizeNamespaceService`, `NamespaceServiceRule`, the guard and each check in the trigger and job start path. The run-as principal of ADR 369 decision 7 takes its place in the trigger changes.
+5. **The namespace service principal stays for now.** The dispatcher needs it until the run-as principal of ADR 369 decision 7 exists. The first trigger change (run-triggers) deletes it with that principal (ADR 370: this change lands before the trigger changes "or with them").
 
 ## Structure
 
@@ -25,6 +25,36 @@ ADR 370 removes the namespace service principal and gives each housekeeping purp
 | Access service | A grant out of the purpose is refused. | `TestGrantOutOfPurposeRefused`: a grant of `namespace-admin` to a housekeeping principal is refused. |
 | Each housekeeping service | It authorizes before it acts, and names its principal. | `TestRevokeStopsOnlyItsSweep`: revoke the grant of the artifact sweep; the artifact sweep changes nothing and writes a denial; the token sweep and the retention run as before. `TestEachSweepIsAttributed`: each audit entry of each sweep names its housekeeping principal, never `@server`. |
 
+## Contract
+
+Types and functions (`pkg/principal`):
+
+- NEW type `principal.HousekeepingPurpose`, with unexported fields. A value comes only from the closed list of NEW `principal.HousekeepingPurposes()`. Each value has the subject `housekeeping:<purpose>`, a role name and the actions of that role.
+- NEW `principal.Housekeeping(purpose)` returns the `identity.Principal` of one purpose.
+- NEW source `builtin`, a constant next to `SourceLocal` (`pkg/principal/principal.go:116`). `validateSource` (`pkg/principal/principal.go:629`) accepts it. An unknown source returns `principal.ErrInvalid`.
+
+Port (`pkg/principal/store.go:58`):
+
+- `ListPrincipals` of `principal.Store` takes the source filter next to the kind. An empty source keeps every source. The total and the cursor count only the rows of the filter. It returns `principal.ErrInvalid` for an unknown source.
+
+Endpoint (existing route, NEW query parameter):
+
+- `GET /api/server/principals?kind=service&source=builtin` keeps the principals of that source. As for `kind`, a source that is not valid answers 400.
+
+Tables:
+
+- No NEW table. The install writes one row in `principals` (kind `service`, source `builtin`) for each purpose, and one stored grant of its role, with the install as the creator and the install time, in the baseline of each dialect.
+
+Error codes and audit:
+
+- 403 `principal.housekeeping` (NEW error code): a credential or a token for a housekeeping principal.
+- 422 `access.grant-out-of-purpose` (NEW error code), with the purpose: a grant of a role that the purpose does not hold.
+- A refused housekeeping run writes an audit entry with the outcome `denied`. The entry names the housekeeping principal and the missing action.
+
 ## Risks
 
 - A sweep that a person revoked stops until a person grants it again. The docs page says so, and the denial entry names the principal and the action.
+
+## Where the source filter runs
+
+The store applies the `source` filter in the list query and in the count query. The service does not filter after the read, because that breaks the page totals and the cursors. The port `pkg/principal/store.go` takes the source, and both dialects and the conformance suite follow. The agent may put the built-in principal constants in `pkg/identity/identity.go` instead of a new file.

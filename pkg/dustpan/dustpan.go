@@ -63,6 +63,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/forgelinksvc"
 	"opendustpan.org/opendustpan/internal/issuersvc"
+	"opendustpan.org/opendustpan/internal/jobunits"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
@@ -85,6 +86,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -181,11 +183,17 @@ type settings struct {
 	// issuerStore keeps the signing keys and the settings of the OIDC issuer
 	// of each namespace, or is nil. issuerBaseURL is the host of the issuer URL,
 	// and issuerOutbox receives its notices.
-	issuerStore          profile.IssuerStore
-	issuerBaseURL        string
-	issuerOutbox         notify.Outbox
-	sinks                sinkSettings
-	jobStore             job.Store
+	issuerStore   profile.IssuerStore
+	issuerBaseURL string
+	issuerOutbox  notify.Outbox
+	sinks         sinkSettings
+	jobStore      job.Store
+	// jobTokenStore keeps the job tokens that the server issues to the runner
+	// sessions of a job, or is nil when the server issues none. With a store,
+	// the authenticator chain resolves a job token behind its own failure
+	// budget, and the authorizer chain bounds every action of the principal to
+	// the unit of its job.
+	jobTokenStore        jobtoken.Store
 	triggerStore         trigger.Store
 	unitSettingsStore    unitsettings.Store
 	driftStore           drift.Store
@@ -717,6 +725,7 @@ func defaultSettings() *settings {
 		issuerOutbox:            nil,
 		sinks:                   sinkSettings{store: nil, senders: nil, ports: egress.Ports{}},
 		jobStore:                nil,
+		jobTokenStore:           nil,
 		triggerStore:            nil,
 		unitSettingsStore:       nil,
 		driftStore:              nil,
@@ -915,18 +924,25 @@ type authPorts struct {
 // inside out, is:
 //
 //  1. the configured authenticator, then the stored access tokens behind
-//     their failure gate;
+//     their failure gate, then the job tokens of the runner sessions behind
+//     the failure gate of their own kind;
 //  2. the marks of the temporary administrators;
 //  3. the refusal of dev subjects on an installation that is not dev;
 //  4. the refusal of the subjects of namespace service principals.
 //
 // The authorizer chain, from the inside out, is the configured authorizer,
-// the self actions, the namespace service rule and the IP allowlist gate.
-// Each step is one statement here, in this order.
+// the self actions, the namespace service rule, the IP allowlist gate and,
+// when the server issues job tokens, the rule of job tokens. Each step is one
+// statement here, in this order.
 func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error) {
 	var none authPorts
 
-	authn, gates, err := gatedAuthenticator(cfg.authenticator, tokens, cfg.namespaceStore, cfg.logger, cfg.now)
+	jobs, units, err := jobTokenPorts(cfg)
+	if err != nil {
+		return none, err
+	}
+
+	authn, gates, err := gatedAuthenticator(cfg.authenticator, tokens, jobs, newGateEnv(cfg))
 	if err != nil {
 		return none, err
 	}
@@ -941,6 +957,14 @@ func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error)
 			identity.ActionCallerManageGitHostLinks,
 		},
 	}}, cfg.ipAllowlists)
+
+	// The rule of job tokens wraps the whole chain of an embedder, so no
+	// Authorizer of an embedder can widen a job token: the rule decides
+	// before every other rule, and it asks them only for the unit of the job
+	// of the token. A server that issues no job token keeps the chain it had.
+	if units != nil {
+		authz = identity.JobTokenRule{Next: authz, Units: units}
+	}
 
 	marks, marked, err := tempAdminDecorator(authn, cfg.namespaceStore, cfg.now, cfg.logger)
 	if err != nil {
@@ -965,6 +989,29 @@ func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error)
 	}
 
 	return authPorts{authenticator: authn, authorizer: authz, gates: gates}, nil
+}
+
+// jobTokenPorts returns the service of the job tokens and the reader of the
+// unit of a job when the server issues job tokens, and no port when it does
+// not: then the chains have no member and no rule for a job token.
+//
+// A server that issues job tokens keeps the job store too. The rule of job
+// tokens reads the unit of the job of every request, so a build without a job
+// store fails here: a rule that cannot read the unit of a job must never fall
+// back to a wider reach.
+func jobTokenPorts(cfg *settings) (*jobtoken.Service, *jobunits.Service, error) {
+	if cfg.jobTokenStore == nil {
+		return nil, nil, nil
+	}
+
+	jobs := jobtoken.NewService(cfg.jobTokenStore, cfg.now)
+
+	units, err := jobunits.New(cfg.jobStore)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the reader of the unit of a job: %w", err)
+	}
+
+	return jobs, units, nil
 }
 
 // tempAdminDecorator marks the temporary administrators among the callers
@@ -1486,7 +1533,7 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		writable = checker
 	}
 
-	return newComponentReadiness(readinessSettings{
+	probe := newComponentReadiness(readinessSettings{
 		components:  cfg.components,
 		streamStop:  cfg.streamStop,
 		store:       cfg.namespaceStore,
@@ -1499,6 +1546,9 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		failures:    observed.ReadinessFailures(),
 		logger:      cfg.logger,
 	})
+	probe.drainPeriod = cfg.drainPeriod
+
+	return probe
 }
 
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
@@ -2898,6 +2948,11 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
+	proxyRules, _, err := newProxyRuleService(cfg, deps.services.namespaces)
+	if err != nil {
+		return none, err
+	}
+
 	gitHost, idem, err := newGitHostParts(cfg, deps)
 	if err != nil {
 		return none, err
@@ -2913,7 +2968,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
-	serverAPI, err := newServerHandler(serverHandlerInputs{
+	serverAPI, err := newServerHandler(&serverHandlerInputs{
 		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
 		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
 		reach:  reach,
@@ -2921,7 +2976,8 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		cursors: cfg.secretWrapper,
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
-		principals: principals, gates: gates, forgeService: gitHost, idempotency: idem, extras: extras,
+		principals: principals, gates: gates, proxyRules: proxyRules, forgeService: gitHost,
+		idempotency: idem, extras: extras,
 		shipper: cfg.auditShipper, workers: cfg.watch, instances: cfg.instanceStore,
 		installationKind: cfg.installationKind, denialLimiter: cfg.denialLimiter,
 		version: cfg.version, logger: cfg.logger, now: cfg.now,
@@ -3797,6 +3853,13 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// names as modules.v1, and follows the same rules.
 	mux.Handle(
 		"/v1/modules/",
+		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
+	)
+	// The provider network mirror of OpenTofu lives outside /api/, under its
+	// own prefix. A person writes it in the network_mirror block of the CLI
+	// configuration. It follows the same rules.
+	mux.Handle(
+		"/v1/mirror/",
 		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
 	)
 

@@ -136,9 +136,13 @@ func newSignInSetup(tb testing.TB, publicURL string, shared *TestClock) *signInS
 		clock = newTestClock()
 	}
 
+	// The providers sign with ES256, except beta, which signs with RS256: the
+	// server accepts both, and each sign-in test still meets both. An RSA key
+	// takes most of the time of a provider, and each test environment makes
+	// three providers.
 	idp := oauthtest.New(tb, oauthtest.Config{
 		Now: now, ClientID: signInClientID, ClientSecret: signInClientSecret,
-		RedirectURI: publicURL + "/api/server/sign-in/" + SignInProvider + "/callback", Algorithm: oauthtest.RS256,
+		RedirectURI: publicURL + "/api/server/sign-in/" + SignInProvider + "/callback", Algorithm: oauthtest.ES256,
 		User: testUser(),
 		Mode: oauthtest.ModeOIDC, Faults: noFaults(),
 		TLS: true,
@@ -159,7 +163,7 @@ func newSignInSetup(tb testing.TB, publicURL string, shared *TestClock) *signInS
 	hub := oauthtest.New(tb, oauthtest.Config{
 		Now: now, ClientID: PlainClientID, ClientSecret: PlainClientSecret,
 		RedirectURI: publicURL + "/api/server/sign-in/" + PlainSignInProvider + "/callback",
-		Algorithm:   oauthtest.RS256,
+		Algorithm:   oauthtest.ES256,
 		User:        testUser(),
 		Mode:        oauthtest.ModeOAuth, Faults: noFaults(), TLS: false,
 	})

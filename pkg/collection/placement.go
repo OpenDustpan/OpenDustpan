@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -180,20 +181,23 @@ func (p Pattern) Covers(other Pattern) bool {
 // collection of the unit. The rules of a namespace are an ordered list and the
 // first rule that matches wins. ID is stable and random, with the prefix plr-.
 type Rule struct {
-	CreatedAt  time.Time
-	ID         string
-	Namespace  namespace.Name
-	Tool       string
-	Project    Pattern
-	Stack      Pattern
-	Collection Name
+	CreatedAt    time.Time
+	ID           string
+	Namespace    namespace.Name
+	Tool         string
+	Project      Pattern
+	Stack        Pattern
+	CollectionID string
+	// CollectionName is the current name, read with the rule. It is a label
+	// only. A write uses CollectionID and ignores this field.
+	CollectionName Name
 	// CreatedBy is the subject that made the rule.
 	CreatedBy string
 	// Position is the place of the rule in the list, from 1.
 	Position int
 }
 
-// Validate checks the tool, the patterns, the collection name and the position
+// Validate checks the tool, the patterns, the collection ID and the position
 // of the rule (0 or more; the store reads 0 as "the end" for a new rule and as
 // "the current place" for a change), and returns the error of the first one that is invalid. Every
 // PlacementStore adapter calls it before a write, so a caller that builds a
@@ -203,12 +207,26 @@ func (r Rule) Validate() error {
 		return fmt.Errorf("%w: %d", ErrInvalidPosition, r.Position)
 	}
 
-	return validateRuleFields(r.Tool, r.Project, r.Stack, r.Collection)
+	return validateRuleFields(r.Tool, r.Project, r.Stack, r.CollectionID)
 }
 
-// validateRuleFields checks the tool, the two patterns and the collection name
+const maxCollectionIDLength = 64
+
+// ValidateCollectionID checks the col- prefix and the identifier characters.
+// It returns ErrInvalidName when the ID has an invalid form.
+func ValidateCollectionID(id string) error {
+	if !strings.HasPrefix(id, "col-") || len(id) <= len("col-") || !ident.Valid(id, maxCollectionIDLength) {
+		return fmt.Errorf("%w: invalid collection ID: use the id from "+
+			"GET /api/dustpan/v1/namespaces/{namespace}/collections",
+			ErrInvalidName)
+	}
+
+	return nil
+}
+
+// validateRuleFields checks the tool, the two patterns and the collection ID
 // of a rule.
-func validateRuleFields(tool string, project, stack Pattern, coll Name) error {
+func validateRuleFields(tool string, project, stack Pattern, collectionID string) error {
 	if !slices.Contains(PlacementTools(), tool) {
 		return fmt.Errorf("%w: %q, want one of %v", ErrInvalidPlacementTool, tool, PlacementTools())
 	}
@@ -221,11 +239,7 @@ func validateRuleFields(tool string, project, stack Pattern, coll Name) error {
 		return err
 	}
 
-	if _, err := ParseName(coll.String()); err != nil {
-		return err
-	}
-
-	return nil
+	return ValidateCollectionID(collectionID)
 }
 
 // Matches reports whether the rule matches a new unit of tool with the given
@@ -242,7 +256,7 @@ func (r Rule) Hides(other Rule) bool {
 
 // Text returns the rule in the form that the audit log and the errors use.
 func (r Rule) Text() string {
-	return r.Tool + " " + r.Project.String() + "/" + r.Stack.String() + " -> " + r.Collection.String()
+	return r.Tool + " " + r.Project.String() + "/" + r.Stack.String() + " -> " + r.CollectionID
 }
 
 // FirstMatch returns the first rule of rules that matches a new unit of tool
@@ -271,15 +285,8 @@ type PlacementError struct {
 
 func (e *PlacementError) Error() string {
 	return fmt.Sprintf(
-		"no placement rule matches %s stack %s/%s in namespace %s: "+
-			"create a collection with POST /api/dustpan/v1/namespaces/%s/collections, "+
-			"add a rule with POST /api/dustpan/v1/namespaces/%s/placement-rules, for example "+
-			"curl -X POST -H \"Authorization: Bearer $TOKEN\" -d '{\"tool\":\"%s\",\"project\":\"*\",\"stack\":\"*\","+
-			"\"collection\":\"<collection>\"}' <server>/api/dustpan/v1/namespaces/%s/placement-rules, "+
-			"or move an existing unit into a collection with PUT /api/inventory/unit-collection "+
-			"(see docs/guides/quickstart.md)",
-		e.Tool, quoteName(e.Project), quoteName(e.Stack), e.Namespace, e.Namespace, e.Namespace,
-		e.Tool, e.Namespace,
+		"no placement rule matches %s stack %s/%s in namespace %s: run opendustpan placement add",
+		e.Tool, quoteName(e.Project), quoteName(e.Stack), e.Namespace,
 	)
 }
 
@@ -319,7 +326,7 @@ type PlacementStore interface {
 	// CreatePlacementRule inserts r at r.Position and moves the rules from that
 	// position on down by one place. Position 0 means the end of the list, read
 	// in the same transaction. It returns ErrPlacementCollectionMissing when
-	// r.Collection does not exist in the namespace, ErrInvalidPosition when
+	// r.CollectionID does not exist in the namespace, ErrInvalidPosition when
 	// r.Position is not 0 or from 1 to the count of rules plus 1,
 	// ErrPlacementConflict when the result has a hidden rule,
 	// ErrTooManyPlacementRules at MaxPlacementRules, and namespace.ErrFenced

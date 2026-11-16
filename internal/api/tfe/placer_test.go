@@ -26,7 +26,8 @@ func (r fixedRules) Place(
 
 	rule.ID = "rule-1"
 	rule.Tool = tool
-	rule.Collection = "default"
+	rule.CollectionID = "col-default"
+	rule.CollectionName = "default"
 
 	return rule, nil
 }
@@ -37,7 +38,7 @@ type fixedCollections struct {
 }
 
 func (c fixedCollections) CollectionID(context.Context, identity.Object) (string, bool, error) {
-	return "collection-id", !c.missing, nil
+	return "col-default", !c.missing, nil
 }
 
 func (c fixedCollections) CollectionOf(context.Context, identity.Object) (string, bool, error) {

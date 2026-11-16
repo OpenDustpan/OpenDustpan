@@ -118,7 +118,7 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindServer).
 		WithBodies(apidesc.NoBody, settingsSchema),
 	apidesc.Pattern(http.MethodPatch, settingsPath): apidesc.Name("updateSettings", tagSettings).
-		WithIfMatchRequired().
+		WithKey().WithIfMatchRequired().
 		WithETag().
 		On(apidesc.KindServer).
 		WithBodies(settingsPatchSchema, settingsSchema),
@@ -127,7 +127,7 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindNamespace).
 		WithBodies(apidesc.NoBody, settingsSchema),
 	apidesc.Pattern(http.MethodPatch, namespaceSettingsPath): apidesc.Name("updateNamespaceSettings", tagSettings).
-		WithIfMatchRequired().
+		WithKey().WithIfMatchRequired().
 		WithETag().
 		On(apidesc.KindNamespace).
 		WithBodies(settingsPatchSchema, settingsSchema),
@@ -196,6 +196,7 @@ func joinLabels() map[string]apidesc.Label {
 	maps.Copy(labels, auditChainOperationLabels())
 	maps.Copy(labels, maintenanceOperationLabels())
 	maps.Copy(labels, directorySignInOperationLabels())
+	maps.Copy(labels, proxyRuleOperationLabels())
 
 	return labels
 }

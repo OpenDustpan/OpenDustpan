@@ -802,6 +802,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 			Size:            10,
 			Force:           tc.force,
 			Sealed:          false,
+			ClientEncrypted: workspace.ClientEncryptedNo,
 			RestoredFrom:    workspace.StateVersionID(tc.restored),
 			SensitiveMarks:  nil,
 			FenceBy:         tc.fenceBy,

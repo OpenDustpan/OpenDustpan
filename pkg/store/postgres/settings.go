@@ -201,9 +201,15 @@ func (st SettingStore) Update(
 		}
 
 		res, changeErr := setting.Change(ctx, settingTx{q: q, srv: srv, entryScope: entryScope}, scope, in)
+		if changeErr != nil {
+			return changeErr
+		}
+
 		result = res
 
-		return changeErr
+		// The answer is stored in this transaction, so a replay of the
+		// Idempotency-Key finds the result of the change or nothing.
+		return finishCompletion(ctx, q, res)
 	}
 
 	// The lock order is the one of every audited write: an entry of the scope

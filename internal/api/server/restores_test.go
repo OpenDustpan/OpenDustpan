@@ -83,16 +83,29 @@ func newRestoreFixtureHooked(
 ) restoreFixture {
 	t.Helper()
 
-	return newRestoreFixtureWorkers(t, stores, target, afterApply, nil)
+	return newRestoreFixtureWorkers(t, stores, target, afterApply, restoreFixtureOptions{workers: nil, authz: nil})
 }
 
-// newRestoreFixtureWorkers builds the fixture of newRestoreFixtureHooked
-// with workers as the worker check of the handler.
+// restoreFixtureOptions holds the optional parts of a restore fixture: the
+// worker source and the authorizer of the handler.
+type restoreFixtureOptions struct {
+	workers apiserver.WorkerSource
+	authz   identity.Authorizer
+}
+
+// newRestoreFixtureWorkers builds the fixture of newRestoreFixtureHooked with
+// the options of the caller: the worker check of the handler and its
+// authorizer. A nil authorizer allows every action.
 func newRestoreFixtureWorkers(
 	t *testing.T, stores backupStores, target blob.Store, afterApply func(context.Context) error,
-	workers apiserver.WorkerSource,
+	opts restoreFixtureOptions,
 ) restoreFixture {
 	t.Helper()
+
+	workers, authz := opts.workers, opts.authz
+	if authz == nil {
+		authz = selectiveAuthorizer{deny: map[identity.Action]bool{}}
+	}
 
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    stores.registry,
@@ -149,6 +162,7 @@ func newRestoreFixtureWorkers(
 	aud := newTestAudit()
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
@@ -163,7 +177,7 @@ func newRestoreFixtureWorkers(
 		Now:              nil,
 		TempAdmins:       nil,
 		Authenticator:    tokenAuthenticator{},
-		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Authorizer:       authz,
 		Logger:           slog.New(slog.DiscardHandler),
 		Namespaces:       namespaces,
 		Backups:          backups,
@@ -622,6 +636,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	}
 
 	denied, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
@@ -671,6 +686,36 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 
 	if status, body := serveRestore(t, denied, http.MethodGet, unknown, ""); status != http.StatusForbidden {
 		t.Fatalf("GET unknown restore when denied answers %d, want %d (%s)", status, http.StatusForbidden, body)
+	}
+}
+
+// TestStartRestoreWithoutGrantAnswers403 proves POST /api/dustpan/v1/restores
+// answers 403 when the principal holds no server:restore on the installation,
+// with the one JSON error shape, and that the denied start writes no row.
+func TestStartRestoreWithoutGrantAnswers403(t *testing.T) {
+	t.Parallel()
+
+	stores := openBackupDeps(t)
+	allowed := newRestoreFixtureOver(t, stores, stores.target)
+
+	denyRestore := selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionServerRestore: true}}
+	opts := restoreFixtureOptions{workers: nil, authz: denyRestore}
+	denied := newRestoreFixtureWorkers(t, stores, stores.target, nil, opts)
+
+	status, body := serveRestore(
+		t, denied.handler, http.MethodPost, "/api/dustpan/v1/restores", `{"backupID":"bkp-missing000000000001"}`,
+	)
+	if status != http.StatusForbidden {
+		t.Fatalf("POST restores without the grant answers %d, want %d (%s)", status, http.StatusForbidden, body)
+	}
+
+	if doc := decodeError(t, body); doc.Code != http.StatusForbidden || doc.Message == "" {
+		t.Fatalf("POST restores error = %+v, want code 403 with a message", doc)
+	}
+
+	listStatus, listBody := serveRestore(t, allowed.handler, http.MethodGet, "/api/dustpan/v1/restores", "")
+	if listStatus != http.StatusOK || strings.Contains(listBody, `"id":"rst-`) {
+		t.Fatalf("GET restores answers %d %s after the denied start, want 200 with no row", listStatus, listBody)
 	}
 }
 
@@ -842,6 +887,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
@@ -990,6 +1036,7 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
@@ -1129,6 +1176,7 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,

@@ -5,32 +5,43 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/faultlog"
+	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/errcode"
 )
 
 // failure is the answer of an error: the HTTP status, a message that is safe
 // to show the caller, and the code of the catalog with its arguments. A
 // failure with an empty code answers without errorCode. Each classify
-// function returns a failure, and writeError writes it.
+// function returns a failure, and writeError writes it. retryAfter is the
+// wait that the answer names in the Retry-After header, or 0 for none.
 type failure struct {
-	status  int
-	message string
-	code    string
-	args    []errcode.Value
+	status     int
+	message    string
+	code       string
+	args       []errcode.Value
+	retryAfter time.Duration
 }
 
 // fail returns the failure of status and message with no code. A classify
 // function returns fail(0, "") with false for an error that it does not map.
 func fail(status int, message string) failure {
-	return failure{status: status, message: message, code: "", args: nil}
+	return failure{status: status, message: message, code: "", args: nil, retryAfter: 0}
 }
 
 // failCoded returns the failure of status and message with code, a code of
 // the catalog, and the arguments that the code declares.
 func failCoded(status int, message, code string, args ...errcode.Value) failure {
-	return failure{status: status, message: message, code: code, args: args}
+	return failure{status: status, message: message, code: code, args: args, retryAfter: 0}
+}
+
+// failRetryAfter returns the failure of status and message with code that the
+// answer carries in the Retry-After header after.
+func failRetryAfter(status int, message, code string, after time.Duration) failure {
+	return failure{status: status, message: message, code: code, args: nil, retryAfter: after}
 }
 
 // answer returns the status, the message and the answer of f. When the
@@ -59,8 +70,13 @@ func (h *Handler) writeAnswer(
 	})
 }
 
-// writeCoded writes the answer of f, which has a code of the catalog.
+// writeCoded writes the answer of f, which has a code of the catalog. It
+// names the Retry-After wait of f when it is above zero.
 func (h *Handler) writeCoded(ctx context.Context, w http.ResponseWriter, f failure) {
+	if f.retryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.FormatInt(problem.RetryAfterSeconds(f.retryAfter), 10))
+	}
+
 	status, message, answer := h.answer(ctx, f)
 	h.writeAnswer(ctx, w, status, message, answer)
 }

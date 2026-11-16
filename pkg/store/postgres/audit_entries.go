@@ -25,5 +25,5 @@ func (s *Store) EntryAt(ctx context.Context, ns namespace.Name, seq int64) (audi
 		return audit.Entry{}, fmt.Errorf("read audit entry: %w", err)
 	}
 
-	return fromAuditRow(row), nil
+	return fromAuditRow(row)
 }

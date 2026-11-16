@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
@@ -110,8 +111,8 @@ var (
 		message: `If-Match must be one revision in quotes, as the ETag of a read gives it, for example "3"`,
 	}
 	errSettingsChanged = &codedError{
-		status: http.StatusPreconditionFailed, code: errcode.RequestPreconditionFailed, args: nil,
-		message: "the settings changed since the revision of If-Match: read them again",
+		status: http.StatusPreconditionFailed, code: errcode.SettingsRevisionStale, args: nil,
+		message: "the settings changed since the revision of If-Match: read them again with GET " + settingsPath,
 	}
 )
 
@@ -348,6 +349,13 @@ func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request, _ identity
 // which writes no audit entry and keeps the revision. A change that reduces
 // security needs a fresh authentication. Any other refused change changes
 // nothing and writes one failure entry.
+//
+// A request with no Idempotency-Key is refused with 400 before any change. The
+// request runs inside the idempotency middleware. The
+// store keeps the answer in the transaction of the change, so a replay with the
+// same body answers the stored result and writes nothing. The same key with
+// another body or another If-Match is refused with 422. The caller is
+// authorized before this handler runs: a replay never skips that check.
 func (h *Handler) patchSettings(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
@@ -357,6 +365,41 @@ func (h *Handler) patchSettings(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
+	h.keyed(w, r, p, keyedCall{
+		build:    settingsAnswer,
+		serve:    func(w http.ResponseWriter, r *http.Request) { h.writeSettingsPatch(w, r, p, obj) },
+		required: true,
+	})
+}
+
+// errSettingsResult reports a result of a settings change that is not a
+// setting.Result.
+var errSettingsResult = errors.New("the settings change passed a result of another type")
+
+// settingsAnswer makes the stored answer of a change from its result. The
+// stored answer and the sent answer are one.
+func settingsAnswer(result any) (idempotency.Answer, error) {
+	res, ok := result.(setting.Result)
+	if !ok {
+		return idempotency.Answer{}, errSettingsResult
+	}
+
+	answer, err := jsonAnswer(http.StatusOK, 0, settingsOf(res.Resource), "")
+	if err != nil {
+		return idempotency.Answer{}, err
+	}
+
+	// The revision 0 is a valid ETag, which jsonAnswer leaves out.
+	answer.Headers["Etag"] = settingsETag(res.Resource.Revision)
+
+	return answer, nil
+}
+
+// writeSettingsPatch runs the change of a PATCH and writes its answer.
+func (h *Handler) writeSettingsPatch(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
 	scope := settingScope(obj)
 
 	patch, revision, err := h.readSettingsPatch(w, r, scope)
@@ -373,9 +416,14 @@ func (h *Handler) patchSettings(w http.ResponseWriter, r *http.Request, p identi
 		return
 	}
 
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("ETag", settingsETag(res.Resource.Revision))
-	h.writeJSON(ctx, w, http.StatusOK, settingsOf(res.Resource))
+	answer, err := settingsAnswer(res)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	writeAnswer(w, answer)
 }
 
 // readSettingsPatch reads and checks the request of a PATCH: the content type,
@@ -440,7 +488,8 @@ func (h *Handler) applySettings(
 // change that reduces security. An installation with no console sign-in has
 // no authentication step to ask for, so the change needs none. Otherwise a
 // request with an access token answers 403 with mfa.fresh-step-required, and
-// a console session whose sign-in is too old answers 401.
+// a console session whose sign-in is too old answers the same 403 with the
+// path of a new sign-in.
 func (h *Handler) requireFreshStep(r *http.Request) error {
 	if h.signIn == nil {
 		return nil
@@ -473,7 +522,7 @@ func (h *Handler) refuseSettings(
 	coded, ok := errors.AsType[*codedError](err)
 	refused := ok && coded.status < http.StatusInternalServerError && coded.status != http.StatusPreconditionFailed
 
-	// A sign-in that is too old refuses the change with 401, and it is a
+	// A sign-in that is too old refuses the change with 403, and it is a
 	// refusal of the caller as well.
 	if refused || errors.Is(err, errReauthenticate) {
 		h.appendObjectChange(r, p, obj, serverChange{

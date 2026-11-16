@@ -26,6 +26,8 @@ func TestConsoleControlPaths(t *testing.T) {
 		{"line feed", "/%0a", ""},
 		{"DEL", "/%7f", ""},
 		{"C1 control", "/%C2%85", ""},
+		{"right-to-left override", "/%e2%80%ae", ""},
+		{"line separator", "/%e2%80%a8", ""},
 		{"raw NUL", "/x", "/\x00"},
 	}
 

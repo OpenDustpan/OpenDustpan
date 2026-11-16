@@ -17,6 +17,7 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/errcode"
+	"opendustpan.org/opendustpan/internal/jobproxysvc"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -117,7 +118,7 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 
 	return newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: autoCreate, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil,
+		hostile: nil, passwords: nil, failPolicyRead: nil,
 	})
 }
 
@@ -142,6 +143,28 @@ type signInEnvOptions struct {
 	passwords []apiserver.PasswordProvider
 	// noGateEngine leaves the gate config service without a policy engine.
 	noGateEngine bool
+	// failPolicyRead, when set, makes the read of the session policy fail
+	// with its error, as a store that is down does.
+	failPolicyRead func() error
+}
+
+// failingPolicyStore is a policy store whose read fails with the error that
+// fail gives. A nil fail makes each read work. Each other call goes to the
+// store that it wraps.
+type failingPolicyStore struct {
+	*sqlite.Store
+
+	fail func() error
+}
+
+func (s failingPolicyStore) GetSessionPolicy(ctx context.Context) (session.Policy, error) {
+	if s.fail != nil {
+		if err := s.fail(); err != nil {
+			return session.Policy{}, err
+		}
+	}
+
+	return s.Store.GetSessionPolicy(ctx)
 }
 
 // seedNamespaces makes the namespaces names in svc.
@@ -193,7 +216,9 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		authz = selectiveAuthorizer{deny: map[identity.Action]bool{}}
 	}
 
-	policies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: clock.Now})
+	policies, err := session.NewPolicies(session.PolicyConfig{
+		Store: failingPolicyStore{Store: st, fail: opts.failPolicyRead}, Now: clock.Now,
+	})
 	if err != nil {
 		t.Fatalf("session policies: %v", err)
 	}
@@ -233,6 +258,8 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	if err != nil {
 		t.Fatalf("gate config service: %v", err)
 	}
+
+	proxyRules := newSignInProxyRules(t, st, namespaces, clock)
 
 	grants, allowlists := newSignInAccess(t, st, namespaces, clock)
 
@@ -291,6 +318,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		AuditChain:       newFakeAuditChain(audit.ChainOn),
 		IPAllowlists:     allowlists,
 		Gates:            gates,
+		ProxyRules:       proxyRules,
 		SessionPolicy:    policyRoutes,
 		InstallationKind: "",
 		StateWriteGates:  stategate.Effective{Mode: "", Reason: "", Checked: nil, Unchecked: nil},
@@ -787,8 +815,8 @@ func (e signInEnv) staleSession(t *testing.T) *http.Cookie {
 
 // TestSignInTokenFreshness proves that a console session creates a token
 // while its sign-in is fresh, and that each route that creates or rotates
-// a token answers 401 with the path of a new sign-in once the sign-in is
-// older than the token freshness window.
+// a token answers 403 with the code and the path of a new sign-in once the
+// sign-in is older than the token freshness window.
 func TestSignInTokenFreshness(t *testing.T) {
 	t.Parallel()
 
@@ -808,16 +836,17 @@ func TestSignInTokenFreshness(t *testing.T) {
 			Message        string `json:"message"`
 			Reauthenticate string `json:"reauthenticate"`
 			Code           int    `json:"code"`
+			ErrorCode      string `json:"errorCode"`
 		}
 
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatalf("decode the answer of %s: %v", target, err)
 		}
 
-		if rec.Code != http.StatusUnauthorized || body.Reauthenticate != "/api/server/sign-in/corp?fresh=1" ||
-			!strings.Contains(body.Message, "sign in again") {
-			t.Errorf("POST %s from a stale session = %d %s, want 401 with the path of a new sign-in", target,
-				rec.Code, rec.Body.String())
+		if rec.Code != http.StatusForbidden || body.Reauthenticate != "/api/server/sign-in/corp?fresh=1" ||
+			body.ErrorCode != "mfa.fresh-step-required" || !strings.Contains(body.Message, "sign in again") {
+			t.Errorf("POST %s from a stale session = %d %s, want 403 with the code and the path of a new sign-in",
+				target, rec.Code, rec.Body.String())
 		}
 	}
 }
@@ -901,13 +930,15 @@ func policyChangeEntry(at time.Time) audit.Entry {
 	}
 }
 
-// TestSignInFreshnessWindowOff proves that a window of 0 lets a session
-// with an old sign-in create a token.
-func TestSignInFreshnessWindowOff(t *testing.T) {
+// TestSignInFreshnessWindowZeroAsksEachTime proves that a window of 0 asks
+// for a fresh authentication at each step: even a session with a fresh
+// sign-in cannot create a token, and answers 403 with the code and the path
+// of a new sign-in.
+func TestSignInFreshnessWindowZeroAsksEachTime(t *testing.T) {
 	t.Parallel()
 
 	e := newSignInEnv(t, true)
-	stale := e.staleSession(t)
+	fresh := e.signIn(t)
 
 	_, err := e.store.UpdateSessionPolicy(t.Context(), func(old session.Policy) (session.Policy, audit.Entry, error) {
 		old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = 0, false, e.clock.Now()
@@ -915,11 +946,21 @@ func TestSignInFreshnessWindowOff(t *testing.T) {
 		return old, policyChangeEntry(e.clock.Now()), nil
 	})
 	if err != nil {
-		t.Fatalf("turn the window off: %v", err)
+		t.Fatalf("set the window to 0: %v", err)
 	}
 
-	if rec := e.postWithSession(t, stale, "/api/server/caller/tokens", ownTokenBody()); rec.Code != http.StatusCreated {
-		t.Fatalf("own token with the window off = %d %s, want 201", rec.Code, rec.Body.String())
+	rec := e.postWithSession(t, fresh, "/api/server/caller/tokens", ownTokenBody())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("own token with a window of 0 = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+
+	var refused struct {
+		Reauthenticate string `json:"reauthenticate"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &refused); err != nil ||
+		refused.Reauthenticate != "/api/server/sign-in/corp?fresh=1" {
+		t.Fatalf("refusal with a window of 0 = %s, want the path of a new sign-in", rec.Body.String())
 	}
 }
 
@@ -1183,6 +1224,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		LocalUsers:       nil,
@@ -1329,8 +1371,8 @@ func (e signInEnv) freshSignIn(t *testing.T) *http.Cookie {
 
 // TestSignInSessionPolicyChangeNeedsAFreshSignIn proves that a console
 // session whose sign-in is older than the token freshness window cannot
-// change the session policy: it answers 401 with the path of a new sign-in
-// and the policy stays. A fresh session changes it.
+// change the session policy: it answers 403 with the code and the path of a
+// new sign-in, and the policy stays. A fresh session changes it.
 func TestSignInSessionPolicyChangeNeedsAFreshSignIn(t *testing.T) {
 	t.Parallel()
 
@@ -1338,8 +1380,8 @@ func TestSignInSessionPolicyChangeNeedsAFreshSignIn(t *testing.T) {
 	stale := e.staleSession(t)
 
 	rec := e.sendWithSession(t, http.MethodPatch, stale, "/api/server/session-policy", `{"tokenFreshnessSeconds":0}`)
-	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "/api/server/sign-in/corp?fresh=1") {
-		t.Fatalf("policy change from a stale session = %d %s, want 401 with the path of a new sign-in",
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "/api/server/sign-in/corp?fresh=1") {
+		t.Fatalf("policy change from a stale session = %d %s, want 403 with the path of a new sign-in",
 			rec.Code, rec.Body.String())
 	}
 
@@ -1368,7 +1410,7 @@ func TestSignInFreshnessWithNoPolicyService(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: true, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil,
+		hostile: nil, passwords: nil, failPolicyRead: nil,
 	})
 
 	created := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
@@ -1377,8 +1419,8 @@ func TestSignInFreshnessWithNoPolicyService(t *testing.T) {
 	}
 
 	rec := e.postWithSession(t, e.staleSession(t), "/api/server/caller/tokens", ownTokenBody())
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("own token from a stale session with no policy service = %d %s, want 401",
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("own token from a stale session with no policy service = %d %s, want 403",
 			rec.Code, rec.Body.String())
 	}
 }
@@ -1641,6 +1683,21 @@ func (e signInEnv) makeSiteAdministrator(t *testing.T) {
 
 // newSignInAccess returns the grant service and the IP allowlist service of
 // a sign-in env, over st.
+func newSignInProxyRules(
+	t *testing.T, st *sqlite.Store, namespaces *namespace.Service, clock *envClock,
+) *jobproxysvc.Service {
+	t.Helper()
+
+	svc, err := jobproxysvc.New(jobproxysvc.Config{
+		Store: st.ProxyRules(), Namespaces: namespaces, Units: st, Now: clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("proxy rule service: %v", err)
+	}
+
+	return svc
+}
+
 func newSignInAccess(
 	t *testing.T, st *sqlite.Store, namespaces *namespace.Service, clock *envClock,
 ) (*access.Service, *ipallow.Service) {
@@ -1757,7 +1814,7 @@ func TestSignInCallbackRefusesAHostileAssertion(t *testing.T) {
 
 			e := newSignInEnvWith(t, signInEnvOptions{
 				autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil,
-				namespaces: nil, hostile: tc.change, passwords: nil,
+				namespaces: nil, hostile: tc.change, passwords: nil, failPolicyRead: nil,
 			})
 
 			binding, authURL := e.start(t, "/console/tokens")

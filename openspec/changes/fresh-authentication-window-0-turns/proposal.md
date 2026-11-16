@@ -104,7 +104,7 @@ Each question below has a provisional answer by the PM decision rule (a benchmar
 Questions considered and answered:
 
 - Does a window of 0 turn the check off? No. ADR 227 decision 3 says no value turns the check off.
-- Must the 403 name the sign-in path? Yes. ADR 227 decision 6 says the error names it.
+- Must the 403 name the sign-in path? Yes. ADR 227 decision 6 says the error names it. For a session of a local user the path is the route that takes the password, `POST /api/dustpan/v1/sign-in/password`: a password sign-in has no start route (`reauthenticateURL` in `internal/api/server/freshness.go:47` returns an empty string for it today), and a text that only says "sign in again with the password" names no path. The provider-based sessions keep the start path with `?fresh=1`. (Answered after a finding of the driver of #3076, 15 Nov.)
 - Is a refusal audited here? No new rule. ADR 227 decision 6 says a refused step changes nothing.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

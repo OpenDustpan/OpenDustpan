@@ -121,6 +121,11 @@ func envSetting(env, doc string) *Setting {
 //
 //nolint:gochecknoglobals // The table is the single declaration list the issue orders; callers never mutate it.
 var Settings = []*Setting{
+	stringSetting("tool", "", "", "the tool code: pulumi or opentofu", referenceNone),
+	stringSetting("project", "", "", "the Pulumi project pattern. Use * for OpenTofu", referenceNone),
+	stringSetting("stack", "", "", "the stack or workspace name pattern", referenceNone),
+	stringSetting("collection", "", "", "the collection name or stable ID", referenceNone),
+	intSetting("position", "", "0", "the rule position, from 1. Omit to append the rule", "(append)"),
 	stringSetting(
 		"config", "DUSTPAN_CONFIG", "",
 		"YAML configuration file; a flag and a variable win over it (DUSTPAN_CONFIG)",

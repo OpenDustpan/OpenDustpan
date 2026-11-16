@@ -148,11 +148,15 @@ func scopeSetup(ctx context.Context, t *testing.T, env *e2e.Env) {
 		}, nil)
 	}
 
+	// A rule names its collection by ID, read after the creates above.
+	teamA := placementCollectionID(ctx, t, env, scopeNamespace, "team-a")
+	teamB := placementCollectionID(ctx, t, env, scopeNamespace, "team-b")
+
 	for _, rule := range []string{
-		`{"tool":"pulumi","project":"scope","stack":"a","collection":"team-a"}`,
-		`{"tool":"pulumi","project":"scope","stack":"b","collection":"team-b"}`,
-		`{"tool":"opentofu","project":"*","stack":"a","collection":"team-a"}`,
-		`{"tool":"opentofu","project":"*","stack":"b","collection":"team-b"}`,
+		fmt.Sprintf(`{"tool":"pulumi","project":"scope","stack":"a","collectionID":%q}`, teamA),
+		fmt.Sprintf(`{"tool":"pulumi","project":"scope","stack":"b","collectionID":%q}`, teamB),
+		fmt.Sprintf(`{"tool":"opentofu","project":"*","stack":"a","collectionID":%q}`, teamA),
+		fmt.Sprintf(`{"tool":"opentofu","project":"*","stack":"b","collectionID":%q}`, teamB),
 	} {
 		principalCall(ctx, t, env, principalStep{
 			http.MethodPost, base + "/placement-rules", rule, http.StatusCreated,

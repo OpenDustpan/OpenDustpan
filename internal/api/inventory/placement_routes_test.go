@@ -22,11 +22,15 @@ import (
 )
 
 // memPlacements is a PlacementStore in memory. It knows the collections
-// payments and sandbox, and it keeps the audit entries of its writes.
+// payments and sandbox, and it keeps the audit entries of its writes. A set
+// createErr fails every create, to test a write that fails for no reason a
+// sentinel names.
 type memPlacements struct {
-	mu      sync.Mutex
-	rules   []collection.Rule
-	entries []audit.Entry
+	mu        sync.Mutex
+	rules     []collection.Rule
+	entries   []audit.Entry
+	denials   *testAudit
+	createErr error
 }
 
 func (m *memPlacements) CreatePlacementRule(
@@ -38,13 +42,18 @@ func (m *memPlacements) CreatePlacementRule(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if r.Collection.Key() != "payments" && r.Collection.Key() != "sandbox" {
+	if m.createErr != nil {
+		return m.createErr
+	}
+
+	if r.CollectionID != "col-payments" && r.CollectionID != "col-sandbox" {
 		return collection.ErrPlacementCollectionMissing
 	}
 
 	if err := r.Validate(); err != nil {
 		return err
 	}
+	r.CollectionName = collection.Name(strings.TrimPrefix(r.CollectionID, "col-"))
 
 	if r.Position == 0 {
 		r.Position = len(m.rules) + 1
@@ -82,6 +91,13 @@ func (m *memPlacements) UpdatePlacementRule(
 	if i < 0 {
 		return collection.ErrPlacementRuleNotFound
 	}
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	if r.CollectionID != "col-payments" && r.CollectionID != "col-sandbox" {
+		return collection.ErrPlacementCollectionMissing
+	}
+	r.CollectionName = collection.Name(strings.TrimPrefix(r.CollectionID, "col-"))
 
 	if r.Position == 0 {
 		r.Position = i + 1
@@ -163,7 +179,8 @@ func newPlacementRouteHandler(t *testing.T, authz identity.Authorizer) (testHand
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
 
-	store := &memPlacements{mu: sync.Mutex{}, rules: nil, entries: nil}
+	log := newTestAudit()
+	store := &memPlacements{mu: sync.Mutex{}, rules: nil, entries: nil, denials: log, createErr: nil}
 
 	svc, err := collection.NewPlacementService(collection.PlacementConfig{Store: store, Namespaces: nsStore, Now: nil})
 	if err != nil {
@@ -176,7 +193,7 @@ func newPlacementRouteHandler(t *testing.T, authz identity.Authorizer) (testHand
 	}
 
 	handler, err := newCheckedHandler(t, apiinventory.Config{
-		OutputSharing: nil, Outputs: nil, Views: nil, Audit: newTestAudit(), OnAuditFailure: nil, Locks: nil,
+		OutputSharing: nil, Outputs: nil, Views: nil, Audit: log, OnAuditFailure: nil, Locks: nil,
 		PublicURL: "", Namespaces: nsSvc, Placements: svc, Collections: nil, Moves: nil,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Deleted:       &memDeleted{entries: nil},
@@ -199,6 +216,130 @@ func newPlacementRouteHandler(t *testing.T, authz identity.Authorizer) (testHand
 }
 
 const placementBase = "/api/dustpan/v1/namespaces/acme/placement-rules"
+
+func TestPlacementRuleUnknownCollectionIsAudited(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{http.MethodPost, http.MethodPut} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			h, store := newPlacementRouteHandler(t, selectiveAuthorizer{deny: nil})
+			target := placementBase
+			if method == http.MethodPut {
+				target += "/" + postRule(t, h, ruleBody("web", "*", "payments"))
+			}
+			code, body := placementCall(t, h, method, target, ruleBody("web", "*", "missing"))
+			expectError(t, code, body, http.StatusNotFound, errcode.CollectionNotFound)
+			list, err := store.denials.List(t.Context(), "acme", audit.Page{Number: 0, Size: 0})
+			if err != nil || len(list.Entries) != 1 {
+				t.Fatalf("refusal audit has %d entries, %v, want 1", len(list.Entries), err)
+			}
+			e := list.Entries[0]
+			if e.Outcome != audit.OutcomeDenied || e.Namespace != "acme" || e.Subject != "tester" ||
+				e.Action != string(identity.ActionNamespaceManagePlacementRules) || e.Reason == "" {
+				t.Errorf("refusal audit = %+v", e)
+			}
+		})
+	}
+}
+
+func TestPlacementRuleRefusesCollectionName(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []string{http.MethodPost, http.MethodPut} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+
+			h, store := newPlacementRouteHandler(t, selectiveAuthorizer{deny: nil})
+			target := placementBase
+			if method == http.MethodPut {
+				target += "/plr-existing"
+			}
+
+			code, body := placementCall(t, h, method, target,
+				`{"tool":"pulumi","project":"web","stack":"*","collection":"payments"}`)
+			expectError(t, code, body, http.StatusBadRequest, "placement.collection-id-required")
+			if len(store.rules) != 0 || len(store.entries) != 0 {
+				t.Fatal("a refused name wrote a rule or an audit change")
+			}
+		})
+	}
+}
+
+func TestPlacementRuleRefusesMalformedID(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name, id string
+	}{
+		{"empty", ""},
+		{"name", "payments"},
+		{"wrong prefix", "plr-payments"},
+		{"prefix only", "col-"},
+		{"slash", "col-a/b"},
+		{"SQL text", "col-a' OR '1'='1"},
+		{"line break", "col-a\nb"},
+		{"too long", "col-" + strings.Repeat("a", 65)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, method := range []string{http.MethodPost, http.MethodPut} {
+				checkMalformedPlacementID(t, method, tc.id)
+			}
+		})
+	}
+}
+
+func checkMalformedPlacementID(t *testing.T, method, id string) {
+	t.Helper()
+
+	h, store := newPlacementRouteHandler(t, selectiveAuthorizer{deny: nil})
+	target := placementBase
+	if method == http.MethodPut {
+		target += "/plr-existing"
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		"tool": "pulumi", "project": "web", "stack": "*", "collectionID": id,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, body := placementCall(t, h, method, target, string(raw))
+	expectError(t, code, body, http.StatusBadRequest, "placement.invalid-collection-id")
+	if len(store.rules) != 0 || len(store.entries) != 0 {
+		t.Fatal("a malformed ID wrote a rule or an audit change")
+	}
+}
+
+func TestPlacementRuleWriteNeedsTheAction(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []string{http.MethodPost, http.MethodPut} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+
+			h, store := newPlacementRouteHandler(t, objectDenier{
+				action: identity.ActionNamespaceManagePlacementRules, object: "acme",
+			})
+			target := placementBase
+			if method == http.MethodPut {
+				target += "/plr-existing"
+			}
+
+			code, _ := placementCall(t, h, method, target,
+				`{"tool":"pulumi","project":"web","stack":"*","collectionID":"col-payments"}`)
+			if code != http.StatusForbidden {
+				t.Fatalf("a write without the action answers %d, want 403", code)
+			}
+			if len(store.rules) != 0 || len(store.entries) != 0 {
+				t.Fatal("a denied write changed the store")
+			}
+		})
+	}
+}
 
 // placementCall sends one signed-in request and returns the status and body.
 func placementCall(t *testing.T, h http.Handler, method, target, body string) (int, string) {
@@ -229,7 +370,7 @@ func errorCodeOf(t *testing.T, body string) string {
 }
 
 func ruleBody(project, stack, coll string) string {
-	return `{"tool":"pulumi","project":"` + project + `","stack":"` + stack + `","collection":"` + coll + `"}`
+	return `{"tool":"pulumi","project":"` + project + `","stack":"` + stack + `","collectionID":"col-` + coll + `"}`
 }
 
 func idOf(t *testing.T, body string) string {
@@ -343,7 +484,8 @@ func TestPlacementRuleLifecycle(t *testing.T) {
 	expectError(t, code, body, http.StatusConflict, errcode.PlacementConflict)
 
 	// The same rule at position 1 is accepted.
-	third := postRule(t, h, `{"tool":"pulumi","project":"payments","stack":"dev*","collection":"sandbox","position":1}`)
+	third := postRule(t, h,
+		`{"tool":"pulumi","project":"payments","stack":"dev*","collectionID":"col-sandbox","position":1}`)
 
 	order := make([]string, 0, len(store.rules))
 	for i := range store.rules {
@@ -357,6 +499,9 @@ func TestPlacementRuleLifecycle(t *testing.T) {
 	code, body = placementCall(t, h, http.MethodGet, placementBase+"/"+first, "")
 	if !strings.Contains(expectStatus(t, code, body, http.StatusOK), `"position":2`) {
 		t.Errorf("get = %s, want position 2", body)
+	}
+	if !strings.Contains(body, `"collectionID":"col-payments"`) || !strings.Contains(body, `"collection":"payments"`) {
+		t.Errorf("get = %s, want the collection ID and its label", body)
 	}
 
 	code, body = placementCall(
@@ -454,7 +599,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"escaped line feed",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a","stack":"x\ny","collection":"payments"}`,
+			`{"tool":"pulumi","project":"a","stack":"x\ny","collectionID":"col-payments"}`,
 			400,
 			errcode.PlacementInvalidPattern,
 		},
@@ -462,7 +607,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"null byte",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a\u0000","stack":"*","collection":"payments"}`,
+			`{"tool":"pulumi","project":"a\u0000","stack":"*","collectionID":"col-payments"}`,
 			400,
 			errcode.PlacementInvalidPattern,
 		},
@@ -478,17 +623,25 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"tool without rules",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"terraform","project":"a","stack":"*","collection":"payments"}`,
+			`{"tool":"terraform","project":"a","stack":"*","collectionID":"col-payments"}`,
 			400,
 			errcode.PlacementInvalidTool,
 		},
 		{
-			"invalid collection name",
+			"collection name and ID",
+			http.MethodPost,
+			placementBase,
+			`{"tool":"pulumi","project":"a","stack":"*","collectionID":"col-payments","collection":"payments"}`,
+			400,
+			errcode.RequestBodyInvalid,
+		},
+		{
+			"invalid collection ID",
 			http.MethodPost,
 			placementBase,
 			ruleBody("a", "*", "../x"),
 			400,
-			errcode.CollectionInvalidName,
+			errcode.PlacementInvalidCollectionID,
 		},
 		{
 			"missing collection",
@@ -502,7 +655,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"position zero is the end, 9 is outside",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a","stack":"*","collection":"payments","position":9}`,
+			`{"tool":"pulumi","project":"a","stack":"*","collectionID":"col-payments","position":9}`,
 			400,
 			errcode.PlacementInvalidPosition,
 		},
@@ -510,7 +663,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"negative position",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a","stack":"*","collection":"payments","position":-1}`,
+			`{"tool":"pulumi","project":"a","stack":"*","collectionID":"col-payments","position":-1}`,
 			400,
 			errcode.PlacementInvalidPosition,
 		},
@@ -518,7 +671,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"unknown field",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a","stack":"*","collection":"payments","x":1}`,
+			`{"tool":"pulumi","project":"a","stack":"*","collectionID":"col-payments","x":1}`,
 			400,
 			errcode.RequestBodyInvalid,
 		},
@@ -526,7 +679,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"missing field",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":"a","collection":"payments"}`,
+			`{"tool":"pulumi","project":"a","collectionID":"col-payments"}`,
 			400,
 			errcode.RequestBodyInvalid,
 		},
@@ -544,7 +697,7 @@ func TestPlacementRuleHostileInput(t *testing.T) {
 			"pattern as number",
 			http.MethodPost,
 			placementBase,
-			`{"tool":"pulumi","project":1,"stack":"*","collection":"payments"}`,
+			`{"tool":"pulumi","project":1,"stack":"*","collectionID":"col-payments"}`,
 			400,
 			errcode.RequestBodyInvalid,
 		},

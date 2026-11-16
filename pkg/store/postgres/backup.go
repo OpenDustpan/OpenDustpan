@@ -143,6 +143,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyTrustRuleTables()...)
 	tables = append(tables, pgCopyBreakGlassReviewTables()...)
 	tables = append(tables, pgCopyUnmanagedTables()...)
+	tables = append(tables, pgCopyProxyRuleTables()...)
 
 	return tables
 }
@@ -309,7 +310,7 @@ func pgCopyCollectionTables() []pgCopyTable {
 		{
 			table: "placement_rules",
 			columns: []string{
-				"id", pgColNamespace, pgColPosition, pgColTool, pgColProject, "stack", "collection_key",
+				"id", pgColNamespace, pgColPosition, pgColTool, pgColProject, "stack", "collection_id",
 				"created_by", pgColCreatedAtMs,
 			},
 			orderBy: []string{pgColNamespace, pgColPosition, "id"},
@@ -377,7 +378,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				"id", pgColWorkspaceID, pgColStatus, "serial", "lineage", "md5", pgColSize,
 				"content_key", "outputs", "force", "upload_digest", "upload_expires_at_ms",
 				"holder", "lock_id", pgColCreatedAtMs, "finalized_at_ms", "restored_from", "sealed",
-				"sensitive_marks", "fenced_by", "unlocked_write", "origin_job",
+				"sensitive_marks", "fenced_by", "unlocked_write", "origin_job", "client_encrypted",
 			},
 			orderBy: []string{"id"},
 		},
@@ -386,7 +387,8 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				pgColObject, pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
-				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
+				"channel", "agent_run", "agent_session", "args_digest", "break_glass", "delegation_id",
+				"secret_stage", "tool", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
 				"changes", "object_id", "fence_version", "principal_kind", pgColJobID, pgColReason,
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
@@ -952,6 +954,9 @@ type pgAttrs struct {
 	installations []string
 	wrappers      []string
 	blobs         []backup.BlobRef
+	// registryFiles holds the registry file entries of each namespace, keyed
+	// by the stable namespace ID.
+	registryFiles map[string][]backup.RegistryFileEntry
 	// unverified holds the keys that rows name and the backup does not copy.
 	unverified []string
 	version    int
@@ -992,7 +997,8 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 		return pgAttrs{}, addErr
 	}
 
-	blobs = append(blobs, collector.Refs()...)
+	gathered := collector.BackupRefs()
+	blobs = append(blobs, gathered.Refs...)
 	slices.SortFunc(blobs, func(a, b backup.BlobRef) int { return strings.Compare(a.Key, b.Key) })
 
 	var version int64
@@ -1015,7 +1021,8 @@ func backupAttrs(ctx context.Context, q *db.Queries, qr pgQuerier) (pgAttrs, err
 		installations: installations,
 		wrappers:      wrappers,
 		blobs:         blobs,
-		unverified:    collector.Unverified(),
+		registryFiles: gathered.RegistryFiles,
+		unverified:    gathered.Unverified,
 		version:       int(version),
 	}, nil
 }
@@ -1240,6 +1247,7 @@ func summarizeStagingIn(
 		WrapperIDs:           wrappers,
 		RowCounts:            counts,
 		Blobs:                blobs,
+		RegistryFiles:        collector.RegistryFiles(),
 		Unverified:           collector.Unverified(),
 		SchemaVersion:        version,
 	}, nil

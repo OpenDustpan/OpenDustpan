@@ -55,23 +55,20 @@ The server keeps its data in `data/dustpan.db` and in `data/blobs`. Leave it run
 
 Use at least 3 characters for a namespace name. The Pulumi CLI refuses a shorter owner name with `error: invalid stack owner`. The server accepts 1 to 100 characters.
 
-The server refuses a new Pulumi stack or OpenTofu workspace that no placement rule matches, and `serve` makes no rule. Make a collection and one rule for each tool. The `opendustpan` binary has no command for these steps yet, so use the API:
+Make a collection and a placement rule for each tool before you make a stack or workspace:
 
 ```sh
-curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' -d '{"name":"everything"}' \
-  https://localhost:8080/api/dustpan/v1/namespaces/acme/collections
-curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}' \
-  https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
-curl --cacert data/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}' \
-  https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
+./bin/opendustpan collection create --server https://localhost:8080 --ca-file data/cert.pem acme/everything
+./bin/opendustpan placement add --server https://localhost:8080 --ca-file data/cert.pem \
+  --tool pulumi --project '*' --stack '*' --collection everything acme
+./bin/opendustpan placement add --server https://localhost:8080 --ca-file data/cert.pem \
+  --tool opentofu --project '*' --stack '*' --collection everything acme
 ```
 
-The collection must exist before the rule. For the compose stack, use the three calls of the compose section.
+The create command prints the stable collection ID. Each add command resolves `everything` to that ID.
+The first matching rule places each new stack or workspace in the collection.
+Quote `*` so the shell does not expand it. No matching rule gives `placement.no-match`.
+Run `opendustpan placement add` to add the rule that is missing.
 
 Go on to [Connect the Pulumi CLI](#connect-the-pulumi-cli). The certificate file is `data/cert.pem`.
 
@@ -113,20 +110,17 @@ docker compose exec opendustpan /opendustpan namespace create \
   --server https://localhost:8080 --ca-file /tls/cert.pem acme
 ```
 
-Then make a collection and one placement rule for each tool in the namespace. The server refuses a new Pulumi stack or OpenTofu workspace that no placement rule matches. Run this from `deploy/compose`, where `.env` and `tls/` are:
+Make the collection and both placement rules in the container:
 
 ```sh
-curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' -d '{"name":"everything"}' \
-  https://localhost:8080/api/dustpan/v1/namespaces/acme/collections
-curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}' \
-  https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
-curl --cacert tls/cert.pem -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}' \
-  https://localhost:8080/api/dustpan/v1/namespaces/acme/placement-rules
+docker compose exec opendustpan /opendustpan collection create \
+  --server https://localhost:8080 --ca-file /tls/cert.pem acme/everything
+docker compose exec opendustpan /opendustpan placement add \
+  --server https://localhost:8080 --ca-file /tls/cert.pem \
+  --tool pulumi --project '*' --stack '*' --collection everything acme
+docker compose exec opendustpan /opendustpan placement add \
+  --server https://localhost:8080 --ca-file /tls/cert.pem \
+  --tool opentofu --project '*' --stack '*' --collection everything acme
 ```
 
 Set `DUSTPAN_ADMIN_TOKEN` first, as [Connect the Pulumi CLI](#connect-the-pulumi-cli) shows. If you changed `OPENDUSTPAN_PORT`, use that port in place of 8080.

@@ -98,10 +98,12 @@ The state of the audit chain is information only. While a change of the audit ch
 
 When an instance gets SIGTERM, it does these steps in this order:
 
-1. `/health/ready` and `/health/ready/{component}` answer 503 at once. The body names the failed check `draining`. `/health/live` still answers 204.
-2. The `worker` component gives back the claim of each durable operation that it runs, and it stops the work. Another `worker` process then claims the operation at its next poll, with no wait for the end of the lease. The give-back checks the claim token in the database. It never gives back a claim that another instance took.
-3. The instance keeps serving all other requests for a drain of 10 seconds. A load balancer with a health check on `/health/ready` takes the instance out of its pool in this time. The drain has a fixed length and no flag.
+1. `/health/ready` and `/health/ready/{component}` answer 503 at once. The body names the failed check `draining`. The answer holds a `Retry-After` header with the drain period in whole seconds, from 1 to 15. `/health/live` still answers 204.
+2. The `worker` component gives back the claim of each durable operation that it runs, and it stops the work. With no wait for the end of the lease, another `worker` process then claims the operation at its next poll. The give-back checks the claim token in the database. It never gives back a claim that another instance took.
+3. The instance keeps serving all requests that do not start a durable operation for a drain of 10 seconds. A load balancer with a health check on `/health/ready` takes the instance out of its pool in this time. The drain has a fixed length and no flag.
 4. The instance closes the listener and waits at most 30 seconds for the requests in flight. A request that began before the signal gets its answer.
+
+During the drain, a request that starts a backup, a restore, a job, a drift check or a trigger answers 503. The answer holds the error code `instance.draining` and a `Retry-After` header. The client retries on another instance.
 
 The drain and the wait together are at most 40 seconds. The Helm chart waits 15 seconds in `preStop` before the signal, and it gives the pod 60 seconds. If you run the instance in another way, give it at least 50 seconds between SIGTERM and SIGKILL. The drain and the wait take 40 seconds, and 10 seconds are margin.
 
@@ -340,6 +342,8 @@ Some targets write to the disk of the host that runs the instance. Each instance
 Set `--public-url` to the URL that clients use, for example `https://dustpan.example`. Without it, each instance makes absolute URLs from the host of each request. Console sign-in needs the public URL.
 
 Set `--trusted-proxies` (`DUSTPAN_TRUSTED_PROXIES`) to the addresses of the load balancer. The server then reads the client address from the forwarding header in `--trusted-proxy-header`. Without it, the audit log and the IP allowlists see the address of the load balancer.
+
+Set the proxy timeouts to more than the drain timeout and the shutdown wait: at least 50 seconds. A shorter idle timeout or response timeout can cut a request in flight before the instance answers it.
 
 Send health checks to the readiness probe. The [observe guide](observe.md) gives the probe paths.
 

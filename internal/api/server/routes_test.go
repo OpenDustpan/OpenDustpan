@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/devcode"
@@ -348,6 +349,7 @@ func newServiceBackedHandlerOf(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Workers:          nil,
 		InstallationKind: "",
@@ -402,7 +404,7 @@ func newServiceBackedHandlerOf(
 		LocalUsers:       newRouteLocalUsers(t, st),
 		Settings:         newRouteTestSettings(st),
 		GitHost:          nil,
-		Idempotency:      nil,
+		Idempotency:      settingsIdempotency(t, st),
 		Instances:        nil,
 		StoreChecks:      checks,
 	})
@@ -1190,6 +1192,7 @@ func setRouteContentType(req *http.Request, route apiserver.Route) {
 	case "/api/dustpan/v1/settings", "/api/dustpan/v1/namespaces/{namespace}/settings":
 		req.Header.Set("Content-Type", "application/merge-patch+json")
 		req.Header.Set("If-Match", `"0"`)
+		req.Header.Set(idempotent.Header, sessionKey())
 	default:
 	}
 }
@@ -1647,6 +1650,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
@@ -1830,6 +1834,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
@@ -1880,6 +1885,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,

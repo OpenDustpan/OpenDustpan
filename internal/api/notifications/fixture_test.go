@@ -23,6 +23,7 @@ import (
 	apinotifications "opendustpan.org/opendustpan/internal/api/notifications"
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/authgate/authgatetest"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/subscriptionsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
@@ -330,7 +331,18 @@ func newFixtureWithCounter(
 ) fixture {
 	t.Helper()
 
-	return buildFixtureParts(t, fixtureParts{middleware: keyMiddleware, wrap: nil, extra: nil, counter: makeCounter})
+	return buildFixtureParts(t, fixtureParts{
+		middleware: keyMiddleware, wrap: nil, extra: nil, counter: makeCounter, limiter: nil,
+	})
+}
+
+// newFixtureWithLimiter is newFixture with the denial limiter l.
+func newFixtureWithLimiter(t *testing.T, l *denylimit.Limiter) fixture {
+	t.Helper()
+
+	return buildFixtureParts(t, fixtureParts{
+		middleware: keyMiddleware, wrap: nil, extra: nil, counter: nil, limiter: l,
+	})
 }
 
 // fixtureParts holds the parts of a fixture: the middleware of the
@@ -342,6 +354,8 @@ type fixtureParts struct {
 	wrap       func(*sqlite.Store, notify.SinkStore) notify.SinkStore
 	extra      []notify.Sender
 	counter    func(now func() time.Time) authgate.FailureCounter
+	// limiter is the denial limiter of the handler. Nil means the default.
+	limiter *denylimit.Limiter
 }
 
 // buildFixtureFull is buildFixtureWith with the senders extra.
@@ -351,7 +365,9 @@ func buildFixtureFull(
 ) fixture {
 	t.Helper()
 
-	return buildFixtureParts(t, fixtureParts{middleware: middleware, wrap: wrap, extra: extra, counter: nil}, deny...)
+	parts := fixtureParts{middleware: middleware, wrap: wrap, extra: extra, counter: nil, limiter: nil}
+
+	return buildFixtureParts(t, parts, deny...)
 }
 
 // buildFixtureParts is buildFixtureFull with the parts of a fixture.
@@ -394,7 +410,7 @@ func buildFixtureParts(t *testing.T, parts fixtureParts, deny ...identity.Action
 	}
 
 	subscriptionSvc, err := subscriptionsvc.NewService(subscriptionsvc.Config{
-		Subscriptions: subscriptions, Deliveries: store.Notifications(), Namespaces: namespaces, Audit: store,
+		Subscriptions: subscriptions, Deliveries: store.Notifications(), Namespaces: namespaces,
 		Now: clock.Now,
 	})
 	if err != nil {
@@ -414,9 +430,9 @@ func buildFixtureParts(t *testing.T, parts fixtureParts, deny ...identity.Action
 		Authenticator:  testAuthn{},
 		Authorizer:     testAuthz{deny: denied},
 		Audit:          store,
-		Namespaces:     nil,
+		Namespaces:     namespaces,
 		OnAuditFailure: nil,
-		DenialLimiter:  nil,
+		DenialLimiter:  parts.limiter,
 		Sessions:       nil,
 		Idempotency:    parts.middleware(t, store, clock),
 		Logger:         slog.New(slog.NewTextHandler(logs, nil)),

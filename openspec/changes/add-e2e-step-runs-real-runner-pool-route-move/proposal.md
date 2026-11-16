@@ -36,7 +36,7 @@ Evidence for the claims above:
 - Add GET, PATCH and DELETE /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool} (NEW paths)
 - Runner drain and retire move to POST /api/dustpan/v1/namespaces/{namespace}/runners/{runner}/drain and POST /api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire (NEW paths). A runner ID is unique in its namespace, so a runner is an object of the namespace (ADR 210 decision 3, the row "An object of a namespace": the collection of the object under the namespace, then its ID), and `pkg/dustpan/apidesc_classes_test.go:168-169` already maps the old paths to these.
 - The runners of a pool move from GET /api/runners/{namespace}/pools/{pool}/runners (`internal/api/runnerapi/routes.go:80`) to GET /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/runners (NEW path; the parent comes first)
-- Join-token list, create and revoke routes move under the runner-pools path (NEW paths)
+- Join-token list, create and revoke routes move under the runner-pools path (NEW paths): GET and POST /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens and POST /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens/{token}/revoke. The old create and list paths (`joinTokensPath` at `internal/api/runnerapi/routes.go:78`) are not in the API description today; they go with the move
 - Each mutation writes its audit entry in the same transaction
 - Remove /api/runners/{}/pools, /api/runners/{}/runners/{}/drain, /api/runners/{}/runners/{}/retire and /api/runners/{}/pools/{}/join-tokens/{}/revoke; they answer 404 with no alias
 

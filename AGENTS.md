@@ -338,10 +338,12 @@ skill (ADR 14):
 - Keep changes small and reviewable, with one concern per change.
 - Support Linux and macOS only (ADR 278). Do not write a patch that is specific to another platform. Do not add a build tag for one. Fixes to generic build bugs on other platforms are accepted.
 - If you are unsure of the intent, ask rather than guess.
-- Agent work starts only from an OpenSpec change in `openspec/changes`. The
-  proposal of the change says "Open questions: none". The pull request of an
-  agent links its change and its issue. The rules for a change are in
-  `openspec/project.md`.
+- Agent work on a new or changed capability starts only from an OpenSpec change
+  in `openspec/changes`. The proposal of the change says "Open questions:
+  none". The pull request of an agent links its change and its issue. The rules
+  for a change are in `openspec/project.md`. A bug fix, a flaky test, a test
+  fake or fixture, tooling, CI, lint and a refactor with no change of behavior
+  need no change. Put the evidence in the pull request body instead.
 - Each proposal and each design checks the existing ADRs. It lists the ADRs
   that it touches, quotes their decision lines, follows the "Changed by" chain
   and marks the owner-tagged decisions. A conflict with an owner-tagged ADR
@@ -354,8 +356,9 @@ skill (ADR 14):
 - Use the stable ID for each stored reference to an entity that a user can
   rename, or remove and make again. A name is a label for people only
   (ADR 362).
-- File a bug issue and a tech-debt issue as before. Their change uses the
-  short proposal form of `openspec/project.md`.
+- File a bug issue and a tech-debt issue as before. Their pull request needs
+  no OpenSpec change. It carries the failure, the fix and the check in its
+  body.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,
   installed for Claude Code and OpenCode. Never edit files under
   `.agents/skills/` by hand. Update a skill only to an upstream commit at least

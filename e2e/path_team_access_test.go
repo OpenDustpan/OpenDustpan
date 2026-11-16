@@ -77,6 +77,12 @@ func TestPathTeamAccess(t *testing.T) {
 		t.Skip("the team access path signs a person in through LDAP: the steps run against the in-process server")
 	}
 
+	if runtime.GOOS != "linux" {
+		// The Pulumi CLI logs in to the HTTPS test server and must trust its
+		// certificate, and Go honors SSL_CERT_FILE only on Linux.
+		t.Skipf("the team access path needs Linux, not %s", runtime.GOOS)
+	}
+
 	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
@@ -213,9 +219,12 @@ func teamAccessPlacementPulumi(ctx context.Context, t *testing.T, env *e2e.Env) 
 		http.MethodPost, teamAccessBase + "/collections", collectionBody(t, "payments"), http.StatusCreated,
 	}, nil)
 
+	// A rule names its collection by ID, read after the create above.
+	payments := placementCollectionID(ctx, t, env, teamAccessNamespace, "payments")
+
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, teamAccessRules,
-		`{"tool":"pulumi","project":"` + e2e.Project + `","stack":"*","collection":"payments"}`,
+		fmt.Sprintf(`{"tool":"pulumi","project":%q,"stack":"*","collectionID":%q}`, e2e.Project, payments),
 		http.StatusCreated,
 	}, nil)
 
@@ -259,9 +268,12 @@ func teamAccessTofuHTTPApply(ctx context.Context, t *testing.T, env *e2e.Env, to
 func teamAccessPlacementTofuHTTP(ctx context.Context, t *testing.T, env *e2e.Env, tofuCLI e2e.Install) {
 	t.Helper()
 
+	// A rule names its collection by ID. The Pulumi step made the collection.
+	payments := placementCollectionID(ctx, t, env, teamAccessNamespace, "payments")
+
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, teamAccessRules,
-		`{"tool":"opentofu","project":"*","stack":"db","collection":"payments"}`,
+		fmt.Sprintf(`{"tool":"opentofu","project":"*","stack":"db","collectionID":%q}`, payments),
 		http.StatusCreated,
 	}, nil)
 
@@ -283,7 +295,7 @@ func teamAccessPlacementTofuHTTP(ctx context.Context, t *testing.T, env *e2e.Env
 	// and the server makes no unit.
 	status, body, err := env.TFEStatusA(ctx, "LOCK", "/tofu/state/"+teamAccessNamespace+"/orphan",
 		tofuHTTPLockInfo())
-	if err != nil || status != http.StatusUnprocessableEntity || !strings.Contains(body, "placement-rules") {
+	if err != nil || status != http.StatusUnprocessableEntity || !strings.Contains(body, "opendustpan placement add") {
 		t.Fatalf("lock of the workspace that no rule matches = %d %s %v, want 422 that names the rules",
 			status, body, err)
 	}

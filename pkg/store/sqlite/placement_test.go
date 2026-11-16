@@ -73,9 +73,16 @@ func newPlacementFixture(t *testing.T) *placementFixture {
 func (f *placementFixture) input(project, stack, coll string, pos int) collection.RuleInput {
 	f.t.Helper()
 
+	id := "col-" + coll
+	c, err := f.colls.Get(f.t.Context(), collection.Ref{Namespace: f.ns, Name: mustCollectionName(f.t, coll)})
+	if err == nil {
+		id = c.ID
+	} else if !errors.Is(err, collection.ErrNotFound) {
+		f.t.Fatal(err)
+	}
 	return collection.RuleInput{
 		Tool: collection.ToolPulumi, Project: collection.Pattern(project), Stack: collection.Pattern(stack),
-		Collection: mustCollectionName(f.t, coll), Position: pos,
+		CollectionID: id, Position: pos,
 	}
 }
 
@@ -151,7 +158,7 @@ func TestPlacementNoMatch(t *testing.T) {
 	f := newPlacementFixture(t)
 
 	_, err := f.place("payments", "prod")
-	if !errors.Is(err, collection.ErrNoPlacement) || !strings.Contains(err.Error(), "placement-rules") {
+	if !errors.Is(err, collection.ErrNoPlacement) || !strings.Contains(err.Error(), "opendustpan placement add") {
 		t.Fatalf("Place with no rule: err = %v, want ErrNoPlacement with the fix", err)
 	}
 
@@ -181,8 +188,8 @@ func TestPlacementOrderDecidesTheCollection(t *testing.T) {
 	}
 	for _, tt := range tests {
 		got, err := f.place(tt.project, tt.stack)
-		if err != nil || got.Collection.String() != tt.want {
-			t.Errorf("Place(%s/%s) = %q, %v, want %q", tt.project, tt.stack, got.Collection, err, tt.want)
+		if err != nil || got.CollectionName.String() != tt.want {
+			t.Errorf("Place(%s/%s) = %q, %v, want %q", tt.project, tt.stack, got.CollectionName, err, tt.want)
 		}
 	}
 }
@@ -231,7 +238,7 @@ func TestPlacementInvalidInputNeverReachesTheStore(t *testing.T) {
 		f.input("a", "*", "payments", -1),
 		f.input("a", "*", "payments", 9),
 		f.input("a", "*", "nowhere", 0),
-		{Tool: "terraform", Project: "a", Stack: "*", Collection: mustCollectionName(t, "payments"), Position: 0},
+		{Tool: "terraform", Project: "a", Stack: "*", CollectionID: "col-payments", Position: 0},
 	}
 	for i, b := range bad {
 		_, err := f.svc.Create(t.Context(), f.ns, b, placementEntry(f.ns, manageRules))

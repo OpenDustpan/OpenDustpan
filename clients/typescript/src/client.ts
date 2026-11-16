@@ -10,11 +10,13 @@ import type {
   BeginPasskeyRegistrationInput,
   BeginPasskeySignInInput,
   BulkReplaceUnitSettingsInput,
+  CancelJobInput,
   CancelRestoreInput,
   ChangeOwnPasswordInput,
   CheckBackupInput,
   CheckGitHostConnectionInput,
   CheckNamespaceIssuerCopyInput,
+  ConfirmJobInput,
   CreateCollectionInput,
   CreateGitHostConnectionInput,
   CreateLocalUserInput,
@@ -86,6 +88,7 @@ import type {
   GetNamespaceIssuerInput,
   GetNamespaceLockInput,
   GetNamespaceOverrideSwitchesInput,
+  GetNamespaceProxyRulesInput,
   GetNamespaceSettingsInput,
   GetNotificationSinkInput,
   GetNotificationSubscriptionInput,
@@ -95,6 +98,7 @@ import type {
   GetProfileInput,
   GetProfileRevisionInput,
   GetProviderReleaseInput,
+  GetRenderedProxyRulesInput,
   GetRestoreInput,
   GetSettingsInput,
   GetSourceFilterInput,
@@ -107,6 +111,7 @@ import type {
   GetUnitDriftInput,
   GetUnitGateInput,
   GetUnitOutputsInput,
+  GetUnitProxyRulesInput,
   GetUnitSettingsInput,
   GetUnitSettingsSuggestionsInput,
   GetUpgradeCheckInput,
@@ -155,6 +160,7 @@ import type {
   PublishProviderReleaseInput,
   PutGitHostAppInput,
   PutGitHostInstallationInput,
+  RedactJobLogInput,
   RedeemLocalUserCodeInput,
   RedeliverNotificationInput,
   RemovePasskeyInput,
@@ -168,6 +174,8 @@ import type {
   ResetUnitSettingsInput,
   RetireBlueprintVersionInput,
   RotateNamespaceIssuerKeysInput,
+  SaveNamespaceProxyRulesInput,
+  SaveUnitProxyRulesInput,
   SetAccessLimitInput,
   SetApprovalDefaultInput,
   SetApprovalRuleInput,
@@ -225,12 +233,14 @@ import type {
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelJobRequest,
   CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
   CheckBackupResponse,
   Collection,
   Components,
+  ConfirmJobRequest,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -304,6 +314,7 @@ import type {
   JobLocationRequest,
   JobLog,
   JobLogEntry,
+  JobLogSubstitution,
   JobPhase,
   JobPlan,
   JobPlanBinding,
@@ -313,6 +324,7 @@ import type {
   JobTrigger,
   JobUnit,
   JobUnitRequest,
+  JoinedProxyRule,
   ListAccessLimitsResponse,
   ListApprovalRulesResponse,
   ListBackupsResponse,
@@ -392,15 +404,22 @@ import type {
   ProfileRevision,
   ProviderRelease,
   ProviderReleaseFile,
+  ProxyRule,
+  ProxyRuleSet,
   PublishFile,
   PublishModuleReleaseRequest,
   PublishProviderReleaseRequest,
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
+  RedactJobLogRequest,
+  RedactJobLogResponse,
   RedeemLocalUserCodeRequest,
+  RegistryFileEntry,
+  RegistryFileSection,
   RegistryKey,
   RegistryModule,
   RegistryProvider,
+  RenderedProxyRules,
   ReplaceNotificationSinkRequest,
   ReplaceNotificationSubscriptionRequest,
   RequestBodyTooLargeError,
@@ -416,6 +435,7 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  SaveProxyRuleSetRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
@@ -511,6 +531,7 @@ import type {
   UnitNoStateErrorArgs,
   UnitOutputEntry,
   UnitOutputs,
+  UnitProxyRules,
   UnitSettings,
   UnitSettingsBoolField,
   UnitSettingsCodeLocation,
@@ -574,6 +595,10 @@ export class Client {
     return execute(this.transport, operations.bulkReplaceUnitSettings, input);
   }
 
+  cancelJob(input: CancelJobInput): Promise<Answer<Job>> {
+    return execute(this.transport, operations.cancelJob, input);
+  }
+
   cancelRestore(input: CancelRestoreInput): Promise<Answer<CancelRestoreResponse>> {
     return execute(this.transport, operations.cancelRestore, input);
   }
@@ -592,6 +617,10 @@ export class Client {
 
   checkNamespaceIssuerCopy(input: CheckNamespaceIssuerCopyInput): Promise<Answer<IssuerCopyCheck>> {
     return execute(this.transport, operations.checkNamespaceIssuerCopy, input);
+  }
+
+  confirmJob(input: ConfirmJobInput): Promise<Answer<Job>> {
+    return execute(this.transport, operations.confirmJob, input);
   }
 
   createCollection(input: CreateCollectionInput): Promise<Answer<Collection>> {
@@ -878,6 +907,10 @@ export class Client {
     return execute(this.transport, operations.getNamespaceOverrideSwitches, input);
   }
 
+  getNamespaceProxyRules(input: GetNamespaceProxyRulesInput): Promise<Answer<ProxyRuleSet>> {
+    return execute(this.transport, operations.getNamespaceProxyRules, input);
+  }
+
   getNamespaceSettings(input: GetNamespaceSettingsInput): Promise<Answer<Settings>> {
     return execute(this.transport, operations.getNamespaceSettings, input);
   }
@@ -912,6 +945,10 @@ export class Client {
 
   getProviderRelease(input: GetProviderReleaseInput): Promise<Answer<ProviderRelease>> {
     return execute(this.transport, operations.getProviderRelease, input);
+  }
+
+  getRenderedProxyRules(input: GetRenderedProxyRulesInput): Promise<Answer<RenderedProxyRules>> {
+    return execute(this.transport, operations.getRenderedProxyRules, input);
   }
 
   getRestore(input: GetRestoreInput): Promise<Answer<GetRestoreResponse>> {
@@ -960,6 +997,10 @@ export class Client {
 
   getUnitOutputs(input: GetUnitOutputsInput): Promise<Answer<UnitOutputs>> {
     return execute(this.transport, operations.getUnitOutputs, input);
+  }
+
+  getUnitProxyRules(input: GetUnitProxyRulesInput): Promise<Answer<UnitProxyRules>> {
+    return execute(this.transport, operations.getUnitProxyRules, input);
   }
 
   getUnitSettings(input: GetUnitSettingsInput): Promise<Answer<UnitSettings>> {
@@ -1154,6 +1195,10 @@ export class Client {
     return execute(this.transport, operations.putGitHostInstallation, input);
   }
 
+  redactJobLog(input: RedactJobLogInput): Promise<Answer<RedactJobLogResponse>> {
+    return execute(this.transport, operations.redactJobLog, input);
+  }
+
   redeemLocalUserCode(input: RedeemLocalUserCodeInput): Promise<Answer<void>> {
     return execute(this.transport, operations.redeemLocalUserCode, input);
   }
@@ -1204,6 +1249,14 @@ export class Client {
 
   rotateNamespaceIssuerKeys(input: RotateNamespaceIssuerKeysInput): Promise<Answer<NamespaceIssuerRotation>> {
     return execute(this.transport, operations.rotateNamespaceIssuerKeys, input);
+  }
+
+  saveNamespaceProxyRules(input: SaveNamespaceProxyRulesInput): Promise<Answer<ProxyRuleSet>> {
+    return execute(this.transport, operations.saveNamespaceProxyRules, input);
+  }
+
+  saveUnitProxyRules(input: SaveUnitProxyRulesInput): Promise<Answer<ProxyRuleSet>> {
+    return execute(this.transport, operations.saveUnitProxyRules, input);
   }
 
   setAccessLimit(input: SetAccessLimitInput): Promise<Answer<AccessLimit>> {

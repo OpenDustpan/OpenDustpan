@@ -760,7 +760,7 @@ func seedBackupDelivery(t *testing.T, s BackupStore, acme namespace.Namespace, c
 	d := notify.Delivery{
 		ID: seedDeliveryID, Notification: "ntf-seed1", Scope: acme.Name, Subscription: seedSubscriptionID,
 		Sink: "snk-seedhook", Contact: "", Principal: "alice", State: notify.DeliveryPending,
-		Attempts: 0, Redeliveries: 0, NextAt: now(), LastError: "", DeliveredAt: time.Time{},
+		Attempts: 0, CreatedAt: now(), Redeliveries: 0, NextAt: now(), LastError: "", DeliveredAt: time.Time{},
 		Owner: "", LeaseUntil: time.Time{}, Version: 0,
 	}
 

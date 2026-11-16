@@ -60,8 +60,14 @@ names the ADRs to read.
 
 A change lives in `openspec/changes/<change-name>/`. It has `proposal.md`,
 `design.md`, `tasks.md` and one delta spec for each capability it touches in
-`specs/<capability>/spec.md`. Agent work starts from a change that has no open
-questions. The pull request links the change and its issue.
+`specs/<capability>/spec.md`. A change is for a new or changed capability.
+Agent work on a capability starts from a change that has no open questions.
+The pull request links the change and its issue.
+
+A bug fix, a flaky test, a test fake or fixture, tooling, CI, lint and a
+refactor with no change of behavior need no change. A test fake is not product
+behavior: no spec names it. The pull request body gives the failure, the fix
+and the check, with the log or the command output as evidence.
 
 ### Proposal
 
@@ -84,7 +90,7 @@ questions. The pull request links the change and its issue.
 3. **Open questions.** Every proposal has a section "Open questions". A change
    may be implemented only when that section reads "none" (the spec-ready
    gate). Each open question names who decides it.
-4. **Short form.** A bug or a tech-debt change may use a short proposal:
+4. **Short form.** A small change of a capability may use a short proposal:
    problem, evidence, fix boundary, check and "Open questions: none". It still
    has an ADR check, but it can be one line when no ADR is touched.
 5. **Evidence for each claim.** Every negative claim carries its proof inline.
@@ -188,6 +194,15 @@ archives the change with the `openspec` command, in the same pull request:
 `npx @fission-ai/openspec@1.15.0 archive <change> --yes`. The command moves the
 change to `openspec/changes/archive/` and merges its spec deltas into
 `openspec/specs/`. Do not move the files by hand.
+
+A task can have the check "Confirmed by: CI". The pull request ticks that task
+before it is marked ready, and archives the change in the same pull request when
+it completes the last task. A file on `main` has passed the merge queue, so the
+claim of CI is true when the file lands. If CI fails, nothing lands. This
+applies only to a task whose check is a required status check of the merge
+queue. A task that a check confirms which is not required (for example a
+nightly job) stays open until that run passes. The rule does not allow a tick
+that the implementer confirms by their own word: that tick stays refused.
 
 Do not tick a task that is not done. If a task moves to another issue, write the
 issue next to the task and leave the box open.

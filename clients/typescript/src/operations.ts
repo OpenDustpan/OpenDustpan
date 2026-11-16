@@ -24,12 +24,14 @@ import {
   decodeBulkUnitSettingsRequest,
   decodeBulkUnitSettingsResult,
   decodeBulkUnitSettingsUnit,
+  decodeCancelJobRequest,
   decodeCancelRestoreResponse,
   decodeCapabilities,
   decodeChangeOwnPasswordRequest,
   decodeCheckBackupResponse,
   decodeCollection,
   decodeComponents,
+  decodeConfirmJobRequest,
   decodeContextAnswer,
   decodeContextDocument,
   decodeContextEntry,
@@ -103,6 +105,7 @@ import {
   decodeJobLocationRequest,
   decodeJobLog,
   decodeJobLogEntry,
+  decodeJobLogSubstitution,
   decodeJobPhase,
   decodeJobPlan,
   decodeJobPlanBinding,
@@ -112,6 +115,7 @@ import {
   decodeJobTrigger,
   decodeJobUnit,
   decodeJobUnitRequest,
+  decodeJoinedProxyRule,
   decodeListAccessLimitsResponse,
   decodeListApprovalRulesResponse,
   decodeListBackupsResponse,
@@ -191,15 +195,22 @@ import {
   decodeProfileRevision,
   decodeProviderRelease,
   decodeProviderReleaseFile,
+  decodeProxyRule,
+  decodeProxyRuleSet,
   decodePublishFile,
   decodePublishModuleReleaseRequest,
   decodePublishProviderReleaseRequest,
   decodePutGitHostAppRequest,
   decodePutGitHostInstallationRequest,
+  decodeRedactJobLogRequest,
+  decodeRedactJobLogResponse,
   decodeRedeemLocalUserCodeRequest,
+  decodeRegistryFileEntry,
+  decodeRegistryFileSection,
   decodeRegistryKey,
   decodeRegistryModule,
   decodeRegistryProvider,
+  decodeRenderedProxyRules,
   decodeReplaceNotificationSinkRequest,
   decodeReplaceNotificationSubscriptionRequest,
   decodeRequestBodyTooLargeError,
@@ -215,6 +226,7 @@ import {
   decodeRestoreSwappedErrorArgs,
   decodeRestoreWarning,
   decodeRotateNamespaceIssuerKeysRequest,
+  decodeSaveProxyRuleSetRequest,
   decodeSaveTriggerRequest,
   decodeSchemaBinaryBelowMinimumError,
   decodeSchemaBinaryBelowMinimumErrorArgs,
@@ -310,6 +322,7 @@ import {
   decodeUnitNoStateErrorArgs,
   decodeUnitOutputEntry,
   decodeUnitOutputs,
+  decodeUnitProxyRules,
   decodeUnitSettings,
   decodeUnitSettingsBoolField,
   decodeUnitSettingsCodeLocation,
@@ -364,12 +377,14 @@ import type {
   BulkUnitSettingsRequest,
   BulkUnitSettingsResult,
   BulkUnitSettingsUnit,
+  CancelJobRequest,
   CancelRestoreResponse,
   Capabilities,
   ChangeOwnPasswordRequest,
   CheckBackupResponse,
   Collection,
   Components,
+  ConfirmJobRequest,
   ContextAnswer,
   ContextDocument,
   ContextEntry,
@@ -443,6 +458,7 @@ import type {
   JobLocationRequest,
   JobLog,
   JobLogEntry,
+  JobLogSubstitution,
   JobPhase,
   JobPlan,
   JobPlanBinding,
@@ -452,6 +468,7 @@ import type {
   JobTrigger,
   JobUnit,
   JobUnitRequest,
+  JoinedProxyRule,
   ListAccessLimitsResponse,
   ListApprovalRulesResponse,
   ListBackupsResponse,
@@ -531,15 +548,22 @@ import type {
   ProfileRevision,
   ProviderRelease,
   ProviderReleaseFile,
+  ProxyRule,
+  ProxyRuleSet,
   PublishFile,
   PublishModuleReleaseRequest,
   PublishProviderReleaseRequest,
   PutGitHostAppRequest,
   PutGitHostInstallationRequest,
+  RedactJobLogRequest,
+  RedactJobLogResponse,
   RedeemLocalUserCodeRequest,
+  RegistryFileEntry,
+  RegistryFileSection,
   RegistryKey,
   RegistryModule,
   RegistryProvider,
+  RenderedProxyRules,
   ReplaceNotificationSinkRequest,
   ReplaceNotificationSubscriptionRequest,
   RequestBodyTooLargeError,
@@ -555,6 +579,7 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  SaveProxyRuleSetRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
   SchemaBinaryBelowMinimumErrorArgs,
@@ -650,6 +675,7 @@ import type {
   UnitNoStateErrorArgs,
   UnitOutputEntry,
   UnitOutputs,
+  UnitProxyRules,
   UnitSettings,
   UnitSettingsBoolField,
   UnitSettingsCodeLocation,
@@ -728,6 +754,16 @@ export interface BulkReplaceUnitSettingsInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation cancelJob. */
+export interface CancelJobInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly job_id: string;
+  };
+  readonly body: CancelJobRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation cancelRestore. */
 export interface CancelRestoreInput {
   readonly path: {
@@ -764,6 +800,16 @@ export interface CheckNamespaceIssuerCopyInput {
   readonly path: {
     readonly namespace: string;
   };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation confirmJob. */
+export interface ConfirmJobInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly job_id: string;
+  };
+  readonly body: ConfirmJobRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -1453,6 +1499,14 @@ export interface GetNamespaceOverrideSwitchesInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getNamespaceProxyRules. */
+export interface GetNamespaceProxyRulesInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getNamespaceSettings. */
 export interface GetNamespaceSettingsInput {
   readonly path: {
@@ -1534,6 +1588,19 @@ export interface GetProviderReleaseInput {
     readonly namespace: string;
     readonly name: string;
     readonly version: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getRenderedProxyRules. */
+export interface GetRenderedProxyRulesInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly unit_id: string;
+  };
+  readonly query?: {
+    /** The operation to render: plan, apply, destroy or refresh. */
+    readonly operation?: string;
   };
   readonly signal?: AbortSignal;
 }
@@ -1640,6 +1707,15 @@ export interface GetUnitGateInput {
 
 /** The input of the operation getUnitOutputs. */
 export interface GetUnitOutputsInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly unit_id: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation getUnitProxyRules. */
+export interface GetUnitProxyRulesInput {
   readonly path: {
     readonly namespace: string;
     readonly unit_id: string;
@@ -2129,6 +2205,16 @@ export interface PutGitHostInstallationInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation redactJobLog. */
+export interface RedactJobLogInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly job_id: string;
+  };
+  readonly body: RedactJobLogRequest;
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation redeemLocalUserCode. */
 export interface RedeemLocalUserCodeInput {
   readonly body: RedeemLocalUserCodeRequest;
@@ -2262,6 +2348,29 @@ export interface RotateNamespaceIssuerKeysInput {
     readonly namespace: string;
   };
   readonly body: RotateNamespaceIssuerKeysRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation saveNamespaceProxyRules. */
+export interface SaveNamespaceProxyRulesInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly body: SaveProxyRuleSetRequest;
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation saveUnitProxyRules. */
+export interface SaveUnitProxyRulesInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly unit_id: string;
+  };
+  readonly body: SaveProxyRuleSetRequest;
+  /** The ETag of the object, from an earlier answer. */
+  readonly ifMatch?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -2521,6 +2630,8 @@ export interface UpdateNamespaceSettingsInput {
   readonly body: UpdateSettingsRequest;
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch: string;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -2547,6 +2658,8 @@ export interface UpdateSettingsInput {
   readonly body: UpdateSettingsRequest;
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch: string;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -2676,6 +2789,23 @@ export const operations = {
     },
     ref(() => decodeBulkUnitSettingsResult),
   ),
+  cancelJob: operation<Job>(
+    {
+      id: "cancelJob",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/cancel",
+      pathParameters: ["namespace", "job_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeJob),
+  ),
   cancelRestore: operation<CancelRestoreResponse>(
     {
       id: "cancelRestore",
@@ -2760,6 +2890,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeIssuerCopyCheck),
+  ),
+  confirmJob: operation<Job>(
+    {
+      id: "confirmJob",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/confirmations",
+      pathParameters: ["namespace", "job_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [201],
+    },
+    ref(() => decodeJob),
   ),
   createCollection: operation<Collection>(
     {
@@ -3968,6 +4115,23 @@ export const operations = {
     },
     ref(() => decodeOverrideSwitches),
   ),
+  getNamespaceProxyRules: operation<ProxyRuleSet>(
+    {
+      id: "getNamespaceProxyRules",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/proxy-rules",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeProxyRuleSet),
+  ),
   getNamespaceSettings: operation<Settings>(
     {
       id: "getNamespaceSettings",
@@ -4120,6 +4284,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeProviderRelease),
+  ),
+  getRenderedProxyRules: operation<RenderedProxyRules>(
+    {
+      id: "getRenderedProxyRules",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules/rendered",
+      pathParameters: ["namespace", "unit_id"],
+      queryParameters: ["operation"],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeRenderedProxyRules),
   ),
   getRestore: operation<GetRestoreResponse>(
     {
@@ -4324,6 +4505,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeUnitOutputs),
+  ),
+  getUnitProxyRules: operation<UnitProxyRules>(
+    {
+      id: "getUnitProxyRules",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules",
+      pathParameters: ["namespace", "unit_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeUnitProxyRules),
   ),
   getUnitSettings: operation<UnitSettings>(
     {
@@ -5141,6 +5339,23 @@ export const operations = {
     },
     ref(() => decodeGitHostInstallation),
   ),
+  redactJobLog: operation<RedactJobLogResponse>(
+    {
+      id: "redactJobLog",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/log-redactions",
+      pathParameters: ["namespace", "job_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeRedactJobLogResponse),
+  ),
   redeemLocalUserCode: operation<void>(
     {
       id: "redeemLocalUserCode",
@@ -5361,6 +5576,40 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeNamespaceIssuerRotation),
+  ),
+  saveNamespaceProxyRules: operation<ProxyRuleSet>(
+    {
+      id: "saveNamespaceProxyRules",
+      method: "PUT",
+      path: "/api/dustpan/v1/namespaces/{namespace}/proxy-rules",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "optional",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeProxyRuleSet),
+  ),
+  saveUnitProxyRules: operation<ProxyRuleSet>(
+    {
+      id: "saveUnitProxyRules",
+      method: "PUT",
+      path: "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules",
+      pathParameters: ["namespace", "unit_id"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "optional",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeProxyRuleSet),
   ),
   setAccessLimit: operation<AccessLimit>(
     {
@@ -5812,7 +6061,7 @@ export const operations = {
       pathParameters: ["namespace"],
       queryParameters: [],
       security: "caller",
-      idempotencyKey: "none",
+      idempotencyKey: "optional",
       ifMatch: "required",
       requiredQueryParameters: [],
       requestBody: "application/merge-patch+json",
@@ -5863,7 +6112,7 @@ export const operations = {
       pathParameters: [],
       queryParameters: [],
       security: "caller",
-      idempotencyKey: "none",
+      idempotencyKey: "optional",
       ifMatch: "required",
       requiredQueryParameters: [],
       requestBody: "application/merge-patch+json",

@@ -672,6 +672,7 @@ func testSummary(refs ...backup.BlobRef) backup.Summary {
 		WrapperIDs:           []string{"kek-1"},
 		RowCounts:            map[string]int64{"namespaces": 1},
 		Blobs:                refs,
+		RegistryFiles:        nil,
 		SchemaVersion:        7,
 		Unverified:           nil,
 	}
@@ -843,6 +844,9 @@ func wantManifest(now time.Time, id backup.ID, sql, first, second []byte) backup
 		InstallationKind: installation.KindProduction,
 		Unverified:       nil,
 		Damaged:          nil,
+		// A backup of this change always writes the registry file section,
+		// also when no namespace holds a registry release.
+		RegistryFiles: map[string]backup.RegistryFileSection{},
 	}
 }
 
@@ -890,6 +894,7 @@ func assertManifestKeys(t *testing.T, target *memStore, id backup.ID) {
 		"id",
 		"installationKind",
 		"primaryInstallations",
+		"registryFiles",
 		"rowCounts",
 		"schemaVersion",
 		"sqlFiles",
