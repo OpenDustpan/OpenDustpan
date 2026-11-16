@@ -244,6 +244,16 @@ func checkHolderReads(ctx context.Context, t *testing.T, env *e2e.Env, f *delega
 		t.Fatalf("own token list of ops = %s, %v; want the one token of ops and no maximum lifetime", body, jsonErr)
 	}
 
+	checkLimitedReads(ctx, t, env, f)
+	checkHolderPrincipals(ctx, t, env, f)
+}
+
+// checkLimitedReads proves the reads of the token of ops on the token lists
+// of deploy: they answer the maximum lifetime, and the lists of other answer
+// 403.
+func checkLimitedReads(ctx context.Context, t *testing.T, env *e2e.Env, f *delegationFixture) {
+	t.Helper()
+
 	reads := []struct {
 		out  any
 		path string
@@ -272,8 +282,6 @@ func checkHolderReads(ctx context.Context, t *testing.T, env *e2e.Env, f *delega
 			t.Fatalf("GET %s = %s, %v; want a list with the maximum lifetime", read.path, body, err)
 		}
 	}
-
-	checkHolderPrincipals(ctx, t, env, f)
 }
 
 // checkHolderPrincipals proves that the token of ops lists deploy, and only

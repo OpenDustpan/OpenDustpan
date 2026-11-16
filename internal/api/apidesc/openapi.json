@@ -3962,10 +3962,6 @@
       },
       "ListOwnTokensResponse": {
         "properties": {
-          "maxLifetimeSeconds": {
-            "format": "int64",
-            "type": "integer"
-          },
           "nextPageToken": {
             "type": "string"
           },
@@ -3974,17 +3970,11 @@
               "$ref": "#/components/schemas/AccessToken"
             },
             "type": "array"
-          },
-          "total": {
-            "format": "int64",
-            "type": "integer"
           }
         },
         "required": [
-          "maxLifetimeSeconds",
           "nextPageToken",
-          "tokens",
-          "total"
+          "tokens"
         ],
         "type": "object"
       },
@@ -11671,15 +11661,6 @@
             "schema": {
               "type": "string"
             }
-          },
-          {
-            "description": "Keep the tokens with this status: active, expiring or ended.",
-            "in": "query",
-            "name": "status",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -11775,6 +11756,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -11814,6 +11798,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "requestBody": {

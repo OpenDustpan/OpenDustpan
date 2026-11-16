@@ -1180,6 +1180,8 @@ export interface DeleteOwnTokenInput {
   readonly path: {
     readonly id: string;
   };
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -2088,8 +2090,6 @@ export interface ListOwnTokensInput {
     readonly pageSize?: number;
     /** The nextPageToken of the page before. */
     readonly pageToken?: string;
-    /** Keep the tokens with this status: active, expiring or ended. */
-    readonly status?: string;
   };
   readonly signal?: AbortSignal;
 }
@@ -2567,6 +2567,8 @@ export interface RotateOwnTokenInput {
     readonly id: string;
   };
   readonly body: RotateOwnTokenRequest;
+  /** The Idempotency-Key. The transport makes a new random key when this is absent. */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -3638,7 +3640,7 @@ export const operations = {
       pathParameters: ["id"],
       queryParameters: [],
       security: "caller",
-      idempotencyKey: "none",
+      idempotencyKey: "optional",
       ifMatch: "none",
       requiredQueryParameters: [],
       requestBody: undefined,
@@ -5319,7 +5321,7 @@ export const operations = {
       method: "GET",
       path: "/api/dustpan/v1/me/tokens",
       pathParameters: [],
-      queryParameters: ["pageSize", "pageToken", "status"],
+      queryParameters: ["pageSize", "pageToken"],
       security: "caller",
       idempotencyKey: "none",
       ifMatch: "none",
@@ -6086,7 +6088,7 @@ export const operations = {
       pathParameters: ["id"],
       queryParameters: [],
       security: "caller",
-      idempotencyKey: "none",
+      idempotencyKey: "optional",
       ifMatch: "none",
       requiredQueryParameters: [],
       requestBody: "application/json",

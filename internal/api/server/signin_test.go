@@ -302,6 +302,10 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 
 	keys := keysOf(t, st, opts)
 
+	// The access-token service checks the secrets that the own-token routes
+	// create, so that a test can send one of them as a bearer.
+	accessTokens := newAccessTokens(t, st, clock)
+
 	handler, err := newCheckedHandler(t, &apiserver.Config{
 		Cursors:          testCursors(t),
 		LocalUsers:       nil,
@@ -313,7 +317,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		Workers:          nil,
 		TempAdmins:       nil,
 		Now:              nil,
-		Authenticator:    tokenAuthenticator{},
+		Authenticator:    fallbackAuthenticator{primary: tokenAuthenticator{}, tokens: accessTokens},
 		Authorizer:       authz,
 		Logger:           slog.New(slog.DiscardHandler),
 		Namespaces:       namespaces,

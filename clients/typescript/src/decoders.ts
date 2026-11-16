@@ -1545,10 +1545,8 @@ export const decodeListOwnGrantsResponse: Decoder<ListOwnGrantsResponse> = objec
 
 /** The validator of ListOwnTokensResponse. */
 export const decodeListOwnTokensResponse: Decoder<ListOwnTokensResponse> = object<ListOwnTokensResponse>("ListOwnTokensResponse", {
-  maxLifetimeSeconds: int64,
   nextPageToken: string,
   tokens: array(ref(() => decodeAccessToken)),
-  total: int64,
 });
 
 /** The validator of ListPasskeysResponse. */

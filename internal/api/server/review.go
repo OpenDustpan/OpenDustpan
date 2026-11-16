@@ -719,9 +719,15 @@ func callerAccessObjects(
 	// that names the allowed types and the optional action.
 	q := queryOf(r)
 
-	switch access.ObjectKind(q.Get("type")) {
-	case access.ObjectNamespace, access.ObjectCollection, access.ObjectUnit, access.ObjectPrincipal:
-	default:
+	// The kinds that the list serves. An installation is not one of them, and
+	// a kind that the map does not hold is refused too.
+	kinds := map[access.ObjectKind]bool{
+		access.ObjectNamespace:  true,
+		access.ObjectCollection: true,
+		access.ObjectUnit:       true,
+		access.ObjectPrincipal:  true,
+	}
+	if !kinds[access.ObjectKind(q.Get("type"))] {
 		return failed(""), errCallerObjectsQuery
 	}
 

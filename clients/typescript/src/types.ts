@@ -1019,10 +1019,8 @@ export interface ListOwnGrantsResponse {
 }
 
 export interface ListOwnTokensResponse {
-  readonly maxLifetimeSeconds: number;
   readonly nextPageToken: string;
   readonly tokens: ReadonlyArray<AccessToken>;
-  readonly total: number;
 }
 
 export interface ListPasskeysResponse {

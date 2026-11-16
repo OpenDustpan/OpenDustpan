@@ -12,9 +12,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
-// tokenDoc decodes the ID of a token.
+// tokenDoc decodes the ID of a token, and its secret on a create.
 type tokenDoc struct {
-	ID string `json:"id"`
+	ID     string `json:"id"`
+	Secret string `json:"secret"`
 }
 
 // seedService stores the service principal "prn-<subject>".

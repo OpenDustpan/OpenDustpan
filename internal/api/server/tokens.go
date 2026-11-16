@@ -634,11 +634,11 @@ func (h *Handler) keyedOwnToken(
 		}
 
 		err := h.idem.Handle(w, r, idempotent.Call{
-			Build:       build,
+			Build:        build,
 			SecretAnswer: secretID,
-			Serve:       func(w http.ResponseWriter, r *http.Request) { serve(w, r, p, obj) },
-			Principal:   p.Subject,
-			Required:    false,
+			Serve:        func(w http.ResponseWriter, r *http.Request) { serve(w, r, p, obj) },
+			Principal:    p.Subject,
+			Required:     false,
 		})
 		if err != nil {
 			h.writeError(r.Context(), w, err)
