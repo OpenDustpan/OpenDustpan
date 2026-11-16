@@ -583,7 +583,7 @@ func (h *Handler) ownTokenRoutes() []Route {
 			ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.keyedOwnToken(
 				h.serveTokenChange(identity.ActionTokenManageOwn, createToken(accesstoken.ScopeOwn)),
-				ownTokenSecretAnswer, ownTokenID,
+				ownTokenSecretAnswer, ownTokenID, h.idem.Handle,
 			),
 		},
 		{
@@ -598,9 +598,13 @@ func (h *Handler) ownTokenRoutes() []Route {
 			// depth: ownTokenEndedAnswer and the store do not rely on this
 			// call site. If the answer of a revoke ever holds a secret, add a
 			// secretID here in the same change, with a review.
+			//
+			// The revoke is on the list of reducing routes
+			// (pkg/maintenance/reducing.go), so it passes HandleReducing: its
+			// record is written in maintenance mode, as its write is.
 			Serve: h.keyedOwnToken(
 				h.serveTokenChange(identity.ActionTokenManageOwn, revokeToken(accesstoken.ScopeOwn)),
-				ownTokenEndedAnswer, nil,
+				ownTokenEndedAnswer, nil, h.idem.HandleReducing,
 			),
 		},
 		{
@@ -608,11 +612,15 @@ func (h *Handler) ownTokenRoutes() []Route {
 			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
 			Serve: h.keyedOwnToken(
 				h.serveTokenChange(identity.ActionTokenManageOwn, rotateToken(accesstoken.ScopeOwn)),
-				ownTokenSecretAnswer, ownTokenID,
+				ownTokenSecretAnswer, ownTokenID, h.idem.Handle,
 			),
 		},
 	}
 }
+
+// idemHandle is the method of the idempotency middleware that serves a keyed
+// request: Handle or HandleReducing.
+type idemHandle func(w http.ResponseWriter, r *http.Request, c idempotent.Call) error
 
 // keyedOwnToken serves a change of an own token, with the Idempotency-Key
 // header that each mutating route of the tool-neutral API takes. A request
@@ -621,9 +629,13 @@ func (h *Handler) ownTokenRoutes() []Route {
 // check. build makes the answer that the store keeps in the transaction of
 // the write. secretID, when it is not nil, says that the answer holds a
 // secret: the record keeps the ID of the token that the write made in place
-// of the answer, and a replay answers 409 with that ID.
+// of the answer, and a replay answers 409 with that ID. handle is the method
+// of the middleware that the route picks: Handle, or HandleReducing for a
+// route that only reduces access (pkg/maintenance/reducing.go). The route
+// picks it, and the request does not.
 func (h *Handler) keyedOwnToken(
 	serve RouteHandler, build func(result any) (idempotency.Answer, error), secretID func(result any) string,
+	handle idemHandle,
 ) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 		if !idempotent.Present(r) {
@@ -638,13 +650,15 @@ func (h *Handler) keyedOwnToken(
 			return
 		}
 
-		err := h.idem.Handle(w, r, idempotent.Call{
+		call := idempotent.Call{
 			Build:        build,
 			SecretAnswer: secretID,
 			Serve:        func(w http.ResponseWriter, r *http.Request) { serve(w, r, p, obj) },
 			Principal:    p.Subject,
 			Required:     false,
-		})
+		}
+
+		err := handle(w, r, call)
 		if err != nil {
 			h.writeError(r.Context(), w, err)
 		}

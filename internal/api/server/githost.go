@@ -166,6 +166,7 @@ func (h *Handler) keyed(w http.ResponseWriter, r *http.Request, p identity.Princ
 
 	err := h.idem.Handle(w, r, idempotent.Call{
 		Build: call.build, SecretAnswer: nil, Serve: call.serve, Principal: p.Subject, Required: call.required,
+		Reducing: false,
 	})
 	if err != nil {
 		h.writeError(r.Context(), w, err)

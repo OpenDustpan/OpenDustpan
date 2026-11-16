@@ -180,6 +180,19 @@ type Result struct {
 	Outcome Outcome
 }
 
+// BeginOption changes what Begin does for one request.
+type BeginOption int
+
+// The options of Begin.
+const (
+	// Reducing says that the route only reduces access: it ends, revokes,
+	// retires or disables (the list of reducing routes in pkg/maintenance).
+	// Begin then writes the pending record on the control path, so that
+	// maintenance mode does not refuse it. The caller of the route decides
+	// this from the route, never from the request.
+	Reducing BeginOption = iota + 1
+)
+
 // Store keeps the records.
 //
 // A record that is older than RecordTTL, or pending and older than
@@ -195,12 +208,16 @@ type Store interface {
 	// is the bytes that the request is compared by, for example the body.
 	// The store keeps only its HMAC-SHA-256 under a key of the store, never
 	// the bytes. A record of another caller never shows: scopes are separate.
-	Begin(ctx context.Context, ref Ref, material []byte, now time.Time) (Result, error)
+	// opts changes how the record is written, see BeginOption.
+	Begin(ctx context.Context, ref Ref, material []byte, now time.Time, opts ...BeginOption) (Result, error)
 	// Complete stores the final answer of the pending record that holds
 	// token. ErrLost when no pending record holds it.
 	Complete(ctx context.Context, ref Ref, token string, a Answer) error
 	// Abandon deletes the pending record that holds token, so a retry with
 	// the same key does the operation. It returns nil when none holds it.
+	// It writes on the control path in every mode: it frees a key and
+	// writes no domain data, and a reducing route must free its key in
+	// maintenance mode too.
 	Abandon(ctx context.Context, ref Ref, token string) error
 	// Sweep deletes the records past RecordTTL and the pending records past
 	// PendingTTL, and returns how many it deleted.

@@ -51,6 +51,7 @@ func (m *Memory) Begin(
 	ref idempotency.Ref,
 	material []byte,
 	now time.Time,
+	_ ...idempotency.BeginOption,
 ) (idempotency.Result, error) {
 	if err := ref.Validate(); err != nil {
 		return idempotency.Result{}, err
