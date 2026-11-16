@@ -4,7 +4,7 @@
 
 ## 1. Failing tests first
 
-- [ ] 1.1 Add a failing test for the route in NEW file internal/api/registry/limits_test.go: the answer holds the five limits with units, and each value equals the value of the check. Name TestLimits_showsEffectiveValues as NEW. Check: `go test -count=1 -v -run '^TestLimits_showsEffectiveValues$' ./internal/api/registry` lists the NEW test as PASS on the PR head. Confirmed by: the pull request body quotes the failing output from the commit of this task, before task 2.1.
+- [ ] 1.1 Add a failing test for the route in NEW file internal/api/registry/limits_test.go: the answer holds the six limits with units, and each value equals the value of the check. Name TestLimits_showsEffectiveValues as NEW. Check: `go test -count=1 -v -run '^TestLimits_showsEffectiveValues$' ./internal/api/registry` lists the NEW test as PASS on the PR head. Confirmed by: the pull request body quotes the failing output from the commit of this task, before task 2.1.
 - [ ] 1.2 Add failing hostile tests in NEW file internal/api/registry/limits_hostile_test.go: no read grant (403), a body and a query value (400), an unknown namespace (404) and a hostile path value (404 without echo). Name TestLimits_Hostile as NEW. Check: `go test -count=1 -v -run '^TestLimits_Hostile$' ./internal/api/registry` lists the NEW test as PASS on the PR head. Confirmed by: the pull request body quotes the failing output from the commit of this task, before task 2.1.
 - [ ] 1.3 Add a failing test for the constructor in NEW file pkg/registry/limits_test.go: a limit of zero or less is refused. Name TestLimits_refusesNonPositive as NEW. Check: `go test -count=1 -v -run '^TestLimits_refusesNonPositive$' ./pkg/registry` lists the NEW test as PASS on the PR head. Confirmed by: the pull request body quotes the failing output from the commit of this task, before task 2.1.
 
@@ -19,7 +19,7 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add a section with the five limits and the command that shows them to the registry publish page, docs/guides/registry-publish.md (the page that the parent change adds). Check: Docs page commands run as written for the read of the limits. Confirmed by: CI (an e2e step in the NEW file e2e/registry_effective_limits_test.go runs the command).
+- [ ] 4.1 Add a section with the six limits and the command that shows them to the registry publish page, docs/guides/registry-publish.md (the page that the parent change adds). Check: Docs page commands run as written for the read of the limits. Confirmed by: CI (an e2e step in the NEW file e2e/registry_effective_limits_test.go runs the command).
 - [ ] 4.2 Add an e2e step in NEW file e2e/registry_effective_limits_test.go that reads the limits with an access token and checks each value against the value in the error of a refused publish. Check: `make e2e` runs the step. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Run the usability check of the read of the limits from the docs page alone. Check: A namespace administrator reads the limits from the docs page alone; the error of a missing grant names its one command. A person's step.
 - [ ] 4.4 Pass the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
