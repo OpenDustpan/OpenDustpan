@@ -38,46 +38,54 @@ When a provider archive holds an unsafe entry or exceeds the unpack limits, the 
 
 ### Requirement: read protocols from manifest
 
-When a provider archive holds terraform-registry-manifest.json, the server SHALL derive the stored protocols only from that manifest.
+When a publish request names a staged file with the role manifest, the server SHALL derive the stored protocols only from the protocol_versions of that file and SHALL refuse a stated protocols list that differs.
 
 #### Scenario: Mismatch refused
-- **WHEN** stated protocols differ from the protocols in terraform-registry-manifest.json.
+- **WHEN** stated protocols differ from the protocol_versions of the manifest file.
 - **THEN** the server refuses the request with 400 registry.invalid and stores no release.
 
 #### Scenario: Match stored
-- **WHEN** stated protocols match the protocols in terraform-registry-manifest.json as an order-insensitive set with duplicates ignored.
+- **WHEN** stated protocols match the protocol_versions of the manifest file as an order-insensitive set with duplicates ignored.
 - **THEN** the stored release holds the manifest protocols.
 
 #### Scenario: Empty manifest list refused
-- **WHEN** the manifest lists an empty protocol list.
+- **WHEN** the manifest file lists an empty protocol list.
 - **THEN** the server refuses with 400 registry.invalid.
 
 ### Requirement: Protocols without manifest
 
-When a provider archive lacks terraform-registry-manifest.json, the server SHALL refuse the publish with 400 registry.invalid, with or without stated protocols.
+When a publish request has no manifest file, the server SHALL store the stated protocols, and SHALL refuse the publish with 400 registry.invalid when it states none.
 
-#### Scenario: Stated protocols without manifest refused
-- **WHEN** a publisher states protocols and the archive holds no terraform-registry-manifest.json.
-- **THEN** the server refuses the request with 400 registry.invalid and stores no release.
+#### Scenario: Stated protocols without manifest stored
+- **WHEN** a publisher states protocols and sends no manifest file.
+- **THEN** the server stores the stated protocols.
 
 #### Scenario: No manifest and no protocols refused
-- **WHEN** the archive holds no manifest and the publisher states no protocols.
+- **WHEN** the request has no manifest file and the publisher states no protocols.
 - **THEN** the server refuses the request with 400 registry.invalid and stores no release, as the store refuses a release with no protocol.
 
 ### Requirement: Malformed manifest
 
-When terraform-registry-manifest.json holds malformed JSON, the server SHALL refuse the publish with 400 registry.bad-archive.
+When the manifest file is larger than the manifest size limit, is not JSON, is not manifest version 1, or lists no protocol, the server SHALL refuse the publish with 400 registry.invalid.
 
-#### Scenario: Bad JSON refused
-- **WHEN** terraform-registry-manifest.json holds malformed JSON.
-- **THEN** the server refuses the request with 400 registry.bad-archive.
+#### Scenario: Bad manifest refused
+- **WHEN** the manifest file holds malformed JSON, a version other than 1, or a body over the manifest size limit.
+- **THEN** the server refuses the request with 400 registry.invalid and stores no release.
+
+#### Scenario: Manifest checked against the checksums file
+- **WHEN** the SHA256SUMS file lists the manifest file and the digest of the sent manifest differs.
+- **THEN** the server refuses the request and stores no release.
+
+#### Scenario: No manifest in the zip
+- **WHEN** the zip archive holds a file named terraform-registry-manifest.json and the request has no manifest file.
+- **THEN** the server does not read that file as the source of protocols.
 
 ### Requirement: Unknown protocol value
 
-When terraform-registry-manifest.json lists a protocol value outside the known set of 5.0 and 6.0, the server SHALL refuse the publish with 400 registry.invalid.
+When the manifest file lists a protocol value outside the known set of 5.0 and 6.0, the server SHALL refuse the publish with 400 registry.invalid.
 
 #### Scenario: Unknown value refused
-- **WHEN** the manifest lists a protocol value outside the known set of 5.0 and 6.0.
+- **WHEN** the manifest file lists a protocol value outside the known set of 5.0 and 6.0.
 - **THEN** the server refuses the request with 400 registry.invalid.
 
 ### Requirement: Count H1 in equality

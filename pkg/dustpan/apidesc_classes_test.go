@@ -145,17 +145,6 @@ var notMoved = map[string]string{
 	"GET /api/audit/entries/{sequence}":                                              "/api/dustpan/v1/audit/entries/{sequence}",
 	"GET /api/audit/check":                                                           "/api/dustpan/v1/audit/check",
 	"GET /api/audit/export":                                                          "/api/dustpan/v1/audit/export",
-	"GET /api/runners/{namespace}/pools":                                             "/api/dustpan/v1/namespaces/{namespace}/runner-pools",
-	"POST /api/runners/{namespace}/pools":                                            "/api/dustpan/v1/namespaces/{namespace}/runner-pools",
-	"GET /api/runners/{namespace}/pools/{pool}":                                      "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}",
-	"PATCH /api/runners/{namespace}/pools/{pool}":                                    "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}",
-	"DELETE /api/runners/{namespace}/pools/{pool}":                                   "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}",
-	"GET /api/runners/{namespace}/pools/{pool}/join-tokens":                          "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens",
-	"POST /api/runners/{namespace}/pools/{pool}/join-tokens":                         "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens",
-	"POST /api/runners/{namespace}/pools/{pool}/join-tokens/{id}/revoke":             "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens/{id}/revoke",
-	"GET /api/runners/{namespace}/pools/{pool}/runners":                              "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/runners",
-	"POST /api/runners/{namespace}/runners/{runner}/drain":                           "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/drain",
-	"POST /api/runners/{namespace}/runners/{runner}/retire":                          "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire",
 }
 
 // routeClass names the classes of a route of the joined table.
@@ -315,7 +304,7 @@ var rootMounts = []string{
 	// The catch-all under the prefix: it answers 404 for a path no adapter serves.
 	apidesc.Prefix,
 	// The tool APIs, the installation APIs and the runner protocol.
-	"/api/inventory/", "/api/audit/", "/api/runners/", "/runner/v1/",
+	"/api/inventory/", "/api/audit/", "/runner/v1/",
 	"/api/v2/", "/api/server/", "/api/", "/tofu/state/",
 	// The provider registry protocol of OpenTofu. Service discovery names its
 	// path, and the client cannot move it under the prefix of the REST API. The

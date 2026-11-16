@@ -115,6 +115,30 @@ func runnerRequest(t *testing.T, h http.Handler, path, token string) *httptest.R
 	return rec
 }
 
+// TestOldRunnerPathsAnswerNotFound proves that a path under the old
+// management prefix has no alias: it answers 404 with no redirect and
+// creates nothing, even with an admin token.
+func TestOldRunnerPathsAnswerNotFound(t *testing.T) {
+	t.Parallel()
+
+	mounted := runnerServer(t, "https://dustpan.test/", withRunnerStores)
+
+	for _, path := range []string{
+		"/api/runners/acme/pools",
+		"/api/runners/acme/pools/rp-1/runners",
+		"/api/runners/acme/runners/rn-1/retire",
+	} {
+		rec := runnerRequest(t, mounted, path, runnerAdminToken)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("POST %s = %d %s, want 404", path, rec.Code, rec.Body.String())
+		}
+
+		if rec.Header().Get("Location") != "" {
+			t.Errorf("POST %s: answer redirects to %q, want no redirect", path, rec.Header().Get("Location"))
+		}
+	}
+}
+
 // TestRunnerRoutesAreMountedWithTheStores proves the server serves the
 // management API and the protocol only with runner stores and a public URL.
 func TestRunnerRoutesAreMountedWithTheStores(t *testing.T) {
@@ -122,7 +146,7 @@ func TestRunnerRoutesAreMountedWithTheStores(t *testing.T) {
 
 	mounted := runnerServer(t, "https://dustpan.test/", withRunnerStores)
 
-	rec := runnerRequest(t, mounted, "/api/runners/acme/pools", runnerAdminToken)
+	rec := runnerRequest(t, mounted, "/api/dustpan/v1/namespaces/acme/runner-pools", runnerAdminToken)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create pool = %d %s, want 201", rec.Code, rec.Body.String())
 	}
@@ -145,7 +169,7 @@ func TestRunnerRoutesAreMountedWithTheStores(t *testing.T) {
 			t.Errorf("%s: poll = %d %s, want a refusal of an unserved path", name, rec.Code, rec.Body.String())
 		}
 
-		rec = runnerRequest(t, h, "/api/runners/acme/pools", runnerAdminToken)
+		rec = runnerRequest(t, h, "/api/dustpan/v1/namespaces/acme/runner-pools", runnerAdminToken)
 		if rec.Code == http.StatusCreated {
 			t.Errorf("%s: create pool = 201, want no runner API", name)
 		}

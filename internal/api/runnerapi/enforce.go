@@ -1,7 +1,6 @@
 package runnerapi
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -12,29 +11,17 @@ import (
 	"strings"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/api/refusal"
-	"opendustpan.org/opendustpan/internal/api/route"
-	"opendustpan.org/opendustpan/internal/sessionauth"
-	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/ipallow"
-	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
 
-// maxAdminBody bounds the body of a request to the management API.
-const maxAdminBody = 64 << 10
-
-// call is the checked request that a route handler gets. An authorized
-// route sets principal and ns. A route of a runner key sets the runner and
-// the key of its proof. Every route sets the body, which is read once
-// because the proof signs its hash.
+// call is the checked request that a route handler gets. A route of a runner
+// key sets the runner and the key of its proof. Every route sets the body,
+// which is read once because the proof signs its hash.
 type call struct {
-	principal identity.Principal
-	ns        namespace.Namespace
-	runner    runner.Runner
-	signer    runner.Key
-	proof     runner.Proof
+	runner runner.Runner
+	signer runner.Key
+	proof  runner.Proof
 	// session is the job session of a route of ScopeSessionKey, and handoff
 	// the checked request of the route of ScopeHandoffToken.
 	session runner.Session
@@ -59,8 +46,6 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 		var err error
 
 		switch rt.Scope {
-		case ScopeAuthorized:
-			r, err = h.checkAuthorized(r, rt, c)
 		case ScopeJoinToken:
 			err = h.checkProtocol(r, c)
 		case ScopeRunnerKey:
@@ -74,125 +59,13 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 		}
 
 		if err != nil {
-			h.writeError(ctx, w, rt.Scope, err)
+			h.writeError(ctx, w, err)
 
 			return
 		}
 
 		rt.Serve(w, r, c)
 	}
-}
-
-// checkAuthorized authenticates the principal, finds the namespace of the
-// path, and checks the actions of route. It returns the request, which holds
-// the session mark of a request that the console cookie signed in.
-func (h *Handler) checkAuthorized(r *http.Request, rt Route, c *call) (*http.Request, error) {
-	ctx := r.Context()
-
-	p, session, err := h.authenticate(r)
-	if err != nil {
-		return r, err
-	}
-
-	if session {
-		r = r.WithContext(sessionauth.WithSession(ctx))
-	}
-
-	if addrErr := h.checkAddress(ctx, r, p); addrErr != nil {
-		return r, addrErr
-	}
-
-	ns, err := h.namespaces.Get(ctx, namespace.Name(r.PathValue("namespace")))
-	if errors.Is(err, namespace.ErrNotFound) {
-		return r, errNotFound
-	}
-
-	if err != nil {
-		return r, fmt.Errorf("get namespace: %w", err)
-	}
-
-	obj := identity.NamespaceObject(ns.Name)
-
-	g := route.Guard{Tokens: nil, Sessions: nil, Refusals: h.guard}
-	checks := route.Checks{Namespace: obj, Reads: nil, Actions: rt.Actions, NotFound: errNotFound, RequireAction: true}
-	if authErr := g.AuthorizeObject(ctx, r, p, obj, checks); authErr != nil {
-		return r, authErr
-	}
-
-	body, err := readBody(r, maxAdminBody)
-	if err != nil {
-		return r, err
-	}
-
-	c.principal, c.ns, c.body = p, ns, body
-
-	return r, nil
-}
-
-// checkAddress refuses a client address that is outside the IP allowlist of
-// the namespace in the path, before the lookup of the namespace. The answer is
-// the same 403 for a namespace that exists and for one that does not exist.
-// Every other result, also an invalid name, continues. An authorizer error
-// stops the request here and writes one entry, also for a namespace that does
-// not exist. A policy refusal continues, so that the later check records it
-// once. It asks through Decide, which writes no entry.
-//
-// Defense in depth: checkAuthorized checks the allowlist again on the found
-// namespace. This check stays so that the order of the lookup never decides
-// the answer.
-func (h *Handler) checkAddress(ctx context.Context, r *http.Request, p identity.Principal) error {
-	action := identity.ActionNamespaceRead
-
-	// An invalid name names no namespace and has no allowlist: the lookup that
-	// follows answers 404 for it.
-	if name, parseErr := namespace.ParseName(r.PathValue("namespace")); parseErr == nil {
-		obj := identity.NamespaceObject(name)
-
-		err := h.guard.Decide(ctx, p, action, obj)
-		if errors.Is(err, ipallow.ErrAddressNotAllowed) {
-			h.guard.Record(ctx, r, p, refusal.Denial{
-				Action: action, Object: obj, Reason: refusal.ReasonFor(err), ReasonWithin: nil, Window: 0,
-			})
-
-			return fmt.Errorf("authorize %s: %w", action, err)
-		}
-
-		if err != nil && !errors.Is(err, identity.ErrDenied) {
-			h.guard.Record(ctx, r, p, refusal.Denial{
-				Action: action, Object: obj, Reason: refusal.ReasonFor(err), ReasonWithin: nil, Window: 0,
-			})
-
-			return fmt.Errorf("authorize %s: %w", action, err)
-		}
-	}
-
-	return nil
-}
-
-// authenticate resolves the "Authorization: token <t>" or the
-// "Authorization: Bearer <t>" header to a principal. A request with no
-// Authorization header uses the console session cookie, and the bool
-// reports that the cookie signed it in.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
-	header := r.Header.Get("Authorization")
-	if header == "" {
-		p, _, err := h.sessions.Authenticate(r)
-
-		return p, err == nil, err
-	}
-
-	raw, ok := strings.CutPrefix(header, tokenScheme)
-	if !ok {
-		raw, ok = strings.CutPrefix(header, bearerScheme)
-	}
-
-	if !ok || raw == "" {
-		return identity.Principal{}, false, identity.ErrUnauthenticated
-	}
-
-	p, err := h.authn.AuthenticateToken(r.Context(), raw)
-
-	return p, false, err
 }
 
 // maxProtocolBody is the largest JSON body of a protocol request.

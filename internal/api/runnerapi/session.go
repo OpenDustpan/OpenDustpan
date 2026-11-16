@@ -282,8 +282,7 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request, c *call) {
 
 	// Nothing is used until the server can answer the assignment.
 	if h.operations == nil || h.jobs == nil {
-		h.writeError(ctx, w, ScopeHandoffToken,
-			fmt.Errorf("%w: this server runs no job phases", runner.ErrNotFound))
+		h.writeError(ctx, w, fmt.Errorf("%w: this server runs no job phases", runner.ErrNotFound))
 
 		return
 	}
@@ -296,14 +295,14 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request, c *call) {
 		// The request names no runner before the session opens, so the entry
 		// holds no claimed runner ID and the installation scope.
 		h.recordUnverifiedHandoffRefusal(ctx, r, err)
-		h.writeError(ctx, w, ScopeHandoffToken, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	resp, err := h.sessionResponse(r, &sess)
 	if err != nil {
-		h.writeError(ctx, w, ScopeHandoffToken, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -419,14 +418,14 @@ func (h *Handler) sessionRenew(w http.ResponseWriter, r *http.Request, c *call) 
 
 	sp, err := h.phaseOf(r, &c.session)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	renewed, err := h.handoffs.SessionRenew(ctx, c.session.ID, sp.claim.Fence, sp.pool.EffectiveLease())
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -460,20 +459,20 @@ func (h *Handler) stepBegin(w http.ResponseWriter, r *http.Request, c *call) {
 
 	sp, err := h.jobPhaseOf(r, c)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	name, err := stepOf(r)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if err = h.recorder.BeginStep(ctx, sp.claim, name); err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -490,27 +489,27 @@ func (h *Handler) stepEnd(w http.ResponseWriter, r *http.Request, c *call) {
 		ExitCode: 0, StartedAt: time.Time{}, FinishedAt: time.Time{}, LogChunks: 0, LogSHA256: "",
 	}
 	if err := decodeBody(c.body, &req); err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if err := checkStepEnd(&req); err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	sp, err := h.jobPhaseOf(r, c)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	name, err := stepOf(r)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -527,7 +526,7 @@ func (h *Handler) stepEnd(w http.ResponseWriter, r *http.Request, c *call) {
 	// writes, so a launcher that sends a wrong end changes nothing.
 	want := job.LogExpectation{Chunks: req.LogChunks, SHA256: req.LogSHA256}
 	if err = h.recorder.EndStepChecked(ctx, sp.claim, rec, want); err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -558,7 +557,7 @@ func (h *Handler) putLog(w http.ResponseWriter, r *http.Request, c *call) {
 
 	seq, err := strconv.Atoi(r.PathValue("seq"))
 	if err != nil || seq < 0 || seq >= protocol.MaxLogChunksPerStep {
-		h.writeError(ctx, w, ScopeSessionKey,
+		h.writeError(ctx, w,
 			fmt.Errorf("%w: the number of a log chunk is 0 to %d", runner.ErrInvalid, protocol.MaxLogChunksPerStep-1))
 
 		return
@@ -566,13 +565,13 @@ func (h *Handler) putLog(w http.ResponseWriter, r *http.Request, c *call) {
 
 	chunk, err := io.ReadAll(io.LimitReader(r.Body, job.MaxLogChunk+1))
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, fmt.Errorf("%w: the body is not readable", runner.ErrInvalid))
+		h.writeError(ctx, w, fmt.Errorf("%w: the body is not readable", runner.ErrInvalid))
 
 		return
 	}
 
 	if len(chunk) > job.MaxLogChunk {
-		h.writeError(ctx, w, ScopeSessionKey,
+		h.writeError(ctx, w,
 			fmt.Errorf("%w: a log chunk has at most %d bytes", runner.ErrInvalid, job.MaxLogChunk))
 
 		return
@@ -580,27 +579,27 @@ func (h *Handler) putLog(w http.ResponseWriter, r *http.Request, c *call) {
 
 	got := sha256.Sum256(chunk)
 	if err = runner.CheckContentHash(c.contentSHA256, got[:]); err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	sp, err := h.jobPhaseOf(r, c)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	name, err := stepOf(r)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if err = h.recorder.AppendLog(ctx, sp.claim, name, seq, bytes.NewReader(chunk)); err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -615,38 +614,38 @@ func (h *Handler) finish(w http.ResponseWriter, r *http.Request, c *call) {
 
 	req := protocol.Finish{Succeeded: false, Message: ""}
 	if err := decodeBody(c.body, &req); err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if err := checkFinishMessage(req.Message); err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	sp, err := h.phaseOf(r, &c.session)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if sp.sweep {
-		h.writeError(ctx, w, ScopeSessionKey, fmt.Errorf("%w: a sweep has no finish", runner.ErrInvalid))
+		h.writeError(ctx, w, fmt.Errorf("%w: a sweep has no finish", runner.ErrInvalid))
 
 		return
 	}
 
 	if h.claimer == nil {
-		h.writeError(ctx, w, ScopeSessionKey, fmt.Errorf("%w: this server cannot finish a phase", runner.ErrNotFound))
+		h.writeError(ctx, w, fmt.Errorf("%w: this server cannot finish a phase", runner.ErrNotFound))
 
 		return
 	}
 
 	if err = h.claimer.Finish(ctx, sp.claim, job.Outcome{Succeeded: req.Succeeded, Message: req.Message}); err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}

@@ -54,13 +54,17 @@ import {
   decodeCreateNotificationSubscriptionRequest,
   decodeCreateProfileRequest,
   decodeCreateProfileRevisionRequest,
+  decodeCreateRunnerJoinTokenRequest,
+  decodeCreateRunnerPoolRequest,
   decodeCreateTrustRuleRequest,
   decodeCreateViewRequest,
   decodeCreatedNotificationSink,
+  decodeCreatedRunnerJoinToken,
   decodeDamagedBlob,
   decodeDeletedUnit,
   decodeDeletedUnitSweep,
   decodeDevData,
+  decodeDrainRunnerRequest,
   decodeDriftCheck,
   decodeDriftCheckLocation,
   decodeDriftResource,
@@ -226,6 +230,13 @@ import {
   decodeRestoreSwappedErrorArgs,
   decodeRestoreWarning,
   decodeRotateNamespaceIssuerKeysRequest,
+  decodeRunner,
+  decodeRunnerGitCredentials,
+  decodeRunnerJoinToken,
+  decodeRunnerJoinTokenList,
+  decodeRunnerList,
+  decodeRunnerPool,
+  decodeRunnerPoolList,
   decodeSaveProxyRuleSetRequest,
   decodeSaveTriggerRequest,
   decodeSchemaBinaryBelowMinimumError,
@@ -343,6 +354,7 @@ import {
   decodeUpdateContextRequest,
   decodeUpdateNamespaceIssuerRequest,
   decodeUpdatePreferencesRequest,
+  decodeUpdateRunnerPoolRequest,
   decodeUpdateSettingsRequest,
   decodeUpgradeCheck,
   decodeView,
@@ -407,13 +419,17 @@ import type {
   CreateNotificationSubscriptionRequest,
   CreateProfileRequest,
   CreateProfileRevisionRequest,
+  CreateRunnerJoinTokenRequest,
+  CreateRunnerPoolRequest,
   CreateTrustRuleRequest,
   CreateViewRequest,
   CreatedNotificationSink,
+  CreatedRunnerJoinToken,
   DamagedBlob,
   DeletedUnit,
   DeletedUnitSweep,
   DevData,
+  DrainRunnerRequest,
   DriftCheck,
   DriftCheckLocation,
   DriftResource,
@@ -579,6 +595,13 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  Runner,
+  RunnerGitCredentials,
+  RunnerJoinToken,
+  RunnerJoinTokenList,
+  RunnerList,
+  RunnerPool,
+  RunnerPoolList,
   SaveProxyRuleSetRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
@@ -696,6 +719,7 @@ import type {
   UpdateContextRequest,
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
+  UpdateRunnerPoolRequest,
   UpdateSettingsRequest,
   UpgradeCheck,
   View,
@@ -900,6 +924,25 @@ export interface CreateProfileRevisionInput {
   readonly ifMatch: string;
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation createRunnerJoinToken. */
+export interface CreateRunnerJoinTokenInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly pool: string;
+  };
+  readonly body: CreateRunnerJoinTokenRequest;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation createRunnerPool. */
+export interface CreateRunnerPoolInput {
+  readonly path: {
+    readonly namespace: string;
+  };
+  readonly body: CreateRunnerPoolRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -1131,6 +1174,15 @@ export interface DeleteProfileInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation deleteRunnerPool. */
+export interface DeleteRunnerPoolInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly pool: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation deleteTrigger. */
 export interface DeleteTriggerInput {
   readonly path: {
@@ -1197,6 +1249,16 @@ export interface DeleteViewInput {
   };
   /** The Idempotency-Key. The transport makes a new random key when this is absent. */
   readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation drainRunner. */
+export interface DrainRunnerInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly runner: string;
+  };
+  readonly body: DrainRunnerRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -1613,6 +1675,15 @@ export interface GetRestoreInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation getRunnerPool. */
+export interface GetRunnerPoolInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly pool: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation getSettings. */
 export interface GetSettingsInput {
   readonly signal?: AbortSignal;
@@ -1942,6 +2013,15 @@ export interface ListPlacementRulesInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation listPoolRunners. */
+export interface ListPoolRunnersInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly pool: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation listProfileRevisions. */
 export interface ListProfileRevisionsInput {
   readonly path: {
@@ -2020,6 +2100,23 @@ export interface ListRegistryProvidersInput {
 
 /** The input of the operation listRestores. */
 export interface ListRestoresInput {
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listRunnerJoinTokens. */
+export interface ListRunnerJoinTokensInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly pool: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation listRunnerPools. */
+export interface ListRunnerPoolsInput {
+  readonly path: {
+    readonly namespace: string;
+  };
   readonly signal?: AbortSignal;
 }
 
@@ -2342,6 +2439,25 @@ export interface RetireBlueprintVersionInput {
   readonly signal?: AbortSignal;
 }
 
+/** The input of the operation retireRunner. */
+export interface RetireRunnerInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly runner: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation revokeRunnerJoinToken. */
+export interface RevokeRunnerJoinTokenInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly pool: string;
+    readonly id: string;
+  };
+  readonly signal?: AbortSignal;
+}
+
 /** The input of the operation rotateNamespaceIssuerKeys. */
 export interface RotateNamespaceIssuerKeysInput {
   readonly path: {
@@ -2650,6 +2766,16 @@ export interface UpdatePreferencesInput {
   readonly body: UpdatePreferencesRequest;
   /** The ETag of the object, from an earlier answer. */
   readonly ifMatch?: string;
+  readonly signal?: AbortSignal;
+}
+
+/** The input of the operation updateRunnerPool. */
+export interface UpdateRunnerPoolInput {
+  readonly path: {
+    readonly namespace: string;
+    readonly pool: string;
+  };
+  readonly body: UpdateRunnerPoolRequest;
   readonly signal?: AbortSignal;
 }
 
@@ -3061,6 +3187,40 @@ export const operations = {
     },
     ref(() => decodeProfile),
   ),
+  createRunnerJoinToken: operation<CreatedRunnerJoinToken>(
+    {
+      id: "createRunnerJoinToken",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens",
+      pathParameters: ["namespace", "pool"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [201],
+    },
+    ref(() => decodeCreatedRunnerJoinToken),
+  ),
+  createRunnerPool: operation<RunnerPool>(
+    {
+      id: "createRunnerPool",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/runner-pools",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
+      statuses: [201],
+    },
+    ref(() => decodeRunnerPool),
+  ),
   createTrustRule: operation<TrustRule>(
     {
       id: "createTrustRule",
@@ -3401,6 +3561,23 @@ export const operations = {
     },
     undefined,
   ),
+  deleteRunnerPool: operation<void>(
+    {
+      id: "deleteRunnerPool",
+      method: "DELETE",
+      path: "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}",
+      pathParameters: ["namespace", "pool"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
   deleteTrigger: operation<void>(
     {
       id: "deleteTrigger",
@@ -3499,6 +3676,23 @@ export const operations = {
       requiredQueryParameters: [],
       requestBody: undefined,
       requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  drainRunner: operation<void>(
+    {
+      id: "drainRunner",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/drain",
+      pathParameters: ["namespace", "runner"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/json",
+      requestBodyRequired: true,
       statuses: [204],
     },
     undefined,
@@ -4319,6 +4513,23 @@ export const operations = {
     },
     ref(() => decodeGetRestoreResponse),
   ),
+  getRunnerPool: operation<RunnerPool>(
+    {
+      id: "getRunnerPool",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}",
+      pathParameters: ["namespace", "pool"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeRunnerPool),
+  ),
   getSettings: operation<Settings>(
     {
       id: "getSettings",
@@ -4948,6 +5159,23 @@ export const operations = {
     },
     ref(() => decodeListPlacementRulesResponse),
   ),
+  listPoolRunners: operation<RunnerList>(
+    {
+      id: "listPoolRunners",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/runners",
+      pathParameters: ["namespace", "pool"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeRunnerList),
+  ),
   listProfileRevisions: operation<ListProfileRevisionsResponse>(
     {
       id: "listProfileRevisions",
@@ -5066,6 +5294,40 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodeListRestoresResponse),
+  ),
+  listRunnerJoinTokens: operation<RunnerJoinTokenList>(
+    {
+      id: "listRunnerJoinTokens",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens",
+      pathParameters: ["namespace", "pool"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeRunnerJoinTokenList),
+  ),
+  listRunnerPools: operation<RunnerPoolList>(
+    {
+      id: "listRunnerPools",
+      method: "GET",
+      path: "/api/dustpan/v1/namespaces/{namespace}/runner-pools",
+      pathParameters: ["namespace"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [200],
+    },
+    ref(() => decodeRunnerPoolList),
   ),
   listStoreChecks: operation<ListStoreChecksResponse>(
     {
@@ -5549,6 +5811,40 @@ export const operations = {
       method: "POST",
       path: "/api/dustpan/v1/self-service/blueprints/{namespace}/{blueprint}/versions/{version}/retire",
       pathParameters: ["namespace", "blueprint", "version"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  retireRunner: operation<void>(
+    {
+      id: "retireRunner",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire",
+      pathParameters: ["namespace", "runner"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: undefined,
+      requestBodyRequired: false,
+      statuses: [204],
+    },
+    undefined,
+  ),
+  revokeRunnerJoinToken: operation<void>(
+    {
+      id: "revokeRunnerJoinToken",
+      method: "POST",
+      path: "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens/{id}/revoke",
+      pathParameters: ["namespace", "pool", "id"],
       queryParameters: [],
       security: "caller",
       idempotencyKey: "none",
@@ -6103,6 +6399,23 @@ export const operations = {
       statuses: [200],
     },
     ref(() => decodePreferences),
+  ),
+  updateRunnerPool: operation<RunnerPool>(
+    {
+      id: "updateRunnerPool",
+      method: "PATCH",
+      path: "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}",
+      pathParameters: ["namespace", "pool"],
+      queryParameters: [],
+      security: "caller",
+      idempotencyKey: "none",
+      ifMatch: "none",
+      requiredQueryParameters: [],
+      requestBody: "application/merge-patch+json",
+      requestBodyRequired: true,
+      statuses: [200],
+    },
+    ref(() => decodeRunnerPool),
   ),
   updateSettings: operation<Settings>(
     {
