@@ -144,7 +144,7 @@ internal/              code that is not part of the SDK
   api/runnerapi/       HTTP adapter for the runner protocol (/runner/v1) and the runner management API
   metrics/, pgtest/, servertest/, ...
                        metrics, the PostgreSQL test database and the test server
-clients/typescript/    the generated TypeScript client package; make clients-check fails when it is not what a fresh run gives
+clients/typescript/    the generated TypeScript client package; not in Git: run make clients-generate (make clients-check runs the generator)
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
   githubfake/          the fake GitHub host of the tests: REST, GraphQL and signed webhook events. The binary never links it
@@ -281,7 +281,7 @@ The steps below are the minimum. They are not complete. The examples in each ste
 
 Treat everything from outside the process as untrusted. Examples: HTTP requests, tool state files, webhooks, Git host data, runner output, configuration, environment variables, restored backups, and database rows from another version.
 
-Write one test for each step. The test sends hostile input directly to that step, as if every other step had failed. A step without its own test is missing.
+Write one test for each step. The test sends hostile input directly to that step, as if every other step failed. A step without its own test is missing.
 
 If a check looks redundant, keep it, and give it a comment. The comment says that the check is a defense-in-depth layer and names the other layers that it does not rely on. Example: `// Defense in depth: the handler validates the name too; this check stays so that a new caller cannot skip it.` Do not put an ADR number in the comment. Do not remove a check that has such a comment. If a check blocks your work, stop and report to the PM.
 
@@ -365,6 +365,7 @@ skill (ADR 14):
   two weeks old (ADR 7), and review its diff first.
 - Agents do not stash, do not create scheduled tasks or reminders, and do not subscribe to pull request activity. Commit work in progress on the branch instead of a stash. Do not skip the pre-commit hook.
 - Build to /var/tmp (`go build -o /var/tmp/<name>`). Add files by name. Never use `git add -A`. `make files-check` refuses large and binary files.
+- Before you push, run `make test-changed`. It builds the module, runs the fast checks, and lints and tests the changed packages and the packages that import them. It is a quick check. It does not replace `make check` or CI.
 
 ## Agent skills
 
