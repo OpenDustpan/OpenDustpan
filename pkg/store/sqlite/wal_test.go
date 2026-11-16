@@ -1037,12 +1037,14 @@ func failedTicks(ticks []sqlite.WALGuardTick) []sqlite.WALGuardTick {
 // TRUNCATE checkpoint stays busy, runs writes for 1 s past the threshold,
 // and proves writers are rarely blocked: one tick tries at most 2 slow
 // attempts and gives up until the next tick, so the p99 write latency stays
-// far below the bound. One tick stalls writers for about 105 ms at most
-// (2 slow attempts with a 50 ms busy timeout plus a 5 ms retry delay, plus
-// the time of a successful checkpoint copy), so the 350 ms bound keeps more
-// than a 3x margin over the theoretical worst stall. It also proves the bound
-// itself through the test hook: every failed tick tried at most 2 slow
-// attempts.
+// close to the p99 of the same writes with no reader. One tick stalls writers
+// for about 105 ms at most (2 slow attempts with a 50 ms busy timeout plus a
+// 5 ms retry delay, plus the time of a successful checkpoint copy). The test
+// first measures the same writes in the same run with no reader, so a loaded
+// machine slows both runs alike. It then bounds the busy p99 by a multiple of
+// the idle p99 plus that stall. Each run has at least 200 writes, so p99 is
+// not the maximum. It also proves the bound itself through the test hook:
+// every failed tick tried at most 2 slow attempts.
 func TestWALGuardBusyWritesStayFast(t *testing.T) {
 	t.Parallel()
 
@@ -1055,6 +1057,24 @@ func TestWALGuardBusyWritesStayFast(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
 	s, ns := openWALBusyStore(ctx, t, path, nil)
+
+	const window = 1 * time.Second
+
+	// Idle baseline: the same writes in the same run with no reader, so every
+	// checkpoint succeeds. A loaded machine slows this run as much as the busy
+	// run below.
+	idleLatencies := writeStacksForWindow(ctx, t, walTimedWrites{
+		store:     s,
+		ns:        ns,
+		tx:        nil,
+		window:    window,
+		minWrites: minTimedWrites,
+		prefix:    "fast-idle",
+	})
+
+	slices.Sort(idleLatencies)
+
+	idleP99 := percentileLatency(idleLatencies, 0.99)
 
 	raw, tx := holdWALReader(ctx, t, path)
 
@@ -1072,14 +1092,13 @@ func TestWALGuardBusyWritesStayFast(t *testing.T) {
 		prefix:    "fast-setup",
 	})
 
-	const window = 1 * time.Second
-
 	latencies := writeStacksForWindow(ctx, t, walTimedWrites{
-		store:  s,
-		ns:     ns,
-		tx:     tx,
-		window: window,
-		prefix: "fast",
+		store:     s,
+		ns:        ns,
+		tx:        tx,
+		window:    window,
+		minWrites: minTimedWrites,
+		prefix:    "fast",
 	})
 
 	if sizes := fileSizes(t, path); sizes.wal < threshold {
@@ -1111,23 +1130,36 @@ func TestWALGuardBusyWritesStayFast(t *testing.T) {
 	maxLatency := latencies[len(latencies)-1]
 
 	t.Logf(
-		"%d writes in %s with the checkpoint busy: p50 = %s, p90 = %s, p99 = %s, max = %s",
+		"%d writes with the checkpoint busy: p50 = %s, p90 = %s, p99 = %s, max = %s; "+
+			"%d idle writes: p99 = %s",
 		len(latencies),
-		window,
 		p50,
 		p90,
 		p99,
 		maxLatency,
+		len(idleLatencies),
+		idleP99,
 	)
 
-	const bound = 350 * time.Millisecond
+	// One failed tick stalls writers for about 105 ms at most. The busy p99
+	// may exceed the idle p99 by a multiple for the load of the checkpoint
+	// attempts, plus that stall.
+	const (
+		idleMultiple = 3
+		tickStall    = 105 * time.Millisecond
+	)
+
+	bound := idleMultiple*idleP99 + tickStall
 
 	if p99 >= bound {
 		if rbErr := tx.Rollback(); rbErr != nil {
 			t.Logf("roll back read transaction: %v", rbErr)
 		}
 
-		t.Fatalf("p99 write latency = %s over %d writes, want under %s", p99, len(latencies), bound)
+		t.Fatalf(
+			"busy p99 write latency = %s over %d writes, want under %s (%d x idle p99 %s + %s)",
+			p99, len(latencies), bound, idleMultiple, idleP99, tickStall,
+		)
 	}
 
 	requireBusyTickSlowCapped(t)
@@ -1146,18 +1178,25 @@ func percentileLatency(sorted []time.Duration, q float64) time.Duration {
 }
 
 // walTimedWrites holds one timed write batch: the store, the namespace, the
-// held reader to roll back on error, the window to fill, and the name prefix
-// of the written stacks.
+// held reader to roll back on error (nil when no reader is held), the window
+// to fill, the least number of writes to take, and the name prefix of the
+// written stacks.
 type walTimedWrites struct {
-	store  *sqlite.Store
-	ns     namespace.Namespace
-	tx     *sql.Tx
-	window time.Duration
-	prefix string
+	store     *sqlite.Store
+	ns        namespace.Namespace
+	tx        *sql.Tx
+	window    time.Duration
+	minWrites int
+	prefix    string
 }
 
+// minTimedWrites is the least number of timed writes in one run. It keeps p99
+// from being the maximum of the samples when a loaded machine slows the writes.
+const minTimedWrites = 200
+
 // writeStacksForWindow writes stacks from job through the public store API
-// for the window and returns every write latency. A write error rolls the
+// for the window, and at least the minimum number of writes, and returns
+// every write latency. A write error rolls the
 // held reader back and stops the test, so the reader never outlives it.
 func writeStacksForWindow(ctx context.Context, t *testing.T, job walTimedWrites) []time.Duration {
 	t.Helper()
@@ -1166,7 +1205,7 @@ func writeStacksForWindow(ctx context.Context, t *testing.T, job walTimedWrites)
 
 	deadline := time.Now().Add(job.window)
 
-	for i := 0; time.Now().Before(deadline); i++ {
+	for i := 0; time.Now().Before(deadline) || i < job.minWrites; i++ {
 		ref, err := stack.ParseRef("acme", "busy", job.prefix+"-"+strconv.Itoa(i))
 		if err != nil {
 			t.Fatalf("parse stack reference: %v", err)
@@ -1187,8 +1226,10 @@ func writeStacksForWindow(ctx context.Context, t *testing.T, job walTimedWrites)
 		start := time.Now()
 
 		if err := job.store.CreateStack(ctx, st, job.ns.Fence()); err != nil {
-			if rbErr := job.tx.Rollback(); rbErr != nil {
-				t.Logf("roll back read transaction: %v", rbErr)
+			if job.tx != nil {
+				if rbErr := job.tx.Rollback(); rbErr != nil {
+					t.Logf("roll back read transaction: %v", rbErr)
+				}
 			}
 
 			t.Fatalf("create stack %s: %v", ref, err)
