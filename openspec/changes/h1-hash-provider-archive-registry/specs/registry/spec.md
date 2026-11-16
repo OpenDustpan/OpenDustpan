@@ -128,14 +128,6 @@ When a publish request lacks authorization, carries a wrong content type, or exc
 - **WHEN** a publish crashes or a staged delete fails before the release stores.
 - **THEN** no staged bytes remain after the restart scan.
 
-### Requirement: Show limits as effective values
-
-Where a namespace owns releases, the server SHALL show the request and unpack limits as effective values in the API.
-
-#### Scenario: Limits visible
-- **WHEN** a caller reads the registry settings of a namespace.
-- **THEN** the API reports 32 MB request, 64 MB unpacked, 1024 files, and 16 MB per file.
-
 ### Requirement: Module uploads skip archive checks
 
 When a publisher uploads a module archive, the server SHALL skip the provider unpack, H1, and manifest checks.
