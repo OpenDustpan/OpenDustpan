@@ -1,12 +1,11 @@
 ## Context
 
-Provider archives are untrusted zip files. The server unpacks with limits, computes the h1 hash, reads the registry manifest for protocols, and maps each namespace to a registry-safe slug.
+Provider archives are untrusted zip files. The server unpacks with limits, computes the h1 hash, and reads the registry manifest for protocols.
 
 ## Decisions
 
 1. **Bounded unpack as structure.** Add an unexported unpack function that opens the staged zip, rejects absolute paths and dot-dot entries, enforces limits on unpacked size, file count, entry size and compression ratio, counts real decompressed bytes while it reads, rejects duplicate names after case folding, and returns the manifest bytes and the h1 digest.
 2. **Archive truth from bytes.** Store H1 on registry.Archive at publish time from the unpack result, include H1 in SameContent (every release gets H1 at publish; no backfill, because no tag shipped a release without it), and derive protocols only from terraform-registry-manifest.json inside the archive with order-insensitive set match.
-3. **Stable slug from ID.** Derive the registry slug for each namespace from its stable ID in lowercase with unsafe characters removed, store the slug on the namespace record at publish time, index slug to namespace for lookup (no backfill of earlier namespaces: no tag shipped the earlier shape, so the slug is set at the first publish), keep the name path of main for existing releases with slug winning on conflict, append a short suffix on collision or empty result, and edit the baseline of each dialect in place with no numbered migration.
 
 ## Structure
 
@@ -17,7 +16,6 @@ Unexported type archiveFacts with constructor openArchiveFacts(stagedKey) that c
 - Zip bomb exhausts disk or memory during unpack.
 - Path traversal writes outside the staging directory.
 - Publisher states false protocols and OpenTofu selects a provider it fails to start.
-- Namespace name outside the safe subset breaks registry URLs.
 
 ## Layers (defense in depth)
 
@@ -99,10 +97,10 @@ end
 | unpack boundary | T | Attacker uploads traversal or zip bomb archive that writes outside staging or exhausts disk. | limit | Unpack stops past 64 MB real bytes, 1024 files, 16 MB per file, 100x ratio. | Publish zip bomb with lying headers; expect 400 on real-byte count. |
 | unpack boundary | T | Attacker uploads traversal or zip bomb archive that writes outside staging or exhausts disk. | authorize at point of use | Service checks publish grant again before H1 store. | Call service unpack without grant; expect denial with no store. |
 | unpack boundary | T | Attacker uploads traversal or zip bomb archive that writes outside staging or exhausts disk. | fail closed | Unpack fails closed on duplicate names and bad headers with no release. | Publish duplicate-name archive; expect 400 with no release stored. |
-| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | boundary check | Download validates slug characters against safe subset before lookup. | Request install with dot-dot slug; expect 404 registry.not-found. |
-| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | encode or contain | Serve encodes slug in URLs and serves bytes with fixed content type. | Fetch release under slug with hostile name; expect safe encoding. |
+| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | boundary check | Download validates the namespace and the type in the path against the safe subset before lookup. | Request install with a dot-dot namespace; expect 404 registry.not-found. |
+| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | encode or contain | Serve encodes the namespace in URLs and serves bytes with fixed content type. | Fetch a release with a hostile type name; expect safe encoding. |
 | serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | limit | Download caps archive bytes served per request. | Fetch oversize release path; expect capped stream with no exhaustion. |
-| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | authorize at point of use | Download checks read grant on namespace object of slug owner. | Fetch private release without read grant; expect 403. |
+| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | authorize at point of use | Download checks read grant on the namespace object. | Fetch private release without read grant; expect 403. |
 | serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | fail closed | Service refuses false protocols and changed H1 with 400 and 409. | Publish false protocols and changed-bytes republish; expect mismatch and content-changed. |
 
 ## Contracts
@@ -111,10 +109,8 @@ end
 
 - Invariant: H1 identifies unpacked bytes; SameContent includes H1.
 - Invariant: Stored protocols equal manifest protocols or empty when no manifest and no stated protocols.
-- Invariant: Registry slug derives from stable namespace ID and never changes on rename.
 - `compute h1 hash`: pre: caller holds publish grant on namespace. Post: release stored with H1 over unpacked tree.
 - `read protocols from manifest`: pre: archive unpack passed bounds. Post: stored protocols equal manifest set or empty.
-- `serve releases under slug`: pre: slug maps to one namespace. Post: client receives release bytes under slug path.
 
 ## Failure modes
 
