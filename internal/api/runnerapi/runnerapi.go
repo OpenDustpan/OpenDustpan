@@ -1,6 +1,6 @@
 // Package runnerapi serves the server side of the runner protocol under
-// /runner/v1, and the tool-neutral API that people use to manage runner
-// pools, join tokens and runners under /api/dustpan/v1/namespaces/{namespace}.
+// /runner/v1. The tool-neutral API that people use to manage runner pools,
+// join tokens and runners lives in internal/api/runnerpools.
 //
 // The protocol is a thin layer over the ports of package runner, package job
 // and package durable: a path calls one port. A runner proves possession of
@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -36,8 +35,6 @@ import (
 var ErrMissingDependency = errors.New("missing dependency")
 
 const (
-	tokenScheme  = "token "
-	bearerScheme = "Bearer "
 	// channelHeader names the request header that says where a request came
 	// from, for the audit entry.
 	channelHeader = "Dustpan-Channel"
@@ -115,8 +112,8 @@ type JobReader interface {
 	Get(ctx context.Context, id job.ID) (job.Job, error)
 }
 
-// Handler serves the runner protocol and the runner management API. The 429
-// for a second concurrent poll of one runner holds for each server instance.
+// Handler serves the runner protocol. The 429 for a second concurrent poll
+// of one runner holds for each server instance.
 type Handler struct {
 	namespaces *namespace.Service
 	pools      runner.PoolStore
@@ -127,9 +124,6 @@ type Handler struct {
 	operations durable.Store
 	recorder   job.CheckedRecorder
 	jobs       JobReader
-	authn      identity.Authenticator
-	authz      identity.Authorizer
-	guard      *refusal.Recorder
 	audit      audit.Store
 	onAuditErr func()
 	// limiter bounds the audit entries of refused handoff tokens.
@@ -214,11 +208,6 @@ func NewHandler(cfg Config) (*Handler, error) {
 		interval = defaultPollInterval
 	}
 
-	recorder, err := refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger, cfg.OnAuditFailure)
-	if err != nil {
-		return nil, fmt.Errorf("denial recorder: %w", err)
-	}
-
 	limiter := cfg.DenialLimiter
 	if limiter == nil {
 		limiter = denylimit.New(denylimit.Config{Window: 0, MaxKeys: 0, MaxFlush: 0, MaxKeysPerPrincipal: 0, Now: nil})
@@ -234,11 +223,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		operations:          cfg.Operations,
 		recorder:            cfg.Recorder,
 		jobs:                cfg.Jobs,
-		authn:               cfg.Authenticator,
-		authz:               cfg.Authorizer,
-		sessions:            cfg.Sessions,
 		logger:              cfg.Logger,
-		guard:               recorder.WithLimiter(cfg.DenialLimiter).WithSurface("runner"),
 		audit:               cfg.Audit,
 		onAuditErr:          cfg.OnAuditFailure,
 		limiter:             limiter,

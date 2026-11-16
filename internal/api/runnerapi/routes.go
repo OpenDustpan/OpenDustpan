@@ -2,7 +2,6 @@ package runnerapi
 
 import (
 	"net/http"
-	"slices"
 
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -14,13 +13,10 @@ import (
 type Scope int
 
 const (
-	// ScopeAuthorized needs a signed-in principal and the Authorizer to allow
-	// the actions of the route on the namespace of the path.
-	ScopeAuthorized Scope = iota + 1
 	// ScopeJoinToken is the join of a runner: the join token and the
 	// signature of the new key authenticate it, and the join token holds
 	// identity.ActionRunnerJoin on its pool.
-	ScopeJoinToken
+	ScopeJoinToken Scope = iota + 1
 	// ScopeRunnerKey is a request of a runner: the proof of its key
 	// authenticates it, and the key holds identity.ActionRunnerClaim on its
 	// pool.
@@ -39,25 +35,8 @@ const (
 // Route declares one endpoint: its ServeMux pattern, how it is protected,
 // the actions it needs and how to serve it. NewHandler registers every route
 // from the table that buildRoutes returns, so a route without a row is never
-// served.
-//
-// A route of ScopeAuthorized runs the checks in this order:
-//
-//  1. The credential is authenticated. A request without a valid credential
-//     answers 401, a session that fails the CSRF check or comes from
-//     another site answers 403, and too many failed sign-ins answer 429.
-//  2. The client address is checked against the IP allowlist of the namespace
-//     of the path. A refused address answers 403.
-//  3. The namespace of the path is read. An unknown namespace answers 404.
-//  4. identity.ActionNamespaceRead on the namespace. A refusal answers 404,
-//     the answer of an unknown namespace, so a caller learns nothing about a
-//     namespace that it cannot read. This read check applies the IP allowlist
-//     a second time, and an allowlist refusal there keeps its 403: it is not
-//     mapped to 404.
-//  5. Actions on the namespace of the path. A refusal answers 403.
-//
-// A route of the other scopes checks its credential, and Actions names the
-// action that the credential holds on its pool.
+// served. A route checks its credential, and Actions names the action that
+// the credential holds on its pool.
 type Route struct {
 	// Method is the HTTP method, for example GET.
 	Method string
@@ -71,53 +50,10 @@ type Route struct {
 	Serve routeHandler
 }
 
-// Path patterns of the management API.
-const (
-	poolsPath       = "/api/dustpan/v1/namespaces/{namespace}/runner-pools"
-	poolPath        = poolsPath + "/{pool}"
-	joinTokensPath  = poolPath + "/join-tokens"
-	joinTokenPath   = joinTokensPath + "/{id}/revoke"
-	poolRunnersPath = poolPath + "/runners"
-	drainPath       = "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/drain"
-	retirePath      = "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire"
-)
-
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
-	return slices.Concat(h.managementRoutes(), h.runnerRoutes(), h.launcherRoutes(), h.planRoutes())
-}
-
-// managementRoutes returns the routes of the management API.
-func (h *Handler) managementRoutes() []Route {
-	read := []identity.Action{identity.ActionNamespaceReadRunners}
-	manage := []identity.Action{identity.ActionNamespaceManageRunners}
-
-	return []Route{
-		{Method: http.MethodGet, Path: poolsPath, Scope: ScopeAuthorized, Actions: read, Serve: h.listPools},
-		{Method: http.MethodPost, Path: poolsPath, Scope: ScopeAuthorized, Actions: manage, Serve: h.createPool},
-		{Method: http.MethodGet, Path: poolPath, Scope: ScopeAuthorized, Actions: read, Serve: h.getPool},
-		{Method: http.MethodPatch, Path: poolPath, Scope: ScopeAuthorized, Actions: manage, Serve: h.updatePool},
-		{Method: http.MethodDelete, Path: poolPath, Scope: ScopeAuthorized, Actions: manage, Serve: h.deletePool},
-		{Method: http.MethodGet, Path: joinTokensPath, Scope: ScopeAuthorized, Actions: read, Serve: h.listJoinTokens},
-		{
-			Method:  http.MethodPost,
-			Path:    joinTokensPath,
-			Scope:   ScopeAuthorized,
-			Actions: manage,
-			Serve:   h.createJoinToken,
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    joinTokenPath,
-			Scope:   ScopeAuthorized,
-			Actions: manage,
-			Serve:   h.revokeJoinToken,
-		},
-		{Method: http.MethodGet, Path: poolRunnersPath, Scope: ScopeAuthorized, Actions: read, Serve: h.listRunners},
-		{Method: http.MethodPost, Path: drainPath, Scope: ScopeAuthorized, Actions: manage, Serve: h.drainRunner},
-		{Method: http.MethodPost, Path: retirePath, Scope: ScopeAuthorized, Actions: manage, Serve: h.retireRunner},
-	}
+	return append(append(append([]Route(nil), h.runnerRoutes()...), h.launcherRoutes()...), h.planRoutes()...)
 }
 
 // runnerRoutes returns the routes of the runner side of the protocol.

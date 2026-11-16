@@ -14,9 +14,8 @@ const tagRunners = "runners"
 // key is the pattern of the route. The runner protocol is outside the prefix
 // by design, so it has no entry. A route under the prefix with no entry stops
 // the server at start.
-//
-//nolint:gochecknoglobals // A fixed table; Go has no constant maps.
-var operationLabels = map[string]apidesc.Label{
+func operationLabels() map[string]apidesc.Label {
+	return map[string]apidesc.Label{
 	apidesc.Pattern(http.MethodGet, poolsPath): apidesc.Name("listRunnerPools", tagRunners).
 		On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, poolListSchema()),
 	apidesc.Pattern(http.MethodPost, poolsPath): apidesc.Name("createRunnerPool", tagRunners).
@@ -40,6 +39,7 @@ var operationLabels = map[string]apidesc.Label{
 		On(apidesc.KindNamespace).WithBodies(drainSchema(), apidesc.NoBody),
 	apidesc.Pattern(http.MethodPost, retirePath): apidesc.Name("retireRunner", tagRunners).
 		On(apidesc.KindNamespace).WithBodies(apidesc.NoBody, apidesc.NoBody),
+	}
 }
 
 // The bodies of the management routes.
@@ -109,5 +109,5 @@ func (h *Handler) Operations() []apidesc.Operation {
 		})
 	}
 
-	return apidesc.Collect(rows, operationLabels)
+	return apidesc.Collect(rows, operationLabels())
 }
