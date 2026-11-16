@@ -273,7 +273,7 @@ func newSweepEnv(t *testing.T, b backend) *sessionEnv {
 		o.mutate = func(cfg *runnerapi.Config) { cfg.Sweeps = fakeSweeps{ops: s.operations} }
 	})
 
-	status, body := e.admin(http.MethodPost, "/api/runners/acme/pools",
+	status, body := e.admin("/api/dustpan/v1/namespaces/acme/runner-pools",
 		map[string]any{"name": "scan", "purpose": "sweeps"})
 	if status != http.StatusCreated {
 		t.Fatalf("create pool = %d %s, want 201", status, body)

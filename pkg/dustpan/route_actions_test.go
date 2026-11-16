@@ -60,7 +60,6 @@ var rootPrefixes = map[string]string{
 	"/api/inventory/": "inventory",
 	"/api/audit/":     "audit",
 	"/runner/v1/":     "runners",
-	"/api/runners/":   "runners",
 	"/api/v2/":        "tfe",
 	"/tofu/state/":    "tofuhttp",
 	"/api/server/":    "server",

@@ -17,6 +17,7 @@ import (
 	registryapi "opendustpan.org/opendustpan/internal/api/registry"
 	"opendustpan.org/opendustpan/internal/api/route"
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	"opendustpan.org/opendustpan/internal/api/runnerpools"
 	selfserviceapi "opendustpan.org/opendustpan/internal/api/selfservice"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	settingsapi "opendustpan.org/opendustpan/internal/api/settings"
@@ -112,6 +113,7 @@ func knownRowTypes() []reflect.Type {
 		reflect.TypeFor[auditapi.Route](),
 		reflect.TypeFor[contextapi.Route](),
 		reflect.TypeFor[runnerapi.Route](),
+		reflect.TypeFor[runnerpools.Route](),
 		reflect.TypeFor[profileapi.Route](),
 		reflect.TypeFor[route.Route[identity.Object]](),
 		reflect.TypeFor[selfserviceapi.Route](),
@@ -164,11 +166,14 @@ func knownScopes() map[reflect.Type]scopeValues {
 		},
 		reflect.TypeFor[runnerapi.Scope](): {
 			public:   nil,
-			signedIn: ints(int64(runnerapi.ScopeAuthorized)),
+			signedIn: nil,
 			credential: ints(
 				int64(runnerapi.ScopeJoinToken), int64(runnerapi.ScopeRunnerKey),
 				int64(runnerapi.ScopeHandoffToken), int64(runnerapi.ScopeSessionKey),
 			),
+		},
+		reflect.TypeFor[runnerpools.Scope](): {
+			public: nil, signedIn: ints(int64(runnerpools.ScopeAuthorized)), credential: nil,
 		},
 		reflect.TypeFor[pulumi.Scope](): {
 			public: ints(int64(pulumi.ScopePublic)), signedIn: ints(int64(pulumi.ScopeAuthorized)),

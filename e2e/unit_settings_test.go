@@ -111,7 +111,8 @@ func runUnitSettingsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		UserAgent: unitSettingsAgent, Name: "create the runner pool", Method: http.MethodPost,
-		Path: "/api/runners/" + refusalNamespace + "/pools", Body: `{"name":"ci","purpose":"jobs"}`,
+		Path: "/api/dustpan/v1/namespaces/" + refusalNamespace + "/runner-pools",
+		Body: `{"name":"ci","purpose":"jobs"}`,
 		Want: http.StatusCreated, Scheme: "token", Check: func(body string) error {
 			if err := json.Unmarshal([]byte(body), &pool); err != nil || pool.ID == "" {
 				return fmt.Errorf("%w: pool %s", errUnitSettingsDoc, body)

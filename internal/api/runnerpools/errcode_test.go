@@ -1,4 +1,4 @@
-package runnerapi_test
+package runnerpools_test
 
 import (
 	"errors"
@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	"opendustpan.org/opendustpan/internal/api/runnerpools"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/errcode/errcodetest"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -39,7 +39,7 @@ func TestEveryManagementAnswerHasACode(t *testing.T) {
 		{"denied", identity.ErrDenied, http.StatusForbidden, errcode.AccessDenied},
 		{"unknown pool", runner.ErrNotFound, http.StatusNotFound, errcode.RunnerNotFound},
 		{"unknown namespace", namespace.ErrNotFound, http.StatusNotFound, errcode.RunnerNotFound},
-		{"bad body", runnerapi.ErrBadBody, http.StatusBadRequest, errcode.RequestBodyInvalid},
+		{"bad body", runnerpools.ErrBadBody, http.StatusBadRequest, errcode.RequestBodyInvalid},
 		{"invalid", runner.ErrInvalid, http.StatusBadRequest, errcode.RunnerInvalid},
 		{"pool exists", runner.ErrAlreadyExists, http.StatusConflict, errcode.RunnerPoolExists},
 		{"immutable", runner.ErrImmutable, http.StatusConflict, errcode.RunnerImmutable},
@@ -59,7 +59,7 @@ func TestEveryManagementAnswerHasACode(t *testing.T) {
 				t.Parallel()
 
 				rec := httptest.NewRecorder()
-				runnerapi.WriteManagementError(t.Context(), rec, err)
+				runnerpools.WriteManagementError(t.Context(), rec, err)
 
 				errcodetest.CheckAnswer(t, errcodetest.ShapeCamelCase, tc.status, rec.Body.Bytes(),
 					errcodetest.Want{Code: tc.code, Args: nil, RequestBody: nil})
