@@ -1392,7 +1392,11 @@ func (m costModel) count(c schemaCounts) int {
 // directory exists.
 func backupModel() costModel {
 	return costModel{
-		fixed: 47 + attemptClaimTrips, perTable: 3 + claimReadTrips, perOther: 1, perMigration: 0, perUnit: stateVersionReads,
+		fixed:        47 + attemptClaimTrips,
+		perTable:     3 + claimReadTrips,
+		perOther:     1,
+		perMigration: 0,
+		perUnit:      stateVersionReads,
 	}
 }
 
