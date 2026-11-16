@@ -34,6 +34,7 @@ const (
 	backupColStatus      = "status"
 	backupColUpdateID    = "update_id"
 	backupColVersion     = "version"
+	backupColBundleID    = "bundle_id"
 	backupColUpdatedAtMs = "updated_at_ms"
 	backupColDeletedAtMs = "deleted_at_ms"
 	backupColSource      = "source"

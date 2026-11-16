@@ -18,6 +18,7 @@ func createCases() []suiteCase {
 		{"CreateTakesANameOfAnotherNamespace", testCreateNameOtherNamespace},
 		{"CreateRefusesATakenID", testCreateIDTaken},
 		{"CreateRefusesAPrincipalOutsideTheNamespace", testCreatePrincipal},
+		{"CreateRefusesTheBundleOfAnotherNamespace", testCreateBundleOfAnotherNamespace},
 		{"CreateRefusesTheRuleAfterTheLimit", testCreateLimit},
 	}
 }
@@ -190,4 +191,60 @@ func testCreateLimit(t *testing.T, h Harness) {
 	// The limit counts one namespace: another namespace takes a rule.
 	h.Namespace(t, nsOther)
 	mustCreate(t, h, newRule(namespace.Name(nsOther), "first", workload(t, h, nsOther)))
+}
+
+// testCreateBundleOfAnotherNamespace sends a rule that names the bundle of
+// another namespace, first to a namespace that holds no bundle, then to one
+// that holds its own bundle. The store layer refuses both, whatever the
+// database constraint would do with the row.
+func testCreateBundleOfAnotherNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, nsAcme)
+	otherFence := h.Namespace(t, nsOther)
+	p := workload(t, h, nsAcme)
+
+	foreign, err := h.Bundles.SaveBundle(
+		t.Context(), nsOther, saveFields(testCA(t)), otherFence, bundleEntry(nsOther, "save"),
+	)
+	if err != nil {
+		t.Fatalf("save the bundle of %s: %v", nsOther, err)
+	}
+
+	none := newRule(nsAcme, "deploy", p)
+	none.Bundle = string(foreign.ID)
+
+	err = h.Store.Create(t.Context(), none, fence, auditEntry(nsAcme, "create", none.ID))
+	if !errors.Is(err, trustrule.ErrBundle) {
+		t.Fatalf("create over no bundle of the namespace = %v, want ErrBundle", err)
+	}
+
+	mustBeGone(t, h, nsAcme, none.ID)
+
+	own, err := h.Bundles.SaveBundle(
+		t.Context(), nsAcme, saveFields(testCA(t)), fence, bundleEntry(nsAcme, "save"),
+	)
+	if err != nil {
+		t.Fatalf("save the bundle of %s: %v", nsAcme, err)
+	}
+
+	other := newRule(nsAcme, "deploy", p)
+	other.Bundle = string(foreign.ID)
+
+	err = h.Store.Create(t.Context(), other, fence, auditEntry(nsAcme, "create", other.ID))
+	if !errors.Is(err, trustrule.ErrBundle) {
+		t.Fatalf("create over the bundle of the namespace = %v, want ErrBundle", err)
+	}
+
+	mustBeGone(t, h, nsAcme, other.ID)
+
+	// The refusal names the namespace, not the bundle: a rule that names the
+	// bundle of its own namespace is stored.
+	ownRule := newRule(nsAcme, "deploy", p)
+	ownRule.Bundle = string(own.ID)
+	mustCreate(t, h, ownRule)
+
+	if got := auditCount(t, h, nsAcme); got != 1 {
+		t.Errorf("audit entries = %d, want 1", got)
+	}
 }

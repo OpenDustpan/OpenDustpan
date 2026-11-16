@@ -16,6 +16,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/trustrules"
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/trustrulesvc"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -181,8 +182,8 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 			Grants: e.store, Roles: e.store, Callers: e.store, Principals: e.store,
 			Collections: nil, Units: e.store,
 		},
-		Store: e.store, Principals: e.store, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil, Now: nil,
-		NewID: nil,
+		Store: e.store, Principals: e.store, Freshness: nil, Authorizer: nil, TempAdmins: nil, Logger: nil,
+		Now: testNow, NewID: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("token service: %v", err)
@@ -198,7 +199,8 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store, Authorizer: authz,
 		Reach:            reach,
-		InstallationURLs: []string{publicURL}, OwnIssuer: nil, CheckURL: nil, Now: nil,
+		InstallationURLs: []string{publicURL}, OwnIssuer: nil, CheckURL: nil, Now: testNow,
+		Bundles: e.store.TrustRules(), Sessions: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("trust rule service: %v", err)
@@ -207,7 +209,7 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 	exchanger, err := trustrulesvc.NewExchanger(trustrulesvc.ExchangeConfig{
 		Rules: e.store.TrustRules(), Exchanges: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store,
 		Tokens: tokens, Audit: e.store, ServerAudit: e.store, Refusals: nil, Keys: nil,
-		InstallationURLs: []string{publicURL}, OwnIssuer: nil, Now: nil, Log: nil,
+		InstallationURLs: []string{publicURL}, OwnIssuer: nil, Now: testNow, Log: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("exchanger: %v", err)
@@ -223,7 +225,7 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 		e.t.Fatalf("handler: %v", err)
 	}
 
-	srv := httptest.NewServer(h)
+	srv := httptest.NewServer(withTestSession(h))
 	e.t.Cleanup(srv.Close)
 
 	e.server, e.handler = srv, h
@@ -294,8 +296,49 @@ func (e *env) storePrincipal(id, subject string, ns namespace.Name, kind princip
 	return id
 }
 
-// do sends a request with the given token and body.
+// sessionHeader makes the test server carry a console session with a sign-in
+// of now on the request, as the session checker of the server does.
+const sessionHeader = "X-Test-Session"
+
+// testNow is the fixed clock of the service and of the sign-in of a test
+// session, so that no test reads the wall clock.
+func testNow() time.Time {
+	return time.Unix(1_700_000_000, 0).UTC()
+}
+
+// withTestSession wraps h so that a request with sessionHeader carries a
+// console session in its context. The value "1" signs in at the fixed now of
+// the service, and the value "old" signs in 16 minutes before it: one minute
+// past the default freshness window of 15 minutes, so a write that needs a
+// fresh authentication is refused as stale and not as missing.
+func withTestSession(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		at := testNow()
+
+		if r.Header.Get(sessionHeader) == "old" {
+			at = testNow().Add(-16 * time.Minute)
+		}
+
+		if v := r.Header.Get(sessionHeader); v == "1" || v == "old" {
+			ctx := sessionauth.WithSession(r.Context())
+			ctx = sessionauth.WithSignIn(ctx, sessionauth.SignIn{At: at, Provider: "local"})
+			r = r.WithContext(ctx)
+		}
+
+		h.ServeHTTP(w, r)
+	})
+}
+
+// do sends a request with the given token and body, with a fresh console
+// session.
 func (e *env) do(method, path, token, body string) (int, []byte) {
+	e.t.Helper()
+
+	return e.send(method, path, token, body, map[string]string{sessionHeader: "1"})
+}
+
+// send sends a request. The header map holds more request headers.
+func (e *env) send(method, path, token, body string, header map[string]string) (int, []byte) {
 	e.t.Helper()
 
 	req, err := http.NewRequestWithContext(e.t.Context(), method, e.server.URL+path, strings.NewReader(body))
@@ -305,6 +348,10 @@ func (e *env) do(method, path, token, body string) (int, []byte) {
 
 	if token != "" {
 		req.Header.Set("Authorization", "token "+token)
+	}
+
+	for k, v := range header {
+		req.Header.Set(k, v)
 	}
 
 	resp, err := e.server.Client().Do(req)

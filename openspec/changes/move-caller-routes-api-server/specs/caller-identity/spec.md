@@ -8,6 +8,30 @@ The server SHALL serve GET /api/dustpan/v1/me/access for the caller principal.
 - **WHEN** the caller sends GET /api/dustpan/v1/me/access with a valid token
 - **THEN** the server returns only the actions that grants give the caller
 
+### Requirement: Caller access objects route
+
+The server SHALL serve GET /api/dustpan/v1/me/access/objects for the caller principal. It needs the action caller:read on the caller and no other grant, and it lists the objects of the query type where the caller can do the query action.
+
+#### Scenario: List objects by type
+- **WHEN** the caller sends GET /api/dustpan/v1/me/access/objects?type=namespace with a valid token
+- **THEN** the server returns one page of the namespaces where the caller can do the default action, with type, action, total, all and nextPageToken, and the caller sees only its own access
+
+#### Scenario: Type missing or unknown
+- **WHEN** the request has no type, or a type other than namespace, collection, unit or principal
+- **THEN** the server answers 400 with a stable error code, and the message names the allowed types and the optional action
+
+#### Scenario: Unknown action refused
+- **WHEN** the request names an action that the server does not know
+- **THEN** the server answers 400 with a stable error code and lists no object
+
+#### Scenario: Paging names
+- **WHEN** the request sends cursor or limit, a pageSize above 200, or a pageToken that is not a nextPageToken
+- **THEN** the server answers 400 with a stable error code that names pageSize and pageToken
+
+#### Scenario: The access route takes no type
+- **WHEN** the caller sends GET /api/dustpan/v1/me/access with the query type and no object
+- **THEN** the server answers 400 with a stable error code, and the message names /api/dustpan/v1/me/access/objects
+
 ### Requirement: Caller grants route
 
 The server SHALL serve GET /api/dustpan/v1/me/grants for the caller principal.
@@ -70,7 +94,7 @@ When the caller sends DELETE /api/dustpan/v1/me/tokens/{id} for an own token, th
 
 ### Requirement: Old paths gone
 
-The server SHALL answer 404 from the router for each path under /api/server/caller/access, /api/server/caller/grants and /api/server/caller/tokens.
+The server SHALL answer 404 from the router for each path under /api/server/caller/access (the objects list included), /api/server/caller/grants and /api/server/caller/tokens.
 
 #### Scenario: Call old path
 - **WHEN** the caller sends a request to /api/server/caller/access

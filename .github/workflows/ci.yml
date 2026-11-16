@@ -197,6 +197,9 @@ jobs:
         run: |
           git fetch --no-tags --unshallow origin +refs/heads/main:refs/remotes/origin/main
           make nolint-check BASE=origin/main
+      # The check reads the index of the checkout, so it runs on each event.
+      - name: No tracked file matches a .gitignore rule
+        run: make ignored-check
       - name: go.mod and go.sum are tidy
         run: go mod tidy -diff
       - name: Verify module checksums

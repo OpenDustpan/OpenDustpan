@@ -418,6 +418,8 @@ const (
 	ErrorCodeTriggerSaverDenied                    ErrorCode = "trigger.saver-denied"
 	ErrorCodeTrustRuleAlreadyExists                ErrorCode = "trust-rule.already-exists"
 	ErrorCodeTrustRuleAmbiguous                    ErrorCode = "trust-rule.ambiguous"
+	ErrorCodeTrustRuleBundleInvalid                ErrorCode = "trust-rule.bundle-invalid"
+	ErrorCodeTrustRuleBundleNotFound               ErrorCode = "trust-rule.bundle-not-found"
 	ErrorCodeTrustRuleInvalid                      ErrorCode = "trust-rule.invalid"
 	ErrorCodeTrustRuleIssuerRefused                ErrorCode = "trust-rule.issuer-refused"
 	ErrorCodeTrustRuleLimit                        ErrorCode = "trust-rule.limit"

@@ -219,6 +219,8 @@ var Tables = []string{
 	"quota_reservation_keys",
 	"quota_requests",
 	TableTrustRules,
+	TableTrustBundles,
+	TableTrustBundleVersions,
 	"unmanaged_targets",
 	"unmanaged_scans",
 	"break_glass_reviews",
