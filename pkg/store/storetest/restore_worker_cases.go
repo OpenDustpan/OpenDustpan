@@ -28,14 +28,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 )
 
-// workerLease is the lease of the restore operations in the worker cases. A
-// takeover waits for it to end, so it stays short, but long enough for the
-// renewals of a loaded machine under the race detector.
+// workerLease is the lease of a claim that a case takes by hand.
 const workerLease = 10 * time.Second
 
-// heldLease is the lease of a case that must keep one claim live for its
-// whole run. It is longer than any case runs, so that no case depends on how
-// much CPU time the renewals get on a loaded machine.
+// heldLease is the lease of the restore operations in the worker cases. It is
+// longer than any case runs, so that no case depends on how much CPU time the
+// renewals get on a loaded machine. A case that stops a holder ends its claim
+// with the gate: another instance then takes the operation over at once.
 const heldLease = 10 * time.Minute
 
 // laterNamespace is the namespace that a worker rig creates after its backup:
@@ -146,7 +145,7 @@ type workerRig struct {
 	// restore that a case cancels.
 	failover int64
 	// lease is the lease of the restore operations of the services of the
-	// rig: workerLease, unless a case sets another.
+	// rig: heldLease, unless a case sets another.
 	lease time.Duration
 }
 
@@ -191,7 +190,7 @@ func newWorkerRig(t *testing.T, newStore RestoreFactory) *workerRig {
 		backupID: "",
 		seed:     noSeed(),
 		failover: 0,
-		lease:    workerLease,
+		lease:    heldLease,
 	}
 
 	r.seed = seedItemKeyBackup(
@@ -599,6 +598,11 @@ type stepGate struct {
 	free     sync.Once
 	crashed  atomic.Bool
 	frozen   atomic.Bool
+	// claim is the claim that the holder took. A crash or a freeze uses it
+	// to end that claim at once.
+	t     *testing.T
+	mu    sync.Mutex
+	claim durable.Claim
 }
 
 // newStepGate returns a gate on the store of r at step. The gate is free at
@@ -614,7 +618,8 @@ func newStepGate(t *testing.T, r *workerRig, step string, mode gateMode) *stepGa
 	g := &stepGate{
 		Store: r.ops, canceler: canceler, step: step, mode: mode, reached: make(chan struct{}),
 		release: make(chan struct{}), fire: sync.Once{}, free: sync.Once{}, crashed: atomic.Bool{},
-		frozen: atomic.Bool{},
+		frozen: atomic.Bool{}, t: t, mu: sync.Mutex{},
+		claim: durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}},
 	}
 
 	t.Cleanup(g.open)
@@ -642,6 +647,10 @@ func (g *stepGate) Claim(ctx context.Context, req durable.ClaimRequest) (durable
 	if err != nil {
 		return op, fmt.Errorf("claim: %w", err)
 	}
+
+	g.mu.Lock()
+	g.claim = op.Claim
+	g.mu.Unlock()
 
 	// A live pause before the first step happens in the stage call, with
 	// pausingStage: the runner counts the lease from the start of the claim.
@@ -676,7 +685,7 @@ func (g *stepGate) RecordStep(ctx context.Context, f durable.StepFence, result [
 	}
 
 	if g.mode == gateCrash && f.Step == g.step {
-		g.crash()
+		g.crash(ctx)
 
 		return durable.ErrClaimLost
 	}
@@ -748,8 +757,25 @@ func (g *stepGate) open() {
 	g.free.Do(func() { close(g.release) })
 }
 
-// crash stops the holder for good.
-func (g *stepGate) crash() {
+// endClaim ends the claim of the holder at once, as a lease that ran out.
+// The holder has a long lease, so that CPU load cannot end its claim before
+// the case wants it: the case ends the claim, and another instance takes the
+// operation over.
+func (g *stepGate) endClaim(ctx context.Context) {
+	g.mu.Lock()
+	claim := g.claim
+	g.mu.Unlock()
+
+	// A claim that is gone already is ended: that is no failure.
+	_, err := g.Store.Extend(context.WithoutCancel(ctx), claim, time.Millisecond)
+	if err != nil && !errors.Is(err, durable.ErrClaimLost) {
+		g.t.Errorf("end the claim of the stopped holder: %v", err)
+	}
+}
+
+// crash stops the holder for good and ends its claim.
+func (g *stepGate) crash(ctx context.Context) {
+	g.endClaim(ctx)
 	g.crashed.Store(true)
 	g.fire.Do(func() { close(g.reached) })
 }
@@ -759,6 +785,7 @@ func (g *stepGate) crash() {
 func (g *stepGate) pause(ctx context.Context, c durable.Claim) durable.Claim {
 	g.fire.Do(func() {
 		if g.mode == gatePauseStale {
+			g.endClaim(ctx)
 			g.frozen.Store(true)
 		}
 
@@ -867,7 +894,9 @@ func (o overwritingBlobs) Put(ctx context.Context, key blob.Key, r io.Reader) er
 }
 
 // testWorkerTakeover stops the holder of instance a for good when it records
-// step. Instance b takes the restore over after the lease and ends it once.
+// step. The claim of a has a long lease, so that CPU load cannot end it
+// before the crash. The crash ends the claim at once. Instance b takes the
+// restore over and ends it once.
 func testWorkerTakeover(t *testing.T, newStore RestoreFactory, step string) {
 	t.Helper()
 
@@ -934,7 +963,6 @@ func testWorkerOtherStart(t *testing.T, newStore RestoreFactory, step string) {
 	t.Helper()
 
 	r := newWorkerRig(t, newStore)
-	r.lease = heldLease
 	gate := newStepGate(t, r, step, gatePauseLive)
 
 	var live backup.RestoreLive
@@ -1004,7 +1032,7 @@ func (k swapKiller) ApplyRestoreArea(
 
 	_, err := k.RestoreLive.ApplyRestoreArea(swapCtx, f, a, keepAccess)
 
-	k.gate.crash()
+	k.gate.crash(ctx)
 
 	return backup.KeepAccessResult{DroppedTempAdmins: 0}, errors.Join(durable.ErrClaimLost, err)
 }
