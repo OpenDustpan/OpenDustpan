@@ -166,7 +166,13 @@ func tamperStagedTrust(t *testing.T, s *Store, stmts []string, args ...any) {
 	t.Helper()
 
 	for _, stmt := range stmts {
-		if _, err := s.pool.Exec(t.Context(), stmt, args...); err != nil {
+		// Only a statement with a placeholder takes the arguments.
+		stmtArgs := args
+		if !strings.Contains(stmt, "$1") {
+			stmtArgs = nil
+		}
+
+		if _, err := s.pool.Exec(t.Context(), stmt, stmtArgs...); err != nil {
 			t.Fatalf("%s: %v", stmt, err)
 		}
 	}
