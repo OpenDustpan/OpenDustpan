@@ -4,6 +4,7 @@ This change starts after `session-fresh-cookie` (the source of the proof) and ta
 
 ## 0. Confirm against the code first
 
+- [ ] 0.0 Stop with BLOCKED when a dependency is not on main. Run `ls -d openspec/changes/archive/*-session-fresh-cookie && rg -q 'freshstep\.' internal/api/jobs/approve.go`. Check: the command exits 0. When it exits non-zero, write `BLOCKED: session-fresh-cookie is not archived on main, or approve.go has no freshstep gate (task 2.4 of fresh-auth-enabled-setting)` as the report, change no file and open no pull request
 - [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests first
