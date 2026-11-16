@@ -36,7 +36,9 @@ func BindFact(c AccessClaims, m Match, now time.Time) FreshFact
 | `BindFact` | principal, generation, sign-in time, expiry | cookie of another person, of an older generation, of another sign-in, expired |
 | `sessionauth` | cookie opens with the ring, stored session first | forged value, value of another kind, cookie without a stored session |
 | Handler | no cookie for a token, an agent or a failed sign-in | failed sign-in, agent |
-| Re-issue | copies claims, never advances a time | request that tries to move `freshAt` |
+| Renewal | `renewSession` passes empty claims | password change with a fact in the old cookie |
+| SSO time | zero, future or older than the window gives an empty fact | `auth_time` far in the future |
+| Re-issue | re-seals only a cookie that `BindFact` accepted, copies claims, never advances a time | request that tries to move `freshAt` |
 
 ## Risks
 

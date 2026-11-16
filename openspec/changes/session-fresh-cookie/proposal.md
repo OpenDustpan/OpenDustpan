@@ -20,7 +20,7 @@ The path after this change:
 ## Evidence
 
 - `Checker.Authenticate` reads the stored session only (internal/sessionauth/sessionauth.go:132). The stored `session.Session` has `AuthTime` and `Provider` and no factor kind (pkg/session/session.go:123).
-- The six places that start a session set one cookie: `signin.go:440`, `passwordsignin.go:259`, `passkeysignin.go:303`, `localusers.go:402` and `:741`, `devsignin.go:146` (internal/api/server, `sessionCookie(...)`).
+- The six places that set a session cookie (five sign-ins and the renewal at `localusers.go:741`): `signin.go:440`, `passwordsignin.go:259`, `passkeysignin.go:303`, `localusers.go:402` and `:741`, `devsignin.go:146` (internal/api/server, `sessionCookie(...)`).
 - The claim types exist (`Claims`, `AccessClaims`, `FreshKind`, pkg/session/cookie.go:193-273). The sealer is the change `session-key-ring`.
 
 ## Fix boundary
@@ -69,4 +69,5 @@ Considered and answered:
 
 - Does a request refresh the fact? No. Only a sign-in writes `freshAt`. A re-issue copies the claims.
 - What binds the cookie to the stored session? The principal ID, the session generation and the sign-in time (`SignInAt` equals the creation time of the stored session in milliseconds). Any difference gives no fact.
+- Does a renewal after a password change carry a fact? No. It is not a sign-in. It sets empty claims.
 - Which kind for which sign-in? Passkey gives `passkey`. A password with a second factor gives `mfa`. An SSO provider gives `sso` with the authentication time that the provider gives. A password alone gives `password`. A dev sign-in gives no kind.
