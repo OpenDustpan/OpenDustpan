@@ -16,6 +16,7 @@ func validRule() trustrule.Rule {
 		CreatedAt: time.UnixMilli(1_700_000_000_000).UTC(), ID: trustrule.NewID(), Namespace: "acme",
 		Name: "deploy", Issuer: "https://token.actions.example.com", Audience: "https://dustpan.example.com",
 		Keys: trustrule.KeySourceDiscovery, StaticKeys: "", PrincipalID: "prn-worker", CreatedBy: "ada",
+		Revision: 1, SpiffeIDPattern: "", Bundle: "",
 		Conditions: []trustrule.Condition{
 			{Claim: "repository", Values: []string{"acme/infra"}},
 			{Claim: "sub", Values: []string{"repo:acme/infra:ref:refs/heads/main"}},
@@ -63,6 +64,7 @@ func TestValidateRefuses(t *testing.T) {
 		{"a static rule with no keys", func(r *trustrule.Rule) { r.Keys = trustrule.KeySourceStatic }},
 		{"no condition", func(r *trustrule.Rule) { r.Conditions = nil }},
 		{"no condition on the subject", func(r *trustrule.Rule) { r.Conditions = r.Conditions[:1] }},
+		{"a negative revision", func(r *trustrule.Rule) { r.Revision = -1 }},
 	}
 
 	for _, tc := range cases {
@@ -198,5 +200,22 @@ func TestRefNamesOnlyARuleID(t *testing.T) {
 
 	if got := trustrule.Ref("trr-a\nb"); got != "trust-rule:invalid" {
 		t.Errorf("Ref of an invalid ID = %q, want trust-rule:invalid", got)
+	}
+}
+
+// TestValidateRefusesABundleReferenceOfTheWrongForm sends a rule with a bad
+// bundle reference straight to Validate, as if the handler, the service and
+// the store had all failed to check it. Defense in depth: those layers check
+// the reference too; this layer must stop it alone.
+func TestValidateRefusesABundleReferenceOfTheWrongForm(t *testing.T) {
+	t.Parallel()
+
+	for _, ref := range []string{"tok-abc", "trb-", "trb-a/../b", "trb-a\nb"} {
+		r := validRule()
+		r.Bundle = ref
+
+		if err := r.Validate(); !errors.Is(err, trustrule.ErrBundle) {
+			t.Errorf("Validate(bundle %q) = %v, want ErrBundle", ref, err)
+		}
 	}
 }

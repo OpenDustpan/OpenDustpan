@@ -61,6 +61,11 @@ type ruleDocument struct {
 	Principal  string              `json:"principal"`
 	CreatedBy  string              `json:"createdBy"`
 	Conditions []conditionDocument `json:"conditions"`
+	// SpiffeIDPattern and Bundle are empty for a rule that sets none. Revision
+	// is the revision that an update sends in If-Match.
+	SpiffeIDPattern string `json:"spiffePattern"`
+	Bundle          string `json:"bundle"`
+	Revision        int64  `json:"revision"`
 }
 
 // listDocument is the list of the rules of a namespace. Rules is never null.
@@ -79,6 +84,23 @@ type createRequest struct {
 	StaticKeys *string              `dustpan:"optional" json:"staticKeys"`
 	Principal  *string              `dustpan:"required" json:"principal"`
 	Conditions *[]conditionDocument `dustpan:"required" json:"conditions"`
+
+	SpiffeIDPattern *string `dustpan:"optional" json:"spiffePattern"`
+	Bundle          *string `dustpan:"optional" json:"bundle"`
+}
+
+// updateRequest is the body of an update. A missing field keeps the stored
+// value.
+type updateRequest struct {
+	Name            *string              `dustpan:"optional" json:"name"`
+	Issuer          *string              `dustpan:"optional" json:"issuer"`
+	Audience        *string              `dustpan:"optional" json:"audience"`
+	KeySource       *trustrule.KeySource `dustpan:"optional" json:"keySource"`
+	StaticKeys      *string              `dustpan:"optional" json:"staticKeys"`
+	Principal       *string              `dustpan:"optional" json:"principal"`
+	Conditions      *[]conditionDocument `dustpan:"optional" json:"conditions"`
+	SpiffeIDPattern *string              `dustpan:"optional" json:"spiffePattern"`
+	Bundle          *string              `dustpan:"optional" json:"bundle"`
 }
 
 // list serves GET on RulesPath. It answers 200 with the rules of the
@@ -123,6 +145,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, p identity.Prin
 		return
 	}
 
+	w.Header().Set("ETag", trustrule.ETag(rule.Revision))
 	w.Header().Set("Location", "/api/dustpan/v1/namespaces/"+url.PathEscape(rule.Namespace.String())+
 		"/trust-rules/"+url.PathEscape(string(rule.ID)))
 	problem.WriteJSON(ctx, h.logger, w, http.StatusCreated, documentOf(&rule))
@@ -173,15 +196,48 @@ func createFailureReason(err error, principalID string) (string, bool) {
 	}}), true
 }
 
+// writeFailureReason returns the audit reason of a refused write of a rule or
+// a bundle: a missing fresh authentication, a principal of another
+// namespace, a missing action, or a check that could not run. It returns
+// false for any other error: a body that is not valid, an unknown object and
+// a write that is not current are not refusals of the caller.
+func writeFailureReason(err error, principalID string) (string, bool) {
+	switch {
+	case errors.Is(err, trustrulesvc.ErrSignInRequired):
+		return trustrulesvc.ErrSignInRequired.Error(), true
+	case errors.Is(err, trustrulesvc.ErrFreshRequired):
+		return trustrulesvc.ErrFreshRequired.Error(), true
+	case errors.Is(err, trustrulesvc.ErrStaleToken):
+		return trustrulesvc.ErrStaleToken.Error(), true
+	case errors.Is(err, trustrule.ErrCrossNamespace):
+		return trustrule.ErrCrossNamespace.Error(), true
+	}
+
+	if reason, ok := createFailureReason(err, principalID); ok {
+		return reason, true
+	}
+
+	// A denial of principal:manage-tokens on a principal that the request
+	// does not name, for example an update that keeps the stored principal,
+	// still names the action that the caller lacks.
+	if errors.Is(err, trustrulesvc.ErrManageTokensDenied) {
+		return trustrulesvc.ErrManageTokensDenied.Error(), true
+	}
+
+	return "", false
+}
+
 // appendCreateFailure writes one failure entry of a refused create: the
 // caller, the action of a create and the principal of the rule, in the
 // namespace of the path or in the installation scope when it cannot be read.
-// A lost entry does not change the answer: it logs one line and calls the
-// audit failure callback.
+// The refusal names the caller when it is a denial of a right, a denial of a
+// fresh authentication, or a write that names another namespace. A lost
+// entry does not change the answer: it logs one line and calls the audit
+// failure callback.
 func (h *Handler) appendCreateFailure(
 	r *http.Request, p identity.Principal, ns namespace.Name, principalID string, err error,
 ) {
-	reason, ok := createFailureReason(err, principalID)
+	reason, ok := writeFailureReason(err, principalID)
 	if !ok {
 		return
 	}
@@ -211,6 +267,36 @@ func (h *Handler) appendCreateFailure(
 	if _, appendErr := appender.Append(r.Context(), n.Fence(), entry); appendErr != nil {
 		h.failAudit(r.Context())
 	}
+}
+
+// writeRefusal names one refused change of a rule or a bundle that the
+// handler records: the request, its caller, the namespace, the audit action
+// of the change, the principal that the change named, and the refusal.
+type writeRefusal struct {
+	r           *http.Request
+	p           identity.Principal
+	ns          namespace.Name
+	action      string
+	principalID string
+	err         error
+}
+
+// recordWriteRefusal writes the audit entry of one refused change of a rule
+// or a bundle, for example an update that points a rule at a principal that
+// the caller may not act as. It goes through the shared denial limiter, as a
+// refusal of a route action does: for one caller, change and namespace, one
+// entry of each window names the caller and the reason. A lost entry does
+// not change the answer: the recorder logs it and counts the failure.
+func (h *Handler) recordWriteRefusal(ctx context.Context, f writeRefusal) {
+	reason, ok := writeFailureReason(f.err, f.principalID)
+	if !ok {
+		return
+	}
+
+	h.guard.Record(ctx, f.r, f.p, refusal.Denial{
+		Action: identity.Action(f.action), Object: identity.NamespaceObject(f.ns),
+		Reason: reason, ReasonWithin: nil, Window: 0,
+	})
 }
 
 // appendServerFailure writes entry in the installation scope. A lost entry
@@ -259,7 +345,71 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, _ identity.Princip
 		return
 	}
 
+	w.Header().Set("ETag", trustrule.ETag(rule.Revision))
 	problem.WriteJSON(ctx, h.logger, w, http.StatusOK, documentOf(&rule))
+}
+
+// update serves PATCH on RulePath. It needs If-Match with the revision that a
+// read gave, changes the fields of the body and answers 200 with the rule.
+func (h *Handler) update(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
+	ctx := r.Context()
+
+	revision, err := ifMatchRevision(r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	var in updateRequest
+	if decodeErr := route.DecodeBody(w, r, maxBundleBodyBytes, &in); decodeErr != nil {
+		h.writeError(ctx, w, decodeErr)
+
+		return
+	}
+
+	input := trustrulesvc.UpdateInput{
+		ID:   trustrule.ID(r.PathValue("rule_id")),
+		Name: deref(in.Name), Issuer: deref(in.Issuer), Audience: deref(in.Audience), Keys: "", KeysSet: false,
+		StaticKeys: in.StaticKeys, PrincipalID: deref(in.Principal), Conditions: nil, ConditionsSet: false,
+		SpiffeIDPattern: in.SpiffeIDPattern, Bundle: in.Bundle, ExpectedRevision: revision,
+	}
+
+	if in.KeySource != nil {
+		input.Keys, input.KeysSet = *in.KeySource, true
+	}
+
+	if in.Conditions != nil {
+		input.ConditionsSet = true
+		input.Conditions = make([]trustrule.Condition, 0, len(*in.Conditions))
+
+		for _, c := range *in.Conditions {
+			input.Conditions = append(input.Conditions, trustrule.Condition{Claim: c.Claim, Values: c.Values})
+		}
+	}
+
+	rule, err := h.rules.Update(ctx, p, h.entryOf(r, p), obj.Namespace(), input)
+	if err != nil {
+		h.recordWriteRefusal(ctx, writeRefusal{
+			r: r, p: p, ns: obj.Namespace(), action: trustrulesvc.ActionUpdate,
+			principalID: input.PrincipalID, err: err,
+		})
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	w.Header().Set("ETag", trustrule.ETag(rule.Revision))
+	problem.WriteJSON(ctx, h.logger, w, http.StatusOK, documentOf(&rule))
+}
+
+// deref returns the text of s, and empty for a missing field.
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+
+	return *s
 }
 
 // delete serves DELETE on RulePath. It answers 204. A workload that matched
@@ -268,7 +418,14 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, _ identity.Princip
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
-	if err := h.rules.Delete(ctx, h.entryOf(r, p), obj.Namespace(), trustrule.ID(r.PathValue("rule_id"))); err != nil {
+	id := trustrule.ID(r.PathValue("rule_id"))
+	entry := h.entryOf(r, p)
+
+	if err := h.rules.Delete(ctx, p, entry, obj.Namespace(), id); err != nil {
+		h.recordWriteRefusal(ctx, writeRefusal{
+			r: r, p: p, ns: obj.Namespace(), action: trustrulesvc.ActionDelete,
+			principalID: "", err: err,
+		})
 		h.writeError(ctx, w, err)
 
 		return
@@ -311,10 +468,19 @@ func readCreate(w http.ResponseWriter, r *http.Request) (trustrulesvc.Input, err
 	out := trustrulesvc.Input{
 		Name: *in.Name, Issuer: *in.Issuer, Audience: *in.Audience, Keys: *in.KeySource, StaticKeys: "",
 		PrincipalID: *in.Principal, Conditions: make([]trustrule.Condition, 0, len(*in.Conditions)),
+		SpiffeIDPattern: "", Bundle: "",
 	}
 
 	if in.StaticKeys != nil {
 		out.StaticKeys = *in.StaticKeys
+	}
+
+	if in.SpiffeIDPattern != nil {
+		out.SpiffeIDPattern = *in.SpiffeIDPattern
+	}
+
+	if in.Bundle != nil {
+		out.Bundle = *in.Bundle
 	}
 
 	for _, c := range *in.Conditions {
@@ -330,7 +496,8 @@ func documentOf(rule *trustrule.Rule) ruleDocument {
 		CreatedAt: rule.CreatedAt.UTC(), ID: string(rule.ID), Namespace: rule.Namespace.String(), Name: rule.Name,
 		Issuer: rule.Issuer, Audience: rule.Audience, KeySource: rule.Keys, StaticKeys: rule.StaticKeys,
 		Principal: rule.PrincipalID, CreatedBy: rule.CreatedBy,
-		Conditions: make([]conditionDocument, 0, len(rule.Conditions)),
+		Conditions:      make([]conditionDocument, 0, len(rule.Conditions)),
+		SpiffeIDPattern: rule.SpiffeIDPattern, Bundle: rule.Bundle, Revision: rule.Revision,
 	}
 
 	for _, c := range rule.Conditions {
@@ -376,6 +543,15 @@ func classify(err error) (problem.Problem, bool) {
 	case errors.Is(err, trustrulesvc.ErrSignInRequired):
 		return problem.New(http.StatusForbidden, errcode.TrustRuleSignInRequired,
 			trustrulesvc.ErrSignInRequired.Error()), true
+	case errors.Is(err, trustrulesvc.ErrFreshRequired):
+		return problem.New(http.StatusForbidden, errcode.MFAFreshStepRequired,
+			trustrulesvc.ErrFreshRequired.Error()), true
+	case errors.Is(err, trustrulesvc.ErrStaleToken):
+		return problem.New(http.StatusForbidden, errcode.MFAFreshStepRequired,
+			trustrulesvc.ErrStaleToken.Error()), true
+	case errors.Is(err, trustrule.ErrStale):
+		return problem.New(http.StatusPreconditionFailed, errcode.RequestPreconditionFailed,
+			"If-Match does not match the stored revision: read the object again and send the new ETag"), true
 	case errors.Is(err, trustrule.ErrNotFound):
 		return problem.New(http.StatusNotFound, errcode.TrustRuleNotFound, trustrule.ErrNotFound.Error()), true
 	case errors.Is(err, trustrule.ErrExists):
@@ -384,9 +560,26 @@ func classify(err error) (problem.Problem, bool) {
 	case errors.Is(err, trustrule.ErrLimit):
 		return problem.New(http.StatusConflict, errcode.TrustRuleLimit,
 			fmt.Sprintf("the namespace holds %d trust rules: delete one first", trustrule.MaxPerNamespace)), true
+	}
+
+	return classifyBundle(err)
+}
+
+// classifyRefusal maps the errors of a refused input of a rule, and passes the
+// rest to package problem.
+func classifyRefusal(err error) (problem.Problem, bool) {
+	switch {
 	case errors.Is(err, trustrule.ErrIssuerRefused):
 		return problem.RefusedText(
 			problem.Detail(err, trustrule.ErrIssuerRefused), http.StatusBadRequest, errcode.TrustRuleIssuerRefused,
+		), true
+	case errors.Is(err, trustrule.ErrCrossNamespace):
+		// A write that names an object of another namespace is a refusal
+		// of the caller, not input that is not valid: the caller may not
+		// write outside the namespace of the path. The check comes before
+		// the ErrPrincipal case, because the error wraps both.
+		return problem.RefusedText(
+			problem.Detail(err, trustrule.ErrCrossNamespace), http.StatusForbidden, errcode.TrustRulePrincipalRefused,
 		), true
 	case errors.Is(err, trustrule.ErrPrincipal):
 		return problem.RefusedText(
@@ -400,4 +593,20 @@ func classify(err error) (problem.Problem, bool) {
 
 	// Not an error of the trust rules: package problem answers it.
 	return problem.Pass()
+}
+
+// classifyBundle maps the errors of the trust bundle checks, and passes the rest
+// to classifyRefusal.
+func classifyBundle(err error) (problem.Problem, bool) {
+	switch {
+	case errors.Is(err, trustrule.ErrBundleActive):
+		return problem.New(http.StatusConflict, errcode.TrustRuleBundleInvalid,
+			"the active version cannot be deleted: rotate the bundle first"), true
+	case errors.Is(err, trustrule.ErrBundle):
+		return problem.RefusedText(
+			problem.Detail(err, trustrule.ErrBundle), http.StatusBadRequest, errcode.TrustRuleBundleInvalid,
+		), true
+	}
+
+	return classifyRefusal(err)
 }

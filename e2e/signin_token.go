@@ -243,6 +243,47 @@ type SessionRequest struct {
 	Method, Path, Body string
 }
 
+// HeaderedSessionRequest is a SessionRequest with the headers that a step
+// of a revisioned write needs.
+type HeaderedSessionRequest struct {
+	SessionRequest
+
+	// IfMatch is the If-Match header of the request. Empty sends none.
+	IfMatch string
+	// UserAgent is the User-Agent header of the request. Empty keeps the
+	// client default.
+	UserAgent string
+}
+
+// FreshAdminHeaderedStatus sends req as a site administrator with a console
+// session that has a fresh sign-in, as FreshAdminAPIStatus does, and adds the
+// headers of req. The env must come from NewEnvWithSignIn.
+func (e *Env) FreshAdminHeaderedStatus(ctx context.Context, tb testing.TB, req HeaderedSessionRequest) (int, string) {
+	tb.Helper()
+
+	if e.signIn == nil {
+		tb.Fatal("FreshAdminHeaderedStatus needs an env from NewEnvWithSignIn")
+	}
+
+	idpSubject := e.signInSubjectOf(ctx, tb, e.freshAdmin(ctx, tb))
+	browser := e.BrowserClient(tb)
+	csrf := e.signInAs(ctx, tb, browser, idpSubject)
+
+	header := sessionHeader(csrf)
+	if req.IfMatch != "" {
+		header.Set("If-Match", req.IfMatch)
+	}
+
+	if req.UserAgent != "" {
+		header.Set("User-Agent", req.UserAgent)
+	}
+
+	return e.browserDo(ctx, tb, browser, browserRequest{
+		method: req.Method, target: e.URL + req.Path, body: req.Body,
+		header: header,
+	})
+}
+
 // freshAdminSubject is the provider subject of the site administrator that
 // FreshAdminAPIStatus signs in.
 const freshAdminSubject = "fresh-admin@example.com"

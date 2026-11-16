@@ -212,6 +212,8 @@ jobs:
         run: |
           python3 -I scripts/runner-deps-guard.py --selftest
           python3 -I scripts/runner-deps-guard.py
+      - name: The test selection of make test-changed passes its self-test
+        run: python3 -I scripts/test-changed.py --selftest
       - uses: sqlc-dev/setup-sqlc@bac53b7fb28c039a6c7f5736fd1e89744021bdd6 # v5.0.0
         with:
           sqlc-version: "1.31.1"

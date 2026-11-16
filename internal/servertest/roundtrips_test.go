@@ -1463,7 +1463,7 @@ func restoreModel() costModel {
 		fixed: 331 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
-			droppedRunnerCredentialTrips + proxyRuleSetTrips,
+			droppedRunnerCredentialTrips + proxyRuleSetTrips + trustBundleTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1564,6 +1564,12 @@ const removalAlertTrips = -2 + 1
 // backup, the column read before the staging load, and the row count of the
 // staged table.
 const checkpointSupersedesTrips = 5 - 7
+
+// trustBundleTrips is the number of round trips that the tables trust_bundles
+// and trust_bundle_versions take off the model. The measured restore makes 12
+// round trips for the two tables, 2 fewer than the 14 that the model gives two
+// tables. The run saves no bundle, so the tables are empty.
+const trustBundleTrips = -2
 
 // checkCount fails the test when the count is not the count of the model,
 // and shows the statement list of the run.
