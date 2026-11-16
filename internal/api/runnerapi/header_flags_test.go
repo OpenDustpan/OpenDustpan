@@ -10,10 +10,10 @@ import (
 )
 
 // headerBehavior is what a route of the runner adapter does with the three
-// conditional-request headers. The runner protocol and the runner management
-// routes are outside the description of the tool-neutral REST API, so no
-// generated client reads a flag for them. This table is the record of their
-// behavior, and the test below compares it with the handler.
+// conditional-request headers. The runner protocol is outside the description
+// of the tool-neutral REST API, so no generated client reads a flag for it.
+// This table is the record of its behavior, and the test below compares it
+// with the handler.
 type headerBehavior struct {
 	// body is the JSON body of the probe request, empty for none.
 	body string
@@ -38,28 +38,13 @@ func noHeaders(body string) headerBehavior {
 // without a decision about its headers. A row that claims a header behavior
 // fails too, until the test has a scenario for it.
 //
-// A management route is probed as the administrator. A protocol route is
-// probed with no runner proof, so the probe covers the checks before the
-// handler; the flow tests cover the handler of each protocol route.
+// A protocol route is probed with no runner proof, so the probe covers the
+// checks before the handler; the flow tests cover the handler of each
+// protocol route.
 func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 	t.Parallel()
 
-	const ns = "/api/dustpan/v1/namespaces/{namespace}"
-
 	want := map[string]headerBehavior{
-		"GET " + ns + "/runner-pools": noHeaders(""),
-		"POST " + ns + "/runner-pools": noHeaders(
-			`{"name":"prod","purpose":"jobs"}`,
-		),
-		"GET " + ns + "/runner-pools/{pool}":                          noHeaders(""),
-		"PATCH " + ns + "/runner-pools/{pool}":                        noHeaders("{}"),
-		"DELETE " + ns + "/runner-pools/{pool}":                       noHeaders(""),
-		"GET " + ns + "/runner-pools/{pool}/join-tokens":              noHeaders(""),
-		"POST " + ns + "/runner-pools/{pool}/join-tokens":             noHeaders(""),
-		"POST " + ns + "/runner-pools/{pool}/join-tokens/{id}/revoke": noHeaders(""),
-		"GET " + ns + "/runner-pools/{pool}/runners":                  noHeaders(""),
-		"POST " + ns + "/runners/{runner}/drain":                      noHeaders(""),
-		"POST " + ns + "/runners/{runner}/retire":                     noHeaders(""),
 		"POST " + protocol.PathJoin:                                   noHeaders("{}"),
 		"POST " + protocol.PathRotate:                                 noHeaders("{}"),
 		"POST " + protocol.PathHeartbeat:                              noHeaders("{}"),
@@ -150,7 +135,7 @@ func probeRoute(t *testing.T, rt runnerapi.Route, row headerBehavior, headers ma
 
 	e := newEnv(t)
 	path := strings.NewReplacer(
-		"{namespace}", "acme", "{pool}", "rp-1", "{id}", "rjt-1", "{runner}", "rn-1", "{operation}", "op-1",
+		"{operation}", "op-1",
 	).Replace(rt.Path)
 
 	req, err := http.NewRequestWithContext(t.Context(), rt.Method, e.server.URL+path, strings.NewReader(row.body))
@@ -162,11 +147,7 @@ func probeRoute(t *testing.T, rt runnerapi.Route, row headerBehavior, headers ma
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	if rt.Scope == runnerapi.ScopeAuthorized {
-		req.Header.Set("Authorization", "token "+adminToken)
-	} else {
-		req.Header.Set(protocol.HeaderRelease, "0.4.0")
-	}
+	req.Header.Set(protocol.HeaderRelease, "0.4.0")
 
 	for k, v := range headers {
 		req.Header.Set(k, v)

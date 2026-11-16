@@ -8,7 +8,6 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	"opendustpan.org/opendustpan/pkg/identity"
-	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
 )
 
@@ -38,9 +37,8 @@ func protocolPaths() map[string]identity.Action {
 }
 
 // TestRouteTable proves the rules of the route table: the table and the mux
-// list the same patterns, each route declares an action and a handler, a
-// protocol route declares the action of its credential, and a management
-// route declares an action on the namespace.
+// list the same patterns, each route declares an action and a handler, and a
+// protocol route declares the action of its credential.
 func TestRouteTable(t *testing.T) {
 	t.Parallel()
 
@@ -58,16 +56,14 @@ func TestRouteTable(t *testing.T) {
 			t.Errorf("route %s %s declares no action or has no handler", route.Method, route.Path)
 		}
 
-		switch {
-		case strings.HasPrefix(route.Path, "/runner/v1/"):
-			checkProtocolRoute(t, route, paths)
-
-			seen[route.Path] = true
-		case strings.HasPrefix(route.Path, "/api/dustpan/v1/namespaces/"):
-			checkManagementRoute(t, route)
-		default:
-			t.Errorf("route %s %s is outside /runner/v1 and /api/dustpan/v1/namespaces", route.Method, route.Path)
+		if !strings.HasPrefix(route.Path, "/runner/v1/") {
+			t.Errorf("route %s %s is outside /runner/v1", route.Method, route.Path)
+			continue
 		}
+
+		checkProtocolRoute(t, route, paths)
+
+		seen[route.Path] = true
 	}
 
 	for path := range paths {
@@ -83,25 +79,6 @@ func TestRouteTable(t *testing.T) {
 
 	if !slices.Equal(patterns, registered) {
 		t.Errorf("table patterns = %v, registered = %v, want equal", patterns, registered)
-	}
-}
-
-func checkManagementRoute(t *testing.T, route *runnerapi.Route) {
-	t.Helper()
-
-	if route.Scope != runnerapi.ScopeAuthorized {
-		t.Errorf("management route %s %s is not ScopeAuthorized", route.Method, route.Path)
-	}
-
-	for _, a := range route.Actions {
-		if a != identity.ActionNamespaceReadRunners && a != identity.ActionNamespaceManageRunners {
-			t.Errorf("management route %s %s declares %s", route.Method, route.Path, a)
-		}
-	}
-
-	changes := route.Method != http.MethodGet
-	if changes && !slices.Contains(route.Actions, identity.ActionNamespaceManageRunners) {
-		t.Errorf("route %s %s changes data without namespace:manage-runners", route.Method, route.Path)
 	}
 }
 
@@ -145,7 +122,7 @@ func TestRoutesRefuseARequestWithNoCredential(t *testing.T) {
 
 	for _, route := range e.handler.Routes() {
 		path := strings.NewReplacer(
-			"{namespace}", "acme", "{pool}", "rp-1", "{id}", "rjt-1", "{runner}", "rn-1", "{operation}", "op-1",
+			"{operation}", "op-1",
 		).Replace(route.Path)
 
 		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
@@ -156,66 +133,12 @@ func TestRoutesRefuseARequestWithNoCredential(t *testing.T) {
 				t.Fatalf("request: %v", err)
 			}
 
-			if route.Scope != runnerapi.ScopeAuthorized {
-				req.Header.Set(protocol.HeaderRelease, "0.4.0")
-			}
+			req.Header.Set(protocol.HeaderRelease, "0.4.0")
 
 			status, _ := e.send(req)
 			if status < http.StatusBadRequest || status >= http.StatusInternalServerError {
 				t.Fatalf("status = %d, want a 4xx refusal", status)
 			}
 		})
-	}
-}
-
-// TestReducingListMatchesRunnerRoutes proves that each entry of
-// maintenance.ReducingRoutes under the runner management prefix is a
-// registered route with the actions that the list names, and that each
-// route of the table that retires or revokes is on the list.
-func TestReducingListMatchesRunnerRoutes(t *testing.T) {
-	t.Parallel()
-
-	e := newEnv(t)
-	registered := map[string][]string{}
-
-	for _, route := range e.handler.Routes() {
-		actions := make([]string, 0, len(route.Actions))
-		for _, a := range route.Actions {
-			actions = append(actions, string(a))
-		}
-
-		registered[route.Method+" "+route.Path] = actions
-	}
-
-	listed := map[string]bool{}
-
-	for _, r := range maintenance.ReducingRoutes() {
-		if !strings.HasPrefix(r.Pattern, "/api/dustpan/v1/namespaces/") {
-			continue
-		}
-
-		key := r.Method + " " + r.Pattern
-		listed[key] = true
-
-		got, ok := registered[key]
-		if !ok {
-			t.Errorf("%s is on the list and is not a registered route", key)
-
-			continue
-		}
-
-		if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(r.Actions))) {
-			t.Errorf("%s declares the actions %v, the list names %v", key, got, r.Actions)
-		}
-	}
-
-	for key := range registered {
-		method, path, _ := strings.Cut(key, " ")
-		shaped := strings.HasSuffix(path, "/revoke") || strings.HasSuffix(path, "/retire") ||
-			strings.HasSuffix(path, "/disable")
-
-		if shaped && !listed[key] {
-			t.Errorf("%s retires or revokes and is not on maintenance.ReducingRoutes (method %s)", key, method)
-		}
 	}
 }
