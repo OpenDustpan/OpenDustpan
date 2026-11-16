@@ -136,7 +136,8 @@ func driftScenario(t *testing.T, env *e2e.Env) {
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		UserAgent: driftAgent, Name: "create the runner pool", Method: http.MethodPost,
-		Path: "/api/runners/" + e2e.Namespace + "/pools", Body: `{"name":"` + driftPool + `","purpose":"jobs"}`,
+		Path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/runner-pools",
+		Body: `{"name":"` + driftPool + `","purpose":"jobs"}`,
 		Want: http.StatusCreated, Scheme: "token", Check: nil,
 	})
 

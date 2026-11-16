@@ -88,7 +88,8 @@ func runAuditAgentBlockOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	})
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
 		UserAgent: agentBlockAgent, Name: "create the runner pool", Method: http.MethodPost,
-		Path: "/api/runners/" + e2e.Namespace + "/pools", Body: `{"name":"agent-block","purpose":"jobs"}`,
+		Path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/runner-pools",
+		Body: `{"name":"agent-block","purpose":"jobs"}`,
 		Want: http.StatusCreated, Scheme: "token", Check: nil,
 	})
 

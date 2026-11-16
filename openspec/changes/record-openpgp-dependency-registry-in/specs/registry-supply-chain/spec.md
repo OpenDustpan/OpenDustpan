@@ -1,12 +1,12 @@
 ## ADDED Requirements
 
-### Requirement: registry-docs-link
+### Requirement: registry-docs-signature-library
 
-Where the registry docs describe signatures, the docs SHALL link to the OpenPGP dependency ADR.
+Where the registry docs describe signatures, the docs SHALL name the OpenPGP library that checks them and the command that shows its version, and SHALL NOT cite an ADR, an RFC or an issue.
 
-#### Scenario: registry-docs-link-present
+#### Scenario: registry-docs-signature-library-present
 - **WHEN** an Operator opens the registry docs section on signatures
-- **THEN** the page links to the OpenPGP dependency ADR.
+- **THEN** the page names the library and the command that shows its version, and holds no ADR, RFC or issue reference.
 
 ### Requirement: adr-index-entry
 

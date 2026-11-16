@@ -1,4 +1,4 @@
-package runnerapi_test
+package runnerpools_test
 
 import (
 	"net/http"
@@ -21,7 +21,7 @@ func TestForbiddenCodes(t *testing.T) {
 			req := httptest.NewRequestWithContext(
 				t.Context(),
 				http.MethodGet,
-				"/api/runners/acme/pools",
+				"/api/dustpan/v1/namespaces/acme/runner-pools",
 				strings.NewReader(""),
 			)
 			req.Header.Set("Authorization", "token "+adminToken)

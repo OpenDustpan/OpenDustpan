@@ -32,6 +32,7 @@ docs/guides/private-registry.md
 docs/guides/publish-a-blueprint.md
 docs/guides/quickstart.md
 docs/guides/roles-and-grants.md
+docs/guides/runner-pools.md
 docs/guides/s3-blobs.md
 docs/guides/saved-views.md
 docs/guides/settings.md

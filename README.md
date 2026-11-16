@@ -350,6 +350,8 @@ How-to guides:
   a collection, move a unit into it, and write the rules that place new stacks.
 - [IP allowlists](docs/guides/ip-allowlists.md): limit the client addresses of a
   namespace, read the effective state, and recover from a lock-out.
+- [Runner pools](docs/guides/runner-pools.md): make a pool and a join token, list
+  the runners of a pool, and drain or retire a runner.
 - [Output sharing](docs/guides/output-sharing.md): the actions that read
   outputs and manage sharing, and the setting that decides the sharing rule of
   a new stack or workspace.

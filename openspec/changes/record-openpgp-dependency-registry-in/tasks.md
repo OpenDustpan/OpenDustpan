@@ -21,4 +21,4 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Add the link to ADR 379 (docs/adr/0379-the-openpgp-dependency-of-the-registry.md) in the existing guide docs/guides/private-registry.md, and run the usability check from that page. Check: `make docs-lint` and `make check` report zero findings; the Operator reaches the ADR from the docs page alone. A person's step. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 4.1 Add one plain statement to the signature section of the existing guide docs/guides/private-registry.md: the registry checks signatures with the OpenPGP packages of the go-crypto module, and `go version -m` on the binary shows the version. Do not cite an ADR, an RFC or an issue on the page. Check: `make docs-lint` and `make check` report zero findings, and `rg -n -i -E '\b(ADR|RFC) ?[0-9]+|issues/[0-9]+' docs/guides/private-registry.md` finds no hit; the Operator finds the library and the command from the docs page alone. A person's step. Confirmed by: CI (the agent runs the fast checks only).

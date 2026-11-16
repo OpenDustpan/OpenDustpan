@@ -73,13 +73,17 @@ import type {
   CreateNotificationSubscriptionRequest,
   CreateProfileRequest,
   CreateProfileRevisionRequest,
+  CreateRunnerJoinTokenRequest,
+  CreateRunnerPoolRequest,
   CreateTrustRuleRequest,
   CreateViewRequest,
   CreatedNotificationSink,
+  CreatedRunnerJoinToken,
   DamagedBlob,
   DeletedUnit,
   DeletedUnitSweep,
   DevData,
+  DrainRunnerRequest,
   DriftCheck,
   DriftCheckLocation,
   DriftResource,
@@ -245,6 +249,13 @@ import type {
   RestoreSwappedErrorArgs,
   RestoreWarning,
   RotateNamespaceIssuerKeysRequest,
+  Runner,
+  RunnerGitCredentials,
+  RunnerJoinToken,
+  RunnerJoinTokenList,
+  RunnerList,
+  RunnerPool,
+  RunnerPoolList,
   SaveProxyRuleSetRequest,
   SaveTriggerRequest,
   SchemaBinaryBelowMinimumError,
@@ -362,6 +373,7 @@ import type {
   UpdateContextRequest,
   UpdateNamespaceIssuerRequest,
   UpdatePreferencesRequest,
+  UpdateRunnerPoolRequest,
   UpdateSettingsRequest,
   UpgradeCheck,
   View,
@@ -794,6 +806,21 @@ export const decodeCreateProfileRevisionRequest: Decoder<CreateProfileRevisionRe
   reason: optional(string),
 });
 
+/** The validator of CreateRunnerJoinTokenRequest. */
+export const decodeCreateRunnerJoinTokenRequest: Decoder<CreateRunnerJoinTokenRequest> = object<CreateRunnerJoinTokenRequest>("CreateRunnerJoinTokenRequest", {
+  ttl: int64,
+});
+
+/** The validator of CreateRunnerPoolRequest. */
+export const decodeCreateRunnerPoolRequest: Decoder<CreateRunnerPoolRequest> = object<CreateRunnerPoolRequest>("CreateRunnerPoolRequest", {
+  concurrency: int64,
+  gitCredentials: ref(() => decodeRunnerGitCredentials),
+  isolation: array(string),
+  lease: int64,
+  name: string,
+  purpose: string,
+});
+
 /** The validator of CreateTrustRuleRequest. */
 export const decodeCreateTrustRuleRequest: Decoder<CreateTrustRuleRequest> = object<CreateTrustRuleRequest>("CreateTrustRuleRequest", {
   audience: string,
@@ -824,6 +851,20 @@ export const decodeCreatedNotificationSink: Decoder<CreatedNotificationSink> = o
   target: string,
   urlSet: boolean,
   version: int64,
+});
+
+/** The validator of CreatedRunnerJoinToken. */
+export const decodeCreatedRunnerJoinToken: Decoder<CreatedRunnerJoinToken> = object<CreatedRunnerJoinToken>("CreatedRunnerJoinToken", {
+  command: string,
+  createdAt: dateTime,
+  createdBy: string,
+  expiresAt: dateTime,
+  id: string,
+  pool: string,
+  revokedAt: optional(dateTime),
+  token: string,
+  usedAt: optional(dateTime),
+  usedBy: optional(string),
 });
 
 /** The validator of DamagedBlob. */
@@ -862,6 +903,11 @@ export const decodeDeletedUnitSweep: Decoder<DeletedUnitSweep> = object<DeletedU
 export const decodeDevData: Decoder<DevData> = object<DevData>("DevData", {
   classes: nullable(record(int64)),
   principals: int64,
+});
+
+/** The validator of DrainRunnerRequest. */
+export const decodeDrainRunnerRequest: Decoder<DrainRunnerRequest> = object<DrainRunnerRequest>("DrainRunnerRequest", {
+  draining: nullable(boolean),
 });
 
 /** The validator of DriftCheck. */
@@ -2175,6 +2221,72 @@ export const decodeRotateNamespaceIssuerKeysRequest: Decoder<RotateNamespaceIssu
   reason: string,
 });
 
+/** The validator of Runner. */
+export const decodeRunner: Decoder<Runner> = object<Runner>("Runner", {
+  draining: boolean,
+  id: string,
+  isolation: string,
+  joinedAt: dateTime,
+  keyExpires: dateTime,
+  keyIdentifier: string,
+  kind: string,
+  labels: nullable(record(string)),
+  lastSeenAt: dateTime,
+  name: string,
+  pool: string,
+  rejoinCommand: optional(array(string)),
+  release: string,
+  status: string,
+});
+
+/** The validator of RunnerGitCredentials. */
+export const decodeRunnerGitCredentials: Decoder<RunnerGitCredentials> = object<RunnerGitCredentials>("RunnerGitCredentials", {
+  helper: optional(string),
+  mode: string,
+});
+
+/** The validator of RunnerJoinToken. */
+export const decodeRunnerJoinToken: Decoder<RunnerJoinToken> = object<RunnerJoinToken>("RunnerJoinToken", {
+  createdAt: dateTime,
+  createdBy: string,
+  expiresAt: dateTime,
+  id: string,
+  pool: string,
+  revokedAt: optional(dateTime),
+  usedAt: optional(dateTime),
+  usedBy: optional(string),
+});
+
+/** The validator of RunnerJoinTokenList. */
+export const decodeRunnerJoinTokenList: Decoder<RunnerJoinTokenList> = object<RunnerJoinTokenList>("RunnerJoinTokenList", {
+  joinTokens: array(ref(() => decodeRunnerJoinToken)),
+});
+
+/** The validator of RunnerList. */
+export const decodeRunnerList: Decoder<RunnerList> = object<RunnerList>("RunnerList", {
+  runners: array(ref(() => decodeRunner)),
+});
+
+/** The validator of RunnerPool. */
+export const decodeRunnerPool: Decoder<RunnerPool> = object<RunnerPool>("RunnerPool", {
+  concurrency: int64,
+  createdAt: dateTime,
+  gitCredentials: ref(() => decodeRunnerGitCredentials),
+  id: string,
+  isolation: array(string),
+  lease: int64,
+  name: string,
+  namespace: string,
+  purpose: string,
+  readOnly: boolean,
+  updatedAt: dateTime,
+});
+
+/** The validator of RunnerPoolList. */
+export const decodeRunnerPoolList: Decoder<RunnerPoolList> = object<RunnerPoolList>("RunnerPoolList", {
+  pools: array(ref(() => decodeRunnerPool)),
+});
+
 /** The validator of SaveProxyRuleSetRequest. */
 export const decodeSaveProxyRuleSetRequest: Decoder<SaveProxyRuleSetRequest> = object<SaveProxyRuleSetRequest>("SaveProxyRuleSetRequest", {
   rules: array(ref(() => decodeProxyRule)),
@@ -3031,6 +3143,16 @@ export const decodeUpdatePreferencesRequest: Decoder<UpdatePreferencesRequest> =
   terminalSchemes: optional(nullable(ref(() => decodeTerminalSchemesPatch))),
   theme: optional(nullable(string)),
   timeZone: optional(nullable(string)),
+});
+
+/** The validator of UpdateRunnerPoolRequest. */
+export const decodeUpdateRunnerPoolRequest: Decoder<UpdateRunnerPoolRequest> = object<UpdateRunnerPoolRequest>("UpdateRunnerPoolRequest", {
+  concurrency: nullable(int64),
+  gitCredentials: nullable(ref(() => decodeRunnerGitCredentials)),
+  isolation: nullable(array(string)),
+  lease: nullable(int64),
+  name: nullable(string),
+  purpose: nullable(string),
 });
 
 /** The validator of UpdateSettingsRequest. */
