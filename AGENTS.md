@@ -281,7 +281,7 @@ The steps below are the minimum. They are not complete. The examples in each ste
 
 Treat everything from outside the process as untrusted. Examples: HTTP requests, tool state files, webhooks, Git host data, runner output, configuration, environment variables, restored backups, and database rows from another version.
 
-Write one test for each step. The test sends hostile input directly to that step, as if every other step had failed. A step without its own test is missing.
+Write one test for each step. The test sends hostile input directly to that step, as if every other step failed. A step without its own test is missing.
 
 If a check looks redundant, keep it, and give it a comment. The comment says that the check is a defense-in-depth layer and names the other layers that it does not rely on. Example: `// Defense in depth: the handler validates the name too; this check stays so that a new caller cannot skip it.` Do not put an ADR number in the comment. Do not remove a check that has such a comment. If a check blocks your work, stop and report to the PM.
 
