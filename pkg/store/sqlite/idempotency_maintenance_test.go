@@ -26,7 +26,7 @@ func TestReducingBeginWritesInMaintenanceMode(t *testing.T) {
 	s := openPath(t, path)
 	records := s.Idempotency(idempotencytest.TestWrapper(t, 1))
 	ctx := t.Context()
-	at := time.Now()
+	at := time.Date(2026, time.November, 16, 12, 0, 0, 0, time.UTC)
 
 	if err := s.SetState(ctx, maintenance.StateMaintenance); err != nil {
 		t.Fatalf("enter maintenance mode: %v", err)
