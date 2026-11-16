@@ -97,7 +97,7 @@ Git does not hold the generated files before the first release. Run
 `make clients-generate` before you use the package, and before
 `make clients-ts-test`. The generator owns `src/`, `package.json` and `tsconfig.json`. A file there
 that a run does not give, also a file without the header, makes
-`make clients-generate` refuse to write, and the check fail with
+`make clients-generate` refuse to write, and `make clients-check` fail with
 `stray: <path>`, until you remove the file. Other files, for example
 `README.md` and `test/`, stay as they are.
 
