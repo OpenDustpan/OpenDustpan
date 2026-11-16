@@ -153,8 +153,8 @@ func TestPublish_staleStagedFilesSwept(t *testing.T) {
 
 	// The service after the restart sweeps the staged files older than the
 	// grace period. The age of a staged file is its modification time, which
-	// is the real time, so the later clock starts from the real time too.
-	later := time.Now().Add(service.StagingGrace + time.Hour)
+	// is the real time, so the later clock is a fixed time far after any run.
+	later := time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC).Add(service.StagingGrace)
 
 	restarted, err := service.New(config(e.store, e.blobs, ns, later))
 	if err != nil {
