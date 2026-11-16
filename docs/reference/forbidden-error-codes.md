@@ -50,8 +50,7 @@ The tool-neutral API and the Pulumi Cloud-compatible API send:
 The codes appear in the answers of:
 
 - the installation API under `/api/server`
-- the tool-neutral APIs under `/api/dustpan/v1`, `/api/inventory`, `/api/audit`
-  and `/api/runners` (the management routes)
+- the tool-neutral APIs under `/api/dustpan/v1`, `/api/inventory` and `/api/audit`
 - the Pulumi Cloud-compatible API under `/api`
 
 The APIs of the notification destinations, the profiles and the registry sent

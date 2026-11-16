@@ -10,22 +10,22 @@ must use the same text.
 
 ## The management API
 
-The paths of the management API start with `/api/runners/{namespace}`. The
+The paths of the management API start with `/api/dustpan/v1/namespaces/{namespace}`. The
 caller signs in as for the other APIs, with an access token or a console
 session. A caller who cannot read the namespace gets 404. A caller who can read
 it, but lacks the action of the route, gets 403.
 
 | Method and path | Action | Answer |
 | --- | --- | --- |
-| `GET /pools` | `namespace:read-runners` | The pools of the namespace |
-| `POST /pools` | `namespace:manage-runners` | A new pool |
-| `GET /pools/{pool}` | `namespace:read-runners` | One pool |
-| `PATCH /pools/{pool}` | `namespace:manage-runners` | The pool with the changed fields |
-| `DELETE /pools/{pool}` | `namespace:manage-runners` | No body |
-| `GET /pools/{pool}/join-tokens` | `namespace:read-runners` | The join tokens, with no secret |
-| `POST /pools/{pool}/join-tokens` | `namespace:manage-runners` | A new join token, with its secret |
-| `POST /pools/{pool}/join-tokens/{id}/revoke` | `namespace:manage-runners` | No body |
-| `GET /pools/{pool}/runners` | `namespace:read-runners` | The runners of the pool that are not retired |
+| `GET /runner-pools` | `namespace:read-runners` | The pools of the namespace |
+| `POST /runner-pools` | `namespace:manage-runners` | A new pool |
+| `GET /runner-pools/{pool}` | `namespace:read-runners` | One pool |
+| `PATCH /runner-pools/{pool}` | `namespace:manage-runners` | The pool with the changed fields |
+| `DELETE /runner-pools/{pool}` | `namespace:manage-runners` | No body |
+| `GET /runner-pools/{pool}/join-tokens` | `namespace:read-runners` | The join tokens, with no secret |
+| `POST /runner-pools/{pool}/join-tokens` | `namespace:manage-runners` | A new join token, with its secret |
+| `POST /runner-pools/{pool}/join-tokens/{id}/revoke` | `namespace:manage-runners` | No body |
+| `GET /runner-pools/{pool}/runners` | `namespace:read-runners` | The runners of the pool that are not retired |
 | `POST /runners/{runner}/drain` | `namespace:manage-runners` | No body |
 | `POST /runners/{runner}/retire` | `namespace:manage-runners` | No body |
 
@@ -38,7 +38,7 @@ The source filter of a namespace has its own page: [Source filter API](source-fi
 ### Pools
 
 A pool belongs to one namespace. Its purpose is `jobs` or `sweeps`, and it
-never changes. The body of `POST /pools` has these fields:
+never changes. The body of `POST /runner-pools` has these fields:
 
 | Field | Content |
 | --- | --- |
@@ -49,7 +49,7 @@ never changes. The body of `POST /pools` has these fields:
 | `isolation` | The isolation kinds that a runner may use. An empty list allows every kind but `process`. |
 | `gitCredentials` | `mode` (`none`, `forge` or `custom`) and `helper`. Only the mode `custom` takes a `helper`: a bare name that starts with `git-credential-`, or a clean absolute path, of letters, digits and the characters `.` `_` `/` `-`. Another helper fails with 400. |
 
-`PATCH /pools/{pool}` takes the same fields, and every field is optional. A
+`PATCH /runner-pools/{pool}` takes the same fields, and every field is optional. A
 field that the body leaves out keeps its value. A `purpose` that differs from
 the pool fails with 409. The answer is the pool, and the change writes one audit
 entry that lists each field that changed. A runner that joined with an
@@ -61,7 +61,7 @@ sweep that did not end names the pool.
 
 ### Join tokens
 
-`POST /pools/{pool}/join-tokens` has an optional body `{"ttl": <milliseconds>}`.
+`POST /runner-pools/{pool}/join-tokens` has an optional body `{"ttl": <milliseconds>}`.
 A token lives 1 hour by default and at most 7 days. The answer holds the
 secret in `token` and a `command` for the runner. The secret starts with
 `dpj_`. The server shows it once and keeps only its SHA-256. A pool has at most
@@ -71,7 +71,7 @@ revoked.
 ### Runners
 
 An entry of the runner list has the fields `id`, `pool`, `name`, `kind`,
-`isolation`, `labels`, `release`, `status`, `draining`, `keyID`, `keyExpires`,
+`isolation`, `labels`, `release`, `status`, `draining`, `keyIdentifier`, `keyExpires`,
 `lastSeenAt` and `joinedAt`. The status is `online`, `offline`, `draining` or
 `must-rejoin`. A runner with the status `must-rejoin` also has
 `rejoinCommand`, with the URL, the pool and the name filled in.
