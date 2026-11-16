@@ -740,6 +740,10 @@ func applyUnpackFacts(files []measured, rel *registry.Release) error {
 			return fmt.Errorf("%w: archive %s was not unpacked", registry.ErrBadArchive, f.Name)
 		}
 
+		// Defense in depth: the stage step and the release check also bind
+		// archive names to the release. This check stays so that a measured
+		// archive with a foreign name never writes a digest, and it does not
+		// rely on those layers.
 		at, ok := byName[f.Name]
 		if !ok {
 			return fmt.Errorf("%w: archive %s is not in the release", ErrBadRequest, f.Name)
