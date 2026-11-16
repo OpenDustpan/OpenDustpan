@@ -8,5 +8,5 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 In `docs/guides/planner-role.md`, under "Refused actions", say what `tofu apply` and `tofu destroy` as planner print: the 403 with `access.denied`. Check: make docs-lint
+- [x] 3.1 In `docs/guides/planner-role.md`, under "Refused actions", say what `tofu apply` and `tofu destroy` as planner print: the 403 with `access.denied`. Check: make docs-lint
 - [ ] 3.2 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
