@@ -1436,10 +1436,35 @@ func testOtherNamespace(t *testing.T, h Harness) {
 	}
 }
 
-func testPoolStoreCrossNamespaceWriteRefused(t *testing.T, h Harness) {
+func testPoolStoreCrossNamespaceUpdateRefused(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := setUp(t, h)
+	secret := joinToken(t, f, time.Hour)
+
+	other, err := h.Domain.CreateNamespace(t.Context(), "globex")
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	next := f.pool
+	next.Lease = runner.MaxLease
+
+	_, err = h.Pools.UpdatePool(t.Context(), next, other, entries(other))
+	wantErr(t, "UpdatePool with the fence of another namespace", err, runner.ErrNotFound)
+
+	if _, err = join(t, f, secret, "cluster-a", now); err != nil {
+		t.Fatalf("Join with the kept token: %v", err)
+	}
+
+	checkCrossNamespaceWriteChangedNothing(t, h, f.pool)
+}
+
+func testPoolStoreCrossNamespaceDeleteRefused(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	secret := joinToken(t, f, time.Hour)
 
 	other, err := h.Domain.CreateNamespace(t.Context(), "globex")
 	if err != nil {
@@ -1449,9 +1474,79 @@ func testPoolStoreCrossNamespaceWriteRefused(t *testing.T, h Harness) {
 	err = h.Pools.DeletePool(t.Context(), f.pool.ID, other, entries(other))
 	wantErr(t, "DeletePool with the fence of another namespace", err, runner.ErrNotFound)
 
-	got, err := h.Pools.Pool(t.Context(), f.pool.ID)
-	if err != nil || got.Name != f.pool.Name || got.Namespace != "acme" {
-		t.Fatalf("Pool after the refused delete = %+v, %v, want it unchanged", got, err)
+	if _, err = join(t, f, secret, "cluster-a", now); err != nil {
+		t.Fatalf("Join with the kept token: %v", err)
+	}
+
+	checkCrossNamespaceWriteChangedNothing(t, h, f.pool)
+}
+
+func testPoolStoreCrossNamespaceCreateTokenRefused(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	other, err := h.Domain.CreateNamespace(t.Context(), "globex")
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	tok := runner.JoinToken{
+		ID: "", Pool: f.pool.ID, SHA256: hash(randomHex(t)), CreatedBy: "alice", CreatedAt: now,
+		ExpiresAt: now.Add(time.Hour), UsedAt: time.Time{}, UsedBy: "", RevokedAt: time.Time{},
+	}
+
+	_, err = h.Pools.CreateJoinToken(t.Context(), tok, other, entries(other))
+	wantErr(t, "CreateJoinToken with the fence of another namespace", err, runner.ErrNotFound)
+
+	tokens, err := h.Pools.JoinTokens(t.Context(), f.pool.ID)
+	if err != nil || len(tokens) != 0 {
+		t.Fatalf("JoinTokens after the refused token create = %d, %v, want none", len(tokens), err)
+	}
+
+	checkCrossNamespaceWriteChangedNothing(t, h, f.pool)
+}
+
+func testPoolStoreCrossNamespaceRevokeRefused(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+	secret := joinToken(t, f, time.Hour)
+
+	tokens, err := h.Pools.JoinTokens(t.Context(), f.pool.ID)
+	if err != nil || len(tokens) != 1 {
+		t.Fatalf("JoinTokens = %d, %v, want one token", len(tokens), err)
+	}
+
+	other, err := h.Domain.CreateNamespace(t.Context(), "globex")
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	err = h.Pools.RevokeJoinToken(t.Context(), tokens[0].ID, other, entries(other))
+	wantErr(t, "RevokeJoinToken with the fence of another namespace", err, runner.ErrNotFound)
+
+	kept, err := h.Pools.JoinTokens(t.Context(), f.pool.ID)
+	if err != nil || len(kept) != 1 || !kept[0].RevokedAt.IsZero() {
+		t.Fatalf("JoinTokens after the refused revoke = %+v, %v, want one live token", kept, err)
+	}
+
+	if _, err = join(t, f, secret, "cluster-a", now); err != nil {
+		t.Fatalf("Join with the kept token: %v", err)
+	}
+
+	checkCrossNamespaceWriteChangedNothing(t, h, f.pool)
+}
+
+// checkCrossNamespaceWriteChangedNothing checks that the pool want is
+// unchanged and that the other namespace has no audit entry after a
+// refused cross-namespace write.
+func checkCrossNamespaceWriteChangedNothing(t *testing.T, h Harness, want runner.Pool) {
+	t.Helper()
+
+	got, err := h.Pools.Pool(t.Context(), want.ID)
+	if err != nil || got.Name != want.Name || got.Namespace != want.Namespace || got.Lease != want.Lease {
+		t.Fatalf("Pool after the refused write = %+v, %v, want it unchanged", got, err)
 	}
 
 	audit, err := h.Domain.AuditEntries(t.Context(), "globex")
