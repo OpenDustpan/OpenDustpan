@@ -10427,7 +10427,7 @@ func (q *Queries) GetTrustBundleOfNamespace(ctx context.Context, namespace strin
 
 const getTrustRule = `-- name: GetTrustRule :one
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms, revision, spiffe_id_pattern, COALESCE(bundle_id, '') AS bundle_id
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS text) AS bundle_id
 FROM trust_rules
 WHERE namespace = $1 AND id = $2
 `
@@ -13562,7 +13562,7 @@ VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8, $9,
     $10, $11, $12, $13,
-    NULLIF($14, '')
+    CAST(NULLIF($14, '') AS text)
 )
 ON CONFLICT DO NOTHING
 `
@@ -19640,7 +19640,7 @@ func (q *Queries) ListTrustBundleVersions(ctx context.Context, bundleID string) 
 
 const listTrustRulesOfNamespace = `-- name: ListTrustRulesOfNamespace :many
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms, revision, spiffe_id_pattern, COALESCE(bundle_id, '') AS bundle_id
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS text) AS bundle_id
 FROM trust_rules
 WHERE namespace = $1
 ORDER BY name COLLATE "C", id COLLATE "C"
@@ -25188,7 +25188,7 @@ UPDATE trust_rules SET
     key_source = $4, static_keys = $5,
     conditions_json = $6, principal_id = $7,
     revision = $8, spiffe_id_pattern = $9,
-    bundle_id = NULLIF($10, '')
+    bundle_id = CAST(NULLIF($10, '') AS text)
 WHERE namespace = $11 AND id = $12 AND revision = $13
 `
 
