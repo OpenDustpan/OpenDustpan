@@ -89,14 +89,16 @@ The generator writes the package. Do not edit a file that has the header
 
 ```sh
 make clients-generate   # write clients/typescript from the description
-make clients-check      # fail if the files differ from a fresh run
+make clients-check      # fail if the generator fails on the description
 make clients-ts-test    # compile with tsc and run the tests, needs Node 22 and tsc
 ```
 
-The generator owns `src/`, `package.json` and `tsconfig.json`. A file there
+Git does not hold the generated files before the first release. Run
+`make clients-generate` before you use the package, and before
+`make clients-ts-test`. The generator owns `src/`, `package.json` and `tsconfig.json`. A file there
 that a run does not give, also a file without the header, makes
-`make clients-check` fail with `stray: <path>`, and `make clients-generate`
-refuses to write until you remove the file. Other files, for example
+`make clients-generate` refuse to write, and `make clients-check` fail with
+`stray: <path>`, until you remove the file. Other files, for example
 `README.md` and `test/`, stay as they are.
 
 `make clients-check` is part of `make lint`. The program has a stable command
