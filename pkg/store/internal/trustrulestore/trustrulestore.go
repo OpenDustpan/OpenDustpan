@@ -71,30 +71,37 @@ func decodeConditions(s string) ([]trustrule.Condition, error) {
 // Row is a trust rule row as the database holds it. Namespace is the name of
 // the namespace of the rule.
 type Row struct {
-	ID             string
-	Namespace      string
-	Name           string
-	Issuer         string
-	Audience       string
-	KeySource      string
-	StaticKeys     string
-	ConditionsJSON string
-	PrincipalID    string
-	CreatedBy      string
-	CreatedAtMs    int64
+	ID              string
+	Namespace       string
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJSON  string
+	PrincipalID     string
+	CreatedBy       string
+	CreatedAtMs     int64
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        string
 }
 
-// RowOf returns the row of r. It fails when the conditions do not encode.
+// RowOf returns the row of r. It fails when the conditions do not encode. A
+// rule with revision 0 is stored with revision 1.
 func RowOf(r *trustrule.Rule) (Row, error) {
 	conds, err := EncodeConditions(r.Conditions)
 	if err != nil {
 		return Row{}, err
 	}
 
+	revision := max(r.Revision, 1)
+
 	return Row{
 		ID: string(r.ID), Namespace: r.Namespace.String(), Name: r.Name, Issuer: r.Issuer, Audience: r.Audience,
 		KeySource: string(r.Keys), StaticKeys: r.StaticKeys, ConditionsJSON: conds, PrincipalID: r.PrincipalID,
-		CreatedBy: r.CreatedBy, CreatedAtMs: r.CreatedAt.UnixMilli(),
+		CreatedBy: r.CreatedBy, CreatedAtMs: r.CreatedAt.UnixMilli(), Revision: revision,
+		SpiffeIDPattern: r.SpiffeIDPattern, BundleID: r.Bundle,
 	}, nil
 }
 
@@ -110,11 +117,16 @@ func Rule(row Row) (trustrule.Rule, error) {
 		CreatedAt: time.UnixMilli(row.CreatedAtMs).UTC(), ID: trustrule.ID(row.ID),
 		Namespace: namespace.Name(row.Namespace), Name: row.Name, Issuer: row.Issuer, Audience: row.Audience,
 		Keys: trustrule.KeySource(row.KeySource), StaticKeys: row.StaticKeys, PrincipalID: row.PrincipalID,
-		CreatedBy: row.CreatedBy, Conditions: conds,
+		CreatedBy: row.CreatedBy, Conditions: conds, Revision: row.Revision,
+		SpiffeIDPattern: row.SpiffeIDPattern, Bundle: row.BundleID,
 	}
 
 	if err := r.Validate(); err != nil {
 		return trustrule.Rule{}, fmt.Errorf("%w: %w", ErrCorrupt, err)
+	}
+
+	if row.Revision < 1 {
+		return trustrule.Rule{}, fmt.Errorf("%w: revision %d", ErrCorrupt, row.Revision)
 	}
 
 	return r, nil
@@ -163,6 +175,29 @@ func CheckDelete(ns namespace.Name, id trustrule.ID, fence namespace.Fence) erro
 	}
 
 	return nil
+}
+
+// CheckUpdate checks an update before the transaction: the key, the rule, and
+// the namespace of the fence against the namespace of the update. It returns
+// the row to write. The row carries the revision of r.
+func CheckUpdate(ns namespace.Name, r *trustrule.Rule, fence namespace.Fence) (Row, error) {
+	if err := CheckKey(ns, r.ID); err != nil {
+		return Row{}, err
+	}
+
+	if err := r.Validate(); err != nil {
+		return Row{}, fmt.Errorf("update trust rule: %w", err)
+	}
+
+	// Defense in depth: as in CheckCreate, the namespace of the update must
+	// be the namespace of the fence and the namespace of the rule. The query
+	// of the store also keys the write on the namespace.
+	if ns != fence.Namespace || r.Namespace != ns {
+		return Row{}, fmt.Errorf("%w: the update names %q and %q, the fence names %q",
+			namespace.ErrFenced, ns, r.Namespace, fence.Namespace)
+	}
+
+	return RowOf(r)
 }
 
 // PrincipalRow is the principal of a rule as the transaction of a create

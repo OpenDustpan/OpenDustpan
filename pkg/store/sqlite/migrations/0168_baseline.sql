@@ -1163,18 +1163,40 @@ CREATE TABLE instance_versions (
     started_at_ms  INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE trust_bundle_versions (
+    bundle_id          TEXT    NOT NULL REFERENCES trust_bundles (id) ON DELETE CASCADE,
+    version            INTEGER NOT NULL CHECK (version >= 1),
+    pem                TEXT    NOT NULL,
+    created_at_ms      INTEGER NOT NULL,
+    overlap_ends_at_ms INTEGER NOT NULL CHECK (overlap_ends_at_ms >= 0),
+    PRIMARY KEY (bundle_id, version)
+) STRICT;
+
+CREATE TABLE trust_bundles (
+    id             TEXT    NOT NULL PRIMARY KEY,
+    namespace      TEXT    NOT NULL UNIQUE,
+    active_version INTEGER NOT NULL CHECK (active_version >= 1),
+    revision       INTEGER NOT NULL CHECK (revision >= 1),
+    created_at_ms  INTEGER NOT NULL,
+    UNIQUE (namespace, id)
+) STRICT;
+
 CREATE TABLE trust_rules (
-    id              TEXT    NOT NULL PRIMARY KEY,
-    namespace       TEXT    NOT NULL,
-    name            TEXT    NOT NULL,
-    issuer          TEXT    NOT NULL,
-    audience        TEXT    NOT NULL,
-    key_source      TEXT    NOT NULL CHECK (key_source IN ('discovery', 'static')),
-    static_keys     TEXT    NOT NULL,
-    conditions_json TEXT    NOT NULL,
-    principal_id    TEXT    NOT NULL REFERENCES principals (id),
-    created_by      TEXT    NOT NULL,
-    created_at_ms   INTEGER NOT NULL
+    id                TEXT    NOT NULL PRIMARY KEY,
+    namespace         TEXT    NOT NULL,
+    name              TEXT    NOT NULL,
+    issuer            TEXT    NOT NULL,
+    audience          TEXT    NOT NULL,
+    key_source        TEXT    NOT NULL CHECK (key_source IN ('discovery', 'static')),
+    static_keys       TEXT    NOT NULL,
+    conditions_json   TEXT    NOT NULL,
+    principal_id      TEXT    NOT NULL REFERENCES principals (id),
+    created_by        TEXT    NOT NULL,
+    created_at_ms     INTEGER NOT NULL,
+    revision          INTEGER NOT NULL CHECK (revision >= 1),
+    spiffe_id_pattern TEXT    NOT NULL,
+    bundle_id         TEXT,
+    FOREIGN KEY (namespace, bundle_id) REFERENCES trust_bundles (namespace, id)
 ) STRICT;
 
 CREATE TABLE self_service_blueprints (

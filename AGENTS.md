@@ -365,6 +365,7 @@ skill (ADR 14):
   two weeks old (ADR 7), and review its diff first.
 - Agents do not stash, do not create scheduled tasks or reminders, and do not subscribe to pull request activity. Commit work in progress on the branch instead of a stash. Do not skip the pre-commit hook.
 - Build to /var/tmp (`go build -o /var/tmp/<name>`). Add files by name. Never use `git add -A`. `make files-check` refuses large and binary files.
+- Before you push, run `make test-changed`. It builds the module, runs the fast checks, and lints and tests the changed packages and the packages that import them. It is a quick check. It does not replace `make check` or CI.
 
 ## Agent skills
 

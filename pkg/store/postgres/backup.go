@@ -65,6 +65,7 @@ const (
 	pgColStatus      = "status"
 	pgColUpdateID    = "update_id"
 	pgColVersion     = "version"
+	pgColBundleID    = "bundle_id"
 	pgColUpdatedAtMs = "updated_at_ms"
 	pgColDeletedAtMs = "deleted_at_ms"
 	pgColSource      = "source"
@@ -1161,7 +1162,7 @@ func checkStaged(ctx context.Context, q db.DBTX, staging string, restoreAt time.
 		return markerErr
 	}
 
-	return checkStagedFeatureRows(ctx, q, staging)
+	return checkStagedFeatureRows(ctx, q, staging, restoreAt)
 }
 
 // summarizeStaging reads the summary of the staging schema: the dialect, the
@@ -2078,7 +2079,7 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
 // the notification sinks, the triggers, the self-service blueprints, the trust rules, the
 // break-glass reviews, the sweep targets and the sweeps.
-func checkStagedFeatureRows(ctx context.Context, pool db.DBTX, staging string) error {
+func checkStagedFeatureRows(ctx context.Context, pool db.DBTX, staging string, restoreAt time.Time) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
 		return err
 	}
@@ -2115,7 +2116,7 @@ func checkStagedFeatureRows(ctx context.Context, pool db.DBTX, staging string) e
 		return err
 	}
 
-	if err := checkStagedTrustRules(ctx, pool, staging); err != nil {
+	if err := checkStagedTrustRules(ctx, pool, staging, restoreAt); err != nil {
 		return err
 	}
 

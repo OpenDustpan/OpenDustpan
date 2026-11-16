@@ -22,7 +22,7 @@ func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		Store: struct{ trustrule.Store }{nil}, Namespaces: namespaces,
 		Principals: struct{ trustrulesvc.Principals }{nil}, Authorizer: coverageAuthorizer{},
 		Reach:            nil,
-		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil,
+		InstallationURLs: nil, OwnIssuer: nil, CheckURL: nil, Now: nil, Bundles: nil, Sessions: nil,
 	})
 	if err != nil {
 		tb.Fatalf("trust rule service: %v", err)
@@ -68,14 +68,18 @@ func coverageTrustRuleRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 
 // trustRuleAllowEntries covers the routes of the workload trust rules of a
 // namespace. No CLI calls them: the console and the clients of the API do.
-// The steps of TestTrustRuleAPI call each of them with the token of an
+// The steps of TestTrustRuleAPI and TestTrustBundleAndRuleUpdateDocs call each of them with the token of an
 // administrator.
 func trustRuleAllowEntries() []AllowEntry {
 	const (
 		rules = "/api/dustpan/v1/namespaces/{namespace}/trust-rules"
 		rule  = rules + "/{rule_id}"
 		test  = "TestTrustRuleAPI"
-		why   = "Console and client route: no CLI calls it. The steps of TestTrustRuleAPI call it through the API."
+
+		bundles = "/api/dustpan/v1/namespaces/{namespace}/trust-bundles"
+		bundle  = bundles + "/{bundle}"
+		docs    = "TestTrustBundleAndRuleUpdateDocs"
+		why     = "Console and client route: no CLI calls it. The steps of TestTrustRuleAPI and TestTrustBundleAndRuleUpdateDocs call it through the API."
 	)
 
 	return []AllowEntry{
@@ -83,6 +87,12 @@ func trustRuleAllowEntries() []AllowEntry {
 		{Method: http.MethodPost, Path: rules, CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: rule, CoveringTest: test, Reason: why},
 		{Method: http.MethodDelete, Path: rule, CoveringTest: test, Reason: why},
+		{Method: http.MethodPatch, Path: rule, CoveringTest: docs, Reason: why},
+		{Method: http.MethodGet, Path: bundles, CoveringTest: docs, Reason: why},
+		{Method: http.MethodPost, Path: bundles, CoveringTest: docs, Reason: why},
+		{Method: http.MethodGet, Path: bundle, CoveringTest: docs, Reason: why},
+		{Method: http.MethodPatch, Path: bundle, CoveringTest: docs, Reason: why},
+		{Method: http.MethodDelete, Path: bundle + "/versions/{version}", CoveringTest: docs, Reason: why},
 		{
 			Method: http.MethodPost, Path: rules + "/exchange", CoveringTest: "TestWorkloadTokenExchange",
 			Reason: "Workload route: a CI job calls it with the token of its platform. The steps of " +
