@@ -291,7 +291,6 @@ type env struct {
 	ids    map[namespace.Name]namespace.ID
 	caller *service.Caller
 	now    time.Time
-	ns     nsStub
 	aud    *memAudit
 	// logs holds the log lines of the service; failures counts the audit failures.
 	logs     *bytes.Buffer
@@ -437,7 +436,7 @@ func newEnv(t *testing.T, flip bool) *env {
 	}
 
 	return &env{
-		svc: svc, store: store, blobs: blobs, ids: ids, caller: callerOf(subject), now: now, ns: ns, aud: aud,
+		svc: svc, store: store, blobs: blobs, ids: ids, caller: callerOf(subject), now: now, aud: aud,
 		logs: logs, failures: failures,
 	}
 }

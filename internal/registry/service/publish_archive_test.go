@@ -2,13 +2,17 @@ package service_test
 
 import (
 	"bytes"
+	"context"
 	crand "crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"opendustpan.org/opendustpan/internal/registry/service"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/registry"
 )
 
@@ -101,6 +105,75 @@ func TestPublish_refusesUnsafeArchive(t *testing.T) {
 	}
 }
 
+// noDeleteBlobs is a blob.Store whose Delete always fails, as a store that is
+// down when a refused publish drops its staged files.
+type noDeleteBlobs struct {
+	blob.Store
+}
+
+var errDeleteDown = errors.New("the blob store refuses deletes")
+
+func (noDeleteBlobs) Delete(context.Context, blob.Key) error { return errDeleteDown }
+
+// TestPublish_staleStagedFilesSwept checks that no staged bytes stay after a
+// refused publish whose staged delete failed, and after a publish that stopped
+// before it moved its staged files. The service that starts after them sweeps
+// the staging directory at its next stage, after the grace period.
+func TestPublish_staleStagedFilesSwept(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, false)
+	sg := newSigner(t)
+	e.trust(t, acme, sg)
+
+	ns := nsStub{}
+	for name, id := range e.ids {
+		ns[name] = namespaceOf(name, id, e.now)
+	}
+
+	failing, err := service.New(config(e.store, noDeleteBlobs{Store: e.blobs}, ns, e.now))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	e.svc = failing
+
+	// A refused publish whose staged delete fails leaves its staged files.
+	bad := buildZipSet(t, sg, makeZip(t, []zipFile{fileEntry("../../evil", []byte("evil"))}))
+	if _, err = e.publish(t, acme, bad); !errors.Is(err, registry.ErrBadArchive) {
+		t.Fatalf("publish of a traversal archive: got %v, want %v", err, registry.ErrBadArchive)
+	}
+
+	// A publish that stops after the stage leaves its staged files too.
+	e.stage(t, acme, buildZipSet(t, sg, providerZip(t, "5.0")))
+
+	if got := e.listing(t, e.ids[acme], "staging"); len(got) != 6 {
+		t.Fatalf("staged files before the restart = %v, want 6", got)
+	}
+
+	// The service after the restart sweeps the staged files older than the
+	// grace period. The age of a staged file is its modification time, which
+	// is the real time, so the later clock starts from the real time too.
+	later := time.Now().Add(service.StagingGrace + time.Hour)
+
+	restarted, err := service.New(config(e.store, e.blobs, ns, later))
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	fresh, err := restarted.Stage(t.Context(), e.caller, acme, strings.NewReader("new"))
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	got := e.listing(t, e.ids[acme], "staging")
+	if len(got) != 1 || !strings.HasSuffix(got[0], fresh.Token) {
+		t.Fatalf("staged files after the restart = %v, want only %s", got, fresh.Token)
+	}
+
+	requireNoRelease(t, e)
+}
+
 // randomThenZeros returns size bytes: random bytes first, then zeros. The
 // random bytes do not compress, and the zeros compress about 1000 times, so
 // the whole buffer compresses to about the size of its random prefix.
@@ -152,6 +225,71 @@ func TestPublish_refusesLyingDeclaredSize(t *testing.T) {
 	_, err := e.publish(t, acme, s)
 	if !errors.Is(err, registry.ErrBadArchive) {
 		t.Fatalf("publish with a lying header: got %v, want %v", err, registry.ErrBadArchive)
+	}
+
+	requireNoRelease(t, e)
+}
+
+// declareAllCompressedSizes returns a copy of the zip bytes data in which each
+// central directory entry declares the compressed size declared and has no
+// data descriptor flag. Each header then claims more than its entry holds, and
+// the zip reader does not catch the claim at the data descriptor.
+func declareAllCompressedSizes(t *testing.T, data []byte, declared uint32) []byte {
+	t.Helper()
+
+	out := bytes.Clone(data)
+	signature := []byte("PK\x01\x02")
+	patched := 0
+
+	for from := 0; ; {
+		at := bytes.Index(out[from:], signature)
+		if at < 0 {
+			break
+		}
+
+		at += from
+
+		// The flags are at byte 8 of the header, the compressed size at 20.
+		flags := binary.LittleEndian.Uint16(out[at+8:])
+		binary.LittleEndian.PutUint16(out[at+8:], flags&^0x8)
+		binary.LittleEndian.PutUint32(out[at+20:], declared)
+
+		patched++
+		from = at + len(signature)
+	}
+
+	if patched == 0 {
+		t.Fatal("the archive has no central directory header")
+	}
+
+	return out
+}
+
+// TestPublish_refusesManyLyingDeclaredSizes checks that the ratio bound counts
+// the bytes that the decoder consumes. Each of 40 entries declares a large
+// compressed size and expands about 1000 times. If the count followed the
+// declared size, each entry would count up to the end of the archive, and the
+// ratio would stay under the bound.
+func TestPublish_refusesManyLyingDeclaredSizes(t *testing.T) {
+	t.Parallel()
+
+	e := newEnv(t, false)
+	sg := newSigner(t)
+	e.trust(t, acme, sg)
+
+	zeros := make([]byte, 3<<19)
+	files := make([]zipFile, 0, 40)
+
+	for i := range 40 {
+		files = append(files, fileEntry(fmt.Sprintf("zeros-%02d.bin", i), zeros))
+	}
+
+	zipped := declareAllCompressedSizes(t, makeZip(t, files), 0xFFFFFFFE)
+	s := buildZipSet(t, sg, zipped)
+
+	_, err := e.publish(t, acme, s)
+	if !errors.Is(err, registry.ErrBadArchive) {
+		t.Fatalf("publish with many lying headers: got %v, want %v", err, registry.ErrBadArchive)
 	}
 
 	requireNoRelease(t, e)

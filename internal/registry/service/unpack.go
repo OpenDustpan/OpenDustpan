@@ -2,7 +2,9 @@ package service
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
+	"compress/flate"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -265,7 +267,7 @@ func readFileEntry(f *zip.File, name string) (readEntry, error) {
 		return none, fmt.Errorf("%w: entry %q is over %d bytes", registry.ErrBadArchive, f.Name, maxUnpackedFileBytes)
 	}
 
-	compressed, err := rawCompressedBytes(f)
+	compressed, err := rawCompressedBytes(f, size)
 	if err != nil {
 		return none, fmt.Errorf("%w: entry %q cannot be read", registry.ErrBadArchive, f.Name)
 	}
@@ -295,23 +297,62 @@ func readFileEntry(f *zip.File, name string) (readEntry, error) {
 	return out, nil
 }
 
-// rawCompressedBytes counts the compressed bytes of one entry that the zip
-// reader feeds to the decoder. It does not use the header size: the header
-// is the publisher's claim, and a lying header must not change the ratio.
-// A header that claims less than the stream holds makes the decode fail, and
-// a header that claims more reads only the bytes that the archive holds.
-func rawCompressedBytes(f *zip.File) (int64, error) {
-	raw, err := f.OpenRaw()
-	if err != nil {
-		return 0, fmt.Errorf("open raw entry: %w", err)
+// byteCounter is a writer that counts the bytes written to it.
+type byteCounter struct {
+	n int64
+}
+
+func (c *byteCounter) Write(p []byte) (int, error) {
+	c.n += int64(len(p))
+
+	return len(p), nil
+}
+
+// rawCompressedBytes counts the compressed bytes of one entry that the
+// decoder consumes. It does not use the header size, and it does not use the
+// length of the raw reader: both come from the publisher's claim, and a claim
+// that is larger than the real stream makes the raw reader run on into the
+// next entries. The count is the bytes that the decoder takes from the raw
+// reader, so a lying header cannot change the ratio. A stored entry has as
+// many compressed bytes as real bytes.
+func rawCompressedBytes(f *zip.File, realSize int64) (int64, error) {
+	switch f.Method {
+	case zip.Store:
+		return realSize, nil
+	case zip.Deflate:
+		raw, err := f.OpenRaw()
+		if err != nil {
+			return 0, fmt.Errorf("open raw entry: %w", err)
+		}
+
+		return deflateConsumed(raw)
+	default:
+		return 0, fmt.Errorf("%w: compression method %d is not supported", registry.ErrBadArchive, f.Method)
+	}
+}
+
+// deflateConsumed runs a deflate decoder over raw and returns the bytes that
+// the decoder consumed. A bufio.Reader gives the decoder a byte reader, so the
+// decoder does not read ahead on its own. The bytes that bufio holds but the
+// decoder did not take are subtracted. The output is bounded.
+func deflateConsumed(raw io.Reader) (int64, error) {
+	counted := &byteCounter{n: 0}
+	buffered := bufio.NewReader(io.TeeReader(raw, counted))
+
+	dec := flate.NewReader(buffered)
+
+	_, err := io.Copy(io.Discard, io.LimitReader(dec, maxUnpackedFileBytes+1))
+	closeErr := dec.Close()
+
+	if err == nil {
+		err = closeErr
 	}
 
-	n, err := io.Copy(io.Discard, raw)
 	if err != nil {
 		return 0, fmt.Errorf("count raw entry: %w", err)
 	}
 
-	return n, nil
+	return counted.n - int64(buffered.Buffered()), nil
 }
 
 // readAllEntry returns the bytes of one entry, bounded.

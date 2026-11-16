@@ -197,6 +197,8 @@ func storeCases() []storeCase {
 		{"namespaces do not share an address", testIsolation},
 		{"a provider and a module of one name are two addresses", testKinds},
 		{"concurrent publishes of one version, other content", testPublishConcurrent},
+		{"concurrent publishes of one version, other H1", testPublishConcurrentH1},
+		{"concurrent publishes of one version, same content", testPublishConcurrentSame},
 		{"a publish writes one audit entry", testAuditOnPublish},
 		{"a refused publish writes no audit entry", testAuditOnRefusal},
 		{"an identical repeat writes no audit entry", testAuditOnRepeat},
@@ -452,6 +454,96 @@ func testPublishConcurrent(t *testing.T, h Harness) {
 
 	if wins != 1 {
 		t.Fatalf("%d publishes won, want exactly 1", wins)
+	}
+
+	if n := len(publishEntries(t, h)); n != 1 {
+		t.Fatalf("%d audit entries, want 1", n)
+	}
+}
+
+// publishAtOnce publishes each release of rels at the same time with fence f
+// and returns the error of each publish.
+func publishAtOnce(t *testing.T, h Harness, f namespace.Fence, rels []registry.Release) []error {
+	t.Helper()
+
+	errs := make([]error, len(rels))
+
+	var wg sync.WaitGroup
+
+	for i := range rels {
+		wg.Go(func() {
+			errs[i] = h.Store.Publish(t.Context(), rels[i], f, entry(acme))
+		})
+	}
+
+	wg.Wait()
+
+	return errs
+}
+
+// testPublishConcurrentH1 checks two publishes of one version at the same
+// time whose archives have the same hashes and another H1. One stores its
+// release, and the other gets ErrVersionExists.
+func testPublishConcurrentH1(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := homed(t, h, acme)
+
+	first := provider("payments", v100)
+	first.Archives[0].H1 = "h1:first-unpacked-tree"
+	second := provider("payments", v100)
+	second.Archives[0].H1 = "h1:second-unpacked-tree"
+
+	rels := []registry.Release{first, second}
+	errs := publishAtOnce(t, h, f, rels)
+
+	wins, want := 0, ""
+
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			wins++
+			want = rels[i].Archives[0].H1
+		case !errors.Is(err, registry.ErrVersionExists):
+			t.Fatalf("Publish = %v, want nil or ErrVersionExists", err)
+		default:
+		}
+	}
+
+	if wins != 1 {
+		t.Fatalf("%d publishes with another H1 stored a release, want exactly 1", wins)
+	}
+
+	got, err := h.Store.Get(t.Context(), first.Address, v100)
+	if err != nil || got.Archives[0].H1 != want {
+		t.Fatalf("Get = %+v, %v, want the H1 %s of the publish that stored", got, err, want)
+	}
+
+	if n := len(publishEntries(t, h)); n != 1 {
+		t.Fatalf("%d audit entries, want 1", n)
+	}
+}
+
+// testPublishConcurrentSame checks two publishes of one version at the same
+// time with the same content and the same H1. Both report success, and one
+// release with one audit entry stays.
+func testPublishConcurrentSame(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := homed(t, h, acme)
+
+	r := provider("payments", v100)
+	r.Archives[0].H1 = "h1:same-unpacked-tree"
+
+	for i, err := range publishAtOnce(t, h, f, []registry.Release{r, r}) {
+		if err != nil {
+			t.Fatalf("Publish %d of the same content = %v, want nil", i, err)
+		}
+	}
+
+	got, err := h.Store.List(t.Context(), r.Address)
+	if err != nil || len(got) != 1 || !got[0].SameContent(r) {
+		t.Fatalf("List = %+v, %v, want the one release", got, err)
 	}
 
 	if n := len(publishEntries(t, h)); n != 1 {
