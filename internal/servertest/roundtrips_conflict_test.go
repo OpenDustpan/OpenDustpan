@@ -46,7 +46,10 @@ const sqlstateDeadlock = "40P01"
 // runner runs the step again and the restore succeeds. The test checks the
 // exact count of the restore with the failed attempt, and the exact count of
 // the restore without it, which is the count that the other restore flows
-// check.
+// check. Both counts hold the reads of the claim before each write of the
+// backup that the restore runs: the count without the failed swap is the
+// count of restoreModel, which holds attemptClaimTrips (see
+// roundtrips_test.go).
 //
 // A waiting backend runs its deadlock check once, deadlock_timeout after its
 // wait starts, and PostgreSQL ends the backend that finds the cycle. The
