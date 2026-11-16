@@ -72,9 +72,8 @@ func bundleEntry(ns namespace.Name, action string) audit.Entry {
 func bundleEntries(t *testing.T, h Harness) []audit.Entry {
 	t.Helper()
 
-	var out []audit.Entry
-
 	entries := h.Audit(t, nsAcme)
+	out := make([]audit.Entry, 0, len(entries))
 
 	for i := range entries {
 		if strings.HasPrefix(entries[i].Action, "trust-bundle:") {
@@ -532,8 +531,8 @@ func testDeleteVersion(t *testing.T, h Harness) {
 	}
 
 	entries := bundleEntries(t, h)
-	if got := entries[len(entries)-1].Action; got != "trust-bundle:delete" {
-		t.Errorf("last audit action = %s, want trust-bundle:delete", got)
+	if len(entries) == 0 || entries[len(entries)-1].Action != "trust-bundle:delete" {
+		t.Errorf("bundle audit entries = %+v, want the last action trust-bundle:delete", entries)
 	}
 
 	// A repeated delete finds no version.

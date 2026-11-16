@@ -199,7 +199,8 @@ func (e *env) serve(authz identity.Authorizer, wrap func(trustrulesvc.Reach) tru
 	rules, err := trustrulesvc.NewService(trustrulesvc.Config{
 		Store: e.store.TrustRules(), Namespaces: namespaces, Principals: e.store, Authorizer: authz,
 		Reach:            reach,
-		InstallationURLs: []string{publicURL}, OwnIssuer: nil, CheckURL: nil, Now: testNow, Bundles: nil, Sessions: nil,
+		InstallationURLs: []string{publicURL}, OwnIssuer: nil, CheckURL: nil, Now: testNow,
+		Bundles: e.store.TrustRules(), Sessions: nil,
 	})
 	if err != nil {
 		e.t.Fatalf("trust rule service: %v", err)

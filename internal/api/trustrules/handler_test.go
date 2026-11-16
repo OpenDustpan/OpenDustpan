@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
-	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/route"
@@ -313,11 +312,7 @@ func TestTrustRuleWritesNeedAConsoleSession(t *testing.T) {
 
 	e := newEnv(t, allActions())
 	existing := e.mustCreate("guarded")
-
-	const (
-		bundlesURL = "/api/dustpan/v1/namespaces/acme/trust-bundles"
-		bundleID   = "trb-00000000000000000000000000000000"
-	)
+	bundleID := e.mustSaveBundle()
 
 	steps := []struct {
 		name, method, path, body string
@@ -332,12 +327,6 @@ func TestTrustRuleWritesNeedAConsoleSession(t *testing.T) {
 
 	for _, s := range steps {
 		status, body := e.send(s.method, s.path, adminToken, s.body, map[string]string{"If-Match": `"1"`})
-		if strings.Contains(s.path, "trust-bundles") && s.method != http.MethodPost && status == http.StatusBadRequest {
-			// The handler fixture has no bundle store, so a change of a bundle
-			// that exists is proved in the service tests with the store wired.
-			continue
-		}
-
 		if status != http.StatusForbidden || errorCode(t, body) != "mfa.fresh-step-required" {
 			t.Errorf("%s with a token only = %d %s, want 403 mfa.fresh-step-required", s.name, status, body)
 		}
