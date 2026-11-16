@@ -214,10 +214,8 @@ func (t TrustRules) GetBundle(ctx context.Context, ns namespace.Name) (trustrule
 		return trustrule.Bundle{}, err
 	}
 
-	// Defense in depth: the query matched the namespace. This check stays so
-	// that a change of the query cannot serve a bundle of another namespace.
-	if b.Namespace != ns {
-		return trustrule.Bundle{}, trustrule.ErrNotFound
+	if err := trustrulestore.CheckBundleOfNamespace(b, ns); err != nil {
+		return trustrule.Bundle{}, err
 	}
 
 	return b, nil

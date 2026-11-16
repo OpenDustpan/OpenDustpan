@@ -1,7 +1,13 @@
 package trustrulestore_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"testing"
 	"time"
 
@@ -62,6 +68,7 @@ func TestRuleRefusesACorruptRow(t *testing.T) {
 		"an http issuer":                 func(row *trustrulestore.Row) { row.Issuer = "http" + "://token.actions.example.com" },
 		"a namespace that is not a name": func(row *trustrulestore.Row) { row.Namespace = "Not A Name" },
 		"an ID of another kind":          func(row *trustrulestore.Row) { row.ID = "tok-1" },
+		"a revision below one":           func(row *trustrulestore.Row) { row.Revision = 0 },
 	}
 
 	for name, change := range cases {
@@ -193,5 +200,92 @@ func TestCheckExchangePrincipal(t *testing.T) {
 		if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, trustrule.ErrPrincipal)) {
 			t.Errorf("%s: CheckExchangePrincipal = %v, want ok %v", tc.name, err, tc.ok)
 		}
+	}
+}
+
+// bundleCAPEM returns the PEM text of one new CA certificate that is valid
+// at the time now.
+func bundleCAPEM(t *testing.T, now time.Time) string {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 62))
+	if err != nil {
+		t.Fatalf("serial: %v", err)
+	}
+
+	var tmpl x509.Certificate
+
+	tmpl.SerialNumber = serial
+	tmpl.Subject.CommonName = "test ca"
+	tmpl.NotBefore = now.Add(-time.Hour)
+	tmpl.NotAfter = now.Add(48 * time.Hour)
+	tmpl.IsCA = true
+	tmpl.BasicConstraintsValid = true
+	tmpl.KeyUsage = x509.KeyUsageCertSign
+
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	var block pem.Block
+
+	block.Type = "CERTIFICATE"
+	block.Bytes = der
+
+	return string(pem.EncodeToMemory(&block))
+}
+
+// TestBundleRefusesACorruptRow reads bundle rows that a backup, a restore or
+// another version could have written. Each one gives ErrCorrupt.
+func TestBundleRefusesACorruptRow(t *testing.T) {
+	t.Parallel()
+
+	now := time.UnixMilli(1_700_000_000_000).UTC()
+	vs := []trustrulestore.VersionRow{{Version: 1, PEM: bundleCAPEM(t, now), CreatedAtMs: now.UnixMilli()}}
+	good := trustrulestore.BundleRow{
+		ID: string(trustrule.NewBundleID()), Namespace: "acme", Active: 1, Revision: 1,
+		CreatedAtMs: now.UnixMilli(),
+	}
+
+	if _, err := trustrulestore.Bundle(good, vs); err != nil {
+		t.Fatalf("Bundle of the row the store wrote = %v, want nil", err)
+	}
+
+	cases := map[string]func(row *trustrulestore.BundleRow){
+		"a namespace that is not a name": func(row *trustrulestore.BundleRow) { row.Namespace = "Not A Name" },
+		"an ID of another kind":          func(row *trustrulestore.BundleRow) { row.ID = "trr-1" },
+		"a revision below one":           func(row *trustrulestore.BundleRow) { row.Revision = 0 },
+	}
+
+	for name, change := range cases {
+		row := good
+		change(&row)
+
+		if _, err := trustrulestore.Bundle(row, vs); !errors.Is(err, trustrulestore.ErrCorrupt) {
+			t.Errorf("%s: Bundle = %v, want ErrCorrupt", name, err)
+		}
+	}
+}
+
+// TestCheckBundleOfNamespace sends the bundle of another namespace to the
+// check of GetBundle, as if the query had selected the row of another
+// namespace.
+func TestCheckBundleOfNamespace(t *testing.T) {
+	t.Parallel()
+
+	b := trustrule.Bundle{ID: trustrule.NewBundleID(), Namespace: "other"}
+
+	if err := trustrulestore.CheckBundleOfNamespace(b, "acme"); !errors.Is(err, trustrule.ErrNotFound) {
+		t.Errorf("check of the bundle of another namespace = %v, want ErrNotFound", err)
+	}
+
+	if err := trustrulestore.CheckBundleOfNamespace(b, "other"); err != nil {
+		t.Errorf("check of the bundle of its own namespace = %v, want nil", err)
 	}
 }

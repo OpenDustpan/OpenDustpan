@@ -220,3 +220,15 @@ func Bundle(row BundleRow, vs []VersionRow) (trustrule.Bundle, error) {
 
 	return out, nil
 }
+
+// CheckBundleOfNamespace returns trustrule.ErrNotFound when b is not the
+// bundle of the namespace ns. Defense in depth: the query matched the
+// namespace. This check stays so that a change of the query cannot serve a
+// bundle of another namespace. It does not rely on the query.
+func CheckBundleOfNamespace(b trustrule.Bundle, ns namespace.Name) error {
+	if b.Namespace != ns {
+		return trustrule.ErrNotFound
+	}
+
+	return nil
+}
