@@ -1608,7 +1608,7 @@ func seedBackupRecord(t *testing.T, s BackupStore) backup.Record {
 	}
 
 	return mustFinishBackup(t, s, backupFinish{
-		ID: seeded.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour),
+		ID: seeded.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour), Attempt: "",
 	})
 }
 
@@ -2069,7 +2069,7 @@ func testBackupEndedShape(t *testing.T, newStore BackupFactory) {
 
 	endedAt := now().Add(time.Hour)
 	mustFinishBackup(t, s, backupFinish{
-		ID: running.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt,
+		ID: running.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt, Attempt: "",
 	})
 	requireEndedStored(t, witness, backup.TableBackups, running.ID.String(), endedAt)
 }
@@ -2106,7 +2106,7 @@ func testBackupRegistry(t *testing.T, newStore BackupFactory) {
 		ID:      first.ID,
 		State:   backup.StateSucceeded,
 		Error:   "",
-		EndedAt: endedAt,
+		EndedAt: endedAt, Attempt: "",
 	})
 
 	if finished.State != backup.StateSucceeded || !finished.EndedAt.Equal(endedAt) || finished.Error != "" {
@@ -2177,7 +2177,7 @@ func failSecondBackup(t *testing.T, s BackupStore) backup.Record {
 		ID:      second.ID,
 		State:   backup.StateFailed,
 		Error:   "copy blobs: connection reset",
-		EndedAt: failedAt,
+		EndedAt: failedAt, Attempt: "",
 	})
 
 	if secondDone.State != backup.StateFailed || secondDone.Error != "copy blobs: connection reset" ||
@@ -2220,7 +2220,9 @@ func testBackupOneRunning(t *testing.T, newStore BackupFactory) {
 		t.Fatalf("taken backup ID: err = %v, want ErrAlreadyExists", err)
 	}
 
-	mustFinishBackup(t, s, backupFinish{ID: first.ID, State: backup.StateSucceeded, Error: "", EndedAt: now()})
+	mustFinishBackup(t, s, backupFinish{
+		ID: first.ID, State: backup.StateSucceeded, Error: "", EndedAt: now(), Attempt: "",
+	})
 	mustCreateBackup(t, s, second)
 }
 
@@ -2350,7 +2352,7 @@ func testBackupFinishRecordsStep(t *testing.T, newStore BackupFactory) {
 	endedAt := now().Add(time.Hour)
 
 	finished := mustFinishClaimed(t, s, claim, backupFinish{
-		ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt,
+		ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt, Attempt: "",
 	})
 
 	if finished.State != backup.StateSucceeded || !finished.EndedAt.Equal(endedAt) {
@@ -2464,10 +2466,11 @@ func testBackupRecordAttempt(t *testing.T, newStore BackupFactory) {
 
 	// A row that is not running reports ErrNotRunning and records no step.
 	// The running row finishes first: one backup runs at a time.
-	if _, err := s.FinishBackup(
+	_, liveErr := s.FinishBackup(
 		t.Context(), live.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", now(), attempt,
-	); err != nil {
-		t.Fatalf("finish backup %s: %v", r.ID, err)
+	)
+	if liveErr != nil {
+		t.Fatalf("finish backup %s: %v", r.ID, liveErr)
 	}
 
 	failed := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
@@ -2477,15 +2480,15 @@ func testBackupRecordAttempt(t *testing.T, newStore BackupFactory) {
 		t.Fatalf("record the attempt of a fresh row: %v", err)
 	}
 
-	if _, finishErr := s.FinishBackup(
+	_, finishErr := s.FinishBackup(
 		t.Context(), failedClaim.Step(backup.StepFinish), failed.ID, backup.StateFailed, "stop", now(), "",
-	); finishErr != nil {
+	)
+	if finishErr != nil {
 		t.Fatalf("finish the failed row: %v", finishErr)
 	}
 
-	if err := s.RecordBackupAttempt(t.Context(), failedClaim.Step("probe"), failed.ID, "2"); !errors.Is(
-		err, backup.ErrNotRunning,
-	) {
+	err := s.RecordBackupAttempt(t.Context(), failedClaim.Step("probe"), failed.ID, "2")
+	if !errors.Is(err, backup.ErrNotRunning) {
 		t.Fatalf("record the attempt of a finished row: err = %v, want ErrNotRunning", err)
 	}
 }
@@ -2569,7 +2572,9 @@ func testBackupFinishStaleClaim(t *testing.T, newStore BackupFactory) {
 		requireStillRunning(t, s, r.ID, live)
 	}
 
-	mustFinishClaimed(t, s, live, backupFinish{ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt})
+	mustFinishClaimed(t, s, live, backupFinish{
+		ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt, Attempt: "",
+	})
 }
 
 // testBackupFinishCanceled cancels the operation of a running backup: the
@@ -2688,7 +2693,9 @@ func testBackupFinishRollsBack(t *testing.T, newStore BackupFactory) {
 
 	requireStillRunning(t, s, r.ID, claim)
 
-	mustFinishClaimed(t, s, claim, backupFinish{ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt})
+	mustFinishClaimed(t, s, claim, backupFinish{
+		ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt, Attempt: "",
+	})
 }
 
 // testBackupFailEndedFailed fails the running row of an operation that ended
@@ -2707,7 +2714,7 @@ func testBackupFailEndedFailed(t *testing.T, newStore BackupFactory) {
 	done := newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour))
 	doneClaim := startBackupWithClaim(t, s, done)
 	finished := mustFinishClaimed(t, s, doneClaim, backupFinish{
-		ID: done.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(2 * time.Hour),
+		ID: done.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(2 * time.Hour), Attempt: "",
 	})
 
 	running := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
@@ -2874,7 +2881,7 @@ func testBackupRowSurvivesReopen(t *testing.T, newStore BackupFactory) {
 		ID:      done.ID,
 		State:   backup.StateSucceeded,
 		Error:   "",
-		EndedAt: now().Add(2 * time.Hour),
+		EndedAt: now().Add(2 * time.Hour), Attempt: "",
 	})
 	running := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
 	claim := startBackupWithClaim(t, s, running)

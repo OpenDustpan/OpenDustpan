@@ -148,7 +148,7 @@ func checkHostilePointer(t *testing.T, tc hostilePointer, full []byte, liveName 
 	t.Helper()
 
 	store := newMemStore()
-	putScopeAttempt(t, store, "5", tc.manifest, scopeFiles{data: full, first: full})
+	putScopeAttempt(t, store, tc.manifest, scopeFiles{data: full, first: full})
 
 	if tc.pointer != "" {
 		store.storeObject(t, liveName, []byte(tc.pointer))

@@ -13095,6 +13095,35 @@ func runRestoreRefused(ctx context.Context, t *testing.T, env *e2e.Env, id, want
 	}
 }
 
+// readDirTargetLivePointer reads the live pointer of backup id from a
+// dir:<path> backup target. The read stays inside the target directory.
+func readDirTargetLivePointer(t *testing.T, target, id string) []byte {
+	t.Helper()
+
+	dir, ok := strings.CutPrefix(target, "dir:")
+	if !ok || strings.TrimSpace(dir) == "" {
+		t.Fatalf("backup target = %q, want dir:<path>", target)
+	}
+
+	root, err := os.OpenRoot(strings.TrimSpace(dir))
+	if err != nil {
+		t.Fatalf("open backup target: %v", err)
+	}
+
+	defer func() {
+		if closeErr := root.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	}()
+
+	raw, err := root.ReadFile(filepath.Join("backups", id, "live.json"))
+	if err != nil {
+		t.Fatalf("read live pointer: %v", err)
+	}
+
+	return raw
+}
+
 // targetManifestKey returns the key of the manifest of backup id in the
 // backup target of the running server: the live pointer names the attempt
 // directory that holds the finished backup.
@@ -13107,17 +13136,7 @@ func targetManifestKey(t *testing.T, target, id string) string {
 		ctx := t.Context()
 		raw = readS3Object(ctx, t, e2e.OpenS3TargetStore(ctx, t, target), "backups/"+id+"/live.json")
 	} else {
-		dir, ok := strings.CutPrefix(target, "dir:")
-		if !ok || strings.TrimSpace(dir) == "" {
-			t.Fatalf("backup target = %q, want dir:<path>", target)
-		}
-
-		var err error
-
-		raw, err = os.ReadFile(filepath.Join(strings.TrimSpace(dir), "backups", id, "live.json"))
-		if err != nil {
-			t.Fatalf("read live pointer: %v", err)
-		}
+		raw = readDirTargetLivePointer(t, target, id)
 	}
 
 	var pointer struct {

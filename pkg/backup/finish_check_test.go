@@ -30,6 +30,7 @@ func scopeManifest(id backup.ID, attempt string, data []byte) backup.Manifest {
 		Attempt:              attempt,
 		Dialect:              backup.DialectSQLite,
 		PrimaryInstallations: nil,
+		RegistryFiles:        nil,
 		WrapperIDs:           nil,
 		Blobs:                nil,
 		Version:              "test-1.0",
@@ -54,16 +55,18 @@ type scopeFiles struct {
 }
 
 // putScopeAttempt writes manifest and its table files to the attempt
-// directory of scopeID named by attempt. The layout belongs to the scope, only
+// directory of scopeID, attempt 5. The layout belongs to the scope, only
 // the manifest varies. A test that puts the manifest of another backup or
 // another attempt there checks that the reader refuses it.
-func putScopeAttempt(t *testing.T, store *memStore, attempt string, manifest backup.Manifest, files scopeFiles) {
+func putScopeAttempt(t *testing.T, store *memStore, manifest backup.Manifest, files scopeFiles) {
 	t.Helper()
 
 	raw, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatalf("encode the manifest: %v", err)
 	}
+
+	const attempt = "5"
 
 	store.storeObject(t, scopeKey(attempt, "manifest.json"), raw)
 
@@ -98,7 +101,7 @@ func TestFinishRefusesTruncatedFile(t *testing.T) {
 			t.Parallel()
 
 			store := newMemStore()
-			putScopeAttempt(t, store, "5", scopeManifest(scopeID, "5", full), scopeFiles{data: full, first: tc.stored})
+			putScopeAttempt(t, store, scopeManifest(scopeID, "5", full), scopeFiles{data: full, first: tc.stored})
 
 			err := backup.CheckAttemptForTest(t.Context(), store, scopeID, "5")
 			if tc.wantErr && !errors.Is(err, backup.ErrCorrupt) {
@@ -145,7 +148,7 @@ func TestCheckFailsClosedOnTheLivePointer(t *testing.T) {
 			t.Parallel()
 
 			store := newMemStore()
-			putScopeAttempt(t, store, "5", tc.manifest, scopeFiles{data: full, first: full})
+			putScopeAttempt(t, store, tc.manifest, scopeFiles{data: full, first: full})
 
 			if tc.pointer != "" {
 				store.storeObject(t, liveName, []byte(tc.pointer))
@@ -165,7 +168,7 @@ func TestCheckAcceptsAFinishedBackup(t *testing.T) {
 
 	full := []byte("a table file of some length")
 	store := newMemStore()
-	putScopeAttempt(t, store, "5", scopeManifest(scopeID, "5", full), scopeFiles{data: full, first: full})
+	putScopeAttempt(t, store, scopeManifest(scopeID, "5", full), scopeFiles{data: full, first: full})
 
 	if err := backup.SeedLivePointerForTest(t.Context(), store, scopeID, "5"); err != nil {
 		t.Fatalf("write the live pointer: %v", err)
