@@ -175,9 +175,14 @@ func TestPublish_handlerGuards(t *testing.T) {
 		t.Fatalf("staged blobs after refused uploads: %v", left)
 	}
 
-	// Defense in depth: the uploads route takes archives as zip files. A zip
-	// body with the zip media type is staged, not refused as a wrong type.
-	if code, answer := f.stage(t, "publisher", "application/zip", []byte("PK"), 2); code != http.StatusCreated {
-		t.Fatalf("zip body with zip media type: got %d %s, want %d", code, answer, http.StatusCreated)
+	// The handler takes only application/octet-stream, also for an archive.
+	// Publish checks that the bytes of an archive are a zip, not a header.
+	code, answer := f.stage(t, "publisher", "application/zip", []byte("PK"), 2)
+	if code != http.StatusUnsupportedMediaType {
+		t.Fatalf("zip body with zip media type: got %d %s, want %d", code, answer, http.StatusUnsupportedMediaType)
+	}
+
+	if left := f.staged(t); len(left) != 0 {
+		t.Fatalf("staged blobs after a zip media type: %v", left)
 	}
 }

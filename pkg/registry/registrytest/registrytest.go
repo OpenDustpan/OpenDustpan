@@ -8,6 +8,8 @@
 package registrytest
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"slices"
 	"sync"
@@ -190,6 +192,7 @@ func storeCases() []storeCase {
 		{"get of a missing version", testGetMissing},
 		{"get with a bad version", testGetBadVersion},
 		{"publish of an invalid release", testPublishInvalid},
+		{"publish with an H1 of another form", testPublishBadH1},
 		{"publish with a stale fence", testPublishStale},
 		{"publish with the fence of another namespace", testPublishOtherFence},
 		{"repeat with the same content", testPublishRepeat},
@@ -268,6 +271,38 @@ func testPublishInvalid(t *testing.T, h Harness) {
 	expectNoReleases(t, h, r.Address)
 }
 
+// testPublishBadH1 publishes archives with an H1 of another form. The store
+// refuses each one with ErrInvalid and stores nothing.
+func testPublishBadH1(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := homed(t, h, acme)
+
+	for _, bad := range []string{
+		"h1:not-a-digest",
+		h1Of("tree") + "\n",
+		"sha256:" + sumA,
+		h1Of("tree")[:len(h1Of("tree"))-1],
+	} {
+		r := provider("payments", v100)
+		r.Archives[0].H1 = bad
+
+		err := h.Store.Publish(t.Context(), r, f, entry(acme))
+		if !errors.Is(err, registry.ErrInvalid) {
+			t.Fatalf("Publish with H1 %q = %v, want ErrInvalid", bad, err)
+		}
+	}
+
+	expectNoReleases(t, h, address(acme, registry.KindProvider, "payments", ""))
+}
+
+// h1Of returns an H1 digest in the stored form, made from seed.
+func h1Of(seed string) string {
+	sum := sha256.Sum256([]byte(seed))
+
+	return "h1:" + base64.StdEncoding.EncodeToString(sum[:])
+}
+
 func testPublishStale(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -338,7 +373,7 @@ func testPublishConflict(t *testing.T, h Harness) {
 	// The same hashes with another H1 are other content: H1 counts in
 	// SameContent, so the store refuses the republish in its transaction.
 	changed := provider("payments", v100)
-	changed.Archives[0].H1 = "h1:other-unpacked-tree"
+	changed.Archives[0].H1 = h1Of("other unpacked tree")
 
 	publishErr := h.Store.Publish(t.Context(), changed, f, entry(acme))
 	if !errors.Is(publishErr, registry.ErrVersionExists) {
@@ -490,9 +525,9 @@ func testPublishConcurrentH1(t *testing.T, h Harness) {
 	f := homed(t, h, acme)
 
 	first := provider("payments", v100)
-	first.Archives[0].H1 = "h1:first-unpacked-tree"
+	first.Archives[0].H1 = h1Of("first unpacked tree")
 	second := provider("payments", v100)
-	second.Archives[0].H1 = "h1:second-unpacked-tree"
+	second.Archives[0].H1 = h1Of("second unpacked tree")
 
 	rels := []registry.Release{first, second}
 	errs := publishAtOnce(t, h, f, rels)
@@ -533,7 +568,7 @@ func testPublishConcurrentSame(t *testing.T, h Harness) {
 	f := homed(t, h, acme)
 
 	r := provider("payments", v100)
-	r.Archives[0].H1 = "h1:same-unpacked-tree"
+	r.Archives[0].H1 = h1Of("same unpacked tree")
 
 	for i, err := range publishAtOnce(t, h, f, []registry.Release{r, r}) {
 		if err != nil {

@@ -183,8 +183,11 @@ func (c *collector) observe(entry checkedEntry, read readEntry) error {
 	}
 
 	if entry.isManifest {
+		// Defense in depth: checkEntry refuses a second entry with the name of
+		// the manifest. This check stays so that a change of the name check
+		// cannot replace the manifest, and it does not rely on checkEntry.
 		if c.manifestBytes != nil {
-			return fmt.Errorf("%w: duplicate entry %q", registry.ErrBadArchive, manifestName)
+			return fmt.Errorf("%w: more than one %s", registry.ErrBadArchive, manifestName)
 		}
 
 		c.manifestBytes = read.held
@@ -214,6 +217,18 @@ func checkEntry(f *zip.File, seen map[string]bool) (checkedEntry, bool, error) {
 		return none, false, fmt.Errorf("%w: entry %q is absolute", registry.ErrBadArchive, f.Name)
 	}
 
+	// The H1 digest writes one line of hash and name for each file. A name
+	// with a newline could forge the line of another file, and a backslash
+	// is a separator on some systems. Only the characters of the allowlist
+	// pass.
+	if !allowedEntryName(f.Name) {
+		return none, false, fmt.Errorf(
+			"%w: entry %q holds a character that is not allowed",
+			registry.ErrBadArchive,
+			f.Name,
+		)
+	}
+
 	for part := range strings.SplitSeq(f.Name, "/") {
 		if part == ".." {
 			return none, false, fmt.Errorf("%w: entry %q leaves the directory", registry.ErrBadArchive, f.Name)
@@ -236,6 +251,22 @@ func checkEntry(f *zip.File, seen map[string]bool) (checkedEntry, bool, error) {
 	}
 
 	return checkedEntry{name: name, folded: folded, isManifest: name == manifestName}, false, nil
+}
+
+// allowedEntryName reports whether every character of name is an ASCII letter,
+// an ASCII digit or one of the characters "._-+/@~=,". It refuses a control
+// character, a space, a backslash and every character outside ASCII.
+func allowedEntryName(name string) bool {
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("._-+/@~=,", r):
+		default:
+			return false
+		}
+	}
+
+	return true
 }
 
 // readEntry holds the checked bytes of one file entry: the SHA-256 and the

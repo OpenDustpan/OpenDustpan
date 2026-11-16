@@ -140,6 +140,15 @@ func decodeArchives(s string) ([]registry.Archive, error) {
 
 	out := make([]registry.Archive, 0, len(docs))
 	for _, d := range docs {
+		// Defense in depth: Release runs the checks of a new release after the
+		// decode, and publish computes H1 from the unpacked bytes. This check
+		// stays so that a row from a restored backup or from another version
+		// cannot pass a value of another form to a caller of the decode. It
+		// does not rely on Release.Validate or on publish.
+		if !registry.ValidH1(d.H1) {
+			return nil, fmt.Errorf("%w: archives: archive %q H1 digest", ErrCorrupt, d.FileName)
+		}
+
 		out = append(out, registry.Archive(d))
 	}
 

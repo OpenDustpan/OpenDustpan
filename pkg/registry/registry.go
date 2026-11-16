@@ -100,6 +100,9 @@ var (
 	fingerprintRE = regexp.MustCompile(`^[0-9A-F]{40,64}$`)
 	protocolRE    = regexp.MustCompile(`^\d{1,2}\.\d{1,2}$`)
 	uploadIDRE    = regexp.MustCompile(`^[a-z0-9]{20,64}$`)
+	// h1RE is the form of an H1 digest: "h1:" and the standard base64 of one
+	// SHA-256.
+	h1RE = regexp.MustCompile(`^h1:[A-Za-z0-9+/]{43}=$`)
 )
 
 const slugRule = "use lowercase letters, digits and single dashes, with no dash at the start or the end"
@@ -592,7 +595,23 @@ func validateArchive(a Archive) error {
 		return fmt.Errorf("%w: archive %q hash or size", ErrInvalid, a.FileName)
 	}
 
+	// Defense in depth: publish computes H1 from the unpacked bytes, and the
+	// store decode checks the stored value too. This check stays so that a
+	// new caller or a restored row cannot store a value of another form. It
+	// does not rely on the unpack or on the store. An empty H1 is a module, or
+	// a release that a server stored before it computed H1.
+	if !ValidH1(a.H1) {
+		return fmt.Errorf("%w: archive %q H1 digest", ErrInvalid, a.FileName)
+	}
+
 	return nil
+}
+
+// ValidH1 reports whether h1 is a stored H1 value that is allowed: empty, or
+// "h1:" and the standard base64 of one SHA-256. The empty value is the H1 of a
+// module, or of a release that a server stored before it computed H1.
+func ValidH1(h1 string) bool {
+	return h1 == "" || h1RE.MatchString(h1)
 }
 
 // CompareVersions orders two valid versions by semantic version precedence:

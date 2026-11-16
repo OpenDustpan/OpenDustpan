@@ -178,26 +178,22 @@ func readBody(w http.ResponseWriter, r *http.Request, v any) error {
 	return route.DecodeBody(w, r, maxBodyBytes, v)
 }
 
-// uploadMediaType is the media type of the body of an upload of raw bytes:
-// a checksums file, a signature file or another file.
+// uploadMediaType is the media type of the body of an upload.
 const uploadMediaType = "application/octet-stream"
-
-// uploadZipMediaType is the media type of the body of an upload of a provider
-// archive.
-const uploadZipMediaType = "application/zip"
 
 // stage serves POST .../registry/uploads: the body is the bytes of one file.
 func (h *Handler) stage(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 	ctx := r.Context()
 
-	// Only raw bytes or a zip archive are a file. A body with another media
-	// type, for example a form that curl sends with --data-binary and no
-	// header, is refused before it is read.
+	// Only raw bytes are a file. A body with another media type, for example a
+	// form that curl sends with --data-binary and no header, is refused before
+	// it is read. The handler does not know the role of a file: publish checks
+	// that the bytes of an archive are a zip.
 	mediaType, _, typeErr := mime.ParseMediaType(apidesc.Header(r, "Content-Type"))
-	if typeErr != nil || (mediaType != uploadMediaType && mediaType != uploadZipMediaType) {
+	if typeErr != nil || mediaType != uploadMediaType {
 		h.writeError(ctx, w, problem.Fixed(
 			http.StatusUnsupportedMediaType, errcode.RequestContentTypeUnsupported,
-			"send the file with the header Content-Type: "+uploadMediaType+" or "+uploadZipMediaType,
+			"send the file with the header Content-Type: "+uploadMediaType,
 		))
 
 		return

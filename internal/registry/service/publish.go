@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -171,11 +172,19 @@ type PublishRequest struct {
 type measured struct {
 	StagedFile
 
-	key   blob.Key
-	sum   string
-	size  int64
-	md5   string
+	key  blob.Key
+	sum  string
+	size int64
+	md5  string
+	// bytes holds the bytes of a checksums file or a signature file. It stays
+	// nil for a provider archive: the measure step unpacks the archive and
+	// drops its bytes before it reads the next file.
 	bytes []byte
+	// facts is the result of the unpack of a provider archive, and unpackErr
+	// is the error of that unpack. The check of the release reports unpackErr
+	// after the signature check.
+	facts     unpackFacts
+	unpackErr error
 }
 
 // Publish publishes one provider release from the staged files of req. It
@@ -407,7 +416,10 @@ func stagedKeys(id namespace.ID, files []StagedFile) ([]measured, error) {
 			return nil, fmt.Errorf("%w: the token of file %s is not valid", ErrBadRequest, f.Name)
 		}
 
-		out = append(out, measured{StagedFile: f, key: key, sum: "", size: 0, md5: "", bytes: nil})
+		out = append(out, measured{
+			StagedFile: f, key: key, sum: "", size: 0, md5: "", bytes: nil,
+			facts: unpackFacts{h1: "", protocols: nil}, unpackErr: nil,
+		})
 	}
 
 	return out, nil
@@ -415,7 +427,10 @@ func stagedKeys(id namespace.ID, files []StagedFile) ([]measured, error) {
 
 // measureAll reads each staged file again and computes its SHA-256 and size.
 // The server trusts no hash that a client sends. The checksums file and the
-// signature file are also kept in memory: both are small.
+// signature file are kept in memory, bounded by the limit of their role. The
+// archives are read one at a time: the bytes of an archive are unpacked and
+// dropped before the next file is read, so the memory holds at most one
+// archive.
 func (s *Service) measureAll(ctx context.Context, view *blob.Scoped, files []measured) error {
 	var total int64
 
@@ -448,10 +463,8 @@ func (s *Service) limitOf(role FileRole) int64 {
 	}
 }
 
-// measureOne reads one staged file, computes its SHA-256 and size, and keeps
-// the bytes of a checksums file, of a signature file and of an archive: the
-// unpack of a provider archive reads the archive bytes, bounded by the limits
-// of the request and of the release.
+// measureOne reads one staged file and computes its SHA-256, its MD5 and its
+// size while it streams the bytes, bounded by the limit of its role.
 func (s *Service) measureOne(ctx context.Context, view *blob.Scoped, f *measured) error {
 	r, err := view.Get(ctx, f.key)
 	if errors.Is(err, blob.ErrNotFound) {
@@ -463,33 +476,61 @@ func (s *Service) measureOne(ctx context.Context, view *blob.Scoped, f *measured
 	}
 
 	digest := blob.NewDigestReader(r)
-	m := newMeasure(digest, s.limitOf(f.Role))
-
-	f.bytes, err = io.ReadAll(m)
-
+	readErr := f.read(digest, s.limitOf(f.Role))
 	closeErr := r.Close()
 
+	if readErr != nil {
+		return readErr
+	}
+
+	if closeErr != nil {
+		return fmt.Errorf("read the staged file %s: %w", f.Name, closeErr)
+	}
+
+	sum := digest.Digest().MD5
+	f.md5 = hex.EncodeToString(sum[:])
+
+	return nil
+}
+
+// read reads the bytes of f from r, at most limit bytes, and hashes them while
+// it reads. It keeps the bytes of a checksums file and of a signature file.
+// It unpacks a provider archive at once, keeps the facts and the error of the
+// unpack, and drops the bytes of the archive, so the publish holds at most one
+// archive in memory. It returns ErrTooLarge past the limit, and
+// registry.ErrBadArchive for an archive that is not a zip file.
+func (f *measured) read(r io.Reader, limit int64) error {
+	m := newMeasure(r, limit)
+
+	var held bytes.Buffer
+
+	_, err := io.Copy(&held, m)
 	if errors.Is(err, ErrTooLarge) {
 		return fmt.Errorf("%w: %s", ErrTooLarge, f.Name)
 	}
 
-	if err != nil || closeErr != nil {
-		return fmt.Errorf("read the staged file %s: %w", f.Name, errors.Join(err, closeErr))
+	if err != nil {
+		return fmt.Errorf("read the staged file %s: %w", f.Name, err)
+	}
+
+	if f.Role != RoleArchive {
+		f.bytes = held.Bytes()
+		f.sum, f.size = m.sum(), m.n
+
+		return nil
 	}
 
 	// The content of an archive decides if it is a zip file, not the media
 	// type of the upload. The check runs before the hash is kept, so a body
 	// that is not a zip file reaches no hash check and no signature check.
-	if f.Role == RoleArchive {
-		if zipErr := requireZip(f.Name, f.bytes); zipErr != nil {
-			return zipErr
-		}
+	if zipErr := requireZip(f.Name, held.Bytes()); zipErr != nil {
+		return zipErr
 	}
 
+	// The unpack error waits for the check of the release, which reports it
+	// after the signature check, as for the other checks of the archive set.
+	f.facts, f.unpackErr = unpackProviderArchive(held.Bytes())
 	f.sum, f.size = m.sum(), m.n
-	sum := digest.Digest().MD5
-	f.md5 = hex.EncodeToString(sum[:])
-
 	return nil
 }
 
@@ -586,8 +627,9 @@ func (s *Service) check(
 	return rel, nil
 }
 
-// checkManifests unpacks each archive with the unpack bounds, writes the H1
-// digest of the unpacked bytes on the archive of the release, and checks the
+// checkManifests reports the result of the bounded unpack of each archive from
+// the measure step, writes the H1 digest of the unpacked bytes on the archive
+// of the release, and checks the
 // stated protocols against the manifest as an exact set with duplicates
 // ignored. The stored protocols are the manifest protocols. A stated value
 // without a manifest fails closed.
@@ -604,9 +646,17 @@ func checkManifests(stated []string, files []measured, rel *registry.Release) er
 			continue
 		}
 
-		facts, err := unpackProviderArchive(f.bytes)
-		if err != nil {
-			return err
+		if f.unpackErr != nil {
+			return f.unpackErr
+		}
+
+		// Defense in depth: the unpack refuses an archive without a manifest,
+		// so its facts always hold an H1 and protocols. This check stays so
+		// that an archive that the measure step did not unpack is refused, and
+		// it does not rely on the measure step or on the unpack.
+		facts := f.facts
+		if facts.h1 == "" || len(facts.protocols) == 0 {
+			return fmt.Errorf("%w: archive %s was not unpacked", registry.ErrBadArchive, f.Name)
 		}
 
 		at, ok := byName[f.Name]
