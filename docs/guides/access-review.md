@@ -233,6 +233,6 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 ```
 
 `GET /api/dustpan/v1/me/grants` pages the caller's own grants, with the same
-`limit` and `cursor` values. `GET /api/dustpan/v1/me/access` answers the question
+`pageSize` and `pageToken` values. `GET /api/dustpan/v1/me/access` answers the question
 of which access the caller has on an object. See
 [Roles and grants](roles-and-grants.md) for that query.
