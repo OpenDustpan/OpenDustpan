@@ -4,7 +4,7 @@ The registry refuses a publish at a request limit and at the unpack limits. The 
 
 ## Decisions
 
-1. **One source for each limit.** Add one value type, `registry.Limits`, in `pkg/registry` with the five limits. The handler, the unpack and the new route read the same value. The route cannot show a value that a check does not use.
+1. **One source for each limit.** Add one value type, `registry.Limits`, in `pkg/registry` with the six limits. The handler, the unpack and the new route read the same value. The route cannot show a value that a check does not use.
 2. **A read route on the namespace.** Add GET .../registry/limits to the route table with the action registry:read, like the other read routes. The answer holds numbers and a unit name for each limit.
 
 ## Structure
@@ -36,7 +36,7 @@ participant Svc as Registry service
 Client->>Route: GET registry limits
 Route->>Svc: read the limits value
 Svc->>Route: Limits
-Route->>Client: 200 with five limits
+Route->>Client: 200 with six limits
 ```
 
 New imports of this change (each one allowed by the module rules):
@@ -65,7 +65,7 @@ end
 | --- | --- | --- | --- | --- | --- |
 | read boundary | I | A caller without a grant reads the registry limits of a namespace and learns its setup. | boundary check | The route takes no body and no query value, and a request with either gets 400. | Send a body and a query value; expect 400. |
 | read boundary | I | A caller without a grant reads the registry limits of a namespace and learns its setup. | encode or contain | The answer holds numbers and fixed unit names only, no text of the caller. | Request with a hostile namespace path value; expect 404 and no echo of the value. |
-| read boundary | I | A caller without a grant reads the registry limits of a namespace and learns its setup. | limit | The answer has a fixed size of five values. | Read the answer; expect five values. |
+| read boundary | I | A caller without a grant reads the registry limits of a namespace and learns its setup. | limit | The answer has a fixed size of six values. | Read the answer; expect six values. |
 | read boundary | I | A caller without a grant reads the registry limits of a namespace and learns its setup. | authorize at point of use | The route checks registry:read on the namespace object. | Ask with an access token without the grant; expect 403. |
 | read boundary | I | A caller without a grant reads the registry limits of a namespace and learns its setup. | fail closed | An unknown namespace gets 404 and a failed read of the grant gets a refusal. | Ask for an unknown namespace; expect 404. |
 
@@ -74,7 +74,7 @@ end
 **registry limits**
 
 - Invariant: Each limit that the route shows is the value that the check of that limit uses.
-- `read limits`: pre: Caller holds registry:read on the namespace. Post: Answer holds the request limit, the unpacked size, the file count, the size of one file and the expansion limit.
+- `read limits`: pre: Caller holds registry:read on the namespace. Post: Answer holds the request limit, the unpacked size, the file count, the size of one file, the expansion limit and the manifest size.
 
 ## Failure modes
 
