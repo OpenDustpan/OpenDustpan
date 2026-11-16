@@ -106,15 +106,19 @@ While a release version exists, the server SHALL refuse a changed-bytes republis
 
 ### Requirement: Request guards
 
-When a publish request lacks authorization, carries a wrong content type, or exceeds the request size, the server SHALL refuse in the order 403 then 415 then 413 before unpacking.
+When a publish request lacks authorization, carries a wrong content type, or exceeds the request size, the server SHALL refuse in the order 403 then 415 then 413 before unpacking. When a staged provider archive is not a zip, the server SHALL refuse it at publish with registry.bad-archive before it computes the hash.
 
 #### Scenario: Oversize request refused
 - **WHEN** a publish body exceeds 32 MB by content length or by counted chunked bytes.
 - **THEN** the server refuses with 413 without unpacking and deletes staged bytes.
 
 #### Scenario: Wrong content type refused
-- **WHEN** a publish request carries a content type other than application/zip.
+- **WHEN** an upload request carries a content type other than application/octet-stream.
 - **THEN** the server refuses with 415 without unpacking.
+
+#### Scenario: Archive that is not a zip refused
+- **WHEN** a publish request names a staged file as the provider archive and the bytes are not a zip.
+- **THEN** the server refuses with 400 registry.bad-archive before the hash and stores nothing.
 
 #### Scenario: Denied principal refused before unpack
 - **WHEN** a principal without the publish grant sends a publish request.
