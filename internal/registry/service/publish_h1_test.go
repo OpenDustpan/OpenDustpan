@@ -107,7 +107,7 @@ func buildZipSet(t *testing.T, sg pgpfixture.Signer, data []byte) *set {
 
 	return &set{
 		name: "payments", version: "1.0.0", sums: []byte(sums), sig: sg.Detach(t, []byte(sums)),
-		archives: map[string][]byte{file: data}, order: []string{file},
+		archives: map[string][]byte{file: data}, order: []string{file}, manifest: nil,
 	}
 }
 
@@ -124,8 +124,10 @@ func requireNoRelease(t *testing.T, e *env) {
 	}
 }
 
-// providerZip returns the bytes of a provider archive with a binary and a
-// manifest with the given protocols.
+// providerZip returns the bytes of a provider archive with a binary and an
+// entry named terraform-registry-manifest.json with the given protocols. The
+// publish does not read that entry: it is a file of the archive like the
+// binary, and it counts in the H1.
 func providerZip(t *testing.T, protocols ...string) []byte {
 	t.Helper()
 
@@ -133,6 +135,24 @@ func providerZip(t *testing.T, protocols ...string) []byte {
 		fileEntry("terraform-provider-payments", []byte("fake provider binary")),
 		fileEntry("terraform-registry-manifest.json", manifestJSON(protocols...)),
 	})
+}
+
+// binaryZip returns the bytes of a provider archive with the binary only, as
+// the release tools build it.
+func binaryZip(t *testing.T) []byte {
+	t.Helper()
+
+	return makeZip(t, []zipFile{fileEntry("terraform-provider-payments", []byte("fake provider binary"))})
+}
+
+// manifestSet returns the archive set of binaryZip with a manifest file that
+// lists protocols, listed in the checksums file.
+func manifestSet(t *testing.T, sg pgpfixture.Signer, protocols ...string) *set {
+	t.Helper()
+
+	body := manifestJSON(protocols...)
+
+	return withManifestFile(t, sg, buildZipSet(t, sg, binaryZip(t)), body, body)
 }
 
 // TestPublish_storesH1FromUnpackedBytes checks that a publish computes the H1

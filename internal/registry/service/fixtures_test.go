@@ -456,6 +456,28 @@ type set struct {
 	sums, sig     []byte
 	archives      map[string][]byte
 	order         []string
+	// manifest is the body of the manifest file, or nil for a set without one.
+	manifest []byte
+}
+
+// manifestFileName is the name that the release tools give the manifest file
+// of release 1.0.0 of provider payments.
+const manifestFileName = "terraform-provider-payments_1.0.0_manifest.json"
+
+// withManifestFile adds a manifest file with body to s. When listed is true,
+// the checksums file lists it with the digest of listedBody, and sg signs the
+// checksums file again.
+func withManifestFile(t *testing.T, sg pgpfixture.Signer, s *set, body, listedBody []byte) *set {
+	t.Helper()
+
+	s.manifest = body
+
+	if listedBody != nil {
+		s.sums = append(s.sums, []byte(hashOf(listedBody)+"  "+manifestFileName+"\n")...)
+		s.sig = sg.Detach(t, s.sums)
+	}
+
+	return s
 }
 
 func (s *set) sumsName() string { return releasecheck.SumsName(s.name, s.version) }
@@ -468,17 +490,14 @@ func buildSet(t *testing.T, sg pgpfixture.Signer, name, version string, platform
 
 	s := &set{
 		name: name, version: version, sums: nil, sig: nil, archives: map[string][]byte{},
-		order: make([]string, 0, len(platforms)),
+		order: make([]string, 0, len(platforms)), manifest: nil,
 	}
 
 	var sums strings.Builder
 
 	for _, p := range platforms {
 		file := fmt.Sprintf("terraform-provider-%s_%s_%s.zip", name, version, p)
-		data := makeZip(t, []zipFile{
-			fileEntry("terraform-provider-"+name, []byte("zip bytes of "+file)),
-			fileEntry("terraform-registry-manifest.json", manifestJSON("5.0")),
-		})
+		data := makeZip(t, []zipFile{fileEntry("terraform-provider-"+name, []byte("zip bytes of "+file))})
 
 		fmt.Fprintf(&sums, "%s  %s\n", hashOf(data), file)
 
@@ -522,6 +541,12 @@ func (e *env) stage(t *testing.T, ns namespace.Name, s *set) service.PublishRequ
 
 	for _, name := range s.order {
 		files = append(files, service.StagedFile{Role: service.RoleArchive, Name: name, Token: put(s.archives[name])})
+	}
+
+	if s.manifest != nil {
+		files = append(files, service.StagedFile{
+			Role: service.RoleManifest, Name: manifestFileName, Token: put(s.manifest),
+		})
 	}
 
 	return service.PublishRequest{

@@ -117,7 +117,6 @@ func TestPublishRepeat(t *testing.T) {
 	other := buildSet(t, sg, "payments", "1.0.0", "linux_amd64")
 	other.archives[other.order[0]] = makeZip(t, []zipFile{
 		fileEntry("terraform-provider-payments", []byte("other bytes")),
-		fileEntry("terraform-registry-manifest.json", manifestJSON("5.0")),
 	})
 	other.sums = []byte(hashOf(other.archives[other.order[0]]) + "  " + other.order[0] + "\n")
 	other.sig = sg.Detach(t, other.sums)
@@ -437,7 +436,6 @@ func TestPublishOfAnExistingVersionWritesNoContentKey(t *testing.T) {
 				other := buildSet(t, sg, "payments", "1.0.0", "linux_amd64")
 				other.archives[other.order[0]] = makeZip(t, []zipFile{
 					fileEntry("terraform-provider-payments", []byte("other bytes")),
-					fileEntry("terraform-registry-manifest.json", manifestJSON("5.0")),
 				})
 				other.sums = []byte(hashOf(other.archives[other.order[0]]) + "  " + other.order[0] + "\n")
 				other.sig = sg.Detach(t, other.sums)
@@ -448,21 +446,16 @@ func TestPublishOfAnExistingVersionWritesNoContentKey(t *testing.T) {
 		},
 		{
 			name: "other protocols",
-			second: func(t *testing.T, e *env, sg pgpfixture.Signer, _ *set) service.PublishRequest {
+			second: func(t *testing.T, e *env, sg pgpfixture.Signer, first *set) service.PublishRequest {
 				t.Helper()
 
-				// The protocols come from the manifest, so a changed protocol
-				// set is a changed archive. The manifest holds 6.0 and the
-				// stated 6.0 matches it, so the publish reaches the version check.
-				other := buildSet(t, sg, "payments", "1.0.0", "linux_amd64")
-				other.archives[other.order[0]] = makeZip(t, []zipFile{
-					fileEntry("terraform-provider-payments", []byte("protocol six bytes")),
-					fileEntry("terraform-registry-manifest.json", manifestJSON("6.0")),
-				})
-				other.sums = []byte(hashOf(other.archives[other.order[0]]) + "  " + other.order[0] + "\n")
-				other.sig = sg.Detach(t, other.sums)
+				// The same archive bytes with a manifest file that lists 6.0:
+				// the stored protocols change, so the content changes.
+				other := *first
+				other.sums = slices.Clone(first.sums)
+				withManifestFile(t, sg, &other, manifestJSON("6.0"), manifestJSON("6.0"))
 
-				req := e.stage(t, acme, other)
+				req := e.stage(t, acme, &other)
 				req.Protocols = []string{"6.0"}
 
 				return req

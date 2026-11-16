@@ -67,19 +67,31 @@ The body of `PUT /providers/{name}/versions/{version}` is:
   "files": [
     {"role": "sums", "name": "terraform-provider-payments_1.0.0_SHA256SUMS", "upload": "<token>"},
     {"role": "signature", "name": "terraform-provider-payments_1.0.0_SHA256SUMS.sig", "upload": "<token>"},
-    {"role": "archive", "name": "terraform-provider-payments_1.0.0_linux_amd64.zip", "upload": "<token>"}
+    {"role": "archive", "name": "terraform-provider-payments_1.0.0_linux_amd64.zip", "upload": "<token>"},
+    {"role": "manifest", "name": "terraform-provider-payments_1.0.0_manifest.json", "upload": "<token>"}
   ]
 }
 ```
 
 `protocols` lists the plugin protocol versions of the provider, from the lowest
 to the highest, with no repeat. It has one to four entries in the form `5.0`.
-`files` has one `sums`, one `signature` and one to 64 `archive` entries. A token
-names a file that was staged in the same namespace. Each token is used once.
+`files` has one `sums`, one `signature`, one to 64 `archive` entries and at most
+one `manifest` entry. A token names a file that was staged in the same
+namespace. Each token is used once.
 
-Each archive is a zip file that holds `terraform-registry-manifest.json`. The
-server unpacks each archive in memory, one archive at a time, and refuses the
-publish:
+The `manifest` file is the `terraform-registry-manifest.json` file that the
+release tools publish next to the archives. The server refuses the publish with
+400 `registry.invalid` when the manifest file is larger than its limit (see
+[Limits](#limits)), is not one JSON object, has a `version` other than `1`,
+lists no protocol version or a version other than `5.0` or `6.0`, lists other
+versions than `protocols`, or has another SHA-256 than its line in the
+checksums file. The checksums file may list the manifest file or not. Without a
+manifest file, `protocols` must list at least one version, or the server
+answers 400 `registry.invalid`.
+
+Each archive is a zip file. The server does not read a manifest inside an
+archive: an entry with that name is a file like the others. The server unpacks
+each archive in memory, one archive at a time, and refuses the publish:
 
 - with 400 `registry.bad-archive` when the archive is not a zip file. The
   server checks this before it uses the hash of the archive and before the
@@ -93,12 +105,11 @@ publish:
 - with 400 `registry.bad-archive` when an entry uses a compression method
   other than store or deflate.
 - with 400 `registry.bad-archive` when the archive passes an unpack limit (see
-  [Limits](#limits)), or when the manifest is not one JSON value.
-- with 400 `registry.invalid` when the archive holds no manifest, when the
-  manifest lists no protocol version or a version other than `5.0` or `6.0`, or
-  when the manifest lists other versions than `protocols`.
+  [Limits](#limits)).
 
-The server stores the protocol versions of the manifest. For each archive it
+With a manifest file, the server stores the protocol versions of the manifest
+file. Without one, it stores `protocols`. It does not store the manifest file.
+For each archive it
 stores the h1 hash of the unpacked files, the hash that `tofu providers lock`
 writes. The h1 hash counts as content: a publish of a version that exists
 with another h1 hash answers 409 `registry.version-exists`.
@@ -258,7 +269,7 @@ provider registry protocol.
 | One file in a provider archive when unpacked | 16 MiB |
 | Files in one provider archive | 1,024 |
 | Unpacked size of a provider archive, as a multiple of its compressed size | 100 |
-| `terraform-registry-manifest.json` | 1 MiB |
+| One manifest file | 64 KiB |
 | One module archive | 64 MiB |
 | One module archive when unpacked | 1 GiB |
 | Entries in one module archive | 20,000 |

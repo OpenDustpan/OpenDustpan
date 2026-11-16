@@ -83,7 +83,7 @@ func (s *Service) PublishModule(ctx context.Context, c *Caller, req ModulePublis
 	f := measured{
 		Role: RoleArchive, Name: addr.Name, Token: req.Upload,
 		key: key, sum: "", size: 0, md5: "", bytes: nil,
-		facts: unpackFacts{h1: "", protocols: nil}, unpackErr: nil,
+		facts: unpackFacts{h1: ""}, unpackErr: nil,
 	}
 
 	if measureErr := s.measureModule(ctx, view, &f); measureErr != nil {

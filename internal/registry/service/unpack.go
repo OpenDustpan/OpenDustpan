@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -32,27 +31,19 @@ const (
 	// maxUnpackRatio is the largest expansion of compressed size that the
 	// unpack allows, counted on real bytes.
 	maxUnpackRatio = 100
-	// maxManifestBytes is the most bytes of terraform-registry-manifest.json
-	// that the unpack reads.
-	maxManifestBytes = 1 << 20
-	// manifestName is the entry of a provider archive that holds the plugin
-	// protocol versions.
-	manifestName = "terraform-registry-manifest.json"
 )
 
 // unpackFacts holds what the bounded unpack of a provider archive found: the
-// H1 digest of the unpacked files and the manifest protocols.
+// H1 digest of the unpacked files.
 type unpackFacts struct {
-	h1        string
-	protocols []string
+	h1 string
 }
 
-// unpacked holds the checked entries of an archive: the sorted file names,
-// the SHA-256 of the real bytes of each file and the manifest bytes.
+// unpacked holds the checked entries of an archive: the sorted file names and
+// the SHA-256 of the real bytes of each file.
 type unpacked struct {
-	names         []string
-	hashes        map[string][]byte
-	manifestBytes []byte
+	names  []string
+	hashes map[string][]byte
 }
 
 // requireZip returns registry.ErrBadArchive when data is not a zip file that
@@ -67,11 +58,11 @@ func requireZip(name string, data []byte) error {
 }
 
 // unpackProviderArchive opens data as a zip archive with the unpack bounds
-// and returns the H1 digest over the sorted unpacked file entries and the
-// protocols of the manifest. Every entry comes from outside the process. It
-// returns registry.ErrBadArchive for an unsafe entry or a limit past the
-// bound, and registry.ErrInvalid for a missing, empty or unknown protocol
-// list.
+// and returns the H1 digest over the sorted unpacked file entries. Every entry
+// comes from outside the process. It reads no manifest: an entry with the name
+// of the manifest is a file like the others, and only the manifest file of the
+// request gives the protocols. It returns registry.ErrBadArchive for an unsafe
+// entry or a limit past the bound.
 func unpackProviderArchive(data []byte) (unpackFacts, error) {
 	var none unpackFacts
 
@@ -88,21 +79,15 @@ func unpackProviderArchive(data []byte) (unpackFacts, error) {
 		return none, err
 	}
 
-	protocols, err := manifestProtocols(entries.manifestBytes)
-	if err != nil {
-		return none, err
-	}
-
-	return unpackFacts{h1: hashEntries(entries.names, entries.hashes), protocols: protocols}, nil
+	return unpackFacts{h1: hashEntries(entries.names, entries.hashes)}, nil
 }
 
 // collectEntries checks every entry of the archive with the unpack bounds
-// and returns the sorted file names, their hashes and the manifest bytes.
+// and returns the sorted file names and their hashes.
 func collectEntries(r *zip.Reader) (unpacked, error) {
 	collector := collector{
 		names:         nil,
 		hashes:        map[string][]byte{},
-		manifestBytes: nil,
 		seen:          map[string]bool{},
 		totalReal:     0,
 		totalCompress: 0,
@@ -114,15 +99,7 @@ func collectEntries(r *zip.Reader) (unpacked, error) {
 		}
 	}
 
-	if collector.manifestBytes == nil {
-		return unpacked{}, fmt.Errorf(
-			"%w: the archive holds no %s: state the protocols of the manifest",
-			registry.ErrInvalid,
-			manifestName,
-		)
-	}
-
-	return unpacked{names: collector.names, hashes: collector.hashes, manifestBytes: collector.manifestBytes}, nil
+	return unpacked{names: collector.names, hashes: collector.hashes}, nil
 }
 
 // collector gathers the checked entries of one archive with the running
@@ -130,7 +107,6 @@ func collectEntries(r *zip.Reader) (unpacked, error) {
 type collector struct {
 	names         []string
 	hashes        map[string][]byte
-	manifestBytes []byte
 	seen          map[string]bool
 	totalReal     int64
 	totalCompress int64
@@ -147,7 +123,7 @@ func (c *collector) add(f *zip.File) error {
 		return nil
 	}
 
-	read, err := readFileEntry(f, entry.name)
+	read, err := readFileEntry(f)
 	if err != nil {
 		return err
 	}
@@ -160,11 +136,11 @@ func (c *collector) add(f *zip.File) error {
 		return fmt.Errorf("%w: more than %d files", registry.ErrBadArchive, maxUnpackedFiles)
 	}
 
-	return c.observe(entry, read)
+	return c.observe(read)
 }
 
-// observe counts one entry toward the total bounds and keeps the manifest.
-func (c *collector) observe(entry checkedEntry, read readEntry) error {
+// observe counts one entry toward the total bounds.
+func (c *collector) observe(read readEntry) error {
 	c.totalReal += read.size
 	c.totalCompress += read.compressed
 
@@ -182,25 +158,13 @@ func (c *collector) observe(entry checkedEntry, read readEntry) error {
 		)
 	}
 
-	if entry.isManifest {
-		// Defense in depth: checkEntry refuses a second entry with the name of
-		// the manifest. This check stays so that a change of the name check
-		// cannot replace the manifest, and it does not rely on checkEntry.
-		if c.manifestBytes != nil {
-			return fmt.Errorf("%w: more than one %s", registry.ErrBadArchive, manifestName)
-		}
-
-		c.manifestBytes = read.held
-	}
-
 	return nil
 }
 
 // checkedEntry is one zip entry after the name and type checks.
 type checkedEntry struct {
-	name       string
-	folded     string
-	isManifest bool
+	name   string
+	folded string
 }
 
 // checkEntry cleans the name of a zip entry and reports whether the unpack
@@ -250,7 +214,7 @@ func checkEntry(f *zip.File, seen map[string]bool) (checkedEntry, bool, error) {
 		return none, false, fmt.Errorf("%w: duplicate entry %q", registry.ErrBadArchive, f.Name)
 	}
 
-	return checkedEntry{name: name, folded: folded, isManifest: name == manifestName}, false, nil
+	return checkedEntry{name: name, folded: folded}, false, nil
 }
 
 // allowedEntryName reports whether every character of name is an ASCII letter,
@@ -270,19 +234,17 @@ func allowedEntryName(name string) bool {
 }
 
 // readEntry holds the checked bytes of one file entry: the SHA-256 and the
-// size of the real bytes, the compressed size, and the bytes when the entry
-// is the manifest.
+// size of the real bytes, and the compressed size.
 type readEntry struct {
 	sum        []byte
 	size       int64
 	compressed int64
-	held       []byte
 }
 
 // readFileEntry reads the real bytes of one file entry with the per-file
 // bound. It counts real bytes, never the header sizes, so a lying header
 // cannot pass a limit.
-func readFileEntry(f *zip.File, name string) (readEntry, error) {
+func readFileEntry(f *zip.File) (readEntry, error) {
 	var none readEntry
 
 	if f.CompressedSize64 > math.MaxInt64 {
@@ -317,29 +279,7 @@ func readFileEntry(f *zip.File, name string) (readEntry, error) {
 		return none, fmt.Errorf("%w: entry %q cannot be read", registry.ErrBadArchive, f.Name)
 	}
 
-	out := readEntry{sum: hash.Sum(nil), size: size, compressed: compressed, held: nil}
-
-	if name != manifestName {
-		return out, nil
-	}
-
-	if size > maxManifestBytes {
-		return none, fmt.Errorf(
-			"%w: entry %q is over %d bytes",
-			registry.ErrBadArchive,
-			f.Name,
-			maxManifestBytes,
-		)
-	}
-
-	held, err := readAllEntry(f, maxManifestBytes+1)
-	if err != nil {
-		return none, fmt.Errorf("%w: entry %q cannot be read", registry.ErrBadArchive, f.Name)
-	}
-
-	out.held = held
-
-	return out, nil
+	return readEntry{sum: hash.Sum(nil), size: size, compressed: compressed}, nil
 }
 
 // byteCounter is a writer that counts the bytes written to it.
@@ -398,68 +338,6 @@ func deflateConsumed(raw io.Reader) (int64, error) {
 	}
 
 	return counted.n - int64(buffered.Buffered()), nil
-}
-
-// readAllEntry returns the bytes of one entry, bounded.
-func readAllEntry(f *zip.File, limit int64) ([]byte, error) {
-	r, err := f.Open()
-	if err != nil {
-		return nil, fmt.Errorf("open entry: %w", err)
-	}
-
-	held, err := io.ReadAll(io.LimitReader(r, limit))
-	closeErr := r.Close()
-
-	if err == nil {
-		err = closeErr
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	return held, nil
-}
-
-// manifestProtocols decodes the manifest bytes and returns its protocol
-// versions. The manifest names its list protocol_versions, so the decode
-// reads the document without a struct. Malformed JSON is a bad archive; a
-// missing, empty or unknown protocol list is invalid.
-func manifestProtocols(data []byte) ([]string, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-
-	var top map[string]json.RawMessage
-	if err := dec.Decode(&top); err != nil {
-		return nil, fmt.Errorf("%w: the manifest is not JSON", registry.ErrBadArchive)
-	}
-
-	if dec.More() {
-		return nil, fmt.Errorf("%w: the manifest holds more than one value", registry.ErrBadArchive)
-	}
-
-	var meta map[string]json.RawMessage
-	if err := json.Unmarshal(top["metadata"], &meta); err != nil {
-		return nil, fmt.Errorf("%w: the manifest has no metadata", registry.ErrInvalid)
-	}
-
-	var protocols []string
-	if err := json.Unmarshal(meta["protocol_versions"], &protocols); err != nil {
-		return nil, fmt.Errorf("%w: the manifest lists no protocol", registry.ErrInvalid)
-	}
-
-	if len(protocols) == 0 {
-		return nil, fmt.Errorf("%w: the manifest lists no protocol", registry.ErrInvalid)
-	}
-
-	known := []string{"5.0", "6.0"}
-
-	for _, p := range protocols {
-		if !slices.Contains(known, p) {
-			return nil, fmt.Errorf("%w: protocol %q is not known", registry.ErrInvalid, p)
-		}
-	}
-
-	return protocols, nil
 }
 
 // hashEntries returns the H1 digest over the sorted unpacked file entries:

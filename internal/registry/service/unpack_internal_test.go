@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 
@@ -20,9 +19,6 @@ type rawEntry struct {
 	data   []byte
 	method uint16
 }
-
-// manifestBody is a valid terraform-registry-manifest.json with protocol 5.0.
-const manifestBody = `{"version":1,"metadata":{"protocol_versions":["5.0"]}}`
 
 // stored returns an entry that the archive stores without compression, so
 // its compressed size is its real size and no ratio bound applies.
@@ -61,12 +57,6 @@ func zipOf(t *testing.T, entries ...rawEntry) []byte {
 	return buf.Bytes()
 }
 
-// withManifest returns the entries and a valid manifest after them, so that
-// the archive passes when the guard under test is removed.
-func withManifest(entries ...rawEntry) []rawEntry {
-	return append(entries, stored(manifestName, []byte(manifestBody)))
-}
-
 // collisionName returns the name of the one entry of archive B: the entry
 // holds the bytes of file "a" of archive A and its name forges the H1 line of
 // file "b" of archive A.
@@ -86,10 +76,6 @@ func TestUnpackProviderArchive_hostile(t *testing.T) {
 
 	payloadX, payloadY := []byte("payload-x"), []byte("payload-y")
 
-	manifest := []byte(manifestBody)
-	overManifest := append(slices.Clone(manifest), bytes.Repeat([]byte{' '}, maxManifestBytes+1-len(manifest))...)
-	twoValues := []byte(manifestBody + ` {"metadata":{"protocol_versions":["6.0"]}}`)
-
 	// Each case is either raw bytes or the entries of a zip archive.
 	cases := []struct {
 		name    string
@@ -102,45 +88,35 @@ func TestUnpackProviderArchive_hostile(t *testing.T) {
 			want: "is not a zip file",
 		},
 		{
-			name: "empty entry name", raw: nil, entries: withManifest(stored("", payloadX)),
+			name: "empty entry name", raw: nil, entries: []rawEntry{stored("", payloadX)},
 			want: "empty entry name",
 		},
 		{
-			name: "backslash prefix", raw: nil, entries: withManifest(stored(`\evil`, payloadX)),
+			name: "backslash prefix", raw: nil, entries: []rawEntry{stored(`\evil`, payloadX)},
 			want: "is absolute",
 		},
 		{
-			name: "backslash inside the name", raw: nil, entries: withManifest(stored(`dir\..\evil`, payloadX)),
+			name: "backslash inside the name", raw: nil, entries: []rawEntry{stored(`dir\..\evil`, payloadX)},
 			want: "not allowed",
 		},
 		{
 			name: "newline that forges the H1 line of another file", raw: nil,
-			entries: withManifest(stored(collisionName(payloadY), payloadX)),
+			entries: []rawEntry{stored(collisionName(payloadY), payloadX)},
 			want:    "not allowed",
 		},
 		{
-			name: "control character", raw: nil, entries: withManifest(stored("a\x00b", payloadX)),
+			name: "control character", raw: nil, entries: []rawEntry{stored("a\x00b", payloadX)},
 			want: "not allowed",
 		},
 		{
-			name: "duplicate manifest", raw: nil,
-			entries: []rawEntry{stored(manifestName, manifest), stored(manifestName, manifest)},
+			name: "duplicate entry", raw: nil,
+			entries: []rawEntry{stored("bin", payloadX), stored("BIN", payloadY)},
 			want:    "duplicate entry",
 		},
 		{
 			name: "file over the per-file bound", raw: nil,
-			entries: withManifest(stored("big", make([]byte, maxUnpackedFileBytes+1))),
+			entries: []rawEntry{stored("big", make([]byte, maxUnpackedFileBytes+1))},
 			want:    fmt.Sprintf("is over %d bytes", maxUnpackedFileBytes),
-		},
-		{
-			name: "manifest over the manifest bound", raw: nil,
-			entries: []rawEntry{stored(manifestName, overManifest)},
-			want:    fmt.Sprintf("is over %d bytes", maxManifestBytes),
-		},
-		{
-			name: "manifest with more than one JSON value", raw: nil,
-			entries: []rawEntry{stored(manifestName, twoValues)},
-			want:    "more than one value",
 		},
 	}
 
@@ -166,17 +142,41 @@ func TestUnpackProviderArchive_hostile(t *testing.T) {
 }
 
 // TestUnpackProviderArchive_atTheBounds checks that a file of exactly the
-// per-file bound and a manifest of exactly the manifest bound pass, so the
-// hostile cases above test the bound and not another fault of the archive.
+// per-file bound passes, so the hostile cases above test the bound and not
+// another fault of the archive.
 func TestUnpackProviderArchive_atTheBounds(t *testing.T) {
 	t.Parallel()
 
-	manifest := append([]byte(manifestBody), bytes.Repeat([]byte{' '}, maxManifestBytes-len(manifestBody))...)
-
-	data := zipOf(t, stored("big", make([]byte, maxUnpackedFileBytes)), stored(manifestName, manifest))
+	data := zipOf(t, stored("big", make([]byte, maxUnpackedFileBytes)))
 
 	if _, err := unpackProviderArchive(data); err != nil {
 		t.Fatalf("unpack at the bounds: %v", err)
+	}
+}
+
+// TestUnpackProviderArchive_readsNoManifest checks that an entry with the
+// name of the manifest is a file like the others: the unpack does not parse
+// it, so a body that is not JSON passes, and its bytes count in the H1. It
+// fails when the unpack reads a manifest from the zip again.
+func TestUnpackProviderArchive_readsNoManifest(t *testing.T) {
+	t.Parallel()
+
+	binary := stored("terraform-provider-payments", []byte("binary"))
+
+	without, err := unpackProviderArchive(zipOf(t, binary))
+	if err != nil {
+		t.Fatalf("unpack an archive with the binary only: %v", err)
+	}
+
+	with, err := unpackProviderArchive(zipOf(t, binary,
+		stored("terraform-registry-manifest.json", []byte("not JSON")),
+	))
+	if err != nil {
+		t.Fatalf("unpack an archive with a manifest entry that is not JSON: %v", err)
+	}
+
+	if with.h1 == without.h1 {
+		t.Fatalf("the manifest entry does not count in the H1: both are %s", with.h1)
 	}
 }
 
@@ -189,57 +189,26 @@ func TestHashEntries_separatorCollision(t *testing.T) {
 
 	payloadX, payloadY := []byte("payload-x"), []byte("payload-y")
 	sumX, sumY := sha256.Sum256(payloadX), sha256.Sum256(payloadY)
-	sumManifest := sha256.Sum256([]byte(manifestBody))
 
-	h1A := hashEntries(
-		[]string{"a", "b", manifestName},
-		map[string][]byte{"a": sumX[:], "b": sumY[:], manifestName: sumManifest[:]},
-	)
+	h1A := hashEntries([]string{"a", "b"}, map[string][]byte{"a": sumX[:], "b": sumY[:]})
 
 	forged := collisionName(payloadY)
-	h1B := hashEntries(
-		[]string{forged, manifestName},
-		map[string][]byte{forged: sumX[:], manifestName: sumManifest[:]},
-	)
+	h1B := hashEntries([]string{forged}, map[string][]byte{forged: sumX[:]})
 
 	if h1A != h1B {
 		t.Fatalf("the test archives do not collide: %s and %s", h1A, h1B)
 	}
 
-	archiveA := zipOf(t, stored("a", payloadX), stored("b", payloadY), stored(manifestName, []byte(manifestBody)))
+	archiveA := zipOf(t, stored("a", payloadX), stored("b", payloadY))
 
 	facts, err := unpackProviderArchive(archiveA)
 	if err != nil || facts.h1 != h1A {
 		t.Fatalf("unpack archive A: got %q, %v, want %q", facts.h1, err, h1A)
 	}
 
-	archiveB := zipOf(t, stored(forged, payloadX), stored(manifestName, []byte(manifestBody)))
+	archiveB := zipOf(t, stored(forged, payloadX))
 
 	if _, err := unpackProviderArchive(archiveB); !errors.Is(err, registry.ErrBadArchive) {
 		t.Fatalf("unpack archive B: got %v, want %v", err, registry.ErrBadArchive)
-	}
-}
-
-// TestCollectorObserve_secondManifest sends a second manifest straight to
-// observe, as if the duplicate check of checkEntry had failed. It fails when
-// the manifest check of observe is removed.
-func TestCollectorObserve_secondManifest(t *testing.T) {
-	t.Parallel()
-
-	c := collector{
-		names: nil, hashes: map[string][]byte{}, manifestBytes: nil,
-		seen: map[string]bool{}, totalReal: 0, totalCompress: 0,
-	}
-
-	entry := checkedEntry{name: manifestName, folded: manifestName, isManifest: true}
-	read := readEntry{sum: nil, size: 1, compressed: 1, held: []byte(manifestBody)}
-
-	if err := c.observe(entry, read); err != nil {
-		t.Fatalf("observe the first manifest: %v", err)
-	}
-
-	err := c.observe(entry, read)
-	if !errors.Is(err, registry.ErrBadArchive) || !strings.Contains(err.Error(), "more than one") {
-		t.Fatalf("observe a second manifest: got %v, want %v", err, registry.ErrBadArchive)
 	}
 }

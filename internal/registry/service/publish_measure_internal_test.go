@@ -18,7 +18,7 @@ func archiveFile(name string) measured {
 	return measured{
 		StagedFile: staged,
 		key:        "", sum: "", size: 0, md5: "", bytes: nil,
-		facts: unpackFacts{h1: "", protocols: nil}, unpackErr: nil,
+		facts: unpackFacts{h1: ""}, unpackErr: nil,
 	}
 }
 
@@ -33,10 +33,7 @@ func TestMeasuredRead_keepsNoArchiveBytes(t *testing.T) {
 	files := make([]measured, 0, 3)
 
 	for i := range 3 {
-		data := zipOf(t,
-			stored("terraform-provider-payments", []byte("binary "+strconv.Itoa(i))),
-			stored(manifestName, []byte(manifestBody)),
-		)
+		data := zipOf(t, stored("terraform-provider-payments", []byte("binary "+strconv.Itoa(i))))
 
 		f := archiveFile("archive-" + strconv.Itoa(i) + ".zip")
 		if err := f.read(bytes.NewReader(data), int64(len(data))); err != nil {
@@ -87,10 +84,7 @@ func TestMeasuredRead_keepsSumsBytes(t *testing.T) {
 func TestMeasuredRead_bound(t *testing.T) {
 	t.Parallel()
 
-	data := zipOf(t,
-		stored("terraform-provider-payments", make([]byte, 4096)),
-		stored(manifestName, []byte(manifestBody)),
-	)
+	data := zipOf(t, stored("terraform-provider-payments", make([]byte, 4096)))
 
 	f := archiveFile("big.zip")
 
@@ -101,6 +95,43 @@ func TestMeasuredRead_bound(t *testing.T) {
 
 	if f.sum != "" || f.size != 0 || f.facts.h1 != "" || f.bytes != nil {
 		t.Fatalf("read past the limit kept a result: sum %q, size %d, H1 %q", f.sum, f.size, f.facts.h1)
+	}
+}
+
+// TestMeasuredRead_manifestBound checks that read stops a manifest file past
+// the limit of its role with registry.ErrInvalid, and keeps no bytes and no
+// hash. It fails when the bound of the read is removed.
+func TestMeasuredRead_manifestBound(t *testing.T) {
+	t.Parallel()
+
+	body := bytes.Repeat([]byte{' '}, 64)
+
+	f := archiveFile("manifest.json")
+	f.Role = RoleManifest
+
+	err := f.read(bytes.NewReader(body), int64(len(body))-1)
+	if !errors.Is(err, registry.ErrInvalid) {
+		t.Fatalf("read a manifest past the limit: got %v, want %v", err, registry.ErrInvalid)
+	}
+
+	if f.bytes != nil || f.sum != "" || f.size != 0 {
+		t.Fatalf("read a manifest past the limit kept %d bytes, the hash %q and the size %d",
+			len(f.bytes), f.sum, f.size)
+	}
+}
+
+// TestLimitOf_manifest checks that the limit of the manifest role is the
+// manifest bound, not the archive bound. It fails when the manifest role
+// gets no limit of its own.
+func TestLimitOf_manifest(t *testing.T) {
+	t.Parallel()
+
+	var s Service
+
+	s.maxFile = 1 << 30
+
+	if got := s.limitOf(RoleManifest); got != maxManifestBytes {
+		t.Fatalf("limit of the manifest role: got %d, want %d", got, maxManifestBytes)
 	}
 }
 
