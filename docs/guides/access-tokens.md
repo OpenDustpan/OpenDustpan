@@ -19,7 +19,7 @@ access token cannot make or rotate a token, or change the token policy.
 
 | Kind | Who holds it | Made by | Routes |
 | --- | --- | --- | --- |
-| Personal | A person, for the CLI or a script | The person, after a fresh sign-in | `/api/server/caller/tokens` |
+| Personal | A person, for the CLI or a script | The person, after a fresh sign-in | `/api/dustpan/v1/me/tokens` |
 | Service | A service principal, for a machine | A caller with `principal:manage-tokens` on the service principal | `/api/server/service-tokens` and `/api/server/principals/{principal}/tokens` |
 
 A workload does not get a stored token from these routes. A workload gets a
@@ -52,7 +52,7 @@ Later reads show no secret.
 
 ## List and read tokens
 
-A person lists its own tokens with `GET /api/server/caller/tokens`. The list
+A person lists its own tokens with `GET /api/dustpan/v1/me/tokens`. The list
 ignores a `principal` value. An administrator with `server:read-tokens` lists
 every token with `GET /api/server/tokens`. A service principal's tokens are listed
 with `GET /api/server/principals/{principal}/tokens`.
@@ -151,7 +151,7 @@ for the history.
 
 | Route | Action |
 | --- | --- |
-| `DELETE /api/server/caller/tokens/{id}` | The person who owns the token, with `token:manage-own` |
+| `DELETE /api/dustpan/v1/me/tokens/{id}` | The person who owns the token, with `token:manage-own` |
 | `DELETE /api/server/tokens/{id}` | `server:manage-tokens` for a personal token, or `principal:manage-tokens` on the principal for a service token |
 | `DELETE /api/server/principals/{principal}/tokens/{id}` | `principal:manage-tokens` on the principal |
 
@@ -166,7 +166,7 @@ A rotation makes a new token, and it sets an end time for the old one.
 Rotate the token in the console. A change that needs a fresh sign-in is made in the console. The console sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF` header. A stored access token gets `403` with `mfa.fresh-step-required`. Rotation of a service token or a principal token has the same rule.
 
 
-The routes are `POST /api/server/caller/tokens/{id}/rotate` for a personal token,
+The routes are `POST /api/dustpan/v1/me/tokens/{id}/rotate` for a personal token,
 `POST /api/server/service-tokens/{id}/rotate` for a service token, and
 `POST /api/server/principals/{principal}/tokens/{id}/rotate` for a token of one
 principal. Each answers `201`.
