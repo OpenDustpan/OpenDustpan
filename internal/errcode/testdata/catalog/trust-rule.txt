@@ -1,5 +1,7 @@
 trust-rule.already-exists
 trust-rule.ambiguous
+trust-rule.bundle-invalid
+trust-rule.bundle-not-found
 trust-rule.invalid
 trust-rule.issuer-refused
 trust-rule.limit

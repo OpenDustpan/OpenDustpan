@@ -12,7 +12,7 @@ The user path this change must make work:
 
 1. **API.** Administrator saves the namespace trust bundle with the new route POST /api/dustpan/v1/namespaces/{namespace}/trust-bundles
 2. **API.** Administrator reads the bundle with the new route GET /api/dustpan/v1/namespaces/{namespace}/trust-bundles/{bundle}, rotates it with the new PATCH route and If-Match, and reads versions and overlapEndsAt
-3. **API.** Administrator creates a trust rule with the existing POST /api/dustpan/v1/namespaces/{namespace}/trust-rules that names bundle, spiffeIDPattern and the principal
+3. **API.** Administrator creates a trust rule with the existing POST /api/dustpan/v1/namespaces/{namespace}/trust-rules that names bundle, spiffePattern and the principal
 4. **API.** Administrator updates a rule with the new PATCH route and If-Match, then deletes a rule the team no longer needs
 5. **API.** Administrator reads the audit entries for each change
 6. **Docs page.** Administrator follows the same steps on the docs page
@@ -34,7 +34,7 @@ Evidence for the claims above:
 ## What Changes
 
 - Versioned namespace trust bundle in pkg/trustrule with save checks, bounds, rotation and retired keeps
-- Rule fields spiffeIDPattern and bundle on the existing trust rule in pkg/trustrule
+- Rule fields spiffePattern and bundle on the existing trust rule in pkg/trustrule
 - Bundle save, rotate, rule update with If-Match and the fresh-authentication check in internal/trustrulesvc
 - New routes GET and POST /api/dustpan/v1/namespaces/{namespace}/trust-bundles and GET and PATCH .../trust-bundles/{bundle} in internal/api/trustrules
 - New route PATCH /api/dustpan/v1/namespaces/{namespace}/trust-rules/{rule_id}

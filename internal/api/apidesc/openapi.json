@@ -1436,6 +1436,9 @@
           "audience": {
             "type": "string"
           },
+          "bundle": {
+            "type": "string"
+          },
           "conditions": {
             "items": {
               "$ref": "#/components/schemas/TrustRuleCondition"
@@ -1459,6 +1462,9 @@
             "type": "string"
           },
           "principal": {
+            "type": "string"
+          },
+          "spiffePattern": {
             "type": "string"
           },
           "staticKeys": {
@@ -2302,6 +2308,8 @@
           "trigger.saver-denied",
           "trust-rule.already-exists",
           "trust-rule.ambiguous",
+          "trust-rule.bundle-invalid",
+          "trust-rule.bundle-not-found",
           "trust-rule.invalid",
           "trust-rule.issuer-refused",
           "trust-rule.limit",
@@ -6670,6 +6678,21 @@
         ],
         "type": "object"
       },
+      "RotateTrustBundleRequest": {
+        "properties": {
+          "overlapSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "pem": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pem"
+        ],
+        "type": "object"
+      },
       "Runner": {
         "properties": {
           "draining": {
@@ -6956,6 +6979,17 @@
           "frequency",
           "kind",
           "source"
+        ],
+        "type": "object"
+      },
+      "SaveTrustBundleRequest": {
+        "properties": {
+          "pem": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pem"
         ],
         "type": "object"
       },
@@ -8717,9 +8751,101 @@
         ],
         "type": "object"
       },
+      "TrustBundle": {
+        "properties": {
+          "active": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "overlapEndsAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/TrustBundleVersion"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "active",
+          "createdAt",
+          "id",
+          "namespace",
+          "overlapEndsAt",
+          "revision",
+          "versions"
+        ],
+        "type": "object"
+      },
+      "TrustBundleList": {
+        "properties": {
+          "bundles": {
+            "items": {
+              "$ref": "#/components/schemas/TrustBundle"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "bundles"
+        ],
+        "type": "object"
+      },
+      "TrustBundleVersion": {
+        "properties": {
+          "caCount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "number": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "overlapEndsAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "caCount",
+          "createdAt",
+          "number",
+          "overlapEndsAt"
+        ],
+        "type": "object"
+      },
       "TrustRule": {
         "properties": {
           "audience": {
+            "type": "string"
+          },
+          "bundle": {
             "type": "string"
           },
           "conditions": {
@@ -8760,12 +8886,20 @@
           "principal": {
             "type": "string"
           },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "spiffePattern": {
+            "type": "string"
+          },
           "staticKeys": {
             "type": "string"
           }
         },
         "required": [
           "audience",
+          "bundle",
           "conditions",
           "createdAt",
           "createdBy",
@@ -8775,6 +8909,8 @@
           "name",
           "namespace",
           "principal",
+          "revision",
+          "spiffePattern",
           "staticKeys"
         ],
         "type": "object"
@@ -9733,6 +9869,48 @@
       "UpdateSettingsRequest": {
         "additionalProperties": {
           "description": "A string, a boolean or a whole number, as the kind of the setting says. It is null for a secret, and for a database value that does not exist."
+        },
+        "type": "object"
+      },
+      "UpdateTrustRuleRequest": {
+        "properties": {
+          "audience": {
+            "type": "string"
+          },
+          "bundle": {
+            "type": "string"
+          },
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/TrustRuleCondition"
+            },
+            "type": "array"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "keySource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrustRuleKeySource"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "spiffePattern": {
+            "type": "string"
+          },
+          "staticKeys": {
+            "type": "string"
+          }
         },
         "type": "object"
       },
@@ -18747,6 +18925,297 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/trust-bundles": {
+      "get": {
+        "operationId": "listTrustBundles",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustBundleList"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:read-access",
+            "object": "namespace"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "saveTrustBundle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveTrustBundleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustBundle"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:manage-trust-rules",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/trust-bundles/{bundle}": {
+      "get": {
+        "operationId": "getTrustBundle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "bundle",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustBundle"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:read-access",
+            "object": "namespace"
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "rotateTrustBundle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "bundle",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateTrustBundleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustBundle"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:manage-trust-rules",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/trust-bundles/{bundle}/versions/{version}": {
+      "delete": {
+        "operationId": "deleteTrustBundleVersion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "bundle",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:manage-trust-rules",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/trust-rules": {
       "get": {
         "operationId": "listTrustRules",
@@ -18819,7 +19288,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -19009,6 +19478,72 @@
           },
           {
             "action": "namespace:read-access",
+            "object": "namespace"
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateTrustRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTrustRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustRule"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:manage-trust-rules",
             "object": "namespace"
           }
         ]

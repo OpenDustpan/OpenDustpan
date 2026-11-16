@@ -34,7 +34,8 @@ func (s *exchangeRuleStore) Create(context.Context, trustrule.Rule, namespace.Fe
 func (s *exchangeRuleStore) Get(context.Context, namespace.Name, trustrule.ID) (trustrule.Rule, error) {
 	return trustrule.Rule{
 		CreatedAt: time.Time{}, ID: "", Namespace: "", Name: "", Issuer: "", Audience: "", Keys: "",
-		StaticKeys: "", PrincipalID: "", CreatedBy: "", Conditions: nil,
+		StaticKeys: "", PrincipalID: "", CreatedBy: "", Conditions: nil, Revision: 0, SpiffeIDPattern: "",
+		Bundle: "",
 	}, trustrule.ErrNotFound
 }
 
@@ -46,6 +47,12 @@ func (s *exchangeRuleStore) Delete(context.Context, namespace.Name, trustrule.ID
 	audit.Entry,
 ) error {
 	return trustrule.ErrNotFound
+}
+
+func (s *exchangeRuleStore) Update(
+	_ context.Context, _ namespace.Name, _ trustrule.Rule, _ namespace.Fence, _ audit.Entry,
+) (trustrule.Rule, error) {
+	return trustrule.Rule{}, trustrule.ErrNotFound
 }
 
 func (s *exchangeRuleStore) RecordExchange(context.Context, trustrule.Exchange, namespace.Fence,
@@ -188,6 +195,8 @@ func exchangeFixture(t *testing.T, ruleIssuer string, k exchangeKey) exchangeEnv
 		PrincipalID: "prn-worker",
 		CreatedBy:   "ada",
 		Conditions:  []trustrule.Condition{{Claim: "sub", Values: []string{"repo:acme/infra:ref:refs/heads/main"}}},
+
+		Revision: 0, SpiffeIDPattern: "", Bundle: "",
 	}
 	rules := &exchangeRuleStore{rules: []trustrule.Rule{rule}}
 

@@ -232,7 +232,7 @@ func TestMatchesHoldsItsOwnGuards(t *testing.T) {
 			CreatedAt: testTime(), ID: trustrule.NewID(), Namespace: "acme", Name: "deploy",
 			Issuer: "https://token.actions.example.com", Audience: "https://dustpan.example.com",
 			Keys: trustrule.KeySourceDiscovery, StaticKeys: "", PrincipalID: "prn-worker", CreatedBy: "ada",
-			Conditions: conds,
+			Conditions: conds, Revision: 1, SpiffeIDPattern: "", Bundle: "",
 		}
 		if r.Matches(&tok) {
 			t.Errorf("%s: Matches = true, want false", name)

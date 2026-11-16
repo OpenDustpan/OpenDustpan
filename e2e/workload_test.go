@@ -107,12 +107,16 @@ func workloadScenario(t *testing.T, env *e2e.Env, issuer *e2e.OIDCIssuerFake, to
 
 	var rule string
 
-	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		UserAgent: workloadAgent, Name: "create a discovery rule for the main branch", Method: http.MethodPost,
-		Path: trustRulesPath, Body: `{"name":"main","issuer":"` + issuer.URL() + `","audience":"` + workloadAudience +
-			`","keySource":"discovery","principal":"` + worker.ID +
-			`","conditions":[{"claim":"sub","values":["` + workloadSubject + `"]}]}`,
-		Want: http.StatusCreated, Check: captureID(&rule), Scheme: "token",
+	// A rule write needs a console session with a recent sign-in: an access
+	// token never gives one.
+	trustSessionStep(ctx, t, env, &trustStep{
+		name: "create a discovery rule for the main branch", want: http.StatusCreated, check: captureID(&rule),
+		req: e2e.HeaderedSessionRequest{
+			Method: http.MethodPost, Path: trustRulesPath, IfMatch: "", UserAgent: workloadAgent,
+			Body: `{"name":"main","issuer":"` + issuer.URL() + `","audience":"` + workloadAudience +
+				`","keySource":"discovery","principal":"` + worker.ID +
+				`","conditions":[{"claim":"sub","values":["` + workloadSubject + `"]}]}`,
+		},
 	})
 
 	now := time.Now()
