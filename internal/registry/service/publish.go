@@ -477,6 +477,15 @@ func (s *Service) measureOne(ctx context.Context, view *blob.Scoped, f *measured
 		return fmt.Errorf("read the staged file %s: %w", f.Name, errors.Join(err, closeErr))
 	}
 
+	// The content of an archive decides if it is a zip file, not the media
+	// type of the upload. The check runs before the hash is kept, so a body
+	// that is not a zip file reaches no hash check and no signature check.
+	if f.Role == RoleArchive {
+		if zipErr := requireZip(f.Name, f.bytes); zipErr != nil {
+			return zipErr
+		}
+	}
+
 	f.sum, f.size = m.sum(), m.n
 	sum := digest.Digest().MD5
 	f.md5 = hex.EncodeToString(sum[:])

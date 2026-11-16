@@ -839,7 +839,9 @@ func TestPublishRefusals(t *testing.T) {
 	stranger := buildSet(t, pgpfixture.NewSigner(t))
 
 	swapped := buildSet(t, sg)
-	swapped.archive[swapped.names[0]] = []byte("other bytes")
+	// A zip file with other bytes: the publish refuses a body that is not a
+	// zip file before the hash check that this case reaches.
+	swapped.archive[swapped.names[0]] = zipBytes(t, []byte("other bytes"))
 
 	tests := []struct {
 		name   string

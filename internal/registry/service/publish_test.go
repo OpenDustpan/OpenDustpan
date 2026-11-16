@@ -204,9 +204,17 @@ func refusals() []refusal {
 		},
 		{
 			name: "archive changed after the signature",
-			build: withSet("payments", "1.0.0", func(s *set) {
-				s.archives[s.order[0]] = []byte("tampered")
-			}),
+			build: func(t *testing.T, e *env, sg pgpfixture.Signer) error {
+				t.Helper()
+
+				// A zip file with other bytes: the publish refuses a body that is
+				// not a zip file before the hash check that this case reaches.
+				tampered := makeZip(t, []zipFile{fileEntry("terraform-provider-payments", []byte("tampered"))})
+
+				return withSet("payments", "1.0.0", func(s *set) {
+					s.archives[s.order[0]] = tampered
+				})(t, e, sg)
+			},
 			want: releasecheck.ErrRefused, text: "linux_amd64.zip",
 		},
 		{

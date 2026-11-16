@@ -55,6 +55,17 @@ type unpacked struct {
 	manifestBytes []byte
 }
 
+// requireZip returns registry.ErrBadArchive when data is not a zip file that
+// the zip reader can open. It reads the central directory only: the unpack
+// checks the entries later. The bytes come from outside the process.
+func requireZip(name string, data []byte) error {
+	if _, err := zip.NewReader(bytes.NewReader(data), int64(len(data))); err != nil {
+		return fmt.Errorf("%w: %s is not a zip file", registry.ErrBadArchive, name)
+	}
+
+	return nil
+}
+
 // unpackProviderArchive opens data as a zip archive with the unpack bounds
 // and returns the H1 digest over the sorted unpacked file entries and the
 // protocols of the manifest. Every entry comes from outside the process. It
@@ -64,6 +75,9 @@ type unpacked struct {
 func unpackProviderArchive(data []byte) (unpackFacts, error) {
 	var none unpackFacts
 
+	// Defense in depth: the measure step refuses an archive that is not a zip
+	// file before the hash. This check stays so that a new caller of the
+	// unpack cannot skip it. It does not rely on the measure step.
 	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return none, fmt.Errorf("%w: the archive is not a zip file", registry.ErrBadArchive)

@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"errors"
 	"slices"
@@ -80,8 +81,10 @@ func refusedCases() []refusedCase {
 
 				s := buildSet(t, sg, refusedName, refusedVersion, "linux_amd64")
 				// The checksums keep the hash of the first archive, so the check of
-				// the archive set refuses the publish.
-				s.archives[s.order[0]] = []byte("other archive bytes")
+				// the archive set refuses the publish. The archive is a zip file,
+				// because the publish refuses a body that is not a zip file before
+				// the hash check.
+				s.archives[s.order[0]] = otherArchive(t)
 
 				return s
 			},
@@ -177,10 +180,12 @@ func refusedCases() []refusedCase {
 				t.Helper()
 
 				// Four archives, each just under the 1 MiB archive limit of the test
-				// config, sum to more than its 3 MiB release limit.
+				// config, sum to more than its 3 MiB release limit. Each one is a
+				// zip file, because the publish refuses a body that is not a zip
+				// file when it reads it.
 				s := buildSet(t, sg, refusedName, refusedVersion,
 					"linux_amd64", "linux_arm64", "darwin_amd64", "darwin_arm64")
-				big := bytes.Repeat([]byte("x"), (1<<20)-1)
+				big := storedZipOfSize(t, (1<<20)-1)
 
 				for _, file := range s.order {
 					s.archives[file] = big
@@ -201,7 +206,7 @@ func refusedCases() []refusedCase {
 				t.Helper()
 
 				s := buildSet(t, sg, refusedName, refusedVersion, "linux_amd64")
-				s.archives[s.order[0]] = []byte("other archive bytes")
+				s.archives[s.order[0]] = otherArchive(t)
 
 				return s
 			},
@@ -221,6 +226,56 @@ func refusedCases() []refusedCase {
 			},
 		},
 	}
+}
+
+// otherArchive returns a zip file that is not an archive of buildSet, so its
+// hash is not in the checksums file of the set.
+func otherArchive(t *testing.T) []byte {
+	t.Helper()
+
+	return makeZip(t, []zipFile{fileEntry("terraform-provider-"+refusedName, []byte("other archive bytes"))})
+}
+
+// storedZipOfSize returns a zip file of exactly size bytes, with one entry
+// that is stored without compression.
+func storedZipOfSize(t *testing.T, size int) []byte {
+	t.Helper()
+
+	build := func(n int) []byte {
+		t.Helper()
+
+		var buf bytes.Buffer
+
+		w := zip.NewWriter(&buf)
+
+		header := new(zip.FileHeader)
+		header.Name = "pad"
+		header.Method = zip.Store
+
+		entry, err := w.CreateHeader(header)
+		if err != nil {
+			t.Fatalf("create zip entry: %v", err)
+		}
+
+		if _, err = entry.Write(bytes.Repeat([]byte("x"), n)); err != nil {
+			t.Fatalf("write zip entry: %v", err)
+		}
+
+		if err = w.Close(); err != nil {
+			t.Fatalf("close zip: %v", err)
+		}
+
+		return buf.Bytes()
+	}
+
+	overhead := len(build(0))
+
+	out := build(size - overhead)
+	if len(out) != size {
+		t.Fatalf("zip size: got %d, want %d", len(out), size)
+	}
+
+	return out
 }
 
 // TestRefusedPublishWritesDeniedAuditEntry checks that a refused publish writes
