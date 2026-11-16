@@ -226,13 +226,16 @@ func newEnvServing(t *testing.T, open func(t *testing.T) stores, set func(s stor
 	}
 }
 
-// skewClock is the clock of the server in a test: the real time plus an
+// testEpoch is the fixed time of the clock of the server in a test.
+func testEpoch() time.Time { return time.Date(2030, time.January, 2, 3, 4, 5, 0, time.UTC) }
+
+// skewClock is the clock of the server in a test: a fixed time plus an
 // offset that the test moves forward.
 type skewClock struct {
 	offset atomic.Int64
 }
 
-func (c *skewClock) now() time.Time { return time.Now().Add(time.Duration(c.offset.Load())) }
+func (c *skewClock) now() time.Time { return testEpoch().Add(time.Duration(c.offset.Load())) }
 
 // served holds what serve starts: the two handlers, the server and the claimer.
 type served struct {
@@ -574,11 +577,11 @@ type stamp struct {
 	at    time.Time
 }
 
-// fresh returns a stamp with a new nonce and the time now.
+// fresh returns a stamp with a new nonce and the fixed time of the test clock.
 func fresh(t *testing.T) stamp {
 	t.Helper()
 
-	return stamp{nonce: newNonce(t), at: time.Now()}
+	return stamp{nonce: newNonce(t), at: testEpoch()}
 }
 
 // rawSigned signs the request with key and the stamp, and sends it with the
