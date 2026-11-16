@@ -33,7 +33,8 @@ package server
 // the page before), principal (the ID of one principal, on the
 // administrator route) and status (active, expiring for an active token
 // with 14 days or less left, or ended for a revoked or expired token; every
-// token when the request names none).
+// token when the request names none). The own list under /me/tokens pages
+// with pageSize and pageToken instead, the names of the tool-neutral API.
 
 import (
 	"bytes"
@@ -67,7 +68,7 @@ var (
 		"invalid token list query: status is active, expiring or ended, and limit is a number from 1 to 1000",
 	)
 	errOwnTokenQuery = errors.New(
-		"invalid token list query: the names are pageSize, pageToken and status; cursor and limit are not names of this route",
+		"invalid token list query: the names are pageSize and pageToken; cursor, limit and status are not names of this route",
 	)
 	errOwnTokenPageSize = errors.New(
 		"invalid pageSize: send a number from 1 to " + strconv.Itoa(audit.MaxPageSize) +
@@ -167,10 +168,6 @@ type tokenListResponse struct {
 type ownTokenListResponse struct {
 	Tokens        []tokenResponse `json:"tokens"`
 	NextPageToken string          `json:"nextPageToken"`
-	Total         int64           `json:"total"`
-	// MaxLifetimeSeconds is the maximum lifetime, in seconds, of a new token
-	// of the caller.
-	MaxLifetimeSeconds int64 `json:"maxLifetimeSeconds"`
 }
 
 // createTokenRequest is the body of a token create. A missing expiresAt
@@ -584,7 +581,10 @@ func (h *Handler) ownTokenRoutes() []Route {
 			Actions:    own,
 			Resolve:    resolveCaller,
 			ActionsFor: nil, OpaqueDenial: false,
-			Serve: h.serveOwnTokenCreate(),
+			Serve: h.keyedOwnToken(
+				h.serveTokenChange(identity.ActionTokenManageOwn, createToken(accesstoken.ScopeOwn)),
+				ownTokenSecretAnswer, ownTokenID,
+			),
 		},
 		{
 			Method:     http.MethodDelete,
@@ -593,25 +593,33 @@ func (h *Handler) ownTokenRoutes() []Route {
 			Actions:    own,
 			Resolve:    resolveCaller,
 			ActionsFor: nil, OpaqueDenial: false,
-			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, revokeToken(accesstoken.ScopeOwn)),
+			Serve: h.keyedOwnToken(
+				h.serveTokenChange(identity.ActionTokenManageOwn, revokeToken(accesstoken.ScopeOwn)),
+				ownTokenEndedAnswer, nil,
+			),
 		},
 		{
 			Method: http.MethodPost, Path: ownTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: own,
 			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false,
-			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, rotateToken(accesstoken.ScopeOwn)),
+			Serve: h.keyedOwnToken(
+				h.serveTokenChange(identity.ActionTokenManageOwn, rotateToken(accesstoken.ScopeOwn)),
+				ownTokenSecretAnswer, ownTokenID,
+			),
 		},
 	}
 }
 
-// serveOwnTokenCreate serves POST /api/dustpan/v1/me/tokens. A request with
-// the Idempotency-Key header runs inside the idempotency middleware, after the
-// route has authenticated and authorized the caller: a replay never skips
-// that check. The store keeps the ID of the token in place of the answer,
-// because the answer holds the secret, which the server never keeps. A replay
-// answers 409 with the ID of the token.
-func (h *Handler) serveOwnTokenCreate() RouteHandler {
-	serve := h.serveTokenChange(identity.ActionTokenManageOwn, createToken(accesstoken.ScopeOwn))
-
+// keyedOwnToken serves a change of an own token, with the Idempotency-Key
+// header that each mutating route of the tool-neutral API takes. A request
+// with the header runs inside the idempotency middleware, after the route
+// has authenticated and authorized the caller: a replay never skips that
+// check. build makes the answer that the store keeps in the transaction of
+// the write. secretID, when it is not nil, says that the answer holds a
+// secret: the record keeps the ID of the token that the write made in place
+// of the answer, and a replay answers 409 with that ID.
+func (h *Handler) keyedOwnToken(
+	serve RouteHandler, build func(result any) (idempotency.Answer, error), secretID func(result any) string,
+) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 		if !idempotent.Present(r) {
 			serve(w, r, p, obj)
@@ -620,24 +628,17 @@ func (h *Handler) serveOwnTokenCreate() RouteHandler {
 		}
 
 		if h.idem == nil {
-			h.writeError(r.Context(), w, errGitHostIdempotencyOff)
+			h.writeError(r.Context(), w, errOwnTokenKeyOff)
 
 			return
 		}
 
 		err := h.idem.Handle(w, r, idempotent.Call{
-			Build: ownTokenCreatedAnswer,
-			SecretAnswer: func(result any) string {
-				t, isToken := result.(accesstoken.Token)
-				if !isToken {
-					return ""
-				}
-
-				return t.ID
-			},
-			Serve:     func(w http.ResponseWriter, r *http.Request) { serve(w, r, p, obj) },
-			Principal: p.Subject,
-			Required:  false,
+			Build:       build,
+			SecretAnswer: secretID,
+			Serve:       func(w http.ResponseWriter, r *http.Request) { serve(w, r, p, obj) },
+			Principal:   p.Subject,
+			Required:    false,
 		})
 		if err != nil {
 			h.writeError(r.Context(), w, err)
@@ -645,15 +646,44 @@ func (h *Handler) serveOwnTokenCreate() RouteHandler {
 	}
 }
 
-// ownTokenCreatedAnswer makes the answer that the store keeps for a token
-// create. It holds the status only: the middleware replaces it with the ID of
-// the token, because the answer to send holds the secret.
-func ownTokenCreatedAnswer(result any) (idempotency.Answer, error) {
+// errOwnTokenKeyOff reports a server that wires no idempotency middleware,
+// so its own-token changes cannot take the Idempotency-Key header.
+var errOwnTokenKeyOff = &codedError{
+	status: http.StatusBadRequest, code: errcode.RequestIdempotencyKeyUnavailable, args: nil,
+	message: "the Idempotency-Key header is not available on this server: send the request without it",
+}
+
+// errOwnTokenResult reports a store that passed a result of another type to
+// the answer builder of an own-token change.
+var errOwnTokenResult = errors.New("the store passed a result of another type")
+
+// ownTokenSecretAnswer makes the answer that the store keeps for a token
+// create and a token rotation. It holds the status only: the middleware
+// replaces it with the ID of the token, because the answer to send holds the
+// secret, which the server never keeps.
+func ownTokenSecretAnswer(result any) (idempotency.Answer, error) {
 	if _, ok := result.(accesstoken.Token); !ok {
-		return idempotency.Answer{}, errGitHostResult
+		return idempotency.Answer{}, errOwnTokenResult
 	}
 
 	return idempotency.Answer{Status: http.StatusCreated, Headers: map[string]string{}, Body: nil}, nil
+}
+
+// ownTokenEndedAnswer makes the answer that the store keeps for a token
+// revoke: 204 with no body.
+func ownTokenEndedAnswer(any) (idempotency.Answer, error) {
+	return idempotency.Answer{Status: http.StatusNoContent, Headers: map[string]string{}, Body: nil}, nil
+}
+
+// ownTokenID returns the ID of the token that the write made, for the record
+// of a request whose answer holds a secret.
+func ownTokenID(result any) string {
+	t, isToken := result.(accesstoken.Token)
+	if !isToken {
+		return ""
+	}
+
+	return t.ID
 }
 
 // createToken returns the op of a token create in scope: it issues a token
@@ -740,7 +770,7 @@ func listTokens(
 // listOwnTokens serves GET /api/dustpan/v1/me/tokens: one page of the
 // tokens of the person of the caller, newest first. The route names its page
 // with pageSize and pageToken. A name that the route does not know, such as
-// cursor, limit or principal, answers 400.
+// cursor, limit, principal or status, answers 400.
 func listOwnTokens(
 	_ http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, _ audit.Entry,
 ) (principalResult, error) {
@@ -758,21 +788,15 @@ func listOwnTokens(
 		return failed(""), err
 	}
 
-	maxLifetime, err := svc.MaxLifetime(r.Context())
-	if err != nil {
-		return failed(""), err
-	}
-
 	list := tokenPageOf(page, svc.Now())
 
 	return ok(http.StatusOK, ownTokenListResponse{
-		Tokens: list.Tokens, NextPageToken: page.NextCursor, Total: page.Total,
-		MaxLifetimeSeconds: int64(maxLifetime / time.Second),
+		Tokens: list.Tokens, NextPageToken: page.NextCursor,
 	}, ""), nil
 }
 
-// ownTokenPageRequest reads the query of the own token list: pageSize,
-// pageToken and status. A name that the route does not declare answers 400.
+// ownTokenPageRequest reads the query of the own token list: pageSize and
+// pageToken. A name that the route does not declare answers 400.
 func ownTokenPageRequest(r *http.Request) (accesstoken.PageRequest, error) {
 	q := queryOf(r)
 
@@ -783,13 +807,8 @@ func ownTokenPageRequest(r *http.Request) (accesstoken.PageRequest, error) {
 		return accesstoken.PageRequest{}, errOwnTokenQuery
 	}
 
-	filter, err := accesstoken.ParseFilter(q.Get("status"))
-	if err != nil {
-		return accesstoken.PageRequest{}, errOwnTokenQuery
-	}
-
 	req := accesstoken.PageRequest{
-		PrincipalID: "", Cursor: q.Get("pageToken"), Filter: filter, Limit: audit.DefaultPageSize,
+		PrincipalID: "", Cursor: q.Get("pageToken"), Filter: accesstoken.FilterAll, Limit: audit.DefaultPageSize,
 	}
 
 	if raw := q.Get("pageSize"); raw != "" {

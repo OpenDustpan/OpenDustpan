@@ -190,8 +190,8 @@ func TestTokenManagerReads(t *testing.T) {
 	var own limitedTokenListDoc
 	f.as(t, "bob", apiCall{http.MethodGet, "/api/dustpan/v1/me/tokens", "", http.StatusOK}, &own)
 
-	if own.MaxLifetimeSeconds != year {
-		t.Fatalf("maximum lifetime of a person = %d, want %d", own.MaxLifetimeSeconds, year)
+	if len(own.Tokens) != 0 || own.MaxLifetimeSeconds != 0 {
+		t.Fatalf("own tokens of bob = %+v, want an empty page with no maximum lifetime", own)
 	}
 }
 

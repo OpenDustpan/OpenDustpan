@@ -11,8 +11,8 @@ const tagCaller = "me"
 
 // callerOperationLabels names the routes of the signed-in caller: its access,
 // its grants and its own access tokens. The key is the pattern of the route.
-// The lists take pageSize and pageToken. Only the token create takes the
-// Idempotency-Key header.
+// The lists take pageSize and pageToken. The token create, rotate and delete
+// take the Idempotency-Key header.
 func callerOperationLabels() map[string]apidesc.Label {
 	page := func(what string) []apidesc.QueryParam {
 		return []apidesc.QueryParam{
@@ -56,9 +56,7 @@ func callerOperationLabels() map[string]apidesc.Label {
 			)),
 		apidesc.Pattern(http.MethodGet, ownTokensPath): apidesc.Name("listOwnTokens", tagCaller).
 			On(apidesc.KindCaller).
-			WithQuery(append(page("tokens"),
-				apidesc.StringParam("status", "Keep the tokens with this status: active, expiring or ended."),
-			)...).
+			WithQuery(page("tokens")...).
 			WithBodies(apidesc.NoBody, apidesc.Typed[ownTokenListResponse]("ListOwnTokensResponse", token)),
 		apidesc.Pattern(http.MethodPost, ownTokensPath): apidesc.Name("createOwnToken", tagCaller).
 			WithStatus(http.StatusCreated).
@@ -69,10 +67,12 @@ func callerOperationLabels() map[string]apidesc.Label {
 				apidesc.Typed[newTokenResponse]("NewAccessToken"),
 			),
 		apidesc.Pattern(http.MethodDelete, ownTokenPath): apidesc.Name("deleteOwnToken", tagCaller).
+			WithKey().
 			On(apidesc.KindCaller).
 			WithBodies(apidesc.NoBody, apidesc.NoBody),
 		apidesc.Pattern(http.MethodPost, ownTokenPath+"/rotate"): apidesc.Name("rotateOwnToken", tagCaller).
 			WithStatus(http.StatusCreated).
+			WithKey().
 			On(apidesc.KindCaller).
 			WithBodies(
 				apidesc.Typed[rotateTokenRequest]("RotateOwnTokenRequest"),

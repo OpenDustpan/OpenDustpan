@@ -713,12 +713,25 @@ func callerAccess(
 func callerAccessObjects(
 	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
-	kind := queryOf(r).Get("type")
-	if kind == "" {
+	// Defense in depth: the service refuses an empty type, an unknown type
+	// and an unknown action too (access.Service.Objects). These checks stay
+	// so that a new caller cannot skip them, and they answer the coded error
+	// that names the allowed types and the optional action.
+	q := queryOf(r)
+
+	switch access.ObjectKind(q.Get("type")) {
+	case access.ObjectNamespace, access.ObjectCollection, access.ObjectUnit, access.ObjectPrincipal:
+	default:
 		return failed(""), errCallerObjectsQuery
 	}
 
-	return callerAccessByType(r, svc, c.p, access.ObjectKind(kind))
+	if action := q.Get("action"); action != "" {
+		if _, classified := access.FamilyOf(identity.Action(action)); !classified {
+			return failed(""), errCallerObjectsQuery
+		}
+	}
+
+	return callerAccessByType(r, svc, c.p, access.ObjectKind(q.Get("type")))
 }
 
 // callerAccessOn answers the access of p on the object with the wire form
