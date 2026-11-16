@@ -1,5 +1,5 @@
 ---
-version: 7
+version: 8
 ---
 
 Issue: #1264, #1497.
@@ -35,6 +35,7 @@ Evidence for the claims above:
 
 - GET /api/dustpan/v1/me/access replaces GET /api/server/caller/access
 - GET /api/dustpan/v1/me/grants replaces GET /api/server/caller/grants
+- GET /api/dustpan/v1/me/access/objects (new path) takes the by-kind read of the old GET /api/server/caller/access (?type=&action=), so that /me/access answers one object (?object=) and the objects list is its own route and its own answer type. It needs caller:read on the caller only. Its query is type (namespace, collection, unit or principal; required), the optional action, pageSize and pageToken; its answer carries type, action, total, all, objects and nextPageToken (the old nextCursor is renamed). Its errors are 400 for a missing or unknown type, an unknown action and the wrong paging names, each with a catalog code
 - GET and POST /api/dustpan/v1/me/tokens replace the token list and create under /api/server/caller/tokens
 - DELETE /api/dustpan/v1/me/tokens/{id} and the rotate route replace the old ones
 - The old paths stop being served, with no alias
