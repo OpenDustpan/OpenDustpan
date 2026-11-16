@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
@@ -21,6 +22,18 @@ const sqlstateDeadlock = "40P01"
 // conflictWait bounds the wait of the forced conflict for the swap.
 const conflictWait = 30 * time.Second
 
+// swapDeadlockWait is the deadlock timeout of the connections of the swap.
+// PostgreSQL ends the transaction whose timer ends first while a cycle
+// exists. The swap waits first, so with this timeout, the swap is the one
+// that ends if the second transaction closes the cycle before the timer ends.
+// The wait is long enough for a machine under load.
+const swapDeadlockWait = 5 * time.Second
+
+// otherDeadlockWait is the deadlock timeout of the second transaction. It is
+// much longer than swapDeadlockWait, so the timer of the second transaction
+// never ends before the timer of the swap.
+const otherDeadlockWait = 60 * time.Second
+
 // errSwapNotWaiting reports that no swap waited for the lock of the second
 // transaction in time.
 var errSwapNotWaiting = errors.New("the swap did not wait for the lock in time")
@@ -36,15 +49,15 @@ var errSwapNotWaiting = errors.New("the swap did not wait for the lock in time")
 func TestRestoreSwapLosesALockConflictOnTheDurableTables(t *testing.T) {
 	t.Parallel()
 
-	url := membershipURL(t)
-	s := openAt(t, url, "")
+	dbURL := membershipURL(t)
+	s := openAt(t, withDeadlockTimeout(t, dbURL, swapDeadlockWait), "")
 	staged := storetest.StageRestoreArea(t, s)
 
-	tx := holdDurableOperations(t, url)
+	tx := holdDurableOperations(t, dbURL)
 
 	conflict := make(chan error, 1)
 
-	go func() { conflict <- closeLockCycle(t.Context(), url, tx) }()
+	go func() { conflict <- closeLockCycle(t.Context(), dbURL, tx) }()
 
 	_, applyErr := s.ApplyRestoreArea(t.Context(), staged.Swap, staged.Area, false)
 
@@ -72,14 +85,32 @@ func TestRestoreSwapLosesALockConflictOnTheDurableTables(t *testing.T) {
 	}
 }
 
+// withDeadlockTimeout returns dbURL with the deadlock timeout d for each
+// connection that opens with it. The test user must be a superuser, as the
+// test user of the PostgreSQL tests is.
+func withDeadlockTimeout(t *testing.T, dbURL string, d time.Duration) string {
+	t.Helper()
+
+	u, err := url.Parse(dbURL)
+	if err != nil {
+		t.Fatalf("parse the database URL: %v", err)
+	}
+
+	q := u.Query()
+	q.Set("deadlock_timeout", fmt.Sprintf("%dms", d.Milliseconds()))
+	u.RawQuery = q.Encode()
+
+	return u.String()
+}
+
 // holdDurableOperations starts a transaction on a second connection that
 // holds a write lock on the durable operations table. The swap renames the
 // live schema aside and then locks that table in it, so the lock makes the
 // swap wait. The test ends the connection and the transaction.
-func holdDurableOperations(t *testing.T, url string) pgx.Tx {
+func holdDurableOperations(t *testing.T, dbURL string) pgx.Tx {
 	t.Helper()
 
-	other, err := pgx.Connect(t.Context(), url)
+	other, err := pgx.Connect(t.Context(), withDeadlockTimeout(t, dbURL, otherDeadlockWait))
 	if err != nil {
 		t.Fatalf("connect the second connection: %v", err)
 	}
@@ -115,8 +146,8 @@ func holdDurableOperations(t *testing.T, url string) pgx.Tx {
 // the installation row that the swap holds, which closes a cycle. It ends tx
 // after the answer. It returns an error when PostgreSQL ended tx and not the
 // swap.
-func closeLockCycle(ctx context.Context, url string, tx pgx.Tx) (err error) {
-	watch, connErr := pgx.Connect(ctx, url)
+func closeLockCycle(ctx context.Context, dbURL string, tx pgx.Tx) (err error) {
+	watch, connErr := pgx.Connect(ctx, dbURL)
 	if connErr != nil {
 		return fmt.Errorf("connect the watcher: %w", connErr)
 	}
