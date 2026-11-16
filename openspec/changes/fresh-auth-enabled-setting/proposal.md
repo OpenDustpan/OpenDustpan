@@ -28,7 +28,8 @@ The path after this change:
   - `pkg/setting/change.go` (:153), `pkg/dustpan/auditchain.go` (:557)
   - `pkg/job/service_approve.go` (:87, `newDestroyFresh`), `pkg/job/gate.go` (:279, `freshAuth`), `pkg/store/internal/jobstore/events.go` (:18, `checkDestroyProof`)
   - `internal/api/server/gate_config.go` (:120, :130, :365, :560, `freshAuthSeconds`)
-- Open work adds more such checks: the trust rule check of #3283 and the session-limit check of #3286.
+  - `internal/trustrulesvc/service.go`: `requireFresh` (:586), called by `requireWriter` (`service_bundle.go:164`) and by the rule writes at `:263` and `:395`; `internal/api/trustrules/handlers.go` maps `ErrFreshRequired` and `ErrStaleToken` to the refusal (:208-211, :546-551)
+- Open work adds one more such check: the session-limit check of #3286. The trust rule check of #3283 is in the list above.
 
 ## Fix boundary
 
