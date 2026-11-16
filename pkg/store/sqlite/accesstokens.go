@@ -17,13 +17,18 @@ import (
 
 var _ accesstoken.Store = (*Store)(nil)
 
-// CreateToken implements accesstoken.Store.
+// CreateToken implements accesstoken.Store. When ctx carries an idempotency
+// completion, the transaction also stores its answer for t.
 func (s *Store) CreateToken(ctx context.Context, t accesstoken.Token, d accesstoken.Digest, e audit.Entry) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return insertToken(ctx, q, t, d)
+		if err := insertToken(ctx, q, t, d); err != nil {
+			return err
+		}
+
+		return finishCompletion(ctx, q, t)
 	})
 }
 
