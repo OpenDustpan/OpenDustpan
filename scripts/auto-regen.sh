@@ -45,7 +45,6 @@ set -euo pipefail
 # as the list of make regen, plus the hash files of the store baselines.
 GENERATED=(
 	internal/api/apidesc/openapi.json
-	clients/typescript/
 	internal/clientgen/golang/testdata/golden/
 	internal/clientgen/typescript/testdata/golden/
 	pkg/store/postgres/internal/db/
