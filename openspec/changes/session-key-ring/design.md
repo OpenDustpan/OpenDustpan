@@ -24,7 +24,9 @@ Fields are unexported. `NewRing` checks that each stored version unwraps and ref
 | Sealer open | kind, version, key ID, length, strict JSON | value of another kind, 4097 bytes, unknown key ID, changed byte |
 | Ring | seal only after `SealsFrom`, retired never opens | version sealing early, retired version |
 | Store | the append writes its audit entry in one transaction | entry that fails validation |
-| Route | read needs `installation:manage-sign-in`, shows no key | token without the action |
+| Retirement | superseded version retires after longest maximum length plus reload interval | leaked old key: no forged cookie after the bound |
+| Backup and output | no table, no log, error or audit field holds key material | export of a ring, failed unwrap |
+| Route | read needs `installation:manage-sign-in`, shows no key; `retireAll` asks the fresh step through `freshstep.Guard` | token without the action |
 
 ## Risks
 
