@@ -1,2 +1,9 @@
 dist/
 node_modules/
+
+# The generator writes these files. They stay out of Git until the first
+# release. Run `make clients-generate` to make them. README.md, test/ and this
+# file are written by hand and stay in Git.
+/src/
+/package.json
+/tsconfig.json

@@ -144,7 +144,7 @@ internal/              code that is not part of the SDK
   api/runnerapi/       HTTP adapter for the runner protocol (/runner/v1) and the runner management API
   metrics/, pgtest/, servertest/, ...
                        metrics, the PostgreSQL test database and the test server
-clients/typescript/    the generated TypeScript client package; make clients-check fails when it is not what a fresh run gives
+clients/typescript/    the generated TypeScript client package; not in Git: run make clients-generate (make clients-check runs the generator)
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
   githubfake/          the fake GitHub host of the tests: REST, GraphQL and signed webhook events. The binary never links it

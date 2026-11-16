@@ -13,8 +13,6 @@ import (
 // descriptionPath is the published description, from this package.
 const descriptionPath = "../../api/apidesc/openapi.json"
 
-// packagePath is the checked-in TypeScript package, from this package.
-const packagePath = "../../../clients/typescript"
 
 const syntheticPath = "../typescript/testdata/synthetic.json"
 
@@ -29,15 +27,22 @@ func run(t *testing.T, args ...string) (int, string, string) {
 	return code, out.String(), errs.String()
 }
 
-// TestCheckedInPackageIsWhatARunGives fails when someone changes the
-// description, a template or a runtime file and does not run make
-// clients-generate.
-func TestCheckedInPackageIsWhatARunGives(t *testing.T) {
+// TestGeneratedPackageIsWhatARunGives runs the generator on the published
+// description into a new directory, then checks that directory. It fails when
+// the generator fails on the description, or when a second run does not give
+// the same files as the first.
+func TestGeneratedPackageIsWhatARunGives(t *testing.T) {
 	t.Parallel()
 
-	code, _, stderr := run(t, "-target", "typescript", "-description", descriptionPath, "-out", packagePath, "-check")
-	if code != cli.ExitOK {
-		t.Errorf("the checked-in package is stale (exit %d):\n%s", code, stderr)
+	dir := filepath.Join(t.TempDir(), "client")
+	args := []string{"-target", "typescript", "-description", descriptionPath, "-out", dir}
+
+	if code, _, stderr := run(t, args...); code != cli.ExitOK {
+		t.Fatalf("generate (exit %d):\n%s", code, stderr)
+	}
+
+	if code, _, stderr := run(t, append(args, "-check")...); code != cli.ExitOK {
+		t.Errorf("the generated package differs from a second run (exit %d):\n%s", code, stderr)
 	}
 }
 

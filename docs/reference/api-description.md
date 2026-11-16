@@ -234,10 +234,9 @@ After a change of the routes, a contributor does these steps:
    go test ./internal/clientgen/golang -run TestRenderGolden -update
    ```
 
-`make clients-check` fails when a generated client differs from a new run on
-the description.
+`make clients-check` fails when the generator fails on the description.
 
-Commit `openapi.json`, the generated clients and the golden files in the same
+Commit `openapi.json` and the golden files in the same
 pull request. When two pull requests change the description, a merge of the
 second can conflict in these generated files. Do not resolve such a conflict
 by hand: take either side, then do steps 1 and 2 again on the merged code.

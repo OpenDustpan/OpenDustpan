@@ -350,16 +350,16 @@ e2e-ha: ## Drive three server binaries of one installation behind a round-robin 
 
 CLIENTGEN := go run ./cmd/clientgen -target typescript -description internal/api/apidesc/openapi.json -out clients/typescript
 
-clients-generate: ## Regenerate the TypeScript client package in clients/typescript from the API description.
+clients-generate: ## Generate the TypeScript client package in clients/typescript from the API description. The generated files stay out of Git until the first tag.
 	$(CLIENTGEN)
 
-clients-check: ## Fail when clients/typescript is not what a fresh run of the generator gives (like sqlc diff). Needs Go only.
-	$(CLIENTGEN) -check
+clients-check: ## Fail when the generator fails on the API description: it writes a package to a temporary directory and checks that run. Needs Go only.
+	go test -count=1 -run 'TestGeneratedPackageIsWhatARunGives' ./internal/clientgen/cli/
 
-clients-ts-test: ## Compile the TypeScript client strictly and run its tests (needs tsc and Node 22). Not part of check.
+clients-ts-test: clients-generate ## Compile the TypeScript client strictly and run its tests (needs tsc and Node 22). Not part of check.
 	cd clients/typescript && tsc -p tsconfig.json && node --test "test/*.test.mjs"
 
-clients-conformance: clients-ts-test ## Build the server, generate the Go and TypeScript clients from the description that the server serves, and run the client conformance suite on them. Not part of check.
+clients-conformance: clients-generate clients-ts-test ## Build the server, generate the Go and TypeScript clients from the description that the server serves, and run the client conformance suite on them. Not part of check.
 	DUSTPAN_TEST_CLIENTGEN_CONFORMANCE=1 go test $(RACE_TEST_FLAGS) -count=1 -timeout 25m -run 'TestGoClientConformance|TestTypeScriptClientConformance' ./internal/clientgen/conformance/
 
 checks-agent: ## Sync the branch with main, then run generate, check, e2e and a TruffleHog scan of the branch commits with cleanup (SYNC=merge|rebase|none, SKIP="steps", CLEAN_CACHE=1 also deletes the e2e CLI cache).
