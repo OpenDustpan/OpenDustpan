@@ -1462,7 +1462,7 @@ func restoreModel() costModel {
 		fixed: 331 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
-			droppedRunnerCredentialTrips,
+			droppedRunnerCredentialTrips + proxyRuleSetTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1540,6 +1540,12 @@ const breakGlassFloorTrips = 3
 // under the lock of the control tables. A restore that drops a credential
 // also appends one audit entry; the restores of this test drop none.
 const droppedRunnerCredentialTrips = 2
+
+// proxyRuleSetTrips is the change in the fixed part for the table
+// proxy_rule_sets, a table of Tables that the dev strip never counts. The run
+// makes 5 round trips for it, 2 fewer than perTable gives, as for
+// group_mappings.
+const proxyRuleSetTrips = -2
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer

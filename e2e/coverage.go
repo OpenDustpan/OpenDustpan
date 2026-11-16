@@ -245,6 +245,7 @@ func CoverageAllowlist() []AllowEntry {
 		sinkAllowEntries(),
 		sourceFilterAllowEntries(),
 		trustRuleAllowEntries(),
+		proxyRulesAllowEntries(),
 		apiDescriptionAllowEntries(),
 		issuerAllowEntries(),
 	)

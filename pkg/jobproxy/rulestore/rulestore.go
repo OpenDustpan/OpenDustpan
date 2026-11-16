@@ -84,6 +84,13 @@ func ValidScope(s Scope) error {
 	return nil
 }
 
+// Handle is a RuleStore as a value. A SQL adapter returns it from its
+// ProxyRules method, so that the wiring finds the store of any adapter through
+// one method set, with no interface in the result.
+type Handle struct {
+	RuleStore
+}
+
 // RuleStore keeps the proxy rule set of each namespace and each unit. A SQL
 // adapter serves it from the database of the namespace. Every write carries
 // the fence of the namespace and the audit entry of the change. The store

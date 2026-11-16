@@ -50,7 +50,6 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	})
 
 	principals, sessions := coverageSignInServices(tb, st)
-
 	admin := coverageProviderAdmin(tb, st)
 
 	// A one-time code mounts the dev sign-in route, so the route table holds it.
@@ -60,6 +59,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	}
 
 	handler, err := serverapi.NewHandler(&serverapi.Config{
+		ProxyRules:     nil,
 		LocalUsers:     coverageLocalUsers(tb, st, principals),
 		Preferences:    nil,
 		GitHostLinks:   nil,
