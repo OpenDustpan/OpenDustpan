@@ -65,7 +65,16 @@ func TestSnapshotMemo(t *testing.T) {
 	chain, byID := memoChain(t, ""), memoChain(t, "ws-1")
 	st := &memoStore{Store: nil, reads: 0}
 	s := &Service{
-		store: st, engine: nil, producers: nil, units: nil, subjects: nil, fences: nil, now: nil, log: nil,
+		store:      st,
+		engine:     nil,
+		producers:  nil,
+		units:      nil,
+		subjects:   nil,
+		fences:     nil,
+		kindReader: nil,
+		isDev:      nil,
+		now:        nil,
+		log:        nil,
 	}
 	ctx := withFactMemo(t.Context())
 

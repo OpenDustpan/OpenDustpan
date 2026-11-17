@@ -4,15 +4,15 @@
 
 ## 1. Failing tests
 
-- [ ] 1.1 Add failing test for module publish accept and refuse at upload in NEW file pkg/registry/module_publish_test.go. Check: TestModulePublishAcceptsArchiveSet fails on main, passes after fix.
-- [ ] 1.2 Add failing protocol tests for discovery, version list, and download in NEW file pkg/registry/module_serve_test.go. Check: TestModuleVersionListServesPublishedVersions fails on main, passes after fix.
-- [ ] 1.3 Add failing tests for cross-namespace, wrong host, bad name, missing version, duplicate publish, and hidden no-grant answer in NEW file pkg/registry/module_denied_test.go. Check: TestModuleCrossNamespaceDenied fails on main, passes after fix.
+- [x] 1.1 Not applicable: tests of module publish accept and refuse exist on main in (read only) `internal/registry/service/module_test.go` (TestPublishModuleThenRead, TestPublishModuleRefusals). Check: the pull request body names each test and its run result.
+- [x] 1.2 Not applicable: tests of module discovery, version list and download exist on main in (read only) `internal/api/tfe/registry_modules_test.go` (TestModuleVersions, TestModuleDownload). Check: the pull request body names each test and its run result.
+- [x] 1.3 Not applicable: tests of cross-namespace, wrong host, bad name, missing version and duplicate publish exist on main in (read only) `internal/api/tfe/registry_modules_test.go` (TestModuleHostGate, TestModuleMissing, TestModuleAuthorization) and (read only) `internal/registry/service/module_test.go` (TestPublishModuleRepeatAndConflict). Check: the pull request body names each test and its run result.
 
 ## 2. Build
 
-- [ ] 2.1 Implement module publish checks and module serve routes with namespace grants and audit in NEW file pkg/registry/module_serve.go. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
-- [ ] 2.2 Wire module serve routes and add e2e step with tofu init against private module. Declare the routes in NEW file pkg/registry/module_routes.go and add the adapter in NEW file pkg/registry/module_serve.go. Add the e2e step in NEW file e2e/private_module_test.go. Check: e2e step: `tofu init` with an access token calls GET /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions on the real binary and fetches the private module of its own namespace. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 2.3 Write docs page for private modules in NEW file docs/private-modules.md. Check: Docs page commands run as written and show publish then tofu init use. Confirmed by: CI (an e2e step in the NEW file e2e/artifact_registry_private_module_docs_test.go runs each command of the docs page against the e2e test server).
+- [x] 2.1 Not applicable: module publish checks and module serve routes with namespace grants and audit exist on main in (read only) `internal/registry/service/module.go` line 54 and (read only) `internal/api/tfe/registry_modules.go` line 49. Check: the pull request body lists the differences found in task 0.1, or says that there are none.
+- [x] 2.2 Not applicable: the routes are wired and the e2e step exists on main in (read only) `e2e/registry_module_test.go` line 109 (TestRegistryModuleTofuInit): the e2e step `tofu init` with an access token calls GET /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions on the real binary and installs the private module. Check: the pull request body names the test.
+- [ ] 2.3 Add the test that runs each command of the section "Publish a module" of `docs/guides/private-registry.md` as written, in NEW file e2e/artifact_registry_private_module_docs_test.go, and fix each command in the guide that fails. Check: e2e step: TestPrivateModuleGuideCommands runs the publish command with an access token (PUT /api/dustpan/v1/namespaces/{}/registry/modules/{}/{}/versions/{}) and `tofu init` against the e2e test server, and `make docs-lint` passes on each edited guide. Confirmed by: CI (the agent writes the e2e test).
 
 ## 3. Side effects (computed from main)
 

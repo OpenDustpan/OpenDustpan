@@ -884,6 +884,11 @@ type requestFlow struct {
 // "lock, upload and unlock" and each pulumi flow that meets the gates hold 1
 // round trip for that read.
 //
+// Each Evaluate of the state.write gates also reads the installation kind
+// once, to apply the approver rules of a dev or a production installation. So
+// "lock", "lock, upload and unlock" and each pulumi flow that meets the gates
+// hold 1 round trip for that read.
+//
 // Each write that moves the state of a unit writes its state version to
 // unit_state with one statement in the transaction of the write. A final
 // version also reads the jobs of the unit that wait for one. So "opentofu
@@ -898,7 +903,7 @@ func requestFlows() []requestFlow {
 			h.measure(h.upload)
 			h.unlock()
 		}},
-		{"lock", 34, func(h *rtHarness) {
+		{"lock", 35, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
 		}},
@@ -924,7 +929,7 @@ func requestFlows() []requestFlow {
 			h.lock()
 			h.measure(h.unlock)
 		}},
-		{"lock, upload and unlock", 95, func(h *rtHarness) {
+		{"lock, upload and unlock", 96, func(h *rtHarness) {
 			h.measure(func() {
 				h.lock()
 				h.upload()
@@ -980,16 +985,16 @@ func requestFlows() []requestFlow {
 		// state of a unit, so the item key transaction of each arms its attempt
 		// deadline with one set_config: one more round trip in each of their
 		// budgets.
-		{"pulumi stack rm", 40, func(h *rtHarness) {
+		{"pulumi stack rm", 41, func(h *rtHarness) {
 			h.newStack()
 			h.measureStackCall(http.MethodDelete, "", "", http.StatusNoContent)
 		}},
-		{"pulumi stack import", 71, func(h *rtHarness) {
+		{"pulumi stack import", 72, func(h *rtHarness) {
 			h.newStack()
 			body := `{"version":3,"deployment":` + deployment(3) + `}`
 			h.measureStackCall(http.MethodPost, "/import", body, http.StatusOK)
 		}},
-		{"pulumi stack restore", 72, func(h *rtHarness) {
+		{"pulumi stack restore", 73, func(h *rtHarness) {
 			h.newStack()
 			run := h.startUpdate()
 			h.save(run, 1)
@@ -999,7 +1004,7 @@ func requestFlows() []requestFlow {
 		// The rename appends its audit entry in the transaction of the rename:
 		// one read of the namespace, one read of the last entry of the chain and
 		// one insert.
-		{"pulumi stack rename", 41, func(h *rtHarness) {
+		{"pulumi stack rename", 42, func(h *rtHarness) {
 			h.newStack()
 			body := `{"newName":"` + h.stack + `-renamed"}`
 			h.measureStackCall(http.MethodPost, "/rename", body, http.StatusOK)

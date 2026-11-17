@@ -137,6 +137,7 @@ type stateWriteRun struct {
 	warnings  []string
 	result    Result
 	refusal   *RefusalError
+	policy    ApproverPolicy
 }
 
 // unitEffect collects what the enforced gates say about one unit.
@@ -164,8 +165,9 @@ func (e *unitEffect) result() Result {
 }
 
 // evaluateStateWrite evaluates the gates of state.write for each unit of c
-// and writes the decision record.
-func (s *Service) evaluateStateWrite(ctx context.Context, c Change) (Decision, error) {
+// and writes the decision record. policy is the approver policy of the
+// installation, read once for the call.
+func (s *Service) evaluateStateWrite(ctx context.Context, c Change, policy ApproverPolicy) (Decision, error) {
 	if c.BreakGlass != "" {
 		return Decision{}, fmt.Errorf(
 			"%w: a break-glass for a gate in error is not implemented in this version", ErrUnavailable,
@@ -187,7 +189,7 @@ func (s *Service) evaluateStateWrite(ctx context.Context, c Change) (Decision, e
 		return Decision{}, &RefusalError{Err: err, Record: "", Messages: []string{cleanText(err.Error())}}
 	}
 
-	run, err := s.newStateWriteRun(ctx, c)
+	run, err := s.newStateWriteRun(ctx, c, policy)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -220,7 +222,7 @@ func (s *Service) evaluateStateWrite(ctx context.Context, c Change) (Decision, e
 }
 
 // newStateWriteRun reads the configuration and asks the engine.
-func (s *Service) newStateWriteRun(ctx context.Context, c Change) (*stateWriteRun, error) {
+func (s *Service) newStateWriteRun(ctx context.Context, c Change, policy ApproverPolicy) (*stateWriteRun, error) {
 	units, scopes, err := s.stateWriteUnits(ctx, c)
 	if err != nil {
 		return nil, err
@@ -247,6 +249,7 @@ func (s *Service) newStateWriteRun(ctx context.Context, c Change) (*stateWriteRu
 		warnings: nil,
 		result:   ResultAllow,
 		refusal:  nil,
+		policy:   policy,
 	}
 
 	run.invalid, run.engineErr = s.recheck(ctx, run.gates)
@@ -659,9 +662,22 @@ func (r *stateWriteRun) requireApproval(pr *PolicyResult, u *unitEval, eff *unit
 		return
 	}
 
-	req := requirementOfRule(*rule)
+	req := requirementOfRule(*rule, r.policy.ruleApprovers(rule.Approvers))
+
 	if !slices.ContainsFunc(r.requires, func(x Requirement) bool { return x.Name == req.Name }) {
 		r.requires = append(r.requires, req)
+	}
+
+	// A rule that nobody can meet denies at once: it does not wait for an
+	// approval that never arrives.
+	if req.Approvers.NamesNobody() {
+		eff.denies = append(eff.denies, fmt.Sprintf(
+			"%s The write needs approval by rule %s, but no approver can meet it, "+
+				"so the server denies the write to %s.",
+			firstNonEmpty(pr.Message, "The gate "+pr.Policy.String()+" matches."), id, u.unit,
+		))
+
+		return
 	}
 
 	eff.approvals = append(eff.approvals, fmt.Sprintf(
@@ -682,16 +698,17 @@ func (r *stateWriteRun) findRule(u *unitEval, id ID) (*ApprovalRule, bool) {
 	return nil, false
 }
 
-// requirementOfRule returns the requirement that rule gives, with no
-// signatures.
-func requirementOfRule(r ApprovalRule) Requirement {
+// requirementOfRule returns the requirement that rule gives, with the
+// approvers that the approver policy of the installation reads from it, and
+// with no signatures.
+func requirementOfRule(r ApprovalRule, approvers Approvers) Requirement {
 	timeout := r.Timeout
 	if timeout == 0 {
 		timeout = defaultApprovalTimeout
 	}
 
 	return Requirement{
-		Name: RuleRequirement(r.ID), Version: r.Version, Approvers: r.Approvers, Count: r.Count,
+		Name: RuleRequirement(r.ID), Version: r.Version, Approvers: approvers, Count: r.Count,
 		AuthorMayApprove: r.AuthorMayApprove, FreshAuth: r.FreshAuth, TimeoutSeconds: int64(timeout.Seconds()),
 		Signatures: nil, Evaluate: false,
 	}

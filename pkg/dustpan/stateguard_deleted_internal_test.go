@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -121,6 +122,7 @@ func newDeletedGuard(t *testing.T) deletedGuard {
 
 	cfg := new(settings)
 	cfg.namespaceStore, cfg.inventoryReader, cfg.now = st, st, time.Now
+	cfg.installationKind = installation.KindProduction
 
 	gates, err := newStateWriteGates(cfg, nss)
 	if err != nil || gates.svc == nil {
