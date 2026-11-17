@@ -10,4 +10,4 @@
 ## 3. Definition of done
 
 - [x] 3.1 Write in the pull request body that the SQL job token stores of #2916 (in (read only) `pkg/store/sqlite` and (read only) `pkg/store/postgres`, on main; this change adds no port method and edits no adapter) run the new case on SQLite and PostgreSQL, and that they return `namespace.ErrNotFound` already. Check: the pull request body names #2916 and the case.
-- [ ] 3.2 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 3.2 Run the checks. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
