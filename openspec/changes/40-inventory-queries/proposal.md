@@ -22,7 +22,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- This item waits on the inventory projection at scale. Proof: | [RFC 40](rfc/0040-inventory-queries.md) Inventory queries                                          | the inventory projection (ADR 13) at scale                      |
+- This item waits on the inventory projection at scale. Proof: | [RFC 40](docs/rfc/0040-inventory-queries.md) Inventory queries                                          | the inventory projection (ADR 13) at scale                      |
 - Main has an inventory routing test. Proof: pkg/dustpan/dustpan_test.go:199 (TestInventoryRouting)
 
 ## What Changes
