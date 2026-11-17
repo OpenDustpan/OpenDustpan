@@ -77,6 +77,11 @@ const (
 	MaxUsernameBytes = 256
 	// MaxPasswordBytes is the longest password of the upstream credential.
 	MaxPasswordBytes = 1024
+	// maxSealedPlainBytes is the longest sealed form of a credential before
+	// the seal: the JSON object with the user name and the password. Both
+	// fields at their longest, with each byte escaped in the worst way that
+	// the checks allow, stay far below it.
+	maxSealedPlainBytes = 8 << 10
 )
 
 // maxRetries is the number of times that a save with no If-Match reads the
@@ -734,6 +739,10 @@ func (s *Service) sealChange(ctx context.Context, pool runner.Pool, change Crede
 		return nil, fmt.Errorf("%w: the credential", runner.ErrInvalid)
 	}
 
+	if sizeErr := CheckSealedSize(plain); sizeErr != nil {
+		return nil, sizeErr
+	}
+
 	scope, err := scopeOf(pool)
 	if err != nil {
 		return nil, err
@@ -746,6 +755,23 @@ func (s *Service) sealChange(ctx context.Context, pool runner.Pool, change Crede
 	}
 
 	return sealed[0], nil
+}
+
+// CheckSealedSize is the size check of the sealed form of a credential, before
+// the seal. It refuses a sealed form that is longer than maxSealedPlainBytes, and so keeps the size of the value that
+// the secret
+// service allocates for bounded.
+//
+// Defense in depth: the body limit of the route (16 KiB) and checkCredential
+// (user name and password lengths) bound the value too; this check stays so
+// that a new caller or a change of those limits cannot skip the bound. It
+// does not rely on either of them.
+func CheckSealedSize(plain []byte) error {
+	if len(plain) > maxSealedPlainBytes {
+		return fmt.Errorf("%w: the credential is longer than %d bytes", runner.ErrInvalid, maxSealedPlainBytes)
+	}
+
+	return nil
 }
 
 // Keys of the sealed form of the credential: a JSON object with the user name

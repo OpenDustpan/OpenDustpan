@@ -276,6 +276,38 @@ func sealHostileUser(t *testing.T, f fixture, user string) {
 	f.settings.put(poolA, rec)
 }
 
+// TestCheckSealedSizeRefusesAnOversizeForm calls the size check straight, as
+// if the body limit and the check of the credential did not run.
+func TestCheckSealedSizeRefusesAnOversizeForm(t *testing.T) {
+	t.Parallel()
+
+	const limit = 8 << 10
+
+	for name, tc := range map[string]struct {
+		size int
+		ok   bool
+	}{
+		"empty":         {size: 0, ok: true},
+		"at the limit":  {size: limit, ok: true},
+		"over by one":   {size: limit + 1, ok: false},
+		"far too large": {size: 1 << 20, ok: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			err := proxysessionsvc.CheckSealedSize(make([]byte, tc.size))
+
+			switch {
+			case tc.ok && err != nil:
+				t.Errorf("size %d: err = %v, want nil", tc.size, err)
+			case !tc.ok && !errors.Is(err, runner.ErrInvalid):
+				t.Errorf("size %d: err = %v, want ErrInvalid", tc.size, err)
+			default:
+			}
+		})
+	}
+}
+
 // TestServiceHostile is the table of hostile cases of the service layer. Each
 // case calls the service straight, as if the route wrapper did not check.
 func TestServiceHostile(t *testing.T) {
