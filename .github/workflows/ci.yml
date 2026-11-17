@@ -360,6 +360,15 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-26.04
     timeout-minutes: 60
+    # The S3 conformance suite of pkg/blob/s3 runs when these four have
+    # values. The values are test-only and are in this file on purpose: a
+    # pull request from a fork does not get the repository secrets, and the
+    # suite must run there too.
+    env:
+      DUSTPAN_TEST_S3_ENDPOINT: http://localhost:9000
+      DUSTPAN_TEST_S3_BUCKET: dustpan-ci-s3
+      DUSTPAN_TEST_S3_ACCESS_KEY: dustpan-test
+      DUSTPAN_TEST_S3_SECRET_KEY: dustpan-ci-test-secret
     services:
       postgres:
         # The Go test cache does not see the image. The digest makes sure that
@@ -378,6 +387,15 @@ jobs:
           --shm-size=1g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
+      # The S3-compatible server of the blob port suite. The digest pins
+      # RustFS 1.0.4, so the image changes only in a commit and never under a
+      # cached test result. The login is a fixed test-only value, not a secret.
+      rustfs:
+        image: rustfs/rustfs@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2 # 1.0.4
+        env:
+          RUSTFS_ACCESS_KEY: dustpan-test
+          RUSTFS_SECRET_KEY: dustpan-ci-test-secret
+        ports: [ "9000:9000" ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -385,6 +403,81 @@ jobs:
           go-version-file: go.mod
           cache: false
       - *go-cache-restore
+      # The service has no container health command: this step asks the S3 API
+      # itself, so the wait proves what go test needs.
+      - name: Wait for the RustFS S3 API
+        timeout-minutes: 5
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.DUSTPAN_TEST_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.DUSTPAN_TEST_S3_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if aws s3api list-buckets --endpoint-url "$DUSTPAN_TEST_S3_ENDPOINT" >/dev/null 2>&1; then
+              echo "The RustFS S3 API answers after $attempt attempt(s)."
+              exit 0
+            fi
+            echo "Attempt $attempt: the RustFS S3 API does not answer yet."
+            sleep 2
+          done
+          echo "The RustFS S3 API did not answer within 120 seconds." >&2
+          exit 1
+      # A rerun on a reused service finds the bucket and must still pass.
+      - name: Create the S3 bucket
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.DUSTPAN_TEST_S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.DUSTPAN_TEST_S3_SECRET_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          set -euo pipefail
+          stderr=$(mktemp)
+          if aws s3api create-bucket \
+            --endpoint-url "$DUSTPAN_TEST_S3_ENDPOINT" \
+            --region us-east-1 \
+            --bucket "$DUSTPAN_TEST_S3_BUCKET" 2>"$stderr"; then
+            echo "Created the bucket $DUSTPAN_TEST_S3_BUCKET."
+            exit 0
+          fi
+          if grep -q -e BucketAlreadyOwnedByYou -e BucketAlreadyExists "$stderr"; then
+            echo "The bucket $DUSTPAN_TEST_S3_BUCKET already exists."
+            exit 0
+          fi
+          cat "$stderr" >&2
+          exit 1
+      # -count=1 makes this a real run, not a cached result from an earlier
+      # job. -v makes the skip line of TestConformance show in the log.
+      - name: Run the S3 conformance suite with a verbose log
+        timeout-minutes: 20
+        run: |
+          set -o pipefail
+          go test -race -count=1 -v -timeout 20m ./pkg/blob/s3/ 2>&1 | tee "$RUNNER_TEMP/s3-conformance.log"
+      # A skip leaves the package result ok, so only this step catches it.
+      # The guard reads only the top-level TestConformance line. The pending
+      # cases of blobtest skip as subtests on purpose, with an indented line,
+      # until their port work lands. The step runs after a failed test step
+      # too, so the guard reports the failure that it finds instead of hiding it.
+      - name: No-skip guard for the S3 conformance suite
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/s3-conformance.log"
+          if [ ! -f "$log" ]; then
+            echo "The S3 conformance log is missing." >&2
+            exit 1
+          fi
+          if grep -q -- '^--- SKIP: TestConformance ' "$log"; then
+            echo "The S3 conformance suite skipped. Set the four DUSTPAN_TEST_S3_* variables and check the endpoint." >&2
+            exit 1
+          fi
+          if ! grep -q -- '^--- PASS: TestConformance ' "$log"; then
+            echo "The S3 conformance suite did not run to pass." >&2
+            exit 1
+          fi
+          if ! grep -q '^ok[[:space:]]' "$log"; then
+            echo "The S3 conformance package did not pass." >&2
+            exit 1
+          fi
       # Pushes and pull requests use the test cache. The schedule runs every
       # package again (GO_TEST_COUNT=-count=1). The two store packages run in
       # the store job.

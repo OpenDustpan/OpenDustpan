@@ -2,14 +2,14 @@
 
 ### Requirement: run-no-skip
 
-When the CI go job provides the four DUSTPAN_TEST_S3_* variables, the server test suite SHALL run the pkg/blob/s3 conformance suite to pass without a skip marker.
+When the CI go job provides the four DUSTPAN_TEST_S3_* variables, the server test suite SHALL run the pkg/blob/s3 conformance suite to pass, and the top-level TestConformance test SHALL not skip. The pending subtests of blobtest can skip until their port work lands.
 
 #### Scenario: Suite runs in CI
 - **WHEN** the four DUSTPAN_TEST_S3_* variables have values and the container answers the S3 API
 - **THEN** the log shows pkg/blob/s3 ran blobtest.Run to pass and the guard exits 0
 
 #### Scenario: Skip fails the job
-- **WHEN** the pkg/blob/s3 -v log holds --- SKIP or the package result is not ok
+- **WHEN** the pkg/blob/s3 -v log holds the top-level line --- SKIP: TestConformance, has no top-level line --- PASS: TestConformance, or the package result is not ok
 - **THEN** the guard exits 1 and the go job fails instead of staying green
 
 #### Scenario: Unready container fails fast
