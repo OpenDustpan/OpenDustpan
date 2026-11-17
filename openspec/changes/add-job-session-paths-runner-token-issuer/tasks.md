@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -9,7 +9,7 @@
 
 ## 2. Build
 
-- [x] 2.1 Implement the expiry rule in `pkg/jobtoken/expiry.go` (NEW) as a pure function of the claim end, the step start, the step timeout and the grace. Check: go test ./pkg/jobtoken/... -run TestExpiryRule -count=1
+- [ ] 2.1 Implement the expiry rule in `pkg/jobtoken/expiry.go` (NEW) as a pure function of the claim end, the step start, the step timeout and the grace. Check: go test ./pkg/jobtoken/... -run TestExpiryRule -count=1
 - [ ] 2.2 Not applicable: implemented by #2916 (SQL job token stores for SQLite and PostgreSQL, with the conformance suite and the hostile cases) and by `jobtoken.Service.Issue` on main (`pkg/jobtoken/service.go:63`).
 - [ ] 2.3 SECURITY. Add the credentials path of the job session in `internal/api/runnerapi/session_credentials.go` (NEW): after the claim check, load the job and its live claim, build the request with an audit entry that names the job, the step and the expiry, call `jobtoken.Service.Issue`, and answer the plaintext once in `protocol.CredentialsResponse`. Declare the route in `internal/api/runnerapi/routes.go` with its action. The answer for a sweep holds no token. Each refusal writes one denial audit entry that names the job, the step and a reason code, and holds no token text, with a hostile test for the boundary check, the claim check and the grant check, each run as if the other layers failed. Check: go test ./internal/api/runnerapi/... -count=1
 - [ ] 2.4 SECURITY. Write the hostile test TestJobTokenRefusedOnRESTRoute in `pkg/dustpan/jobtoken_rest_refusal_test.go` (NEW). It takes a token from the new credentials path and sends it straight to a REST route and to a unit of another job, and expects 403 with no read and no change. Check: go test ./pkg/dustpan/... -run TestJobTokenRefusedOnRESTRoute -count=1
@@ -21,7 +21,7 @@
 
 ## 4. Definition of done
 
-- [x] 4.1 Add the NEW top-level test `TestJobTokenWiring` in a `_test.go` file of `internal/servertest`: claim a phase through /runner/v1, open the job session, ask for the credentials of a step, and call the route /tofu/state/{namespace}/{workspace} with the token (credential kind job-token, identity.CredentialJobToken). Check: go test ./internal/servertest/... -run TestJobTokenWiring
+- [ ] 4.1 Add the NEW top-level test `TestJobTokenWiring` in a `_test.go` file of `internal/servertest`: claim a phase through /runner/v1, open the job session, ask for the credentials of a step, and call the route /tofu/state/{namespace}/{workspace} with the token (credential kind job-token, identity.CredentialJobToken). Check: go test ./internal/servertest/... -run TestJobTokenWiring
 - [ ] 4.2 Add an e2e step in `e2e/job_token_credentials_test.go` (NEW) that does the path of 4.1 with the real launcher: it opens the job session with the handoff token on the session open path, then calls the NEW route `POST /runner/v1/session/credentials` with the session key proof (action runner:claim), on the unit of the job and on another unit; this step is also the e2e step of the job-token authenticator chain (the refusal on another unit). Check: make e2e. Confirmed by: CI (the agent writes the e2e test).
-- [x] 4.3 Update docs/reference/runner-api.md with the credentials path and run the usability check. Check: make docs-lint. A person's step.
+- [ ] 4.3 Update docs/reference/runner-api.md with the credentials path and run the usability check. Check: make docs-lint. A person's step.
 - [ ] 4.4 Pass the full check. Check: make check with zero findings. Confirmed by: CI (the agent runs the fast checks only).
