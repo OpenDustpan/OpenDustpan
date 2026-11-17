@@ -1,7 +1,6 @@
 package ldapauth_test
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -77,13 +76,7 @@ func checkSameRejection(t *testing.T, wrong, unknown error) {
 	}
 }
 
-// refusingGate is a session.BindGate that refuses each bind, as the gate of a
-// locked person does.
-type refusingGate struct{}
-
 var errGateRefused = errors.New("the person is locked")
-
-func (refusingGate) BeforeBind(context.Context, string) error { return errGateRefused }
 
 // TestGateRefusalCostsTheBindsOfAnUnknownUser proves that a known user name
 // that the bind gate refuses makes the same binds as an unknown user name:
@@ -111,7 +104,7 @@ func TestGateRefusalCostsTheBindsOfAnUnknownUser(t *testing.T) {
 		return s.dir.Binds()[before:], err
 	}
 
-	refused, refusedErr := bindsOf("alice", refusingGate{})
+	refused, refusedErr := bindsOf("alice", refusingGate{err: errGateRefused})
 	unknown, unknownErr := bindsOf("nobody", openGate{})
 
 	if !errors.Is(unknownErr, session.ErrMethodRejected) {
