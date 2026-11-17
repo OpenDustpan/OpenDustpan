@@ -9,6 +9,7 @@ The tool step needs a credential that acts as the starter on one unit and stops 
 3. **End in the same transaction.** Finish, takeover and retire end the token rows in the same transaction as their own write.
 4. **Routes.** The token is accepted on the state routes of its unit. It is refused on the REST API and on other units.
 5. **JobID only on job tokens.** Principal.JobID is set only when the credential is CredentialJobToken.
+6. **Which refusals write an audit entry.** A refusal after the proof check writes one denial audit entry that names the job, the step and the reason. A refusal before the proof check writes no audit entry and no credentials, and writes one log record (no secret, session ID shortened, the reason). The reason: a caller that has not passed the proof check has no proven job, so it must not be able to write audit entries. Audit entries of unproven callers would let any caller fill the audit log. The record of such a refusal stays in the log of the server, which the operator configures. This reads decision 5 of ADR 386 (one audit entry for each launcher request) as covering the requests of a proven launcher; a caller that fails the proof check is not a launcher. The lead of the project decided this reading (17 Nov 2026).
 
 ## Structure
 
