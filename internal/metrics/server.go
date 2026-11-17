@@ -101,21 +101,22 @@ const MaxSinkSeries = 16
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
-	registry *Registry
-	requests *Counter
-	duration *Histogram
-	inFlight *Gauge
-	ready    *Counter
-	audit    *Counter
-	chain    *chainFamilies
-	sinks    sinkFamilies
-	reloads  *Counter
-	reloadOK *Gauge
-	sweeps   *Counter
-	deleted  *Counter
-	blobWait *Counter
-	signin   *Counter
-	gitHost  *Counter
+	registry  *Registry
+	requests  *Counter
+	duration  *Histogram
+	inFlight  *Gauge
+	ready     *Counter
+	audit     *Counter
+	chain     *chainFamilies
+	sinks     sinkFamilies
+	reloads   *Counter
+	reloadOK  *Gauge
+	sweeps    *Counter
+	deleted   *Counter
+	blobWait  *Counter
+	signin    *Counter
+	gitHost   *Counter
+	claimSkip *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -172,11 +173,12 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		sweeps:   newSweepCounter(reg),
-		deleted:  newDeletedSweepCounter(reg),
-		blobWait: newBlobDeleteWaitCounter(reg),
-		signin:   newSignInCounterErrors(reg),
-		gitHost:  newGitHostRefusedCounter(reg),
+		sweeps:    newSweepCounter(reg),
+		deleted:   newDeletedSweepCounter(reg),
+		blobWait:  newBlobDeleteWaitCounter(reg),
+		signin:    newSignInCounterErrors(reg),
+		gitHost:   newGitHostRefusedCounter(reg),
+		claimSkip: newClaimPollSkippedCounter(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
@@ -732,4 +734,25 @@ func (m *ServerMetrics) ObserveGitHostRefused(reason string) {
 	}
 
 	m.gitHost.Inc(reason)
+}
+
+// newClaimPollSkippedCounter creates dustpan_job_claim_poll_skipped_total in
+// reg.
+func newClaimPollSkippedCounter(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_job_claim_poll_skipped_total",
+		"Operations that one claim poll skipped past its bound.",
+		nil,
+		1,
+	)
+}
+
+// AddClaimPollSkipped adds n to the count of operations that the claim poll
+// skipped past its bound. The claimer reports the count when a poll reaches the
+// bound and returns no work. Operators alert when the count keeps growing: the
+// bound keeps operations from the runners that poll.
+func (m *ServerMetrics) AddClaimPollSkipped(n int) {
+	if n > 0 {
+		m.claimSkip.Add(uint64(n))
+	}
 }

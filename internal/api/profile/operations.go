@@ -10,8 +10,8 @@ import (
 const tagProfiles = "profiles"
 
 // operationLabels names the routes of this adapter. The key is the pattern of
-// the route. The Idempotency-Key flag comes from Route.IdempotencyKey, so no
-// label sets it.
+// the route. The Idempotency-Key flag comes from Route.IdempotencyKey, whose
+// comment says what the wrapper does with the header, so no label sets it.
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant maps.
 var operationLabels = map[string]apidesc.Label{
