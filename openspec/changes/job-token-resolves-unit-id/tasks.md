@@ -11,7 +11,7 @@
 
 - [ ] 2.1 SECURITY. In `pkg/identity/jobtoken_rule.go` add the NEW port `UnitIDReader` (method `UnitID(ctx, Object) (string, bool, error)`, the signature of `access.Units`) and the NEW field `UnitIDs` of `JobTokenRule`. In `JobTokenRule.Authorize`, when the object is a unit with no stable ID, read the stable ID through `UnitIDs` and compare it with the unit of the job. A rule with no port refuses such an object (fail closed). Add a comment that says the read is a defense-in-depth layer and that the comparison does not rely on the route. Check: go test ./pkg/identity/ -run TestJobTokenRuleResolvesUnitID -count=1
 - [ ] 2.2 In `pkg/dustpan/dustpan.go` (`newAuthPorts`) wire the store that meets `access.Units` as `UnitIDs` of the rule. Check: go test ./pkg/dustpan/ -run TestJobTokenReachesOwnUnitState -count=1
-- [ ] 2.3 SECURITY. Prove the guard: run the test of 1.1 once with the comparison of the stable ID removed from `JobTokenRule.Authorize` in `pkg/identity/jobtoken_rule.go`, and paste the failing output into the pull request body. Check: the pull request body holds the failing run.
+- [x] 2.3 SECURITY. Prove the guard: run the test of 1.1 once with the comparison of the stable ID removed from `JobTokenRule.Authorize` in `pkg/identity/jobtoken_rule.go`, and paste the failing output into the pull request body. Check: the pull request body holds the failing run.
 
 ## 3. Definition of done
 
