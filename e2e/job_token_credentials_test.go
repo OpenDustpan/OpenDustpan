@@ -67,12 +67,12 @@ func jobTokenCredentials(t *testing.T, env *e2e.Env) {
 	// A step that the phase does not have, and a name that is not a step
 	// name, get no token.
 	for _, bad := range []string{"no-such-step", "Bad Step", ""} {
-		status, body := run.launcher.Credentials(ctx, t, bad)
-		if status != http.StatusBadRequest {
-			t.Errorf("credentials of step %q = %d %s, want 400", bad, status, body)
+		code, refusal := run.launcher.Credentials(ctx, t, bad)
+		if code != http.StatusBadRequest {
+			t.Errorf("credentials of step %q = %d %s, want 400", bad, code, refusal)
 		}
 
-		if strings.Contains(string(body), jobtoken.SecretPrefix) {
+		if strings.Contains(string(refusal), jobtoken.SecretPrefix) {
 			t.Errorf("the refusal of step %q holds token text", bad)
 		}
 	}
