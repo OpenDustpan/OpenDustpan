@@ -5,7 +5,7 @@ A job proxy runs next to the launcher of a phase. It needs the rules of its clai
 ## Decisions
 
 1. **Two kinds of session, one claim.** A claim may have one launcher session and one proxy session. The kind is a column of `runner_handoff_tokens` and `runner_sessions`, set from the route, never from a body or a header. A handoff token and a session of kind `launcher` authenticate only the launcher paths. A handoff token and a session of kind `proxy` authenticate only the proxy paths. A wrong kind answers 403 with the reason `wrong-session-kind` and writes an audit entry.
-2. **The proxy handoff copies the launcher handoff.** `POST /runner/v1/claims/{operation}/proxy-handoff` is a runner-key route with `runner:claim` on the pool. The server checks that the runner owns the live claim. The token starts with `dpp_`, lives 10 minutes (`runner.HandoffTokenTTL`), is used once, and the server keeps its SHA-256. A second token for a claim with no proxy session replaces the first.
+2. **The proxy handoff copies the launcher handoff.** `POST /runner/v1/claims/{operation}/proxy-handoff` is a runner-key route with `runner:claim` on the pool. The server checks that the runner owns the live claim. The token starts with `dph_` like the launcher handoff token (`runner.HandoffTokenPrefix`); the kind column of the token row says which paths it opens. It lives 10 minutes (`runner.HandoffTokenTTL`), is used once, and the server keeps its SHA-256. A second token for a claim with no proxy session replaces the first.
 3. **The proxy session copies the launcher session.** `POST /runner/v1/proxy/session` takes the proxy handoff token, the public key and the proof of the new key. In one transaction the server checks and uses the token, checks that the claim is live and stores the session. The session lives as long as the claim. A takeover or a retire ends it (`claim-lost`, `retired`).
 4. **The proxy assignment is its own message.** The answer of the proxy session open holds the rendered joined rules of the unit of the claim (`jobproxy.Render` of `jobproxy.Join`, with the variables of the claim), the digest of the rendered rules, the server host for the tunnel rule, the allowed private ranges of the pool, and the upstream URL of the pool. It holds no secret. A rule whose template needs `inputs.` or `profile.` has no value before job start: the open fails with the fixed reason `rules-not-renderable` and the proxy never starts without rules (fail closed).
 5. **The upstream credential has its own path.** `POST /runner/v1/proxy/session/upstream-credential` is a proxy-session-key route. The server unseals the credential with `secret.Service.Decrypt` under the scope (namespace, stable pool ID), which is a data key of the namespace as ADR 330 says ("The pool seals it with the data key of the namespace"; `secret.NewScope`, `pkg/secret/secret.go:86`; `OpenKey`, `pkg/secret/secret.go:253`), and returns it once for each call. It writes one audit entry for each call (a reveal). A launcher session cannot reach it. No other answer holds the credential. The upstream credential is never in an error text.
@@ -48,7 +48,7 @@ The structure makes the bug class "a launcher token on a proxy path" impossible 
 ```mermaid
 sequenceDiagram
 Runner->>Server: POST claims/{operation}/proxy-handoff (runner key)
-Server->>Store: issue dpp_ token for the live claim
+Server->>Store: issue dph_ token for the live claim
 Server-->>Runner: handoff token
 Runner->>Proxy: hand over the token (never an env var)
 Proxy->>Server: POST proxy/session (token, public key, proof)
@@ -156,8 +156,6 @@ func ParseSessionKind(s string) (SessionKind, error) // ErrInvalid
 //   OpenSession(ctx, sha256 string, kind SessionKind, k Key, now time.Time) (Session, error)
 // Errors: ErrNotFound for a token of another kind, ErrClaimLost, ErrTokenUsed, ErrTokenExpired, ErrConflict (a session of this kind exists), ErrInvalid.
 
-const ProxyHandoffTokenPrefix = "dpp_"
-
 type ProxySettings struct{ /* unexported */ }
 
 func NewProxySettings(ranges []string, upstreamURL string) (ProxySettings, error) // ErrInvalid
@@ -187,7 +185,7 @@ Endpoints. Each error body is `{"code": "...", "message": "..."}` (runner protoc
 
 | Method and path | Scope | Action and object | Request | Success | Errors |
 | --- | --- | --- | --- | --- | --- |
-| `POST /runner/v1/claims/{operation}/proxy-handoff` | runner key | `runner:claim` on the pool | none (the operation is the path parameter; the claim token is the stored one) | 200 `{"handoffToken": "dpp_...", "expiresAt": "<RFC 3339>"}` | 401 `bad-proof`, 403 `wrong-session-kind` or denied, 409 `claim-lost`, 404 `not-found` |
+| `POST /runner/v1/claims/{operation}/proxy-handoff` | runner key | `runner:claim` on the pool | none (the operation is the path parameter; the claim token is the stored one) | 200 `{"handoffToken": "dph_...", "expiresAt": "<RFC 3339>"}` | 401 `bad-proof`, 403 `wrong-session-kind` or denied, 409 `claim-lost`, 404 `not-found` |
 | `POST /runner/v1/proxy/session` | proxy handoff token | `runner:claim` on the pool of the runner | `{"handoffToken", "publicKey", "proof", "release"}` | 200 `{"session", "expiresAt", "lease", "assignment": {...}}` with the proxy assignment below | 401, 403 `wrong-session-kind`, 409 `claim-lost`, 410 token used or expired, 422 `rules-not-renderable` |
 | `POST /runner/v1/proxy/session/upstream-credential` | proxy session key | `runner:claim` on the pool of the runner | none | 200 `{"username": "...", "password": "..."}` | 401, 403 `wrong-session-kind`, 404 `no-upstream`, 409 `claim-lost` |
 | `GET /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/proxy-settings` | REST | `namespace:read-runners` on the namespace | none | 200 body below, ETag is the version | 401, 403, 404 |
