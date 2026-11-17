@@ -11,14 +11,14 @@ The settings resource lists installation settings from declarations (`pkg/dustpa
 
 ## Structure
 
-NEW file pkg/gate/retention_setting.go holds the key constant, `RetentionSettingDeclarations()` and a function `RetentionPeriod(value string) (time.Duration, bool, error)` that parses the stored value once. The sweep of the follow-up calls this function, so no other code parses the text. The function is the one place that knows `0` means keep forever.
+pkg/gate is a leaf of the domain graph and does not import the setting package. NEW file pkg/gate/retention_setting.go holds only setting-free code: the key constant, the sentinel `ErrInvalidRetention`, `RetentionCheck(value string) error`, `RetentionReducesSecurity(old, next string) bool` and `RetentionPeriod(value string) (time.Duration, bool, error)` that parses the stored value once. The function `decisionRecordRetentionDeclaration()` in pkg/dustpan/settings_resource.go builds the `setting.Declaration` from these functions and wraps `ErrInvalidRetention` in `setting.ErrInvalidValue`. The sweep of the follow-up calls this function, so no other code parses the text. The function is the one place that knows `0` means keep forever.
 
 ## Contract
 
 - Key: `decisionRecords.retentionHours`, level installation, kind int, default `0`, database layer, apply live.
-- `Check(value string) error`: nil for `0` and for a canonical whole number from 24 to 87600; otherwise an error that wraps `setting.ErrInvalidValue` and names the key, the value and the range. The settings route answers 400.
-- `ReducesSecurity(old, next string) bool`: true when `next` is not `0` and (`old` is `0` or `next` is less than `old`), and true when either value does not parse.
-- `RetentionPeriod(value string) (period time.Duration, keepForever bool, err error)` in pkg/gate: `0` gives `keepForever` true; a valid number gives `period` in hours; a refused text gives an error that wraps `setting.ErrInvalidValue`.
+- `RetentionCheck(value string) error` in pkg/gate: nil for `0` and for a canonical whole number from 24 to 87600; otherwise an error that wraps `ErrInvalidRetention` and names the key, the value and the range. The declaration `Check` wraps it in `setting.ErrInvalidValue`. The settings route answers 400.
+- `RetentionReducesSecurity(old, next string) bool` in pkg/gate (the declaration `ReducesSecurity` calls it): true when `next` is not `0` and (`old` is `0` or `next` is less than `old`), and true when either value does not parse.
+- `RetentionPeriod(value string) (period time.Duration, keepForever bool, err error)` in pkg/gate: `0` gives `keepForever` true; a valid number gives `period` in hours; a refused text gives an error that wraps `ErrInvalidRetention`.
 - Routes: GET and PATCH /api/dustpan/v1/settings, unchanged. Item shape: the existing item of the settings resource.
 
 ## Risks
