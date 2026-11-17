@@ -129,6 +129,8 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "a start with an invalid request stores no row", test: testBackupStartInvalid},
 		{name: "a start with a foreign key or kind stores no row", test: testBackupStartForeign},
 		{name: "finishing a backup records the step in the same call", test: testBackupFinishRecordsStep},
+		{name: "the write step records the attempt of the row", test: testBackupRecordAttempt},
+		{name: "a finish of another attempt than the row is refused", test: testBackupFinishAttemptCompare},
 		{name: "a stale claim cannot finish a backup", test: testBackupFinishStaleClaim},
 		{name: "a canceled operation cannot finish a backup", test: testBackupFinishCanceled},
 		{name: "a fence that is not a live claim cannot finish a backup", test: testBackupFinishForeignFence},
@@ -758,7 +760,7 @@ func seedBackupDelivery(t *testing.T, s BackupStore, acme namespace.Namespace, c
 	d := notify.Delivery{
 		ID: seedDeliveryID, Notification: "ntf-seed1", Scope: acme.Name, Subscription: seedSubscriptionID,
 		Sink: "snk-seedhook", Contact: "", Principal: "alice", State: notify.DeliveryPending,
-		Attempts: 0, Redeliveries: 0, NextAt: now(), LastError: "", DeliveredAt: time.Time{},
+		Attempts: 0, CreatedAt: now(), Redeliveries: 0, NextAt: now(), LastError: "", DeliveredAt: time.Time{},
 		Owner: "", LeaseUntil: time.Time{}, Version: 0,
 	}
 
@@ -1606,7 +1608,7 @@ func seedBackupRecord(t *testing.T, s BackupStore) backup.Record {
 	}
 
 	return mustFinishBackup(t, s, backupFinish{
-		ID: seeded.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour),
+		ID: seeded.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour), Attempt: "",
 	})
 }
 
@@ -1751,12 +1753,15 @@ func mustCreateBackup(t *testing.T, s BackupStore, r backup.Record) backup.Recor
 }
 
 // backupFinish holds how to finish a running backup row: its ID, the end
-// state with the error text, and the end time.
+// state with the error text, the end time and the attempt that the row must
+// record for a succeeded finish. An empty attempt takes the token of the
+// claim.
 type backupFinish struct {
 	ID      backup.ID
 	State   backup.State
 	Error   string
 	EndedAt time.Time
+	Attempt string
 }
 
 // mustFinishBackup finishes a running backup row that CreateBackup stored,
@@ -1770,12 +1775,25 @@ func mustFinishBackup(t *testing.T, s BackupStore, finish backupFinish) backup.R
 }
 
 // mustFinishClaimed finishes a running backup row with the fence of claim for
-// the step StepFinish, failing on error.
+// the step StepFinish. A row that ends succeeded records the attempt of the
+// claim first, as the write step of the service does, so the attempt compare
+// of the finish accepts it.
 func mustFinishClaimed(t *testing.T, s BackupStore, claim durable.Claim, finish backupFinish) backup.Record {
 	t.Helper()
 
+	attempt := finish.Attempt
+	if attempt == "" {
+		attempt = backup.AttemptOf(claim.Token)
+	}
+
+	if finish.State == backup.StateSucceeded {
+		if err := s.RecordBackupAttempt(t.Context(), claim.Step(backup.StepWrite), finish.ID, attempt); err != nil {
+			t.Fatalf("record the attempt of backup %s: %v", finish.ID, err)
+		}
+	}
+
 	got, err := s.FinishBackup(
-		t.Context(), claim.Step(backup.StepFinish), finish.ID, finish.State, finish.Error, finish.EndedAt,
+		t.Context(), claim.Step(backup.StepFinish), finish.ID, finish.State, finish.Error, finish.EndedAt, attempt,
 	)
 	if err != nil {
 		t.Fatalf("finish backup %s: %v", finish.ID, err)
@@ -2029,6 +2047,7 @@ func newBackupRecord(id backup.ID, startedAt time.Time) backup.Record {
 		Target:    "dir:/var/backups",
 		Error:     "",
 		State:     backup.StateRunning,
+		Attempt:   "",
 	}
 }
 
@@ -2050,7 +2069,7 @@ func testBackupEndedShape(t *testing.T, newStore BackupFactory) {
 
 	endedAt := now().Add(time.Hour)
 	mustFinishBackup(t, s, backupFinish{
-		ID: running.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt,
+		ID: running.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt, Attempt: "",
 	})
 	requireEndedStored(t, witness, backup.TableBackups, running.ID.String(), endedAt)
 }
@@ -2087,7 +2106,7 @@ func testBackupRegistry(t *testing.T, newStore BackupFactory) {
 		ID:      first.ID,
 		State:   backup.StateSucceeded,
 		Error:   "",
-		EndedAt: endedAt,
+		EndedAt: endedAt, Attempt: "",
 	})
 
 	if finished.State != backup.StateSucceeded || !finished.EndedAt.Equal(endedAt) || finished.Error != "" {
@@ -2111,7 +2130,7 @@ func checkBackupFinishErrors(t *testing.T, s BackupStore, claim durable.Claim, i
 	ctx := t.Context()
 	probe := claim.Step("probe")
 
-	if _, err := s.FinishBackup(ctx, probe, id, backup.StateFailed, "again", endedAt); !errors.Is(
+	if _, err := s.FinishBackup(ctx, probe, id, backup.StateFailed, "again", endedAt, ""); !errors.Is(
 		err, backup.ErrNotRunning,
 	) {
 		t.Fatalf("finish a finished backup: err = %v, want ErrNotRunning", err)
@@ -2120,7 +2139,7 @@ func checkBackupFinishErrors(t *testing.T, s BackupStore, claim durable.Claim, i
 	missing := backup.ID(ident.NewID("bkp-"))
 	missingProbe := bareBackupClaim(t, s, missing).Step("probe")
 
-	_, err := s.FinishBackup(ctx, missingProbe, missing, backup.StateFailed, "no", endedAt)
+	_, err := s.FinishBackup(ctx, missingProbe, missing, backup.StateFailed, "no", endedAt, "")
 	if !errors.Is(err, backup.ErrNotFound) {
 		t.Fatalf("finish a missing backup: err = %v, want ErrNotFound", err)
 	}
@@ -2158,7 +2177,7 @@ func failSecondBackup(t *testing.T, s BackupStore) backup.Record {
 		ID:      second.ID,
 		State:   backup.StateFailed,
 		Error:   "copy blobs: connection reset",
-		EndedAt: failedAt,
+		EndedAt: failedAt, Attempt: "",
 	})
 
 	if secondDone.State != backup.StateFailed || secondDone.Error != "copy blobs: connection reset" ||
@@ -2201,7 +2220,9 @@ func testBackupOneRunning(t *testing.T, newStore BackupFactory) {
 		t.Fatalf("taken backup ID: err = %v, want ErrAlreadyExists", err)
 	}
 
-	mustFinishBackup(t, s, backupFinish{ID: first.ID, State: backup.StateSucceeded, Error: "", EndedAt: now()})
+	mustFinishBackup(t, s, backupFinish{
+		ID: first.ID, State: backup.StateSucceeded, Error: "", EndedAt: now(), Attempt: "",
+	})
 	mustCreateBackup(t, s, second)
 }
 
@@ -2331,7 +2352,7 @@ func testBackupFinishRecordsStep(t *testing.T, newStore BackupFactory) {
 	endedAt := now().Add(time.Hour)
 
 	finished := mustFinishClaimed(t, s, claim, backupFinish{
-		ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt,
+		ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt, Attempt: "",
 	})
 
 	if finished.State != backup.StateSucceeded || !finished.EndedAt.Equal(endedAt) {
@@ -2347,7 +2368,7 @@ func testBackupFinishRecordsStep(t *testing.T, newStore BackupFactory) {
 	}
 
 	_, err := s.FinishBackup(
-		t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateFailed, "again", endedAt.Add(time.Hour),
+		t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateFailed, "again", endedAt.Add(time.Hour), "",
 	)
 	if !errors.Is(err, durable.ErrStepDone) {
 		t.Fatalf("finish with a recorded step: err = %v, want durable.ErrStepDone", err)
@@ -2355,6 +2376,238 @@ func testBackupFinishRecordsStep(t *testing.T, newStore BackupFactory) {
 
 	if got := mustGetBackup(t, s, r.ID); got != finished {
 		t.Fatalf("backup after the second finish = %+v, want %+v", got, finished)
+	}
+}
+
+// testBackupRecordAttempt records the attempt of the write step with the
+// live claim: the row holds the attempt and the operation records the step
+// in the same call. A second record of the same claim reports
+// durable.ErrStepDone, a stale fence and a fence of another operation report
+// durable.ErrClaimLost, and a missing row reports ErrNotFound. A record of
+// another attempt never overwrites the attempt that the row names. An
+// attempt outside the allowlist is refused with ErrInvalidAttempt.
+func testBackupRecordAttempt(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	r := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
+	first, attempt := recordFreshBackupAttempt(t, s, r)
+	live := refuseOtherBackupAttempt(t, s, r.ID, attempt, first)
+	refuseInvalidBackupAttempt(t, s, r.ID, attempt, live)
+	refuseFinishedBackupAttempt(t, s, r.ID, attempt, live)
+}
+
+// recordFreshBackupAttempt stores the write attempt on the fresh running row
+// r and proves that a repeat of the same claim reports durable.ErrStepDone.
+// It returns the first claim and the recorded attempt.
+func recordFreshBackupAttempt(t *testing.T, s BackupStore, r backup.Record) (durable.Claim, string) {
+	t.Helper()
+
+	mustStartBackup(t, s, r)
+	// The lease outlasts the slowest store round trips of the case below: a
+	// claim that expires before the repeat of the record reports
+	// durable.ErrClaimLost instead of durable.ErrStepDone.
+	first := claimBackupOperation(t, s, r.ID, "first", 2*time.Second)
+	attempt := backup.AttemptOf(first.Token)
+
+	if err := s.RecordBackupAttempt(t.Context(), first.Step(backup.StepWrite), r.ID, attempt); err != nil {
+		t.Fatalf("record the attempt of backup %s: %v", r.ID, err)
+	}
+
+	got := mustGetBackup(t, s, r.ID)
+	if got.Attempt != attempt {
+		t.Fatalf("recorded attempt = %q, want %q", got.Attempt, attempt)
+	}
+
+	if _, done := mustOperation(t, s, first.Operation).Step(backup.StepWrite); !done {
+		t.Fatalf("operation did not record %s with the attempt", backup.StepWrite)
+	}
+
+	// A second record of the same claim is refused and changes nothing.
+	if err := s.RecordBackupAttempt(t.Context(), first.Step(backup.StepWrite), r.ID, attempt); !errors.Is(
+		err, durable.ErrStepDone,
+	) {
+		t.Fatalf("record the attempt twice: err = %v, want durable.ErrStepDone", err)
+	}
+
+	return first, attempt
+}
+
+// refuseOtherBackupAttempt proves that a stale fence, a fence of another
+// operation and a live claim that names another attempt change nothing, and
+// that a missing row reports ErrNotFound. It returns the live claim.
+func refuseOtherBackupAttempt(
+	t *testing.T, s BackupStore, id backup.ID, attempt string, first durable.Claim,
+) durable.Claim {
+	t.Helper()
+
+	// A stale fence records no step and no attempt.
+	stale := durable.StepFence{Operation: first.Operation, Token: first.Token - 1, Step: backup.StepWrite}
+
+	if err := s.RecordBackupAttempt(t.Context(), stale, id, "9"); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("record with a stale fence: err = %v, want durable.ErrClaimLost", err)
+	}
+
+	if got := mustGetBackup(t, s, id); got.Attempt != attempt {
+		t.Fatalf("attempt after a stale record = %q, want %q", got.Attempt, attempt)
+	}
+
+	// A fence of the operation of another backup records nothing. It sends the
+	// attempt that the row records, so only ownsBackup can refuse it: the
+	// row compare would pass.
+	other := bareBackupClaim(t, s, backup.ID(ident.NewID("bkp-")))
+
+	if err := s.RecordBackupAttempt(t.Context(), other.Step(backup.StepWrite), id, attempt); !errors.Is(
+		err, durable.ErrClaimLost,
+	) {
+		t.Fatalf("record with a fence of another backup: err = %v, want durable.ErrClaimLost", err)
+	}
+
+	if got := mustGetBackup(t, s, id); got.Attempt != attempt {
+		t.Fatalf("attempt after a foreign record = %q, want %q", got.Attempt, attempt)
+	}
+
+	// A live claim that names another attempt never overwrites the row. The
+	// fence names an unrecorded step, so the call reaches the compare of the
+	// row: with the recorded write step the call would stop at ErrStepDone
+	// before the row check, as the runner never runs a recorded step again.
+	live := claimBackupWhenExpired(t, s, id, "second")
+
+	if err := s.RecordBackupAttempt(t.Context(), live.Step("probe"), id, "9"); !errors.Is(
+		err, durable.ErrClaimLost,
+	) {
+		t.Fatalf("record another attempt over the stored one: err = %v, want durable.ErrClaimLost", err)
+	}
+
+	if got := mustGetBackup(t, s, id); got.Attempt != attempt {
+		t.Fatalf("attempt after a record of another attempt = %q, want %q", got.Attempt, attempt)
+	}
+
+	// A missing row reports ErrNotFound.
+	missing := backup.ID(ident.NewID("bkp-"))
+	missingFence := bareBackupClaim(t, s, missing).Step(backup.StepWrite)
+
+	if err := s.RecordBackupAttempt(t.Context(), missingFence, missing, "1"); !errors.Is(
+		err, backup.ErrNotFound,
+	) {
+		t.Fatalf("record the attempt of a missing backup: err = %v, want ErrNotFound", err)
+	}
+
+	return live
+}
+
+// refuseInvalidBackupAttempt proves the store allowlist: each attempt outside
+// 1 to 64 allowlisted characters is refused with ErrInvalidAttempt, records
+// no step and leaves the row unchanged.
+func refuseInvalidBackupAttempt(
+	t *testing.T, s BackupStore, id backup.ID, attempt string, live durable.Claim,
+) {
+	t.Helper()
+
+	for i, bad := range []string{
+		strings.Repeat("a", 65),
+		"../x",
+		"a/b",
+		"A",
+		"a\nb",
+	} {
+		step := "invalid-" + string(rune('0'+i))
+
+		if err := s.RecordBackupAttempt(t.Context(), live.Step(step), id, bad); !errors.Is(
+			err, backup.ErrInvalidAttempt,
+		) {
+			t.Fatalf("record invalid attempt %q: err = %v, want ErrInvalidAttempt", bad, err)
+		}
+
+		if got := mustGetBackup(t, s, id); got.Attempt != attempt {
+			t.Fatalf("attempt after an invalid record = %q, want %q", got.Attempt, attempt)
+		}
+
+		if _, done := mustOperation(t, s, live.Operation).Step(step); done {
+			t.Fatalf("operation recorded invalid step %q, want none", step)
+		}
+	}
+}
+
+// refuseFinishedBackupAttempt finishes the running row id and proves that a
+// finished row reports ErrNotRunning and records no step.
+func refuseFinishedBackupAttempt(
+	t *testing.T, s BackupStore, id backup.ID, attempt string, live durable.Claim,
+) {
+	t.Helper()
+
+	// A row that is not running reports ErrNotRunning and records no step.
+	// The running row finishes first: one backup runs at a time.
+	_, liveErr := s.FinishBackup(
+		t.Context(), live.Step(backup.StepFinish), id, backup.StateSucceeded, "", now(), attempt,
+	)
+	if liveErr != nil {
+		t.Fatalf("finish backup %s: %v", id, liveErr)
+	}
+
+	failed := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	failedClaim := bareBackupClaim(t, s, failed.ID)
+
+	if err := s.RecordBackupAttempt(t.Context(), failedClaim.Step(backup.StepWrite), failed.ID, "1"); err != nil {
+		t.Fatalf("record the attempt of a fresh row: %v", err)
+	}
+
+	_, finishErr := s.FinishBackup(
+		t.Context(), failedClaim.Step(backup.StepFinish), failed.ID, backup.StateFailed, "stop", now(), "",
+	)
+	if finishErr != nil {
+		t.Fatalf("finish the failed row: %v", finishErr)
+	}
+
+	err := s.RecordBackupAttempt(t.Context(), failedClaim.Step("probe"), failed.ID, "2")
+	if !errors.Is(err, backup.ErrNotRunning) {
+		t.Fatalf("record the attempt of a finished row: err = %v, want ErrNotRunning", err)
+	}
+}
+
+// testBackupFinishAttemptCompare proves the compare of the finish commit: a
+// succeeded finish of an attempt that the row does not record reports
+// durable.ErrClaimLost, records no step and leaves the row running with its
+// attempt, and the row keeps the recorded attempt when it ends.
+func testBackupFinishAttemptCompare(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	r := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
+	claim := startBackupWithClaim(t, s, r)
+	attempt := backup.AttemptOf(claim.Token)
+
+	if err := s.RecordBackupAttempt(t.Context(), claim.Step(backup.StepWrite), r.ID, attempt); err != nil {
+		t.Fatalf("record the attempt of backup %s: %v", r.ID, err)
+	}
+
+	_, err := s.FinishBackup(
+		t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", now().Add(time.Hour),
+		backup.AttemptOf(claim.Token+1),
+	)
+	if !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("finish with another attempt: err = %v, want durable.ErrClaimLost", err)
+	}
+
+	requireStillRunning(t, s, r.ID, claim)
+
+	if got := mustGetBackup(t, s, r.ID); got.Attempt != attempt {
+		t.Fatalf("attempt after the refused finish = %q, want %q", got.Attempt, attempt)
+	}
+
+	if _, done := mustOperation(t, s, claim.Operation).Step(backup.StepFinish); done {
+		t.Fatalf("operation recorded %s after a refused finish, want none", backup.StepFinish)
+	}
+
+	finished, err := s.FinishBackup(
+		t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", now().Add(time.Hour), attempt,
+	)
+	if err != nil {
+		t.Fatalf("finish backup %s with the recorded attempt: %v", r.ID, err)
+	}
+
+	if finished.Attempt != attempt {
+		t.Fatalf("attempt of the finished row = %q, want %q", finished.Attempt, attempt)
 	}
 }
 
@@ -2383,7 +2636,7 @@ func testBackupFinishStaleClaim(t *testing.T, newStore BackupFactory) {
 	}
 
 	for name, fence := range fences {
-		_, err := s.FinishBackup(t.Context(), fence, r.ID, backup.StateSucceeded, "", endedAt)
+		_, err := s.FinishBackup(t.Context(), fence, r.ID, backup.StateSucceeded, "", endedAt, "")
 		if !errors.Is(err, durable.ErrClaimLost) {
 			t.Fatalf("finish with %s: err = %v, want durable.ErrClaimLost", name, err)
 		}
@@ -2391,7 +2644,9 @@ func testBackupFinishStaleClaim(t *testing.T, newStore BackupFactory) {
 		requireStillRunning(t, s, r.ID, live)
 	}
 
-	mustFinishClaimed(t, s, live, backupFinish{ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt})
+	mustFinishClaimed(t, s, live, backupFinish{
+		ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt, Attempt: "",
+	})
 }
 
 // testBackupFinishCanceled cancels the operation of a running backup: the
@@ -2408,7 +2663,7 @@ func testBackupFinishCanceled(t *testing.T, newStore BackupFactory) {
 	}
 
 	_, err := s.FinishBackup(
-		t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", now().Add(time.Hour),
+		t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", now().Add(time.Hour), "",
 	)
 	if !errors.Is(err, durable.ErrCanceled) {
 		t.Fatalf("finish after a cancel: err = %v, want durable.ErrCanceled", err)
@@ -2453,7 +2708,7 @@ func testBackupFinishForeignFence(t *testing.T, newStore BackupFactory) {
 	}
 
 	for name, fence := range fences {
-		_, finishErr := s.FinishBackup(t.Context(), fence, r.ID, backup.StateSucceeded, "", now().Add(time.Hour))
+		_, finishErr := s.FinishBackup(t.Context(), fence, r.ID, backup.StateSucceeded, "", now().Add(time.Hour), "")
 		if !errors.Is(finishErr, durable.ErrClaimLost) {
 			t.Fatalf("finish with a fence of an %s: err = %v, want durable.ErrClaimLost", name, finishErr)
 		}
@@ -2467,7 +2722,7 @@ func testBackupFinishForeignFence(t *testing.T, newStore BackupFactory) {
 	live := bareBackupClaim(t, s, otherBackup)
 	liveFence := live.Step(backup.StepFinish)
 
-	_, err = s.FinishBackup(t.Context(), liveFence, r.ID, backup.StateSucceeded, "", now().Add(time.Hour))
+	_, err = s.FinishBackup(t.Context(), liveFence, r.ID, backup.StateSucceeded, "", now().Add(time.Hour), "")
 	if !errors.Is(err, durable.ErrClaimLost) {
 		t.Fatalf("finish with a live fence of another backup: err = %v, want durable.ErrClaimLost", err)
 	}
@@ -2494,7 +2749,7 @@ func testBackupFinishRollsBack(t *testing.T, newStore BackupFactory) {
 	missing := backup.ID(ident.NewID("bkp-"))
 	missingFence := bareBackupClaim(t, s, missing).Step(backup.StepFinish)
 
-	if _, err := s.FinishBackup(t.Context(), missingFence, missing, backup.StateFailed, "no", endedAt); !errors.Is(
+	if _, err := s.FinishBackup(t.Context(), missingFence, missing, backup.StateFailed, "no", endedAt, ""); !errors.Is(
 		err, backup.ErrNotFound,
 	) {
 		t.Fatalf("finish a missing backup: err = %v, want ErrNotFound", err)
@@ -2502,7 +2757,7 @@ func testBackupFinishRollsBack(t *testing.T, newStore BackupFactory) {
 
 	requireStillRunning(t, s, r.ID, claim)
 
-	if _, err := s.FinishBackup(t.Context(), fence, r.ID, backup.StateRunning, "", endedAt); !errors.Is(
+	if _, err := s.FinishBackup(t.Context(), fence, r.ID, backup.StateRunning, "", endedAt, ""); !errors.Is(
 		err, backup.ErrNotRunning,
 	) {
 		t.Fatalf("finish with the state running: err = %v, want ErrNotRunning", err)
@@ -2510,7 +2765,9 @@ func testBackupFinishRollsBack(t *testing.T, newStore BackupFactory) {
 
 	requireStillRunning(t, s, r.ID, claim)
 
-	mustFinishClaimed(t, s, claim, backupFinish{ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt})
+	mustFinishClaimed(t, s, claim, backupFinish{
+		ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: endedAt, Attempt: "",
+	})
 }
 
 // testBackupFailEndedFailed fails the running row of an operation that ended
@@ -2529,7 +2786,7 @@ func testBackupFailEndedFailed(t *testing.T, newStore BackupFactory) {
 	done := newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour))
 	doneClaim := startBackupWithClaim(t, s, done)
 	finished := mustFinishClaimed(t, s, doneClaim, backupFinish{
-		ID: done.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(2 * time.Hour),
+		ID: done.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(2 * time.Hour), Attempt: "",
 	})
 
 	running := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
@@ -2696,7 +2953,7 @@ func testBackupRowSurvivesReopen(t *testing.T, newStore BackupFactory) {
 		ID:      done.ID,
 		State:   backup.StateSucceeded,
 		Error:   "",
-		EndedAt: now().Add(2 * time.Hour),
+		EndedAt: now().Add(2 * time.Hour), Attempt: "",
 	})
 	running := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
 	claim := startBackupWithClaim(t, s, running)

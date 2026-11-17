@@ -15,7 +15,7 @@ import (
 const muxTestToken = "admin-token-for-the-mux-layer-test-of-the-server"
 
 // newMuxServer builds a server over a new store with the components set.
-func newMuxServer(t *testing.T, set Components) *Server {
+func newMuxServer(t *testing.T, set Components, extra ...Option) *Server {
 	t.Helper()
 
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -44,12 +44,14 @@ func newMuxServer(t *testing.T, set Components) *Server {
 		t.Fatalf("authenticator: %v", err)
 	}
 
-	srv, err := NewServer(
+	opts := append([]Option{
 		WithInstallation("test"), WithNamespaceStore(st), WithStackStore(st), WithUpdateStore(st),
 		WithCheckpointStore(st), WithEventStore(st), WithSecretKeyStore(st), WithSecretWrapper(wrapper),
 		WithWorkspaceStore(st), WithStateStore(st), WithBlobStore(blobs), WithInventoryReader(st),
 		WithAuthenticator(authn), WithComponents(set),
-	)
+	}, extra...)
+
+	srv, err := NewServer(opts...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}

@@ -14,8 +14,8 @@ import (
 // namespace and the jobs route reads one job. Both authorize on the
 // namespace, so the IP allowlist of the namespace is on their path.
 const (
-	runnerPoolsPath = "/api/runners/"
-	runnerPoolsTail = "/pools"
+	runnerPoolsPath = "/api/dustpan/v1/namespaces/"
+	runnerPoolsTail = "/runner-pools"
 	jobsPathHead    = "/api/dustpan/v1/namespaces/"
 	jobsPathMid     = "/jobs/"
 )

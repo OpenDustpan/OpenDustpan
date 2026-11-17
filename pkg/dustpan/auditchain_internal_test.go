@@ -7,8 +7,10 @@ import (
 	"io"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,6 +72,11 @@ func newTestAuditChain(t *testing.T, setting audit.ChainSetting) *auditChain {
 	})
 	if err != nil {
 		t.Fatalf("save chain record: %v", err)
+	}
+
+	// Only a person approves a change to off, so the default caller is one.
+	if setting == audit.ChainOff {
+		createPrincipalOfKind(t, chain, "alice", principal.KindPerson)
 	}
 
 	return chain
@@ -137,8 +144,8 @@ func createPrincipalOfKind(t *testing.T, chain *auditChain, subject string, kind
 
 // TestApproveOffRefusesServicePrincipal proves that an approval of a change
 // to off by a service principal is refused before it writes anything, that
-// the same caller may approve a change to on, and that a subject with no
-// principal row may approve a change to off.
+// the same caller may approve a change to on, and that a person may approve a
+// change to off.
 func TestApproveOffRefusesServicePrincipal(t *testing.T) {
 	t.Parallel()
 
@@ -157,7 +164,7 @@ func TestApproveOffRefusesServicePrincipal(t *testing.T) {
 	}
 
 	if err := off.Approve(t.Context(), approver()); err != nil {
-		t.Fatalf("approve off without a principal row: %v", err)
+		t.Fatalf("approve off as a person: %v", err)
 	}
 
 	on := newTestAuditChain(t, audit.ChainOn)
@@ -169,11 +176,9 @@ func TestApproveOffRefusesServicePrincipal(t *testing.T) {
 }
 
 // TestApproveOffKindsAllowlist proves that the check on a change to off is
-// an allowlist of the kind person and the kind workload: each of those kinds
-// with a principal row may approve it. It refuses the kind service, the kind
-// agent and an unknown kind. A workload passed this check on main, when the
-// check refused only the kind service, and this test documents that it still
-// passes. A refused approval writes no operation.
+// an allowlist of the kind person: only that kind may approve it. It refuses
+// the kind workload, the kind service, the kind agent and an unknown kind. A
+// refused approval writes no operation.
 func TestApproveOffKindsAllowlist(t *testing.T) {
 	t.Parallel()
 
@@ -184,7 +189,7 @@ func TestApproveOffKindsAllowlist(t *testing.T) {
 	}{
 		{"person", principal.KindPerson, false},
 		{"service", principal.KindService, true},
-		{"workload", principal.KindWorkload, false},
+		{"workload", principal.KindWorkload, true},
 		{"agent", principal.KindAgent, true},
 		{"unknown", principal.Kind("robot"), true},
 	} {
@@ -216,6 +221,116 @@ func TestApproveOffKindsAllowlist(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestApproveOffRefusesEachOtherCaseAndAudits proves that an approval of a
+// change to off by each case that is not a person answers ErrChainNeedsPerson,
+// starts no migration, keeps the stored chain state and writes one denied
+// entry in the server scope.
+func TestApproveOffRefusesEachOtherCaseAndAudits(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range approverCases() {
+		if !tc.refused {
+			continue
+		}
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkRefusedApproval(t, tc)
+		})
+	}
+}
+
+// checkRefusedApproval approves a change to off as the caller of tc and
+// proves the refusal, the missing operation, the unchanged record and the one
+// denied entry.
+func checkRefusedApproval(t *testing.T, tc approverCase) {
+	t.Helper()
+
+	off := newTestAuditChain(t, audit.ChainOff)
+
+	if tc.stored {
+		createPrincipalOfKind(t, off, "intruder", tc.kind)
+	}
+
+	if tc.replace {
+		off.principals = tc.reader
+	}
+
+	before, err := off.store.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	caller := approver()
+	caller.Subject = "intruder"
+
+	err = off.Approve(t.Context(), caller)
+	if !errors.Is(err, audit.ErrChainNeedsPerson) {
+		t.Fatalf("approve off: %v, want ErrChainNeedsPerson", err)
+	}
+
+	if got := migrationOpCount(t, off); got != 0 {
+		t.Fatalf("operations after a refused approval = %d, want none", got)
+	}
+
+	after, err := off.store.ChainRecord(t.Context())
+	if err != nil || after != before {
+		t.Fatalf("chain record after = %+v, %v, want %+v", after, err, before)
+	}
+
+	if denied := deniedEntryCount(t, off, "intruder"); denied != 1 {
+		t.Fatalf("denied entries = %d, want 1", denied)
+	}
+}
+
+// deniedEntryCount answers the count of denied approval entries of subject in
+// the server scope.
+func deniedEntryCount(t *testing.T, chain *auditChain, subject string) int {
+	t.Helper()
+
+	listing, err := chain.entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 50})
+	if err != nil {
+		t.Fatalf("list server entries: %v", err)
+	}
+
+	denied := 0
+
+	for i := range listing.Entries {
+		e := listing.Entries[i]
+		if e.Action == audit.ActionSetChain && e.Outcome == audit.OutcomeDenied && e.Subject == subject {
+			denied++
+		}
+	}
+
+	return denied
+}
+
+// TestApproveOffRefusalJoinsTheFailedAuditWrite proves that a failed write of
+// the denied entry joins the refusal.
+func TestApproveOffRefusalJoinsTheFailedAuditWrite(t *testing.T) {
+	t.Parallel()
+
+	off := newTestAuditChain(t, audit.ChainOff)
+	off.principals = fakePrincipals{err: nil, kind: principal.KindService}
+	off.server = failingServer{}
+
+	err := off.Approve(t.Context(), approver())
+	if !errors.Is(err, audit.ErrChainNeedsPerson) || !errors.Is(err, errServerAppend) {
+		t.Fatalf("approve off: %v, want the refusal joined with the write error", err)
+	}
+}
+
+// errServerAppend is the failure of failingServer.
+var errServerAppend = errors.New("server append failed")
+
+// failingServer fails each append.
+type failingServer struct{}
+
+func (failingServer) AppendServer(context.Context, audit.Entry) (audit.Entry, error) {
+	return audit.Entry{}, errServerAppend
 }
 
 // TestApproveOffNeedsTheMFAStep proves that once the MFA check asks for a
@@ -395,6 +510,103 @@ func TestFailedApprovalWritesNoEntryAndRetryWritesOne(t *testing.T) {
 	}
 }
 
+// holdingApproval wraps the atomic approval of a chain. Its first call
+// reports that it runs and then waits for release. A later call, which only
+// runs while the first one still waits when nothing serializes the
+// approvals, reports it in second.
+type holdingApproval struct {
+	real    chainApprovalStore
+	calls   atomic.Int32
+	inside  chan struct{}
+	release chan struct{}
+	second  chan struct{}
+}
+
+func (h *holdingApproval) ApproveChainChange(
+	ctx context.Context, e audit.Entry, fixed durable.StartRequest, retryKey string,
+) (durable.Operation, error) {
+	if h.calls.Add(1) == 1 {
+		close(h.inside)
+		<-h.release
+	} else {
+		close(h.second)
+	}
+
+	return h.real.ApproveChainChange(ctx, e, fixed, retryKey)
+}
+
+// approveParkedOnLock reports whether a goroutine that runs Approve waits
+// for a mutex. It reads the stacks of all goroutines, so it needs no timer.
+func approveParkedOnLock() bool {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+
+	for stack := range strings.SplitSeq(string(buf), "\n\n") {
+		if strings.Contains(stack, "(*auditChain).Approve(") &&
+			strings.Contains(stack, "sync.runtime_SemacquireMutex") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TestApprovalsOfOneInstanceRunOneAtATime proves that a second approval does
+// not run its checks or start its migration while a first approval of the
+// same instance is between its check of the pending change and its commit.
+// It holds the first approval in its commit, sends the second, and waits
+// until the second waits for the lock or reaches the commit.
+func TestApprovalsOfOneInstanceRunOneAtATime(t *testing.T) {
+	t.Parallel()
+
+	chain := newTestAuditChain(t, audit.ChainOff)
+	held := &holdingApproval{
+		real: chain.approve, calls: atomic.Int32{},
+		inside: make(chan struct{}), release: make(chan struct{}), second: make(chan struct{}),
+	}
+	chain.approve = held
+
+	var wg sync.WaitGroup
+
+	errs := make([]error, 2)
+
+	wg.Go(func() { errs[0] = chain.Approve(t.Context(), approver()) })
+
+	<-held.inside
+
+	wg.Go(func() { errs[1] = chain.Approve(t.Context(), approver()) })
+
+	reached := false
+
+	for !approveParkedOnLock() && !reached {
+		select {
+		case <-held.second:
+			reached = true
+		default:
+			runtime.Gosched()
+		}
+	}
+
+	close(held.release)
+	wg.Wait()
+
+	if reached {
+		t.Fatal("a second approval reached its commit while the first one held it")
+	}
+
+	if errs[0] != nil {
+		t.Fatalf("first approval: %v, want nil", errs[0])
+	}
+
+	if !errors.Is(errs[1], audit.ErrChainMigrating) && !errors.Is(errs[1], audit.ErrNoChainChange) {
+		t.Fatalf("second approval: %v, want ErrChainMigrating or ErrNoChainChange", errs[1])
+	}
+
+	if got := approvalEntriesOf(t, chain); len(got) != 1 {
+		t.Fatalf("approval entries = %d, want 1", len(got))
+	}
+}
+
 // newConcurrentApprovalChain answers a chain on st with the migration loop
 // marked running, ready for an approval of a change to off.
 func newConcurrentApprovalChain(t *testing.T, st *sqlite.Store) *auditChain {
@@ -488,6 +700,7 @@ func TestConcurrentApprovalsLeaveOneEntry(t *testing.T) {
 	first := newConcurrentApprovalChain(t, st)
 	second := newConcurrentApprovalChain(t, st)
 
+	createPrincipalOfKind(t, first, "alice", principal.KindPerson)
 	saveConcurrentWaitingChange(t, st)
 
 	counts := runConcurrentApprovals(t, []*auditChain{first, second})
@@ -540,6 +753,8 @@ func TestConcurrentApprovalsOnOneStore(t *testing.T) {
 	}
 
 	first, second := newChain(), newChain()
+
+	createPrincipalOfKind(t, first, "alice", principal.KindPerson)
 
 	saveErr := st.SaveChainRecord(t.Context(), audit.ChainRecord{
 		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,

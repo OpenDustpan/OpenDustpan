@@ -5,7 +5,7 @@
 When a caller creates a trust rule, the server SHALL check the namespace action on that namespace.
 
 #### Scenario: Create valid rule
-- **WHEN** a caller with the action and a fresh session creates a rule with a valid spiffeIDPattern
+- **WHEN** a caller with the action and a fresh session creates a rule with a valid spiffePattern
 - **THEN** the server stores the rule with stable IDs and writes an audit entry
 
 ### Requirement: Update rule

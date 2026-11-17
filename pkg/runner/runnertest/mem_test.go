@@ -362,7 +362,7 @@ func (m *mem) CreateJoinToken(
 		return runner.JoinToken{}, err
 	}
 
-	if _, ok := m.pools[t.Pool]; !ok {
+	if p, ok := m.pools[t.Pool]; !ok || p.Namespace != fence.Namespace {
 		return runner.JoinToken{}, runner.ErrNotFound
 	}
 
@@ -399,10 +399,16 @@ func (m *mem) RevokeJoinToken(_ context.Context, id string, fence namespace.Fenc
 	}
 
 	t, ok := m.tokens[id]
+	if !ok {
+		return runner.ErrNotFound
+	}
+
+	p, ok := m.pools[t.Pool]
+	if !ok || p.Namespace != fence.Namespace {
+		return runner.ErrNotFound
+	}
 
 	switch {
-	case !ok:
-		return runner.ErrNotFound
 	case !t.UsedAt.IsZero():
 		return runner.ErrTokenUsed
 	case !t.RevokedAt.IsZero():

@@ -18,6 +18,7 @@ const (
 	portTableNamespaces  = "namespaces"
 	portTableManualLocks = "manual_locks"
 	portColVersion       = "version"
+	portColBundleID      = "bundle_id"
 	portColStackID       = "stack_id"
 	portColStatus        = "status"
 	portColStartedAtMs   = "started_at_ms"
@@ -332,7 +333,7 @@ func portableSpec() []PortableTable {
 				{Name: portColTool, Kind: KindText},
 				{Name: portColProject, Kind: KindText},
 				{Name: "stack", Kind: KindText},
-				{Name: "collection_key", Kind: KindText},
+				{Name: "collection_id", Kind: KindText},
 				{Name: "created_by", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 			},
@@ -507,6 +508,13 @@ func portableSpec() []PortableTable {
 				{Name: "source_ip", Kind: KindText},
 				{Name: "user_agent", Kind: KindText},
 				{Name: "channel", Kind: KindText},
+				{Name: "agent_run", Kind: KindText},
+				{Name: "agent_session", Kind: KindText},
+				{Name: "args_digest", Kind: KindText},
+				{Name: "break_glass", Kind: KindBool},
+				{Name: "delegation_id", Kind: KindText},
+				{Name: "secret_stage", Kind: KindText},
+				{Name: "tool", Kind: KindText},
 				{Name: portColKind, Kind: KindText},
 				{Name: "outcome", Kind: KindText},
 				{Name: "request_id", Kind: KindText},
@@ -820,5 +828,26 @@ func portableSpec() []PortableTable {
 		portableTrustRuleTables(),
 		portableUnmanagedTables(),
 		portableBreakGlassReviewTables(),
+		portableProxyRuleTables(),
 	)
+}
+
+// portableProxyRuleTables returns the table of the proxy rule sets of the
+// namespaces and the units.
+func portableProxyRuleTables() []PortableTable {
+	return []PortableTable{
+		{
+			Table:   "proxy_rule_sets",
+			OrderBy: []string{portColNamespaceID, "scope_kind", "unit_id"},
+			Columns: []Column{
+				{Name: portColNamespaceID, Kind: KindText},
+				{Name: "scope_kind", Kind: KindText},
+				{Name: "unit_id", Kind: KindText},
+				{Name: "document", Kind: KindText},
+				{Name: "digest", Kind: KindText},
+				{Name: portColVersion, Kind: KindInteger},
+				{Name: "updated_at_ms", Kind: KindTime},
+			},
+		},
+	}
 }

@@ -98,10 +98,12 @@ The state of the audit chain is information only. While a change of the audit ch
 
 When an instance gets SIGTERM, it does these steps in this order:
 
-1. `/health/ready` and `/health/ready/{component}` answer 503 at once. The body names the failed check `draining`. `/health/live` still answers 204.
-2. The `worker` component gives back the claim of each durable operation that it runs, and it stops the work. Another `worker` process then claims the operation at its next poll, with no wait for the end of the lease. The give-back checks the claim token in the database. It never gives back a claim that another instance took.
-3. The instance keeps serving all other requests for a drain of 10 seconds. A load balancer with a health check on `/health/ready` takes the instance out of its pool in this time. The drain has a fixed length and no flag.
+1. `/health/ready` and `/health/ready/{component}` answer 503 at once. The body names the failed check `draining`. The answer holds a `Retry-After` header with the drain period in whole seconds, from 1 to 15. `/health/live` still answers 204.
+2. The `worker` component gives back the claim of each durable operation that it runs, and it stops the work. With no wait for the end of the lease, another `worker` process then claims the operation at its next poll. The give-back checks the claim token in the database. It never gives back a claim that another instance took.
+3. The instance keeps serving all requests that do not start a durable operation for a drain of 10 seconds. A load balancer with a health check on `/health/ready` takes the instance out of its pool in this time. The drain has a fixed length and no flag.
 4. The instance closes the listener and waits at most 30 seconds for the requests in flight. A request that began before the signal gets its answer.
+
+During the drain, a request that starts a backup, a restore, a job, a drift check or a trigger answers 503. The answer holds the error code `instance.draining` and a `Retry-After` header. The client retries on another instance.
 
 The drain and the wait together are at most 40 seconds. The Helm chart waits 15 seconds in `preStop` before the signal, and it gives the pod 60 seconds. If you run the instance in another way, give it at least 50 seconds between SIGTERM and SIGKILL. The drain and the wait take 40 seconds, and 10 seconds are margin.
 
@@ -121,6 +123,12 @@ Each worker records a heartbeat in the store when it claims work or renews a cla
 A restore is a durable operation too. The `api` process that took the request stores it, and a `worker` process runs its steps. The worker loads the backup into a staging area and checks it. Then it enters maintenance mode, takes the backup of the live data and copies the blobs. Then it swaps the staged data into the live data, leaves maintenance mode and drops the staging area. Each step records its result in the database. When the instance that runs a restore stops, another `worker` process continues the restore after the lease ends, from the step after the last recorded step. Run at least one `worker` process with enough time and memory for a restore, or the restore waits. Any instance answers the state of a restore, and any instance takes a cancel before the swap.
 
 A backup is a durable operation. The `api` process that took the request stores it. A `worker` process runs it and renews its claim while it works. A start, a restart or a rolling update of an instance never fails a backup that another instance runs. When the instance that runs a backup stops with SIGTERM, it gives the claim back, and another `worker` process continues the backup at once. When the instance dies with no clean stop, another `worker` process continues the backup after the lease ends. The lease is 30 seconds by default. Run at least one `worker` process, or the backup waits. Any instance answers the state of a backup, because the state is in the database.
+
+Each run of a backup writes to its own directory in the target: `backups/<id>/<attempt>/`. The attempt is the number of the claim of the run. A run that lost its claim can write or delete only in its own directory. It never changes the directory of the run that finished the backup. Each put under `backups/` and each delete reads the claim again right before the call. A copy under `blobs/` does not read the claim. The copy keeps the first object and checks it against the live bytes.
+
+The finish step checks the size and the checksum of each file of its directory. A file that is missing or short fails the backup. After the check passes, the holder writes `backups/<id>/live.json` with the attempt of the row. It writes the pointer before the fenced commit of the row. It re-checks the claim right before the put. This file names the attempt of the finished backup. A read of the backup, a check and a restore use only the directory that `live.json` names. A backup with no `live.json` is not complete.
+
+Then the same instance deletes the other attempt directories of the same backup. It runs only after the pointer names the attempt that the row records. It checks its claim before each delete. It keeps the directory of the row attempt and the pointer itself. When the pointer and the row differ, it deletes nothing. A takeover leaves one old directory until this cleanup runs. A backup that never finishes leaves its directories in the target. The server has no retention for backups. Delete these directories by hand when you do not need them. Find them under `backups/<id>/`.
 
 ## Roll out a new release
 
@@ -334,6 +342,8 @@ Some targets write to the disk of the host that runs the instance. Each instance
 Set `--public-url` to the URL that clients use, for example `https://dustpan.example`. Without it, each instance makes absolute URLs from the host of each request. Console sign-in needs the public URL.
 
 Set `--trusted-proxies` (`DUSTPAN_TRUSTED_PROXIES`) to the addresses of the load balancer. The server then reads the client address from the forwarding header in `--trusted-proxy-header`. Without it, the audit log and the IP allowlists see the address of the load balancer.
+
+Set the proxy timeouts to more than the drain timeout and the shutdown wait: at least 50 seconds. A shorter idle timeout or response timeout can cut a request in flight before the instance answers it.
 
 Send health checks to the readiness probe. The [observe guide](observe.md) gives the probe paths.
 

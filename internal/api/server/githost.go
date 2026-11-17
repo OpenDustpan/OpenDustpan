@@ -142,13 +142,17 @@ type keyedCall struct {
 	build func(result any) (idempotency.Answer, error)
 	// serve runs the write and writes its answer.
 	serve http.HandlerFunc
+	// required says that the route refuses a request with no Idempotency-Key.
+	required bool
 }
 
 // keyed runs the call. A request with the Idempotency-Key header runs inside the
 // middleware, which keeps the answer in the transaction of the write. The
 // caller has authorized the request already: a replay never skips that check.
+// A call with required set sends a request with no key to the middleware too,
+// which refuses it before any write.
 func (h *Handler) keyed(w http.ResponseWriter, r *http.Request, p identity.Principal, call keyedCall) {
-	if !idempotent.Present(r) {
+	if !call.required && !idempotent.Present(r) {
 		call.serve(w, r)
 
 		return
@@ -161,7 +165,7 @@ func (h *Handler) keyed(w http.ResponseWriter, r *http.Request, p identity.Princ
 	}
 
 	err := h.idem.Handle(w, r, idempotent.Call{
-		Build: call.build, SecretAnswer: nil, Serve: call.serve, Principal: p.Subject, Required: false,
+		Build: call.build, SecretAnswer: nil, Serve: call.serve, Principal: p.Subject, Required: call.required,
 	})
 	if err != nil {
 		h.writeError(r.Context(), w, err)

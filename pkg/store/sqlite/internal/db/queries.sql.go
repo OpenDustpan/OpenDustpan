@@ -570,8 +570,8 @@ WHERE notification_deliveries.id IN (
     ORDER BY d.next_at_ms, d.id
     LIMIT ?5
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-          last_error, delivered_at_ms, owner, lease_until_ms, version
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+          next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 `
 
 type ClaimNotificationDeliveriesParams struct {
@@ -609,6 +609,7 @@ func (q *Queries) ClaimNotificationDeliveries(ctx context.Context, arg ClaimNoti
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.CreatedAtMs,
 			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
@@ -1338,9 +1339,8 @@ const countNotificationDeliveriesOfSubscriptionBefore = `-- name: CountNotificat
 SELECT COUNT(*) FROM (
     SELECT 1 FROM notification_deliveries
     WHERE scope = ?1 AND subscription_id = ?2
-      AND (next_at_ms > ?3
-        OR (next_at_ms = ?3 AND id >= ?4))
-    ORDER BY next_at_ms DESC, id DESC
+      AND (created_at_ms, id) >= (CAST(?3 AS INTEGER), CAST(?4 AS TEXT))
+    ORDER BY created_at_ms DESC, id DESC
     LIMIT ?5
 ) AS within_bound
 `
@@ -1353,11 +1353,13 @@ type CountNotificationDeliveriesOfSubscriptionBeforeParams struct {
 	MaxRows        int64
 }
 
-// The number of deliveries of the subscription at or before the cursor (next
-// time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
-// the deliveries that a page after the cursor leaves behind. The count stops
-// at max_rows. The ORDER BY does not change the count; it stays so that the
-// plan reads the index of the history in order and stops at max_rows.
+// The number of deliveries of the subscription at or before the cursor
+// (creation time, delivery ID) in the order of
+// ListNotificationDeliveriesOfSubscription: the deliveries that a page after
+// the cursor leaves behind. The count stops at max_rows. The row
+// comparison is a bound of the index of the history, so the scan reads only
+// the rows that it counts. The ORDER BY does not change the count; it stays so
+// that the plan reads that index in order and stops at max_rows.
 func (q *Queries) CountNotificationDeliveriesOfSubscriptionBefore(ctx context.Context, arg CountNotificationDeliveriesOfSubscriptionBeforeParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countNotificationDeliveriesOfSubscriptionBefore,
 		arg.Scope,
@@ -2044,6 +2046,26 @@ func (q *Queries) CountTrustRulesInNamespace(ctx context.Context, namespace stri
 	return count, err
 }
 
+const countTrustRulesNamedInNamespace = `-- name: CountTrustRulesNamedInNamespace :one
+SELECT COUNT(*) FROM trust_rules
+WHERE namespace = ?1 AND name = ?2 AND id <> ?3
+`
+
+type CountTrustRulesNamedInNamespaceParams struct {
+	Namespace string
+	Name      string
+	ExceptID  string
+}
+
+// Counts the rules of the namespace with a name, except one rule. An update
+// uses it to refuse a name that another rule has.
+func (q *Queries) CountTrustRulesNamedInNamespace(ctx context.Context, arg CountTrustRulesNamedInNamespaceParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTrustRulesNamedInNamespace, arg.Namespace, arg.Name, arg.ExceptID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countUnmanagedTargets = `-- name: CountUnmanagedTargets :one
 SELECT COUNT(*) FROM unmanaged_targets WHERE namespace_id = ?1
 `
@@ -2544,20 +2566,20 @@ func (q *Queries) CreatePasskeyChallenge(ctx context.Context, arg CreatePasskeyC
 }
 
 const createPlacementRule = `-- name: CreatePlacementRule :exec
-INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
+INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_id, created_by, created_at_ms)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreatePlacementRuleParams struct {
-	ID            string
-	Namespace     string
-	Position      int64
-	Tool          string
-	Project       string
-	Stack         string
-	CollectionKey string
-	CreatedBy     string
-	CreatedAtMs   int64
+	ID           string
+	Namespace    string
+	Position     int64
+	Tool         string
+	Project      string
+	Stack        string
+	CollectionID string
+	CreatedBy    string
+	CreatedAtMs  int64
 }
 
 // The caller checks the fence in the same transaction and renumbers the list
@@ -2570,7 +2592,7 @@ func (q *Queries) CreatePlacementRule(ctx context.Context, arg CreatePlacementRu
 		arg.Tool,
 		arg.Project,
 		arg.Stack,
-		arg.CollectionKey,
+		arg.CollectionID,
 		arg.CreatedBy,
 		arg.CreatedAtMs,
 	)
@@ -3978,16 +4000,16 @@ func (q *Queries) DeletePlacementRule(ctx context.Context, arg DeletePlacementRu
 
 const deletePlacementRulesOfCollection = `-- name: DeletePlacementRulesOfCollection :exec
 DELETE FROM placement_rules
-WHERE namespace = ? AND collection_key = ?
+WHERE namespace = ? AND collection_id = ?
 `
 
 type DeletePlacementRulesOfCollectionParams struct {
-	Namespace     string
-	CollectionKey string
+	Namespace    string
+	CollectionID string
 }
 
 func (q *Queries) DeletePlacementRulesOfCollection(ctx context.Context, arg DeletePlacementRulesOfCollectionParams) error {
-	_, err := q.db.ExecContext(ctx, deletePlacementRulesOfCollection, arg.Namespace, arg.CollectionKey)
+	_, err := q.db.ExecContext(ctx, deletePlacementRulesOfCollection, arg.Namespace, arg.CollectionID)
 	return err
 }
 
@@ -4014,6 +4036,34 @@ type DeletePrincipalParams struct {
 // at the same time reads the commit of the first.
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteProxyRuleSet = `-- name: DeleteProxyRuleSet :execrows
+DELETE FROM proxy_rule_sets
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1)
+  AND scope_kind = ?2 AND unit_id = ?3 AND version = ?4
+`
+
+type DeleteProxyRuleSetParams struct {
+	Namespace string
+	ScopeKind string
+	UnitID    string
+	Version   int64
+}
+
+// The caller checks the fence in the same transaction. A row of another
+// version is not removed.
+func (q *Queries) DeleteProxyRuleSet(ctx context.Context, arg DeleteProxyRuleSetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteProxyRuleSet,
+		arg.Namespace,
+		arg.ScopeKind,
+		arg.UnitID,
+		arg.Version,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -4260,6 +4310,23 @@ type DeleteTriggerParams struct {
 
 func (q *Queries) DeleteTrigger(ctx context.Context, arg DeleteTriggerParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTrigger, arg.ID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteTrustBundleVersion = `-- name: DeleteTrustBundleVersion :execrows
+DELETE FROM trust_bundle_versions WHERE bundle_id = ?1 AND version = ?2
+`
+
+type DeleteTrustBundleVersionParams struct {
+	BundleID string
+	Version  int64
+}
+
+func (q *Queries) DeleteTrustBundleVersion(ctx context.Context, arg DeleteTrustBundleVersionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTrustBundleVersion, arg.BundleID, arg.Version)
 	if err != nil {
 		return 0, err
 	}
@@ -5171,8 +5238,9 @@ type FinishBackupParams struct {
 	ID        string
 }
 
-// Moves one running backup to its end state. A finished backup matches no
-// row, so a retry reports no change.
+// Moves one running backup to its end state. The attempt stays the one that
+// the write step recorded. A finished backup matches no row, so a retry
+// reports no change.
 func (q *Queries) FinishBackup(ctx context.Context, arg FinishBackupParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, finishBackup,
 		arg.State,
@@ -5500,7 +5568,7 @@ func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow
 
 const getAuditEntry = `-- name: GetAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence = ?
@@ -5530,6 +5598,13 @@ func (q *Queries) GetAuditEntry(ctx context.Context, arg GetAuditEntryParams) (A
 		&i.SourceIp,
 		&i.UserAgent,
 		&i.Channel,
+		&i.AgentRun,
+		&i.AgentSession,
+		&i.ArgsDigest,
+		&i.BreakGlass,
+		&i.DelegationID,
+		&i.SecretStage,
+		&i.Tool,
 		&i.Kind,
 		&i.Outcome,
 		&i.RequestID,
@@ -5566,7 +5641,7 @@ func (q *Queries) GetAuditSinkCursor(ctx context.Context, arg GetAuditSinkCursor
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 WHERE id = ?
 `
@@ -5581,6 +5656,7 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 		&i.EndedAtMs,
 		&i.Target,
 		&i.Error,
+		&i.Attempt,
 	)
 	return i, err
 }
@@ -7776,8 +7852,8 @@ func (q *Queries) GetNotificationCursor(ctx context.Context, arg GetNotification
 }
 
 const getNotificationDelivery = `-- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = ?1
 `
@@ -7795,6 +7871,7 @@ func (q *Queries) GetNotificationDelivery(ctx context.Context, id string) (Notif
 		&i.Principal,
 		&i.State,
 		&i.Attempts,
+		&i.CreatedAtMs,
 		&i.Redeliveries,
 		&i.NextAtMs,
 		&i.LastError,
@@ -7984,10 +8061,27 @@ func (q *Queries) GetPersonPreferences(ctx context.Context, id string) (GetPerso
 	return i, err
 }
 
+const getPlacementCollection = `-- name: GetPlacementCollection :one
+SELECT id FROM collections WHERE namespace = ? AND id = ?
+`
+
+type GetPlacementCollectionParams struct {
+	Namespace string
+	ID        string
+}
+
+// The collection ID must belong to the namespace of the rule.
+func (q *Queries) GetPlacementCollection(ctx context.Context, arg GetPlacementCollectionParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getPlacementCollection, arg.Namespace, arg.ID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getPlacementRule = `-- name: GetPlacementRule :one
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = ? AND r.id = ?
 `
 
@@ -8003,6 +8097,7 @@ type GetPlacementRuleRow struct {
 	Tool           string
 	Project        string
 	Stack          string
+	CollectionID   string
 	CollectionName string
 	CreatedBy      string
 	CreatedAtMs    int64
@@ -8018,6 +8113,7 @@ func (q *Queries) GetPlacementRule(ctx context.Context, arg GetPlacementRulePara
 		&i.Tool,
 		&i.Project,
 		&i.Stack,
+		&i.CollectionID,
 		&i.CollectionName,
 		&i.CreatedBy,
 		&i.CreatedAtMs,
@@ -8204,6 +8300,40 @@ func (q *Queries) GetProfileRevision(ctx context.Context, arg GetProfileRevision
 		&i.Author,
 		&i.CreatedAtMs,
 		&i.Reason,
+	)
+	return i, err
+}
+
+const getProxyRuleSet = `-- name: GetProxyRuleSet :one
+SELECT p.document, p.digest, p.version, p.updated_at_ms
+FROM proxy_rule_sets AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = ?1 AND p.scope_kind = ?2 AND p.unit_id = ?3
+`
+
+type GetProxyRuleSetParams struct {
+	Namespace string
+	ScopeKind string
+	UnitID    string
+}
+
+type GetProxyRuleSetRow struct {
+	Document    string
+	Digest      string
+	Version     int64
+	UpdatedAtMs int64
+}
+
+// The namespace, the kind and the unit ID are the whole key: a unit scope never
+// reads the row of its namespace.
+func (q *Queries) GetProxyRuleSet(ctx context.Context, arg GetProxyRuleSetParams) (GetProxyRuleSetRow, error) {
+	row := q.db.QueryRowContext(ctx, getProxyRuleSet, arg.Namespace, arg.ScopeKind, arg.UnitID)
+	var i GetProxyRuleSetRow
+	err := row.Scan(
+		&i.Document,
+		&i.Digest,
+		&i.Version,
+		&i.UpdatedAtMs,
 	)
 	return i, err
 }
@@ -9462,9 +9592,30 @@ func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTrig
 	return i, err
 }
 
+const getTrustBundleOfNamespace = `-- name: GetTrustBundleOfNamespace :one
+SELECT id, namespace, active_version, revision, created_at_ms
+FROM trust_bundles
+WHERE namespace = ?1
+`
+
+// The namespace is part of the key: a bundle of another namespace reads as no
+// row.
+func (q *Queries) GetTrustBundleOfNamespace(ctx context.Context, namespace string) (TrustBundle, error) {
+	row := q.db.QueryRowContext(ctx, getTrustBundleOfNamespace, namespace)
+	var i TrustBundle
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.ActiveVersion,
+		&i.Revision,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
 const getTrustRule = `-- name: GetTrustRule :one
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS TEXT) AS bundle_id
 FROM trust_rules
 WHERE namespace = ?1 AND id = ?2
 `
@@ -9474,11 +9625,28 @@ type GetTrustRuleParams struct {
 	ID        string
 }
 
+type GetTrustRuleRow struct {
+	ID              string
+	Namespace       string
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	CreatedBy       string
+	CreatedAtMs     int64
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        string
+}
+
 // The namespace is part of the key: a rule of another namespace reads as no
 // row.
-func (q *Queries) GetTrustRule(ctx context.Context, arg GetTrustRuleParams) (TrustRule, error) {
+func (q *Queries) GetTrustRule(ctx context.Context, arg GetTrustRuleParams) (GetTrustRuleRow, error) {
 	row := q.db.QueryRowContext(ctx, getTrustRule, arg.Namespace, arg.ID)
-	var i TrustRule
+	var i GetTrustRuleRow
 	err := row.Scan(
 		&i.ID,
 		&i.Namespace,
@@ -9491,6 +9659,9 @@ func (q *Queries) GetTrustRule(ctx context.Context, arg GetTrustRuleParams) (Tru
 		&i.PrincipalID,
 		&i.CreatedBy,
 		&i.CreatedAtMs,
+		&i.Revision,
+		&i.SpiffeIDPattern,
+		&i.BundleID,
 	)
 	return i, err
 }
@@ -10399,9 +10570,9 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+    at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
     fence_version, reason, principal_kind, job_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertAuditEntryParams struct {
@@ -10418,6 +10589,13 @@ type InsertAuditEntryParams struct {
 	SourceIp      string
 	UserAgent     string
 	Channel       string
+	AgentRun      string
+	AgentSession  string
+	ArgsDigest    string
+	BreakGlass    int64
+	DelegationID  string
+	SecretStage   string
+	Tool          string
 	Kind          string
 	Outcome       string
 	RequestID     string
@@ -10447,6 +10625,13 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.SourceIp,
 		arg.UserAgent,
 		arg.Channel,
+		arg.AgentRun,
+		arg.AgentSession,
+		arg.ArgsDigest,
+		arg.BreakGlass,
+		arg.DelegationID,
+		arg.SecretStage,
+		arg.Tool,
 		arg.Kind,
 		arg.Outcome,
 		arg.RequestID,
@@ -11787,11 +11972,12 @@ func (q *Queries) InsertNotification(ctx context.Context, arg InsertNotification
 
 const insertNotificationDelivery = `-- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-    last_error, delivered_at_ms, owner, lease_until_ms, version
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+    next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     ?1, ?2, ?3, ?4, ?5,
-    ?6, ?7, 'pending', 0, 0, ?8, '', 0, '', 0, 1
+    ?6, ?7, 'pending', 0, ?8, 0, ?9, '', 0, '',
+    0, 1
 )
 `
 
@@ -11803,6 +11989,7 @@ type InsertNotificationDeliveryParams struct {
 	SinkID         string
 	Contact        string
 	Principal      string
+	CreatedAtMs    int64
 	NextAtMs       int64
 }
 
@@ -11815,6 +12002,7 @@ func (q *Queries) InsertNotificationDelivery(ctx context.Context, arg InsertNoti
 		arg.SinkID,
 		arg.Contact,
 		arg.Principal,
+		arg.CreatedAtMs,
 		arg.NextAtMs,
 	)
 	return err
@@ -12032,6 +12220,41 @@ func (q *Queries) InsertProfileRevision(ctx context.Context, arg InsertProfileRe
 		arg.Reason,
 	)
 	return err
+}
+
+const insertProxyRuleSet = `-- name: InsertProxyRuleSet :execrows
+INSERT INTO proxy_rule_sets (namespace_id, scope_kind, unit_id, document, digest, version, updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = ?1),
+    ?2, ?3, ?4, ?5, 1, ?6
+)
+ON CONFLICT (namespace_id, scope_kind, unit_id) DO NOTHING
+`
+
+type InsertProxyRuleSetParams struct {
+	Namespace   string
+	ScopeKind   string
+	UnitID      string
+	Document    string
+	Digest      string
+	UpdatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A scope that has a set
+// is not written.
+func (q *Queries) InsertProxyRuleSet(ctx context.Context, arg InsertProxyRuleSetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertProxyRuleSet,
+		arg.Namespace,
+		arg.ScopeKind,
+		arg.UnitID,
+		arg.Document,
+		arg.Digest,
+		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertPurgedImport = `-- name: InsertPurgedImport :exec
@@ -12577,31 +12800,85 @@ func (q *Queries) InsertTicket(ctx context.Context, arg InsertTicketParams) (int
 	return result.RowsAffected()
 }
 
+const insertTrustBundle = `-- name: InsertTrustBundle :exec
+INSERT INTO trust_bundles (id, namespace, active_version, revision, created_at_ms)
+VALUES (?1, ?2, ?3, ?4, ?5)
+`
+
+type InsertTrustBundleParams struct {
+	ID            string
+	Namespace     string
+	ActiveVersion int64
+	Revision      int64
+	CreatedAtMs   int64
+}
+
+// The caller checks the fence and the PEM text in the same transaction. The
+// namespace holds one bundle: a second bundle of a namespace fails the unique key.
+func (q *Queries) InsertTrustBundle(ctx context.Context, arg InsertTrustBundleParams) error {
+	_, err := q.db.ExecContext(ctx, insertTrustBundle,
+		arg.ID,
+		arg.Namespace,
+		arg.ActiveVersion,
+		arg.Revision,
+		arg.CreatedAtMs,
+	)
+	return err
+}
+
+const insertTrustBundleVersion = `-- name: InsertTrustBundleVersion :exec
+INSERT INTO trust_bundle_versions (bundle_id, version, pem, created_at_ms, overlap_ends_at_ms)
+VALUES (?1, ?2, ?3, ?4, ?5)
+`
+
+type InsertTrustBundleVersionParams struct {
+	BundleID        string
+	Version         int64
+	Pem             string
+	CreatedAtMs     int64
+	OverlapEndsAtMs int64
+}
+
+func (q *Queries) InsertTrustBundleVersion(ctx context.Context, arg InsertTrustBundleVersionParams) error {
+	_, err := q.db.ExecContext(ctx, insertTrustBundleVersion,
+		arg.BundleID,
+		arg.Version,
+		arg.Pem,
+		arg.CreatedAtMs,
+		arg.OverlapEndsAtMs,
+	)
+	return err
+}
+
 const insertTrustRule = `-- name: InsertTrustRule :execrows
 INSERT INTO trust_rules (
     id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, bundle_id
 )
 VALUES (
     ?1, ?2, ?3, ?4, ?5,
     ?6, ?7, ?8, ?9,
-    ?10, ?11
+    ?10, ?11, ?12, ?13,
+    CAST(NULLIF(?14, '') AS TEXT)
 )
 ON CONFLICT DO NOTHING
 `
 
 type InsertTrustRuleParams struct {
-	ID             string
-	Namespace      string
-	Name           string
-	Issuer         string
-	Audience       string
-	KeySource      string
-	StaticKeys     string
-	ConditionsJson string
-	PrincipalID    string
-	CreatedBy      string
-	CreatedAtMs    int64
+	ID              string
+	Namespace       string
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	CreatedBy       string
+	CreatedAtMs     int64
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        interface{}
 }
 
 // The caller checks the fence and the principal in the same transaction. A
@@ -12619,6 +12896,9 @@ func (q *Queries) InsertTrustRule(ctx context.Context, arg InsertTrustRuleParams
 		arg.PrincipalID,
 		arg.CreatedBy,
 		arg.CreatedAtMs,
+		arg.Revision,
+		arg.SpiffeIDPattern,
+		arg.BundleID,
 	)
 	if err != nil {
 		return 0, err
@@ -13024,7 +13304,7 @@ func (q *Queries) LastAuditChainStartSequence(ctx context.Context, namespace str
 
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
@@ -13051,6 +13331,13 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.SourceIp,
 		&i.UserAgent,
 		&i.Channel,
+		&i.AgentRun,
+		&i.AgentSession,
+		&i.ArgsDigest,
+		&i.BreakGlass,
+		&i.DelegationID,
+		&i.SecretStage,
+		&i.Tool,
 		&i.Kind,
 		&i.Outcome,
 		&i.RequestID,
@@ -13256,7 +13543,7 @@ func (q *Queries) ListAuditChainMarks(ctx context.Context) ([]AuditChainMark, er
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
@@ -13297,6 +13584,13 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.SourceIp,
 			&i.UserAgent,
 			&i.Channel,
+			&i.AgentRun,
+			&i.AgentSession,
+			&i.ArgsDigest,
+			&i.BreakGlass,
+			&i.DelegationID,
+			&i.SecretStage,
+			&i.Tool,
 			&i.Kind,
 			&i.Outcome,
 			&i.RequestID,
@@ -13325,7 +13619,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
@@ -13364,6 +13658,13 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.SourceIp,
 			&i.UserAgent,
 			&i.Channel,
+			&i.AgentRun,
+			&i.AgentSession,
+			&i.ArgsDigest,
+			&i.BreakGlass,
+			&i.DelegationID,
+			&i.SecretStage,
+			&i.Tool,
 			&i.Kind,
 			&i.Outcome,
 			&i.RequestID,
@@ -13466,7 +13767,7 @@ func (q *Queries) ListAwaitingJobsOfUnit(ctx context.Context, arg ListAwaitingJo
 }
 
 const listBackups = `-- name: ListBackups :many
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 ORDER BY started_at_ms DESC, id ASC
 `
@@ -13487,6 +13788,7 @@ func (q *Queries) ListBackups(ctx context.Context) ([]Backup, error) {
 			&i.EndedAtMs,
 			&i.Target,
 			&i.Error,
+			&i.Attempt,
 		); err != nil {
 			return nil, err
 		}
@@ -16323,11 +16625,11 @@ func (q *Queries) ListNarrowerGateObjects(ctx context.Context, arg ListNarrowerG
 }
 
 const listNotificationDeliveriesOfSubscription = `-- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = ?1 AND subscription_id = ?2
-ORDER BY next_at_ms DESC, id DESC
+ORDER BY created_at_ms DESC, id DESC
 LIMIT ?3
 `
 
@@ -16356,6 +16658,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.CreatedAtMs,
 			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
@@ -16378,13 +16681,12 @@ func (q *Queries) ListNotificationDeliveriesOfSubscription(ctx context.Context, 
 }
 
 const listNotificationDeliveriesOfSubscriptionAfter = `-- name: ListNotificationDeliveriesOfSubscriptionAfter :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = ?1 AND subscription_id = ?2
-  AND (next_at_ms < ?3
-    OR (next_at_ms = ?3 AND id < ?4))
-ORDER BY next_at_ms DESC, id DESC
+  AND (created_at_ms, id) < (CAST(?3 AS INTEGER), CAST(?4 AS TEXT))
+ORDER BY created_at_ms DESC, id DESC
 LIMIT ?5
 `
 
@@ -16396,10 +16698,10 @@ type ListNotificationDeliveriesOfSubscriptionAfterParams struct {
 	MaxRows        int64
 }
 
-// The page of ListNotificationDeliveriesOfSubscription after the cursor (next
-// time, delivery ID): the rows with an older next time, or with the same next
-// time and a smaller ID. The bound on next_at_ms lets the index scan start at
-// the cursor.
+// The page of ListNotificationDeliveriesOfSubscription after the cursor
+// (creation time, delivery ID): the rows with an older creation time, or with
+// the same creation time and a smaller ID. The row comparison is a bound of the
+// index of the history, so the scan starts at the cursor.
 func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Context, arg ListNotificationDeliveriesOfSubscriptionAfterParams) ([]NotificationDelivery, error) {
 	rows, err := q.db.QueryContext(ctx, listNotificationDeliveriesOfSubscriptionAfter,
 		arg.Scope,
@@ -16425,6 +16727,7 @@ func (q *Queries) ListNotificationDeliveriesOfSubscriptionAfter(ctx context.Cont
 			&i.Principal,
 			&i.State,
 			&i.Attempts,
+			&i.CreatedAtMs,
 			&i.Redeliveries,
 			&i.NextAtMs,
 			&i.LastError,
@@ -16961,9 +17264,9 @@ func (q *Queries) ListPlacementRuleIDs(ctx context.Context, namespace string) ([
 }
 
 const listPlacementRules = `-- name: ListPlacementRules :many
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = ?
 ORDER BY r.position, r.id
 `
@@ -16975,6 +17278,7 @@ type ListPlacementRulesRow struct {
 	Tool           string
 	Project        string
 	Stack          string
+	CollectionID   string
 	CollectionName string
 	CreatedBy      string
 	CreatedAtMs    int64
@@ -16996,6 +17300,7 @@ func (q *Queries) ListPlacementRules(ctx context.Context, namespace string) ([]L
 			&i.Tool,
 			&i.Project,
 			&i.Stack,
+			&i.CollectionID,
 			&i.CollectionName,
 			&i.CreatedBy,
 			&i.CreatedAtMs,
@@ -17016,13 +17321,13 @@ func (q *Queries) ListPlacementRules(ctx context.Context, namespace string) ([]L
 const listPlacementRulesOfCollection = `-- name: ListPlacementRulesOfCollection :many
 SELECT id, tool, project, stack
 FROM placement_rules
-WHERE namespace = ? AND collection_key = ?
+WHERE namespace = ? AND collection_id = ?
 ORDER BY position, id
 `
 
 type ListPlacementRulesOfCollectionParams struct {
-	Namespace     string
-	CollectionKey string
+	Namespace    string
+	CollectionID string
 }
 
 type ListPlacementRulesOfCollectionRow struct {
@@ -17034,7 +17339,7 @@ type ListPlacementRulesOfCollectionRow struct {
 
 // The rules that name one collection, for the audit entry of its delete.
 func (q *Queries) ListPlacementRulesOfCollection(ctx context.Context, arg ListPlacementRulesOfCollectionParams) ([]ListPlacementRulesOfCollectionRow, error) {
-	rows, err := q.db.QueryContext(ctx, listPlacementRulesOfCollection, arg.Namespace, arg.CollectionKey)
+	rows, err := q.db.QueryContext(ctx, listPlacementRulesOfCollection, arg.Namespace, arg.CollectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -18881,23 +19186,82 @@ func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnit
 	return items, nil
 }
 
+const listTrustBundleVersions = `-- name: ListTrustBundleVersions :many
+SELECT version, pem, created_at_ms, overlap_ends_at_ms
+FROM trust_bundle_versions
+WHERE bundle_id = ?1
+ORDER BY version
+`
+
+type ListTrustBundleVersionsRow struct {
+	Version         int64
+	Pem             string
+	CreatedAtMs     int64
+	OverlapEndsAtMs int64
+}
+
+func (q *Queries) ListTrustBundleVersions(ctx context.Context, bundleID string) ([]ListTrustBundleVersionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTrustBundleVersions, bundleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTrustBundleVersionsRow
+	for rows.Next() {
+		var i ListTrustBundleVersionsRow
+		if err := rows.Scan(
+			&i.Version,
+			&i.Pem,
+			&i.CreatedAtMs,
+			&i.OverlapEndsAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTrustRulesOfNamespace = `-- name: ListTrustRulesOfNamespace :many
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS TEXT) AS bundle_id
 FROM trust_rules
 WHERE namespace = ?1
 ORDER BY name, id
 `
 
-func (q *Queries) ListTrustRulesOfNamespace(ctx context.Context, namespace string) ([]TrustRule, error) {
+type ListTrustRulesOfNamespaceRow struct {
+	ID              string
+	Namespace       string
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	CreatedBy       string
+	CreatedAtMs     int64
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        string
+}
+
+func (q *Queries) ListTrustRulesOfNamespace(ctx context.Context, namespace string) ([]ListTrustRulesOfNamespaceRow, error) {
 	rows, err := q.db.QueryContext(ctx, listTrustRulesOfNamespace, namespace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []TrustRule
+	var items []ListTrustRulesOfNamespaceRow
 	for rows.Next() {
-		var i TrustRule
+		var i ListTrustRulesOfNamespaceRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Namespace,
@@ -18910,6 +19274,9 @@ func (q *Queries) ListTrustRulesOfNamespace(ctx context.Context, namespace strin
 			&i.PrincipalID,
 			&i.CreatedBy,
 			&i.CreatedAtMs,
+			&i.Revision,
+			&i.SpiffeIDPattern,
+			&i.BundleID,
 		); err != nil {
 			return nil, err
 		}
@@ -20723,6 +21090,28 @@ func (q *Queries) ReadWorkspaces(ctx context.Context, namespace string) ([]ReadW
 		return nil, err
 	}
 	return items, nil
+}
+
+const recordBackupAttempt = `-- name: RecordBackupAttempt :execrows
+UPDATE backups
+SET attempt = ?
+WHERE id = ? AND state = 'running'
+`
+
+type RecordBackupAttemptParams struct {
+	Attempt string
+	ID      string
+}
+
+// Stores the attempt of the write step on the running row. The Go code
+// checks the fence and records the step in the same transaction, and the
+// finish compares the attempt before it moves the row.
+func (q *Queries) RecordBackupAttempt(ctx context.Context, arg RecordBackupAttemptParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordBackupAttempt, arg.Attempt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const recordMaintenanceRevocation = `-- name: RecordMaintenanceRevocation :exec
@@ -23839,17 +24228,17 @@ func (q *Queries) UpdateNotificationSubscription(ctx context.Context, arg Update
 
 const updatePlacementRuleContent = `-- name: UpdatePlacementRuleContent :execrows
 UPDATE placement_rules
-SET tool = ?, project = ?, stack = ?, collection_key = ?
+SET tool = ?, project = ?, stack = ?, collection_id = ?
 WHERE namespace = ? AND id = ?
 `
 
 type UpdatePlacementRuleContentParams struct {
-	Tool          string
-	Project       string
-	Stack         string
-	CollectionKey string
-	Namespace     string
-	ID            string
+	Tool         string
+	Project      string
+	Stack        string
+	CollectionID string
+	Namespace    string
+	ID           string
 }
 
 func (q *Queries) UpdatePlacementRuleContent(ctx context.Context, arg UpdatePlacementRuleContentParams) (int64, error) {
@@ -23857,7 +24246,7 @@ func (q *Queries) UpdatePlacementRuleContent(ctx context.Context, arg UpdatePlac
 		arg.Tool,
 		arg.Project,
 		arg.Stack,
-		arg.CollectionKey,
+		arg.CollectionID,
 		arg.Namespace,
 		arg.ID,
 	)
@@ -23885,6 +24274,41 @@ func (q *Queries) UpdatePrincipal(ctx context.Context, arg UpdatePrincipalParams
 		arg.UpdatedAtMs,
 		arg.ID,
 		arg.Namespace,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateProxyRuleSet = `-- name: UpdateProxyRuleSet :execrows
+UPDATE proxy_rule_sets
+SET document = ?1, digest = ?2, version = CAST(?3 AS INTEGER) + 1,
+    updated_at_ms = ?4
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?5)
+  AND scope_kind = ?6 AND unit_id = ?7 AND version = CAST(?3 AS INTEGER)
+`
+
+type UpdateProxyRuleSetParams struct {
+	Document    string
+	Digest      string
+	Version     int64
+	UpdatedAtMs int64
+	Namespace   string
+	ScopeKind   string
+	UnitID      string
+}
+
+// A row of another version than the one that the caller read is not written.
+func (q *Queries) UpdateProxyRuleSet(ctx context.Context, arg UpdateProxyRuleSetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateProxyRuleSet,
+		arg.Document,
+		arg.Digest,
+		arg.Version,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+		arg.ScopeKind,
+		arg.UnitID,
 	)
 	if err != nil {
 		return 0, err
@@ -24038,6 +24462,85 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		arg.UpdatedAtMs,
 		arg.Version,
 		arg.ProviderID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateTrustBundle = `-- name: UpdateTrustBundle :execrows
+UPDATE trust_bundles SET active_version = ?1, revision = ?2
+WHERE id = ?3 AND revision = ?4
+`
+
+type UpdateTrustBundleParams struct {
+	ActiveVersion  int64
+	Revision       int64
+	ID             string
+	StoredRevision int64
+}
+
+// The revision in the WHERE clause is the stored one, so a write that lost a
+// race changes no row.
+func (q *Queries) UpdateTrustBundle(ctx context.Context, arg UpdateTrustBundleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateTrustBundle,
+		arg.ActiveVersion,
+		arg.Revision,
+		arg.ID,
+		arg.StoredRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateTrustRule = `-- name: UpdateTrustRule :execrows
+UPDATE trust_rules SET
+    name = ?1, issuer = ?2, audience = ?3,
+    key_source = ?4, static_keys = ?5,
+    conditions_json = ?6, principal_id = ?7,
+    revision = ?8, spiffe_id_pattern = ?9,
+    bundle_id = CAST(NULLIF(?10, '') AS TEXT)
+WHERE namespace = ?11 AND id = ?12 AND revision = ?13
+`
+
+type UpdateTrustRuleParams struct {
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        interface{}
+	Namespace       string
+	ID              string
+	StoredRevision  int64
+}
+
+// The caller reads the rule and checks the revision, the fence and the
+// principal in the same transaction. The revision in the WHERE clause is the
+// stored one, so a write that lost a race changes no row. The namespace, the
+// creator and the creation time never change.
+func (q *Queries) UpdateTrustRule(ctx context.Context, arg UpdateTrustRuleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateTrustRule,
+		arg.Name,
+		arg.Issuer,
+		arg.Audience,
+		arg.KeySource,
+		arg.StaticKeys,
+		arg.ConditionsJson,
+		arg.PrincipalID,
+		arg.Revision,
+		arg.SpiffeIDPattern,
+		arg.BundleID,
+		arg.Namespace,
+		arg.ID,
+		arg.StoredRevision,
 	)
 	if err != nil {
 		return 0, err

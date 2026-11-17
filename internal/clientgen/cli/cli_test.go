@@ -13,9 +13,6 @@ import (
 // descriptionPath is the published description, from this package.
 const descriptionPath = "../../api/apidesc/openapi.json"
 
-// packagePath is the checked-in TypeScript package, from this package.
-const packagePath = "../../../clients/typescript"
-
 const syntheticPath = "../typescript/testdata/synthetic.json"
 
 //nolint:revive // The three results have different meanings, and every caller names them.
@@ -29,15 +26,22 @@ func run(t *testing.T, args ...string) (int, string, string) {
 	return code, out.String(), errs.String()
 }
 
-// TestCheckedInPackageIsWhatARunGives fails when someone changes the
-// description, a template or a runtime file and does not run make
-// clients-generate.
-func TestCheckedInPackageIsWhatARunGives(t *testing.T) {
+// TestGeneratedPackageIsWhatARunGives runs the generator on the published
+// description into a new directory, then checks that directory. It fails when
+// the generator fails on the description, or when a second run does not give
+// the same files as the first.
+func TestGeneratedPackageIsWhatARunGives(t *testing.T) {
 	t.Parallel()
 
-	code, _, stderr := run(t, "-target", "typescript", "-description", descriptionPath, "-out", packagePath, "-check")
-	if code != cli.ExitOK {
-		t.Errorf("the checked-in package is stale (exit %d):\n%s", code, stderr)
+	dir := filepath.Join(t.TempDir(), "client")
+	args := []string{"-target", "typescript", "-description", descriptionPath, "-out", dir}
+
+	if code, _, stderr := run(t, args...); code != cli.ExitOK {
+		t.Fatalf("generate (exit %d):\n%s", code, stderr)
+	}
+
+	if code, _, stderr := run(t, append(args, "-check")...); code != cli.ExitOK {
+		t.Errorf("the generated package differs from a second run (exit %d):\n%s", code, stderr)
 	}
 }
 
@@ -124,8 +128,35 @@ func TestClientVersionDefaultsToTheDescriptionVersion(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, stderr)
 	}
 
-	if raw := readFile(t, dir, "package.json"); !strings.Contains(raw, `"version": "0.3.0"`) {
+	// A run without -publish writes no client version and no digest.
+	if raw := readFile(t, dir, "package.json"); !strings.Contains(raw, `"version": "0.0.0"`) {
 		t.Errorf("package.json:\n%s", raw)
+	}
+
+	raw := readFile(t, dir, "src/metadata.ts")
+	if strings.Contains(raw, "clientVersion:") || strings.Contains(raw, "descriptionSha256:") {
+		t.Errorf("metadata.ts of a run without -publish:\n%s", raw)
+	}
+
+	dir1 := t.TempDir()
+	publishArgs := []string{"-target", "typescript", "-description", syntheticPath, "-out", dir1, "-publish"}
+	if code, _, stderr := run(t, publishArgs...); code != cli.ExitOK {
+		t.Fatalf("-publish: exit %d\n%s", code, stderr)
+	}
+
+	if raw = readFile(t, dir1, "package.json"); !strings.Contains(raw, `"version": "0.3.0"`) {
+		t.Errorf("package.json of -publish:\n%s", raw)
+	}
+
+	if raw = readFile(t, dir1, "src/metadata.ts"); !strings.Contains(raw, "descriptionSha256:") {
+		t.Errorf("metadata.ts of -publish:\n%s", raw)
+	}
+
+	noPublish := []string{
+		"-target", "typescript", "-description", syntheticPath, "-out", t.TempDir(), "-client-version", "0.3.7",
+	}
+	if code, _, _ := run(t, noPublish...); code != cli.ExitUsage {
+		t.Errorf("-client-version without -publish: want exit %d, got %d", cli.ExitUsage, code)
 	}
 
 	dir2 := t.TempDir()
@@ -138,6 +169,7 @@ func TestClientVersionDefaultsToTheDescriptionVersion(t *testing.T) {
 		syntheticPath,
 		"-out",
 		dir2,
+		"-publish",
 		"-client-version",
 		"0.3.7",
 	)
@@ -163,6 +195,7 @@ func TestMetadataHoldsTheDigestOfTheDescription(t *testing.T) {
 		syntheticPath,
 		"-out",
 		dir,
+		"-publish",
 		"-server-release",
 		"abc123",
 	)
@@ -232,7 +265,10 @@ func TestRefusals(t *testing.T) {
 		},
 		{
 			"client version of another minor",
-			[]string{"-target", "typescript", "-description", syntheticPath, "-out", out, "-client-version", "0.9.0"},
+			[]string{
+				"-target", "typescript", "-description", syntheticPath, "-out", out,
+				"-publish", "-client-version", "0.9.0",
+			},
 			cli.ExitFailed,
 			"client version",
 		},

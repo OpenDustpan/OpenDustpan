@@ -29,7 +29,7 @@ func TestTokenRoutesDenyWithOneBody(t *testing.T) {
 		http.MethodPost, "/api/server/principals/prn-deploy/tokens", `{"name":"ci"}`, http.StatusCreated,
 	}, &service)
 	f.as(t, "alice", apiCall{
-		http.MethodPost, "/api/server/caller/tokens", `{"name":"laptop"}`, http.StatusCreated,
+		http.MethodPost, "/api/dustpan/v1/me/tokens", `{"name":"laptop"}`, http.StatusCreated,
 	}, &personal)
 
 	type route struct {
@@ -127,7 +127,7 @@ func TestTokenRoutesHideStoredTokenState(t *testing.T) {
 		http.MethodPost, "/api/server/principals/prn-deploy/tokens", `{"name":"ci"}`, http.StatusCreated,
 	}, &service)
 	f.as(t, "alice", apiCall{
-		http.MethodPost, "/api/server/caller/tokens", `{"name":"laptop"}`, http.StatusCreated,
+		http.MethodPost, "/api/dustpan/v1/me/tokens", `{"name":"laptop"}`, http.StatusCreated,
 	}, &personal)
 
 	const (

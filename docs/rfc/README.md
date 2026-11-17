@@ -177,3 +177,4 @@ both together.
 | [128](0128-reach-growth-and-token-managers.md) | Reach growth and token managers | discussing |
 | [129](0129-concurrent-applies-on-one-state.md) | Concurrent applies on one state: the six open points of ADR 302 | accepted (ADR 368, ADR 369) |
 | [130](0130-break-glass-mode-2-review-and-authentication.md) | Break-glass mode 2 over the network: its review and its authentication | accepted (ADR 372) |
+| [131](0131-generated-files-and-merge-conflicts.md) | Generated files and merge conflicts | accepted (ADR 383) |

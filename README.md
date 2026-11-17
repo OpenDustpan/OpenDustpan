@@ -350,6 +350,8 @@ How-to guides:
   a collection, move a unit into it, and write the rules that place new stacks.
 - [IP allowlists](docs/guides/ip-allowlists.md): limit the client addresses of a
   namespace, read the effective state, and recover from a lock-out.
+- [Runner pools](docs/guides/runner-pools.md): make a pool and a join token, list
+  the runners of a pool, and drain or retire a runner.
 - [Output sharing](docs/guides/output-sharing.md): the actions that read
   outputs and manage sharing, and the setting that decides the sharing rule of
   a new stack or workspace.
@@ -368,6 +370,9 @@ How-to guides:
   connect a Slack incoming webhook to a namespace and send a test message.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
+- [Install from the container image](docs/guides/install.md): pull the
+  v0.1.0 image by tag or by digest, make the two Secrets, and install the
+  chart.
 - [Install with Helm](docs/guides/kubernetes.md): the Helm chart, its Secrets, storage, upgrade and rollback steps.
 - [Run several instances](docs/guides/several-instances.md): the settings
   that each instance shares, for the target design.

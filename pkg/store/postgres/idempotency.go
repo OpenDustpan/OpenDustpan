@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -111,9 +112,11 @@ func idempotencyKeyOps(
 	}
 }
 
-// Begin implements idempotency.Store.
+// Begin implements idempotency.Store. A Reducing request writes its record on
+// the control path, so maintenance mode does not refuse the record of a route
+// that ends access.
 func (i *Idempotency) Begin(
-	ctx context.Context, ref idempotency.Ref, material []byte, now time.Time,
+	ctx context.Context, ref idempotency.Ref, material []byte, now time.Time, opts ...idempotency.BeginOption,
 ) (idempotency.Result, error) {
 	if err := ref.Validate(); err != nil {
 		return idempotency.Result{}, err
@@ -124,11 +127,20 @@ func (i *Idempotency) Begin(
 		return idempotency.Result{}, err
 	}
 
+	// Defense in depth: the route decides Reducing, and the maintenance gate
+	// lets only the routes of the list through. This store does not check the
+	// route, so a caller that passes Reducing for another route writes its
+	// record in maintenance mode. The route tests catch that.
+	run := i.store.inTx
+	if slices.Contains(opts, idempotency.Reducing) {
+		run = i.store.inControlTx
+	}
+
 	at := codec.IdempotencyAttempt{Ref: ref, Fingerprint: nil, Token: token, Now: now}
 
-	res, key, err := i.attempt(ctx, at, material, sharedKeyOps)
+	res, key, err := i.attempt(ctx, run, at, material, sharedKeyOps)
 	if errors.Is(err, codec.ErrIdempotencyResetNeeded) {
-		res, key, err = i.attempt(ctx, at, material, exclusiveKeyOps)
+		res, key, err = i.attempt(ctx, run, at, material, exclusiveKeyOps)
 	}
 
 	if err != nil {
@@ -236,7 +248,10 @@ func (i *Idempotency) Abandon(ctx context.Context, ref idempotency.Ref, token st
 		return err
 	}
 
-	err := i.store.inTx(ctx, func(q *db.Queries) error {
+	// Abandon frees a key and writes no domain data, so it runs on the control
+	// path in every mode. A reducing route that fails must free its key in
+	// maintenance mode too.
+	err := i.store.inControlTx(ctx, func(q *db.Queries) error {
 		return q.AbandonIdempotencyRecord(ctx, db.AbandonIdempotencyRecordParams{
 			Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key), Token: token,
 		})
@@ -270,10 +285,11 @@ func (i *Idempotency) Sweep(ctx context.Context, now time.Time) (int, error) {
 }
 
 // attempt runs one transaction of Begin with the key operations that keyOps
-// makes. It returns codec.ErrIdempotencyResetNeeded when the key row needs a
-// reset and the operations do not hold the row exclusively.
+// makes, on the transaction path that run gives. It returns
+// codec.ErrIdempotencyResetNeeded when the key row needs a reset and the
+// operations do not hold the row exclusively.
 func (i *Idempotency) attempt(
-	ctx context.Context, at codec.IdempotencyAttempt, material []byte,
+	ctx context.Context, run txRunner, at codec.IdempotencyAttempt, material []byte,
 	keyOps func(*db.Queries) codec.IdempotencyKeyOps,
 ) (idempotency.Result, codec.IdempotencyKey, error) {
 	var (
@@ -281,7 +297,7 @@ func (i *Idempotency) attempt(
 		key codec.IdempotencyKey
 	)
 
-	err := i.store.inTx(ctx, func(q *db.Queries) error {
+	err := run(ctx, func(q *db.Queries) error {
 		var keyErr error
 
 		if key, keyErr = i.keys.Resolve(ctx, keyOps(q)); keyErr != nil {

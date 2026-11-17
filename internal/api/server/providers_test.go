@@ -155,7 +155,7 @@ func newProviderEnvWith(t *testing.T, passwords []apiserver.PasswordProvider) pr
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, authz: nil, namespaces: nil, hostile: nil,
-		passwords: passwords,
+		passwords: passwords, failPolicyRead: nil, idempotency: false,
 		stored: func(st *sqlite.Store, clock *envClock) (*session.ProviderAdmin, apiserver.StoredProviders) {
 			beta = oauthtest.New(t, oauthtest.Config{
 				Now: clock.Now, ClientID: "dustpan-beta", ClientSecret: betaSecret, RedirectURI: betaCallback,
@@ -666,8 +666,8 @@ func TestSignInProviderChangeNeedsAFreshSession(t *testing.T) {
 	stale := e.staleSession(t)
 
 	rec := e.postWithSession(t, stale, "/api/server/sign-in-providers", e.betaBody())
-	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "reauthenticate") {
-		t.Fatalf("create from a stale session = %d %s, want 401 with reauthenticate", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "reauthenticate") {
+		t.Fatalf("create from a stale session = %d %s, want 403 with reauthenticate", rec.Code, rec.Body.String())
 	}
 
 	if rec := e.adminDo(t, http.MethodGet, "/api/server/sign-in-providers/beta", ""); rec.Code != http.StatusNotFound {
@@ -683,8 +683,8 @@ func TestSignInProviderChangeNeedsAFreshSession(t *testing.T) {
 	}
 
 	for _, rec := range refused {
-		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "reauthenticate") {
-			t.Fatalf("change from a stale session = %d %s, want 401 with reauthenticate", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "reauthenticate") {
+			t.Fatalf("change from a stale session = %d %s, want 403 with reauthenticate", rec.Code, rec.Body.String())
 		}
 	}
 

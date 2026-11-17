@@ -241,9 +241,11 @@ func CoverageAllowlist() []AllowEntry {
 		savedViewAllowEntries(),
 		gitHostAllowEntries(),
 		registryAllowEntries(),
+		registryMirrorAllowEntries(),
 		sinkAllowEntries(),
 		sourceFilterAllowEntries(),
 		trustRuleAllowEntries(),
+		proxyRulesAllowEntries(),
 		apiDescriptionAllowEntries(),
 		issuerAllowEntries(),
 	)

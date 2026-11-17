@@ -309,7 +309,7 @@ func (b browser) tokenChange(t *testing.T, path, body string) answer {
 func (b browser) ownToken(t *testing.T, body string) e2eToken {
 	t.Helper()
 
-	a := b.tokenChange(t, "/api/server/caller/tokens", body)
+	a := b.tokenChange(t, "/api/dustpan/v1/me/tokens", body)
 	if a.status != http.StatusCreated {
 		t.Fatalf("own token from the session = %d, want 201: %s", a.status, a.body)
 	}
@@ -327,7 +327,7 @@ func (b browser) ownToken(t *testing.T, body string) e2eToken {
 func (b browser) rotateOwnToken(t *testing.T, id string) e2eToken {
 	t.Helper()
 
-	a := b.tokenChange(t, "/api/server/caller/tokens/"+id+"/rotate", `{}`)
+	a := b.tokenChange(t, "/api/dustpan/v1/me/tokens/"+id+"/rotate", `{}`)
 	if a.status != http.StatusCreated {
 		t.Fatalf("rotation from the session = %d, want 201: %s", a.status, a.body)
 	}
@@ -404,15 +404,18 @@ func checkTokenFreshness(t *testing.T, b browser) {
 	b.session(t)
 	clock.Advance(6 * time.Minute)
 
-	a := b.tokenChange(t, "/api/server/caller/tokens", body)
+	a := b.tokenChange(t, "/api/dustpan/v1/me/tokens", body)
 
 	var refusal struct {
+		ErrorCode      string `json:"errorCode"`
 		Reauthenticate string `json:"reauthenticate"`
 	}
 
-	if err := json.Unmarshal([]byte(a.body), &refusal); err != nil || a.status != http.StatusUnauthorized ||
+	if err := json.Unmarshal([]byte(a.body), &refusal); err != nil || a.status != http.StatusForbidden ||
+		refusal.ErrorCode != "mfa.fresh-step-required" ||
 		refusal.Reauthenticate != "/api/server/sign-in/"+e2e.SignInProvider+"?fresh=1" {
-		t.Fatalf("token from a stale session = %d %s, want 401 with the path of a new sign-in", a.status, a.body)
+		t.Fatalf("token from a stale session = %d %s, want 403 with the code and the path",
+			a.status, a.body)
 	}
 
 	signIns := b.env.IdentityProvider(t).SignIns()

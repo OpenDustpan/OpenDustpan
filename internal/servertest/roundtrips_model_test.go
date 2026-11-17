@@ -174,8 +174,8 @@ func TestCostModelFitsMeasuredHistory(t *testing.T) {
 				model       costModel
 				trips, from int
 			}{
-				{"backup", backupModel(), point.backupTrips, base.backupTrips},
-				{"restore", restoreModel(), point.restoreTrip, base.restoreTrip},
+				{"backup", backupModel().withoutClaimReads(), point.backupTrips, base.backupTrips},
+				{"restore", restoreModel().withoutClaimReads(), point.restoreTrip, base.restoreTrip},
 			} {
 				predicted := flow.model.count(point.schema) - flow.model.count(base.schema)
 				measured := flow.trips - flow.from

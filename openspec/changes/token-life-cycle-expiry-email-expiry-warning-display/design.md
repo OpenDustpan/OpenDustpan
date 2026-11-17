@@ -19,7 +19,7 @@ unexported expiryWarning value made only by newWarningState, which checks the ex
 
 ## Diagrams
 
-Today: `GET /api/server/caller/tokens` on main (from the route table and the handler body, route row internal/api/server/tokens.go:543, handler internal/api/server/tokens.go:232).
+Today: `GET /api/dustpan/v1/me/tokens` on main (from the route table and the handler body, route row internal/api/server/tokens.go:569, handler listOwnTokens at internal/api/server/tokens.go:793).
 
 ```mermaid
 sequenceDiagram
@@ -27,7 +27,7 @@ participant C as Client
 participant R as GET route
 participant H as serveTokenRead
 participant AZ as Authorizer
-C->>R: GET /api/server/caller/tokens
+C->>R: GET /api/dustpan/v1/me/tokens
 R->>AZ: ActionTokenManageOwn (ScopeAuthorized)
 R->>H: serveTokenRead
 H-->>C: answer
@@ -54,7 +54,7 @@ P1[pkg/accesstoken]
 
 | Attribute | Target | Unit | Scope |
 | --- | --- | --- | --- |
-| correctness | 100% of reads at the 14-day and 3-day boundaries give the right level | percent of test reads | token reads under /api/server/caller/tokens |
+| correctness | 100% of reads at the 14-day and 3-day boundaries give the right level | percent of test reads | token reads under /api/dustpan/v1/me/tokens |
 | observability | 100% of listed tokens carry a level and seconds left | percent of listed tokens | token list reads under /api/server/tokens |
 
 ## Threat model

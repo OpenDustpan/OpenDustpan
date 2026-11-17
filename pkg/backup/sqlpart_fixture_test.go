@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 )
@@ -11,9 +12,36 @@ import (
 // sqlPartTable is the table whose file holds the test SQL part.
 const sqlPartTable = "namespaces"
 
+// fixtureAttempt is the attempt of a fixture backup: the fencing token of the
+// first claim of the operation of a test run.
+const fixtureAttempt = "1"
+
+// attemptDir returns the directory of the fixture attempt of backup id.
+func attemptDir(id backup.ID) string {
+	return "backups/" + id.String() + "/" + fixtureAttempt + "/"
+}
+
+// manifestKeyOf returns the target key of the manifest of backup id.
+func manifestKeyOf(id backup.ID) string {
+	return attemptDir(id) + "manifest.json"
+}
+
+// livePointerKeyOf returns the target key of the live pointer of backup id.
+func livePointerKeyOf(id backup.ID) string {
+	return "backups/" + id.String() + "/live.json"
+}
+
+// publishLive writes the live pointer of backup id for the fixture attempt, as
+// the finish step does after its commit.
+func publishLive(t *testing.T, target *memStore, id backup.ID) {
+	t.Helper()
+
+	target.storeObject(t, livePointerKeyOf(id), []byte(`{"attempt":"`+fixtureAttempt+`"}`))
+}
+
 // sqlPartKey returns the target key of the test SQL part of backup id.
 func sqlPartKey(id backup.ID) string {
-	return "backups/" + id.String() + "/" + backup.PortablePath(sqlPartTable)
+	return attemptDir(id) + backup.PortablePath(sqlPartTable)
 }
 
 // sqlPartAggregate returns the size and the SHA-256 that a manifest keeps for
@@ -60,5 +88,5 @@ func sqlPartAllFiles(data []byte) []backup.PortableFile {
 
 // sqlPartAllKey returns the target key of one table file of backup id.
 func sqlPartAllKey(id backup.ID, table string) string {
-	return "backups/" + id.String() + "/" + backup.PortablePath(table)
+	return attemptDir(id) + backup.PortablePath(table)
 }

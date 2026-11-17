@@ -144,7 +144,7 @@ internal/              code that is not part of the SDK
   api/runnerapi/       HTTP adapter for the runner protocol (/runner/v1) and the runner management API
   metrics/, pgtest/, servertest/, ...
                        metrics, the PostgreSQL test database and the test server
-clients/typescript/    the generated TypeScript client package; make clients-check fails when it is not what a fresh run gives
+clients/typescript/    the generated TypeScript client package; not in Git: run make clients-generate (make clients-check runs the generator)
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check
 e2e/                   end-to-end suite driving real CLI binaries of every supported tool (make e2e)
   githubfake/          the fake GitHub host of the tests: REST, GraphQL and signed webhook events. The binary never links it
@@ -281,7 +281,7 @@ The steps below are the minimum. They are not complete. The examples in each ste
 
 Treat everything from outside the process as untrusted. Examples: HTTP requests, tool state files, webhooks, Git host data, runner output, configuration, environment variables, restored backups, and database rows from another version.
 
-Write one test for each step. The test sends hostile input directly to that step, as if every other step had failed. A step without its own test is missing.
+Write one test for each step. The test sends hostile input directly to that step, as if every other step failed. A step without its own test is missing.
 
 If a check looks redundant, keep it, and give it a comment. The comment says that the check is a defense-in-depth layer and names the other layers that it does not rely on. Example: `// Defense in depth: the handler validates the name too; this check stays so that a new caller cannot skip it.` Do not put an ADR number in the comment. Do not remove a check that has such a comment. If a check blocks your work, stop and report to the PM.
 
@@ -338,10 +338,12 @@ skill (ADR 14):
 - Keep changes small and reviewable, with one concern per change.
 - Support Linux and macOS only (ADR 278). Do not write a patch that is specific to another platform. Do not add a build tag for one. Fixes to generic build bugs on other platforms are accepted.
 - If you are unsure of the intent, ask rather than guess.
-- Agent work starts only from an OpenSpec change in `openspec/changes`. The
-  proposal of the change says "Open questions: none". The pull request of an
-  agent links its change and its issue. The rules for a change are in
-  `openspec/project.md`.
+- Agent work on a new or changed capability starts only from an OpenSpec change
+  in `openspec/changes`. The proposal of the change says "Open questions:
+  none". The pull request of an agent links its change and its issue. The rules
+  for a change are in `openspec/project.md`. A bug fix, a flaky test, a test
+  fake or fixture, tooling, CI, lint and a refactor with no change of behavior
+  need no change. Put the evidence in the pull request body instead.
 - Each proposal and each design checks the existing ADRs. It lists the ADRs
   that it touches, quotes their decision lines, follows the "Changed by" chain
   and marks the owner-tagged decisions. A conflict with an owner-tagged ADR
@@ -354,14 +356,16 @@ skill (ADR 14):
 - Use the stable ID for each stored reference to an entity that a user can
   rename, or remove and make again. A name is a label for people only
   (ADR 362).
-- File a bug issue and a tech-debt issue as before. Their change uses the
-  short proposal form of `openspec/project.md`.
+- File a bug issue and a tech-debt issue as before. Their pull request needs
+  no OpenSpec change. It carries the failure, the fix and the check in its
+  body.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,
   installed for Claude Code and OpenCode. Never edit files under
   `.agents/skills/` by hand. Update a skill only to an upstream commit at least
   two weeks old (ADR 7), and review its diff first.
 - Agents do not stash, do not create scheduled tasks or reminders, and do not subscribe to pull request activity. Commit work in progress on the branch instead of a stash. Do not skip the pre-commit hook.
 - Build to /var/tmp (`go build -o /var/tmp/<name>`). Add files by name. Never use `git add -A`. `make files-check` refuses large and binary files.
+- Before you push, run `make test-changed`. It builds the module, runs the fast checks, and lints and tests the changed packages and the packages that import them. It is a quick check. It does not replace `make check` or CI.
 
 ## Agent skills
 

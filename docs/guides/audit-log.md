@@ -92,8 +92,9 @@ An entry holds these fields:
 - Where: `sourceIP` (the remote address the server sees), `userAgent`
   (capped at 512 bytes), `channel` (`api` or `console`, as the client
   declares it in the `Dustpan-Channel` header). Unknown values are `api`.
-  The server writes two more channels on its own: `startup` and
-  `config-file` (see "Settings entries").
+  Calls of an agent declare `agent` (the built-in agent), `mcp` or
+  `mcp-proxy` (an outside agent). The server writes two more channels on
+  its own: `startup` and `config-file` (see "Settings entries").
 - `changes`: the keys of the entry with their values, else omitted. Each
   change holds `key`, `new`, and when they apply, `old`, `layer` and
   `takesEffect`. A `startup` or `config-file` entry holds its settings
@@ -106,6 +107,16 @@ An entry holds these fields:
   `service` or `workload`. It is omitted when the server cannot name the
   kind, for example for the bootstrap admin token.
 - `jobID`: the job whose token acted, else omitted.
+- `agent`: the agent block of an entry with agent data, else omitted. It
+  holds `agentRun` (the run ID of a call of the built-in agent),
+  `agentSession` (the MCP session ID of a call of an outside agent, or the
+  run ID of a call of the built-in agent), `tool`, `argsDigest` (the SHA-256
+  of the arguments of the call), `breakGlass` (true for a break-glass
+  credential) and `secretStage`. A job entry of an agent leaves `tool`,
+  `argsDigest` and `secretStage` empty. An entry with an agent field that
+  is not valid (over 256 bytes, or with a hidden character) is refused at
+  the store: the write fails and nothing is stored. Read the entries again
+  with `GET /api/audit/entries`.
 - Kind: `tool-operation`, `reveal`, `override`, `change`, `read-access`,
   `audit-read` or `security`, never anything else, so a reader never confuses a tool that needed secrets
   with a person who asked to see one.
@@ -124,13 +135,21 @@ An entry holds these fields:
   fixed order: the decimal value count, the stable ID of the unit, the
   canonical JSON of the changes (sorted by key) as the store holds it, the
   decimal failover version of the namespace (0 in `@server`), the principal
-  kind, the job ID and the reason. The reason stays last. No release shipped
-  an audit entry, so the order can change, and an entry from an earlier build
-  does not keep its hash. No field is optional. An entry with no value count
-  writes one `-` in place of the count, so an entry with no count (`-`) and an entry with the count 0
-  (`1:0`) have different hashes. Because each field carries its length,
-  two different entries never give the same encoding.
-  The first entry of a namespace has an empty `prevHash`.
+   kind, the job ID and the reason. The reason stays last. No release shipped
+   an audit entry, so the order can change, and an entry from an earlier build
+   does not keep its hash. No field is optional. An entry with no value count
+   writes one `-` in place of the count, so an entry with no count (`-`) and an entry with the count 0
+   (`1:0`) have different hashes. Because each field carries its length,
+   two different entries never give the same encoding.
+   The first entry of a namespace has an empty `prevHash`.
+   When the entry carries agent data, the encoding appends the agent block
+   after the reason: the length-prefixed text `agent/1`, then the run, the
+   session, the tool, the arguments digest, the break-glass flag as `true`
+   or `false`, and the secret stage, each length-prefixed, in this fixed
+   order, with an empty value when it is not set. An entry with no agent
+   data hashes exactly as before the block existed, so a chain stored before
+   the block still passes `GET /api/audit/check`. A check that finds a hash
+   that does not match an entry returns the first entry that fails.
 
 ## Force-unlock entries
 
@@ -455,7 +474,7 @@ It prints where to approve and ends with an error.
 
 - Turning the chain on needs the action `server:set-audit-chain` (operator family).
 - Turning the chain off needs `server:set-audit-chain` (operator family) and `server:disable-audit-chain` (administration family).
-  A service principal cannot approve it: a person must approve turning the chain off.
+  Only a person can approve turning the chain off. A refusal writes a denied entry in `@server` with the action `server:set-audit-chain`.
 
 The approval writes an entry in `@server` with the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
 Then the server migrates the log in the background.

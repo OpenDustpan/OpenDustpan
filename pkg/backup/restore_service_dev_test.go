@@ -23,7 +23,7 @@ import (
 func setManifestKind(t *testing.T, setup *restoreServiceSetup, kind installation.Kind) {
 	t.Helper()
 
-	key := "backups/" + setup.id.String() + "/manifest.json"
+	key := manifestKeyOf(setup.id)
 	raw := string(setup.target.readObject(t, key))
 
 	edited := strings.Replace(raw, `"installationKind":"production"`, `"installationKind":"`+kind.String()+`"`, 1)

@@ -112,6 +112,10 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "a restore keeps the live durable operations", test: testRestoreKeepsDurableOperations},
 		{name: "a restore keeps the live runner control rows", test: testRestoreKeepsRunnerControlRows},
 		{name: "a restore keeps the live used ticket records", test: testRestoreKeepsUsedTickets},
+		{
+			name: "a restore drops the runner credentials of a runner that the backup predates",
+			test: testRestoreDropsRunnerCredentials,
+		},
 		{name: "a restore leaves no replay record", test: testRestoreEmptiesIdempotencyRecords},
 		{name: "a restore leaves no job token", test: testRestoreEmptiesJobTokens},
 		{name: "round trip over every table keeps every row", test: testRestoreRoundTrip},
@@ -1386,7 +1390,7 @@ func seedTargetControlRows(t *testing.T, dst RestoreStore) targetControlRows {
 
 	targetBackup := mustCreateBackup(t, dst, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
 	done := mustFinishBackup(t, dst, backupFinish{
-		ID: targetBackup.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour),
+		ID: targetBackup.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour), Attempt: "",
 	})
 	restore := mustCreateRestore(
 		t, dst, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
@@ -1409,7 +1413,7 @@ func seedSourceControlRows(t *testing.T, src RestoreStore) (backup.ID, backup.Re
 
 	srcBackup := mustCreateBackup(t, src, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
 	mustFinishBackup(t, src, backupFinish{
-		ID: srcBackup.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour),
+		ID: srcBackup.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour), Attempt: "",
 	})
 	srcRestore := mustCreateRestore(
 		t, src, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
@@ -1648,7 +1652,7 @@ func testRestoreApplyReRecordsBackup(t *testing.T, newStore RestoreFactory) {
 	}
 
 	finished := mustFinishBackup(t, pdst, backupFinish{
-		ID: pre.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour),
+		ID: pre.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour), Attempt: "",
 	})
 
 	if applyErr := pdst.ApplyStaging(ctx); applyErr != nil {

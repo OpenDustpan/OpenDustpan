@@ -226,6 +226,8 @@ var (
 //
 //nolint:gochecknoglobals // A fixed table; Go has no constant sets.
 var legacyFieldNames = map[string]string{
+	"collectionID": "The placement API spells the stable ID of a collection collectionID, because the tagliatelle " +
+		"goCamel rule of the linter demands it.",
 	"unitID":    "The inventory, context and job APIs spell the stable ID of a unit unitID, and the console reads it.",
 	"versionID": "The jobs API spells the ID of the closing state version versionID.",
 	"poolID": "The jobs API spells the ID of the runner pool poolID, because the tagliatelle goCamel " +
@@ -245,6 +247,10 @@ var legacyFieldNames = map[string]string{
 	"objectID": "The error argument of the answer for a replayed secret spells the ID of the object objectID, " +
 		"as the catalog of error codes declares it, and the console reads it.",
 	"backupID": "The backup and restore API spells the ID of a backup backupID, and the CLI and the console read it.",
+	"principalID": "The access token routes spell the ID of the principal of a token principalID, " +
+		"because the tagliatelle goCamel rule of the linter demands it.",
+	"grantID": "The access review and the grants of the caller spell the ID of a grant grantID, " +
+		"because the tagliatelle goCamel rule of the linter demands it.",
 	"preBackupID": "The restore API spells the ID of the backup taken before the restore preBackupID, " +
 		"and the CLI and the console read it.",
 }

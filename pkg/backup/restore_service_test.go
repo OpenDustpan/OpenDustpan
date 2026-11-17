@@ -984,7 +984,7 @@ func TestRestoreMutatedTargetCannotApply(t *testing.T) {
 
 	setup := newRestoreServiceSetup(t)
 
-	raw := setup.target.readObject(t, "backups/"+setup.id.String()+"/manifest.json")
+	raw := setup.target.readObject(t, manifestKeyOf(setup.id))
 
 	var manifest backup.Manifest
 
@@ -1660,7 +1660,7 @@ func TestRestoreRefusesForeignDescriptorPath(t *testing.T) {
 
 	setup := newRestoreServiceSetup(t)
 
-	raw := setup.target.readObject(t, "backups/"+setup.id.String()+"/manifest.json")
+	raw := setup.target.readObject(t, manifestKeyOf(setup.id))
 
 	var manifest backup.Manifest
 

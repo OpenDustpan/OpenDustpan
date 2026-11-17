@@ -125,6 +125,10 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a claim ends when its lease passes", testClaimLeasePasses},
 		{"a renewal moves the expiry from the database time", testRenewExpiryFromDatabase},
 		{"a runner of another namespace is not found for a drain, retire or rotation", testOtherNamespace},
+		{"TestPoolStore_CrossNamespaceWriteRefused_UpdatePool", testPoolStoreCrossNamespaceUpdateRefused},
+		{"TestPoolStore_CrossNamespaceWriteRefused_DeletePool", testPoolStoreCrossNamespaceDeleteRefused},
+		{"TestPoolStore_CrossNamespaceWriteRefused_CreateJoinToken", testPoolStoreCrossNamespaceCreateTokenRefused},
+		{"TestPoolStore_CrossNamespaceWriteRefused_RevokeJoinToken", testPoolStoreCrossNamespaceRevokeRefused},
 		{"a session of a runner that no longer exists is refused", testSessionOfDeletedRunner},
 		{"each change appends its audit entry", testAuditEntries},
 	}

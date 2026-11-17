@@ -22,7 +22,7 @@ import (
 func deleteManifest(t *testing.T, held checkBackupStores, id string) blob.Key {
 	t.Helper()
 
-	key, err := blob.ParseKey("backups/" + id + "/manifest.json")
+	key, err := blob.ParseKey("backups/" + id + "/1/manifest.json")
 	if err != nil {
 		t.Fatalf("parse manifest key: %v", err)
 	}

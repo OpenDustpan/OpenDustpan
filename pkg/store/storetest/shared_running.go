@@ -47,7 +47,7 @@ func testSharedOneRunning(t *testing.T, a, b Store) {
 		wg.Go(func() {
 			backupErrs[i] = h.CreateBackup(t.Context(), backup.Record{
 				StartedAt: start, EndedAt: time.Time{}, ID: backup.ID(ident.NewID("bkp-")),
-				Target: "dir:/var/backups", Error: "", State: backup.StateRunning,
+				Target: "dir:/var/backups", Error: "", State: backup.StateRunning, Attempt: "",
 			})
 		})
 		wg.Go(func() {

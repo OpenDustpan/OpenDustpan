@@ -30,8 +30,10 @@ var outsideByDesign = []string{
 	// The OpenTofu HTTP backend.
 	"/tofu/state/",
 	// The provider and module registry protocols of OpenTofu. Service discovery
-	// names the paths, so they cannot move under the prefix.
-	"/v1/providers/", "/v1/modules/",
+	// names the paths, so they cannot move under the prefix. The provider
+	// network mirror lives under its own prefix next to them: a person writes
+	// it in the network_mirror block of the CLI configuration.
+	"/v1/providers/", "/v1/modules/", "/v1/mirror/",
 	// The runner protocol.
 	"/runner/v1/",
 	// The paths that an identity provider, a cloud trust policy, an MCP
@@ -101,8 +103,6 @@ var notMoved = map[string]string{
 	"GET /api/server/namespaces/{namespace}/collections/{collection}/access-review":  "/api/dustpan/v1/namespaces/{namespace}/collections/{collection}/access-review",
 	"GET /api/server/namespaces/{namespace}/unit-access-review":                      "/api/dustpan/v1/namespaces/{namespace}/unit-access-review",
 	"GET /api/server/principals/{principal}/access-review":                           "/api/dustpan/v1/principals/{principal}/access-review",
-	"GET /api/server/caller/access":                                                  "/api/dustpan/v1/me/access",
-	"GET /api/server/caller/grants":                                                  "/api/dustpan/v1/me/grants",
 	"GET /api/server/tokens":                                                         "/api/dustpan/v1/tokens",
 	"GET /api/server/tokens/{id}":                                                    "/api/dustpan/v1/tokens/{id}",
 	"DELETE /api/server/tokens/{id}":                                                 "/api/dustpan/v1/tokens/{id}",
@@ -112,10 +112,6 @@ var notMoved = map[string]string{
 	"GET /api/server/principals/{principal}/tokens":                                  "/api/dustpan/v1/principals/{principal}/tokens",
 	"POST /api/server/principals/{principal}/tokens/{id}/rotate":                     "/api/dustpan/v1/principals/{principal}/tokens/{id}/rotate",
 	"DELETE /api/server/principals/{principal}/tokens/{id}":                          "/api/dustpan/v1/principals/{principal}/tokens/{id}",
-	"GET /api/server/caller/tokens":                                                  "/api/dustpan/v1/me/tokens",
-	"POST /api/server/caller/tokens":                                                 "/api/dustpan/v1/me/tokens",
-	"DELETE /api/server/caller/tokens/{id}":                                          "/api/dustpan/v1/me/tokens/{id}",
-	"POST /api/server/caller/tokens/{id}/rotate":                                     "/api/dustpan/v1/me/tokens/{id}/rotate",
 	"GET /api/server/token-policy":                                                   "/api/dustpan/v1/settings/token-policy",
 	"PATCH /api/server/token-policy":                                                 "/api/dustpan/v1/settings/token-policy",
 	"POST /api/server/token-policy/sweep":                                            "/api/dustpan/v1/settings/token-policy/sweep",
@@ -143,17 +139,6 @@ var notMoved = map[string]string{
 	"GET /api/audit/entries/{sequence}":                                              "/api/dustpan/v1/audit/entries/{sequence}",
 	"GET /api/audit/check":                                                           "/api/dustpan/v1/audit/check",
 	"GET /api/audit/export":                                                          "/api/dustpan/v1/audit/export",
-	"GET /api/runners/{namespace}/pools":                                             "/api/dustpan/v1/namespaces/{namespace}/runner-pools",
-	"POST /api/runners/{namespace}/pools":                                            "/api/dustpan/v1/namespaces/{namespace}/runner-pools",
-	"GET /api/runners/{namespace}/pools/{pool}":                                      "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}",
-	"PATCH /api/runners/{namespace}/pools/{pool}":                                    "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}",
-	"DELETE /api/runners/{namespace}/pools/{pool}":                                   "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}",
-	"GET /api/runners/{namespace}/pools/{pool}/join-tokens":                          "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens",
-	"POST /api/runners/{namespace}/pools/{pool}/join-tokens":                         "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens",
-	"POST /api/runners/{namespace}/pools/{pool}/join-tokens/{id}/revoke":             "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens/{id}/revoke",
-	"GET /api/runners/{namespace}/pools/{pool}/runners":                              "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/runners",
-	"POST /api/runners/{namespace}/runners/{runner}/drain":                           "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/drain",
-	"POST /api/runners/{namespace}/runners/{runner}/retire":                          "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire",
 }
 
 // routeClass names the classes of a route of the joined table.
@@ -313,13 +298,14 @@ var rootMounts = []string{
 	// The catch-all under the prefix: it answers 404 for a path no adapter serves.
 	apidesc.Prefix,
 	// The tool APIs, the installation APIs and the runner protocol.
-	"/api/inventory/", "/api/audit/", "/api/runners/", "/runner/v1/",
+	"/api/inventory/", "/api/audit/", "/runner/v1/",
 	"/api/v2/", "/api/server/", "/api/", "/tofu/state/",
 	// The provider registry protocol of OpenTofu. Service discovery names its
 	// path, and the client cannot move it under the prefix of the REST API. The
 	// TFE adapter serves it and lists the route table in its own tests. The
-	// module registry protocol follows the same rule.
-	"/v1/providers/", "/v1/modules/",
+	// module registry protocol and the provider network mirror follow the same
+	// rule.
+	"/v1/providers/", "/v1/modules/", "/v1/mirror/",
 	// The protocol routes of the OIDC issuers. The path is part of the issuer
 	// URL that clouds hold, so it cannot move under the prefix.
 	"/oidc/",

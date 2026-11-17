@@ -313,7 +313,7 @@ func TestJobPlannerNoPoolNamesTheNextStep(t *testing.T) {
 			t.Fatalf("Plan = %v, want ErrUnsupported", err)
 		}
 
-		for _, want := range []string{"POST /api/runners/{namespace}/pools", "purpose jobs", "DUSTPAN_PUBLIC_URL"} {
+		for _, want := range []string{"POST /api/dustpan/v1/namespaces/{namespace}/runner-pools", "purpose jobs", "DUSTPAN_PUBLIC_URL"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("Plan = %v, want a text that has %q", err, want)
 			}

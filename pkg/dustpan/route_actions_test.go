@@ -60,7 +60,6 @@ var rootPrefixes = map[string]string{
 	"/api/inventory/": "inventory",
 	"/api/audit/":     "audit",
 	"/runner/v1/":     "runners",
-	"/api/runners/":   "runners",
 	"/api/v2/":        "tfe",
 	"/tofu/state/":    "tofuhttp",
 	"/api/server/":    "server",
@@ -68,6 +67,7 @@ var rootPrefixes = map[string]string{
 	"/oidc/":          "issuer",
 	"/v1/providers/":  "tfe",
 	"/v1/modules/":    "tfe",
+	"/v1/mirror/":     "tfe",
 }
 
 // rootMethods lists the patterns with a method that code may register

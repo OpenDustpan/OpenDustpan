@@ -55,8 +55,9 @@ An S3-compatible target holds each object with a limit of 5 GiB. Each table file
 
 A backup is a set of objects under the target:
 
-- `backups/<id>/manifest.json` describes the backup. It is the last object that the server writes. A backup without it is not complete.
-- `backups/<id>/sql/<table>.jsonl.gz` holds the SQL data. There is one file for each table of the installation. Each file is gzip-compressed JSON Lines: one row for each line, with one member for each column.
+- `backups/<id>/<attempt>/manifest.json` describes the backup. The write step writes it last of its run. A backup without a manifest in its attempt directory is not complete.
+- `backups/<id>/<attempt>/sql/<table>.jsonl.gz` holds the SQL data. There is one file for each table of the installation. Each file is gzip-compressed JSON Lines: one row for each line, with one member for each column.
+- `backups/<id>/live.json` names the live attempt. The finish step writes it after Check and before the fenced commit. A read, a check and a restore use only the directory that it names. A backup with no `live.json` is not complete.
 - `blobs/<key>` holds each blob that the SQL data names. Examples are OpenTofu state versions and Pulumi checkpoints. Other examples are job plan parts, job log chunks and registry release files.
 
 The manifest records the backup format (`format`: 3) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the primary installations and the wrapper IDs. It records the kind of the installation that wrote the backup (`installationKind`: `dev` or `production`). The server reads the kind from its own database. A backup of another format number is not valid, and neither is a manifest with no kind or with an unknown kind.
@@ -71,7 +72,7 @@ Registry release files follow a stricter rule. A published release that names a 
 
 A restore accepts a backup only when the `unverified` list names every blob that the SQL data names without these values. A backup that does not list such a blob lost its content. The restore then stops with the text `backup is incomplete: the data names <number> blobs that the backup does not hold`. The live data stays as it was.
 
-The server refuses a backup when its data names more than 10000 such blobs. It writes no manifest, so no restore applies the backup. The failed row and the server log name the count and the limit. The count points to rows without the size and the MD5 of a blob. Such rows can come from an earlier version of the server. Run the backup again after those rows hold their values, or after the server no longer holds them. No setting changes the bound. The answer of `GET /api/server/backups/{id}` shows it as `unverifiedKeyLimit`. The same answer shows the count of the unverified keys of the manifest as `unverifiedKeyCount`. The code `backup.too-many-unverified` carries the count and the limit as its arguments.
+The server refuses a backup when its data names more than 10000 such blobs. It writes no manifest, so no restore applies the backup. The failed row and the server log name the count and the limit. The count points to rows without the size and the MD5 of a blob. Such rows can come from an earlier version of the server. Run the backup again after those rows hold their values, or after the server no longer holds them. No setting changes the bound. The answer of `GET /api/dustpan/v1/backups/{id}` shows it as `unverifiedKeyLimit`. The same answer shows the count of the unverified keys of the manifest as `unverifiedKeyCount`. The code `backup.too-many-unverified` carries the count and the limit as its arguments.
 
 A restore does not apply the bound. A manifest with more unverified keys than the bound restores as before. Such a manifest can come from an earlier version of the server. The restore checks the same rule: the list must name every blob that the data names. The audit log then holds one entry with the count and the limit.
 
@@ -352,9 +353,9 @@ restore applies. These writes run, each with its audit entry:
   revocation in normal operation stay in force: the fence of the namespace,
   and the rule that the caller holds every action that the grant gives.
 - the revocation of a join token of a runner pool
-  (`POST /api/runners/{namespace}/pools/{pool}/join-tokens/{id}/revoke`).
+  (`POST /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens/{id}/revoke`).
 - the retire of a runner
-  (`POST /api/runners/{namespace}/runners/{runner}/retire`), which also ends
+  (`POST /api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire`), which also ends
   the live claims of the runner. The other routes of the runner management API
   answer 503 in maintenance mode.
 - the disable of a sign-in provider, which also ends its sessions. A change of
@@ -407,6 +408,14 @@ account. It keeps that account enabled and writes an entry with the outcome
 with the code `principal.no-working-break-glass` when it lowers the count of
 working break-glass accounts and leaves fewer than two
 (see [Other paths](break-glass-accounts.md#other-paths)).
+
+A restore keeps the live runner handoff tokens and job sessions. It drops a
+handoff token or a job session whose runner the backup does not hold, for
+example a runner that joined after the backup. When it drops one or more, the
+restore writes one entry in `@server` with the action
+`restore:drop-runner-credentials`. The entry names the count of the dropped
+handoff tokens, the count of the dropped job sessions and the ID of each
+runner. It never names a token value or a session secret.
 
 The server records only the revocations of the current stay in maintenance mode. A
 new enter starts a new stay. A revocation that you made in normal

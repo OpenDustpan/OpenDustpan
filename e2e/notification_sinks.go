@@ -91,10 +91,23 @@ func (e *Env) storeDelivery(
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	at := now.Add(-seed.StoppedBefore)
 	d := notify.Delivery{
-		ID: ident.NewID(notify.DeliveryIDPrefix), Notification: ident.NewID(notify.IDPrefix), Scope: ns,
-		Subscription: seed.Subscription, Sink: seed.Sink, Contact: "", Principal: seed.Principal,
-		State: notify.DeliveryPending, Attempts: 0, Redeliveries: 0, NextAt: at.Add(-time.Minute), LastError: "",
-		DeliveredAt: time.Time{}, Owner: "", LeaseUntil: time.Time{}, Version: 0,
+		ID:           ident.NewID(notify.DeliveryIDPrefix),
+		Notification: ident.NewID(notify.IDPrefix),
+		Scope:        ns,
+		Subscription: seed.Subscription,
+		Sink:         seed.Sink,
+		Contact:      "",
+		Principal:    seed.Principal,
+		State:        notify.DeliveryPending,
+		Attempts:     0,
+		CreatedAt:    now.Add(-time.Minute),
+		Redeliveries: 0,
+		NextAt:       at.Add(-time.Minute),
+		LastError:    "",
+		DeliveredAt:  time.Time{},
+		Owner:        "",
+		LeaseUntil:   time.Time{},
+		Version:      0,
 	}
 
 	if err = store.Enqueue(ctx, n.Fence(), []notify.Delivery{d}); err != nil {

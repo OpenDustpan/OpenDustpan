@@ -3,11 +3,16 @@ package sqlite
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"errors"
 	"io"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -187,4 +192,94 @@ func TestKeepAccessHoldsWriteLockAcrossSwap(t *testing.T) {
 	if _, err := s.GetNamespace(ctx, "rival"); err != nil {
 		t.Fatalf("get rival namespace after the keep: %v", err)
 	}
+}
+
+// TestKeepAccessRefusesPlacementRuleOfAnotherNamespace checks that a
+// keep-access restore refuses a staged placement rule that names a collection
+// of another namespace. The rule is written into the staged file with the
+// foreign keys off, the way a damaged or hostile backup file can hold it, so
+// only the staged foreign-key check of the apply sees the row. The apply
+// reports ErrRestoreAccessMismatch and the live database keeps its rules.
+func TestKeepAccessRefusesPlacementRuleOfAnotherNamespace(t *testing.T) {
+	t.Parallel()
+
+	seed := newPlacementSeed(t)
+	s := seed.s
+
+	sink := &keepMemSink{files: map[string]*bytes.Buffer{}}
+
+	sum, files, err := s.ExportPortable(t.Context(), sink.open)
+	if err != nil {
+		t.Fatalf("export portable: %v", err)
+	}
+
+	_, err = s.StagePortable(t.Context(), sink.read, sum, files, storetest.StageAs(t, s))
+	if err != nil {
+		t.Fatalf("stage portable: %v", err)
+	}
+
+	staged := openStagedWithoutForeignKeys(t, s.stagingPath)
+
+	_, err = staged.ExecContext(t.Context(), placementRuleInsert,
+		ident.NewID("plr-"), seed.alpha.Name.String(), seed.colID, 1_700_000_000_000,
+	)
+	if err != nil {
+		t.Fatalf("write the staged rule of alpha: %v", err)
+	}
+
+	// Close the staged file before the apply. An open handle holds a lock
+	// on the file, and the apply can then fail with a busy database
+	// instead of the access mismatch that this test checks. Close is safe
+	// to call twice, so the cleanup of the open helper stays.
+	err = staged.Close()
+	if err != nil {
+		t.Fatalf("close the staged file: %v", err)
+	}
+
+	_, err = s.ApplyStagingKeepingAccess(t.Context())
+	if !errors.Is(err, backup.ErrRestoreAccessMismatch) {
+		t.Fatalf("apply keeping the access tables = %v, want ErrRestoreAccessMismatch", err)
+	}
+
+	var rules int
+
+	err = s.conn.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM placement_rules").Scan(&rules)
+	if err != nil {
+		t.Fatalf("count live placement rules: %v", err)
+	}
+
+	if rules != 0 {
+		t.Fatalf("live placement rules after the refused apply = %d, want 0", rules)
+	}
+}
+
+// openStagedWithoutForeignKeys opens the staged file with the foreign keys
+// off: the state of a damaged or hostile backup file that holds rows that no
+// constraint allowed.
+func openStagedWithoutForeignKeys(t *testing.T, path string) *sql.DB {
+	t.Helper()
+
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("resolve the staged file: %v", err)
+	}
+
+	query := url.Values{}
+	query.Add("_pragma", "busy_timeout(10000)")
+	query.Add("_pragma", "foreign_keys(off)")
+
+	conn, err := sql.Open("sqlite", (&url.URL{
+		Scheme: fileScheme, Path: abs, RawQuery: query.Encode(),
+	}).String())
+	if err != nil {
+		t.Fatalf("open the staged file: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close the staged file: %v", closeErr)
+		}
+	})
+
+	return conn
 }

@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -128,6 +129,28 @@ func (c *countingRegistryStore) Addresses(
 	return c.Store.Addresses(ctx, ns, kind, after, limit)
 }
 
+// failingKeys wraps the key store of the fixture. After fail is set, Keys
+// returns an error that is not registry.ErrNotFound, so ServableReleases
+// fails after it has read the releases.
+type failingKeys struct {
+	registry.KeyStore
+
+	fail atomic.Bool
+}
+
+// errKeysDown is the error that failingKeys returns.
+var errKeysDown = errors.New("the key store is down")
+
+// Keys fails when fail is set, and passes the call to the wrapped store
+// otherwise.
+func (k *failingKeys) Keys(ctx context.Context, ns namespace.Name) ([]registry.KeyRecord, error) {
+	if k.fail.Load() {
+		return nil, errKeysDown
+	}
+
+	return k.KeyStore.Keys(ctx, ns)
+}
+
 type fixture struct {
 	handler *apiregistry.Handler
 	// served is the handler that the tests call: it fails a test when a
@@ -139,6 +162,8 @@ type fixture struct {
 	service *service.Service
 	// registry counts the calls that reach the address list of the store.
 	registry *countingRegistryStore
+	// keys fails the read of the trusted keys on demand.
+	keys *failingKeys
 }
 
 func newFixture(t *testing.T, deny ...identity.Action) fixture {
@@ -186,9 +211,11 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 	verifier := pgpverify.Verifier{Now: nil}
 	registryStore := &countingRegistryStore{Store: store.Registry(), addresses: atomic.Int64{}}
 
+	keys := &failingKeys{KeyStore: store.RegistryKeys(), fail: atomic.Bool{}}
+
 	svc, err := service.New(service.Config{
 		Store:                 registryStore,
-		Keys:                  store.RegistryKeys(),
+		Keys:                  keys,
 		Verifier:              verifier,
 		Inspector:             verifier,
 		Blobs:                 blobs,
@@ -238,6 +265,7 @@ func newFixtureWithAuthorizer(t *testing.T, override identity.Authorizer, deny .
 		store:    store,
 		service:  svc,
 		registry: registryStore,
+		keys:     keys,
 	}
 }
 
@@ -318,6 +346,40 @@ func buildSetFor(t *testing.T, sg pgpfixture.Signer, name string) archiveSet {
 	return buildSetVersion(t, sg, name, providerVersion)
 }
 
+// zipBytes returns the bytes of a provider archive with one binary and a
+// manifest with protocol 5.0, as a publisher sends it.
+func zipBytes(t *testing.T, binary []byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	w := zip.NewWriter(&buf)
+
+	for _, entry := range []struct{ name, body string }{
+		{"terraform-provider-binary", string(binary)},
+		{"terraform-registry-manifest.json", `{"version":1,"metadata":{"protocol_versions":["5.0"]}}` + `}`},
+	} {
+		header := new(zip.FileHeader)
+		header.Name = entry.name
+		header.Method = zip.Deflate
+
+		out, err := w.CreateHeader(header)
+		if err != nil {
+			t.Fatalf("create zip entry %s: %v", entry.name, err)
+		}
+
+		if _, err := out.Write([]byte(entry.body)); err != nil {
+			t.Fatalf("write zip entry %s: %v", entry.name, err)
+		}
+	}
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+
+	return buf.Bytes()
+}
+
 // buildSetVersion builds the archive set of version of the provider name.
 func buildSetVersion(t *testing.T, sg pgpfixture.Signer, name, version string) archiveSet {
 	t.Helper()
@@ -328,7 +390,7 @@ func buildSetVersion(t *testing.T, sg pgpfixture.Signer, name, version string) a
 
 	for _, p := range []string{"linux_amd64", "darwin_arm64"} {
 		file := fmt.Sprintf("terraform-provider-%s_%s_%s.zip", name, version, p)
-		data := []byte("zip bytes of " + file)
+		data := zipBytes(t, []byte("zip bytes of "+file))
 		sum := sha256.Sum256(data)
 		fmt.Fprintf(&sums, "%s  %s\n", hex.EncodeToString(sum[:]), file)
 
@@ -719,6 +781,48 @@ func TestGetReleaseServed(t *testing.T) {
 	}
 }
 
+// TestServedVersionsReadError proves that a failed read of the servable
+// releases answers a 500 with the generic text on the list route and on the
+// route of one version, with no list and no release in the answer.
+func TestServedVersionsReadError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{"list of versions", base + "/providers/" + providerName + "/versions"},
+		{"one version", base + "/providers/" + providerName + "/versions/1.0.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			sg := pgpfixture.NewSigner(t)
+
+			f.trust(t, "acme", sg)
+			f.publishVersion(t, sg, "1.0.0")
+
+			f.keys.fail.Store(true)
+
+			got := f.call(t, "reader", http.MethodGet, tt.target, nil)
+			wantCode(t, "read with a failed key store", got, http.StatusInternalServerError)
+
+			if !strings.Contains(got.body, "internal error") {
+				t.Errorf("answer = %q, want the generic text", got.body)
+			}
+
+			for _, leak := range []string{errKeysDown.Error(), "releases", providerVersion} {
+				if strings.Contains(got.body, leak) {
+					t.Errorf("answer = %q, must not hold %q", got.body, leak)
+				}
+			}
+		})
+	}
+}
+
 // TestPublishRefusals sends hostile requests straight to the handler.
 func TestPublishRefusals(t *testing.T) {
 	t.Parallel()
@@ -735,7 +839,9 @@ func TestPublishRefusals(t *testing.T) {
 	stranger := buildSet(t, pgpfixture.NewSigner(t))
 
 	swapped := buildSet(t, sg)
-	swapped.archive[swapped.names[0]] = []byte("other bytes")
+	// A zip file with other bytes: the publish refuses a body that is not a
+	// zip file before the hash check that this case reaches.
+	swapped.archive[swapped.names[0]] = zipBytes(t, []byte("other bytes"))
 
 	tests := []struct {
 		name   string

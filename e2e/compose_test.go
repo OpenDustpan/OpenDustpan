@@ -44,6 +44,54 @@ const (
 	composeNamespace = "acme"
 )
 
+// TestComposeDocsCommands runs the blocks of the checked pages, and a fixture
+// block that carries the needs-docker marker, with Docker. It runs only with
+// E2E_COMPOSE=1; TestDocsCommandsDockerGate shows that the same block is
+// skipped without it.
+func TestComposeDocsCommands(t *testing.T) {
+	t.Parallel()
+
+	if os.Getenv("E2E_COMPOSE") != "1" {
+		t.Skip("set E2E_COMPOSE=1 (make compose-smoke) to run the docs commands that need Docker")
+	}
+
+	root := repoRoot(t)
+
+	checked, err := e2e.ReadPageList(root, docsCheckedList)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fixture := docsFixture(t, map[string]string{
+		"docs/guides/docker.md": "<!-- docs-check-skip: needs-docker -->\n" + fenced("docker --version\n"),
+	})
+
+	for _, run := range []struct {
+		root  string
+		scope []string
+	}{{fixture, []string{"docs/guides"}}, {root, checked}} {
+		if len(run.scope) == 0 {
+			continue
+		}
+
+		cmds, collectErr := e2e.CollectCommands(run.root, run.scope)
+		if collectErr != nil {
+			t.Fatal(collectErr)
+		}
+
+		res, runErr := e2e.RunCommands(t.Context(), docsDefault(), cmds)
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+
+		for _, r := range res {
+			if r.Status != e2e.DocsPassed {
+				t.Error(r.Report())
+			}
+		}
+	}
+}
+
 // TestComposeQuickstart brings up the stack of deploy/compose, as the
 // quickstart guide says, and drives the real Pulumi CLI and OpenTofu against
 // it. It builds the server image, runs init.sh, starts the stack and waits

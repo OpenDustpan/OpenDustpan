@@ -270,6 +270,7 @@ func TestPortableManifestFormat(t *testing.T) {
 	manifest := backup.Manifest{
 		CreatedAt:            time.Time{},
 		ID:                   "bkp-1",
+		Attempt:              "1",
 		Dialect:              backup.DialectSQLite,
 		PrimaryInstallations: []string{"eu-west"},
 		WrapperIDs:           []string{"kek-1"},

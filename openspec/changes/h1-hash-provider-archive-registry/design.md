@@ -1,12 +1,11 @@
 ## Context
 
-Provider archives are untrusted zip files. The server unpacks with limits, computes the h1 hash, reads the registry manifest for protocols, and maps each namespace to a registry-safe slug.
+Provider archives are untrusted zip files. The server unpacks with limits, computes the h1 hash, and reads the registry manifest file, a separate release file, for protocols.
 
 ## Decisions
 
-1. **Bounded unpack as structure.** Add an unexported unpack function that opens the staged zip, rejects absolute paths and dot-dot entries, enforces limits on unpacked size, file count, entry size and compression ratio, counts real decompressed bytes while it reads, rejects duplicate names after case folding, and returns the manifest bytes and the h1 digest.
-2. **Archive truth from bytes.** Store H1 on registry.Archive at publish time from the unpack result, include H1 in SameContent (every release gets H1 at publish; no backfill, because no tag shipped a release without it), and derive protocols only from terraform-registry-manifest.json inside the archive with order-insensitive set match.
-3. **Stable slug from ID.** Derive the registry slug for each namespace from its stable ID in lowercase with unsafe characters removed, store the slug on the namespace record at publish time, index slug to namespace for lookup (no backfill of earlier namespaces: no tag shipped the earlier shape, so the slug is set at the first publish), keep the name path of main for existing releases with slug winning on conflict, append a short suffix on collision or empty result, and edit the baseline of each dialect in place with no numbered migration.
+1. **Bounded unpack as structure.** Add an unexported unpack function that opens the staged zip, rejects absolute paths and dot-dot entries, enforces limits on unpacked size, file count, entry size and compression ratio, counts real decompressed bytes while it reads, rejects duplicate names after case folding, and returns the h1 digest. It never reads a manifest from the zip.
+2. **Archive truth from bytes.** Store H1 on registry.Archive at publish time from the unpack result, include H1 in SameContent (every release gets H1 at publish; no backfill, because no tag shipped a release without it), and derive protocols only from the manifest file (the fourth file role `manifest`, beside sums, signature and archive) with order-insensitive set match. The manifest is bounded (size limit, JSON only, version 1, protocol values 5.0 or 6.0, no empty list), is read by the bounded reader class of the archive, and is checked against the SHA256SUMS file when that file lists it (fail closed on a mismatch). No fallback to a manifest inside the zip: the public release tools publish the manifest as a separate release asset and the zip holds the binary only.
 
 ## Structure
 
@@ -17,15 +16,15 @@ Unexported type archiveFacts with constructor openArchiveFacts(stagedKey) that c
 - Zip bomb exhausts disk or memory during unpack.
 - Path traversal writes outside the staging directory.
 - Publisher states false protocols and OpenTofu selects a provider it fails to start.
-- Namespace name outside the safe subset breaks registry URLs.
 
 ## Layers (defense in depth)
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
 | port adapter | Unpack rejects entries with absolute paths, dot-dot segments, and symlink bits, and stops past 64 MB unpacked size, 1024 files, 16 MB per file, and 100 times expansion of compressed size counted on real bytes. | Publish a zip with ../../evil, absolute /tmp/evil, symlink entry, and zip bomb entries; each publish fails with 400 and no file leaves the staging directory. |
-| service | Service compares stated protocols to manifest protocols with exact set match and refuses mismatch; a stated protocol value without a manifest fails closed. | Publish a provider that states protocols 5.0 while the manifest states 6.0, and one that states protocols without a manifest; the service returns invalid protocols and stores nothing. |
-| HTTP handler | Registry HTTP handlers check publish authorization first, then zip content type, then count request bytes during read to 32 MB, and stage bytes only after those checks. | Send an oversize archive and a wrong content type with a principal without publish grant; the handler returns 403, 415, and 413 without unpacking. |
+| service | Service compares stated protocols to manifest protocols with exact set match and refuses mismatch; a request without a manifest file states the protocols or fails closed; a manifest over its size limit, not JSON, not version 1 or with an unknown value is refused; a manifest that the SHA256SUMS file lists with another digest is refused. | Publish a provider that states protocols 5.0 while the manifest states 6.0, one with an oversize, malformed, version 2 or empty-list manifest, one with a manifest that the sums file lists with another digest, and one with no manifest and no stated protocols; the service returns registry.invalid and stores nothing. |
+| HTTP handler | Registry HTTP handlers check publish authorization first, then the octet-stream content type of an upload, then count request bytes during read to 32 MB, and stage bytes only after those checks. The handler does not know the role of a file, so the type of the bytes is checked at publish (service layer). | Send an oversize archive and a wrong content type with a principal without publish grant; the handler returns 403, 415, and 413 without unpacking. |
+| service | Publish checks that a file with the archive role is a zip by its content, and refuses a file that is not with registry.bad-archive before it computes the hash. A client header does not decide it. | Stage a non-zip body and publish it as the archive role; publish returns 400 registry.bad-archive and stores nothing. |
 
 ## Diagrams
 
@@ -40,7 +39,7 @@ participant Service
 participant Store
 Publisher->>API: POST uploads archive
 API->>Unpack: open staged zip with bounds
-Unpack->>Service: H1 and manifest protocols
+Unpack->>Service: H1
 Service->>Store: compare SameContent and store
 ```
 
@@ -99,10 +98,10 @@ end
 | unpack boundary | T | Attacker uploads traversal or zip bomb archive that writes outside staging or exhausts disk. | limit | Unpack stops past 64 MB real bytes, 1024 files, 16 MB per file, 100x ratio. | Publish zip bomb with lying headers; expect 400 on real-byte count. |
 | unpack boundary | T | Attacker uploads traversal or zip bomb archive that writes outside staging or exhausts disk. | authorize at point of use | Service checks publish grant again before H1 store. | Call service unpack without grant; expect denial with no store. |
 | unpack boundary | T | Attacker uploads traversal or zip bomb archive that writes outside staging or exhausts disk. | fail closed | Unpack fails closed on duplicate names and bad headers with no release. | Publish duplicate-name archive; expect 400 with no release stored. |
-| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | boundary check | Download validates slug characters against safe subset before lookup. | Request install with dot-dot slug; expect 404 registry.not-found. |
-| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | encode or contain | Serve encodes slug in URLs and serves bytes with fixed content type. | Fetch release under slug with hostile name; expect safe encoding. |
+| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | boundary check | Download validates the namespace and the type in the path against the safe subset before lookup. | Request install with a dot-dot namespace; expect 404 registry.not-found. |
+| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | encode or contain | Serve encodes the namespace in URLs and serves bytes with fixed content type. | Fetch a release with a hostile type name; expect safe encoding. |
 | serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | limit | Download caps archive bytes served per request. | Fetch oversize release path; expect capped stream with no exhaustion. |
-| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | authorize at point of use | Download checks read grant on namespace object of slug owner. | Fetch private release without read grant; expect 403. |
+| serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | authorize at point of use | Download checks read grant on the namespace object. | Fetch private release without read grant; expect 403. |
 | serve boundary | I | Publisher states false protocols or swaps archive bytes so OpenTofu installs a provider it cannot start. | fail closed | Service refuses false protocols and changed H1 with 400 and 409. | Publish false protocols and changed-bytes republish; expect mismatch and content-changed. |
 
 ## Contracts
@@ -110,16 +109,14 @@ end
 **registry release**
 
 - Invariant: H1 identifies unpacked bytes; SameContent includes H1.
-- Invariant: Stored protocols equal manifest protocols or empty when no manifest and no stated protocols.
-- Invariant: Registry slug derives from stable namespace ID and never changes on rename.
+- Invariant: Stored protocols equal the manifest file protocols when a manifest file is sent, else the stated protocols; a release never stores an empty list.
 - `compute h1 hash`: pre: caller holds publish grant on namespace. Post: release stored with H1 over unpacked tree.
-- `read protocols from manifest`: pre: archive unpack passed bounds. Post: stored protocols equal manifest set or empty.
-- `serve releases under slug`: pre: slug maps to one namespace. Post: client receives release bytes under slug path.
+- `read protocols from manifest`: pre: the manifest file passed its bounds and the sums check. Post: stored protocols equal the manifest set.
 
 ## Failure modes
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
 | Bounded unpack | Unpack exceeds limit mid-stream | Fix archive and publish again; staged bytes deleted. | No release stored, staged bytes deleted. |
-| Protocol check | Stated protocols differ from manifest | Rebuild request from manifest and publish again. | No release stored. |
+| Protocol check | Stated protocols differ from the manifest file | Rebuild request from manifest and publish again. | No release stored. |
 | Compare and store in one transaction | Changed-bytes republish race | Publish a new version with changed bytes. | One winner stored, loser gets 409. |

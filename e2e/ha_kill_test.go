@@ -510,6 +510,15 @@ func haKillDuringBackup(t *testing.T, env *e2e.Env) {
 	if err := cluster.WaitHealthy(ctx); err != nil {
 		t.Fatalf("%v", err)
 	}
+
+	// The instance that held the claim runs again. Whatever it does with the
+	// directory of its own attempt, the finished backup stays complete.
+	again := env.RunBinary(ctx, t, "backup", "check",
+		"--server", env.URL, "--ca-file", env.CABundle(), "--backup", id)
+	if again.ExitCode != 0 || !strings.Contains(again.Stdout, "backup "+id+" is complete") {
+		t.Fatalf("backup check after the restart exits with status %d:\n%s%s",
+			again.ExitCode, again.Stdout, again.Stderr)
+	}
 }
 
 // haWaitBackupOperationEnd waits until the durable operation id has ended: the

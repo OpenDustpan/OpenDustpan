@@ -9,7 +9,7 @@ func portableTrustRuleTables() []PortableTable {
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
-				{Name: "namespace", Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
 				{Name: portColName, Kind: KindText},
 				{Name: portColIssuer, Kind: KindText},
 				{Name: "audience", Kind: KindText},
@@ -19,6 +19,31 @@ func portableTrustRuleTables() []PortableTable {
 				{Name: portColPrincipalID, Kind: KindText},
 				{Name: portColCreatedBy, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: "revision", Kind: KindInteger},
+				{Name: "spiffe_id_pattern", Kind: KindText},
+				{Name: portColBundleID, Kind: KindText},
+			},
+		},
+		{
+			Table:   TableTrustBundles,
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
+				{Name: "active_version", Kind: KindInteger},
+				{Name: "revision", Kind: KindInteger},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   TableTrustBundleVersions,
+			OrderBy: []string{portColBundleID, portColVersion},
+			Columns: []Column{
+				{Name: portColBundleID, Kind: KindText},
+				{Name: portColVersion, Kind: KindInteger},
+				{Name: "pem", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: "overlap_ends_at_ms", Kind: KindInteger},
 			},
 		},
 	}

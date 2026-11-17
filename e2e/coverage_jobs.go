@@ -60,6 +60,11 @@ func jobAllowEntries() []AllowEntry {
 		why  = "Console and client route: no CLI calls it. The harness steps of TestJobsAPI call it through the API."
 	)
 
+	const (
+		actionsTest = "TestJobActions"
+		actionsWhy  = "Console and client route: no CLI calls it. The steps of TestJobActions call it through the API."
+	)
+
 	return []AllowEntry{
 		{Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs", CoveringTest: test, Reason: why},
 		{Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs", CoveringTest: test, Reason: why},
@@ -76,6 +81,18 @@ func jobAllowEntries() []AllowEntry {
 		{
 			Method: http.MethodGet, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}",
 			CoveringTest: test, Reason: why,
+		},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/cancel",
+			CoveringTest: actionsTest, Reason: actionsWhy,
+		},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/confirmations",
+			CoveringTest: actionsTest, Reason: actionsWhy,
+		},
+		{
+			Method: http.MethodPost, Path: "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/log-redactions",
+			CoveringTest: actionsTest, Reason: actionsWhy,
 		},
 	}
 }

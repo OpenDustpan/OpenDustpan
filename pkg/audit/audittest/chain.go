@@ -98,6 +98,9 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a second migration to the same state writes no entry", test: testChainMigrateTwice},
 		{name: "concurrent end entries write one entry", test: testChainConcurrentEnds},
 		{name: "each namespace entry holds its failover version under the hash", test: testChainFenceVersion},
+		{name: "a stored chain from before the change passes the check", test: testChainCheckPassesOldChain},
+		{name: "a chain of entries without a block passes the check", test: testChainCheckPassesEntriesWithoutBlock},
+		{name: "a stored row with a partial origin is refused on read", test: testStoreRefusesPartialOriginRow},
 		{name: "a stale fence refuses a start entry", test: testChainStaleFence},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
@@ -656,6 +659,87 @@ func testChainFenceVersion(t *testing.T, ts ChainTestStore) {
 	if res := check(t, ts.Store, tl.ns.Name); res.Valid || res.BadSequence != 1 {
 		t.Fatalf("check after a changed fence version: got %+v, want invalid at 1", res)
 	}
+}
+
+// testStoreRefusesPartialOriginRow proves that a stored row with a tool but
+// no agent run and no agent session does not read back as an entry: the
+// read refuses it with ErrInvalidOrigin, in the list and in the check.
+func testStoreRefusesPartialOriginRow(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.append(2)
+
+	ts.TamperEntry(t, tl.ns.Name, 1, "tool", "read")
+
+	_, err := ts.Store.List(t.Context(), tl.ns.Name, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if !errors.Is(err, audit.ErrInvalidOrigin) {
+		t.Fatalf("list with a partial origin row = %v, want audit.ErrInvalidOrigin", err)
+	}
+}
+
+// testChainCheckPassesEntriesWithoutBlock proves that an entry with a nil
+// Origin hashes as on main (no block, ADR 380 decision 2), and that the
+// chain check passes a chain of such entries.
+func testChainCheckPassesEntriesWithoutBlock(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+
+	appended := tl.append(2)
+	for i := range appended {
+		if appended[i].HasAgentBlock() {
+			t.Fatalf("entry %d without agent data has an agent block", appended[i].Sequence)
+		}
+
+		if got, want := audit.ComputeHash(appended[i], appended[i].PrevHash), appended[i].Hash; got != want {
+			t.Fatalf("entry %d hashes to %s, want stored %s", appended[i].Sequence, got, want)
+		}
+	}
+
+	wantValid(t, check(t, ts.Store, tl.ns.Name))
+}
+
+// testChainCheckPassesOldChain proves that a chain stored before the agent
+// block existed still passes the check: entries with no agent data hash
+// exactly as before, and the check covers entries with and without the
+// block in one chain.
+func testChainCheckPassesOldChain(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+
+	old := tl.append(2)
+	for i := range old {
+		if old[i].HasAgentBlock() {
+			t.Fatalf("entry %d without agent data has an agent block", old[i].Sequence)
+		}
+	}
+
+	withAgent := newEntry(tl.ns.Name, "admin", "req-agent", tl.tick())
+	withAgent.Channel = audit.ChannelAgent
+	withAgent.Origin = mustOrigin(
+		t,
+		audit.OriginArgs{
+			Run:          "run-1",
+			Session:      "run-1",
+			Tool:         "",
+			ArgsDigest:   "",
+			BreakGlass:   false,
+			SecretStage:  "",
+			DelegationID: "",
+		},
+	)
+	appendEntry(t, ts.Store, tl.ns.Fence(), withAgent)
+
+	wantValid(t, check(t, ts.Store, tl.ns.Name))
+
+	got := listScope(t, ts.Store, tl.ns.Name)
+	if len(got) != 3 {
+		t.Fatalf("entries: got %d, want 3", len(got))
+	}
+
+	checkValidChain(t, got)
 }
 
 func testChainStaleFence(t *testing.T, ts ChainTestStore) {

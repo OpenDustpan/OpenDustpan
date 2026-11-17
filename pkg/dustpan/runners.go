@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
+	"opendustpan.org/opendustpan/internal/api/runnerpools"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -31,7 +32,7 @@ type RunnerStores interface {
 
 // WithRunners sets the stores of the runner protocol. With them and a public
 // URL (WithPublicURL), the server serves the runner protocol under
-// /runner/v1 and the management API under /api/runners. Without them, the
+// /runner/v1 and the management API under /api/dustpan/v1/namespaces. Without them, the
 // server serves neither.
 func WithRunners(s RunnerStores) Option {
 	return func(o *settings) { o.runners = s }
@@ -173,6 +174,32 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 	return handler, nil
 }
 
+// newRunnerPoolsHandler builds the runner management API. It returns false
+// when the server has no runner stores or no public URL, as the protocol does.
+func newRunnerPoolsHandler(cfg *settings, svc services, onFailure func()) (http.Handler, bool, error) {
+	neutralAudit, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, false, err
+	}
+
+	publicURL := strings.TrimRight(strings.TrimSpace(cfg.publicURL), "/")
+	if cfg.runners == nil || publicURL == "" {
+		return nil, false, nil
+	}
+
+	pools, err := runnerpools.NewHandler(runnerpools.Config{
+		Namespaces: svc.namespaces, Pools: cfg.runners, Members: cfg.runners,
+		Authenticator: cfg.authenticator, Authorizer: cfg.authorizer,
+		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,
+		Sessions: cfg.sessionCookies, Logger: cfg.logger, ServerURL: publicURL, Now: cfg.now,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("runner pools api: %w", err)
+	}
+
+	return pools, true, nil
+}
+
 // planDeps are what the plan paths of a launcher need. A part that the server
 // lacks is nil, and the plan paths then answer not-found.
 type planDeps struct {
@@ -256,4 +283,27 @@ func newDurableRecorder(in *jobRecorderInputs) (*job.DurableRecorder, bool, erro
 	}
 
 	return recorder, true, nil
+}
+
+// runnerHandlers holds the two runner handlers: the runner protocol and the
+// management API of pools, join tokens and runners. Each is nil when the
+// server has no runner stores or no public URL.
+type runnerHandlers struct {
+	protocol http.Handler
+	pools    http.Handler
+}
+
+// newRunnerHandlers builds the runner protocol and the management API.
+func newRunnerHandlers(cfg *settings, svc services, onFailure func()) (runnerHandlers, error) {
+	protocol, err := newRunnerHandler(cfg, svc, onFailure)
+	if err != nil {
+		return runnerHandlers{protocol: nil, pools: nil}, err
+	}
+
+	pools, _, err := newRunnerPoolsHandler(cfg, svc, onFailure)
+	if err != nil {
+		return runnerHandlers{protocol: nil, pools: nil}, err
+	}
+
+	return runnerHandlers{protocol: protocol, pools: pools}, nil
 }

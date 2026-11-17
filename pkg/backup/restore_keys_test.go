@@ -109,7 +109,7 @@ func TestRestoreKeyAdmitsTheKeysOfABackup(t *testing.T) {
 func addManifestBlob(t *testing.T, setup *restoreServiceSetup, key string) {
 	t.Helper()
 
-	path := "backups/" + setup.id.String() + "/manifest.json"
+	path := manifestKeyOf(setup.id)
 
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal(setup.target.readObject(t, path), &doc); err != nil {
@@ -364,7 +364,7 @@ func TestExportRefusesARowKeyThatARestoreWouldRefuse(t *testing.T) {
 				t.Fatalf("row = %+v, %v, want failed with a text that names the key", row, getErr)
 			}
 
-			if fix.target.has("blobs/"+key) || fix.target.has("backups/bkp-poison/manifest.json") {
+			if fix.target.has("blobs/"+key) || fix.target.has(manifestKeyOf("bkp-poison")) {
 				t.Fatal("the target holds a blob or a manifest of the refused backup")
 			}
 		})

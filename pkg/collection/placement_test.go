@@ -188,7 +188,7 @@ func rule(t *testing.T, project, stack, coll string) collection.Rule {
 	return collection.Rule{
 		CreatedAt: time.Time{}, ID: "", Namespace: "", CreatedBy: "",
 		Tool: collection.ToolPulumi, Project: collection.Pattern(project), Stack: collection.Pattern(stack),
-		Collection: name, Position: 1,
+		CollectionID: "col-" + coll, CollectionName: name, Position: 1,
 	}
 }
 
@@ -219,9 +219,9 @@ func TestFirstMatch(t *testing.T) {
 
 	for _, tt := range tests {
 		got, ok := collection.FirstMatch(rules, tt.tool, tt.project, tt.stack)
-		if ok != tt.wantMatch || got.Collection.String() != tt.wantCollection {
+		if ok != tt.wantMatch || got.CollectionName.String() != tt.wantCollection {
 			t.Errorf("%s: FirstMatch = %q, %v, want %q, %v",
-				tt.name, got.Collection, ok, tt.wantCollection, tt.wantMatch)
+				tt.name, got.CollectionName, ok, tt.wantCollection, tt.wantMatch)
 		}
 	}
 
@@ -269,7 +269,7 @@ func TestRuleValidate(t *testing.T) {
 		{"empty tool", func(r *collection.Rule) { r.Tool = "" }, collection.ErrInvalidPlacementTool},
 		{"project", func(r *collection.Rule) { r.Project = "a b" }, collection.ErrInvalidPattern},
 		{"stack", func(r *collection.Rule) { r.Stack = "" }, collection.ErrInvalidPattern},
-		{"collection", func(r *collection.Rule) { r.Collection = "-x-" }, collection.ErrInvalidName},
+		{"collection", func(r *collection.Rule) { r.CollectionID = "-x-" }, collection.ErrInvalidName},
 		{"position", func(r *collection.Rule) { r.Position = -1 }, collection.ErrInvalidPosition},
 	}
 
@@ -299,13 +299,13 @@ func TestPlacementErrorText(t *testing.T) {
 		t.Errorf("error text has a control character: %q", text)
 	}
 
-	// The message names the routes and carries a curl example. The long stack
-	// name is cut, so the text stays bounded.
+	// The message names the command that helps. The long stack name is cut,
+	// so the text stays bounded.
 	if len(text) > 700 {
 		t.Errorf("error text has %d bytes, want a bounded text", len(text))
 	}
 
-	for _, want := range []string{"acme", "placement-rules"} {
+	for _, want := range []string{"acme", "opendustpan placement add"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("error text %q lacks %q", text, want)
 		}

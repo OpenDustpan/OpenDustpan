@@ -421,7 +421,11 @@ type freshAuthRule struct {
 //nolint:gochecknoglobals // A constant table of routes.
 var freshAuthRules = []freshAuthRule{
 	{
-		regexp.MustCompile(`^/api/server/(?:caller/tokens|service-tokens|principals/[^/]+/tokens)(?:/[^/]+/rotate)?$`),
+		regexp.MustCompile(`^/api/server/(?:service-tokens|principals/[^/]+/tokens)(?:/[^/]+/rotate)?$`),
+		[]string{http.MethodPost},
+	},
+	{
+		regexp.MustCompile(`^/api/dustpan/v1/me/tokens(?:/[^/]+/rotate)?$`),
 		[]string{http.MethodPost},
 	},
 	{regexp.MustCompile(`^/api/server/(?:session|token)-policy$`), []string{http.MethodPatch}},

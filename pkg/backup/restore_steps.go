@@ -599,7 +599,7 @@ func (s *RestoreService) stageInput(
 		return StagingArea{Restore: "", Token: 0}, none, keyErr
 	}
 
-	if verifyErr := verifySQLPart(ctx, s.target, in.BackupID, manifest.SQLFiles); verifyErr != nil {
+	if verifyErr := verifySQLPart(ctx, s.target, in.BackupID, manifest.Attempt, manifest.SQLFiles); verifyErr != nil {
 		return StagingArea{Restore: "", Token: 0}, none, verifyErr
 	}
 
@@ -625,7 +625,7 @@ func (s *RestoreService) stageInput(
 	// check-only restore, and a production installation without the dev
 	// setting, only detect.
 	stage := RestoreStageInput{
-		Open: portableOpener(ctx, s.target, in.BackupID), Want: restoreWant(manifest, wantBlobs),
+		Open: portableOpener(ctx, s.target, in.BackupID, manifest.Attempt), Want: restoreWant(manifest, wantBlobs),
 		Files: manifest.SQLFiles, Options: StageOptions{
 			BackupKind: pinned.kind, AllowDev: s.allowDev, RestoreAt: s.now().UTC(),
 		},

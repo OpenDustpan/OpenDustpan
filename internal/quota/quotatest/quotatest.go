@@ -79,6 +79,9 @@ func Run(t *testing.T, newHarness Factory) {
 		{"set settled writes the count of the inventory", testSetSettled},
 		{"a stale fence writes nothing", testFenced},
 		{"a reservation that is not valid is ErrInvalid", testInvalid},
+		{"a reservation of another namespace is ErrFenced and stores nothing", testReserveOfAnotherNamespace},
+		{"a check of another namespace is ErrFenced and stores nothing", testCheckOfAnotherNamespace},
+		{"set settled of a key of another namespace is ErrFenced and writes nothing", testSetSettledOfAnotherNamespace},
 	}
 
 	for _, tc := range cases {
@@ -700,4 +703,86 @@ func testInvalid(t *testing.T, h Harness, fence namespace.Fence) {
 	if _, err := reserve(t, h, fence, r); !errors.Is(err, quota.ErrInvalid) {
 		t.Fatalf("Reserve(no key) = %v, want ErrInvalid", err)
 	}
+}
+
+// otherNS is a second namespace that exists, so that a refusal comes from the
+// namespace check of the counter and not from a missing namespace.
+const otherNS = namespace.Name("other")
+
+func otherKey(kind quota.Kind, scope string) quota.Key {
+	return quota.Key{Namespace: otherNS, Blueprint: "postgres", Kind: kind, Scope: scope}
+}
+
+// testReserveOfAnotherNamespace: the reservation and its key are of another
+// namespace, and the check is of the fenced namespace, so that only the check
+// of the reservation namespace can refuse the reservation.
+func testReserveOfAnotherNamespace(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	if _, err := h.Domain.CreateNamespace(t.Context(), otherNS); err != nil {
+		t.Fatalf("CreateNamespace(%s) = %v", otherNS, err)
+	}
+
+	mine := key("namespace")
+	other := otherKey(quota.KindUnits, "namespace")
+	r := reservation("req-1/1", other)
+	r.Namespace = otherNS
+
+	_, err := reserve(t, h, fence, r, check(mine, 1))
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("Reserve(a reservation of another namespace) = %v, want ErrFenced", err)
+	}
+
+	wantUsage(t, h, mine, 0, 0)
+	wantUsage(t, h, other, 0, 0)
+}
+
+// testCheckOfAnotherNamespace: a check whose key is of another namespace than
+// the fence is refused in a reservation and in a record.
+func testCheckOfAnotherNamespace(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	if _, err := h.Domain.CreateNamespace(t.Context(), otherNS); err != nil {
+		t.Fatalf("CreateNamespace(%s) = %v", otherNS, err)
+	}
+
+	mine := key("namespace")
+	otherUnits := otherKey(quota.KindUnits, "namespace")
+	otherRequests := otherKey(quota.KindRequests, "requester:alice")
+
+	_, err := reserve(t, h, fence, reservation("req-1/1", mine), check(otherUnits, 1))
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("Reserve(a check of another namespace) = %v, want ErrFenced", err)
+	}
+
+	err = record(t, h, fence, t0(), quota.Check{Key: otherRequests, Window: time.Hour, Max: 1})
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("Record(a check of another namespace) = %v, want ErrFenced", err)
+	}
+
+	wantUsage(t, h, mine, 0, 0)
+	wantUsage(t, h, otherUnits, 0, 0)
+
+	got := usage(t, h, t0(), quota.Check{Key: otherRequests, Window: time.Hour, Max: 0})[0]
+	if got.Requests != 0 {
+		t.Fatalf("Usage(%s) after the refusal = %+v, want no request", otherRequests, got)
+	}
+}
+
+// testSetSettledOfAnotherNamespace: the settled count of a key of another
+// namespace is refused under the fence of this one, and nothing is written.
+func testSetSettledOfAnotherNamespace(t *testing.T, h Harness, fence namespace.Fence) {
+	t.Helper()
+
+	if _, err := h.Domain.CreateNamespace(t.Context(), otherNS); err != nil {
+		t.Fatalf("CreateNamespace(%s) = %v", otherNS, err)
+	}
+
+	other := otherKey(quota.KindUnits, "namespace")
+
+	if err := h.Counter.SetSettled(t.Context(), other, 7, fence); !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("SetSettled(a key of another namespace) = %v, want ErrFenced", err)
+	}
+
+	wantUsage(t, h, other, 0, 0)
 }

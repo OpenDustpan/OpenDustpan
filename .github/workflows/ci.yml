@@ -23,9 +23,12 @@ on:
 permissions:
   contents: read
 
-# A new push to main cancels the run of the older push. A new push to a pull
-# request cancels the run for the older head of that pull request. Runs of the
-# merge queue and scheduled runs are never canceled.
+# A new push to a pull request cancels the run for the older head of that pull
+# request. Runs of main, of the merge queue and scheduled runs are never
+# canceled: only a run of main that ends saves the Go cache entries, so a
+# canceled run left the go job with an old entry or none. A new push to main
+# waits for the run in progress, and replaces only a run that has not started,
+# so at most one run of main waits.
 # A draft pull request runs every job, as a ready one does. A scheduled run
 # has its own group, so it never replaces a pending push run for the same
 # commit. A merge group has no pull request number, so its group holds the
@@ -34,7 +37,7 @@ permissions:
 # cancel-closed-pr.yml must keep the group of a pull request.
 concurrency:
   group: ${{ github.event_name == 'push' && 'ci-main' || format('ci-{0}{1}{2}', github.event.pull_request.number || github.sha, github.event_name == 'schedule' && '-schedule' || '', github.event_name == 'merge_group' && '-merge-group' || '') }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Each job has its own GitHub-hosted runner (ubuntu-26.04), so the jobs share
 # no disk and no port. The Go build cache (with the test results) and the Go
@@ -43,7 +46,12 @@ concurrency:
 # commit, and a job restores the newest entry of its own job. Only push and
 # scheduled runs on main save an entry. Pull requests and merge groups only
 # restore, so they cannot change the cache that main uses. GitHub removes the
-# least recently used entries when the repository is above its cache limit.
+# least recently used entries when the repository is above its cache limit
+# (10 GB). One entry of each job was about 11.7 GB, so each run on main
+# removed the entries of the run before it, and a job often found no entry.
+# A job that builds about what another job builds sets GO_CACHE_FROM to that
+# job: it restores the entry of that job and saves none. The entries that
+# remain are about 4.5 GB, so the entries of two runs fit in the limit.
 
 # Which jobs run (the changes job sets the outputs):
 # - push and schedule: every job (schedule keeps its own limits).
@@ -166,8 +174,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      # The job id keeps the jobs apart. go.mod holds the Go version, so a
-      # new toolchain starts from a new prefix.
+      # The job id keeps the jobs apart; a job with GO_CACHE_FROM uses the
+      # entry of that job. go.mod holds the Go version, so a new toolchain
+      # starts from a new prefix.
       - &go-cache-restore
         name: Restore the Go caches
         id: go-cache
@@ -176,10 +185,10 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          key: go-${{ runner.os }}-${{ env.GO_CACHE_FROM || github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
           restore-keys: |
-            go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-
-            go-${{ runner.os }}-${{ github.job }}-${{ strategy.job-index }}-
+            go-${{ runner.os }}-${{ env.GO_CACHE_FROM || github.job }}-${{ strategy.job-index }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-${{ runner.os }}-${{ env.GO_CACHE_FROM || github.job }}-${{ strategy.job-index }}-
       # A pull request with the label nolint-approved skips this step. The
       # three-dot diff needs the history back to the merge base, so the step
       # fetches main with its history; the checkout of the job stays shallow.
@@ -188,6 +197,9 @@ jobs:
         run: |
           git fetch --no-tags --unshallow origin +refs/heads/main:refs/remotes/origin/main
           make nolint-check BASE=origin/main
+      # The check reads the index of the checkout, so it runs on each event.
+      - name: No tracked file matches a .gitignore rule
+        run: make ignored-check
       - name: go.mod and go.sum are tidy
         run: go mod tidy -diff
       - name: Verify module checksums
@@ -200,6 +212,8 @@ jobs:
         run: |
           python3 -I scripts/runner-deps-guard.py --selftest
           python3 -I scripts/runner-deps-guard.py
+      - name: The test selection of make test-changed passes its self-test
+        run: python3 -I scripts/test-changed.py --selftest
       - uses: sqlc-dev/setup-sqlc@bac53b7fb28c039a6c7f5736fd1e89744021bdd6 # v5.0.0
         with:
           sqlc-version: "1.31.1"
@@ -217,6 +231,10 @@ jobs:
         run: make licenses
       - name: Docs follow ASD-STE100
         run: make docs-lint
+      # The OpenSpec CLI comes from npm at the version that the Makefile pins.
+      # It runs on the node of the runner image, with telemetry off.
+      - name: OpenSpec changes and specs are valid
+        run: make openspec-validate
       - name: The release record checks pass
         run: make release-record-check
       # The files check reads the files that the change adds against the merge
@@ -232,11 +250,17 @@ jobs:
             git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           fi
           make files-check FILES_BASE=origin/main
+      # A pull request that completes an OpenSpec change archives it. The step
+      # before this one fetched main with its history.
+      - name: A completed OpenSpec change is archived
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        run: make change-archived-check BASE_REF=origin/main
       # A failed job saves too: its build cache is still valid. The key is the
-      # one that the restore step computed.
+      # one that the restore step computed. A job with GO_CACHE_FROM saves no
+      # entry: the job that it names saves the entry.
       - &go-cache-save
         name: Save the Go caches
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') }}
+        if: ${{ !cancelled() && !env.GO_CACHE_FROM && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -294,6 +318,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: golangci-lint
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -395,6 +421,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.journal == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: go
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -459,7 +487,17 @@ jobs:
       # test run needs less disk time. These settings change only what
       # PostgreSQL keeps after a crash of the machine, not what a query
       # returns. The crash-test job keeps the defaults.
-      - name: Turn off fsync in the test PostgreSQL
+      # make test-ci-store runs 16 cases at a time (STORE_TEST_PARALLEL), and a
+      # case can hold the pools of up to 3 stores, so the server takes 300
+      # connections instead of the 100 of the default. A drop of the schema of
+      # a case takes one lock for each object in it, about a thousand, and the
+      # lock table holds max_locks_per_transaction times max_connections
+      # locks: with the default of 64, 16 drops at a time filled it ("out of
+      # shared memory", SQLSTATE 53200). 256 gives 76,800 locks. Both settings
+      # apply only at a start, so the step restarts the container and waits
+      # for it. The port mapping 5432:5432 is fixed, so the restart keeps the
+      # port.
+      - name: Tune the test PostgreSQL
         env:
           PG_CONTAINER: ${{ job.services.postgres.id }}
         run: |
@@ -467,7 +505,15 @@ jobs:
             -c "ALTER SYSTEM SET fsync = off" \
             -c "ALTER SYSTEM SET synchronous_commit = off" \
             -c "ALTER SYSTEM SET full_page_writes = off" \
-            -c "SELECT pg_reload_conf()"
+            -c "ALTER SYSTEM SET max_connections = 300" \
+            -c "ALTER SYSTEM SET max_locks_per_transaction = 256"
+          docker restart "$PG_CONTAINER" > /dev/null
+          for _ in $(seq 60); do
+            docker exec "$PG_CONTAINER" pg_isready -U postgres -q && break
+            sleep 1
+          done
+          docker exec "$PG_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 -tA \
+            -c "SHOW max_connections" -c "SHOW max_locks_per_transaction"
       # The runner throws the service container away after the job, so the
       # PostgreSQL tests keep their database at the end
       # (DUSTPAN_TEST_SKIP_FINAL_DROP). The variable also keeps the test
@@ -489,6 +535,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     env:
+      GO_CACHE_FROM: lint
       TRIVY_VERSION: 0.75.0
       TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
       TRUFFLEHOG_VERSION: 3.99.2
@@ -669,6 +716,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: e2e
     timeout-minutes: 70
     services:
       postgres: *postgres-service
@@ -691,6 +740,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: e2e
     timeout-minutes: 60
     services:
       postgres: *postgres-service
@@ -728,6 +779,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: e2e
     timeout-minutes: 40
     services:
       postgres: *postgres-service
@@ -752,6 +805,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && github.event_name != 'schedule' && (needs.changes.result != 'success' || needs.changes.outputs.e2e == 'true') }}
     runs-on: ubuntu-26.04
+    env:
+      GO_CACHE_FROM: e2e
     timeout-minutes: 40
     services:
       postgres: *postgres-service

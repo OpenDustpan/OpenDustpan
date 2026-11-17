@@ -23,7 +23,7 @@ func TestToolNeutralMethodNotAllowedIsJSON(t *testing.T) {
 		{http.MethodDelete, "/api/dustpan/v1/namespaces/acme/jobs"},
 		{http.MethodPost, "/api/server/tokens"},
 		{http.MethodGet, "/api/inventory/deleted-units/pulumi/unit-1/restore"},
-		{http.MethodGet, "/api/runners/acme/runners/run-1/drain"},
+		{http.MethodGet, "/api/dustpan/v1/namespaces/acme/runners/run-1/drain"},
 		{http.MethodDelete, "/api/audit/entries"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {

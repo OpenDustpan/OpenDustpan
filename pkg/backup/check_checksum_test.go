@@ -79,7 +79,7 @@ func TestCheckRefusesAManifestWithNoChecksum(t *testing.T) {
 	t.Parallel()
 
 	fix := checkedBackup(t)
-	key := "backups/bkp-sum/manifest.json"
+	key := manifestKeyOf("bkp-sum")
 
 	var manifest map[string]any
 	if err := json.Unmarshal(fix.target.readObject(t, key), &manifest); err != nil {

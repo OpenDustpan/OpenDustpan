@@ -207,8 +207,8 @@ The object of the entry names the read:
 The namespace of the entry is `@server` for the installation review. It is the
 name of the namespace for a namespace review.
 
-The reads of your own access are different. `GET /api/server/caller/access` and
-`GET /api/server/caller/grants` write no entry. Any signed-in principal can
+The reads of your own access are different. `GET /api/dustpan/v1/me/access` and
+`GET /api/dustpan/v1/me/grants` write no entry. Any signed-in principal can
 read them.
 
 ## Who can read a review
@@ -229,10 +229,10 @@ Any signed-in principal can read its own access. Use the caller routes:
 
 ```sh
 curl -s -H "Authorization: Bearer $TOKEN" \
-  https://dustpan.example.com/api/server/caller/grants
+  https://dustpan.example.com/api/dustpan/v1/me/grants
 ```
 
-`GET /api/server/caller/grants` pages the caller's own grants, with the same
-`limit` and `cursor` values. `GET /api/server/caller/access` answers the question
+`GET /api/dustpan/v1/me/grants` pages the caller's own grants, with the same
+`pageSize` and `pageToken` values. `GET /api/dustpan/v1/me/access` answers the question
 of which access the caller has on an object. See
 [Roles and grants](roles-and-grants.md) for that query.

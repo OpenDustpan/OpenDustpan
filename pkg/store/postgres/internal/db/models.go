@@ -72,6 +72,13 @@ type AuditEntry struct {
 	SourceIp      string
 	UserAgent     string
 	Channel       string
+	AgentRun      string
+	AgentSession  string
+	ArgsDigest    string
+	BreakGlass    bool
+	DelegationID  string
+	SecretStage   string
+	Tool          string
 	Kind          string
 	Outcome       string
 	RequestID     string
@@ -106,6 +113,7 @@ type Backup struct {
 	EndedAtMs   pgtype.Int8
 	Target      string
 	Error       string
+	Attempt     string
 }
 
 type BlobDeleteLease struct {
@@ -765,6 +773,7 @@ type NotificationDelivery struct {
 	Principal      string
 	State          string
 	Attempts       int64
+	CreatedAtMs    int64
 	Redeliveries   int64
 	NextAtMs       int64
 	LastError      string
@@ -882,15 +891,15 @@ type PersonPreference struct {
 }
 
 type PlacementRule struct {
-	ID            string
-	Namespace     string
-	Position      int32
-	Tool          string
-	Project       string
-	Stack         string
-	CollectionKey string
-	CreatedBy     string
-	CreatedAtMs   int64
+	ID           string
+	Namespace    string
+	Position     int32
+	Tool         string
+	Project      string
+	Stack        string
+	CollectionID string
+	CreatedBy    string
+	CreatedAtMs  int64
 }
 
 type Principal struct {
@@ -946,6 +955,16 @@ type ProfileRevision struct {
 	Author         string
 	CreatedAtMs    int64
 	Reason         string
+}
+
+type ProxyRuleSet struct {
+	NamespaceID string
+	ScopeKind   string
+	UnitID      string
+	Document    string
+	Digest      string
+	Version     int64
+	UpdatedAtMs int64
 }
 
 type QuotaKey struct {
@@ -1318,18 +1337,37 @@ type Trigger struct {
 	NextSlotMs       int64
 }
 
+type TrustBundle struct {
+	ID            string
+	Namespace     string
+	ActiveVersion int64
+	Revision      int64
+	CreatedAtMs   int64
+}
+
+type TrustBundleVersion struct {
+	BundleID        string
+	Version         int64
+	Pem             string
+	CreatedAtMs     int64
+	OverlapEndsAtMs int64
+}
+
 type TrustRule struct {
-	ID             string
-	Namespace      string
-	Name           string
-	Issuer         string
-	Audience       string
-	KeySource      string
-	StaticKeys     string
-	ConditionsJson string
-	PrincipalID    string
-	CreatedBy      string
-	CreatedAtMs    int64
+	ID              string
+	Namespace       string
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	CreatedBy       string
+	CreatedAtMs     int64
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        pgtype.Text
 }
 
 type UnitDefault struct {

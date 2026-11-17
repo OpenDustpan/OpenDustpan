@@ -1301,8 +1301,10 @@ type neutralHandlers struct {
 	inventory http.Handler
 	audit     http.Handler
 	context   http.Handler
-	// runners is the runner protocol and its management API, or nil.
+	// runners is the runner protocol, or nil.
 	runners http.Handler
+	// runnerPools is the management API of runner pools, join tokens and runners, or nil.
+	runnerPools http.Handler
 	// profiles is nil when no profile store is set.
 	profiles http.Handler
 	// issuer is nil when no issuer store is set.
@@ -1351,7 +1353,7 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	runners, err := newRunnerHandler(cfg, svc, onFailure)
+	runners, err := newRunnerHandlers(cfg, svc, onFailure)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1376,7 +1378,7 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	settingAPIs, err := newNamespaceSettingHandlers(svc, cfg, onFailure)
+	settingAPIs, err := newNamespaceSettingHandlers(svc, cfg, onFailure, policies)
 	if err != nil {
 		return neutralHandlers{}, err
 	}
@@ -1385,7 +1387,8 @@ func newNeutralHandlers(
 		inventory:    units,
 		audit:        entries,
 		context:      contexts,
-		runners:      runners,
+		runners:      runners.protocol,
+		runnerPools:  runners.pools,
 		profiles:     profileAPI.profiles,
 		issuer:       profileAPI.issuer,
 		sinks:        profileAPI.sinkAPI,
@@ -1450,7 +1453,9 @@ type namespaceSettingHandlers struct {
 
 // newNamespaceSettingHandlers builds the source filter API and the trust rule
 // API of the stores that cfg sets.
-func newNamespaceSettingHandlers(svc services, cfg *settings, onFailure func()) (namespaceSettingHandlers, error) {
+func newNamespaceSettingHandlers(
+	svc services, cfg *settings, onFailure func(), policies *session.Policies,
+) (namespaceSettingHandlers, error) {
 	var (
 		out namespaceSettingHandlers
 		err error
@@ -1464,7 +1469,7 @@ func newNamespaceSettingHandlers(svc services, cfg *settings, onFailure func()) 
 	}
 
 	if cfg.trustRules.store != nil {
-		out.trustRules, err = newTrustRuleHandler(svc, cfg, onFailure)
+		out.trustRules, err = newTrustRuleHandler(svc, cfg, onFailure, policies)
 		if err != nil {
 			return namespaceSettingHandlers{sourceFilter: nil, trustRules: nil, selfService: nil}, err
 		}
@@ -1533,7 +1538,7 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		writable = checker
 	}
 
-	return newComponentReadiness(readinessSettings{
+	probe := newComponentReadiness(readinessSettings{
 		components:  cfg.components,
 		streamStop:  cfg.streamStop,
 		store:       cfg.namespaceStore,
@@ -1546,6 +1551,9 @@ func newReadiness(cfg *settings, observed *metrics.ServerMetrics, chain *auditCh
 		failures:    observed.ReadinessFailures(),
 		logger:      cfg.logger,
 	})
+	probe.drainPeriod = cfg.drainPeriod
+
+	return probe
 }
 
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
@@ -2945,6 +2953,11 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
+	proxyRules, _, err := newProxyRuleService(cfg, deps.services.namespaces)
+	if err != nil {
+		return none, err
+	}
+
 	gitHost, idem, err := newGitHostParts(cfg, deps)
 	if err != nil {
 		return none, err
@@ -2960,7 +2973,7 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		return none, err
 	}
 
-	serverAPI, err := newServerHandler(serverHandlerInputs{
+	serverAPI, err := newServerHandler(&serverHandlerInputs{
 		authenticator: cfg.authenticator, authorizer: cfg.authorizer,
 		store: cfg.namespaceStore, namespaces: deps.services.namespaces, access: deps.services.access,
 		reach:  reach,
@@ -2968,7 +2981,8 @@ func newInstallationAPI(cfg *settings, deps installationDeps) (installationParts
 		cursors: cfg.secretWrapper,
 		backups: deps.backups, restores: restores, checks: checks, maintenance: deps.maint,
 		observed: deps.observed, chain: deps.chain, policies: deps.policies, signIn: deps.signIn,
-		principals: principals, gates: gates, forgeService: gitHost, idempotency: idem, extras: extras,
+		principals: principals, gates: gates, proxyRules: proxyRules, forgeService: gitHost,
+		idempotency: idem, extras: extras,
 		shipper: cfg.auditShipper, workers: cfg.watch, instances: cfg.instanceStore,
 		installationKind: cfg.installationKind, denialLimiter: cfg.denialLimiter,
 		version: cfg.version, logger: cfg.logger, now: cfg.now,
@@ -3777,13 +3791,11 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// runners is more specific than /api/, so it reaches its own adapter.
 	if a.runners != nil {
 		mux.Handle("/runner/v1/", withMaintenance(a.runners, a.maintenance, shapeRunner, cfg.logger))
-		mux.Handle(
-			"/api/runners/",
-			withCORS(
-				withRunnerMaintenance(withJSONMethodNotAllowed(a.runners), a.maintenance, shapeInventory, cfg.logger),
-				cfg.allowedOrigins,
-			),
-		)
+		// The management routes are under v1Prefix. Only the reducing routes
+		// pass in maintenance mode.
+		mountV1(mux, a.runnerPools, func(h http.Handler) http.Handler {
+			return withCORS(withRunnerMaintenance(h, a.maintenance, shapeInventory, cfg.logger), cfg.allowedOrigins)
+		})
 	}
 	// The adapters below answer in the shape of the inventory API, with CORS
 	// and the maintenance gate.
@@ -3844,6 +3856,13 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// names as modules.v1, and follows the same rules.
 	mux.Handle(
 		"/v1/modules/",
+		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
+	)
+	// The provider network mirror of OpenTofu lives outside /api/, under its
+	// own prefix. A person writes it in the network_mirror block of the CLI
+	// configuration. It follows the same rules.
+	mux.Handle(
+		"/v1/mirror/",
 		withMaintenance(a.tfe, a.maintenance, shapeTFE, cfg.logger),
 	)
 

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/idempotent"
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/api/stategate"
 	"opendustpan.org/opendustpan/internal/devcode"
@@ -262,6 +263,7 @@ func failedSeed() backup.Record {
 		Target:    "dir:test",
 		Error:     "server stopped during backup",
 		State:     backup.StateFailed,
+		Attempt:   "",
 	}
 }
 
@@ -347,6 +349,7 @@ func newServiceBackedHandlerOf(
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Workers:          nil,
 		InstallationKind: "",
@@ -401,7 +404,7 @@ func newServiceBackedHandlerOf(
 		LocalUsers:       newRouteLocalUsers(t, st),
 		Settings:         newRouteTestSettings(st),
 		GitHost:          nil,
-		Idempotency:      nil,
+		Idempotency:      settingsIdempotency(t, st),
 		Instances:        nil,
 		StoreChecks:      checks,
 	})
@@ -780,13 +783,13 @@ var routeBodies = map[string]string{
 	"POST /api/server/tokens/{id}/rotate":                                     `{}`,
 	"POST /api/server/service-tokens":                                         `{"principalID":"` + testOtherPrincipalID + `","name":"ci"}`,
 	"POST /api/server/service-tokens/{id}/rotate":                             `{}`,
-	"POST /api/server/caller/tokens":                                          `{"name":"laptop"}`,
+	"POST /api/dustpan/v1/me/tokens":                                          `{"name":"laptop"}`,
 	"POST /api/server/namespaces/{namespace}/principals":                      `{"subject":"ci-new"}`,
 	"PATCH /api/server/namespaces/{namespace}/principals/{id}":                `{"displayName":"Routes bot"}`,
 	"POST /api/server/principals/{principal}/tokens":                          `{"name":"ci"}`,
 	"POST /api/server/principals/{principal}/tokens/{id}/rotate":              `{}`,
 	"POST /api/server/principals/{principal}/grants":                          routePrincipalGrantBody,
-	"POST /api/server/caller/tokens/{id}/rotate":                              `{}`,
+	"POST /api/dustpan/v1/me/tokens/{id}/rotate":                              `{}`,
 	"PATCH /api/server/token-policy":                                          `{"inactivitySeconds":0}`,
 	"PATCH /api/server/session-policy":                                        `{"idleSeconds":900}`,
 	"PATCH /api/dustpan/v1/me/preferences":                                    `{"theme":"terminal"}`,
@@ -912,9 +915,9 @@ func newRouteTestRestores(
 func seedRouteTestRows(t *testing.T, st *sqlite.Store, seeds []backup.Record) {
 	t.Helper()
 
-	for _, seed := range seeds {
-		if seedErr := st.CreateBackup(t.Context(), seed); seedErr != nil {
-			t.Fatalf("seed backup %s: %v", seed.ID, seedErr)
+	for i := range seeds {
+		if seedErr := st.CreateBackup(t.Context(), seeds[i]); seedErr != nil {
+			t.Fatalf("seed backup %s: %v", seeds[i].ID, seedErr)
 		}
 	}
 
@@ -1138,7 +1141,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 		id = testTokenID
 	case strings.HasPrefix(route.Path, "/api/server/service-tokens"):
 		id = testServiceTokenID
-	case strings.HasPrefix(route.Path, "/api/server/caller/tokens"):
+	case strings.HasPrefix(route.Path, "/api/dustpan/v1/me/tokens"):
 		id = testOwnTokenID
 	default:
 		id = routeGrantID(route.Path, id)
@@ -1189,6 +1192,7 @@ func setRouteContentType(req *http.Request, route apiserver.Route) {
 	case "/api/dustpan/v1/settings", "/api/dustpan/v1/namespaces/{namespace}/settings":
 		req.Header.Set("Content-Type", "application/merge-patch+json")
 		req.Header.Set("If-Match", `"0"`)
+		req.Header.Set(idempotent.Header, sessionKey())
 	default:
 	}
 }
@@ -1231,8 +1235,10 @@ func routeQuery(path string) string {
 	switch {
 	case strings.Contains(path, "/unit-grants") || strings.Contains(path, "/unit-access-review"):
 		return "?tool=pulumi&unit=" + url.QueryEscape(testUnitName)
-	case path == "/api/server/caller/access":
+	case path == "/api/dustpan/v1/me/access":
 		return "?object=" + testNamespace
+	case path == "/api/dustpan/v1/me/access/objects":
+		return "?type=unit"
 	case path == "/api/dustpan/v1/local-users/locks":
 		return "?principal=" + testPrincipalID
 	default:
@@ -1284,8 +1290,8 @@ func (fakeEpochs) Now() time.Time { return time.Now() }
 // token, so these routes refuse it.
 func freshAuthRoutes() []string {
 	return []string{
-		"POST /api/server/caller/tokens",
-		"POST /api/server/caller/tokens/{id}/rotate",
+		"POST /api/dustpan/v1/me/tokens",
+		"POST /api/dustpan/v1/me/tokens/{id}/rotate",
 		"POST /api/server/service-tokens",
 		"POST /api/server/service-tokens/{id}/rotate",
 		"POST /api/server/principals/{principal}/tokens",
@@ -1646,6 +1652,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
@@ -1732,7 +1739,7 @@ func (stubBackupRegistry) CreateBackup(_ context.Context, _ backup.Record) error
 
 //nolint:revive // argument-limit: the stub has the signature of the port.
 func (stubBackupRegistry) FinishBackup(
-	_ context.Context, _ durable.StepFence, _ backup.ID, _ backup.State, _ string, _ time.Time,
+	_ context.Context, _ durable.StepFence, _ backup.ID, _ backup.State, _ string, _ time.Time, _ string,
 ) (backup.Record, error) {
 	return backup.Record{
 		StartedAt: time.Time{},
@@ -1741,7 +1748,14 @@ func (stubBackupRegistry) FinishBackup(
 		Target:    "",
 		Error:     "",
 		State:     "",
+		Attempt:   "",
 	}, nil
+}
+
+func (stubBackupRegistry) RecordBackupAttempt(
+	_ context.Context, _ durable.StepFence, _ backup.ID, _ string,
+) error {
+	return nil
 }
 
 func (stubBackupRegistry) GetBackup(_ context.Context, _ backup.ID) (backup.Record, error) {
@@ -1822,6 +1836,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,
@@ -1872,6 +1887,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := newCheckedHandler(t, &apiserver.Config{
+		ProxyRules:       nil,
 		Cursors:          testCursors(t),
 		Reach:            noReach(),
 		Preferences:      nil,

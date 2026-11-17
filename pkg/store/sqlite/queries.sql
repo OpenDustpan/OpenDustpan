@@ -1014,7 +1014,7 @@ VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetBackup :one
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 WHERE id = ?;
 
@@ -1061,13 +1061,22 @@ WHERE NOT EXISTS (
 ON CONFLICT (holder) DO UPDATE SET expires_at_ms = excluded.expires_at_ms;
 
 -- name: ListBackups :many
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 ORDER BY started_at_ms DESC, id ASC;
 
+-- name: RecordBackupAttempt :execrows
+-- Stores the attempt of the write step on the running row. The Go code
+-- checks the fence and records the step in the same transaction, and the
+-- finish compares the attempt before it moves the row.
+UPDATE backups
+SET attempt = ?
+WHERE id = ? AND state = 'running';
+
 -- name: FinishBackup :execrows
--- Moves one running backup to its end state. A finished backup matches no
--- row, so a retry reports no change.
+-- Moves one running backup to its end state. The attempt stays the one that
+-- the write step recorded. A finished backup matches no row, so a retry
+-- reports no change.
 UPDATE backups
 SET state = ?, error = ?, ended_at_ms = ?
 WHERE id = ? AND state = 'running';
@@ -1232,7 +1241,7 @@ SET failover_version = failover_version + 1;
 -- The entry of a scope at one sequence, for the check of signed
 -- checkpoints. A missing entry matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence = ?;
@@ -1241,7 +1250,7 @@ WHERE namespace = ? AND sequence = ?;
 -- The entry with the highest sequence of a namespace, for the next append.
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
@@ -1251,15 +1260,15 @@ LIMIT 1;
 -- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+    at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
     fence_version, reason, principal_kind, job_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ?
@@ -1277,7 +1286,7 @@ WHERE namespace = ?;
 -- audit.CheckPageSize entries after the last sequence it saw, so a namespace
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       at_ms, source_ip, user_agent, channel, agent_run, agent_session, args_digest, break_glass, delegation_id, secret_stage, tool, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
        fence_version, reason, principal_kind, job_id
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
@@ -3717,6 +3726,39 @@ SET deleted_at_ms = sqlc.arg(deleted_at_ms)
 WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND deleted_at_ms = 0
   AND (CAST(sqlc.arg(if_latest) AS INTEGER) = 0 OR latest = CAST(sqlc.arg(if_latest) AS INTEGER));
 
+-- name: DeleteProxyRuleSet :execrows
+-- The caller checks the fence in the same transaction. A row of another
+-- version is not removed.
+DELETE FROM proxy_rule_sets
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND scope_kind = sqlc.arg(scope_kind) AND unit_id = sqlc.arg(unit_id) AND version = sqlc.arg(version);
+
+-- name: GetProxyRuleSet :one
+-- The namespace, the kind and the unit ID are the whole key: a unit scope never
+-- reads the row of its namespace.
+SELECT p.document, p.digest, p.version, p.updated_at_ms
+FROM proxy_rule_sets AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND p.scope_kind = sqlc.arg(scope_kind) AND p.unit_id = sqlc.arg(unit_id);
+
+-- name: InsertProxyRuleSet :execrows
+-- The caller checks the fence in the same transaction. A scope that has a set
+-- is not written.
+INSERT INTO proxy_rule_sets (namespace_id, scope_kind, unit_id, document, digest, version, updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(scope_kind), sqlc.arg(unit_id), sqlc.arg(document), sqlc.arg(digest), 1, sqlc.arg(updated_at_ms)
+)
+ON CONFLICT (namespace_id, scope_kind, unit_id) DO NOTHING;
+
+-- name: UpdateProxyRuleSet :execrows
+-- A row of another version than the one that the caller read is not written.
+UPDATE proxy_rule_sets
+SET document = sqlc.arg(document), digest = sqlc.arg(digest), version = CAST(sqlc.arg(version) AS INTEGER) + 1,
+    updated_at_ms = sqlc.arg(updated_at_ms)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND scope_kind = sqlc.arg(scope_kind) AND unit_id = sqlc.arg(unit_id) AND version = CAST(sqlc.arg(version) AS INTEGER);
+
 -- name: InsertManualLock :execrows
 -- Records the manual lock of one object. A row that exists for the object is
 -- not written. The caller checks the fence in the same transaction.
@@ -4586,8 +4628,8 @@ SET state = 'skipped', delivered_at_ms = sqlc.arg(delivered_at_ms), owner = '', 
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id) AND state = 'pending';
 
 -- name: GetNotificationDelivery :one
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE id = sqlc.arg(id);
 
@@ -4598,11 +4640,12 @@ WHERE scope = sqlc.arg(scope) AND notification_id = sqlc.arg(notification_id)
 
 -- name: InsertNotificationDelivery :exec
 INSERT INTO notification_deliveries (
-    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-    last_error, delivered_at_ms, owner, lease_until_ms, version
+    id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+    next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 ) VALUES (
     sqlc.arg(id), sqlc.arg(scope), sqlc.arg(notification_id), sqlc.arg(subscription_id), sqlc.arg(sink_id),
-    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, 0, sqlc.arg(next_at_ms), '', 0, '', 0, 1
+    sqlc.arg(contact), sqlc.arg(principal), 'pending', 0, sqlc.arg(created_at_ms), 0, sqlc.arg(next_at_ms), '', 0, '',
+    0, 1
 );
 
 -- name: ListDueNotificationDeliveryScopes :many
@@ -4623,8 +4666,8 @@ WHERE notification_deliveries.id IN (
     ORDER BY d.next_at_ms, d.id
     LIMIT sqlc.arg(max_rows)
 )
-RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-          last_error, delivered_at_ms, owner, lease_until_ms, version;
+RETURNING id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+          next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version;
 
 -- name: RecordNotificationAttempt :execrows
 -- Stores the result for the live claim only: the owner and the version of the
@@ -4638,40 +4681,40 @@ WHERE notification_deliveries.id = sqlc.arg(id) AND notification_deliveries.scop
   AND notification_deliveries.state = 'pending' AND notification_deliveries.lease_until_ms > sqlc.arg(now_ms);
 
 -- name: CountNotificationDeliveriesOfSubscriptionBefore :one
--- The number of deliveries of the subscription at or before the cursor (next
--- time, delivery ID) in the order of ListNotificationDeliveriesOfSubscription:
--- the deliveries that a page after the cursor leaves behind. The count stops
--- at max_rows. The ORDER BY does not change the count; it stays so that the
--- plan reads the index of the history in order and stops at max_rows.
+-- The number of deliveries of the subscription at or before the cursor
+-- (creation time, delivery ID) in the order of
+-- ListNotificationDeliveriesOfSubscription: the deliveries that a page after
+-- the cursor leaves behind. The count stops at max_rows. The row
+-- comparison is a bound of the index of the history, so the scan reads only
+-- the rows that it counts. The ORDER BY does not change the count; it stays so
+-- that the plan reads that index in order and stops at max_rows.
 SELECT COUNT(*) FROM (
     SELECT 1 FROM notification_deliveries
     WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
-      AND (next_at_ms > sqlc.arg(after_ms)
-        OR (next_at_ms = sqlc.arg(after_ms) AND id >= sqlc.arg(after_id)))
-    ORDER BY next_at_ms DESC, id DESC
+      AND (created_at_ms, id) >= (CAST(sqlc.arg(after_ms) AS INTEGER), CAST(sqlc.arg(after_id) AS TEXT))
+    ORDER BY created_at_ms DESC, id DESC
     LIMIT sqlc.arg(max_rows)
 ) AS within_bound;
 
 -- name: ListNotificationDeliveriesOfSubscription :many
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
-ORDER BY next_at_ms DESC, id DESC
+ORDER BY created_at_ms DESC, id DESC
 LIMIT sqlc.arg(max_rows);
 
 -- name: ListNotificationDeliveriesOfSubscriptionAfter :many
--- The page of ListNotificationDeliveriesOfSubscription after the cursor (next
--- time, delivery ID): the rows with an older next time, or with the same next
--- time and a smaller ID. The bound on next_at_ms lets the index scan start at
--- the cursor.
-SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, redeliveries, next_at_ms,
-       last_error, delivered_at_ms, owner, lease_until_ms, version
+-- The page of ListNotificationDeliveriesOfSubscription after the cursor
+-- (creation time, delivery ID): the rows with an older creation time, or with
+-- the same creation time and a smaller ID. The row comparison is a bound of the
+-- index of the history, so the scan starts at the cursor.
+SELECT id, scope, notification_id, subscription_id, sink_id, contact, principal, state, attempts, created_at_ms, redeliveries,
+       next_at_ms, last_error, delivered_at_ms, owner, lease_until_ms, version
 FROM notification_deliveries
 WHERE scope = sqlc.arg(scope) AND subscription_id = sqlc.arg(subscription_id)
-  AND (next_at_ms < sqlc.arg(after_ms)
-    OR (next_at_ms = sqlc.arg(after_ms) AND id < sqlc.arg(after_id)))
-ORDER BY next_at_ms DESC, id DESC
+  AND (created_at_ms, id) < (CAST(sqlc.arg(after_ms) AS INTEGER), CAST(sqlc.arg(after_id) AS TEXT))
+ORDER BY created_at_ms DESC, id DESC
 LIMIT sqlc.arg(max_rows);
 
 -- name: RedeliverNotificationDelivery :execrows
@@ -5094,19 +5137,23 @@ WHERE version = CAST(sqlc.arg(expected) AS INTEGER)
 -- name: CreatePlacementRule :exec
 -- The caller checks the fence in the same transaction and renumbers the list
 -- after the insert.
-INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_key, created_by, created_at_ms)
+INSERT INTO placement_rules (id, namespace, position, tool, project, stack, collection_id, created_by, created_at_ms)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
+-- name: GetPlacementCollection :one
+-- The collection ID must belong to the namespace of the rule.
+SELECT id FROM collections WHERE namespace = ? AND id = ?;
+
 -- name: GetPlacementRule :one
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = ? AND r.id = ?;
 
 -- name: ListPlacementRules :many
-SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, c.name AS collection_name, r.created_by, r.created_at_ms
+SELECT r.id, r.namespace, r.position, r.tool, r.project, r.stack, r.collection_id, c.name AS collection_name, r.created_by, r.created_at_ms
 FROM placement_rules AS r
-JOIN collections AS c ON c.namespace = r.namespace AND c.name_key = r.collection_key
+JOIN collections AS c ON c.namespace = r.namespace AND c.id = r.collection_id
 WHERE r.namespace = ?
 ORDER BY r.position, r.id;
 
@@ -5119,7 +5166,7 @@ ORDER BY position, id;
 
 -- name: UpdatePlacementRuleContent :execrows
 UPDATE placement_rules
-SET tool = ?, project = ?, stack = ?, collection_key = ?
+SET tool = ?, project = ?, stack = ?, collection_id = ?
 WHERE namespace = ? AND id = ?;
 
 -- name: SetPlacementRulePosition :exec
@@ -5135,12 +5182,12 @@ WHERE namespace = ? AND id = ?;
 -- The rules that name one collection, for the audit entry of its delete.
 SELECT id, tool, project, stack
 FROM placement_rules
-WHERE namespace = ? AND collection_key = ?
+WHERE namespace = ? AND collection_id = ?
 ORDER BY position, id;
 
 -- name: DeletePlacementRulesOfCollection :exec
 DELETE FROM placement_rules
-WHERE namespace = ? AND collection_key = ?;
+WHERE namespace = ? AND collection_id = ?;
 
 -- name: CreateStoreCheck :execrows
 INSERT INTO store_checks (id, target, state, requested_by, started_at_ms, ended_at_ms, error, report)
@@ -5442,12 +5489,13 @@ WHERE namespace_id = sqlc.arg(namespace_id) AND issuer_url = sqlc.arg(issuer_url
 -- rule with a taken ID, or with a name that the namespace has, is not written.
 INSERT INTO trust_rules (
     id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, bundle_id
 )
 VALUES (
     sqlc.arg(id), sqlc.arg(namespace), sqlc.arg(name), sqlc.arg(issuer), sqlc.arg(audience),
     sqlc.arg(key_source), sqlc.arg(static_keys), sqlc.arg(conditions_json), sqlc.arg(principal_id),
-    sqlc.arg(created_by), sqlc.arg(created_at_ms)
+    sqlc.arg(created_by), sqlc.arg(created_at_ms), sqlc.arg(revision), sqlc.arg(spiffe_id_pattern),
+    CAST(NULLIF(sqlc.arg(bundle_id), '') AS TEXT)
 )
 ON CONFLICT DO NOTHING;
 
@@ -5465,19 +5513,70 @@ WHERE id = sqlc.arg(id);
 -- The namespace is part of the key: a rule of another namespace reads as no
 -- row.
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS TEXT) AS bundle_id
 FROM trust_rules
 WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
 
 -- name: ListTrustRulesOfNamespace :many
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS TEXT) AS bundle_id
 FROM trust_rules
 WHERE namespace = sqlc.arg(namespace)
 ORDER BY name, id;
 
 -- name: DeleteTrustRule :execrows
 DELETE FROM trust_rules WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
+
+-- name: UpdateTrustRule :execrows
+-- The caller reads the rule and checks the revision, the fence and the
+-- principal in the same transaction. The revision in the WHERE clause is the
+-- stored one, so a write that lost a race changes no row. The namespace, the
+-- creator and the creation time never change.
+UPDATE trust_rules SET
+    name = sqlc.arg(name), issuer = sqlc.arg(issuer), audience = sqlc.arg(audience),
+    key_source = sqlc.arg(key_source), static_keys = sqlc.arg(static_keys),
+    conditions_json = sqlc.arg(conditions_json), principal_id = sqlc.arg(principal_id),
+    revision = sqlc.arg(revision), spiffe_id_pattern = sqlc.arg(spiffe_id_pattern),
+    bundle_id = CAST(NULLIF(sqlc.arg(bundle_id), '') AS TEXT)
+WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id) AND revision = sqlc.arg(stored_revision);
+
+-- name: CountTrustRulesNamedInNamespace :one
+-- Counts the rules of the namespace with a name, except one rule. An update
+-- uses it to refuse a name that another rule has.
+SELECT COUNT(*) FROM trust_rules
+WHERE namespace = sqlc.arg(namespace) AND name = sqlc.arg(name) AND id <> sqlc.arg(except_id);
+
+-- name: GetTrustBundleOfNamespace :one
+-- The namespace is part of the key: a bundle of another namespace reads as no
+-- row.
+SELECT id, namespace, active_version, revision, created_at_ms
+FROM trust_bundles
+WHERE namespace = sqlc.arg(namespace);
+
+-- name: ListTrustBundleVersions :many
+SELECT version, pem, created_at_ms, overlap_ends_at_ms
+FROM trust_bundle_versions
+WHERE bundle_id = sqlc.arg(bundle_id)
+ORDER BY version;
+
+-- name: InsertTrustBundle :exec
+-- The caller checks the fence and the PEM text in the same transaction. The
+-- namespace holds one bundle: a second bundle of a namespace fails the unique key.
+INSERT INTO trust_bundles (id, namespace, active_version, revision, created_at_ms)
+VALUES (sqlc.arg(id), sqlc.arg(namespace), sqlc.arg(active_version), sqlc.arg(revision), sqlc.arg(created_at_ms));
+
+-- name: InsertTrustBundleVersion :exec
+INSERT INTO trust_bundle_versions (bundle_id, version, pem, created_at_ms, overlap_ends_at_ms)
+VALUES (sqlc.arg(bundle_id), sqlc.arg(version), sqlc.arg(pem), sqlc.arg(created_at_ms), sqlc.arg(overlap_ends_at_ms));
+
+-- name: UpdateTrustBundle :execrows
+-- The revision in the WHERE clause is the stored one, so a write that lost a
+-- race changes no row.
+UPDATE trust_bundles SET active_version = sqlc.arg(active_version), revision = sqlc.arg(revision)
+WHERE id = sqlc.arg(id) AND revision = sqlc.arg(stored_revision);
+
+-- name: DeleteTrustBundleVersion :execrows
+DELETE FROM trust_bundle_versions WHERE bundle_id = sqlc.arg(bundle_id) AND version = sqlc.arg(version);
 
 -- name: GetExchangePrincipal :one
 -- Reads the principal of a token exchange in its transaction, so a delete or

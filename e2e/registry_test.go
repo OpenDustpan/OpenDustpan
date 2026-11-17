@@ -32,6 +32,8 @@ type registryProvider struct {
 	archive       []byte
 	sums          []byte
 	signature     []byte
+	// manifest is the terraform-registry-manifest.json file of the release.
+	manifest []byte
 }
 
 // buildProvider makes the release of a provider for linux/amd64. OpenTofu
@@ -59,11 +61,16 @@ func buildProvider(t *testing.T, sg pgpfixture.Signer, version string) registryP
 
 	p := registryProvider{
 		name: providerName, version: version, archiveName: "", archive: zipped.Bytes(), sums: nil, signature: nil,
+		manifest: []byte(`{"version":1,"metadata":{"protocol_versions":["5.0"]}}`),
 	}
 	p.archiveName = fmt.Sprintf("terraform-provider-%s_%s_linux_amd64.zip", providerName, version)
 
+	// The release tools publish the manifest next to the archives and list it
+	// in the checksums file.
 	sum := sha256.Sum256(p.archive)
-	p.sums = []byte(hex.EncodeToString(sum[:]) + "  " + p.archiveName + "\n")
+	manifestSum := sha256.Sum256(p.manifest)
+	p.sums = []byte(hex.EncodeToString(sum[:]) + "  " + p.archiveName + "\n" +
+		hex.EncodeToString(manifestSum[:]) + "  " + p.manifestName() + "\n")
 
 	p.signature = sg.Detach(t, p.sums)
 
@@ -72,6 +79,10 @@ func buildProvider(t *testing.T, sg pgpfixture.Signer, version string) registryP
 
 func (p registryProvider) sumsName() string {
 	return fmt.Sprintf("terraform-provider-%s_%s_SHA256SUMS", p.name, p.version)
+}
+
+func (p registryProvider) manifestName() string {
+	return fmt.Sprintf("terraform-provider-%s_%s_manifest.json", p.name, p.version)
 }
 
 func (p registryProvider) archiveSHA() string {
@@ -160,6 +171,7 @@ func (r registryAPI) publish(ctx context.Context, t *testing.T, p registryProvid
 			{"role": "sums", "name": p.sumsName(), "upload": r.stage(ctx, t, up.sums)},
 			{"role": "signature", "name": p.sumsName() + ".sig", "upload": r.stage(ctx, t, up.signature)},
 			{"role": "archive", "name": p.archiveName, "upload": r.stage(ctx, t, up.archive)},
+			{"role": "manifest", "name": p.manifestName(), "upload": r.stage(ctx, t, p.manifest)},
 		},
 	})
 	if err != nil {
@@ -237,7 +249,9 @@ func runRegistryOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		api:     registryAPI{env: env, base: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/registry"},
 		signer:  pgpfixture.NewSigner(t),
 		address: env.RegistryAddress(providerName),
-		good:    registryProvider{name: "", version: "", archiveName: "", archive: nil, sums: nil, signature: nil},
+		good: registryProvider{
+			name: "", version: "", archiveName: "", archive: nil, sums: nil, signature: nil, manifest: nil,
+		},
 	}
 
 	sc.publishGood(ctx, t)
@@ -313,6 +327,124 @@ const registryConfig = `terraform {
 }
 `
 
+// TestRegistryMirrorHTTP proves the provider network mirror endpoints over
+// HTTP, on each store. OpenTofu cannot build a mirror path from a host that has
+// a port, and the test server has one, so the test sends the requests that the
+// CLI sends. A platform team publishes one signed provider version. The mirror
+// index lists the version, the version document lists the archive with its
+// zh: hash, a host other than the configured host answers 404, and a request
+// without a credential is refused.
+func TestRegistryMirrorHTTP(t *testing.T) {
+	t.Parallel()
+
+	tool := e2e.OpenTofu()
+
+	if runtime.GOOS != "linux" {
+		t.Skipf("the OpenTofu suite needs Linux, not %s", runtime.GOOS)
+	}
+
+	fetcher := sharedFetcher(t)
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	for _, label := range tool.Versions() {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+
+			installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+			defer cancel()
+
+			cli, installErr := fetcher.Install(installCtx, tool, label)
+			if installErr != nil {
+				t.Fatalf("install %s %s: %v", tool.Name, label, installErr)
+			}
+
+			for _, db := range databases {
+				t.Run(string(db), func(t *testing.T) {
+					t.Parallel()
+					runMirrorHTTPOnStore(t, cli, db)
+				})
+			}
+		})
+	}
+}
+
+func runMirrorHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	env := e2e.NewEnv(ctx, t, cli, store)
+	api := registryAPI{env: env, base: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/registry"}
+	signer := pgpfixture.NewSigner(t)
+
+	api.addKey(ctx, t, signer)
+
+	good := buildProvider(t, signer, "1.0.0")
+
+	if resp := api.publish(ctx, t, good, good.asBuilt()); resp.Status != http.StatusOK {
+		t.Fatalf("publish = %d %s", resp.Status, resp.Body)
+	}
+
+	base := "/v1/mirror/" + env.Host() + "/" + e2e.Namespace + "/" + providerName
+
+	index := mirrorGet(ctx, t, env, base+"/index.json")
+	if index.Status != http.StatusOK || !strings.Contains(index.Body, `"`+good.version+`"`) {
+		t.Fatalf("mirror index = %d %s, want 200 with version %s", index.Status, index.Body, good.version)
+	}
+
+	doc := mirrorGet(ctx, t, env, base+"/"+good.version+".json")
+	if doc.Status != http.StatusOK || !strings.Contains(doc.Body, "zh:"+good.archiveSHA()) {
+		t.Fatalf("mirror version document = %d %s, want 200 with zh:%s", doc.Status, doc.Body, good.archiveSHA())
+	}
+
+	mirrorRefusals(ctx, t, env, base)
+}
+
+// mirrorRefusals proves the mirror answers 404 for a host other than the
+// configured host and for an unknown version, and refuses a request without a
+// credential.
+func mirrorRefusals(ctx context.Context, t *testing.T, env *e2e.Env, base string) {
+	t.Helper()
+
+	other := "/v1/mirror/other.example.com/" + e2e.Namespace + "/" + providerName + "/index.json"
+	if resp := mirrorGet(ctx, t, env, other); resp.Status != http.StatusNotFound {
+		t.Fatalf("mirror index of another host = %d %s, want 404", resp.Status, resp.Body)
+	}
+
+	if resp := mirrorGet(ctx, t, env, base+"/9.9.9.json"); resp.Status != http.StatusNotFound {
+		t.Fatalf("mirror document of an unknown version = %d %s, want 404", resp.Status, resp.Body)
+	}
+
+	status, body, err := env.ServerAPIStatusBare(ctx, http.MethodGet, base+"/index.json")
+	if err != nil {
+		t.Fatalf("mirror index without a credential: %v", err)
+	}
+
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		t.Fatalf("mirror index without a credential = %d %s, want 401 or 403", status, body)
+	}
+}
+
+// mirrorGet sends one authenticated GET to a mirror path, with the Bearer
+// credential that OpenTofu sends.
+func mirrorGet(ctx context.Context, t *testing.T, env *e2e.Env, path string) e2e.APIResponse {
+	t.Helper()
+
+	resp, err := env.ServerAPIHeadersAs(ctx, env.TokenA(), path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+
+	return resp
+}
+
 // checkInit proves init installed the provider from the registry, checked the
 // signature and wrote the zh: hash of the archive to the lock file.
 func (sc *registryScenario) checkInit(name, dir string, p registryProvider) func(e2e.Result) error {
@@ -353,7 +485,9 @@ func (sc *registryScenario) refuseHostileReleases(ctx context.Context, t *testin
 	tampered := buildProvider(t, sc.signer, "1.0.1")
 	up := tampered.asBuilt()
 	up.archive = bytes.Clone(tampered.archive)
-	up.archive[len(up.archive)-1] ^= 0xff
+	// Flip a byte of the first entry data, behind its local file header. The
+	// archive stays a zip file, so the publish reaches the hash check.
+	up.archive[30+len(fmt.Sprintf("terraform-provider-%s_v%s", providerName, "1.0.1"))] ^= 0xff
 
 	resp := sc.api.publish(ctx, t, tampered, up)
 	if resp.Status != http.StatusUnprocessableEntity || !strings.Contains(resp.Body, tampered.archiveName) {

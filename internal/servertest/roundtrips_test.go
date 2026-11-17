@@ -493,6 +493,8 @@ type rtHarness struct {
 	workspace string
 	stack     string
 	nextStack int
+	// jobPool is true after the runner pool of the job flows exists.
+	jobPool bool
 }
 
 // newRoundTripHarness starts a cluster whose store has the tracer, and a client
@@ -508,18 +510,24 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 
 	h := &rtHarness{
 		t: t, cluster: cluster, client: &http.Client{Transport: transport, Timeout: requestLimit}, tracer: tracer,
-		warm: false, mode: mode, trips: nil, serial: 0, workspace: "", stack: "", nextStack: 0,
+		warm: false, mode: mode, trips: nil, serial: 0, workspace: "", stack: "", nextStack: 0, jobPool: false,
 	}
 
 	h.call(http.MethodPost, "/api/server/namespaces", `{"name":"acme"}`, http.StatusCreated)
-	h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/collections", `{"name":"everything"}`, http.StatusCreated)
+	body := h.call(
+		http.MethodPost, "/api/dustpan/v1/namespaces/acme/collections", `{"name":"everything"}`, http.StatusCreated,
+	)
+	var target struct {
+		ID string `json:"id"`
+	}
+	h.decode(body, &target)
 	h.call(
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
-		`{"tool":"pulumi","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
+		`{"tool":"pulumi","project":"*","stack":"*","collectionID":"`+target.ID+`"}`, http.StatusCreated,
 	)
 	h.call(
 		http.MethodPost, "/api/dustpan/v1/namespaces/acme/placement-rules",
-		`{"tool":"opentofu","project":"*","stack":"*","collection":"everything"}`, http.StatusCreated,
+		`{"tool":"opentofu","project":"*","stack":"*","collectionID":"`+target.ID+`"}`, http.StatusCreated,
 	)
 
 	return h
@@ -619,6 +627,36 @@ func (h *rtHarness) createStack(name string) {
 	h.t.Helper()
 
 	h.call(http.MethodPost, "/api/stacks/acme/web", `{"stackName":"`+name+`"}`, http.StatusOK)
+}
+
+// startPlanJob starts a plan job on the workspace and returns its ID. The first
+// call creates the runner pool of the job flows.
+func (h *rtHarness) startPlanJob() string {
+	h.t.Helper()
+
+	if !h.jobPool {
+		h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools",
+			`{"name":"ci","purpose":"jobs"}`, http.StatusCreated)
+
+		h.jobPool = true
+	}
+
+	answer := h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/jobs",
+		`{"unit":{"tool":"opentofu","name":"web"},"operation":"plan","pool":"ci",`+
+			`"location":{"repository":"acme/infra","ref":"main","directory":"net"},"reason":"round trips"}`,
+		http.StatusCreated)
+
+	var doc struct {
+		ID string `json:"id"`
+	}
+
+	h.decode(answer, &doc)
+
+	if doc.ID == "" {
+		h.t.Fatalf("job answer %s has no id", answer)
+	}
+
+	return doc.ID
 }
 
 // lock locks the workspace.
@@ -843,6 +881,16 @@ func requestFlows() []requestFlow {
 		{"lock", 34, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
+		}},
+		// The budget is 48. The cancel reads the job and its pool, ends the
+		// durable operation of the job, writes the job row and its audit entry
+		// in one transaction, and reads the pool again for the answer.
+		{"job cancel", 48, func(h *rtHarness) {
+			jobID := h.startPlanJob()
+			h.measure(func() {
+				h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/jobs/"+jobID+"/cancel",
+					`{"reason":"round trips"}`, http.StatusOK)
+			})
 		}},
 		{"unlock", 13, func(h *rtHarness) {
 			h.lock()
@@ -1327,12 +1375,48 @@ func (m costModel) count(c schemaCounts) int {
 		m.perUnit*c.units
 }
 
+// withoutClaimReads returns the model as it was before the write step read
+// the claim before each put: the measured history predates those reads.
+func (m costModel) withoutClaimReads() costModel {
+	m.fixed -= attemptClaimTrips
+	m.perTable -= claimReadTrips
+
+	return m
+}
+
 // backupModel is the cost model of a backup. Its coefficients were fitted to
 // three commits that differ in tables, control tables and migrations, and a
 // fourth commit checks them (see TestCostModelFitsMeasuredHistory).
+//
+// The write step reads the claim again right before each put under
+// backups/<id>/<attempt>/ and before each delete. One read of the claim is a
+// read-only transaction of 4 round trips: begin, the read of the operation,
+// the read of its steps and the commit. A table file costs those 4 round
+// trips more, so perTable counts 7. The fixed part holds attemptClaimTrips
+// more: the write of the manifest and the other writes under the directory of
+// the attempt, and the write of backups/<id>/live.json after the commit of
+// the finish step. The copy of a blob
+// under blobs/ reads no claim, so perUnit does not change. The first run
+// deletes nothing, because the directory of the attempt is new and no old
+// directory exists.
 func backupModel() costModel {
-	return costModel{fixed: 47, perTable: 3, perOther: 1, perMigration: 0, perUnit: stateVersionReads}
+	return costModel{
+		fixed:        47 + attemptClaimTrips,
+		perTable:     3 + claimReadTrips,
+		perOther:     1,
+		perMigration: 0,
+		perUnit:      stateVersionReads,
+	}
 }
+
+// claimReadTrips is the number of round trips of one read of the claim before
+// a put under the directory of an attempt.
+const claimReadTrips = 4
+
+// attemptClaimTrips is the number of round trips that the reads of the claim
+// before the writes that are not a table file add to the fixed part of a
+// backup. The value is the measured one on PostgreSQL.
+const attemptClaimTrips = 23
 
 // restoreModel is the cost model of a restore, fitted the same way. The cost of
 // a migration and of a unit (the maintenance scans and the state version
@@ -1410,12 +1494,18 @@ func backupModel() costModel {
 // The fixed part also holds checkpointSupersedesTrips: the table holds no
 // marks in the run, so the restore makes 2 round trips fewer for it than the
 // model gives a table.
+//
+// The fixed part also holds attemptClaimTrips, and perTable holds the
+// claimReadTrips of the claim read for the table file of each table: the
+// backup that the restore holds reads the claim before each put under
+// backups/.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 331 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+		fixed: 331 + 1 + attemptClaimTrips + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
-			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips,
-		perTable:     7,
+			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
+			droppedRunnerCredentialTrips + proxyRuleSetTrips + trustBundleTrips,
+		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,
@@ -1486,6 +1576,19 @@ const stagedTriggerClockTrips = 1
 // or the tables.
 const breakGlassFloorTrips = 3
 
+// droppedRunnerCredentialTrips is the number of round trips of the read of
+// the runner credentials that the swap drops: one read of the handoff tokens
+// and one of the job sessions whose runner the restored data does not hold,
+// under the lock of the control tables. A restore that drops a credential
+// also appends one audit entry; the restores of this test drop none.
+const droppedRunnerCredentialTrips = 2
+
+// proxyRuleSetTrips is the change in the fixed part for the table
+// proxy_rule_sets, a table of Tables that the dev strip never counts. The run
+// makes 5 round trips for it, 2 fewer than perTable gives, as for
+// group_mappings.
+const proxyRuleSetTrips = -2
+
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer
 // than a table in the model, because the dev strip counts no rows in it. The
@@ -1502,6 +1605,12 @@ const removalAlertTrips = -2 + 1
 // backup, the column read before the staging load, and the row count of the
 // staged table.
 const checkpointSupersedesTrips = 5 - 7
+
+// trustBundleTrips is the number of round trips that the tables trust_bundles
+// and trust_bundle_versions take off the model. The measured restore makes 12
+// round trips for the two tables, 2 fewer than the 14 that the model gives two
+// tables. The run saves no bundle, so the tables are empty.
+const trustBundleTrips = -2
 
 // checkCount fails the test when the count is not the count of the model,
 // and shows the statement list of the run.

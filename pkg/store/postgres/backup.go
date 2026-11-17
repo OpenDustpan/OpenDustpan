@@ -65,6 +65,7 @@ const (
 	pgColStatus      = "status"
 	pgColUpdateID    = "update_id"
 	pgColVersion     = "version"
+	pgColBundleID    = "bundle_id"
 	pgColUpdatedAtMs = "updated_at_ms"
 	pgColDeletedAtMs = "deleted_at_ms"
 	pgColSource      = "source"
@@ -143,6 +144,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyTrustRuleTables()...)
 	tables = append(tables, pgCopyBreakGlassReviewTables()...)
 	tables = append(tables, pgCopyUnmanagedTables()...)
+	tables = append(tables, pgCopyProxyRuleTables()...)
 
 	return tables
 }
@@ -309,7 +311,7 @@ func pgCopyCollectionTables() []pgCopyTable {
 		{
 			table: "placement_rules",
 			columns: []string{
-				"id", pgColNamespace, pgColPosition, pgColTool, pgColProject, "stack", "collection_key",
+				"id", pgColNamespace, pgColPosition, pgColTool, pgColProject, "stack", "collection_id",
 				"created_by", pgColCreatedAtMs,
 			},
 			orderBy: []string{pgColNamespace, pgColPosition, "id"},
@@ -386,7 +388,8 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				pgColObject, pgColVersion, "value_path", pgColAtMs, "source_ip", "user_agent",
-				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
+				"channel", "agent_run", "agent_session", "args_digest", "break_glass", "delegation_id",
+				"secret_stage", "tool", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
 				"changes", "object_id", "fence_version", "principal_kind", pgColJobID, pgColReason,
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
@@ -447,7 +450,7 @@ func pgControlTables() []pgCopyTable {
 		},
 		{
 			table:   backup.TableBackups,
-			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, pgColTarget, "error"},
+			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, pgColTarget, "error", "attempt"},
 			orderBy: []string{"id"},
 		},
 		{
@@ -1159,7 +1162,7 @@ func checkStaged(ctx context.Context, q db.DBTX, staging string, restoreAt time.
 		return markerErr
 	}
 
-	return checkStagedFeatureRows(ctx, q, staging)
+	return checkStagedFeatureRows(ctx, q, staging, restoreAt)
 }
 
 // summarizeStaging reads the summary of the staging schema: the dialect, the
@@ -1858,11 +1861,20 @@ func startBackupTx(
 // text and end time, in one transaction, and returns the finished row. Any
 // state but succeeded or failed reports ErrNotRunning, as do a row that is
 // not running; a missing row reports ErrNotFound. A fence that is not the
-// live claim reports the durable sentinel and changes nothing.
+// live claim reports the durable sentinel and changes nothing. When state is
+// StateSucceeded, the transaction compares attempt, the attempt of the
+// manifest that the caller checked, with the attempt that the row records,
+// and refuses the finish when they differ.
 //
 //nolint:revive // argument-limit: the fence, the row and the three fields of its end are one write; a struct would only move the fields.
 func (s *Store) FinishBackup(
-	ctx context.Context, f durable.StepFence, id backup.ID, state backup.State, errText string, endedAt time.Time,
+	ctx context.Context,
+	f durable.StepFence,
+	id backup.ID,
+	state backup.State,
+	errText string,
+	endedAt time.Time,
+	attempt string,
 ) (backup.Record, error) {
 	if state != backup.StateSucceeded && state != backup.StateFailed {
 		return backup.Record{}, backup.ErrNotRunning
@@ -1885,26 +1897,21 @@ func (s *Store) FinishBackup(
 			return err
 		}
 
-		n, err := q.FinishBackup(ctx, db.FinishBackupParams{
+		if err := checkFinishRow(ctx, q, id, state, attempt); err != nil {
+			return err
+		}
+
+		rec, err := applyFinishBackup(ctx, q, id, db.FinishBackupParams{
 			State:     string(state),
 			Error:     errText,
 			EndedAtMs: backupEndedAt(endedAt),
 			ID:        id.String(),
 		})
 		if err != nil {
-			return fmt.Errorf("finish backup: %w", err)
+			return err
 		}
 
-		if n == 0 {
-			return finishFailure(ctx, q, id)
-		}
-
-		row, err := q.GetBackup(ctx, id.String())
-		if err != nil {
-			return fmt.Errorf("select finished backup: %w", err)
-		}
-
-		out = backupRecord(row)
+		out = rec
 
 		return nil
 	})
@@ -1913,6 +1920,134 @@ func (s *Store) FinishBackup(
 	}
 
 	return out, nil
+}
+
+// applyFinishBackup moves the running row id to the state of finish with
+// the error text and the end time, and returns the finished row. A finish
+// that changes nothing reports why through finishFailure.
+func applyFinishBackup(
+	ctx context.Context, q *db.Queries, id backup.ID, finish db.FinishBackupParams,
+) (backup.Record, error) {
+	n, err := q.FinishBackup(ctx, finish)
+	if err != nil {
+		return backup.Record{}, fmt.Errorf("finish backup: %w", err)
+	}
+
+	if n == 0 {
+		return backup.Record{}, finishFailure(ctx, q, id)
+	}
+
+	row, err := q.GetBackup(ctx, id.String())
+	if err != nil {
+		return backup.Record{}, fmt.Errorf("select finished backup: %w", err)
+	}
+
+	return backupRecord(row)
+}
+
+// RecordBackupAttempt implements backup.Registry: it checks the fence f,
+// records its step and stores attempt on the running backup id, in one
+// transaction. A fence that is not the live claim records nothing.
+func (s *Store) RecordBackupAttempt(
+	ctx context.Context, f durable.StepFence, id backup.ID, attempt string,
+) error {
+	return s.inMinimumTx(ctx, func(q *db.Queries) error {
+		// The fence comes first: a stale claim changes nothing and learns
+		// nothing about the row.
+		if err := recordStep(ctx, q, f, nil); err != nil {
+			return err
+		}
+
+		// Defense in depth: the fence checked above is live, but it must
+		// belong to the operation of this backup. The service passes the
+		// right fence; this check stays so that no caller records a step of
+		// one backup under the claim of another operation.
+		if err := ownsBackup(ctx, q, f, id); err != nil {
+			return err
+		}
+
+		if err := backup.ValidAttempt(attempt); err != nil {
+			return err
+		}
+
+		if err := checkRecordRow(ctx, q, id, attempt); err != nil {
+			return err
+		}
+
+		n, err := q.RecordBackupAttempt(ctx, db.RecordBackupAttemptParams{Attempt: attempt, ID: id.String()})
+		if err != nil {
+			return fmt.Errorf("set the attempt of backup %s: %w", id, err)
+		}
+
+		if n == 0 {
+			return backup.ErrNotRunning
+		}
+
+		return nil
+	})
+}
+
+// checkFinishRow reads the backup row id for a finish when state is
+// StateSucceeded, and compares attempt, the attempt of the manifest that the
+// caller checked, with the attempt that the row records. A missing row
+// reports backup.ErrNotFound, and a row that names another attempt reports
+// durable.ErrClaimLost and stays running.
+func checkFinishRow(ctx context.Context, q *db.Queries, id backup.ID, state backup.State, attempt string) error {
+	if state == backup.StateSucceeded {
+		if err := backup.ValidAttempt(attempt); err != nil {
+			return err
+		}
+	}
+
+	row, err := q.GetBackup(ctx, id.String())
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return backup.ErrNotFound
+		}
+
+		return fmt.Errorf("select backup: %w", err)
+	}
+
+	// Defense in depth: the fence check of the caller already refused a claim
+	// that another holder took over, and only a write step under a new live
+	// claim can change the row attempt. This check stays so that the row can
+	// never read succeeded on an attempt whose manifest the caller did not
+	// check.
+	if state == backup.StateSucceeded && row.Attempt != attempt {
+		return durable.ErrClaimLost
+	}
+
+	return nil
+}
+
+// checkRecordRow reads the backup row id for a record of the write-step
+// attempt and compares attempt with the attempt that the row records. A
+// missing row reports backup.ErrNotFound, a row that is not running reports
+// backup.ErrNotRunning, and a row that names another attempt reports
+// durable.ErrClaimLost and keeps its attempt.
+func checkRecordRow(ctx context.Context, q *db.Queries, id backup.ID, attempt string) error {
+	row, err := q.GetBackup(ctx, id.String())
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return backup.ErrNotFound
+		}
+
+		return fmt.Errorf("select backup: %w", err)
+	}
+
+	if row.State != string(backup.StateRunning) {
+		return backup.ErrNotRunning
+	}
+
+	// Defense in depth: the fence check of the caller already refused a claim
+	// that another holder took, and only the write step of the live claim
+	// reaches this point. This check stays so that a second record of
+	// another attempt never overwrites the attempt that the row names.
+	if row.Attempt != "" && row.Attempt != attempt {
+		return durable.ErrClaimLost
+	}
+
+	return nil
 }
 
 // ownsBackup returns durable.ErrClaimLost unless the operation of f is the
@@ -1956,7 +2091,7 @@ func (s *Store) GetBackup(ctx context.Context, id backup.ID) (backup.Record, err
 		return backup.Record{}, fmt.Errorf("select backup: %w", err)
 	}
 
-	return backupRecord(row), nil
+	return backupRecord(row)
 }
 
 // ListBackups implements backup.Registry: every backup row, newest first.
@@ -1968,7 +2103,12 @@ func (s *Store) ListBackups(ctx context.Context) ([]backup.Record, error) {
 
 	out := make([]backup.Record, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, backupRecord(row))
+		rec, err := backupRecord(row)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, rec)
 	}
 
 	return out, nil
@@ -1993,22 +2133,24 @@ func (s *Store) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, e
 }
 
 // backupRecord converts a backup row into a domain record. A NULL end time
-// reads as the zero time: the backup still runs.
-func backupRecord(row db.Backup) backup.Record {
-	var endedAt time.Time
+// reads as the zero time: the backup still runs. An attempt that is not
+// empty must pass the shared allowlist, or the row is corrupt.
+func backupRecord(row db.Backup) (backup.Record, error) {
+	var endedAtMs int64
 
 	if row.EndedAtMs.Valid {
-		endedAt = codec.FromMillis(row.EndedAtMs.Int64)
+		endedAtMs = row.EndedAtMs.Int64
 	}
 
-	return backup.Record{
-		StartedAt: codec.FromMillis(row.StartedAtMs),
-		EndedAt:   endedAt,
-		ID:        backup.ID(row.ID),
-		Target:    row.Target,
-		Error:     row.Error,
-		State:     backup.State(row.State),
-	}
+	return codec.FromBackupRow(codec.BackupRow{
+		ID:          row.ID,
+		State:       row.State,
+		Target:      row.Target,
+		Error:       row.Error,
+		Attempt:     row.Attempt,
+		StartedAtMs: row.StartedAtMs,
+		EndedAtMs:   endedAtMs,
+	})
 }
 
 // backupEndedAt encodes the end time for the backups table: the zero time is
@@ -2076,7 +2218,7 @@ func backupConflict(ctx context.Context, q *db.Queries, id backup.ID) error {
 // of their own: the drift results, the unit settings, the registry, the Git host connections,
 // the notification sinks, the triggers, the self-service blueprints, the trust rules, the
 // break-glass reviews, the sweep targets and the sweeps.
-func checkStagedFeatureRows(ctx context.Context, pool db.DBTX, staging string) error {
+func checkStagedFeatureRows(ctx context.Context, pool db.DBTX, staging string, restoreAt time.Time) error {
 	if err := checkStagedDriftResults(ctx, pool, staging); err != nil {
 		return err
 	}
@@ -2113,7 +2255,7 @@ func checkStagedFeatureRows(ctx context.Context, pool db.DBTX, staging string) e
 		return err
 	}
 
-	if err := checkStagedTrustRules(ctx, pool, staging); err != nil {
+	if err := checkStagedTrustRules(ctx, pool, staging, restoreAt); err != nil {
 		return err
 	}
 

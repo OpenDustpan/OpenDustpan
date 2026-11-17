@@ -93,8 +93,9 @@ func at() time.Time {
 func entry(ns string) audit.Entry {
 	return audit.Entry{
 		At: at(), Namespace: namespace.Name(ns), Subject: actor, IDPSubject: "", TokenID: "", Action: action,
-		Object: "", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
-		Channel: "", Kind: "", Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		Object: "proxy-rules", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "", UserAgent: "",
+		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "",
+		PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0, PrincipalKind: "", JobID: "", Reason: "",
 		Origin: nil,
 	}
@@ -145,6 +146,7 @@ func cases() []suiteCase {
 		{"a second put at the read version gives version 2", putTwice},
 		{"put with version 0 of a scope with a set returns conflict", putCreateConflict},
 		{"put with a stale version returns conflict and changes nothing", putStaleConflict},
+		{"put with a version above 0 of a scope with no set returns conflict", putMissingConflict},
 		{"put with a stale fence returns fenced and changes nothing", putStaleFence},
 		{"put with the fence of another namespace returns fenced", putOtherFence},
 		{"put of a document that fails parse returns invalid and changes nothing", putInvalidDocument},
@@ -224,6 +226,19 @@ func putStaleConflict(t *testing.T, h Harness) {
 	}
 
 	wantFirstVersion(t, h, unit(nsAcme, unitA), docA())
+}
+
+func putMissingConflict(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, nsAcme)
+
+	_, err := h.Store.Put(t.Context(), change(nsScope(nsAcme), docA(), staleVersion), fence, entry(nsAcme))
+	if !errors.Is(err, rulestore.ErrConflict) {
+		t.Fatalf("Put: got %v, want ErrConflict", err)
+	}
+
+	wantNotFound(t, h, nsScope(nsAcme))
 }
 
 func putStaleFence(t *testing.T, h Harness) {

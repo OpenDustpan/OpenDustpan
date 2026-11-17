@@ -51,7 +51,7 @@ test("the request carries the path, the method and the headers of the operation"
   assert.equal(req.method, "GET");
   assert.equal(req.headers.accept, "application/json");
   assert.equal(req.headers.authorization, "Bearer tok");
-  const agent = `opendustpan-client-ts/${metadata.clientVersion} (description ${metadata.descriptionVersion}; server ${metadata.serverRelease})`;
+  const agent = `opendustpan-client-ts/${metadata.clientVersion ?? "unpublished"} (description ${metadata.descriptionVersion}; server ${metadata.serverRelease})`;
   assert.equal(req.headers["user-agent"], agent);
   assert.equal(req.headers["idempotency-key"], undefined);
   assert.equal(req.body, undefined);
