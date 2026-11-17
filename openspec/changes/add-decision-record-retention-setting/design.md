@@ -13,6 +13,14 @@ The settings resource lists installation settings from declarations (`pkg/dustpa
 
 NEW file pkg/gate/retention_setting.go holds the key constant, `RetentionSettingDeclarations()` and a function `RetentionPeriod(value string) (time.Duration, bool, error)` that parses the stored value once. The sweep of the follow-up calls this function, so no other code parses the text. The function is the one place that knows `0` means keep forever.
 
+## Contract
+
+- Key: `decisionRecords.retentionHours`, level installation, kind int, default `0`, database layer, apply live.
+- `Check(value string) error`: nil for `0` and for a canonical whole number from 24 to 87600; otherwise an error that wraps `setting.ErrInvalidValue` and names the key, the value and the range. The settings route answers 400.
+- `ReducesSecurity(old, next string) bool`: true when `next` is not `0` and (`old` is `0` or `next` is less than `old`), and true when either value does not parse.
+- `RetentionPeriod(value string) (period time.Duration, keepForever bool, err error)` in pkg/gate: `0` gives `keepForever` true; a valid number gives `period` in hours; a refused text gives an error that wraps `setting.ErrInvalidValue`.
+- Routes: GET and PATCH /api/dustpan/v1/settings, unchanged. Item shape: the existing item of the settings resource.
+
 ## Risks
 
 - A setting that deletes nothing may look broken. The docs page and the `Doc` text say that no job deletes records until the follow-up ships.

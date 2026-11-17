@@ -33,8 +33,8 @@ Evidence for the claims above:
 - Register its trigger in internal/cron (on main).
 - Take a store lease on the lease primitive of main, so that one sweep runs at a time. The first task names its exact file and line from the code.
 - Write an audit record of each sweep with the count of pruned records and the reason.
-- Read the cutoff from the setting of the parent change with `gate.RetentionPeriod`. `0` means keep forever and the sweep deletes nothing, but it still writes its audit record.
-- Show the last sweep in the audit entry of the sweep, not in the settings resource. `setting.Read` (`pkg/setting/change.go:109`) shows stored values and cannot show a run-time time.
+- Read the cutoff from the setting of the parent change with the function `gate.RetentionPeriod` (NEW in the parent change). `0` means keep forever and the sweep deletes nothing, but it still writes its audit record.
+- Show the last sweep in the audit entry of the sweep, not in the settings resource. The settings read shows stored values and cannot show a run-time time.
 
 Out of scope:
 
