@@ -309,6 +309,101 @@ func (p *proxyEnv) checkProxyEvents() {
 	}
 }
 
+// lastHeader returns the header of the last answer that the env read.
+func (e *env) lastHeader() http.Header {
+	e.t.Helper()
+
+	h := e.last.Load()
+	if h == nil {
+		e.t.Fatal("no answer read yet")
+	}
+
+	return *h
+}
+
+// TestUpstreamCredentialNoStore is the hostile table of the answer layer: the
+// answer of the upstream credential path carries a credential, so each answer
+// of the path, the 200 and each refusal, must forbid a cache. Each row fails
+// when the header is missing.
+func TestUpstreamCredentialNoStore(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		run    func(p *proxyEnv) (int, []byte)
+		status int
+	}{
+		{
+			name: "credential answer",
+			run: func(p *proxyEnv) (int, []byte) {
+				proxy, _ := p.openProxy()
+
+				return proxy.do(proxy.post(protocol.PathProxyUpstreamCredential, nil))
+			},
+			status: http.StatusOK,
+		},
+		{
+			name: "launcher session proof",
+			run: func(p *proxyEnv) (int, []byte) {
+				l := p.launch()
+
+				return l.do(l.post(protocol.PathProxyUpstreamCredential, nil))
+			},
+			status: http.StatusForbidden,
+		},
+		{
+			name: "runner key proof",
+			run: func(p *proxyEnv) (int, []byte) {
+				return p.runner.call(protocol.PathProxyUpstreamCredential, nil)
+			},
+			status: http.StatusUnauthorized,
+		},
+		{
+			name: "no proof",
+			run: func(p *proxyEnv) (int, []byte) {
+				return p.runner.raw(protocol.PathProxyUpstreamCredential, nil, "0.4.0")
+			},
+			status: http.StatusUnauthorized,
+		},
+		{
+			name: "body on a path with no body",
+			run: func(p *proxyEnv) (int, []byte) {
+				proxy, _ := p.openProxy()
+
+				return proxy.do(proxy.post(protocol.PathProxyUpstreamCredential, map[string]string{"pool": "x"}))
+			},
+			status: http.StatusBadRequest,
+		},
+		{
+			name: "after the takeover",
+			run: func(p *proxyEnv) (int, []byte) {
+				proxy, _ := p.openProxy()
+				p.takeOver()
+
+				return proxy.do(proxy.post(protocol.PathProxyUpstreamCredential, nil))
+			},
+			status: http.StatusConflict,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newProxyEnv(t)
+			status, body := tc.run(p)
+
+			if status != tc.status {
+				t.Fatalf("answer = %d %s, want %d", status, body, tc.status)
+			}
+
+			if got := p.lastHeader().Get("Cache-Control"); got != "no-store" {
+				t.Errorf("Cache-Control = %q, want no-store", got)
+			}
+		})
+	}
+}
+
 // TestProxyPaths is the table of hostile cases of the handler layer: each
 // proxy path with a launcher proof, a runner key and no proof, each launcher
 // path with a proxy proof, a replayed nonce, a body past the limit, a session

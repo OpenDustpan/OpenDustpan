@@ -60,6 +60,8 @@ type env struct {
 	claimer *opsClaimer
 	fence   namespace.Fence
 	clock   *skewClock
+	// last is the header of the last answer that send read.
+	last atomic.Pointer[http.Header]
 }
 
 // opsClaimer is a job.Claimer on the durable store: the phases of a job are
@@ -275,7 +277,16 @@ func newEnvServing(t *testing.T, open func(t *testing.T) stores, set func(s stor
 
 	h, srv, ops := serve(t, s, opts)
 
-	return &env{t: t, store: s, server: srv, handler: h, claimer: ops, fence: ns.Fence(), clock: clock}
+	return &env{
+		t:       t,
+		store:   s,
+		server:  srv,
+		handler: h,
+		claimer: ops,
+		fence:   ns.Fence(),
+		clock:   clock,
+		last:    atomic.Pointer[http.Header]{},
+	}
 }
 
 // lapseLease is the lease that lapse sets, and lapseMargin is the time to
@@ -475,6 +486,9 @@ func (e *env) send(req *http.Request) (int, []byte) {
 	if err != nil {
 		e.t.Fatalf("read body: %v", err)
 	}
+
+	header := resp.Header.Clone()
+	e.last.Store(&header)
 
 	return resp.StatusCode, out
 }
