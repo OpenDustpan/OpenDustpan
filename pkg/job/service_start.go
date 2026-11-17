@@ -61,7 +61,12 @@ func checkRequest(a Actor, req *StartRequest) (SourceKind, error) {
 		return "", fmt.Errorf("%w: a job token cannot start a job", ErrPolicyDenied)
 	}
 
-	err := checkKinds(req)
+	err := checkAgentRef(a.Agent)
+	if err != nil {
+		return "", err
+	}
+
+	err = checkKinds(req)
 	if err != nil {
 		return "", err
 	}
@@ -87,6 +92,35 @@ func checkRequest(a Actor, req *StartRequest) (SourceKind, error) {
 	}
 
 	return source, nil
+}
+
+// checkAgentRef returns ErrInvalid for an agent reference that the agent
+// block of an audit entry cannot hold: more than audit.MaxAgentFieldLen
+// bytes, bytes that are not valid UTF-8, or a hidden character. An empty
+// reference names no agent and is valid. The check runs before the policy
+// and before any write, so a refused start leaves no job and no entry.
+//
+// Defense in depth: audit.NewOrigin in entry and the Validate check of the
+// audit store refuse the same values. This check stays so that the start
+// is refused before the policy and the gates see the reference, and does not
+// rely on either of them.
+func checkAgentRef(ref AgentRef) error {
+	if ref.IsZero() {
+		return nil
+	}
+
+	s := string(ref)
+
+	switch {
+	case len(s) > audit.MaxAgentFieldLen:
+		return fmt.Errorf("%w: an agent reference has at most %d bytes", ErrInvalid, audit.MaxAgentFieldLen)
+	case !utf8.ValidString(s):
+		return fmt.Errorf("%w: an agent reference holds valid UTF-8 only", ErrInvalid)
+	case ident.HasHidden(s):
+		return fmt.Errorf("%w: an agent reference holds no hidden character", ErrInvalid)
+	}
+
+	return nil
 }
 
 // checkKinds checks the operation, the executor and the purpose of req, and that
