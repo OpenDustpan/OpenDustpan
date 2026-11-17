@@ -223,6 +223,24 @@ read them.
 
 A caller without the action gets `403`.
 
+## Find the grant behind a discovery answer
+
+A token with a grant on a collection or on a unit in a namespace discovers
+that namespace. The answer carries the response header `X-Dustpan-Grant-Id`,
+with the stable ID of the grant that allowed it, never a name. To see the
+holder, the role and the object of that grant, read the review of the
+collection and find the grant with this ID:
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" \
+"https://dustpan.example.com/api/server/namespaces/acme/collections/payments/access-review?limit=100"
+```
+
+To stop the discovery, revoke the grant with
+`DELETE /api/server/grants/{id}`. The next request gets the same `404` as for
+an unknown namespace. An answer that no grant allowed, for example an
+administrator's, carries no such header.
+
 ## Read your own access
 
 Any signed-in principal can read its own access. Use the caller routes:
