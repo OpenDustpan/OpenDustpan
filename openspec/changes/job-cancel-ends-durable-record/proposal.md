@@ -4,13 +4,13 @@ version: 4
 
 ## Why
 
-**Persona: developer.** A developer cancels a job that runs on a runner pool. The job must show as canceled. The background task that backs it must end the same way, so that no record stays open after the cancel.
+**Persona: developer.** A developer cancels a job that runs on a runner pool. The job must show as canceling while its executor stops, and then as canceled. The background task that backs it must end the same way, so that no record stays open after the cancel.
 
 The user path this change must make work:
 
 1. **API.** The developer sends a cancel request for a job in a namespace.
-2. **API.** The developer reads the job with GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job} and sees the state canceled.
-3. **E2e.** A step with the real runner cancels a job and checks that the job and its durable record agree.
+2. **API.** The developer reads the job with GET /api/dustpan/v1/namespaces/{namespace}/jobs/{job} and sees the state canceling for a running job (canceled at once for a job with no executor), and later canceled.
+3. **E2e.** A step with the real runner cancels a running job and checks that the job and its durable record agree after the executor stops.
 
 Errors the person may hit, and the one command that helps:
 
@@ -26,7 +26,8 @@ Evidence for the claims above:
 
 ## What Changes
 
-- The cancel path of a job ends the job as canceled and ends its durable operation record as canceled in one transaction.
+- The cancel path of a job with no executor (queued, dispatched, awaiting state) ends the job as canceled and ends its durable operation record as canceled in one transaction.
+- The cancel path of a running job moves the job to canceling (state machine of pkg/job/state.go: Running with EventCancel gives Canceling) and records the request on the durable record. The executor then ends both as canceled in one transaction.
 - No new route is added. The existing job cancel route keeps its path.
 
 Out of scope:
