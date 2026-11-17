@@ -1,9 +1,12 @@
 package runnerapi_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -59,12 +62,14 @@ func newTokenEnv(
 	t.Helper()
 
 	written := newTestAudit()
+	logs := &syncBuffer{mu: sync.Mutex{}, buf: bytes.Buffer{}}
 
 	var tokens *jobtoken.Service
 
 	e := newEnvServing(t, openSQLite, func(s stores, o *serveOptions) {
 		o.claimer = job.NewClaimer(s.jobs, s.operations, s.namespaces, jobtest.NoGates{})
 		o.jobs = s.jobs
+		o.logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 		records, ok := s.namespaces.(principal.Store)
 		if !ok {
@@ -104,7 +109,7 @@ func newTokenEnv(
 
 	return &tokenEnv{
 		sessionEnv: &sessionEnv{
-			env: e, jobs: nil, claimer: nil, logs: nil, pool: pool, runner: r, work: work,
+			env: e, jobs: nil, claimer: nil, logs: logs, pool: pool, runner: r, work: work,
 		},
 		audit:   written,
 		tokens:  tokens,
@@ -498,6 +503,8 @@ func TestSessionCredentialsClaimEnded(t *testing.T) {
 	if got := refusedEntries(t, s); len(got) != 0 {
 		t.Fatalf("the refusal wrote %d credentials entries, want 0", len(got))
 	}
+
+	checkSessionRefusalLog(t, s, "claim-lost")
 }
 
 // TestSessionCredentialsTakeover proves that a request after a takeover gets
@@ -521,6 +528,8 @@ func TestSessionCredentialsTakeover(t *testing.T) {
 	if got := refusedEntries(t, s); len(got) != 0 {
 		t.Fatalf("the refusal wrote %d credentials entries, want 0", len(got))
 	}
+
+	checkSessionRefusalLog(t, s, "claim-lost")
 }
 
 // TestSessionCredentialsDeadClaimInPath proves that the claim check of the
@@ -582,6 +591,72 @@ func TestSessionCredentialsRetiredRunner(t *testing.T) {
 
 	if got := refusedEntries(t, s); len(got) != 0 {
 		t.Fatalf("the refusal wrote %d credentials entries, want 0", len(got))
+	}
+
+	checkSessionRefusalLog(t, s, "retired")
+}
+
+// TestSessionCredentialsSessionLogOtherPath proves that a session-layer
+// refusal of another path of the job session writes no record of the
+// credentials path.
+func TestSessionCredentialsSessionLogOtherPath(t *testing.T) {
+	t.Parallel()
+
+	s := newTokenEnv(t, 0, 0)
+	s.launch()
+	s.lapse(s.work.Operation)
+
+	status, body := s.l.do(s.l.post(protocol.PathSessionRenew, nil))
+	if status != http.StatusConflict {
+		t.Fatalf("renew after the claim ended = %d %s, want 409", status, body)
+	}
+
+	if n := strings.Count(s.logs.String(), credentialsRefusedLog); n != 0 {
+		t.Fatalf("the renew refusal wrote %d credentials records, want 0:\n%s", n, s.logs.String())
+	}
+}
+
+// credentialsRefusedLog is the message of the log record of a credentials
+// request that the session layer refused.
+const credentialsRefusedLog = `msg="credentials request refused by the session layer"`
+
+// checkSessionRefusalLog checks the log of a credentials request that the
+// session layer refused: exactly one record, with the reason and the short
+// hash of the session, and with no session ID and no token text.
+func checkSessionRefusalLog(t *testing.T, s *tokenEnv, reason string) {
+	t.Helper()
+
+	logs := s.logs.String()
+
+	var records []string
+
+	for line := range strings.SplitSeq(logs, "\n") {
+		if strings.Contains(line, credentialsRefusedLog) {
+			records = append(records, line)
+		}
+	}
+
+	if len(records) != 1 {
+		t.Fatalf("the log holds %d credentials refusal records, want 1:\n%s", len(records), logs)
+	}
+
+	rec := records[0]
+	if !strings.Contains(rec, "reason="+reason) {
+		t.Errorf("the record names no reason %q: %s", reason, rec)
+	}
+
+	if !strings.Contains(rec, "session="+sha256Hex(s.l.id)[:16]) {
+		t.Errorf("the record names no short hash of the session: %s", rec)
+	}
+
+	// The open of the session logs its ID by design; the refusal record
+	// holds only its short hash.
+	if strings.Contains(rec, s.l.id) {
+		t.Errorf("the record holds the session ID: %s", rec)
+	}
+
+	if strings.Contains(logs, jobtoken.SecretPrefix) {
+		t.Error("the log holds token text")
 	}
 }
 

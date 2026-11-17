@@ -24,6 +24,7 @@ const eventCredentialsRefused = "credentials-refused"
 // Reason codes of the denial entries of the credentials path.
 const (
 	reasonClaimLost   = "claim-lost"
+	reasonRetired     = "retired"
 	reasonNoUnit      = "no-unit"
 	reasonStarterGone = "starter-gone"
 	reasonSweep       = "sweep"
@@ -256,6 +257,32 @@ func (h *Handler) claimJob(ctx context.Context, sess *runner.Session) string {
 	}
 
 	return rec.Job
+}
+
+// sessionLogHash is the number of hex digits of the SHA-256 of a session ID
+// that a log record holds in place of the ID.
+const sessionLogHash = 16
+
+// logCredentialsSessionRefusal writes one log record for a credentials request
+// that the session layer refused before the proof check, because the claim of
+// the session is lost or its runner is retired. No proof authenticated the
+// request, so it writes no audit entry. The record holds the reason and a
+// short hash of the session ID, never the ID, the proof or a token. Other
+// errors write no record here.
+func (h *Handler) logCredentialsSessionRefusal(ctx context.Context, sessionID string, err error) {
+	var reason string
+
+	switch {
+	case errors.Is(err, runner.ErrClaimLost):
+		reason = reasonClaimLost
+	case errors.Is(err, runner.ErrRetired):
+		reason = reasonRetired
+	default:
+		return
+	}
+
+	h.logger.WarnContext(ctx, "credentials request refused by the session layer",
+		slog.String("session", sha256Hex(sessionID)[:sessionLogHash]), slog.String("reason", reason))
 }
 
 // recordCredentialsRefusal writes the denial entry of a refused credentials
