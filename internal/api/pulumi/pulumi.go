@@ -47,6 +47,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/manuallock"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -424,7 +425,8 @@ func (h *Handler) defaultOrganization(
 }
 
 // readableNamespaces returns the namespaces the principal may read, ordered
-// by name, as organization summaries.
+// by name, as organization summaries. A holder of a grant on a collection or
+// on a unit in the namespace also sees that namespace.
 func (h *Handler) readableNamespaces(
 	ctx context.Context, p identity.Principal,
 ) ([]organizationSummary, error) {
@@ -436,14 +438,13 @@ func (h *Handler) readableNamespaces(
 	out := []organizationSummary{}
 
 	for i := range all {
-		obj := identity.NamespaceObject(all[i].Name)
+		ok, includeErr := h.includeNamespace(ctx, p, all[i].Name)
+		if includeErr != nil {
+			return nil, includeErr
+		}
 
-		if err := h.authz.Authorize(ctx, p, identity.ActionNamespaceRead, obj); err != nil {
-			if errors.Is(err, identity.ErrDenied) {
-				continue
-			}
-
-			return nil, err
+		if !ok {
+			continue
 		}
 
 		name := all[i].Name.String()
@@ -451,6 +452,72 @@ func (h *Handler) readableNamespaces(
 	}
 
 	return out, nil
+}
+
+// includeNamespace reports whether p sees the namespace ns in the
+// organization list: when p may read it, or when p holds a grant on a
+// collection or on a unit in it.
+func (h *Handler) includeNamespace(
+	ctx context.Context, p identity.Principal, ns namespace.Name,
+) (bool, error) {
+	obj := identity.NamespaceObject(ns)
+
+	authorizeErr := h.authz.Authorize(ctx, p, identity.ActionNamespaceRead, obj)
+	if authorizeErr == nil {
+		return true, nil
+	}
+
+	// Defense in depth: the IP allowlist refusal never falls through to the
+	// grant fallback, so a blocked address cannot discover the namespace
+	// through a collection grant. This check does not rely on the route
+	// handler or on the refusal of the Authorizer for the later requests.
+	if errors.Is(authorizeErr, ipallow.ErrAddressNotAllowed) {
+		return false, authorizeErr
+	}
+
+	if !errors.Is(authorizeErr, identity.ErrDenied) {
+		return false, authorizeErr
+	}
+
+	return h.holdsGrantInNamespace(ctx, p, ns)
+}
+
+// holdsGrantInNamespace reports whether p holds a grant on a collection in
+// ns or on a unit in it. It reads the grants at each request, so a revoked
+// grant is gone on the next request. A grant on the namespace itself, or on
+// the installation, is decided by the Authorizer before this runs: this check
+// only opens discovery from inside. An error of the authorizer is returned.
+func (h *Handler) holdsGrantInNamespace(
+	ctx context.Context, p identity.Principal, ns namespace.Name,
+) (bool, error) {
+	for _, action := range []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadOutputs} {
+		scope, err := h.authz.ListObjects(ctx, p, action)
+		if err != nil {
+			return false, fmt.Errorf("list readable objects: %w", err)
+		}
+
+		if scopeHoldsNamespace(scope, ns) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// scopeHoldsNamespace reports whether scope names a collection or a unit in
+// ns. A grant on the namespace itself, or on the installation, is decided by
+// the Authorizer before this runs. An every-object scope alone proves no
+// grant in ns: only the gated namespace check above may open that path.
+func scopeHoldsNamespace(scope identity.Scope, ns namespace.Name) bool {
+	for _, objs := range [][]identity.Object{scope.Collections, scope.Units} {
+		for i := range objs {
+			if objs[i].Namespace() == ns {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 type stackSummary struct {
