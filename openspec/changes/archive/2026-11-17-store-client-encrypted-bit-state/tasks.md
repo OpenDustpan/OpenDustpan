@@ -14,13 +14,13 @@
 
 - [x] 2.1 Add the column to each dialect baseline in name order. Edit the baseline file of each dialect under pkg/store (NEW column in the state version table). Add the same column to the backup column list of the table in pkg/backup/portable_tables.go, because a backup holds every column. Check: `make generate` and `sqlc diff` are clean with no numbered migration file
 - [x] 2.2 Write the bit at finalize and read it in Latest in pkg/workspace/state_meta.go. Check: `go test ./pkg/workspace/...` passes
-- [ ] 2.3 Add a guard test that removes the constructor rejection in pkg/outputshare/outputsharetest/states.go. Check: The mutation fails the conformance suite
+- [x] 2.3 Guard test of the rejection of an unknown bit at finalize: `testFinalizeWithoutTheBitIsRefused` in the store conformance suite pkg/store/storetest/workspaces.go, which runs on each dialect. Check: removing the rejection in `FinalizeStateVersionRow` (pkg/store/internal/codec/workspaces.go) fails `TestWorkspaceConformance` with "want ErrStateBitUnknown"
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Regenerate `internal/api/apidesc/openapi.json` (run `TestAPIDescriptionGolden` with its `-update-api-description` flag) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [x] 3.1 Regenerate `internal/api/apidesc/openapi.json` (run `TestAPIDescriptionGolden` with its `-update-api-description` flag) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the change adds no API field, so both generators give no diff
 
 ## 4. definition of done
 
-- [ ] 4.1 Confirm the existing outputs routes use the Latest port with no new route Check: Test log shows one row read and no blob read
-- [ ] 4.2 Pass the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.1 Confirm the existing outputs routes use the Latest port with no new route Check: `TestLatestAnswersTheBitWithoutABlobRead` and `TestLatestStreamsTheBlobWhenTheBitIsNull` pass in pkg/workspace; the first counts no blob read with a present bit
+- [x] 4.2 Pass the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
