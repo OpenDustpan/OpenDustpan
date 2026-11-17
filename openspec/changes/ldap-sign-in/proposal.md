@@ -192,7 +192,6 @@ Decided by the PM on 2026-11-08, with the ADR check done:
 4. LDAP groups are out of scope.
 5. The static provider comes first. The stored provider is its own change.
 
-Source of this change: the file `orchestration/specs/ldap-sign-in.md` on the
-branch `pm/spec-driven` of `OpenDustpan/product` could not be read (the read was
-refused). This change is written from issue #2943, from PR #2968 and PR #2981, and
+Source of this change: the earlier spec text of the project manager, which is
+in the product repository, could not be read (the read was refused). This change is written from issue #2943, from PR #2968 and PR #2981, and
 from the code on `main`.

@@ -323,6 +323,33 @@ func (l *FakeLauncher) Post(ctx context.Context, tb testing.TB, path string, bod
 	return resp.Status, resp.Body
 }
 
+// Credentials asks the credentials path of the session for the job token of
+// a step and returns the status and the body of the answer. The request has
+// the session key proof, as the launcher sends it.
+func (l *FakeLauncher) Credentials(ctx context.Context, tb testing.TB, step string) (int, []byte) {
+	tb.Helper()
+
+	return l.Post(ctx, tb, protocol.PathSessionCredentials, protocol.CredentialsRequest{Step: step})
+}
+
+// JobToken asks for the job token of a step and fails the test when the
+// answer is not 200 with a token.
+func (l *FakeLauncher) JobToken(ctx context.Context, tb testing.TB, step string) protocol.CredentialsResponse {
+	tb.Helper()
+
+	status, body := l.Credentials(ctx, tb, step)
+	if status != http.StatusOK {
+		tb.Fatalf("credentials of step %q = %d %s, want 200", step, status, body)
+	}
+
+	var got protocol.CredentialsResponse
+	if err := json.Unmarshal(body, &got); err != nil || got.Token == "" {
+		tb.Fatalf("credentials of step %q = %s, want a job token: %v", step, body, err)
+	}
+
+	return got
+}
+
 // PutLog uploads one chunk of a log. The header and the proof carry the hash
 // of the chunk.
 func (l *FakeLauncher) PutLog(ctx context.Context, tb testing.TB, path string, chunk []byte) (int, []byte) {

@@ -12,6 +12,24 @@ import (
 // tokens refuses every action of it.
 var ErrJobNotFound = errors.New("identity: the job of a job token was not found")
 
+// ErrJobTokenOtherUnit reports a job token that asks for an action on an
+// object that is not the unit of its job. It wraps ErrDenied, so each adapter
+// answers 403. An adapter answers it with JobTokenOtherUnitText.
+var ErrJobTokenOtherUnit = fmt.Errorf("%w: the job token is for one unit only", ErrDenied)
+
+// JobTokenOtherUnitText is the answer text of ErrJobTokenOtherUnit. It names
+// no unit and no job.
+const JobTokenOtherUnitText = "job token is for one unit only. Read the job to see its unit."
+
+// ErrJobTokenEnded reports a job token that the server does not know, or whose
+// claim, job, expiry or starter ended. It wraps ErrUnauthenticated, so each
+// adapter answers 401. An adapter answers it with JobTokenEndedText.
+var ErrJobTokenEnded = fmt.Errorf("%w: the job token ended", ErrUnauthenticated)
+
+// JobTokenEndedText is the answer text of ErrJobTokenEnded. It names no
+// token, no job and no reason.
+const JobTokenEndedText = "job token ended. Read the job state."
+
 // errNoJobUnits reports a rule of job tokens without a port that reads the
 // unit of a job. The rule then refuses every action of a job token: a rule
 // that cannot read the unit of a job must not guess one.
@@ -67,6 +85,12 @@ type JobUnits interface {
 	UnitOfJob(ctx context.Context, jobID string) (JobUnit, error)
 }
 
+// UnitIDReader returns the stable ID of the unit obj, and false when no such
+// unit exists or obj is not a unit. It has the signature of access.Units.
+type UnitIDReader interface {
+	UnitID(ctx context.Context, obj Object) (string, bool, error)
+}
+
 // JobTokenRule decides every check of a job token, and asks Next for every
 // other principal. A job token acts on the unit of its job only, and only
 // when it is a consistent job token: a principal that carries a job ID with
@@ -91,9 +115,12 @@ type JobTokenRule struct {
 	// Units answers the unit of the job of a job token. A rule without a
 	// port refuses every job token: fail closed.
 	Units JobUnits
+	// UnitIDs resolves the stable ID of a unit that the route names without
+	// one. A rule without a port refuses such a unit: fail closed.
+	UnitIDs UnitIDReader
 }
 
-var _ Authorizer = JobTokenRule{Next: nil, Units: nil}
+var _ Authorizer = JobTokenRule{Next: nil, Units: nil, UnitIDs: nil}
 
 // Authorize implements Authorizer.
 func (r JobTokenRule) Authorize(ctx context.Context, p Principal, action Action, obj Object) error {
@@ -120,8 +147,17 @@ func (r JobTokenRule) Authorize(ctx context.Context, p Principal, action Action,
 		return r.Next.Authorize(ctx, withoutElevation(p), action, obj)
 	}
 
-	if !obj.IsUnit() || obj.UnitID() != unit.UnitID() {
-		return &DeniedError{Subject: p.Subject, Action: action, Object: obj}
+	// Resolve the stable ID of a unit that the route names without one. The
+	// read is a defense-in-depth layer: the route builds the unit object from
+	// the name and the comparison below does not rely on the route resolving
+	// it, so a route that forgets this call cannot widen a job token.
+	resolved, err := r.resolveUnitID(ctx, p, action, obj)
+	if err != nil {
+		return err
+	}
+
+	if !resolved.IsUnit() || resolved.UnitID() != unit.UnitID() {
+		return fmt.Errorf("%w: %w", ErrJobTokenOtherUnit, &DeniedError{Subject: p.Subject, Action: action, Object: obj})
 	}
 
 	return r.Next.Authorize(ctx, withoutElevation(p), action, obj)
@@ -233,4 +269,45 @@ func emptyScope() Scope {
 		Namespaces: nil, Collections: nil, Units: nil, Principals: nil,
 		every: everyObject{set: false, except: nil},
 	}
+}
+
+// resolveUnitID returns obj with its stable ID filled in when it is a unit
+// that the route names without one. It asks UnitIDs for the ID. A rule with
+// no port, or a unit that the port does not find, is refused. A port error
+// is returned as an error that is not a denial.
+//
+// The read is a defense-in-depth layer: the route builds the unit object from
+// the name and the comparison in Authorize does not rely on the route
+// resolving it, so a route that forgets this call cannot widen a job token.
+func (r JobTokenRule) resolveUnitID(
+	ctx context.Context, p Principal, action Action, obj Object,
+) (Object, error) {
+	// A unit that already carries a stable ID is not resolved again. Defense
+	// in depth: the port adapter and the access authorizer may resolve it too,
+	// and this check does not rely on them, so a unit whose ID was stripped
+	// cannot be widened by a caller that skips those layers.
+	if !obj.IsUnit() || obj.UnitID() != "" {
+		return obj, nil
+	}
+
+	// Defense in depth: the access authorizer and the route may resolve the
+	// stable ID too, and this check does not rely on them, so a rule with no
+	// port refuses such a unit even when another layer resolved it.
+	if r.UnitIDs == nil {
+		return obj, &DeniedError{Subject: p.Subject, Action: action, Object: obj}
+	}
+
+	id, found, err := r.UnitIDs.UnitID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read the stable ID of the unit %q: %w", obj, err)
+	}
+
+	// Defense in depth: the access authorizer and the route may report the unit
+	// as found too, and this check does not rely on them, so a unit that this
+	// port does not find is refused even when another layer found it.
+	if !found {
+		return obj, &DeniedError{Subject: p.Subject, Action: action, Object: obj}
+	}
+
+	return obj.WithUnitID(id), nil
 }

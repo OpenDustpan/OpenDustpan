@@ -2,6 +2,7 @@ package dustpan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,7 +16,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -136,24 +139,7 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 		claimer = cfg.jobClaimer(guard)
 	}
 
-	recorder := cfg.jobRecorder
-
-	if recorder == nil {
-		built, ok, buildErr := newDurableRecorder(&jobRecorderInputs{
-			jobs: cfg.jobStore, blobs: cfg.blobStore, updates: cfg.updateStore, namespaceStore: cfg.namespaceStore,
-			wrapper: cfg.secretWrapper, now: cfg.now, namespaces: svc.namespaces, logger: cfg.logger,
-			retention: cfg.jobRetention,
-		})
-		if buildErr != nil {
-			return nil, buildErr
-		}
-
-		if ok {
-			recorder = built
-		}
-	}
-
-	deps, err := planDepsOf(recorder, svc, cfg)
+	deps, err := sessionDepsOf(cfg, svc)
 	if err != nil {
 		return nil, err
 	}
@@ -161,17 +147,91 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 	handler, err := runnerapi.NewHandler(runnerapi.Config{
 		Namespaces: svc.namespaces, Pools: cfg.runners, Members: cfg.runners, Handoffs: cfg.runners,
 		Claimer: claimer, Sweeps: nil, Operations: cfg.durableStore,
-		Recorder: recorder, Jobs: cfg.jobStore, Authenticator: cfg.authenticator,
+		Recorder: deps.recorder, Jobs: cfg.jobStore, Authenticator: cfg.authenticator,
 		Authorizer: cfg.authorizer, Sessions: cfg.sessionCookies, Logger: cfg.logger, Release: release,
 		ServerURL: publicURL, Now: cfg.now, PollInterval: 0,
 		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,
-		Plans: deps.plans, Artifacts: deps.artifacts, OnHandoffRefusalSuppressed: nil,
+		Plans: deps.plans.plans, Artifacts: deps.plans.artifacts, OnHandoffRefusalSuppressed: nil,
+		JobTokens: deps.issuer.tokens, Starters: deps.issuer.starters,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runner api: %w", err)
 	}
 
 	return handler, nil
+}
+
+// sessionDeps are what the paths of a job session need: the recorder of the
+// steps and the logs, the plan parts, and the issuer of the job tokens. A part
+// that the server lacks is nil.
+type sessionDeps struct {
+	recorder job.CheckedRecorder
+	plans    planDeps
+	issuer   jobTokenIssuer
+}
+
+// sessionDepsOf returns the parts of the job session paths. The recorder is
+// the one of WithJobRecorder, else the one that the server builds itself.
+func sessionDepsOf(cfg *settings, svc services) (sessionDeps, error) {
+	var deps sessionDeps
+
+	deps.recorder = cfg.jobRecorder
+
+	if deps.recorder == nil {
+		built, ok, err := newDurableRecorder(&jobRecorderInputs{
+			jobs: cfg.jobStore, blobs: cfg.blobStore, updates: cfg.updateStore, namespaceStore: cfg.namespaceStore,
+			wrapper: cfg.secretWrapper, now: cfg.now, namespaces: svc.namespaces, logger: cfg.logger,
+			retention: cfg.jobRetention,
+		})
+		if err != nil {
+			return deps, err
+		}
+
+		if ok {
+			deps.recorder = built
+		}
+	}
+
+	var err error
+
+	if deps.plans, err = planDepsOf(deps.recorder, svc, cfg); err != nil {
+		return deps, err
+	}
+
+	if deps.issuer, err = jobTokenIssuerOf(cfg); err != nil {
+		return deps, err
+	}
+
+	return deps, nil
+}
+
+// jobTokenIssuer is what the credentials path of a job session needs: the
+// service that issues job tokens and the records of the principals that
+// start jobs. Both are nil when the server issues no job tokens.
+type jobTokenIssuer struct {
+	tokens   *jobtoken.Service
+	starters runnerapi.StarterRecords
+}
+
+// errNoStarterRecords is the error of a server that issues job tokens and
+// keeps no records of principals.
+var errNoStarterRecords = errors.New("the namespace store keeps no principals, which the job token issuer needs")
+
+// jobTokenIssuerOf returns the issuer of the credentials path. A server with
+// no job token store issues no job tokens, and the path answers not-found. A
+// server with a job token store and no records of principals does not start:
+// the issuer must name the record of the starter of each job.
+func jobTokenIssuerOf(cfg *settings) (jobTokenIssuer, error) {
+	if cfg.jobTokenStore == nil {
+		return jobTokenIssuer{tokens: nil, starters: nil}, nil
+	}
+
+	records, ok := cfg.namespaceStore.(principal.Store)
+	if !ok {
+		return jobTokenIssuer{tokens: nil, starters: nil}, fmt.Errorf("%w: %w", ErrMissingOption, errNoStarterRecords)
+	}
+
+	return jobTokenIssuer{tokens: jobtoken.NewService(cfg.jobTokenStore, cfg.now), starters: records}, nil
 }
 
 // newRunnerPoolsHandler builds the runner management API. It returns false

@@ -164,12 +164,12 @@ func (s *Service) authorizeRevoke(ctx context.Context, caller identity.Principal
 		return s.checkOwner(ctx, caller, t)
 	}
 
-	if scope == ScopeService && t.Kind != KindService && t.Kind != KindTrust {
+	if scope == ScopeService && t.Kind != KindService && !t.Kind.FromExchange() {
 		return fmt.Errorf("%w: revoke a %s token through /api/server/tokens/{id} or, as its owner, through "+
 			"/api/dustpan/v1/me/tokens/{id}", ErrWrongKind, t.Kind)
 	}
 
-	if t.Kind == KindService || t.Kind == KindTrust {
+	if t.Kind == KindService || t.Kind.FromExchange() {
 		return s.requireManageTokens(ctx, caller, t.PrincipalID, useMake)
 	}
 

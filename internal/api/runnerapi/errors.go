@@ -125,6 +125,14 @@ func classifyProtocol(err error) (int, protocol.Error) {
 		return mk(http.StatusConflict, protocol.ErrorPlanStale, job.ErrPlanStale)
 	}
 
+	// The starter of the job lost its grant or is disabled: the fixed text
+	// only, so the answer names no principal and no grant.
+	if errors.Is(err, errGrantLost) {
+		return http.StatusForbidden, protocol.Error{
+			Code: protocol.ErrorGrantLost, Message: grantLostMessage, Supported: "",
+		}
+	}
+
 	switch {
 	case errors.Is(err, runner.ErrBadProof), errors.Is(err, runner.ErrReplay):
 		return mk(http.StatusUnauthorized, protocol.ErrorBadProof, runner.ErrBadProof, runner.ErrReplay)

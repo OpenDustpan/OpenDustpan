@@ -85,6 +85,7 @@ func newStoredBlobRig(base string) storetest.StoredBlobBackupFactory {
 					Namespaces: st.Store,
 					Domain:     &jobDomain{s: st.Store},
 					WriteState: nil,
+					FailAudit:  nil,
 				},
 				Records: jobs, ItemKeys: st.Store, Blobs: live, Wrapper: in.Key,
 			}),

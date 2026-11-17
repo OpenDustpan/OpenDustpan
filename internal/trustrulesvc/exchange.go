@@ -40,7 +40,7 @@ var (
 // TokenIssuer makes the access token of an exchange. *accesstoken.Service
 // meets it.
 type TokenIssuer interface {
-	// NewTrustToken returns a new token of the kind trust, with its secret
+	// NewTrustToken returns a new token of the kind jwt-exchange, with its secret
 	// and its digest, for the principal principalID, made at the time at.
 	// It does not store the token. The lifetime is the exchange lifetime of
 	// the token policy.
@@ -708,6 +708,7 @@ func exchangeEntry(
 	e.Outcome = audit.OutcomeSuccess
 	e.Changes = []audit.Change{
 		{Key: "principal", Old: nil, New: r.PrincipalID, Layer: "", TakesEffect: ""},
+		{Key: "kind", Old: nil, New: string(t.Kind), Layer: "", TakesEffect: ""},
 		{Key: "issuer", Old: nil, New: r.Issuer, Layer: "", TakesEffect: ""},
 		{Key: "subject", Old: nil, New: clean(tok.Subject(), maxClaimRunes), Layer: "", TakesEffect: ""},
 		{Key: "jti", Old: nil, New: clean(tok.ID(), maxClaimRunes), Layer: "", TakesEffect: ""},

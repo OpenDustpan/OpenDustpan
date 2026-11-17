@@ -97,6 +97,16 @@ func Forbidden(err error) string {
 	}
 }
 
+// InvalidList returns the code of a 400 that err causes when a list holds a
+// bad entry or too many entries, or "" when err is not that cause.
+func InvalidList(err error) string {
+	if errors.Is(err, ipallow.ErrInvalidList) {
+		return IPAllowlistInvalidCIDR
+	}
+
+	return ""
+}
+
 // Internal returns the answer of ServerInternal. It cannot fail, so a caller
 // that has no better answer after New failed uses it.
 func Internal() Answer { return Answer{code: ServerInternal, args: nil} }

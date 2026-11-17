@@ -101,6 +101,7 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a stored chain from before the change passes the check", test: testChainCheckPassesOldChain},
 		{name: "a chain of entries without a block passes the check", test: testChainCheckPassesEntriesWithoutBlock},
 		{name: "a stored row with a partial origin is refused on read", test: testStoreRefusesPartialOriginRow},
+		{name: "a changed byte of the agent block is found", test: testAuditTamperedBlockFailsCheck},
 		{name: "a stale fence refuses a start entry", test: testChainStaleFence},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
@@ -740,6 +741,45 @@ func testChainCheckPassesOldChain(t *testing.T, ts ChainTestStore) {
 	}
 
 	checkValidChain(t, got)
+}
+
+// blockEntry returns an entry with an agent block.
+func blockEntry(t *testing.T, tl *timeline) audit.Entry {
+	t.Helper()
+
+	e := newEntry(tl.ns.Name, "admin", "req-block", tl.tick())
+	e.Channel = audit.ChannelAgent
+	e.Origin = mustOrigin(t, audit.OriginArgs{
+		Run: "run-1", Session: "run-1", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "",
+		DelegationID: "",
+	})
+
+	return e
+}
+
+// appendBlockEntry appends one entry with an agent block and answers its
+// sequence.
+func appendBlockEntry(t *testing.T, ts ChainTestStore, tl *timeline) int64 {
+	t.Helper()
+
+	return appendEntry(t, ts.Store, tl.ns.Fence(), blockEntry(t, tl)).Sequence
+}
+
+// testAuditTamperedBlockFailsCheck proves that one changed byte of the agent
+// block fails the chain check at the sequence of the entry.
+func testAuditTamperedBlockFailsCheck(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.append(1)
+	seq := appendBlockEntry(t, ts, tl)
+	tl.append(1)
+
+	wantValid(t, check(t, ts.Store, tl.ns.Name))
+
+	ts.TamperEntry(t, tl.ns.Name, seq, "agent_run", "run-2")
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), seq)
 }
 
 func testChainStaleFence(t *testing.T, ts ChainTestStore) {

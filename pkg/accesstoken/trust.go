@@ -14,7 +14,7 @@ type Issued struct {
 	Digest Digest
 }
 
-// NewTrustToken returns a new token of the kind KindTrust for the principal
+// NewTrustToken returns a new token of the kind KindJWTExchange for the principal
 // principalID, made at the time at, with its secret. It does not store the
 // token: the store of the trust rules keeps it with the audit entry of the
 // exchange in one transaction. The token lives the exchange lifetime of the
@@ -39,7 +39,7 @@ func (s *Service) NewTrustToken(
 	}
 
 	n, err := s.newToken(tokenSpec{
-		at: at, expiresAt: at.Add(lifetime), principalID: principalID, name: name, kind: KindTrust,
+		at: at, expiresAt: at.Add(lifetime), principalID: principalID, name: name, kind: KindJWTExchange,
 		createdBy: createdBy,
 	})
 	if err != nil {

@@ -141,6 +141,10 @@ func (h *Handler) checkSession(r *http.Request, rt Route, c *call) error {
 	}
 
 	if err != nil {
+		if rt.Path == protocol.PathSessionCredentials {
+			h.logCredentialsSessionRefusal(r.Context(), proof.Subject, err)
+		}
+
 		return fmt.Errorf("select job session: %w", err)
 	}
 

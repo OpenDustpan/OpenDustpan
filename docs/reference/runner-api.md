@@ -165,6 +165,7 @@ runner key cannot call them.
 | `PUT /session/plan/uploads/{part}` | one part of the plan, `plan-display` or `plan-apply` | 204 |
 | `POST /session/plan/commit` | the kind, the size and the SHA-256 of each part | 204 |
 | `GET /session/plan/parts/{part}` | none | the part, with its size and hash in the headers |
+| `POST /session/credentials` | the name of the step | the job token of the step and its expiry |
 | `POST /session/finish` | `succeeded` and a reason | 204 |
 
 The exchange has no proof of an existing key. The handoff token and the
@@ -236,8 +237,38 @@ size and the hash that the server stored, so the launcher checks the bytes
 that it received. A plan that a redaction deleted, and a part that the plan does
 not have, get `not-found`.
 
-The paths for the source, the credentials and the report of a sweep are not
-part of this API yet. A session of a sweep has no steps, no logs, no plan and no
+`POST /session/credentials` gives the job token of one step. The token is for
+the state of the unit of the job only. The launcher gives it to the tool
+through the credentials helper or the credentials file of the tool. The claim
+answer and the assignment hold no job token. The session needs a live claim,
+and the claim must be of a job phase and not of a sweep. The server makes the
+token for the starter of the job, so the starter must still exist, must not be
+disabled, and must still hold the action that starts the job on its unit. The
+answer is `Grant lost` with the code `grant-lost` and status 403 when the
+starter does not. The name of the step must be a step of the phase. A name with
+a character that a step name does not allow gets `invalid`.
+
+The token ends at the earlier of two times: the end of the claim, and the start
+of the step plus its timeout plus a grace period. It also ends when the job
+ends. A new request for the same step gives a new token. The server shows the
+secret in this answer only. It writes one audit entry for each token. The entry
+names the job, the step and the expiry, and holds no secret. A refusal after
+the proof check writes an audit entry too, also for a step name that is not
+valid. The entry shows a fixed placeholder in place of that name. A failure of
+the server, for example a store that does not answer, writes an audit entry
+with the outcome `failure` and the reason `server-error`, and the answer is 5xx.
+When that entry cannot be written, the server writes a log record and still
+answers 5xx. A refusal before the proof check, a
+claim that is not live (`claim-lost`) or a runner that was retired (`retired`),
+writes one log record and no audit entry.
+
+A route of the tool, for example the state of another unit, answers 403 with the
+text `job token is for one unit only. Read the job to see its unit.` A job token
+that is not known, or that ended, gets 401 with the text `job token ended. Read
+the job state.` A job token cannot call the REST API.
+
+The paths for the source and the report of a sweep are not part of this API
+yet. A session of a sweep has no steps, no logs, no plan, no credentials and no
 finish.
 
 ## Errors of the protocol
@@ -252,6 +283,7 @@ Each answer with a status of 400 or more has the body
 | `key-expired` | 401 | The runner must join again. |
 | `token-used`, `token-expired` | 401 | The join token or the handoff token cannot be used. |
 | `retired` | 403 | An administrator retired the runner. |
+| `grant-lost` | 403 | The starter of the job is disabled, or no longer holds the action that starts the job. |
 | `not-found` | 404 | The token, the pool or the claim is not known. |
 | `claim-lost` | 409 | The claim is not live. The runner stops the work. |
 | `conflict` | 409 | The request conflicts with the state of the server. |

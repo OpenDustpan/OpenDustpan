@@ -15,3 +15,8 @@ entry of the issue SHALL show the kind.
 - **GIVEN** the token list of a service principal that got tokens from the JWT exchange
 - **WHEN** a site administrator lists the tokens of the principal
 - **THEN** each of those tokens shows the kind `jwt-exchange`, and no token shows the kind `trust`
+
+#### Scenario: Stored token of an unknown kind
+- **GIVEN** a stored token of a kind that this version does not know, for example the old kind `trust`
+- **WHEN** a request presents that token as a bearer
+- **THEN** the server answers 401 and the request does not sign in

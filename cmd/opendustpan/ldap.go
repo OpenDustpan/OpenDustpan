@@ -54,8 +54,12 @@ type ldapFlags struct {
 	groupMemberAttribute   string
 	groupMemberOfAttribute string
 	groupNameAttribute     string
+	subjectFailureLimit    int64
 	startTLS               bool
 	noAutoCreate           bool
+	// subjectFailureLimitSet reports that a flag, variable or file sets the
+	// limit, so that an LDAP setting with no URL fails the start.
+	subjectFailureLimitSet bool
 }
 
 // register binds the LDAP flags of fs to l.
@@ -91,6 +95,7 @@ func (l *ldapFlags) register(fs *flag.FlagSet) {
 
 	cli.ByFlag("ldap-start-tls").Bool(fs, &l.startTLS)
 	cli.ByFlag("ldap-no-auto-create").Bool(fs, &l.noAutoCreate)
+	cli.ByFlag(ldapSubjectFailureLimitFlag).Int64(fs, &l.subjectFailureLimit)
 }
 
 // partial reports whether l sets a setting of a provider with no URL. The
@@ -106,7 +111,7 @@ func (l *ldapFlags) partial() bool {
 		}
 	}
 
-	return l.startTLS || l.noAutoCreate
+	return l.startTLS || l.noAutoCreate || l.subjectFailureLimitSet
 }
 
 // ldapOptions returns the LDAP sign-in option of the serve flags: one provider
@@ -130,12 +135,19 @@ func (f *serveFlags) ldapOptions(
 
 	l := &f.ldap
 
+	source, limitSet := ldapSubjectFailureLimitSource(f.resolved)
+	l.subjectFailureLimitSet = limitSet
+
 	if strings.TrimSpace(l.url) == "" {
 		if l.partial() {
 			return nil, fmt.Errorf("%w: unset the other --ldap-* settings, or set the URL", errNoLDAPURL)
 		}
 
 		return nil, nil
+	}
+
+	if limitErr := checkLDAPSubjectFailureLimit(l.subjectFailureLimit); limitErr != nil {
+		return nil, limitErr
 	}
 
 	password, err := secretFrom(getenv, ldapBindEnvVar, ldapBindFileEnvVar, errNoLDAPPassword)
@@ -149,7 +161,7 @@ func (f *serveFlags) ldapOptions(
 		}
 	}
 
-	p, err := l.provider(string(password))
+	p, err := l.provider(string(password), source)
 	if err != nil {
 		return nil, err
 	}
@@ -157,8 +169,9 @@ func (f *serveFlags) ldapOptions(
 	return []dustpan.Option{dustpan.WithLDAPProvider(p)}, nil
 }
 
-// provider returns the provider of l with the password of the service account.
-func (l *ldapFlags) provider(password string) (dustpan.LDAPProvider, error) {
+// provider returns the provider of l with the password of the service account
+// and the layer that sets the lockout limit.
+func (l *ldapFlags) provider(password, limitSource string) (dustpan.LDAPProvider, error) {
 	var (
 		none  dustpan.LDAPProvider
 		mask  uint64
@@ -188,30 +201,32 @@ func (l *ldapFlags) provider(password string) (dustpan.LDAPProvider, error) {
 	}
 
 	return dustpan.LDAPProvider{
-		RootCAs:                roots,
-		AllowedRanges:          ranges,
-		ID:                     l.providerID,
-		DisplayName:            l.displayName,
-		URL:                    strings.TrimSpace(l.url),
-		BindDN:                 l.bindDN,
-		BindPassword:           session.NewPassword(password),
-		BaseDN:                 l.baseDN,
-		UserFilter:             l.userFilter,
-		UserNameAttribute:      l.userNameAttribute,
-		EmailAttribute:         l.emailAttribute,
-		NameAttribute:          l.nameAttribute,
-		Subject:                l.subject,
-		DisabledAttribute:      l.disabledAttribute,
-		Groups:                 l.groups,
-		GroupBaseDN:            l.groupBaseDN,
-		GroupFilter:            l.groupFilter,
-		GroupMemberAttribute:   l.groupMemberAttribute,
-		GroupMemberOfAttribute: l.groupMemberOfAttribute,
-		GroupNameAttribute:     l.groupNameAttribute,
-		DisabledValues:         splitList(l.disabledValues),
-		DisabledMask:           mask,
-		StartTLS:               l.startTLS,
-		AutoCreate:             !l.noAutoCreate,
+		RootCAs:                   roots,
+		AllowedRanges:             ranges,
+		ID:                        l.providerID,
+		DisplayName:               l.displayName,
+		URL:                       strings.TrimSpace(l.url),
+		BindDN:                    l.bindDN,
+		BindPassword:              session.NewPassword(password),
+		BaseDN:                    l.baseDN,
+		UserFilter:                l.userFilter,
+		UserNameAttribute:         l.userNameAttribute,
+		EmailAttribute:            l.emailAttribute,
+		NameAttribute:             l.nameAttribute,
+		Subject:                   l.subject,
+		DisabledAttribute:         l.disabledAttribute,
+		Groups:                    l.groups,
+		GroupBaseDN:               l.groupBaseDN,
+		GroupFilter:               l.groupFilter,
+		GroupMemberAttribute:      l.groupMemberAttribute,
+		GroupMemberOfAttribute:    l.groupMemberOfAttribute,
+		GroupNameAttribute:        l.groupNameAttribute,
+		DisabledValues:            splitList(l.disabledValues),
+		DisabledMask:              mask,
+		StartTLS:                  l.startTLS,
+		AutoCreate:                !l.noAutoCreate,
+		SubjectFailureLimit:       int(l.subjectFailureLimit),
+		SubjectFailureLimitSource: limitSource,
 	}, nil
 }
 
