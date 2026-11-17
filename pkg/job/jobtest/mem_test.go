@@ -734,7 +734,8 @@ func (m *memDB) lookup(id job.ID) (*job.Job, bool) {
 }
 
 // admit returns the error of a create that the store refuses before it looks
-// at the key: a stale fence, entries of another namespace, and a first state
+// at the key: a stale fence, entries of another namespace, an entry that
+// fails validation, and a first state
 // other than queued, or awaiting-approval with no dispatch.
 func (m *memDB) admit(j *job.Job, d *durable.StartRequest, fence namespace.Fence, e []audit.Entry) error {
 	if err := m.checkFence(fence); err != nil {
@@ -743,6 +744,12 @@ func (m *memDB) admit(j *job.Job, d *durable.StartRequest, fence namespace.Fence
 
 	if err := checkNamespace(j.Spec.Unit.Namespace(), fence, e); err != nil {
 		return err
+	}
+
+	for i := range e {
+		if err := e[i].Validate(); err != nil {
+			return fmt.Errorf("audit entry %d: %w", i, err)
+		}
 	}
 
 	queued := j.State == job.StateQueued

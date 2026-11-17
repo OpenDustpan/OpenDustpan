@@ -18,8 +18,9 @@ func TestApprovalEntryAgentInBlock(t *testing.T) {
 	r := approveRig(t, openPolicy())
 	r.seed(nil)
 
-	if _, err := r.svc.Approve(t.Context(), agentActor("carol", "dusty"), approveID, job.VerdictReject,
-		noBinding(), "stopped"); err != nil {
+	_, err := r.svc.Approve(t.Context(), agentActor("carol", "dusty"), approveID, job.VerdictReject,
+		noBinding(), "stopped")
+	if err != nil {
 		t.Fatalf("Approve = %v", err)
 	}
 
@@ -79,9 +80,49 @@ func TestStartJobMalformedAgentRefRefused(t *testing.T) {
 	}
 }
 
-// TestStartJobBlockWriteFailureRollsBack proves, at the port adapter layer,
-// that the job and the entry with its agent block go to the store in one
-// create, and that a failed write fails the start and leaves no job.
+// TestApproveMalformedAgentRefRefused proves, at the service layer, that a
+// verdict with an agent ref that the audit block cannot hold is refused before
+// any Apply, and that no entry is written.
+func TestApproveMalformedAgentRefRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		ref  string
+	}{
+		{"line break", "run-1\nforged"},
+		{"bidirectional override", "run-1" + string(rune(0x202e)) + "forged"},
+		{"zero width space", "run-1" + string(rune(0x200b)) + "forged"},
+		{"invalid UTF-8", "run-\xff\xfe"},
+		{"too long", strings.Repeat("a", audit.MaxAgentFieldLen+1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := approveRig(t, openPolicy())
+			r.seed(nil)
+
+			a := actorOf("carol")
+			a.Agent = job.AgentRef(tc.ref)
+
+			_, err := r.svc.Approve(t.Context(), a, approveID, job.VerdictReject,
+				noBinding(), "stopped")
+			if !errors.Is(err, audit.ErrInvalidOrigin) {
+				t.Fatalf("Approve = %v, want %v", err, audit.ErrInvalidOrigin)
+			}
+
+			if len(r.store.applies) != 0 || len(r.store.applyEntries) != 0 {
+				t.Fatalf("applies = %d, entries = %v, want none", len(r.store.applies), r.store.applyEntries)
+			}
+		})
+	}
+}
+
+// TestStartJobBlockWriteFailureRollsBack proves, at the service layer, that
+// the job and the entry with its agent block go to the store in one create,
+// and that a failed write fails the start and leaves no job. The adapter
+// rollback is in the job store conformance suite (jobtest, the case for a
+// refused block entry).
 func TestStartJobBlockWriteFailureRollsBack(t *testing.T) {
 	t.Parallel()
 

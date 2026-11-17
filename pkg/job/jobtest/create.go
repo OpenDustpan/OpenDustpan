@@ -242,6 +242,47 @@ func testCreateUnitBusy(t *testing.T, h Harness) {
 	}
 }
 
+// testCreateBlockWriteFails proves that a create whose audit entry carries an
+// agent block, and whose entry is refused, stores no job and no entry.
+func testCreateBlockWriteFails(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	origin, err := audit.NewOrigin(audit.OriginArgs{
+		Run: "run-1", Session: "session-1", Tool: "", ArgsDigest: "", BreakGlass: false,
+		SecretStage: "", DelegationID: "",
+	})
+	if err != nil {
+		t.Fatalf("NewOrigin = %v", err)
+	}
+
+	bad := entry(f.unit, job.ActionUnitRunApply)
+	bad.Origin = origin
+	bad.Subject = ""
+
+	before, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
+	if err != nil {
+		t.Fatalf("AuditEntries = %v", err)
+	}
+
+	j := newJob(f.unit, job.OperationRefresh, "")
+
+	_, _, err = h.Jobs.Create(t.Context(), *j, nil, f.fence, []audit.Entry{bad})
+	if !errors.Is(err, audit.ErrInvalidEntry) {
+		t.Fatalf("Create with a refused block entry = %v, want audit.ErrInvalidEntry", err)
+	}
+
+	if _, err = h.Jobs.Get(t.Context(), j.ID); !errors.Is(err, job.ErrNotFound) {
+		t.Fatalf("Get after a failed Create = %v, want ErrNotFound", err)
+	}
+
+	after, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("audit entries after a failed Create = %d, %v; want %d", len(after), err, len(before))
+	}
+}
+
 func testCreateFrozen(t *testing.T, h Harness) {
 	t.Helper()
 

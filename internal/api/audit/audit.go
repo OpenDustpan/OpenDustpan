@@ -222,8 +222,7 @@ func toAuditEntry(e audit.Entry) auditEntry {
 		Agent:         nil,
 	}
 
-	// The block wins over the legacy agent change key of an old start entry.
-	if o := e.AgentOrigin(); o != nil {
+	if o := e.Origin; o != nil {
 		entry.Agent = &auditAgentBlock{
 			AgentRun:     o.Run(),
 			AgentSession: o.Session(),
@@ -505,11 +504,6 @@ func requestErrors(err error) (problem.Problem, bool) {
 		return problem.New(http.StatusInternalServerError, errcode.AuditExportNotRecorded, err.Error()), true
 	case errors.Is(err, errNoEntryReader):
 		return problem.New(http.StatusNotImplemented, errcode.AuditEntryReadUnavailable, err.Error()), true
-	case errors.Is(err, audit.ErrInvalidOrigin):
-		// The store refuses a row whose agent block it cannot read. The
-		// answer holds a fixed text, never the text of the row.
-		return problem.New(http.StatusInternalServerError, errcode.AuditEntryReadUnavailable,
-			"the server cannot read an audit entry: run the chain check again with GET /api/audit/check"), true
 	default:
 		return problem.Pass()
 	}

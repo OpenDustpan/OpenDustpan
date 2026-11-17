@@ -141,6 +141,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a key with another spec conflicts", testCreateKeyConflict},
 		{"create with a dispatch starts the durable operation", testCreateDispatch},
 		{"create with a dispatch obeys the one-change rule", testCreateUnitBusy},
+		{"a create whose block entry is refused stores no job and no entry", testCreateBlockWriteFails},
 		{"after ErrUnitBusy, a create with no dispatch waits with unit-busy", testCreateWaits},
 		{"create with a dispatch obeys a freeze", testCreateFrozen},
 		{"create with a dispatch obeys a manual lock, and the job waits locked", testCreateLocked},
