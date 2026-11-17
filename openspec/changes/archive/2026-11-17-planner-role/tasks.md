@@ -1,6 +1,6 @@
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+- [x] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
 
 ## 1. Failing tests
 
@@ -11,10 +11,10 @@
 
 ## 2. Side effects (computed from main)
 
-- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
+- [x] 2.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request
 
 ## 3. Definition of done
 
 - [x] 3.1 Run the e2e planner step with the real Pulumi CLI and OpenTofu, a personal access token, route /api/stacks/{}/{}/{}/state/{}/reveal and the masked state route GET /api/v2/state-versions/{state_version_id}/resources. Check: make e2e planner step passes.
 - [x] 3.2 Update docs/guides/planner-role.md and run its commands. Check: Each command runs as written. `make docs-lint` passes on each edited guide.
-- [x] 3.3 Run the full check. Check: `make check` reports zero findings.
+- [x] 3.3 Run the full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

@@ -50,6 +50,11 @@ type Harness struct {
 	// harness with no real store of a tool leaves it nil, and the suite runs
 	// no case that needs a state version.
 	WriteState StateWriter
+	// FailAudit makes each later append to the audit log of the database
+	// fail inside the transaction of the append, after the write of the job,
+	// until the test ends. A harness that cannot make the append fail leaves
+	// it nil, and the suite skips the case that needs it.
+	FailAudit func(t *testing.T)
 }
 
 // StateWriter writes the state of a unit through the store of its tool. The
@@ -141,6 +146,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a key with another spec conflicts", testCreateKeyConflict},
 		{"create with a dispatch starts the durable operation", testCreateDispatch},
 		{"create with a dispatch obeys the one-change rule", testCreateUnitBusy},
+		{"a create with an invalid entry stores no job and no entry", testCreateInvalidEntryStoresNothing},
+		{"a create whose audit append fails rolls the job back", testCreateAuditAppendFailsRollsBack},
 		{"after ErrUnitBusy, a create with no dispatch waits with unit-busy", testCreateWaits},
 		{"create with a dispatch obeys a freeze", testCreateFrozen},
 		{"create with a dispatch obeys a manual lock, and the job waits locked", testCreateLocked},

@@ -126,8 +126,8 @@ func (h *Handler) listBackups(w http.ResponseWriter, r *http.Request, _ identity
 	}
 
 	summaries := make([]backupSummaryJSON, 0, len(records))
-	for _, record := range records {
-		summaries = append(summaries, summarizeBackup(record))
+	for i := range records {
+		summaries = append(summaries, summarizeBackup(records[i]))
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, listBackupsResponse{Backups: summaries})

@@ -4333,3 +4333,15 @@ decisions:
   accepted_artifact: "docs/adr/0385-a-fresh-step-is-opt-in.md"
   evidence:
   - "docs/adr/0385-a-fresh-step-is-opt-in.md"
+- id: "adr-0386"
+  title: "ADR 386: The server makes the job token when the launcher asks for step credentials"
+  decision: "1. **The server makes the job token at the launcher request (owner, 2026-11-17).** The launcher asks for step credentials through its job session. The server makes the job token at that request. The claim of a runner phase makes no job token. The claim answer holds none.\n2. **The expiry is the earlier of two times (owner, 2026-11-17).** The first time is the end of the claim. The second time is the end of the step timeout plus the grace period. The token expires at the earlier time.\n3. **The runner never holds a credential of a step.** ADR 133 decision 13 stays. The claim answer, the handoff token and the runner state hold no job token.\n4. **The rest of ADR 100 decision 20 stays.** The token belongs to the principal that started the job. It acts only on the unit of the job. It carries the job-ID claim. It works only while the claim is live. ADR 213 and ADR 304 change the principal and the reach of the token. They do not change the time of its making.\n5. **Each request leaves a record.** The server writes one audit entry for each launcher request. The entry names the job, the step and the expiry.\n\nLater changes, from the status line of ADR 386: Decided by the project owner (owner, 2026-11-17). The owner chose the timing of ADR 133 decision 12 over the timing of ADR 100 decision 20."
+  reason: "ADR 100 decision 20 says that the server makes a job token at the claim of a runner phase. ADR 133 decision 12 says that the launcher asks for the credentials of each step through its session. ADR 133 decision 13 says that the runner never holds a credential of a step."
+  scope:
+  - "docs/adr/0386-the-job-token-is-made-when-the-launcher-asks.md"
+  currency: "active"
+  source: "adr"
+  accepted_at: "2026-11-17"
+  accepted_artifact: "docs/adr/0386-the-job-token-is-made-when-the-launcher-asks.md"
+  evidence:
+  - "docs/adr/0386-the-job-token-is-made-when-the-launcher-asks.md"

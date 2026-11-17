@@ -263,6 +263,7 @@ func failedSeed() backup.Record {
 		Target:    "dir:test",
 		Error:     "server stopped during backup",
 		State:     backup.StateFailed,
+		Attempt:   "",
 	}
 }
 
@@ -914,9 +915,9 @@ func newRouteTestRestores(
 func seedRouteTestRows(t *testing.T, st *sqlite.Store, seeds []backup.Record) {
 	t.Helper()
 
-	for _, seed := range seeds {
-		if seedErr := st.CreateBackup(t.Context(), seed); seedErr != nil {
-			t.Fatalf("seed backup %s: %v", seed.ID, seedErr)
+	for i := range seeds {
+		if seedErr := st.CreateBackup(t.Context(), seeds[i]); seedErr != nil {
+			t.Fatalf("seed backup %s: %v", seeds[i].ID, seedErr)
 		}
 	}
 
@@ -1738,7 +1739,7 @@ func (stubBackupRegistry) CreateBackup(_ context.Context, _ backup.Record) error
 
 //nolint:revive // argument-limit: the stub has the signature of the port.
 func (stubBackupRegistry) FinishBackup(
-	_ context.Context, _ durable.StepFence, _ backup.ID, _ backup.State, _ string, _ time.Time,
+	_ context.Context, _ durable.StepFence, _ backup.ID, _ backup.State, _ string, _ time.Time, _ string,
 ) (backup.Record, error) {
 	return backup.Record{
 		StartedAt: time.Time{},
@@ -1747,7 +1748,14 @@ func (stubBackupRegistry) FinishBackup(
 		Target:    "",
 		Error:     "",
 		State:     "",
+		Attempt:   "",
 	}, nil
+}
+
+func (stubBackupRegistry) RecordBackupAttempt(
+	_ context.Context, _ durable.StepFence, _ backup.ID, _ string,
+) error {
+	return nil
 }
 
 func (stubBackupRegistry) GetBackup(_ context.Context, _ backup.ID) (backup.Record, error) {

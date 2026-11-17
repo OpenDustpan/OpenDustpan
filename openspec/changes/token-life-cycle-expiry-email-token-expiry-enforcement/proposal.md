@@ -29,7 +29,7 @@ Evidence for the claims above:
 - The pack lists a test of the token lifetime in main. Proof: TestLifetime at pkg/accesstoken/accesstoken_test.go:311.
 - Main runs the inactivity disable on a schedule tick. Proof: TestJobSchedulesRunInactivityDisableOncePerTick at pkg/dustpan/schedules_internal_test.go:341.
 - Main refuses a disabled principal in the token check. Proof: TestCheckActiveRefusesADisabledPrincipal at pkg/accesstoken/accesstoken_test.go:554.
-- The caller token list takes a status filter that keeps ended tokens. Proof: Review finding of the owner: internal/api/server/tokens.go:717 parses status with accesstoken.ParseFilter, and accesstoken.FilterEnded keeps revoked and expired tokens at pkg/accesstoken/accesstoken.go:167. The guide docs/guides/access-tokens.md does not state the filter.
+- The own token list does not take a status filter on main: `ownTokenPageRequest` at internal/api/server/tokens.go:819 accepts only `pageSize` and `pageToken` and answers 400 for any other name, and docs/guides/access-tokens.md:60 says so. The administrator lists parse `status` with accesstoken.ParseFilter at tokens.go:900, and accesstoken.FilterEnded keeps revoked and expired tokens (pkg/accesstoken/accesstoken.go:175). A Developer has no administrator right, so the step 3 path needs the filter on the own list. The PM decided: the change adds it (benchmark: the guide of the administrator lists already names the three values).
 - Main looks a token up by the hash of the secret and compares the digest in constant time before the ended check. Proof: Review finding PM.tim: pkg/accesstoken/service.go:637-642 (Service.AuthenticateToken: digestOfRaw, then GetTokenByDigest) and pkg/accesstoken/accesstoken.go:301 (Digest.Equal with crypto/subtle.ConstantTimeCompare); StatusAt runs after that lookup.
 - Main audits every refused sign-in on the request path. Proof: Review finding PM.tim: internal/signinsvc/refuse.go:41, Service.refuse writes an entry for each refusal.
 
@@ -41,7 +41,8 @@ Evidence for the claims above:
 - Write an audit entry on the request path for each refusal, with the real reason and the token ID, and with the reason unknown token and no token ID for an unknown token
 - Show the token limits in the settings resource with their source: maximum lifetime, inactivity period and rotation overlap
 - Keep the rotation overlap at the value of main
-- Document the status=ended filter in docs/guides/access-tokens.md
+- Add the query name `status` (active, expiring or ended; every token when absent) to GET /api/dustpan/v1/me/tokens, with the same values and the same parser as the administrator lists. The route keeps `pageSize` and `pageToken`, and still answers 400 for `cursor`, `limit` and `principal`
+- Document the status filter in the own-list table of docs/guides/access-tokens.md and drop `status` from the sentence that lists the refused names
 
 Out of scope:
 

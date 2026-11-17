@@ -533,12 +533,7 @@ func sqliteControlTables() []sqliteBackupTable {
 		{
 			table: backup.TableBackups,
 			columns: []string{
-				"id",
-				backupColState,
-				backupColStartedAtMs,
-				backupColEndedAtMs,
-				backupColTarget,
-				"error",
+				"id", backupColState, backupColStartedAtMs, backupColEndedAtMs, backupColTarget, "error", "attempt",
 			},
 		},
 		{

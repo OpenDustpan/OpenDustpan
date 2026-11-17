@@ -55,8 +55,9 @@ An S3-compatible target holds each object with a limit of 5 GiB. Each table file
 
 A backup is a set of objects under the target:
 
-- `backups/<id>/manifest.json` describes the backup. It is the last object that the server writes. A backup without it is not complete.
-- `backups/<id>/sql/<table>.jsonl.gz` holds the SQL data. There is one file for each table of the installation. Each file is gzip-compressed JSON Lines: one row for each line, with one member for each column.
+- `backups/<id>/<attempt>/manifest.json` describes the backup. The write step writes it last of its run. A backup without a manifest in its attempt directory is not complete.
+- `backups/<id>/<attempt>/sql/<table>.jsonl.gz` holds the SQL data. There is one file for each table of the installation. Each file is gzip-compressed JSON Lines: one row for each line, with one member for each column.
+- `backups/<id>/live.json` names the live attempt. The finish step writes it after Check and before the fenced commit. A read, a check and a restore use only the directory that it names. A backup with no `live.json` is not complete.
 - `blobs/<key>` holds each blob that the SQL data names. Examples are OpenTofu state versions and Pulumi checkpoints. Other examples are job plan parts, job log chunks and registry release files.
 
 The manifest records the backup format (`format`: 3) and the SQL format (`sqlFormat`: `portable`). It records the database that wrote the backup (`dialect`) and the schema version. It also records the primary installations and the wrapper IDs. It records the kind of the installation that wrote the backup (`installationKind`: `dev` or `production`). The server reads the kind from its own database. A backup of another format number is not valid, and neither is a manifest with no kind or with an unknown kind.

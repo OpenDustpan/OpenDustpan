@@ -79,3 +79,15 @@ When a holder rotates an access token, the server SHALL keep the old token valid
 #### Scenario: old token after overlap
 - **WHEN** a client sends the old token after its end time
 - **THEN** the server answers 401
+
+### Requirement: own-list-status-filter
+
+The own token list, GET /api/dustpan/v1/me/tokens, SHALL take the query name `status` with the value active, expiring or ended, and SHALL answer 400 for any other value.
+
+#### Scenario: ended tokens of the caller
+- **WHEN** a Developer sends GET /api/dustpan/v1/me/tokens?status=ended
+- **THEN** the page holds only the revoked and expired tokens of that person
+
+#### Scenario: another value
+- **WHEN** a Developer sends status=gone
+- **THEN** the server answers 400 and names the three values

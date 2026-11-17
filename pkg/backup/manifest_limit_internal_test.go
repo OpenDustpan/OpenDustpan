@@ -77,7 +77,7 @@ func TestReadManifestLimitBoundsTheRead(t *testing.T) {
 	}
 }
 
-// checkManifestReadLimit runs one case against readManifestLimit and checks
+// checkManifestReadLimit runs one case against readManifestAt and checks
 // the answer and the bytes that the read took.
 func checkManifestReadLimit(t *testing.T, tc manifestReadCase) {
 	t.Helper()
@@ -85,14 +85,19 @@ func checkManifestReadLimit(t *testing.T, tc manifestReadCase) {
 	reader := bytes.NewReader(tc.object)
 	target := &limitStore{mapStore: newMapStore(false, nil), reader: reader}
 
-	manifest, err := readManifestLimit(t.Context(), target, preBackupID, tc.limit)
+	prefix, prefixErr := newAttemptPrefix(preBackupID, preAttempt)
+	if prefixErr != nil {
+		t.Fatalf("newAttemptPrefix: %v", prefixErr)
+	}
+
+	manifest, err := readManifestAt(t.Context(), target, prefix, tc.limit)
 
 	if tc.wantErr && !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("readManifestLimit = %v, want ErrCorrupt", err)
+		t.Fatalf("readManifestAt = %v, want ErrCorrupt", err)
 	}
 
 	if !tc.wantErr && err != nil {
-		t.Fatalf("readManifestLimit = %v, want nil", err)
+		t.Fatalf("readManifestAt = %v, want nil", err)
 	}
 
 	if !tc.wantErr && manifest.ID != preBackupID {
