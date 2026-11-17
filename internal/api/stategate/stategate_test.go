@@ -531,7 +531,7 @@ func TestDetailIsOneLine(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := stategate.Detail(tc.refused, "gate.denied\n")
+			got := stategate.Detail(tc.refused, "gate.denied\n", "acme")
 			if strings.ContainsAny(got, "\r\n") {
 				t.Fatalf("Detail = %q, want one line", got)
 			}

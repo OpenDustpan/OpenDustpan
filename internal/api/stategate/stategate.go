@@ -496,13 +496,15 @@ func refuse(ctx context.Context, log *slog.Logger, w Write, record Recorder, ref
 		record(ctx, "state.write refused with "+code)
 	}
 
-	return Outcome{Allowed: false, Unavailable: nil, Refusal: refused, Code: code, Detail: Detail(refused, code)}
+	return Outcome{Allowed: false, Unavailable: nil, Refusal: refused, Code: code,
+		Detail: Detail(refused, code, w.Unit.Namespace().String())}
 }
 
 // Detail returns the text of a refusal on one line: the gate messages, the
-// error code and the ID of the decision record. Each CR and LF becomes a
-// space, so that a message cannot add a line to a plain-text body or a log.
-func Detail(refused *gate.RefusalError, code string) string {
+// error code, the ID of the decision record and the read route of the
+// record, when the write names a namespace. Each CR and LF becomes a space,
+// so that a message cannot add a line to a plain-text body or a log.
+func Detail(refused *gate.RefusalError, code string, ns string) string {
 	var b strings.Builder
 
 	for _, m := range refused.Messages {
@@ -514,6 +516,10 @@ func Detail(refused *gate.RefusalError, code string) string {
 
 	if refused.Record != "" {
 		b.WriteString(", decision record " + oneLine(string(refused.Record)))
+		if trimmed := oneLine(ns); trimmed != "" {
+			b.WriteString("; to read the record, send GET /api/dustpan/v1/namespaces/" + trimmed +
+				"/decision-records/" + oneLine(string(refused.Record)))
+		}
 	}
 
 	b.WriteString(")")
