@@ -139,7 +139,9 @@ func currentOperation(j *job.Job) durable.ID {
 // every action of the principal to that unit. It returns an error that wraps
 // identity.ErrUnauthenticated for every refusal: a value that is not a
 // secret, an unknown record, a record whose digest differs, a claim or job
-// that is not live, or a starter that is deleted or disabled. On every
+// that is not live, or a starter that is deleted or disabled. An unknown
+// record and a claim, job, expiry or starter that ended wrap
+// identity.ErrJobTokenEnded, which wraps identity.ErrUnauthenticated. On every
 // refusal and every error it returns the zero principal and the zero object.
 // The error holds no token text, digest, job ID, unit name or namespace name.
 // A store error other than ErrNotFound comes back wrapped, so the caller
@@ -158,7 +160,7 @@ func (s *Service) Authenticate(
 	m, err := s.store.GetByDigest(ctx, d)
 	if errors.Is(err, ErrNotFound) {
 		return identity.Principal{}, identity.Object{}, fmt.Errorf(
-			"%w: job token not found", identity.ErrUnauthenticated,
+			"%w: job token not found", identity.ErrJobTokenEnded,
 		)
 	}
 
@@ -214,14 +216,16 @@ func (s *Service) Authenticate(
 	return p, m.Token.Unit, nil
 }
 
-// live returns an error that wraps identity.ErrUnauthenticated when the claim
-// or the job of m is not live at the time now.
+// live returns an error that wraps identity.ErrJobTokenEnded when the claim,
+// the job, the expiry or the starter of m is not live at the time now, and an
+// error that wraps identity.ErrUnauthenticated only when the record and the
+// records that the store read do not match.
 func live(m *Match, now time.Time) error {
 	// Check 1: the durable operation of the claim runs. Defense in depth:
 	// Store.Issue checks it at the issue; this check stays so that an
 	// operation that stops later cannot authenticate.
 	if m.Claim.OperationState != durable.StateRunning {
-		return fmt.Errorf("%w: the operation does not run", identity.ErrUnauthenticated)
+		return fmt.Errorf("%w: the operation does not run", identity.ErrJobTokenEnded)
 	}
 
 	// Check 2: the claim token of the operation is the claim token of the
@@ -229,7 +233,7 @@ func live(m *Match, now time.Time) error {
 	// Defense in depth: Store.Issue checks it at the issue; this check stays
 	// so that a takeover after the issue cannot authenticate.
 	if m.Claim.OperationClaimToken != m.Token.ClaimToken {
-		return fmt.Errorf("%w: the claim was taken over", identity.ErrUnauthenticated)
+		return fmt.Errorf("%w: the claim was taken over", identity.ErrJobTokenEnded)
 	}
 
 	// Check 3: the lease of the claim ends after now. A lease that ends at
@@ -237,14 +241,14 @@ func live(m *Match, now time.Time) error {
 	// it at the issue; this check stays so that a lease that ends later cannot
 	// authenticate.
 	if !now.Before(m.Claim.LeaseEndsAt) {
-		return fmt.Errorf("%w: the claim lease ended", identity.ErrUnauthenticated)
+		return fmt.Errorf("%w: the claim lease ended", identity.ErrJobTokenEnded)
 	}
 
 	// Check 4: the job is in a state that allows a live token. Defense in
 	// depth: Store.Issue checks it at the issue; this check stays so that a
 	// job that changes state later cannot authenticate.
 	if !JobStateLive(m.Claim.JobState) {
-		return fmt.Errorf("%w: the job is not live", identity.ErrUnauthenticated)
+		return fmt.Errorf("%w: the job is not live", identity.ErrJobTokenEnded)
 	}
 
 	// Check 5: the current operation of the job is the claim operation of
@@ -252,7 +256,7 @@ func live(m *Match, now time.Time) error {
 	// depth: Store.Issue checks it at the issue; this check stays so that a
 	// job that moves later cannot authenticate.
 	if m.Claim.JobOperation != m.Token.ClaimOperation {
-		return fmt.Errorf("%w: the job runs another operation", identity.ErrUnauthenticated)
+		return fmt.Errorf("%w: the job runs another operation", identity.ErrJobTokenEnded)
 	}
 
 	// Check 6: the unit ID of the job is the unit ID of the record. The
@@ -260,14 +264,14 @@ func live(m *Match, now time.Time) error {
 	// in depth: Store.Issue checks it at the issue; this check stays so that
 	// a record of another unit cannot authenticate.
 	if m.Claim.JobUnitID != m.Token.Unit.UnitID() {
-		return fmt.Errorf("%w: the unit differs from the job unit", identity.ErrUnauthenticated)
+		return fmt.Errorf("%w: the unit differs from the job unit", identity.ErrJobTokenEnded)
 	}
 
 	// Check 7: the hard expiry of the record is after now. Defense in
 	// depth: Store.Issue checks it at the issue; this check stays so that
 	// the time of this request decides.
 	if !now.Before(m.Token.ExpiresAt) {
-		return fmt.Errorf("%w: the job token expired", identity.ErrUnauthenticated)
+		return fmt.Errorf("%w: the job token expired", identity.ErrJobTokenEnded)
 	}
 
 	// Check 8: the starter principal is enabled. Defense in depth: the store
@@ -278,7 +282,7 @@ func live(m *Match, now time.Time) error {
 	// store check, or an adapter that does not read the flag cannot
 	// authenticate.
 	if !m.Claim.StarterEnabled {
-		return fmt.Errorf("%w: the starter is not enabled", identity.ErrUnauthenticated)
+		return fmt.Errorf("%w: the starter is not enabled", identity.ErrJobTokenEnded)
 	}
 
 	// Check 9: the starter of the record is the principal that started the

@@ -423,6 +423,10 @@ func classifyAccess(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
 		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
+	case errors.Is(err, identity.ErrJobTokenEnded):
+		return http.StatusUnauthorized, identity.JobTokenEndedText, true
+	case errors.Is(err, identity.ErrJobTokenOtherUnit):
+		return http.StatusForbidden, identity.JobTokenOtherUnitText, true
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated", true
 	case errors.Is(err, identity.ErrDenied):
