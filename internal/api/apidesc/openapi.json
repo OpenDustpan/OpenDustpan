@@ -107,6 +107,82 @@
         ],
         "type": "object"
       },
+      "AccessToken": {
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "disabledAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "expiresInDays": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "expiryWarning": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "principalID": {
+            "type": "string"
+          },
+          "replacedBy": {
+            "type": "string"
+          },
+          "revokedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "createdBy",
+          "disabledAt",
+          "expiresAt",
+          "expiresInDays",
+          "expiryWarning",
+          "id",
+          "kind",
+          "lastUsedAt",
+          "name",
+          "principalID",
+          "replacedBy",
+          "revokedAt",
+          "status"
+        ],
+        "type": "object"
+      },
       "AddRegistryKeyRequest": {
         "properties": {
           "armoredPublicKey": {
@@ -1250,6 +1326,35 @@
         ],
         "type": "object"
       },
+      "CreateOwnTokenRequest": {
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "principalID": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "expiresAt",
+          "name",
+          "principalID"
+        ],
+        "type": "object"
+      },
       "CreateProfileRequest": {
         "properties": {
           "document": {
@@ -2066,6 +2171,7 @@
           "profile.routing-change-needs-open",
           "profile.schema-version",
           "registry.archive-set-refused",
+          "registry.bad-archive",
           "registry.invalid",
           "registry.key-exists",
           "registry.key-invalid",
@@ -3798,6 +3904,93 @@
         ],
         "type": "object"
       },
+      "ListOwnAccessObjectsResponse": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "all": {
+            "type": "boolean"
+          },
+          "nextPageToken": {
+            "type": "string"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/OwnAccessObject"
+            },
+            "type": "array"
+          },
+          "total": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "all",
+          "nextPageToken",
+          "objects",
+          "total",
+          "type"
+        ],
+        "type": "object"
+      },
+      "ListOwnGrantsResponse": {
+        "properties": {
+          "asOfMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/OwnGrant"
+            },
+            "type": "array"
+          },
+          "nextPageToken": {
+            "type": "string"
+          },
+          "total": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "asOfMs",
+          "grants",
+          "nextPageToken",
+          "total"
+        ],
+        "type": "object"
+      },
+      "ListOwnTokensResponse": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "tokens": {
+            "items": {
+              "$ref": "#/components/schemas/AccessToken"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "nextPageToken",
+          "tokens"
+        ],
+        "type": "object"
+      },
       "ListPasskeysResponse": {
         "properties": {
           "passkeys": {
@@ -4563,6 +4756,86 @@
         ],
         "type": "object"
       },
+      "NewAccessToken": {
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "disabledAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "expiresInDays": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "expiryWarning": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "principalID": {
+            "type": "string"
+          },
+          "replacedBy": {
+            "type": "string"
+          },
+          "revokedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "secret": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "createdBy",
+          "disabledAt",
+          "expiresAt",
+          "expiresInDays",
+          "expiryWarning",
+          "id",
+          "kind",
+          "lastUsedAt",
+          "name",
+          "principalID",
+          "replacedBy",
+          "revokedAt",
+          "secret",
+          "status"
+        ],
+        "type": "object"
+      },
       "NotificationDelivery": {
         "properties": {
           "attempts": {
@@ -4815,6 +5088,290 @@
         "required": [
           "allowForcedWrites",
           "allowUnlockedWrites"
+        ],
+        "type": "object"
+      },
+      "OwnAccess": {
+        "properties": {
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/OwnAccessGrant"
+            },
+            "type": "array"
+          },
+          "missingActions": {
+            "items": {
+              "$ref": "#/components/schemas/OwnMissingAction"
+            },
+            "type": "array"
+          },
+          "object": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actions",
+          "grants",
+          "missingActions",
+          "object"
+        ],
+        "type": "object"
+      },
+      "OwnAccessGrant": {
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "createdBy",
+          "id",
+          "object",
+          "role",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "OwnAccessObject": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "object"
+        ],
+        "type": "object"
+      },
+      "OwnGrant": {
+        "properties": {
+          "canGrantAccess": {
+            "type": "boolean"
+          },
+          "effectiveFromMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "effectiveUntilMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "grantID": {
+            "type": "string"
+          },
+          "grantedAtMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "grantedBy": {
+            "type": "string"
+          },
+          "holder": {
+            "type": "string"
+          },
+          "inheritedFrom": {
+            "type": "string"
+          },
+          "lastAccessAtMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "lastAccessTracked": {
+            "type": "boolean"
+          },
+          "memberCount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "object": {
+            "type": "string"
+          },
+          "objectState": {
+            "type": "string"
+          },
+          "revokedAtMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "revokedBy": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "subjectName": {
+            "type": "string"
+          },
+          "via": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OwnGrantVia"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "canGrantAccess",
+          "effectiveFromMs",
+          "effectiveUntilMs",
+          "grantID",
+          "grantedAtMs",
+          "grantedBy",
+          "inheritedFrom",
+          "object",
+          "objectState",
+          "revokedAtMs",
+          "revokedBy",
+          "role",
+          "source",
+          "subject",
+          "subjectName",
+          "via"
+        ],
+        "type": "object"
+      },
+      "OwnGrantVia": {
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "member": {
+            "type": "string"
+          },
+          "memberFromMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "memberSource": {
+            "type": "string"
+          },
+          "memberSourceId": {
+            "type": "string"
+          },
+          "memberSubject": {
+            "type": "string"
+          },
+          "memberSuspended": {
+            "type": "boolean"
+          },
+          "memberUntilMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "group",
+          "member",
+          "memberFromMs",
+          "memberSource",
+          "memberSourceId",
+          "memberSubject",
+          "memberSuspended",
+          "memberUntilMs"
+        ],
+        "type": "object"
+      },
+      "OwnGrantedBy": {
+        "properties": {
+          "builtInRoles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "customRoles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "builtInRoles",
+          "customRoles"
+        ],
+        "type": "object"
+      },
+      "OwnMissingAction": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "grantedBy": {
+            "$ref": "#/components/schemas/OwnGrantedBy"
+          }
+        },
+        "required": [
+          "action",
+          "grantedBy"
+        ],
+        "type": "object"
+      },
+      "OwnTokenRotation": {
+        "properties": {
+          "previous": {
+            "$ref": "#/components/schemas/AccessToken"
+          },
+          "token": {
+            "$ref": "#/components/schemas/NewAccessToken"
+          }
+        },
+        "required": [
+          "previous",
+          "token"
         ],
         "type": "object"
       },
@@ -6100,6 +6657,29 @@
         "required": [
           "emergency",
           "reason"
+        ],
+        "type": "object"
+      },
+      "RotateOwnTokenRequest": {
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "oldTokenEndsAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "expiresAt",
+          "oldTokenEndsAt"
         ],
         "type": "object"
       },
@@ -10681,6 +11261,185 @@
         ]
       }
     },
+    "/api/dustpan/v1/me/access": {
+      "get": {
+        "operationId": "getOwnAccess",
+        "parameters": [
+          {
+            "description": "The object to answer for, for example @server or a namespace.",
+            "in": "query",
+            "name": "object",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnAccess"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:read",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/access/objects": {
+      "get": {
+        "operationId": "listOwnAccessObjects",
+        "parameters": [
+          {
+            "description": "The action that the listed objects must allow.",
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of objects on the page. The default is 50 and the maximum is 200.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The kind of the objects to list: namespace, collection, unit or principal.",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOwnAccessObjectsResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:read",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/grants": {
+      "get": {
+        "operationId": "listOwnGrants",
+        "parameters": [
+          {
+            "description": "The largest number of grants on the page. The default is 50 and the maximum is 200.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOwnGrantsResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:read",
+            "object": "caller"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/me/linked-accounts": {
       "get": {
         "operationId": "listGitHostLinks",
@@ -11058,6 +11817,213 @@
         "x-dustpan-actions": [
           {
             "action": "caller:manage-preferences",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/tokens": {
+      "get": {
+        "operationId": "listOwnTokens",
+        "parameters": [
+          {
+            "description": "The largest number of tokens on the page. The default is 50 and the maximum is 200.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOwnTokensResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "token:manage-own",
+            "object": "caller"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createOwnToken",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOwnTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewAccessToken"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "token:manage-own",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/tokens/{id}": {
+      "delete": {
+        "operationId": "deleteOwnToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "token:manage-own",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/tokens/{id}/rotate": {
+      "post": {
+        "operationId": "rotateOwnToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateOwnTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnTokenRotation"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "token:manage-own",
             "object": "caller"
           }
         ]
@@ -22047,6 +23013,9 @@
     },
     {
       "name": "locks"
+    },
+    {
+      "name": "me"
     },
     {
       "name": "namespaces"

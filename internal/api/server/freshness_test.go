@@ -52,7 +52,7 @@ func freshRoutes() []freshRoute {
 	ownToken := func(t *testing.T, e providerEnv) string {
 		t.Helper()
 
-		rec := e.postWithSession(t, e.freshSignIn(t), "/api/server/caller/tokens", ownTokenBody())
+		rec := e.postWithSession(t, e.freshSignIn(t), "/api/dustpan/v1/me/tokens", ownTokenBody())
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("make the own token = %d %s, want 201", rec.Code, rec.Body.String())
 		}
@@ -60,7 +60,7 @@ func freshRoutes() []freshRoute {
 		var made tokenDoc
 		decodeInto(t, rec.Body.String(), &made)
 
-		return "/api/server/caller/tokens/" + made.ID + "/rotate"
+		return "/api/dustpan/v1/me/tokens/" + made.ID + "/rotate"
 	}
 	seedDefault := func(t *testing.T, e providerEnv) string {
 		t.Helper()
@@ -264,9 +264,9 @@ func freshOwnRoutes(
 	createBeta, ownToken, seedDefault, seedRule func(*testing.T, providerEnv) string, principalTokens string,
 ) []freshRoute {
 	return []freshRoute{
-		{nil, "create own token", http.MethodPost, "/api/server/caller/tokens", ownTokenBody(), http.StatusCreated},
+		{nil, "create own token", http.MethodPost, "/api/dustpan/v1/me/tokens", ownTokenBody(), http.StatusCreated},
 		{
-			ownToken, "rotate own token", http.MethodPost, "/api/server/caller/tokens/{id}/rotate", `{}`,
+			ownToken, "rotate own token", http.MethodPost, "/api/dustpan/v1/me/tokens/{id}/rotate", `{}`,
 			http.StatusCreated,
 		},
 		{
@@ -657,7 +657,7 @@ func TestFreshWindowZeroAsksEachTime(t *testing.T) {
 
 	// The step at age 0: the sign-in of the session is fresh, and the window
 	// of 0 refuses it.
-	rec := e.postWithSession(t, sess, "/api/server/caller/tokens", ownTokenBody())
+	rec := e.postWithSession(t, sess, "/api/dustpan/v1/me/tokens", ownTokenBody())
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), freshErrorCode) ||
 		!strings.Contains(rec.Body.String(), "/api/server/sign-in/corp?fresh=1") {
 		t.Fatalf("own token at age 0 = %d %s, want 403 with the code and the path of a new sign-in",
@@ -668,7 +668,7 @@ func TestFreshWindowZeroAsksEachTime(t *testing.T) {
 	// is the same.
 	stale := e.staleSession(t)
 
-	rec = e.postWithSession(t, stale, "/api/server/caller/tokens", ownTokenBody())
+	rec = e.postWithSession(t, stale, "/api/dustpan/v1/me/tokens", ownTokenBody())
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), freshErrorCode) ||
 		!strings.Contains(rec.Body.String(), "/api/server/sign-in/corp?fresh=1") {
 		t.Fatalf("own token with an old sign-in = %d %s, want 403 with the code and the path of a new sign-in",
@@ -712,12 +712,12 @@ func checkStaleNamesSignInPath(t *testing.T, e signInEnv, sess *http.Cookie) {
 
 	const reauthenticate = "/api/server/sign-in/corp?fresh=1"
 
-	before := e.sendWithSession(t, http.MethodGet, sess, "/api/server/caller/tokens", "")
+	before := e.sendWithSession(t, http.MethodGet, sess, "/api/dustpan/v1/me/tokens", "")
 	if before.Code != http.StatusOK {
 		t.Fatalf("list the tokens = %d %s, want 200", before.Code, before.Body.String())
 	}
 
-	rec := e.postWithSession(t, sess, "/api/server/caller/tokens", ownTokenBody())
+	rec := e.postWithSession(t, sess, "/api/dustpan/v1/me/tokens", ownTokenBody())
 
 	got := decodeErrorBody(t, rec)
 	if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode ||
@@ -726,7 +726,7 @@ func checkStaleNamesSignInPath(t *testing.T, e signInEnv, sess *http.Cookie) {
 			rec.Body.String(), freshErrorCode, reauthenticate)
 	}
 
-	after := e.sendWithSession(t, http.MethodGet, sess, "/api/server/caller/tokens", "")
+	after := e.sendWithSession(t, http.MethodGet, sess, "/api/dustpan/v1/me/tokens", "")
 	if after.Code != http.StatusOK || after.Body.String() != before.Body.String() {
 		t.Fatalf("tokens after the refusal = %d %s, want the list from before: %s", after.Code,
 			after.Body.String(), before.Body.String())
@@ -743,7 +743,7 @@ func TestFreshAuthRefusesAForgedFreshTimeHeader(t *testing.T) {
 	e := newSignInEnv(t, true)
 	sess := e.staleSession(t)
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/caller/tokens",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/me/tokens",
 		strings.NewReader(ownTokenBody()))
 	req.AddCookie(sess)
 
@@ -802,7 +802,7 @@ func TestFreshAuthRefusesAnOutOfRangeStoredWindow(t *testing.T) {
 				t.Fatalf("store an out-of-range window: %v", err)
 			}
 
-			rec := e.postWithSession(t, sess, "/api/server/caller/tokens", ownTokenBody())
+			rec := e.postWithSession(t, sess, "/api/dustpan/v1/me/tokens", ownTokenBody())
 
 			got := decodeErrorBody(t, rec)
 			if rec.Code != http.StatusForbidden || got.ErrorCode != freshErrorCode ||
@@ -827,7 +827,7 @@ func TestFreshAuthFailsClosedWhenThePolicyReadFails(t *testing.T) {
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: false, noGateEngine: false, stored: nil, authz: nil, namespaces: nil,
-		hostile: nil, passwords: nil,
+		hostile: nil, passwords: nil, idempotency: false,
 		failPolicyRead: func() error {
 			if down.Load() {
 				return errPolicyStoreDown
@@ -842,7 +842,7 @@ func TestFreshAuthFailsClosedWhenThePolicyReadFails(t *testing.T) {
 	_, s := e.readSession(t, sess)
 	down.Store(true)
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/caller/tokens",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/dustpan/v1/me/tokens",
 		strings.NewReader(ownTokenBody()))
 	req.AddCookie(sess)
 	req.Header.Set(apiserver.CSRFHeader, s.CSRFToken)

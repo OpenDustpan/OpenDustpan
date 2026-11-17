@@ -783,13 +783,13 @@ var routeBodies = map[string]string{
 	"POST /api/server/tokens/{id}/rotate":                                     `{}`,
 	"POST /api/server/service-tokens":                                         `{"principalID":"` + testOtherPrincipalID + `","name":"ci"}`,
 	"POST /api/server/service-tokens/{id}/rotate":                             `{}`,
-	"POST /api/server/caller/tokens":                                          `{"name":"laptop"}`,
+	"POST /api/dustpan/v1/me/tokens":                                          `{"name":"laptop"}`,
 	"POST /api/server/namespaces/{namespace}/principals":                      `{"subject":"ci-new"}`,
 	"PATCH /api/server/namespaces/{namespace}/principals/{id}":                `{"displayName":"Routes bot"}`,
 	"POST /api/server/principals/{principal}/tokens":                          `{"name":"ci"}`,
 	"POST /api/server/principals/{principal}/tokens/{id}/rotate":              `{}`,
 	"POST /api/server/principals/{principal}/grants":                          routePrincipalGrantBody,
-	"POST /api/server/caller/tokens/{id}/rotate":                              `{}`,
+	"POST /api/dustpan/v1/me/tokens/{id}/rotate":                              `{}`,
 	"PATCH /api/server/token-policy":                                          `{"inactivitySeconds":0}`,
 	"PATCH /api/server/session-policy":                                        `{"idleSeconds":900}`,
 	"PATCH /api/dustpan/v1/me/preferences":                                    `{"theme":"terminal"}`,
@@ -1141,7 +1141,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 		id = testTokenID
 	case strings.HasPrefix(route.Path, "/api/server/service-tokens"):
 		id = testServiceTokenID
-	case strings.HasPrefix(route.Path, "/api/server/caller/tokens"):
+	case strings.HasPrefix(route.Path, "/api/dustpan/v1/me/tokens"):
 		id = testOwnTokenID
 	default:
 		id = routeGrantID(route.Path, id)
@@ -1235,8 +1235,10 @@ func routeQuery(path string) string {
 	switch {
 	case strings.Contains(path, "/unit-grants") || strings.Contains(path, "/unit-access-review"):
 		return "?tool=pulumi&unit=" + url.QueryEscape(testUnitName)
-	case path == "/api/server/caller/access":
+	case path == "/api/dustpan/v1/me/access":
 		return "?object=" + testNamespace
+	case path == "/api/dustpan/v1/me/access/objects":
+		return "?type=unit"
 	case path == "/api/dustpan/v1/local-users/locks":
 		return "?principal=" + testPrincipalID
 	default:
@@ -1288,8 +1290,8 @@ func (fakeEpochs) Now() time.Time { return time.Now() }
 // token, so these routes refuse it.
 func freshAuthRoutes() []string {
 	return []string{
-		"POST /api/server/caller/tokens",
-		"POST /api/server/caller/tokens/{id}/rotate",
+		"POST /api/dustpan/v1/me/tokens",
+		"POST /api/dustpan/v1/me/tokens/{id}/rotate",
 		"POST /api/server/service-tokens",
 		"POST /api/server/service-tokens/{id}/rotate",
 		"POST /api/server/principals/{principal}/tokens",

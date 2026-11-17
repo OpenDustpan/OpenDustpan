@@ -309,7 +309,7 @@ func (b browser) tokenChange(t *testing.T, path, body string) answer {
 func (b browser) ownToken(t *testing.T, body string) e2eToken {
 	t.Helper()
 
-	a := b.tokenChange(t, "/api/server/caller/tokens", body)
+	a := b.tokenChange(t, "/api/dustpan/v1/me/tokens", body)
 	if a.status != http.StatusCreated {
 		t.Fatalf("own token from the session = %d, want 201: %s", a.status, a.body)
 	}
@@ -327,7 +327,7 @@ func (b browser) ownToken(t *testing.T, body string) e2eToken {
 func (b browser) rotateOwnToken(t *testing.T, id string) e2eToken {
 	t.Helper()
 
-	a := b.tokenChange(t, "/api/server/caller/tokens/"+id+"/rotate", `{}`)
+	a := b.tokenChange(t, "/api/dustpan/v1/me/tokens/"+id+"/rotate", `{}`)
 	if a.status != http.StatusCreated {
 		t.Fatalf("rotation from the session = %d, want 201: %s", a.status, a.body)
 	}
@@ -404,7 +404,7 @@ func checkTokenFreshness(t *testing.T, b browser) {
 	b.session(t)
 	clock.Advance(6 * time.Minute)
 
-	a := b.tokenChange(t, "/api/server/caller/tokens", body)
+	a := b.tokenChange(t, "/api/dustpan/v1/me/tokens", body)
 
 	var refusal struct {
 		ErrorCode      string `json:"errorCode"`

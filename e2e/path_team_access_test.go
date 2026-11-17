@@ -613,7 +613,7 @@ func (c teamAccessBrowser) makeToken(ctx context.Context, t *testing.T, name str
 	}
 
 	status, body = c.send(ctx, t, browserRequest{
-		method: http.MethodPost, path: "/api/server/caller/tokens",
+		method: http.MethodPost, path: "/api/dustpan/v1/me/tokens",
 		body: `{"name":"` + name + `"}`, csrf: session.CSRFToken,
 	})
 	if status != http.StatusCreated {

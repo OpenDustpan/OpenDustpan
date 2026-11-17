@@ -32,6 +32,8 @@ type registryProvider struct {
 	archive       []byte
 	sums          []byte
 	signature     []byte
+	// manifest is the terraform-registry-manifest.json file of the release.
+	manifest []byte
 }
 
 // buildProvider makes the release of a provider for linux/amd64. OpenTofu
@@ -59,11 +61,16 @@ func buildProvider(t *testing.T, sg pgpfixture.Signer, version string) registryP
 
 	p := registryProvider{
 		name: providerName, version: version, archiveName: "", archive: zipped.Bytes(), sums: nil, signature: nil,
+		manifest: []byte(`{"version":1,"metadata":{"protocol_versions":["5.0"]}}`),
 	}
 	p.archiveName = fmt.Sprintf("terraform-provider-%s_%s_linux_amd64.zip", providerName, version)
 
+	// The release tools publish the manifest next to the archives and list it
+	// in the checksums file.
 	sum := sha256.Sum256(p.archive)
-	p.sums = []byte(hex.EncodeToString(sum[:]) + "  " + p.archiveName + "\n")
+	manifestSum := sha256.Sum256(p.manifest)
+	p.sums = []byte(hex.EncodeToString(sum[:]) + "  " + p.archiveName + "\n" +
+		hex.EncodeToString(manifestSum[:]) + "  " + p.manifestName() + "\n")
 
 	p.signature = sg.Detach(t, p.sums)
 
@@ -72,6 +79,10 @@ func buildProvider(t *testing.T, sg pgpfixture.Signer, version string) registryP
 
 func (p registryProvider) sumsName() string {
 	return fmt.Sprintf("terraform-provider-%s_%s_SHA256SUMS", p.name, p.version)
+}
+
+func (p registryProvider) manifestName() string {
+	return fmt.Sprintf("terraform-provider-%s_%s_manifest.json", p.name, p.version)
 }
 
 func (p registryProvider) archiveSHA() string {
@@ -160,6 +171,7 @@ func (r registryAPI) publish(ctx context.Context, t *testing.T, p registryProvid
 			{"role": "sums", "name": p.sumsName(), "upload": r.stage(ctx, t, up.sums)},
 			{"role": "signature", "name": p.sumsName() + ".sig", "upload": r.stage(ctx, t, up.signature)},
 			{"role": "archive", "name": p.archiveName, "upload": r.stage(ctx, t, up.archive)},
+			{"role": "manifest", "name": p.manifestName(), "upload": r.stage(ctx, t, p.manifest)},
 		},
 	})
 	if err != nil {
@@ -237,7 +249,9 @@ func runRegistryOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		api:     registryAPI{env: env, base: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/registry"},
 		signer:  pgpfixture.NewSigner(t),
 		address: env.RegistryAddress(providerName),
-		good:    registryProvider{name: "", version: "", archiveName: "", archive: nil, sums: nil, signature: nil},
+		good: registryProvider{
+			name: "", version: "", archiveName: "", archive: nil, sums: nil, signature: nil, manifest: nil,
+		},
 	}
 
 	sc.publishGood(ctx, t)
@@ -471,7 +485,9 @@ func (sc *registryScenario) refuseHostileReleases(ctx context.Context, t *testin
 	tampered := buildProvider(t, sc.signer, "1.0.1")
 	up := tampered.asBuilt()
 	up.archive = bytes.Clone(tampered.archive)
-	up.archive[len(up.archive)-1] ^= 0xff
+	// Flip a byte of the first entry data, behind its local file header. The
+	// archive stays a zip file, so the publish reaches the hash check.
+	up.archive[30+len(fmt.Sprintf("terraform-provider-%s_v%s", providerName, "1.0.1"))] ^= 0xff
 
 	resp := sc.api.publish(ctx, t, tampered, up)
 	if resp.Status != http.StatusUnprocessableEntity || !strings.Contains(resp.Body, tampered.archiveName) {

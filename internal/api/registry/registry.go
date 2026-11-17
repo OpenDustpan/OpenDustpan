@@ -162,6 +162,7 @@ var registryProblems = []registryProblem{
 	{registry.ErrKeyExists, errcode.RegistryKeyExists, http.StatusConflict},
 	{registry.ErrBadSignature, errcode.RegistrySignatureInvalid, http.StatusUnprocessableEntity},
 	{registry.ErrUntrustedKey, errcode.RegistrySignatureUntrustedKey, http.StatusUnprocessableEntity},
+	{registry.ErrBadArchive, errcode.RegistryBadArchive, http.StatusBadRequest},
 	{releasecheck.ErrRefused, errcode.RegistryArchiveSetRefused, http.StatusUnprocessableEntity},
 	{modulecheck.ErrRefused, errcode.RegistryModuleArchiveRefused, http.StatusUnprocessableEntity},
 	{service.ErrNoKeys, errcode.RegistryNoKeys, http.StatusUnprocessableEntity},

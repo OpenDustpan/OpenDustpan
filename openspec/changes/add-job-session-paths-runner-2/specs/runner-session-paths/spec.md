@@ -56,14 +56,6 @@ When a cancel is requested for the claim, the server SHALL answer canceled true 
 - **WHEN** a cancel is requested and the launcher renews
 - **THEN** the renew answers canceled true
 
-### Requirement: Credentials
-
-When the launcher calls the credentials path on a live session, the server SHALL answer the job token of that claim.
-
-#### Scenario: Token of the claim
-- **WHEN** the launcher calls the credentials path
-- **THEN** the server answers one token limited to the unit with the expiry of the claim
-
 ### Requirement: Fenced step writes
 
 While the claim is live, the server SHALL accept step begin, log chunks and step end only through the session of that claim.

@@ -192,6 +192,7 @@ func joinLabels() map[string]apidesc.Label {
 	maps.Copy(labels, storeCheckOperationLabels())
 	maps.Copy(labels, localUserOperationLabels())
 	maps.Copy(labels, passkeyOperationLabels())
+	maps.Copy(labels, callerOperationLabels())
 	maps.Copy(labels, backupOperationLabels())
 	maps.Copy(labels, auditChainOperationLabels())
 	maps.Copy(labels, maintenanceOperationLabels())

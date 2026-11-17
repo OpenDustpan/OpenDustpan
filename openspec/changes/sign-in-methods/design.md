@@ -29,7 +29,7 @@ The sign-in service holds an unexported `methodSet` that only `newMethodSet` can
 
 ## Diagrams
 
-Today: `POST /api/server/caller/tokens` on main (from the route table and the handler body, route row internal/api/server/tokens.go:553, handler internal/api/server/tokens.go:246).
+Today: `POST /api/dustpan/v1/me/tokens` on main (from the route table and the handler body, route row internal/api/server/tokens.go:579, handler createToken at internal/api/server/tokens.go:714).
 
 ```mermaid
 sequenceDiagram
@@ -38,7 +38,7 @@ participant R as POST route
 participant H as serveTokenChange
 participant AZ as Authorizer
 participant Ftokens as tokens
-C->>R: POST /api/server/caller/tokens
+C->>R: POST /api/dustpan/v1/me/tokens
 R->>AZ: ActionTokenManageOwn (ScopeAuthorized)
 R->>H: serveTokenChange
 H->>Ftokens: Now

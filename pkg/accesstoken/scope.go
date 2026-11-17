@@ -48,7 +48,7 @@ var (
 	// another person. Each person makes and rotates only its own personal
 	// tokens, after a sign-in. It comes wrapped with identity.ErrDenied.
 	ErrNotOwnToken = errors.New(
-		"a person makes and rotates only its own personal tokens: the person signs in and uses /api/server/caller/tokens",
+		"a person makes and rotates only its own personal tokens: the person signs in and uses /api/dustpan/v1/me/tokens",
 	)
 	// ErrReachExceeded reports a caller that holds principal:manage-tokens
 	// on the installation and makes or rotates a token of a service
@@ -127,7 +127,7 @@ func (s *Service) targetPrincipal(
 func checkKind(scope Scope, kind Kind) error {
 	switch {
 	case scope == ScopeService && kind != KindService:
-		return fmt.Errorf("%w: its owner makes and rotates a %s token through /api/server/caller/tokens",
+		return fmt.Errorf("%w: its owner makes and rotates a %s token through /api/dustpan/v1/me/tokens",
 			ErrWrongKind, kind)
 	case scope != ScopeService && kind != KindPersonal:
 		return fmt.Errorf("%w: a %s token goes through /api/server/service-tokens", ErrWrongKind, kind)
@@ -166,7 +166,7 @@ func (s *Service) authorizeRevoke(ctx context.Context, caller identity.Principal
 
 	if scope == ScopeService && t.Kind != KindService && t.Kind != KindTrust {
 		return fmt.Errorf("%w: revoke a %s token through /api/server/tokens/{id} or, as its owner, through "+
-			"/api/server/caller/tokens/{id}", ErrWrongKind, t.Kind)
+			"/api/dustpan/v1/me/tokens/{id}", ErrWrongKind, t.Kind)
 	}
 
 	if t.Kind == KindService || t.Kind == KindTrust {

@@ -149,7 +149,8 @@ func Check(addr registry.Address, version string, set Set, sums map[string]strin
 		return none, err
 	}
 
-	// The caller fills the publisher, the time, the key and the protocols.
+	// The caller fills the publisher, the time, the key, the protocols and the H1
+	// digest of each archive, which it computes from the unpacked bytes.
 	var rel registry.Release
 
 	rel.Address, rel.Version = addr, version
@@ -163,7 +164,7 @@ func Check(addr registry.Address, version string, set Set, sums map[string]strin
 		}
 
 		rel.Archives = append(rel.Archives, registry.Archive{
-			Platform: platform, FileName: a.Name, SHA256: a.SHA256, Size: a.Size,
+			Platform: platform, FileName: a.Name, SHA256: a.SHA256, Size: a.Size, H1: "",
 		})
 	}
 

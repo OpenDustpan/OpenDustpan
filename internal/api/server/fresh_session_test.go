@@ -127,7 +127,7 @@ func needsFreshSession(method, target string) bool {
 	switch method {
 	case http.MethodPost:
 		return path == "/api/server/roles" || path == "/api/server/service-tokens" ||
-			path == "/api/server/caller/tokens" || strings.HasSuffix(path, "/tokens") ||
+			path == "/api/dustpan/v1/me/tokens" || strings.HasSuffix(path, "/tokens") ||
 			strings.HasSuffix(path, "/rotate") || strings.HasSuffix(path, "/members") ||
 			(strings.HasSuffix(path, "/grants") && !strings.HasSuffix(path, "/unit-grants"))
 	case http.MethodPatch:

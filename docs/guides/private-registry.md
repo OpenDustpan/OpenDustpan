@@ -36,6 +36,16 @@ limits.
   terraform-provider-<name>_<version>_SHA256SUMS.sig
   ```
 
+- Optional: the manifest file, `terraform-registry-manifest.json`, that your
+  build tool publishes next to the archives, for example as
+  `terraform-provider-<name>_<version>_manifest.json`. It lists the plugin
+  protocol versions of the provider, for example
+  `{"version": 1, "metadata": {"protocol_versions": ["5.0"]}}`. When you send
+  it, the server stores its protocol versions. When you do not send it, you
+  must state the protocol versions in the request. The server does not read a
+  manifest inside an archive. See
+  [Rules for a manifest file](#rules-for-a-manifest-file).
+
 The name of the provider uses lowercase letters, digits and single dashes. It
 does not start or end with a dash, and it has at most 64 characters. The
 name of a namespace follows the same rule. A namespace whose name is outside
@@ -94,14 +104,20 @@ curl -X PUT -H "Authorization: token $DUSTPAN_TOKEN" \
     "files": [
       {"role": "sums", "name": "terraform-provider-payments_1.0.0_SHA256SUMS", "upload": "<token>"},
       {"role": "signature", "name": "terraform-provider-payments_1.0.0_SHA256SUMS.sig", "upload": "<token>"},
-      {"role": "archive", "name": "terraform-provider-payments_1.0.0_linux_amd64.zip", "upload": "<token>"}
+      {"role": "archive", "name": "terraform-provider-payments_1.0.0_linux_amd64.zip", "upload": "<token>"},
+      {"role": "manifest", "name": "terraform-provider-payments_1.0.0_manifest.json", "upload": "<token>"}
     ]
   }' \
   https://dustpan.example.com/api/dustpan/v1/namespaces/acme/registry/providers/payments/versions/1.0.0
 ```
 
-The server checks the release in this order, and it refuses the publish at the
-first check that fails:
+The `manifest` entry is optional. Without it, `protocols` must list at least
+one version.
+
+First the server reads each file again. It refuses an archive that is not a
+zip file with 400 and the code `registry.bad-archive`, before it uses the hash
+of the archive. Then the server checks the release in this order, and it
+refuses the publish at the first check that fails:
 
 1. The signature is valid for the exact bytes of the checksums file, and a
    key of the namespace made it. The server checks the signature before it
@@ -109,13 +125,22 @@ first check that fails:
 2. The checksums file has one line for each archive, in the form that your
    build tool writes: a lowercase SHA-256, two spaces and a file name. A line
    with a path, a repeated name, or a name that is not in the upload is
-   refused.
+   refused. When the checksums file has a line for the manifest file, the
+   SHA-256 of the manifest file must be the SHA-256 on that line.
 3. The SHA-256 that the server computed for each archive is the SHA-256 in
    the checksums file. The error names the archive.
 4. The name of each archive gives the provider name, the version and a
    platform. They must match the request.
+5. Each archive passes the rules for a provider archive. The server stores
+   the h1 hash of the unpacked files of each archive, the hash that
+   `tofu providers lock` writes.
+6. The manifest file, when you send it, passes the rules for a manifest file
+   and lists the same protocol versions as `protocols` in the request. The
+   server stores the protocol versions of the manifest file. Without a
+   manifest file, the server stores `protocols`.
 
-A file becomes readable only after all four checks pass. A refused publish
+A file becomes readable only after all six checks pass. The server does not
+store the manifest file. A refused publish
 leaves nothing that OpenTofu can read, and the server removes the uploaded
 files.
 
@@ -367,11 +392,53 @@ publish names the provider, the version, the fingerprint of the key and the
 hashes of the checksums file and the signature file. The entry of a module
 publish names the module, the version and the hash of the archive.
 
+## Rules for a provider archive
+
+The server unpacks each provider archive in memory and refuses the publish
+with 400 and the code `registry.bad-archive` when the archive:
+
+- is not a zip file
+- holds an entry with an empty name, a name that starts with `/` or `\`, or a
+  `..` segment
+- holds an entry name with a character other than an ASCII letter, an ASCII
+  digit or one of `. _ - + / @ ~ = ,`. This refuses a space, a backslash, a
+  newline and every other control character.
+- holds a symbolic link
+- holds two entries with the same name, also when only the case of a letter
+  is different
+- uses a compression method other than store or deflate
+- passes one of the unpack limits in [Limits](#limits)
+
+An entry named `terraform-registry-manifest.json` in an archive is a file like
+the other files. The server does not read it for protocol versions.
+
+To find the cause, list the archive with `unzip -l <archive>`.
+
+## Rules for a manifest file
+
+The server refuses the publish with 400 and the code `registry.invalid` when
+the manifest file:
+
+- is larger than the limit in [Limits](#limits)
+- is not one JSON object
+- has a `version` other than `1`
+- lists no protocol version, or a version other than `5.0` or `6.0`
+- lists other versions than `protocols` in the request
+- has another SHA-256 than its line in the checksums file
+
+A request has at most one manifest file. To find the cause, run
+`jq . <manifest file>`.
+
 ## Limits
 
 | Limit | Value |
 | --- | --- |
 | One file | 512 MiB |
+| One provider archive when unpacked | 64 MiB |
+| One file in a provider archive when unpacked | 16 MiB |
+| Files in one provider archive | 1,024 |
+| Unpacked size of a provider archive, as a multiple of its compressed size | 100 |
+| One manifest file | 64 KiB |
 | One module archive | 64 MiB |
 | One module archive when unpacked | 1 GiB |
 | Entries in one module archive | 20,000 |

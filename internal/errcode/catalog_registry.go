@@ -3,6 +3,8 @@ package errcode
 // The codes of the area. A code is never removed and never changes its
 // meaning.
 const (
+	// RegistryBadArchive means that the provider archive fails the unpack check.
+	RegistryBadArchive = "registry.bad-archive"
 	// RegistryArchiveSetRefused means that the release check refused the set of archives of the release.
 	RegistryArchiveSetRefused = "registry.archive-set-refused"
 	// RegistryInvalid means that the registry request is not valid.
@@ -34,6 +36,7 @@ const (
 // registrySpecs are the codes of the private registry.
 func registrySpecs() []Spec {
 	return []Spec{
+		{Code: RegistryBadArchive, Meaning: "the provider archive fails the unpack check", Args: nil},
 		{
 			Code:    RegistryArchiveSetRefused,
 			Meaning: "the release check refused the set of archives of the release",

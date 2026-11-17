@@ -83,6 +83,7 @@ func (s *Service) PublishModule(ctx context.Context, c *Caller, req ModulePublis
 	f := measured{
 		Role: RoleArchive, Name: addr.Name, Token: req.Upload,
 		key: key, sum: "", size: 0, md5: "", bytes: nil,
+		facts: unpackFacts{h1: ""}, unpackErr: nil,
 	}
 
 	if measureErr := s.measureModule(ctx, view, &f); measureErr != nil {
@@ -162,12 +163,13 @@ func checkModuleRequest(req ModulePublishRequest) (registry.Address, error) {
 }
 
 // stagedModuleRelease returns the release of the staged archive f, before the
-// checks of the release.
+// checks of the release. The H1 of its archive stays empty: h1 is the install
+// hash of a provider, and OpenTofu does not read it for a module.
 func (s *Service) stagedModuleRelease(c *Caller, addr registry.Address, version string, f measured) registry.Release {
 	return registry.Release{
 		PublishedAt: s.now().UTC(), Address: addr, Version: version, SumsFile: "", SumsSHA256: "",
 		SignatureFile: "", SignatureSHA256: "", KeyFingerprint: "", PublishedBy: c.Principal.Subject, Protocols: nil,
-		Archives: []registry.Archive{{Platform: "", FileName: f.Name, SHA256: f.sum, Size: f.size}},
+		Archives: []registry.Archive{{Platform: "", FileName: f.Name, SHA256: f.sum, Size: f.size, H1: ""}},
 		Files:    storedFiles([]measured{f}),
 	}
 }

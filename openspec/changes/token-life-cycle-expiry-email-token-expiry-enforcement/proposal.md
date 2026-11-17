@@ -12,7 +12,7 @@ The user path this change must make work:
 
 1. **API.** Developer creates an access token through the API with a picked expiry date
 2. **CLI.** Developer runs pulumi up and tofu apply with the token
-3. **API.** Developer lists the ended tokens with GET /api/server/caller/tokens?status=ended to see the cause of a 401
+3. **API.** Developer lists the ended tokens with GET /api/dustpan/v1/me/tokens?status=ended to see the cause of a 401
 4. **Docs page.** Developer reads the access tokens guide for expiry, lifetime, inactivity disable, rotation and the status filter
 5. **API.** Developer rotates the token through the API before expiry and retries the CLI
 
@@ -20,7 +20,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Developer runs pulumi up or tofu apply with an expired, revoked or disabled token | 401 unauthenticated, with no detail about the token. The bytes and headers equal those for an unknown token. The audit entry holds the real reason and the token ID. | `GET /api/server/caller/tokens?status=ended` |
+| Developer runs pulumi up or tofu apply with an expired, revoked or disabled token | 401 unauthenticated, with no detail about the token. The bytes and headers equal those for an unknown token. The audit entry holds the real reason and the token ID. | `GET /api/dustpan/v1/me/tokens?status=ended` |
 | Developer requests a token with an expiry past the maximum lifetime | The server refuses the create with error code token.invalid and a message that names the maximum lifetime. | `GET /api/dustpan/v1/settings` |
 
 Evidence for the claims above:
@@ -29,7 +29,7 @@ Evidence for the claims above:
 - The pack lists a test of the token lifetime in main. Proof: TestLifetime at pkg/accesstoken/accesstoken_test.go:311.
 - Main runs the inactivity disable on a schedule tick. Proof: TestJobSchedulesRunInactivityDisableOncePerTick at pkg/dustpan/schedules_internal_test.go:341.
 - Main refuses a disabled principal in the token check. Proof: TestCheckActiveRefusesADisabledPrincipal at pkg/accesstoken/accesstoken_test.go:554.
-- The caller token list takes a status filter that keeps ended tokens. Proof: Review finding of the owner: internal/api/server/tokens.go:717 parses status with accesstoken.ParseFilter, and accesstoken.FilterEnded keeps revoked and expired tokens at pkg/accesstoken/accesstoken.go:167. The guide docs/guides/access-tokens.md does not state the filter.
+- The own token list does not take a status filter on main: `ownTokenPageRequest` at internal/api/server/tokens.go:819 accepts only `pageSize` and `pageToken` and answers 400 for any other name, and docs/guides/access-tokens.md:60 says so. The administrator lists parse `status` with accesstoken.ParseFilter at tokens.go:900, and accesstoken.FilterEnded keeps revoked and expired tokens (pkg/accesstoken/accesstoken.go:175). A Developer has no administrator right, so the step 3 path needs the filter on the own list. The PM decided: the change adds it (benchmark: the guide of the administrator lists already names the three values).
 - Main looks a token up by the hash of the secret and compares the digest in constant time before the ended check. Proof: Review finding PM.tim: pkg/accesstoken/service.go:637-642 (Service.AuthenticateToken: digestOfRaw, then GetTokenByDigest) and pkg/accesstoken/accesstoken.go:301 (Digest.Equal with crypto/subtle.ConstantTimeCompare); StatusAt runs after that lookup.
 - Main audits every refused sign-in on the request path. Proof: Review finding PM.tim: internal/signinsvc/refuse.go:41, Service.refuse writes an entry for each refusal.
 
@@ -41,7 +41,8 @@ Evidence for the claims above:
 - Write an audit entry on the request path for each refusal, with the real reason and the token ID, and with the reason unknown token and no token ID for an unknown token
 - Show the token limits in the settings resource with their source: maximum lifetime, inactivity period and rotation overlap
 - Keep the rotation overlap at the value of main
-- Document the status=ended filter in docs/guides/access-tokens.md
+- Add the query name `status` (active, expiring or ended; every token when absent) to GET /api/dustpan/v1/me/tokens, with the same values and the same parser as the administrator lists. The route keeps `pageSize` and `pageToken`, and still answers 400 for `cursor`, `limit` and `principal`
+- Document the status filter in the own-list table of docs/guides/access-tokens.md and drop `status` from the sentence that lists the refused names
 
 Out of scope:
 

@@ -135,7 +135,7 @@ func runPasskeySignInOnStore(t *testing.T, env *e2e.Env, tofu, pulumi e2e.Instal
 	csrf := p.readSession(t, user.Subject)
 
 	expires := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
-	token := p.send(t, http.MethodPost, "/api/server/caller/tokens",
+	token := p.send(t, http.MethodPost, "/api/dustpan/v1/me/tokens",
 		`{"name":"laptop","expiresAt":"`+expires+`"}`, asBrowser(csrf))
 	token.want(t, "make a token with the session of the passkey", http.StatusCreated, "")
 
