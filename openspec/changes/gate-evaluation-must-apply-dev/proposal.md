@@ -39,7 +39,7 @@ Evidence for the claims above:
 Out of scope:
 
 - Full gate evaluation beyond the dev-data approver rules.
-- Approval defaults and ownership rules at `state.write` (ADR 225 decisions 4 and 9, ADR 224 decision 16). Until the owner decides, the `state.write` gate applies `RuleApprovers` and the `NoApprover` refusal to the approval rules that a gate names only. A later change takes this up after the owner decision.
+- Approval defaults and ownership rules at the state-write decision point (ADR 225 decisions 4 and 9, ADR 224 decision 16). Until the owner decides, the state-write gate in pkg/gate/statewrite.go applies `RuleApprovers` and the `NoApprover` refusal to the approval rules that a gate names only. A later change takes this up after the owner decision.
 - The temp_admins KeepAccessTables restore path, which needs its own RFC.
 - New numbered migrations or baseline schema edits.
 
