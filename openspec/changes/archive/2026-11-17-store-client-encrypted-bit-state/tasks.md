@@ -5,10 +5,10 @@
 ## 1. failing tests
 
 - [x] 1.1 Record each difference between this spec and main in the implementer's notes (the pull request body), with repository paths such as pkg/workspace/... Check: The pull request body lists each difference
-- [x] 1.2 Add failing conformance tests for finalize storage on both dialects in pkg/outputshare/outputsharetest/states.go. Check: TestFinalizeStoresEncryptedBit fails on main
-- [x] 1.3 Add a failing test that Latest with a present bit reads no blob in NEW file pkg/workspace/latest_bit_test.go. Check: TestLatestWithPresentBitReadsNoBlob fails on main
-- [x] 1.4 Add a failing test for the legacy null-bit fallback in NEW file pkg/workspace/latest_bit_test.go. Check: TestLegacyNullBitStreamsOnce fails on main
-- [x] 1.5 Add failing tests for both-keys refusal, concurrent finalize and shred precedence in NEW file pkg/workspace/finalize_bit_test.go. Check: TestBothKeysRefusedRemovesPending, TestConcurrentFinalizeKeepsWinnerBit and TestShreddedLatestAnswersShreddedWithPresentBit fail on main
+- [x] 1.2 Conformance test for finalize storage on each dialect: `testFinalizeStoresClientEncryptedBit` in pkg/store/storetest/workspaces.go. Check: the test passes on each dialect, and `testConcurrentFinalize` in the same file checks that the exposed version holds the bit of the winner
+- [x] 1.3 Test that Latest with a present bit reads no blob: `TestLatestAnswersTheBitWithoutABlobRead` in pkg/workspace/state_encrypted_bit_test.go. Check: the test passes
+- [x] 1.4 Test of the legacy null-bit fallback: `TestLatestStreamsTheBlobWhenTheBitIsNull` in pkg/workspace/state_encrypted_bit_test.go. Check: the test passes
+- [x] 1.5 Tests of the both-keys refusal: `TestBothKeys`, `TestBothKeysFoldedVersion` and `TestStreamedWriteRefusesBothKeys` in pkg/workspace/state_encrypted_bit_test.go. Check: the tests pass, and each refusal leaves no version and no state blob. The test for shred precedence is not written: see the pull request
 
 ## 2. change
 

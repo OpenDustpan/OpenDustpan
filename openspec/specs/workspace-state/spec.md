@@ -1,7 +1,7 @@
 # workspace-state Specification
 
 ## Purpose
-This capability states how the store records and reads the client-encrypted bit of a state version. The store writes the bit when it finalizes a state version and refuses a finalize that has no known bit. A read of the latest version answers the bit from the row, with no blob read.
+This capability states how the server records and reads the client-encryption bit of a state version. The server writes the bit when it finalizes a state version and refuses a finalize without a known bit. A read of the latest version answers the bit from the row with no blob read, and streams the blob only for a version stored before the server kept the bit. The server refuses an uploaded state document that holds both encrypted_data and version.
 
 ## Requirements
 
