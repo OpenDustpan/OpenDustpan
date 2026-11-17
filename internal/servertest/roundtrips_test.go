@@ -525,6 +525,7 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 		trips:     nil,
 		serial:    0,
 		workspace: "",
+		jobID:     "",
 		stack:     "",
 		nextStack: 0,
 		jobPool:   false,
