@@ -111,7 +111,7 @@ Questions considered and answered:
 
 - Which audit kind does an open write? Kind access, per ADR 203 decision 9: "Each open writes one audit entry of the kind `access`, with the action `profile:open` and the consumer:". ADR 240 covers state downloads only.
 - Does this slice evaluate ${ }? Yes. ADR 201 decision 4: "Expressions are Expr. A string that is exactly `${ <expression> }` gives the value of the expression, of any type." ADR 228 decision 1 limits Expr to values.
-- Does neverStore need secret or sealed? No. ADR 201 decision 12 allows it on any value. The slice 1 rule in document_check.go is corrected.
+- Does neverStore need secret or sealed? No. ADR 201 decision 12 allows it on any value. The slice 1 rule in pkg/profile/document_check.go is corrected.
 - Who refuses never-store for the data source? The server, through a NEW mode field in the open request, so an old provider build cannot skip it (ADR 209 decision 3).
 - Can expressions decide access? No. ADR 228 decision 1: "Expr never decides whether a change may go on."
 

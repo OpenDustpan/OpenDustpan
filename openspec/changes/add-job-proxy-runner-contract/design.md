@@ -63,7 +63,7 @@ New imports of this change (each one allowed by the module rules):
 
 - `internal/api/runnerapi` imports `internal/proxysessionsvc` (NEW)
 - `internal/api/runnerpools` imports `internal/proxysessionsvc` (NEW)
-- `internal/proxysessionsvc` imports `pkg/jobproxy`, `pkg/jobproxy/rulestore`, `pkg/secret`, `pkg/runner`, `pkg/egress`
+- `internal/proxysessionsvc` imports `pkg/jobproxy` and its rule store package, `pkg/secret`, `pkg/runner`, `pkg/egress`
 
 States of a proxy session:
 
@@ -225,7 +225,7 @@ Pool proxy settings (GET answer, PUT request and answer; the PUT request has no 
 
 `upstreamCredential` is write-only: it is in the PUT request only, absent keeps the stored value, `null` removes it. `source` is `default` or `set`. A pool with no row answers 200 with empty ranges, no URL, `credentialSet` false, `source` `default` and version 0.
 
-Stored schema, in both dialects (edited in place in `0168_baseline.sql`, in name order; timestamps are Unix milliseconds in BIGINT):
+Stored schema, in both dialects (edited in place in the baseline schema file of each dialect, in name order; timestamps are Unix milliseconds in BIGINT):
 
 - `runner_handoff_tokens` and `runner_sessions`: new column `kind` TEXT NOT NULL (values `launcher`, `proxy`, with a CHECK). The unique key `(operation_id, token)` becomes `(operation_id, token, kind)`.
 - NEW table `runner_pool_proxy_settings`: `pool_id` TEXT PRIMARY KEY, a foreign key to `runner_pools(id)` with ON DELETE CASCADE; `namespace_id` TEXT NOT NULL; `allowed_ranges` TEXT NOT NULL (a JSON array of CIDR strings); `upstream_url` TEXT NOT NULL (empty for none); `upstream_credential` BYTEA (PostgreSQL) or BLOB (SQLite), the sealed value, empty for none; `version` BIGINT NOT NULL; `updated_by` TEXT NOT NULL; `updated_at_ms` BIGINT NOT NULL; an index on `namespace_id`.

@@ -52,7 +52,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- sourceOf already returns the source kind of a start (`pkg/job/service_start.go:134 (func sourceOf)`)
+- sourceOf already returns the source kind of a start (`pkg/job/service_start.go:169 (func sourceOf)`)
 - bindClaim binds the event of a claim (`pkg/store/internal/jobstore/apply.go:162 (func bindClaim)`)
 
 ## ADR check

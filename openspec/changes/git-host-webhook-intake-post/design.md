@@ -14,7 +14,7 @@ Slice 1 holds the store, the registration map and the check. This change adds th
    - The confirmation: the NEW route POST /api/dustpan/v1/git-host-apps/{kind}/confirm-rotation writes NULL in the three old columns in one UPDATE with the version check, and writes an audit entry.
    - The check order of one event, against one registration snapshot: (1) the signature with the current secret, constant time; on a match, accept. (2) Only when (1) fails, and the old columns are set, and the time of the server is before old_event_secret_ends_at_ms: the signature with the old secret, constant time; on a match, accept and write the audit entry `git-host.event-accepted-old-secret` with the kind, the hook ID, the delivery ID and the end of the window. (3) Else refuse, answer 204 as for every refusal, count git_host_event_rejected_total and write the audit entry `git-host.event-refused` with the reason (`signature`, `old-secret-expired`). An unreadable or partial old set refuses (fail closed).
    - The API: the answer of GET /api/dustpan/v1/git-host-apps/{kind} gets the NEW field oldSecretEndsAt (Unix milliseconds), the effective end of the window; the field is absent when no window is open. No read answers a secret.
-   - Backup: backup_githost.go of each dialect lists the three columns, so a backup holds the window (a restore keeps an open window as it was).
+   - Backup: the git host backup file of each dialect lists the three columns, so a backup holds the window (a restore keeps an open window as it was).
 
 ## Structure
 
