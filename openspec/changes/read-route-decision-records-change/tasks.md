@@ -12,6 +12,7 @@
 
 - [ ] 1.6 SECURITY. Failing hostile test: the service rejects a non-gdr- ID and a forged scope with a sentinel, and the scope recheck after the load rejects a record of another scope. Write it in the NEW file internal/api/decisionrecord/service_hostile_test.go. Check: TestDecisionRecordServiceRejectsHostileInput
 - [ ] 1.7 SECURITY. Failing hostile test: the port query gets an ID with SQL metacharacters and returns no row. Write it in the NEW file internal/api/decisionrecord/port_hostile_test.go. Check: TestDecisionRecordPortQueryHostileID
+- [ ] 1.8 SECURITY. Failing hostile test: a store read that fails with a driver error returns an error that wraps gate.ErrUnavailable and not gate.ErrNotFound. Write it in the existing file pkg/store/sqlite/gate_test.go (close the database, then call Records.Get). Check: TestRecordsGetWrapsStoreError fails on main because Records.Get at pkg/store/internal/gatestore/records.go:230-235 returns the raw driver error.
 
 ## 2. Side effects (computed from main)
 
@@ -24,4 +25,5 @@
 - [ ] 3.2 Update the API description in `internal/api/apidesc/openapi.json` with `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`. Never edit it by hand. Check: `go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description` leaves no diff. Confirmed by: the driver's gates.
 - [ ] 3.3 Docs page for the read call in NEW file docs/guides/decision-records.md. Check: `make docs-lint` passes and the curl command runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/read_route_decision_records_change_docs_test.go runs each command of the docs page against the e2e test server).
 - [ ] 3.4 E2e step and usability check. Check: BLOCKED by the e2e fixture: a gate that refuses a write with the real OpenTofu CLI and a personal access token of a principal with the gate read action; the step reads the NEW route. A person's step. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 3.5 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [ ] 3.5 SECURITY. Translate the driver error in Records.Get in pkg/store/internal/gatestore/records.go (:230-235): wrap it with gate.ErrUnavailable, as pkg/gate/access.go:68 does (`fmt.Errorf("...: %w: %w", gate.ErrUnavailable, err)`), so that the handler answers 503 gate.unavailable and not 404. Keep the gate.ErrNotFound path as it is. Check: TestRecordsGetWrapsStoreError passes.
+- [ ] 3.6 Full check. Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).
