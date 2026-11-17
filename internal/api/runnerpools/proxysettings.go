@@ -43,6 +43,9 @@ var (
 	)}
 	errProxySettingsIfMatch = problem.Fixed(http.StatusBadRequest, errcode.RequestIfMatchInvalid,
 		`If-Match must be the version of the proxy settings in quotes, as the ETag of a read gives it`)
+	// errProxySettingsMissing is the internal refusal for a save that returned
+	// no settings. It has no code of its own: the answer is an internal error.
+	errProxySettingsMissing = errors.New("proxy settings missing")
 	errProxySettingsChanged = problem.Fixed(http.StatusPreconditionFailed, errcode.RequestPreconditionFailed,
 		"the proxy settings changed since the version that you read: read them again")
 )
@@ -238,7 +241,7 @@ func (h *Handler) proxySettingsPut(r *http.Request, c *call) (*proxysessionsvc.P
 // writeProxySettings answers the settings with the version as the ETag.
 func (h *Handler) writeProxySettings(w http.ResponseWriter, r *http.Request, s *proxysessionsvc.Settings) {
 	if s == nil {
-		h.writeError(r.Context(), w, ScopeAuthorized, errors.New("proxy settings missing"))
+		h.writeError(r.Context(), w, ScopeAuthorized, errProxySettingsMissing)
 
 		return
 	}
