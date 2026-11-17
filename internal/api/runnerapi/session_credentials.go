@@ -22,6 +22,11 @@ import (
 // request that the server refused after the session checks.
 const eventCredentialsRefused = "credentials-refused"
 
+// eventCredentialsFailed names the event of the entry of a credentials request
+// that failed on the server after the session checks, for example because a
+// store or the authorizer did not answer. The request got a 5xx answer.
+const eventCredentialsFailed = "credentials-failed"
+
 // Reason codes of the denial entries of the credentials path.
 const (
 	reasonClaimLost   = "claim-lost"
@@ -33,7 +38,15 @@ const (
 	reasonNotLive     = "not-live"
 	reasonExpired     = "expired"
 	reasonRefused     = "refused"
+
+	reasonServerError = "server-error"
+	reasonInvalidStep = "invalid-step"
+	reasonUnknownStep = "unknown-step"
 )
+
+// stepNotValid stands in the denial entry for a step name that failed the
+// name check. The entry never holds text that was not checked.
+const stepNotValid = "(invalid)"
 
 // errGrantLost reports a starter of a job that keeps its record but no
 // longer holds the grant to run the job, or is disabled. The answer is 403
@@ -46,9 +59,9 @@ const grantLostMessage = "Grant lost. The starter of the job does not hold the g
 	"Read the grants of the starter."
 
 // credentialsFailure is a refusal of the credentials path. Reason is the code
-// of its denial entry, or empty when the failure is not a refusal (a store
-// that does not answer) and writes no entry. Job is the job of the claim when
-// it is known.
+// of its entry, or empty when the failure is not a refusal (a store that does
+// not answer): the entry then holds the reason server-error. Job is the job of
+// the claim when it is known.
 type credentialsFailure struct {
 	err    error
 	job    string
@@ -73,9 +86,13 @@ type issueInput struct {
 // credentials hands the job token of one step to the launcher of a job
 // session. The session checks (key proof, live claim) ran before. The path
 // checks the claim again, loads the job, and asks the token service, whose
-// store checks the world in its own transaction. Each refusal after the step
-// name check writes one denial entry that holds the job, the step and a
-// reason code, and never a token.
+// store checks the world in its own transaction. Each refusal after the
+// session checks writes one denial entry that holds the job, the step and a
+// reason code, and never a token. A step name that is not valid appears as a
+// fixed placeholder. A failure of the server (a store or authorizer that does
+// not answer) writes one entry with the outcome failure and the reason
+// server-error, and the answer is 5xx. When the entry cannot be written, the
+// request writes a log record and still fails closed.
 func (h *Handler) credentials(w http.ResponseWriter, r *http.Request, c *call) {
 	ctx := r.Context()
 
@@ -90,8 +107,11 @@ func (h *Handler) credentials(w http.ResponseWriter, r *http.Request, c *call) {
 	// checks the job and its steps. This check stays so that no later error,
 	// entry or log line holds a step name that was not checked.
 	if !job.ValidStepName(req.Step) {
-		h.writeError(ctx, w, fmt.Errorf("%w: the step name is 1 to %d lowercase letters, digits and '-'",
-			runner.ErrInvalid, job.MaxStepName))
+		err := fmt.Errorf("%w: the step name is 1 to %d lowercase letters, digits and '-'",
+			runner.ErrInvalid, job.MaxStepName)
+		h.recordCredentialsRefusal(ctx, r, &c.session, stepNotValid,
+			&credentialsFailure{err: err, job: "", reason: reasonInvalidStep})
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -106,9 +126,11 @@ func (h *Handler) credentials(w http.ResponseWriter, r *http.Request, c *call) {
 
 	got, failure := h.issueToken(r, &c.session, req.Step)
 	if failure != nil {
-		if failure.reason != "" {
-			h.recordCredentialsRefusal(ctx, r, &c.session, req.Step, failure)
+		if failure.reason == "" {
+			failure.reason = reasonServerError
 		}
+
+		h.recordCredentialsRefusal(ctx, r, &c.session, req.Step, failure)
 
 		h.writeError(ctx, w, failure.err)
 
@@ -155,14 +177,14 @@ func (h *Handler) issueToken(
 	if sp.claim.Phase < 0 || sp.claim.Phase >= len(j.Phases) {
 		err = fmt.Errorf("%w: job %s has no phase %d", runner.ErrInvalid, j.ID, sp.claim.Phase)
 
-		return none, &credentialsFailure{err: err, job: jobID, reason: ""}
+		return none, &credentialsFailure{err: err, job: jobID, reason: reasonUnknownStep}
 	}
 
 	st, ok := stepOfPhase(&j, sp.claim.Phase, step)
 	if !ok {
 		err = fmt.Errorf("%w: the phase has no step of this name", runner.ErrInvalid)
 
-		return none, &credentialsFailure{err: err, job: jobID, reason: ""}
+		return none, &credentialsFailure{err: err, job: jobID, reason: reasonUnknownStep}
 	}
 
 	// Defense in depth: the store checks the live unit row too. This check
@@ -235,7 +257,7 @@ func (h *Handler) checkStarterGrant(
 
 		if err != nil {
 			// Fail closed: an authorizer that does not answer gives no token.
-			// It is not a refusal, so it writes no entry, and the answer is 5xx.
+			// It is not a refusal: the entry says failure, and the answer is 5xx.
 			err = fmt.Errorf("check the grant of the starter: %w", err)
 
 			return &credentialsFailure{err: err, job: jobID, reason: ""}
@@ -293,7 +315,8 @@ func (h *Handler) issue(r *http.Request, in *issueInput) (issuedToken, *credenti
 
 		return none, &credentialsFailure{err: err, job: jobID, reason: reasonRefused}
 	default:
-		// A store failure is not a refusal: no entry, and the answer is 5xx.
+		// A store failure is not a refusal: the entry says failure, and the
+		// answer is 5xx.
 		return none, &credentialsFailure{err: err, job: jobID, reason: ""}
 	}
 }
@@ -355,7 +378,7 @@ func (h *Handler) logCredentialsSessionRefusal(ctx context.Context, sessionID st
 		slog.String("session", sha256Hex(sessionID)[:sessionLogHash]), slog.String("reason", reason))
 }
 
-// recordCredentialsRefusal writes the denial entry of a refused credentials
+// recordCredentialsRefusal writes the entry of a refused or failed credentials
 // request, in the namespace of the runner of the session. It returns nothing:
 // the refusal stays when the append fails (fail closed), and the failure is
 // logged and counted. The entry holds the session, the job, the step and the
@@ -386,11 +409,18 @@ func (h *Handler) recordCredentialsRefusal(
 
 	rule := runner.AuditRule{Action: runner.AuditRules()[runner.EventCredentialsIssued].Action, Kind: audit.KindChange}
 	e := h.entry(r, rn.Namespace, sess.ID, rule, h.now())
+	event := eventCredentialsRefused
 	e.Outcome = audit.OutcomeDenied
+
+	if failure.reason == reasonServerError {
+		event = eventCredentialsFailed
+		e.Outcome = audit.OutcomeFailure
+	}
+
 	e.Reason = failure.reason
 	e.JobID = failure.job
 	e.Changes = []audit.Change{
-		{Key: changeEvent, Old: nil, New: eventCredentialsRefused, Layer: "", TakesEffect: ""},
+		{Key: changeEvent, Old: nil, New: event, Layer: "", TakesEffect: ""},
 		{Key: "step", Old: nil, New: step, Layer: "", TakesEffect: ""},
 		{Key: "reason", Old: nil, New: failure.reason, Layer: "", TakesEffect: ""},
 	}

@@ -3,6 +3,7 @@ package runnerapi_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -838,7 +839,8 @@ func checkGrantLost(t *testing.T, s *tokenEnv, status int, body []byte) {
 
 // TestSessionCredentialsBadStepName proves that the boundary check of the path
 // refuses a step name that is not valid, as if the job had a step of that
-// name: no token, no entry and no step name in the answer.
+// name: no token, no step name in the answer, and one denial entry for each
+// request that holds the reason and a fixed placeholder in place of the name.
 func TestSessionCredentialsBadStepName(t *testing.T) {
 	t.Parallel()
 
@@ -869,8 +871,13 @@ func TestSessionCredentialsBadStepName(t *testing.T) {
 		t.Fatal("a step name that is not valid got a token")
 	}
 
-	if got := refusedEntries(t, s); len(got) != 0 {
-		t.Fatalf("a step name that is not valid wrote %d denial entries, want 0", len(got))
+	got := refusedEntries(t, s)
+	if len(got) != len(names) {
+		t.Fatalf("step names that are not valid wrote %d denial entries, want %d", len(got), len(names))
+	}
+
+	for i := range got {
+		checkDenialStep(t, got[i], denialWant{session: s.l.id, job: "", step: "(invalid)", reason: "invalid-step"})
 	}
 }
 
@@ -902,7 +909,7 @@ func TestSessionCredentialsSweep(t *testing.T) {
 }
 
 // TestSessionCredentialsUnknownStep proves that an unknown step gets no token
-// and no entry.
+// and one denial entry.
 func TestSessionCredentialsUnknownStep(t *testing.T) {
 	t.Parallel()
 
@@ -918,9 +925,12 @@ func TestSessionCredentialsUnknownStep(t *testing.T) {
 		t.Fatal("an unknown step got a token")
 	}
 
-	if got := refusedEntries(t, s); len(got) != 0 {
-		t.Fatalf("an unknown step wrote %d denial entries, want 0", len(got))
+	got := refusedEntries(t, s)
+	if len(got) != 1 {
+		t.Fatalf("an unknown step wrote %d denial entries, want 1", len(got))
 	}
+
+	checkDenialStep(t, got[0], denialWant{session: s.l.id, job: string(s.job.ID), step: "nope", reason: "unknown-step"})
 }
 
 // checkDenial checks one denial entry of the credentials path: its outcome is
@@ -928,6 +938,20 @@ func TestSessionCredentialsUnknownStep(t *testing.T) {
 // not empty, the job. It holds no token text.
 func checkDenial(t *testing.T, e audit.Entry, session, jobID, reason string) {
 	t.Helper()
+
+	checkDenialStep(t, e, denialWant{session: session, job: jobID, step: "plan", reason: reason})
+}
+
+// denialWant is what a denial entry of the credentials path must name.
+type denialWant struct {
+	session, job, step, reason string
+}
+
+// checkDenialStep is checkDenial for a denial entry that names any step.
+func checkDenialStep(t *testing.T, e audit.Entry, want denialWant) {
+	t.Helper()
+
+	session, jobID, step, reason := want.session, want.job, want.step, want.reason
 
 	if e.Outcome != audit.OutcomeDenied {
 		t.Errorf("denial outcome = %q, want denied", e.Outcome)
@@ -941,8 +965,8 @@ func checkDenial(t *testing.T, e audit.Entry, session, jobID, reason string) {
 		t.Errorf("denial job = %q, want %q", e.JobID, jobID)
 	}
 
-	if !holdsChange(e, "step", "plan") {
-		t.Errorf("the denial entry names no step: %+v", e.Changes)
+	if !holdsChange(e, "step", step) {
+		t.Errorf("the denial entry names no step %q: %+v", step, e.Changes)
 	}
 
 	if !holdsChange(e, "reason", reason) {
@@ -1086,4 +1110,270 @@ func (s deadClaimOps) Get(ctx context.Context, id durable.ID) (durable.Operation
 	}
 
 	return op, nil
+}
+
+// TestSessionCredentialsStepNotInPhase proves that a step of another phase
+// gets no token and one denial entry.
+func TestSessionCredentialsStepNotInPhase(t *testing.T) {
+	t.Parallel()
+
+	s := newTokenEnv(t, 0, 0, func(cfg *runnerapi.Config) {
+		cfg.Jobs = otherPhaseJobs{inner: cfg.Jobs}
+	})
+	s.launch()
+
+	status, body := s.ask("plan")
+	if status != http.StatusBadRequest || errorCode(t, body) != protocol.ErrorInvalid {
+		t.Fatalf("credentials of a step of another phase = %d %s, want 400 invalid", status, body)
+	}
+
+	if len(issuedEntries(t, s)) != 0 {
+		t.Fatal("a step of another phase got a token")
+	}
+
+	got := refusedEntries(t, s)
+	if len(got) != 1 {
+		t.Fatalf("the refusal wrote %d denial entries, want 1", len(got))
+	}
+
+	checkDenial(t, got[0], s.l.id, string(s.job.ID), "unknown-step")
+}
+
+// TestSessionCredentialsAuthorizerFails proves the fail-closed layer of the
+// grant check: an authorizer that returns an error that is not a denial gives
+// no token and no issue entry, and the answer is 5xx.
+func TestSessionCredentialsAuthorizerFails(t *testing.T) {
+	t.Parallel()
+
+	broken := &atomic.Bool{}
+
+	s := newTokenEnv(t, 0, 0, func(cfg *runnerapi.Config) {
+		cfg.Authorizer = failingStarterAuthz{inner: cfg.Authorizer, broken: broken}
+	})
+	s.launch()
+	broken.Store(true)
+
+	status, body := s.ask("plan")
+	if status < http.StatusInternalServerError {
+		t.Fatalf("credentials with an authorizer that fails = %d %s, want 5xx", status, body)
+	}
+
+	if strings.Contains(string(body), jobtoken.SecretPrefix) {
+		t.Errorf("the answer holds token text: %s", body)
+	}
+
+	if len(issuedEntries(t, s)) != 0 {
+		t.Fatal("an authorizer that fails gave a token")
+	}
+
+	failed := entriesOfEvent(t, "credentials-failed", func() (audit.Listing, error) {
+		return s.audit.List(t.Context(), namespace.Name("acme"), tokenAuditPage())
+	})
+	if len(failed) != 1 {
+		t.Fatalf("the failure wrote %d entries, want 1", len(failed))
+	}
+
+	if failed[0].Outcome != audit.OutcomeFailure || !holdsChange(failed[0], "reason", "server-error") ||
+		failed[0].Reason != "server-error" || failed[0].JobID != string(s.job.ID) {
+		t.Errorf("failure entry = %+v, want outcome failure, reason server-error and the job", failed[0])
+	}
+
+	if strings.Contains(failed[0].Reason, errAuthorizerDown.Error()) {
+		t.Error("the failure entry holds the text of the error")
+	}
+}
+
+// TestSessionCredentialsFailureEntryAppendFails proves the last fail-closed
+// layer: when the entry of a failed request cannot be written, the request
+// still gets no token and the answer is 5xx, and the handler logs the failed
+// append.
+func TestSessionCredentialsFailureEntryAppendFails(t *testing.T) {
+	t.Parallel()
+
+	broken := &atomic.Bool{}
+
+	s := newTokenEnv(t, 0, 0, func(cfg *runnerapi.Config) {
+		cfg.Authorizer = failingStarterAuthz{inner: cfg.Authorizer, broken: broken}
+		cfg.Audit = new(appendFailsAudit)
+	})
+	s.launch()
+	broken.Store(true)
+
+	status, body := s.ask("plan")
+	if status < http.StatusInternalServerError {
+		t.Fatalf("credentials with no way to write the entry = %d %s, want 5xx", status, body)
+	}
+
+	if len(issuedEntries(t, s)) != 0 {
+		t.Fatal("a request whose entry failed got a token")
+	}
+
+	if !strings.Contains(s.logs.String(), "audit append failed") {
+		t.Error("the handler logged no failed append")
+	}
+}
+
+// appendFailsAudit is an audit store whose fenced append always fails.
+type appendFailsAudit struct{ testAudit }
+
+var errAppendDown = errors.New("append down")
+
+func (*appendFailsAudit) Append(context.Context, namespace.Fence, audit.Entry) (audit.Entry, error) {
+	return audit.Entry{}, errAppendDown
+}
+
+// TestSessionCredentialsUnknownStartAction proves the fail-closed layer of the
+// start requirements: a job whose start action is unknown gets no token and one
+// denial entry, and does not pass the grant loop with no requirements.
+func TestSessionCredentialsUnknownStartAction(t *testing.T) {
+	t.Parallel()
+
+	s := newTokenEnv(t, 0, 0, func(cfg *runnerapi.Config) {
+		cfg.Jobs = unknownOperationJobs{inner: cfg.Jobs}
+	})
+	s.launch()
+
+	status, body := s.ask("plan")
+	checkGrantLost(t, s, status, body)
+}
+
+// TestSessionCredentialsExpiryNotAfterNow proves the expiry layer of the path:
+// an expiry that is not after the clock of the server gets no token and one
+// denial entry, as if the claim ended between the session check and the issue.
+func TestSessionCredentialsExpiryNotAfterNow(t *testing.T) {
+	t.Parallel()
+
+	s := newTokenEnv(t, 0, 0, func(cfg *runnerapi.Config) {
+		cfg.Jobs = pastTimeoutJobs{inner: cfg.Jobs}
+	})
+	s.launch()
+
+	status, body := s.ask("plan")
+	if status != http.StatusConflict || errorCode(t, body) != protocol.ErrorClaimLost {
+		t.Fatalf("credentials with an ended expiry = %d %s, want 409 claim-lost", status, body)
+	}
+
+	if len(issuedEntries(t, s)) != 0 {
+		t.Fatal("an expiry that is not after now got a token")
+	}
+
+	got := refusedEntries(t, s)
+	if len(got) != 1 {
+		t.Fatalf("the refusal wrote %d denial entries, want 1", len(got))
+	}
+
+	checkDenial(t, got[0], s.l.id, string(s.job.ID), "expired")
+}
+
+// TestSessionCredentialsNoIssuer proves that a server with no job token issuer
+// has no credentials path.
+func TestSessionCredentialsNoIssuer(t *testing.T) {
+	t.Parallel()
+
+	s := newTokenEnv(t, 0, 0, func(cfg *runnerapi.Config) {
+		cfg.JobTokens = nil
+	})
+	s.launch()
+
+	status, body := s.ask("plan")
+	if status != http.StatusNotFound {
+		t.Fatalf("credentials of a server with no issuer = %d %s, want 404", status, body)
+	}
+
+	if len(issuedEntries(t, s)) != 0 {
+		t.Fatal("a server with no issuer gave a token")
+	}
+}
+
+// errAuthorizerDown is the error of an authorizer that does not answer.
+var errAuthorizerDown = errors.New("the authorizer does not answer")
+
+// failingStarterAuthz answers an error that is not a denial for the starter
+// ada once broken is set, and asks its inner authorizer for every other
+// request.
+type failingStarterAuthz struct {
+	inner  identity.Authorizer
+	broken *atomic.Bool
+}
+
+func (f failingStarterAuthz) Authorize(ctx context.Context, p identity.Principal, action identity.Action,
+	obj identity.Object,
+) error {
+	if p.Subject == "ada" && f.broken.Load() {
+		return errAuthorizerDown
+	}
+
+	return f.inner.Authorize(ctx, p, action, obj)
+}
+
+func (f failingStarterAuthz) ListObjects(ctx context.Context, p identity.Principal, action identity.Action,
+) (identity.Scope, error) {
+	scope, err := f.inner.ListObjects(ctx, p, action)
+	if err != nil {
+		return scope, fmt.Errorf("list objects: %w", err)
+	}
+
+	return scope, nil
+}
+
+// unknownOperationJobs is a job reader that answers the job of its reader with
+// an operation that no start action matches.
+type unknownOperationJobs struct {
+	inner runnerapi.JobReader
+}
+
+func (f unknownOperationJobs) Get(ctx context.Context, id job.ID) (job.Job, error) {
+	j, err := f.inner.Get(ctx, id)
+	if err != nil {
+		return job.Job{}, err
+	}
+
+	j.Spec.Operation = "no-such-operation"
+
+	return j, nil
+}
+
+// pastTimeoutJobs is a job reader that answers the job of its reader with
+// steps whose timeout is far in the past, so that the expiry of the token is
+// not after the clock of the server.
+type pastTimeoutJobs struct {
+	inner runnerapi.JobReader
+}
+
+func (f pastTimeoutJobs) Get(ctx context.Context, id job.ID) (job.Job, error) {
+	j, err := f.inner.Get(ctx, id)
+	if err != nil {
+		return job.Job{}, err
+	}
+
+	steps := append([]job.Step(nil), j.Spec.Steps...)
+	for i := range steps {
+		steps[i].Timeout = -24 * time.Hour
+	}
+
+	j.Spec.Steps = steps
+
+	return j, nil
+}
+
+// otherPhaseJobs is a job reader that answers the job of its reader with steps
+// of a phase that is not the phase of the claim.
+type otherPhaseJobs struct {
+	inner runnerapi.JobReader
+}
+
+func (f otherPhaseJobs) Get(ctx context.Context, id job.ID) (job.Job, error) {
+	j, err := f.inner.Get(ctx, id)
+	if err != nil {
+		return job.Job{}, err
+	}
+
+	steps := append([]job.Step(nil), j.Spec.Steps...)
+	for i := range steps {
+		steps[i].Phase = "no-such-phase"
+	}
+
+	j.Spec.Steps = steps
+
+	return j, nil
 }

@@ -253,7 +253,12 @@ of the step plus its timeout plus a grace period. It also ends when the job
 ends. A new request for the same step gives a new token. The server shows the
 secret in this answer only. It writes one audit entry for each token. The entry
 names the job, the step and the expiry, and holds no secret. A refusal after
-the proof check writes an audit entry too. A refusal before the proof check, a
+the proof check writes an audit entry too, also for a step name that is not
+valid. The entry shows a fixed placeholder in place of that name. A failure of
+the server, for example a store that does not answer, writes an audit entry
+with the outcome `failure` and the reason `server-error`, and the answer is 5xx.
+When that entry cannot be written, the server writes a log record and still
+answers 5xx. A refusal before the proof check, a
 claim that is not live (`claim-lost`) or a runner that was retired (`retired`),
 writes one log record and no audit entry.
 
