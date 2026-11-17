@@ -1,0 +1,95 @@
+package servertest_test
+
+import (
+	"encoding/base64"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/runner/protocol"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
+)
+
+// TestJobTokenWiring checks that a job token that the credentials path of a job
+// session issues works on the state route of the unit of the job, and on no
+// other unit. It runs the whole chain on one server: the claim of a phase, the
+// job session, the credentials of a step, and the authenticator chain.
+func TestJobTokenWiring(t *testing.T) {
+	t.Parallel()
+
+	h := newRoundTripHarness(t, traceOff, dustpan.WithPublicURL(publicURL))
+
+	h.createWorkspace("web")
+	h.createWorkspace("other")
+
+	sess := h.jobSession()
+
+	// The starter of the flows holds the role planner, which cannot read state.
+	// The token acts as the starter, so the starter also gets the role writer.
+	grantStarterWriter(h)
+
+	resp, err := sess.Post(t.Context(), protocol.PathSessionCredentials, protocol.CredentialsRequest{Step: "plan"})
+	if err != nil || resp.Status != http.StatusOK {
+		t.Fatalf("credentials = %+v, %v; want 200", resp, err)
+	}
+
+	var issued protocol.CredentialsResponse
+
+	h.decode(string(resp.Body), &issued)
+
+	if !strings.HasPrefix(issued.Token, "odj_") {
+		t.Fatal("token has no odj_ prefix")
+	}
+
+	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("job:"+issued.Token))
+	base := h.cluster.URL(0)
+
+	// The unit of the job: the token passes the authenticator and the
+	// authorizer. The workspace has no state yet, so the answer is 404.
+	status, answer := h.send(http.MethodGet, base+"/tofu/state/acme/web", basic, "")
+	if status != http.StatusNotFound {
+		t.Fatalf("state of the unit of the job = %d %s, want 404", status, answer)
+	}
+
+	// Another unit: the token is valid, and the authorizer refuses it.
+	status, answer = h.send(http.MethodGet, base+"/tofu/state/acme/other", basic, "")
+	if status != http.StatusForbidden {
+		t.Fatalf("state of another unit = %d %s, want 403", status, answer)
+	}
+
+	if strings.Contains(answer, issued.Token) {
+		t.Fatal("the refusal holds the token")
+	}
+
+	// A token that the server did not issue gets 401.
+	bad := "Basic " + base64.StdEncoding.EncodeToString([]byte("job:odj_not-issued"))
+
+	status, _ = h.send(http.MethodGet, base+"/tofu/state/acme/web", bad, "")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("state with a token that was not issued = %d, want 401", status)
+	}
+}
+
+// grantStarterWriter gives the starter of the flows the role writer on the
+// namespace acme.
+func grantStarterWriter(h *rtHarness) {
+	h.t.Helper()
+
+	at := time.UnixMilli(1_700_000_000_000).UTC()
+	obj := identity.NamespaceObject("acme")
+	st := h.cluster.Store(h.t, 0)
+	fence, entry := storetest.GrantWrite(h.t, st, obj, at, "grant:job-token-wiring")
+
+	grant := access.Grant{
+		CreatedAt: at, Condition: nil, Object: obj, ID: "grt-admin-writer", Role: access.RoleWriter,
+		CreatedBy: "admin", Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-admin"},
+	}
+
+	if err := st.CreateGrant(h.t.Context(), grant, fence, entry, nil); err != nil {
+		h.t.Fatalf("create the writer grant of the starter: %v", err)
+	}
+}

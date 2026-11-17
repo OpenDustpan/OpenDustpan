@@ -153,16 +153,27 @@ func (h *rtHarness) joinRunner(client *session.Client) {
 func (h *rtHarness) createStarter() {
 	h.t.Helper()
 
-	at := time.UnixMilli(1_700_000_000_000).UTC()
+	st := h.cluster.Store(h.t, 0)
+
+	// The starter is a person. The inactivity disable of the server disables a
+	// person whose records are older than the inactivity period, at the time of
+	// the database clock. A fixed time in the past makes the sweep disable the
+	// starter when its tick runs during the flow, and the credentials path then
+	// answers grant-lost. A time at the database clock keeps the starter active.
+	at, err := st.DatabaseNow(h.t.Context())
+	if err != nil {
+		h.t.Fatalf("read the clock of the database: %v", err)
+	}
+
+	at = at.UTC().Truncate(time.Millisecond)
+
 	p := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: "prn-admin", Subject: "admin",
 		DisplayName: "admin", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "",
 		GroupCount: 0, BreakGlass: false,
 	}
 
-	st := h.cluster.Store(h.t, 0)
-
-	err := st.CreatePrincipal(h.t.Context(), p, storetest.ServerChange(at, principal.Ref(p.ID)))
+	err = st.CreatePrincipal(h.t.Context(), p, storetest.ServerChange(at, principal.Ref(p.ID)))
 	if err != nil {
 		h.t.Fatalf("create the starter: %v", err)
 	}

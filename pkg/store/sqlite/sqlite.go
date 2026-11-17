@@ -52,7 +52,7 @@ const fileScheme = "file"
 // sets it explicitly so a later default cannot change the bound silently.
 // The automatic checkpoint is passive, so it never restarts the log while a
 // reader holds it; the guard below forces a truncate checkpoint when the log
-// grows past walGuardThresholdBytes.
+// grows past the guard threshold of the store.
 const walAutoCheckpointFrames = 1000
 
 // walJournalSizeLimitBytes caps the size the database keeps the write-ahead
@@ -95,40 +95,30 @@ const walGuardBusyTimeoutMs = 50
 // connection before the guard returns it to the pool, in milliseconds.
 const walGuardDefaultTimeoutMs = 10000
 
-// walGuardInterval ticks the write-ahead log guard. Tests replace it through
-// the test hook; production keeps 200 ms.
-//
-//nolint:gochecknoglobals // The guard timing stays tunable in tests without a new setting; the hook restores it.
-var walGuardInterval = 200 * time.Millisecond
+// walGuardBaseInterval is the base wait between two guard ticks. Each store
+// keeps its own walGuardInterval field, which newStore sets to this value.
+const walGuardBaseInterval = 200 * time.Millisecond
 
-// walGuardThresholdBytes starts a truncate checkpoint when the write-ahead
-// log file reaches it, in bytes. It holds the same value as
-// walJournalSizeLimitBytes: the guard bounds the peak, the pragma bounds the
-// file after a restart. Tests replace it through the test hook.
-//
-//nolint:gochecknoglobals // The guard threshold stays tunable in tests without a new setting; the hook restores it.
-var walGuardThresholdBytes = int64(walJournalSizeLimitBytes)
+// walGuardDefaultThresholdBytes is the threshold a store starts with. It holds
+// the same value as walJournalSizeLimitBytes: the guard bounds the peak, the
+// pragma bounds the file after a restart. Each store keeps its own
+// walGuardThresholdBytes field, which newStore sets to this value.
+const walGuardDefaultThresholdBytes = int64(walJournalSizeLimitBytes)
 
 // walGuardMaxBackoff caps the wait before the next guard tick after a tick
 // that fails with a slow busy attempt, in production. The guard doubles the
 // wait on each such tick up to this cap and resets it to the base interval
 // after a successful truncate or when the log drops below the threshold.
+// Each store keeps its own walGuardBackoffCap field, which newStore sets to
+// this value.
 const walGuardMaxBackoff = 5 * time.Second
 
-// walGuardBackoffCap holds the backoff cap the guard enforces: it holds
-// walGuardMaxBackoff in production; tests replace it through the test hook,
-// so backoff tests stay fast.
-//
-//nolint:gochecknoglobals // The guard backoff stays tunable in tests without a new setting; the hook restores it.
-var walGuardBackoffCap = walGuardMaxBackoff
-
 // walTickInfo describes one past-threshold guard tick for the test hook: the
-// database path of the store, so a test reads only the ticks of its own store
-// while other stores tick in parallel, when the truncate finished, how long
-// the tick took from its stat to the finish, whether it succeeded, whether the
-// tick saw a slow busy attempt, and the slow and total attempt counts, and the
-// wait the guard slept before the tick, so tests check the backoff without
-// measuring wall-clock gaps.
+// database path of the store, when the truncate finished, how long the tick
+// took from its stat to the finish, whether it succeeded, whether the tick saw
+// a slow busy attempt, the slow and total attempt counts, and the wait the
+// guard slept before the tick, so tests check the backoff without measuring
+// wall-clock gaps.
 type walTickInfo struct {
 	path         string
 	at           time.Time
@@ -140,63 +130,11 @@ type walTickInfo struct {
 	attempts     int
 }
 
-// walGuardTicksMu guards walGuardTicks and walGuardCollect below: the guard
-// appends past-threshold ticks, and the test hook swaps, clears and reads
-// them. Holds stay brief and never nest with other locks.
-//
-//nolint:gochecknoglobals // The guard and the hook share one tick buffer; every hold stays brief.
-var walGuardTicksMu sync.Mutex
-
-// walGuardTicks holds one entry per past-threshold guard tick while a test
-// collects them. Production never collects, so the buffer stays empty outside
-// tests.
-//
-//nolint:gochecknoglobals // See walGuardTicksMu: the buffer lives beside its lock.
-var walGuardTicks []walTickInfo
-
-// walGuardCollect reports whether the test hook collects guard ticks. Only
-// the hook writes it, under walGuardTicksMu; the guard reads it on the same
-// lock before it appends.
-//
-//nolint:gochecknoglobals // See walGuardTicksMu: the flag lives beside its lock.
-var walGuardCollect = false
-
-// recordWalTick appends info to the test hook buffer when a test collects
-// guard ticks. Production never collects, so this stays a brief locked check.
-func recordWalTick(info walTickInfo) {
-	walGuardTicksMu.Lock()
-	defer walGuardTicksMu.Unlock()
-
-	if !walGuardCollect {
-		return
-	}
-
-	const maxTicks = 100000
-
-	if len(walGuardTicks) < maxTicks {
-		walGuardTicks = append(walGuardTicks, info)
-	}
-}
-
 // walGuardWarnPeriod is the time a truncate checkpoint must keep failing on
 // every tick before the guard writes one warning: 30 s of continuous busy
-// results means the log cannot restart and keeps growing.
+// results means the log cannot restart and keeps growing. Each store keeps
+// its own walGuardWarnAfter field, which newStore sets to this value.
 const walGuardWarnPeriod = 30 * time.Second
-
-// walGuardWarnAfter holds the failing time before the guard warns, in
-// nanoseconds as a duration. It holds walGuardWarnPeriod in production;
-// tests replace it through the test hook.
-//
-//nolint:gochecknoglobals // The guard warn period stays tunable in tests without a new setting; the hook restores it.
-var walGuardWarnAfter = walGuardWarnPeriod
-
-// walGuardMu guards the interval, the threshold, the warn period and the
-// backoff cap above: the test hook holds it exclusive for each swap, and the
-// guard holds it shared for each read. Every hold stays brief and never nests
-// with the store lock, so the guard never parks behind a test.
-//
-//nolint:gochecknoglobals // The hook and the guard share one lock; every hold stays brief.
-var walGuardMu sync.RWMutex
 
 //go:embed migrations/*.sql
 var migrations embed.FS
@@ -259,6 +197,29 @@ type Store struct {
 	// so no checkpoint runs on a closed handle.
 	guardCancel context.CancelFunc
 	guardDone   chan struct{}
+	// walGuardInterval is the base wait between two guard ticks. newStore sets
+	// it to walGuardBaseInterval; WithWALGuardForTest replaces it for one store.
+	walGuardInterval time.Duration
+	// walGuardThresholdBytes starts a truncate checkpoint when the write-ahead
+	// log file reaches it, in bytes. newStore sets it to
+	// walGuardDefaultThresholdBytes; WithWALGuardForTest replaces it for one store.
+	walGuardThresholdBytes int64
+	// walGuardWarnAfter holds the failing time before the guard warns. newStore
+	// sets it to walGuardWarnPeriod; WithWALGuardForTest replaces it for one store.
+	walGuardWarnAfter time.Duration
+	// walGuardBackoffCap caps the wait before the next guard tick after a slow
+	// busy tick. newStore sets it to walGuardMaxBackoff; WithWALGuardForTest
+	// replaces it for one store.
+	walGuardBackoffCap time.Duration
+	// walGuardTicksMu guards walGuardTicks and walGuardCollect: the guard appends
+	// past-threshold ticks, and the test hook reads them. Holds stay brief.
+	walGuardTicksMu sync.Mutex
+	// walGuardTicks holds one entry per past-threshold guard tick while the store
+	// collects them for a test. Production never collects, so it stays empty.
+	walGuardTicks []walTickInfo
+	// walGuardCollect reports whether the store collects guard ticks. Only
+	// WithWALGuardForTest sets it, before the guard starts.
+	walGuardCollect bool
 	// logger records guard warnings. It defaults to a discard handler; pass
 	// WithLogger to record the busy warning.
 	logger *slog.Logger
@@ -424,6 +385,13 @@ func newStore(conn *sql.DB, path string, guard *processGuard) *Store {
 		stagingPath:              "",
 		guardCancel:              nil,
 		guardDone:                nil,
+		walGuardInterval:         walGuardBaseInterval,
+		walGuardThresholdBytes:   walGuardDefaultThresholdBytes,
+		walGuardWarnAfter:        walGuardWarnPeriod,
+		walGuardBackoffCap:       walGuardMaxBackoff,
+		walGuardTicksMu:          sync.Mutex{},
+		walGuardTicks:            nil,
+		walGuardCollect:          false,
 		logger:                   slog.New(slog.DiscardHandler),
 		lastTruncateSuccess:      time.Now(),
 		busyWarned:               false,
@@ -1918,21 +1886,16 @@ func rollback(tx *sql.Tx) error {
 // backoff cap; a tick that fails with only fast busy attempts keeps the base
 // interval. A successful truncate or a log below the threshold resets the
 // wait to the base interval. The loop never panics and never stops early: a
-// failed tick only logs at debug level. The interval and the cap are read
-// again for every tick, so the test hook takes effect without reopening the
-// store.
+// failed tick only logs at debug level. The interval and the cap are the
+// settings of this store, fixed when it opens.
 func (s *Store) guardLoop(ctx context.Context) {
 	defer close(s.guardDone)
 
-	walGuardMu.RLock()
-	wait := walGuardInterval
-	walGuardMu.RUnlock()
+	wait := s.walGuardInterval
 
 	for {
-		walGuardMu.RLock()
-		base := walGuardInterval
-		backoffCap := walGuardBackoffCap
-		walGuardMu.RUnlock()
+		base := s.walGuardInterval
+		backoffCap := s.walGuardBackoffCap
 
 		if wait < base {
 			wait = base
@@ -1952,7 +1915,7 @@ func (s *Store) guardLoop(ctx context.Context) {
 		case <-timer.C:
 		}
 
-		wait = nextGuardWait(wait, s.guardTick(ctx, wait))
+		wait = s.nextGuardWait(wait, s.guardTick(ctx, wait))
 	}
 }
 
@@ -1960,13 +1923,10 @@ func (s *Store) guardLoop(ctx context.Context) {
 // outcome: a successful truncate or a log below the threshold resets the wait
 // to the base interval, a tick that fails with a slow busy attempt doubles it
 // up to the backoff cap, and a tick that fails with only fast busy attempts
-// keeps the base interval. The base and the cap are read again on every call,
-// so the test hook takes effect without reopening the store.
-func nextGuardWait(wait time.Duration, outcome guardOutcome) time.Duration {
-	walGuardMu.RLock()
-	base := walGuardInterval
-	backoffCap := walGuardBackoffCap
-	walGuardMu.RUnlock()
+// keeps the base interval. The base and the cap are the settings of this store.
+func (s *Store) nextGuardWait(wait time.Duration, outcome guardOutcome) time.Duration {
+	base := s.walGuardInterval
+	backoffCap := s.walGuardBackoffCap
 
 	switch {
 	case outcome.belowThreshold || outcome.succeeded:
@@ -2010,10 +1970,8 @@ func (s *Store) guardTick(ctx context.Context, waited time.Duration) guardOutcom
 		return guardOutcome{belowThreshold: false, succeeded: false, slowBusy: false}
 	}
 
-	walGuardMu.RLock()
-	threshold := walGuardThresholdBytes
-	warnAfter := walGuardWarnAfter
-	walGuardMu.RUnlock()
+	threshold := s.walGuardThresholdBytes
+	warnAfter := s.walGuardWarnAfter
 
 	now := time.Now()
 	if info.Size() < threshold {
@@ -2025,7 +1983,7 @@ func (s *Store) guardTick(ctx context.Context, waited time.Duration) guardOutcom
 
 	result := s.guardCheckpoint(ctx)
 
-	recordWalTick(walTickInfo{
+	s.recordWalTick(walTickInfo{
 		path:         s.path,
 		at:           time.Now(),
 		waited:       waited,
@@ -2054,6 +2012,23 @@ func (s *Store) guardTick(ctx context.Context, waited time.Duration) guardOutcom
 	}
 
 	return guardOutcome{belowThreshold: false, succeeded: false, slowBusy: result.slowBusy}
+}
+
+// recordWalTick appends info to the tick buffer of s when a test collects
+// guard ticks. Production never collects, so this stays a brief locked check.
+func (s *Store) recordWalTick(info walTickInfo) {
+	s.walGuardTicksMu.Lock()
+	defer s.walGuardTicksMu.Unlock()
+
+	if !s.walGuardCollect {
+		return
+	}
+
+	const maxTicks = 100000
+
+	if len(s.walGuardTicks) < maxTicks {
+		s.walGuardTicks = append(s.walGuardTicks, info)
+	}
 }
 
 // truncateResult reports one runTruncate call: whether the checkpoint
