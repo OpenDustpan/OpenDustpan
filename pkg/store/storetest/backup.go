@@ -2506,6 +2506,7 @@ func refuseInvalidBackupAttempt(
 	t.Helper()
 
 	for i, bad := range []string{
+		"",
 		strings.Repeat("a", 65),
 		"../x",
 		"a/b",
