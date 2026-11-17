@@ -2,6 +2,8 @@
 version: 5
 ---
 
+Issue: #3371.
+
 Roadmap: `docs/roadmap.md:159` (Groups, roles and grants).
 
 ## Why
