@@ -147,7 +147,7 @@ func (f *stepOps) Get(context.Context, durable.ID) (durable.Operation, error) {
 
 	op := f.op
 	op.State = durable.StateRunning
-	op.Claim = durable.Claim{Operation: op.ID, Owner: "test", Token: f.live, ExpiresAt: claimTestTime}
+	op.Claim = durable.Claim{Operation: op.ID, Owner: "test", Token: f.live, ExpiresAt: claimTestTime()}
 	op.CancelRequested = false
 
 	return op, nil
@@ -275,7 +275,7 @@ func (stepKinds) ReadKind(context.Context) (installation.Kind, error) {
 func stepService(target blob.Store, reg *stepRegistry, ops *stepOps) *Service {
 	reg.mu.Lock()
 	reg.rows[stepID] = Record{
-		StartedAt: claimTestTime, EndedAt: time.Time{}, ID: stepID, Target: "test", Error: "",
+		StartedAt: claimTestTime(), EndedAt: time.Time{}, ID: stepID, Target: "test", Error: "",
 		State: StateRunning, Attempt: "",
 	}
 	reg.mu.Unlock()
@@ -300,7 +300,7 @@ func stepOperation(opID durable.ID) durable.Operation {
 		Claim: durable.Claim{
 			Operation: opID, Owner: "test", Token: 0, ExpiresAt: time.Time{},
 		},
-		CancelRequested: false, NotBefore: time.Time{}, CreatedAt: claimTestTime, UpdatedAt: claimTestTime,
+		CancelRequested: false, NotBefore: time.Time{}, CreatedAt: claimTestTime(), UpdatedAt: claimTestTime(),
 	}
 }
 
@@ -440,7 +440,7 @@ func TestStepFinishRefusesARowThatIsNotRunning(t *testing.T) {
 
 	reg.mu.Lock()
 	reg.rows[stepID] = Record{
-		StartedAt: claimTestTime, EndedAt: claimTestTime, ID: stepID, Target: "test", Error: "",
+		StartedAt: claimTestTime(), EndedAt: claimTestTime(), ID: stepID, Target: "test", Error: "",
 		State: StateSucceeded, Attempt: "5",
 	}
 	reg.mu.Unlock()
