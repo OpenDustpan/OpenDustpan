@@ -11,7 +11,7 @@ import (
 // entry for each action constant of the block in identity.go. An author
 // who adds a new action constant must add its catalog entry too, and this
 // count makes the missing entry fail here.
-const catalogCount = 127
+const catalogCount = 128
 
 // TestActionsCatalogIsComplete checks the catalog that Actions returns:
 // it holds one entry for each action of the core, sorted, with no
