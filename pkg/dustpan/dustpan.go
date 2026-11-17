@@ -2249,12 +2249,22 @@ func denialFlusher(
 	}
 
 	allowlist := allowlistAudit{store: serverAudit, limiter: cfg.allowlistLimiter, now: cfg.now, logger: cfg.logger}
-	shared := rec.WithLimiter(cfg.denialLimiter)
 
+	return joinFlushers(rec.WithLimiter(cfg.denialLimiter), allowlist), nil
+}
+
+// denialFlush is met by the recorder of the shared limiter.
+type denialFlush interface {
+	Flush(ctx context.Context)
+}
+
+// joinFlushers returns the function that writes the counts of the shared
+// limiter and then the counts of the allowlist gate.
+func joinFlushers(shared denialFlush, allowlist allowlistAudit) func(context.Context) {
 	return func(ctx context.Context) {
 		shared.Flush(ctx)
 		allowlist.flush(ctx)
-	}, nil
+	}
 }
 
 // flushTimeout bounds the write of the counts of refused requests at shutdown.

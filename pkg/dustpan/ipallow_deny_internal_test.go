@@ -712,3 +712,82 @@ func TestAllowlistLimiterIsNotShared(t *testing.T) {
 		t.Fatal("the allowlist limiter is nil or the shared denial limiter")
 	}
 }
+
+// recordingFlush records that the shared flush ran.
+type recordingFlush struct{ ran atomic.Bool }
+
+// Flush implements denialFlush.
+func (f *recordingFlush) Flush(context.Context) { f.ran.Store(true) }
+
+// TestJoinFlushersDrainsBoth tests the function that the server calls at
+// shutdown: it runs the shared flush and writes the counts of the allowlist
+// gate. It fails when either call is removed.
+func TestJoinFlushersDrainsBoth(t *testing.T) {
+	t.Parallel()
+
+	g := newLimitedGate(t, 100, nil)
+	address := netip.MustParseAddr("203.0.113.9")
+
+	for range 3 {
+		g.refuse(t, address)
+	}
+
+	shared := &recordingFlush{ran: atomic.Bool{}}
+	flush := joinFlushers(shared, allowlistAudit{
+		store: g.gate.audit, limiter: g.gate.limiter, now: g.gate.now, logger: g.gate.logger,
+	})
+
+	flush(t.Context())
+
+	if !shared.ran.Load() {
+		t.Fatal("the shared flush did not run")
+	}
+
+	if !hasEntry(g.entries(), address, "2 further refusals") {
+		t.Fatalf("no allowlist count at shutdown: %+v", g.entries())
+	}
+}
+
+// TestAllowlistGateUsesItsOwnLimiter sends refusals through the gate that the
+// server builds and checks that the shared denial limiter stays empty. It
+// fails when the gate takes the shared limiter.
+func TestAllowlistGateUsesItsOwnLimiter(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultSettings()
+	server := &recordingServer{mu: sync.Mutex{}, entries: nil}
+	gate := allowlistGateOf(cfg, server)
+
+	if gate.limiter != cfg.allowlistLimiter {
+		t.Fatal("the gate does not use the allowlist limiter of the settings")
+	}
+
+	gate.settings = newTestGate(
+		t,
+		&failingSettingsStore{Store: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
+			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
+		}},
+	).settings
+
+	for _, address := range []string{"203.0.113.9", "203.0.113.10", "203.0.113.11"} {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
+		r.Header.Set("Authorization", "Bearer x")
+
+		checker := gate.checker(t.Context(), r)
+		if checker == nil {
+			t.Fatal("checker = nil, want a checker")
+		}
+
+		if decision := checker.check(t.Context(), netip.MustParseAddr(address)); !decision.Denied {
+			t.Fatalf("decision for %s = %+v, want a denial", address, decision)
+		}
+	}
+
+	if got := cfg.denialLimiter.Len(); got != 0 {
+		t.Fatalf("the shared denial limiter holds %d keys, want 0", got)
+	}
+
+	if got := cfg.allowlistLimiter.Len(); got != 3 {
+		t.Fatalf("the allowlist limiter holds %d keys, want 3", got)
+	}
+}

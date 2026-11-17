@@ -121,13 +121,19 @@ func newAllowlistRequestGate(cfg *settings) (allowlistRequestGate, error) {
 		return allowlistRequestGate{}, err
 	}
 
+	return allowlistGateOf(cfg, serverAudit), nil
+}
+
+// allowlistGateOf returns the gate of cfg over the audit store of the server
+// scope. The gate has its own limiter, never the shared denial limiter.
+func allowlistGateOf(cfg *settings, serverAudit audit.ServerStore) allowlistRequestGate {
 	return allowlistRequestGate{
 		settings: newSettingService(cfg, cfg.namespaceStore),
 		audit:    serverAudit,
 		limiter:  cfg.allowlistLimiter,
 		now:      cfg.now,
 		logger:   cfg.logger,
-	}, nil
+	}
 }
 
 // checker returns the checker of one request, or nil when the request uses
@@ -300,13 +306,16 @@ func (a allowlistAudit) flush(ctx context.Context) {
 	a.writePendings(ctx, a.limiter.Drain())
 }
 
-// writePendings writes the counts of pendings. It writes only the counts of
-// refusals by an IP allowlist: the entry has the label of this gate, so the
-// count of any other key is not written here.
+// writePendings writes the counts of pendings that carry the action of this
+// gate, the aggregate mark of a client address, or the overflow mark. It skips
+// the count of any other key, because the entry has the label of this gate.
 //
 // Defense in depth: the gate has its own limiter, so a foreign key does not
-// get here; this filter stays so that a shared limiter cannot give the count
-// of another adapter the wrong label.
+// get here; the action filter stays so that a shared limiter cannot give the
+// count of another adapter the wrong label. The aggregate clause also stays:
+// it holds if the count of keys for each address, or the start of the
+// aggregate key, changes. The tests of the gate and its limiter do not rely
+// on this filter.
 func (a allowlistAudit) writePendings(ctx context.Context, pendings []denylimit.Pending) {
 	for _, pending := range pendings {
 		ours := pending.Key.Action == allowlistDenyAction || pending.Key.Action == denylimit.AggregateMark
