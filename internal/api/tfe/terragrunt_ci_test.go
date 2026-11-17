@@ -293,9 +293,11 @@ func TestTerragruntCiSameWorkspaceAddress(t *testing.T) {
 	}
 }
 
-// TestTerragruntCiLockRefusal proves that a CI step that locks a held
-// workspace is refused with 409 and the lock holder, does not wait, and
-// writes no state version, so the state lineage stays unchanged.
+// TestTerragruntCiLockRefusal proves that a lock request on a workspace that
+// another holder has locked is refused with 409 and names the holder, and that
+// the refused request writes no state. The workspace port is a stub whose
+// current state is constant, so this test does not show the effect of a
+// refused lock on a real state lineage.
 func TestTerragruntCiLockRefusal(t *testing.T) {
 	t.Parallel()
 

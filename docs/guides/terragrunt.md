@@ -121,7 +121,8 @@ terragrunt run --all --non-interactive --parallelism 3 -- apply --auto-approve
 ```
 
 Each unit applies in its own workspace. A second CI step that locks a
-workspace that another step already holds is refused. It does not wait.
+workspace that is locked is refused. OpenTofu waits for the lock only when
+the `-lock-timeout` option is set.
 The CI log mixes the output of the units. Each line of the run names its unit
 directory, so find the failing unit by that name.
 
