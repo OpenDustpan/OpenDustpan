@@ -70,7 +70,7 @@ terragrunt run --all --non-interactive --parallelism 3 -- apply --auto-approve
 Each unit applies in its own workspace. A held lock blocks another unit
 only when both name one workspace.
 
-### 4. Confirm the run
+### 4. Check the run
 
 Read the state versions of each workspace. Each workspace holds one new
 state version:
@@ -89,6 +89,46 @@ curl -sS --cacert "$CACERT" -H "Authorization: Bearer $TOKEN" \
   "$SERVER/api/dustpan/v1/namespaces/acme/units"
 ```
 
+## Team CI
+
+A CI job runs the same command as a laptop, against the same workspaces. The
+job needs one access token. The token needs read and write on each workspace
+of the run. Store the token as a secret of the CI system. Do not print it in
+the job log.
+
+### 1. Write the credentials file in the job
+
+At the start of the job, write the OpenTofu credentials file from the secret.
+No prompt is needed:
+
+```sh
+CREDS=$(mktemp)
+printf 'credentials "localhost:8080" {\n  token = "%s"\n}\n' "$DUSTPAN_TOKEN" > "$CREDS"
+export TF_CLI_CONFIG_FILE=$CREDS SSL_CERT_FILE=$CA_CERT_FILE
+```
+
+`CA_CERT_FILE` is a path to the server certificate that the job holds as a file.
+
+### 2. Point each unit at its workspace
+
+Use the `cloud` block of step 2 above in each unit directory. The unit
+directories of the job are the same as on a laptop.
+
+### 3. Run the apply in the job
+
+```sh
+terragrunt run --all --non-interactive --parallelism 3 -- apply --auto-approve
+```
+
+Each unit applies in its own workspace. A second CI step that locks a
+workspace that another step already holds is refused. It does not wait.
+The CI log mixes the output of the units. Each line of the run names its unit
+directory, so find the failing unit by that name.
+
+Profiles and blueprints stay the first choice for a new team. Use this path
+for a team that already runs Terragrunt. See
+[Why profiles and blueprints stay the recommended path](../explanation/profiles-and-blueprints.md).
+
 ## Errors
 
 | Error | What the answer says | The command that helps |
@@ -96,3 +136,5 @@ curl -sS --cacert "$CACERT" -H "Authorization: Bearer $TOKEN" \
 | A second apply on the same workspace fails while the first apply holds the lock. | Wait for the holder to finish, then retry the unit. To release a stale lock after Ctrl-C, run the unlock command once per locked workspace. | `tofu force-unlock <lock-id>` |
 | A unit with a wrong backend hostname or workspace name fails to read state. | Fix the backend hostname and workspace name, then reconfigure that unit directory. | `tofu init -reconfigure` |
 | One unit fails with a refusal while the other units apply. | Grant the principal read and write on that workspace, then rerun the failed unit only. | `terragrunt apply` |
+| A second CI step locks a workspace that another step already locks. | The workspace is locked by another run. Wait for the holding CI step to finish, then run the same command again. | `terragrunt run --all apply` |
+| The CI job sends a missing or not valid credential. | Sign-in failed for the CI credential. Check the access token stored in the CI job, then run the same command again. | `terragrunt run --all apply` |
