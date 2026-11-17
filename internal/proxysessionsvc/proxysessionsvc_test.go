@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -649,6 +650,75 @@ func TestPutSettings(t *testing.T) {
 	if len(entries) != 3 || !hasChange(entries[0], "event", string(runner.EventPoolProxySettingsChanged)) ||
 		!hasChange(entries[0], "credentialChanged", "true") || !hasChange(entries[1], "credentialChanged", "false") {
 		t.Errorf("audit entries of the saves = %+v, want three pool-proxy-settings-changed entries", entries)
+	}
+}
+
+// digestText matches a hex digest of 32 or more bytes.
+var digestText = regexp.MustCompile(`(?i)^[0-9a-f]{32,}$`)
+
+// TestSettingsEntryHoldsNoURLDigest is the hostile case of the audit layer: a
+// reader of the audit log must not confirm a guess of the upstream URL. The
+// entry of a save names the changed fields, and holds no digest of the URL or
+// of the credential. This test fails when the entry holds a hash of the URL.
+func TestSettingsEntryHoldsNoURLDigest(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	p := pool(poolA, nsAcme)
+
+	mustPut(t, f, putRequest(p))
+
+	moved := putRequest(p)
+	moved.UpstreamURL = "https://other.example.com:3128"
+	moved.Credential = proxysessionsvc.CredentialChange{Present: false, Value: nil}
+	moved.IfMatch = "1"
+	mustPut(t, f, moved)
+
+	same := putRequest(p)
+	same.UpstreamURL = moved.UpstreamURL
+	same.Credential = proxysessionsvc.CredentialChange{Present: false, Value: nil}
+	same.IfMatch = "2"
+	mustPut(t, f, same)
+
+	entries := f.settings.auditEntries()
+	if len(entries) != 3 {
+		t.Fatalf("audit entries of the saves = %d, want 3", len(entries))
+	}
+
+	for i := range entries {
+		checkNoDigest(t, i, entries[i])
+	}
+
+	// The entry still names what changed: the URL (the third save keeps it), the
+	// credential and the version.
+	if !hasChange(entries[0], "upstreamURLChanged", "true") || !hasChange(entries[1], "upstreamURLChanged", "true") ||
+		!hasChange(entries[0], "credentialChanged", "true") || !hasChange(entries[1], "credentialChanged", "false") ||
+		!hasChange(entries[2], "upstreamURLChanged", "false") || !hasChange(entries[1], "version", "2") {
+		t.Errorf("audit entries = %+v, want the changed fields and the version", entries)
+	}
+}
+
+// checkNoDigest fails the test when an entry holds a digest key or a digest
+// value.
+func checkNoDigest(t *testing.T, i int, e audit.Entry) {
+	t.Helper()
+
+	for _, c := range e.Changes {
+		key := strings.ToLower(c.Key)
+		if strings.Contains(key, "sha") || strings.Contains(key, "hash") {
+			t.Errorf("entry %d holds the change key %q, want no digest key", i, c.Key)
+		}
+
+		values := []string{c.New}
+		if c.Old != nil {
+			values = append(values, *c.Old)
+		}
+
+		for _, v := range values {
+			if digestText.MatchString(v) {
+				t.Errorf("entry %d change %q holds the digest %q, want no digest", i, c.Key, v)
+			}
+		}
 	}
 }
 

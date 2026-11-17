@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -352,7 +353,19 @@ func TestReplicasClaimOnePhase(t *testing.T) {
 	)
 
 	pool := e.createPool()
-	servers := []*env{e, {t: t, store: second, server: replica, handler: nil, claimer: nil, fence: e.fence, clock: nil}}
+	servers := []*env{
+		e,
+		{
+			t:       t,
+			store:   second,
+			server:  replica,
+			handler: nil,
+			claimer: nil,
+			fence:   e.fence,
+			clock:   nil,
+			last:    atomic.Pointer[http.Header]{},
+		},
+	}
 
 	runners := make([]*fakeRunner, 0, replicaRunners)
 
