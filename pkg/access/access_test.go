@@ -486,14 +486,17 @@ func TestUnclassifiedActionIsDenied(t *testing.T) {
 	assertChecks(t, f.authz, admin, []check{{identity.ServerObject(), identity.Action("server:future"), true}})
 }
 
-// unclassifiedActions lists the actions of the features with no routes
-// yet. They stay unclassified: no role holds them, and the policy check
-// denies them to every principal that is not an administrator, until its
-// feature classifies them when its routes land. This is the one table:
+// unclassifiedActions holds the actions that wait for classification.
+// They stay unclassified: no role holds them, and the policy check
+// denies them to every principal that is not an administrator, until
+// their feature classifies them. server:manage-audit waits because its
+// scope work is planned separately: its route has landed and works for
+// the administrator flag only. This is the one table:
 // TestActionsWithoutRoutesAreUnclassified and
 // TestEveryCoreActionIsClassifiedOrListed both read it.
 func unclassifiedActions() []identity.Action {
 	return []identity.Action{
+		identity.ActionServerManageAudit,
 		identity.ActionUnitRunApply,
 		identity.ActionUnitRunDestroy,
 		identity.ActionUnitWriteBack,
@@ -524,10 +527,10 @@ func unclassifiedActions() []identity.Action {
 	}
 }
 
-// TestActionsWithoutRoutesAreUnclassified checks that the actions of the
-// features with no routes yet stay unclassified. So no role holds them, and
-// the policy check denies them to a site administrator on the installation
-// and on a namespace. A feature classifies its actions when its routes land.
+// TestActionsWithoutRoutesAreUnclassified checks that each action of the
+// unclassified table stays unclassified: no role holds it, and the policy
+// check denies it to a site administrator on the installation and on a
+// namespace. The table holds the reason of each waiting action.
 func TestActionsWithoutRoutesAreUnclassified(t *testing.T) {
 	t.Parallel()
 
@@ -549,8 +552,8 @@ func TestActionsWithoutRoutesAreUnclassified(t *testing.T) {
 
 // TestEveryCoreActionIsClassifiedOrListed checks that the catalog of the
 // core is closed: each action of identity.Actions has a family, or sits on
-// the unclassified table until its routes land. An action on the table has
-// no family, so no built-in role holds it.
+// the unclassified table. An action on the table has no family, so no
+// built-in role holds it.
 func TestEveryCoreActionIsClassifiedOrListed(t *testing.T) {
 	t.Parallel()
 

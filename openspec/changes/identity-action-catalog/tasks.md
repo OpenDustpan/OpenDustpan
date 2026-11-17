@@ -5,12 +5,12 @@
 ## 1. Catalog
 
 - [ ] 1.1 In `pkg/identity/identity.go`, keep the action constants as they are. Directly after their block, add the unexported array `catalog` (NEW) that lists each constant once, in the order of the block, and `Actions() []Action` (NEW) that returns a sorted copy. Extend the comment above the block: a new action goes into `catalog` too. Check: `go build ./...` passes.
-- [ ] 1.2 Add table tests in `pkg/identity/actions_test.go` (NEW): `Actions()` holds 125 actions, is sorted, holds no duplicate, and a change of the returned slice does not change the next result. Check: `go test ./pkg/identity/...` passes.
+- [x] 1.2 Add table tests in `pkg/identity/actions_test.go` (NEW): `Actions()` holds 125 actions, is sorted, holds no duplicate, and a change of the returned slice does not change the next result. Check: `go test ./pkg/identity/...` passes.
 
 ## 2. The family test
 
-- [ ] 2.1 In `pkg/access/access_test.go`, move the action list of `TestActionsWithoutRoutesAreUnclassified` into one variable `unclassifiedActions` that the test reads. Check: `go test ./pkg/access/ -run TestActionsWithoutRoutesAreUnclassified` passes.
-- [ ] 2.2 Add `TestEveryCoreActionIsClassifiedOrListed` (NEW) in `pkg/access/access_test.go`: for each action of `identity.Actions()`, `access.FamilyOf` answers a family, or the action is in `unclassifiedActions`; an action in `unclassifiedActions` has no family. Check: `go test ./pkg/access/ -run TestEveryCoreActionIsClassifiedOrListed` passes.
+- [x] 2.1 In `pkg/access/access_test.go`, move the action list of `TestActionsWithoutRoutesAreUnclassified` into one variable `unclassifiedActions` that the test reads. Check: `go test ./pkg/access/ -run TestActionsWithoutRoutesAreUnclassified` passes.
+- [x] 2.2 Add `TestEveryCoreActionIsClassifiedOrListed` (NEW) in `pkg/access/access_test.go`: for each action of `identity.Actions()`, `access.FamilyOf` answers a family, or the action is in `unclassifiedActions`; an action in `unclassifiedActions` has no family. Check: `go test ./pkg/access/ -run TestEveryCoreActionIsClassifiedOrListed` passes.
 
 ## 3. Verification
 
