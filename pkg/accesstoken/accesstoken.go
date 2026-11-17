@@ -28,6 +28,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -76,10 +77,10 @@ const (
 
 // FromExchange reports whether a token exchange issues a token of the kind k.
 // A token of such a kind gets the credential of an exchange and the revoke
-// rule of the service tokens. This method is the only place that names the
-// kinds of an exchange.
+// rule of the service tokens. The unexported set in this method is the only
+// place that names the kinds of an exchange.
 func (k Kind) FromExchange() bool {
-	return k == KindJWTExchange
+	return slices.Contains([]Kind{KindJWTExchange}, k)
 }
 
 // KindFor returns the kind of the token of a principal of kind k, or

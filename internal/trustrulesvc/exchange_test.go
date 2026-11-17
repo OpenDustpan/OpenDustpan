@@ -378,7 +378,7 @@ func checkExchangeEntry(t *testing.T, e audit.Entry, id trustrule.ID) {
 	}
 
 	if changed["subject"] != "repo:acme/infra:ref:refs/heads/main" || changed["jti"] != "run-1" ||
-		changed["issuer"] != staticIssuer {
+		changed["issuer"] != staticIssuer || changed["kind"] != string(accesstoken.KindJWTExchange) {
 		t.Fatalf("changes = %v", changed)
 	}
 }

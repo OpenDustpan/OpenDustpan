@@ -11,7 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
 )
 
-// storeTrust makes a token of the kind trust for the service principal of
+// storeTrust makes a token of the kind jwt-exchange for the service principal of
 // f, and stores it as the store of the trust rules does.
 func storeTrust(t *testing.T, f *fixture) (accesstoken.Issued, error) {
 	t.Helper()
@@ -30,6 +30,32 @@ func storeTrust(t *testing.T, f *fixture) (accesstoken.Issued, error) {
 	}
 
 	return issued, nil
+}
+
+// TestTokenListShowsTheKindJWTExchange checks that the token list of a service
+// principal shows each exchanged token with the kind jwt-exchange, and no
+// token of another kind.
+func TestTokenListShowsTheKindJWTExchange(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+
+	if _, err := storeTrust(t, &f); err != nil {
+		t.Fatalf("NewTrustToken = %v", err)
+	}
+
+	page, err := f.svc.List(t.Context(), accesstoken.PageRequest{
+		PrincipalID: f.service.ID, Cursor: "", Filter: accesstoken.FilterAll, Limit: 0,
+	})
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("List = %+v, %v; want the one exchanged token", page, err)
+	}
+
+	for _, tok := range page.Items {
+		if tok.Kind != accesstoken.KindJWTExchange {
+			t.Fatalf("kind = %q, want %q", tok.Kind, accesstoken.KindJWTExchange)
+		}
+	}
 }
 
 // lifetimeOf returns the lifetime of a new trust token of f.
