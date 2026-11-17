@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/metrics"
 )
 
 // operationLister is implemented by an adapter that describes its routes under
@@ -28,26 +29,26 @@ type routeSource struct {
 // fails without it.
 func (a adapters) allHandlers() []namedHandler {
 	return []namedHandler{
-		{"server", a.server},
-		{"inventory", a.inventory},
-		{"audit", a.audit},
-		{"context", a.context},
-		{"runners", a.runners},
-		{"runnerpools", a.runnerPools},
-		{"profiles", a.profiles},
-		{"issuer", a.issuer},
-		{"sinks", a.sinks},
-		{"jobs", a.jobs},
-		{"triggers", a.triggers},
-		{"unitsettings", a.unitSettings},
-		{"drift", a.drift},
-		{"registry", a.registry},
-		{"sourcefilter", a.sourceFilter},
-		{"trustrules", a.trustRules},
-		{"selfservice", a.selfService},
-		{"pulumi", a.pulumi},
-		{"tfe", a.tfe},
-		{"tofuhttp", a.tofuHTTP},
+		{name: "server", handler: a.server, label: metrics.AdapterServer},
+		{name: "inventory", handler: a.inventory, label: metrics.AdapterInventory},
+		{name: "audit", handler: a.audit, label: metrics.AdapterServer},
+		{name: "context", handler: a.context, label: metrics.AdapterServer},
+		{name: "runners", handler: a.runners, label: metrics.AdapterServer},
+		{name: "runnerpools", handler: a.runnerPools, label: metrics.AdapterServer},
+		{name: "profiles", handler: a.profiles, label: metrics.AdapterServer},
+		{name: "issuer", handler: a.issuer, label: metrics.AdapterServer},
+		{name: "sinks", handler: a.sinks, label: metrics.AdapterServer},
+		{name: "jobs", handler: a.jobs, label: metrics.AdapterServer},
+		{name: "triggers", handler: a.triggers, label: metrics.AdapterServer},
+		{name: "unitsettings", handler: a.unitSettings, label: metrics.AdapterServer},
+		{name: "drift", handler: a.drift, label: metrics.AdapterServer},
+		{name: "registry", handler: a.registry, label: metrics.AdapterServer},
+		{name: "sourcefilter", handler: a.sourceFilter, label: metrics.AdapterServer},
+		{name: "trustrules", handler: a.trustRules, label: metrics.AdapterServer},
+		{name: "selfservice", handler: a.selfService, label: metrics.AdapterServer},
+		{name: "pulumi", handler: a.pulumi, label: metrics.AdapterPulumi},
+		{name: "tfe", handler: a.tfe, label: metrics.AdapterOpenTofu},
+		{name: "tofuhttp", handler: a.tofuHTTP, label: metrics.AdapterOpenTofu},
 	}
 }
 
@@ -65,10 +66,33 @@ func (a adapters) handlers() []namedHandler {
 	return out
 }
 
-// namedHandler is an adapter with the name that the tests print.
+// namedHandler is an adapter with the name that the tests print and the
+// adapter label that the request metrics and the request log use.
 type namedHandler struct {
 	name    string
 	handler http.Handler
+	label   string
+}
+
+// adapterLabels maps each registered pattern of every mounted adapter to the
+// label of that adapter.
+func (a adapters) adapterLabels() map[string]string {
+	out := map[string]string{}
+
+	for _, source := range a.routeSources() {
+		label := metrics.AdapterServer
+		for _, h := range a.allHandlers() {
+			if h.name == source.name {
+				label = h.label
+				break
+			}
+		}
+		for _, pattern := range source.patterns {
+			out[pattern] = label
+		}
+	}
+
+	return out
 }
 
 // isNilHandler reports whether h is a nil interface. A module that is off

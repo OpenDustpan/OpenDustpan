@@ -1,43 +1,113 @@
 package dustpan
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
 
-// TestAdapterForRequest proves the adapter label of each route family, from
-// the route pattern and from the path when no pattern matched.
-func TestAdapterForRequest(t *testing.T) {
+	"opendustpan.org/opendustpan/internal/metrics"
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
+)
+
+func TestAdapterLabelFollowsRegistration(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name    string
-		pattern string
-		path    string
-		want    string
-	}{
-		{name: "pulumi pattern", pattern: "GET /api/user", path: "/api/user", want: "pulumi"},
-		{name: "tfe pattern", pattern: "GET /api/v2/ping", path: "/api/v2/ping", want: "opentofu"},
-		{name: "tfe discovery", pattern: "", path: "/.well-known/terraform.json", want: "opentofu"},
-		{name: "http backend pattern", pattern: "/tofu/state/", path: "/tofu/state/acme/prod", want: "opentofu"},
-		{name: "http backend path", pattern: "", path: "/tofu/state/acme/prod", want: "opentofu"},
-		{
-			name: "inventory", pattern: "GET /api/dustpan/v1/namespaces/{namespace}/units",
-			path: "/api/dustpan/v1/namespaces/acme/units", want: "inventory",
-		},
-		{
-			name: "inventory restore", pattern: "POST /api/inventory/deleted-units/{tool}/{unitID}/restore",
-			path: "/api/inventory/deleted-units/pulumi/stk-1/restore", want: "inventory",
-		},
-		{name: "audit", pattern: "GET /api/audit/entries", path: "/api/audit/entries", want: adapterServer},
-		{name: "installation", pattern: "", path: "/api/server/no-such-route", want: adapterServer},
-		{name: "probe", pattern: "GET /health/live", path: "/health/live", want: adapterServer},
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	blobs, err := blobfs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("key wrapper: %v", err)
+	}
 
-			if got := adapterForRequest(tc.pattern, tc.path); got != tc.want {
-				t.Fatalf("adapterForRequest(%q, %q) = %q, want %q", tc.pattern, tc.path, got, tc.want)
+	authn, err := identity.NewStaticToken("admin", "admin-token-for-adapter-label-test-0123456789")
+	if err != nil {
+		t.Fatalf("authenticator: %v", err)
+	}
+
+	srv, err := NewServer(
+		WithInstallation("test"),
+		WithNamespaceStore(st), WithStackStore(st), WithUpdateStore(st),
+		WithCheckpointStore(st), WithEventStore(st), WithSecretKeyStore(st),
+		WithSecretWrapper(wrapper), WithWorkspaceStore(st), WithStateStore(st),
+		WithBlobStore(blobs), WithInventoryReader(st), WithAuthenticator(authn),
+	)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	labels := srv.adapterLabels
+	sources := srv.RouteSources()
+
+	if len(labels) == 0 {
+		t.Fatal("adapter labels map is empty")
+	}
+	if len(sources) == 0 {
+		t.Fatal("route sources are empty")
+	}
+
+	adapterByName := map[string]string{}
+	for _, source := range sources {
+		for _, pattern := range source.Patterns {
+			got, ok := labels[pattern]
+			if !ok {
+				t.Fatalf("pattern %q of adapter %q has no label", pattern, source.Name)
 			}
-		})
+			if prev, ok := adapterByName[source.Name]; ok && prev != got {
+				t.Fatalf("adapter %q has labels %q and %q", source.Name, prev, got)
+			}
+			adapterByName[source.Name] = got
+		}
+	}
+
+	wantAdapter := map[string]string{
+		"pulumi":       metrics.AdapterPulumi,
+		"tfe":          metrics.AdapterOpenTofu,
+		"tofuhttp":     metrics.AdapterOpenTofu,
+		"inventory":    metrics.AdapterInventory,
+		"server":       metrics.AdapterServer,
+		"audit":        metrics.AdapterServer,
+		"context":      metrics.AdapterServer,
+		"profiles":     metrics.AdapterServer,
+		"issuer":       metrics.AdapterServer,
+		"sinks":        metrics.AdapterServer,
+		"registry":     metrics.AdapterServer,
+	}
+
+	for name, want := range wantAdapter {
+		got, ok := adapterByName[name]
+		if !ok {
+			continue
+		}
+		if got != want {
+			t.Errorf("adapter %q label = %q, want %q", name, got, want)
+		}
+	}
+
+	for pattern, want := range labels {
+		if got := srv.adapterLabelForPattern(pattern); got != want {
+			t.Errorf("adapterLabelForPattern(%q) = %q, want %q", pattern, got, want)
+		}
+	}
+
+	if got := srv.adapterLabelForPattern(""); got != metrics.AdapterServer {
+		t.Errorf("adapterLabelForPattern(%q) = %q, want %q", "", got, metrics.AdapterServer)
+	}
+	if got := srv.adapterLabelForPattern("GET /no/such/pattern"); got != metrics.AdapterServer {
+		t.Errorf("unknown pattern label = %q, want %q", got, metrics.AdapterServer)
 	}
 }

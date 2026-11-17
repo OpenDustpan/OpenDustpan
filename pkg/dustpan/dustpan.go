@@ -572,6 +572,7 @@ type Server struct {
 	mounted *adapters
 	// root is the root mux. Only the tests of the API description read it.
 	root          *rootMux
+	adapterLabels map[string]string
 	logger        *slog.Logger
 	listenAddr    string
 	listener      net.Listener
@@ -1127,10 +1128,14 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 	started := newStartState()
 
 	srv := &Server{
-		flushDenials: flushDenials,
-		handler:      withStartGate(handlers.served, started, cfg.logger),
-		started:      started,
-		ungated:      handlers.ungated, mounted: &mount, root: handlers.root, manualLocks: svc.manualLocks,
+		flushDenials:  flushDenials,
+		handler:       withStartGate(handlers.served, started, cfg.logger),
+		started:       started,
+		ungated:       handlers.ungated,
+		mounted:       &mount,
+		root:          handlers.root,
+		adapterLabels: mount.adapterLabels(),
+		manualLocks:   svc.manualLocks,
 		logger:        cfg.logger,
 		listenAddr:    cfg.listenAddr,
 		listener:      cfg.listener,
@@ -2095,6 +2100,14 @@ func (s *Server) Restores() *backup.RestoreService {
 // through it.
 func (s *Server) Metrics() *metrics.ServerMetrics {
 	return s.observed
+}
+
+func (s *Server) adapterLabelForPattern(pattern string) string {
+	if label, ok := s.adapterLabels[pattern]; ok {
+		return label
+	}
+
+	return metrics.AdapterServer
 }
 
 // Run serves HTTP until ctx is done, then shuts down gracefully. With
@@ -3446,9 +3459,6 @@ const requestIDHeader = requestid.Header
 // It holds no path, so it cannot leak a capability token.
 const unmatchedRoute = "unmatched"
 
-// adapterServer is the adapter label for the installation and audit APIs.
-const adapterServer = "server"
-
 // RequestID returns the request ID in ctx, or "" when ctx holds none. The
 // middleware sets it for each request, so handlers and later issues can log
 // it without reading headers.
@@ -3480,40 +3490,6 @@ func (w *statusWriter) Write(p []byte) (int, error) {
 	w.bytes += int64(n)
 
 	return n, err //nolint:wrapcheck // Transparent wrapper: callers must see the original error.
-}
-
-// adapterForRequest maps a request to its adapter label from the route
-// pattern, or from the path when no pattern matched. It returns pulumi,
-// opentofu, inventory or server. It never returns the path itself.
-func adapterForRequest(pattern, path string) string {
-	route := pattern
-	if route == "" {
-		route = path
-	}
-
-	name := route
-	if _, rest, ok := strings.Cut(route, " "); ok {
-		name = rest
-	}
-
-	switch {
-	case name == v1Prefix+"capabilities", strings.HasPrefix(name, v1Prefix+"sign-in/"),
-		strings.HasPrefix(name, v1Prefix+"me/"):
-		return adapterServer
-	case strings.HasPrefix(name, "/api/inventory/"), strings.HasPrefix(name, v1Prefix):
-		return "inventory"
-	case strings.HasPrefix(name, "/api/audit/"):
-		return adapterServer
-	case strings.HasPrefix(name, "/api/server/"):
-		return adapterServer
-	case strings.HasPrefix(name, "/api/v2/"), strings.HasPrefix(name, "/.well-known/"),
-		strings.HasPrefix(name, "/tofu/"):
-		return "opentofu"
-	case strings.HasPrefix(name, "/api/"):
-		return "pulumi"
-	default:
-		return adapterServer
-	}
 }
 
 // debugRoute reports whether pattern logs at debug. Probes and the metrics
@@ -3611,8 +3587,22 @@ type requestAddr struct {
 	warns    *warnLimiter
 }
 
+func adapterLabelForPattern(labels map[string]string, pattern string) string {
+	if pattern == "" {
+		return metrics.AdapterServer
+	}
+
+	if label, ok := labels[pattern]; ok {
+		return label
+	}
+
+	return metrics.AdapterServer
+}
+
 func withRequestLog(
 	next http.Handler,
+	root *rootMux,
+	labels map[string]string,
 	addr requestAddr,
 	logger *slog.Logger,
 	callers requestCaller,
@@ -3643,10 +3633,11 @@ func withRequestLog(
 		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK, bytes: 0}
 		admitted := callers.admit(wrapped, r, resolved, logger)
 
-		// The route pattern is not known until the handler returns, so the
-		// in-flight gauge tracks the adapter from the path only. The gauge
-		// holds no route label for the same reason.
-		startAdapter := adapterForRequest("", r.URL.Path)
+		// The route pattern is known before the handler runs, so the
+		// in-flight gauge tracks the adapter of the matched route. The gauge
+		// holds no route label.
+		_, startPattern := root.mux.Handler(r)
+		startAdapter := adapterLabelForPattern(labels, startPattern)
 		if observed != nil {
 			observed.IncInFlight(startAdapter)
 			defer observed.DecInFlight(startAdapter)
@@ -3660,7 +3651,7 @@ func withRequestLog(
 
 		elapsed := time.Since(start)
 		route := logRoute(r)
-		adapter := adapterForRequest(r.Pattern, r.URL.Path)
+		adapter := adapterLabelForPattern(labels, r.Pattern)
 
 		if observed != nil {
 			observed.ObserveRequest(adapter, route, r.Method, wrapped.status, elapsed)
@@ -3985,10 +3976,11 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 	}
 
 	gated := withAuditChainGate(mux, a.chain, cfg.logger)
+	labels := a.adapterLabels()
 
 	return routeHandlers{
 		served: withMisuseReporter(apidesc.NewReporter(cfg.logger), withRequestCache(withRequestLog(
-			gateComponents(gated, cfg.components), addr, cfg.logger,
+			gateComponents(gated, cfg.components), mux, labels, addr, cfg.logger,
 			requestCaller{authn: cfg.authenticator, allow: allow}, observed,
 		))),
 		ungated: gated,

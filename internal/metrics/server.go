@@ -9,8 +9,8 @@ import (
 )
 
 // Adapter labels for the request metrics. The middleware maps each request
-// to one of these from its route pattern, or from its path prefix when no
-// pattern matched. It never uses the path itself as a label.
+// to one of these from the adapter that registered its route pattern. It
+// never uses the path itself as a label.
 const (
 	AdapterPulumi    = "pulumi"
 	AdapterOpenTofu  = "opentofu"
