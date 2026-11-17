@@ -688,9 +688,9 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 }
 
 // credentialOf returns the credential of a token of the kind k: a token of a
-// trust rule is a trust token, so no check reads it as a token of a person.
+// token exchange is a trust token, so no check reads it as a token of a person.
 func credentialOf(k Kind) identity.Credential {
-	if k == KindTrust {
+	if k.FromExchange() {
 		return identity.CredentialTrustToken
 	}
 

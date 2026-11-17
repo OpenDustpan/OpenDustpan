@@ -144,7 +144,7 @@ func (fakeTokens) NewTrustToken(
 	t := accesstoken.Token{
 		CreatedAt: at, ExpiresAt: at.Add(time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
 		DisabledAt: time.Time{}, ID: "tok-exchanged", PrincipalID: principalID, Name: name,
-		Kind: accesstoken.KindTrust, ReplacedBy: "", CreatedBy: createdBy,
+		Kind: accesstoken.KindJWTExchange, ReplacedBy: "", CreatedBy: createdBy,
 	}
 
 	return accesstoken.Issued{Token: t, Secret: accesstoken.Secret{}, Digest: accesstoken.Digest{}}, nil
@@ -353,7 +353,7 @@ func TestExchangeIssuesATokenAndWritesItsEntry(t *testing.T) {
 		t.Fatalf("Exchange = %v", err)
 	}
 
-	if res.Token.PrincipalID != "prn-worker" || res.Token.Kind != accesstoken.KindTrust ||
+	if res.Token.PrincipalID != "prn-worker" || res.Token.Kind != accesstoken.KindJWTExchange ||
 		res.Rule.ID != f.rules.rules[0].ID || len(f.rules.exchanges) != 1 {
 		t.Fatalf("result = %+v, exchanges = %d", res, len(f.rules.exchanges))
 	}

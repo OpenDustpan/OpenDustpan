@@ -66,7 +66,7 @@ func TestTrustTokenLivesTheExchangeLifetime(t *testing.T) {
 		t.Fatalf("NewTrustToken = %v", err)
 	}
 
-	if issued.Token.Kind != accesstoken.KindTrust || issued.Token.PrincipalID != f.service.ID {
+	if issued.Token.Kind != accesstoken.KindJWTExchange || issued.Token.PrincipalID != f.service.ID {
 		t.Fatalf("token = %+v", issued.Token)
 	}
 

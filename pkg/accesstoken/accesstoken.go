@@ -68,11 +68,19 @@ const (
 	// KindService is a token of a service principal, for a machine that
 	// cannot sign in to the console.
 	KindService Kind = "service"
-	// KindTrust is a token that a workload got in a token exchange through
-	// a trust rule. It belongs to a service principal, lives one exchange
-	// lifetime, and no rotation renews it.
-	KindTrust Kind = "trust"
+	// KindJWTExchange is a token that a workload got in a token exchange of a
+	// JWT through a trust rule. It belongs to a service principal, lives one
+	// exchange lifetime, and no rotation renews it.
+	KindJWTExchange Kind = "jwt-exchange"
 )
+
+// FromExchange reports whether a token exchange issues a token of the kind k.
+// A token of such a kind gets the credential of an exchange and the revoke
+// rule of the service tokens. This method is the only place that names the
+// kinds of an exchange.
+func (k Kind) FromExchange() bool {
+	return k == KindJWTExchange
+}
 
 // KindFor returns the kind of the token of a principal of kind k, or
 // ErrNoTokenForKind.
