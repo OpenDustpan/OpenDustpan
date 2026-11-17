@@ -178,7 +178,8 @@ writes a refusal entry with the action of the request, for example
 outcome `denied`, the scope that refused and the client address. The server
 limits these entries: it writes one entry for each scope and client address in
 each window. The next entry for that address, or the entry at shutdown, gives
-the count of the further refusals. The limit applies to the entry only. Each
+the count of the further refusals. This limit has its own table, so many
+client addresses do not change the limit of other denials. The limit applies to the entry only. Each
 refused request gets the same 403 answer. Read the entries in the
 [audit log](audit-log.md).
 

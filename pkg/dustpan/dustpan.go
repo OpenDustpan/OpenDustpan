@@ -153,6 +153,11 @@ type settings struct {
 	// denialLimiter is the one limiter of the audit entries of refused requests.
 	// Every adapter gets it, so its bound on keys holds for the whole server.
 	denialLimiter *denylimit.Limiter
+	// allowlistLimiter is the limiter of the audit entries of IP allowlist
+	// refusals. It is not the shared limiter: the gate runs before sign-in and
+	// keys each client address, so many addresses must not fill the table of
+	// the denials of signed-in principals.
+	allowlistLimiter *denylimit.Limiter
 	// devRefusal holds the one recorder of the refused dev sign-ins.
 	devRefusal *devRefusalState
 	// stackRefusals records the refusals of the stack blob scope. newServices
@@ -700,6 +705,7 @@ type services struct {
 func defaultSettings() *settings {
 	return &settings{
 		denialLimiter:           defaultDenialLimiter(),
+		allowlistLimiter:        defaultDenialLimiter(),
 		devRefusal:              new(devRefusalState),
 		stackRefusals:           nil,
 		settingsConfig:          settingsConfig{store: nil, declarations: nil, static: nil},
@@ -2237,7 +2243,18 @@ func denialFlusher(
 		return nil, fmt.Errorf("denial flusher: %w", err)
 	}
 
-	return rec.WithLimiter(cfg.denialLimiter).Flush, nil
+	serverAudit, err := serverAuditOf(cfg.namespaceStore)
+	if err != nil {
+		return nil, err
+	}
+
+	allowlist := allowlistAudit{store: serverAudit, limiter: cfg.allowlistLimiter, now: cfg.now, logger: cfg.logger}
+	shared := rec.WithLimiter(cfg.denialLimiter)
+
+	return func(ctx context.Context) {
+		shared.Flush(ctx)
+		allowlist.flush(ctx)
+	}, nil
 }
 
 // flushTimeout bounds the write of the counts of refused requests at shutdown.

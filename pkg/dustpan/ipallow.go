@@ -124,7 +124,7 @@ func newAllowlistRequestGate(cfg *settings) (allowlistRequestGate, error) {
 	return allowlistRequestGate{
 		settings: newSettingService(cfg, cfg.namespaceStore),
 		audit:    serverAudit,
-		limiter:  cfg.denialLimiter,
+		limiter:  cfg.allowlistLimiter,
 		now:      cfg.now,
 		logger:   cfg.logger,
 	}, nil
@@ -268,9 +268,7 @@ func (a allowlistAudit) record(ctx context.Context, r *http.Request, denial allo
 		decision = a.limiter.Allow(key)
 	}
 
-	for _, pending := range decision.Flush {
-		a.append(ctx, a.pendingEntry(pending), allowScope(pending.Key.Kind))
-	}
+	a.writePendings(ctx, decision.Flush)
 
 	if !decision.Write {
 		return
@@ -292,6 +290,35 @@ func (a allowlistAudit) record(ctx context.Context, r *http.Request, denial allo
 	}
 }
 
+// flush writes the counts that the limiter still holds. The server calls it
+// once at shutdown.
+func (a allowlistAudit) flush(ctx context.Context) {
+	if a.store == nil || a.limiter == nil {
+		return
+	}
+
+	a.writePendings(ctx, a.limiter.Drain())
+}
+
+// writePendings writes the counts of pendings. It writes only the counts of
+// refusals by an IP allowlist: the entry has the label of this gate, so the
+// count of any other key is not written here.
+//
+// Defense in depth: the gate has its own limiter, so a foreign key does not
+// get here; this filter stays so that a shared limiter cannot give the count
+// of another adapter the wrong label.
+func (a allowlistAudit) writePendings(ctx context.Context, pendings []denylimit.Pending) {
+	for _, pending := range pendings {
+		ours := pending.Key.Action == allowlistDenyAction || pending.Key.Action == denylimit.AggregateMark
+
+		if !pending.Overflow && !ours {
+			continue
+		}
+
+		a.append(ctx, a.pendingEntry(pending), allowScope(pending.Key.Kind))
+	}
+}
+
 // pendingEntry returns the entry that carries a count of refusals that the
 // limiter held back.
 func (a allowlistAudit) pendingEntry(pending denylimit.Pending) audit.Entry {
@@ -299,12 +326,17 @@ func (a allowlistAudit) pendingEntry(pending denylimit.Pending) audit.Entry {
 		return a.overflowEntry(pending.Suppressed)
 	}
 
+	scope := allowScope(pending.Key.Kind)
+	if pending.Key.Kind == denylimit.AggregateMark {
+		scope = ""
+	}
+
 	address, err := netip.ParseAddr(pending.Key.Principal)
 	if err != nil {
 		address = netip.Addr{}
 	}
 
-	entry := allowlistDenialEntry(a.now, nil, allowDenial{Scope: allowScope(pending.Key.Kind), Address: address})
+	entry := allowlistDenialEntry(a.now, nil, allowDenial{Scope: scope, Address: address})
 	entry.Reason = fmt.Sprintf(
 		"%d further refusals in the last window were not recorded one by one",
 		pending.Suppressed,

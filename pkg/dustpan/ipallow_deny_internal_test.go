@@ -485,3 +485,230 @@ func TestAllowlistRefusalAuditIsLimited(t *testing.T) {
 		t.Fatalf("no entry carries the count of 49 held back refusals: %+v", server.entries)
 	}
 }
+
+var errAppendRefused = errors.New("append refused")
+
+// failFirstServer is an audit.ServerStore that refuses its first append.
+type failFirstServer struct {
+	inner  recordingServer
+	failed bool
+}
+
+// AppendServer implements audit.ServerStore.
+func (s *failFirstServer) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error) {
+	s.inner.mu.Lock()
+
+	if !s.failed {
+		s.failed = true
+		s.inner.mu.Unlock()
+
+		return audit.Entry{}, errAppendRefused
+	}
+
+	s.inner.mu.Unlock()
+
+	return s.inner.AppendServer(ctx, e)
+}
+
+// limitedGate is a gate with a limiter, a recording audit store and a clock
+// that a test moves.
+type limitedGate struct {
+	gate  allowlistRequestGate
+	store *recordingServer
+	clock *atomic.Int64
+}
+
+// newLimitedGate returns a gate for the installation list 198.51.100.0/24
+// with a limiter of maxKeys keys and a window of one minute. store is the
+// audit store of the gate; nil means a recording store.
+func newLimitedGate(t *testing.T, maxKeys int, store audit.ServerStore) limitedGate {
+	t.Helper()
+
+	var clock atomic.Int64
+
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := func() time.Time { return start.Add(time.Duration(clock.Load())) }
+
+	recorded := &recordingServer{mu: sync.Mutex{}, entries: nil}
+	if store == nil {
+		store = recorded
+	}
+
+	gate := newTestGate(
+		t,
+		&failingSettingsStore{Store: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
+			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
+		}},
+	)
+	gate.audit = store
+	gate.now = now
+	gate.limiter = denylimit.New(denylimit.Config{
+		Window: time.Minute, MaxKeys: maxKeys, MaxFlush: 100, MaxKeysPerPrincipal: 10, Now: now,
+	})
+
+	return limitedGate{gate: gate, store: recorded, clock: &clock}
+}
+
+// advance moves the clock of the gate.
+func (l limitedGate) advance(d time.Duration) { l.clock.Add(int64(d)) }
+
+// refuse sends one request from address and requires the denial.
+func (l limitedGate) refuse(t *testing.T, address netip.Addr) {
+	t.Helper()
+
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
+	r.Header.Set("Authorization", "Bearer x")
+
+	checker := l.gate.checker(t.Context(), r)
+	if checker == nil {
+		t.Fatal("checker = nil, want a checker")
+	}
+
+	if decision := checker.check(t.Context(), address); !decision.Denied {
+		t.Fatalf("decision for %s = %+v, want a denial", address, decision)
+	}
+}
+
+// entries returns a copy of the recorded entries.
+func (l limitedGate) entries() []audit.Entry {
+	l.store.mu.Lock()
+	defer l.store.mu.Unlock()
+
+	return append([]audit.Entry(nil), l.store.entries...)
+}
+
+// hasEntry reports whether an entry has the source address and a reason that
+// holds text.
+func hasEntry(entries []audit.Entry, address netip.Addr, text string) bool {
+	for i := range entries {
+		if entries[i].SourceIP == address.String() && strings.Contains(entries[i].Reason, text) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TestAllowlistLimiterIgnoresForeignCounts is the hostile test of the label of
+// a flush entry: the table holds the count of another adapter's key, for
+// example the stack:delete denials of a principal. A refusal from an address
+// that sweeps the table must not write that count as an allowlist entry. It
+// fails when the flush filter is removed.
+func TestAllowlistLimiterIgnoresForeignCounts(t *testing.T) {
+	t.Parallel()
+
+	g := newLimitedGate(t, 100, nil)
+	foreign := denylimit.Key{Principal: "alice", Action: "stack:delete", Kind: "stack", Scope: "team"}
+
+	g.gate.limiter.Allow(foreign)
+	g.gate.limiter.Allow(foreign)
+	g.advance(2 * time.Minute)
+
+	g.refuse(t, netip.MustParseAddr("203.0.113.9"))
+
+	entries := g.entries()
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d (%+v), want 1: the count of the foreign key must not be written", len(entries), entries)
+	}
+}
+
+// TestAllowlistFlushWritesHeldBackCounts is the test of the flush loop of a
+// refusal: the count of an address whose window ended goes out with the next
+// refusal of another address. It fails when the loop is removed.
+func TestAllowlistFlushWritesHeldBackCounts(t *testing.T) {
+	t.Parallel()
+
+	g := newLimitedGate(t, 100, nil)
+	first, second := netip.MustParseAddr("203.0.113.9"), netip.MustParseAddr("203.0.113.10")
+
+	for range 3 {
+		g.refuse(t, first)
+	}
+
+	g.advance(2 * time.Minute)
+	g.refuse(t, second)
+
+	if !hasEntry(g.entries(), first, "2 further refusals") {
+		t.Fatalf("no flush entry for %s with the count 2: %+v", first, g.entries())
+	}
+}
+
+// TestAllowlistFailedAppendKeepsTheCount is the test of the release of a
+// failed append: the first entry cannot be stored, so the next refusal in the
+// same window writes an entry that carries the lost refusal. It fails when
+// the release is removed.
+func TestAllowlistFailedAppendKeepsTheCount(t *testing.T) {
+	t.Parallel()
+
+	failing := &failFirstServer{inner: recordingServer{mu: sync.Mutex{}, entries: nil}, failed: false}
+	g := newLimitedGate(t, 100, failing)
+	address := netip.MustParseAddr("203.0.113.9")
+
+	g.refuse(t, address)
+	g.refuse(t, address)
+
+	failing.inner.mu.Lock()
+	defer failing.inner.mu.Unlock()
+
+	if len(failing.inner.entries) != 1 || !strings.Contains(failing.inner.entries[0].Reason, "1 further refusals") {
+		t.Fatalf("entries = %+v, want one entry that carries the count 1", failing.inner.entries)
+	}
+}
+
+// TestAllowlistOverflowEntry is the test of the overflow label: a limiter
+// with room for one key gives the second address the aggregate entry, which
+// names untracked client addresses. It fails when the overflow case is
+// removed.
+func TestAllowlistOverflowEntry(t *testing.T) {
+	t.Parallel()
+
+	g := newLimitedGate(t, 1, nil)
+
+	g.refuse(t, netip.MustParseAddr("203.0.113.9"))
+	g.refuse(t, netip.MustParseAddr("203.0.113.10"))
+
+	var found bool
+
+	for _, entry := range g.entries() {
+		if strings.Contains(entry.Object, "untracked client addresses") {
+			found = true
+		}
+	}
+
+	if !found {
+		t.Fatalf("no overflow entry: %+v", g.entries())
+	}
+}
+
+// TestAllowlistShutdownFlush is the test of the drain at shutdown: the count
+// that the limiter holds is written once. It fails when the drain is removed.
+func TestAllowlistShutdownFlush(t *testing.T) {
+	t.Parallel()
+
+	g := newLimitedGate(t, 100, nil)
+	address := netip.MustParseAddr("203.0.113.9")
+
+	for range 3 {
+		g.refuse(t, address)
+	}
+
+	allowlistAudit{
+		store: g.gate.audit, limiter: g.gate.limiter, now: g.gate.now, logger: g.gate.logger,
+	}.flush(t.Context())
+
+	if !hasEntry(g.entries(), address, "2 further refusals") {
+		t.Fatalf("no shutdown entry with the count 2: %+v", g.entries())
+	}
+}
+
+// TestAllowlistLimiterIsNotShared fails when the gate shares the limiter of
+// the other adapters: many client addresses would then fill its table before
+// sign-in and push the denials of signed-in principals into the overflow count.
+func TestAllowlistLimiterIsNotShared(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultSettings()
+	if cfg.allowlistLimiter == nil || cfg.allowlistLimiter == cfg.denialLimiter {
+		t.Fatal("the allowlist limiter is nil or the shared denial limiter")
+	}
+}
