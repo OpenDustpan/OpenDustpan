@@ -70,14 +70,14 @@ func newLDAPRouteEnv(t *testing.T) ldapRouteEnv {
 	}
 
 	e := newProviderEnvWith(t, []apiserver.PasswordProvider{{
-		Method: m, ID: ldapRouteID, DisplayName: "Corp directory", AutoCreate: true,
+		Method: m, ID: ldapRouteID, DisplayName: "Corp directory", AutoCreate: true, SubjectFailureLimit: 7,
 		LDAP: apiserver.LDAPSettings{
 			AllowedRanges: nil,
 			URL:           dir.LDAPSURL(), BindDN: ldaptest.ServiceDN, BaseDN: ldaptest.BaseDN,
 			UserFilter: "(&(objectClass=person)(uid={user}))", UserNameAttribute: "uid", EmailAttribute: "",
 			NameAttribute: "", Subject: "entryUUID", DisabledAttribute: "", Groups: "off", GroupBaseDN: "",
 			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
-			StartTLS: false,
+			StartTLS: false, SubjectFailureLimit: 7, SubjectFailureLimitSource: "file",
 		},
 	}})
 
@@ -335,11 +335,13 @@ type ldapListProvider struct {
 
 // ldapListSettings are the LDAP settings of a provider of ldapListDoc.
 type ldapListSettings struct {
-	AllowedRanges   []string `json:"allowedRanges"`
-	BindDN          string   `json:"bindDn"`
-	Subject         string   `json:"subject"`
-	Groups          string   `json:"groups"`
-	BindPasswordSet bool     `json:"bindPasswordSet"`
+	AllowedRanges             []string `json:"allowedRanges"`
+	BindDN                    string   `json:"bindDn"`
+	Subject                   string   `json:"subject"`
+	Groups                    string   `json:"groups"`
+	BindPasswordSet           bool     `json:"bindPasswordSet"`
+	SubjectFailureLimit       int      `json:"subjectFailureLimit"`
+	SubjectFailureLimitSource string   `json:"subjectFailureLimitSource"`
 }
 
 // checkLDAPListEntry fails when p is not the static LDAP provider with its
@@ -349,7 +351,8 @@ func checkLDAPListEntry(t *testing.T, p *ldapListProvider) {
 
 	if p.Source != "static" || p.Mode != "ldap" || p.LDAP == nil || p.LDAP.BindDN != ldaptest.ServiceDN ||
 		p.LDAP.Subject != "entryUUID" || p.LDAP.Groups != "off" || !p.LDAP.BindPasswordSet ||
-		p.LDAP.AllowedRanges == nil || len(p.LDAP.AllowedRanges) != 0 {
+		p.LDAP.AllowedRanges == nil || len(p.LDAP.AllowedRanges) != 0 ||
+		p.LDAP.SubjectFailureLimit != 7 || p.LDAP.SubjectFailureLimitSource != "file" {
 		t.Fatalf("provider = %+v, want static ldap with its effective settings", p)
 	}
 }

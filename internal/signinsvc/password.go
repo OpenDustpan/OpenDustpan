@@ -24,13 +24,14 @@ import (
 
 // Reasons of a refused sign-in of a password method.
 const (
-	ReasonNameLocked       = "user name locked after failed attempts"
-	ReasonSubjectLocked    = "person locked after failed attempts"
-	ReasonCountFailed      = "count of the failure cannot be written"
-	ReasonLockoutOff       = "password sign-in has no lockout store"
-	ReasonGateSkipped      = "password method did not check the person before the bind"
-	ReasonGateSubject      = "password method checked another person than the one it signed in"
-	ReasonPasswordMismatch = "password method is not the method of the provider"
+	ReasonNameLocked          = "user name locked after failed attempts"
+	ReasonSubjectLocked       = "person locked after failed attempts"
+	ReasonCountFailed         = "count of the failure cannot be written"
+	ReasonLockoutOff          = "password sign-in has no lockout store"
+	ReasonGateSkipped         = "password method did not check the person before the bind"
+	ReasonGateSubject         = "password method checked another person than the one it signed in"
+	ReasonPasswordMismatch    = "password method is not the method of the provider"
+	ReasonSubjectFailureLimit = "subject failure limit is not valid"
 )
 
 // ErrSubjectLocked is the error of the bind gate while the person is
@@ -87,6 +88,11 @@ type PasswordRequest struct {
 	UserName string
 	// Password is the password that the person typed.
 	Password session.Password
+	// SubjectFailureLimit is the limit of the count of the subject from
+	// every source, from authgate.MinSubjectFailureLimit to
+	// authgate.MaxSubjectFailureLimit. Zero uses
+	// authgate.DefaultSubjectFailureLimit.
+	SubjectFailureLimit int
 }
 
 // lockKeys are the keys of the counts of one key of an attempt: the digest
@@ -105,7 +111,8 @@ type lockKeys struct {
 //     many names counts, also against names that do not exist;
 //   - the subject that the search of the method found, in the bind gate,
 //     before the method sends the password, so that each form of one user name
-//     counts on one person.
+//     counts on one person. The count of the subject from every source locks
+//     the person after SubjectFailureLimit failures in a row.
 //
 // A lock on either key stops the sign-in before a password reaches the
 // directory. The name of a count is the keyed digest of the provider ID, the
@@ -222,6 +229,11 @@ func (s *Service) checkPasswordRequest(req *PasswordRequest) string {
 		return ReasonProviderKind
 	case req.Method == nil || req.Method.Kind() != req.Provider.Kind:
 		return ReasonPasswordMismatch
+	case req.SubjectFailureLimit < 0 || req.SubjectFailureLimit > authgate.MaxSubjectFailureLimit:
+		// Defense in depth: the settings layer refuses a limit outside the
+		// range before the start. This check stays so that a new caller
+		// cannot count a subject with a rule that the store refuses.
+		return ReasonSubjectFailureLimit
 	case !validTypedName(req.UserName) || req.Password.Reveal() == "":
 		// Defense in depth: the method checks the user name and refuses an
 		// empty password before any bind. This check stays so that no count
@@ -230,6 +242,16 @@ func (s *Service) checkPasswordRequest(req *PasswordRequest) string {
 	default:
 		return ""
 	}
+}
+
+// subjectFailureLimit returns the limit of the count of the subject from
+// every source: the value of the request, or the default when it is zero.
+func (r *PasswordRequest) subjectFailureLimit() int {
+	if r.SubjectFailureLimit == 0 {
+		return authgate.DefaultSubjectFailureLimit
+	}
+
+	return r.SubjectFailureLimit
 }
 
 // validTypedName reports whether name has 1 to session.MaxUserName bytes of
@@ -264,13 +286,19 @@ func (s *Service) countKey(ctx context.Context, req *PasswordRequest, kind, valu
 	}
 
 	keys := lockKeys{name: digest, sub: sourcePrefix(req.Entry.SourceIP)}
+
+	global := authgate.PasswordNameRule()
+	if kind == keyKindSubject {
+		global = authgate.PasswordSubjectRule(req.subjectFailureLimit())
+	}
+
 	rules := []struct {
 		rule  authgate.LockRule
 		scope string
 		sub   string
 	}{
 		{scope: authgate.ScopePassword, sub: keys.sub, rule: authgate.PasswordRule()},
-		{scope: authgate.ScopePasswordName, sub: "", rule: authgate.PasswordNameRule()},
+		{scope: authgate.ScopePasswordName, sub: "", rule: global},
 	}
 
 	for _, r := range rules {

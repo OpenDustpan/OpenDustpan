@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -79,6 +80,18 @@ func ldapSetupCases() []ldapSetupCase {
 		{name: "allowed private range", publicURL: public, change: func(p *dustpan.LDAPProvider) {
 			p.AllowedRanges = []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}
 		}, want: "", withOIDC: false},
+		{name: "subject failure limit below the minimum", publicURL: public, change: func(p *dustpan.LDAPProvider) {
+			p.SubjectFailureLimit = -1
+		}, want: "ldap.subjectFailureLimit", withOIDC: false},
+		{name: "subject failure limit of the maximum", publicURL: public, change: func(p *dustpan.LDAPProvider) {
+			p.SubjectFailureLimit = authgate.MaxSubjectFailureLimit
+		}, want: "", withOIDC: false},
+		{name: "subject failure limit over the maximum", publicURL: public, change: func(p *dustpan.LDAPProvider) {
+			p.SubjectFailureLimit = authgate.MaxSubjectFailureLimit + 1
+		}, want: "ldap.subjectFailureLimit", withOIDC: false},
+		{name: "unknown subject failure limit source", publicURL: public, change: func(p *dustpan.LDAPProvider) {
+			p.SubjectFailureLimitSource = "database"
+		}, want: "ldap.subjectFailureLimitSource", withOIDC: false},
 		{name: "reserved local ID", publicURL: public, change: func(p *dustpan.LDAPProvider) {
 			p.ID = session.LocalProviderID
 		}, want: "provider ID", withOIDC: false},
@@ -131,30 +144,32 @@ func TestNewServerLDAPSetup(t *testing.T) {
 // ldapProvider returns a valid LDAP provider with the ID corp-ldap.
 func ldapProvider() dustpan.LDAPProvider {
 	return dustpan.LDAPProvider{
-		RootCAs:                nil,
-		AllowedRanges:          nil,
-		ID:                     "corp-ldap",
-		DisplayName:            "Corp",
-		URL:                    "ldaps://ldap.example.org",
-		BindDN:                 "cn=dustpan,ou=services,dc=example,dc=org",
-		BindPassword:           session.NewPassword("bind-password-of-the-test"),
-		BaseDN:                 "ou=people,dc=example,dc=org",
-		UserFilter:             "(&(objectClass=person)(uid={user}))",
-		UserNameAttribute:      "uid",
-		EmailAttribute:         "mail",
-		NameAttribute:          "cn",
-		Subject:                "entryUUID",
-		DisabledAttribute:      "",
-		Groups:                 "off",
-		GroupBaseDN:            "",
-		GroupFilter:            "",
-		GroupMemberAttribute:   "",
-		GroupMemberOfAttribute: "",
-		GroupNameAttribute:     "",
-		DisabledValues:         nil,
-		DisabledMask:           0,
-		StartTLS:               false,
-		AutoCreate:             true,
+		RootCAs:                   nil,
+		AllowedRanges:             nil,
+		ID:                        "corp-ldap",
+		DisplayName:               "Corp",
+		URL:                       "ldaps://ldap.example.org",
+		BindDN:                    "cn=dustpan,ou=services,dc=example,dc=org",
+		BindPassword:              session.NewPassword("bind-password-of-the-test"),
+		BaseDN:                    "ou=people,dc=example,dc=org",
+		UserFilter:                "(&(objectClass=person)(uid={user}))",
+		UserNameAttribute:         "uid",
+		EmailAttribute:            "mail",
+		NameAttribute:             "cn",
+		Subject:                   "entryUUID",
+		DisabledAttribute:         "",
+		Groups:                    "off",
+		GroupBaseDN:               "",
+		GroupFilter:               "",
+		GroupMemberAttribute:      "",
+		GroupMemberOfAttribute:    "",
+		GroupNameAttribute:        "",
+		DisabledValues:            nil,
+		DisabledMask:              0,
+		StartTLS:                  false,
+		AutoCreate:                true,
+		SubjectFailureLimit:       authgate.DefaultSubjectFailureLimit,
+		SubjectFailureLimitSource: "default",
 	}
 }
 
