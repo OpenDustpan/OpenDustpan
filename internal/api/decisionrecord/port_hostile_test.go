@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/api/decisionrecord"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -57,7 +56,7 @@ func TestDecisionRecordPortQueryHostileID(t *testing.T) {
 		t.Fatalf("seed the record: %v", err)
 	}
 
-	port := decisionrecord.NewRecords(s)
+	port := s.Records()
 
 	hostile := []string{
 		"gdr-x' OR '1'='1' --",
@@ -69,7 +68,7 @@ func TestDecisionRecordPortQueryHostileID(t *testing.T) {
 	}
 
 	for _, id := range hostile {
-		_, err := port.Get(ctx, "acme", gate.RecordID(id))
+		_, err = port.Get(ctx, "acme", gate.RecordID(id))
 		if !errors.Is(err, gate.ErrNotFound) {
 			t.Errorf("Get(%q) = %v, want an error that wraps gate.ErrNotFound", id, err)
 		}

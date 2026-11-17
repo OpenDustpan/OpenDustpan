@@ -124,13 +124,49 @@ func storedRecord(ns namespace.Name, id string) gate.Record {
 		Units: []gate.UnitResult{{
 			Unit: mustUnitRef("opentofu", ns, "web"),
 			Facts: gate.Facts{
-				Schema: gate.SchemaVersion{Subject: "change.apply", Major: 1, Minor: 0},
-				Unit:   gate.UnitFacts{Tool: "opentofu", Collection: "", Labels: []string{"env=prod"}},
+				Schema:    gate.SchemaVersion{Subject: "change.apply", Major: 1, Minor: 0},
+				Principal: gate.PrincipalFacts{Kind: gate.PrincipalPerson, Credential: gate.CredentialSession},
+				Source: gate.SourceFacts{
+					Kind: "test", Ref: "", Protected: false, Commit: "", UpstreamUnit: "",
+				},
+				Unit:      gate.UnitFacts{Tool: "opentofu", Collection: "", Labels: []string{"env=prod"}},
+				Operation: gate.OperationFacts{Kind: gate.OperationApply},
 				Change: gate.ChangeFacts{
 					InputKeys:     []string{"plan"},
 					SecretKeys:    []string{"password", "token"},
 					TruncatedKeys: nil,
 					Paths:         nil,
+				},
+				Plan: gate.PlanFacts{
+					Available:     false,
+					Add:           0,
+					Change:        0,
+					Replace:       0,
+					Destroy:       0,
+					ResourceTypes: nil,
+				},
+				Cost:   gate.CostFacts{Available: false, DeltaMonthly: 0, TotalMonthly: 0, Currency: ""},
+				Budget: gate.BudgetFacts{Available: false, Level: "", PercentUsed: 0},
+				Drift:  gate.DriftFacts{Available: false, Resources: 0, AgeSeconds: 0},
+				ResourcePolicy: gate.ResourcePolicyFacts{
+					Available:       false,
+					MandatoryFailed: 0,
+					AdvisoryFailed:  0,
+					Unreadable:      0,
+				},
+				ExternalChecks: gate.ExternalCheckFacts{Passed: nil, Failed: nil, Pending: nil, TimedOut: nil},
+				Quota:          gate.QuotaFacts{Available: false, MaxPercentUsed: 0, Exceeded: nil},
+				Dependents:     gate.DependentFacts{Available: false, Count: 0, Units: nil},
+				Paths:          gate.PathFacts{Available: false, Touches: nil, Only: nil},
+				Document:       gate.DocumentFacts{Truncated: nil},
+				State:          gate.StateFacts{Available: false, Resources: 0, Removed: nil},
+				Profile: gate.ProfileFacts{
+					Name:          "",
+					Access:        "",
+					RefProtected:  false,
+					JobOpen:       false,
+					RoutingChange: false,
+					ImportsAdded:  nil,
 				},
 			},
 			Digest: "3f1c9d4b7a2e5068c1d8f0a4b6e2d7c9e3f1c9d4b7a2e5068c1d8f0a4b6e2d7c9",
@@ -311,7 +347,7 @@ func newHandler(t *testing.T, authz identity.Authorizer, records decisionrecord.
 		Records:        records,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
-		Audit:          &testAudit{},
+		Audit:          &testAudit{entries: nil},
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,
@@ -338,10 +374,10 @@ type testHandler struct {
 // ServeHTTP serves with the check of the description.
 func (h testHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.served.ServeHTTP(w, r) }
 
-func get(t *testing.T, h http.Handler, path, token string) *httptest.ResponseRecorder {
+func get(ctx context.Context, t *testing.T, h http.Handler, path, token string) *httptest.ResponseRecorder {
 	t.Helper()
 
-	r := httptest.NewRequest(http.MethodGet, path, nil)
+	r := httptest.NewRequestWithContext(ctx, http.MethodGet, path, http.NoBody)
 	if token != "" {
 		r.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -363,7 +399,7 @@ func TestDecisionRecordReadReturnsStoredRecord(t *testing.T) {
 	records := newFakeRecords()
 	handler := newHandler(t, newAuthorizer(namespaceHolds("acme")...), records)
 
-	w := get(t, handler, "/api/dustpan/v1/namespaces/acme/decision-records/"+recordID, testToken)
+	w := get(t.Context(), t, handler, "/api/dustpan/v1/namespaces/acme/decision-records/"+recordID, testToken)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body)
 	}
@@ -408,7 +444,7 @@ func TestDecisionRecordReadDeniedGives404(t *testing.T) {
 
 	handler := newHandler(t, newAuthorizer(holds...), newFakeRecords())
 
-	w := get(t, handler, "/api/dustpan/v1/namespaces/acme/decision-records/"+recordID, testToken)
+	w := get(t.Context(), t, handler, "/api/dustpan/v1/namespaces/acme/decision-records/"+recordID, testToken)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404; body: %s", w.Code, w.Body)
 	}
@@ -479,7 +515,7 @@ func TestDecisionRecordReadForeignGives404(t *testing.T) {
 			authz := newAuthorizer(tc.holds...)
 			handler := newHandler(t, authz, newFakeRecords())
 
-			w := get(t, handler, tc.path, tc.token)
+			w := get(t.Context(), t, handler, tc.path, tc.token)
 			if w.Code != http.StatusNotFound {
 				t.Fatalf("status = %d, want 404; body: %s", w.Code, w.Body)
 			}
@@ -499,56 +535,80 @@ func TestInstallationDecisionRecordRead(t *testing.T) {
 	t.Run("a caller with installation:read-gates reads the record", func(t *testing.T) {
 		t.Parallel()
 
-		handler := newHandler(t, newAuthorizer(installationHolds()...), newFakeRecords())
-
-		w := get(t, handler, "/api/dustpan/v1/decision-records/"+instalRecord, testToken)
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body)
-		}
-
-		var rec gate.Record
-		if err := json.Unmarshal(w.Body.Bytes(), &rec); err != nil {
-			t.Fatalf("decode the record: %v", err)
-		}
-
-		if rec.ID != gate.RecordID(instalRecord) {
-			t.Errorf("id = %q, want %q", rec.ID, instalRecord)
-		}
-
-		if rec.Namespace != audit.ServerScope {
-			t.Errorf("namespace = %q, want %q", rec.Namespace, audit.ServerScope)
-		}
+		checkInstallationRecordRead(t)
 	})
 
 	t.Run("a caller without installation:read-gates gets the 404 of an unknown ID", func(t *testing.T) {
 		t.Parallel()
 
-		handler := newHandler(t, newAuthorizer(), newFakeRecords())
-
-		w := get(t, handler, "/api/dustpan/v1/decision-records/"+instalRecord, testToken)
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want 404; body: %s", w.Code, w.Body)
-		}
-
-		if w.Body.String() != notFoundBody {
-			t.Fatalf("body = %q, want %q", w.Body.String(), notFoundBody)
-		}
+		checkInstallationRecordDenied(t)
 	})
 
 	t.Run("a namespace record ID on the installation route answers 404", func(t *testing.T) {
 		t.Parallel()
 
-		handler := newHandler(t, newAuthorizer(installationHolds()...), newFakeRecords())
-
-		w := get(t, handler, "/api/dustpan/v1/decision-records/"+recordID, testToken)
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want 404; body: %s", w.Code, w.Body)
-		}
-
-		if w.Body.String() != notFoundBody {
-			t.Fatalf("body = %q, want %q", w.Body.String(), notFoundBody)
-		}
+		checkInstallationRouteNamespaceRecord(t)
 	})
+}
+
+// checkInstallationRecordRead proves that a caller with
+// installation:read-gates reads the installation record.
+func checkInstallationRecordRead(t *testing.T) {
+	t.Helper()
+
+	handler := newHandler(t, newAuthorizer(installationHolds()...), newFakeRecords())
+
+	w := get(t.Context(), t, handler, "/api/dustpan/v1/decision-records/"+instalRecord, testToken)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body)
+	}
+
+	var rec gate.Record
+	if err := json.Unmarshal(w.Body.Bytes(), &rec); err != nil {
+		t.Fatalf("decode the record: %v", err)
+	}
+
+	if rec.ID != gate.RecordID(instalRecord) {
+		t.Errorf("id = %q, want %q", rec.ID, instalRecord)
+	}
+
+	if rec.Namespace != audit.ServerScope {
+		t.Errorf("namespace = %q, want %q", rec.Namespace, audit.ServerScope)
+	}
+}
+
+// checkInstallationRecordDenied proves that a caller without
+// installation:read-gates gets the 404 of an unknown ID.
+func checkInstallationRecordDenied(t *testing.T) {
+	t.Helper()
+
+	handler := newHandler(t, newAuthorizer(), newFakeRecords())
+
+	w := get(t.Context(), t, handler, "/api/dustpan/v1/decision-records/"+instalRecord, testToken)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body: %s", w.Code, w.Body)
+	}
+
+	if w.Body.String() != notFoundBody {
+		t.Fatalf("body = %q, want %q", w.Body.String(), notFoundBody)
+	}
+}
+
+// checkInstallationRouteNamespaceRecord proves that a namespace record ID on
+// the installation route answers 404.
+func checkInstallationRouteNamespaceRecord(t *testing.T) {
+	t.Helper()
+
+	handler := newHandler(t, newAuthorizer(installationHolds()...), newFakeRecords())
+
+	w := get(t.Context(), t, handler, "/api/dustpan/v1/decision-records/"+recordID, testToken)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body: %s", w.Code, w.Body)
+	}
+
+	if w.Body.String() != notFoundBody {
+		t.Fatalf("body = %q, want %q", w.Body.String(), notFoundBody)
+	}
 }
 
 // TestDecisionRecordReadStoreErrorGives503 proves that a store error answers
@@ -561,7 +621,7 @@ func TestDecisionRecordReadStoreErrorGives503(t *testing.T) {
 
 	handler := newHandler(t, newAuthorizer(namespaceHolds("acme")...), records)
 
-	w := get(t, handler, "/api/dustpan/v1/namespaces/acme/decision-records/"+recordID, testToken)
+	w := get(t.Context(), t, handler, "/api/dustpan/v1/namespaces/acme/decision-records/"+recordID, testToken)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503; body: %s", w.Code, w.Body)
 	}
@@ -596,55 +656,103 @@ func TestRoutesDeclareActions(t *testing.T) {
 		http.MethodGet + " " + installationTemplate: {identity.ActionInstallationReadGates},
 	}
 
+	byPattern := checkRouteTable(t, handler, wantReads)
+	checkServedPatterns(t, handler, byPattern)
+	checkPinnedRoutes(t, byPattern, wantReads)
+	checkNoTokenReads(t, handler)
+}
+
+// checkRouteTable checks every row of the route table, and returns the rows
+// by pattern: no duplicate pattern, every route authorized with a read
+// action, a resolver and a handler, only read routes without a set action,
+// and the pinned read actions.
+func checkRouteTable(
+	t *testing.T, handler testHandler, wantReads map[string][]identity.Action,
+) map[string]decisionrecord.Route {
+	t.Helper()
+
 	byPattern := map[string]decisionrecord.Route{}
 
 	for _, rt := range handler.Routes() {
-		pattern := rt.Method + " " + rt.Path
-
-		if _, dup := byPattern[pattern]; dup {
-			t.Fatalf("duplicate route %q", pattern)
-		}
-
-		byPattern[pattern] = rt
-
-		switch {
-		case rt.Scope != route.ScopeAuthorized:
-			t.Errorf("route %q is not authorized: this API serves no public route", pattern)
-		case len(rt.Reads) == 0:
-			t.Errorf("route %q declares no read action", pattern)
-		case rt.Resolve == nil || rt.Serve == nil:
-			t.Errorf("route %q declares no resolver or no handler", pattern)
-		case (rt.Method == http.MethodGet) != (len(rt.Actions) == 0):
-			t.Errorf("route %q: only a read route may declare no set action", pattern)
-		default:
-		}
-
-		want, known := wantReads[pattern]
-		if !known {
-			t.Errorf("route %q is not on the pinned list", pattern)
-			continue
-		}
-
-		if !slices.Equal(rt.Reads, want) {
-			t.Errorf("route %q declares the reads %v, want %v", pattern, rt.Reads, want)
-		}
+		checkRouteRow(t, byPattern, rt, wantReads)
 	}
+
+	return byPattern
+}
+
+// checkRouteRow checks one row of the route table against the pinned reads,
+// and records it by pattern.
+func checkRouteRow(
+	t *testing.T, byPattern map[string]decisionrecord.Route, rt decisionrecord.Route,
+	wantReads map[string][]identity.Action,
+) {
+	t.Helper()
+
+	pattern := rt.Method + " " + rt.Path
+
+	if _, dup := byPattern[pattern]; dup {
+		t.Fatalf("duplicate route %q", pattern)
+	}
+
+	byPattern[pattern] = rt
+
+	switch {
+	case rt.Scope != route.ScopeAuthorized:
+		t.Errorf("route %q is not authorized: this API serves no public route", pattern)
+	case len(rt.Reads) == 0:
+		t.Errorf("route %q declares no read action", pattern)
+	case rt.Resolve == nil || rt.Serve == nil:
+		t.Errorf("route %q declares no resolver or no handler", pattern)
+	case (rt.Method == http.MethodGet) != (len(rt.Actions) == 0):
+		t.Errorf("route %q: only a read route may declare no set action", pattern)
+	default:
+	}
+
+	want, known := wantReads[pattern]
+	if !known {
+		t.Errorf("route %q is not on the pinned list", pattern)
+
+		return
+	}
+
+	if !slices.Equal(rt.Reads, want) {
+		t.Errorf("route %q declares the reads %v, want %v", pattern, rt.Reads, want)
+	}
+}
+
+// checkServedPatterns proves that every served route has a table row.
+func checkServedPatterns(t *testing.T, handler testHandler, byPattern map[string]decisionrecord.Route) {
+	t.Helper()
 
 	for _, pattern := range handler.RegisteredPatterns() {
 		if _, ok := byPattern[pattern]; !ok {
 			t.Errorf("served route %q has no table row", pattern)
 		}
 	}
+}
+
+// checkPinnedRoutes proves that every pinned route has a table row.
+func checkPinnedRoutes(
+	t *testing.T,
+	byPattern map[string]decisionrecord.Route,
+	wantReads map[string][]identity.Action,
+) {
+	t.Helper()
 
 	for pattern := range wantReads {
 		if _, ok := byPattern[pattern]; !ok {
 			t.Errorf("pinned route %q has no table row", pattern)
 		}
 	}
+}
 
-	// A caller with no token gets the one not-found answer, for every route.
+// checkNoTokenReads proves that a caller with no token gets the one
+// not-found answer on every route.
+func checkNoTokenReads(t *testing.T, handler testHandler) {
+	t.Helper()
+
 	for _, template := range []string{namespaceTemplate, installationTemplate} {
-		w := get(t, handler, pathOf(template), "")
+		w := get(t.Context(), t, handler, pathOf(template), "")
 		if w.Code != http.StatusNotFound {
 			t.Errorf("route %q with no token = %d, want 404", template, w.Code)
 		}

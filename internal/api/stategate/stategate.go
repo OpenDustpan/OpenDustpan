@@ -496,15 +496,17 @@ func refuse(ctx context.Context, log *slog.Logger, w Write, record Recorder, ref
 		record(ctx, "state.write refused with "+code)
 	}
 
-	return Outcome{Allowed: false, Unavailable: nil, Refusal: refused, Code: code,
-		Detail: Detail(refused, code, w.Unit.Namespace().String())}
+	return Outcome{
+		Allowed: false, Unavailable: nil, Refusal: refused, Code: code,
+		Detail: Detail(refused, code, w.Unit.Namespace().String()),
+	}
 }
 
 // Detail returns the text of a refusal on one line: the gate messages, the
 // error code, the ID of the decision record and the read route of the
 // record, when the write names a namespace. Each CR and LF becomes a space,
 // so that a message cannot add a line to a plain-text body or a log.
-func Detail(refused *gate.RefusalError, code string, ns string) string {
+func Detail(refused *gate.RefusalError, code, ns string) string {
 	var b strings.Builder
 
 	for _, m := range refused.Messages {

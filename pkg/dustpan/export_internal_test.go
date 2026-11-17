@@ -318,10 +318,13 @@ func withAdapterHandler(a adapters, name string, h http.Handler) (adapters, bool
 // that has the name, or nil.
 func adapterHandlerSetter(a *adapters, name string) func(http.Handler) {
 	fields := map[string]func(http.Handler){
-		"server":       func(h http.Handler) { a.server = h },
-		"inventory":    func(h http.Handler) { a.inventory = h },
-		"audit":        func(h http.Handler) { a.audit = h },
-		"context":      func(h http.Handler) { a.context = h },
+		"server":    func(h http.Handler) { a.server = h },
+		"inventory": func(h http.Handler) { a.inventory = h },
+		"audit":     func(h http.Handler) { a.audit = h },
+		"context":   func(h http.Handler) { a.context = h },
+		"decisionrecords": func(h http.Handler) {
+			a.decisionRecords = h
+		},
 		"runners":      func(h http.Handler) { a.runners = h },
 		"runnerpools":  func(h http.Handler) { a.runnerPools = h },
 		"profiles":     func(h http.Handler) { a.profiles = h },

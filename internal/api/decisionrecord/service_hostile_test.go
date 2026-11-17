@@ -41,6 +41,12 @@ func mustService(t *testing.T, records decisionrecord.Records) *decisionrecord.S
 	return svc
 }
 
+// newHostileRecords returns records that serve record whatever it is asked
+// for, and counts the calls.
+func newHostileRecords(record gate.Record) *hostileRecords {
+	return &hostileRecords{mu: sync.Mutex{}, record: record, gets: 0}
+}
+
 // A unit scope is the widest scope of a real change. The service answers each
 // other kind of scope of the path with gate.ErrInvalid.
 func forgedScopes() []struct {
@@ -74,122 +80,163 @@ func TestDecisionRecordServiceRejectsHostileInput(t *testing.T) {
 	t.Run("a non-gdr- ID is rejected before the load", func(t *testing.T) {
 		t.Parallel()
 
-		cases := []string{
-			"",
-			"gdr-",
-			"gdr-abc",
-			"gdr-a1b2c3d4e5f6g7h8i9j0extra",
-			"GDR-A1B2C3D4E5F6G7H8I9J0",
-			"cho-a1b2c3d4e5f6g7h8i9j0",
-			"gdr-a1b2c3d4e5f6g7h8i9j-",
-			"gdr-a1b2c3d4e5f6g7h8i9j ",
-			"x' OR '1'='1",
-			"gdr-a1b2c3%00",
-		}
-
-		for _, id := range cases {
-			records := &hostileRecords{}
-			svc := mustService(t, records)
-
-			_, err := svc.Read(t.Context(), gate.NamespaceScope("acme"), id)
-			if !errors.Is(err, gate.ErrInvalid) {
-				t.Errorf("Read(%q) = %v, want an error that wraps gate.ErrInvalid", id, err)
-			}
-
-			if records.gets != 0 {
-				t.Errorf("Read(%q) asked the store %d times, want 0", id, records.gets)
-			}
-		}
+		checkHostileIDs(t)
 	})
 
 	t.Run("a forged scope is rejected before the load", func(t *testing.T) {
 		t.Parallel()
 
-		for _, tc := range forgedScopes() {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
-
-				records := &hostileRecords{}
-
-				svc := mustService(t, records)
-
-				_, err := svc.Read(t.Context(), tc.scope, recordID)
-				if !errors.Is(err, gate.ErrInvalid) {
-					t.Fatalf("Read(scope %s) = %v, want an error that wraps gate.ErrInvalid", tc.scope, err)
-				}
-
-				if records.gets != 0 {
-					t.Fatalf("Read(scope %s) asked the store %d times, want 0", tc.scope, records.gets)
-				}
-			})
-		}
+		checkForgedScopes(t)
 	})
 
 	t.Run("a record of another scope back from the load is rejected", func(t *testing.T) {
 		t.Parallel()
 
-		at := time.UnixMilli(1_700_000_000_000).UTC()
-
-		cases := []struct {
-			name  string
-			scope gate.Scope
-			record gate.Record
-		}{
-			{
-				name:  "a namespace scope reading a record of another namespace",
-				scope: gate.NamespaceScope("acme"),
-				record: gate.Record{
-					ID: gate.RecordID(recordID), Point: gate.PointStateWrite,
-					Change: gate.ChangeRef{Kind: gate.ChangeStateWrite, ID: ""}, Namespace: "other",
-					At: at, Subject: "bo@example.com", Schema: gate.SchemaVersion{Subject: "state.write", Major: 1, Minor: 0},
-					Result: gate.ResultDeny, Count: 1, LastAt: at,
-				},
-			},
-			{
-				name:  "the installation scope reading a record of a namespace",
-				scope: gate.InstallationScope(),
-				record: gate.Record{
-					ID: gate.RecordID(recordID), Point: gate.PointStateWrite,
-					Change: gate.ChangeRef{Kind: gate.ChangeStateWrite, ID: ""}, Namespace: "acme",
-					At: at, Subject: "bo@example.com", Schema: gate.SchemaVersion{Subject: "state.write", Major: 1, Minor: 0},
-					Result: gate.ResultDeny, Count: 1, LastAt: at,
-				},
-			},
-		}
-
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
-
-				records := &hostileRecords{mu: sync.Mutex{}, record: tc.record, gets: 0}
-
-				svc := mustService(t, records)
-
-				_, err := svc.Read(t.Context(), tc.scope, recordID)
-				if !errors.Is(err, gate.ErrNotFound) {
-					t.Fatalf("Read = %v, want an error that wraps gate.ErrNotFound", err)
-				}
-
-				if records.gets != 1 {
-					t.Fatalf("the service asked the store %d times, want 1", records.gets)
-				}
-			})
-		}
+		checkForeignRecord(t)
 	})
 
 	t.Run("an empty unit of the scope is rejected before the load", func(t *testing.T) {
 		t.Parallel()
 
-		// A namespace name that cannot be a namespace name, so the scope
-		// handed to the service is checked once more here.
-		records := &hostileRecords{}
+		checkEmptyScope(t)
+	})
+}
+
+// checkHostileIDs proves that each non-gdr- ID fails with gate.ErrInvalid,
+// and that the store is never asked.
+func checkHostileIDs(t *testing.T) {
+	t.Helper()
+
+	cases := []string{
+		"",
+		"gdr-",
+		"gdr-abc",
+		"gdr-a1b2c3d4e5f6g7h8i9j0extra",
+		"GDR-A1B2C3D4E5F6G7H8I9J0",
+		"cho-a1b2c3d4e5f6g7h8i9j0",
+		"gdr-a1b2c3d4e5f6g7h8i9j-",
+		"gdr-a1b2c3d4e5f6g7h8i9j ",
+		"x' OR '1'='1",
+		"gdr-a1b2c3%00",
+	}
+
+	for _, id := range cases {
+		var empty gate.Record
+
+		records := newHostileRecords(empty)
+		svc := mustService(t, records)
+
+		_, err := svc.Read(t.Context(), gate.NamespaceScope("acme"), id)
+		if !errors.Is(err, gate.ErrInvalid) {
+			t.Errorf("Read(%q) = %v, want an error that wraps gate.ErrInvalid", id, err)
+		}
+
+		if records.gets != 0 {
+			t.Errorf("Read(%q) asked the store %d times, want 0", id, records.gets)
+		}
+	}
+}
+
+// checkForgedScopes proves that each forged scope fails with gate.ErrInvalid,
+// and that the store is never asked.
+func checkForgedScopes(t *testing.T) {
+	t.Helper()
+
+	for _, tc := range forgedScopes() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var empty gate.Record
+
+			records := newHostileRecords(empty)
+
+			svc := mustService(t, records)
+
+			_, err := svc.Read(t.Context(), tc.scope, recordID)
+			if !errors.Is(err, gate.ErrInvalid) {
+				t.Fatalf("Read(scope %s) = %v, want an error that wraps gate.ErrInvalid", tc.scope, err)
+			}
+
+			if records.gets != 0 {
+				t.Fatalf("Read(scope %s) asked the store %d times, want 0", tc.scope, records.gets)
+			}
+		})
+	}
+}
+
+// hostileRecord returns a stored record of ns with id for the hostile tests:
+// a state.write record with every field set.
+func hostileRecord(ns namespace.Name, id string, at time.Time) gate.Record {
+	return gate.Record{
+		ID: gate.RecordID(id), Point: gate.PointStateWrite,
+		Change: gate.ChangeRef{Kind: gate.ChangeStateWrite, ID: ""}, Namespace: ns,
+		At: at, Subject: "bo@example.com", Schema: gate.SchemaVersion{Subject: "state.write", Major: 1, Minor: 0},
+		PathSets: nil, Units: nil, Requirements: nil, Warnings: nil, AutoApply: false, Controls: nil,
+		BreakGlass: "", Result: gate.ResultDeny, Action: "state.read", Count: 1, LastAt: at,
+	}
+}
+
+// checkForeignRecord proves that a record of another scope back from the load
+// fails with gate.ErrNotFound.
+func checkForeignRecord(t *testing.T) {
+	t.Helper()
+
+	at := time.UnixMilli(1_700_000_000_000).UTC()
+
+	cases := []struct {
+		name   string
+		scope  gate.Scope
+		record gate.Record
+	}{
+		{
+			name:   "a namespace scope reading a record of another namespace",
+			scope:  gate.NamespaceScope("acme"),
+			record: hostileRecord("other", recordID, at),
+		},
+		{
+			name:   "the installation scope reading a record of a namespace",
+			scope:  gate.InstallationScope(),
+			record: hostileRecord("acme", recordID, at),
+		},
+	}
+
+	for i := range cases {
+		tc := cases[i]
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			records := newHostileRecords(tc.record)
+
+			svc := mustService(t, records)
+
+			_, err := svc.Read(t.Context(), tc.scope, recordID)
+			if !errors.Is(err, gate.ErrNotFound) {
+				t.Fatalf("Read = %v, want an error that wraps gate.ErrNotFound", err)
+			}
+
+			if records.gets != 1 {
+				t.Fatalf("the service asked the store %d times, want 1", records.gets)
+			}
+		})
+	}
+}
+
+// checkEmptyScope proves that an empty scope fails with gate.ErrInvalid.
+func checkEmptyScope(t *testing.T) {
+	t.Helper()
+
+	// A namespace name that cannot be a namespace name, so the scope
+	// handed to the service is checked once more here.
+	var empty gate.Record
+
+	records := newHostileRecords(empty)
 	svc := mustService(t, records)
 
-		_, err := svc.Read(t.Context(), gate.NamespaceScope(""), recordID)
-		if !errors.Is(err, gate.ErrInvalid) {
-			t.Fatalf("Read = %v, want an error that wraps gate.ErrInvalid", err)
-		}
-	})
+	_, err := svc.Read(t.Context(), gate.NamespaceScope(""), recordID)
+	if !errors.Is(err, gate.ErrInvalid) {
+		t.Fatalf("Read = %v, want an error that wraps gate.ErrInvalid", err)
+	}
 }
 
 // TestDecisionRecordServiceAcceptsAScopeOfThePath proves that the service
@@ -215,9 +262,10 @@ func TestDecisionRecordServiceAcceptsAScopeOfThePath(t *testing.T) {
 				ID: gate.RecordID(recordID), Point: gate.PointStateWrite,
 				Change: gate.ChangeRef{Kind: gate.ChangeAccess, ID: ""}, Namespace: tc.ns,
 				At: at, Subject: "bo@example.com", Schema: gate.SchemaVersion{Subject: "access", Major: 1, Minor: 0},
-				Result: gate.ResultDeny, Count: 1, LastAt: at,
+				PathSets: nil, Units: nil, Requirements: nil, Warnings: nil, AutoApply: false, Controls: nil,
+				BreakGlass: "", Result: gate.ResultDeny, Action: "state.read", Count: 1, LastAt: at,
 			}
-			records := &hostileRecords{mu: sync.Mutex{}, record: record, gets: 0}
+			records := newHostileRecords(record)
 
 			svc := mustService(t, records)
 
@@ -232,4 +280,3 @@ func TestDecisionRecordServiceAcceptsAScopeOfThePath(t *testing.T) {
 		})
 	}
 }
-

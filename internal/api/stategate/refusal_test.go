@@ -2,6 +2,7 @@ package stategate_test
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/gate"
@@ -27,8 +28,8 @@ func TestApprovalRefusalNamesRecordRead(t *testing.T) {
 		},
 	}
 
-	guard := &fakeGuard{err: refused}
-	rec := &recorder{}
+	guard := &fakeGuard{mu: sync.Mutex{}, decision: decision(gate.ResultAllow, ""), err: refused, got: nil}
+	rec := &recorder{mu: sync.Mutex{}, reasons: nil}
 	w := write(t, gate.OperationLock, principal(identity.CredentialAccessToken, ""))
 
 	out := newAdmitter(t, guard).Admit(t.Context(), w, rec.record)

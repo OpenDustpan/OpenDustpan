@@ -77,24 +77,29 @@ func readNamespace(scope gate.Scope) (namespace.Name, error) {
 		return "", fmt.Errorf("%w: the zero scope names no scope", gate.ErrInvalid)
 	}
 
-	switch scope.Level() {
-	case gate.LevelInstallation:
+	if scope.Level() == gate.LevelInstallation {
 		// A record of an access limit on an installation object is data of the
 		// installation: its namespace in the store is the server scope.
 		return audit.ServerScope, nil
-	case gate.LevelNamespace:
-		ns := scope.Namespace()
-
-		if _, err := namespace.ParseName(ns.String()); err != nil {
-			return "", fmt.Errorf("%w: the scope namespace %q is not a valid name", gate.ErrInvalid, ns)
-		}
-
-		if ns == audit.ServerScope {
-			return "", fmt.Errorf("%w: the server scope is not a namespace scope", gate.ErrInvalid)
-		}
-
-		return ns, nil
-	default:
-		return "", fmt.Errorf("%w: a scope of kind %q holds no decision record of a route", gate.ErrInvalid, scope.Level())
 	}
+
+	if scope.Level() != gate.LevelNamespace {
+		return "", fmt.Errorf(
+			"%w: a scope of kind %q holds no decision record of a route",
+			gate.ErrInvalid,
+			scope.Level(),
+		)
+	}
+
+	ns := scope.Namespace()
+
+	if _, err := namespace.ParseName(ns.String()); err != nil {
+		return "", fmt.Errorf("%w: the scope namespace %q is not a valid name", gate.ErrInvalid, ns)
+	}
+
+	if ns == audit.ServerScope {
+		return "", fmt.Errorf("%w: the server scope is not a namespace scope", gate.ErrInvalid)
+	}
+
+	return ns, nil
 }

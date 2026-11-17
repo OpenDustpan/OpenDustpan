@@ -8,11 +8,9 @@ import (
 	"opendustpan.org/opendustpan/internal/api/apidesc/apidesctest"
 )
 
-// unobservedOperations lists the described operations whose success path no
-// test of this package serves. It is empty: the tests serve both routes.
-var unobservedOperations = []string{}
-
 // TestMain fails the package when a test leaves a goroutine running.
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(apidesctest.RequireObserved(m, unobservedOperations))
+	// No described operation lacks a success-path test: both routes are
+	// served, so the allowlist is empty.
+	goleak.VerifyTestMain(apidesctest.RequireObserved(m, nil))
 }
