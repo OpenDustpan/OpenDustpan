@@ -12,7 +12,7 @@ The user path this change must make work:
 
 1. **Docs page.** Turn on require MFA and enroll TOTP or a passkey.
 2. **API.** Sign in with password at POST /api/dustpan/v1/sign-in/password, then give the second factor to get a session.
-3. **API.** Create an access token at POST /api/server/caller/tokens, then run pulumi up and tofu apply with it.
+3. **API.** Create an access token at POST /api/dustpan/v1/me/tokens, then run pulumi up and tofu apply with it.
 4. **API.** Reveal a secret value at POST /api/v2/state-versions/{id}/actions/reveal; a stale step asks for a fresh authentication first.
 
 Errors the person may hit, and the one command that helps:
@@ -29,7 +29,7 @@ Evidence for the claims above:
 - LDAP sign-in has an e2e test and a guide. Proof: e2e/ldap_signin_test.go and docs/guides/ldap-sign-in.md
 - Local user sign-in has e2e tests and guides. Proof: e2e/localusers_test.go, e2e/passkeys_test.go, docs/guides/local-users.md, docs/guides/passkeys.md
 - No e2e test names MFA, TOTP, or SSO in this pack. Proof: keyword evidence: MFA e2e_count 0, TOTP e2e_count 0, SSO e2e_count 0
-- The token routes exist on main. Proof: route ANY /api/server/caller/tokens in the pack main list
+- The token routes exist on main. Proof: route ANY /api/dustpan/v1/me/tokens in the pack main list
 
 ## What Changes
 

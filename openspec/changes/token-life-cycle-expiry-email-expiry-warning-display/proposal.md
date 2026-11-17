@@ -19,8 +19,8 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A request with an expired token fails. | 401 with error code token.invalid. Create a new personal token, then run the command again. | `GET /api/server/caller/tokens` |
-| A read of a token without the token read grant fails. | 403 with the missing action and object. No warning field is returned. Ask an administrator for the grant. | `GET /api/server/caller/tokens` |
+| A request with an expired token fails. | 401 with error code token.invalid. Create a new personal token, then run the command again. | `GET /api/dustpan/v1/me/tokens` |
+| A read of a token without the token read grant fails. | 403 with the missing action and object. No warning field is returned. Ask an administrator for the grant. | `GET /api/dustpan/v1/me/tokens` |
 
 Evidence for the claims above:
 
@@ -31,7 +31,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Add the expiry warning level and the seconds left to the existing token reads under /api/server/tokens, /api/server/caller/tokens and /api/server/principals/{}/tokens
+- Add the expiry warning level and the seconds left to the existing token reads under /api/server/tokens, /api/dustpan/v1/me/tokens and /api/server/principals/{}/tokens
 - Give the console banner the same data from the caller token read
 - Read the 14-day and 3-day thresholds from settings
 - Leave the carriage in tool-compatible responses to an open question
