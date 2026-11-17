@@ -3237,6 +3237,15 @@ func (s *fakeBackupStore) finishRow(
 		return backup.Record{}, backup.ErrNotRunning
 	}
 
+	// A succeeded finish that names an attempt names one in the allowlist, as
+	// the adapters require. The fake keeps the empty attempt that its own
+	// control tests finish with, so those tests need no recorded attempt.
+	if state == backup.StateSucceeded && attempt != "" {
+		if err := backup.ValidAttempt(attempt); err != nil {
+			return backup.Record{}, err
+		}
+	}
+
 	// The finish commits only on the attempt that the row records.
 	// Defense in depth: the fence check of the caller already refused a claim
 	// that another holder took. This check stays so that the row never
