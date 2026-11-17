@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/ldapauth"
 	"opendustpan.org/opendustpan/internal/ldaptest"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/session/sessiontest"
@@ -130,5 +131,76 @@ func TestGateRefusalCostsTheBindsOfAnUnknownUser(t *testing.T) {
 		t.Fatalf("dummy bind = %q, want an entry below the base DN", dummy)
 	default:
 		// The refused name made one dummy bind and no bind of the user.
+	}
+}
+
+// TestDisabledPersonCostsTheBindsOfAnUnknownUser proves that a person that the
+// directory reports as disabled, and a person whose disabled value fails
+// closed, make the same binds as an unknown user name: the service bind, then
+// one dummy bind below the base DN. The bind of the person never happens.
+// Without the dummy bind such a name is one round trip faster than an unknown
+// name, and the time of the answer tells that the name exists.
+func TestDisabledPersonCostsTheBindsOfAnUnknownUser(t *testing.T) {
+	t.Parallel()
+
+	rule := ldapauth.Disabled{Attribute: "userAccountControl", Values: nil, Mask: 2}
+
+	cases := []struct {
+		want  error
+		name  string
+		value string
+	}{
+		{name: "the directory reports the person as disabled", value: "514", want: session.ErrSubjectDisabled},
+		{name: "the disabled value is not a number", value: "x514", want: session.ErrMethodAnswer},
+		{name: "the entry has no disabled value", value: "", want: session.ErrMethodAnswer},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t)
+			attrs := map[string][]string{"entryUUID": {"6ba7b810-9dad-11d1-80b4-00c04fd430c8"}}
+			if tc.value != "" {
+				attrs[rule.Attribute] = []string{tc.value}
+			}
+
+			s.dir.AddUser(ldaptest.User{Attributes: attrs, UserName: "alice", Password: goodPassword})
+
+			m := newMethod(t, s.configWith(func(c *ldapauth.Config) { c.Disabled = rule }))
+
+			bindsOf := func(name string) ([]string, error) {
+				t.Helper()
+
+				before := len(s.dir.Binds())
+				_, err := m.Verify(t.Context(), credentials(name, goodPassword), openGate{})
+
+				return s.dir.Binds()[before:], err
+			}
+
+			disabled, disabledErr := bindsOf("alice")
+			unknown, _ := bindsOf("nobody")
+
+			if !errors.Is(disabledErr, tc.want) {
+				t.Fatalf("error of the person = %v, want %v", disabledErr, tc.want)
+			}
+
+			if len(disabled) != 2 || len(unknown) != len(disabled) {
+				t.Fatalf("binds: person %q, unknown name %q; want 2 each", disabled, unknown)
+			}
+
+			dummy := disabled[1]
+
+			switch {
+			case disabled[0] != ldaptest.ServiceDN:
+				t.Fatalf("first bind = %q, want the service account", disabled[0])
+			case strings.EqualFold(dummy, ldaptest.UserDN("alice")) || strings.EqualFold(dummy, ldaptest.ServiceDN):
+				t.Fatalf("second bind = %q, want an entry that is neither the user nor the service account", dummy)
+			case !strings.HasSuffix(strings.ToLower(dummy), ","+strings.ToLower(ldaptest.BaseDN)):
+				t.Fatalf("dummy bind = %q, want an entry below the base DN", dummy)
+			default:
+				// The person made one dummy bind and no bind of its own.
+			}
+		})
 	}
 }
