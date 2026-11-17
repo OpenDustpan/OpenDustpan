@@ -13,7 +13,7 @@
 
 ## 3. Side effects (computed from main)
 
-- [ ] 3.1 Confirm that no request flow changed, so the round-trip budgets stand: the change adds no route and no caller of a route. Check: the round-trip tests in `internal/servertest/roundtrips_test.go` pass unchanged. Confirmed by: CI (the round-trip tests pass unchanged).
+- [ ] 3.1 Confirm that no request flow changed, so the round-trip budgets stand: the change adds no route and no caller of a route. Check: the round-trip tests of the servertest package pass unchanged. Confirmed by: CI (the round-trip tests pass unchanged).
 - [x] 3.2 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change.
 
 ## 4. Definition of done
