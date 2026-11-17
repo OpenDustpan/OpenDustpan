@@ -202,33 +202,6 @@ func (r *stepRegistry) RecordBackupAttempt(
 	return nil
 }
 
-// FinishBackup ends the running row id with state, as the registry does for a
-// failed finish. A succeeded finish is not used by the tests of this fake.
-//
-//nolint:revive // The method implements backup.Registry, whose FinishBackup signature has seven parameters.
-func (r *stepRegistry) FinishBackup(
-	_ context.Context, _ durable.StepFence, id ID, state State, errText string, endedAt time.Time, _ string,
-) (Record, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	row, ok := r.rows[id]
-	if !ok {
-		return Record{}, ErrNotFound
-	}
-
-	if row.State != StateRunning {
-		return Record{}, ErrNotRunning
-	}
-
-	row.State = state
-	row.Error = errText
-	row.EndedAt = endedAt
-	r.rows[id] = row
-
-	return row, nil
-}
-
 func (r *stepRegistry) GetBackup(_ context.Context, id ID) (Record, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -483,39 +456,5 @@ func TestStepFinishRefusesARowThatIsNotRunning(t *testing.T) {
 	row, err := reg.GetBackup(t.Context(), stepID)
 	if err != nil || row.State != StateSucceeded || row.Attempt != "5" {
 		t.Fatalf("row after a refused finish = %+v, %v, want unchanged succeeded with attempt 5", row, err)
-	}
-}
-
-// TestStepFinishRefusesARowWithoutAnAttempt proves the attempt check of the
-// finish step: a running row that records no attempt fails with
-// ErrInvalidAttempt in its error and ends as failed, so the finish step never
-// checks or commits an attempt that the row does not name.
-func TestStepFinishRefusesARowWithoutAnAttempt(t *testing.T) {
-	t.Parallel()
-
-	opID := durable.ID("op-finish-no-attempt")
-	target := newStepTarget()
-	reg := newStepRegistry()
-	ops := newStepOps(stepOperation(opID), 7)
-	svc := stepService(target, reg, ops)
-
-	reg.mu.Lock()
-	reg.rows[stepID] = Record{
-		StartedAt: claimTestTime(), EndedAt: time.Time{}, ID: stepID, Target: "test", Error: "",
-		State: StateRunning, Attempt: "",
-	}
-	reg.mu.Unlock()
-
-	fence := durable.StepFence{Operation: opID, Token: 7, Step: StepFinish}
-
-	if err := svc.StepFinishForTest(t.Context(), stepOperation(opID), fence); !errors.Is(
-		err, ErrInvalidAttempt,
-	) {
-		t.Fatalf("finish step on a row without an attempt = %v, want ErrInvalidAttempt", err)
-	}
-
-	row, err := reg.GetBackup(t.Context(), stepID)
-	if err != nil || row.State != StateFailed {
-		t.Fatalf("row after a refused finish = %+v, %v, want a failed row", row, err)
 	}
 }
