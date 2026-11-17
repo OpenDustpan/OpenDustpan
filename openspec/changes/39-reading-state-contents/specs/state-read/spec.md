@@ -24,17 +24,45 @@ When the server answers a masked read, the server SHALL key each marker by its J
 - **WHEN** caller reuses a cursor on another unit, another version or after 10 minutes
 - **THEN** server refuses the page with 400
 
+#### Scenario: cursor too long
+- **WHEN** caller sends a cursor above the length cap
+- **THEN** server refuses the page with 400 and reads no state
+
+### Requirement: label marker schema
+
+The API description SHALL declare the marker of a masked value as its own named schema, and SHALL NOT change the schema of any other route.
+
+#### Scenario: other routes keep their schema
+- **WHEN** the API description is regenerated with the NEW route
+- **THEN** the schema of each route that does not use the marker is the same as before
+
 ### Requirement: deny without grant
 
 If a caller lacks the required action on the unit, then the server SHALL deny the read with 403.
 
 #### Scenario: sibling grant denied
 - **WHEN** caller holds unit:read on another unit with no grant on this unit
-- **THEN** server answers 403 with no secret bytes
+- **THEN** server answers 403 with the code `unit.forbidden` and no secret bytes
 
 ### Requirement: bounds and failures
 
-If a version is above 5 MB, then the server SHALL refuse the read with 413 and no content.
+If a version is above 5 MB, then the server SHALL refuse the read with 413 and no content, and the server SHALL refuse it before it holds the content of the version. If a read passes the timeout of 30 seconds, then the server SHALL answer 504 with no bytes.
+
+#### Scenario: version above 5 MB
+- **WHEN** a read names a version that is larger than 5 MB
+- **THEN** server answers 413 before it loads the version content, and no content leaves
+
+#### Scenario: read passes the deadline
+- **WHEN** the read runs past its 30 second deadline
+- **THEN** server answers 504 with no bytes
+
+### Requirement: refusal limiter
+
+If a caller causes repeated refusals on the read route, then the server SHALL count them with the denial limiter of the server configuration, as the other adapters do. The reveal route of the change `39-reveal-state-value` reuses this limiter.
+
+#### Scenario: repeated refusals
+- **WHEN** one caller sends repeated reads that the server refuses
+- **THEN** the limiter counts each refusal and answers 429 after the limit
 
 #### Scenario: over size refused
 - **WHEN** version is above 5 MB

@@ -5,7 +5,7 @@ Single-path reveal over the separate stack and workspace models. Main serves the
 ## Decisions
 
 1. **Keep the Pulumi route, add tool-neutral single-path reveal.** Keep the Pulumi reveal route unchanged. Add the NEW tool-neutral reveal. Reveal takes unit reference, version and exactly one value path and writes one reveal entry before the first byte. Statuses: 403 missing grant, 404 unknown version, 400 bad, non-secret or cross-version path, 422 Pulumi other provider, 410 shredded or redacted.
-2. **Fail closed with defined failures.** An open or decrypt failure after the audit write answers 500 with no bytes; a timeout at 30 seconds answers 504 with no bytes. A retry writes a second entry. An audit write failure answers 500 with no bytes.
+2. **Fail closed with defined failures.** An open or decrypt failure after the audit write answers 500 with no bytes; a timeout at 30 seconds answers 504 with no bytes. A retry writes a second entry. An audit write failure answers 500 with no bytes, for each tool. Each refusal writes one audit entry. A shredded item answers 410 before any blob read.
 
 ## Structure
 
@@ -21,9 +21,9 @@ The existing reveal path in `pkg/stack/reveal.go` and `pkg/workspace/reveal.go` 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
 | authorize at point of use | handler checks unit:read-secrets for the unit | reveal with only unit:read gives 403 |
-| boundary check | allowlist for version and value path; strict JSON decode | two paths and a bad JSON Pointer give 400 with no secret echo |
+| boundary check | allowlist for version and value path for each tool; strict JSON decode | two paths and a bad JSON Pointer give 400 with no secret echo, for Pulumi and for OpenTofu |
 | encode or contain | errors repeat no secret bytes | failed reveal body and logs hold no plain bytes |
-| limit | one-path reveal, 30 second timeout | two paths give 400 |
+| limit | one-path reveal, 30 second timeout, denial limiter of `39-reading-state-contents` on refusals | two paths give 400; repeated refusals reach the limiter |
 | fail closed | deny on audit write failure or open failure | break audit write and check reveal answers 500 with no content |
 
 ## Diagrams
