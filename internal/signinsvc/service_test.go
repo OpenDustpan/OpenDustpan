@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/signinsvc"
@@ -780,6 +781,126 @@ func TestRefusalSurvivesAnAuditFailure(t *testing.T) {
 
 	if w.auditFailed != 1 || len(w.starts) != 0 {
 		t.Fatalf("audit failures %d, sessions %d, want 1 and 0", w.auditFailed, len(w.starts))
+	}
+}
+
+// subjectLockLimit is the limit of the count of the subject from every source
+// in the tests of the setting.
+const subjectLockLimit = 3
+
+// TestPasswordSubjectFailureLimitLocksAtTheLimit proves that the count of the
+// subject from every source locks the person after exactly the limit of the
+// setting, and that a limit outside the range refuses the sign-in before the
+// method.
+func TestPasswordSubjectFailureLimitLocksAtTheLimit(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the limit", func(t *testing.T) {
+		t.Parallel()
+		checkSubjectLockAtTheLimit(t)
+	})
+
+	t.Run("outside the range", func(t *testing.T) {
+		t.Parallel()
+		checkSubjectFailureLimitOutsideTheRange(t)
+	})
+
+	t.Run("a zero limit is the default", func(t *testing.T) {
+		t.Parallel()
+		checkZeroSubjectFailureLimitIsTheDefault(t)
+	})
+}
+
+// checkZeroSubjectFailureLimitIsTheDefault proves that a request with a limit
+// of zero locks the person after exactly authgate.DefaultSubjectFailureLimit
+// failures: one failure fewer still signs in.
+func checkZeroSubjectFailureLimitIsTheDefault(t *testing.T) {
+	t.Helper()
+
+	below := newPasswordHarness(t, nil)
+	below.subjectLimit = 0
+
+	below.failTimes(t, "alice", authgate.DefaultSubjectFailureLimit-1)
+
+	if _, err := below.signIn(t, "alice", "right"); err != nil {
+		t.Fatalf("sign-in below the default limit = %v, want a session", err)
+	}
+
+	at := newPasswordHarness(t, nil)
+	at.subjectLimit = 0
+
+	at.failTimes(t, "alice", authgate.DefaultSubjectFailureLimit)
+
+	_, err := at.signIn(t, "alice", "right")
+	if got := refusalReason(t, err); got != signinsvc.ReasonSubjectLocked {
+		t.Fatalf(
+			"sign-in after %d failures = %q, want %q",
+			authgate.DefaultSubjectFailureLimit,
+			got,
+			signinsvc.ReasonSubjectLocked,
+		)
+	}
+}
+
+// checkSubjectLockAtTheLimit proves that the count of the subject from every
+// source locks the person after exactly subjectLockLimit failures.
+func checkSubjectLockAtTheLimit(t *testing.T) {
+	t.Helper()
+
+	h := newPasswordHarness(t, nil)
+	h.subjectLimit = subjectLockLimit
+
+	h.failTimes(t, "alice", subjectLockLimit-1)
+
+	if _, err := h.signIn(t, "alice", "right"); err != nil {
+		t.Fatalf("sign-in below the limit = %v, want a session", err)
+	}
+
+	h.failTimes(t, "alice", subjectLockLimit)
+
+	binds := h.dir.counts().binds
+
+	_, err := h.signIn(t, "alice", "right")
+	if got := refusalReason(t, err); got != signinsvc.ReasonSubjectLocked {
+		t.Fatalf("sign-in after %d failures = %q, want %q", subjectLockLimit, got, signinsvc.ReasonSubjectLocked)
+	}
+
+	if !errors.Is(err, session.ErrMethodRejected) {
+		t.Fatalf("err = %v, want the class of a wrong password", err)
+	}
+
+	if after := h.dir.counts().binds; after != binds {
+		t.Fatalf("a locked person got %d binds, want none", after-binds)
+	}
+
+	before := h.dir.counts().binds
+
+	if _, err := h.signIn(t, "bob", "wrong"); refusalReason(t, err) != signinsvc.ReasonDirectoryRejected {
+		t.Fatalf("sign-in of another person = %v, want %q", err, signinsvc.ReasonDirectoryRejected)
+	}
+
+	if after := h.dir.counts().binds; after != before+1 {
+		t.Fatalf("another person got %d binds, want 1", after-before)
+	}
+}
+
+// checkSubjectFailureLimitOutsideTheRange proves that a limit outside the
+// range refuses the sign-in before the method.
+func checkSubjectFailureLimitOutsideTheRange(t *testing.T) {
+	t.Helper()
+
+	for _, limit := range []int{-1, 101} {
+		h := newPasswordHarness(t, nil)
+		h.subjectLimit = limit
+
+		_, err := h.signIn(t, "alice", "right")
+		if got := refusalReason(t, err); got != signinsvc.ReasonSubjectFailureLimit {
+			t.Fatalf("sign-in with the limit %d = %q, want %q", limit, got, signinsvc.ReasonSubjectFailureLimit)
+		}
+
+		if v := h.dir.counts().verifies; v != 0 {
+			t.Fatalf("the method was called %d times with the limit %d, want 0", v, limit)
+		}
 	}
 }
 

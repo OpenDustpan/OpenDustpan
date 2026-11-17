@@ -16,7 +16,7 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Create with expiry in the past or more than 30 days after creation | 422 with the NEW error code delegation.invalid-expiry and no new row. | `POST /api/dustpan/v1/delegations` |
-| Read of an unknown delegation id | 404 with the NEW error code delegation.not-found. | `GET /api/dustpan/v1/delegations/{id}` |
+| Read of an unknown delegation id | 404 with the NEW error code delegation.not-found. | the NEW route `GET /api/dustpan/v1/delegations/{id}` |
 | List when the caller holds no delegation | 200 with an empty list. | `GET /api/dustpan/v1/delegations` |
 
 Evidence for the claims above:

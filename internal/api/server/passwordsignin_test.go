@@ -15,6 +15,7 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/ldapauth"
 	"opendustpan.org/opendustpan/internal/ldaptest"
+	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -70,14 +71,14 @@ func newLDAPRouteEnv(t *testing.T) ldapRouteEnv {
 	}
 
 	e := newProviderEnvWith(t, []apiserver.PasswordProvider{{
-		Method: m, ID: ldapRouteID, DisplayName: "Corp directory", AutoCreate: true,
+		Method: m, ID: ldapRouteID, DisplayName: "Corp directory", AutoCreate: true, SubjectFailureLimit: 7,
 		LDAP: apiserver.LDAPSettings{
 			AllowedRanges: nil,
 			URL:           dir.LDAPSURL(), BindDN: ldaptest.ServiceDN, BaseDN: ldaptest.BaseDN,
 			UserFilter: "(&(objectClass=person)(uid={user}))", UserNameAttribute: "uid", EmailAttribute: "",
 			NameAttribute: "", Subject: "entryUUID", DisabledAttribute: "", Groups: "off", GroupBaseDN: "",
 			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
-			StartTLS: false,
+			StartTLS: false, SubjectFailureLimit: 7, SubjectFailureLimitSource: "file",
 		},
 	}})
 
@@ -335,11 +336,13 @@ type ldapListProvider struct {
 
 // ldapListSettings are the LDAP settings of a provider of ldapListDoc.
 type ldapListSettings struct {
-	AllowedRanges   []string `json:"allowedRanges"`
-	BindDN          string   `json:"bindDn"`
-	Subject         string   `json:"subject"`
-	Groups          string   `json:"groups"`
-	BindPasswordSet bool     `json:"bindPasswordSet"`
+	AllowedRanges             []string `json:"allowedRanges"`
+	BindDN                    string   `json:"bindDn"`
+	Subject                   string   `json:"subject"`
+	Groups                    string   `json:"groups"`
+	BindPasswordSet           bool     `json:"bindPasswordSet"`
+	SubjectFailureLimit       int      `json:"subjectFailureLimit"`
+	SubjectFailureLimitSource string   `json:"subjectFailureLimitSource"`
 }
 
 // checkLDAPListEntry fails when p is not the static LDAP provider with its
@@ -349,7 +352,8 @@ func checkLDAPListEntry(t *testing.T, p *ldapListProvider) {
 
 	if p.Source != "static" || p.Mode != "ldap" || p.LDAP == nil || p.LDAP.BindDN != ldaptest.ServiceDN ||
 		p.LDAP.Subject != "entryUUID" || p.LDAP.Groups != "off" || !p.LDAP.BindPasswordSet ||
-		p.LDAP.AllowedRanges == nil || len(p.LDAP.AllowedRanges) != 0 {
+		p.LDAP.AllowedRanges == nil || len(p.LDAP.AllowedRanges) != 0 ||
+		p.LDAP.SubjectFailureLimit != 7 || p.LDAP.SubjectFailureLimitSource != "file" {
 		t.Fatalf("provider = %+v, want static ldap with its effective settings", p)
 	}
 }
@@ -505,6 +509,81 @@ func TestLDAPRouteOfAnotherSiteHasABoundedAudit(t *testing.T) {
 	if n := e.dir.Connections(); n != 0 {
 		t.Fatalf("the directory got %d connections, want 0", n)
 	}
+}
+
+// TestLDAPRouteLocksAPersonAtTheConfiguredLimit proves that the limit of the
+// provider reaches the lockout of the person: the env sets a limit of 7, not
+// the default of 5. After 6 wrong passwords the right password signs in. After
+// 7 wrong passwords the right password gets 401 with no cookie, and a refused
+// sign-in entry holds the reason of the lock.
+func TestLDAPRouteLocksAPersonAtTheConfiguredLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		failures int
+		want     int
+	}{
+		{"one failure short of the limit", 6, http.StatusNoContent},
+		{"at the limit", 7, http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newLDAPRouteEnv(t)
+
+			for i := range tc.failures {
+				rec := e.post(t, ldapRoutePath, signInBody("alice", "wrong-password"))
+				if rec.Code != http.StatusUnauthorized {
+					t.Fatalf("failure %d = %d %s, want 401", i+1, rec.Code, rec.Body.String())
+				}
+			}
+
+			checkRightPasswordAfterFailures(t, e, tc.failures, tc.want)
+		})
+	}
+}
+
+// checkRightPasswordAfterFailures signs in with the right password and checks
+// the status. A refused sign-in has no cookie and a lock entry.
+func checkRightPasswordAfterFailures(t *testing.T, e ldapRouteEnv, failures, want int) {
+	t.Helper()
+
+	rec := e.post(t, ldapRoutePath, signInBody("alice", ldapRoutePassword))
+	if rec.Code != want {
+		t.Fatalf("right password after %d failures = %d %s, want %d", failures, rec.Code, rec.Body.String(), want)
+	}
+
+	if want == http.StatusNoContent {
+		return
+	}
+
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatal("a locked person got a cookie")
+	}
+
+	if !hasLockEntry(e.serverEntries(t)) {
+		t.Fatalf("no refused sign-in entry holds the reason %q", signinsvc.ReasonSubjectLocked)
+	}
+}
+
+// hasLockEntry reports whether an entry of a refused sign-in holds the reason
+// of the lock of a person.
+func hasLockEntry(entries []audit.Entry) bool {
+	for i := range entries {
+		en := &entries[i]
+		if en.Action != session.ActionSignIn || en.Outcome != audit.OutcomeFailure {
+			continue
+		}
+
+		for _, c := range en.Changes {
+			if c.Key == "reason" && c.New == signinsvc.ReasonSubjectLocked {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // TestPasswordRoutesAnswerTheSameRefusal proves that a wrong password on the

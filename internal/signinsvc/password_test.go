@@ -207,10 +207,11 @@ func (k keyReader) NameLockKey(context.Context) ([]byte, error) { return k.key, 
 // passwordHarness is a service with the counts of a SQLite store, the fake
 // ports of w, and a fake directory.
 type passwordHarness struct {
-	w     *world
-	svc   *signinsvc.Service
-	dir   *fakeDirectory
-	locks *countingLocks
+	w            *world
+	svc          *signinsvc.Service
+	dir          *fakeDirectory
+	locks        *countingLocks
+	subjectLimit int
 }
 
 // newPasswordHarness returns a harness. keys replaces the key reader of the
@@ -247,7 +248,7 @@ func newPasswordHarness(t *testing.T, keys signinsvc.NameKeys) passwordHarness {
 		t.Fatalf("New() = %v", err)
 	}
 
-	return passwordHarness{w: w, svc: svc, dir: newDirectory(), locks: locks}
+	return passwordHarness{w: w, svc: svc, dir: newDirectory(), locks: locks, subjectLimit: lockLimit}
 }
 
 // signIn signs in with the typed name and the password.
@@ -256,7 +257,7 @@ func (h passwordHarness) signIn(t *testing.T, name, password string) (signinsvc.
 
 	return h.svc.CompletePassword(t.Context(), &signinsvc.PasswordRequest{
 		Entry: callerEntry(), Provider: ldapProvider(), Method: h.dir, UserName: name,
-		Password: session.NewPassword(password),
+		Password: session.NewPassword(password), SubjectFailureLimit: h.subjectLimit,
 	})
 }
 
@@ -585,7 +586,7 @@ func TestPasswordRequestOutsideTheBoundaryNeverReachesTheMethod(t *testing.T) {
 
 			_, err := h.svc.CompletePassword(t.Context(), &signinsvc.PasswordRequest{
 				Entry: callerEntry(), Provider: tc.provider, Method: h.dir, UserName: tc.userName,
-				Password: session.NewPassword(tc.password),
+				Password: session.NewPassword(tc.password), SubjectFailureLimit: authgate.DefaultSubjectFailureLimit,
 			})
 			if got := refusalReason(t, err); got != tc.want {
 				t.Fatalf("sign-in = %q, want %q", got, tc.want)
@@ -683,7 +684,7 @@ func checkNoLockoutStore(t *testing.T) {
 
 	_, err = svc.CompletePassword(t.Context(), &signinsvc.PasswordRequest{
 		Entry: callerEntry(), Provider: ldapProvider(), Method: dir, UserName: "alice",
-		Password: session.NewPassword("right"),
+		Password: session.NewPassword("right"), SubjectFailureLimit: authgate.DefaultSubjectFailureLimit,
 	})
 	if got := refusalReason(t, err); got != signinsvc.ReasonLockoutOff {
 		t.Fatalf("sign-in = %q, want %q", got, signinsvc.ReasonLockoutOff)

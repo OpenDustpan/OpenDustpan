@@ -83,6 +83,7 @@ func ldapServeFlags() []string {
 		"ldap-email-attribute",
 		"ldap-name-attribute",
 		"ldap-subject",
+		"ldap-subject-failure-limit",
 		"ldap-disabled-attribute",
 		"ldap-disabled-mask",
 		"ldap-disabled-values",

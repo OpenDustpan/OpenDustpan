@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ldapauth"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/egress/plainconn"
@@ -60,6 +62,15 @@ type LDAPProvider struct {
 	DisabledMask           uint64
 	StartTLS               bool
 	AutoCreate             bool
+	// SubjectFailureLimit is the limit of the count of the subject from
+	// every source: 1 to 100. Zero uses the default of 5. The count of the
+	// person from one source locks the person after 10 failures. The count
+	// from every source locks the person after this limit.
+	SubjectFailureLimit int
+	// SubjectFailureLimitSource is the layer that sets SubjectFailureLimit:
+	// "flag", "env", "file" or "default". Empty means "default". The list of
+	// the sign-in providers shows it.
+	SubjectFailureLimitSource string
 }
 
 // WithLDAPProvider adds an LDAP provider to the sign-in. The sign-in needs the
@@ -97,6 +108,11 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 			}
 		}
 
+		limit, source, limitErr := subjectFailureLimitOf(p)
+		if limitErr != nil {
+			return nil, limitErr
+		}
+
 		m, err := ldapauth.NewMethod(ldapConfig(cfg, p, settingsSvc))
 		if err != nil {
 			return nil, fmt.Errorf("%w: provider %q: %w", errLDAPSetup, p.ID, err)
@@ -104,6 +120,7 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 
 		out = append(out, serverapi.PasswordProvider{
 			Method: m, ID: p.ID, DisplayName: displayNameOr(p.DisplayName, p.ID), AutoCreate: p.AutoCreate,
+			SubjectFailureLimit: limit,
 			LDAP: serverapi.LDAPSettings{
 				AllowedRanges: rangeTexts(
 					p.AllowedRanges,
@@ -124,11 +141,48 @@ func passwordProviders(cfg *settings, settingsSvc *setting.Service) ([]serverapi
 				GroupMemberOfAttribute: p.GroupMemberOfAttribute,
 				GroupNameAttribute:     p.GroupNameAttribute,
 				StartTLS:               p.StartTLS,
+				SubjectFailureLimit:    limit,
+				SubjectFailureLimitSource: string(
+					source,
+				),
 			},
 		})
 	}
 
 	return out, nil
+}
+
+// subjectFailureLimitOf returns the effective limit of the failed sign-ins of
+// a subject from every source, and the layer that sets it. It fails the start
+// for a provider whose limit or source is not valid.
+func subjectFailureLimitOf(p *LDAPProvider) (int, setting.Source, error) {
+	limit := p.SubjectFailureLimit
+	if limit == 0 {
+		limit = authgate.DefaultSubjectFailureLimit
+	}
+
+	if limit < authgate.MinSubjectFailureLimit || limit > authgate.MaxSubjectFailureLimit {
+		return 0, "", fmt.Errorf("%w: provider %q: ldap.subjectFailureLimit %d is not from %d to %d",
+			errLDAPSetup, p.ID, limit, authgate.MinSubjectFailureLimit, authgate.MaxSubjectFailureLimit)
+	}
+
+	source := setting.Source(p.SubjectFailureLimitSource)
+	if source == "" {
+		source = setting.SourceDefault
+	}
+
+	sources := []string{
+		string(setting.SourceFlag), string(setting.SourceEnv), string(setting.SourceFile),
+		string(setting.SourceDefault),
+	}
+	if !slices.Contains(sources, string(source)) {
+		return 0, "", fmt.Errorf(
+			"%w: provider %q: ldap.subjectFailureLimitSource %q is not flag, env, file or default",
+			errLDAPSetup, p.ID, p.SubjectFailureLimitSource,
+		)
+	}
+
+	return limit, source, nil
 }
 
 // ldapConfig returns the configuration of the method of p.
