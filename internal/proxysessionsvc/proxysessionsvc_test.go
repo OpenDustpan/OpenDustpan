@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/proxysessionsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/jobproxy/rulestore"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -308,6 +309,21 @@ func TestCheckSealedSizeRefusesAnOversizeForm(t *testing.T) {
 	}
 }
 
+// sweepFixture is a fixture whose claim has no job, as the claim of a sweep.
+func sweepFixture(t *testing.T) fixture {
+	t.Helper()
+
+	return newFixtureWith(t, "", job.OperationPlan)
+}
+
+// unknownOperationFixture is a fixture whose job has an operation that the
+// job proxy does not know.
+func unknownOperationFixture(t *testing.T) fixture {
+	t.Helper()
+
+	return newFixtureWith(t, jobWeb, job.Operation("unknown"))
+}
+
 // TestServiceHostile is the table of hostile cases of the service layer. Each
 // case calls the service straight, as if the route wrapper did not check.
 func TestServiceHostile(t *testing.T) {
@@ -354,47 +370,83 @@ func TestServiceHostile(t *testing.T) {
 		call    call
 		want    error
 		reason  string
+		fixture func(*testing.T) fixture
 	}{
 		{
 			name: "assignment with a launcher session", prepare: none,
 			call: assignment(runner.SessionKindLauncher, nsAcme),
 			want: proxysessionsvc.ErrWrongSessionKind, reason: proxysessionsvc.ReasonWrongSessionKind,
+			fixture: newFixture,
 		},
 		{
 			name: "assignment with a session of no kind", prepare: none, call: assignment("", nsAcme),
 			want: proxysessionsvc.ErrWrongSessionKind, reason: proxysessionsvc.ReasonWrongSessionKind,
+			fixture: newFixture,
 		},
 		{
 			name: "credential with a launcher session", prepare: none,
 			call: credential(runner.SessionKindLauncher, nsAcme),
 			want: proxysessionsvc.ErrWrongSessionKind, reason: proxysessionsvc.ReasonWrongSessionKind,
+			fixture: newFixture,
 		},
 		{
 			name: "assignment after the claim ended", prepare: ended, call: assignment(runner.SessionKindProxy, nsAcme),
 			want: runner.ErrClaimLost, reason: proxysessionsvc.ReasonClaimLost,
+			fixture: newFixture,
 		},
 		{
 			name: "credential after the claim ended", prepare: ended, call: credential(runner.SessionKindProxy, nsAcme),
 			want: runner.ErrClaimLost, reason: proxysessionsvc.ReasonClaimLost,
+			fixture: newFixture,
 		},
 		{
 			name: "credential after a takeover", prepare: takenOver, call: credential(runner.SessionKindProxy, nsAcme),
 			want: runner.ErrClaimLost, reason: proxysessionsvc.ReasonClaimLost,
+			fixture: newFixture,
 		},
 		{
 			name: "assignment of a claim of another runner", prepare: otherRunner,
 			call: assignment(runner.SessionKindProxy, nsAcme),
 			want: runner.ErrClaimLost, reason: proxysessionsvc.ReasonClaimLost,
+			fixture: newFixture,
 		},
 		{
 			name: "assignment with a pool of another namespace", prepare: none,
 			call: assignment(runner.SessionKindProxy, nsOther), want: runner.ErrNotFound,
-			reason: proxysessionsvc.ReasonNotJobOfPool,
+			reason:  proxysessionsvc.ReasonNotJobOfPool,
+			fixture: newFixture,
 		},
 		{
 			name: "credential with a pool of another namespace", prepare: none,
 			call: credential(runner.SessionKindProxy, nsOther), want: runner.ErrNotFound,
-			reason: proxysessionsvc.ReasonNotJobOfPool,
+			reason:  proxysessionsvc.ReasonNotJobOfPool,
+			fixture: newFixture,
+		},
+		{
+			name:    "assignment of the claim of a sweep",
+			prepare: none,
+			call:    assignment(runner.SessionKindProxy, nsAcme),
+			want:    runner.ErrInvalid,
+			reason:  proxysessionsvc.ReasonNoProxyOperation,
+			fixture: sweepFixture,
+		},
+		{
+			name:    "credential of the claim of a sweep",
+			prepare: none,
+			call:    credential(runner.SessionKindProxy, nsAcme),
+			want:    runner.ErrInvalid,
+			reason:  proxysessionsvc.ReasonNoProxyOperation,
+			fixture: sweepFixture,
+		},
+		{
+			name: "assignment of a job with an unknown operation", prepare: none,
+			call: assignment(runner.SessionKindProxy, nsAcme),
+			want: runner.ErrInvalid, reason: proxysessionsvc.ReasonNoProxyOperation, fixture: unknownOperationFixture,
+		},
+		{
+			name: "credential of a job with an unknown operation", prepare: none,
+			call: credential(runner.SessionKindProxy, nsAcme),
+			want: runner.ErrInvalid, reason: proxysessionsvc.ReasonNoProxyOperation, fixture: unknownOperationFixture,
 		},
 	}
 
@@ -402,7 +454,7 @@ func TestServiceHostile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newFixture(t)
+			f := tc.fixture(t)
 			mustPut(t, f, putRequest(pool(poolA, nsAcme)))
 			tc.prepare(f)
 

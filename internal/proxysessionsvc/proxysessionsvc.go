@@ -758,9 +758,9 @@ func (s *Service) sealChange(ctx context.Context, pool runner.Pool, change Crede
 }
 
 // CheckSealedSize is the size check of the sealed form of a credential, before
-// the seal. It refuses a sealed form that is longer than maxSealedPlainBytes, and so keeps the size of the value that
-// the secret
-// service allocates for bounded.
+// the seal. It refuses a sealed form that is longer than maxSealedPlainBytes,
+// and so keeps the size of the value that the secret service allocates
+// bounded.
 //
 // Defense in depth: the body limit of the route (16 KiB) and checkCredential
 // (user name and password lengths) bound the value too; this check stays so

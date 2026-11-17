@@ -275,6 +275,14 @@ type fixture struct {
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 
+	return newFixtureWith(t, jobWeb, job.OperationPlan)
+}
+
+// newFixtureWith is newFixture with the job of the claim and the operation of
+// the job given. An empty claimJob is the claim of a sweep, which has no job.
+func newFixtureWith(t *testing.T, claimJob string, operation job.Operation) fixture {
+	t.Helper()
+
 	namespaces, secrets := openSecrets(t)
 
 	webUnit, err := identity.UnitObject("pulumi", nsAcme, "web-prod")
@@ -286,7 +294,7 @@ func newFixture(t *testing.T) fixture {
 
 	j.ID = jobWeb
 	j.Spec.Unit = webUnit.WithUnitID(unitWeb)
-	j.Spec.Operation = job.OperationPlan
+	j.Spec.Operation = operation
 	j.Phases = make([]job.Phase, 1)
 	j.Phases[0].Kind = job.PhasePlan
 
@@ -300,7 +308,7 @@ func newFixture(t *testing.T) fixture {
 
 	f.svc, err = proxysessionsvc.New(proxysessionsvc.Config{
 		Settings: f.settings, Rules: f.rules, Secrets: secrets, Namespaces: namespaces, Operations: f.ops,
-		Claims: fakeClaims{jobs: map[durable.ID]string{opWeb: jobWeb}},
+		Claims: fakeClaims{jobs: map[durable.ID]string{opWeb: claimJob}},
 		Jobs:   fakeJobs{jobs: map[job.ID]job.Job{jobWeb: j}}, Units: fakeUnits{}, Audit: f.audit,
 		Logger: slog.New(slog.DiscardHandler),
 		Now:    func() time.Time { return time.UnixMilli(1_790_000_000_000) },
