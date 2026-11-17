@@ -64,7 +64,7 @@ func TestBearerOfOldKindTokenAnswers401(t *testing.T) {
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: stubCollections{}, Units: st,
 		},
-		Logger: nil, Now: nil, NewID: nil,
+		Logger: nil, Now: func() time.Time { return at }, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -72,19 +72,16 @@ func TestBearerOfOldKindTokenAnswers401(t *testing.T) {
 
 	late.set(svc)
 
-	issued, err := svc.NewTrustToken(t.Context(), time.Now(), prn.ID, "old kind", "trust-rule:old")
+	issued, err := svc.NewTrustToken(t.Context(), at, prn.ID, "old kind", "trust-rule:old")
 	if err != nil {
 		t.Fatalf("NewTrustToken: %v", err)
 	}
 
 	issued.Token.Kind = "trust"
 
-	if err := st.CreateToken(
-		t.Context(),
-		issued.Token,
-		issued.Digest,
-		storetest.ServerChange(at, "token:"+issued.Token.ID),
-	); err != nil {
+	entry := storetest.ServerChange(at, "token:"+issued.Token.ID)
+
+	if err := st.CreateToken(t.Context(), issued.Token, issued.Digest, entry); err != nil {
 		t.Fatalf("store the old-kind token: %v", err)
 	}
 

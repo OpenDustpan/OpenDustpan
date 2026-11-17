@@ -8,7 +8,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 )
 
-// knownRow returns a row with the kind kind and no other field but the ID.
+// knownRow returns a row with the stored kind and no other field but the ID.
 func knownRow(kind string) codec.AccessTokenRow {
 	return codec.AccessTokenRow{
 		ID: "tok-1", PrincipalID: "", Name: "", Kind: kind, ReplacedBy: "", CreatedBy: "",
