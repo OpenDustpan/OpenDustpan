@@ -16,6 +16,7 @@
 - [ ] 2.1 Add the shared refusal function in pkg/accesstoken/service.go (NEW function refuse, used by Service.AuthenticateToken at line 637) and route each 401 case through it Check: `go test ./pkg/accesstoken/...` passes
 - [ ] 2.2 Write the audit entry with reason and token ID on each refusal, in the NEW refuse function in pkg/accesstoken/service.go Check: `go test ./internal/api/...` passes
 - [ ] 2.3 Show the maximum lifetime, the inactivity period and the overlap with their source in the settings resource, in NEW pkg/accesstoken/limits.go Check: `GET /api/dustpan/v1/settings` lists each token limit
+- [ ] 2.5 Accept `status` in the own list: declare the name on the route label of listOwnTokens in internal/api/server/tokens.go and read it with accesstoken.ParseFilter in ownTokenPageRequest (tokens.go:819); update the comment of listOwnTokens (:789) and the 400 text of errOwnTokenQuery. Check: `go test ./internal/api/server/...` passes and the old test that sends `status` to the own list changes to expect 200
 - [ ] 2.4 Document the status=ended filter in the List and read tokens section of docs/guides/access-tokens.md Check: `make docs-lint` passes and a docs test runs the command as written
 
 ## 3. Side effects (computed from main)
