@@ -181,7 +181,7 @@ none
 
 Design calls that follow an existing pattern and change no word of an owner decision (the PM sees them in the report):
 
-- The credential is sealed under the scope of the namespace and the stable ID of the pool, with `secret.Service.Encrypt`. ADR 330 says "the data key of the namespace"; the scope uses that key through the service.
+- The credential is sealed with `secret.Service.Encrypt` under the scope (namespace, stable pool ID). ADR 330 says: "The pool seals it with the data key of the namespace". On main a data key belongs to a scope (`secret.NewScope`, `pkg/secret/secret.go:86`), and the service stores each scope key wrapped by the key-encryption key (`OpenKey`, `pkg/secret/secret.go:253`). It does not derive a scope key from one key of the namespace. The ADRs call such a key "a data key of the namespace scope" (ADR 204 decision on the issuer key, ADR 194). This change reads ADR 330 in that way: a data key of the namespace, in the scope of the pool. A reading with one key for all pools of a namespace is the alternative; the lead decides.
 - The credential has the shape of a user name and a password for `Proxy-Authorization: Basic`. A bearer form is a later change.
 - The proxy handoff token starts with `dpp_`. The launcher token keeps `dph_`.
 - The optional If-Match version on a save follows `job-proxy-rule-sets` (decision 3 there).
