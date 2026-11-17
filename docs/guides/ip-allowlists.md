@@ -4,19 +4,74 @@ This guide shows how to turn on IP allowlists for an installation, how to set
 the list of one namespace, how to read the effective state, and how to delete
 a list that locks people out.
 
-An IP allowlist limits the client addresses that may use a namespace. A request
-from another address gets `403`. An allowlist is set per namespace, and it applies
-only when the installation has the feature on.
+An IP allowlist limits the client addresses that may use an installation or a
+namespace. A request from another address gets `403`.
+
+An installation can hold two kinds of list. The installation list is a setting
+of the installation, and it applies to every request that uses a credential or
+starts a sign-in. A namespace list is a rule of one namespace, and it applies
+only when the `--ip-allowlists` feature is on. A request must pass the
+installation list first, then the namespace list.
 
 The examples use a token in `$TOKEN` and the host `dustpan.example.com`. The
 [security model](../explanation/security-model.md) explains the rules in more
 detail.
 
-## Turn on the feature
+## Turn on the installation list
 
-The feature is off by default. Start the server with `--ip-allowlists`, or set
-`DUSTPAN_IP_ALLOWLISTS`. The server needs a store to run the feature. Without a
-store, the server does not start.
+The installation list is off by default. Read the settings resource and note
+the `revision`, or the `ETag` header, for `If-Match`:
+
+```sh
+curl -si -H "Authorization: Bearer $TOKEN" \
+  https://dustpan.example.com/api/dustpan/v1/settings
+```
+
+The keys are `ipAllowlist.enabled` and `ipAllowlist.installation`. Turn the
+list on and set it in one change:
+
+```sh
+curl -si -X PATCH -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/merge-patch+json" \
+  -H 'If-Match: "3"' \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"ipAllowlist.enabled":true,"ipAllowlist.installation":"10.0.0.0/8,2001:db8::/32,192.0.2.7"}' \
+  https://dustpan.example.com/api/dustpan/v1/settings
+```
+
+The caller needs `server:manage-settings`. The answer is `200` with the new
+resource and the new `ETag`. The change takes effect at once.
+
+The list value is one string of CIDRs or addresses, separated by commas:
+
+- Each item is a CIDR, such as `10.0.0.0/8`, or a single address, such as
+  `192.0.2.7`. A single address is stored as `/32` for IPv4, or `/128` for IPv6.
+- The host bits of a CIDR are dropped. `10.1.2.3/8` is stored as `10.0.0.0/8`.
+- A duplicate is dropped. The order of the other items is kept.
+- The list holds at most 256 distinct entries.
+- An item that is not a CIDR or an address gets `400`, with the code
+  `settings.value-invalid`, and the message names the item. The stored list
+  does not change.
+
+An empty list denies every address while `ipAllowlist.enabled` is `true`. Set
+both keys in one change, so that a client never applies a list that it did not
+mean to set.
+
+A client outside the installation list cannot sign in and cannot use an access
+token. The answer is `403` with the code `ip-allowlist.denied` and the scope
+`installation`. The check runs before the credential, so a refused request
+reads no token and writes no sign-in entry.
+
+The installation list applies to the Pulumi CLI and the OpenTofu CLI in the
+same way as to the console: each request that carries their access token is
+checked. A CLI from a refused address gets the `403` and cannot run a plan or
+an apply.
+
+## Turn on the namespace feature
+
+The namespace feature is off by default. Start the server with
+`--ip-allowlists`, or set `DUSTPAN_IP_ALLOWLISTS`. The server needs a store to
+run the feature. Without a store, the server does not start.
 
 | Setting | Effect |
 | --- | --- |
@@ -46,7 +101,7 @@ The body holds `cidrs`, a list of addresses or networks:
   `192.0.2.7`. A single address is stored as `/32` for IPv4, or `/128` for IPv6.
 - The host bits of a CIDR are dropped. `10.1.2.3/8` is stored as `10.0.0.0/8`.
 - A duplicate is dropped. The order of the other items is kept.
-- The list holds at most 64 distinct entries.
+- The list holds at most 256 distinct entries.
 - The body is at most 16 KiB.
 - An empty list gets `400`. To delete the list, use `DELETE`.
 
@@ -75,8 +130,8 @@ three of these are true:
 2. `optedIn` is `true`.
 3. The client address is in one of the `cidrs`.
 
-A namespace with no list allows every address. An unknown namespace reads as
-having no list.
+A namespace with no list allows every address that the installation list
+allows. An unknown namespace reads as having no list.
 
 When the feature is off, `GET` still returns the stored list, with `enabled`
 set to `false`. The list stays stored and does not apply.
@@ -115,8 +170,15 @@ If the audit entry of a change cannot be written, the change does not happen.
 
 ## Lock-out recovery
 
-A list that refuses every client, including the operator, can be deleted in two
-ways.
+The installation list is checked before every credential. Use an address that
+you control in the installation list. If the list refuses every client, send
+the `PATCH` that sets `ipAllowlist.enabled` to `false` from a client in the
+list, or from a client that you add to the list first. Without such a client,
+the setting is only in the database; a person with database access must repair
+it. The server does not start a bypass for the installation list.
+
+A namespace list that refuses every client, including the operator, can be
+deleted in two ways.
 
 1. Restart the server with `--ip-allowlists`, and without
    `--ip-allowlists-include-bootstrap`. The bootstrap administrator token is
@@ -133,7 +195,9 @@ in more detail.
 
 | Code | Status | Meaning |
 | --- | --- | --- |
+| `ip-allowlist.denied` | `403` | The client address is not in the installation list. The `scope` argument is `installation`. |
 | `access.ip-not-allowed` | `403` | The client address is not in the list of the namespace. |
+| `settings.value-invalid` | `400` | An entry of the installation list is not a CIDR or an address. The message names the entry. |
 | `mfa.fresh-step-required` | `403` | The change needs a fresh sign-in. |
 | `access.denied` | `403` | The caller does not hold the action. |
 

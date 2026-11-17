@@ -3576,6 +3576,7 @@ func withRequestLog(
 	logger *slog.Logger,
 	authn identity.Authenticator,
 	observed *metrics.ServerMetrics,
+	allow allowlistRequestGate,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resolved := addr.resolver.Resolve(r)
@@ -3599,9 +3600,28 @@ func withRequestLog(
 
 		r = r.WithContext(ctx)
 
-		caller, signedIn := callerForRequest(ctx, authn, r)
-		if signedIn {
-			warnTokenExpiry(w, caller, time.Now())
+		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK, bytes: 0}
+
+		// The installation list is checked before the credential is used. A
+		// refused request writes no sign-in entry and reads no token.
+		var caller identity.Principal
+
+		var signedIn bool
+
+		refused := false
+
+		if checker := allow.checker(ctx, r); checker != nil {
+			if decision := checker.check(ctx, resolved); decision.Denied {
+				writeAllowlistDenial(ctx, wrapped, logger, decision)
+				refused = true
+			}
+		}
+
+		if !refused {
+			caller, signedIn = callerForRequest(ctx, authn, r)
+			if signedIn {
+				warnTokenExpiry(w, caller, time.Now())
+			}
 		}
 
 		// The route pattern is not known until the handler returns, so the
@@ -3614,9 +3634,10 @@ func withRequestLog(
 		}
 
 		start := time.Now()
-		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK, bytes: 0}
 
-		next.ServeHTTP(wrapped, r)
+		if !refused {
+			next.ServeHTTP(wrapped, r)
+		}
 
 		elapsed := time.Since(start)
 		route := logRoute(r)
@@ -3939,11 +3960,16 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 
 	addr := requestAddr{resolver: resolver, warns: newWarnLimiter(cfg.now)}
 
+	allow, err := newAllowlistRequestGate(cfg)
+	if err != nil {
+		return routeHandlers{}, err
+	}
+
 	gated := withAuditChainGate(mux, a.chain, cfg.logger)
 
 	return routeHandlers{
 		served: withMisuseReporter(apidesc.NewReporter(cfg.logger), withRequestCache(withRequestLog(
-			gateComponents(gated, cfg.components), addr, cfg.logger, cfg.authenticator, observed,
+			gateComponents(gated, cfg.components), addr, cfg.logger, cfg.authenticator, observed, allow,
 		))),
 		ungated: gated,
 		root:    mux,

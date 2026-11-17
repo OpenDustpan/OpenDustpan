@@ -37,6 +37,11 @@ func TestIPAllowlists(t *testing.T) {
 		t.Fatal("the Pulumi tool needs at least one version in its matrix")
 	}
 
+	tofuVersion := e2e.OpenTofu().Single()
+	if tofuVersion == "" {
+		t.Fatal("the OpenTofu tool needs at least one version in its matrix")
+	}
+
 	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
 	t.Cleanup(cancel)
 
@@ -45,16 +50,21 @@ func TestIPAllowlists(t *testing.T) {
 		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
 	}
 
+	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersion)
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, tofuVersion, err)
+	}
+
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			runIPAllowlistOnStore(t, cli, db)
+			runIPAllowlistOnStore(t, cli, tofu, db)
 		})
 	}
 }
 
 // runIPAllowlistOnStore runs the IP allowlist steps on one store.
-func runIPAllowlistOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+func runIPAllowlistOnStore(t *testing.T, cli, tofu e2e.Install, store e2e.Store) {
 	t.Helper()
 
 	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
@@ -77,6 +87,7 @@ func runIPAllowlistOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkIPAllowlistAdmitsInside(ctx, t, env)
 	checkIPAllowlistLeavesOpenAlone(ctx, t, env)
 	checkIPAllowlistDelete(ctx, t, env)
+	checkIPAllowlistInstallationList(ctx, t, env, cli, tofu)
 }
 
 // ipAllowlistStep is one installation API request of the IP allowlist steps
@@ -387,4 +398,80 @@ func checkIPAllowlistDelete(ctx context.Context, t *testing.T, env *e2e.Env) {
 		method: http.MethodGet, path: "/api/dustpan/v1/namespaces/locked/override-switches", body: "",
 		want: http.StatusOK,
 	})
+}
+
+// checkIPAllowlistInstallationList proves the installation list with the real
+// Pulumi CLI and OpenTofu. It first allows every address, so both CLIs run
+// with an access token, then narrows the list to the source outside the
+// default address. The CLIs then fail, the units route answers 200 from the
+// allowed source and 403 with the code from the default source.
+func checkIPAllowlistInstallationList(
+	ctx context.Context, t *testing.T, env *e2e.Env, cli, tofu e2e.Install,
+) {
+	t.Helper()
+
+	resp, _ := settingsRead(ctx, t, env, settingsRoute)
+	etag := resp.Header.Get("ETag")
+
+	settingsWant(ctx, t, env, settingsReq{
+		path: settingsRoute, ifMatch: etag,
+		body: `{"ipAllowlist.enabled":true,"ipAllowlist.installation":"0.0.0.0/0"}`,
+	}, settingsAnswer{status: http.StatusOK, code: ""})
+
+	pulumiRun, err := env.Run(ctx, []string{"PULUMI_ACCESS_TOKEN=" + env.TokenA()},
+		"stack", "ls", "--json", "--all")
+	if err != nil || pulumiRun.ExitCode != 0 {
+		t.Fatalf("pulumi stack ls inside the installation list: %+v, %v", pulumiRun, err)
+	}
+
+	tofuRun, err := env.RunTofuWithToken(ctx, t, tofu, env.TokenA(), "init", "-input=false", "-no-color")
+	if err != nil || tofuRun.ExitCode != 0 {
+		t.Fatalf("tofu init inside the installation list: %+v, %v", tofuRun, err)
+	}
+
+	resp, _ = settingsRead(ctx, t, env, settingsRoute)
+	etag = resp.Header.Get("ETag")
+
+	settingsWant(ctx, t, env, settingsReq{
+		path: settingsRoute, ifMatch: etag,
+		body: `{"ipAllowlist.installation":"` + ipAllowlistSource + `/32"}`,
+	}, settingsAnswer{status: http.StatusOK, code: ""})
+
+	pulumiRun, err = env.Run(ctx, []string{"PULUMI_ACCESS_TOKEN=" + env.TokenA()},
+		"stack", "ls", "--json", "--all")
+	if err != nil {
+		t.Fatalf("pulumi stack ls outside the installation list: %v", err)
+	}
+
+	if pulumiRun.ExitCode == 0 {
+		t.Fatalf("pulumi stack ls outside the installation list passed: %+v", pulumiRun)
+	}
+
+	tofuRun, err = env.RunTofuWithToken(ctx, t, tofu, env.TokenA(), "init", "-input=false", "-no-color")
+	if err != nil {
+		t.Fatalf("tofu init outside the installation list: %v", err)
+	}
+
+	if tofuRun.ExitCode == 0 {
+		t.Fatalf("tofu init outside the installation list passed: %+v", tofuRun)
+	}
+
+	unitsPath := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/units"
+
+	status, body, err := env.ServerAPIStatusFrom(ctx, ipAllowlistSource, env.TokenA(),
+		http.MethodGet, unitsPath, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("the units route from %s answers %d, %v: %s", ipAllowlistSource, status, err, body)
+	}
+
+	status, body, err = env.ServerAPIStatus(ctx, http.MethodGet, unitsPath, "")
+	if err != nil {
+		t.Fatalf("the units route from the default source: %v", err)
+	}
+
+	if status != http.StatusForbidden || !strings.Contains(body, `"errorCode":"ip-allowlist.denied"`) ||
+		!strings.Contains(body, `"scope":"installation"`) {
+		t.Fatalf("the units route from the default source answers %d (%s), want 403 ip-allowlist.denied "+
+			"with scope installation", status, body)
+	}
 }
