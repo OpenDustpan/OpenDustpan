@@ -625,11 +625,13 @@ func casePruneHostile(t *testing.T, e *env) {
 	_, err = rs.PruneExpired(ctx, "", req, zeroFence(), en)
 	wantErr(t, "PruneExpired(empty namespace)", err, gate.ErrInvalid)
 
-	_, err = rs.PruneExpired(ctx, "-bad", req, e.acme, en)
+	// The fence and the entry name the invalid name too, so that only the
+	// name check refuses this call.
+	_, err = rs.PruneExpired(ctx, "-bad", req, namespace.Fence{Namespace: "-bad", FailoverVersion: 1}, entry("-bad"))
 	wantErr(t, "PruneExpired(invalid namespace)", err, gate.ErrInvalid)
 
-	// Defense in depth: the handler checks the fence too; this check stays so
-	// that a new caller cannot skip it.
+	// Defense in depth: the fence check of the store transaction refuses the
+	// same call; this check stays so that a new caller cannot skip it.
 	_, err = rs.PruneExpired(ctx, "acme", req, e.globex, en)
 	wantErr(t, "PruneExpired(fence of globex)", err, gate.ErrInvalid)
 
