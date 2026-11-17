@@ -6,6 +6,25 @@ const (
 	portColRevokedAtMs = "revoked_at_ms"
 )
 
+// portableProxySettingsTable describes the table of the proxy settings of a
+// pool. The credential column holds sealed bytes that the backup keeps as they
+// are.
+func portableProxySettingsTable() PortableTable {
+	return PortableTable{
+		Table:   "runner_pool_proxy_settings",
+		OrderBy: []string{portColPoolID},
+		Columns: []Column{
+			{Name: portColPoolID, Kind: KindText},
+			{Name: "allowed_ranges", Kind: KindText},
+			{Name: "upstream_url", Kind: KindText},
+			{Name: "credential", Kind: KindBytes},
+			{Name: portColVersion, Kind: KindInteger},
+			{Name: portColUpdatedBy, Kind: KindText},
+			{Name: portColUpdatedAtMs, Kind: KindTime},
+		},
+	}
+}
+
 // portableRunnerTables is the portable description of the tables of runner
 // pools, join tokens and runners, in the order of Tables. The tables of
 // handoff tokens, job sessions, claim times and nonces are control data and
@@ -29,13 +48,14 @@ func portableRunnerTables() []PortableTable {
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 			},
 		},
+		portableProxySettingsTable(),
 		{
 			Table:   "runner_join_tokens",
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "pool_id", Kind: KindText},
+				{Name: portColPoolID, Kind: KindText},
 				{Name: portColSHA256, Kind: KindText},
 				{Name: portColCreatedBy, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
@@ -51,7 +71,7 @@ func portableRunnerTables() []PortableTable {
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
 				{Name: portColNamespaceID, Kind: KindText},
-				{Name: "pool_id", Kind: KindText},
+				{Name: portColPoolID, Kind: KindText},
 				{Name: portColName, Kind: KindText},
 				{Name: portColKind, Kind: KindText},
 				{Name: "isolation", Kind: KindText},

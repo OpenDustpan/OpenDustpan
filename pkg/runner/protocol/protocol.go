@@ -45,6 +45,24 @@ const (
 	// PathClaimRelease gives back a claim whose launcher never opened a
 	// session, for example after an image pull error (ReleaseRequest).
 	PathClaimRelease = Prefix + "/claims/{operation}/release"
+	// PathClaimProxyHandoff asks for the handoff token of the proxy session
+	// of a claim of the runner (HandoffResponse). Path parameter:
+	// {operation}. The token opens only a proxy session.
+	PathClaimProxyHandoff = Prefix + "/claims/{operation}/proxy-handoff"
+)
+
+// Paths of the job proxy: requests with the proof of the proxy session key.
+// A launcher session never passes them, and a proxy session never passes a
+// path of the launcher.
+const (
+	// PathProxySession exchanges a proxy handoff token for a proxy session
+	// (SessionRequest, ProxySessionResponse). The handoff token and the
+	// signature of the new key authenticate it, as for PathSession.
+	PathProxySession = Prefix + "/proxy/session"
+	// PathProxyUpstreamCredential gets the credential of the upstream proxy
+	// of the pool (UpstreamCredentialResponse). It has no body. Each call is
+	// one reveal in the audit log.
+	PathProxyUpstreamCredential = Prefix + "/proxy/session/upstream-credential"
 )
 
 // Paths of the launcher: requests with the proof of the session key.
@@ -154,7 +172,9 @@ const (
 // ErrorBadProof (runner.SessionStore.UseNonce).
 //
 //nolint:gochecknoglobals // A fixed list, read only.
-var NoncePaths = []string{PathRotate, PathPoll, PathClaimHandoff, PathSession}
+var NoncePaths = []string{
+	PathRotate, PathPoll, PathClaimHandoff, PathSession, PathClaimProxyHandoff, PathProxySession,
+}
 
 // NeedsNonce reports whether the server keeps the nonce of a proof on the
 // path pattern p, one of the Path constants.
@@ -192,6 +212,14 @@ const (
 	ErrorVersionAhead       = "version-ahead"       // 426: retry with backoff
 	ErrorRateLimited        = "rate-limited"        // 429 with Retry-After
 	ErrorUnavailable        = "unavailable"         // 503 with Retry-After
+)
+
+// The codes of Error of the paths of the job proxy, and the HTTP status of
+// each.
+const (
+	ErrorWrongSessionKind   = "wrong-session-kind"   // 403: a session of the other kind
+	ErrorRulesNotRenderable = "rules-not-renderable" // 422: the proxy does not start
+	ErrorNoUpstream         = "no-upstream"          // 404: the pool has no upstream credential
 )
 
 // JoinRequest registers a runner. The token is the secret of the join
@@ -444,6 +472,58 @@ type CredentialFile struct {
 	Name         string `json:"name"`
 	Content      []byte `json:"content"`
 	PathVariable string `json:"pathVariable,omitempty"`
+}
+
+// ProxySessionResponse holds the proxy session and the proxy assignment.
+type ProxySessionResponse struct {
+	Session    string          `json:"session"`
+	ExpiresAt  time.Time       `json:"expiresAt"`
+	Lease      Duration        `json:"lease"`
+	Assignment ProxyAssignment `json:"assignment"`
+}
+
+// ProxyAssignment is what the job proxy of a phase applies. It holds no
+// secret: the upstream credential has its own path.
+type ProxyAssignment struct {
+	Namespace string `json:"namespace"`
+	// Unit is the unit reference of the phase.
+	Unit string `json:"unit"`
+	// Operation is the operation of the job: plan, apply, destroy or refresh.
+	Operation string `json:"operation"`
+	// Rules are the rendered proxy rules of the namespace, then of the unit.
+	Rules []ProxyRule `json:"rules"`
+	// RulesDigest is "sha256:" and the hex SHA-256 of the rendered rules.
+	RulesDigest string `json:"rulesDigest"`
+	// ServerHost is the host of the server, for the tunnel to the server.
+	ServerHost string `json:"serverHost"`
+	// AllowedRanges are the private ranges of the pool that the proxy may
+	// open.
+	AllowedRanges []string `json:"allowedRanges"`
+	// UpstreamURL is the upstream proxy of the pool, or empty for none.
+	UpstreamURL string `json:"upstreamURL"`
+}
+
+// ProxyRule is one rendered proxy rule with the scope that holds it.
+type ProxyRule struct {
+	// Scope is "namespace" or "unit".
+	Scope             string   `json:"scope"`
+	ID                string   `json:"id"`
+	Operations        []string `json:"operations"`
+	Host              string   `json:"host"`
+	Port              int      `json:"port"`
+	Mode              string   `json:"mode"`
+	Methods           []string `json:"methods"`
+	Paths             []string `json:"paths"`
+	Credential        string   `json:"credential,omitempty"`
+	ClientCertificate string   `json:"clientCertificate,omitempty"`
+	ServerTrust       string   `json:"serverTrust"`
+}
+
+// UpstreamCredentialResponse holds the credential of the upstream proxy of
+// the pool. The job proxy keeps it in memory only.
+type UpstreamCredentialResponse struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 // StepEnd records the end of a step.

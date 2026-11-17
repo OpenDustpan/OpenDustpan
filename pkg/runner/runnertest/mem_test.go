@@ -63,7 +63,7 @@ type mem struct {
 	sessions  map[string]runner.Session
 	ops       map[durable.ID]op
 	entries   map[namespace.Name][]audit.Entry
-	sessionOf map[durable.ID]string
+	sessionOf map[sessionSlot]string
 	nonces    map[nonceKey]time.Time
 }
 
@@ -72,7 +72,7 @@ func newMem() *mem {
 		mu: sync.Mutex{}, seq: 0, fences: map[namespace.Name]int64{}, pools: map[string]runner.Pool{},
 		inUse: map[string]bool{}, tokens: map[string]runner.JoinToken{}, runners: map[string]runner.Runner{},
 		launches: map[string]runner.HandoffToken{}, sessions: map[string]runner.Session{}, ops: map[durable.ID]op{},
-		entries: map[namespace.Name][]audit.Entry{}, sessionOf: map[durable.ID]string{},
+		entries: map[namespace.Name][]audit.Entry{}, sessionOf: map[sessionSlot]string{},
 		nonces: map[nonceKey]time.Time{},
 	}
 }
@@ -731,9 +731,21 @@ func releaseOp(m *mem, id durable.ID) {
 // hasSession reports whether the claim token of the operation id has a
 // job session.
 func hasSession(m *mem, id durable.ID, token int64) bool {
-	sid, ok := m.sessionOf[id]
+	return hasSessionOfKind(m, id, token, runner.SessionKindLauncher)
+}
+
+// hasSessionOfKind reports whether the claim token of the operation id has a
+// session of the kind kind.
+func hasSessionOfKind(m *mem, id durable.ID, token int64, kind runner.SessionKind) bool {
+	sid, ok := m.sessionOf[sessionSlot{op: id, kind: kind}]
 
 	return ok && m.sessions[sid].Token == token
+}
+
+// sessionSlot is the place of the session of one kind of one operation.
+type sessionSlot struct {
+	op   durable.ID
+	kind runner.SessionKind
 }
 
 // SessionStore.
@@ -768,20 +780,29 @@ func (m *mem) IssueHandoffToken(_ context.Context, t runner.HandoffToken, c dura
 		return fmt.Errorf("%w: the operation is not of a kind of the pool", runner.ErrInvalid)
 	}
 
-	if hasSession(m, c.Operation, c.Token) {
+	if _, err = runner.ParseSessionKind(string(t.Kind)); err != nil {
+		return err
+	}
+
+	if hasSessionOfKind(m, c.Operation, c.Token, t.Kind) {
 		return runner.ErrConflict
 	}
 
-	for h := range m.launches {
-		if o := m.launches[h]; o.Operation == t.Operation && o.Token == t.Token {
-			delete(m.launches, h)
-		}
-	}
+	dropLaunchesOfKind(m, &t)
 
 	m.launches[t.SHA256] = t
 	recordClaimTime(m, c.Operation, t.IssuedAt, "", 0)
 
 	return nil
+}
+
+// dropLaunchesOfKind deletes the handoff tokens of the claim and the kind of t.
+func dropLaunchesOfKind(m *mem, t *runner.HandoffToken) {
+	for h := range m.launches {
+		if o := m.launches[h]; o.Operation == t.Operation && o.Token == t.Token && o.Kind == t.Kind {
+			delete(m.launches, h)
+		}
+	}
 }
 
 // recordClaimTime records the claim time at of the live claim of the
@@ -824,12 +845,14 @@ func (m *mem) LookupClaim(_ context.Context, c durable.Claim) (runner.ClaimRecor
 	}, nil
 }
 
-func (m *mem) OpenSession(_ context.Context, sum string, k runner.Key, now time.Time) (runner.Session, error) {
+func (m *mem) OpenSession(
+	_ context.Context, sum string, kind runner.SessionKind, k runner.Key, now time.Time,
+) (runner.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	t, ok := m.launches[sum]
-	if !ok {
+	if !ok || t.Kind != kind {
 		return runner.Session{}, runner.ErrNotFound
 	}
 
@@ -851,11 +874,11 @@ func (m *mem) OpenSession(_ context.Context, sum string, k runner.Key, now time.
 	m.launches[sum] = t
 
 	s := runner.Session{
-		ID: nextID(m, runner.SessionIDPrefix), Operation: t.Operation, Token: t.Token, Runner: t.Runner,
+		ID: nextID(m, runner.SessionIDPrefix), Kind: kind, Operation: t.Operation, Token: t.Token, Runner: t.Runner,
 		Key: runner.Key{Public: k.Public, CreatedAt: now}, CreatedAt: now,
 	}
 	m.sessions[s.ID] = s
-	m.sessionOf[op] = s.ID
+	m.sessionOf[sessionSlot{op: op, kind: kind}] = s.ID
 
 	return s, nil
 }

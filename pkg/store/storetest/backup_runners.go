@@ -19,15 +19,17 @@ import (
 
 // RunnerPorts are the ports of the runner tool on one store: the pools and
 // their join tokens, the members that hold the runners and their keys, and
-// the handoff tokens and job sessions of the runners.
+// the handoff tokens and job sessions of the runners, and the proxy settings
+// of the pools.
 type RunnerPorts struct {
 	Pools    runner.PoolStore
 	Members  runner.MemberStore
 	Sessions runner.SessionStore
+	Proxy    runner.PoolProxyStore
 }
 
 // RunnerSeeder is a BackupStore capability for a store that keeps runner
-// pools. The round trip fills and compares the three runner tables through
+// pools. The round trip fills and compares the four runner tables through
 // RunnerPorts. The control rows of the runner protocol are not in the backup:
 // SeedRunnerControlRows writes one row in each of them, for the runner
 // runnerID in the rows that name one, and CountRunnerControlRows reads the
@@ -44,7 +46,7 @@ type RunnerSeeder interface {
 
 // runnerTables returns the runner tables in backup.Tables.
 func runnerTables() []string {
-	return []string{"runner_pools", "runner_join_tokens", "runners"}
+	return []string{"runner_pools", "runner_join_tokens", "runners", "runner_pool_proxy_settings"}
 }
 
 // runnerControlTables returns the tables of the runner protocol that the
@@ -53,24 +55,29 @@ func runnerControlTables() []string {
 	return []string{"runner_claims", "runner_handoff_tokens", "runner_sessions", "runner_nonces"}
 }
 
-// seededRunners holds the pool, the join token and the runner as the store
-// returned them after the join, read back before the backup. The round trip
-// compares the restored rows with these values.
+// seededRunners holds the pool, the join token, the runner and the proxy
+// settings of the pool as the store returned them, read back before the
+// backup. The round trip compares the restored rows with these values.
 type seededRunners struct {
 	pool   runner.Pool
 	token  runner.JoinToken
 	runner runner.Runner
+	proxy  runner.ProxySettingsRecord
 }
 
 // runnerSecret is the join secret of the seeded token. The store keeps only
 // its hash.
 const runnerSecret = runner.JoinTokenPrefix + "seed-secret-0123456789"
 
-// seedBackupRunners writes one pool in acme, one join token of the pool, and
-// one runner that joined with that token. It also writes one row in each
-// control table of the runner protocol, for that runner in the rows that name
-// one, so that the restore check can prove that those rows do not arrive. It
-// returns nil for a store with no runner port.
+// runnerProxySealed stands for the sealed upstream credential of the seeded
+// pool. The store keeps these bytes as they are, and so does the backup.
+const runnerProxySealed = "sealed-proxy-credential-bytes"
+
+// seedBackupRunners writes one pool in acme, one join token of the pool, one
+// runner that joined with that token, and the proxy settings of the pool. It
+// also writes one row in each control table of the runner protocol, for that
+// runner in the rows that name one, so that the restore check can prove that
+// those rows do not arrive. It returns nil for a store with no runner port.
 func seedBackupRunners(t *testing.T, s BackupStore, acme namespace.Namespace) *seededRunners {
 	t.Helper()
 
@@ -79,13 +86,46 @@ func seedBackupRunners(t *testing.T, s BackupStore, acme namespace.Namespace) *s
 		return nil
 	}
 
-	seeded := joinBackupRunner(t, seeder.RunnerPorts(), acme, "linux-1")
+	ports := seeder.RunnerPorts()
+	seeded := joinBackupRunner(t, ports, acme, "linux-1")
+	seeded.proxy = seedBackupProxySettings(t, ports, acme, seeded.pool.ID)
 
 	if err := seeder.SeedRunnerControlRows(t.Context(), seeded.runner.ID); err != nil {
 		t.Fatalf("seed runner control rows: %v", err)
 	}
 
 	return seeded
+}
+
+// seedBackupProxySettings saves the proxy settings of the pool poolID, with
+// one private range, an upstream proxy and a sealed credential, and returns
+// the record as the store returns it.
+func seedBackupProxySettings(
+	t *testing.T, ports RunnerPorts, acme namespace.Namespace, poolID string,
+) runner.ProxySettingsRecord {
+	t.Helper()
+
+	settings, err := runner.NewProxySettings([]string{"10.20.0.0/16"}, "https://proxy.example.com:3128")
+	if err != nil {
+		t.Fatalf("make proxy settings: %v", err)
+	}
+
+	rec := runner.ProxySettingsRecord{
+		Settings: settings, Credential: []byte(runnerProxySealed), Version: 0,
+		UpdatedBy: "alice", UpdatedAt: now(),
+	}
+	entry := lifecycleEntry(acme.Name, "namespace:manage-runners")
+
+	if _, err = ports.Proxy.SetProxySettings(t.Context(), acme.Fence(), poolID, rec, entry); err != nil {
+		t.Fatalf("save proxy settings of pool %s: %v", poolID, err)
+	}
+
+	stored, err := ports.Proxy.ProxySettings(t.Context(), poolID)
+	if err != nil {
+		t.Fatalf("read proxy settings of pool %s: %v", poolID, err)
+	}
+
+	return stored
 }
 
 // joinBackupRunner creates one pool in acme, one join token of the pool, and
@@ -148,6 +188,9 @@ func joinBackupRunner(t *testing.T, ports RunnerPorts, acme namespace.Namespace,
 		pool:   readBackPool(t, ports, acme, pool.ID),
 		token:  readBackJoinToken(t, ports, pool.ID),
 		runner: readBackRunner(t, ports, joined.Runner.ID),
+		proxy: runner.ProxySettingsRecord{
+			Settings: runner.ProxySettings{}, Credential: nil, Version: 0, UpdatedBy: "", UpdatedAt: time.Time{},
+		},
 	}
 }
 
@@ -267,6 +310,36 @@ func checkRestoredRunners(t *testing.T, dst RestoreStore, acme namespace.Name, s
 	}
 
 	compareRunner(t, seeded.runner, got)
+
+	proxy, err := ports.Proxy.ProxySettings(ctx, seeded.pool.ID)
+	if err != nil {
+		t.Fatalf("restored proxy settings of pool %s: %v", seeded.pool.ID, err)
+	}
+
+	compareProxySettings(t, seeded.proxy, proxy)
+}
+
+// compareProxySettings fails the test for each field of got that differs
+// from want. The sealed credential must arrive as the same bytes.
+func compareProxySettings(t *testing.T, want, got runner.ProxySettingsRecord) {
+	t.Helper()
+
+	if !slices.Equal(got.Settings.AllowedRanges(), want.Settings.AllowedRanges()) ||
+		got.Settings.UpstreamURL() != want.Settings.UpstreamURL() {
+		t.Errorf("restored proxy settings ranges, upstream = %v, %q, want %v, %q",
+			got.Settings.AllowedRanges(), got.Settings.UpstreamURL(),
+			want.Settings.AllowedRanges(), want.Settings.UpstreamURL())
+	}
+
+	if !bytes.Equal(got.Credential, want.Credential) {
+		t.Errorf("restored proxy credential = %d bytes, want the %d sealed bytes as they were",
+			len(got.Credential), len(want.Credential))
+	}
+
+	if got.Version != want.Version || got.UpdatedBy != want.UpdatedBy || !got.UpdatedAt.Equal(want.UpdatedAt) {
+		t.Errorf("restored proxy settings version, by, at = %d, %q, %v, want %d, %q, %v",
+			got.Version, got.UpdatedBy, got.UpdatedAt, want.Version, want.UpdatedBy, want.UpdatedAt)
+	}
 }
 
 // checkRunnerControlRowsAbsent checks that dst holds no row in any control

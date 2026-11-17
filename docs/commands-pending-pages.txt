@@ -23,6 +23,7 @@ docs/guides/load.md
 docs/guides/local-users.md
 docs/guides/manual-locks.md
 docs/guides/migrate-out.md
+docs/guides/moving-units.md
 docs/guides/notification-destinations.md
 docs/guides/observe.md
 docs/guides/oidc-issuer.md

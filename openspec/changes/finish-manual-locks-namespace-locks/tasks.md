@@ -8,10 +8,12 @@
 - [ ] 1.2 Dispatch tests for wait, running phase, timeout and release in the NEW file pkg/manuallock/dispatch_test.go. Check: TestDispatchWaitsWithReasonLocked fails on main
 - [ ] 1.3 Job-token tests for OpenTofu lock and Pulumi update start with race cases in pkg/manuallock/manuallock_test.go. Check: TestToolLockWithPreLockJobToken (NEW, in pkg/manuallock/manuallock_test.go) fails on main; when it passes from the start, the pull request body says so and the task counts as done
 - [ ] 1.4 Bulk route tests with mixed, duplicate and over-limit cases in the NEW file pkg/manuallock/bulk_test.go. Check: TestBulkLockPerItem fails on main
+- [ ] 1.5 Route tests for the bulk routes in a NEW test file in internal/api/inventory: mixed, duplicate and over-limit cases through the HTTP handler. Check: the new test fails on main
 
 ## 2. Side effects (computed from main)
 
 - [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+- [ ] 2.2 Add the two bulk routes to the route table of the lock routes in internal/api/inventory/locks.go (func lockRoutes), their names to internal/api/inventory/operations.go and their path constants to internal/api/refusal/lockroutes.go. Check: go test ./internal/api/inventory/... ./internal/api/refusal/... -count=1
 
 ## 3. Definition of done
 

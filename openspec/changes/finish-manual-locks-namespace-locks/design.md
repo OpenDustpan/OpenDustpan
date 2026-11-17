@@ -37,7 +37,7 @@ P1[pkg/manuallock]
 
 New imports of this change (each one allowed by the module rules):
 
-- `internal/api/server` imports `pkg/manuallock`
+- `internal/api/inventory` imports `pkg/manuallock`
 
 States and transitions after this change:
 

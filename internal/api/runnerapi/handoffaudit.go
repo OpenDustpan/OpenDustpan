@@ -284,7 +284,7 @@ func (h *Handler) handoffRefusalEntry(
 
 	e.Changes = []audit.Change{
 		{Key: changeEvent, Old: nil, New: string(ref.Event()), Layer: "", TakesEffect: ""},
-		{Key: "reason", Old: nil, New: string(ref.Reason), Layer: "", TakesEffect: ""},
+		{Key: changeReason, Old: nil, New: string(ref.Reason), Layer: "", TakesEffect: ""},
 		{Key: "runner", Old: nil, New: runnerID, Layer: "", TakesEffect: ""},
 		{Key: "runnerVerified", Old: nil, New: strconv.FormatBool(ref.Verified), Layer: "", TakesEffect: ""},
 	}

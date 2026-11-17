@@ -604,8 +604,15 @@ func (h *Handler) liveClaim(r *http.Request, rn *runner.Runner) (durable.Claim, 
 	return op.Claim, op, nil
 }
 
-// handoff issues the handoff token of a claim of the runner.
+// handoff issues the handoff token of the launcher session of a claim of the
+// runner.
 func (h *Handler) handoff(w http.ResponseWriter, r *http.Request, c *call) {
+	h.issueHandoff(w, r, c, runner.SessionKindLauncher)
+}
+
+// issueHandoff issues a handoff token of the kind for a claim of the runner.
+// The kind comes from the route, never from the request.
+func (h *Handler) issueHandoff(w http.ResponseWriter, r *http.Request, c *call, kind runner.SessionKind) {
 	ctx := r.Context()
 
 	claim, _, err := h.liveClaim(r, &c.runner)
@@ -626,8 +633,16 @@ func (h *Handler) handoff(w http.ResponseWriter, r *http.Request, c *call) {
 	now := h.now()
 	sum := sha256.Sum256([]byte(secret))
 	tok := runner.HandoffToken{
-		SHA256: hex.EncodeToString(sum[:]), Operation: string(claim.Operation), Token: claim.Token,
-		Runner: c.runner.ID, IssuedAt: now, ExpiresAt: now.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
+		SHA256: hex.EncodeToString(
+			sum[:],
+		),
+		Kind:      kind,
+		Operation: string(claim.Operation),
+		Token:     claim.Token,
+		Runner:    c.runner.ID,
+		IssuedAt:  now,
+		ExpiresAt: now.Add(runner.HandoffTokenTTL),
+		UsedAt:    time.Time{},
 	}
 
 	if err = h.handoffs.IssueHandoffToken(ctx, tok, claim); err != nil {

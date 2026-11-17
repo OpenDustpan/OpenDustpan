@@ -114,6 +114,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a handoff token needs a live claim of the pool", testHandoffTokenClaim},
 		{"a handoff token is only for a claim of its own runner", testHandoffTokenOwner},
 		{"a new handoff token replaces the old one until a session opens", testHandoffTokenReplace},
+		{"a handoff token of one kind opens only a session of that kind", testSessionKindOwn},
+		{"a session of one kind per claim, and a second one is a conflict", testSessionKindOnePerKind},
 		{"a nonce is good for one proof up to and at its expiry", testNonce},
 		{"a runner renews a claim until the session wait limit", testRunnerRenew},
 		{"a renewal with a stale fence changes nothing", testRunnerRenewStaleFence},
@@ -317,8 +319,8 @@ func handoffToken(t *testing.T, c durable.Claim, runnerID string, at time.Time) 
 	secret := runner.HandoffTokenPrefix + randomHex(t)
 
 	return runner.HandoffToken{
-		SHA256: hash(secret), Operation: string(c.Operation), Token: c.Token, Runner: runnerID, IssuedAt: at,
-		ExpiresAt: at.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
+		SHA256: hash(secret), Kind: runner.SessionKindLauncher, Operation: string(c.Operation), Token: c.Token,
+		Runner: runnerID, IssuedAt: at, ExpiresAt: at.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
 	}, secret
 }
 

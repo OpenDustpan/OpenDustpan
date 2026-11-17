@@ -422,7 +422,7 @@ func (h *Handler) recordCredentialsRefusal(
 	e.Changes = []audit.Change{
 		{Key: changeEvent, Old: nil, New: event, Layer: "", TakesEffect: ""},
 		{Key: "step", Old: nil, New: step, Layer: "", TakesEffect: ""},
-		{Key: "reason", Old: nil, New: failure.reason, Layer: "", TakesEffect: ""},
+		{Key: changeReason, Old: nil, New: failure.reason, Layer: "", TakesEffect: ""},
 	}
 
 	if _, err = h.audit.Append(ctx, fence, e); err != nil {

@@ -44,7 +44,7 @@ func pgCopyProfileTables() []pgCopyTable {
 			table: "issuer_settings",
 			columns: []string{
 				pgColNamespaceID, "issuer_url", "subject_template", "allow_block_subjects", "include_actor_name",
-				"version", pgColUpdatedAtMs, "updated_by", "copy_check",
+				pgColVersion, pgColUpdatedAtMs, pgColUpdatedBy, "copy_check",
 			},
 			orderBy: []string{pgColNamespaceID},
 		},

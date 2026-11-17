@@ -2227,16 +2227,18 @@ func (q *Queries) CountRunnerPoolsOfNamespace(ctx context.Context, namespaceID s
 }
 
 const countRunnerSessionsOfClaim = `-- name: CountRunnerSessionsOfClaim :one
-SELECT COUNT(*) FROM runner_sessions WHERE operation_id = $1 AND token = $2
+SELECT COUNT(*) FROM runner_sessions
+WHERE operation_id = $1 AND token = $2 AND kind = $3
 `
 
 type CountRunnerSessionsOfClaimParams struct {
 	OperationID string
 	Token       int64
+	Kind        string
 }
 
 func (q *Queries) CountRunnerSessionsOfClaim(ctx context.Context, arg CountRunnerSessionsOfClaimParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countRunnerSessionsOfClaim, arg.OperationID, arg.Token)
+	row := q.db.QueryRow(ctx, countRunnerSessionsOfClaim, arg.OperationID, arg.Token, arg.Kind)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -4524,16 +4526,18 @@ func (q *Queries) DeleteRole(ctx context.Context, arg DeleteRoleParams) (int64, 
 }
 
 const deleteRunnerHandoffTokensOfClaim = `-- name: DeleteRunnerHandoffTokensOfClaim :exec
-DELETE FROM runner_handoff_tokens WHERE operation_id = $1 AND token = $2
+DELETE FROM runner_handoff_tokens
+WHERE operation_id = $1 AND token = $2 AND kind = $3
 `
 
 type DeleteRunnerHandoffTokensOfClaimParams struct {
 	OperationID string
 	Token       int64
+	Kind        string
 }
 
 func (q *Queries) DeleteRunnerHandoffTokensOfClaim(ctx context.Context, arg DeleteRunnerHandoffTokensOfClaimParams) error {
-	_, err := q.db.Exec(ctx, deleteRunnerHandoffTokensOfClaim, arg.OperationID, arg.Token)
+	_, err := q.db.Exec(ctx, deleteRunnerHandoffTokensOfClaim, arg.OperationID, arg.Token, arg.Kind)
 	return err
 }
 
@@ -4552,6 +4556,15 @@ DELETE FROM runner_join_tokens WHERE pool_id = $1
 
 func (q *Queries) DeleteRunnerPoolJoinTokens(ctx context.Context, poolID string) error {
 	_, err := q.db.Exec(ctx, deleteRunnerPoolJoinTokens, poolID)
+	return err
+}
+
+const deleteRunnerPoolProxySettings = `-- name: DeleteRunnerPoolProxySettings :exec
+DELETE FROM runner_pool_proxy_settings WHERE pool_id = $1
+`
+
+func (q *Queries) DeleteRunnerPoolProxySettings(ctx context.Context, poolID string) error {
+	_, err := q.db.Exec(ctx, deleteRunnerPoolProxySettings, poolID)
 	return err
 }
 
@@ -5502,6 +5515,7 @@ WHERE state = 'running' AND claim_owner = $1::text
   AND NOT EXISTS (
     SELECT 1 FROM runner_sessions s
     WHERE s.operation_id = durable_operations.id AND s.token = durable_operations.claim_token
+      AND s.kind = 'launcher'
   )
 `
 
@@ -9662,8 +9676,31 @@ func (q *Queries) GetRunnerPoolByName(ctx context.Context, arg GetRunnerPoolByNa
 	return i, err
 }
 
+const getRunnerPoolProxySettings = `-- name: GetRunnerPoolProxySettings :one
+SELECT pool_id, allowed_ranges, upstream_url, credential, version, updated_by, updated_at_ms
+FROM runner_pool_proxy_settings
+WHERE pool_id = $1
+FOR UPDATE
+`
+
+// Holds the row until the transaction ends, so two saves run one after the other.
+func (q *Queries) GetRunnerPoolProxySettings(ctx context.Context, poolID string) (RunnerPoolProxySetting, error) {
+	row := q.db.QueryRow(ctx, getRunnerPoolProxySettings, poolID)
+	var i RunnerPoolProxySetting
+	err := row.Scan(
+		&i.PoolID,
+		&i.AllowedRanges,
+		&i.UpstreamUrl,
+		&i.Credential,
+		&i.Version,
+		&i.UpdatedBy,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const getRunnerSession = `-- name: GetRunnerSession :one
-SELECT s.id, s.operation_id, s.token, s.runner_id, s.key_public, s.key_created_at_ms, s.created_at_ms,
+SELECT s.id, s.operation_id, s.token, s.runner_id, s.kind, s.key_public, s.key_created_at_ms, s.created_at_ms,
        COALESCE((SELECT r.retired_at_ms FROM runners r WHERE r.id = s.runner_id), 1)::bigint AS runner_retired_at_ms
 FROM runner_sessions s
 WHERE s.id = $1
@@ -9674,6 +9711,7 @@ type GetRunnerSessionRow struct {
 	OperationID       string
 	Token             int64
 	RunnerID          string
+	Kind              string
 	KeyPublic         []byte
 	KeyCreatedAtMs    int64
 	CreatedAtMs       int64
@@ -9688,6 +9726,7 @@ func (q *Queries) GetRunnerSession(ctx context.Context, id string) (GetRunnerSes
 		&i.OperationID,
 		&i.Token,
 		&i.RunnerID,
+		&i.Kind,
 		&i.KeyPublic,
 		&i.KeyCreatedAtMs,
 		&i.CreatedAtMs,
@@ -13259,9 +13298,9 @@ func (q *Queries) InsertRunnerClaimTime(ctx context.Context, arg InsertRunnerCla
 }
 
 const insertRunnerHandoffToken = `-- name: InsertRunnerHandoffToken :exec
-INSERT INTO runner_handoff_tokens (sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms)
+INSERT INTO runner_handoff_tokens (sha256, operation_id, token, runner_id, kind, issued_at_ms, expires_at_ms, used_at_ms)
 VALUES ($1, $2, $3, $4, $5,
-        $6, 0)
+        $6, $7, 0)
 `
 
 type InsertRunnerHandoffTokenParams struct {
@@ -13269,6 +13308,7 @@ type InsertRunnerHandoffTokenParams struct {
 	OperationID string
 	Token       int64
 	RunnerID    string
+	Kind        string
 	IssuedAtMs  int64
 	ExpiresAtMs int64
 }
@@ -13279,6 +13319,7 @@ func (q *Queries) InsertRunnerHandoffToken(ctx context.Context, arg InsertRunner
 		arg.OperationID,
 		arg.Token,
 		arg.RunnerID,
+		arg.Kind,
 		arg.IssuedAtMs,
 		arg.ExpiresAtMs,
 	)
@@ -13357,10 +13398,38 @@ func (q *Queries) InsertRunnerPool(ctx context.Context, arg InsertRunnerPoolPara
 	return err
 }
 
+const insertRunnerPoolProxySettings = `-- name: InsertRunnerPoolProxySettings :exec
+INSERT INTO runner_pool_proxy_settings (pool_id, allowed_ranges, upstream_url, credential, version, updated_by,
+                                        updated_at_ms)
+VALUES ($1, $2, $3, $4, 1,
+        $5, $6)
+`
+
+type InsertRunnerPoolProxySettingsParams struct {
+	PoolID        string
+	AllowedRanges string
+	UpstreamUrl   string
+	Credential    []byte
+	UpdatedBy     string
+	UpdatedAtMs   int64
+}
+
+func (q *Queries) InsertRunnerPoolProxySettings(ctx context.Context, arg InsertRunnerPoolProxySettingsParams) error {
+	_, err := q.db.Exec(ctx, insertRunnerPoolProxySettings,
+		arg.PoolID,
+		arg.AllowedRanges,
+		arg.UpstreamUrl,
+		arg.Credential,
+		arg.UpdatedBy,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
 const insertRunnerSession = `-- name: InsertRunnerSession :exec
-INSERT INTO runner_sessions (id, operation_id, token, runner_id, key_public, key_created_at_ms, created_at_ms)
+INSERT INTO runner_sessions (id, operation_id, token, runner_id, kind, key_public, key_created_at_ms, created_at_ms)
 VALUES ($1, $2, $3, $4, $5,
-        $6, $7)
+        $6, $7, $8)
 `
 
 type InsertRunnerSessionParams struct {
@@ -13368,6 +13437,7 @@ type InsertRunnerSessionParams struct {
 	OperationID    string
 	Token          int64
 	RunnerID       string
+	Kind           string
 	KeyPublic      []byte
 	KeyCreatedAtMs int64
 	CreatedAtMs    int64
@@ -13379,6 +13449,7 @@ func (q *Queries) InsertRunnerSession(ctx context.Context, arg InsertRunnerSessi
 		arg.OperationID,
 		arg.Token,
 		arg.RunnerID,
+		arg.Kind,
 		arg.KeyPublic,
 		arg.KeyCreatedAtMs,
 		arg.CreatedAtMs,
@@ -18373,6 +18444,7 @@ WHERE state = 'running' AND claim_owner = $1::text
   AND NOT EXISTS (
     SELECT 1 FROM runner_sessions s
     WHERE s.operation_id = durable_operations.id AND s.token = durable_operations.claim_token
+      AND s.kind = 'launcher'
   )
 ORDER BY id
 `
@@ -20377,7 +20449,7 @@ func (q *Queries) LockQuotaKey(ctx context.Context, arg LockQuotaKeyParams) (int
 }
 
 const lockRunnerHandoffToken = `-- name: LockRunnerHandoffToken :one
-SELECT sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms
+SELECT sha256, operation_id, token, runner_id, kind, issued_at_ms, expires_at_ms, used_at_ms
 FROM runner_handoff_tokens
 WHERE sha256 = $1
 FOR UPDATE
@@ -20392,6 +20464,7 @@ func (q *Queries) LockRunnerHandoffToken(ctx context.Context, sha256 string) (Ru
 		&i.OperationID,
 		&i.Token,
 		&i.RunnerID,
+		&i.Kind,
 		&i.IssuedAtMs,
 		&i.ExpiresAtMs,
 		&i.UsedAtMs,
@@ -25135,6 +25208,42 @@ func (q *Queries) UpdateRunnerPool(ctx context.Context, arg UpdateRunnerPoolPara
 		arg.ID,
 	)
 	return err
+}
+
+const updateRunnerPoolProxySettings = `-- name: UpdateRunnerPoolProxySettings :execrows
+UPDATE runner_pool_proxy_settings
+SET allowed_ranges = $1, upstream_url = $2,
+    credential = $3, version = version + 1, updated_by = $4,
+    updated_at_ms = $5
+WHERE pool_id = $6 AND version = $7
+`
+
+type UpdateRunnerPoolProxySettingsParams struct {
+	AllowedRanges string
+	UpstreamUrl   string
+	Credential    []byte
+	UpdatedBy     string
+	UpdatedAtMs   int64
+	PoolID        string
+	Version       int64
+}
+
+// Writes the next version. It changes no row, and so returns 0 rows, when the
+// stored version is not the one that the caller read.
+func (q *Queries) UpdateRunnerPoolProxySettings(ctx context.Context, arg UpdateRunnerPoolProxySettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateRunnerPoolProxySettings,
+		arg.AllowedRanges,
+		arg.UpstreamUrl,
+		arg.Credential,
+		arg.UpdatedBy,
+		arg.UpdatedAtMs,
+		arg.PoolID,
+		arg.Version,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateSelfServiceBlueprintDraft = `-- name: UpdateSelfServiceBlueprintDraft :execrows
