@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -100,6 +101,41 @@ func (d ApprovalDefault) Unmeetable() bool {
 	return !d.Approvers.Empty() && d.Approvers.NamesNobody()
 }
 
+// newApproverPolicy builds the approver policy of an installation whose kind is
+// given by kind. It returns an error that wraps ErrUnavailable for a kind that
+// is not dev or production, so the caller fails closed.
+func newApproverPolicy(kind string) (ApproverPolicy, error) {
+	switch kind {
+	case "dev":
+		return ApproverPolicy{Production: false, IsDev: isDevSubject}, nil
+	case "production":
+		return ApproverPolicy{Production: true, IsDev: isDevSubject}, nil
+	default:
+		return ApproverPolicy{}, fmt.Errorf("%w: read the installation kind: unknown installation kind %q",
+			ErrUnavailable, kind)
+	}
+}
+
+// readApproverPolicy reads the installation kind with kinds and returns the
+// approver policy of that kind. It returns an error that wraps ErrUnavailable
+// for a read error, for a kind that is not dev or production, and for a nil
+// reader.
+func readApproverPolicy(ctx context.Context, kinds KindReader) (ApproverPolicy, error) {
+	// Defense in depth: NewService refuses a service with no kind reader. This
+	// check stays so that a Service that is not built by NewService fails
+	// closed and does not panic.
+	if kinds == nil {
+		return ApproverPolicy{}, fmt.Errorf("%w: read the installation kind: no reader", ErrUnavailable)
+	}
+
+	kind, err := kinds.ReadKind(ctx)
+	if err != nil {
+		return ApproverPolicy{}, fmt.Errorf("%w: read the installation kind: %w", ErrUnavailable, err)
+	}
+
+	return newApproverPolicy(kind)
+}
+
 // CountsAsSignature reports whether a signature of subject may fill a slot of
 // a requirement. It is false for NoApprover, also on a dev installation, and
 // on a production installation for each dev subject, also when the data
@@ -111,6 +147,51 @@ func (p ApproverPolicy) CountsAsSignature(subject string) bool {
 
 	if p.Production && (p.IsDev == nil || p.IsDev(subject)) {
 		return false
+	}
+
+	return true
+}
+
+// ruleApprovers returns the approvers of the requirement of a stored approval
+// rule or ownership rule: RuleApprovers of a, with no user whose signature
+// CountsAsSignature refuses. A list that keeps no approver holds NoApprover
+// only, so the requirement is unmeetable.
+//
+// Defense in depth: the write path of a rule refuses a dev approver on a
+// production installation, and a restore strips dev subjects. This read does
+// not rely on either.
+func (p ApproverPolicy) ruleApprovers(a Approvers) Approvers {
+	read := RuleApprovers(a)
+
+	out := Approvers{
+		Groups: read.Groups, GroupIDs: read.GroupIDs, UnitOwners: read.UnitOwners,
+		Users: slices.DeleteFunc(slices.Clone(read.Users), func(u string) bool { return !p.CountsAsSignature(u) }),
+	}
+
+	if out.Empty() {
+		out.Users = []string{NoApprover}
+	}
+
+	return out
+}
+
+// isDevSubject implements the dev-subject matching rule without importing
+// package principal, which package gate cannot import.
+func isDevSubject(s string) bool {
+	const prefix = "dev:"
+	if len(s) < len(prefix) {
+		return false
+	}
+
+	for i := range len(prefix) {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+
+		if c != prefix[i] {
+			return false
+		}
 	}
 
 	return true

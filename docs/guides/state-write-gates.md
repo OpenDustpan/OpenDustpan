@@ -387,6 +387,24 @@ check them, for example with no inventory reader. A runner claim follows the
 same rule as a write from a CLI: with the gates on, an enforced gate refuses
 the claim, and with the gates off, no gate covers a unit.
 
+## Approvers and dev signatures
+
+An approval rule, an approval default or an ownership rule can lose every
+approver. The server then stores the value `!no-approver` for its users, and
+the gate refuses the write that the rule covers. It does not skip the rule and
+does not fail the whole scope with an error. The requirement stays open until a
+person changes the rule.
+
+On a production installation, the server never counts a signature whose subject
+is a dev subject, also when the signature is already in the data. A dev-only
+rule is unmeetable on production, so it denies at once instead of waiting for
+an approval that never arrives.
+
+The server reads the installation kind once for each write, before it reads
+any gate. If it cannot read the kind, or the database holds another kind than
+the server, it refuses the write and writes no decision record. Retry the write
+after the server recovers.
+
 ## Limits of this version
 
 - The [gate configuration API](../reference/gate-config-api.md) stores gates and

@@ -112,9 +112,20 @@ func newSWEnv(t *testing.T, units gate.UnitSource, engineErr error) swEnv {
 }
 
 // newWrappedSWEnv is newSWEnv with a gate store that wrap makes from the real
-// store, or the real store when wrap is nil.
+// store, or the real store when wrap is nil. The installation is a production
+// installation.
 func newWrappedSWEnv(
 	t *testing.T, units gate.UnitSource, engineErr error, wrap func(*sqlite.Store) gate.Store,
+) swEnv {
+	t.Helper()
+
+	return newKindSWEnv(t, units, engineErr, wrap, fixedKind("production"))
+}
+
+// newKindSWEnv is newWrappedSWEnv with the reader of the installation kind
+// kinds.
+func newKindSWEnv(
+	t *testing.T, units gate.UnitSource, engineErr error, wrap func(*sqlite.Store) gate.Store, kinds gate.KindReader,
 ) swEnv {
 	t.Helper()
 
@@ -171,14 +182,18 @@ func newWrappedSWEnv(
 	}
 
 	svc, err := gate.NewService(gate.ServiceConfig{
-		Store:     gates,
-		Engine:    swEngine{Engine: cedargo.New(cedargo.WithAccessActions("unit:write", "unit:read")), fail: engineErr},
-		Producers: nil,
-		Units:     units,
-		Subjects:  swSubjects{},
-		Fences:    swFences{nss: nss},
-		Now:       nil,
-		Log:       slog.New(slog.DiscardHandler),
+		Store: gates,
+		Engine: swEngine{
+			Engine: cedargo.New(cedargo.WithAccessActions("unit:write", "unit:read")),
+			fail:   engineErr,
+		},
+		Producers:  nil,
+		Units:      units,
+		Subjects:   swSubjects{},
+		Fences:     swFences{nss: nss},
+		KindReader: kinds,
+		Now:        nil,
+		Log:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatal(err)
