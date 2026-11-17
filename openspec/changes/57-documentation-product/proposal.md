@@ -18,7 +18,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- RFC 57 Documentation as a product waits on its research and is not shipped. Proof: docs/roadmap.md:831 row: [RFC 57](rfc/0057-documentation.md) Documentation as a product | its research
+- RFC 57 Documentation as a product waits on its research and is not shipped. Proof: docs/roadmap.md:831 row: [RFC 57](docs/rfc/0057-documentation.md) Documentation as a product | its research
 
 ## What Changes
 

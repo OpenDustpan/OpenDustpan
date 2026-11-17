@@ -12,7 +12,7 @@ The user path this change must make work:
 
 Evidence for the claims above:
 
-- This item waits on OpenTofu and a license check. Proof: | [RFC 53](rfc/0053-terraform-cli.md) Terraform CLI support                                          | OpenTofu (milestone 2) and a license check                      |
+- This item waits on OpenTofu and a license check. Proof: | [RFC 53](docs/rfc/0053-terraform-cli.md) Terraform CLI support                                          | OpenTofu (milestone 2) and a license check                      |
 - The e2e suite drives OpenTofu through a helper. Proof: e2e/tool.go:110 (func OpenTofu)
 
 ## What Changes

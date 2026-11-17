@@ -33,5 +33,5 @@
 
 ## Not applicable
 
-- 2.3: the pull request #3219 changed no queries.sql file and no generated sqlc file. The release file hashes come from rows that the blob reference collector already exports (pkg/store/internal/blobrefs/blobrefs.go), so the change needs no new query, and `sqlc diff` is clean on main.
-- 3.1: the pull request #3219 changed no file in internal/servertest (no roundtrips_conflict_test.go, roundtrips_model_test.go or roundtrips_test.go). The registry file copy adds no request flow: it uses the existing backup and restore routes, and the round-trip suite passes on main.
+- 2.3: the pull request #3219 changed no SQL query file and no generated sqlc file. The release file hashes come from rows that the blob reference collector already exports (pkg/store/internal/blobrefs/blobrefs.go), so the change needs no new query, and `sqlc diff` is clean on main.
+- 3.1: the pull request #3219 changed no file in internal/servertest (no internal/servertest/roundtrips_conflict_test.go, internal/servertest/roundtrips_model_test.go or internal/servertest/roundtrips_test.go). The registry file copy adds no request flow: it uses the existing backup and restore routes, and the round-trip suite passes on main.

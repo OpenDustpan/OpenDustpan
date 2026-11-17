@@ -8,7 +8,7 @@ version: 2
 
 Evidence for the claims above:
 
-- RFC 47 waits on runs in milestone 5. Proof: docs/roadmap.md:826 row: [RFC 47](rfc/0047-discovery-and-codification.md) Discovery and codification | runs (milestone 5)
+- RFC 47 waits on runs in milestone 5. Proof: docs/roadmap.md:826 row: [RFC 47](docs/rfc/0047-discovery-and-codification.md) Discovery and codification | runs (milestone 5)
 
 ## What Changes
 
