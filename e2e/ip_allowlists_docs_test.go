@@ -65,12 +65,18 @@ func ipAllowlistsDocsScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 	}
 
 	// The page's merge patch: both keys in one change.
-	resp, changed := settingsPatch(ctx, t, env, settingsReq{
-		path: settingsRoute, ifMatch: etag,
-		body: `{"ipAllowlist.enabled":true,"ipAllowlist.installation":"` + ipAllowlistSource + `/32"}`,
-	})
-	if resp.Status != http.StatusOK {
-		t.Fatalf("PATCH the installation list answers %d (%s), want 200", resp.Status, resp.Body)
+	// A change that widens the installation list needs a fresh sign-in.
+	status, answer := env.FreshAdminMergePatch(ctx, t, settingsRoute, etag,
+		`{"ipAllowlist.enabled":true,"ipAllowlist.installation":"`+ipAllowlistSource+`/32"}`)
+	if status != http.StatusOK {
+		t.Fatalf("PATCH the installation list answers %d (%s), want 200", status, answer)
+	}
+
+	// The default address is outside the list now, so decode the answer of the
+	// patch instead of a new read.
+	var changed settingsDoc
+	if err := json.Unmarshal([]byte(answer), &changed); err != nil {
+		t.Fatalf("decode the patch answer: %v", err)
 	}
 
 	if value, ok := settingFor(t, changed, "ipAllowlist.enabled").Value.(bool); !ok || !value {

@@ -424,15 +424,18 @@ func checkIPAllowlistInstallationList(ctx context.Context, t *testing.T, env *e2
 }
 
 // patchInstallationList sends body as a merge patch of the installation
-// settings and wants 200.
+// settings with a fresh console session and wants 200.
 func patchInstallationList(ctx context.Context, t *testing.T, env *e2e.Env, body string) {
 	t.Helper()
 
 	resp, _ := settingsRead(ctx, t, env, settingsRoute)
 
-	settingsWant(ctx, t, env, settingsReq{
-		path: settingsRoute, ifMatch: resp.Header.Get("ETag"), body: body,
-	}, settingsAnswer{status: http.StatusOK, code: ""})
+	// A change that widens the installation list needs a fresh sign-in, which
+	// an access token never gives.
+	status, answer := env.FreshAdminMergePatch(ctx, t, settingsRoute, resp.Header.Get("ETag"), body)
+	if status != http.StatusOK {
+		t.Fatalf("PATCH %s answers %d %s, want 200", body, status, answer)
+	}
 }
 
 // cliRuns is the result of the CLI runs: whether each CLI exited with 0.
