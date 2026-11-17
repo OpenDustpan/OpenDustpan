@@ -256,12 +256,16 @@ func (coveragePasswordMethod) Verify(
 // so the route table holds the password sign-in of a provider.
 func coveragePasswordProvider() serverapi.PasswordProvider {
 	return serverapi.PasswordProvider{
-		Method: coveragePasswordMethod{}, ID: "coverage-ldap", DisplayName: "", AutoCreate: false,
+		Method:              coveragePasswordMethod{},
+		ID:                  "coverage-ldap",
+		DisplayName:         "",
+		AutoCreate:          false,
+		SubjectFailureLimit: 0,
 		LDAP: serverapi.LDAPSettings{
 			AllowedRanges: nil, URL: "", BindDN: "", BaseDN: "", UserFilter: "", UserNameAttribute: "",
 			EmailAttribute: "", NameAttribute: "", Subject: "", DisabledAttribute: "", Groups: "", GroupBaseDN: "",
 			GroupFilter: "", GroupMemberAttribute: "", GroupMemberOfAttribute: "", GroupNameAttribute: "",
-			StartTLS: false,
+			StartTLS: false, SubjectFailureLimit: 0, SubjectFailureLimitSource: "",
 		},
 	}
 }

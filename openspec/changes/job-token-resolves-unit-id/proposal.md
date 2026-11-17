@@ -33,7 +33,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - A job token is allowed only when the stable ID of the object equals the stable ID of the unit of the job. (`pkg/identity/jobtoken_rule.go:123 (JobTokenRule.Authorize)`)
 - The rule refuses a unit of a job that has no stable ID. (`pkg/identity/jobtoken_rule.go:41 (NewJobUnit)`)
-- The access authorizer already reads the stable ID of a unit that has none, once for each request, through `access.Units`. (`pkg/access/authorizer.go:1043 (Authorizer.withUnitID)`)
+- The access authorizer already reads the stable ID of a unit that has none, once for each request, through `access.Units`. (`Authorizer.withUnitID` in the access package)
 - The OpenTofu HTTP backend builds the unit object from the path with no stable ID and then authorizes. (`internal/api/tofuhttp/tofuhttp.go:270 (Handler.enforce)`)
 - The rule wraps the whole chain of the server. (`pkg/dustpan/dustpan.go:966 (newAuthPorts)`)
 

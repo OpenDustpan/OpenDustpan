@@ -639,7 +639,7 @@ A rule in one namespace that matches a JWT from an issuer or a TLS client certif
 _Avoid_: Trust policy, federation rule
 
 **Token exchange**:
-A request of a workload to a namespace. The workload sends a JWT of its issuer. It gets an access token of the kind `trust` for the principal of the one trust rule that accepts the JWT. The access token lives the exchange lifetime of the token policy, one hour by default (ADR 54, ADR 69).
+A request of a workload to a namespace. The workload sends a JWT of its issuer. It gets an access token of the kind `jwt-exchange` for the principal of the one trust rule that accepts the JWT. The access token lives the exchange lifetime of the token policy, one hour by default (ADR 54, ADR 69).
 _Avoid_: Token swap, federation login, OIDC login
 
 **Group**:

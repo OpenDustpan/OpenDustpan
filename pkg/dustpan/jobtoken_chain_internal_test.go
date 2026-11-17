@@ -724,6 +724,21 @@ func TestNewAuthPortsRefusesJobTokensWithoutAJobStore(t *testing.T) {
 	}
 }
 
+// TestNewAuthPortsRefusesJobTokensWithoutUnitIDs proves that the server fails
+// at the build when it issues job tokens and its namespace store cannot
+// resolve a unit ID: the rule of job tokens compares stable IDs, and a rule
+// that cannot read one must not fall back to a comparison of names.
+func TestNewAuthPortsRefusesJobTokensWithoutUnitIDs(t *testing.T) {
+	t.Parallel()
+
+	w := newJobTokenWorld(t)
+	w.cfg.namespaceStore = &plainNamespaceStore{Store: nil}
+
+	if _, err := newAuthPorts(w.cfg, nil); !errors.Is(err, errJobTokensNeedUnitIDs) {
+		t.Fatalf("auth ports without unit IDs = %v, want errJobTokensNeedUnitIDs", err)
+	}
+}
+
 // TestNewJobTokenGateRefusesNoService proves the defense-in-depth check of the
 // gate of the job tokens: a gate over no service fails the build instead of
 // taking the failure budget of an address and dropping every job token.

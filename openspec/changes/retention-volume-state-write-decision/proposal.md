@@ -23,7 +23,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Each OpenTofu lock request is one evaluation, and no job prunes the records. Proof: Issue 1255: each OpenTofu lock request is one evaluation, and -lock-timeout retries a lock many times. So the records grow with every lock request, and no job prunes them.
-- Each evaluation writes one decision record on main. Proof: pkg/gate/statewrite_test.go:606 (TestEachEvaluationWritesOneRecord).
+- Each evaluation writes one decision record on main. Proof: pkg/gate/statewrite_test.go:607 (TestEachEvaluationWritesOneRecord).
 - A retry against a held lock writes no record. Proof: Issue 1255 note: the TFE lock route asks the guard only when the lock is free.
 - The state.write guard is the adapter that the HTTP adapters use. Proof: internal/api/stategate/stategate.go:30 (the interface that *gate.Service implements).
 
@@ -50,7 +50,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Each evaluation writes one decision record. (`pkg/gate/statewrite_test.go:606 (TestEachEvaluationWritesOneRecord)`)
+- Each evaluation writes one decision record. (`pkg/gate/statewrite_test.go:607 (TestEachEvaluationWritesOneRecord)`)
 - The stategate adapter guards the state.write decision point for HTTP adapters that write state. (`internal/api/stategate/stategate.go:30`)
 
 ## ADR check

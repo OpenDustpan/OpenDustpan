@@ -167,7 +167,7 @@ PATCH /api/server/token-policy   {"exchangeLifetimeSeconds": 900}
 ```
 
 The access token is a token of the service principal of the rule, with the
-kind `trust`. It shows in the list of the tokens of the principal, and a
+kind `jwt-exchange`. It shows in the list of the tokens of the principal, and a
 holder of `principal:manage-tokens` on the principal can revoke it. No
 rotation renews it: the job asks for a new token. A delete of the rule does
 not end the tokens that the rule issued earlier.

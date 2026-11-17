@@ -1,7 +1,7 @@
 # workspace-state Specification
 
 ## Purpose
-This capability states how the store records and reads the client-encrypted bit of a state version. The store writes the bit when it finalizes a state version and refuses a finalize that has no known bit. A read of the latest version answers the bit from the row, with no blob read.
+This capability states how the server records and reads the client-encryption bit of a state version. The server writes the bit when it finalizes a state version and refuses a finalize without a known bit. A read of the latest version answers the bit from the row with no blob read, and streams the blob only for a version stored before the server kept the bit. The server refuses an uploaded state document that holds both encrypted_data and version.
 
 ## Requirements
 
@@ -40,11 +40,3 @@ If an uploaded state document holds both encrypted_data and version, then the se
 #### Scenario: both keys refused
 - **WHEN** an uploaded document holds both keys
 - **THEN** the upload fails and no version is stored
-
-### Requirement: shred-redaction-precedence
-
-If the latest state item is shredded or redacted, then the server SHALL answer shredded or redacted before any outputs answer.
-
-#### Scenario: shredded with present bit
-- **WHEN** the latest item is shredded and its row holds a present bit
-- **THEN** the read answers shredded
