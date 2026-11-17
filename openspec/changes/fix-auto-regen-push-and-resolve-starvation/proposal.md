@@ -66,9 +66,9 @@ files of the pull request after main moves. Two gaps stop that:
   actor, and `workflow_run` starts `auto-regen-push`. The push workflow keeps
   every check that it has: the run is a `workflow_dispatch` of
   `.github/workflows/auto-regen-resolve.yml` in this repository
-  (`auto-regen-push.yml:26-30`), the pull request is open and its head is the
+  (`.github/workflows/auto-regen-push.yml:26-30`), the pull request is open and its head is the
   head of the run (`cmd_match_run`), main did not move
-  (`auto-regen-push.yml:89-92`), and the patch changes only generated paths
+  (`.github/workflows/auto-regen-push.yml:89-92`), and the patch changes only generated paths
   (`check-patch` at `:96`).
 - **B.** The concurrency group of the resolve workflow becomes
   auto-regen-resolve-<pr>-<head> (from the workflow inputs pr and head) with
@@ -84,7 +84,7 @@ files of the pull request after main moves. Two gaps stop that:
 
 - After the merge, a pull request with a stale generated file gets one resolve
   run and one push run. The push run pushes the regenerated files, and the
-  run list of `auto-regen-push.yml` is no longer empty.
+  run list of `.github/workflows/auto-regen-push.yml` is no longer empty.
 - Pushes to main while a resolve run works do not cancel it.
 
 ## ADR check
@@ -101,10 +101,10 @@ none
 Questions considered and answered:
 
 - Should the push move into the resolve workflow? No. The resolve run uses the
-  workflow file of the pull request branch (`auto-regen-resolve.yml:7-9`), so a
+  workflow file of the pull request branch (`.github/workflows/auto-regen-resolve.yml:7-9`), so a
   push job there would run untrusted code with the App secret.
 - Does the fix need a new secret? No. It uses `REGEN_APP_CLIENT_ID` and
-  `REGEN_APP_PRIVATE_KEY`, which `auto-regen-push.yml:105-106` already uses.
+  `REGEN_APP_PRIVATE_KEY`, which `.github/workflows/auto-regen-push.yml:105-106` already uses.
 - Does the App need a new permission? It needs Actions write for the
   dispatch. Task 1.1 checks it. If the App does not have it, the owner grants
   it in the settings of the App, and the task records that it is BLOCKED by

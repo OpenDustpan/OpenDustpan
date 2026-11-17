@@ -19,7 +19,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- RFC 69 waits on the owner to set up the channels. Proof: docs/roadmap.md:837 row: | [RFC 69](rfc/0069-community-channels.md) Community channels | the owner sets up the channels |
+- RFC 69 waits on the owner to set up the channels. Proof: docs/roadmap.md:837 row: | [RFC 69](docs/rfc/0069-community-channels.md) Community channels | the owner sets up the channels |
 
 ## What Changes
 
