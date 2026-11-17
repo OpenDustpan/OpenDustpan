@@ -13,8 +13,12 @@ When a principal holds the planner role on a unit, the server SHALL answer state
 When a principal holds only the planner role on a unit, the server SHALL answer the raw state download with 403 and the code access.denied. ADR 212 decision 1: a planner "cannot apply, destroy, approve or read a secret value". The raw download needs unit:read-secrets (ADR 41).
 
 #### Scenario: planner raw state refused
-- **WHEN** a planner runs pulumi stack export or tofu state pull
+- **WHEN** a planner runs tofu state pull, which reads GET /api/v2/state-versions/{state_version_id}/download (needs unit:read and unit:read-secrets, `internal/api/tfe/routes.go:297`)
 - **THEN** the server answers 403 with access.denied
+
+#### Scenario: planner exports a Pulumi stack
+- **WHEN** a planner runs pulumi stack export, which reads GET /api/stacks/{namespace}/{project}/{stack}/export (needs unit:read, `internal/api/pulumi/routes.go:461`)
+- **THEN** the server answers 200 with the state as the stack stores it, with each secret value as ciphertext
 
 ### Requirement: planner-write-refused
 
