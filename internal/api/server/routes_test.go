@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -307,7 +308,21 @@ func newServiceBackedHandlerOf(
 ) (testHandler, *sqlite.Store) {
 	t.Helper()
 
-	st := openRouteTestStore(t)
+	return newServiceBackedHandlerAt(t, filepath.Join(t.TempDir(), "dustpan.db"), authn, authz, seeds...)
+}
+
+// newServiceBackedHandlerAt is newServiceBackedHandlerOf with the database
+// file of the store at path.
+func newServiceBackedHandlerAt(
+	t *testing.T,
+	path string,
+	authn identity.Authenticator,
+	authz identity.Authorizer,
+	seeds ...backup.Record,
+) (testHandler, *sqlite.Store) {
+	t.Helper()
+
+	st := openServerTemplateStore(t, path)
 	live := openRouteTestBlobs(t)
 	target := openRouteTestBlobs(t)
 	service := newRouteTestBackups(t, st, live, target)
@@ -813,6 +828,29 @@ func openRouteTestStore(t *testing.T) *sqlite.Store {
 	t.Helper()
 
 	return openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
+}
+
+// setStoredTokenKind writes kind to the stored token id with direct SQL
+// on the database file at path, as a row of another version would carry it. No
+// port writes a kind that it does not know.
+func setStoredTokenKind(t *testing.T, path, id, kind string) {
+	t.Helper()
+
+	conn, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close database: %v", closeErr)
+		}
+	})
+
+	const query = "UPDATE access_tokens SET kind = ? WHERE id = ?"
+	if _, execErr := conn.ExecContext(t.Context(), query, kind, id); execErr != nil {
+		t.Fatalf("set stored token kind: %v", execErr)
+	}
 }
 
 // openRouteTestBlobs opens a fresh file blob store for one route test.

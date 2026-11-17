@@ -26,14 +26,25 @@ import (
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
-// Store is what the suite needs: the token port, the principal records
-// that own the tokens, and the temporary administrator records that the
-// sweep exempts while they work.
-type Store interface {
+// BaseStore is the part of Store that an adapter already implements: the
+// token port, the principal records and the temporary administrator records.
+type BaseStore interface {
 	accesstoken.Store
 	accesstoken.HostStore
 	principal.RecordStore
 	tempadmin.Store
+}
+
+// Store is what the suite needs: the token port, the principal records
+// that own the tokens, and the temporary administrator records that the
+// sweep exempts while they work.
+type Store interface {
+	BaseStore
+
+	// InsertRawToken writes the token t with the digest d with no check of
+	// its kind, as a write to the database itself would. The cases of an
+	// unknown kind use it to store a row that the write path refuses.
+	InsertRawToken(ctx context.Context, t accesstoken.Token, d accesstoken.Digest) error
 }
 
 // Factory returns a fresh, empty store for one subtest.
@@ -49,6 +60,8 @@ func Run(t *testing.T, newStore Factory) {
 	}{
 		{name: "token round trip", test: testRoundTrip},
 		{name: "a stored token of an unknown kind is ErrUnknownKind", test: testUnknownKind},
+		{name: "the list skips a stored token of an unknown kind", test: testListSkipsUnknownKind},
+		{name: "a write of an unknown kind is ErrUnknownKind and stores nothing", test: testWriteRefusesUnknownKind},
 		{name: "a token needs a principal that exists", test: testMissingPrincipal},
 		{name: "duplicate ID or digest is ErrAlreadyExists", test: testDuplicate},
 		{name: "missing token is ErrNotFound", test: testMissingToken},
@@ -1472,7 +1485,7 @@ func testSweepSkipsBreakGlass(t *testing.T, s Store) {
 }
 
 // testUnknownKind checks that a stored token of a kind that no code issues,
-// here the old kind "trust", never decodes: each read answers
+// here the old kind "trust", never decodes: each read of that row answers
 // accesstoken.ErrUnknownKind and no token. Each store adapter must refuse the
 // row itself, without the help of the service.
 func testUnknownKind(t *testing.T, s Store) {
@@ -1484,7 +1497,7 @@ func testUnknownKind(t *testing.T, s Store) {
 
 	old := newToken("tok-old", "prn-1", 1)
 	old.Kind = accesstoken.Kind("trust")
-	mustToken(t, s, old, digest(1))
+	mustRawToken(t, s, old, digest(1))
 
 	got, err := s.GetToken(ctx, "tok-old")
 	wantErr(t, "get a token of an unknown kind", err, accesstoken.ErrUnknownKind)
@@ -1499,11 +1512,83 @@ func testUnknownKind(t *testing.T, s Store) {
 	if m.Token.ID != "" {
 		t.Errorf("get by digest returned the token %q, want no token", m.Token.ID)
 	}
+}
 
-	list, _, err := s.ListTokens(ctx, listQuery(""))
-	wantErr(t, "list a token of an unknown kind", err, accesstoken.ErrUnknownKind)
+// mustRawToken stores tok with the raw insert of the store.
+func mustRawToken(t *testing.T, s Store, tok accesstoken.Token, d accesstoken.Digest) {
+	t.Helper()
 
-	if len(list) != 0 {
-		t.Errorf("list returned %d tokens, want none", len(list))
+	if err := s.InsertRawToken(t.Context(), tok, d); err != nil {
+		t.Fatalf("insert raw token %q: %v", tok.ID, err)
 	}
+}
+
+// testListSkipsUnknownKind checks that one stored row of an unknown kind does
+// not fail the list: the page holds the tokens of a known kind, and the total
+// does not count the skipped row.
+func testListSkipsUnknownKind(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, "prn-1", "ci-deploy", principal.KindService)
+
+	mustToken(t, s, newToken("tok-a", "prn-1", 1), digest(1))
+
+	bad := newToken("tok-bad", "prn-1", 2)
+	bad.Kind = accesstoken.Kind("trust")
+	mustRawToken(t, s, bad, digest(2))
+
+	mustToken(t, s, newToken("tok-b", "prn-1", 3), digest(3))
+
+	wantList(t, s, listQuery(""), []string{"tok-b", "tok-a"}, 2)
+	wantList(t, s, listQuery("prn-1"), []string{"tok-b", "tok-a"}, 2)
+}
+
+// testWriteRefusesUnknownKind checks that CreateToken and the new token of
+// RotateToken refuse each kind that this version does not issue with
+// accesstoken.ErrUnknownKind, and that the refusal changes nothing: no token
+// is stored, and the old token of a rotation stays active.
+func testWriteRefusesUnknownKind(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	mustPrincipal(t, s, "prn-1", "ci-deploy", principal.KindService)
+	mustToken(t, s, newToken("tok-1", "prn-1", 1), digest(1))
+
+	hostile := []accesstoken.Kind{
+		"",
+		"trust",
+		"Personal",
+		"personal ",
+		"personal\n",
+		"service\x00",
+		"jwt_exchange",
+		"../service",
+	}
+
+	for i, kind := range hostile {
+		id := "tok-bad-" + strconv.Itoa(i)
+
+		bad := newToken(id, "prn-1", 2)
+		bad.Kind = kind
+
+		err := s.CreateToken(ctx, bad, digest(100+i), entryAt(id, at(2)))
+		wantErr(t, "create a token of the kind "+strconv.Quote(string(kind)), err, accesstoken.ErrUnknownKind)
+
+		if _, getErr := s.GetToken(ctx, id); !errors.Is(getErr, accesstoken.ErrNotFound) {
+			t.Errorf("token of the kind %q: get = %v, want ErrNotFound", kind, getErr)
+		}
+
+		r := accesstoken.Replacement{OldEndsAt: at(30), OldID: "tok-1", Next: bad, Digest: digest(200 + i)}
+		err = s.RotateToken(ctx, r, entryAt("tok-1", at(5)))
+		wantErr(t, "rotate to a token of the kind "+strconv.Quote(string(kind)), err, accesstoken.ErrUnknownKind)
+	}
+
+	got := mustGet(t, s, "tok-1")
+	if got.ReplacedBy != "" || !got.RevokedAt.IsZero() ||
+		!got.ExpiresAt.Equal(newToken("tok-1", "prn-1", 1).ExpiresAt) {
+		t.Fatalf("old token after the refused rotations = %+v, want it unchanged", got)
+	}
+
+	wantList(t, s, listQuery(""), []string{"tok-1"}, 1)
 }

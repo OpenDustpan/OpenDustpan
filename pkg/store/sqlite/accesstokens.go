@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -35,6 +36,13 @@ func (s *Store) CreateToken(ctx context.Context, t accesstoken.Token, d accessto
 // insertToken inserts t in the transaction of q. It tells a missing
 // principal from a taken ID or digest.
 func insertToken(ctx context.Context, q *db.Queries, t accesstoken.Token, d accesstoken.Digest) error {
+	// Defense in depth: the token service issues only known kinds. This check
+	// stays so that no other caller of the store, and no row of another
+	// version, writes a kind that the read path refuses.
+	if !t.Kind.Valid() {
+		return fmt.Errorf("insert access token %q: %w: %q", t.ID, accesstoken.ErrUnknownKind, string(t.Kind))
+	}
+
 	n, err := q.CreateAccessToken(ctx, db.CreateAccessTokenParams{
 		ID:          t.ID,
 		Name:        t.Name,
@@ -166,15 +174,11 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 			return fmt.Errorf("select access tokens: %w", err)
 		}
 
-		out = make([]accesstoken.Token, 0, len(rows))
+		var skipped int64
 
-		for i := range rows {
-			t, decodeErr := codec.FromAccessTokenRow(tokenRow(rows[i]))
-			if decodeErr != nil {
-				return fmt.Errorf("decode access token: %w", decodeErr)
-			}
-
-			out = append(out, t)
+		out, skipped, err = s.decodeTokenRows(ctx, rows)
+		if err != nil {
+			return err
 		}
 
 		total, err = q.CountAccessTokens(ctx, db.CountAccessTokensParams{
@@ -184,6 +188,10 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 			return fmt.Errorf("count access tokens: %w", err)
 		}
 
+		// The count holds the skipped rows of this page. Rows of an unknown
+		// kind on other pages stay in it until their page is read.
+		total -= skipped
+
 		return nil
 	})
 	if err != nil {
@@ -191,6 +199,41 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 	}
 
 	return out, total, nil
+}
+
+// decodeTokenRows decodes the rows of one page. One row of a kind that this
+// version does not know must not fail the page. The row never signs in. The
+// list leaves it out, counts it in skipped and the log names it.
+func (s *Store) decodeTokenRows(
+	ctx context.Context,
+	rows []db.ListAccessTokensRow,
+) ([]accesstoken.Token, int64, error) {
+	out := make([]accesstoken.Token, 0, len(rows))
+
+	var skipped int64
+
+	for i := range rows {
+		t, err := codec.FromAccessTokenRow(tokenRow(rows[i]))
+		if errors.Is(err, accesstoken.ErrUnknownKind) {
+			skipped++
+
+			s.logger.WarnContext(
+				ctx,
+				"access token list skips a row of an unknown kind",
+				slog.String("error", err.Error()),
+			)
+
+			continue
+		}
+
+		if err != nil {
+			return nil, 0, fmt.Errorf("decode access token: %w", err)
+		}
+
+		out = append(out, t)
+	}
+
+	return out, skipped, nil
 }
 
 // RevokeToken implements accesstoken.Store. When ctx carries an idempotency
