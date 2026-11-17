@@ -73,6 +73,9 @@ func (s *Service) Read(ctx context.Context, scope gate.Scope, id string) (gate.R
 // scope whose name is not a namespace name (for example the server scope
 // "@server" written as a namespace), and the zero scope.
 func readNamespace(scope gate.Scope) (namespace.Name, error) {
+	// Defense in depth: the level check below also refuses the zero scope.
+	// This check stays so that a change of that check cannot let the zero
+	// scope read a record.
 	if scope.IsZero() {
 		return "", fmt.Errorf("%w: the zero scope names no scope", gate.ErrInvalid)
 	}
@@ -97,6 +100,9 @@ func readNamespace(scope gate.Scope) (namespace.Name, error) {
 		return "", fmt.Errorf("%w: the scope namespace %q is not a valid name", gate.ErrInvalid, ns)
 	}
 
+	// Defense in depth: the name parse above also refuses the server scope
+	// written as a namespace. This check stays so that a change of that parse
+	// cannot let a namespace scope read a record of the installation.
 	if ns == audit.ServerScope {
 		return "", fmt.Errorf("%w: the server scope is not a namespace scope", gate.ErrInvalid)
 	}

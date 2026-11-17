@@ -152,8 +152,19 @@ func (h *Handler) writeJSON(ctx context.Context, w http.ResponseWriter, status i
 func (h *Handler) readNamespaceRecord(w http.ResponseWriter, r *http.Request, _ identity.Principal, t target) {
 	ctx := r.Context()
 
+	// Defense in depth: the wrapper authorizes on the namespace object, and
+	// the store selects by namespace, so an unknown namespace reads no row.
+	// This check stays so that a record of a namespace that no longer exists
+	// is never served. A store that does not answer is 503, any other error
+	// is the one 404.
 	if _, err := h.namespaces.Get(ctx, t.ns); err != nil {
+		if errors.Is(err, namespace.ErrUnavailable) {
+			h.writeError(ctx, w, err)
+			return
+		}
+
 		h.writeError(ctx, w, errNotFound)
+
 		return
 	}
 

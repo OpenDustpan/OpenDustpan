@@ -113,6 +113,9 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 // the path and the raw ID of the path. A name that is not a namespace name
 // answers the one 404.
 func (h *Handler) resolveNamespace(_ http.ResponseWriter, r *http.Request) (target, error) {
+	// Defense in depth: the service parses the name of the scope again. This
+	// check stays so that no authorization check, and no audit entry, runs on
+	// a name that is not a namespace name.
 	ns, err := namespace.ParseName(r.PathValue("namespace"))
 	if err != nil {
 		return target{}, errNotFound

@@ -199,8 +199,8 @@ func mustUnitRef(tool string, ns namespace.Name, name string) gate.UnitRef {
 	return gate.UnitRef{Object: obj}
 }
 
-// fakeNamespaces answers every namespace except "absent", whose primary installation is the test
-// installation.
+// fakeNamespaces answers every namespace except "absent", which is unknown, and "down", whose store
+// does not answer. The primary installation of the others is the test installation.
 type fakeNamespaces struct{}
 
 func (fakeNamespaces) CreateNamespace(context.Context, namespace.Namespace) error { return nil }
@@ -208,6 +208,10 @@ func (fakeNamespaces) CreateNamespace(context.Context, namespace.Namespace) erro
 func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	if name == "absent" {
 		return namespace.Namespace{}, namespace.ErrNotFound
+	}
+
+	if name == "down" {
+		return namespace.Namespace{}, fmt.Errorf("%w: connection reset", namespace.ErrUnavailable)
 	}
 
 	return namespace.Namespace{
@@ -910,6 +914,12 @@ func TestDeniedReadWritesAuditEntry(t *testing.T) {
 			name:        "a read without namespace:read-gates",
 			path:        "/api/dustpan/v1/namespaces/acme/decision-records/" + recordID,
 			holds:       readOnlyHolds("acme"),
+			wantEntries: 1,
+		},
+		{
+			name:        "an installation read without installation:read-gates",
+			path:        "/api/dustpan/v1/decision-records/" + instalRecord,
+			holds:       nil,
 			wantEntries: 1,
 		},
 		{
