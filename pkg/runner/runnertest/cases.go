@@ -736,6 +736,79 @@ func testHandoffTokenReplace(t *testing.T, h Harness) {
 	wantErr(t, "IssueHandoffToken for a claim with a session", err, runner.ErrConflict)
 }
 
+// testSessionKindOwn checks that a token opens only a session of its own kind,
+// that a refused open uses no token, and that a token of the other kind does
+// not replace the token of a kind.
+func testSessionKindOwn(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	c := durable.Claim{Operation: durable.ID(l.tok.Operation), Owner: l.r.ID, Token: l.tok.Token, ExpiresAt: time.Time{}}
+
+	proxySecret := runner.HandoffTokenPrefix + randomHex(t)
+	proxy := l.tok
+	proxy.Kind = runner.SessionKindProxy
+	proxy.SHA256 = hash(proxySecret)
+
+	if err := h.Sessions.IssueHandoffToken(t.Context(), proxy, c); err != nil {
+		t.Fatalf("IssueHandoffToken of kind proxy for a claim with a launcher token: %v", err)
+	}
+
+	_, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), runner.SessionKindProxy, newKey(t), now)
+	wantErr(t, "OpenSession of the launcher token as a proxy session", err, runner.ErrNotFound)
+
+	_, err = h.Sessions.OpenSession(t.Context(), hash(proxySecret), runner.SessionKindLauncher, newKey(t), now)
+	wantErr(t, "OpenSession of the proxy token as a launcher session", err, runner.ErrNotFound)
+
+	p, err := h.Sessions.OpenSession(t.Context(), hash(proxySecret), runner.SessionKindProxy, newKey(t), now)
+	if err != nil || p.Kind != runner.SessionKindProxy || p.Operation != l.tok.Operation || p.Token != l.tok.Token {
+		t.Fatalf("OpenSession of the proxy token as a proxy session = %+v, %v", p, err)
+	}
+
+	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), runner.SessionKindLauncher, newKey(t), now)
+	if err != nil || s.Kind != runner.SessionKindLauncher || s.Runner != l.r.ID {
+		t.Fatalf("OpenSession of the launcher token as a launcher session = %+v, %v", s, err)
+	}
+
+	_, err = h.Sessions.OpenSession(t.Context(), hash(l.secret), runner.SessionKindLauncher, newKey(t), now)
+	wantErr(t, "a second OpenSession with the launcher token", err, runner.ErrTokenUsed)
+}
+
+// testSessionKindOnePerKind checks that a claim has at most one session of
+// each kind, and that a token of a kind that has a session conflicts.
+func testSessionKindOnePerKind(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	c := durable.Claim{Operation: durable.ID(l.tok.Operation), Owner: l.r.ID, Token: l.tok.Token, ExpiresAt: time.Time{}}
+
+	if _, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), runner.SessionKindLauncher, newKey(t), now); err != nil {
+		t.Fatalf("OpenSession of the launcher token: %v", err)
+	}
+
+	proxySecret := runner.HandoffTokenPrefix + randomHex(t)
+	proxy := l.tok
+	proxy.Kind = runner.SessionKindProxy
+	proxy.SHA256 = hash(proxySecret)
+
+	if err := h.Sessions.IssueHandoffToken(t.Context(), proxy, c); err != nil {
+		t.Fatalf("IssueHandoffToken of kind proxy for a claim with a launcher session: %v", err)
+	}
+
+	if _, err := h.Sessions.OpenSession(t.Context(), hash(proxySecret), runner.SessionKindProxy, newKey(t), now); err != nil {
+		t.Fatalf("OpenSession of the proxy token: %v", err)
+	}
+
+	again := proxy
+	again.SHA256 = hash(runner.HandoffTokenPrefix + randomHex(t))
+
+	err := h.Sessions.IssueHandoffToken(t.Context(), again, c)
+	wantErr(t, "IssueHandoffToken of kind proxy for a claim with a proxy session", err, runner.ErrConflict)
+
+	_, err = h.Sessions.OpenSession(t.Context(), hash(proxySecret), runner.SessionKindProxy, newKey(t), now)
+	wantErr(t, "a second proxy OpenSession for the claim", err, runner.ErrTokenUsed)
+}
+
 func testNonce(t *testing.T, h Harness) {
 	t.Helper()
 
