@@ -174,7 +174,7 @@ func (s *tokenEnv) launchDirect() *launcher {
 	x := s.newExchange(s.runner.handoff(s.work.Operation))
 
 	sess, err := s.store.runners.OpenSession(s.t.Context(), sha256Hex(x.token),
-		runner.Key{Public: x.pub, CreatedAt: time.Time{}}, time.Now())
+		runner.Key{Public: x.pub, CreatedAt: time.Time{}}, s.clock.now())
 	if err != nil {
 		s.t.Fatalf("open session: %v", err)
 	}
@@ -424,14 +424,14 @@ func TestSessionCredentialsStepEnd(t *testing.T) {
 	s := newTokenEnv(t, 10*time.Minute, time.Minute)
 	s.launch()
 
-	before := time.Now().UTC()
+	before := s.clock.now().UTC()
 
 	status, body := s.ask("plan")
 	if status != http.StatusOK {
 		t.Fatalf("credentials = %d %s, want 200", status, body)
 	}
 
-	after := time.Now().UTC()
+	after := s.clock.now().UTC()
 
 	var resp protocol.CredentialsResponse
 
@@ -740,7 +740,7 @@ func TestSessionCredentialsStarterGone(t *testing.T) {
 		t.Fatal("the store keeps no records of principals")
 	}
 
-	entry := storetest.ServerChange(time.Now().UTC(), principal.Ref(s.starter.ID))
+	entry := storetest.ServerChange(s.clock.now().UTC(), principal.Ref(s.starter.ID))
 	if err := records.DeletePrincipal(t.Context(), s.starter.ID, entry); err != nil {
 		t.Fatalf("delete the starter: %v", err)
 	}
@@ -791,7 +791,7 @@ func TestSessionCredentialsStarterDisabled(t *testing.T) {
 		t.Fatal("the store keeps no records of principals")
 	}
 
-	entry := storetest.ServerChange(time.Now().UTC(), principal.Ref(s.starter.ID))
+	entry := storetest.ServerChange(s.clock.now().UTC(), principal.Ref(s.starter.ID))
 	if err := records.DisablePrincipal(t.Context(), s.starter.ID, entry); err != nil {
 		t.Fatalf("disable the starter: %v", err)
 	}
