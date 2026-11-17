@@ -2,6 +2,8 @@
 version: 6
 ---
 
+Issue: #3377.
+
 Roadmap: `docs/roadmap.md:166` (The planner role).
 
 ## Why
@@ -12,7 +14,7 @@ The user path this change must make work:
 
 1. **API.** Site administrator grants the planner role on a collection to the developer or a group.
 2. **CLI.** Developer creates an access token for self and configures the Pulumi CLI and OpenTofu with it.
-3. **CLI.** Developer reads the masked state with GET /api/v2/state-versions/{state_version_id}/resources and the masked Pulumi state read. ADR 212 decision 1: a planner "reads state with the state actions that the role gives, as viewer does". ADR 41 gives the masked state read with unit:read. The raw state download needs unit:read-secrets. So `pulumi stack export` and `tofu state pull` (GET /api/v2/state-versions/{state_version_id}/download) answer access.denied for a planner.
+3. **CLI.** Developer reads the masked state with GET /api/v2/state-versions/{state_version_id}/resources and the masked Pulumi state read. ADR 212 decision 1: a planner "reads state with the state actions that the role gives, as viewer does". ADR 41 gives the masked state read with unit:read. The raw state download needs unit:read-secrets. So `tofu state pull` (GET /api/v2/state-versions/{state_version_id}/download, `internal/api/tfe/routes.go:297`) answers access.denied for a planner. `pulumi stack export` needs only unit:read (`internal/api/pulumi/routes.go:461`) and works, with each secret value as ciphertext. A planner who wants the state of an OpenTofu workspace reads its metadata with unit:read and its outputs with unit:read-outputs. A masked download is a new feature and needs its own change.
 4. **CLI.** Developer tries up, destroy or apply and gets 403 with access.denied; asks for a secret reveal and gets 403 with access.denied. ADR 212 decision 1: a planner "cannot apply, destroy, approve or read a secret value".
 5. **Docs page.** Developer follows docs/guides/planner-role.md for the allowed reads.
 
