@@ -1,7 +1,7 @@
 # notifications Specification
 
 ## Purpose
-TBD - created by archiving change redeliver-refusals-through-denial-limiter. Update Purpose after archive.
+The server sends notifications about events to destinations that an operator sets. This capability covers how a refused redelivery counts against the shared denial limiter. It does not cover the senders or the destination settings.
 
 ## Requirements
 

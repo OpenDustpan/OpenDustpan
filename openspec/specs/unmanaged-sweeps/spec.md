@@ -1,7 +1,7 @@
 # unmanaged-sweeps Specification
 
 ## Purpose
-TBD - created by archiving change unmanaged-target-pool-layer-tests. Update Purpose after archive.
+An unmanaged sweep finds resources that no unit manages, on the pool of a stored target. This capability covers the check that the pool of the target belongs to the namespace of the sweep. It does not cover the sweep findings or the actions on them.
 
 ## Requirements
 

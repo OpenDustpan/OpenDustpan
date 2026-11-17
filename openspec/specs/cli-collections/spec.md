@@ -1,7 +1,7 @@
 # cli-collections Specification
 
 ## Purpose
-TBD - created by archiving change cli-collections-and-placement-commands. Update Purpose after archive.
+The `opendustpan` command makes collections and placement rules, so that a platform engineer needs no raw JSON call before the first run of a tool. This capability covers those commands. It does not cover the collection and placement routes.
 
 ## Requirements
 
