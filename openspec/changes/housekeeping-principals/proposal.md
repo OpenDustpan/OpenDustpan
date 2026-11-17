@@ -64,19 +64,24 @@ Each fact names its file, line and function on main. The change specifies only t
 - The principal that the server builds for a start. (`pkg/identity/namespace_service.go:61 (NamespaceService)`)
 - The rule in code that gives it `unit:run-plan`. (`pkg/access/authorizer.go:154 (authorizeNamespaceService)`)
 - The same rule in the allowlist gate. (`pkg/identity/namespace_service.go:108 (NamespaceServiceRule.Authorize)`)
-- The wiring of that rule and of the guard. (`pkg/dustpan/dustpan.go:890`, `pkg/dustpan/dustpan.go:916`)
+- The wiring of that rule and of the guard. (`pkg/dustpan/dustpan.go:964`, `pkg/dustpan/dustpan.go:1008`)
 - The guard that refuses a credential with that subject. (`pkg/principal/namespace_service_guard.go:24 (RefuseNamespaceServiceSubjects)`)
-- The refusal of a grant to it. (`pkg/access/service.go:1610`)
+- The refusal of a grant to it. (`pkg/access/service.go:1630`)
 - The dispatcher makes it for each start. (`pkg/trigger/dispatcher.go:249`)
-- The trigger and job start checks. (`pkg/trigger/manager.go:459`, `pkg/trigger/trigger.go:264`, `pkg/job/trigger.go:47`, `pkg/job/trigger.go:77`)
-- The artifact sweep writes as `@server`. (`pkg/job/artifactsweep.go:617`)
+- The trigger and job start checks. (`pkg/trigger/manager.go:459`, `pkg/trigger/trigger.go:264`, `pkg/job/trigger.go:46`, `pkg/job/trigger.go:76-82`)
+- The artifact sweep writes as `@server`. (`pkg/job/artifactsweep.go:654`)
 - The reconcile of jobs writes as `@server`. (`pkg/job/reconcile.go:673`)
-- The cleanup of saved views writes as `@server`. (`pkg/savedview/service.go:292 (Service.systemEntry)`)
+- The cleanup of saved views writes as `@server`. (`pkg/savedview/service.go:259 (Service.systemEntry)` and `pkg/savedview/service.go:293 (cleanupSubject)`)
 - The sweep of access tokens writes as `@server`. (`pkg/accesstoken/policy.go:197 (SweepEntry)`)
 - The expiry of temporary administrators writes as `@server`. (`pkg/tempadmin/service.go:148 (Service.Sweep)`)
-- The retention of history writes as `@server`. (`pkg/history/history.go:156 (ItemRef.KeyRef)`)
+- The retention of history writes as `@server`. (`pkg/history/history.go:156 (ServerSubject)` and `pkg/history/redaction.go:22 (RetentionReason)`)
 - The locks of local users write as `@server`. (`internal/localusersvc/locks.go:415`)
 - The reaper of agent runs. (`internal/agent/reaper.go:53 (Reap)`)
+- The expiry of a temporary administrator at its use writes as `@server`. (`pkg/tempadmin/authenticator.go:296 (Decorator.expire)`)
+- The rotation and the copy check of issuer keys write as `@server`. (`internal/issuersvc/settings.go:194 (Service.serverEntry)`)
+- The sweep of superseded checkpoint blobs runs with no principal. (`pkg/stack/superseded_sweep.go:72 (Updates.SweepSuperseded)`)
+- The sweep of blobs of a workspace runs with no principal. (`pkg/workspace/service.go:2527 (Service.sweepUnreferenced)`)
+- The layers that refuse a credential for the namespace service subject. (`pkg/principal/principal.go:352`, `internal/sessionauth/sessionauth.go:219`, `pkg/accesstoken/service.go:680`, `pkg/accesstoken/service.go:1011`)
 
 ## ADR check
 
@@ -126,9 +131,9 @@ none
 
 Questions considered and answered:
 
-- Which purposes get a principal? Each caller that today writes as `@server` or runs without a principal: the artifact sweep, the reconcile of jobs, the cleanup of saved views, the sweep of access tokens, the expiry of temporary administrators, the retention of history, the locks of local users, the reaper of agent runs, and the reapers of blobs and checkpoints. Task 0.1 checks the list on main again with `rg`.
+- Which purposes get a principal? Each caller that today writes as `@server` or runs without a principal: the artifact sweep, the reconcile of jobs, the cleanup of saved views, the sweep of access tokens, the expiry of temporary administrators, the retention of history, the locks of local users, the reaper of agent runs, and the reapers of blobs and checkpoints, and the rotation of issuer keys. Task 0.1 checked the list on main on 17 November 2026; the callers and the purposes are in the design document ("Callers on main"). A caller that writes `@server` only as the sender of a notification, or as an effect of a request of a person, is not a housekeeping purpose and stays as it is.
 - Does a housekeeping principal belong to a namespace? No. It is a principal of the installation. Its grants name the objects that its purpose touches.
-- Is `@server` removed? No. It stays as the object of a grant on the installation (`pkg/identity/identity.go:736`). A run never acts as `@server`.
+- Is `@server` removed? No. It stays as the object of a grant on the installation (`pkg/identity/identity.go:802 (ServerObject)`). A run never acts as `@server`.
 - Who is the creator of the install grants? The install, recorded as the creator with the install time, as ADR 338 decision 1 did for the namespace grant.
 - What about the existing namespaces? No installation exists, so no migration (ADR 322).
 
