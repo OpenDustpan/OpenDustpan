@@ -15,6 +15,7 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/ldapauth"
 	"opendustpan.org/opendustpan/internal/ldaptest"
+	"opendustpan.org/opendustpan/internal/signinsvc"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -508,6 +509,81 @@ func TestLDAPRouteOfAnotherSiteHasABoundedAudit(t *testing.T) {
 	if n := e.dir.Connections(); n != 0 {
 		t.Fatalf("the directory got %d connections, want 0", n)
 	}
+}
+
+// TestLDAPRouteLocksAPersonAtTheConfiguredLimit proves that the limit of the
+// provider reaches the lockout of the person: the env sets a limit of 7, not
+// the default of 5. After 6 wrong passwords the right password signs in. After
+// 7 wrong passwords the right password gets 401 with no cookie, and a refused
+// sign-in entry holds the reason of the lock.
+func TestLDAPRouteLocksAPersonAtTheConfiguredLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		failures int
+		want     int
+	}{
+		{"one failure short of the limit", 6, http.StatusNoContent},
+		{"at the limit", 7, http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := newLDAPRouteEnv(t)
+
+			for i := range tc.failures {
+				rec := e.post(t, ldapRoutePath, signInBody("alice", "wrong-password"))
+				if rec.Code != http.StatusUnauthorized {
+					t.Fatalf("failure %d = %d %s, want 401", i+1, rec.Code, rec.Body.String())
+				}
+			}
+
+			checkRightPasswordAfterFailures(t, e, tc.failures, tc.want)
+		})
+	}
+}
+
+// checkRightPasswordAfterFailures signs in with the right password and checks
+// the status. A refused sign-in has no cookie and a lock entry.
+func checkRightPasswordAfterFailures(t *testing.T, e ldapRouteEnv, failures, want int) {
+	t.Helper()
+
+	rec := e.post(t, ldapRoutePath, signInBody("alice", ldapRoutePassword))
+	if rec.Code != want {
+		t.Fatalf("right password after %d failures = %d %s, want %d", failures, rec.Code, rec.Body.String(), want)
+	}
+
+	if want == http.StatusNoContent {
+		return
+	}
+
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatal("a locked person got a cookie")
+	}
+
+	if !hasLockEntry(e.serverEntries(t)) {
+		t.Fatalf("no refused sign-in entry holds the reason %q", signinsvc.ReasonSubjectLocked)
+	}
+}
+
+// hasLockEntry reports whether an entry of a refused sign-in holds the reason
+// of the lock of a person.
+func hasLockEntry(entries []audit.Entry) bool {
+	for i := range entries {
+		en := &entries[i]
+		if en.Action != session.ActionSignIn || en.Outcome != audit.OutcomeFailure {
+			continue
+		}
+
+		for _, c := range en.Changes {
+			if c.Key == "reason" && c.New == signinsvc.ReasonSubjectLocked {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // TestPasswordRoutesAnswerTheSameRefusal proves that a wrong password on the

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/signinsvc"
@@ -803,6 +804,42 @@ func TestPasswordSubjectFailureLimitLocksAtTheLimit(t *testing.T) {
 		t.Parallel()
 		checkSubjectFailureLimitOutsideTheRange(t)
 	})
+
+	t.Run("a zero limit is the default", func(t *testing.T) {
+		t.Parallel()
+		checkZeroSubjectFailureLimitIsTheDefault(t)
+	})
+}
+
+// checkZeroSubjectFailureLimitIsTheDefault proves that a request with a limit
+// of zero locks the person after exactly authgate.DefaultSubjectFailureLimit
+// failures: one failure fewer still signs in.
+func checkZeroSubjectFailureLimitIsTheDefault(t *testing.T) {
+	t.Helper()
+
+	below := newPasswordHarness(t, nil)
+	below.subjectLimit = 0
+
+	below.failTimes(t, "alice", authgate.DefaultSubjectFailureLimit-1)
+
+	if _, err := below.signIn(t, "alice", "right"); err != nil {
+		t.Fatalf("sign-in below the default limit = %v, want a session", err)
+	}
+
+	at := newPasswordHarness(t, nil)
+	at.subjectLimit = 0
+
+	at.failTimes(t, "alice", authgate.DefaultSubjectFailureLimit)
+
+	_, err := at.signIn(t, "alice", "right")
+	if got := refusalReason(t, err); got != signinsvc.ReasonSubjectLocked {
+		t.Fatalf(
+			"sign-in after %d failures = %q, want %q",
+			authgate.DefaultSubjectFailureLimit,
+			got,
+			signinsvc.ReasonSubjectLocked,
+		)
+	}
 }
 
 // checkSubjectLockAtTheLimit proves that the count of the subject from every
