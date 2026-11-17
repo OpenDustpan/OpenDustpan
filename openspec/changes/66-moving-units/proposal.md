@@ -2,6 +2,8 @@
 version: 3
 ---
 
+Issue: #3510.
+
 ## Why
 
 **Persona: namespace administrator.** A namespace administrator tries to place a stack or workspace in another namespace. The server has no move endpoint for it, so the administrator needs a stated export and import path and a list of what does not carry over.
@@ -16,13 +18,13 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| The target name already holds a unit, deleted units included | The dry run marks that import unit skipped. Deleted units hold the name too. List deleted units, then pick a free target name. | `GET /api/dustpan/v1/namespaces/{namespace}/deleted-units` |
+| The target name already holds a unit, deleted units included | The replay skips each version that the target already holds with the same serial, lineage and MD5. It does not skip a unit. Deleted units hold the name too. List deleted units, then pick a free target name. | `GET /api/dustpan/v1/namespaces/{namespace}/deleted-units` |
 | The source unit is not found in its namespace | The server answers 404. Check the source name in the unit list of the source namespace. | `GET /api/dustpan/v1/namespaces/{namespace}/units` |
 
 Evidence for the claims above:
 
 - Main serves unit routes scoped to one namespace. Proof: GET /api/dustpan/v1/namespaces/{}/units
-- Main has a unit lifecycle helper on the server. Proof: pkg/dustpan/dustpan.go:2841 (func unitLifecycles)
+- Main has a unit lifecycle helper on the server. Proof: (read only) `pkg/dustpan/dustpan.go` line 2943 (func unitLifecycles), (read only) `pkg/dustpan/dustpan_test.go` line 154 (func TestStackLifecycle), (read only) `pkg/store/storetest/unit_query.go` line 443 (func testQueryUnitsUnitPages)
 - A unit never moves between namespaces and export plus import is the way out. Proof: docs/adr/0047-soft-delete-and-units-stay-in-their-namespace.md decisions 5 and 7
 
 ## What Changes
@@ -54,9 +56,7 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Main serves unit lifecycles through the server helper. (`pkg/dustpan/dustpan.go:2841 (func unitLifecycles)`)
-- Main tests the stack lifecycle. (`pkg/dustpan/dustpan_test.go:154 (func TestStackLifecycle)`)
-- Main tests unit query paging. (`pkg/store/storetest/unit_query.go:443 (func testQueryUnitsUnitPages)`)
+- Main lists the guide pages that the docs runner skips. (`docs/commands-pending-pages.txt:1`)
 
 ## ADR check
 
