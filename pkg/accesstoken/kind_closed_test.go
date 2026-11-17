@@ -2,9 +2,13 @@ package accesstoken_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -26,14 +30,30 @@ func storeTokenOfKind(t *testing.T, f *fixture, k accesstoken.Kind) accesstoken.
 		t.Fatalf("NewTrustToken = %v", err)
 	}
 
-	issued.Token.Kind = k
-
 	e := caller()
 	e.At, e.Namespace, e.Object = f.clock.Now(), audit.ServerScope, accesstoken.TokenRef(f.service.ID, issued.Token.ID)
 	e.Kind, e.Outcome = audit.KindChange, audit.OutcomeSuccess
 
 	if err := f.store.CreateToken(t.Context(), issued.Token, issued.Digest, e); err != nil {
-		t.Fatalf("store the old-kind token: %v", err)
+		t.Fatalf("store the token: %v", err)
+	}
+
+	// No port writes a kind that it does not know, so change the stored row
+	// with a second connection, as a row of another version would be.
+	conn, openErr := sql.Open("sqlite", f.path)
+	if openErr != nil {
+		t.Fatalf("open database: %v", openErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close database: %v", closeErr)
+		}
+	}()
+
+	const query = "UPDATE access_tokens SET kind = ? WHERE id = ?"
+	if _, execErr := conn.ExecContext(t.Context(), query, string(k), issued.Token.ID); execErr != nil {
+		t.Fatalf("set stored token kind: %v", execErr)
 	}
 
 	return issued.Secret
@@ -180,5 +200,88 @@ func TestRevokeOfJWTExchangeNeedsManageTokens(t *testing.T) {
 				t.Errorf("revoke of a jwt-exchange token %s: err = %v, want %v", tc.name, err, tc.want)
 			}
 		})
+	}
+}
+
+// rotateCountStore returns every token with the kind that it holds, as a store
+// that skips the check of the kind, and counts the calls that write a token.
+type rotateCountStore struct {
+	accesstoken.Store
+
+	kind    accesstoken.Kind
+	rotates *atomic.Int32
+}
+
+func (s rotateCountStore) GetToken(ctx context.Context, id string) (accesstoken.Token, error) {
+	tok, err := s.Store.GetToken(ctx, id)
+	tok.Kind = s.kind
+
+	return tok, err
+}
+
+func (s rotateCountStore) RotateToken(ctx context.Context, r accesstoken.Replacement, e audit.Entry) error {
+	s.rotates.Add(1)
+
+	return s.Store.RotateToken(ctx, r, e)
+}
+
+// TestRotateRefusesTokenOfUnknownKind checks that a store that gives back a
+// token of a kind that this version does not know does not get a successor of
+// that kind: the service fails and does not call the store to write.
+func TestRotateRefusesTokenOfUnknownKind(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []accesstoken.Kind{oldKind, "", "Service", "service ", "service\x00", "../service"} {
+		t.Run(strconv.Quote(string(kind)), func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t, nil)
+			tok, _ := f.create(t, f.service, "deploy")
+
+			var rotates atomic.Int32
+
+			svc := serviceOver(t, &f, rotateCountStore{Store: f.store, kind: kind, rotates: &rotates})
+
+			_, secret, err := svc.Rotate(t.Context(), admin(), caller(), accesstoken.RotateInput{
+				ID: tok.ID, Scope: accesstoken.ScopeService,
+				OldEndsAt: nil, ExpiresAt: time.Time{},
+			})
+			if err == nil {
+				t.Fatalf("Rotate of a token of kind %q succeeded, want an error", kind)
+			}
+
+			if secret.Reveal() != "" {
+				t.Error("Rotate of a token of an unknown kind returned a secret")
+			}
+
+			if n := rotates.Load(); n != 0 {
+				t.Errorf("store.RotateToken called %d times, want 0", n)
+			}
+		})
+	}
+}
+
+// TestNewTokenRefusesUnknownKind sends a hostile kind straight to the record
+// constructor of the service, as if the route check before it did not exist.
+func TestNewTokenRefusesUnknownKind(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+
+	for _, kind := range []accesstoken.Kind{oldKind, "", "Service", "service ", "service\x00", "../service", "service\n"} {
+		tok, err := accesstoken.IssueTokenForTest(f.svc, kind)
+		if !errors.Is(err, accesstoken.ErrUnknownKind) {
+			t.Errorf("issue a token of kind %q: err = %v, want ErrUnknownKind", kind, err)
+		}
+
+		if tok.ID != "" {
+			t.Errorf("issue a token of kind %q returned the token %q, want none", kind, tok.ID)
+		}
+	}
+
+	for _, kind := range []accesstoken.Kind{accesstoken.KindPersonal, accesstoken.KindService, accesstoken.KindJWTExchange} {
+		if _, err := accesstoken.IssueTokenForTest(f.svc, kind); err != nil {
+			t.Errorf("issue a token of kind %q: %v", kind, err)
+		}
 	}
 }

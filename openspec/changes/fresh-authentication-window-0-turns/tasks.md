@@ -5,7 +5,7 @@
 ## 1. Failing tests first
 
 - [x] 1.1 Test that a window of 0 refuses age 0 and an old step: TestFreshWindowZeroAsksEachTime in the existing file internal/sessionauth/sessionauth_test.go (for Fresh at internal/sessionauth/sessionauth.go:312) and in the existing file internal/api/server/freshness_test.go (package server, edited by this change) for the route. Check: TestFreshWindowZeroAsksEachTime fails on main
-- [x] 1.2 Test the 403 names the sign-in path: TestStaleErrorNamesSignInPath in the existing file internal/api/server/freshness_test.go (package server, edited by this change). A valid session with a stale sign-in, and a valid session under window 0, must answer 403 with mfa.fresh-step-required and the `reauthenticate` path. Change the stale-session tests of freshness_test.go and signin_test.go that expect 401 today. This task extends the file with new behavior. Check: TestStaleErrorNamesSignInPath fails on main, because internal/api/server/signin.go:743 answers 401
+- [x] 1.2 Test the 403 names the sign-in path: TestStaleErrorNamesSignInPath in the existing file internal/api/server/freshness_test.go (package server, edited by this change). A valid session with a stale sign-in, and a valid session under window 0, must answer 403 with mfa.fresh-step-required and the `reauthenticate` path. Change the stale-session tests of internal/api/server/freshness_test.go and internal/api/server/signin_test.go that expect 401 today. This task extends the file with new behavior. Check: TestStaleErrorNamesSignInPath fails on main, because internal/api/server/signin.go:743 answers 401
 - [x] 1.3 Test that an age equal to a nonzero window is fresh: TestFreshBoundaryEqualsWindow in the existing file internal/sessionauth/sessionauth_test.go. Check: TestFreshBoundaryEqualsWindow passes on main and keeps passing
 - [x] 1.4 Test that a window outside 0 and 60 to 900 seconds is refused: TestFreshWindowConstructorRefusesOutOfRange in the existing file pkg/session/policy_test.go, for ValidTokenFreshness (pkg/session/policy.go:35), with 1 s, 59 s, 901 s and 7 days refused and 0, 60 s and 900 s accepted. Check: TestFreshWindowConstructorRefusesOutOfRange fails on main
 
@@ -18,7 +18,7 @@
 
 ## 2b. Side effects (computed from main)
 
-- [x] 2.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change. The files that this change edits are the ones in the Files list of proposal.md.
+- [x] 2.1 Not applicable: this change adds no ADR, so `docs/adr/INDEX.md` does not change. The files that this change edits are the ones in the Files list of the proposal of this change.
 
 ## 3. Definition of done
 

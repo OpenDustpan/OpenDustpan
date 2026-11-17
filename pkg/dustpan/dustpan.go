@@ -817,6 +817,10 @@ func NewServer(opts ...Option) (*Server, error) {
 		opt(cfg)
 	}
 
+	// The metrics exist before the built-in store, so the claimer of the
+	// store options counts the operations that a claim poll skips on them.
+	cfg.observed = metrics.NewServerMetrics(cfg.version, cfg.now())
+
 	if err := applyBuiltinStore(cfg); err != nil {
 		return nil, err
 	}
@@ -875,10 +879,6 @@ func buildServer(cfg *settings) (*Server, error) {
 	}
 
 	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
-
-	// The metrics exist before the services, so each deleter of a blob can
-	// count the takes that it refuses.
-	cfg.observed = metrics.NewServerMetrics(cfg.version, cfg.now())
 
 	svc, err := newServices(cfg, tokens, ports.authorizer)
 	if err != nil {

@@ -9,7 +9,7 @@
 
 ## 2. Build
 
-- [ ] 2.1 Implement the stores in the NEW files pkg/store/sqlite/notify_dispatch.go and pkg/store/postgres/notify_dispatch.go with queries in each queries.sql and the baseline migration. Check: go test -race ./pkg/store/... -timeout 60m passes
+- [ ] 2.1 Implement the stores in the NEW files pkg/store/sqlite/notify_dispatch.go and pkg/store/postgres/notify_dispatch.go with queries in each SQL query file and the baseline migration. Check: go test -race ./pkg/store/... -timeout 60m passes
 - [ ] 2.2 Implement the dispatcher and the delivery operation in the NEW file internal/notifydispatch/dispatcher.go. It marks a delivery sent after the sink accepts it. The acceptance check reads GET /api/dustpan/v1/namespaces/{namespace}/subscriptions/{id}/deliveries with an access token. Check: go test -race ./internal/notifydispatch/... passes
 - [ ] 2.3 Wire the removal alert service at internal/removalalertsvc/removalalertsvc.go:256 and the dispatcher in pkg/dustpan (NEW file pkg/dustpan/notifydispatch.go). Declare the delivery read route and its action in the NEW file internal/api/notifications/deliveries_routes.go and serve it in the NEW file internal/api/notifications/deliveries_handler.go. The acceptance check calls GET /api/dustpan/v1/namespaces/{namespace}/subscriptions/{id}/deliveries with an access token. Check: TestRemovalAlertIsDelivered passes
 

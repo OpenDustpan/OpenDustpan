@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -45,7 +46,8 @@ func TestBearerOfOldKindTokenAnswers401(t *testing.T) {
 	t.Parallel()
 
 	late := &lateAuthenticator{mu: sync.Mutex{}, next: nil}
-	handler, st := newServiceBackedHandlerOf(t, late, identity.AdminOnly{}, nil...)
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+	handler, st := newServiceBackedHandlerAt(t, path, late, identity.AdminOnly{}, nil...)
 
 	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
 
@@ -77,13 +79,13 @@ func TestBearerOfOldKindTokenAnswers401(t *testing.T) {
 		t.Fatalf("NewTrustToken: %v", err)
 	}
 
-	issued.Token.Kind = "trust"
-
 	entry := storetest.ServerChange(at, "token:"+issued.Token.ID)
 
 	if err := st.CreateToken(t.Context(), issued.Token, issued.Digest, entry); err != nil {
-		t.Fatalf("store the old-kind token: %v", err)
+		t.Fatalf("store the token: %v", err)
 	}
+
+	setStoredTokenKind(t, path, issued.Token.ID, "trust")
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/roles", nil)
 	req.Header.Set("Authorization", "Bearer "+issued.Secret.Reveal())
