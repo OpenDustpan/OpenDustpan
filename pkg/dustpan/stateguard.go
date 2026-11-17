@@ -127,7 +127,7 @@ func newStateWriteGates(cfg *settings, namespaces *namespace.Service) (stateWrit
 		Store: store, Engine: newGateEngine(), Producers: nil,
 		Units: facts, Subjects: principalSubjects{principals: principals},
 		Fences:     namespaceFences{namespaces: namespaces},
-		KindReader: kindReader, Now: cfg.now, Log: log,
+		KindReader: kindReader, IsDev: principal.IsDevSubject, Now: cfg.now, Log: log,
 	})
 	if err != nil {
 		return none, fmt.Errorf("gate service: %w", err)
