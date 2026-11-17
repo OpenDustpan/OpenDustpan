@@ -146,7 +146,9 @@ func (h *Handler) baseRoutes() []Route {
 			// namespaces (ADR 18): the handler filters them with the
 			// Authorizer for namespace:read on each namespace. A holder of a
 			// grant on a collection or on a unit in the namespace also sees
-			// that namespace.
+			// that namespace. An answer that a grant allowed carries the
+			// response header X-Dustpan-Grant-Id with the stable ID of the
+			// grant, never a name.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCallerRead},
 			Resolve: resolveCurrentUser,
@@ -160,7 +162,9 @@ func (h *Handler) baseRoutes() []Route {
 			// object is the caller itself, caller:read is the gate, and the
 			// handler filters with the Authorizer for namespace:read on each
 			// namespace. A holder of a grant on a collection or on a unit in
-			// the namespace also sees that namespace.
+			// the namespace also sees that namespace. An answer that a grant
+			// allowed carries the response header X-Dustpan-Grant-Id with the
+			// stable ID of the grant, never a name.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCallerRead},
 			Resolve: resolveCurrentUser,

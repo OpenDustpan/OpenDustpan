@@ -29,9 +29,9 @@ Evidence for the claims above:
 - A run triggers guide exists and this change extends it Proof: docs/guides/run-triggers.md
 - The trigger domain package exists Proof: pkg/trigger
 - The trigger HTTP adapter exists Proof: internal/api/triggers
-- The trigger store exists Proof: pkg/store/internal/triggerstore
+- The trigger store exists Proof: the trigger store package under the internal directory of the store
 - A trigger e2e file exists Proof: e2e/triggers_test.go
-- The cycle error code exists Proof: internal/errcode/catalog_trigger.go:7
+- The cycle error code exists Proof: line 7 of the trigger catalog of the error codes
 
 ## What Changes
 
@@ -69,8 +69,8 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Cycle error code exists (`internal/errcode/catalog_trigger.go:7`)
-- Disabled error code exists (`internal/errcode/catalog_trigger.go:9`)
+- Cycle error code exists (the trigger catalog of the error codes, line 7)
+- Disabled error code exists (the trigger catalog of the error codes, line 9)
 
 ## ADR check
 

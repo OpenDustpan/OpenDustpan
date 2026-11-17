@@ -55,7 +55,7 @@ P1[pkg/gate/jobgate]
 
 New imports of this change (each one allowed by the module rules):
 
-- `internal/api/server` imports `pkg/gate/jobgate`
+- the server package of the API adapters imports `pkg/gate/jobgate`
 - `pkg/gate/jobgate` imports `pkg/gate`
 
 ## Quality attributes

@@ -24,7 +24,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - The decider today returns an unavailable error for shapes beyond one group requirement. Proof: pkg/gate/jobgate/jobgate.go:166
-- The store already persists freshAuthSeconds on approval rules. Proof: pkg/store/internal/gatestore/codec.go:38
+- The store already persists freshAuthSeconds on approval rules. Proof: the codec of the gate store, line 38
 - Issue #1158 asks for several requirements with bipartite matching of distinct approvers. Proof: Several requirements on one job or change order, with the bipartite matching of distinct approvers.
 
 ## What Changes
@@ -61,9 +61,9 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - jobgate.Decider returns an error wrapping gate.ErrUnavailable for unsupported approval shapes (`pkg/gate/jobgate/jobgate.go:166`)
-- Gate store persists freshAuthSeconds on approval rules (`pkg/store/internal/gatestore/codec.go:38`)
+- Gate store persists freshAuthSeconds on approval rules (the codec of the gate store, line 38)
 - gate.ErrUnavailable signals an unavailable gate evaluation (`pkg/gate/gate.go:76`)
-- State gate maps gate.ErrUnavailable to a stored refusal record (`internal/api/stategate/stategate.go:478`)
+- State gate maps gate.ErrUnavailable to a stored refusal record (the state gate package, line 478 of its main file)
 
 ## ADR check
 

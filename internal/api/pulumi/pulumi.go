@@ -43,6 +43,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/collection"
@@ -358,15 +359,20 @@ type userResponse struct {
 }
 
 // currentUser answers GET /api/user. Organizations are the namespaces the
-// principal may read, filtered with the Authorizer.
+// principal may read, filtered with the Authorizer. A namespace that a grant
+// allowed names the grant in the response header X-Dustpan-Grant-Id.
 func (h *Handler) currentUser(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
-	namespaces, err := h.readableNamespaces(ctx, p)
+	namespaces, grantID, err := h.readableNamespaces(ctx, r, p)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
+	}
+
+	if grantID != "" {
+		w.Header().Set(access.HeaderDiscoveryGrant, grantID)
 	}
 
 	h.writeJSON(r.Context(), w, http.StatusOK, userResponse{
@@ -399,13 +405,14 @@ type defaultOrganizationResponse struct {
 
 // defaultOrganization answers GET /api/user/organizations/default. It names
 // the only readable namespace, or answers 404 when there is not exactly one,
-// so the CLI chooses.
+// so the CLI chooses. An answer that a grant allowed names the grant in the
+// response header X-Dustpan-Grant-Id.
 func (h *Handler) defaultOrganization(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
 ) {
 	ctx := r.Context()
 
-	namespaces, err := h.readableNamespaces(ctx, p)
+	namespaces, grantID, err := h.readableNamespaces(ctx, r, p)
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -418,6 +425,10 @@ func (h *Handler) defaultOrganization(
 		return
 	}
 
+	if grantID != "" {
+		w.Header().Set(access.HeaderDiscoveryGrant, grantID)
+	}
+
 	h.writeJSON(ctx, w, http.StatusOK, defaultOrganizationResponse{
 		GithubLogin: namespaces[0].Name,
 		Messages:    []any{},
@@ -425,46 +436,53 @@ func (h *Handler) defaultOrganization(
 }
 
 // readableNamespaces returns the namespaces the principal may read, ordered
-// by name, as organization summaries. A holder of a grant on a collection or
-// on a unit in the namespace also sees that namespace.
+// by name, as organization summaries, and the stable ID of one grant that
+// allowed a namespace of the list (never a name). A holder of a grant on a
+// collection or on a unit in the namespace also sees that namespace.
 func (h *Handler) readableNamespaces(
-	ctx context.Context, p identity.Principal,
-) ([]organizationSummary, error) {
+	ctx context.Context, r *http.Request, p identity.Principal,
+) ([]organizationSummary, string, error) {
 	all, err := h.namespaces.List(ctx)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	out := []organizationSummary{}
+	grantID := ""
 
 	for i := range all {
-		ok, includeErr := h.includeNamespace(ctx, p, all[i].Name)
+		ok, via, includeErr := h.includeNamespace(ctx, r, p, all[i].Name)
 		if includeErr != nil {
-			return nil, includeErr
+			return nil, "", includeErr
 		}
 
 		if !ok {
 			continue
 		}
 
+		if via != "" && grantID == "" {
+			grantID = via
+		}
+
 		name := all[i].Name.String()
 		out = append(out, organizationSummary{GithubLogin: name, Name: name, AvatarURL: ""})
 	}
 
-	return out, nil
+	return out, grantID, nil
 }
 
 // includeNamespace reports whether p sees the namespace ns in the
-// organization list: when p may read it, or when p holds a grant on a
-// collection or on a unit in it.
+// organization list, and the stable ID of the grant that allows it when a
+// grant, not the Authorizer, allows it: when p may read it, or when p holds
+// a grant on a collection or on a unit in it.
 func (h *Handler) includeNamespace(
-	ctx context.Context, p identity.Principal, ns namespace.Name,
-) (bool, error) {
+	ctx context.Context, r *http.Request, p identity.Principal, ns namespace.Name,
+) (bool, string, error) {
 	obj := identity.NamespaceObject(ns)
 
 	authorizeErr := h.authz.Authorize(ctx, p, identity.ActionNamespaceRead, obj)
 	if authorizeErr == nil {
-		return true, nil
+		return true, "", nil
 	}
 
 	// Defense in depth: the IP allowlist refusal never falls through to the
@@ -474,47 +492,79 @@ func (h *Handler) includeNamespace(
 	// The namespace is skipped, not an error: one blocked namespace must not
 	// fail the list of the other namespaces.
 	if errors.Is(authorizeErr, ipallow.ErrAddressNotAllowed) {
-		return false, nil
+		return false, "", nil
 	}
 
 	if !errors.Is(authorizeErr, identity.ErrDenied) {
-		return false, authorizeErr
+		return false, "", authorizeErr
 	}
 
-	return h.holdsGrantInNamespace(ctx, p, ns)
+	ok, via, holdsErr := h.holdsGrantInNamespace(ctx, p, ns)
+	if holdsErr != nil {
+		// Fail closed: the read of the grants failed, so the request is
+		// refused and the refusal gets an audit entry.
+		h.guard.Record(ctx, r, p, refusal.Denial{
+			Action: identity.ActionNamespaceRead, Object: obj, Reason: refusal.ReasonFor(holdsErr),
+			ReasonWithin: nil, Window: 0,
+		})
+
+		return false, "", holdsErr
+	}
+
+	return ok, via, nil
 }
 
 // holdsGrantInNamespace reports whether p holds a grant on a collection in
-// ns or on a unit in it. It reads the grants at each request, so a revoked
-// grant is gone on the next request. A grant on the namespace itself, or on
-// the installation, is decided by the Authorizer before this runs: this check
-// only opens discovery from inside. An error of the authorizer is returned.
+// ns or on a unit in it, and the stable ID of one such grant (never a name).
+// It reads the grants at each request, so a revoked grant is gone on the
+// next request. A grant on the namespace itself, or on the installation, is
+// decided by the Authorizer before this runs: this check only opens
+// discovery from inside. An error of the authorizer is returned. An
+// authorizer that names the grant but returns an empty ID is refused, so a
+// held answer from it always has an ID. An authorizer without the method, for
+// example a custom authorizer without the grant list, takes the scope path:
+// the answer is held when the scope names the namespace and it carries no
+// grant header.
 func (h *Handler) holdsGrantInNamespace(
 	ctx context.Context, p identity.Principal, ns namespace.Name,
-) (bool, error) {
+) (bool, string, error) {
+	// An administrator is decided by the Authorizer itself: a test double
+	// that denies an administrator keeps the old answer below.
+	if p.Admin {
+		return false, "", nil
+	}
+
+	if id, found, err := access.DiscoveryGrantID(ctx, h.authz, p, ns); found || err != nil {
+		if err != nil {
+			return false, "", err
+		}
+
+		return id != "", id, nil
+	}
+
+	// The authorizer cannot name its grants: the scope check decides, and
+	// the answer carries no grant header.
 	for _, action := range []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadOutputs} {
 		scope, err := h.authz.ListObjects(ctx, p, action)
 		if err != nil {
-			return false, fmt.Errorf("list readable objects: %w", err)
+			return false, "", fmt.Errorf("list readable objects: %w", err)
 		}
 
 		if scopeHoldsNamespace(scope, ns) {
-			return true, nil
+			return true, "", nil
 		}
 	}
 
-	return false, nil
+	return false, "", nil
 }
 
-// scopeHoldsNamespace reports whether scope names the namespace ns, a
-// collection in it or a unit in it. A grant that lets the principal read the
-// namespace is decided by the Authorizer before this runs. A grant of the
-// unit read actions on the namespace itself, without namespace:read, is found
-// here through scope.Namespaces, the same as the same grant on a collection.
+// scopeHoldsNamespace reports whether scope names a collection in the
+// namespace ns or a unit in it. A grant on the namespace itself is decided by
+// the Authorizer before this runs, so scope.Namespaces does not count here.
 // An every-object scope alone proves no grant in ns: only the gated
 // namespace check above may open that path.
 func scopeHoldsNamespace(scope identity.Scope, ns namespace.Name) bool {
-	for _, objs := range [][]identity.Object{scope.Namespaces, scope.Collections, scope.Units} {
+	for _, objs := range [][]identity.Object{scope.Collections, scope.Units} {
 		for i := range objs {
 			if objs[i].Namespace() == ns {
 				return true

@@ -296,22 +296,7 @@ func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, acti
 func (a *Authorizer) scopeFor(ctx context.Context, subjects []Subject, action identity.Action) (Scope, error) {
 	none := Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}
 
-	roles, err := a.rolesWith(ctx, action)
-	if err != nil || len(roles) == 0 {
-		return none, err
-	}
-
-	grants, err := a.store.GrantsWithRoles(ctx, subjects, roles)
-	if err != nil {
-		return none, fmt.Errorf("read grants: %w", err)
-	}
-
-	grants, err = a.confineGrants(ctx, grants)
-	if err != nil {
-		return none, err
-	}
-
-	live, err := a.currentUnits(ctx, grants)
+	grants, err := a.reachGrants(ctx, subjects, action)
 	if err != nil {
 		return none, err
 	}
@@ -319,13 +304,45 @@ func (a *Authorizer) scopeFor(ctx context.Context, subjects []Subject, action id
 	out := none
 
 	for i := range grants {
+		addToScope(&out, grants[i].Object)
+	}
+
+	return out, nil
+}
+
+// reachGrants returns the grants of the subjects that give action: the one
+// walk that decides reach. The scope and the discovery grant ID both read it.
+func (a *Authorizer) reachGrants(ctx context.Context, subjects []Subject, action identity.Action) ([]Grant, error) {
+	roles, err := a.rolesWith(ctx, action)
+	if err != nil || len(roles) == 0 {
+		return nil, err
+	}
+
+	grants, err := a.store.GrantsWithRoles(ctx, subjects, roles)
+	if err != nil {
+		return nil, fmt.Errorf("read grants: %w", err)
+	}
+
+	grants, err = a.confineGrants(ctx, grants)
+	if err != nil {
+		return nil, err
+	}
+
+	live, err := a.currentUnits(ctx, grants)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Grant, 0, len(grants))
+
+	for i := range grants {
 		add, addErr := a.grantInScope(ctx, grants[i].Object, action, live)
 		if addErr != nil {
-			return none, addErr
+			return nil, addErr
 		}
 
 		if add {
-			addToScope(&out, grants[i].Object)
+			out = append(out, grants[i])
 		}
 	}
 

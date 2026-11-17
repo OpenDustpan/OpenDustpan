@@ -758,7 +758,9 @@ func scopeOrganizationHidden(ctx context.Context, t *testing.T, env *e2e.Env, pe
 // checkScopeReview proves that the access-review export of collection team-a
 // names each grant with its holder, role, object, creator and time, and that
 // every row belongs to the collection: the collection itself, one of its
-// units, the namespace or the installation.
+// units, the namespace or the installation. It sends the request of the
+// command on the page "Find the grant behind a discovery answer" in the
+// access-review guide, with the same limit.
 func checkScopeReview(
 	ctx context.Context, t *testing.T, env *e2e.Env, writerGrant, viewerGrant e2eGrant,
 ) {
@@ -768,7 +770,7 @@ func checkScopeReview(
 
 	principalCall(ctx, t, env, principalStep{
 		http.MethodGet,
-		"/api/server/namespaces/" + scopeNamespace + "/collections/team-a/access-review",
+		"/api/server/namespaces/" + scopeNamespace + "/collections/team-a/access-review?limit=100",
 		"",
 		http.StatusOK,
 	}, &doc)
