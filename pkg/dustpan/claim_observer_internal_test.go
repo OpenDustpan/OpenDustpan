@@ -39,7 +39,7 @@ func TestClaimSkipsMoveTheMetric(t *testing.T) {
 	})
 
 	cfg := defaultSettings()
-	cfg.observed = metrics.NewServerMetrics("test", time.Now())
+	cfg.observed = metrics.NewServerMetrics("test", time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
 	WithBuiltinStore(st)(cfg)
 
 	if applyErr := applyBuiltinStore(cfg); applyErr != nil {
