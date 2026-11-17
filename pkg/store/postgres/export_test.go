@@ -107,13 +107,13 @@ func runnerControlStatements(runnerID string) []runnerControlStatement {
 			args: nil,
 		},
 		{
-			stmt: `INSERT INTO runner_handoff_tokens (sha256, operation_id, token, runner_id, issued_at_ms, ` +
-				`expires_at_ms, used_at_ms) VALUES ('control-hash', 'op-control', 1, $1, 1, 2, 0)`,
+			stmt: `INSERT INTO runner_handoff_tokens (sha256, operation_id, token, runner_id, kind, issued_at_ms, ` +
+				`expires_at_ms, used_at_ms) VALUES ('control-hash', 'op-control', 1, $1, 'launcher', 1, 2, 0)`,
 			args: []any{runnerID},
 		},
 		{
-			stmt: `INSERT INTO runner_sessions (id, operation_id, token, runner_id, key_public, ` +
-				`key_created_at_ms, created_at_ms) VALUES ('control-session', 'op-control', 1, $1, ` +
+			stmt: `INSERT INTO runner_sessions (id, operation_id, token, runner_id, kind, key_public, ` +
+				`key_created_at_ms, created_at_ms) VALUES ('control-session', 'op-control', 1, $1, 'launcher', ` +
 				`decode('00', 'hex'), 1, 1)`,
 			args: []any{runnerID},
 		},

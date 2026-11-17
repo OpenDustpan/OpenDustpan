@@ -111,14 +111,15 @@ func testRestoreDropsRunnerCredentials(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("apply staged backup: %v", err)
 	}
 
-	if _, err := ports.Sessions.OpenSession(ctx, credentials.token.SHA256, newRunnerKey(t), now()); !errors.Is(
-		err, runner.ErrNotFound,
-	) {
+	launcher := runner.SessionKindLauncher
+
+	_, err := ports.Sessions.OpenSession(ctx, credentials.token.SHA256, launcher, newRunnerKey(t), now())
+	if !errors.Is(err, runner.ErrNotFound) {
 		t.Errorf("OpenSession with the handoff token of a runner that the restored data does not hold = %v, "+
 			"want runner.ErrNotFound", err)
 	}
 
-	if _, err := ports.Sessions.Session(ctx, credentials.session.ID); !errors.Is(err, runner.ErrNotFound) {
+	if _, err = ports.Sessions.Session(ctx, credentials.session.ID); !errors.Is(err, runner.ErrNotFound) {
 		t.Errorf("Session of a runner that the restored data does not hold = %v, want runner.ErrNotFound", err)
 	}
 
@@ -214,14 +215,15 @@ func issueRunnerCredentials(
 	digest := sha256.Sum256([]byte(runnerHandoffSecret))
 	token := runner.HandoffToken{
 		SHA256: hex.EncodeToString(digest[:]), Operation: string(claimed.ID), Token: claimed.Claim.Token,
-		Runner: r.ID, IssuedAt: now(), ExpiresAt: now().Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
+		Runner: r.ID, Kind: runner.SessionKindLauncher, IssuedAt: now(), ExpiresAt: now().Add(runner.HandoffTokenTTL),
+		UsedAt: time.Time{},
 	}
 
 	if issueErr := ports.Sessions.IssueHandoffToken(ctx, token, claimed.Claim); issueErr != nil {
 		t.Fatalf("issue the handoff token of the runner credentials: %v", issueErr)
 	}
 
-	session, err := ports.Sessions.OpenSession(ctx, token.SHA256, newRunnerKey(t), now())
+	session, err := ports.Sessions.OpenSession(ctx, token.SHA256, runner.SessionKindLauncher, newRunnerKey(t), now())
 	if err != nil {
 		t.Fatalf("open the job session of the runner credentials: %v", err)
 	}

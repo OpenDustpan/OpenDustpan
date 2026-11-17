@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
 	"opendustpan.org/opendustpan/internal/api/runnerpools"
 	"opendustpan.org/opendustpan/internal/api/stategate"
+	"opendustpan.org/opendustpan/internal/proxysessionsvc"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -108,7 +109,9 @@ func WithJobRecorder(r job.CheckedRecorder) Option {
 // or returns nil when the server has no runner stores or no public URL. The
 // join challenge names the public URL without a trailing slash, so a runner
 // cannot join without it.
-func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handler, error) {
+func newRunnerHandler(
+	cfg *settings, svc services, onFailure func(), proxies *proxysessionsvc.Service,
+) (http.Handler, error) {
 	neutralAudit, err := auditStoreOf(cfg)
 	if err != nil {
 		return nil, err
@@ -152,7 +155,7 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 		ServerURL: publicURL, Now: cfg.now, PollInterval: 0,
 		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,
 		Plans: deps.plans.plans, Artifacts: deps.plans.artifacts, OnHandoffRefusalSuppressed: nil,
-		JobTokens: deps.issuer.tokens, Starters: deps.issuer.starters,
+		JobTokens: deps.issuer.tokens, Starters: deps.issuer.starters, Proxies: proxies,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("runner api: %w", err)
@@ -236,7 +239,9 @@ func jobTokenIssuerOf(cfg *settings) (jobTokenIssuer, error) {
 
 // newRunnerPoolsHandler builds the runner management API. It returns false
 // when the server has no runner stores or no public URL, as the protocol does.
-func newRunnerPoolsHandler(cfg *settings, svc services, onFailure func()) (http.Handler, bool, error) {
+func newRunnerPoolsHandler(
+	cfg *settings, svc services, onFailure func(), proxies *proxysessionsvc.Service,
+) (http.Handler, bool, error) {
 	neutralAudit, err := auditStoreOf(cfg)
 	if err != nil {
 		return nil, false, err
@@ -251,7 +256,7 @@ func newRunnerPoolsHandler(cfg *settings, svc services, onFailure func()) (http.
 		Namespaces: svc.namespaces, Pools: cfg.runners, Members: cfg.runners,
 		Authenticator: cfg.authenticator, Authorizer: cfg.authorizer,
 		Audit: neutralAudit, OnAuditFailure: onFailure, DenialLimiter: cfg.denialLimiter,
-		Sessions: cfg.sessionCookies, Logger: cfg.logger, ServerURL: publicURL, Now: cfg.now,
+		Sessions: cfg.sessionCookies, Logger: cfg.logger, ServerURL: publicURL, Now: cfg.now, Proxies: proxies,
 	})
 	if err != nil {
 		return nil, false, fmt.Errorf("runner pools api: %w", err)
@@ -353,17 +358,56 @@ type runnerHandlers struct {
 	pools    http.Handler
 }
 
-// newRunnerHandlers builds the runner protocol and the management API.
+// newRunnerHandlers builds the runner protocol and the management API. Both
+// share one proxy session service: the protocol serves the proxy session,
+// and the management API serves the proxy settings of a pool.
 func newRunnerHandlers(cfg *settings, svc services, onFailure func()) (runnerHandlers, error) {
-	protocol, err := newRunnerHandler(cfg, svc, onFailure)
+	proxies, _, err := newProxySessionService(cfg, svc)
 	if err != nil {
 		return runnerHandlers{protocol: nil, pools: nil}, err
 	}
 
-	pools, _, err := newRunnerPoolsHandler(cfg, svc, onFailure)
+	protocol, err := newRunnerHandler(cfg, svc, onFailure, proxies)
+	if err != nil {
+		return runnerHandlers{protocol: nil, pools: nil}, err
+	}
+
+	pools, _, err := newRunnerPoolsHandler(cfg, svc, onFailure, proxies)
 	if err != nil {
 		return runnerHandlers{protocol: nil, pools: nil}, err
 	}
 
 	return runnerHandlers{protocol: protocol, pools: pools}, nil
+}
+
+// newProxySessionService builds the service of the proxy session and of the
+// proxy settings of a pool. The second result is false when the server lacks
+// a store that the service reads: the runner stores, the proxy rule sets, the
+// secret service, the durable operations, the jobs or the inventory. Without
+// the service, the paths of the job proxy answer not-found and the proxy
+// settings routes are not mounted. Both SQL adapters keep all of them.
+func newProxySessionService(cfg *settings, svc services) (*proxysessionsvc.Service, bool, error) {
+	settingsStore, ok := cfg.runners.(runner.PoolProxyStore)
+	rules, hasRules := cfg.namespaceStore.(proxyRuleStore)
+
+	if !ok || !hasRules || svc.secrets == nil || svc.namespaces == nil || cfg.durableStore == nil ||
+		cfg.jobStore == nil || cfg.inventoryReader == nil {
+		return nil, false, nil
+	}
+
+	entries, err := auditStoreOf(cfg)
+	if err != nil {
+		return nil, false, err
+	}
+
+	proxies, err := proxysessionsvc.New(proxysessionsvc.Config{
+		Settings: settingsStore, Rules: rules.ProxyRules(), Secrets: svc.secrets, Namespaces: svc.namespaces,
+		Operations: cfg.durableStore, Claims: cfg.runners, Jobs: cfg.jobStore, Units: cfg.inventoryReader,
+		Audit: entries, Logger: cfg.logger, Now: cfg.now,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("proxy session service: %w", err)
+	}
+
+	return proxies, true, nil
 }

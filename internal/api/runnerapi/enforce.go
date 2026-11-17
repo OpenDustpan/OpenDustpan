@@ -22,8 +22,9 @@ type call struct {
 	runner runner.Runner
 	signer runner.Key
 	proof  runner.Proof
-	// session is the job session of a route of ScopeSessionKey, and handoff
-	// the checked request of the route of ScopeHandoffToken.
+	// session is the session of a route of ScopeSessionKey or
+	// ScopeProxySessionKey, and handoff the checked request of a route of
+	// ScopeHandoffToken or ScopeProxyHandoffToken.
 	session runner.Session
 	handoff protocol.SessionRequest
 	// contentSHA256 is the signed hash of the body of an upload. The handler
@@ -50,9 +51,9 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 			err = h.checkProtocol(r, c)
 		case ScopeRunnerKey:
 			err = h.checkRunner(r, rt, c)
-		case ScopeHandoffToken:
+		case ScopeHandoffToken, ScopeProxyHandoffToken:
 			err = h.checkHandoff(r, c)
-		case ScopeSessionKey:
+		case ScopeSessionKey, ScopeProxySessionKey:
 			err = h.checkSession(r, rt, c)
 		default:
 			err = fmt.Errorf("%w: route %s has no scope", errNotFound, rt.Path)

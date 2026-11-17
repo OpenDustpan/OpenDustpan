@@ -315,6 +315,7 @@ func configFor(t *testing.T, s stores, opts serveOptions) (runnerpools.Config, *
 		Logger:         loggerOf(opts),
 		ServerURL:      serverURL,
 		Now:            opts.now,
+		Proxies:        nil,
 	}
 
 	if opts.mutate != nil {
@@ -362,7 +363,7 @@ func protocolConfigFor(
 
 		Sweeps: nil, Recorder: nil, Jobs: nil, OnAuditFailure: nil, DenialLimiter: nil,
 		OnHandoffRefusalSuppressed: nil, Sessions: nil, Plans: nil, Artifacts: nil,
-		JobTokens: nil, Starters: nil,
+		JobTokens: nil, Starters: nil, Proxies: nil,
 	}
 }
 

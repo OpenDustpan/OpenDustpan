@@ -65,6 +65,7 @@ const (
 	pgColStatus      = "status"
 	pgColUpdateID    = "update_id"
 	pgColVersion     = "version"
+	pgColUpdatedBy   = "updated_by"
 	pgColBundleID    = "bundle_id"
 	pgColUpdatedAtMs = "updated_at_ms"
 	pgColDeletedAtMs = "deleted_at_ms"
@@ -332,7 +333,7 @@ func pgCopyCollectionTables() []pgCopyTable {
 				"resource_deleted_at_ms",
 				"marks_seq",
 				"updated_at_ms",
-				"updated_by",
+				pgColUpdatedBy,
 			},
 			orderBy: []string{pgColNamespaceID, pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource},
 		},
