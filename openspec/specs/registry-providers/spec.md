@@ -1,7 +1,7 @@
 # registry-providers Specification
 
 ## Purpose
-TBD - created by archiving change artifact-registry-private-provider. Update Purpose after archive.
+Define how a namespace publishes private provider releases with signature and checksum checks, how the server holds the signing keys of a namespace, and how a Developer installs a provider with `tofu init` through the team provider protocol and the provider mirror.
 
 ## Requirements
 
