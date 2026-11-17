@@ -372,6 +372,10 @@ func finishRow(
 	endedAt time.Time,
 	attempt string,
 ) (backup.Record, error) {
+	// Defense in depth: the service checks the attempt of the manifest before
+	// it calls the store, and the attempt compare below refuses an attempt that
+	// the row does not record. This check stays so that a caller that skips the
+	// service and a row with an unparsable attempt never reach a succeeded row.
 	if state == backup.StateSucceeded {
 		if err := backup.ValidAttempt(attempt); err != nil {
 			return backup.Record{}, err
