@@ -30,9 +30,11 @@ func drainPeriodDeclaration(period time.Duration) setting.Declaration {
 // declarations of WithSettings and the settings that the server declares
 // itself.
 func settingDeclarations(cfg *settings) []setting.Declaration {
-	out := make([]setting.Declaration, 0, len(cfg.settingsConfig.declarations)+3)
+	allowlist := ipallow.SettingDeclarations()
+
+	out := make([]setting.Declaration, 0, len(cfg.settingsConfig.declarations)+len(allowlist)+1)
 	out = append(out, cfg.settingsConfig.declarations...)
-	out = append(out, ipallow.SettingDeclarations()...)
+	out = append(out, allowlist...)
 
 	return append(out, drainPeriodDeclaration(cfg.drainPeriod))
 }

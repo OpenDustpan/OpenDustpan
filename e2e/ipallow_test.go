@@ -87,7 +87,7 @@ func runIPAllowlistOnStore(t *testing.T, cli, tofu e2e.Install, store e2e.Store)
 	checkIPAllowlistAdmitsInside(ctx, t, env)
 	checkIPAllowlistLeavesOpenAlone(ctx, t, env)
 	checkIPAllowlistDelete(ctx, t, env)
-	checkIPAllowlistInstallationList(ctx, t, env, cli, tofu)
+	checkIPAllowlistInstallationList(ctx, t, env, tofu)
 }
 
 // ipAllowlistStep is one installation API request of the IP allowlist steps
@@ -405,56 +405,66 @@ func checkIPAllowlistDelete(ctx context.Context, t *testing.T, env *e2e.Env) {
 // with an access token, then narrows the list to the source outside the
 // default address. The CLIs then fail, the units route answers 200 from the
 // allowed source and 403 with the code from the default source.
-func checkIPAllowlistInstallationList(
-	ctx context.Context, t *testing.T, env *e2e.Env, cli, tofu e2e.Install,
-) {
+func checkIPAllowlistInstallationList(ctx context.Context, t *testing.T, env *e2e.Env, tofu e2e.Install) {
+	t.Helper()
+
+	patchInstallationList(ctx, t, env, `{"ipAllowlist.enabled":true,"ipAllowlist.installation":"0.0.0.0/0"}`)
+
+	if runs := runCLIsWithToken(ctx, t, env, tofu); !runs.pulumi || !runs.tofu {
+		t.Fatalf("CLIs inside the installation list: %+v, want both to pass", runs)
+	}
+
+	patchInstallationList(ctx, t, env, `{"ipAllowlist.installation":"`+ipAllowlistSource+`/32"}`)
+
+	if runs := runCLIsWithToken(ctx, t, env, tofu); runs.pulumi || runs.tofu {
+		t.Fatalf("CLIs outside the installation list: %+v, want both to fail", runs)
+	}
+
+	checkUnitsBehindInstallationList(ctx, t, env)
+}
+
+// patchInstallationList sends body as a merge patch of the installation
+// settings and wants 200.
+func patchInstallationList(ctx context.Context, t *testing.T, env *e2e.Env, body string) {
 	t.Helper()
 
 	resp, _ := settingsRead(ctx, t, env, settingsRoute)
-	etag := resp.Header.Get("ETag")
 
 	settingsWant(ctx, t, env, settingsReq{
-		path: settingsRoute, ifMatch: etag,
-		body: `{"ipAllowlist.enabled":true,"ipAllowlist.installation":"0.0.0.0/0"}`,
+		path: settingsRoute, ifMatch: resp.Header.Get("ETag"), body: body,
 	}, settingsAnswer{status: http.StatusOK, code: ""})
+}
+
+// cliRuns is the result of the CLI runs: whether each CLI exited with 0.
+type cliRuns struct {
+	pulumi bool
+	tofu   bool
+}
+
+// runCLIsWithToken runs the Pulumi CLI and OpenTofu with an access token from
+// the default address and answers whether each one passed.
+func runCLIsWithToken(ctx context.Context, t *testing.T, env *e2e.Env, tofu e2e.Install) cliRuns {
+	t.Helper()
 
 	pulumiRun, err := env.Run(ctx, []string{"PULUMI_ACCESS_TOKEN=" + env.TokenA()},
 		"stack", "ls", "--json", "--all")
-	if err != nil || pulumiRun.ExitCode != 0 {
-		t.Fatalf("pulumi stack ls inside the installation list: %+v, %v", pulumiRun, err)
+	if err != nil {
+		t.Fatalf("pulumi stack ls: %v", err)
 	}
 
 	tofuRun, err := env.RunTofuWithToken(ctx, t, tofu, env.TokenA(), "init", "-input=false", "-no-color")
-	if err != nil || tofuRun.ExitCode != 0 {
-		t.Fatalf("tofu init inside the installation list: %+v, %v", tofuRun, err)
-	}
-
-	resp, _ = settingsRead(ctx, t, env, settingsRoute)
-	etag = resp.Header.Get("ETag")
-
-	settingsWant(ctx, t, env, settingsReq{
-		path: settingsRoute, ifMatch: etag,
-		body: `{"ipAllowlist.installation":"` + ipAllowlistSource + `/32"}`,
-	}, settingsAnswer{status: http.StatusOK, code: ""})
-
-	pulumiRun, err = env.Run(ctx, []string{"PULUMI_ACCESS_TOKEN=" + env.TokenA()},
-		"stack", "ls", "--json", "--all")
 	if err != nil {
-		t.Fatalf("pulumi stack ls outside the installation list: %v", err)
+		t.Fatalf("tofu init: %v", err)
 	}
 
-	if pulumiRun.ExitCode == 0 {
-		t.Fatalf("pulumi stack ls outside the installation list passed: %+v", pulumiRun)
-	}
+	return cliRuns{pulumi: pulumiRun.ExitCode == 0, tofu: tofuRun.ExitCode == 0}
+}
 
-	tofuRun, err = env.RunTofuWithToken(ctx, t, tofu, env.TokenA(), "init", "-input=false", "-no-color")
-	if err != nil {
-		t.Fatalf("tofu init outside the installation list: %v", err)
-	}
-
-	if tofuRun.ExitCode == 0 {
-		t.Fatalf("tofu init outside the installation list passed: %+v", tofuRun)
-	}
+// checkUnitsBehindInstallationList proves that the units route answers 200
+// from the allowed source and 403 access.ip-not-allowed, with the scope
+// installation, from the default address.
+func checkUnitsBehindInstallationList(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
 
 	unitsPath := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/units"
 

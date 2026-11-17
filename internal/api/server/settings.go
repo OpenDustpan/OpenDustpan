@@ -23,6 +23,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/idempotency"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/setting"
 )
 
@@ -123,6 +124,10 @@ var (
 func settingsError(err error) error {
 	keyErr, hasKey := errors.AsType[*setting.KeyError](err)
 
+	if invalid := invalidListError(err, keyErr); invalid != nil {
+		return invalid
+	}
+
 	switch {
 	case errors.Is(err, setting.ErrLocked) && hasKey:
 		return &codedError{
@@ -157,6 +162,29 @@ func settingsError(err error) error {
 		return errSettingsChanged
 	default:
 		return err
+	}
+}
+
+// invalidListError maps a bad IP allowlist to 400 ip-allowlist.invalid-cidr,
+// with the reason that names the bad entry. It answers nil for any other
+// error. The settings service keeps only the text of the check of a value,
+// so a bad installation list arrives as an invalid value of its key, and
+// keyErr holds the reason. A nil err answers nil.
+func invalidListError(err error, keyErr *setting.KeyError) error {
+	var reason string
+
+	switch {
+	case keyErr != nil && keyErr.Key == ipallow.SettingInstallation && errors.Is(err, setting.ErrInvalidValue):
+		reason = keyErr.Reason
+	case errors.Is(err, ipallow.ErrInvalidList):
+		reason = err.Error()
+	default:
+		return nil
+	}
+
+	return &codedError{
+		status: http.StatusBadRequest, code: errcode.IPAllowlistInvalidCIDR, args: nil,
+		message: "the IP allowlist is not valid: " + reason,
 	}
 }
 

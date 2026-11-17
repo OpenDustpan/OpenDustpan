@@ -32,7 +32,7 @@ func TestInvalidCidrRefused(t *testing.T) {
 
 	doc, etag = readSettings(t, ts.URL)
 
-	if got := itemOf(t, doc, "ipAllowlist.enabled").Value; got != true {
+	if got, ok := itemOf(t, doc, "ipAllowlist.enabled").Value.(bool); !ok || !got {
 		t.Fatalf("ipAllowlist.enabled = %v, want true", got)
 	}
 

@@ -77,8 +77,19 @@ func ipAllowlistsDocsScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Fatalf("ipAllowlist.enabled after the patch = %+v, want true", settingFor(t, changed, "ipAllowlist.enabled"))
 	}
 
-	// The read and the write of the page: a client inside the list reads the
-	// effective value, and the units route answers it.
+	checkEffectiveInstallationList(ctx, t, env)
+
+	// The units route answers a client inside the list. The default address
+	// is outside the list: the same request is refused with the page's code
+	// and scope.
+	checkUnitsBehindInstallationList(ctx, t, env)
+}
+
+// checkEffectiveInstallationList reads the settings from a client inside the
+// list, as the page does, and checks the effective value of the list.
+func checkEffectiveInstallationList(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
 	status, body, err := env.ServerAPIStatusFrom(ctx, ipAllowlistSource, env.TokenA(),
 		http.MethodGet, settingsRoute, "")
 	if err != nil || status != http.StatusOK {
@@ -86,34 +97,14 @@ func ipAllowlistsDocsScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 	}
 
 	var effective settingsDoc
-	if err := json.Unmarshal([]byte(body), &effective); err != nil {
-		t.Fatalf("decode the settings from %s: %v: %s", ipAllowlistSource, err, body)
+	if decodeErr := json.Unmarshal([]byte(body), &effective); decodeErr != nil {
+		t.Fatalf("decode the settings from %s: %v: %s", ipAllowlistSource, decodeErr, body)
 	}
 
 	if value, ok := settingFor(t, effective, "ipAllowlist.installation").Value.(string); !ok ||
 		value != ipAllowlistSource+"/32" {
 		t.Fatalf("ipAllowlist.installation = %+v, want %s/32",
 			settingFor(t, effective, "ipAllowlist.installation"), ipAllowlistSource)
-	}
-
-	unitsPath := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/units"
-
-	status, body, err = env.ServerAPIStatusFrom(ctx, ipAllowlistSource, env.TokenA(), http.MethodGet, unitsPath, "")
-	if err != nil || status != http.StatusOK {
-		t.Fatalf("GET the units from %s answers %d, %v: %s", ipAllowlistSource, status, err, body)
-	}
-
-	// The default address is outside the list: the same request is refused
-	// with the page's code and scope.
-	status, body, err = env.ServerAPIStatus(ctx, http.MethodGet, unitsPath, "")
-	if err != nil {
-		t.Fatalf("GET the units from the default address: %v", err)
-	}
-
-	if status != http.StatusForbidden || !strings.Contains(body, `"errorCode":"access.ip-not-allowed"`) ||
-		!strings.Contains(body, "of the installation") {
-		t.Fatalf("GET the units from the default address answers %d (%s), want 403 access.ip-not-allowed "+
-			"for the installation", status, body)
 	}
 }
 
@@ -122,9 +113,14 @@ func ipAllowlistsDocsScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 func ipAllowlistsDocsPageText(t *testing.T) {
 	t.Helper()
 
-	data, err := os.ReadFile(ipAllowlistsDocsPage)
+	root, err := os.OpenRoot("..")
 	if err != nil {
-		t.Fatalf("read %s: %v", ipAllowlistsDocsPage, err)
+		t.Fatalf("open the repository: %v", err)
+	}
+
+	data, readErr := root.ReadFile(ipAllowlistsDocsPage)
+	if closeErr := root.Close(); readErr != nil || closeErr != nil {
+		t.Fatalf("read %s: %v %v", ipAllowlistsDocsPage, readErr, closeErr)
 	}
 
 	page := string(data)

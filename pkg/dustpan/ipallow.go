@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/setting"
@@ -30,7 +31,6 @@ type allowScope string
 const (
 	allowScopeInstallation allowScope = "installation"
 	allowScopeNamespace    allowScope = "namespace"
-	allowScopeToken        allowScope = "token"
 )
 
 // allowDenial is one refusal: the scope that refused and the recorded client
@@ -48,14 +48,13 @@ type allowDecision struct {
 }
 
 // allowChecker holds the parsed lists of one request. The installation list
-// is checked first, then the namespace list, then the token list. A nil
-// namespace or token list means that scope did not opt in. The checker fails
-// closed on an unknown address.
+// is checked first, then the namespace list. A nil namespace list means that
+// the namespace did not opt in. The checker fails closed on an unknown
+// address.
 type allowChecker struct {
 	enabled      bool
 	installation ipallow.List
 	namespace    *ipallow.List
-	token        *ipallow.List
 	record       func(context.Context, allowDenial)
 }
 
@@ -64,17 +63,15 @@ type allowChecker struct {
 func newAllowChecker(
 	enabled bool,
 	installation ipallow.List,
-	namespace, token *ipallow.List,
+	namespace *ipallow.List,
 	record func(context.Context, allowDenial),
 ) *allowChecker {
-	return &allowChecker{
-		enabled: enabled, installation: installation, namespace: namespace, token: token, record: record,
-	}
+	return &allowChecker{enabled: enabled, installation: installation, namespace: namespace, record: record}
 }
 
 // check answers whether addr is outside an opted-in list. It checks the
-// installation list before the namespace and token lists, so a refusal names
-// the first scope that refused.
+// installation list before the namespace list, so a refusal names the first
+// scope that refused.
 func (c *allowChecker) check(ctx context.Context, addr netip.Addr) allowDecision {
 	if c == nil || !c.enabled {
 		return allowDecision{Scope: "", Denied: false}
@@ -86,7 +83,6 @@ func (c *allowChecker) check(ctx context.Context, addr netip.Addr) allowDecision
 	}{
 		{scope: allowScopeInstallation, list: &c.installation},
 		{scope: allowScopeNamespace, list: c.namespace},
-		{scope: allowScopeToken, list: c.token},
 	}
 
 	for _, step := range steps {
@@ -131,8 +127,9 @@ func newAllowlistRequestGate(cfg *settings) (allowlistRequestGate, error) {
 }
 
 // checker returns the checker of one request, or nil when the request uses
-// no credential and starts no sign-in. A settings read that fails fails
-// closed: the checker denies with an empty installation list.
+// no credential and starts no sign-in. When a settings read or the parse of
+// the stored list fails, the checker fails closed: it denies with an empty
+// installation list.
 func (g allowlistRequestGate) checker(ctx context.Context, r *http.Request) *allowChecker {
 	if g.settings == nil || !allowlistRequest(r) {
 		return nil
@@ -146,28 +143,28 @@ func (g allowlistRequestGate) checker(ctx context.Context, r *http.Request) *all
 	if err != nil {
 		g.logger.WarnContext(ctx, "read the IP allowlist setting", slog.String("setting", ipallow.SettingEnabled))
 
-		return newAllowChecker(true, ipallow.List{}, nil, nil, record)
+		return newAllowChecker(true, ipallow.List{}, nil, record)
 	}
 
 	if enabled.Value != "true" {
-		return newAllowChecker(false, ipallow.List{}, nil, nil, record)
+		return newAllowChecker(false, ipallow.List{}, nil, record)
 	}
 
 	installation, err := g.settings.Effective(ctx, setting.InstallationScope(), ipallow.SettingInstallation)
 	if err != nil {
 		g.logger.WarnContext(ctx, "read the IP allowlist setting", slog.String("setting", ipallow.SettingInstallation))
 
-		return newAllowChecker(true, ipallow.List{}, nil, nil, record)
+		return newAllowChecker(true, ipallow.List{}, nil, record)
 	}
 
 	list, err := ipallow.DecodeList(installation.Value)
 	if err != nil {
 		g.logger.WarnContext(ctx, "parse the IP allowlist", slog.String("setting", ipallow.SettingInstallation))
 
-		return newAllowChecker(true, ipallow.List{}, nil, nil, record)
+		return newAllowChecker(true, ipallow.List{}, nil, record)
 	}
 
-	return newAllowChecker(true, list, nil, nil, record)
+	return newAllowChecker(true, list, nil, record)
 }
 
 // allowlistRequest reports whether a request uses a credential or starts a
@@ -247,11 +244,53 @@ func allowlistDenialEntry(now func() time.Time, r *http.Request, denial allowDen
 	}
 }
 
+// requestCaller finds the caller of a request after the installation list
+// lets the client address in.
+type requestCaller struct {
+	authn identity.Authenticator
+	allow allowlistRequestGate
+}
+
+// admission is the result of admit: the caller of the request, or a refusal
+// that admit already answered.
+type admission struct {
+	caller   identity.Principal
+	signedIn bool
+	refused  bool
+}
+
+// admit checks the installation list before the credential is used, so a
+// refused request writes no sign-in entry and reads no token. A refused
+// request gets its 403 here. Otherwise admit answers the caller of the
+// request and warns about a token that expires soon.
+func (c requestCaller) admit(
+	w http.ResponseWriter, r *http.Request, addr netip.Addr, logger *slog.Logger,
+) admission {
+	ctx := r.Context()
+
+	if checker := c.allow.checker(ctx, r); checker != nil {
+		if decision := checker.check(ctx, addr); decision.Denied {
+			writeAllowlistDenial(ctx, w, logger, decision)
+
+			var none identity.Principal
+
+			return admission{caller: none, signedIn: false, refused: true}
+		}
+	}
+
+	caller, signedIn := callerForRequest(ctx, c.authn, r)
+	if signedIn {
+		warnTokenExpiry(w, caller, time.Now())
+	}
+
+	return admission{caller: caller, signedIn: signedIn, refused: false}
+}
+
 // writeAllowlistDenial writes the 403 of a refusal: the code of the catalog
 // and a message that names the scope that refused. The scope is one of the
 // fixed values of allowScope, never text of the request.
 func writeAllowlistDenial(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, decision allowDecision) {
-	problem.Writer{Logger: logger}.WriteProblem(ctx, w, problem.New(
+	problem.Writer{Logger: logger, KeepDenied: nil, Classify: nil}.WriteProblem(ctx, w, problem.New(
 		http.StatusForbidden, errcode.AccessIPNotAllowed,
 		"the address is outside the IP allowlist of the "+string(decision.Scope),
 	))

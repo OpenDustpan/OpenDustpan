@@ -48,9 +48,9 @@ The list value is one string of CIDRs or addresses, separated by commas:
   `192.0.2.7`. A single address is stored as `/32` for IPv4, or `/128` for IPv6.
 - The host bits of a CIDR are dropped. `10.1.2.3/8` is stored as `10.0.0.0/8`.
 - A duplicate is dropped. The order of the other items is kept.
-- The list holds at most 256 distinct entries.
+- The list holds at most 64 distinct entries. A 65th entry gets `400`.
 - An item that is not a CIDR or an address gets `400`, with the code
-  `settings.value-invalid`, and the message names the item. The stored list
+  `ip-allowlist.invalid-cidr`, and the message names the item. The stored list
   does not change.
 
 An empty list denies every address while `ipAllowlist.enabled` is `true`. Set
@@ -58,8 +58,10 @@ both keys in one change, so that a client never applies a list that it did not
 mean to set.
 
 A client outside the installation list cannot sign in and cannot use an access
-token. The answer is `403` with the code `ip-allowlist.denied` and the scope
-`installation`. The check runs before the credential, so a refused request
+token. The answer is `403` with the code `access.ip-not-allowed`, and the
+message names the scope that refused: `the address is outside the IP allowlist
+of the installation`. The server writes an audit entry with the action
+`installation:deny-ip-allowlist`, the scope and the client address. The check runs before the credential, so a refused request
 reads no token and writes no sign-in entry.
 
 The installation list applies to the Pulumi CLI and the OpenTofu CLI in the
@@ -101,12 +103,13 @@ The body holds `cidrs`, a list of addresses or networks:
   `192.0.2.7`. A single address is stored as `/32` for IPv4, or `/128` for IPv6.
 - The host bits of a CIDR are dropped. `10.1.2.3/8` is stored as `10.0.0.0/8`.
 - A duplicate is dropped. The order of the other items is kept.
-- The list holds at most 256 distinct entries.
+- The list holds at most 64 distinct entries.
 - The body is at most 16 KiB.
 - An empty list gets `400`. To delete the list, use `DELETE`.
 
-An item that is not a CIDR or an address gets `400`, and the message names the
-item. These `400` answers carry no `errorCode`.
+An item that is not a CIDR or an address, a 65th entry, or an empty list gets
+`400` with the code `ip-allowlist.invalid-cidr`, and the message names the
+item.
 
 ## Read the list
 
@@ -174,7 +177,7 @@ The installation list is checked before every credential. Use an address that
 you control in the installation list. If the list refuses every client, send
 the `PATCH` that sets `ipAllowlist.enabled` to `false` from a client in the
 list, or from a client that you add to the list first. Without such a client,
-the setting is only in the database; a person with database access must repair
+the setting is only in the database. A person with database access must repair
 it. The server does not start a bypass for the installation list.
 
 A namespace list that refuses every client, including the operator, can be
@@ -195,12 +198,11 @@ in more detail.
 
 | Code | Status | Meaning |
 | --- | --- | --- |
-| `ip-allowlist.denied` | `403` | The client address is not in the installation list. The `scope` argument is `installation`. |
-| `access.ip-not-allowed` | `403` | The client address is not in the list of the namespace. |
-| `settings.value-invalid` | `400` | An entry of the installation list is not a CIDR or an address. The message names the entry. |
+| `access.ip-not-allowed` | `403` | The client address is not in the installation list or in the list of the namespace. For the installation list, the message names the scope `installation`. |
+| `ip-allowlist.invalid-cidr` | `400` | An entry of a list is not a CIDR or an address, or the list holds more than 64 entries. The message names the entry. |
 | `mfa.fresh-step-required` | `403` | The change needs a fresh sign-in. |
 | `access.denied` | `403` | The caller does not hold the action. |
 
-A list refusal for a bad body, such as an empty list or an invalid item, is a
-`400` with no `errorCode`. A `PUT` with the feature off gets `409` with the
+A namespace list body that is not one JSON object with `cidrs` gets `400` with
+no `errorCode`. A `PUT` with the feature off gets `409` with the
 message that names the `--ip-allowlists` setting. It has no `errorCode` either.

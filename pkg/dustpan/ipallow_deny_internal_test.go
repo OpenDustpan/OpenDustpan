@@ -48,10 +48,12 @@ func TestDenyAnyListDenies(t *testing.T) {
 		logger: slog.New(slog.DiscardHandler),
 	}
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces/acme/units", http.NoBody)
+	req := httptest.NewRequestWithContext(
+		t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces/acme/units", http.NoBody,
+	)
 	record := func(ctx context.Context, d allowDenial) { auditor.record(ctx, req, d) }
 
-	checker := newAllowChecker(true, installation, &namespace, nil, record)
+	checker := newAllowChecker(true, installation, &namespace, record)
 	addr := netip.MustParseAddr("203.0.113.7")
 
 	decision := checker.check(t.Context(), addr)

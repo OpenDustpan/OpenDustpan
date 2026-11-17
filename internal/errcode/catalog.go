@@ -136,25 +136,6 @@ func areas() []func() []Spec {
 	}
 }
 
-// The codes of the IP allowlist. A code is never removed and never changes
-// its meaning.
-const (
-	// IPAllowlistInvalidCIDR means that an IP allowlist holds an entry that is
-	// not a valid CIDR range, or holds too many entries.
-	IPAllowlistInvalidCIDR = "ip-allowlist.invalid-cidr"
-)
-
-// ipAllowlistSpecs are the codes of the IP allowlist.
-func ipAllowlistSpecs() []Spec {
-	return []Spec{
-		{
-			Code:    IPAllowlistInvalidCIDR,
-			Meaning: "an IP allowlist holds an entry that is not a valid CIDR range, or too many entries",
-			Args:    nil,
-		},
-	}
-}
-
 // Lookup returns the spec of code, and false when the catalog does not have
 // it.
 func Lookup(code string) (Spec, bool) {

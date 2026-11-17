@@ -3574,9 +3574,8 @@ func withRequestLog(
 	next http.Handler,
 	addr requestAddr,
 	logger *slog.Logger,
-	authn identity.Authenticator,
+	callers requestCaller,
 	observed *metrics.ServerMetrics,
-	allow allowlistRequestGate,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resolved := addr.resolver.Resolve(r)
@@ -3601,28 +3600,7 @@ func withRequestLog(
 		r = r.WithContext(ctx)
 
 		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK, bytes: 0}
-
-		// The installation list is checked before the credential is used. A
-		// refused request writes no sign-in entry and reads no token.
-		var caller identity.Principal
-
-		var signedIn bool
-
-		refused := false
-
-		if checker := allow.checker(ctx, r); checker != nil {
-			if decision := checker.check(ctx, resolved); decision.Denied {
-				writeAllowlistDenial(ctx, wrapped, logger, decision)
-				refused = true
-			}
-		}
-
-		if !refused {
-			caller, signedIn = callerForRequest(ctx, authn, r)
-			if signedIn {
-				warnTokenExpiry(w, caller, time.Now())
-			}
-		}
+		admitted := callers.admit(wrapped, r, resolved, logger)
 
 		// The route pattern is not known until the handler returns, so the
 		// in-flight gauge tracks the adapter from the path only. The gauge
@@ -3635,7 +3613,7 @@ func withRequestLog(
 
 		start := time.Now()
 
-		if !refused {
+		if !admitted.refused {
 			next.ServeHTTP(wrapped, r)
 		}
 
@@ -3659,8 +3637,8 @@ func withRequestLog(
 
 		attrs = appendClientIP(attrs, resolved)
 
-		if signedIn {
-			attrs = append(attrs, slog.String("subject", caller.Subject))
+		if admitted.signedIn {
+			attrs = append(attrs, slog.String("subject", admitted.caller.Subject))
 		}
 
 		level := slog.LevelInfo
@@ -3969,7 +3947,8 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 
 	return routeHandlers{
 		served: withMisuseReporter(apidesc.NewReporter(cfg.logger), withRequestCache(withRequestLog(
-			gateComponents(gated, cfg.components), addr, cfg.logger, cfg.authenticator, observed, allow,
+			gateComponents(gated, cfg.components), addr, cfg.logger,
+			requestCaller{authn: cfg.authenticator, allow: allow}, observed,
 		))),
 		ungated: gated,
 		root:    mux,
