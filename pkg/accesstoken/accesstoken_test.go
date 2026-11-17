@@ -516,6 +516,85 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 	}
 }
 
+// TestAuthenticateRefusesDisabledToken proves that a token that the inactivity
+// sweep disabled does not authenticate.
+func TestAuthenticateRefusesDisabledToken(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	_, secret := f.createLong(t, f.service, "idle")
+
+	res, err := f.svc.SweepInactive(ctx, caller())
+	if err != nil || len(res.Tokens) != 1 {
+		t.Fatalf("sweep = %+v, %v; want the idle token disabled", res, err)
+	}
+
+	if _, err := f.svc.AuthenticateToken(ctx, secret.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("idle-disabled token: err = %v, want ErrUnauthenticated", err)
+	}
+}
+
+// TestRefusalIsIdenticalForEveryEndedCase proves that an unknown, an expired,
+// a revoked and a disabled token get the same refusal, so the answer does not
+// tell which case it was.
+func TestRefusalIsIdenticalForEveryEndedCase(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	revoked, revokedSecret := f.create(t, f.service, "revoked")
+	if err := f.svc.Revoke(ctx, admin(), caller(), accesstoken.ScopePersonal, revoked.ID); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	_, expiredSecret, err := f.createIn(ctx,
+		accesstoken.Input{ExpiresAt: f.clock.Now().Add(time.Hour), PrincipalID: f.service.ID, Name: "short"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	_, idleSecret := f.createLong(t, f.service, "idle")
+
+	f.clock.Advance(2 * time.Hour)
+
+	res, err := f.svc.SweepInactive(ctx, caller())
+	if err != nil || len(res.Tokens) != 1 {
+		t.Fatalf("sweep = %+v, %v; want the idle token disabled", res, err)
+	}
+
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"unknown", accesstoken.SecretPrefix + strings.Repeat("A", 43)},
+		{"expired", expiredSecret.Reveal()},
+		{"revoked", revokedSecret.Reveal()},
+		{"disabled", idleSecret.Reveal()},
+	}
+
+	var want error
+
+	for _, tc := range cases {
+		_, err := f.svc.AuthenticateToken(ctx, tc.raw)
+		if !errors.Is(err, identity.ErrUnauthenticated) {
+			t.Fatalf("%s token: err = %v, want ErrUnauthenticated", tc.name, err)
+		}
+
+		if want == nil {
+			want = err
+
+			continue
+		}
+
+		if err.Error() != want.Error() {
+			t.Errorf("%s token: err = %q, want the same refusal %q", tc.name, err, want)
+		}
+	}
+}
+
 func TestCheckActive(t *testing.T) {
 	t.Parallel()
 

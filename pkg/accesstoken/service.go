@@ -631,14 +631,14 @@ func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult
 // closed.
 func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.Principal, error) {
 	if !LooksLikeSecret(raw) {
-		return identity.Principal{}, identity.ErrUnauthenticated
+		return identity.Principal{}, s.refuse(ctx, "not a secret", "")
 	}
 
 	digest := digestOfRaw(raw)
 
 	m, err := s.store.GetTokenByDigest(ctx, digest)
 	if errors.Is(err, ErrNotFound) {
-		return identity.Principal{}, identity.ErrUnauthenticated
+		return identity.Principal{}, s.refuse(ctx, "unknown token", "")
 	}
 
 	if err != nil {
@@ -646,17 +646,16 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	}
 
 	if !m.Digest.Equal(digest) {
-		return identity.Principal{}, identity.ErrUnauthenticated
+		return identity.Principal{}, s.refuse(ctx, "unknown token", "")
 	}
 
 	now := s.Now()
 	if status := m.Token.StatusAt(now); status != StatusActive {
-		return identity.Principal{}, fmt.Errorf("%w: access token %s", identity.ErrUnauthenticated, status)
+		return identity.Principal{}, s.refuse(ctx, string(status), m.Token.ID)
 	}
 
 	if !m.Owner.DisabledAt.IsZero() {
-		return identity.Principal{}, fmt.Errorf("%w: the principal of the access token is disabled",
-			identity.ErrUnauthenticated)
+		return identity.Principal{}, s.refuse(ctx, "principal disabled", m.Token.ID)
 	}
 
 	// Defense in depth: no token is made for this subject, and the
@@ -664,8 +663,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	// that a token row of another version never acts as the namespace
 	// service principal.
 	if identity.IsNamespaceServiceSubject(m.Owner.Subject) {
-		return identity.Principal{}, fmt.Errorf("%w: an access token cannot act as the namespace service principal",
-			identity.ErrUnauthenticated)
+		return identity.Principal{}, s.refuse(ctx, "namespace service principal", m.Token.ID)
 	}
 
 	if err := s.checkPolicyActive(ctx, m, now); err != nil {
@@ -740,7 +738,7 @@ func (s *Service) checkPolicyActive(ctx context.Context, m Match, now time.Time)
 		if allow, err := s.tempAdminExempt(ctx, o.Subject, now); err != nil {
 			return err
 		} else if !allow {
-			return fmt.Errorf("%w: access token inactive for %s", identity.ErrUnauthenticated, p.Inactivity)
+			return s.refuse(ctx, "token inactive", t.ID)
 		}
 	}
 
@@ -748,12 +746,23 @@ func (s *Service) checkPolicyActive(ctx context.Context, m Match, now time.Time)
 		if allow, err := s.tempAdminExempt(ctx, o.Subject, now); err != nil {
 			return err
 		} else if !allow {
-			return fmt.Errorf("%w: the user account of the access token is inactive for %s",
-				identity.ErrUnauthenticated, p.Inactivity)
+			return s.refuse(ctx, "account inactive", t.ID)
 		}
 	}
 
 	return nil
+}
+
+// refuse answers the refusal of a token. Every refusal returns the same
+// error, identity.ErrUnauthenticated, so the answer does not tell an unknown
+// token from an ended one. The reason and the token ID go to the log; the
+// token ID is empty when the token is unknown. The audit entry of the refusal
+// is not written yet.
+func (s *Service) refuse(ctx context.Context, reason, tokenID string) error {
+	s.logger.InfoContext(ctx, "access token refused",
+		slog.String("reason", reason), slog.String("token_id", tokenID))
+
+	return identity.ErrUnauthenticated
 }
 
 // tempAdminExempt reports whether the inactivity disable exempts the person
