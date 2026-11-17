@@ -1117,6 +1117,18 @@ func TestRevokedGrantLosesDiscoveryOnNextRequest(t *testing.T) {
 		t.Fatalf("entitlement before the revoke answers %d, want %d", code, http.StatusOK)
 	}
 
+	revokeAliceGrants(t, st)
+
+	code, body := discoveryTFEGet(t, srv, discoveryAliceToken, "/api/v2/organizations/acme/entitlement-set")
+	if code != http.StatusNotFound {
+		t.Fatalf("entitlement after the revoke answers %d, want %d (%s)", code, http.StatusNotFound, body)
+	}
+}
+
+// revokeAliceGrants revokes the grants that alice holds.
+func revokeAliceGrants(t *testing.T, st *sqlite.Store) {
+	t.Helper()
+
 	grants, err := st.GrantsOf(t.Context(), access.Subject{Kind: access.SubjectPrincipal, ID: "prn-alice"})
 	if err != nil {
 		t.Fatalf("grants of alice: %v", err)
@@ -1128,7 +1140,8 @@ func TestRevokedGrantLosesDiscoveryOnNextRequest(t *testing.T) {
 
 	var revoked bool
 
-	for _, g := range grants {
+	for i := range grants {
+		g := &grants[i]
 		fence, entry := storetest.GrantWrite(t, st, g.Object, time.Unix(0, 0), "revoke:test")
 		entry.Namespace = namespace.Name("acme")
 
@@ -1142,9 +1155,60 @@ func TestRevokedGrantLosesDiscoveryOnNextRequest(t *testing.T) {
 	if !revoked {
 		t.Fatal("no grant of alice revoked")
 	}
+}
 
-	code, body := discoveryTFEGet(t, srv, discoveryAliceToken, "/api/v2/organizations/acme/entitlement-set")
-	if code != http.StatusNotFound {
-		t.Fatalf("entitlement after the revoke answers %d, want %d (%s)", code, http.StatusNotFound, body)
+// discoveryUserBody is the part of GET /api/user that the tests read.
+type discoveryUserBody struct {
+	Organizations []discoveryUserOrganization `json:"organizations"`
+}
+
+// discoveryUserOrganization is one organization of GET /api/user.
+type discoveryUserOrganization struct {
+	Name string `json:"name"`
+}
+
+// discoveryPulumiOrganizations returns the organization names that GET
+// /api/user answers for token, through the Pulumi Cloud-compatible route.
+func discoveryPulumiOrganizations(t *testing.T, srv *dustpan.Server, token string) []string {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/user", http.NoBody)
+	req.Header.Set("Authorization", "token "+token)
+	rec := httptest.NewRecorder()
+	startedHandler(t, srv).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/user answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body discoveryUserBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode /api/user: %v", err)
+	}
+
+	names := make([]string, 0, len(body.Organizations))
+	for _, o := range body.Organizations {
+		names = append(names, o.Name)
+	}
+
+	return names
+}
+
+// TestPulumiUserListsNamespaceOfCollectionGrantUntilRevoked proves, through
+// the real server, that a real grant on a collection puts its namespace in
+// GET /api/user, and that the revoke removes it on the next request.
+func TestPulumiUserListsNamespaceOfCollectionGrantUntilRevoked(t *testing.T) {
+	t.Parallel()
+
+	srv, st := discoveryServer(t, access.RoleViewer)
+
+	if got := discoveryPulumiOrganizations(t, srv, discoveryAliceToken); !slices.Contains(got, "acme") {
+		t.Fatalf("organizations before the revoke = %v, want acme", got)
+	}
+
+	revokeAliceGrants(t, st)
+
+	if got := discoveryPulumiOrganizations(t, srv, discoveryAliceToken); len(got) != 0 {
+		t.Fatalf("organizations after the revoke = %v, want none", got)
 	}
 }

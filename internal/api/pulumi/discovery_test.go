@@ -377,7 +377,8 @@ func TestRevokedGrantLosesNamespace(t *testing.T) {
 
 // TestBlockedAddressSeesNoNamespace proves a request refused by the IP
 // allowlist never falls through to the grant fallback: even with a grant on
-// a collection of acme, the caller sees no namespace.
+// a collection of acme, the caller sees no namespace, and the request still
+// answers 200.
 func TestBlockedAddressSeesNoNamespace(t *testing.T) {
 	t.Parallel()
 
@@ -388,12 +389,163 @@ func TestBlockedAddressSeesNoNamespace(t *testing.T) {
 	handler := newUserHandler(t, nsStore, stStore, discoveryBlockedAuthorizer{})
 
 	rec := get(t, handler, "/api/user")
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("user outside the allowlist answers %d, want %d", rec.Code, http.StatusForbidden)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("user outside the allowlist answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
 	if body := rec.Body.String(); containsOrganization(body, "acme") {
 		t.Fatalf("blocked body holds acme, want no namespace: %s", body)
+	}
+}
+
+// TestBlockedNamespaceKeepsOthers proves that one namespace refused by the IP
+// allowlist does not fail the list: the other readable namespace stays in it.
+func TestBlockedNamespaceKeepsOthers(t *testing.T) {
+	t.Parallel()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	stStore := &memStackStore{stacks: map[stack.Ref]stack.Stack{}}
+	seedNamespaces(t, nsStore, "acme", "beta")
+
+	handler := newUserHandler(t, nsStore, stStore, discoveryBlockedOneAuthorizer{})
+
+	rec := get(t, handler, "/api/user")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("user answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	orgs := decodeDiscoveryOrganizations(t, rec.Body.String())
+	if discoveryContains(orgs, "acme") {
+		t.Fatalf("organizations = %+v, want no acme", orgs)
+	}
+
+	if !discoveryContains(orgs, "beta") {
+		t.Fatalf("organizations = %+v, want beta", orgs)
+	}
+}
+
+// discoveryBlockedOneAuthorizer refuses namespace:read on acme with an IP
+// allowlist refusal, allows it on every other namespace, and reports a
+// collection grant on acme.
+type discoveryBlockedOneAuthorizer struct{}
+
+func (discoveryBlockedOneAuthorizer) Authorize(
+	ctx context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	if action == identity.ActionNamespaceRead && obj.Namespace().String() == "acme" {
+		return discoveryBlockedAuthorizer{}.Authorize(ctx, p, action, obj)
+	}
+
+	return nil
+}
+
+func (discoveryBlockedOneAuthorizer) ListObjects(
+	ctx context.Context, p identity.Principal, action identity.Action,
+) (identity.Scope, error) {
+	return discoveryBlockedAuthorizer{}.ListObjects(ctx, p, action)
+}
+
+// discoveryLookupFailAuthorizer denies namespace:read, fails the grant lookup
+// for unit:read, and reports a collection grant on acme for the output read
+// action. A lookup error that is skipped instead of returned would list acme.
+type discoveryLookupFailAuthorizer struct{}
+
+func (discoveryLookupFailAuthorizer) Authorize(
+	ctx context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	return discoveryCollectionAuthorizer{}.Authorize(ctx, p, action, obj)
+}
+
+func (discoveryLookupFailAuthorizer) ListObjects(
+	ctx context.Context, p identity.Principal, action identity.Action,
+) (identity.Scope, error) {
+	if action == identity.ActionUnitRead {
+		return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, errDiscoveryStore
+	}
+
+	return discoveryCollectionAuthorizer{}.ListObjects(ctx, p, action)
+}
+
+// TestFailedGrantLookupSeesNoNamespace proves that an error of the grant
+// lookup fails the request closed: no namespace is listed.
+func TestFailedGrantLookupSeesNoNamespace(t *testing.T) {
+	t.Parallel()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	stStore := &memStackStore{stacks: map[stack.Ref]stack.Stack{}}
+	seedNamespaces(t, nsStore, "acme")
+
+	handler := newUserHandler(t, nsStore, stStore, discoveryLookupFailAuthorizer{})
+
+	rec := get(t, handler, "/api/user")
+	if rec.Code == http.StatusOK {
+		t.Fatalf("user answers %d with a failed grant lookup, want an error status", rec.Code)
+	}
+
+	if body := rec.Body.String(); containsOrganization(body, "acme") {
+		t.Fatalf("failed body holds acme, want no namespace: %s", body)
+	}
+}
+
+// discoveryNamespaceGrantAuthorizer denies namespace:read and reports a
+// grant of the unit read actions on the namespace acme itself.
+type discoveryNamespaceGrantAuthorizer struct{}
+
+func (discoveryNamespaceGrantAuthorizer) Authorize(
+	ctx context.Context,
+	p identity.Principal,
+	action identity.Action,
+	obj identity.Object,
+) error {
+	return discoveryCollectionAuthorizer{}.Authorize(ctx, p, action, obj)
+}
+
+func (discoveryNamespaceGrantAuthorizer) ListObjects(
+	_ context.Context, _ identity.Principal, action identity.Action,
+) (identity.Scope, error) {
+	if action != identity.ActionUnitRead && action != identity.ActionUnitReadOutputs {
+		return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
+	}
+
+	ns, err := namespace.ParseName("acme")
+	if err != nil {
+		return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, err
+	}
+
+	return identity.Scope{
+		Namespaces:  []identity.Object{identity.NamespaceObject(ns)},
+		Collections: nil,
+		Units:       nil,
+		Principals:  nil,
+	}, nil
+}
+
+// TestNamespaceGrantSeesNamespace proves a unit read grant on the namespace
+// itself opens discovery of that namespace, the same as the grant on a
+// collection of it, and of no other namespace.
+func TestNamespaceGrantSeesNamespace(t *testing.T) {
+	t.Parallel()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	stStore := &memStackStore{stacks: map[stack.Ref]stack.Stack{}}
+	seedNamespaces(t, nsStore, "acme", "beta")
+
+	handler := newUserHandler(t, nsStore, stStore, discoveryNamespaceGrantAuthorizer{})
+
+	rec := get(t, handler, "/api/user")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("user answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	orgs := decodeDiscoveryOrganizations(t, rec.Body.String())
+	if !discoveryContains(orgs, "acme") || discoveryContains(orgs, "beta") {
+		t.Fatalf("organizations = %+v, want acme only", orgs)
 	}
 }
 

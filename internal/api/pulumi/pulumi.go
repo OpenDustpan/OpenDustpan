@@ -471,8 +471,10 @@ func (h *Handler) includeNamespace(
 	// grant fallback, so a blocked address cannot discover the namespace
 	// through a collection grant. This check does not rely on the route
 	// handler or on the refusal of the Authorizer for the later requests.
+	// The namespace is skipped, not an error: one blocked namespace must not
+	// fail the list of the other namespaces.
 	if errors.Is(authorizeErr, ipallow.ErrAddressNotAllowed) {
-		return false, authorizeErr
+		return false, nil
 	}
 
 	if !errors.Is(authorizeErr, identity.ErrDenied) {
@@ -504,12 +506,12 @@ func (h *Handler) holdsGrantInNamespace(
 	return false, nil
 }
 
-// scopeHoldsNamespace reports whether scope names a collection or a unit in
-// ns. A grant on the namespace itself, or on the installation, is decided by
+// scopeHoldsNamespace reports whether scope names the namespace ns, a
+// collection in it or a unit in it. A grant on the namespace itself, or on the installation, is decided by
 // the Authorizer before this runs. An every-object scope alone proves no
 // grant in ns: only the gated namespace check above may open that path.
 func scopeHoldsNamespace(scope identity.Scope, ns namespace.Name) bool {
-	for _, objs := range [][]identity.Object{scope.Collections, scope.Units} {
+	for _, objs := range [][]identity.Object{scope.Namespaces, scope.Collections, scope.Units} {
 		for i := range objs {
 			if objs[i].Namespace() == ns {
 				return true
