@@ -88,7 +88,7 @@ end
 
 ## Contract
 
-The provider network mirror protocol is a wire protocol of OpenTofu with fixed paths (`index.json`, `{version}.json`), so it lives in the TFE adapter next to the provider registry protocol, under its own prefix outside `/api/` and outside the API description (PM decision, 14 Nov 2026). The base URL is what a person writes in `network_mirror { url = "https://<host>/v1/mirror/" }`; the CLI adds `:hostname/:namespace/:type/index.json` and `:hostname/:namespace/:type/:version.json` (RFC 101, "Facts").
+The provider network mirror protocol is a wire protocol of OpenTofu with fixed paths (the version index and one file for each version), so it lives in the TFE adapter next to the provider registry protocol, under its own prefix outside `/api/` and outside the API description (PM decision, 14 Nov 2026). The base URL is what a person writes in `network_mirror { url = "https://<host>/v1/mirror/" }`; the CLI reads GET /v1/mirror/{hostname}/{namespace}/{type}/index.json and GET /v1/mirror/{hostname}/{namespace}/{type}/{version}.json (RFC 101, "Facts").
 
 | Route (NEW) | Scope | Action and object | Answer |
 | --- | --- | --- | --- |
