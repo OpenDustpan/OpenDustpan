@@ -963,9 +963,14 @@ func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error)
 	// before every other rule, and it asks them only for the unit of the job
 	// of the token. A server that issues no job token keeps the chain it had.
 	if units != nil {
-		var unitIDs access.Units
-		if store, ok := cfg.namespaceStore.(access.Units); ok {
-			unitIDs = store
+		// The rule refuses a unit with no stable ID when it has no port. A
+		// store that does not meet access.Units fails the startup here, so the
+		// server never runs with every named unit route refused and no record
+		// of the cause. This check does not rely on the rule or on the route
+		// resolving the ID.
+		unitIDs, ok := cfg.namespaceStore.(access.Units)
+		if !ok {
+			return none, fmt.Errorf("job tokens need a namespace store that resolves unit IDs (access.Units): %T", cfg.namespaceStore)
 		}
 
 		authz = identity.JobTokenRule{Next: authz, Units: units, UnitIDs: unitIDs}

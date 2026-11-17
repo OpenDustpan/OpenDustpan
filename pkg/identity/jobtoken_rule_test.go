@@ -551,6 +551,13 @@ func TestJobTokenRuleResolvesUnitID(t *testing.T) {
 			wantUnitIDReads: 1, wantJobReads: 1,
 		},
 		{
+			name: "a rule with no unit ID port refuses a unit by name", p: token, action: identity.ActionUnitRead,
+			obj: ownByName, jobKnown: true, unitID: "unt-1", unitIDFound: true,
+			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: true,
+			wantDenied: true, wantFailClosed: false, wantNext: false,
+			wantUnitIDReads: 0, wantJobReads: 1,
+		},
+		{
 			name: "an object that carries a stable ID is not resolved again", p: token, action: identity.ActionUnitRead,
 			obj: stableOther, jobKnown: true, unitID: "should-not-be-read", unitIDFound: true,
 			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
@@ -592,9 +599,14 @@ func checkResolvesCase(t *testing.T, tc resolvesCase, job identity.JobUnit) {
 		units.units["job-1"] = job
 	}
 
-	unitIDs := &fakeUnitIDs{id: tc.unitID, found: tc.unitIDFound, err: tc.unitIDErr, reads: nil}
+	fakeIDs := &fakeUnitIDs{id: tc.unitID, found: tc.unitIDFound, err: tc.unitIDErr, reads: nil}
+
+	// The interface field stays a nil interface for a rule without the port,
+	// so the rule's own nil check sees it.
+	var unitIDs identity.UnitIDReader = fakeIDs
 	if tc.noUnitIDPort {
 		unitIDs = nil
+		fakeIDs = nil
 	}
 
 	if tc.noJobPort {
@@ -618,7 +630,7 @@ func checkResolvesCase(t *testing.T, tc resolvesCase, job identity.JobUnit) {
 		t.Errorf("the next authorizer was asked %t, want %t", asked, tc.wantNext)
 	}
 
-	checkResolvesReads(t, unitIDs, units, tc)
+	checkResolvesReads(t, fakeIDs, units, tc)
 }
 
 // checkResolvesAnswer proves the answer of the rule for one resolves case.

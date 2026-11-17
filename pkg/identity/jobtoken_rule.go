@@ -264,10 +264,17 @@ func emptyScope() Scope {
 func (r JobTokenRule) resolveUnitID(
 	ctx context.Context, p Principal, action Action, obj Object,
 ) (Object, error) {
+	// A unit that already carries a stable ID is not resolved again. Defense
+	// in depth: the port adapter and the access authorizer may resolve it too,
+	// and this check does not rely on them, so a unit whose ID was stripped
+	// cannot be widened by a caller that skips those layers.
 	if !obj.IsUnit() || obj.UnitID() != "" {
 		return obj, nil
 	}
 
+	// Defense in depth: the access authorizer and the route may resolve the
+	// stable ID too, and this check does not rely on them, so a rule with no
+	// port refuses such a unit even when another layer resolved it.
 	if r.UnitIDs == nil {
 		return obj, &DeniedError{Subject: p.Subject, Action: action, Object: obj}
 	}
@@ -277,6 +284,9 @@ func (r JobTokenRule) resolveUnitID(
 		return obj, fmt.Errorf("read the stable ID of the unit %q: %w", obj, err)
 	}
 
+	// Defense in depth: the access authorizer and the route may report the unit
+	// as found too, and this check does not rely on them, so a unit that this
+	// port does not find is refused even when another layer found it.
 	if !found {
 		return obj, &DeniedError{Subject: p.Subject, Action: action, Object: obj}
 	}

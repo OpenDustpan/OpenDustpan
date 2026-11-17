@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -330,35 +331,33 @@ func TestJobTokenReachesOwnUnitState(t *testing.T) {
 
 	otherPath := "/tofu/state/acme/other"
 
-	do := func(token, path string) (int, string) {
-		return jobTokenStateDo(t, ts, token, path)
-	}
-
 	cases := []struct {
-		name   string
-		path   string
-		token  string
-		want   int
-		before func()
+		name     string
+		path     string
+		token    string
+		want     int
+		wantBody string
 	}{
-		{name: "own unit", path: "/tofu/state/acme/web", token: jobToken, want: http.StatusOK, before: nil},
-		{name: "another unit", path: otherPath, token: jobToken, want: http.StatusForbidden, before: nil},
+		{name: "own unit", path: "/tofu/state/acme/web", token: jobToken, want: http.StatusOK},
+		{name: "another unit", path: otherPath, token: jobToken, want: http.StatusForbidden},
 		{
 			name: "recreated unit", path: "/tofu/state/acme/web", token: env.recreatedToken,
-			want: http.StatusUnauthorized, before: nil,
+			want: http.StatusUnauthorized, wantBody: "job token ended",
 		},
-		{name: "no token", path: "/tofu/state/acme/web", token: "", want: http.StatusUnauthorized, before: nil},
+		{name: "no token", path: "/tofu/state/acme/web", token: "", want: http.StatusUnauthorized},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if tc.before != nil {
-				tc.before()
-			}
-			status, body := do(tc.token, tc.path)
+
+			status, body := jobTokenStateDo(t, ts, tc.token, tc.path)
 			if status != tc.want {
 				t.Fatalf("%s: status %d, body %s, want %d", tc.name, status, body, tc.want)
+			}
+
+			if tc.wantBody != "" && !strings.Contains(body, tc.wantBody) {
+				t.Fatalf("%s: body %s, want it to contain %q", tc.name, body, tc.wantBody)
 			}
 		})
 	}
