@@ -20,6 +20,27 @@ type NamespaceReader interface {
 	GetNamespace(ctx context.Context, name namespace.Name) (namespace.Namespace, error)
 }
 
+// ClaimObserver hears how many operations one Claim skipped past the bound
+// maxSkippedClaims. The claimer tells it once per poll that reaches the bound,
+// with the count of the operations that the poll ended or gave back. The
+// server counts them, so an operator sees a poll that keeps operations from a
+// runner. NoopClaimObserver is the default: a claimer that the caller gives no
+// observer counts nothing.
+type ClaimObserver interface {
+	// SkippedClaims records that one Claim skipped n operations past the
+	// bound. n is at least one.
+	SkippedClaims(n int)
+}
+
+// NoopClaimObserver is the ClaimObserver that counts nothing. It is the
+// default of a DurableClaimer.
+type NoopClaimObserver struct{}
+
+// SkippedClaims implements ClaimObserver. It does nothing.
+func (NoopClaimObserver) SkippedClaims(int) {}
+
+var _ ClaimObserver = NoopClaimObserver{}
+
 // claimAttempts is how many times the claimer reads a job again after a
 // concurrent change of it, before it gives the operation back.
 const claimAttempts = 5
@@ -86,6 +107,7 @@ type DurableClaimer struct {
 	operations durable.Store
 	namespaces NamespaceReader
 	gates      GateGuard
+	observer   ClaimObserver
 	now        func() time.Time
 	log        *slog.Logger
 }
@@ -112,6 +134,18 @@ func WithClaimerLogger(logger *slog.Logger) ClaimerOption {
 	}
 }
 
+// WithClaimObserver sets the observer that hears how many operations one Claim
+// skipped past the bound maxSkippedClaims. A nil observer is refused: the
+// claimer keeps the no-op, so a caller that passes nil cannot turn the count
+// off by mistake. The default is the no-op.
+func WithClaimObserver(observer ClaimObserver) ClaimerOption {
+	return func(c *DurableClaimer) {
+		if observer != nil {
+			c.observer = observer
+		}
+	}
+}
+
 // NewClaimer returns the claimer of the phases of jobs. namespaces gives the
 // current fence of the namespace of a unit. gates tells which enforced gates
 // cover the unit of a job at each claim. It is required: a claimer with a nil
@@ -123,7 +157,7 @@ func NewClaimer(
 ) *DurableClaimer {
 	c := &DurableClaimer{
 		jobs: jobs, operations: operations, namespaces: namespaces, gates: gates, now: time.Now,
-		log: slog.New(slog.DiscardHandler),
+		observer: NoopClaimObserver{}, log: slog.New(slog.DiscardHandler),
 	}
 
 	for _, o := range opts {
@@ -141,6 +175,8 @@ func (c *DurableClaimer) Claim(ctx context.Context, req ClaimRequest) (Assignmen
 	if err := dreq.Validate(); err != nil {
 		return Assignment{}, claimError(fmt.Errorf("claim request: %w", err))
 	}
+
+	last := ""
 
 	for range maxSkippedClaims {
 		if err := ctx.Err(); err != nil {
@@ -160,7 +196,14 @@ func (c *DurableClaimer) Claim(ctx context.Context, req ClaimRequest) (Assignmen
 		if ok {
 			return a, nil
 		}
+
+		last = string(op.ID)
+		c.logSkipped(ctx, &op)
 	}
+
+	// The bound is the only reason to count: a poll that ends on a claim, a
+	// context or a store error did not reach it.
+	c.recordSkipped(ctx, maxSkippedClaims, last)
 
 	return Assignment{}, claimError(fmt.Errorf("claim: %d operations skipped: %w", maxSkippedClaims, durable.ErrNoWork))
 }
@@ -344,6 +387,29 @@ func (c *DurableClaimer) end(ctx context.Context, pc *PhaseClaim, plan func(j *J
 // errRetryClaim marks a claim attempt that read a job which changed before
 // the event: the claimer reads the job again.
 var errRetryClaim = errors.New("job changed while it was claimed")
+
+// logSkipped logs one operation that the poll skipped, with the job that the
+// operation belongs to. A reader can then find each job that the poll could not
+// start. The job is empty for an operation that names no job.
+func (c *DurableClaimer) logSkipped(ctx context.Context, op *durable.Operation) {
+	jobRef := ""
+
+	if id, _, ok := parsePhaseKey(op.Key); ok {
+		jobRef = string(id)
+	}
+
+	c.log.WarnContext(ctx, "the claim skipped an operation",
+		slog.String("operation", string(op.ID)), slog.String("job", jobRef))
+}
+
+// recordSkipped tells the observer and the log that one Claim skipped n
+// operations past the bound. The operation is the last one that the poll gave
+// back, so a reader can find the job that the poll could not start.
+func (c *DurableClaimer) recordSkipped(ctx context.Context, n int, operation string) {
+	c.observer.SkippedClaims(n)
+	c.log.WarnContext(ctx, "the claim gave up after the bound of skipped operations",
+		slog.Int("skipped", n), slog.Int("bound", maxSkippedClaims), slog.String("operation", operation))
+}
 
 // assign moves the job of the claimed operation op to running. It reports
 // false when the claim does not run a phase: the operation belongs to no

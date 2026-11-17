@@ -26,7 +26,7 @@ type Route struct {
 	route.Route[identity.Object]
 
 	// IdempotencyKey says that the route takes the Idempotency-Key header.
-	// A request with the header to a route that does not take it answers
+	// The wrapper refuses the header on every other mutating route with
 	// 400, so the server never ignores a key without an error.
 	IdempotencyKey bool
 	// Answer makes the answer of a route that takes the key from the result
