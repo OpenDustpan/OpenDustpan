@@ -2,6 +2,7 @@ package servertest_test
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -495,6 +496,10 @@ type rtHarness struct {
 	nextStack int
 	// jobPool is true after the runner pool of the job flows exists.
 	jobPool bool
+	// runnerKey and runnerID are the key and the ID of the runner of the job
+	// session flows, after it joined.
+	runnerKey ed25519.PrivateKey
+	runnerID  string
 }
 
 // newRoundTripHarness starts a cluster whose store has the tracer, and a client
@@ -509,8 +514,20 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 	t.Cleanup(transport.CloseIdleConnections)
 
 	h := &rtHarness{
-		t: t, cluster: cluster, client: &http.Client{Transport: transport, Timeout: requestLimit}, tracer: tracer,
-		warm: false, mode: mode, trips: nil, serial: 0, workspace: "", stack: "", nextStack: 0, jobPool: false,
+		t:         t,
+		cluster:   cluster,
+		client:    &http.Client{Transport: transport, Timeout: requestLimit},
+		tracer:    tracer,
+		warm:      false,
+		mode:      mode,
+		trips:     nil,
+		serial:    0,
+		workspace: "",
+		stack:     "",
+		nextStack: 0,
+		jobPool:   false,
+		runnerKey: nil,
+		runnerID:  "",
 	}
 
 	h.call(http.MethodPost, "/api/server/namespaces", `{"name":"acme"}`, http.StatusCreated)
@@ -891,6 +908,14 @@ func requestFlows() []requestFlow {
 				h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/jobs/"+jobID+"/cancel",
 					`{"reason":"round trips"}`, http.StatusOK)
 			})
+		}},
+		// The budget is 43. The path reads the session, the claim and its
+		// operation, the job and its starter, checks the grant of the starter,
+		// and then issues the token and its audit entry in one transaction
+		// that rereads the job, the operation and the starter.
+		{"job session credentials", 43, func(h *rtHarness) {
+			sess := h.jobSession()
+			h.measure(func() { h.credentials(sess) })
 		}},
 		{"unlock", 13, func(h *rtHarness) {
 			h.lock()

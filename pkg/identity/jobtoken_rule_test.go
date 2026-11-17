@@ -256,6 +256,46 @@ func TestJobTokenRuleAuthorize(t *testing.T) {
 	}
 }
 
+// TestJobTokenRuleOtherUnitError proves that the refusal of an object that is
+// not the unit of the job wraps ErrJobTokenOtherUnit, the denial and
+// ErrDenied, so an adapter answers the text of a token for one unit. A token
+// of an unknown job is refused without it: the rule knows no unit of it.
+func TestJobTokenRuleOtherUnitError(t *testing.T) {
+	t.Parallel()
+
+	unit := jobUnitObject(t, "acme", "web/prod", "unt-1")
+	units := &fakeJobUnits{units: map[string]identity.JobUnit{"job-1": unitOfJob(t, unit)}, err: nil, reads: nil}
+	next := &allowingAuthorizer{seen: nil, scope: unitScope(), err: nil}
+	rule := identity.JobTokenRule{Next: next, Units: units}
+
+	for _, obj := range []identity.Object{
+		jobUnitObject(t, "acme", "web/dev", "unt-2"),
+		jobUnitObject(t, "acme", "web/prod", "unt-9"),
+		identity.NamespaceObject("acme"),
+	} {
+		err := rule.Authorize(t.Context(), jobToken(), identity.ActionUnitRead, obj)
+
+		var denied *identity.DeniedError
+
+		if !errors.Is(err, identity.ErrJobTokenOtherUnit) || !errors.Is(err, identity.ErrDenied) ||
+			!errors.As(err, &denied) {
+			t.Errorf("Authorize on %s = %v, want ErrJobTokenOtherUnit with the denial", obj, err)
+		}
+	}
+
+	unknown := jobToken()
+	unknown.JobID = "job-2"
+
+	err := rule.Authorize(t.Context(), unknown, identity.ActionUnitRead, unit)
+	if errors.Is(err, identity.ErrJobTokenOtherUnit) || !errors.Is(err, identity.ErrDenied) {
+		t.Errorf("Authorize of an unknown job = %v, want a denial without ErrJobTokenOtherUnit", err)
+	}
+
+	if len(next.seen) != 0 {
+		t.Errorf("the next authorizer was asked %d times, want 0", len(next.seen))
+	}
+}
+
 // checkRuleAuthorize runs one case of the table.
 func checkRuleAuthorize(t *testing.T, tc ruleCase, job identity.JobUnit) {
 	t.Helper()
