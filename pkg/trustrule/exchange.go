@@ -41,7 +41,7 @@ type ExchangeStore interface {
 	//   - ErrNotFound when the rule does not exist or names another
 	//     principal.
 	//   - ErrPrincipal when the principal fails the check above.
-	//   - ErrInvalid when x.Token is not a token of the kind trust.
+	//   - ErrInvalid when x.Token is not a token of the kind jwt-exchange.
 	//   - accesstoken.ErrAlreadyExists when the token ID or the digest is
 	//     taken.
 	//   - namespace.ErrFenced and audit.ErrInvalidEntry.

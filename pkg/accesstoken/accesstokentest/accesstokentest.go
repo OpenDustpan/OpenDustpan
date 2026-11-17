@@ -48,6 +48,7 @@ func Run(t *testing.T, newStore Factory) {
 		name string
 	}{
 		{name: "token round trip", test: testRoundTrip},
+		{name: "a stored token of an unknown kind is ErrUnknownKind", test: testUnknownKind},
 		{name: "a token needs a principal that exists", test: testMissingPrincipal},
 		{name: "duplicate ID or digest is ErrAlreadyExists", test: testDuplicate},
 		{name: "missing token is ErrNotFound", test: testMissingToken},
@@ -1467,5 +1468,42 @@ func testSweepSkipsBreakGlass(t *testing.T, s Store) {
 
 	if got := mustGet(t, s, "tok-glass"); !got.DisabledAt.IsZero() {
 		t.Fatalf("token of a break-glass account disabled at %s, want it enabled", got.DisabledAt)
+	}
+}
+
+// testUnknownKind checks that a stored token of a kind that no code issues,
+// here the old kind "trust", never decodes: each read answers
+// accesstoken.ErrUnknownKind and no token. Each store adapter must refuse the
+// row itself, without the help of the service.
+func testUnknownKind(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	mustPrincipal(t, s, "prn-1", "ci-deploy", principal.KindService)
+
+	old := newToken("tok-old", "prn-1", 1)
+	old.Kind = accesstoken.Kind("trust")
+	mustToken(t, s, old, digest(1))
+
+	got, err := s.GetToken(ctx, "tok-old")
+	wantErr(t, "get a token of an unknown kind", err, accesstoken.ErrUnknownKind)
+
+	if got.Kind != "" {
+		t.Errorf("get a token of an unknown kind returned the kind %q, want no token", got.Kind)
+	}
+
+	m, err := s.GetTokenByDigest(ctx, digest(1))
+	wantErr(t, "get by digest a token of an unknown kind", err, accesstoken.ErrUnknownKind)
+
+	if m.Token.ID != "" {
+		t.Errorf("get by digest returned the token %q, want no token", m.Token.ID)
+	}
+
+	list, _, err := s.ListTokens(ctx, listQuery(""))
+	wantErr(t, "list a token of an unknown kind", err, accesstoken.ErrUnknownKind)
+
+	if len(list) != 0 {
+		t.Errorf("list returned %d tokens, want none", len(list))
 	}
 }

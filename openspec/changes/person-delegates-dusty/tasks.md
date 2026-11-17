@@ -5,7 +5,7 @@
 ## 1. failing tests
 
 - [ ] 1.1 Add failing server tests for agent principal, create, bad input, list own, read one and namespace list in the NEW file pkg/access/delegation_test.go. Check: TestCreateDelegationStoresHolderScopeCreatorTime calls the NEW route POST /api/dustpan/v1/delegations with a personal access token; BLOCKED by the NEW delegation routes, so it fails on main with 404.
-- [ ] 1.2 Add failing server tests for creator revoke, administrator revoke, repeat revoke and unknown id in the NEW file pkg/access/delegation_revoke_test.go. Check: TestRevokeDelegationMarksRevoked calls the NEW route POST /api/dustpan/v1/delegations/{id}/revoke with a personal access token; BLOCKED by the NEW delegation routes, so it fails on main with 404.
+- [ ] 1.2 Add failing server tests for creator revoke, administrator revoke, repeat revoke and unknown id in the NEW file pkg/access/delegation_revoke_test.go. The unknown id case also calls the NEW route GET /api/dustpan/v1/delegations/{id} and expects 404 with delegation.not-found. Check: TestRevokeDelegationMarksRevoked calls the NEW route POST /api/dustpan/v1/delegations/{id}/revoke with a personal access token; BLOCKED by the NEW delegation routes, so it fails on main with 404.
 
 ## 2. build
 

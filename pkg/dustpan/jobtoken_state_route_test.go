@@ -299,13 +299,12 @@ func seedJobTokenState(
 		},
 	}
 
-	recreatedMatch := match
-	recreatedMatch.Token.Digest = jobtoken.DigestOf(recreatedSecret)
-	recreatedMatch.Claim.JobUnitID = "different-id"
-
+	// The recreated unit has no entry here. On the real path the store finds no
+	// live unit row for the token of a deleted unit and answers ErrNotFound,
+	// and the service ends the token. The test follows that path and does not
+	// fake a record with another unit ID.
 	tokenStore.matches = map[jobtoken.Digest]jobtoken.Match{
-		jobtoken.DigestOf(jobSecret):       match,
-		jobtoken.DigestOf(recreatedSecret): recreatedMatch,
+		jobtoken.DigestOf(jobSecret): match,
 	}
 
 	return jobTokenStateTokens{

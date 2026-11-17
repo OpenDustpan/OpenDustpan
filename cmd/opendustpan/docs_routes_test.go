@@ -593,7 +593,7 @@ func docTestServer(t *testing.T, issuer string) *dustpan.Server {
 			UserNameAttribute: "uid", EmailAttribute: "mail", NameAttribute: "cn", Subject: "entryUUID",
 			DisabledAttribute: "", Groups: "off", GroupBaseDN: "", GroupFilter: "", GroupMemberAttribute: "",
 			GroupMemberOfAttribute: "", GroupNameAttribute: "", DisabledValues: nil, DisabledMask: 0,
-			StartTLS: false, AutoCreate: true,
+			StartTLS: false, AutoCreate: true, SubjectFailureLimit: 5, SubjectFailureLimitSource: "default",
 		}),
 		dustpan.WithOIDCProvider(dustpan.OIDCProvider{
 			HTTPClient: nil, ID: "corp-oidc", DisplayName: "Corp", Issuer: issuer,

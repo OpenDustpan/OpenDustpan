@@ -235,12 +235,12 @@ func CheckExchange(x *trustrule.Exchange) error {
 		return err
 	}
 
-	// Defense in depth: the service makes only tokens of the kind trust for
+	// Defense in depth: the service makes only tokens of the kind jwt-exchange for
 	// an exchange. This check stays so that no caller of the store makes a
 	// personal or a service token through the path of an exchange.
-	if x.Token.Kind != accesstoken.KindTrust {
+	if x.Token.Kind != accesstoken.KindJWTExchange {
 		return fmt.Errorf("%w: an exchange stores only a token of the kind %q, not %q", trustrule.ErrInvalid,
-			accesstoken.KindTrust, x.Token.Kind)
+			accesstoken.KindJWTExchange, x.Token.Kind)
 	}
 
 	if x.Token.PrincipalID == "" || !x.Token.ExpiresAt.After(x.Token.CreatedAt) {
