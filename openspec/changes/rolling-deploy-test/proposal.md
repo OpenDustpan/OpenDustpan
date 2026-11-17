@@ -2,6 +2,8 @@
 version: 2
 ---
 
+Issue: #2027.
+
 Roadmap: `docs/roadmap.md:466` (Test rolling deploy with mixed version pool.).
 
 ## Why
@@ -25,14 +27,12 @@ Evidence for the claims above:
 
 - A mixed version test target exists on main. Proof: Makefile:309
 - Main defines the schema below-minimum error code. Proof: internal/errcode/catalog_schema.go:8
-- Main checks the drain period in health. Proof: pkg/dustpan/health.go:493 (func checkDrainPeriod)
+- Main checks the drain period in health. Proof: pkg/dustpan/health.go:510 (func checkDrainPeriod)
 - Main lists server instances. Proof: route table or API description for ANY /api/server/instances
 
 ## What Changes
 
-- Add rolling deploy exit-test step with three binaries behind round-robin TLS proxy.
-- Run tofu apply and pulumi up loops with no failed command during one-at-a-time replace.
-- Fake contract migration with test-only minimum row write in test setup; use version check and drain from earlier parts.
+- The rolling deploy step with three binaries behind a round-robin TLS proxy, and the loops of `tofu apply` and `pulumi up` with no failed command, are on main. This change extends `e2e/ha_rolling_test.go` with two checks: the error code `schema.binary-below-minimum` on a refused write, and a read of `GET /api/server/instances` that lists three instances.
 - Add no new server logic.
 
 Out of scope:
@@ -58,10 +58,15 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- health checks the drain period (`pkg/dustpan/health.go:493 (func checkDrainPeriod)`)
+- health checks the drain period (`pkg/dustpan/health.go:510 (func checkDrainPeriod)`)
 - store test refuses version zero in the journal suite (`pkg/store/storetest/journal.go:210 (func testJournalRefusesVersionZero)`)
 - store test refuses a bad version in the portable stage suite (`pkg/store/storetest/portable.go:279 (func testPortableStageRefusesVersion)`)
-- job service defines tofu apply steps (`pkg/dustpan/jobservice.go:846 (func tofuApplySteps)`)
+- the rolling deploy step runs a loop of `tofu apply` and `pulumi up` while each instance is replaced (`e2e/ha_rolling_test.go:195 (func haRollingDeploy)`)
+- the step replaces one instance with a binary of a newer build (`e2e/ha_rolling_test.go:148 (func haRoll)`)
+- the step checks that each old instance answers 503 on a write and leaves the pool (`e2e/ha_rolling_test.go:344 (func haCheckOldInstances)`)
+- the mixed-version matrix runs the current binary with the binary of each of the last 2 tags (`e2e/ha_rolling_test.go:417 (func haMixedVersionMatrix)`)
+- the high availability suite runs the step as "5 rolling deploy" (`e2e/ha_test.go:118 (func runHighAvailability)`)
+- job service defines tofu apply steps (`pkg/dustpan/jobservice.go:858 (func tofuApplySteps)`)
 
 ## ADR check
 

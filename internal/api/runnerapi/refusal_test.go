@@ -84,7 +84,7 @@ func TestRunnerRequestsAreRefused(t *testing.T) {
 		},
 		{
 			"no proof header",
-			func() (int, []byte) { return r.raw(protocol.PathPoll, wait, "", "0.4.0") },
+			func() (int, []byte) { return r.raw(protocol.PathPoll, wait, "0.4.0") },
 			http.StatusUnauthorized, protocol.ErrorBadProof,
 		},
 		{

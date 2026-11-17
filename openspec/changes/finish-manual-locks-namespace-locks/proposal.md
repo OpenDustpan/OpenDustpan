@@ -61,6 +61,7 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - Lock error codes exist in the catalog. (`internal/errcode/catalog_lock.go:13`)
+- The lock routes of units, collections and namespaces sit in one route table in the inventory adapter. (`internal/api/inventory/locks.go:97` (func lockRoutes))
 - The manual lock service has helpers for locked collections. (`pkg/manuallock/service.go:229`)
 - The conformance fixture builds locked units. (`pkg/manuallock/manuallocktest/fixture.go:145`)
 

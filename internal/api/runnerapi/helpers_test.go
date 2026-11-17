@@ -60,6 +60,8 @@ type env struct {
 	claimer *opsClaimer
 	fence   namespace.Fence
 	clock   *skewClock
+	// last is the header of the last answer that send read.
+	last atomic.Pointer[http.Header]
 }
 
 // opsClaimer is a job.Claimer on the durable store: the phases of a job are
@@ -275,7 +277,16 @@ func newEnvServing(t *testing.T, open func(t *testing.T) stores, set func(s stor
 
 	h, srv, ops := serve(t, s, opts)
 
-	return &env{t: t, store: s, server: srv, handler: h, claimer: ops, fence: ns.Fence(), clock: clock}
+	return &env{
+		t:       t,
+		store:   s,
+		server:  srv,
+		handler: h,
+		claimer: ops,
+		fence:   ns.Fence(),
+		clock:   clock,
+		last:    atomic.Pointer[http.Header]{},
+	}
 }
 
 // lapseLease is the lease that lapse sets, and lapseMargin is the time to
@@ -361,7 +372,7 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 		Namespaces: cfg.Namespaces, Pools: cfg.Pools, Members: cfg.Members,
 		Authenticator: cfg.Authenticator, Authorizer: cfg.Authorizer,
 		Audit: cfg.Audit, OnAuditFailure: cfg.OnAuditFailure, DenialLimiter: cfg.DenialLimiter,
-		Sessions: cfg.Sessions, Logger: cfg.Logger, ServerURL: cfg.ServerURL, Now: cfg.Now,
+		Sessions: cfg.Sessions, Logger: cfg.Logger, ServerURL: cfg.ServerURL, Now: cfg.Now, Proxies: cfg.Proxies,
 	})
 	if err != nil {
 		t.Fatalf("pools handler: %v", err)
@@ -422,6 +433,7 @@ func configFor(t *testing.T, s stores, opts serveOptions) (runnerapi.Config, *op
 		Plans:                      nil,
 		Artifacts:                  nil,
 		OnHandoffRefusalSuppressed: nil,
+		Proxies:                    nil,
 	}
 
 	if opts.mutate != nil {
@@ -474,6 +486,9 @@ func (e *env) send(req *http.Request) (int, []byte) {
 	if err != nil {
 		e.t.Fatalf("read body: %v", err)
 	}
+
+	header := resp.Header.Clone()
+	e.last.Store(&header)
 
 	return resp.StatusCode, out
 }
@@ -575,7 +590,7 @@ func (f *fakeRunner) join(pool, token string) (int, []byte) {
 		Proof: ed25519.Sign(f.priv, runner.JoinChallenge(serverURL, pool, f.name, token)),
 	}
 
-	status, body := f.raw(protocol.PathJoin, req, "", f.release)
+	status, body := f.raw(protocol.PathJoin, req, f.release)
 	if status == http.StatusOK {
 		var resp protocol.JoinResponse
 
@@ -651,11 +666,11 @@ func (f *fakeRunner) rawSigned(
 	return f.send(path, raw, header, release)
 }
 
-// raw sends a request with a proof header that the caller made.
-func (f *fakeRunner) raw(path string, body any, proof, release string) (int, []byte) {
+// raw sends a request with no proof header.
+func (f *fakeRunner) raw(path string, body any, release string) (int, []byte) {
 	f.e.t.Helper()
 
-	return f.send(path, encodeBody(f.e.t, body), proof, release)
+	return f.send(path, encodeBody(f.e.t, body), "", release)
 }
 
 func (f *fakeRunner) send(path string, raw []byte, proof, release string) (int, []byte) {

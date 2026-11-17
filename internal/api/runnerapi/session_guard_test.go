@@ -360,7 +360,7 @@ func (s *sessionEnv) launchSweep() *launcher {
 	x := s.newExchange(s.runner.handoff(s.work.Operation))
 
 	sess, err := s.store.runners.OpenSession(s.t.Context(), sha256Hex(x.token),
-		runner.Key{Public: x.pub, CreatedAt: time.Time{}}, time.Now())
+		runner.SessionKindLauncher, runner.Key{Public: x.pub, CreatedAt: time.Time{}}, time.Now())
 	if err != nil {
 		s.t.Fatalf("open session: %v", err)
 	}
@@ -409,8 +409,13 @@ func TestJobPhaseRefusesWithoutAJobReader(t *testing.T) {
 			s.launch()
 
 			sess := runner.Session{
-				ID: "", Operation: s.work.Operation, Token: s.work.Token, Runner: s.runner.id,
-				Key: runner.Key{Public: nil, CreatedAt: time.Time{}}, CreatedAt: time.Time{},
+				ID:        "",
+				Kind:      runner.SessionKindLauncher,
+				Operation: s.work.Operation,
+				Token:     s.work.Token,
+				Runner:    s.runner.id,
+				Key:       runner.Key{Public: nil, CreatedAt: time.Time{}},
+				CreatedAt: time.Time{},
 			}
 
 			if err := runnerapi.JobPhaseOf(t.Context(), s.handler, sess); err != nil {

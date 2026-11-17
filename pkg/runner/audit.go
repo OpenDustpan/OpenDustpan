@@ -44,7 +44,21 @@ const (
 	// a pod, or a handoff token or a proof that the server refused. Its
 	// outcome is denied.
 	EventHandoffRefused Event = "handoff-refused"
+	// EventPoolProxySettingsChanged is a save of the proxy settings of a pool.
+	// The entry holds the old and the new ranges, the hashes of the old and
+	// the new upstream URL, and whether the credential changed. It never holds
+	// the URL or the credential.
+	EventPoolProxySettingsChanged Event = "pool-proxy-settings-changed"
+	// EventProxySessionOpened is a proxy session that got its assignment.
+	EventProxySessionOpened Event = proxyEventPrefix + "session-opened"
+	// EventProxyCredentialIssued is the hand of the upstream credential of a
+	// pool to a proxy session. It is a reveal, and it never holds the
+	// credential.
+	EventProxyCredentialIssued Event = proxyEventPrefix + "credential-issued"
 )
+
+// proxyEventPrefix starts the wire value of the events of a proxy session.
+const proxyEventPrefix = "proxy-"
 
 // AuditRule is the action and the kind of the audit entry of one event.
 // The subject is the principal of the request, or the runner or the
@@ -74,5 +88,9 @@ func AuditRules() map[Event]AuditRule {
 		EventKeyRotated:        {Action: job.ActionRunnerClaim, Kind: audit.KindChange},
 		EventCredentialsIssued: {Action: job.ActionRunnerClaim, Kind: audit.KindReveal},
 		EventHandoffRefused:    {Action: job.ActionRunnerClaim, Kind: audit.KindChange},
+
+		EventPoolProxySettingsChanged: manage,
+		EventProxySessionOpened:       {Action: job.ActionRunnerClaim, Kind: audit.KindChange},
+		EventProxyCredentialIssued:    {Action: job.ActionRunnerClaim, Kind: audit.KindReveal},
 	}
 }
