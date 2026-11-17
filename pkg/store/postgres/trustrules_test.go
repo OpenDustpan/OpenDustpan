@@ -36,6 +36,7 @@ func newTrustRuleHarness(t *testing.T, s *postgres.Store) trustruletest.Harness 
 
 	return trustruletest.Harness{
 		Store:            s.TrustRules(),
+		Bundles:          s.TrustRules(),
 		Exchanges:        s.TrustRules(),
 		Token:            trustRuleToken(s),
 		DisablePrincipal: trustRuleDisable(s),

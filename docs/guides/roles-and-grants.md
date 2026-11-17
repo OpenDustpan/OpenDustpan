@@ -196,15 +196,15 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 ## Ask why an action is allowed or denied
 
-`GET /api/server/caller/access` answers for the caller. It lists the grants that
-give the caller an action, and the roles that would give a missing action. Use
-the `type` form. Give `type` as `namespace`, `collection`, `unit` or `principal`,
-with an optional `action`. The `object` form is also accepted, but not with
-`type` in the same request.
+`GET /api/dustpan/v1/me/access?object=...` answers for the caller. It lists the
+grants that give the caller an action on one object, and the roles that would
+give a missing action. `GET /api/dustpan/v1/me/access/objects` pages the same
+answer by type. Give `type` as `namespace`, `collection`, `unit` or `principal`,
+with an optional `action`.
 
 ```sh
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "https://dustpan.example.com/api/server/caller/access?type=namespace&action=unit:write"
+  "https://dustpan.example.com/api/dustpan/v1/me/access/objects?type=namespace&action=unit:write"
 ```
 
 Any signed-in principal can read its own access. The caller only sees its own

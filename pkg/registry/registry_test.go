@@ -39,12 +39,14 @@ func provider() registry.Release {
 				FileName: "terraform-provider-payments_1.2.3_linux_amd64.zip",
 				SHA256:   sum,
 				Size:     10,
+				H1:       storedH1,
 			},
 			{
 				Platform: "darwin_arm64",
 				FileName: "terraform-provider-payments_1.2.3_darwin_arm64.zip",
 				SHA256:   sum,
 				Size:     10,
+				H1:       storedH1,
 			},
 		},
 		Files: nil,
@@ -259,8 +261,14 @@ func TestReleaseValidate(t *testing.T) {
 			Protocols:       nil,
 			PublishedBy:     "user-1",
 			PublishedAt:     time.UnixMilli(1_800_000_000_000).UTC(),
-			Archives:        []registry.Archive{{Platform: "", FileName: "vpc-1.0.0.zip", SHA256: sum, Size: 5}},
-			Files:           nil,
+			Archives: []registry.Archive{{
+				Platform: "",
+				FileName: "vpc-1.0.0.zip",
+				SHA256:   sum,
+				Size:     5,
+				H1:       "", // Fixture that no install reads.
+			}},
+			Files: nil,
 		}
 	}
 
@@ -382,6 +390,7 @@ func TestReleaseValidate(t *testing.T) {
 					FileName: "p" + strconv.Itoa(i) + ".zip",
 					SHA256:   sum,
 					Size:     1,
+					H1:       "", // Fixture that no install reads.
 				}
 			}
 		}, "64 platforms", true},

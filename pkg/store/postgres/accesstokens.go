@@ -18,10 +18,15 @@ import (
 
 var _ accesstoken.Store = (*Store)(nil)
 
-// CreateToken implements accesstoken.Store.
+// CreateToken implements accesstoken.Store. When ctx carries an idempotency
+// completion, the transaction also stores its answer for t.
 func (s *Store) CreateToken(ctx context.Context, t accesstoken.Token, d accesstoken.Digest, e audit.Entry) error {
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		return insertToken(ctx, q, t, d)
+		if err := insertToken(ctx, q, t, d); err != nil {
+			return err
+		}
+
+		return finishCompletion(ctx, q, t)
 	})
 }
 
@@ -155,8 +160,10 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 	return out, total, nil
 }
 
-// RevokeToken implements accesstoken.Store. It only reduces access, so it runs
-// in maintenance mode and the maintenance journal records it.
+// RevokeToken implements accesstoken.Store. When ctx carries an idempotency
+// completion, the transaction also stores its answer for the revoke. It only
+// reduces access, so it runs in maintenance mode and the maintenance journal
+// records it.
 func (s *Store) RevokeToken(ctx context.Context, id string, e audit.Entry) error {
 	rev := revocation{kind: maintenance.RevokedToken, target: id, endReason: ""}
 
@@ -166,15 +173,16 @@ func (s *Store) RevokeToken(ctx context.Context, id string, e audit.Entry) error
 			return fmt.Errorf("revoke access token: %w", err)
 		}
 
-		if n == 1 {
-			return nil
+		if n != 1 {
+			return endedOrMissing(ctx, q, id)
 		}
 
-		return endedOrMissing(ctx, q, id)
+		return finishCompletion(ctx, q, nil)
 	})
 }
 
-// RotateToken implements accesstoken.Store.
+// RotateToken implements accesstoken.Store. When ctx carries an idempotency
+// completion, the transaction also stores its answer for the new token.
 func (s *Store) RotateToken(ctx context.Context, r accesstoken.Replacement, e audit.Entry) error {
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
 		n, err := q.EndRotatedAccessToken(ctx, db.EndRotatedAccessTokenParams{
@@ -188,7 +196,11 @@ func (s *Store) RotateToken(ctx context.Context, r accesstoken.Replacement, e au
 			return endedOrMissing(ctx, q, r.OldID)
 		}
 
-		return insertToken(ctx, q, r.Next, r.Digest)
+		if err := insertToken(ctx, q, r.Next, r.Digest); err != nil {
+			return err
+		}
+
+		return finishCompletion(ctx, q, r.Next)
 	})
 }
 

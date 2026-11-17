@@ -74,6 +74,9 @@ func newJobService(svc services, cfg *settings) (job.Starter, error) {
 		Gates:      jobGates{snapshots: gates, members: facts},
 		Fences:     jobFences{namespaces: svc.namespaces}, Freezes: freezes, Switches: nil, Now: cfg.now, NewID: nil,
 		Log: log, Approvers: &approvers, MaxPlanAge: 0, Groups: jobGroups{principals: principalStoreOf(cfg)},
+		// No adapter of job.ArtifactStore exists yet, so the service refuses a
+		// redaction of a log.
+		Artifacts: nil,
 	})
 	if svcErr != nil {
 		return nil, fmt.Errorf("job service: %w", svcErr)
@@ -672,7 +675,7 @@ func (p jobPlanner) poolID(ctx context.Context, ns namespace.Name, name string) 
 			// holds no name, so an API answer that keeps 300 bytes of it
 			// always holds the whole step.
 			return "", fmt.Errorf("%w: the namespace has no runner pool for jobs: make one with POST "+
-				"/api/runners/{namespace}/pools and the purpose jobs (this route needs DUSTPAN_PUBLIC_URL)",
+				"/api/dustpan/v1/namespaces/{namespace}/runner-pools and the purpose jobs (this route needs DUSTPAN_PUBLIC_URL)",
 				job.ErrUnsupported)
 		default:
 			return "", fmt.Errorf("%w: the namespace has more than one runner pool for jobs, so there is no "+

@@ -128,8 +128,8 @@ func runHostBinary(ctx context.Context, t *testing.T, env *e2e.Env, person strin
 
 	token, expires := parseHostOutput(t, res.Stdout)
 
-	if got := time.Until(expires); got <= 23*time.Hour || got > 25*time.Hour {
-		t.Fatalf("host expiry is in %s, want about 24h", got)
+	if got := time.Until(expires); got <= 59*time.Minute || got > 61*time.Minute {
+		t.Fatalf("host expiry is in %s, want about 1h, the default of tempadmin.session-limit", got)
 	}
 
 	return token, expires

@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/api/runnerapi"
-	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
@@ -46,23 +45,21 @@ func storeLostCauses() []struct {
 func TestStoreLostProtocol(t *testing.T) {
 	t.Parallel()
 
-	for _, scope := range []runnerapi.Scope{runnerapi.ScopeRunnerKey, runnerapi.ScopeJoinToken} {
-		for _, tc := range storeLostCauses() {
-			t.Run(fmt.Sprintf("scope %d %s", scope, tc.name), func(t *testing.T) {
-				t.Parallel()
+	for _, tc := range storeLostCauses() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-				checkProtocolLost(t, scope, tc.err)
-			})
-		}
+			checkProtocolLost(t, tc.err)
+		})
 	}
 }
 
 // checkProtocolLost checks the answer of a runner route to a lost store.
-func checkProtocolLost(t *testing.T, scope runnerapi.Scope, err error) {
+func checkProtocolLost(t *testing.T, err error) {
 	t.Helper()
 
 	rec := httptest.NewRecorder()
-	runnerapi.WriteError(t.Context(), rec, slog.New(slog.DiscardHandler), scope, err)
+	runnerapi.WriteError(t.Context(), rec, slog.New(slog.DiscardHandler), err)
 
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
 		t.Fatalf("status = %d, Retry-After = %q, want 503 and 5", rec.Code, rec.Header().Get("Retry-After"))
@@ -75,34 +72,5 @@ func checkProtocolLost(t *testing.T, scope runnerapi.Scope, err error) {
 
 	if body.Code != protocol.ErrorUnavailable || body.Message != namespace.ErrUnavailable.Error() {
 		t.Fatalf("body = %+v, want code %q and the sentence of the sentinel", body, protocol.ErrorUnavailable)
-	}
-}
-
-// TestStoreLostManagement proves the same for the management routes, in the
-// problem shape.
-func TestStoreLostManagement(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range storeLostCauses() {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			rec := httptest.NewRecorder()
-			runnerapi.WriteManagementError(t.Context(), rec, tc.err)
-
-			var body struct {
-				Code      int    `json:"code"`
-				ErrorCode string `json:"errorCode"`
-			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-				t.Fatalf("decode body %q: %v", rec.Body.String(), err)
-			}
-
-			if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" ||
-				body.Code != http.StatusServiceUnavailable || body.ErrorCode != errcode.NamespaceUnavailable {
-				t.Fatalf("status = %d, Retry-After = %q, body = %+v, want 503, 5 and %s",
-					rec.Code, rec.Header().Get("Retry-After"), body, errcode.NamespaceUnavailable)
-			}
-		})
 	}
 }

@@ -2,7 +2,6 @@ package job
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -76,7 +75,7 @@ func (s *service) Approve(
 		}
 	}
 
-	return s.record(ctx, &j, a, &ap, mfaOf(&j, v))
+	return s.record(ctx, &j, a, &ap, recordAs{action: ActionJobApprove, auth: mfaOf(&j, v)})
 }
 
 // checkApproval runs the checks that only an approval needs. ap.Plan holds the
@@ -164,40 +163,7 @@ func clip(s string) string {
 // approve gets a *DeniedError, and an error of the authorizer is a denial
 // too (fail closed).
 func (s *service) authorizedJob(ctx context.Context, a Actor, id ID) (Job, error) {
-	if !strings.HasPrefix(string(id), IDPrefix) {
-		return Job{}, ErrNotFound
-	}
-
-	j, err := s.store.Get(ctx, id)
-	if err != nil {
-		return Job{}, fmt.Errorf("get job: %w", err)
-	}
-
-	err = s.authorizer.Authorize(ctx, a.Principal, ActionJobRead, j.Spec.Unit)
-
-	switch {
-	case err == nil:
-	case errors.Is(err, identity.ErrDenied):
-		return Job{}, ErrNotFound
-	default:
-		return Job{}, fmt.Errorf("authorize %s: %w", ActionJobRead, err)
-	}
-
-	err = s.authorizer.Authorize(ctx, a.Principal, ActionJobApprove, j.Spec.Unit)
-
-	switch {
-	case err == nil:
-		return j, nil
-	case errors.Is(err, identity.ErrDenied):
-		return Job{}, &DeniedError{Action: ActionJobApprove, Object: j.Spec.Unit, Err: err}
-	default:
-		// The authorizer failed. A failure allows no one, and the caller gets
-		// a denial that the audit log records.
-		return Job{}, &DeniedError{
-			Action: ActionJobApprove, Object: j.Spec.Unit,
-			Err: fmt.Errorf("%w: the authorizer failed: %w", identity.ErrDenied, err),
-		}
-	}
+	return s.authorizedFor(ctx, a, id, ActionJobApprove)
 }
 
 // waitingGates returns the gates of type GateApproval of the current phase of
@@ -368,10 +334,17 @@ func newDestroyFresh(a Actor, now time.Time) (destroyFresh, error) {
 	return destroyFresh{auth: ConfirmAuthMFA, at: a.AuthAt}, nil
 }
 
+// recordAs is what the audit entry of a verdict names: the action that allowed
+// it, and the fresh authentication when there is one.
+type recordAs struct {
+	action identity.Action
+	auth   ConfirmAuth
+}
+
 // record stores the verdict in one change with its audit entry. The event
 // follows from the gates after the verdict: a rejection ends the job, the last
 // needed approval opens it, and any other approval keeps it waiting.
-func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, auth ConfirmAuth) (Job, error) {
+func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, as recordAs) (Job, error) {
 	phase := &j.Phases[j.Current]
 	approvals := append(slices.Clone(phase.Approvals), *ap)
 
@@ -393,7 +366,7 @@ func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, aut
 		c.Event = EventApprovalRecorded
 	}
 
-	e, err := s.approvalEntry(j, a, ap, auth, c.Event)
+	e, err := s.approvalEntry(j, a, ap, as, c.Event)
 	if err != nil {
 		return Job{}, fmt.Errorf("record approval: %w", err)
 	}
@@ -416,7 +389,7 @@ func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, aut
 // and the authentication when there are any. The comment is the reason. An
 // agent reference that the block cannot hold fails here, before any write.
 func (s *service) approvalEntry(
-	j *Job, a Actor, ap *Approval, auth ConfirmAuth, ev Event,
+	j *Job, a Actor, ap *Approval, as recordAs, ev Event,
 ) (audit.Entry, error) {
 	changes := []audit.Change{
 		{Key: "job", Old: nil, New: string(j.ID), Layer: "", TakesEffect: ""},
@@ -442,13 +415,13 @@ func (s *service) approvalEntry(
 		changes = append(changes, audit.Change{Key: keyPlan, Old: nil, New: ap.Plan.Plan, Layer: "", TakesEffect: ""})
 	}
 
-	if auth != "" {
-		changes = append(changes, audit.Change{Key: "auth", Old: nil, New: string(auth), Layer: "", TakesEffect: ""})
+	if as.auth != "" {
+		changes = append(changes, audit.Change{Key: "auth", Old: nil, New: string(as.auth), Layer: "", TakesEffect: ""})
 	}
 
 	return audit.Entry{
 		At: ap.At, Namespace: j.Spec.Unit.Namespace(), Subject: a.Principal.Subject, IDPSubject: "",
-		TokenID: a.Principal.TokenID, Action: string(ActionJobApprove), Object: j.Spec.Unit.String(), Version: "",
+		TokenID: a.Principal.TokenID, Action: string(as.action), Object: j.Spec.Unit.String(), Version: "",
 		ValuePath: "", ValueCount: nil, Changes: changes, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI,
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: j.Spec.Unit.UnitID(),
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: string(a.Principal.Kind), JobID: "",

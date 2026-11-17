@@ -132,7 +132,7 @@ func TestOwnAndServiceTokenRoutesRefuseHiddenName(t *testing.T) {
 			bad := quoteJSON(t, hr.text)
 
 			for _, c := range []struct{ name, path, body string }{
-				{"caller", "/api/server/caller/tokens", `{"name":` + bad + `}`},
+				{"caller", "/api/dustpan/v1/me/tokens", `{"name":` + bad + `}`},
 				{
 					"service", "/api/server/service-tokens",
 					`{"principalID":"` + testOtherPrincipalID + `","name":` + bad + `}`,

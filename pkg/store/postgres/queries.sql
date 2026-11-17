@@ -4179,6 +4179,39 @@ SET deleted_at_ms = sqlc.arg(deleted_at_ms)
 WHERE namespace_id = sqlc.arg(namespace_id) AND id = sqlc.arg(id) AND COALESCE(deleted_at_ms, -1) = 0
   AND (CAST(sqlc.arg(if_latest) AS BIGINT) = 0 OR latest = CAST(sqlc.arg(if_latest) AS BIGINT));
 
+-- name: DeleteProxyRuleSet :execrows
+-- The caller checks the fence in the same transaction. A row of another
+-- version is not removed.
+DELETE FROM proxy_rule_sets
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND scope_kind = sqlc.arg(scope_kind) AND unit_id = sqlc.arg(unit_id) AND version = sqlc.arg(version)::BIGINT;
+
+-- name: GetProxyRuleSet :one
+-- The namespace, the kind and the unit ID are the whole key: a unit scope never
+-- reads the row of its namespace.
+SELECT p.document, p.digest, p.version, p.updated_at_ms
+FROM proxy_rule_sets AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = sqlc.arg(namespace) AND p.scope_kind = sqlc.arg(scope_kind) AND p.unit_id = sqlc.arg(unit_id);
+
+-- name: InsertProxyRuleSet :execrows
+-- The caller checks the fence in the same transaction. A scope that has a set
+-- is not written.
+INSERT INTO proxy_rule_sets (namespace_id, scope_kind, unit_id, document, digest, version, updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace)),
+    sqlc.arg(scope_kind), sqlc.arg(unit_id), sqlc.arg(document), sqlc.arg(digest), 1, sqlc.arg(updated_at_ms)
+)
+ON CONFLICT (namespace_id, scope_kind, unit_id) DO NOTHING;
+
+-- name: UpdateProxyRuleSet :execrows
+-- A row of another version than the one that the caller read is not written.
+UPDATE proxy_rule_sets
+SET document = sqlc.arg(document), digest = sqlc.arg(digest), version = sqlc.arg(version)::BIGINT + 1,
+    updated_at_ms = sqlc.arg(updated_at_ms)
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = sqlc.arg(namespace))
+  AND scope_kind = sqlc.arg(scope_kind) AND unit_id = sqlc.arg(unit_id) AND version = sqlc.arg(version)::BIGINT;
+
 -- name: InsertManualLock :execrows
 -- Records the manual lock of one object. A row that exists for the object is
 -- not written. The caller checks the fence in the same transaction.
@@ -5971,12 +6004,13 @@ WHERE namespace_id = sqlc.arg(namespace_id) AND issuer_url = sqlc.arg(issuer_url
 -- rule with a taken ID, or with a name that the namespace has, is not written.
 INSERT INTO trust_rules (
     id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, bundle_id
 )
 VALUES (
     sqlc.arg(id), sqlc.arg(namespace), sqlc.arg(name), sqlc.arg(issuer), sqlc.arg(audience),
     sqlc.arg(key_source), sqlc.arg(static_keys), sqlc.arg(conditions_json), sqlc.arg(principal_id),
-    sqlc.arg(created_by), sqlc.arg(created_at_ms)
+    sqlc.arg(created_by), sqlc.arg(created_at_ms), sqlc.arg(revision), sqlc.arg(spiffe_id_pattern),
+    CAST(NULLIF(sqlc.arg(bundle_id), '') AS text)
 )
 ON CONFLICT DO NOTHING;
 
@@ -5995,19 +6029,70 @@ FOR SHARE;
 -- The namespace is part of the key: a rule of another namespace reads as no
 -- row.
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS text) AS bundle_id
 FROM trust_rules
 WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
 
 -- name: ListTrustRulesOfNamespace :many
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS text) AS bundle_id
 FROM trust_rules
 WHERE namespace = sqlc.arg(namespace)
 ORDER BY name COLLATE "C", id COLLATE "C";
 
 -- name: DeleteTrustRule :execrows
 DELETE FROM trust_rules WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id);
+
+-- name: UpdateTrustRule :execrows
+-- The caller reads the rule and checks the revision, the fence and the
+-- principal in the same transaction. The revision in the WHERE clause is the
+-- stored one, so a write that lost a race changes no row. The namespace, the
+-- creator and the creation time never change.
+UPDATE trust_rules SET
+    name = sqlc.arg(name), issuer = sqlc.arg(issuer), audience = sqlc.arg(audience),
+    key_source = sqlc.arg(key_source), static_keys = sqlc.arg(static_keys),
+    conditions_json = sqlc.arg(conditions_json), principal_id = sqlc.arg(principal_id),
+    revision = sqlc.arg(revision), spiffe_id_pattern = sqlc.arg(spiffe_id_pattern),
+    bundle_id = CAST(NULLIF(sqlc.arg(bundle_id), '') AS text)
+WHERE namespace = sqlc.arg(namespace) AND id = sqlc.arg(id) AND revision = sqlc.arg(stored_revision);
+
+-- name: CountTrustRulesNamedInNamespace :one
+-- Counts the rules of the namespace with a name, except one rule. An update
+-- uses it to refuse a name that another rule has.
+SELECT COUNT(*) FROM trust_rules
+WHERE namespace = sqlc.arg(namespace) AND name = sqlc.arg(name) AND id <> sqlc.arg(except_id);
+
+-- name: GetTrustBundleOfNamespace :one
+-- The namespace is part of the key: a bundle of another namespace reads as no
+-- row.
+SELECT id, namespace, active_version, revision, created_at_ms
+FROM trust_bundles
+WHERE namespace = sqlc.arg(namespace);
+
+-- name: ListTrustBundleVersions :many
+SELECT version, pem, created_at_ms, overlap_ends_at_ms
+FROM trust_bundle_versions
+WHERE bundle_id = sqlc.arg(bundle_id)
+ORDER BY version;
+
+-- name: InsertTrustBundle :exec
+-- The caller checks the fence and the PEM text in the same transaction. The
+-- namespace holds one bundle: a second bundle of a namespace fails the unique key.
+INSERT INTO trust_bundles (id, namespace, active_version, revision, created_at_ms)
+VALUES (sqlc.arg(id), sqlc.arg(namespace), sqlc.arg(active_version), sqlc.arg(revision), sqlc.arg(created_at_ms));
+
+-- name: InsertTrustBundleVersion :exec
+INSERT INTO trust_bundle_versions (bundle_id, version, pem, created_at_ms, overlap_ends_at_ms)
+VALUES (sqlc.arg(bundle_id), sqlc.arg(version), sqlc.arg(pem), sqlc.arg(created_at_ms), sqlc.arg(overlap_ends_at_ms));
+
+-- name: UpdateTrustBundle :execrows
+-- The revision in the WHERE clause is the stored one, so a write that lost a
+-- race changes no row.
+UPDATE trust_bundles SET active_version = sqlc.arg(active_version), revision = sqlc.arg(revision)
+WHERE id = sqlc.arg(id) AND revision = sqlc.arg(stored_revision);
+
+-- name: DeleteTrustBundleVersion :execrows
+DELETE FROM trust_bundle_versions WHERE bundle_id = sqlc.arg(bundle_id) AND version = sqlc.arg(version);
 
 -- name: GetExchangePrincipal :one
 -- Reads the principal of a token exchange in its transaction, so a delete or

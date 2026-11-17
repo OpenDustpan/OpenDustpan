@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
@@ -25,6 +26,13 @@ type e2eExport struct {
 type e2eLimitedTokens struct {
 	Tokens             []e2eToken `json:"tokens"`
 	MaxLifetimeSeconds int64      `json:"maxLifetimeSeconds"`
+}
+
+// e2eTokenList decodes a token list of the me routes, which page with
+// pageSize and pageToken.
+type e2eTokenList struct {
+	Tokens        []e2eToken `json:"tokens"`
+	NextPageToken string     `json:"nextPageToken"`
 }
 
 // e2eRotation decodes the answer of a rotation.
@@ -219,8 +227,31 @@ func checkTokenFollowsGrants(ctx context.Context, t *testing.T, env *e2e.Env, f 
 
 // checkHolderReads proves what the token of ops reads: the tokens of
 // deploy with the maximum lifetime, the principals it manages, and its own
-// token list with the maximum lifetime. The tokens of other answer 403.
+// token list, which pages with pageSize and pageToken. The tokens of other
+// answer 403.
 func checkHolderReads(ctx context.Context, t *testing.T, env *e2e.Env, f *delegationFixture) {
+	t.Helper()
+
+	var own e2eTokenList
+
+	status, body, err := env.ServerAPIStatusAs(ctx, f.opsToken.Secret, http.MethodGet, "/api/dustpan/v1/me/tokens", "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET /api/dustpan/v1/me/tokens with the token of ops = %d, %v (%s); want 200", status, err, body)
+	}
+
+	if jsonErr := json.Unmarshal([]byte(body), &own); jsonErr != nil || len(own.Tokens) != 1 ||
+		own.Tokens[0].ID != f.opsToken.ID || strings.Contains(body, "maxLifetimeSeconds") {
+		t.Fatalf("own token list of ops = %s, %v; want the one token of ops and no maximum lifetime", body, jsonErr)
+	}
+
+	checkLimitedReads(ctx, t, env, f)
+	checkHolderPrincipals(ctx, t, env, f)
+}
+
+// checkLimitedReads proves the reads of the token of ops on the token lists
+// of deploy: they answer the maximum lifetime, and the lists of other answer
+// 403.
+func checkLimitedReads(ctx context.Context, t *testing.T, env *e2e.Env, f *delegationFixture) {
 	t.Helper()
 
 	reads := []struct {
@@ -234,7 +265,6 @@ func checkHolderReads(ctx context.Context, t *testing.T, env *e2e.Env, f *delega
 			http.StatusOK,
 		},
 		{nil, "/api/server/principals/" + f.other.ID + "/tokens", http.StatusForbidden},
-		{&e2eLimitedTokens{Tokens: nil, MaxLifetimeSeconds: 0}, "/api/server/caller/tokens", http.StatusOK},
 	}
 
 	for _, read := range reads {
@@ -252,8 +282,6 @@ func checkHolderReads(ctx context.Context, t *testing.T, env *e2e.Env, f *delega
 			t.Fatalf("GET %s = %s, %v; want a list with the maximum lifetime", read.path, body, err)
 		}
 	}
-
-	checkHolderPrincipals(ctx, t, env, f)
 }
 
 // checkHolderPrincipals proves that the token of ops lists deploy, and only
@@ -264,7 +292,7 @@ func checkHolderPrincipals(ctx context.Context, t *testing.T, env *e2e.Env, f *d
 	var managed e2eAccessObjects
 
 	status, body, err := env.ServerAPIStatusAs(ctx, f.opsToken.Secret, http.MethodGet,
-		"/api/server/caller/access?type=principal", "")
+		"/api/dustpan/v1/me/access/objects?type=principal", "")
 	if err != nil || status != http.StatusOK || json.Unmarshal([]byte(body), &managed) != nil {
 		t.Fatalf("principals that ops manages = %d, %v (%s); want 200", status, err, body)
 	}

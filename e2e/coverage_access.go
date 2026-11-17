@@ -168,10 +168,10 @@ func tokenAllowEntries() []AllowEntry {
 		{http.MethodDelete, one},
 		{http.MethodPost, "/api/server/service-tokens"},
 		{http.MethodPost, "/api/server/service-tokens/{id}/rotate"},
-		{http.MethodGet, "/api/server/caller/tokens"},
-		{http.MethodPost, "/api/server/caller/tokens"},
-		{http.MethodDelete, "/api/server/caller/tokens/{id}"},
-		{http.MethodPost, "/api/server/caller/tokens/{id}/rotate"},
+		{http.MethodGet, "/api/dustpan/v1/me/tokens"},
+		{http.MethodPost, "/api/dustpan/v1/me/tokens"},
+		{http.MethodDelete, "/api/dustpan/v1/me/tokens/{id}"},
+		{http.MethodPost, "/api/dustpan/v1/me/tokens/{id}/rotate"},
 	}
 
 	out := make([]AllowEntry, 0, len(routes))
@@ -225,8 +225,9 @@ func reviewAllowEntries() []AllowEntry {
 		"/api/server/namespaces/{namespace}/access-review",
 		"/api/server/namespaces/{namespace}/collections/{collection}/access-review",
 		"/api/server/namespaces/{namespace}/unit-access-review",
-		"/api/server/caller/access",
-		"/api/server/caller/grants",
+		"/api/dustpan/v1/me/access",
+		"/api/dustpan/v1/me/access/objects",
+		"/api/dustpan/v1/me/grants",
 	}
 
 	out := make([]AllowEntry, 0, len(paths))

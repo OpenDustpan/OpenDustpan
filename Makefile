@@ -10,9 +10,9 @@
 #   node 20.19 or later with npx, for openspec-validate (the CLI comes from npm at a pinned version)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: cover regenerate-baseline release-record-check release-build release-verify ai-pr-spec-check pin-frozen files-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check change-archived-check
+.PHONY: cover regenerate-baseline release-record-check release-build release-verify ai-pr-spec-check pin-frozen files-check ignored-check check fmt lint subtestcheck nolint-check nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint openspec-validate adr-index adr-decisions chart-lint test test-changed test-nocache test-postgres test-s3 bench bench-s3 bench-s3-protocol load e2e docs-commands-check e2e-ha upgrade-test mixed-version-test crash-test soak faults generate build build-launcher image-smoke compose-smoke demo checks-agent clients-conformance clients-generate clients-check clients-ts-test pr-body-check change-archived-check
 
-check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint openspec-validate release-record-check pin-frozen files-check test bench journal-guard journal-test ## Everything CI checks.
+check: lint subtestcheck lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint openspec-validate release-record-check pin-frozen files-check ignored-check test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -41,9 +41,11 @@ nolint-check: ## Fail when the lines added since BASE (default origin/main) carr
 
 # Extra flags for golangci-lint, for example LINT_FLAGS=--timeout=15m in CI.
 LINT_FLAGS ?=
+# The packages of lint-journal-build; test-changed sets only the changed ones.
+LINT_PKGS ?= ./...
 
 lint-journal-build: ## Lint the journal recording build: some files are left out of it, so it needs its own run.
-	golangci-lint run $(LINT_FLAGS) --build-tags e2e,journalrecording ./...
+	golangci-lint run $(LINT_FLAGS) --build-tags e2e,journalrecording $(LINT_PKGS)
 
 # The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
 ANALYSIS_TAGS := e2e,upgrade,soak
@@ -57,8 +59,11 @@ GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.8.0
 NILAWAY_GOGC      ?= 25
 NILAWAY_GOMEMLIMIT ?= 12GiB
 
+# The packages that nilaway reports on; test-changed sets only the changed ones.
+NILAWAY_PKGS ?= ./...
+
 nilaway: ## Nil-panic analysis of our packages; dependencies are read but not reported.
-	GOGC=$(NILAWAY_GOGC) GOMEMLIMIT=$(NILAWAY_GOMEMLIMIT) GOFLAGS=-tags=$(ANALYSIS_TAGS) $(NILAWAY) -include-pkgs=opendustpan.org/opendustpan ./...
+	GOGC=$(NILAWAY_GOGC) GOMEMLIMIT=$(NILAWAY_GOMEMLIMIT) GOFLAGS=-tags=$(ANALYSIS_TAGS) $(NILAWAY) -include-pkgs=opendustpan.org/opendustpan $(NILAWAY_PKGS)
 
 vuln: ## Known vulnerabilities in the code paths we call (reads the database at vuln.go.dev).
 	$(GOVULNCHECK) -tags $(ANALYSIS_TAGS) ./...
@@ -266,13 +271,17 @@ TEST_TIMEOUT ?= 45m
 # detector stays on for all code, and checkptr stays on for our own code. On
 # 4 cores, the dev data suite of pkg/store/sqlite used 904 s of user CPU with
 # the checks and 647 s without them. The cost: checkptr does not find unsafe
-# pointer misuse inside those modules, which we do not maintain. A second
-# -gcflags on the same command line replaces this one, so a target that needs
-# its own -gcflags must merge them into one.
+# pointer misuse inside those modules, which we do not maintain. -gcflags can
+# repeat with other patterns; for a package that matches more than one, the
+# last match wins, so a later -gcflags with an overlapping pattern must repeat
+# -d=checkptr=0.
 RACE_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0'
 
 test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
 	go test $(RACE_TEST_FLAGS) -timeout $(TEST_TIMEOUT) ./...
+
+test-changed: ## Quick local check, not complete; CI runs all checks. go build ./..., the fast repository checks, golangci-lint and nilaway on the packages changed since the merge base with BASE (default origin/main), and go test without -race on them and on the packages whose tests import them. The store suites run only when pkg/store/ changes.
+	python3 -I scripts/test-changed.py --base '$(BASE)' --timeout $(GO_TEST_TIMEOUT)
 
 test-nocache: ## Go tests as in test, but every package runs again. CI does the same on main every 2 hours, with test-ci-other and test-ci-store, to find flaky tests.
 	go test $(RACE_TEST_FLAGS) -count=1 -timeout $(TEST_TIMEOUT) ./...
@@ -341,21 +350,24 @@ test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs D
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m ./e2e/...
 
+docs-commands-check: ## Run each shell block of README, docs/guides and docs/reference as written; a failure prints page, block index, command and output. Not part of check.
+	E2E_DOCS_COMMANDS=1 go test -tags e2e -count=1 -timeout 60m -run 'TestDocsCommands|TestDocsCommandRunsAsWritten' ./e2e/
+
 e2e-ha: ## Drive three server binaries of one installation behind a round-robin proxy on PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL; E2E_HA_BACKUP_MB sets the backup size; see e2e/doc.go). Not part of check; the e2e-ha-nightly workflow (e2e/e2e-ha-nightly.workflow.yml) runs it.
 	E2E_INSTANCES=3 go test -tags e2e $(RACE_TEST_FLAGS) -count=1 -parallel 16 -timeout 60m -run '^TestHighAvailability$$' ./e2e/
 
 CLIENTGEN := go run ./cmd/clientgen -target typescript -description internal/api/apidesc/openapi.json -out clients/typescript
 
-clients-generate: ## Regenerate the TypeScript client package in clients/typescript from the API description.
+clients-generate: ## Generate the TypeScript client package in clients/typescript from the API description. The generated files stay out of Git until the first tag.
 	$(CLIENTGEN)
 
-clients-check: ## Fail when clients/typescript is not what a fresh run of the generator gives (like sqlc diff). Needs Go only.
-	$(CLIENTGEN) -check
+clients-check: ## Fail when the generator fails on the API description: it writes a package to a temporary directory and checks that run. Needs Go only.
+	go test -count=1 -run 'TestGeneratedPackageIsWhatARunGives' ./internal/clientgen/cli/
 
-clients-ts-test: ## Compile the TypeScript client strictly and run its tests (needs tsc and Node 22). Not part of check.
+clients-ts-test: clients-generate ## Compile the TypeScript client strictly and run its tests (needs tsc and Node 22). Not part of check.
 	cd clients/typescript && tsc -p tsconfig.json && node --test "test/*.test.mjs"
 
-clients-conformance: clients-ts-test ## Build the server, generate the Go and TypeScript clients from the description that the server serves, and run the client conformance suite on them. Not part of check.
+clients-conformance: clients-generate clients-ts-test ## Build the server, generate the Go and TypeScript clients from the description that the server serves, and run the client conformance suite on them. Not part of check.
 	DUSTPAN_TEST_CLIENTGEN_CONFORMANCE=1 go test $(RACE_TEST_FLAGS) -count=1 -timeout 25m -run 'TestGoClientConformance|TestTypeScriptClientConformance' ./internal/clientgen/conformance/
 
 checks-agent: ## Sync the branch with main, then run generate, check, e2e and a TruffleHog scan of the branch commits with cleanup (SYNC=merge|rebase|none, SKIP="steps", CLEAN_CACHE=1 also deletes the e2e CLI cache).
@@ -400,6 +412,9 @@ FILES_BASE ?= origin/main
 
 files-check: ## Refuse a branch that adds a file over 1 MiB or a binary file outside testdata/ without an allowlist line (base FILES_BASE, default origin/main).
 	./scripts/check-files.sh $(FILES_BASE)
+
+ignored-check: ## Fail when a tracked file matches a rule of a .gitignore file.
+	./scripts/check-ignored-files.sh
 
 regenerate-baseline: ## Write the baseline migration of each dialect from the migrations of BASELINE_REF (default origin/main); needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Not part of check.
 	./scripts/regenerate-baseline.sh $(BASELINE_REF)

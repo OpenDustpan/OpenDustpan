@@ -57,10 +57,60 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 	maps.Copy(scenarios, backupScenarios())
 	maps.Copy(scenarios, auditChainScenarios())
 	maps.Copy(scenarios, maintenanceScenarios())
+	maps.Copy(scenarios, ownTokenScenarios())
+	maps.Copy(scenarios, proxyRuleScenarios())
 
 	_, h := newGateHandler(t, adminGates())
 
 	checkHeaderFlags(t, h.env.handler.Operations(), scenarios)
+}
+
+// proxyRuleScenarios returns the scenarios of the proxy rule set operations.
+func proxyRuleScenarios() map[string]headertest.Scenario {
+	scenario := func(method, target string) headertest.Scenario {
+		return func(t *testing.T) headertest.Probe {
+			t.Helper()
+
+			g := newGateEnv(t, proxyAdmin())
+
+			saved := putProxy(t, g, target, proxyRuleDoc, "")
+			wantStatus(t, saved, http.StatusOK)
+
+			body := ""
+			if method == http.MethodPut {
+				body = proxyOtherDoc
+			}
+
+			etag := saved.Header().Get("ETag")
+
+			return headertest.Probe{
+				ETag: etag,
+				Send: func(headers map[string]string) headertest.Answer {
+					// The ETag is a digest, so the stale value that the check makes
+					// is not a digest. Send a digest that no set has instead.
+					ifMatch := headers["If-Match"]
+					if ifMatch != "" && ifMatch != etag {
+						ifMatch = `"` + strings.Repeat("0", 64) + `"`
+					}
+
+					rec := serveProxy(t, g, proxyCall{
+						method: method, target: target, body: body, contentType: "application/json",
+						ifMatch: ifMatch,
+					})
+
+					return headertest.Answer{Status: rec.Code, Header: rec.Header(), Body: rec.Body.String()}
+				},
+				Replayed: nil,
+			}
+		}
+	}
+
+	return map[string]headertest.Scenario{
+		"getNamespaceProxyRules":  scenario(http.MethodGet, proxyNSPath),
+		"saveNamespaceProxyRules": scenario(http.MethodPut, proxyNSPath),
+		"getUnitProxyRules":       scenario(http.MethodGet, proxyUnitURL),
+		"saveUnitProxyRules":      scenario(http.MethodPut, proxyUnitURL),
+	}
 }
 
 // approvalScenarios returns the scenarios of the approval operations.

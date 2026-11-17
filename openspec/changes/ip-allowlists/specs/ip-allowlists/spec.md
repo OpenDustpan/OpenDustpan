@@ -14,7 +14,7 @@ When the client address sits outside any opted-in installation, namespace or tok
 
 #### Scenario: Address misses one list
 - **WHEN** the address matches one opted-in list but not another
-- **THEN** the server answers 403 with error code ip-allowlist.denied and the scope
+- **THEN** the server answers 403 with error code access.ip-not-allowed and the scope
 
 ### Requirement: Invalid entry
 

@@ -956,6 +956,16 @@ type ProfileRevision struct {
 	Reason         string
 }
 
+type ProxyRuleSet struct {
+	NamespaceID string
+	ScopeKind   string
+	UnitID      string
+	Document    string
+	Digest      string
+	Version     int64
+	UpdatedAtMs int64
+}
+
 type QuotaKey struct {
 	NamespaceID  string
 	Blueprint    string
@@ -1326,18 +1336,37 @@ type Trigger struct {
 	NextSlotMs       int64
 }
 
+type TrustBundle struct {
+	ID            string
+	Namespace     string
+	ActiveVersion int64
+	Revision      int64
+	CreatedAtMs   int64
+}
+
+type TrustBundleVersion struct {
+	BundleID        string
+	Version         int64
+	Pem             string
+	CreatedAtMs     int64
+	OverlapEndsAtMs int64
+}
+
 type TrustRule struct {
-	ID             string
-	Namespace      string
-	Name           string
-	Issuer         string
-	Audience       string
-	KeySource      string
-	StaticKeys     string
-	ConditionsJson string
-	PrincipalID    string
-	CreatedBy      string
-	CreatedAtMs    int64
+	ID              string
+	Namespace       string
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	CreatedBy       string
+	CreatedAtMs     int64
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        sql.NullString
 }
 
 type UnitDefault struct {

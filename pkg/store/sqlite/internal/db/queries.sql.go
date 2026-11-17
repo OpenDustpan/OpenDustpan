@@ -2046,6 +2046,26 @@ func (q *Queries) CountTrustRulesInNamespace(ctx context.Context, namespace stri
 	return count, err
 }
 
+const countTrustRulesNamedInNamespace = `-- name: CountTrustRulesNamedInNamespace :one
+SELECT COUNT(*) FROM trust_rules
+WHERE namespace = ?1 AND name = ?2 AND id <> ?3
+`
+
+type CountTrustRulesNamedInNamespaceParams struct {
+	Namespace string
+	Name      string
+	ExceptID  string
+}
+
+// Counts the rules of the namespace with a name, except one rule. An update
+// uses it to refuse a name that another rule has.
+func (q *Queries) CountTrustRulesNamedInNamespace(ctx context.Context, arg CountTrustRulesNamedInNamespaceParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTrustRulesNamedInNamespace, arg.Namespace, arg.Name, arg.ExceptID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countUnmanagedTargets = `-- name: CountUnmanagedTargets :one
 SELECT COUNT(*) FROM unmanaged_targets WHERE namespace_id = ?1
 `
@@ -4022,6 +4042,34 @@ func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams
 	return result.RowsAffected()
 }
 
+const deleteProxyRuleSet = `-- name: DeleteProxyRuleSet :execrows
+DELETE FROM proxy_rule_sets
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?1)
+  AND scope_kind = ?2 AND unit_id = ?3 AND version = ?4
+`
+
+type DeleteProxyRuleSetParams struct {
+	Namespace string
+	ScopeKind string
+	UnitID    string
+	Version   int64
+}
+
+// The caller checks the fence in the same transaction. A row of another
+// version is not removed.
+func (q *Queries) DeleteProxyRuleSet(ctx context.Context, arg DeleteProxyRuleSetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteProxyRuleSet,
+		arg.Namespace,
+		arg.ScopeKind,
+		arg.UnitID,
+		arg.Version,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteRegistryKey = `-- name: DeleteRegistryKey :execrows
 DELETE FROM registry_keys
 WHERE registry_keys.fingerprint = ?1
@@ -4262,6 +4310,23 @@ type DeleteTriggerParams struct {
 
 func (q *Queries) DeleteTrigger(ctx context.Context, arg DeleteTriggerParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteTrigger, arg.ID, arg.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteTrustBundleVersion = `-- name: DeleteTrustBundleVersion :execrows
+DELETE FROM trust_bundle_versions WHERE bundle_id = ?1 AND version = ?2
+`
+
+type DeleteTrustBundleVersionParams struct {
+	BundleID string
+	Version  int64
+}
+
+func (q *Queries) DeleteTrustBundleVersion(ctx context.Context, arg DeleteTrustBundleVersionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTrustBundleVersion, arg.BundleID, arg.Version)
 	if err != nil {
 		return 0, err
 	}
@@ -8237,6 +8302,40 @@ func (q *Queries) GetProfileRevision(ctx context.Context, arg GetProfileRevision
 	return i, err
 }
 
+const getProxyRuleSet = `-- name: GetProxyRuleSet :one
+SELECT p.document, p.digest, p.version, p.updated_at_ms
+FROM proxy_rule_sets AS p
+JOIN namespaces AS n ON n.id = p.namespace_id
+WHERE n.name = ?1 AND p.scope_kind = ?2 AND p.unit_id = ?3
+`
+
+type GetProxyRuleSetParams struct {
+	Namespace string
+	ScopeKind string
+	UnitID    string
+}
+
+type GetProxyRuleSetRow struct {
+	Document    string
+	Digest      string
+	Version     int64
+	UpdatedAtMs int64
+}
+
+// The namespace, the kind and the unit ID are the whole key: a unit scope never
+// reads the row of its namespace.
+func (q *Queries) GetProxyRuleSet(ctx context.Context, arg GetProxyRuleSetParams) (GetProxyRuleSetRow, error) {
+	row := q.db.QueryRowContext(ctx, getProxyRuleSet, arg.Namespace, arg.ScopeKind, arg.UnitID)
+	var i GetProxyRuleSetRow
+	err := row.Scan(
+		&i.Document,
+		&i.Digest,
+		&i.Version,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const getQuotaReservation = `-- name: GetQuotaReservation :one
 SELECT r.id, r.state, r.at_ms, r.ends_at_ms
 FROM quota_reservations AS r
@@ -9491,9 +9590,30 @@ func (q *Queries) GetTrigger(ctx context.Context, arg GetTriggerParams) (GetTrig
 	return i, err
 }
 
+const getTrustBundleOfNamespace = `-- name: GetTrustBundleOfNamespace :one
+SELECT id, namespace, active_version, revision, created_at_ms
+FROM trust_bundles
+WHERE namespace = ?1
+`
+
+// The namespace is part of the key: a bundle of another namespace reads as no
+// row.
+func (q *Queries) GetTrustBundleOfNamespace(ctx context.Context, namespace string) (TrustBundle, error) {
+	row := q.db.QueryRowContext(ctx, getTrustBundleOfNamespace, namespace)
+	var i TrustBundle
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.ActiveVersion,
+		&i.Revision,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
 const getTrustRule = `-- name: GetTrustRule :one
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS TEXT) AS bundle_id
 FROM trust_rules
 WHERE namespace = ?1 AND id = ?2
 `
@@ -9503,11 +9623,28 @@ type GetTrustRuleParams struct {
 	ID        string
 }
 
+type GetTrustRuleRow struct {
+	ID              string
+	Namespace       string
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	CreatedBy       string
+	CreatedAtMs     int64
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        string
+}
+
 // The namespace is part of the key: a rule of another namespace reads as no
 // row.
-func (q *Queries) GetTrustRule(ctx context.Context, arg GetTrustRuleParams) (TrustRule, error) {
+func (q *Queries) GetTrustRule(ctx context.Context, arg GetTrustRuleParams) (GetTrustRuleRow, error) {
 	row := q.db.QueryRowContext(ctx, getTrustRule, arg.Namespace, arg.ID)
-	var i TrustRule
+	var i GetTrustRuleRow
 	err := row.Scan(
 		&i.ID,
 		&i.Namespace,
@@ -9520,6 +9657,9 @@ func (q *Queries) GetTrustRule(ctx context.Context, arg GetTrustRuleParams) (Tru
 		&i.PrincipalID,
 		&i.CreatedBy,
 		&i.CreatedAtMs,
+		&i.Revision,
+		&i.SpiffeIDPattern,
+		&i.BundleID,
 	)
 	return i, err
 }
@@ -12080,6 +12220,41 @@ func (q *Queries) InsertProfileRevision(ctx context.Context, arg InsertProfileRe
 	return err
 }
 
+const insertProxyRuleSet = `-- name: InsertProxyRuleSet :execrows
+INSERT INTO proxy_rule_sets (namespace_id, scope_kind, unit_id, document, digest, version, updated_at_ms)
+VALUES (
+    (SELECT n.id FROM namespaces AS n WHERE n.name = ?1),
+    ?2, ?3, ?4, ?5, 1, ?6
+)
+ON CONFLICT (namespace_id, scope_kind, unit_id) DO NOTHING
+`
+
+type InsertProxyRuleSetParams struct {
+	Namespace   string
+	ScopeKind   string
+	UnitID      string
+	Document    string
+	Digest      string
+	UpdatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A scope that has a set
+// is not written.
+func (q *Queries) InsertProxyRuleSet(ctx context.Context, arg InsertProxyRuleSetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertProxyRuleSet,
+		arg.Namespace,
+		arg.ScopeKind,
+		arg.UnitID,
+		arg.Document,
+		arg.Digest,
+		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertPurgedImport = `-- name: InsertPurgedImport :exec
 INSERT INTO imports_purged (namespace_id, id, purged_at_ms)
 VALUES (?1, ?2, ?3)
@@ -12623,31 +12798,85 @@ func (q *Queries) InsertTicket(ctx context.Context, arg InsertTicketParams) (int
 	return result.RowsAffected()
 }
 
+const insertTrustBundle = `-- name: InsertTrustBundle :exec
+INSERT INTO trust_bundles (id, namespace, active_version, revision, created_at_ms)
+VALUES (?1, ?2, ?3, ?4, ?5)
+`
+
+type InsertTrustBundleParams struct {
+	ID            string
+	Namespace     string
+	ActiveVersion int64
+	Revision      int64
+	CreatedAtMs   int64
+}
+
+// The caller checks the fence and the PEM text in the same transaction. The
+// namespace holds one bundle: a second bundle of a namespace fails the unique key.
+func (q *Queries) InsertTrustBundle(ctx context.Context, arg InsertTrustBundleParams) error {
+	_, err := q.db.ExecContext(ctx, insertTrustBundle,
+		arg.ID,
+		arg.Namespace,
+		arg.ActiveVersion,
+		arg.Revision,
+		arg.CreatedAtMs,
+	)
+	return err
+}
+
+const insertTrustBundleVersion = `-- name: InsertTrustBundleVersion :exec
+INSERT INTO trust_bundle_versions (bundle_id, version, pem, created_at_ms, overlap_ends_at_ms)
+VALUES (?1, ?2, ?3, ?4, ?5)
+`
+
+type InsertTrustBundleVersionParams struct {
+	BundleID        string
+	Version         int64
+	Pem             string
+	CreatedAtMs     int64
+	OverlapEndsAtMs int64
+}
+
+func (q *Queries) InsertTrustBundleVersion(ctx context.Context, arg InsertTrustBundleVersionParams) error {
+	_, err := q.db.ExecContext(ctx, insertTrustBundleVersion,
+		arg.BundleID,
+		arg.Version,
+		arg.Pem,
+		arg.CreatedAtMs,
+		arg.OverlapEndsAtMs,
+	)
+	return err
+}
+
 const insertTrustRule = `-- name: InsertTrustRule :execrows
 INSERT INTO trust_rules (
     id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, bundle_id
 )
 VALUES (
     ?1, ?2, ?3, ?4, ?5,
     ?6, ?7, ?8, ?9,
-    ?10, ?11
+    ?10, ?11, ?12, ?13,
+    CAST(NULLIF(?14, '') AS TEXT)
 )
 ON CONFLICT DO NOTHING
 `
 
 type InsertTrustRuleParams struct {
-	ID             string
-	Namespace      string
-	Name           string
-	Issuer         string
-	Audience       string
-	KeySource      string
-	StaticKeys     string
-	ConditionsJson string
-	PrincipalID    string
-	CreatedBy      string
-	CreatedAtMs    int64
+	ID              string
+	Namespace       string
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	CreatedBy       string
+	CreatedAtMs     int64
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        interface{}
 }
 
 // The caller checks the fence and the principal in the same transaction. A
@@ -12665,6 +12894,9 @@ func (q *Queries) InsertTrustRule(ctx context.Context, arg InsertTrustRuleParams
 		arg.PrincipalID,
 		arg.CreatedBy,
 		arg.CreatedAtMs,
+		arg.Revision,
+		arg.SpiffeIDPattern,
+		arg.BundleID,
 	)
 	if err != nil {
 		return 0, err
@@ -18951,23 +19183,82 @@ func (q *Queries) ListTriggersOfUnit(ctx context.Context, arg ListTriggersOfUnit
 	return items, nil
 }
 
+const listTrustBundleVersions = `-- name: ListTrustBundleVersions :many
+SELECT version, pem, created_at_ms, overlap_ends_at_ms
+FROM trust_bundle_versions
+WHERE bundle_id = ?1
+ORDER BY version
+`
+
+type ListTrustBundleVersionsRow struct {
+	Version         int64
+	Pem             string
+	CreatedAtMs     int64
+	OverlapEndsAtMs int64
+}
+
+func (q *Queries) ListTrustBundleVersions(ctx context.Context, bundleID string) ([]ListTrustBundleVersionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTrustBundleVersions, bundleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTrustBundleVersionsRow
+	for rows.Next() {
+		var i ListTrustBundleVersionsRow
+		if err := rows.Scan(
+			&i.Version,
+			&i.Pem,
+			&i.CreatedAtMs,
+			&i.OverlapEndsAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTrustRulesOfNamespace = `-- name: ListTrustRulesOfNamespace :many
 SELECT id, namespace, name, issuer, audience, key_source, static_keys, conditions_json, principal_id,
-    created_by, created_at_ms
+    created_by, created_at_ms, revision, spiffe_id_pattern, CAST(COALESCE(bundle_id, '') AS TEXT) AS bundle_id
 FROM trust_rules
 WHERE namespace = ?1
 ORDER BY name, id
 `
 
-func (q *Queries) ListTrustRulesOfNamespace(ctx context.Context, namespace string) ([]TrustRule, error) {
+type ListTrustRulesOfNamespaceRow struct {
+	ID              string
+	Namespace       string
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	CreatedBy       string
+	CreatedAtMs     int64
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        string
+}
+
+func (q *Queries) ListTrustRulesOfNamespace(ctx context.Context, namespace string) ([]ListTrustRulesOfNamespaceRow, error) {
 	rows, err := q.db.QueryContext(ctx, listTrustRulesOfNamespace, namespace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []TrustRule
+	var items []ListTrustRulesOfNamespaceRow
 	for rows.Next() {
-		var i TrustRule
+		var i ListTrustRulesOfNamespaceRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Namespace,
@@ -18980,6 +19271,9 @@ func (q *Queries) ListTrustRulesOfNamespace(ctx context.Context, namespace strin
 			&i.PrincipalID,
 			&i.CreatedBy,
 			&i.CreatedAtMs,
+			&i.Revision,
+			&i.SpiffeIDPattern,
+			&i.BundleID,
 		); err != nil {
 			return nil, err
 		}
@@ -23962,6 +24256,41 @@ func (q *Queries) UpdatePrincipal(ctx context.Context, arg UpdatePrincipalParams
 	return result.RowsAffected()
 }
 
+const updateProxyRuleSet = `-- name: UpdateProxyRuleSet :execrows
+UPDATE proxy_rule_sets
+SET document = ?1, digest = ?2, version = CAST(?3 AS INTEGER) + 1,
+    updated_at_ms = ?4
+WHERE namespace_id = (SELECT n.id FROM namespaces AS n WHERE n.name = ?5)
+  AND scope_kind = ?6 AND unit_id = ?7 AND version = CAST(?3 AS INTEGER)
+`
+
+type UpdateProxyRuleSetParams struct {
+	Document    string
+	Digest      string
+	Version     int64
+	UpdatedAtMs int64
+	Namespace   string
+	ScopeKind   string
+	UnitID      string
+}
+
+// A row of another version than the one that the caller read is not written.
+func (q *Queries) UpdateProxyRuleSet(ctx context.Context, arg UpdateProxyRuleSetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateProxyRuleSet,
+		arg.Document,
+		arg.Digest,
+		arg.Version,
+		arg.UpdatedAtMs,
+		arg.Namespace,
+		arg.ScopeKind,
+		arg.UnitID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateRole = `-- name: UpdateRole :execrows
 UPDATE roles SET name = ?, name_key = ?, description = ?, actions = ?, updated_at_ms = ?
 WHERE id = ? AND deleted_at_ms IS NULL
@@ -24108,6 +24437,85 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		arg.UpdatedAtMs,
 		arg.Version,
 		arg.ProviderID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateTrustBundle = `-- name: UpdateTrustBundle :execrows
+UPDATE trust_bundles SET active_version = ?1, revision = ?2
+WHERE id = ?3 AND revision = ?4
+`
+
+type UpdateTrustBundleParams struct {
+	ActiveVersion  int64
+	Revision       int64
+	ID             string
+	StoredRevision int64
+}
+
+// The revision in the WHERE clause is the stored one, so a write that lost a
+// race changes no row.
+func (q *Queries) UpdateTrustBundle(ctx context.Context, arg UpdateTrustBundleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateTrustBundle,
+		arg.ActiveVersion,
+		arg.Revision,
+		arg.ID,
+		arg.StoredRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateTrustRule = `-- name: UpdateTrustRule :execrows
+UPDATE trust_rules SET
+    name = ?1, issuer = ?2, audience = ?3,
+    key_source = ?4, static_keys = ?5,
+    conditions_json = ?6, principal_id = ?7,
+    revision = ?8, spiffe_id_pattern = ?9,
+    bundle_id = CAST(NULLIF(?10, '') AS TEXT)
+WHERE namespace = ?11 AND id = ?12 AND revision = ?13
+`
+
+type UpdateTrustRuleParams struct {
+	Name            string
+	Issuer          string
+	Audience        string
+	KeySource       string
+	StaticKeys      string
+	ConditionsJson  string
+	PrincipalID     string
+	Revision        int64
+	SpiffeIDPattern string
+	BundleID        interface{}
+	Namespace       string
+	ID              string
+	StoredRevision  int64
+}
+
+// The caller reads the rule and checks the revision, the fence and the
+// principal in the same transaction. The revision in the WHERE clause is the
+// stored one, so a write that lost a race changes no row. The namespace, the
+// creator and the creation time never change.
+func (q *Queries) UpdateTrustRule(ctx context.Context, arg UpdateTrustRuleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateTrustRule,
+		arg.Name,
+		arg.Issuer,
+		arg.Audience,
+		arg.KeySource,
+		arg.StaticKeys,
+		arg.ConditionsJson,
+		arg.PrincipalID,
+		arg.Revision,
+		arg.SpiffeIDPattern,
+		arg.BundleID,
+		arg.Namespace,
+		arg.ID,
+		arg.StoredRevision,
 	)
 	if err != nil {
 		return 0, err

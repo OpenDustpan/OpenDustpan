@@ -115,7 +115,9 @@ func TestPublishRepeat(t *testing.T) {
 
 	// Other bytes for the same version are refused.
 	other := buildSet(t, sg, "payments", "1.0.0", "linux_amd64")
-	other.archives[other.order[0]] = []byte("other bytes")
+	other.archives[other.order[0]] = makeZip(t, []zipFile{
+		fileEntry("terraform-provider-payments", []byte("other bytes")),
+	})
 	other.sums = []byte(hashOf(other.archives[other.order[0]]) + "  " + other.order[0] + "\n")
 	other.sig = sg.Detach(t, other.sums)
 
@@ -201,9 +203,17 @@ func refusals() []refusal {
 		},
 		{
 			name: "archive changed after the signature",
-			build: withSet("payments", "1.0.0", func(s *set) {
-				s.archives[s.order[0]] = []byte("tampered")
-			}),
+			build: func(t *testing.T, e *env, sg pgpfixture.Signer) error {
+				t.Helper()
+
+				// A zip file with other bytes: the publish refuses a body that is
+				// not a zip file before the hash check that this case reaches.
+				tampered := makeZip(t, []zipFile{fileEntry("terraform-provider-payments", []byte("tampered"))})
+
+				return withSet("payments", "1.0.0", func(s *set) {
+					s.archives[s.order[0]] = tampered
+				})(t, e, sg)
+			},
 			want: releasecheck.ErrRefused, text: "linux_amd64.zip",
 		},
 		{
@@ -424,7 +434,9 @@ func TestPublishOfAnExistingVersionWritesNoContentKey(t *testing.T) {
 				t.Helper()
 
 				other := buildSet(t, sg, "payments", "1.0.0", "linux_amd64")
-				other.archives[other.order[0]] = []byte("other bytes")
+				other.archives[other.order[0]] = makeZip(t, []zipFile{
+					fileEntry("terraform-provider-payments", []byte("other bytes")),
+				})
 				other.sums = []byte(hashOf(other.archives[other.order[0]]) + "  " + other.order[0] + "\n")
 				other.sig = sg.Detach(t, other.sums)
 
@@ -434,10 +446,16 @@ func TestPublishOfAnExistingVersionWritesNoContentKey(t *testing.T) {
 		},
 		{
 			name: "other protocols",
-			second: func(t *testing.T, e *env, _ pgpfixture.Signer, first *set) service.PublishRequest {
+			second: func(t *testing.T, e *env, sg pgpfixture.Signer, first *set) service.PublishRequest {
 				t.Helper()
 
-				req := e.stage(t, acme, first)
+				// The same archive bytes with a manifest file that lists 6.0:
+				// the stored protocols change, so the content changes.
+				other := *first
+				other.sums = slices.Clone(first.sums)
+				withManifestFile(t, sg, &other, manifestJSON("6.0"), manifestJSON("6.0"))
+
+				req := e.stage(t, acme, &other)
 				req.Protocols = []string{"6.0"}
 
 				return req

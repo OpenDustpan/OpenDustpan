@@ -91,7 +91,7 @@ func TestTheTrustRuleServiceAsksTheIssuer(t *testing.T) {
 	withServices.namespaces = nsSvc
 	withServices.issuer = issuer
 
-	with, err := newTrustRuleService(withServices, cfg)
+	with, err := newTrustRuleService(withServices, cfg, nil)
 	if err != nil {
 		t.Fatalf("service with an issuer: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestTheTrustRuleServiceAsksTheIssuer(t *testing.T) {
 	var withoutServices services
 	withoutServices.namespaces = nsSvc
 
-	without, err := newTrustRuleService(withoutServices, cfg)
+	without, err := newTrustRuleService(withoutServices, cfg, nil)
 	if err != nil {
 		t.Fatalf("service without an issuer: %v", err)
 	}

@@ -71,7 +71,7 @@ Registry release files follow a stricter rule. A published release that names a 
 
 A restore accepts a backup only when the `unverified` list names every blob that the SQL data names without these values. A backup that does not list such a blob lost its content. The restore then stops with the text `backup is incomplete: the data names <number> blobs that the backup does not hold`. The live data stays as it was.
 
-The server refuses a backup when its data names more than 10000 such blobs. It writes no manifest, so no restore applies the backup. The failed row and the server log name the count and the limit. The count points to rows without the size and the MD5 of a blob. Such rows can come from an earlier version of the server. Run the backup again after those rows hold their values, or after the server no longer holds them. No setting changes the bound. The answer of `GET /api/server/backups/{id}` shows it as `unverifiedKeyLimit`. The same answer shows the count of the unverified keys of the manifest as `unverifiedKeyCount`. The code `backup.too-many-unverified` carries the count and the limit as its arguments.
+The server refuses a backup when its data names more than 10000 such blobs. It writes no manifest, so no restore applies the backup. The failed row and the server log name the count and the limit. The count points to rows without the size and the MD5 of a blob. Such rows can come from an earlier version of the server. Run the backup again after those rows hold their values, or after the server no longer holds them. No setting changes the bound. The answer of `GET /api/dustpan/v1/backups/{id}` shows it as `unverifiedKeyLimit`. The same answer shows the count of the unverified keys of the manifest as `unverifiedKeyCount`. The code `backup.too-many-unverified` carries the count and the limit as its arguments.
 
 A restore does not apply the bound. A manifest with more unverified keys than the bound restores as before. Such a manifest can come from an earlier version of the server. The restore checks the same rule: the list must name every blob that the data names. The audit log then holds one entry with the count and the limit.
 
@@ -352,9 +352,9 @@ restore applies. These writes run, each with its audit entry:
   revocation in normal operation stay in force: the fence of the namespace,
   and the rule that the caller holds every action that the grant gives.
 - the revocation of a join token of a runner pool
-  (`POST /api/runners/{namespace}/pools/{pool}/join-tokens/{id}/revoke`).
+  (`POST /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens/{id}/revoke`).
 - the retire of a runner
-  (`POST /api/runners/{namespace}/runners/{runner}/retire`), which also ends
+  (`POST /api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire`), which also ends
   the live claims of the runner. The other routes of the runner management API
   answer 503 in maintenance mode.
 - the disable of a sign-in provider, which also ends its sessions. A change of

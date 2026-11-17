@@ -1,11 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"time"
 
@@ -146,6 +148,10 @@ const (
 	RoleSums      FileRole = "sums"
 	RoleSignature FileRole = "signature"
 	RoleArchive   FileRole = "archive"
+	// RoleManifest is the manifest file of the release tools,
+	// terraform-registry-manifest.json, that lists the plugin protocol
+	// versions. A request has at most one.
+	RoleManifest FileRole = "manifest"
 )
 
 // StagedFile names one staged file of a publish: its role, the file name that
@@ -163,6 +169,7 @@ type PublishRequest struct {
 	Name    string
 	Version string
 	// Protocols are the plugin protocol versions that the publisher states.
+	// With a manifest file, they must equal the protocols of the manifest.
 	Protocols []string
 	Files     []StagedFile
 }
@@ -171,11 +178,20 @@ type PublishRequest struct {
 type measured struct {
 	StagedFile
 
-	key   blob.Key
-	sum   string
-	size  int64
-	md5   string
+	key  blob.Key
+	sum  string
+	size int64
+	md5  string
+	// bytes holds the bytes of a checksums file, a signature file or a
+	// manifest file. It stays
+	// nil for a provider archive: the measure step unpacks the archive and
+	// drops its bytes before it reads the next file.
 	bytes []byte
+	// facts is the result of the unpack of a provider archive, and unpackErr
+	// is the error of that unpack. The check of the release reports unpackErr
+	// after the signature check.
+	facts     unpackFacts
+	unpackErr error
 }
 
 // Publish publishes one provider release from the staged files of req. It
@@ -379,9 +395,9 @@ func checkFileList(files []StagedFile) error {
 
 		tokens[f.Token], names[f.Name] = true, true
 
-		if f.Role != RoleSums && f.Role != RoleSignature && f.Role != RoleArchive {
+		if !slices.Contains([]FileRole{RoleSums, RoleSignature, RoleArchive, RoleManifest}, f.Role) {
 			return fmt.Errorf(
-				"%w: file %s has the role %q: use sums, signature or archive",
+				"%w: file %s has the role %q: use sums, signature, archive or manifest",
 				ErrBadRequest,
 				f.Name,
 				f.Role,
@@ -391,6 +407,10 @@ func checkFileList(files []StagedFile) error {
 
 	if roles[RoleSums] != 1 || roles[RoleSignature] != 1 || roles[RoleArchive] == 0 {
 		return fmt.Errorf("%w: send one sums file, one signature file and at least one archive", ErrBadRequest)
+	}
+
+	if roles[RoleManifest] > 1 {
+		return fmt.Errorf("%w: send at most one manifest file", ErrBadRequest)
 	}
 
 	return nil
@@ -407,7 +427,10 @@ func stagedKeys(id namespace.ID, files []StagedFile) ([]measured, error) {
 			return nil, fmt.Errorf("%w: the token of file %s is not valid", ErrBadRequest, f.Name)
 		}
 
-		out = append(out, measured{StagedFile: f, key: key, sum: "", size: 0, md5: "", bytes: nil})
+		out = append(out, measured{
+			StagedFile: f, key: key, sum: "", size: 0, md5: "", bytes: nil,
+			facts: unpackFacts{h1: ""}, unpackErr: nil,
+		})
 	}
 
 	return out, nil
@@ -415,7 +438,10 @@ func stagedKeys(id namespace.ID, files []StagedFile) ([]measured, error) {
 
 // measureAll reads each staged file again and computes its SHA-256 and size.
 // The server trusts no hash that a client sends. The checksums file and the
-// signature file are also kept in memory: both are small.
+// signature file are kept in memory, bounded by the limit of their role. The
+// archives are read one at a time: the bytes of an archive are unpacked and
+// dropped before the next file is read, so the memory holds at most one
+// archive.
 func (s *Service) measureAll(ctx context.Context, view *blob.Scoped, files []measured) error {
 	var total int64
 
@@ -443,13 +469,15 @@ func (s *Service) limitOf(role FileRole) int64 {
 		return MaxSignatureBytes
 	case RoleArchive:
 		return s.maxFile
+	case RoleManifest:
+		return maxManifestBytes
 	default:
 		return 0
 	}
 }
 
-// measureOne reads one staged file, computes its SHA-256 and size, and keeps
-// the bytes of a checksums file and of a signature file.
+// measureOne reads one staged file and computes its SHA-256, its MD5 and its
+// size while it streams the bytes, bounded by the limit of its role.
 func (s *Service) measureOne(ctx context.Context, view *blob.Scoped, f *measured) error {
 	r, err := view.Get(ctx, f.key)
 	if errors.Is(err, blob.ErrNotFound) {
@@ -461,37 +489,76 @@ func (s *Service) measureOne(ctx context.Context, view *blob.Scoped, f *measured
 	}
 
 	digest := blob.NewDigestReader(r)
-	m := newMeasure(digest, s.limitOf(f.Role))
-
-	if f.Role == RoleArchive {
-		_, err = io.Copy(io.Discard, m)
-	} else {
-		f.bytes, err = io.ReadAll(m)
-	}
-
+	readErr := f.read(digest, s.limitOf(f.Role))
 	closeErr := r.Close()
 
-	if errors.Is(err, ErrTooLarge) {
-		return fmt.Errorf("%w: %s", ErrTooLarge, f.Name)
+	if readErr != nil {
+		return readErr
 	}
 
-	if err != nil || closeErr != nil {
-		return fmt.Errorf("read the staged file %s: %w", f.Name, errors.Join(err, closeErr))
+	if closeErr != nil {
+		return fmt.Errorf("read the staged file %s: %w", f.Name, closeErr)
 	}
 
-	f.sum, f.size = m.sum(), m.n
 	sum := digest.Digest().MD5
 	f.md5 = hex.EncodeToString(sum[:])
 
 	return nil
 }
 
+// read reads the bytes of f from r, at most limit bytes, and hashes them while
+// it reads. It keeps the bytes of a checksums file, a signature file and a
+// manifest file. It unpacks a provider archive at once, keeps the facts and
+// the error of the unpack, and drops the bytes of the archive, so the publish
+// holds at most one archive in memory. It returns ErrTooLarge past the limit,
+// registry.ErrInvalid for a manifest file past the limit, and
+// registry.ErrBadArchive for an archive that is not a zip file.
+func (f *measured) read(r io.Reader, limit int64) error {
+	m := newMeasure(r, limit)
+
+	var held bytes.Buffer
+
+	_, err := io.Copy(&held, m)
+	if errors.Is(err, ErrTooLarge) && f.Role == RoleManifest {
+		return fmt.Errorf("%w: the manifest file %s is larger than %d bytes", registry.ErrInvalid, f.Name, limit)
+	}
+
+	if errors.Is(err, ErrTooLarge) {
+		return fmt.Errorf("%w: %s", ErrTooLarge, f.Name)
+	}
+
+	if err != nil {
+		return fmt.Errorf("read the staged file %s: %w", f.Name, err)
+	}
+
+	if f.Role != RoleArchive {
+		f.bytes = held.Bytes()
+		f.sum, f.size = m.sum(), m.n
+
+		return nil
+	}
+
+	// The content of an archive decides if it is a zip file, not the media
+	// type of the upload. The check runs before the hash is kept, so a body
+	// that is not a zip file reaches no hash check and no signature check.
+	if zipErr := requireZip(f.Name, held.Bytes()); zipErr != nil {
+		return zipErr
+	}
+
+	// The unpack error waits for the check of the release, which reports it
+	// after the signature check, as for the other checks of the archive set.
+	f.facts, f.unpackErr = unpackProviderArchive(held.Bytes())
+	f.sum, f.size = m.sum(), m.n
+	return nil
+}
+
 // byRole is the measured files of a request, sorted by role. A nil file is a
 // file that the request lacks.
 type byRole struct {
-	set  releasecheck.Set
-	sums *measured
-	sig  *measured
+	set      releasecheck.Set
+	sums     *measured
+	sig      *measured
+	manifest *measured
 }
 
 // sortByRole builds the file set of the release check from the measured files.
@@ -509,6 +576,8 @@ func sortByRole(files []measured) byRole {
 			out.set.Signature, out.sig = file, f
 		case RoleArchive:
 			out.set.Archives = append(out.set.Archives, file)
+		case RoleManifest:
+			out.manifest = f
 		default:
 		}
 	}
@@ -559,24 +628,161 @@ func (s *Service) check(
 		return registry.Release{}, fmt.Errorf("parse the checksums file: %w: %w", releasecheck.ErrRefused, err)
 	}
 
+	parsed, err = checkManifestSum(sorted.manifest, parsed)
+	if err != nil {
+		return registry.Release{}, err
+	}
+
 	rel, err := releasecheck.Check(addr, req.Version, set, parsed)
 	if err != nil {
 		return registry.Release{}, fmt.Errorf("check the archive set: %w", err)
 	}
 
+	if factsErr := applyUnpackFacts(files, &rel); factsErr != nil {
+		return registry.Release{}, factsErr
+	}
+
+	protocols, err := releaseProtocols(req.Protocols, sorted.manifest)
+	if err != nil {
+		return registry.Release{}, err
+	}
+
 	rel.KeyFingerprint = fingerprint
-	rel.Protocols = slices.Clone(req.Protocols)
+	rel.Protocols = protocols
 	rel.Files = storedFiles(files)
 
 	return rel, nil
 }
 
+// checkManifestSum checks the manifest file against the checksums file and
+// returns the lines of the checksums file without the line of the manifest,
+// so that the check of the archive set sees only the archives. A manifest
+// file that the checksums file lists with another digest is refused with
+// registry.ErrInvalid. A manifest file that the checksums file does not list
+// passes: the release tools do not always list it. Without a manifest file,
+// sums is returned as it is.
+func checkManifestSum(manifest *measured, sums map[string]string) (map[string]string, error) {
+	if manifest == nil {
+		return sums, nil
+	}
+
+	listed, ok := sums[manifest.Name]
+	if !ok {
+		return sums, nil
+	}
+
+	if listed != manifest.sum {
+		return nil, fmt.Errorf(
+			"%w: the checksums file lists the manifest file %s with another digest", registry.ErrInvalid, manifest.Name,
+		)
+	}
+
+	out := maps.Clone(sums)
+	delete(out, manifest.Name)
+
+	return out, nil
+}
+
+// releaseProtocols returns the protocols to store. With a manifest file, they
+// are the protocols of the manifest, and the stated protocols must hold the
+// same versions as a set with duplicates ignored, or the publish is refused
+// with registry.ErrInvalid. Without a manifest file, they are the stated
+// protocols; the check of the release refuses an empty list.
+func releaseProtocols(stated []string, manifest *measured) ([]string, error) {
+	if manifest == nil {
+		return slices.Clone(stated), nil
+	}
+
+	protocols, err := manifestProtocols(manifest.Name, manifest.bytes)
+	if err != nil {
+		return nil, err
+	}
+
+	// A stated list that differs from the manifest is refused and not
+	// replaced, so the publisher sees the wrong value in the answer.
+	if !sameProtocolSet(stated, protocols) {
+		return nil, fmt.Errorf(
+			"%w: stated protocols %q differ from the manifest %q",
+			registry.ErrInvalid,
+			stated,
+			protocols,
+		)
+	}
+
+	return protocols, nil
+}
+
+// applyUnpackFacts reports the result of the bounded unpack of each archive
+// from the measure step, and writes the H1 digest of the unpacked bytes on the
+// archive of the release.
+func applyUnpackFacts(files []measured, rel *registry.Release) error {
+	byName := map[string]int{}
+
+	for i := range rel.Archives {
+		byName[rel.Archives[i].FileName] = i
+	}
+
+	for i := range files {
+		f := &files[i]
+		if f.Role != RoleArchive {
+			continue
+		}
+
+		if f.unpackErr != nil {
+			return f.unpackErr
+		}
+
+		// Defense in depth: a successful unpack always gives an H1. This check
+		// stays so that an archive that the measure step did not unpack is
+		// refused, and it does not rely on the measure step or on the unpack.
+		facts := f.facts
+		if facts.h1 == "" {
+			return fmt.Errorf("%w: archive %s was not unpacked", registry.ErrBadArchive, f.Name)
+		}
+
+		// Defense in depth: the stage step and the release check also bind
+		// archive names to the release. This check stays so that a measured
+		// archive with a foreign name never writes a digest, and it does not
+		// rely on those layers.
+		at, ok := byName[f.Name]
+		if !ok {
+			return fmt.Errorf("%w: archive %s is not in the release", ErrBadRequest, f.Name)
+		}
+
+		rel.Archives[at].H1 = facts.h1
+	}
+
+	return nil
+}
+
+// sameProtocolSet reports whether stated and manifest hold the same protocol
+// versions as sets, with duplicates ignored.
+func sameProtocolSet(stated, manifest []string) bool {
+	if len(stated) == 0 || len(manifest) == 0 {
+		return len(stated) == 0 && len(manifest) == 0
+	}
+
+	manifestSet := slices.Clone(manifest)
+	slices.Sort(manifestSet)
+	manifestSet = slices.Compact(manifestSet)
+
+	statedSet := slices.Clone(stated)
+	slices.Sort(statedSet)
+	statedSet = slices.Compact(statedSet)
+
+	return slices.Equal(statedSet, manifestSet)
+}
+
 // move copies each staged file to its content key. The reader that feeds the
 // copy checks the SHA-256 and the size again, and fails at the end when they
-// differ, so a content key never holds bytes that were not checked.
+// differ, so a content key never holds bytes that were not checked. A manifest
+// file is not copied: the release keeps its protocols, not its bytes.
 func (s *Service) move(ctx context.Context, view *blob.Scoped, id namespace.ID, files []measured) error {
 	for i := range files {
 		f := &files[i]
+		if f.Role == RoleManifest {
+			continue
+		}
 
 		dst, err := registry.BlobKey(id, f.sum)
 		if err != nil {
@@ -660,12 +866,17 @@ func (s *Service) releaseEntry(c *Caller, rel registry.Release) audit.Entry {
 // storedFiles returns the digests of the files of a release: the SHA-256, the
 // size and the MD5 that the measure computed while it read each staged file.
 // A file is stored as it came, so these are the digests of the stored bytes.
-// A file with the same bytes as an earlier one appears once.
+// A file with the same bytes as an earlier one appears once. A manifest file is
+// not stored, so it has no digest here.
 func storedFiles(files []measured) []registry.StoredFile {
 	out := make([]registry.StoredFile, 0, len(files))
 
 	for i := range files {
 		f := &files[i]
+		if f.Role == RoleManifest {
+			continue
+		}
+
 		if slices.ContainsFunc(out, func(o registry.StoredFile) bool { return o.SHA256 == f.sum }) {
 			continue
 		}

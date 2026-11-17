@@ -54,6 +54,14 @@ type reviewDoc struct {
 	NextCursor string         `json:"nextCursor"`
 }
 
+// callerGrantsDoc is one page of the grants of the caller.
+type callerGrantsDoc struct {
+	Total         *int64         `json:"total"`
+	AsOfMs        *int64         `json:"asOfMs"`
+	Grants        []reviewRowDoc `json:"grants"`
+	NextPageToken string         `json:"nextPageToken"`
+}
+
 type accessDoc struct {
 	Object  string     `json:"object"`
 	Actions []string   `json:"actions"`
@@ -66,11 +74,11 @@ type accessObjectDoc struct {
 }
 
 type accessObjectsDoc struct {
-	Objects    []accessObjectDoc `json:"objects"`
-	Action     string            `json:"action"`
-	NextCursor string            `json:"nextCursor"`
-	Total      int64             `json:"total"`
-	All        bool              `json:"all"`
+	Objects       []accessObjectDoc `json:"objects"`
+	Action        string            `json:"action"`
+	NextPageToken string            `json:"nextPageToken"`
+	Total         int64             `json:"total"`
+	All           bool              `json:"all"`
 }
 
 // TestReviewScopesAndActions reads the exports as callers with grants: the
@@ -193,7 +201,7 @@ func TestReviewWritesAnAuditEntry(t *testing.T) {
 
 	before := latest("@server")
 
-	f.as(t, "alice", apiCall{http.MethodGet, "/api/server/caller/access?object=acme", "", http.StatusOK}, nil)
+	f.as(t, "alice", apiCall{http.MethodGet, "/api/dustpan/v1/me/access?object=acme", "", http.StatusOK}, nil)
 
 	if after := latest("@server"); after.Sequence != before.Sequence {
 		t.Fatalf("caller access wrote %+v, want no entry", after)
@@ -240,7 +248,7 @@ func TestCallerAccess(t *testing.T) {
 	f := newAccessFixture(t)
 
 	var one accessDoc
-	f.as(t, "alice", apiCall{http.MethodGet, "/api/server/caller/access?object=acme", "", http.StatusOK}, &one)
+	f.as(t, "alice", apiCall{http.MethodGet, "/api/dustpan/v1/me/access?object=acme", "", http.StatusOK}, &one)
 
 	if one.Object != "acme" || !slices.Contains(one.Actions, "namespace:read-access") ||
 		len(one.Grants) != 1 || one.Grants[0].Role != "admin" {
@@ -248,7 +256,7 @@ func TestCallerAccess(t *testing.T) {
 	}
 
 	var none accessDoc
-	f.as(t, "bob", apiCall{http.MethodGet, "/api/server/caller/access?object=acme", "", http.StatusOK}, &none)
+	f.as(t, "bob", apiCall{http.MethodGet, "/api/dustpan/v1/me/access?object=acme", "", http.StatusOK}, &none)
 
 	if len(none.Actions) != 0 || len(none.Grants) != 0 {
 		t.Fatalf("access of bob on acme = %+v, want none", none)
@@ -266,7 +274,7 @@ func TestCallerAccess(t *testing.T) {
 	} {
 		var page accessObjectsDoc
 		f.as(t, c.subject, apiCall{
-			http.MethodGet, "/api/server/caller/access?" + c.query, "", http.StatusOK,
+			http.MethodGet, "/api/dustpan/v1/me/access/objects?" + c.query, "", http.StatusOK,
 		}, &page)
 
 		objs := make([]string, 0, len(page.Objects))
@@ -280,10 +288,19 @@ func TestCallerAccess(t *testing.T) {
 		}
 	}
 
-	for _, query := range []string{"", "object=acme&type=unit", "type=group", "type=unit&action=nope", "type=unit&limit=0"} {
-		f.as(t, "alice", apiCall{
-			http.MethodGet, "/api/server/caller/access?" + query, "", http.StatusBadRequest,
-		}, nil)
+	for _, path := range []string{
+		"/api/dustpan/v1/me/access",
+		"/api/dustpan/v1/me/access?object=acme&type=unit",
+		"/api/dustpan/v1/me/access?type=unit",
+		"/api/dustpan/v1/me/access/objects",
+		"/api/dustpan/v1/me/access/objects?object=acme",
+		"/api/dustpan/v1/me/access/objects?type=group",
+		"/api/dustpan/v1/me/access/objects?type=unit&action=nope",
+		"/api/dustpan/v1/me/access/objects?type=unit&pageSize=0",
+		"/api/dustpan/v1/me/access/objects?type=unit&limit=1",
+		"/api/dustpan/v1/me/access/objects?type=unit&cursor=x",
+	} {
+		f.as(t, "alice", apiCall{http.MethodGet, path, "", http.StatusBadRequest}, nil)
 	}
 }
 
@@ -341,7 +358,7 @@ func TestCallerAccessGrantedBy(t *testing.T) {
 	})
 
 	var admin callerAccessFullDoc
-	f.as(t, "admin", apiCall{http.MethodGet, "/api/server/caller/access?object=acme", "", http.StatusOK}, &admin)
+	f.as(t, "admin", apiCall{http.MethodGet, "/api/dustpan/v1/me/access?object=acme", "", http.StatusOK}, &admin)
 
 	if len(admin.MissingActions) != 0 {
 		t.Fatalf("missing actions of the bootstrap admin = %+v, want none", admin.MissingActions)
@@ -354,7 +371,7 @@ func callerMissing(t *testing.T, f accessFixture, subject, object string) caller
 
 	var got callerAccessFullDoc
 	f.as(t, subject, apiCall{
-		http.MethodGet, "/api/server/caller/access?object=" + object, "", http.StatusOK,
+		http.MethodGet, "/api/dustpan/v1/me/access?object=" + object, "", http.StatusOK,
 	}, &got)
 
 	return got
@@ -422,10 +439,10 @@ func TestCallerGrants(t *testing.T) {
 
 	var got []string
 
-	path := "/api/server/caller/grants?limit=1"
+	path := "/api/dustpan/v1/me/grants?pageSize=1"
 
 	for page := 0; path != ""; page++ {
-		var doc reviewDoc
+		var doc callerGrantsDoc
 		f.as(t, "bob", apiCall{http.MethodGet, path, "", http.StatusOK}, &doc)
 
 		if (page == 0) != (doc.Total != nil) || (doc.Total != nil && *doc.Total != 2) || doc.AsOfMs == nil {
@@ -435,8 +452,8 @@ func TestCallerGrants(t *testing.T) {
 		got = append(got, callerGrantRows(doc)...)
 
 		path = ""
-		if doc.NextCursor != "" {
-			path = "/api/server/caller/grants?limit=1&cursor=" + doc.NextCursor
+		if doc.NextPageToken != "" {
+			path = "/api/dustpan/v1/me/grants?pageSize=1&pageToken=" + doc.NextPageToken
 		}
 	}
 
@@ -457,10 +474,10 @@ func TestCallerGrantsOfOtherCallers(t *testing.T) {
 	f := newAccessFixture(t)
 
 	for subject, rows := range map[string]int{"olga": 1, "admin": 0} {
-		var doc reviewDoc
-		f.as(t, subject, apiCall{http.MethodGet, "/api/server/caller/grants", "", http.StatusOK}, &doc)
+		var doc callerGrantsDoc
+		f.as(t, subject, apiCall{http.MethodGet, "/api/dustpan/v1/me/grants", "", http.StatusOK}, &doc)
 
-		if doc.Total == nil || *doc.Total != int64(rows) || len(doc.Grants) != rows || doc.NextCursor != "" {
+		if doc.Total == nil || *doc.Total != int64(rows) || len(doc.Grants) != rows || doc.NextPageToken != "" {
 			t.Fatalf("grants of %s = %+v, want %d", subject, doc, rows)
 		}
 	}
@@ -474,17 +491,20 @@ func TestCallerGrantsRefusals(t *testing.T) {
 	f := newAccessFixture(t)
 	seedOpsGrants(t, f)
 
-	var first reviewDoc
-	f.as(t, "bob", apiCall{http.MethodGet, "/api/server/caller/grants?limit=1", "", http.StatusOK}, &first)
+	var first callerGrantsDoc
+	f.as(t, "bob", apiCall{http.MethodGet, "/api/dustpan/v1/me/grants?pageSize=1", "", http.StatusOK}, &first)
 
 	for _, c := range []struct{ subject, query string }{
-		{"olga", "cursor=" + first.NextCursor},
-		{"bob", "limit=0"},
-		{"bob", "limit=x"},
-		{"bob", "cursor=%21"},
+		{"olga", "pageToken=" + first.NextPageToken},
+		{"bob", "pageSize=0"},
+		{"bob", "pageSize=201"},
+		{"bob", "pageSize=x"},
+		{"bob", "pageToken=%21"},
+		{"bob", "limit=1"},
+		{"bob", "cursor=" + first.NextPageToken},
 	} {
 		f.as(t, c.subject, apiCall{
-			http.MethodGet, "/api/server/caller/grants?" + c.query, "", http.StatusBadRequest,
+			http.MethodGet, "/api/dustpan/v1/me/grants?" + c.query, "", http.StatusBadRequest,
 		}, nil)
 	}
 }
@@ -616,7 +636,7 @@ func seedSuspendedReviewMember(t *testing.T, f accessFixture) {
 
 // callerGrantRows returns each row of doc as its subject, subject name,
 // role, object and membership.
-func callerGrantRows(doc reviewDoc) []string {
+func callerGrantRows(doc callerGrantsDoc) []string {
 	out := make([]string, 0, len(doc.Grants))
 
 	for i := range doc.Grants {
@@ -663,7 +683,7 @@ func TestCallerAccessPaging(t *testing.T) {
 
 	var got []string
 
-	path := "/api/server/caller/access?type=unit&limit=2"
+	path := "/api/dustpan/v1/me/access/objects?type=unit&pageSize=2"
 
 	for path != "" {
 		var page accessObjectsDoc
@@ -678,8 +698,8 @@ func TestCallerAccessPaging(t *testing.T) {
 		}
 
 		path = ""
-		if page.NextCursor != "" {
-			path = "/api/server/caller/access?type=unit&limit=2&cursor=" + page.NextCursor
+		if page.NextPageToken != "" {
+			path = "/api/dustpan/v1/me/access/objects?type=unit&pageSize=2&pageToken=" + page.NextPageToken
 		}
 	}
 
@@ -689,9 +709,8 @@ func TestCallerAccessPaging(t *testing.T) {
 	}
 
 	for _, cursor := range []string{"%21", "AA", strings.Repeat("A", 513)} {
-		f.as(t, "bob", apiCall{
-			http.MethodGet, "/api/server/caller/access?type=unit&cursor=" + cursor, "", http.StatusBadRequest,
-		}, nil)
+		path := "/api/dustpan/v1/me/access/objects?type=unit&pageToken=" + cursor
+		f.as(t, "bob", apiCall{http.MethodGet, path, "", http.StatusBadRequest}, nil)
 	}
 }
 
@@ -823,14 +842,14 @@ func TestReviewLastAccess(t *testing.T) {
 
 	checkFilteredLastAccess(t, f)
 
-	grants := reviewRowsAsMap(t, f, "alice", "/api/server/caller/grants")
+	grants := reviewRowsAsMap(t, f, "alice", "/api/dustpan/v1/me/grants")
 	if len(grants) != 1 {
 		t.Fatalf("grants of alice = %d rows, want her own row", len(grants))
 	}
 
 	checkUsedRow(t, grants, "principal:prn-alice", float64(used.UnixMilli()))
 
-	bob := reviewRowsAsMap(t, f, "bob", "/api/server/caller/grants")
+	bob := reviewRowsAsMap(t, f, "bob", "/api/dustpan/v1/me/grants")
 	if len(bob) != 2 {
 		t.Fatalf("grants of bob = %d rows, want the own row and the row through the group", len(bob))
 	}

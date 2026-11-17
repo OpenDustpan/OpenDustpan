@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -46,11 +45,11 @@ func answerMessage(t *testing.T, body string) string {
 	return got.Message
 }
 
-// TestWriteErrorWrappedCopy proves that every case of the protocol switch and
-// of the management switch answers the sentence of the sentinel and nothing
-// else, also when code wraps the sentinel once or twice. The wrap text stays in
-// the log of a Warn refusal only: a Debug refusal logs no text. An error that no
-// case knows answers "internal error".
+// TestWriteErrorWrappedCopy proves that every case of the protocol switch
+// answers the sentence of the sentinel and nothing else, also when code wraps
+// the sentinel once or twice. The wrap text stays in the log of a Warn refusal
+// only: a Debug refusal logs no text. An error that no case knows answers
+// "internal error".
 func TestWriteErrorWrappedCopy(t *testing.T) {
 	t.Parallel()
 
@@ -76,14 +75,6 @@ func TestWriteErrorWrappedCopy(t *testing.T) {
 		{"protocol bad body", ScopeRunnerKey, errBadBody, http.StatusBadRequest},
 		{"protocol limit", ScopeRunnerKey, runner.ErrLimit, http.StatusTooManyRequests},
 		{"protocol not home", ScopeRunnerKey, namespace.ErrNotHome, http.StatusServiceUnavailable},
-		{"management csrf", ScopeAuthorized, sessionauth.ErrCSRF, http.StatusForbidden},
-		{"management other site", ScopeAuthorized, sessionauth.ErrOtherSite, http.StatusForbidden},
-		{"management invalid", ScopeAuthorized, runner.ErrInvalid, http.StatusBadRequest},
-		{"management bad body", ScopeAuthorized, errBadBody, http.StatusBadRequest},
-		{"management immutable", ScopeAuthorized, runner.ErrImmutable, http.StatusConflict},
-		{"management pool in use", ScopeAuthorized, runner.ErrPoolInUse, http.StatusConflict},
-		{"management token used", ScopeAuthorized, runner.ErrTokenUsed, http.StatusConflict},
-		{"management limit", ScopeAuthorized, runner.ErrLimit, http.StatusConflict},
 	}
 
 	for _, tc := range cases {
@@ -112,7 +103,7 @@ func TestWriteErrorWrappedCopy(t *testing.T) {
 func checkWrappedAnswer(t *testing.T, tc wrappedCase, err error, wrap string) {
 	t.Helper()
 
-	rec, logged := writeErrorOf(t, tc.scope, err)
+	rec, logged := writeErrorOf(t, err)
 
 	if rec.Code != tc.status {
 		t.Fatalf("status = %d, want %d", rec.Code, tc.status)
@@ -147,29 +138,22 @@ func checkWrappedAnswer(t *testing.T, tc wrappedCase, err error, wrap string) {
 }
 
 // TestWriteErrorUnknownAnswer proves the negative row: an error that no case
-// knows answers "internal error" in both scopes, with no text of the error in
-// the body.
+// knows answers "internal error", with no text of the error in the body.
 func TestWriteErrorUnknownAnswer(t *testing.T) {
 	t.Parallel()
 
-	for _, scope := range []Scope{ScopeRunnerKey, ScopeAuthorized} {
-		t.Run(fmt.Sprint(scope), func(t *testing.T) {
-			t.Parallel()
+	rec, logged := writeErrorOf(t, errUnknownDriver)
 
-			rec, logged := writeErrorOf(t, scope, errUnknownDriver)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
 
-			if rec.Code != http.StatusInternalServerError {
-				t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
-			}
+	if got := answerMessage(t, rec.Body.String()); got != internalMessage {
+		t.Fatalf("message = %q, want %q", got, internalMessage)
+	}
 
-			if got := answerMessage(t, rec.Body.String()); got != internalMessage {
-				t.Fatalf("message = %q, want %q", got, internalMessage)
-			}
-
-			if strings.Contains(logged, "hunter2") {
-				t.Fatalf("log = %q, must not hold the text of the unknown error", logged)
-			}
-		})
+	if strings.Contains(logged, "hunter2") {
+		t.Fatalf("log = %q, must not hold the text of the unknown error", logged)
 	}
 }
 
@@ -178,16 +162,10 @@ func TestWriteErrorUnknownAnswer(t *testing.T) {
 func TestWriteErrorBareSentinelNoRefusedLine(t *testing.T) {
 	t.Parallel()
 
-	for _, scope := range []Scope{ScopeRunnerKey, ScopeAuthorized} {
-		t.Run(fmt.Sprint(scope), func(t *testing.T) {
-			t.Parallel()
+	_, logged := writeErrorOf(t, errBadBody)
 
-			_, logged := writeErrorOf(t, scope, errBadBody)
-
-			if strings.Contains(logged, "runner request refused") {
-				t.Fatalf("log = %q, must hold no refused line", logged)
-			}
-		})
+	if strings.Contains(logged, "runner request refused") {
+		t.Fatalf("log = %q, must hold no refused line", logged)
 	}
 }
 

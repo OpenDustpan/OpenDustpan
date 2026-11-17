@@ -2,6 +2,8 @@
 version: 7
 ---
 
+Issue: #3373.
+
 Roadmap: `docs/roadmap.md:183` (IP allowlists).
 
 ## Why
@@ -21,8 +23,8 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| Console sign-in or token request from an address outside an opted-in list. | 403 with error code ip-allowlist.denied that names the scope that refused. | `GET /api/dustpan/v1/settings` |
-| Save of a list with an entry that is not a valid CIDR or address. | 400 with error code ip-allowlist.invalid-cidr that names the bad entry. | `GET /api/dustpan/v1/settings` |
+| Console sign-in or token request from an address outside an opted-in list. | 403 with error code access.ip-not-allowed that names the scope that refused. | `GET /api/dustpan/v1/settings` |
+| Save of a list with an entry that is not a valid CIDR or address. | 400 with the NEW error code ip-allowlist.invalid-cidr that names the bad entry. | `GET /api/dustpan/v1/settings` |
 
 Evidence for the claims above:
 
@@ -58,6 +60,10 @@ Where the path still costs the person time or surprises them:
 Each fact names its file, line and function on main. The change specifies only the difference.
 
 - A test covers the installation grant for allowlists. (`pkg/dustpan/ipallow_access_test.go:237 (TestIPAllowlistNeedsInstallationGrant)`)
+- A list holds at most 64 distinct prefixes, and an entry that does not parse gives an error that wraps `ErrInvalidList`. (`pkg/ipallow/list.go:47 (ParseList)`)
+- A refused address maps to the error code access.ip-not-allowed. (`internal/errcode/errcode.go:81 (Forbidden)`)
+- A write of a list with an invalid entry is classified by the handler of the namespace list route. (`internal/api/server/ip_allowlist.go:229 (classifyIPAllowlist)`)
+- The feature is off until the option turns it on. (`pkg/dustpan/area_ipallow.go:23 (defaultIPAllowlistSettings)`)
 
 ## ADR check
 

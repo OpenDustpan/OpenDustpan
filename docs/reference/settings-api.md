@@ -198,7 +198,7 @@ An error has the fields `code` (the HTTP status), `message` and `errorCode`.
 | 404 | `namespace.not-found` | The namespace does not exist |
 | 409 | `settings.locked` | The static layer sets the key. `errorArgs.key` and `errorArgs.source` name them. |
 | 409 | `settings.static-only` | Only the static layer can set the key. `errorArgs.key` names it. |
-| 412 | `request.precondition-failed` | The revision changed since your read |
+| 412 | `settings.revision-stale` | The revision changed since your read |
 | 413 | `request.body-too-large` | The body is over 16384 bytes |
 | 415 | `request.content-type-unsupported` | The `Content-Type` is not the merge patch type |
 | 428 | `request.precondition-required` | The request has no `If-Match` header |
@@ -215,7 +215,7 @@ server sets it itself.
 | `accessReview.collectionUnitCap` | `int` | 10000 | `live` | The largest count of units that the export of a collection reads. The server refuses an export over it, and refuses a value outside 1 to 100000. A raise counts as a change that reduces security. |
 | `branding.preset` | `string` | empty | `live` | The name of the branding preset of the installation. A name of lower-case letters, digits and hyphens, at most 32 characters. Empty means the standard palette. |
 | `egress.allowPlainConnections` | `bool` | `false` | `live` | Allow LDAP and SMTP connections with no TLS. An LDAP bind or an SMTP login then sends its password with no encryption. |
-| `server.drainPeriod` | `string` | `10s` | `restart` | The time between the stop signal and the start of the shutdown. In it, `GET /health/ready` answers 503 and the server serves all other requests, so a load balancer takes the instance out of its pool. |
+| `server.drainPeriod` | `string` | `10s` | `restart` | The time between the stop signal and the start of the shutdown. In it, the route `/health/ready` answers 503 to a GET request. The server serves all other requests, so a load balancer takes the instance out of its pool. |
 
 The flag `--branding-preset`, the variable `DUSTPAN_BRANDING_PRESET` and the
 key `branding.preset` of the configuration file set it from the static layer

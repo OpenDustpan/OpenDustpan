@@ -18,7 +18,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| A membership change widens an access limit and the caller does not hold the limited actions. | The server refuses the change with 403 and writes an audit entry. The error names the limit ID only when the caller can read that limit. | `GET /api/server/caller/access` |
+| A membership change widens an access limit and the caller does not hold the limited actions. | The server refuses the change with 403 and writes an audit entry. The error names the limit ID only when the caller can read that limit. | `GET /api/dustpan/v1/me/access` |
 
 Evidence for the claims above:
 

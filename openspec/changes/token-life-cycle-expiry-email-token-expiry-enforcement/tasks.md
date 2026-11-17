@@ -16,6 +16,7 @@
 - [ ] 2.1 Add the shared refusal function in pkg/accesstoken/service.go (NEW function refuse, used by Service.AuthenticateToken at line 637) and route each 401 case through it Check: `go test ./pkg/accesstoken/...` passes
 - [ ] 2.2 Write the audit entry with reason and token ID on each refusal, in the NEW refuse function in pkg/accesstoken/service.go Check: `go test ./internal/api/...` passes
 - [ ] 2.3 Show the maximum lifetime, the inactivity period and the overlap with their source in the settings resource, in NEW pkg/accesstoken/limits.go Check: `GET /api/dustpan/v1/settings` lists each token limit
+- [ ] 2.5 Accept `status` in the own list: declare the name on the route label of listOwnTokens in internal/api/server/tokens.go and read it with accesstoken.ParseFilter in ownTokenPageRequest (tokens.go:819); update the comment of listOwnTokens (:789) and the 400 text of errOwnTokenQuery. Check: `go test ./internal/api/server/...` passes and the old test that sends `status` to the own list changes to expect 200
 - [ ] 2.4 Document the status=ended filter in the List and read tokens section of docs/guides/access-tokens.md Check: `make docs-lint` passes and a docs test runs the command as written
 
 ## 3. Side effects (computed from main)
@@ -24,8 +25,8 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Check the route actions Check: Route test lists `ANY /api/server/caller/tokens` and `ANY /api/server/tokens` with their actions
-- [ ] 4.2 Run an e2e step over TLS on SQLite and PostgreSQL: create a personal access token through `ANY /api/server/caller/tokens`, then run pulumi up and tofu apply with that token Check: e2e runs both CLIs with the token past its expiry and checks 401 and the audit entries. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 4.1 Check the route actions Check: Route test lists `ANY /api/dustpan/v1/me/tokens` and `ANY /api/server/tokens` with their actions
+- [ ] 4.2 Run an e2e step over TLS on SQLite and PostgreSQL: create a personal access token through `ANY /api/dustpan/v1/me/tokens`, then run pulumi up and tofu apply with that token Check: e2e runs both CLIs with the token past its expiry and checks 401 and the audit entries. Confirmed by: CI (the agent writes the e2e test).
 - [ ] 4.3 Write the docs page in the same pull request: edit docs/guides/access-tokens.md (exists on main) Check: The access tokens guide documents expiry, lifetime, inactivity disable, the rotation overlap and the status filter. `make docs-lint` passes on each edited guide.
 - [ ] 4.4 Run the usability check Check: A Developer completes create, rotate, CLI use and the ended list from the docs page alone. A person's step.
 - [ ] 4.5 Run the full check Check: `make check` reports zero findings. Confirmed by: CI (the agent runs the fast checks only).

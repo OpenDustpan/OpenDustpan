@@ -1,3 +1,5 @@
+Issue: #3289.
+
 Decision: ADR 370. Order: this change lands before the changes of triggers, schedules and drift checks of milestones 5 and 6 (run-triggers, add-schedule-triggers-due-claim, start-plan-on-push-review, write-state-version-unit-state-follows-trigger-start, job-service-unit-settings-pool), or in the same pull request as the first of them.
 
 ## Why

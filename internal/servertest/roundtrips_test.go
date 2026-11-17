@@ -493,6 +493,8 @@ type rtHarness struct {
 	workspace string
 	stack     string
 	nextStack int
+	// jobPool is true after the runner pool of the job flows exists.
+	jobPool bool
 }
 
 // newRoundTripHarness starts a cluster whose store has the tracer, and a client
@@ -508,7 +510,7 @@ func newRoundTripHarness(t *testing.T, mode traceMode, opts ...dustpan.Option) *
 
 	h := &rtHarness{
 		t: t, cluster: cluster, client: &http.Client{Transport: transport, Timeout: requestLimit}, tracer: tracer,
-		warm: false, mode: mode, trips: nil, serial: 0, workspace: "", stack: "", nextStack: 0,
+		warm: false, mode: mode, trips: nil, serial: 0, workspace: "", stack: "", nextStack: 0, jobPool: false,
 	}
 
 	h.call(http.MethodPost, "/api/server/namespaces", `{"name":"acme"}`, http.StatusCreated)
@@ -625,6 +627,36 @@ func (h *rtHarness) createStack(name string) {
 	h.t.Helper()
 
 	h.call(http.MethodPost, "/api/stacks/acme/web", `{"stackName":"`+name+`"}`, http.StatusOK)
+}
+
+// startPlanJob starts a plan job on the workspace and returns its ID. The first
+// call creates the runner pool of the job flows.
+func (h *rtHarness) startPlanJob() string {
+	h.t.Helper()
+
+	if !h.jobPool {
+		h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/runner-pools",
+			`{"name":"ci","purpose":"jobs"}`, http.StatusCreated)
+
+		h.jobPool = true
+	}
+
+	answer := h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/jobs",
+		`{"unit":{"tool":"opentofu","name":"web"},"operation":"plan","pool":"ci",`+
+			`"location":{"repository":"acme/infra","ref":"main","directory":"net"},"reason":"round trips"}`,
+		http.StatusCreated)
+
+	var doc struct {
+		ID string `json:"id"`
+	}
+
+	h.decode(answer, &doc)
+
+	if doc.ID == "" {
+		h.t.Fatalf("job answer %s has no id", answer)
+	}
+
+	return doc.ID
 }
 
 // lock locks the workspace.
@@ -849,6 +881,16 @@ func requestFlows() []requestFlow {
 		{"lock", 34, func(h *rtHarness) {
 			h.measure(h.lock)
 			h.unlock()
+		}},
+		// The budget is 48. The cancel reads the job and its pool, ends the
+		// durable operation of the job, writes the job row and its audit entry
+		// in one transaction, and reads the pool again for the answer.
+		{"job cancel", 48, func(h *rtHarness) {
+			jobID := h.startPlanJob()
+			h.measure(func() {
+				h.call(http.MethodPost, "/api/dustpan/v1/namespaces/acme/jobs/"+jobID+"/cancel",
+					`{"reason":"round trips"}`, http.StatusOK)
+			})
 		}},
 		{"unlock", 13, func(h *rtHarness) {
 			h.lock()
@@ -1421,7 +1463,7 @@ func restoreModel() costModel {
 		fixed: 331 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
-			droppedRunnerCredentialTrips,
+			droppedRunnerCredentialTrips + proxyRuleSetTrips + trustBundleTrips,
 		perTable:     7,
 		perOther:     2,
 		perMigration: 2,
@@ -1500,6 +1542,12 @@ const breakGlassFloorTrips = 3
 // also appends one audit entry; the restores of this test drop none.
 const droppedRunnerCredentialTrips = 2
 
+// proxyRuleSetTrips is the change in the fixed part for the table
+// proxy_rule_sets, a table of Tables that the dev strip never counts. The run
+// makes 5 round trips for it, 2 fewer than perTable gives, as for
+// group_mappings.
+const proxyRuleSetTrips = -2
+
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer
 // than a table in the model, because the dev strip counts no rows in it. The
@@ -1516,6 +1564,12 @@ const removalAlertTrips = -2 + 1
 // backup, the column read before the staging load, and the row count of the
 // staged table.
 const checkpointSupersedesTrips = 5 - 7
+
+// trustBundleTrips is the number of round trips that the tables trust_bundles
+// and trust_bundle_versions take off the model. The measured restore makes 12
+// round trips for the two tables, 2 fewer than the 14 that the model gives two
+// tables. The run saves no bundle, so the tables are empty.
+const trustBundleTrips = -2
 
 // checkCount fails the test when the count is not the count of the model,
 // and shows the statement list of the run.

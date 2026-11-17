@@ -8,6 +8,8 @@
 package registrytest
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"slices"
 	"sync"
@@ -101,6 +103,7 @@ func provider(name, version string) registry.Release {
 			FileName: "terraform-provider-" + name + "_" + version + "_linux_amd64.zip",
 			SHA256:   sumA,
 			Size:     archiveSize,
+			H1:       "", // Fixture that no install reads.
 		}},
 		Files: nil,
 	}
@@ -189,6 +192,7 @@ func storeCases() []storeCase {
 		{"get of a missing version", testGetMissing},
 		{"get with a bad version", testGetBadVersion},
 		{"publish of an invalid release", testPublishInvalid},
+		{"publish with an H1 of another form", testPublishBadH1},
 		{"publish with a stale fence", testPublishStale},
 		{"publish with the fence of another namespace", testPublishOtherFence},
 		{"repeat with the same content", testPublishRepeat},
@@ -196,6 +200,8 @@ func storeCases() []storeCase {
 		{"namespaces do not share an address", testIsolation},
 		{"a provider and a module of one name are two addresses", testKinds},
 		{"concurrent publishes of one version, other content", testPublishConcurrent},
+		{"concurrent publishes of one version, other H1", testPublishConcurrentH1},
+		{"concurrent publishes of one version, same content", testPublishConcurrentSame},
 		{"a publish writes one audit entry", testAuditOnPublish},
 		{"a refused publish writes no audit entry", testAuditOnRefusal},
 		{"an identical repeat writes no audit entry", testAuditOnRepeat},
@@ -265,6 +271,38 @@ func testPublishInvalid(t *testing.T, h Harness) {
 	expectNoReleases(t, h, r.Address)
 }
 
+// testPublishBadH1 publishes archives with an H1 of another form. The store
+// refuses each one with ErrInvalid and stores nothing.
+func testPublishBadH1(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := homed(t, h, acme)
+
+	for _, bad := range []string{
+		"h1:not-a-digest",
+		h1Of("tree") + "\n",
+		"sha256:" + sumA,
+		h1Of("tree")[:len(h1Of("tree"))-1],
+	} {
+		r := provider("payments", v100)
+		r.Archives[0].H1 = bad
+
+		err := h.Store.Publish(t.Context(), r, f, entry(acme))
+		if !errors.Is(err, registry.ErrInvalid) {
+			t.Fatalf("Publish with H1 %q = %v, want ErrInvalid", bad, err)
+		}
+	}
+
+	expectNoReleases(t, h, address(acme, registry.KindProvider, "payments", ""))
+}
+
+// h1Of returns an H1 digest in the stored form, made from seed.
+func h1Of(seed string) string {
+	sum := sha256.Sum256([]byte(seed))
+
+	return "h1:" + base64.StdEncoding.EncodeToString(sum[:])
+}
+
 func testPublishStale(t *testing.T, h Harness) {
 	t.Helper()
 
@@ -331,6 +369,21 @@ func testPublishConflict(t *testing.T, h Harness) {
 	if err != nil || got.Archives[0].SHA256 != sumA {
 		t.Fatalf("the conflict changed the record: %+v, %v", got, err)
 	}
+
+	// The same hashes with another H1 are other content: H1 counts in
+	// SameContent, so the store refuses the republish in its transaction.
+	changed := provider("payments", v100)
+	changed.Archives[0].H1 = h1Of("other unpacked tree")
+
+	publishErr := h.Store.Publish(t.Context(), changed, f, entry(acme))
+	if !errors.Is(publishErr, registry.ErrVersionExists) {
+		t.Fatalf("Publish with another H1 = %v, want ErrVersionExists", publishErr)
+	}
+
+	again, err := h.Store.Get(t.Context(), r.Address, r.Version)
+	if err != nil || again.Archives[0].H1 != "" {
+		t.Fatalf("the H1 conflict changed the record: %+v, %v", again, err)
+	}
 }
 
 func testIsolation(t *testing.T, h Harness) {
@@ -363,8 +416,14 @@ func testKinds(t *testing.T, h Harness) {
 		Protocols:       nil,
 		PublishedBy:     publisher,
 		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
-		Archives:        []registry.Archive{{Platform: "", FileName: "vpc.zip", SHA256: sumB, Size: 1}},
-		Files:           nil,
+		Archives: []registry.Archive{{
+			Platform: "",
+			FileName: "vpc.zip",
+			SHA256:   sumB,
+			Size:     1,
+			H1:       "", // Fixture that no install reads.
+		}},
+		Files: nil,
 	}
 	mustPublish(t, h, mod, f)
 
@@ -430,6 +489,96 @@ func testPublishConcurrent(t *testing.T, h Harness) {
 
 	if wins != 1 {
 		t.Fatalf("%d publishes won, want exactly 1", wins)
+	}
+
+	if n := len(publishEntries(t, h)); n != 1 {
+		t.Fatalf("%d audit entries, want 1", n)
+	}
+}
+
+// publishAtOnce publishes each release of rels at the same time with fence f
+// and returns the error of each publish.
+func publishAtOnce(t *testing.T, h Harness, f namespace.Fence, rels []registry.Release) []error {
+	t.Helper()
+
+	errs := make([]error, len(rels))
+
+	var wg sync.WaitGroup
+
+	for i := range rels {
+		wg.Go(func() {
+			errs[i] = h.Store.Publish(t.Context(), rels[i], f, entry(acme))
+		})
+	}
+
+	wg.Wait()
+
+	return errs
+}
+
+// testPublishConcurrentH1 checks two publishes of one version at the same
+// time whose archives have the same hashes and another H1. One stores its
+// release, and the other gets ErrVersionExists.
+func testPublishConcurrentH1(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := homed(t, h, acme)
+
+	first := provider("payments", v100)
+	first.Archives[0].H1 = h1Of("first unpacked tree")
+	second := provider("payments", v100)
+	second.Archives[0].H1 = h1Of("second unpacked tree")
+
+	rels := []registry.Release{first, second}
+	errs := publishAtOnce(t, h, f, rels)
+
+	wins, want := 0, ""
+
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			wins++
+			want = rels[i].Archives[0].H1
+		case !errors.Is(err, registry.ErrVersionExists):
+			t.Fatalf("Publish = %v, want nil or ErrVersionExists", err)
+		default:
+		}
+	}
+
+	if wins != 1 {
+		t.Fatalf("%d publishes with another H1 stored a release, want exactly 1", wins)
+	}
+
+	got, err := h.Store.Get(t.Context(), first.Address, v100)
+	if err != nil || got.Archives[0].H1 != want {
+		t.Fatalf("Get = %+v, %v, want the H1 %s of the publish that stored", got, err, want)
+	}
+
+	if n := len(publishEntries(t, h)); n != 1 {
+		t.Fatalf("%d audit entries, want 1", n)
+	}
+}
+
+// testPublishConcurrentSame checks two publishes of one version at the same
+// time with the same content and the same H1. Both report success, and one
+// release with one audit entry stays.
+func testPublishConcurrentSame(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := homed(t, h, acme)
+
+	r := provider("payments", v100)
+	r.Archives[0].H1 = h1Of("same unpacked tree")
+
+	for i, err := range publishAtOnce(t, h, f, []registry.Release{r, r}) {
+		if err != nil {
+			t.Fatalf("Publish %d of the same content = %v, want nil", i, err)
+		}
+	}
+
+	got, err := h.Store.List(t.Context(), r.Address)
+	if err != nil || len(got) != 1 || !got[0].SameContent(r) {
+		t.Fatalf("List = %+v, %v, want the one release", got, err)
 	}
 
 	if n := len(publishEntries(t, h)); n != 1 {
@@ -663,8 +812,14 @@ func moduleRelease(name, system string) registry.Release {
 		Protocols:       nil,
 		PublishedBy:     publisher,
 		PublishedAt:     time.UnixMilli(fixtureT).UTC(),
-		Archives:        []registry.Archive{{Platform: "", FileName: name + ".zip", SHA256: sumB, Size: 1}},
-		Files:           nil,
+		Archives: []registry.Archive{{
+			Platform: "",
+			FileName: name + ".zip",
+			SHA256:   sumB,
+			Size:     1,
+			H1:       "", // Fixture that no install reads.
+		}},
+		Files: nil,
 	}
 }
 

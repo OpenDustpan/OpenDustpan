@@ -1048,6 +1048,19 @@ CREATE TABLE profiles (
     CONSTRAINT profiles_latest_check CHECK ((latest >= 1))
 );
 
+CREATE TABLE proxy_rule_sets (
+    namespace_id text NOT NULL,
+    scope_kind text NOT NULL,
+    unit_id text NOT NULL,
+    document text NOT NULL,
+    digest text NOT NULL,
+    version bigint NOT NULL,
+    updated_at_ms bigint NOT NULL,
+    CONSTRAINT proxy_rule_sets_check CHECK ((((scope_kind = 'namespace'::text) AND (unit_id = ''::text)) OR ((scope_kind = 'unit'::text) AND (unit_id <> ''::text)))),
+    CONSTRAINT proxy_rule_sets_scope_kind_check CHECK ((scope_kind = ANY (ARRAY['namespace'::text, 'unit'::text]))),
+    CONSTRAINT proxy_rule_sets_version_check CHECK ((version >= 1))
+);
+
 CREATE TABLE quota_keys (
     namespace_id text NOT NULL,
     blueprint text NOT NULL,
@@ -1408,6 +1421,26 @@ CREATE TABLE triggers (
     CONSTRAINT triggers_kind_check CHECK ((kind = ANY (ARRAY['review-request-push'::text, 'schedule'::text, 'follows'::text])))
 );
 
+CREATE TABLE trust_bundle_versions (
+    bundle_id text NOT NULL,
+    version bigint NOT NULL,
+    pem text NOT NULL,
+    created_at_ms bigint NOT NULL,
+    overlap_ends_at_ms bigint NOT NULL,
+    CONSTRAINT trust_bundle_versions_overlap_ends_at_ms_check CHECK ((overlap_ends_at_ms >= 0)),
+    CONSTRAINT trust_bundle_versions_version_check CHECK ((version >= 1))
+);
+
+CREATE TABLE trust_bundles (
+    id text NOT NULL,
+    namespace text NOT NULL,
+    active_version bigint NOT NULL,
+    revision bigint NOT NULL,
+    created_at_ms bigint NOT NULL,
+    CONSTRAINT trust_bundles_active_version_check CHECK ((active_version >= 1)),
+    CONSTRAINT trust_bundles_revision_check CHECK ((revision >= 1))
+);
+
 CREATE TABLE trust_rules (
     id text NOT NULL,
     namespace text NOT NULL,
@@ -1420,7 +1453,11 @@ CREATE TABLE trust_rules (
     principal_id text NOT NULL,
     created_by text NOT NULL,
     created_at_ms bigint NOT NULL,
-    CONSTRAINT trust_rules_key_source_check CHECK ((key_source = ANY (ARRAY['discovery'::text, 'static'::text])))
+    revision bigint NOT NULL,
+    spiffe_id_pattern text NOT NULL,
+    bundle_id text,
+    CONSTRAINT trust_rules_key_source_check CHECK ((key_source = ANY (ARRAY['discovery'::text, 'static'::text]))),
+    CONSTRAINT trust_rules_revision_check CHECK ((revision >= 1))
 );
 
 CREATE TABLE unit_defaults (
@@ -1901,6 +1938,9 @@ ALTER TABLE ONLY profile_revisions
 ALTER TABLE ONLY profiles
     ADD CONSTRAINT profiles_pkey PRIMARY KEY (namespace_id, id);
 
+ALTER TABLE ONLY proxy_rule_sets
+    ADD CONSTRAINT proxy_rule_sets_pkey PRIMARY KEY (namespace_id, scope_kind, unit_id);
+
 ALTER TABLE ONLY quota_keys
     ADD CONSTRAINT quota_keys_pkey PRIMARY KEY (namespace_id, blueprint, kind, scope);
 
@@ -2002,6 +2042,18 @@ ALTER TABLE ONLY temp_admins
 
 ALTER TABLE ONLY triggers
     ADD CONSTRAINT triggers_pkey PRIMARY KEY (namespace_id, id);
+
+ALTER TABLE ONLY trust_bundle_versions
+    ADD CONSTRAINT trust_bundle_versions_pkey PRIMARY KEY (bundle_id, version);
+
+ALTER TABLE ONLY trust_bundles
+    ADD CONSTRAINT trust_bundles_namespace_key UNIQUE (namespace);
+
+ALTER TABLE ONLY trust_bundles
+    ADD CONSTRAINT trust_bundles_namespace_id_key UNIQUE (namespace, id);
+
+ALTER TABLE ONLY trust_bundles
+    ADD CONSTRAINT trust_bundles_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY trust_rules
     ADD CONSTRAINT trust_rules_pkey PRIMARY KEY (id);
@@ -2395,6 +2447,9 @@ ALTER TABLE ONLY principal_session_generations
 ALTER TABLE ONLY profile_revisions
     ADD CONSTRAINT profile_revisions_namespace_id_profile_id_fkey FOREIGN KEY (namespace_id, profile_id) REFERENCES profiles(namespace_id, id);
 
+ALTER TABLE ONLY proxy_rule_sets
+    ADD CONSTRAINT proxy_rule_sets_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
+
 ALTER TABLE ONLY quota_keys
     ADD CONSTRAINT quota_keys_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
@@ -2455,8 +2510,15 @@ ALTER TABLE ONLY state_versions
 ALTER TABLE ONLY triggers
     ADD CONSTRAINT triggers_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);
 
+ALTER TABLE ONLY trust_bundle_versions
+    ADD CONSTRAINT trust_bundle_versions_bundle_id_fkey FOREIGN KEY (bundle_id) REFERENCES trust_bundles(id) ON DELETE CASCADE;
+
 ALTER TABLE ONLY trust_rules
     ADD CONSTRAINT trust_rules_principal_id_fkey FOREIGN KEY (principal_id) REFERENCES principals(id);
+
+ALTER TABLE ONLY trust_rules
+    ADD CONSTRAINT trust_rules_namespace_bundle_id_fkey FOREIGN KEY (namespace, bundle_id)
+    REFERENCES trust_bundles(namespace, id);
 
 ALTER TABLE ONLY unit_defaults
     ADD CONSTRAINT unit_defaults_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);

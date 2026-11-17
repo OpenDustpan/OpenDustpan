@@ -187,7 +187,8 @@ func (h *Handler) stage(w http.ResponseWriter, r *http.Request, p identity.Princ
 
 	// Only raw bytes are a file. A body with another media type, for example a
 	// form that curl sends with --data-binary and no header, is refused before
-	// it is read.
+	// it is read. The handler does not know the role of a file: publish checks
+	// that the bytes of an archive are a zip.
 	mediaType, _, typeErr := mime.ParseMediaType(apidesc.Header(r, "Content-Type"))
 	if typeErr != nil || mediaType != uploadMediaType {
 		h.writeError(ctx, w, problem.Fixed(

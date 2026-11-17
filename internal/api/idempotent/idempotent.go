@@ -181,7 +181,22 @@ type Call struct {
 // c.Serve. A refusal whose code the catalog refuses answers 500 with the code
 // of an internal failure, and Handle logs the code and the cause.
 func (m *Middleware) Handle(w http.ResponseWriter, r *http.Request, c Call) error {
-	err := m.serveCall(w, r, c)
+	return m.handleRoute(w, r, c, nil)
+}
+
+// HandleReducing is Handle for a route that only reduces access: it is on the
+// list of reducing routes (pkg/maintenance/reducing.go). The record of the
+// request is then written in maintenance mode too. The route picks this
+// method, so the request never sets it.
+func (m *Middleware) HandleReducing(w http.ResponseWriter, r *http.Request, c Call) error {
+	return m.handleRoute(w, r, c, []idempotency.BeginOption{idempotency.Reducing})
+}
+
+// handleRoute is Handle with the options of the store call for the route.
+func (m *Middleware) handleRoute(
+	w http.ResponseWriter, r *http.Request, c Call, opts []idempotency.BeginOption,
+) error {
+	err := m.serveCall(w, r, c, opts)
 	if refusal, ok := errors.AsType[*Error](err); ok && refusal != nil && refusal.cause != nil {
 		faultlog.LogInternal(
 			r.Context(),
@@ -195,8 +210,10 @@ func (m *Middleware) Handle(w http.ResponseWriter, r *http.Request, c Call) erro
 	return err
 }
 
-// serveCall is Handle without the log of a refusal that has no catalog answer.
-func (m *Middleware) serveCall(w http.ResponseWriter, r *http.Request, c Call) error {
+// serveCall is handle without the log of a refusal that has no catalog answer.
+func (m *Middleware) serveCall(
+	w http.ResponseWriter, r *http.Request, c Call, opts []idempotency.BeginOption,
+) error {
 	key, err := keyOf(r)
 	if err != nil {
 		return err
@@ -227,7 +244,7 @@ func (m *Middleware) serveCall(w http.ResponseWriter, r *http.Request, c Call) e
 	//nolint:forbidigo // The raw query goes into a digest as bytes. No parameter is read from it.
 	material := frame(body, []byte(r.URL.RawQuery), []byte(strings.Join(apidesc.HeaderValues(r, "If-Match"), ",")))
 
-	res, err := m.store.Begin(r.Context(), ref, material, m.now())
+	res, err := m.store.Begin(r.Context(), ref, material, m.now(), opts...)
 	if err != nil {
 		return fmt.Errorf("begin idempotent request: %w", err)
 	}

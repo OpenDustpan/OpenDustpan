@@ -107,6 +107,82 @@
         ],
         "type": "object"
       },
+      "AccessToken": {
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "disabledAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "expiresInDays": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "expiryWarning": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "principalID": {
+            "type": "string"
+          },
+          "replacedBy": {
+            "type": "string"
+          },
+          "revokedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "createdBy",
+          "disabledAt",
+          "expiresAt",
+          "expiresInDays",
+          "expiryWarning",
+          "id",
+          "kind",
+          "lastUsedAt",
+          "name",
+          "principalID",
+          "replacedBy",
+          "revokedAt",
+          "status"
+        ],
+        "type": "object"
+      },
       "AddRegistryKeyRequest": {
         "properties": {
           "armoredPublicKey": {
@@ -631,6 +707,17 @@
         ],
         "type": "object"
       },
+      "CancelJobRequest": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
       "CancelRestoreResponse": {
         "properties": {
           "id": {
@@ -727,6 +814,28 @@
         },
         "required": [
           "components"
+        ],
+        "type": "object"
+      },
+      "ConfirmJobRequest": {
+        "properties": {
+          "planBinding": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JobPlanBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "planBinding",
+          "verdict"
         ],
         "type": "object"
       },
@@ -1213,6 +1322,35 @@
         ],
         "type": "object"
       },
+      "CreateOwnTokenRequest": {
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "principalID": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "expiresAt",
+          "name",
+          "principalID"
+        ],
+        "type": "object"
+      },
       "CreateProfileRequest": {
         "properties": {
           "document": {
@@ -1245,9 +1383,60 @@
         ],
         "type": "object"
       },
+      "CreateRunnerJoinTokenRequest": {
+        "properties": {
+          "ttl": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ttl"
+        ],
+        "type": "object"
+      },
+      "CreateRunnerPoolRequest": {
+        "properties": {
+          "concurrency": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "gitCredentials": {
+            "$ref": "#/components/schemas/RunnerGitCredentials"
+          },
+          "isolation": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "lease": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "concurrency",
+          "gitCredentials",
+          "isolation",
+          "lease",
+          "name",
+          "purpose"
+        ],
+        "type": "object"
+      },
       "CreateTrustRuleRequest": {
         "properties": {
           "audience": {
+            "type": "string"
+          },
+          "bundle": {
             "type": "string"
           },
           "conditions": {
@@ -1273,6 +1462,9 @@
             "type": "string"
           },
           "principal": {
+            "type": "string"
+          },
+          "spiffePattern": {
             "type": "string"
           },
           "staticKeys": {
@@ -1349,6 +1541,54 @@
           "target",
           "urlSet",
           "version"
+        ],
+        "type": "object"
+      },
+      "CreatedRunnerJoinToken": {
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "pool": {
+            "type": "string"
+          },
+          "revokedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "usedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "usedBy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "createdAt",
+          "createdBy",
+          "expiresAt",
+          "id",
+          "pool",
+          "token"
         ],
         "type": "object"
       },
@@ -1481,6 +1721,20 @@
         "required": [
           "classes",
           "principals"
+        ],
+        "type": "object"
+      },
+      "DrainRunnerRequest": {
+        "properties": {
+          "draining": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "draining"
         ],
         "type": "object"
       },
@@ -1786,6 +2040,7 @@
           "git-host.link-request-not-found",
           "git-host.link-request-used",
           "git-host.link-unavailable",
+          "instance.draining",
           "instance.invalid-id",
           "instance.not-found",
           "issuer.conflict",
@@ -1809,6 +2064,7 @@
           "job.policy-denied",
           "job.self-approval",
           "job.unsupported",
+          "job.wrong-state",
           "journal.batch-invalid",
           "journal.build-timeout",
           "journal.conflict",
@@ -1911,6 +2167,7 @@
           "profile.routing-change-needs-open",
           "profile.schema-version",
           "registry.archive-set-refused",
+          "registry.bad-archive",
           "registry.invalid",
           "registry.key-exists",
           "registry.key-invalid",
@@ -1980,6 +2237,7 @@
           "settings.locked",
           "settings.patch-invalid",
           "settings.retention-invalid",
+          "settings.revision-stale",
           "settings.static-only",
           "settings.unavailable",
           "settings.value-invalid",
@@ -2051,6 +2309,8 @@
           "trigger.saver-denied",
           "trust-rule.already-exists",
           "trust-rule.ambiguous",
+          "trust-rule.bundle-invalid",
+          "trust-rule.bundle-not-found",
           "trust-rule.invalid",
           "trust-rule.issuer-refused",
           "trust-rule.limit",
@@ -3163,6 +3423,17 @@
         ],
         "type": "object"
       },
+      "JobLogSubstitution": {
+        "properties": {
+          "match": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "match"
+        ],
+        "type": "object"
+      },
       "JobPhase": {
         "properties": {
           "approvals": {
@@ -3398,6 +3669,21 @@
         ],
         "type": "object"
       },
+      "JoinedProxyRule": {
+        "properties": {
+          "rule": {
+            "$ref": "#/components/schemas/ProxyRule"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule",
+          "scope"
+        ],
+        "type": "object"
+      },
       "ListAccessLimitsResponse": {
         "properties": {
           "accessLimits": {
@@ -3611,6 +3897,93 @@
         },
         "required": [
           "subscriptions"
+        ],
+        "type": "object"
+      },
+      "ListOwnAccessObjectsResponse": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "all": {
+            "type": "boolean"
+          },
+          "nextPageToken": {
+            "type": "string"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/OwnAccessObject"
+            },
+            "type": "array"
+          },
+          "total": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "all",
+          "nextPageToken",
+          "objects",
+          "total",
+          "type"
+        ],
+        "type": "object"
+      },
+      "ListOwnGrantsResponse": {
+        "properties": {
+          "asOfMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/OwnGrant"
+            },
+            "type": "array"
+          },
+          "nextPageToken": {
+            "type": "string"
+          },
+          "total": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "asOfMs",
+          "grants",
+          "nextPageToken",
+          "total"
+        ],
+        "type": "object"
+      },
+      "ListOwnTokensResponse": {
+        "properties": {
+          "nextPageToken": {
+            "type": "string"
+          },
+          "tokens": {
+            "items": {
+              "$ref": "#/components/schemas/AccessToken"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "nextPageToken",
+          "tokens"
         ],
         "type": "object"
       },
@@ -4379,6 +4752,86 @@
         ],
         "type": "object"
       },
+      "NewAccessToken": {
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "disabledAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "expiresInDays": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "expiryWarning": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "principalID": {
+            "type": "string"
+          },
+          "replacedBy": {
+            "type": "string"
+          },
+          "revokedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "secret": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "createdBy",
+          "disabledAt",
+          "expiresAt",
+          "expiresInDays",
+          "expiryWarning",
+          "id",
+          "kind",
+          "lastUsedAt",
+          "name",
+          "principalID",
+          "replacedBy",
+          "revokedAt",
+          "secret",
+          "status"
+        ],
+        "type": "object"
+      },
       "NotificationDelivery": {
         "properties": {
           "attempts": {
@@ -4631,6 +5084,290 @@
         "required": [
           "allowForcedWrites",
           "allowUnlockedWrites"
+        ],
+        "type": "object"
+      },
+      "OwnAccess": {
+        "properties": {
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/OwnAccessGrant"
+            },
+            "type": "array"
+          },
+          "missingActions": {
+            "items": {
+              "$ref": "#/components/schemas/OwnMissingAction"
+            },
+            "type": "array"
+          },
+          "object": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actions",
+          "grants",
+          "missingActions",
+          "object"
+        ],
+        "type": "object"
+      },
+      "OwnAccessGrant": {
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "createdBy",
+          "id",
+          "object",
+          "role",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "OwnAccessObject": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "object"
+        ],
+        "type": "object"
+      },
+      "OwnGrant": {
+        "properties": {
+          "canGrantAccess": {
+            "type": "boolean"
+          },
+          "effectiveFromMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "effectiveUntilMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "grantID": {
+            "type": "string"
+          },
+          "grantedAtMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "grantedBy": {
+            "type": "string"
+          },
+          "holder": {
+            "type": "string"
+          },
+          "inheritedFrom": {
+            "type": "string"
+          },
+          "lastAccessAtMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "lastAccessTracked": {
+            "type": "boolean"
+          },
+          "memberCount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "object": {
+            "type": "string"
+          },
+          "objectState": {
+            "type": "string"
+          },
+          "revokedAtMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "revokedBy": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "subjectName": {
+            "type": "string"
+          },
+          "via": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OwnGrantVia"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "canGrantAccess",
+          "effectiveFromMs",
+          "effectiveUntilMs",
+          "grantID",
+          "grantedAtMs",
+          "grantedBy",
+          "inheritedFrom",
+          "object",
+          "objectState",
+          "revokedAtMs",
+          "revokedBy",
+          "role",
+          "source",
+          "subject",
+          "subjectName",
+          "via"
+        ],
+        "type": "object"
+      },
+      "OwnGrantVia": {
+        "properties": {
+          "group": {
+            "type": "string"
+          },
+          "member": {
+            "type": "string"
+          },
+          "memberFromMs": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "memberSource": {
+            "type": "string"
+          },
+          "memberSourceId": {
+            "type": "string"
+          },
+          "memberSubject": {
+            "type": "string"
+          },
+          "memberSuspended": {
+            "type": "boolean"
+          },
+          "memberUntilMs": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "group",
+          "member",
+          "memberFromMs",
+          "memberSource",
+          "memberSourceId",
+          "memberSubject",
+          "memberSuspended",
+          "memberUntilMs"
+        ],
+        "type": "object"
+      },
+      "OwnGrantedBy": {
+        "properties": {
+          "builtInRoles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "customRoles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "builtInRoles",
+          "customRoles"
+        ],
+        "type": "object"
+      },
+      "OwnMissingAction": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "grantedBy": {
+            "$ref": "#/components/schemas/OwnGrantedBy"
+          }
+        },
+        "required": [
+          "action",
+          "grantedBy"
+        ],
+        "type": "object"
+      },
+      "OwnTokenRotation": {
+        "properties": {
+          "previous": {
+            "$ref": "#/components/schemas/AccessToken"
+          },
+          "token": {
+            "$ref": "#/components/schemas/NewAccessToken"
+          }
+        },
+        "required": [
+          "previous",
+          "token"
         ],
         "type": "object"
       },
@@ -5241,6 +5978,87 @@
         ],
         "type": "object"
       },
+      "ProxyRule": {
+        "properties": {
+          "clientCertificate": {
+            "type": "string"
+          },
+          "credential": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "methods": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "port": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "serverTrust": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "id",
+          "mode",
+          "operations",
+          "port",
+          "serverTrust"
+        ],
+        "type": "object"
+      },
+      "ProxyRuleSet": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ProxyRule"
+            },
+            "type": "array"
+          },
+          "updatedAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "digest",
+          "rules",
+          "updatedAt",
+          "version"
+        ],
+        "type": "object"
+      },
       "PublishFile": {
         "properties": {
           "name": {
@@ -5338,6 +6156,48 @@
         },
         "required": [
           "namespace"
+        ],
+        "type": "object"
+      },
+      "RedactJobLogRequest": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "substitutions": {
+            "items": {
+              "$ref": "#/components/schemas/JobLogSubstitution"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "substitutions",
+          "version"
+        ],
+        "type": "object"
+      },
+      "RedactJobLogResponse": {
+        "properties": {
+          "log": {
+            "$ref": "#/components/schemas/JobLog"
+          },
+          "matches": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "redactedVersion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "log",
+          "matches",
+          "redactedVersion"
         ],
         "type": "object"
       },
@@ -5453,6 +6313,24 @@
         "required": [
           "name",
           "namespace"
+        ],
+        "type": "object"
+      },
+      "RenderedProxyRules": {
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/JoinedProxyRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "operation",
+          "rules"
         ],
         "type": "object"
       },
@@ -5778,6 +6656,286 @@
         ],
         "type": "object"
       },
+      "RotateOwnTokenRequest": {
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "oldTokenEndsAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "expiresAt",
+          "oldTokenEndsAt"
+        ],
+        "type": "object"
+      },
+      "RotateTrustBundleRequest": {
+        "properties": {
+          "overlapSeconds": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "pem": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pem"
+        ],
+        "type": "object"
+      },
+      "Runner": {
+        "properties": {
+          "draining": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "isolation": {
+            "type": "string"
+          },
+          "joinedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "keyExpires": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "keyIdentifier": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "lastSeenAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pool": {
+            "type": "string"
+          },
+          "rejoinCommand": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "release": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "draining",
+          "id",
+          "isolation",
+          "joinedAt",
+          "keyExpires",
+          "keyIdentifier",
+          "kind",
+          "labels",
+          "lastSeenAt",
+          "name",
+          "pool",
+          "release",
+          "status"
+        ],
+        "type": "object"
+      },
+      "RunnerGitCredentials": {
+        "properties": {
+          "helper": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "type": "object"
+      },
+      "RunnerJoinToken": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "pool": {
+            "type": "string"
+          },
+          "revokedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "usedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "usedBy": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "createdBy",
+          "expiresAt",
+          "id",
+          "pool"
+        ],
+        "type": "object"
+      },
+      "RunnerJoinTokenList": {
+        "properties": {
+          "joinTokens": {
+            "items": {
+              "$ref": "#/components/schemas/RunnerJoinToken"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "joinTokens"
+        ],
+        "type": "object"
+      },
+      "RunnerList": {
+        "properties": {
+          "runners": {
+            "items": {
+              "$ref": "#/components/schemas/Runner"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runners"
+        ],
+        "type": "object"
+      },
+      "RunnerPool": {
+        "properties": {
+          "concurrency": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "gitCredentials": {
+            "$ref": "#/components/schemas/RunnerGitCredentials"
+          },
+          "id": {
+            "type": "string"
+          },
+          "isolation": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "lease": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "readOnly": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "concurrency",
+          "createdAt",
+          "gitCredentials",
+          "id",
+          "isolation",
+          "lease",
+          "name",
+          "namespace",
+          "purpose",
+          "readOnly",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "RunnerPoolList": {
+        "properties": {
+          "pools": {
+            "items": {
+              "$ref": "#/components/schemas/RunnerPool"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "pools"
+        ],
+        "type": "object"
+      },
+      "SaveProxyRuleSetRequest": {
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ProxyRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "type": "object"
+      },
       "SaveTriggerRequest": {
         "properties": {
           "enabled": {
@@ -5822,6 +6980,17 @@
           "frequency",
           "kind",
           "source"
+        ],
+        "type": "object"
+      },
+      "SaveTrustBundleRequest": {
+        "properties": {
+          "pem": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pem"
         ],
         "type": "object"
       },
@@ -7583,9 +8752,101 @@
         ],
         "type": "object"
       },
+      "TrustBundle": {
+        "properties": {
+          "active": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "overlapEndsAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/TrustBundleVersion"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "active",
+          "createdAt",
+          "id",
+          "namespace",
+          "overlapEndsAt",
+          "revision",
+          "versions"
+        ],
+        "type": "object"
+      },
+      "TrustBundleList": {
+        "properties": {
+          "bundles": {
+            "items": {
+              "$ref": "#/components/schemas/TrustBundle"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "bundles"
+        ],
+        "type": "object"
+      },
+      "TrustBundleVersion": {
+        "properties": {
+          "caCount": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "number": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "overlapEndsAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "caCount",
+          "createdAt",
+          "number",
+          "overlapEndsAt"
+        ],
+        "type": "object"
+      },
       "TrustRule": {
         "properties": {
           "audience": {
+            "type": "string"
+          },
+          "bundle": {
             "type": "string"
           },
           "conditions": {
@@ -7626,12 +8887,20 @@
           "principal": {
             "type": "string"
           },
+          "revision": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "spiffePattern": {
+            "type": "string"
+          },
           "staticKeys": {
             "type": "string"
           }
         },
         "required": [
           "audience",
+          "bundle",
           "conditions",
           "createdAt",
           "createdBy",
@@ -7641,6 +8910,8 @@
           "name",
           "namespace",
           "principal",
+          "revision",
+          "spiffePattern",
           "staticKeys"
         ],
         "type": "object"
@@ -7977,6 +9248,41 @@
           "stateId",
           "tool",
           "unitId"
+        ],
+        "type": "object"
+      },
+      "UnitProxyRules": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "joined": {
+            "items": {
+              "$ref": "#/components/schemas/JoinedProxyRule"
+            },
+            "type": "array"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ProxyRule"
+            },
+            "type": "array"
+          },
+          "updatedAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "digest",
+          "joined",
+          "rules",
+          "updatedAt",
+          "version"
         ],
         "type": "object"
       },
@@ -8503,9 +9809,109 @@
         },
         "type": "object"
       },
+      "UpdateRunnerPoolRequest": {
+        "properties": {
+          "concurrency": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "gitCredentials": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RunnerGitCredentials"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "isolation": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "lease": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "concurrency",
+          "gitCredentials",
+          "isolation",
+          "lease",
+          "name",
+          "purpose"
+        ],
+        "type": "object"
+      },
       "UpdateSettingsRequest": {
         "additionalProperties": {
           "description": "A string, a boolean or a whole number, as the kind of the setting says. It is null for a secret, and for a database value that does not exist."
+        },
+        "type": "object"
+      },
+      "UpdateTrustRuleRequest": {
+        "properties": {
+          "audience": {
+            "type": "string"
+          },
+          "bundle": {
+            "type": "string"
+          },
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/TrustRuleCondition"
+            },
+            "type": "array"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "keySource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TrustRuleKeySource"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "principal": {
+            "type": "string"
+          },
+          "spiffePattern": {
+            "type": "string"
+          },
+          "staticKeys": {
+            "type": "string"
+          }
         },
         "type": "object"
       },
@@ -9851,6 +11257,185 @@
         ]
       }
     },
+    "/api/dustpan/v1/me/access": {
+      "get": {
+        "operationId": "getOwnAccess",
+        "parameters": [
+          {
+            "description": "The object to answer for, for example @server or a namespace.",
+            "in": "query",
+            "name": "object",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnAccess"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:read",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/access/objects": {
+      "get": {
+        "operationId": "listOwnAccessObjects",
+        "parameters": [
+          {
+            "description": "The action that the listed objects must allow.",
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The largest number of objects on the page. The default is 50 and the maximum is 200.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The kind of the objects to list: namespace, collection, unit or principal.",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOwnAccessObjectsResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:read",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/grants": {
+      "get": {
+        "operationId": "listOwnGrants",
+        "parameters": [
+          {
+            "description": "The largest number of grants on the page. The default is 50 and the maximum is 200.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOwnGrantsResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "caller:read",
+            "object": "caller"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/me/linked-accounts": {
       "get": {
         "operationId": "listGitHostLinks",
@@ -10228,6 +11813,213 @@
         "x-dustpan-actions": [
           {
             "action": "caller:manage-preferences",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/tokens": {
+      "get": {
+        "operationId": "listOwnTokens",
+        "parameters": [
+          {
+            "description": "The largest number of tokens on the page. The default is 50 and the maximum is 200.",
+            "in": "query",
+            "name": "pageSize",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The nextPageToken of the page before.",
+            "in": "query",
+            "name": "pageToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOwnTokensResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "token:manage-own",
+            "object": "caller"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createOwnToken",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOwnTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewAccessToken"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "token:manage-own",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/tokens/{id}": {
+      "delete": {
+        "operationId": "deleteOwnToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "token:manage-own",
+            "object": "caller"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/me/tokens/{id}/rotate": {
+      "post": {
+        "operationId": "rotateOwnToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateOwnTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnTokenRotation"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "me"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "token:manage-own",
             "object": "caller"
           }
         ]
@@ -13245,6 +15037,244 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancelJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "job:read",
+            "object": "unit"
+          },
+          {
+            "action": "job:cancel",
+            "object": "unit"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/confirmations": {
+      "post": {
+        "operationId": "confirmJob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "job:read",
+            "object": "unit"
+          },
+          {
+            "action": "unit:run-plan",
+            "object": "unit"
+          },
+          {
+            "action": "unit:run-apply",
+            "object": "unit"
+          },
+          {
+            "action": "unit:run-destroy",
+            "object": "unit"
+          },
+          {
+            "action": "unit:write-back",
+            "object": "unit"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/log-redactions": {
+      "post": {
+        "operationId": "redactJobLog",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedactJobLogRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RedactJobLogResponse"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "jobs"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "job:read",
+            "object": "unit"
+          },
+          {
+            "action": "unit:redact",
+            "object": "unit"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/jobs/{job_id}/logs/{phase}": {
       "get": {
         "operationId": "getJobLog",
@@ -14448,6 +16478,119 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/proxy-rules": {
+      "get": {
+        "operationId": "getNamespaceProxyRules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyRuleSet"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "proxy-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "saveNamespaceProxyRules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveProxyRuleSetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyRuleSet"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "proxy-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-proxy-rules",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/registry/keys": {
       "get": {
         "operationId": "listRegistryKeys",
@@ -15179,6 +17322,596 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/runner-pools": {
+      "get": {
+        "operationId": "listRunnerPools",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerPoolList"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read-runners",
+            "object": "namespace"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createRunnerPool",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRunnerPoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerPool"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-runners",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}": {
+      "delete": {
+        "operationId": "deleteRunnerPool",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-runners",
+            "object": "namespace"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getRunnerPool",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerPool"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read-runners",
+            "object": "namespace"
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateRunnerPool",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRunnerPoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerPool"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-runners",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens": {
+      "get": {
+        "operationId": "listRunnerJoinTokens",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerJoinTokenList"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read-runners",
+            "object": "namespace"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createRunnerJoinToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRunnerJoinTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedRunnerJoinToken"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-runners",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/join-tokens/{id}/revoke": {
+      "post": {
+        "operationId": "revokeRunnerJoinToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-runners",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/runners": {
+      "get": {
+        "operationId": "listPoolRunners",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pool",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunnerList"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read-runners",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/drain": {
+      "post": {
+        "operationId": "drainRunner",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "runner",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DrainRunnerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-runners",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/runners/{runner}/retire": {
+      "post": {
+        "operationId": "retireRunner",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "runner",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "runners"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:manage-runners",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/settings": {
       "get": {
         "operationId": "getNamespaceSettings",
@@ -15239,6 +17972,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           },
           {
             "$ref": "#/components/parameters/IfMatchRequired"
@@ -16190,6 +18926,297 @@
         ]
       }
     },
+    "/api/dustpan/v1/namespaces/{namespace}/trust-bundles": {
+      "get": {
+        "operationId": "listTrustBundles",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustBundleList"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:read-access",
+            "object": "namespace"
+          }
+        ]
+      },
+      "post": {
+        "operationId": "saveTrustBundle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveTrustBundleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustBundle"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:manage-trust-rules",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/trust-bundles/{bundle}": {
+      "get": {
+        "operationId": "getTrustBundle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "bundle",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustBundle"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:read-access",
+            "object": "namespace"
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "rotateTrustBundle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "bundle",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateTrustBundleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustBundle"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:manage-trust-rules",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/trust-bundles/{bundle}/versions/{version}": {
+      "delete": {
+        "operationId": "deleteTrustBundleVersion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "bundle",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:manage-trust-rules",
+            "object": "namespace"
+          }
+        ]
+      }
+    },
     "/api/dustpan/v1/namespaces/{namespace}/trust-rules": {
       "get": {
         "operationId": "listTrustRules",
@@ -16262,7 +19289,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
@@ -16452,6 +19479,72 @@
           },
           {
             "action": "namespace:read-access",
+            "object": "namespace"
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateTrustRule",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "rule_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/merge-patch+json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTrustRuleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustRule"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "trust-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "namespace:read",
+            "object": "namespace"
+          },
+          {
+            "action": "namespace:manage-trust-rules",
             "object": "namespace"
           }
         ]
@@ -17595,6 +20688,198 @@
         "x-dustpan-actions": [
           {
             "action": "unit:read-outputs",
+            "object": "unit"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules": {
+      "get": {
+        "operationId": "getUnitProxyRules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnitProxyRules"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "proxy-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "unit:read",
+            "object": "unit"
+          }
+        ]
+      },
+      "put": {
+        "operationId": "saveUnitProxyRules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveProxyRuleSetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyRuleSet"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "proxy-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "unit:manage-proxy-rules",
+            "object": "unit"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules/rendered": {
+      "get": {
+        "operationId": "getRenderedProxyRules",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "unit_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The operation to render: plan, apply, destroy or refresh.",
+            "in": "query",
+            "name": "operation",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderedProxyRules"
+                }
+              }
+            },
+            "description": "The request succeeded."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "proxy-rules"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "unit:read",
             "object": "unit"
           }
         ]
@@ -19256,6 +22541,9 @@
         "operationId": "updateSettings",
         "parameters": [
           {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
             "$ref": "#/components/parameters/IfMatchRequired"
           }
         ],
@@ -19723,6 +23011,9 @@
       "name": "locks"
     },
     {
+      "name": "me"
+    },
+    {
       "name": "namespaces"
     },
     {
@@ -19747,10 +23038,16 @@
       "name": "profiles"
     },
     {
+      "name": "proxy-rules"
+    },
+    {
       "name": "registry"
     },
     {
       "name": "restores"
+    },
+    {
+      "name": "runners"
     },
     {
       "name": "self-service"

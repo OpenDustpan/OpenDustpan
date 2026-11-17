@@ -20,7 +20,7 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | Trust or full sync change without a fresh step | The server answers 403 with error code mfa.fresh-step-required and names the way to get a fresh step. Do the fresh step, then repeat the call. | `curl -s $SERVER/api/dustpan/v1/me/freshness` |
-| Trust change by a caller whose reach does not cover the group | The server answers 403 and names the missing reach. Ask a caller whose reach covers the group to set trust. | `curl -s -H "Authorization: Bearer $TOKEN" $SERVER/api/server/caller/access` |
+| Trust change by a caller whose reach does not cover the group | The server answers 403 and names the missing reach. Ask a caller whose reach covers the group to set trust. | `curl -s -H "Authorization: Bearer $TOKEN" $SERVER/api/dustpan/v1/me/access` |
 
 Evidence for the claims above:
 

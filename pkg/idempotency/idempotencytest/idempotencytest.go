@@ -31,6 +31,7 @@ func Run(t *testing.T, newStore Factory) {
 		{"the first request starts and holds a token", testStarts},
 		{"a second request before the answer is in progress", testInProgress},
 		{"a request with the same body replays the stored answer", testReplay},
+		{"a reducing request starts, replays and frees its key like any other", testReducingRecord},
 		{"a request with another body is a reuse, pending or done", testReused},
 		{"a record is scoped by principal, method, path and key", testScopes},
 		{"an invalid ref is refused and changes nothing", testInvalidRef},
@@ -151,6 +152,61 @@ func testReplay(t *testing.T, s idempotency.Store) {
 	// A replay never changes the record: a second replay answers the same.
 	again := begin(t, s, ref("k1"), payload(), epoch().Add(time.Minute+time.Minute))
 	wantOutcome(t, again, idempotency.Replayed)
+}
+
+// testReducingRecord proves the option of a reducing route keeps the record
+// contract: the record starts with a token, a second request is in progress,
+// the stored answer replays, and an abandoned key runs again. Whether
+// maintenance mode accepts the write is proved by the store tests, because
+// this suite has no installation state.
+func testReducingRecord(t *testing.T, s idempotency.Store) {
+	t.Helper()
+
+	reducing := []idempotency.BeginOption{idempotency.Reducing}
+
+	first, err := s.Begin(t.Context(), ref("k1"), payload(), epoch(), reducing...)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	wantOutcome(t, first, idempotency.Started)
+
+	if first.Token == "" {
+		t.Fatal("a started reducing request holds no token")
+	}
+
+	again, err := s.Begin(t.Context(), ref("k1"), payload(), epoch().Add(time.Second), reducing...)
+	if err != nil {
+		t.Fatalf("begin again: %v", err)
+	}
+
+	wantOutcome(t, again, idempotency.InProgress)
+
+	if err = s.Complete(t.Context(), ref("k1"), first.Token, answer()); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	got, err := s.Begin(t.Context(), ref("k1"), payload(), epoch().Add(time.Minute), reducing...)
+	if err != nil {
+		t.Fatalf("begin after complete: %v", err)
+	}
+
+	wantOutcome(t, got, idempotency.Replayed)
+
+	if err = s.Abandon(t.Context(), ref("k2"), "no-such-token"); err != nil {
+		t.Fatalf("abandon of an unknown token: %v", err)
+	}
+
+	fresh, err := s.Begin(t.Context(), ref("k2"), payload(), epoch(), reducing...)
+	if err != nil {
+		t.Fatalf("begin of a second key: %v", err)
+	}
+
+	if err = s.Abandon(t.Context(), ref("k2"), fresh.Token); err != nil {
+		t.Fatalf("abandon: %v", err)
+	}
+
+	wantOutcome(t, begin(t, s, ref("k2"), payload(), epoch()), idempotency.Started)
 }
 
 func testReused(t *testing.T, s idempotency.Store) {

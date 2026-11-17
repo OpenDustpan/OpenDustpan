@@ -172,8 +172,19 @@ func (h *Handler) getWorker(w http.ResponseWriter, r *http.Request, _ identity.P
 	h.writeJSON(ctx, w, http.StatusOK, body)
 }
 
-// classifyWorker maps ErrNoWorker to 503 with the command that helps.
+// classifyWorker maps ErrNoWorker to 503 with the command that helps, and a
+// drain refusal to 503 with Retry-After and the code instance.draining. The
+// retryAfter of the answer is the drain period of this instance.
 func classifyWorker(err error) (failure, bool) {
+	if errors.Is(err, admit.ErrDraining) {
+		return failRetryAfter(
+			http.StatusServiceUnavailable,
+			admit.DrainingMessage,
+			errcode.InstanceDraining,
+			admit.DrainRetryAfter(err),
+		), true
+	}
+
 	if errors.Is(err, admit.ErrNoWorker) {
 		return failCoded(http.StatusServiceUnavailable, admit.Message, errcode.WorkerAbsent), true
 	}

@@ -21,9 +21,11 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
-// crashLease is the lease of the claim of the process that crashes. The
-// second process can take over the claim only after it ends, so it is short.
-const crashLease = 2 * time.Second
+// crashLease is the lease of the claim of the process that crashes. It is far
+// longer than any stall of a loaded machine, so the claim does not end before
+// the crash. The test ends the claim on purpose with endDeadClaim, so the
+// takeover does not wait for a wall-clock lease.
+const crashLease = time.Hour
 
 // recoverLease is the lease of the process that recovers the backup. It is far
 // longer than any stall of a loaded machine, so the claim of that process
@@ -150,10 +152,40 @@ func crashedBackup(t *testing.T, path string, dirs recoveryDirs, id backup.ID) {
 
 	crash()
 	worker.Wait()
+	endDeadClaim(t, first, id)
 
 	if closeErr := first.Close(); closeErr != nil {
 		t.Fatalf("close store: %v", closeErr)
 	}
+}
+
+// endDeadClaim ends the claim of the crashed process at once, as a lease that
+// ran out: the second process can then take the operation over without a wait
+// for the clock. The process holds no worker now, so nothing renews the claim.
+func endDeadClaim(t *testing.T, store *sqlite.Store, id backup.ID) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	ops, err := store.DurableOperationsPort().
+		List(ctx, durable.Filter{Kind: backup.OperationKind, States: nil, Limit: 0})
+	if err != nil {
+		t.Fatalf("list operations: %v", err)
+	}
+
+	for i := range ops {
+		if ops[i].Key != backup.OperationKey(id) {
+			continue
+		}
+
+		if _, extendErr := store.DurableOperationsPort().Extend(ctx, ops[i].Claim, time.Millisecond); extendErr != nil {
+			t.Fatalf("end the claim of the crashed process: %v", extendErr)
+		}
+
+		return
+	}
+
+	t.Fatalf("no operation for backup %s", id)
 }
 
 // errCrashed is the answer of a store after the crash of its process.

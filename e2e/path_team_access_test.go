@@ -77,6 +77,12 @@ func TestPathTeamAccess(t *testing.T) {
 		t.Skip("the team access path signs a person in through LDAP: the steps run against the in-process server")
 	}
 
+	if runtime.GOOS != "linux" {
+		// The Pulumi CLI logs in to the HTTPS test server and must trust its
+		// certificate, and Go honors SSL_CERT_FILE only on Linux.
+		t.Skipf("the team access path needs Linux, not %s", runtime.GOOS)
+	}
+
 	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
@@ -289,7 +295,7 @@ func teamAccessPlacementTofuHTTP(ctx context.Context, t *testing.T, env *e2e.Env
 	// and the server makes no unit.
 	status, body, err := env.TFEStatusA(ctx, "LOCK", "/tofu/state/"+teamAccessNamespace+"/orphan",
 		tofuHTTPLockInfo())
-	if err != nil || status != http.StatusUnprocessableEntity || !strings.Contains(body, "placement-rules") {
+	if err != nil || status != http.StatusUnprocessableEntity || !strings.Contains(body, "opendustpan placement add") {
 		t.Fatalf("lock of the workspace that no rule matches = %d %s %v, want 422 that names the rules",
 			status, body, err)
 	}
@@ -607,7 +613,7 @@ func (c teamAccessBrowser) makeToken(ctx context.Context, t *testing.T, name str
 	}
 
 	status, body = c.send(ctx, t, browserRequest{
-		method: http.MethodPost, path: "/api/server/caller/tokens",
+		method: http.MethodPost, path: "/api/dustpan/v1/me/tokens",
 		body: `{"name":"` + name + `"}`, csrf: session.CSRFToken,
 	})
 	if status != http.StatusCreated {

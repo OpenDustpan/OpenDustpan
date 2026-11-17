@@ -9,6 +9,9 @@
 # A required check must report on each merge group of the merge queue, or the
 # queue waits for it. A merge group has no body, so on merge_group the job runs
 # and the body step skips: the body was checked on the pull request.
+#
+# Dependabot writes the body of its pull requests, so the job skips for it. A
+# skipped job counts as passed for a required check.
 name: pr-body-check
 
 on:
@@ -35,6 +38,7 @@ jobs:
   # required checks of the branch.
   pr-body-check:
     name: pr-body-check
+    if: ${{ github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:

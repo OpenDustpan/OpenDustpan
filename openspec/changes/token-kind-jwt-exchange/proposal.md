@@ -20,7 +20,7 @@ must not share one kind. ADR 371 (owner, 2026-11-14) renames the kind to
 - `pkg/store/internal/trustrulestore/trustrulestore.go:206` — the store refuses an exchange token whose kind is not `KindTrust`.
 - `pkg/trustrule/trustruletest/exchange_cases.go:36` and `:93` — the conformance suite expects `KindTrust`.
 - Tests: `pkg/accesstoken/trust_token_test.go:69` (`TestTrustTokenLivesTheExchangeLifetime`), `internal/trustrulesvc/exchange_test.go:131` and `:340`.
-- Docs: `docs/guides/workload-identity.md:170` ("kind `trust`") and `GLOSSARY.md:630` ("the kind `trust`").
+- Docs: `docs/guides/workload-identity.md:170` ("kind `trust`"), `docs/explanation/security-model.md:89` ("token of the kind `trust`") and `GLOSSARY.md:642` ("the kind `trust`").
 - No SQL constraint names the kind: `rg -n "'trust'" pkg/store/sqlite/migrations pkg/store/postgres/migrations` finds nothing.
 
 ## Fix boundary
@@ -30,7 +30,7 @@ must not share one kind. ADR 371 (owner, 2026-11-14) renames the kind to
 - `pkg/accesstoken/accesstoken.go`: replace `KindTrust` with the NEW kind `KindJWTExchange Kind = "jwt-exchange"`. Add the unexported set of exchange kinds and the NEW method `Kind.FromExchange() bool`, true for each kind that a token exchange issues. Only this method names the exchange kinds.
 - `pkg/accesstoken/service.go` (`credentialOf`) and `pkg/accesstoken/scope.go` (`authorizeRevoke`): use the NEW method `FromExchange` in place of the name of one kind, so that the mTLS kind of the change `mtls-mtls-exchange-token` gets the credential `trust-token` and the revoke rule of the service tokens with no second edit.
 - `pkg/accesstoken/trust.go`, `pkg/store/internal/trustrulestore/trustrulestore.go`, `pkg/trustrule/trustruletest/exchange_cases.go` and the two test files: the new constant.
-- `docs/guides/workload-identity.md` and `GLOSSARY.md`: the kind `jwt-exchange`.
+- `docs/guides/workload-identity.md`, `docs/explanation/security-model.md` and `GLOSSARY.md`: the kind `jwt-exchange`.
 
 **OUT**
 

@@ -28,23 +28,21 @@ func TestMaintenanceRefusal(t *testing.T) {
 		{"wrapped twice", fmt.Errorf("poll: %w", fmt.Errorf("lease row 9: %w", maintenance.ErrInMaintenance))},
 	}
 
-	for _, scope := range []runnerapi.Scope{runnerapi.ScopeRunnerKey, runnerapi.ScopeJoinToken} {
-		for _, tc := range cases {
-			t.Run(fmt.Sprintf("scope %d %s", scope, tc.name), func(t *testing.T) {
-				t.Parallel()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-				checkMaintenanceRefusal(t, scope, tc.err)
-			})
-		}
+			checkMaintenanceRefusal(t, tc.err)
+		})
 	}
 }
 
 // checkMaintenanceRefusal proves the answer to a maintenance refusal.
-func checkMaintenanceRefusal(t *testing.T, scope runnerapi.Scope, err error) {
+func checkMaintenanceRefusal(t *testing.T, err error) {
 	t.Helper()
 
 	rec := httptest.NewRecorder()
-	runnerapi.WriteError(t.Context(), rec, slog.New(slog.DiscardHandler), scope, err)
+	runnerapi.WriteError(t.Context(), rec, slog.New(slog.DiscardHandler), err)
 
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "5" {
 		t.Fatalf("status = %d, Retry-After = %q, want 503 and 5", rec.Code, rec.Header().Get("Retry-After"))

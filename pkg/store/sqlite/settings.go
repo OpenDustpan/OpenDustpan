@@ -197,9 +197,15 @@ func (st SettingStore) Update(
 
 	run := func(q *db.Queries) error {
 		res, changeErr := setting.Change(ctx, settingTx{q: q, entryScope: entryScope}, scope, in)
+		if changeErr != nil {
+			return changeErr
+		}
+
 		result = res
 
-		return changeErr
+		// The answer is stored in this transaction, so a replay of the
+		// Idempotency-Key finds the result of the change or nothing.
+		return finishCompletion(ctx, q, res)
 	}
 
 	if scope.IsInstallation() {

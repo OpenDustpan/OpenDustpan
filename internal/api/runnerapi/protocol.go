@@ -35,7 +35,7 @@ func (h *Handler) join(w http.ResponseWriter, r *http.Request, c *call) {
 
 	parsed, err := h.parseJoin(r, c.body)
 	if err != nil {
-		h.writeError(ctx, w, ScopeJoinToken, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -44,33 +44,28 @@ func (h *Handler) join(w http.ResponseWriter, r *http.Request, c *call) {
 
 	tok, pool, err := h.members.LookupJoin(ctx, hash)
 	if err != nil {
-		h.writeError(ctx, w, ScopeJoinToken, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if req.Pool != pool.ID {
-		h.writeError(ctx, w, ScopeJoinToken, fmt.Errorf("%w: the join token is for another pool", runner.ErrInvalid))
+		h.writeError(ctx, w, fmt.Errorf("%w: the join token is for another pool", runner.ErrInvalid))
 
 		return
 	}
 
 	challenge := runner.JoinChallenge(h.serverURL, pool.ID, req.Name, req.Token)
 	if !ed25519.Verify(req.PublicKey, challenge, req.Proof) {
-		h.writeError(
-			ctx,
-			w,
-			ScopeJoinToken,
-			fmt.Errorf("%w: the signature of the join challenge does not match the key",
-				runner.ErrBadProof),
-		)
+		h.writeError(ctx, w,
+			fmt.Errorf("%w: the signature of the join challenge does not match the key", runner.ErrBadProof))
 
 		return
 	}
 
 	ns, err := h.namespaces.WritableHere(ctx, pool.Namespace)
 	if err != nil {
-		h.writeError(ctx, w, ScopeJoinToken, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -79,7 +74,7 @@ func (h *Handler) join(w http.ResponseWriter, r *http.Request, c *call) {
 	joined, err := h.members.Join(ctx, runner.Joining{TokenSHA256: hash, Request: joining, At: now}, ns.Fence(),
 		func(j *runner.Joined) []audit.Entry { return []audit.Entry{h.joinEntry(r, &tok, &pool, j, now)} })
 	if err != nil {
-		h.writeError(ctx, w, ScopeJoinToken, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -192,7 +187,7 @@ func (h *Handler) rotate(w http.ResponseWriter, r *http.Request, c *call) {
 
 	var req protocol.RotateRequest
 	if err := decodeBody(c.body, &req); err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -201,26 +196,21 @@ func (h *Handler) rotate(w http.ResponseWriter, r *http.Request, c *call) {
 	next := runner.Key{Public: req.PublicKey, CreatedAt: now}
 
 	if err := next.Validate(); err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if !ed25519.Verify(next.Public, runner.RotateChallenge(c.runner.ID, next), req.NextProof) {
-		h.writeError(
-			ctx,
-			w,
-			ScopeRunnerKey,
-			fmt.Errorf("%w: the signature of the rotation challenge does not match the new key",
-				runner.ErrBadProof),
-		)
+		h.writeError(ctx, w,
+			fmt.Errorf("%w: the signature of the rotation challenge does not match the new key", runner.ErrBadProof))
 
 		return
 	}
 
 	fence, err := h.fenceOf(r, c.runner.Namespace)
 	if err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -236,7 +226,7 @@ func (h *Handler) rotate(w http.ResponseWriter, r *http.Request, c *call) {
 	_, err = h.members.RotateKey(ctx, runner.Rotation{Runner: c.runner.ID, Signer: c.signer.ID(), Next: next}, fence,
 		[]audit.Entry{e})
 	if err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -252,13 +242,13 @@ func (h *Handler) heartbeat(w http.ResponseWriter, r *http.Request, c *call) {
 
 	var req protocol.Heartbeat
 	if err := decodeBody(c.body, &req); err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if len(req.Claims) > runner.MaxConcurrency {
-		h.writeError(ctx, w, ScopeRunnerKey,
+		h.writeError(ctx, w,
 			fmt.Errorf("%w: a runner holds at most %d claims", runner.ErrInvalid, runner.MaxConcurrency))
 
 		return
@@ -266,7 +256,7 @@ func (h *Handler) heartbeat(w http.ResponseWriter, r *http.Request, c *call) {
 
 	rel, err := runner.ParseRelease(r.Header.Get(protocol.HeaderRelease))
 	if err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -275,7 +265,7 @@ func (h *Handler) heartbeat(w http.ResponseWriter, r *http.Request, c *call) {
 
 	rn, err := h.members.Heartbeat(ctx, c.runner.ID, rel, now)
 	if err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -287,7 +277,7 @@ func (h *Handler) heartbeat(w http.ResponseWriter, r *http.Request, c *call) {
 	for _, op := range req.Claims {
 		info, err := h.claimState(r, rn.ID, op)
 		if err != nil {
-			h.writeError(ctx, w, ScopeRunnerKey, err)
+			h.writeError(ctx, w, err)
 
 			return
 		}
@@ -351,13 +341,13 @@ func (h *Handler) poll(w http.ResponseWriter, r *http.Request, c *call) {
 
 	var req protocol.PollRequest
 	if err := decodeBody(c.body, &req); err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if _, busy := h.polls.LoadOrStore(c.runner.ID, struct{}{}); busy {
-		h.writeError(ctx, w, ScopeRunnerKey, fmt.Errorf("%w: a runner has one poll at a time", runner.ErrLimit))
+		h.writeError(ctx, w, fmt.Errorf("%w: a runner has one poll at a time", runner.ErrLimit))
 
 		return
 	}
@@ -366,7 +356,7 @@ func (h *Handler) poll(w http.ResponseWriter, r *http.Request, c *call) {
 
 	pool, err := h.pools.Pool(ctx, c.runner.Pool)
 	if err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -381,7 +371,7 @@ func (h *Handler) poll(w http.ResponseWriter, r *http.Request, c *call) {
 
 		switch {
 		case claimErr != nil:
-			h.writeError(ctx, w, ScopeRunnerKey, claimErr)
+			h.writeError(ctx, w, claimErr)
 
 			return
 		case result == pollWork:
@@ -621,14 +611,14 @@ func (h *Handler) handoff(w http.ResponseWriter, r *http.Request, c *call) {
 	claim, _, err := h.liveClaim(r, &c.runner)
 	if err != nil {
 		h.recordHandoffClaimRefusal(ctx, r, err, &c.runner)
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	secret, err := newSecret(runner.HandoffTokenPrefix)
 	if err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -642,7 +632,7 @@ func (h *Handler) handoff(w http.ResponseWriter, r *http.Request, c *call) {
 
 	if err = h.handoffs.IssueHandoffToken(ctx, tok, claim); err != nil {
 		h.recordHandoffClaimRefusal(ctx, r, err, &c.runner)
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -657,21 +647,21 @@ func (h *Handler) renew(w http.ResponseWriter, r *http.Request, c *call) {
 
 	claim, op, err := h.liveClaim(r, &c.runner)
 	if err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	pool, err := h.pools.Pool(ctx, c.runner.Pool)
 	if err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	fence, err := h.fenceOf(r, c.runner.Namespace)
 	if err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -683,18 +673,18 @@ func (h *Handler) renew(w http.ResponseWriter, r *http.Request, c *call) {
 		// The store changed nothing. The claimer releases the claim with
 		// its own rules, then the runner gets the claim-lost answer.
 		if giveErr := h.giveBack(r, &c.runner, claim); giveErr != nil {
-			h.writeError(ctx, w, ScopeRunnerKey, giveErr)
+			h.writeError(ctx, w, giveErr)
 
 			return
 		}
 
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 	case errors.Is(err, runner.ErrSessionOpen):
 		h.writeJSON(ctx, w, http.StatusOK, protocol.RenewResponse{
 			ExpiresAt: claim.ExpiresAt.UTC(), Canceled: op.CancelRequested, SessionOpen: true,
 		})
 	case err != nil:
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 	default:
 		h.writeJSON(ctx, w, http.StatusOK, protocol.RenewResponse{
 			ExpiresAt: renewed.ExpiresAt.UTC(), Canceled: op.CancelRequested, SessionOpen: false,
@@ -710,7 +700,7 @@ func (h *Handler) releaseClaim(w http.ResponseWriter, r *http.Request, c *call) 
 	var req protocol.ReleaseRequest
 	if len(c.body) > 0 {
 		if err := decodeBody(c.body, &req); err != nil {
-			h.writeError(ctx, w, ScopeRunnerKey, err)
+			h.writeError(ctx, w, err)
 
 			return
 		}
@@ -718,13 +708,13 @@ func (h *Handler) releaseClaim(w http.ResponseWriter, r *http.Request, c *call) 
 
 	claim, _, err := h.liveClaim(r, &c.runner)
 	if err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if err = h.giveBack(r, &c.runner, claim); err != nil {
-		h.writeError(ctx, w, ScopeRunnerKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}

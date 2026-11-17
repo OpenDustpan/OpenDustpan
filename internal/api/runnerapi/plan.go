@@ -122,20 +122,20 @@ func (h *Handler) putPlanPart(w http.ResponseWriter, r *http.Request, c *call) {
 
 	kind, err := planKindOf(r.PathValue("part"))
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if h.plans == nil {
-		h.writeError(ctx, w, ScopeSessionKey, fmt.Errorf("%w: this server stores no plans", runner.ErrNotFound))
+		h.writeError(ctx, w, fmt.Errorf("%w: this server stores no plans", runner.ErrNotFound))
 
 		return
 	}
 
 	sp, _, err := h.planPhase(r, c, job.PhasePlan)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -150,7 +150,7 @@ func (h *Handler) putPlanPart(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -166,27 +166,27 @@ func (h *Handler) commitPlan(w http.ResponseWriter, r *http.Request, c *call) {
 
 	req := protocol.PlanCommit{Parts: nil}
 	if err := decodeBody(c.body, &req); err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	parts, err := commitPartsOf(&req)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if h.plans == nil {
-		h.writeError(ctx, w, ScopeSessionKey, fmt.Errorf("%w: this server stores no plans", runner.ErrNotFound))
+		h.writeError(ctx, w, fmt.Errorf("%w: this server stores no plans", runner.ErrNotFound))
 
 		return
 	}
 
 	sp, _, err := h.planPhase(r, c, job.PhasePlan)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -197,7 +197,7 @@ func (h *Handler) commitPlan(w http.ResponseWriter, r *http.Request, c *call) {
 			err = fmt.Errorf("%w: %w", runner.ErrConflict, err)
 		}
 
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -243,34 +243,34 @@ func (h *Handler) getPlanPart(w http.ResponseWriter, r *http.Request, c *call) {
 
 	kind, err := planKindOf(r.PathValue("part"))
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	if h.artifacts == nil {
-		h.writeError(ctx, w, ScopeSessionKey, fmt.Errorf("%w: this server reads no plans", runner.ErrNotFound))
+		h.writeError(ctx, w, fmt.Errorf("%w: this server reads no plans", runner.ErrNotFound))
 
 		return
 	}
 
 	sp, j, err := h.planPhase(r, c, job.PhaseApply)
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, err)
+		h.writeError(ctx, w, err)
 
 		return
 	}
 
 	plan := planToApply(&j, sp.claim.Phase)
 	if plan == nil {
-		h.writeError(ctx, w, ScopeSessionKey, fmt.Errorf("%w: job %s has no plan to apply", runner.ErrNotFound, j.ID))
+		h.writeError(ctx, w, fmt.Errorf("%w: job %s has no plan to apply", runner.ErrNotFound, j.ID))
 
 		return
 	}
 
 	part := plan.Part(kind)
 	if part == nil {
-		h.writeError(ctx, w, ScopeSessionKey, fmt.Errorf("%w: the plan has no part %s", runner.ErrNotFound, kind))
+		h.writeError(ctx, w, fmt.Errorf("%w: the plan has no part %s", runner.ErrNotFound, kind))
 
 		return
 	}
@@ -282,7 +282,7 @@ func (h *Handler) getPlanPart(w http.ResponseWriter, r *http.Request, c *call) {
 	}
 
 	if err != nil {
-		h.writeError(ctx, w, ScopeSessionKey, fmt.Errorf("open plan part: %w", err))
+		h.writeError(ctx, w, fmt.Errorf("open plan part: %w", err))
 
 		return
 	}

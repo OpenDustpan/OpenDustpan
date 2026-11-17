@@ -112,51 +112,61 @@ func TestRunnerManagementInMaintenanceMode(t *testing.T) {
 	}{
 		{
 			"retire a runner", http.MethodPost,
-			func(r runnerRows) string { return "/api/runners/acme/runners/" + r.runner + "/retire" }, "",
+			func(r runnerRows) string { return "/api/dustpan/v1/namespaces/acme/runners/" + r.runner + "/retire" }, "",
 			http.StatusNoContent,
 		},
 		{
 			"revoke a join token", http.MethodPost,
 			func(r runnerRows) string {
-				return "/api/runners/acme/pools/" + r.pool + "/join-tokens/" + r.token + "/revoke"
+				return "/api/dustpan/v1/namespaces/acme/runner-pools/" + r.pool + "/join-tokens/" + r.token + "/revoke"
 			}, "", http.StatusNoContent,
 		},
 		{
 			"drain a runner", http.MethodPost,
-			func(r runnerRows) string { return "/api/runners/acme/runners/" + r.runner + "/drain" }, "",
+			func(r runnerRows) string { return "/api/dustpan/v1/namespaces/acme/runners/" + r.runner + "/drain" }, "",
 			http.StatusServiceUnavailable,
 		},
 		{
-			"create a pool", http.MethodPost, func(runnerRows) string { return "/api/runners/acme/pools" },
-			`{"name":"other","purpose":"jobs"}`, http.StatusServiceUnavailable,
+			"create a pool",
+			http.MethodPost,
+			func(runnerRows) string { return "/api/dustpan/v1/namespaces/acme/runner-pools" },
+			`{"name":"other","purpose":"jobs"}`,
+			http.StatusServiceUnavailable,
 		},
 		{
 			"update a pool", http.MethodPatch,
-			func(r runnerRows) string { return "/api/runners/acme/pools/" + r.pool }, `{}`,
+			func(r runnerRows) string { return "/api/dustpan/v1/namespaces/acme/runner-pools/" + r.pool }, `{}`,
 			http.StatusServiceUnavailable,
 		},
 		{
 			"delete a pool", http.MethodDelete,
-			func(r runnerRows) string { return "/api/runners/acme/pools/" + r.pool }, "",
+			func(r runnerRows) string { return "/api/dustpan/v1/namespaces/acme/runner-pools/" + r.pool }, "",
 			http.StatusServiceUnavailable,
 		},
 		{
 			"create a join token", http.MethodPost,
-			func(r runnerRows) string { return "/api/runners/acme/pools/" + r.pool + "/join-tokens" }, `{}`,
+			func(r runnerRows) string {
+				return "/api/dustpan/v1/namespaces/acme/runner-pools/" + r.pool + "/join-tokens"
+			}, `{}`,
 			http.StatusServiceUnavailable,
 		},
 		{
-			"list pools", http.MethodGet, func(runnerRows) string { return "/api/runners/acme/pools" }, "",
+			"list pools",
+			http.MethodGet,
+			func(runnerRows) string { return "/api/dustpan/v1/namespaces/acme/runner-pools" },
+			"",
 			http.StatusServiceUnavailable,
 		},
 		{
 			"list runners", http.MethodGet,
-			func(r runnerRows) string { return "/api/runners/acme/pools/" + r.pool + "/runners" }, "",
+			func(r runnerRows) string {
+				return "/api/dustpan/v1/namespaces/acme/runner-pools/" + r.pool + "/runners"
+			}, "",
 			http.StatusServiceUnavailable,
 		},
 		{
 			"retire with another method", http.MethodGet,
-			func(r runnerRows) string { return "/api/runners/acme/runners/" + r.runner + "/retire" }, "",
+			func(r runnerRows) string { return "/api/dustpan/v1/namespaces/acme/runners/" + r.runner + "/retire" }, "",
 			http.StatusServiceUnavailable,
 		},
 	}
@@ -205,7 +215,12 @@ func waitForRunnerAPIStatus(t *testing.T, h http.Handler, want int) {
 	deadline := time.Now().Add(30 * time.Second)
 
 	for time.Now().Before(deadline) {
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/runners/acme/pools", nil)
+		req := httptest.NewRequestWithContext(
+			t.Context(),
+			http.MethodGet,
+			"/api/dustpan/v1/namespaces/acme/runner-pools",
+			nil,
+		)
 		req.Header.Set("Authorization", "token "+runnerAdminToken)
 
 		rec := httptest.NewRecorder()

@@ -19,7 +19,7 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | The pass is expired, used, unknown or for another unit. | The server answers 403 with an error code that says the pass is not valid. It writes no state and writes an audit entry. | `GET /api/audit/entries` |
-| The caller holds no grant to issue a pass. | The server answers 403 and names the missing action. | `GET /api/server/caller/grants` |
+| The caller holds no grant to issue a pass. | The server answers 403 and names the missing action. | `GET /api/dustpan/v1/me/grants` |
 
 Evidence for the claims above:
 

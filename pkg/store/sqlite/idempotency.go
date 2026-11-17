@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/idempotency"
@@ -85,9 +86,11 @@ func idempotencyKeyOps(q *db.Queries) codec.IdempotencyKeyOps {
 	}
 }
 
-// Begin implements idempotency.Store.
+// Begin implements idempotency.Store. A Reducing request writes its record on
+// the control path, so maintenance mode does not refuse the record of a route
+// that ends access.
 func (i *Idempotency) Begin(
-	ctx context.Context, ref idempotency.Ref, material []byte, now time.Time,
+	ctx context.Context, ref idempotency.Ref, material []byte, now time.Time, opts ...idempotency.BeginOption,
 ) (idempotency.Result, error) {
 	if err := ref.Validate(); err != nil {
 		return idempotency.Result{}, err
@@ -105,7 +108,16 @@ func (i *Idempotency) Begin(
 
 	var resolved codec.IdempotencyKey
 
-	err = i.store.inTx(ctx, func(q *db.Queries) error {
+	// Defense in depth: the route decides Reducing, and the maintenance gate
+	// lets only the routes of the list through. This store does not check the
+	// route, so a caller that passes Reducing for another route writes its
+	// record in maintenance mode. The route tests catch that.
+	run := i.store.inTx
+	if slices.Contains(opts, idempotency.Reducing) {
+		run = i.store.inControlTx
+	}
+
+	err = run(ctx, func(q *db.Queries) error {
 		var keyErr error
 
 		if resolved, keyErr = i.keys.Resolve(ctx, idempotencyKeyOps(q)); keyErr != nil {
@@ -231,7 +243,10 @@ func (i *Idempotency) Abandon(ctx context.Context, ref idempotency.Ref, token st
 	i.store.mu.RLock()
 	defer i.store.mu.RUnlock()
 
-	err := i.store.inTx(ctx, func(q *db.Queries) error {
+	// Abandon frees a key and writes no domain data, so it runs on the control
+	// path in every mode. A reducing route that fails must free its key in
+	// maintenance mode too.
+	err := i.store.inControlTx(ctx, func(q *db.Queries) error {
 		return q.AbandonIdempotencyRecord(ctx, db.AbandonIdempotencyRecordParams{
 			Principal: ref.Principal, Method: ref.Method, Path: ref.Path, IdemKey: string(ref.Key), Token: token,
 		})

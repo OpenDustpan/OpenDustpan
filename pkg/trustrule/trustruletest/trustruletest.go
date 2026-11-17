@@ -24,10 +24,12 @@ import (
 // empty. The namespace exists already. DeletePrincipal deletes the principal
 // with the ID id, and DisablePrincipal disables it.
 //
-// Exchanges is the exchange store of the adapter, and Token reads an access
+// Bundles is the trust bundle store of the adapter. Exchanges is the exchange
+// store of the adapter, and Token reads an access
 // token by its ID, or reports false when no token has the ID.
 type Harness struct {
 	Store            trustrule.Store
+	Bundles          trustrule.BundleStore
 	Exchanges        trustrule.ExchangeStore
 	Namespace        func(t *testing.T, name string) namespace.Fence
 	Audit            func(t *testing.T, ns string) []audit.Entry
@@ -85,5 +87,11 @@ func cases() []suiteCase {
 		// An exchange stores its token only for a rule and a principal that
 		// still accept it, in the transaction of its audit entry.
 		exchangeCases(),
+		// An update checks the revision, the fence and the principal, and
+		// keeps what never changes.
+		updateCases(),
+		// The trust bundle of a namespace keeps append-only versions with one
+		// active pointer, and refuses input that fails its checks.
+		bundleCases(),
 	)
 }

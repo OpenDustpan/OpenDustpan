@@ -265,8 +265,9 @@ func (h *Handler) createGitHostConnection(
 	build := connectionAnswerOf(reg, http.StatusCreated)
 
 	h.keyed(w, r, p, keyedCall{
-		build: build,
-		serve: func(w http.ResponseWriter, r *http.Request) { h.makeGitHostConnection(w, r, p, obj.Namespace(), build) },
+		build:    build,
+		serve:    func(w http.ResponseWriter, r *http.Request) { h.makeGitHostConnection(w, r, p, obj.Namespace(), build) },
+		required: false,
 	})
 }
 
@@ -349,8 +350,9 @@ func (h *Handler) deleteGitHostConnection(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	h.keyed(w, r, p, keyedCall{
-		build: noContentAnswer,
-		serve: func(w http.ResponseWriter, r *http.Request) { h.removeGitHostConnection(w, r, p, obj.Namespace()) },
+		build:    noContentAnswer,
+		serve:    func(w http.ResponseWriter, r *http.Request) { h.removeGitHostConnection(w, r, p, obj.Namespace()) },
+		required: false,
 	})
 }
 
@@ -384,8 +386,9 @@ func (h *Handler) makeGitHostDefault(
 	build := connectionAnswerOf(reg, http.StatusOK)
 
 	h.keyed(w, r, p, keyedCall{
-		build: build,
-		serve: func(w http.ResponseWriter, r *http.Request) { h.setGitHostDefault(w, r, p, obj.Namespace(), build) },
+		build:    build,
+		serve:    func(w http.ResponseWriter, r *http.Request) { h.setGitHostDefault(w, r, p, obj.Namespace(), build) },
+		required: false,
 	})
 }
 
