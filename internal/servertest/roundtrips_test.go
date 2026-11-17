@@ -1537,7 +1537,7 @@ func restoreModel() costModel {
 		fixed: 331 + 1 + attemptClaimTrips + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
-			droppedRunnerCredentialTrips + proxyRuleSetTrips + trustBundleTrips,
+			droppedRunnerCredentialTrips + proxyRuleSetTrips + poolProxySettingsTrips + trustBundleTrips,
 		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
@@ -1621,6 +1621,12 @@ const droppedRunnerCredentialTrips = 2
 // makes 5 round trips for it, 2 fewer than perTable gives, as for
 // group_mappings.
 const proxyRuleSetTrips = -2
+
+// poolProxySettingsTrips is the change in the fixed part for the table
+// runner_pool_proxy_settings, a table of Tables that the dev strip never
+// counts. The run makes 5 round trips for it, 2 fewer than perTable gives, as
+// for group_mappings.
+const poolProxySettingsTrips = -2
 
 // removalAlertTrips is the change in the fixed part for the table
 // member_removal_alerts. Like member_removals, it costs 2 round trips fewer

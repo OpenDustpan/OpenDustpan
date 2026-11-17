@@ -237,6 +237,12 @@ func (h *Handler) proxySettingsPut(r *http.Request, c *call) (*proxysessionsvc.P
 
 // writeProxySettings answers the settings with the version as the ETag.
 func (h *Handler) writeProxySettings(w http.ResponseWriter, r *http.Request, s *proxysessionsvc.Settings) {
+	if s == nil {
+		h.writeError(r.Context(), w, ScopeAuthorized, errors.New("proxy settings missing"))
+
+		return
+	}
+
 	w.Header().Set("ETag", `"`+strconv.FormatInt(s.Version, 10)+`"`)
 	h.writeJSON(r.Context(), w, http.StatusOK, proxySettingsJSON{
 		AllowedRanges: s.AllowedRanges, UpstreamProxy: s.UpstreamURL, CredentialSet: s.CredentialSet,

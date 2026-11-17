@@ -100,7 +100,7 @@ func opensProxySession(t *testing.T, env *e2e.Env, handoff string) *e2e.FakeProx
 	ctx := t.Context()
 
 	proxy, status, body := env.OpenProxySession(ctx, t, handoff)
-	if status != http.StatusOK {
+	if status != http.StatusOK || proxy == nil {
 		t.Fatalf("open the proxy session = %d %s, want 200", status, body)
 	}
 

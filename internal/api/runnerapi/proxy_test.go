@@ -115,6 +115,10 @@ func newProxyEnv(t *testing.T) *proxyEnv {
 		}
 	})
 
+	if raw == nil || svc == nil {
+		t.Fatal("the session env did not build the store and the proxy service")
+	}
+
 	pool, err := raw.Runners().Pool(t.Context(), s.pool)
 	if err != nil {
 		t.Fatalf("read pool: %v", err)
