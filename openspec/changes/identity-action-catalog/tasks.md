@@ -15,4 +15,4 @@
 ## 3. Verification
 
 - [ ] 3.1 Prove the guard in `pkg/access/access.go:115`: remove `identity.ActionJobReadLogs` from the family table; `TestEveryCoreActionIsClassifiedOrListed` fails and names `job:read-logs`. Restore it. Check: the failure text holds the action.
-- [ ] 3.2 `make check` reports zero findings on `pkg/identity` and `pkg/access`. Check: the command exits 0. Confirmed by: CI (the agent runs the fast checks only). Credential: none. BLOCKED by: none.
+- [x] 3.2 `make check` reports zero findings on `pkg/identity` and `pkg/access`. Check: the command exits 0. Confirmed by: CI (the agent runs the fast checks only). Credential: none. BLOCKED by: none.
