@@ -24,8 +24,8 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - The ports FindingStore and ScanStore exist today in internal/unmanaged. Proof: rg -n -F --glob '!*_test.go' 'FindingStore' pkg internal cmd gives internal/unmanaged/ports.go:249. The same search for ScanStore gives internal/unmanaged/ports.go:326.
-- Writes in other domains carry namespace.Fence and map a stale fence to namespace.ErrFenced. Proof: rg for namespace.Fence gives 1280 matches. rg for namespace.ErrFenced gives 489 matches, for example internal/cost/ports.go:119.
-- PostgreSQL tests read their URL from DUSTPAN_TEST_POSTGRES_URL. Proof: internal/servertest/servertest.go:51 holds const EnvURL = DUSTPAN_TEST_POSTGRES_URL.
+- Writes in other domains carry namespace.Fence and map a stale fence to namespace.ErrFenced. Proof: rg for namespace.Fence gives 1280 matches. rg for namespace.ErrFenced gives 489 matches, for example in the ports of the cost package, line 119.
+- PostgreSQL tests read their URL from DUSTPAN_TEST_POSTGRES_URL. Proof: line 51 of the servertest package holds const EnvURL = DUSTPAN_TEST_POSTGRES_URL.
 
 ## What Changes
 
@@ -61,9 +61,9 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - The FindingStore port exists in the internal package. (`internal/unmanaged/ports.go:249`)
 - The ScanStore port exists in the internal package. (`internal/unmanaged/ports.go:326`)
-- namespace.ErrFenced is the sentinel of a stale fence. (`pkg/namespace/namespace.go:38`)
-- namespace.Fence is the type that a write carries. (`pkg/namespace/namespace.go:178`)
-- The PostgreSQL test URL variable is defined. (`internal/servertest/servertest.go:51`)
+- namespace.ErrFenced is the sentinel of a stale fence. (the namespace package, line 38)
+- namespace.Fence is the type that a write carries. (the namespace package, line 178)
+- The PostgreSQL test URL variable is defined. (the servertest package, line 51)
 
 ## Owner decisions that apply
 
