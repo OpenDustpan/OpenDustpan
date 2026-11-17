@@ -12,7 +12,7 @@ The user path this change must make work:
 
 1. **API.** The runner polls and claims a job phase with its runner key. The server takes the claim kinds from the pool.
 2. **API.** The launcher opens a job session with the handoff token, then renews the claim through the session renew path.
-3. **API.** The launcher reads source, gets the job token, begins and ends steps, streams log chunks, uploads plan parts and commits the plan once.
+3. **API.** The launcher reads source, begins and ends steps, streams log chunks, uploads plan parts and commits the plan once.
 4. **Docs page.** The runner operator reads docs/reference/runner-api.md for each session path, cap and error code.
 5. **E2e.** The step drives the real launcher against POST /runner/v1/session with a handoff token, then the session paths with the session key proof (action runner:claim).
 
@@ -34,7 +34,7 @@ Evidence for the claims above:
 ## What Changes
 
 - Main already has these routes: POST /runner/v1/session, /session/renew, /session/steps/{step}/begin and /end, /session/steps/{step}/logs/{seq} and /session/finish (internal/api/runnerapi/routes.go:164-199, PathSession* in pkg/runner/protocol/protocol.go:57-99). Main also has their tests in internal/api/runnerapi/session_test.go and session_guard_test.go, and the docs rows at docs/reference/runner-api.md:160-163.
-- This change adds the routes that main declares but does not route: PathSessionSource (protocol.go:65), PathSessionSourceObject (:68), PathSessionPlanPart (:71), PathSessionCredentials (:74), PathSessionPlanUpload (:89) and PathSessionPlanCommit (:92). It adds their caps, their tests and their docs rows.
+- This change adds the routes that main declares but does not route: PathSessionSource (protocol.go:65), PathSessionSourceObject (:68), PathSessionPlanPart (:71), PathSessionPlanUpload (:89) and PathSessionPlanCommit (:92). The credentials path (PathSessionCredentials) belongs to `add-job-session-paths-runner-token-issuer`. This change adds their caps, their tests and their docs rows.
 - A runner key on a session path and a session key on a runner path both answer 401 bad-proof.
 - The session paths serve job claims only. A namespace pool with the sweep purpose is refused.
 - Upload caps, a log sequence rule, the Dustpan-Content-SHA256 check, and one plan commit with a stored result.
@@ -43,7 +43,7 @@ Evidence for the claims above:
 Out of scope:
 
 - The sweep report, finish routes and all sweep code.
-- The job token issuer, from the first part.
+- The credentials path and the job token issuer (`add-job-session-paths-runner-token-issuer`).
 - The launcher binary modes, runner pool routes and the runner pool e2e, in other changes.
 
 Depends on:
@@ -112,7 +112,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Changed by: ADR 110 extends decision 17; ADR 125 changes; ADR 128 changes decision 17; ADR 130 extends; ADR 135 extends decision 5; ADR 139 extends decision 5; ADR 144 changes decision 20; ADR 145 extends; ADR 148 extends decision 4; ADR 190 changes decision 4; ADR 213 changes decision 20; ADR 258 extends decision 4; ADR 263 extends decision 4; ADR 286 changes; ADR 299 changes decisions 12 and 15; ADR 304 changes decision 2; ADR 304 changes decision 20; ADR 314 extends; ADR 353 extends decision 4. Chain to the end: ADR 110, ADR 125, ADR 128, ADR 130, ADR 135, ADR 139, ADR 144, ADR 145, ADR 148, ADR 190, ADR 213, ADR 258, ADR 263, ADR 286, ADR 299, ADR 304, ADR 314, ADR 353, ADR 210, ADR 218, ADR 222, ADR 225, ADR 305, ADR 308, ADR 354, ADR 227, ADR 164, ADR 300, ADR 343, ADR 199, ADR 220, ADR 226, ADR 282, ADR 149, ADR 224, ADR 259, ADR 146, ADR 197, ADR 203, ADR 204, ADR 234, ADR 241, ADR 248, ADR 262, ADR 315, ADR 334.
 - Current rule: this ADR, with ADR 110, 125, 128, 130, 135, 139, 144, 145, 148, 190, 213, 258, 263, 286, 299, 304, 314, 353.
 - Quote: "The job token and the job-ID claim."
-- Effect: The credentials path serves the token that the first part issues.
+- Effect: None for this change. The credentials path is in `add-job-session-paths-runner-token-issuer`.
 - Conflict: none.
 
 **ADR 210: The tool-neutral API: one prefix, resource paths, action names, versions and a style guide** (not owner-tagged).
@@ -132,6 +132,6 @@ Questions considered and answered:
 
 - Can a sweep-purpose pool reach the job session paths? No. Owner decision, 13 Nov 2026 (queue P14), with ADR 130 decision 3: claim kinds come from the pool, and a namespace pool with the sweep purpose is refused.
 - Does the Idempotency-Key rule apply? No. ADR 210 decision 2 keeps runner paths outside the tool-neutral API; the replay rule of ADR 131 decision 13 applies.
-- What does the credentials path answer when no issuer is wired? It depends on the first part. This change answers 503 until the issuer exists and writes no issue logic.
+- Who routes the credentials path? `add-job-session-paths-runner-token-issuer`. This change adds no credentials route and no issue logic.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

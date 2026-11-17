@@ -5,12 +5,12 @@
 ## 1. Failing tests first
 
 - [x] 1.0 Tests for exchange, renew, step order and log caps and hash exist on main: internal/api/runnerapi/session_test.go:201 (TestSessionRoutes), :342 (TestOpenSession), :460 (TestSessionRenewExtendsTheLease), :650 (TestLogAndStepEnd), :836 (TestLogChunkHashIsChecked). Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` passes on main
-- [ ] 1.1 Write failing tests for source, credentials, plan part upload, plan caps and the double commit in internal/api/runnerapi/session_test.go (existing file). Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` fails on main
+- [ ] 1.1 Write failing tests for source, plan part upload, plan caps and the double commit in internal/api/runnerapi/session_test.go (existing file). Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` fails on main
 - [ ] 1.2 Write failing hostile tests in internal/api/runnerapi/session_hostile_test.go (NEW): namespace pool with the sweep purpose, takeover during plan upload, runner key on the new session paths. Main has TestSweepExchangeIsRefused at internal/api/runnerapi/session_guard_test.go:337. Check: `go test ./internal/api/runnerapi/ -run TestSessionHostile -count=1` fails on main
 
 ## 2. Behavior and docs
 
-- [ ] 2.1 Wire the six missing session routes (source, source object, plan part, credentials, plan upload, plan commit) to one port call after the claim check. Declare the routes in internal/api/runnerapi/routes.go (existing, near :164-199) and write the adapter in internal/api/runnerapi/session.go (existing). Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` passes
+- [ ] 2.1 Wire the five missing session routes (source, source object, plan part, plan upload, plan commit) to one port call after the claim check. Declare the routes in internal/api/runnerapi/routes.go (existing, near :164-199) and write the adapter in internal/api/runnerapi/session.go (existing). Check: `go test ./internal/api/runnerapi/ -run TestSession -count=1` passes
 - [ ] 2.2 Add docs/reference/runner-api.md rows for the six missing session paths, their caps and error codes. Main has the rows for /session, renew and steps (:160-163). Check: `make docs-lint` passes
 
 ## 3. Side effects (computed from main)
