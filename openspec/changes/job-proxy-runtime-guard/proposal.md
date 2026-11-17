@@ -50,6 +50,7 @@ Depends on:
 
 - job-proxy-rule-sets
 - `job-proxy-rule-sets` (the part before it in the split)
+- `add-job-proxy-runner-contract` (the proxy session paths, the pool allowed ranges and the upstream proxy settings, the proxy authorization table)
 
 ## Usability
 
@@ -116,6 +117,6 @@ Questions considered and answered:
 - How do bound dial, private ranges, and upstream proxy combine? ADR 327 decision 8 and ADR 330 decision 8 answer it: dial with pkg/egress rules, never always-denied addresses, private range only when pool allows it, pool upstream proxy only.
 - Does this change add per-request records or phase audit entries? ADR 327 decision 10 answers it: this change writes only the job log line with host and path and a fixed reason. Full records and phase audit stay in the later part.
 - Is the proxy on by default for every job? ADR 353 decisions 1 and 2 answer it: proxy runs only where the team set proxy rules.
-- Where is the upstream proxy credential stored? ADR 330 decision 8 answers it: the pool seals it. Pool storage is built in job-proxy-rule-sets, which this change depends on.
+- Where is the upstream proxy credential stored? ADR 330 decision 8 answers it: the pool seals it. Pool storage is built in add-job-proxy-runner-contract, which this change depends on.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.

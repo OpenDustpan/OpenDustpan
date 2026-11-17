@@ -1,17 +1,18 @@
 ## Context
 
-The tool step needs a credential that acts as the starter on one unit and stops with the claim or the step. The issuer sits behind job.Claimer.
+The tool step needs a credential that acts as the starter on one unit and stops with the claim or the step. The launcher asks for it through its job session (ADR 133 decision 12), and the server makes it at that request (ADR 386, owner, 17 Nov 2026). The claim makes no token and the claim answer holds none (ADR 133 decision 13).
 
 ## Decisions
 
-1. **Issuer behind the claim.** The issuer stores the token hash, job ID, stable unit ID, claim ID and expiry in the claim transaction.
-2. **End in the same transaction.** Finish, takeover and retire end the token rows in the same transaction as their own write.
-3. **Routes.** The token is accepted on the state routes of its unit. It is refused on the REST API and on other units.
-4. **JobID only on job tokens.** Principal.JobID is set only when the credential is CredentialJobToken.
+1. **Issue at the launcher request.** The credentials path of the job session calls the existing `jobtoken.Service.Issue`. The service stores the token hash, job ID, stable unit ID, claim and expiry in the transaction of the issue, with one audit entry that names the job, the step and the expiry. Each request makes one token for its step. An earlier token of the claim stops at its own expiry or with the claim.
+2. **Expiry.** The expiry is the earlier of the end of the claim and the end of the step timeout plus grace. A pure function in `pkg/jobtoken/expiry.go` computes it from three times.
+3. **End in the same transaction.** Finish, takeover and retire end the token rows in the same transaction as their own write.
+4. **Routes.** The token is accepted on the state routes of its unit. It is refused on the REST API and on other units.
+5. **JobID only on job tokens.** Principal.JobID is set only when the credential is CredentialJobToken.
 
 ## Structure
 
-Unexported struct jobToken with fields jobID, unitID, claimID and expiry. Only its constructor makes a value. It refuses an empty unit ID and a past expiry. The stable unit ID is used, so a deleted and recreated unit does not match.
+Unexported struct jobToken with fields jobID, unitID, claim and expiry. Only its constructor makes a value. It refuses an empty unit ID and a past expiry. The stable unit ID is used, so a deleted and recreated unit does not match.
 
 ## Risks
 
@@ -33,7 +34,10 @@ After this change:
 ```mermaid
 sequenceDiagram
   Runner->>Server: claim phase
-  Server->>Store: write claim and token
+  Server-->>Runner: claim answer, no job token
+  Launcher->>Server: credentials request on the job session
+  Server->>Store: issue token and write one audit entry
+  Server-->>Launcher: token, shown once
   Step->>Server: tool request with job token
   Server->>Store: check claim and unit
   Server-->>Step: allow or deny
@@ -43,7 +47,7 @@ States and transitions after this change:
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Live: claim
+  [*] --> Live: launcher request
   Live --> Live: renew
   Live --> Ended: finish, expiry, grace bound, takeover, retire
 ```
@@ -66,11 +70,11 @@ flowchart LR
     S[Tool step]
   end
   subgraph Server[Server]
-    C[Claimer and issuer]
+    C[Job session and issuer]
     A[Tool API check]
     DB[(Store)]
   end
-  R -->|claim| C
+  R -->|credentials request| C
   C -->|token hash| DB
   S -->|job token| A
   A -->|liveness and unit| DB
@@ -98,7 +102,7 @@ flowchart LR
 
 | Step | Failure | Retry | State after |
 | --- | --- | --- | --- |
-| Make the token in the claim transaction | The transaction fails. | The runner polls again and the claim repeats. | No claim and no token. |
+| Issue the token at the launcher request | The transaction fails. | The launcher asks again. | No token and no audit entry. |
 | Renew the claim | The renew fails or the lease passes. | The holder renews again before expiry. | The claim expires and the token ends with it. |
 | Takeover of the phase | The old runner still holds a token. | None. The takeover ends the old token in the same transaction. | Only the new claim has a live token. |
 | Finish the job | The finish write fails. | The caller repeats the finish. | The job is not finished and the token stays live by the same rule. A finish that commits ends the token in the same transaction. |
