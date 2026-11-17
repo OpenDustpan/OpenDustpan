@@ -76,8 +76,9 @@ func jobTokenState(t *testing.T, env *e2e.Env) {
 	writeTofuHTTPConfig(t, env.ProjectDir(), env.URL+"/tofu/state/"+e2e.Namespace+"/"+jobsUnit)
 
 	env.Step(ctx, t, e2e.StepSpec{
-		Check: checkTofuHTTPInit(), Name: "init on the unit of the job", Args: []string{"init", "-input=false", "-no-color"},
-		Env: backendEnv, Stdin: "", Fail: false, Redact: false,
+		Check: checkTofuHTTPInit(), Name: "init on the unit of the job",
+		Args: []string{"init", "-input=false", "-no-color"},
+		Env:  backendEnv, Stdin: "", Fail: false, Redact: false,
 	})
 
 	env.Step(ctx, t, e2e.StepSpec{

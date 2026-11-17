@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -59,47 +60,8 @@ func jobTokenStackExport(t *testing.T, env *e2e.Env) {
 		createStack(ctx, t, env, e2e.Namespace+"/"+exportProject+"/"+name)
 	}
 
-	var poolID string
-
-	env.APIStepA(ctx, t, e2e.APIStepSpec{
-		UserAgent: jobsAgent, Name: "create the runner pool", Method: http.MethodPost,
-		Path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/runner-pools",
-		Body: `{"name":"` + jobsPool + `","purpose":"jobs"}`, Want: http.StatusCreated, Scheme: "token",
-		Check: func(body string) error {
-			var pool struct {
-				ID string `json:"id"`
-			}
-
-			if err := json.Unmarshal([]byte(body), &pool); err != nil || pool.ID == "" {
-				return fmt.Errorf("%w: pool %s: %w", errLauncherFlow, body, err)
-			}
-
-			poolID = pool.ID
-
-			return nil
-		},
-	})
-
-	started := fmt.Sprintf(`{"unit":{"tool":"pulumi","name":"%s/%s"},"operation":"plan","pool":%q,`+
-		`"location":{"repository":"acme/infra","ref":"main","directory":"net"},"reason":"e2e"}`,
-		exportProject, exportOwn, jobsPool)
-
-	var jobID string
-
-	env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
-		UserAgent: jobsAgent, Name: "start a plan job on the stack", Method: http.MethodPost, Path: jobsRoute,
-		Body: started, Want: http.StatusCreated, Scheme: "token",
-		Check: func(body string) error {
-			var doc jobDoc
-			if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.ID == "" {
-				return fmt.Errorf("%w: job %s: %w", errLauncherFlow, body, err)
-			}
-
-			jobID = doc.ID
-
-			return nil
-		},
-	}, map[string]string{"Idempotency-Key": "job-token-export-key"})
+	started := startExportJob(ctx, t, env)
+	jobID, poolID := started.job, started.pool
 
 	fake := env.JoinFakeRunner(ctx, t, e2e.Namespace, poolID, "builder-1")
 
@@ -132,4 +94,57 @@ func jobTokenStackExport(t *testing.T, env *e2e.Env) {
 			t.Errorf("export of the %s with the job token = %d %s, want %d", tc.name, got, body, tc.want)
 		}
 	}
+}
+
+// exportJob holds the IDs of the job of the export test and of its runner pool.
+type exportJob struct {
+	job, pool string
+}
+
+// startExportJob makes a runner pool and starts a plan job on the first stack.
+// It returns their IDs.
+func startExportJob(ctx context.Context, t *testing.T, env *e2e.Env) exportJob {
+	t.Helper()
+
+	var out exportJob
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "create the runner pool", Method: http.MethodPost,
+		Path: "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/runner-pools",
+		Body: `{"name":"` + jobsPool + `","purpose":"jobs"}`, Want: http.StatusCreated, Scheme: "token",
+		Check: func(body string) error {
+			var pool struct {
+				ID string `json:"id"`
+			}
+
+			if err := json.Unmarshal([]byte(body), &pool); err != nil || pool.ID == "" {
+				return fmt.Errorf("%w: pool %s: %w", errLauncherFlow, body, err)
+			}
+
+			out.pool = pool.ID
+
+			return nil
+		},
+	})
+
+	started := fmt.Sprintf(`{"unit":{"tool":"pulumi","name":"%s/%s"},"operation":"plan","pool":%q,`+
+		`"location":{"repository":"acme/infra","ref":"main","directory":"net"},"reason":"e2e"}`,
+		exportProject, exportOwn, jobsPool)
+
+	env.APIStepWithHeaders(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "start a plan job on the stack", Method: http.MethodPost, Path: jobsRoute,
+		Body: started, Want: http.StatusCreated, Scheme: "token",
+		Check: func(body string) error {
+			var doc jobDoc
+			if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.ID == "" {
+				return fmt.Errorf("%w: job %s: %w", errLauncherFlow, body, err)
+			}
+
+			out.job = doc.ID
+
+			return nil
+		},
+	}, map[string]string{"Idempotency-Key": "job-token-export-key"})
+
+	return out
 }
