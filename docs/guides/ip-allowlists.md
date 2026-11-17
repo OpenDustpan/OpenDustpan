@@ -175,8 +175,12 @@ for a set and `namespace:remove-ip-allowlist` for a delete. A refused request
 writes a refusal entry with the action of the request, for example
 `collection:read`. A request that the installation list refuses writes an
 `installation:deny-ip-allowlist` entry. The entry has the kind `security`, the
-outcome `denied`, the scope that refused and the client address. Read the
-entries in the [audit log](audit-log.md).
+outcome `denied`, the scope that refused and the client address. The server
+limits these entries: it writes one entry for each scope and client address in
+each window. The next entry for that address, or the entry at shutdown, gives
+the count of the further refusals. The limit applies to the entry only. Each
+refused request gets the same 403 answer. Read the entries in the
+[audit log](audit-log.md).
 
 If the audit entry of a change cannot be written, the change does not happen.
 

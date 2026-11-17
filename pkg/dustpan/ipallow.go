@@ -2,6 +2,7 @@ package dustpan
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -10,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
 	"opendustpan.org/opendustpan/internal/api/problem"
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -106,6 +108,7 @@ func (c *allowChecker) check(ctx context.Context, addr netip.Addr) allowDecision
 type allowlistRequestGate struct {
 	settings *setting.Service
 	audit    audit.ServerStore
+	limiter  *denylimit.Limiter
 	now      func() time.Time
 	logger   *slog.Logger
 }
@@ -121,6 +124,7 @@ func newAllowlistRequestGate(cfg *settings) (allowlistRequestGate, error) {
 	return allowlistRequestGate{
 		settings: newSettingService(cfg, cfg.namespaceStore),
 		audit:    serverAudit,
+		limiter:  cfg.denialLimiter,
 		now:      cfg.now,
 		logger:   cfg.logger,
 	}, nil
@@ -136,7 +140,7 @@ func (g allowlistRequestGate) checker(ctx context.Context, r *http.Request) *all
 	}
 
 	record := func(ctx context.Context, denial allowDenial) {
-		allowlistAudit{store: g.audit, now: g.now, logger: g.logger}.record(ctx, r, denial)
+		allowlistAudit{store: g.audit, limiter: g.limiter, now: g.now, logger: g.logger}.record(ctx, r, denial)
 	}
 
 	enabled, err := g.settings.Effective(ctx, setting.InstallationScope(), ipallow.SettingEnabled)
@@ -234,27 +238,110 @@ func healthProbePath(p string) bool {
 
 // allowlistAudit writes the denial entries of the installation scope.
 type allowlistAudit struct {
-	store  audit.ServerStore
-	now    func() time.Time
-	logger *slog.Logger
+	store   audit.ServerStore
+	limiter *denylimit.Limiter
+	now     func() time.Time
+	logger  *slog.Logger
 }
 
-// record writes one denial entry. It never changes the answer: a failed
-// append writes one WARN line and the request stays refused.
+// record writes the entry of one denial, within the bound of the limiter. The
+// key of the limiter is the scope that refused and the client address, so a
+// client outside the list writes one entry for each window and each later
+// refusal only adds to the count that the next entry carries. The limiter
+// limits the entry only: the caller answers the 403 in each case. A failed
+// append writes one WARN line and gives the write back to the limiter.
+//
+// Defense in depth: the list check does not rely on a rate limit of the
+// listener or a proxy to keep the audit log small.
 func (a allowlistAudit) record(ctx context.Context, r *http.Request, denial allowDenial) {
 	if a.store == nil {
 		return
 	}
 
+	key := denylimit.Key{
+		Principal: denial.Address.String(), Action: allowlistDenyAction,
+		Kind: string(denial.Scope), Scope: string(audit.ServerScope),
+	}
+
+	decision := denylimit.Decision{Write: true, Suppressed: 0, Overflow: false, Flush: nil}
+	if a.limiter != nil {
+		decision = a.limiter.Allow(key)
+	}
+
+	for _, pending := range decision.Flush {
+		a.append(ctx, a.pendingEntry(pending), allowScope(pending.Key.Kind))
+	}
+
+	if !decision.Write {
+		return
+	}
+
 	entry := allowlistDenialEntry(a.now, r, denial)
 
+	switch {
+	case decision.Overflow:
+		entry = a.overflowEntry(decision.Suppressed)
+	case decision.Suppressed > 0:
+		entry.Reason = fmt.Sprintf("%s; %d further refusals in the last window were not recorded one by one",
+			entry.Reason, decision.Suppressed)
+	default:
+	}
+
+	if !a.append(ctx, entry, denial.Scope) && a.limiter != nil {
+		a.limiter.Release(key, decision)
+	}
+}
+
+// pendingEntry returns the entry that carries a count of refusals that the
+// limiter held back.
+func (a allowlistAudit) pendingEntry(pending denylimit.Pending) audit.Entry {
+	if pending.Overflow {
+		return a.overflowEntry(pending.Suppressed)
+	}
+
+	address, err := netip.ParseAddr(pending.Key.Principal)
+	if err != nil {
+		address = netip.Addr{}
+	}
+
+	entry := allowlistDenialEntry(a.now, nil, allowDenial{Scope: allowScope(pending.Key.Kind), Address: address})
+	entry.Reason = fmt.Sprintf(
+		"%d further refusals in the last window were not recorded one by one",
+		pending.Suppressed,
+	)
+
+	return entry
+}
+
+// overflowEntry returns the entry that stands for the refusals of client
+// addresses that the limiter had no room to track.
+func (a allowlistAudit) overflowEntry(suppressed int) audit.Entry {
+	entry := allowlistDenialEntry(a.now, nil, allowDenial{Scope: "", Address: netip.Addr{}})
+	entry.Object = "refusals of untracked client addresses"
+	entry.Reason = fmt.Sprintf(
+		"%d refusals were not recorded one by one: too many client addresses in one window",
+		suppressed,
+	)
+
+	return entry
+}
+
+// append writes entry and reports whether it was stored.
+func (a allowlistAudit) append(ctx context.Context, entry audit.Entry, scope allowScope) bool {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), allowlistAuditTimeout)
 	defer cancel()
 
 	if _, err := a.store.AppendServer(writeCtx, entry); err != nil {
-		a.logger.WarnContext(ctx, "append the IP allowlist denial", slog.String("scope", string(denial.Scope)))
+		a.logger.WarnContext(ctx, "append the IP allowlist denial", slog.String("scope", string(scope)))
+
+		return false
 	}
+
+	return true
 }
+
+// allowlistDenyAction is the audit action of a refusal by an IP allowlist.
+const allowlistDenyAction = "installation:deny-ip-allowlist"
 
 // allowlistDenialEntry returns the security entry of one refusal. The entry
 // holds the scope that refused and the recorded client address, never the
@@ -277,7 +364,7 @@ func allowlistDenialEntry(now func() time.Time, r *http.Request, denial allowDen
 
 	return audit.Entry{
 		At: at.UTC(), Namespace: audit.ServerScope, Subject: "anonymous", IDPSubject: "", TokenID: "",
-		Action: "installation:deny-ip-allowlist", Object: string(denial.Scope), Version: "", ValuePath: "",
+		Action: allowlistDenyAction, Object: string(denial.Scope), Version: "", ValuePath: "",
 		ValueCount: nil, Changes: nil, SourceIP: denial.Address.String(), UserAgent: userAgent, Channel: channel,
 		Kind: audit.KindSecurity, Outcome: audit.OutcomeDenied, RequestID: requestID, ObjectID: "", PrevHash: "",
 		Hash: "", Sequence: 0, FenceVersion: 0, Reason: "the client address is outside an IP allowlist",

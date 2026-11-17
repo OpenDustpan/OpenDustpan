@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/denylimit"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -49,8 +51,10 @@ func TestDenyAnyListDenies(t *testing.T) {
 
 	store := &recordingServerAudit{entries: nil}
 	auditor := allowlistAudit{
-		store: store, now: func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) },
-		logger: slog.New(slog.DiscardHandler),
+		store:   store,
+		limiter: nil,
+		now:     func() time.Time { return time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC) },
+		logger:  slog.New(slog.DiscardHandler),
 	}
 
 	req := httptest.NewRequestWithContext(
@@ -193,7 +197,7 @@ func newTestGate(t *testing.T, store setting.Store) allowlistRequestGate {
 
 	return allowlistRequestGate{
 		settings: setting.NewService(store, registry, nil, nil, nil),
-		audit:    nil, now: nil, logger: slog.New(slog.DiscardHandler),
+		audit:    nil, limiter: nil, now: nil, logger: slog.New(slog.DiscardHandler),
 	}
 }
 
@@ -381,5 +385,103 @@ func TestAllowlistRefusalWritesAuditEntry(t *testing.T) {
 	if got.Action != "installation:deny-ip-allowlist" || got.Outcome != audit.OutcomeDenied ||
 		got.Kind != audit.KindSecurity || got.SourceIP != outside.String() {
 		t.Fatalf("entry = %+v, want installation:deny-ip-allowlist, denied, security, %s", got, outside)
+	}
+}
+
+// TestAllowlistRefusalAuditIsLimited is the hostile test of the audit bound: a
+// client outside the list that sends many requests in one window writes one
+// entry, a second address writes its own entry, and the next window carries
+// the count of the held back refusals. The 403 decision is the same for each
+// request, also when the limiter drops the entry. It fails when the limiter
+// is removed from the record path.
+func TestAllowlistRefusalAuditIsLimited(t *testing.T) {
+	t.Parallel()
+
+	const refusals = 50
+
+	outside := netip.MustParseAddr("203.0.113.9")
+	other := netip.MustParseAddr("203.0.113.10")
+	server := &recordingServer{mu: sync.Mutex{}, entries: nil}
+
+	var (
+		clockMu sync.Mutex
+		clock   = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	)
+
+	now := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+
+		return clock
+	}
+
+	gate := newTestGate(
+		t,
+		&failingSettingsStore{Store: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
+			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
+		}},
+	)
+	gate.audit = server
+	gate.now = now
+	gate.limiter = denylimit.New(denylimit.Config{
+		Window: time.Minute, MaxKeys: 100, MaxFlush: 100, MaxKeysPerPrincipal: 10, Now: now,
+	})
+
+	refuse := func(address netip.Addr) {
+		t.Helper()
+
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
+		r.Header.Set("Authorization", "Bearer x")
+
+		checker := gate.checker(t.Context(), r)
+		if checker == nil {
+			t.Fatal("checker = nil, want a checker")
+		}
+
+		if decision := checker.check(t.Context(), address); !decision.Denied {
+			t.Fatalf("decision for %s = %+v, want a denial", address, decision)
+		}
+	}
+
+	count := func() int {
+		server.mu.Lock()
+		defer server.mu.Unlock()
+
+		return len(server.entries)
+	}
+
+	for range refusals {
+		refuse(outside)
+	}
+
+	if got := count(); got != 1 {
+		t.Fatalf("entries after %d refusals from one address = %d, want 1", refusals, got)
+	}
+
+	refuse(other)
+
+	if got := count(); got != 2 {
+		t.Fatalf("entries after a second address = %d, want 2", got)
+	}
+
+	clockMu.Lock()
+	clock = clock.Add(2 * time.Minute)
+	clockMu.Unlock()
+
+	refuse(outside)
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	var carried bool
+
+	for _, entry := range server.entries {
+		if entry.SourceIP == outside.String() && strings.Contains(entry.Reason, "49 further refusals") {
+			carried = true
+		}
+	}
+
+	if !carried {
+		t.Fatalf("no entry carries the count of 49 held back refusals: %+v", server.entries)
 	}
 }
