@@ -40,11 +40,3 @@ If an uploaded state document holds both encrypted_data and version, then the se
 #### Scenario: both keys refused
 - **WHEN** an uploaded document holds both keys
 - **THEN** the upload fails and no version is stored
-
-### Requirement: shred-redaction-precedence
-
-If the latest state item is shredded or redacted, then the server SHALL answer shredded or redacted before any outputs answer.
-
-#### Scenario: shredded with present bit
-- **WHEN** the latest item is shredded and its row holds a present bit
-- **THEN** the read answers shredded

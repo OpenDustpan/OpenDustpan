@@ -8,7 +8,7 @@
 - [x] 1.2 Conformance test for finalize storage on each dialect: `testFinalizeStoresClientEncryptedBit` in pkg/store/storetest/workspaces.go. Check: the test passes on each dialect, and `testConcurrentFinalize` in the same file checks that the exposed version holds the bit of the winner
 - [x] 1.3 Test that Latest with a present bit reads no blob: `TestLatestAnswersTheBitWithoutABlobRead` in pkg/workspace/state_encrypted_bit_test.go. Check: the test passes
 - [x] 1.4 Test of the legacy null-bit fallback: `TestLatestStreamsTheBlobWhenTheBitIsNull` in pkg/workspace/state_encrypted_bit_test.go. Check: the test passes
-- [x] 1.5 Tests of the both-keys refusal: `TestBothKeys`, `TestBothKeysFoldedVersion` and `TestStreamedWriteRefusesBothKeys` in pkg/workspace/state_encrypted_bit_test.go. Check: the tests pass, and each refusal leaves no version and no state blob. The test for shred precedence is not written: see the pull request
+- [x] 1.5 Tests of the both-keys refusal: `TestBothKeys`, `TestBothKeysFoldedVersion` and `TestStreamedWriteRefusesBothKeys` in pkg/workspace/state_encrypted_bit_test.go. Check: the tests pass, and each refusal leaves no version and no state blob. No test for shred precedence: the latest state version is never redacted, so the requirement is removed from the capability spec (ADR 151); shredded reads of old versions are in the change 39-reading-state-contents
 
 ## 2. change
 
