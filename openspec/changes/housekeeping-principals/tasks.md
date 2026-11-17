@@ -4,7 +4,7 @@ Order: this change lands before run-triggers, add-schedule-triggers-due-claim, s
 
 ## 0. Confirm against the code first
 
-- [ ] 0.1 Read each fact of "What main already does" at its file and line on the current main, and run `rg -n 'history.ServerSubject|SweepSubject|cleanupSubject|IsNamespaceServiceSubject|NamespaceService\(' pkg internal --type go` to find each caller. Record each difference in design.md. Check: design.md lists the callers and the purposes.
+- [ ] 0.1 Read each fact of "What main already does" at its file and line on the current main, and run `rg -n 'history.ServerSubject|SweepSubject|cleanupSubject|IsNamespaceServiceSubject|NamespaceService\(' pkg internal --type go` to find each caller. Record each difference in the design document of the change. Check: the design document lists the callers and the purposes.
 
 ## 1. Failing tests first
 
