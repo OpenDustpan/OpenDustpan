@@ -12,6 +12,24 @@ import (
 // tokens refuses every action of it.
 var ErrJobNotFound = errors.New("identity: the job of a job token was not found")
 
+// ErrJobTokenOtherUnit reports a job token that asks for an action on an
+// object that is not the unit of its job. It wraps ErrDenied, so each adapter
+// answers 403. An adapter answers it with JobTokenOtherUnitText.
+var ErrJobTokenOtherUnit = fmt.Errorf("%w: the job token is for one unit only", ErrDenied)
+
+// JobTokenOtherUnitText is the answer text of ErrJobTokenOtherUnit. It names
+// no unit and no job.
+const JobTokenOtherUnitText = "job token is for one unit only. Read the job to see its unit."
+
+// ErrJobTokenEnded reports a job token that the server does not know, or whose
+// claim, job, expiry or starter ended. It wraps ErrUnauthenticated, so each
+// adapter answers 401. An adapter answers it with JobTokenEndedText.
+var ErrJobTokenEnded = fmt.Errorf("%w: the job token ended", ErrUnauthenticated)
+
+// JobTokenEndedText is the answer text of ErrJobTokenEnded. It names no
+// token, no job and no reason.
+const JobTokenEndedText = "job token ended. Read the job state."
+
 // errNoJobUnits reports a rule of job tokens without a port that reads the
 // unit of a job. The rule then refuses every action of a job token: a rule
 // that cannot read the unit of a job must not guess one.
@@ -139,7 +157,7 @@ func (r JobTokenRule) Authorize(ctx context.Context, p Principal, action Action,
 	}
 
 	if !resolved.IsUnit() || resolved.UnitID() != unit.UnitID() {
-		return &DeniedError{Subject: p.Subject, Action: action, Object: obj}
+		return fmt.Errorf("%w: %w", ErrJobTokenOtherUnit, &DeniedError{Subject: p.Subject, Action: action, Object: obj})
 	}
 
 	return r.Next.Authorize(ctx, withoutElevation(p), action, obj)
