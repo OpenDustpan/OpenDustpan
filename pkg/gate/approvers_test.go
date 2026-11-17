@@ -257,10 +257,52 @@ func TestNewServiceNeedsKindReader(t *testing.T) {
 
 	_, err := gate.NewService(gate.ServiceConfig{
 		Store: stubStore{Store: nil}, Engine: stubEngine{Engine: nil}, Producers: nil, Units: stubUnits{},
-		Subjects: subjects{}, Fences: stubFences{}, KindReader: nil, Now: nil, Log: slog.New(slog.DiscardHandler),
+		Subjects: subjects{}, Fences: stubFences{}, KindReader: nil, IsDev: principalpkg.IsDevSubject, Now: nil,
+		Log: slog.New(slog.DiscardHandler),
 	})
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("NewService(no kind reader) = %v, want ErrInvalid", err)
+	}
+}
+
+func TestNewServiceNeedsDevSubjectMatcher(t *testing.T) {
+	t.Parallel()
+
+	_, err := gate.NewService(gate.ServiceConfig{
+		Store: stubStore{Store: nil}, Engine: stubEngine{Engine: nil}, Producers: nil, Units: stubUnits{},
+		Subjects: subjects{}, Fences: stubFences{}, KindReader: fixedKind("production"), IsDev: nil, Now: nil,
+		Log: slog.New(slog.DiscardHandler),
+	})
+	if !errors.Is(err, gate.ErrInvalid) {
+		t.Fatalf("NewService with no dev subject matcher: err = %v, want ErrInvalid", err)
+	}
+}
+
+func TestReadApproverPolicyRefusesNilReader(t *testing.T) {
+	t.Parallel()
+
+	policy, err := gate.ReadApproverPolicyForTest(t.Context(), nil, principalpkg.IsDevSubject)
+	if !errors.Is(err, gate.ErrUnavailable) {
+		t.Fatalf("readApproverPolicy with a nil reader: err = %v, want ErrUnavailable", err)
+	}
+
+	if policy.IsDev != nil || policy.Production {
+		t.Fatalf("readApproverPolicy with a nil reader gave a policy: %+v", policy)
+	}
+}
+
+func TestReadApproverPolicyGivesTheMatcherToThePolicy(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []string{"dev", "production"} {
+		policy, err := gate.ReadApproverPolicyForTest(t.Context(), fixedKind(kind), principalpkg.IsDevSubject)
+		if err != nil {
+			t.Fatalf("kind %q: %v", kind, err)
+		}
+
+		if policy.IsDev == nil || !policy.IsDev("dev:alice") || policy.IsDev("alice") {
+			t.Fatalf("kind %q: the policy does not use the matcher that the caller gave", kind)
+		}
 	}
 }
 

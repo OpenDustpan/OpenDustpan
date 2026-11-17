@@ -389,11 +389,10 @@ the claim, and with the gates off, no gate covers a unit.
 
 ## Approvers and dev signatures
 
-An approval rule, an approval default or an ownership rule can lose every
-approver. The server then stores the value `!no-approver` for its users, and
-the gate refuses the write that the rule covers. It does not skip the rule and
-does not fail the whole scope with an error. The requirement stays open until a
-person changes the rule.
+An approval rule can lose every approver. The server then stores the value
+`!no-approver` for its users, and the gate refuses the write that the rule
+covers. It does not skip the rule and does not fail the whole scope with an
+error. The requirement stays open until a person changes the rule.
 
 On a production installation, the server never counts a signature whose subject
 is a dev subject, also when the signature is already in the data. A dev-only
@@ -402,8 +401,8 @@ an approval that never arrives.
 
 The server reads the installation kind once for each write, before it reads
 any gate. If it cannot read the kind, or the database holds another kind than
-the server, it refuses the write and writes no decision record. Retry the write
-after the server recovers.
+the server, it refuses the write and writes no decision record. The refusal is
+still in the audit log. Retry the write after the server recovers.
 
 ## Limits of this version
 

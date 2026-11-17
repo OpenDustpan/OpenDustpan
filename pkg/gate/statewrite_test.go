@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	principalpkg "opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -192,6 +193,7 @@ func newKindSWEnv(
 		Subjects:   swSubjects{},
 		Fences:     swFences{nss: nss},
 		KindReader: kinds,
+		IsDev:      principalpkg.IsDevSubject,
 		Now:        nil,
 		Log:        slog.New(slog.DiscardHandler),
 	})

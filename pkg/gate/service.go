@@ -171,6 +171,7 @@ type Service struct {
 	subjects   SubjectSource
 	fences     FenceSource
 	kindReader KindReader
+	isDev      DevSubjectMatcher
 	now        func() time.Time
 	log        *slog.Logger
 }
@@ -186,6 +187,9 @@ type ServiceConfig struct {
 	// KindReader reads the installation kind. Evaluate reads it once for each
 	// call.
 	KindReader KindReader
+	// IsDev matches a dev subject. The caller passes principal.IsDevSubject, so
+	// one rule decides everywhere. NewService refuses a nil matcher.
+	IsDev DevSubjectMatcher
 	// Now is the clock, and time.Now when nil.
 	Now func() time.Time
 	Log *slog.Logger
@@ -195,7 +199,7 @@ type ServiceConfig struct {
 // logger is nil.
 func NewService(cfg ServiceConfig) (*Service, error) {
 	if cfg.Store == nil || cfg.Engine == nil || cfg.Units == nil || cfg.Subjects == nil || cfg.Fences == nil ||
-		cfg.KindReader == nil || cfg.Log == nil {
+		cfg.KindReader == nil || cfg.IsDev == nil || cfg.Log == nil {
 		return nil, fmt.Errorf("%w: the gate service needs each port and a logger", ErrInvalid)
 	}
 
@@ -206,7 +210,8 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, engine: cfg.Engine, producers: slices.Clone(cfg.Producers), units: cfg.Units,
-		subjects: cfg.Subjects, fences: cfg.Fences, kindReader: cfg.KindReader, now: now, log: cfg.Log,
+		subjects: cfg.Subjects, fences: cfg.Fences, kindReader: cfg.KindReader, isDev: cfg.IsDev, now: now,
+		log: cfg.Log,
 	}, nil
 }
 
@@ -269,7 +274,7 @@ func (s *Service) Evaluate(ctx context.Context, c Change) (Decision, error) {
 	// One read of the installation kind for each call, before any rule. A
 	// read error or a kind that is not dev or production stops the
 	// evaluation: fail closed.
-	policy, err := readApproverPolicy(ctx, s.kindReader)
+	policy, err := readApproverPolicy(ctx, s.kindReader, s.isDev)
 	if err != nil {
 		return Decision{}, fmt.Errorf("evaluate %s: %w", point, err)
 	}
