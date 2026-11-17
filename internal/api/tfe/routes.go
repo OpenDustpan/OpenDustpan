@@ -52,10 +52,12 @@ const (
 	ScopeConsole
 	// ScopeDiscovery serves the entitlement set and the workspace list by
 	// organization. Each also answers a principal who holds a grant on a
-	// collection or on a unit in the namespace (ADR 374 decision 1). The
+	// collection or on a unit in the namespace. The
 	// wrapper answers 404 for an unknown organization and for a caller
-	// with no grant in the namespace, with the same body. Only these two
-	// routes may use it.
+	// with no grant in the namespace, with the same body. Each answer that
+	// a grant allowed carries the response header X-Dustpan-Grant-Id with
+	// the stable ID of the grant, never a name. Only these two routes may
+	// use it.
 	ScopeDiscovery
 )
 
@@ -134,9 +136,10 @@ func (h *Handler) discoveryRoutes() []Route {
 			// The organization is the namespace: the route reads it, so
 			// namespace:read stays the gate for callers who hold it. A
 			// caller who holds a grant on a collection or on a unit in the
-			// namespace also gets the answer (ADR 374 decision 1). The
-			// handler answers 404 for an unknown organization and never
-			// creates one.
+			// namespace also gets the answer, with the
+			// response header X-Dustpan-Grant-Id naming the stable ID of
+			// the grant. The handler answers 404 for an unknown organization
+			// and never creates one.
 			Scope:   ScopeDiscovery,
 			Actions: []identity.Action{identity.ActionNamespaceRead},
 			Resolve: resolveOrganization,
@@ -147,9 +150,11 @@ func (h *Handler) discoveryRoutes() []Route {
 			Path:   "/api/v2/organizations/{organization}/workspaces",
 			// A discovery read: the wrapper also answers a caller who
 			// holds a grant on a collection or on a unit in the namespace
-			// (ADR 374 decision 1). The handler then keeps only the
-			// workspaces the caller may unit:read (decision 1.2) and
-			// answers 404 for an unknown organization.
+			// with the response header
+			// X-Dustpan-Grant-Id naming the stable ID of the grant. The
+			// handler then keeps only the workspaces the caller may
+			// unit:read and answers 404 for an unknown
+			// organization.
 			Scope:   ScopeDiscovery,
 			Actions: []identity.Action{identity.ActionNamespaceRead},
 			Resolve: resolveOrganization,

@@ -526,10 +526,11 @@ func (discoveryNamespaceGrantAuthorizer) ListObjects(
 	}, nil
 }
 
-// TestNamespaceGrantSeesNamespace proves a unit read grant on the namespace
-// itself opens discovery of that namespace, the same as the grant on a
-// collection of it, and of no other namespace.
-func TestNamespaceGrantSeesNamespace(t *testing.T) {
+// TestNamespaceGrantSeesNoNamespace proves a unit read grant on the namespace
+// itself does not open discovery by the grant check: the Authorizer decides
+// a grant on the namespace before it runs, and discovery from inside opens
+// for a collection or a unit only.
+func TestNamespaceGrantSeesNoNamespace(t *testing.T) {
 	t.Parallel()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
@@ -544,8 +545,8 @@ func TestNamespaceGrantSeesNamespace(t *testing.T) {
 	}
 
 	orgs := decodeDiscoveryOrganizations(t, rec.Body.String())
-	if !discoveryContains(orgs, "acme") || discoveryContains(orgs, "beta") {
-		t.Fatalf("organizations = %+v, want acme only", orgs)
+	if discoveryContains(orgs, "acme") || discoveryContains(orgs, "beta") {
+		t.Fatalf("organizations = %+v, want none", orgs)
 	}
 }
 

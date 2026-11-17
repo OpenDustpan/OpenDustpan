@@ -2,7 +2,7 @@
 
 ### Requirement: Resolve approvers before quorum
 
-When the server evaluates an approval rule, an ownership rule or an approval default, the server SHALL resolve its approvers through RuleApprovers with Production read from KindReader.
+When the server evaluates an approval rule, the server SHALL resolve its approvers through RuleApprovers with Production read from KindReader.
 
 #### Scenario: Mixed dev and real approvers on production
 - **WHEN** evaluation runs on production with a rule that names one dev subject and one real principal
