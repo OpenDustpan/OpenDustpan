@@ -61,6 +61,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "token round trip", test: testRoundTrip},
 		{name: "a stored token of an unknown kind is ErrUnknownKind", test: testUnknownKind},
 		{name: "the list skips a stored token of an unknown kind", test: testListSkipsUnknownKind},
+		{name: "the list pages reach each token past unknown kinds", test: testListPagesPastUnknownKind},
 		{name: "a write of an unknown kind is ErrUnknownKind and stores nothing", test: testWriteRefusesUnknownKind},
 		{name: "a token needs a principal that exists", test: testMissingPrincipal},
 		{name: "duplicate ID or digest is ErrAlreadyExists", test: testDuplicate},
@@ -1541,6 +1542,73 @@ func testListSkipsUnknownKind(t *testing.T, s Store) {
 
 	wantList(t, s, listQuery(""), []string{"tok-b", "tok-a"}, 2)
 	wantList(t, s, listQuery("prn-1"), []string{"tok-b", "tok-a"}, 2)
+}
+
+// testListPagesPastUnknownKind checks that a row of an unknown kind never ends
+// the pages early. The test pages the list the way the service does: it asks
+// for one row more than the page holds, keeps the page, and takes the cursor
+// of the last row that it keeps. For each page size, the pages together hold
+// each token of a known kind, in order, once. The unknown rows sit at the
+// start, inside a page and next to each other.
+func testListPagesPastUnknownKind(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, "prn-1", "ci-deploy", principal.KindService)
+
+	for i := 1; i <= 7; i++ {
+		tok := newToken("tok-"+strconv.Itoa(i), "prn-1", i)
+		if i == 3 || i == 4 || i == 7 {
+			tok.Kind = accesstoken.Kind("trust")
+			mustRawToken(t, s, tok, digest(i))
+
+			continue
+		}
+
+		mustToken(t, s, tok, digest(i))
+	}
+
+	want := []string{"tok-6", "tok-5", "tok-2", "tok-1"}
+
+	for size := 1; size <= 3; size++ {
+		if got := pageAll(t, s, size); !slices.Equal(got, want) {
+			t.Errorf("page size %d: pages hold %q, want %q", size, got, want)
+		}
+	}
+}
+
+// pageAll lists every token the way the service does: a query for size+1
+// rows, a page of the first size rows, and the cursor of the last row of the
+// page. It returns the IDs of the pages in order.
+func pageAll(t *testing.T, s Store, size int) []string {
+	t.Helper()
+
+	var got []string
+
+	q := listQuery("")
+	q.Limit = size + 1
+
+	for range 10 {
+		rows, _, err := s.ListTokens(t.Context(), q)
+		if err != nil {
+			t.Fatalf("page size %d: list: %v", size, err)
+		}
+
+		kept := rows[:min(len(rows), size)]
+		for i := range kept {
+			got = append(got, kept[i].ID)
+		}
+
+		if len(rows) <= size {
+			return got
+		}
+
+		last := kept[len(kept)-1]
+		q.AfterCreatedAt, q.AfterID, q.HasAfter = last.CreatedAt, last.ID, true
+	}
+
+	t.Fatalf("page size %d: the pages do not end", size)
+
+	return nil
 }
 
 // testWriteRefusesUnknownKind checks that CreateToken and the new token of

@@ -160,23 +160,12 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 	)
 
 	err := s.inReadTx(ctx, func(q *db.Queries) error {
-		rows, err := q.ListAccessTokens(ctx, db.ListAccessTokensParams{
-			PrincipalID: cols.PrincipalID,
-			Status:      cols.Status,
-			AtMs:        cols.AtMs,
-			SoonMs:      cols.SoonMs,
-			HasAfter:    hasAfter,
-			AfterMs:     cols.AfterMs,
-			AfterID:     cols.AfterID,
-			RowLimit:    int64(tq.Limit),
-		})
-		if err != nil {
-			return fmt.Errorf("select access tokens: %w", err)
-		}
+		var (
+			skipped int64
+			err     error
+		)
 
-		var skipped int64
-
-		out, skipped, err = s.decodeTokenRows(ctx, rows)
+		out, skipped, err = s.readTokenPage(ctx, q, cols, hasAfter, tq.Limit)
 		if err != nil {
 			return err
 		}
@@ -199,6 +188,61 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 	}
 
 	return out, total, nil
+}
+
+// readTokenPage reads up to limit rows of a known kind, newest first. A row
+// of an unknown kind is skipped. When a batch holds one, the read goes on
+// after the last row that it READ, not after the last row that it returned.
+// So a skipped row never ends the pages early and a live token never drops
+// out of the list.
+func (s *Store) readTokenPage(
+	ctx context.Context,
+	q *db.Queries,
+	cols codec.AccessTokenListQuery,
+	hasAfter int64,
+	limit int,
+) ([]accesstoken.Token, int64, error) {
+	out := make([]accesstoken.Token, 0, limit)
+
+	var skipped int64
+
+	params := db.ListAccessTokensParams{
+		PrincipalID: cols.PrincipalID,
+		Status:      cols.Status,
+		AtMs:        cols.AtMs,
+		SoonMs:      cols.SoonMs,
+		HasAfter:    hasAfter,
+		AfterMs:     cols.AfterMs,
+		AfterID:     cols.AfterID,
+		RowLimit:    0,
+	}
+
+	for len(out) < limit {
+		want := int64(limit - len(out))
+		params.RowLimit = want
+
+		rows, err := q.ListAccessTokens(ctx, params)
+		if err != nil {
+			return nil, 0, fmt.Errorf("select access tokens: %w", err)
+		}
+
+		toks, n, err := s.decodeTokenRows(ctx, rows)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		out = append(out, toks...)
+		skipped += n
+
+		if int64(len(rows)) < want {
+			break
+		}
+
+		last := rows[len(rows)-1]
+		params.HasAfter, params.AfterMs, params.AfterID = 1, last.CreatedAtMs, last.ID
+	}
+
+	return out, skipped, nil
 }
 
 // decodeTokenRows decodes the rows of one page. One row of a kind that this
