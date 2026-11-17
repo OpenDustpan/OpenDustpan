@@ -2,6 +2,8 @@
 version: 1
 ---
 
+Issue: #3369.
+
 Roadmap: `docs/roadmap.md:393` (Manage namespace and unit proxy rule sets.).
 
 ## Why
@@ -26,7 +28,7 @@ Errors the person may hit, and the one command that helps:
 | Save fails without `namespace:manage-runners`. | The server says access is denied for the runner action. Ask a namespace administrator for the grant. | `GET /api/dustpan/v1/namespaces/{namespace}/access-limits` |
 | Save fails when If-Match is not the stored version. | The server answers 412 and says the version is stale. Read the settings again and send the save again with the new version. | `GET /api/dustpan/v1/namespaces/{namespace}/runner-pools/{pool}/proxy-settings` |
 | The job proxy opens its session and the rendered rules need a value that exists only at job start. | The session open is refused with the fixed reason `rules-not-renderable`. Remove the `inputs.` or `profile.` template from the rule, or wait for the change that renders them at job start. | `GET /api/dustpan/v1/namespaces/{namespace}/units/{unit_id}/proxy-rules/rendered` |
-| A launcher token is sent to a proxy path, or a proxy token to a launcher path. | The server answers 403 with the fixed reason `wrong-session-kind` and writes an audit entry. | `GET /api/dustpan/v1/namespaces/{namespace}/audit` |
+| A launcher token is sent to a proxy path, or a proxy token to a launcher path. | The server answers 403 with the fixed reason `wrong-session-kind` and writes an audit entry. | `GET /api/dustpan/v1/audit/chain` |
 
 Evidence for the claims above:
 
@@ -76,16 +78,21 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The launcher session paths exist: `PathSession`, `PathClaimHandoff` and the other paths in `pkg/runner/protocol/protocol.go` (about lines 37-99). `Assignment` holds no secret (`pkg/runner/protocol/protocol.go`, `type Assignment`).
-- The route table has `runnerRoutes`, `launcherRoutes` and `planRoutes` with the scopes `ScopeJoinToken`, `ScopeRunnerKey`, `ScopeHandoffToken` and `ScopeSessionKey` (`internal/api/runnerapi/routes.go`). The handoff handler is `handoff` (`internal/api/runnerapi/protocol.go:608`).
-- `runner.SessionStore` has `IssueHandoffToken`, `OpenSession` and `SessionRenew` (`pkg/runner/store.go:147-207`). `runner.HandoffToken` and `runner.Session` have no kind (`pkg/runner/token.go:152`, `:183`).
-- `runner_pools` has no proxy column (`pkg/store/sqlite/migrations/0168_baseline.sql:748`). `runner_handoff_tokens` (line 808) and `runner_sessions` (line 819) are unique on `(operation_id, token)`.
-- The pool routes need `namespace:read-runners` and `namespace:manage-runners` (`internal/api/runnerpools/routes.go`). They need no fresh authentication.
-- Proxy rule sets exist: `jobproxy.Join` and `jobproxy.Render` (`pkg/jobproxy`), the port `rulestore.RuleStore`, and the service `internal/jobproxysvc` (`job-proxy-rule-sets`, merged).
-- The egress rules exist: `egress.ParseAllowedRanges`, `egress.CheckAllowedRange` and `egress.Rules` in `pkg/egress`. Minimum prefix is /8 for IPv4 and /32 for IPv6. Loopback, link-local, metadata, unspecified and multicast addresses never open.
-- The guard dialer exists in `pkg/launcher/proxy/dial.go` (`guardDialer.resolve`). It refuses the whole host when one answer fails the check.
-- `secret.Service.Encrypt(ctx, secret.Scope, plaintexts)` seals data under a scope. `pkg/profile/service.go` uses it.
-- `runner.AssignmentVersion` is 1 (`pkg/runner/version.go:28`).
+- The launcher session path to open a session exists. (`pkg/runner/protocol/protocol.go:57 (PathSession)`)
+- The launcher handoff path of a claim exists. (`pkg/runner/protocol/protocol.go:39 (PathClaimHandoff)`)
+- The route table joins the runner, launcher and plan routes. (`internal/api/runnerapi/routes.go:56 (runnerRoutes)`)
+- The handoff handler issues the handoff token of a claim. (`internal/api/runnerapi/protocol.go:608 (handoff)`)
+- The session store issues handoff tokens and opens sessions. (`pkg/runner/store.go:168 (IssueHandoffToken)`)
+- The session store opens a session with no kind. (`pkg/runner/store.go:177 (OpenSession)`)
+- A handoff token checks its use with no kind. (`pkg/runner/token.go:169 (CheckUse)`)
+- A runner pool has no proxy column. (`pkg/store/sqlite/migrations/0168_baseline.sql:748 (runner_pools)`)
+- Proxy rule sets join. (`pkg/jobproxy/join.go:16 (Join)`)
+- Proxy rule sets render. (`pkg/jobproxy/render.go:188 (Render)`)
+- The egress rules parse allowed ranges. (`pkg/egress/egress.go:124 (ParseAllowedRanges)`)
+- The egress rules check one allowed range. (`pkg/egress/egress.go:141 (CheckAllowedRange)`)
+- The guard dialer refuses the whole host when one answer fails the check. (`pkg/launcher/proxy/dial.go:104 (resolve)`)
+- The secret service seals data under a scope. (`pkg/secret/secret.go:268 (Encrypt)`)
+- The assignment version is 1. (`pkg/runner/version.go:28 (AssignmentVersion)`)
 
 ## Owner decisions that apply
 

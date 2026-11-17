@@ -18,8 +18,8 @@ A job proxy runs next to the launcher of a phase. It needs the rules of its clai
 
 The kind is an unexported-field type, so that a caller cannot make a session of no kind:
 
-- `runner.SessionKind` is a string type with the two constants `SessionKindLauncher` and `SessionKindProxy` and the constructor `ParseSessionKind`. `HandoffToken` and `Session` get a `Kind` field that the store sets from the argument, never from the token text.
-- `runner.ProxySettings` has unexported fields and the constructor `NewProxySettings`, which checks the ranges (`egress.ParseAllowedRanges`) and the upstream URL. The store adapter takes only a value that the constructor made.
+- `runner.SessionKind` is a string type with the two constants NEW `SessionKindLauncher` and NEW `SessionKindProxy` and the constructor `ParseSessionKind`. `HandoffToken` and `Session` get a `Kind` field that the store sets from the argument, never from the token text.
+- NEW `runner.ProxySettings` has unexported fields and the constructor `NewProxySettings`, which checks the ranges (`egress.ParseAllowedRanges`) and the upstream URL. The store adapter takes only a value that the constructor made.
 - `runner.PoolProxyStore` is a new small port: `ProxySettings` and `SetProxySettings`. The service in `internal/proxysessionsvc` uses it, together with `secret.Service`.
 - The HTTP adapter holds one new scope pair, `ScopeProxyHandoffToken` and `ScopeProxySessionKey`. The route test rejects a route whose scope and path family differ.
 
@@ -40,7 +40,7 @@ The structure makes the bug class "a launcher token on a proxy path" impossible 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
 | port adapter | The store stores the kind with the token. `OpenSession` accepts a token only for its own kind. The pool settings store takes only a `ProxySettings` that the constructor made, and checks the fence in the transaction. | Open a launcher token as a proxy session and a proxy token as a launcher session straight on the port. Both fail with `ErrNotFound`. Write settings with a stale fence and fail with `namespace.ErrFenced`. |
-| service | The service renders the rules for the claim of the session only. It fails closed on a template without a value. It unseals the credential only for a live proxy session. It seals under the scope of the pool. | Ask for the assignment of a session whose claim ended, and for the credential with a launcher session. Both fail and write an audit entry. Render a rule with `inputs.x` and get `rules-not-renderable`. |
+| service | The service renders the rules for the claim of the session only. It fails closed on a template without a value. It unseals the credential only for a live proxy session. It seals under the scope of the pool. | Ask for the assignment of a session whose claim ended, and for the credential with a launcher session. Both fail and write an audit entry. Render a rule with an `inputs.` template and get `rules-not-renderable`. |
 | HTTP handler | The wrapper checks the scope of the route, the kind of the session, the proof, the nonce and the size limit before the handler runs. The handler returns fixed reasons only. | Send a launcher session proof to each proxy path and a proxy session proof to each launcher path. Each answers 403 with `wrong-session-kind`. Send a body past the limit and a bad range. Each fails closed. |
 
 ## Diagrams
@@ -204,7 +204,7 @@ Proxy assignment (the `assignment` field of the proxy session answer):
   "rulesDigest": "sha256:<hex>",
   "serverHost": "<host of this server>",
   "allowedRanges": ["10.0.0.0/8"],
-  "upstreamUrl": "http://proxy.example:3128"
+  "upstreamURL": "http://proxy.example:3128"
 }
 ```
 
@@ -213,7 +213,7 @@ Pool proxy settings (GET answer, PUT request and answer; the PUT request has no 
 ```json
 {
   "allowedRanges": ["10.0.0.0/8"],
-  "upstreamUrl": "http://proxy.example:3128",
+  "upstreamURL": "http://proxy.example:3128",
   "upstreamCredential": {"username": "u", "password": "p"},
   "credentialSet": true,
   "source": "default",
@@ -234,7 +234,7 @@ Audit events (added to `runner.AuditRules`):
 
 | Event | Kind | Action | Holds |
 | --- | --- | --- | --- |
-| `pool-proxy-settings-changed` (`runner.EventPoolProxySettingsChanged`) | change (`audit.KindChange`) | `namespace:manage-runners` | pool ID, old and new ranges, SHA-256 of the old and new upstream URL, `credentialChanged`, old and new version. Never the URL or the credential. |
-| `proxy-session-opened` (`runner.EventProxySessionOpened`) | change (`audit.KindChange`) | `runner:claim` | job, phase, unit ID, claim, rules digest, rule count, whether an upstream proxy is set |
-| `proxy-credential-issued` (`runner.EventProxyCredentialIssued`) | reveal (`audit.KindReveal`) | `runner:claim` | job, phase, claim, pool ID, session ID. Never the credential. |
+| `pool-proxy-settings-changed` (NEW `runner.EventPoolProxySettingsChanged`) | change (`audit.KindChange`) | `namespace:manage-runners` | pool ID, old and new ranges, SHA-256 of the old and new upstream URL, `credentialChanged`, old and new version. Never the URL or the credential. |
+| `proxy-session-opened` (NEW `runner.EventProxySessionOpened`) | change (`audit.KindChange`) | `runner:claim` | job, phase, unit ID, claim, rules digest, rule count, whether an upstream proxy is set |
+| `proxy-credential-issued` (NEW `runner.EventProxyCredentialIssued`) | reveal (`audit.KindReveal`) | `runner:claim` | job, phase, claim, pool ID, session ID. Never the credential. |
 | `handoff-refused` (existing `runner.EventHandoffRefused`) | change (`audit.KindChange`), outcome denied | `runner:claim` | reason `wrong-session-kind`, the path and the kind |
