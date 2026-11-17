@@ -45,7 +45,8 @@ var (
 	ErrTooLarge = errors.New("backup SQL part too large")
 )
 
-// Manifest is the last object a backup writes: backups/<id>/manifest.json. It
+// Manifest is the last object a backup writes:
+// backups/<id>/<attempt>/manifest.json. It
 // names every object the backup holds, so Check and restore can verify the
 // target before they use it. SQLFiles holds one descriptor for each table file
 // of the SQL part, in the order of Tables (ADR 42, decision 4). SQLSize is the
@@ -66,6 +67,11 @@ type Manifest struct {
 	Format               int            `json:"format"`
 	SchemaVersion        int            `json:"schemaVersion"`
 	SQLSize              int64          `json:"sqlSize"`
+	// Attempt names the directory backups/<id>/<attempt>/ that holds this
+	// manifest and the table files. It is the claim fencing token of the run
+	// that wrote them. A reader takes the attempt from live.json and refuses a
+	// manifest that names another attempt.
+	Attempt string `json:"attempt"`
 	// RowCounts holds the row count of each table in Tables. Restore compares
 	// the loaded counts with it after the SQL load.
 	RowCounts map[string]int64 `json:"rowCounts"`
@@ -162,7 +168,8 @@ type Config struct {
 	// without sealed state.
 	StateOpener StateOpener
 	// Target is the backup target that holds blobs/<key>,
-	// backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json.
+	// backups/<id>/<attempt>/sql/<table>.jsonl.gz and
+	// backups/<id>/<attempt>/manifest.json.
 	Target blob.Store
 	// TargetName names the target for operators, for example
 	// "dir:/var/backups". The registry row keeps it.
@@ -282,9 +289,10 @@ func NewService(cfg Config) (*Service, error) {
 }
 
 // Run starts backup id and blocks until it ends. It captures the SQL data in
-// one read transaction, writes it to backups/<id>/sql/<table>.jsonl.gz,
+// one read transaction, writes it to
+// backups/<id>/<attempt>/sql/<table>.jsonl.gz,
 // copies each blob the SQL data names to blobs/<blob key>, and writes
-// backups/<id>/manifest.json last. A blob the target already holds is not
+// backups/<id>/<attempt>/manifest.json last. A blob the target already holds is not
 // copied again. It returns ErrAlreadyRunning while another backup runs. A
 // failed backup marks its registry row failed with the error text and leaves
 // no manifest. It returns the finished registry row, or ErrFailed with the
@@ -443,22 +451,17 @@ type operationInput struct {
 
 // readInput decodes and checks the input of a backup operation. An input
 // that fails is permanent: no retry changes it.
-func readInput(op durable.Operation) (operationInput, blob.Key, error) {
+func readInput(op durable.Operation) (operationInput, error) {
 	var in operationInput
 	if err := json.Unmarshal(op.Input, &in); err != nil {
-		return operationInput{}, "", durable.Permanent(fmt.Errorf("decode backup input: %w", err))
+		return operationInput{}, durable.Permanent(fmt.Errorf("decode backup input: %w", err))
 	}
 
 	if _, err := ParseID(in.ID.String()); err != nil {
-		return operationInput{}, "", durable.Permanent(err)
+		return operationInput{}, durable.Permanent(err)
 	}
 
-	manifestKey, err := blob.ParseKey("backups/" + in.ID.String() + "/manifest.json")
-	if err != nil {
-		return operationInput{}, "", durable.Permanent(fmt.Errorf("backup %s: %w", in.ID, err))
-	}
-
-	return in, manifestKey, nil
+	return in, nil
 }
 
 // MaxSQLBytes returns the SQL part limit the service enforces. Zero means
@@ -497,7 +500,29 @@ func (s *Service) Check(ctx context.Context, id ID) error {
 		return fmt.Errorf("check backup %s: %w", id, err)
 	}
 
-	manifest, err := readManifest(ctx, s.target, id)
+	live, err := readLivePointer(ctx, s.target, id)
+	if err != nil {
+		return fmt.Errorf("check backup %s: %w", id, err)
+	}
+
+	// The check route has the backups row at hand, so it also requires that
+	// the pointer names the attempt that the row records. A pointer that
+	// names a stale attempt reads corrupt even when that prefix is whole.
+	// Defense in depth: Check read the same pointer above; this check stays
+	// so that a row of another attempt never reads complete.
+	row, err := s.registry.GetBackup(ctx, id)
+	if err != nil {
+		return fmt.Errorf("check backup %s: %w", id, err)
+	}
+
+	if live.attempt != row.Attempt {
+		return fmt.Errorf(
+			"check backup %s: the live pointer names attempt %q, the backups row records %q: %w",
+			id, live.attempt, row.Attempt, ErrCorrupt,
+		)
+	}
+
+	manifest, err := readManifestAt(ctx, s.target, live, maxManifestBytes)
 	if err != nil {
 		return fmt.Errorf("check backup %s: %w", id, err)
 	}
@@ -675,6 +700,7 @@ func (s *Service) request(
 		Target:    s.targetName,
 		Error:     "",
 		State:     StateRunning,
+		Attempt:   "",
 	}
 
 	return create, start, nil
@@ -744,44 +770,85 @@ func (s *Service) failEnded(ctx context.Context) {
 }
 
 // stepWrite writes the SQL part, the blobs and the manifest to the target.
-// Every write goes to a key that depends on the backup ID only, so a second
-// run of the step after a takeover writes the same keys again and the
-// target needs no fence. A stop of the runner (the context ends) returns
-// with no write to the row: the next claim runs the step again. Any other
-// error marks the row failed with the fence of this claim and ends the
+// The table files and the manifest go to backups/<id>/<attempt>/, where the
+// attempt is the fencing token of this claim, so a run after a takeover writes
+// a new directory and a stale run touches only its own. Each put and each
+// delete reads the claim right before the target call. A run that wrote its
+// files records its attempt on the backups row in the same fenced transaction
+// that records this step, so the database decides which attempt counts. A
+// stop of the runner (the context ends, the claim moves or a cancel wins)
+// returns with no write to the row: the next claim runs the step again. Any
+// other error marks the row failed with the fence of this claim and ends the
 // operation.
 func (s *Service) stepWrite(ctx context.Context, sc durable.StepContext) ([]byte, error) {
-	in, manifestKey, err := readInput(sc.Operation)
+	in, err := readInput(sc.Operation)
 	if err != nil {
 		return nil, err
 	}
 
-	backupErr := s.clearPartial(ctx, in.ID, manifestKey)
+	prefix, err := newAttemptPrefix(in.ID, AttemptOf(sc.Fence.Token))
+	if err != nil {
+		return nil, durable.Permanent(err)
+	}
+
+	fenced := s.fencedBy(sc.Fence)
+
+	backupErr := fenced.clearPartial(ctx, prefix)
 	if backupErr == nil {
-		backupErr = s.backup(ctx, backupRun{
-			id: in.ID, startedAt: in.StartedAt, manifestKey: manifestKey, policy: policyOf(in),
+		backupErr = fenced.backup(ctx, backupRun{
+			id: in.ID, startedAt: in.StartedAt, prefix: prefix, policy: policyOf(in),
 		})
+	}
+
+	if backupErr == nil {
+		// The row attempt commits in the same fenced transaction as the
+		// record of this step, so the database decides which attempt counts.
+		backupErr = s.recordWriteAttempt(ctx, sc.Fence, in.ID, prefix.attempt)
+		if errors.Is(backupErr, durable.ErrStepDone) {
+			// The step record, with its attempt, was already committed.
+			backupErr = nil
+		}
 	}
 
 	if backupErr == nil {
 		return nil, nil
 	}
 
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || errors.Is(backupErr, durable.ErrClaimLost) || errors.Is(backupErr, durable.ErrCanceled) {
 		return nil, backupErr
 	}
 
 	return nil, s.failRow(ctx, sc.Fence, in.ID, backupErr)
 }
 
-// clearPartial removes the objects under backups/<id>/ that an earlier run of
-// the step left, the manifest first. The target creates each key once, so a
-// run after a takeover would fail with blob.ErrExists on the table files
-// otherwise. The manifest goes first, so a half-cleared backup never looks
-// complete. The copies under blobs/ stay: the copy keeps the first copy of a
-// blob and checks it against the live bytes.
-func (s *Service) clearPartial(ctx context.Context, id ID, manifestKey blob.Key) error {
-	left, err := listObjects(ctx, s.target, "backups/"+id.String())
+// recordWriteAttempt stores attempt as the attempt of backup id and records
+// the write step in one fenced transaction. A holder that lost the claim
+// records nothing.
+func (s *Service) recordWriteAttempt(
+	ctx context.Context, fence durable.StepFence, id ID, attempt string,
+) error {
+	if err := s.registry.RecordBackupAttempt(ctx, fence, id, attempt); err != nil {
+		return fmt.Errorf("record the attempt of backup %s: %w", id, err)
+	}
+
+	return nil
+}
+
+// clearPartial removes the objects under p that an earlier run with the same
+// attempt left, the manifest first. It never lists or deletes outside p, so a
+// run that lost its claim cannot touch the directory of another attempt. The
+// manifest goes first, so a half-cleared backup never looks complete. The
+// copies under blobs/ stay: the copy keeps the first copy of a blob and checks
+// it against the live bytes.
+func (s *Service) clearPartial(ctx context.Context, p attemptPrefix) error {
+	id := p.id
+
+	manifestKey, err := p.manifestKey()
+	if err != nil {
+		return err
+	}
+
+	left, err := listObjects(ctx, s.target, p.dir())
 	if err != nil {
 		return fmt.Errorf("list objects of backup %s: %w", id, err)
 	}
@@ -798,16 +865,15 @@ func (s *Service) clearPartial(ctx context.Context, id ID, manifestKey blob.Key)
 		keys = slices.Insert(keys, 0, manifestKey)
 	}
 
-	prefix := "backups/" + id.String() + "/"
-
 	for _, key := range keys {
 		// Defense in depth: List filters by prefix, but a target whose List
-		// matches "backups/<id>" as a plain string prefix also returns the
-		// keys of another backup (for example "backups/<id>0/..."). This
-		// check stays so that a List that is too wide never deletes the files
-		// of another backup. It does not rely on the List layer.
-		if !strings.HasPrefix(key.String(), prefix) {
-			return fmt.Errorf("refuse to delete object %s outside %s of backup %s: %w", key, prefix, id, ErrCorrupt)
+		// matches the prefix as a plain string prefix also returns the keys
+		// of another attempt or another backup (for example
+		// "backups/<id>/<attempt>0/..."). This check stays so that a List
+		// that is too wide never deletes the files of another attempt. It
+		// does not rely on the List layer or on the claim check of the target.
+		if !p.owns(key) {
+			return fmt.Errorf("refuse to delete object %s outside %s of backup %s: %w", key, p.dir(), id, ErrCorrupt)
 		}
 
 		if err := s.target.Delete(ctx, key); err != nil {
@@ -819,11 +885,13 @@ func (s *Service) clearPartial(ctx context.Context, id ID, manifestKey blob.Key)
 }
 
 // failRow marks backup id failed under fence and returns the error that ends
-// the operation: the backup error as a permanent error, or the error of the
-// write when the claim is lost or the operation is canceled, which the
-// runner reads as a stop.
+// operation: the backup error as a permanent error, or the error of the write
+// when the claim is lost or the operation is canceled, which the runner reads
+// as a stop. A failed row keeps the attempt that it holds: the finish commit
+// compares the attempt only for a row that reads succeeded, so this call
+// passes none.
 func (s *Service) failRow(ctx context.Context, fence durable.StepFence, id ID, backupErr error) error {
-	_, finishErr := s.registry.FinishBackup(ctx, fence, id, StateFailed, backupErr.Error(), s.now().UTC())
+	_, finishErr := s.registry.FinishBackup(ctx, fence, id, StateFailed, backupErr.Error(), s.now().UTC(), "")
 
 	switch {
 	case finishErr == nil:
@@ -835,72 +903,139 @@ func (s *Service) failRow(ctx context.Context, fence durable.StepFence, id ID, b
 	}
 }
 
-// stepFinish moves the row to succeeded and records the step in one
-// transaction. A claim that was lost writes nothing. A row that is not
-// running any more ends the operation failed.
+// stepFinish checks the attempt directory that the backups row records with
+// the same Check that the check route runs, writes the live pointer, commits
+// the row and the step record in one fenced transaction, then deletes the
+// other attempt directories of the backup.
+//
+// The step takes the attempt from the backups row, never from the token of
+// its own claim: the durable runner skips a recorded step, so a holder that
+// took over after the write step wrote no files under its own token. The
+// live pointer goes to the target before the commit: the commit records this
+// step, so the runner gives no second chance, and a holder that stops between
+// the pointer and the commit leaves a pointer that the next holder finds
+// equal and commits. The pointer holds the row attempt in one fixed byte
+// form, and the writer reads it first, so two holders give the same pointer
+// on a store that refuses the second put and on a store that replaces the
+// object.
+//
+// The deletes that this change covers: the clear of the write step, the
+// pointer put and the cleanup of this step all read the claim right before
+// the call, so a holder that lost its claim reaches no object, and a delete
+// of a stale holder lands only under the directory of its own attempt, never
+// under the directory of the attempt that the row records. The cleanup runs
+// after the commit and only when the pointer names the row attempt; it keeps
+// that directory and the pointer.
 func (s *Service) stepFinish(ctx context.Context, sc durable.StepContext) ([]byte, error) {
-	in, _, err := readInput(sc.Operation)
+	in, err := readInput(sc.Operation)
 	if err != nil {
 		return nil, err
 	}
 
-	// A holder that lost its claim can still run clearPartial late and delete
-	// files of the backup that the survivor completed. The row would then
-	// read succeeded with files missing, so the step checks the files first
-	// and fails the backup closed.
-	if presentErr := s.checkPresent(ctx, in.ID); presentErr != nil {
-		if ctx.Err() != nil {
-			return nil, presentErr
-		}
-
-		return nil, s.failRow(ctx, sc.Fence, in.ID, presentErr)
+	// The backups row decides the live attempt, not the claim of this holder.
+	row, err := s.registry.GetBackup(ctx, in.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read backup %s for the finish step: %w", in.ID, err)
 	}
 
-	_, finishErr := s.registry.FinishBackup(ctx, sc.Fence, in.ID, StateSucceeded, "", s.now().UTC())
+	// Defense in depth: the store refuses a row that is not running in the
+	// same transaction as the step record. This check stays so that a caller
+	// that skips the store never finishes a backup that already ended.
+	if row.State != StateRunning {
+		return nil, durable.Permanent(fmt.Errorf("finish backup %s: %w", in.ID, ErrNotRunning))
+	}
 
-	switch {
-	case finishErr == nil:
-		return nil, nil
-	case errors.Is(finishErr, durable.ErrClaimLost), errors.Is(finishErr, durable.ErrCanceled):
+	prefix, err := newAttemptPrefix(in.ID, row.Attempt)
+	if err != nil {
+		return nil, s.failRow(ctx, sc.Fence, in.ID, fmt.Errorf("backup %s: %w", in.ID, err))
+	}
+
+	if checkErr := s.checkFinishAttempt(ctx, sc.Fence, in.ID, prefix); checkErr != nil {
+		return nil, checkErr
+	}
+
+	fenced := s.fencedBy(sc.Fence)
+
+	if pointerErr := s.writeFinishPointer(ctx, fenced, sc.Fence, in.ID, prefix); pointerErr != nil {
+		return nil, pointerErr
+	}
+
+	if finishErr := fenced.commitFinishAttempt(ctx, sc.Fence, in.ID, prefix); finishErr != nil {
 		return nil, finishErr
-	default:
-		return nil, durable.Permanent(fmt.Errorf("finish backup %s: %w", in.ID, finishErr))
 	}
+
+	if cleanErr := fenced.cleanupOrphans(ctx, prefix); cleanErr != nil && ctx.Err() == nil {
+		s.logger.WarnContext(ctx, "cleanup of old attempt directories of a backup stopped",
+			slog.String("backup", in.ID.String()), slog.String("error", durable.ErrorClass(cleanErr)))
+	}
+
+	return nil, nil
 }
 
-// checkPresent lists the objects under backups/<id>/ and compares them to the
-// manifest: the manifest and each table file it names must exist. A missing
-// file reports ErrCorrupt.
-func (s *Service) checkPresent(ctx context.Context, id ID) error {
-	manifest, err := s.ReadManifest(ctx, id)
-	if err != nil {
-		return err
+// checkFinishAttempt checks the attempt directory that the backups row
+// records with the same Check that the check route runs. A canceled context
+// ends the step with the check error; any other check failure marks the row
+// failed.
+func (s *Service) checkFinishAttempt(
+	ctx context.Context, fence durable.StepFence, id ID, prefix attemptPrefix,
+) error {
+	if checkErr := checkAttempt(ctx, s.target, prefix); checkErr != nil {
+		if ctx.Err() != nil {
+			return checkErr
+		}
+
+		return s.failRow(ctx, fence, id, checkErr)
 	}
 
-	listed, err := listObjects(ctx, s.target, "backups/"+id.String())
-	if err != nil {
-		return fmt.Errorf("list objects of backup %s: %w", id, err)
-	}
+	return nil
+}
 
-	have := make(map[string]struct{}, len(listed))
-	for _, obj := range listed {
-		have[obj.Key.String()] = struct{}{}
-	}
+// writeFinishPointer writes the live pointer that names the row attempt. A
+// lost claim or a cancel ends the step with the pointer error; a pointer that
+// names another attempt or does not parse marks the row failed, so the
+// backup never reads succeeded and the operator runs a new backup. The
+// writer never replaces the pointer, and the cleanup deletes nothing then.
+// fence is the fence of the step: it goes back to failRow when the pointer
+// check fails.
+func (s *Service) writeFinishPointer(
+	ctx context.Context, fenced *Service, fence durable.StepFence, id ID, prefix attemptPrefix,
+) error {
+	if pointerErr := writeLivePointer(ctx, fenced.target, prefix); pointerErr != nil {
+		switch {
+		case ctx.Err() != nil,
+			errors.Is(pointerErr, durable.ErrClaimLost),
+			errors.Is(pointerErr, durable.ErrCanceled):
+			return pointerErr
+		case errors.Is(pointerErr, ErrCorrupt):
+			s.logger.WarnContext(
+				ctx,
+				"backup finish stopped on a live pointer that does not name the attempt of the row",
+				slog.String("backup", id.String()),
+			)
 
-	want := make([]string, 0, len(manifest.SQLFiles)+1)
-	want = append(want, "backups/"+id.String()+"/manifest.json")
-
-	for _, file := range manifest.SQLFiles {
-		want = append(want, "backups/"+id.String()+"/"+file.Path)
-	}
-
-	for _, key := range want {
-		if _, ok := have[key]; !ok {
-			return fmt.Errorf("backup %s lost the object %s before it finished: %w", id, key, ErrCorrupt)
+			return fenced.failRow(ctx, fence, id, pointerErr)
+		default:
+			return pointerErr
 		}
 	}
 
 	return nil
+}
+
+// commitFinishAttempt commits the row and the step record in one fenced
+// transaction. A lost claim or a cancel ends the step; any other finish
+// error is permanent.
+func (s *Service) commitFinishAttempt(ctx context.Context, fence durable.StepFence, id ID, prefix attemptPrefix) error {
+	_, finishErr := s.registry.FinishBackup(ctx, fence, id, StateSucceeded, "", s.now().UTC(), prefix.attempt)
+
+	switch {
+	case finishErr == nil:
+		return nil
+	case errors.Is(finishErr, durable.ErrClaimLost), errors.Is(finishErr, durable.ErrCanceled):
+		return finishErr
+	default:
+		return durable.Permanent(fmt.Errorf("finish backup %s: %w", id, finishErr))
+	}
 }
 
 // damagePolicy says what a backup does at a live blob that is missing or
@@ -927,10 +1062,10 @@ func policyOf(in operationInput) damagePolicy {
 
 // backupRun holds the input of one run of a backup.
 type backupRun struct {
-	startedAt   time.Time
-	id          ID
-	manifestKey blob.Key
-	policy      damagePolicy
+	startedAt time.Time
+	id        ID
+	prefix    attemptPrefix
+	policy    damagePolicy
 }
 
 // backup exports the SQL part, copies the named blobs, and writes the
@@ -945,7 +1080,7 @@ func (s *Service) backup(ctx context.Context, run backupRun) error {
 		return err
 	}
 
-	exported, err := s.exportPortable(ctx, id)
+	exported, err := s.exportPortable(ctx, run.prefix)
 	if err != nil {
 		return err
 	}
@@ -1002,7 +1137,7 @@ func (s *Service) backup(ctx context.Context, run backupRun) error {
 		damaged:   damaged,
 		size:      exported.size,
 		sha:       exported.sha,
-		key:       run.manifestKey,
+		prefix:    run.prefix,
 	})
 }
 
@@ -1189,7 +1324,7 @@ type sqlExport struct {
 }
 
 // exportPortable writes one object for each table file of the SQL part, under
-// backups/<id>/sql, and returns the summary with the descriptors. Each file
+// backups/<id>/<attempt>/sql, and returns the summary with the descriptors. Each file
 // streams into the target while the export writes it, so the SQL part never sits
 // in memory whole. A file that fails before it completes is aborted in the
 // target, so no partial table file stays there as a good one.
@@ -1197,14 +1332,14 @@ type sqlExport struct {
 // The service finishes every file it opened before it returns, also when the
 // exporter returns without a Close or an Abort of a file. An open file keeps
 // its target Put waiting on the pipe, so it must never outlive the export.
-func (s *Service) exportPortable(ctx context.Context, id ID) (sqlExport, error) {
+func (s *Service) exportPortable(ctx context.Context, prefix attemptPrefix) (sqlExport, error) {
 	var (
 		mu     sync.Mutex
 		opened []*targetWriter
 	)
 
 	sink := func(path string) (io.WriteCloser, error) {
-		key, err := blob.ParseKey("backups/" + id.String() + "/" + path)
+		key, err := prefix.key(path)
 		if err != nil {
 			return nil, fmt.Errorf("name table file %q: %w", path, err)
 		}
@@ -1704,11 +1839,12 @@ type manifestInput struct {
 	damaged   []DamagedBlob
 	size      int64
 	sha       [sha256.Size]byte
-	key       blob.Key
+	prefix    attemptPrefix
 }
 
-// writeManifest writes backups/<id>/manifest.json last, after the SQL part
-// and every blob, so a backup without a manifest never counts as complete.
+// writeManifest writes backups/<id>/<attempt>/manifest.json last, after the
+// SQL part and every blob, so a backup without a manifest never counts as
+// complete.
 func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 	// Defense in depth: backup refuses the bound before the first copy, so no
 	// manifest above the bound reaches this write. This check stays so that no
@@ -1721,6 +1857,7 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 	manifest := Manifest{
 		CreatedAt:            in.startedAt,
 		ID:                   in.id,
+		Attempt:              in.prefix.attempt,
 		Dialect:              in.sum.Dialect,
 		PrimaryInstallations: in.sum.PrimaryInstallations,
 		WrapperIDs:           in.sum.WrapperIDs,
@@ -1747,7 +1884,12 @@ func (s *Service) writeManifest(ctx context.Context, in manifestInput) error {
 		return fmt.Errorf("encode manifest of backup %s: %w", in.id, err)
 	}
 
-	if err := s.target.Put(ctx, in.key, bytes.NewReader(data)); err != nil {
+	key, err := in.prefix.manifestKey()
+	if err != nil {
+		return err
+	}
+
+	if err := s.target.Put(ctx, key, bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("write manifest of backup %s: %w", in.id, err)
 	}
 
@@ -1765,13 +1907,27 @@ func Check(ctx context.Context, target blob.Store, id ID) error {
 		return fmt.Errorf("check backup %s: %w", id, ErrMissingDependency)
 	}
 
-	manifest, err := readManifest(ctx, target, id)
+	live, err := readLivePointer(ctx, target, id)
+	if err != nil {
+		return err
+	}
+
+	return checkAttempt(ctx, target, live)
+}
+
+// checkAttempt checks the manifest and the objects of the attempt directory p
+// as Check does. The finish step calls it before the live pointer exists, so
+// it takes the prefix and reads no pointer.
+func checkAttempt(ctx context.Context, target blob.Store, p attemptPrefix) error {
+	id := p.id
+
+	manifest, err := readManifestAt(ctx, target, p, maxManifestBytes)
 	if err != nil {
 		return err
 	}
 
 	for _, file := range manifest.SQLFiles {
-		key, err := blob.ParseKey("backups/" + id.String() + "/" + file.Path)
+		key, err := p.key(file.Path)
 		if err != nil {
 			return fmt.Errorf("check backup %s: %w", id, err)
 		}
@@ -1801,17 +1957,26 @@ func Check(ctx context.Context, target blob.Store, id ID) error {
 // a hostile or broken target cannot grow the read without bound.
 const maxManifestBytes = 64 << 20
 
-// readManifest reads and parses backups/<id>/manifest.json. A backup without
-// a readable manifest of the current format never counts as complete.
+// readManifest reads the live pointer of backup id, then the manifest in the
+// attempt directory that it names. A backup without a readable pointer or a
+// readable manifest of the current format never counts as complete.
 func readManifest(ctx context.Context, target blob.Store, id ID) (Manifest, error) {
-	return readManifestLimit(ctx, target, id, maxManifestBytes)
+	live, err := readLivePointer(ctx, target, id)
+	if err != nil {
+		return Manifest{}, err
+	}
+
+	return readManifestAt(ctx, target, live, maxManifestBytes)
 }
 
-// readManifestLimit is readManifest with the size bound as a parameter, so a
-// test can reach the bound with a small limit instead of maxManifestBytes.
-// readManifest passes maxManifestBytes.
-func readManifestLimit(ctx context.Context, target blob.Store, id ID, limit int64) (Manifest, error) {
-	key, err := blob.ParseKey("backups/" + id.String() + "/manifest.json")
+// readManifestAt reads the manifest of the attempt directory p with the size
+// bound limit, so a test can reach the bound with a small limit instead of
+// maxManifestBytes. The manifest must name the attempt of p, else it is
+// corrupt.
+func readManifestAt(ctx context.Context, target blob.Store, p attemptPrefix, limit int64) (Manifest, error) {
+	id := p.id
+
+	key, err := p.manifestKey()
 	if err != nil {
 		return Manifest{}, fmt.Errorf("check backup %s: %w", id, err)
 	}
@@ -1840,7 +2005,17 @@ func readManifestLimit(ctx context.Context, target blob.Store, id ID, limit int6
 		return Manifest{}, fmt.Errorf("manifest of backup %s is larger than %d bytes: %w", id, limit, ErrCorrupt)
 	}
 
-	return parseManifest(id, data)
+	manifest, err := parseManifest(id, data)
+	if err != nil {
+		return Manifest{}, err
+	}
+
+	if manifest.Attempt != p.attempt {
+		return Manifest{}, fmt.Errorf("backup %s holds a manifest of attempt %q in the directory of attempt %q: %w",
+			id, manifest.Attempt, p.attempt, ErrCorrupt)
+	}
+
+	return manifest, nil
 }
 
 // parseManifest decodes the bytes of the manifest of backup id and checks the

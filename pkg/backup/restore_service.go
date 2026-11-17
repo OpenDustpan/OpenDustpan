@@ -99,7 +99,8 @@ type RestoreConfig struct {
 	// lease ends. Required: a restore without the port cannot wait.
 	Leases blobguard.Leases
 	// Target is the backup target that holds blobs/<key>,
-	// backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json.
+	// backups/<id>/<attempt>/sql/<table>.jsonl.gz and
+	// backups/<id>/<attempt>/manifest.json.
 	Target blob.Store
 	// Key is the key-encryption key the checks prove against the backup.
 	Key secret.Wrapper
@@ -814,7 +815,7 @@ type restoreOutcome struct {
 }
 
 // logObjectPath matches a quoted backup-target object path, for example
-// "backups/bkp-1/manifest.json" or "blobs/namespaces/ns-1/pulumi/stk-1/upd-1/0": storage layout, not
+// "backups/bkp-1/1/manifest.json" or "blobs/namespaces/ns-1/pulumi/stk-1/upd-1/0": storage layout, not
 // data. Blob content keys without the target prefix stay, so the log still
 // names the blob that failed.
 var logObjectPath = regexp.MustCompile(`"[^"]*(?:backups|blobs)/[^"]*"`)

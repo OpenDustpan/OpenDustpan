@@ -3,6 +3,7 @@ package backup_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -184,6 +185,10 @@ var tableData = []byte("table file content") //nolint:gochecknoglobals // A read
 type gateExporter struct {
 	entered chan struct{}
 	gate    chan struct{}
+	// resumed closes when the first call returns after the gate opened, so a
+	// test can wait for the stale holder to attempt its late write. Later
+	// calls run at once and never touch it.
+	resumed chan struct{}
 	// testDone ends the wait when the test ends, so a failed test does not
 	// leave the worker stuck in the export.
 	testDone <-chan struct{}
@@ -200,6 +205,7 @@ func newGateExporter(t *testing.T) *gateExporter {
 	return &gateExporter{
 		entered:  make(chan struct{}),
 		gate:     make(chan struct{}),
+		resumed:  make(chan struct{}),
 		testDone: t.Context().Done(),
 		calls:    atomic.Int64{},
 		idle:     false,
@@ -223,6 +229,10 @@ func (g *gateExporter) ExportPortable(
 
 	select {
 	case <-g.gate:
+		// The holder resumes here and attempts its late write, which the
+		// claim check of the fenced target refuses. resumed closes when
+		// that attempt returns, before the test stops the worker.
+		defer close(g.resumed)
 	case <-g.testDone:
 	}
 
@@ -321,10 +331,22 @@ func TestTakeoverAfterTheHolderStopsWithoutRelease(t *testing.T) {
 
 	assertCompleteBackup(t, setup.target, id)
 
-	// A resumes after B finished. Its write of the row must fail on the claim.
+	// A resumes after B finished. The claim check of the fenced target
+	// refuses its late writes, so its write step stops with a lost claim and
+	// it never reaches the finish step: no finish is refused.
 	close(exporterA.gate)
-	waitFor(t, "the refused finish of the first instance", func() bool { return setup.reg.lostFinishes.Load() == 1 })
+
+	select {
+	case <-exporterA.resumed:
+	case <-t.Context().Done():
+		t.Fatal("test ended before the stale holder resumed")
+	}
+
 	workerA.stop()
+
+	if got := setup.reg.lostFinishes.Load(); got != 0 {
+		t.Fatalf("refused finishes = %d, want 0: the stale holder stopped at its write step", got)
+	}
 
 	after, err := setup.reg.GetBackup(t.Context(), id)
 	if err != nil || after != row {
@@ -335,14 +357,25 @@ func TestTakeoverAfterTheHolderStopsWithoutRelease(t *testing.T) {
 }
 
 // assertCompleteBackup proves that the target holds exactly one complete
-// backup id: every table file once, the manifest, and nothing else under the
-// directory of the backup.
+// backup id: the live pointer and, in the directory that it names, every table
+// file once and the manifest, and nothing else under the directory of the
+// backup.
 func assertCompleteBackup(t *testing.T, target *memStore, id backup.ID) {
 	t.Helper()
 
 	if err := backup.Check(t.Context(), target, id); err != nil {
 		t.Fatalf("check backup %s: %v", id, err)
 	}
+
+	var pointer struct {
+		Attempt string `json:"attempt"`
+	}
+
+	if err := json.Unmarshal(target.readObject(t, livePointerKeyOf(id)), &pointer); err != nil {
+		t.Fatalf("decode the live pointer of backup %s: %v", id, err)
+	}
+
+	dir := "backups/" + id.String() + "/" + pointer.Attempt + "/"
 
 	objects, err := blobtest.ListAll(t.Context(), target, "backups/"+id.String())
 	if err != nil {
@@ -354,9 +387,9 @@ func assertCompleteBackup(t *testing.T, target *memStore, id backup.ID) {
 		got[obj.Key.String()] = true
 	}
 
-	want := map[string]bool{"backups/" + id.String() + "/manifest.json": true}
+	want := map[string]bool{dir + "manifest.json": true, livePointerKeyOf(id): true}
 	for _, table := range backup.Tables {
-		want["backups/"+id.String()+"/"+backup.PortablePath(table)] = true
+		want[dir+backup.PortablePath(table)] = true
 	}
 
 	if len(got) != len(want) || len(objects) != len(want) {
@@ -399,9 +432,26 @@ func TestTakeoverKeepsTheBlobCopies(t *testing.T) {
 	startWorker(t, svcB)
 
 	waitRow(t, setup.reg, id, backup.StateSucceeded)
+	waitOperation(t, setup.reg.ops, id, "the operation succeeded", func(o durable.Operation) bool {
+		return o.State == durable.StateSucceeded
+	})
+
+	// The stale holder resumes after the survivor finished. The claim check
+	// of the fenced target refuses its late writes, so it stops at its write
+	// step and never reaches the finish step: no finish is refused.
 	close(exporter.gate)
-	waitFor(t, "the refused finish of the first instance", func() bool { return setup.reg.lostFinishes.Load() == 1 })
+
+	select {
+	case <-exporter.resumed:
+	case <-t.Context().Done():
+		t.Fatal("test ended before the stale holder resumed")
+	}
+
 	workerA.stop()
+
+	if got := setup.reg.lostFinishes.Load(); got != 0 {
+		t.Fatalf("refused finishes = %d, want 0: the stale holder stopped at its write step", got)
+	}
 
 	assertCompleteBackup(t, setup.target, id)
 
@@ -452,8 +502,8 @@ func TestWriteStepFailureEndsRowAndOperationFailed(t *testing.T) {
 		t.Fatalf("operation state = %s, want failed", op.State)
 	}
 
-	if setup.target.has("backups/" + id.String() + "/manifest.json") {
-		t.Fatal("target holds a manifest of the failed backup, want none")
+	if setup.target.has(manifestKeyOf(id)) || setup.target.has(livePointerKeyOf(id)) {
+		t.Fatal("target holds a manifest or a live pointer of the failed backup, want none")
 	}
 }
 

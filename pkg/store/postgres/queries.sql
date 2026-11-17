@@ -1150,7 +1150,7 @@ VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT DO NOTHING;
 
 -- name: GetBackup :one
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 WHERE id = $1;
 
@@ -1221,11 +1221,22 @@ SELECT COALESCE((SELECT kind FROM running), '')::text AS kind,
        COALESCE((SELECT id FROM running), '')::text AS id;
 
 -- name: ListBackups :many
-SELECT id, state, started_at_ms, ended_at_ms, target, error
+SELECT id, state, started_at_ms, ended_at_ms, target, error, attempt
 FROM backups
 ORDER BY started_at_ms DESC, id ASC;
 
+-- name: RecordBackupAttempt :execrows
+-- Stores the attempt of the write step on the running row. The Go code
+-- checks the fence and records the step in the same transaction, and the
+-- finish compares the attempt before it moves the row.
+UPDATE backups
+SET attempt = $1
+WHERE id = $2 AND state = 'running';
+
 -- name: FinishBackup :execrows
+-- Moves one running backup to its end state. The attempt stays the one that
+-- the write step recorded. A finished backup matches no row, so a retry
+-- reports no change.
 UPDATE backups
 SET state = $1, error = $2, ended_at_ms = $3
 WHERE id = $4 AND state = 'running';

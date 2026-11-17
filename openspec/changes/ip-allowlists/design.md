@@ -57,7 +57,7 @@ flowchart LR
 | --- | --- | --- | --- | --- | --- |
 | network to server | S | A spoofed proxy header bypasses the list. | boundary check | The settings API refuses an invalid CIDR. | Write 999.999.0.0/16 and check 400. |
 | network to server | S | A spoofed proxy header bypasses the list. | encode or contain | The checker parses the address to netip.Addr and matches IPv4-mapped forms as IPv4. | Send ::ffff:10.0.0.1 and check it matches as 10.0.0.1. |
-| network to server | S | A spoofed proxy header bypasses the list. | limit | A list holds at most 256 entries. | Write 257 entries and check 400. |
+| network to server | S | A spoofed proxy header bypasses the list. | limit | A list holds at most 64 entries (`ipallow.MaxEntries`, `pkg/ipallow/list.go:18`). This change keeps the limit of main. | Write 65 entries and check 400. |
 | network to server | S | A spoofed proxy header bypasses the list. | authorize at point of use | The checker uses the recorded client address after trusted-proxy handling. | Send a spoofed header from an untrusted source and check the recorded address is used. |
 | network to server | S | A spoofed proxy header bypasses the list. | fail closed | A stored list that fails to parse denies sign-in and token requests. | Store a bad list and check 403 for each address. |
 

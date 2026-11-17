@@ -392,6 +392,9 @@
       },
       "BackupManifest": {
         "properties": {
+          "attempt": {
+            "type": "string"
+          },
           "blobs": {
             "items": {
               "$ref": "#/components/schemas/ManifestBlob"
@@ -483,6 +486,7 @@
           }
         },
         "required": [
+          "attempt",
           "blobs",
           "createdAt",
           "dialect",

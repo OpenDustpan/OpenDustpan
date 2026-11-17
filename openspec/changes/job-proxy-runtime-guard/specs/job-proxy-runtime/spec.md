@@ -133,8 +133,8 @@ When the job proxy dials a tunnel host, the job proxy SHALL connect only to a re
 - **THEN** the proxy connects only to an address that it checked.
 
 #### Scenario: Mixed addresses
-- **WHEN** a host resolves to one allowed and one denied address
-- **THEN** the proxy uses only an allowed checked address and never dials a denied or unchecked address.
+- **WHEN** a host resolves to one allowed and one denied address (one DNS answer is not allowed)
+- **THEN** the guard refuses the whole host, the proxy dials no address of that host, and it never dials a denied or unchecked address.
 
 ### Requirement: No rebind between check and connect
 

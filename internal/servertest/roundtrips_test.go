@@ -1375,12 +1375,48 @@ func (m costModel) count(c schemaCounts) int {
 		m.perUnit*c.units
 }
 
+// withoutClaimReads returns the model as it was before the write step read
+// the claim before each put: the measured history predates those reads.
+func (m costModel) withoutClaimReads() costModel {
+	m.fixed -= attemptClaimTrips
+	m.perTable -= claimReadTrips
+
+	return m
+}
+
 // backupModel is the cost model of a backup. Its coefficients were fitted to
 // three commits that differ in tables, control tables and migrations, and a
 // fourth commit checks them (see TestCostModelFitsMeasuredHistory).
+//
+// The write step reads the claim again right before each put under
+// backups/<id>/<attempt>/ and before each delete. One read of the claim is a
+// read-only transaction of 4 round trips: begin, the read of the operation,
+// the read of its steps and the commit. A table file costs those 4 round
+// trips more, so perTable counts 7. The fixed part holds attemptClaimTrips
+// more: the write of the manifest and the other writes under the directory of
+// the attempt, and the write of backups/<id>/live.json after the commit of
+// the finish step. The copy of a blob
+// under blobs/ reads no claim, so perUnit does not change. The first run
+// deletes nothing, because the directory of the attempt is new and no old
+// directory exists.
 func backupModel() costModel {
-	return costModel{fixed: 47, perTable: 3, perOther: 1, perMigration: 0, perUnit: stateVersionReads}
+	return costModel{
+		fixed:        47 + attemptClaimTrips,
+		perTable:     3 + claimReadTrips,
+		perOther:     1,
+		perMigration: 0,
+		perUnit:      stateVersionReads,
+	}
 }
+
+// claimReadTrips is the number of round trips of one read of the claim before
+// a put under the directory of an attempt.
+const claimReadTrips = 4
+
+// attemptClaimTrips is the number of round trips that the reads of the claim
+// before the writes that are not a table file add to the fixed part of a
+// backup. The value is the measured one on PostgreSQL.
+const attemptClaimTrips = 23
 
 // restoreModel is the cost model of a restore, fitted the same way. The cost of
 // a migration and of a unit (the maintenance scans and the state version
@@ -1458,13 +1494,18 @@ func backupModel() costModel {
 // The fixed part also holds checkpointSupersedesTrips: the table holds no
 // marks in the run, so the restore makes 2 round trips fewer for it than the
 // model gives a table.
+//
+// The fixed part also holds attemptClaimTrips, and perTable holds the
+// claimReadTrips of the claim read for the table file of each table: the
+// backup that the restore holds reads the claim before each put under
+// backups/.
 func restoreModel() costModel {
 	return costModel{
-		fixed: 331 + 1 + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
+		fixed: 331 + 1 + attemptClaimTrips + forgeStripClassTrips + blobDeleteLeaseTrips - breakGlassReviewTrips + stagedJobCheckTrips +
 			removalAlertTrips + stagedPrincipalCheckTrips + stagedTriggerClockTrips + unitStateTrips +
 			breakGlassFloorTrips + serverAuditLockTrips + checkpointSupersedesTrips +
 			droppedRunnerCredentialTrips + proxyRuleSetTrips + trustBundleTrips,
-		perTable:     7,
+		perTable:     7 + claimReadTrips,
 		perOther:     2,
 		perMigration: 2,
 		perUnit:      maintenanceScans + stateVersionReads,

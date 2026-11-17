@@ -11603,7 +11603,8 @@ func runBackupCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 // backupCheckManifestDoc decodes the manifest of one backup: only the blob
 // keys the check names when one goes missing.
 type backupCheckManifestDoc struct {
-	Blobs []backupCheckBlobDoc `json:"blobs"`
+	Attempt string               `json:"attempt"`
+	Blobs   []backupCheckBlobDoc `json:"blobs"`
 }
 
 // backupCheckBlobDoc decodes one manifest blob entry.
@@ -11666,7 +11667,7 @@ func corruptServerBackupTarget(ctx context.Context, t *testing.T, env *e2e.Env, 
 		t.Fatalf("decode backup %s %q: %v", id, body, decodeErr)
 	}
 
-	key := "backups/" + id + "/" + backup.PortablePath("namespaces")
+	key := "backups/" + id + "/" + doc.Manifest.Attempt + "/" + backup.PortablePath("namespaces")
 	if len(doc.Manifest.Blobs) > 0 {
 		key = "blobs/" + doc.Manifest.Blobs[0].Key
 	}
@@ -11757,7 +11758,7 @@ func runBackupsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	id := startBackupAndConflict(ctx, t, env)
 	doc := pollBackupState(ctx, t, env, id)
 	checkBackupManifest(t, store, doc)
-	checkPortableObjects(t, env, id, doc.Manifest.SQLFiles)
+	checkPortableObjects(t, env, id, doc.Manifest.Attempt, doc.Manifest.SQLFiles)
 	checkBackupList(ctx, t, env, id)
 	checkBackupUnauthorized(ctx, t, env, id)
 
@@ -11842,6 +11843,7 @@ type backupDoc struct {
 // backupManifestDoc holds the manifest fields the backup steps check.
 type backupManifestDoc struct {
 	ID                   string               `json:"id"`
+	Attempt              string               `json:"attempt"`
 	Format               int                  `json:"format"`
 	Dialect              string               `json:"dialect"`
 	PrimaryInstallations []string             `json:"primaryInstallations"`
@@ -11941,14 +11943,17 @@ func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id string)
 			t.Fatalf("GET backup %s: %v", id, err)
 		}
 
+		// The finish step writes the live pointer after Check and before the
+		// fenced commit, so a row that reads succeeded always has its
+		// pointer. A 409 here would mean a corrupt target, not a window.
 		if status != http.StatusOK {
 			t.Fatalf("GET backup %s answers %d, want %d (%s)", id, status, http.StatusOK, body)
 		}
 
 		var doc backupDoc
 
-		if err := json.Unmarshal([]byte(body), &doc); err != nil {
-			t.Fatalf("decode backup %s %q: %v", id, body, err)
+		if decodeErr := json.Unmarshal([]byte(body), &doc); decodeErr != nil {
+			t.Fatalf("decode backup %s %q: %v", id, body, decodeErr)
 		}
 
 		switch doc.State {
@@ -12052,13 +12057,13 @@ func checkPortableFiles(t *testing.T, files []backupSQLFileDoc) {
 
 // checkPortableObjects proves each table file of a backup is in the target with
 // the size its descriptor names.
-func checkPortableObjects(t *testing.T, env *e2e.Env, id string, files []backupSQLFileDoc) {
+func checkPortableObjects(t *testing.T, env *e2e.Env, id, attempt string, files []backupSQLFileDoc) {
 	t.Helper()
 
 	dir := env.BackupTargetDir(t)
 
 	for _, file := range files {
-		info, err := os.Stat(filepath.Join(dir, "backups", id, filepath.FromSlash(file.Path)))
+		info, err := os.Stat(filepath.Join(dir, "backups", id, attempt, filepath.FromSlash(file.Path)))
 		if err != nil {
 			t.Fatalf("stat table file %q of backup %s: %v", file.Path, id, err)
 		}
@@ -13089,7 +13094,62 @@ func runRestoreRefused(ctx context.Context, t *testing.T, env *e2e.Env, id, want
 	}
 }
 
-// targetManifestPath returns the path of backups/<id>/manifest.json in the
+// readDirTargetLivePointer reads the live pointer of backup id from a
+// dir:<path> backup target. The read stays inside the target directory.
+func readDirTargetLivePointer(t *testing.T, target, id string) []byte {
+	t.Helper()
+
+	dir, ok := strings.CutPrefix(target, "dir:")
+	if !ok || strings.TrimSpace(dir) == "" {
+		t.Fatalf("backup target = %q, want dir:<path>", target)
+	}
+
+	root, err := os.OpenRoot(strings.TrimSpace(dir))
+	if err != nil {
+		t.Fatalf("open backup target: %v", err)
+	}
+
+	defer func() {
+		if closeErr := root.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	}()
+
+	raw, err := root.ReadFile(filepath.Join("backups", id, "live.json"))
+	if err != nil {
+		t.Fatalf("read live pointer: %v", err)
+	}
+
+	return raw
+}
+
+// targetManifestKey returns the key of the manifest of backup id in the
+// backup target of the running server: the live pointer names the attempt
+// directory that holds the finished backup.
+func targetManifestKey(t *testing.T, target, id string) string {
+	t.Helper()
+
+	var raw []byte
+
+	if strings.HasPrefix(target, "s3://") {
+		ctx := t.Context()
+		raw = readS3Object(ctx, t, e2e.OpenS3TargetStore(ctx, t, target), "backups/"+id+"/live.json")
+	} else {
+		raw = readDirTargetLivePointer(t, target, id)
+	}
+
+	var pointer struct {
+		Attempt string `json:"attempt"`
+	}
+
+	if err := json.Unmarshal(raw, &pointer); err != nil || pointer.Attempt == "" {
+		t.Fatalf("decode live pointer of backup %s: %v", id, err)
+	}
+
+	return "backups/" + id + "/" + pointer.Attempt + "/manifest.json"
+}
+
+// targetManifestPath returns the path of the manifest of backup id in the
 // file backup target, failing the test when the target is not a directory.
 func targetManifestPath(t *testing.T, target, id string) string {
 	t.Helper()
@@ -13099,10 +13159,10 @@ func targetManifestPath(t *testing.T, target, id string) string {
 		t.Fatalf("backup target = %q, want dir:<path>", target)
 	}
 
-	return filepath.Join(strings.TrimSpace(dir), "backups", id, "manifest.json")
+	return filepath.Join(strings.TrimSpace(dir), filepath.FromSlash(targetManifestKey(t, target, id)))
 }
 
-// readTargetManifest reads backups/<id>/manifest.json from the backup target
+// readTargetManifest reads the manifest of backup id from the backup target
 // of the running server.
 func readTargetManifest(t *testing.T, target, id string) backup.Manifest {
 	t.Helper()
@@ -13119,13 +13179,13 @@ func readTargetManifest(t *testing.T, target, id string) backup.Manifest {
 	return manifest
 }
 
-// readManifestBytes returns backups/<id>/manifest.json from the backup target
+// readManifestBytes returns the manifest of backup id from the backup target
 // of the running server: a file read on a dir: target, an object read on an
 // s3:// target.
 func readManifestBytes(t *testing.T, target, id string) []byte {
 	t.Helper()
 
-	key := "backups/" + id + "/manifest.json"
+	key := targetManifestKey(t, target, id)
 
 	if strings.HasPrefix(target, "s3://") {
 		ctx := t.Context()
@@ -13141,7 +13201,7 @@ func readManifestBytes(t *testing.T, target, id string) []byte {
 	return raw
 }
 
-// rewriteTargetManifest edits backups/<id>/manifest.json in the backup target
+// rewriteTargetManifest edits the manifest of backup id in the backup target
 // of the running server, so the next restore meets the tampered manifest.
 // Callers write the saved manifest back after the refused restore.
 func rewriteTargetManifest(t *testing.T, target, id string, edit func(*backup.Manifest)) {
@@ -13152,7 +13212,7 @@ func rewriteTargetManifest(t *testing.T, target, id string, edit func(*backup.Ma
 	writeTargetManifest(t, target, id, manifest)
 }
 
-// writeTargetManifest writes manifest as backups/<id>/manifest.json in the
+// writeTargetManifest writes manifest as the manifest of backup id in the
 // backup target of the running server.
 func writeTargetManifest(t *testing.T, target, id string, manifest backup.Manifest) {
 	t.Helper()
@@ -13165,13 +13225,13 @@ func writeTargetManifest(t *testing.T, target, id string, manifest backup.Manife
 	writeManifestBytes(t, target, id, data)
 }
 
-// writeManifestBytes writes data as backups/<id>/manifest.json into the
+// writeManifestBytes writes data as the manifest of backup id into the
 // backup target of the running server: a file write on a dir: target, an
 // object write on an s3:// target.
 func writeManifestBytes(t *testing.T, target, id string, data []byte) {
 	t.Helper()
 
-	key := "backups/" + id + "/manifest.json"
+	key := targetManifestKey(t, target, id)
 
 	if strings.HasPrefix(target, "s3://") {
 		ctx := t.Context()

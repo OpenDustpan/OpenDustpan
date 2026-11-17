@@ -113,6 +113,7 @@ type Backup struct {
 	EndedAtMs   pgtype.Int8
 	Target      string
 	Error       string
+	Attempt     string
 }
 
 type BlobDeleteLease struct {
