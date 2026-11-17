@@ -171,6 +171,13 @@ func (g allowlistRequestGate) checker(ctx context.Context, r *http.Request) *all
 // sign-in. A health probe, a static asset and a public page use neither, so
 // the installation list does not stop them.
 func allowlistRequest(r *http.Request) bool {
+	// A probe answers from the process state and shows no data. It stays
+	// outside the list even with a credential, so that a stopped database
+	// cannot turn a readiness answer of 503 into a 403.
+	if healthProbePath(r.URL.Path) {
+		return false
+	}
+
 	if r.Header.Get("Authorization") != "" {
 		return true
 	}
@@ -189,6 +196,12 @@ func allowlistRequest(r *http.Request) bool {
 	}
 
 	return false
+}
+
+// healthProbePath reports whether p is a clean health probe path: the live
+// probe, the ready probe or the ready probe of one component.
+func healthProbePath(p string) bool {
+	return workerOnlyPath(p) && p != metricsPath
 }
 
 // allowlistAudit writes the denial entries of the installation scope.

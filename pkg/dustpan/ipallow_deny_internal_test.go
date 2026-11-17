@@ -75,3 +75,42 @@ func TestDenyAnyListDenies(t *testing.T) {
 		t.Fatalf("denial entry is not valid: %v", err)
 	}
 }
+
+// TestAllowlistRequestSkipsProbes is the hostile test of the request filter:
+// a health probe with a credential stays outside the list, so a stopped
+// database cannot turn a readiness answer of 503 into a 403. Each other path
+// that carries a credential stays inside the list. It fails if the filter
+// stops treating the probe paths as exempt, or exempts a path near them.
+func TestAllowlistRequestSkipsProbes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/health/live", false},
+		{"/health/ready", false},
+		{"/health/ready/database", false},
+		{"/health/ready/", true},
+		{"/health/ready/a/b", true},
+		{"/health/../api/dustpan/v1/namespaces", true},
+		{"/health//ready", true},
+		{"/health/ready/../x", true},
+		{"/api/server/metrics", true},
+		{"/api/dustpan/v1/namespaces", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
+			r.URL.Path = tc.path
+			r.Header.Set("Authorization", "Bearer token")
+
+			if got := allowlistRequest(r); got != tc.want {
+				t.Fatalf("allowlistRequest(%q) = %t, want %t", tc.path, got, tc.want)
+			}
+		})
+	}
+}

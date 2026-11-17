@@ -16,6 +16,7 @@ docs/guides/faults.md
 docs/guides/host-recovery.md
 docs/guides/import.md
 docs/guides/install.md
+docs/guides/ip-allowlists.md
 docs/guides/kubernetes.md
 docs/guides/ldap-sign-in.md
 docs/guides/load.md
