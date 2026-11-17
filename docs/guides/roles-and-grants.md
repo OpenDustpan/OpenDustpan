@@ -194,6 +194,16 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   "https://dustpan.example.com/api/server/namespaces/acme/collections/payments/access-review?limit=100"
 ```
 
+A token with a grant on a collection or on a unit in a namespace also
+discovers that namespace, which the OpenTofu CLI and the Pulumi CLI read
+first. The answer names the namespace and its entitlements, and a list shows
+only the items that the caller may read. Any other caller gets the same `404`
+as for an unknown namespace, with the same body. A revoked grant loses
+discovery on the next request. An answer that a grant allowed carries the
+response header `X-Dustpan-Grant-Id`, with the stable ID of the grant, never
+a name. An answer that no grant allowed, for example an administrator's,
+carries no such header.
+
 ## Ask why an action is allowed or denied
 
 `GET /api/dustpan/v1/me/access?object=...` answers for the caller. It lists the

@@ -199,6 +199,25 @@ func newUserHandlerWithSessions(
 ) *pulumi.Handler {
 	t.Helper()
 
+	return newUserHandlerWithOptions(t, nsStore, stStore, authz, userHandlerOptions{
+		sessions: sessions, entries: orTestAudit(nil),
+	})
+}
+
+// userHandlerOptions holds the parts of a user handler that a test may set.
+type userHandlerOptions struct {
+	sessions *sessionauth.Checker
+	// entries is the audit store, so a test can read the entries that the
+	// handler writes.
+	entries audit.Store
+}
+
+func newUserHandlerWithOptions(
+	t *testing.T, nsStore *memNamespaceStore, stStore *memStackStore, authz identity.Authorizer,
+	opts userHandlerOptions,
+) *pulumi.Handler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: nsStore, Now: nil, Installation: "test-region"},
 	)
@@ -224,13 +243,13 @@ func newUserHandlerWithSessions(
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
-		Sessions:                sessions,
+		Sessions:                opts.sessions,
 		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
 		Gate:                    nil,
-		Audit:                   newTestAudit(),
+		Audit:                   opts.entries,
 		OnAuditFailure:          nil,
 		CheckpointDeltaCutoff:   0,
 		DenialLimiter:           nil,
