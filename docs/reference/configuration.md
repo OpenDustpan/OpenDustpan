@@ -78,6 +78,7 @@ the same list.
 | `--ldap-email-attribute` | `DUSTPAN_LDAP_EMAIL_ATTRIBUTE` | `ldap.emailAttribute` | (none: no email) |
 | `--ldap-name-attribute` | `DUSTPAN_LDAP_NAME_ATTRIBUTE` | `ldap.nameAttribute` | (none: no name) |
 | `--ldap-subject` | `DUSTPAN_LDAP_SUBJECT` | `ldap.subject` | `entryUUID`. Use `objectGUID` for Active Directory. The subject must not change when a person changes a name or an email. |
+| `--ldap-subject-failure-limit` | `DUSTPAN_LDAP_SUBJECT_FAILURE_LIMIT` | `ldap.subjectFailureLimit` | `5`. A value from 1 to 100. The count of one person from one source locks the person after 10 failures. The count from every source locks the person after this limit. |
 | `--ldap-disabled-attribute` | `DUSTPAN_LDAP_DISABLED_ATTRIBUTE` | `ldap.disabledAttribute` | (none: the server reads no such value) |
 | `--ldap-disabled-mask` | `DUSTPAN_LDAP_DISABLED_MASK` | `ldap.disabledMask` | (none: compare the values of `ldap.disabledValues`) |
 | `--ldap-disabled-values` | `DUSTPAN_LDAP_DISABLED_VALUES` | `ldap.disabledValues` | (none) |

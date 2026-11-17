@@ -76,11 +76,11 @@ the job gets its rules from the server, not from this route.
 
 | Status | Code | Cause and command |
 | --- | --- | --- |
-| 400 | `request.if_match_invalid` | `If-Match` is not a digest in quotes. Send the `ETag` of a read. |
-| 400 | `request.invalid_path` | `unit_id` is not valid. Use the ID from the unit list. |
-| 400 | `request.invalid_query` | `operation` is not `plan`, `apply`, `destroy` or `refresh`. Send one of them. |
-| 404 | `unit.not_found` | No unit has this ID in the namespace. List the units of the namespace. |
-| 412 | `request.precondition_failed` | The set changed after your read. Read it again and send the save again. |
-| 413 | `request.body_too_large` | The body is larger than 64 KB. Remove rules. |
-| 415 | `request.content_type_unsupported` | The content type is not `application/json`. Set the header. |
-| 422 | `request.body_invalid` | A rule is not valid. The message names the rule and the field. Correct it. |
+| 400 | `request.if-match-invalid` | `If-Match` is not a digest in quotes. Send the `ETag` of a read. |
+| 400 | `request.invalid-path` | `unit_id` is not valid. Use the ID from the unit list. |
+| 400 | `request.invalid-query` | `operation` is not `plan`, `apply`, `destroy` or `refresh`. Send one of them. |
+| 404 | `unit.not-found` | No unit has this ID in the namespace. List the units of the namespace. |
+| 412 | `request.precondition-failed` | The set changed after your read. Read it again and send the save again. |
+| 413 | `request.body-too-large` | The body is larger than 64 KB. Remove rules. |
+| 415 | `request.content-type-unsupported` | The content type is not `application/json`. Set the header. |
+| 422 | `request.body-invalid` | A rule is not valid. The message names the rule and the field. Correct it. |

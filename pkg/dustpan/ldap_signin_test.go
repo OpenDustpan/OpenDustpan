@@ -202,9 +202,12 @@ func TestLDAPSignInThroughTheServer(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 
 	list := s.serve(req)
-	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"tls-ldap"`) ||
-		!strings.Contains(list.Body.String(), `"bindPasswordSet":true`) {
-		t.Fatalf("provider list = %d %s, want the LDAP providers", list.Code, list.Body.String())
+	body := list.Body.String()
+	if list.Code != http.StatusOK || !strings.Contains(body, `"tls-ldap"`) ||
+		!strings.Contains(body, `"bindPasswordSet":true`) ||
+		!strings.Contains(body, `"subjectFailureLimit":5`) ||
+		!strings.Contains(body, `"subjectFailureLimitSource":"default"`) {
+		t.Fatalf("provider list = %d %s, want the LDAP providers and their effective limit", list.Code, body)
 	}
 
 	checkNoLDAPSecret(t, s, "provider list", list.Body.String())

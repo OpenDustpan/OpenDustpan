@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -24,8 +25,13 @@ type AccessTokenRow struct {
 	DisabledAtMs int64
 }
 
-// FromAccessTokenRow converts a row into a domain token.
-func FromAccessTokenRow(row AccessTokenRow) accesstoken.Token {
+// FromAccessTokenRow converts a row into a domain token. A row of a kind that
+// the domain does not know gives accesstoken.ErrUnknownKind and no token.
+func FromAccessTokenRow(row AccessTokenRow) (accesstoken.Token, error) {
+	if !accesstoken.Kind(row.Kind).Valid() {
+		return accesstoken.Token{}, fmt.Errorf("access token %q: %w: %q", row.ID, accesstoken.ErrUnknownKind, row.Kind)
+	}
+
 	return accesstoken.Token{
 		CreatedAt:   FromMillis(row.CreatedAtMs),
 		ExpiresAt:   FromMillis(row.ExpiresAtMs),
@@ -38,7 +44,7 @@ func FromAccessTokenRow(row AccessTokenRow) accesstoken.Token {
 		Kind:        accesstoken.Kind(row.Kind),
 		ReplacedBy:  row.ReplacedBy,
 		CreatedBy:   row.CreatedBy,
-	}
+	}, nil
 }
 
 // AccessTokenOwnerRow is the column representation of the owner of a

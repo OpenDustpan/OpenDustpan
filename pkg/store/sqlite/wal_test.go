@@ -51,15 +51,15 @@ import (
 func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 	t.Parallel()
 
-	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, walLoadThreshold, 30*time.Second, 5*time.Second)
-	defer restore()
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
 	copyTemplate(t, path)
 
-	s, err := sqlite.Open(ctx, path)
+	s, err := sqlite.Open(
+		ctx, path,
+		sqlite.WithWALGuardForTest(20*time.Millisecond, walLoadThreshold, 30*time.Second, 5*time.Second),
+	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -140,6 +140,12 @@ func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 
 // walLoadThreshold is the guard threshold of the load test: 256 KiB.
 const walLoadThreshold = 1 << 18
+
+// walGuardDisabledForTest opens a store whose guard never truncates: the
+// threshold is past any log size, so the log grows and only the test reads it.
+func walGuardDisabledForTest() sqlite.Option {
+	return sqlite.WithWALGuardForTest(20*time.Millisecond, 1<<62, 30*time.Second, 5*time.Second)
+}
 
 // walGuardWaitCap bounds one pause of waitForGuard. A guard that works
 // reaches the instant with no readers within some ticks of 20 ms, also on a
@@ -336,9 +342,6 @@ func TestWALPragmas(t *testing.T) {
 func TestBackupWithLargeWAL(t *testing.T) {
 	t.Parallel()
 
-	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, 1<<62, 30*time.Second, 5*time.Second)
-	defer restore()
-
 	ctx := t.Context()
 	dir := t.TempDir()
 
@@ -405,7 +408,7 @@ func openWALBackupSource(ctx context.Context, t *testing.T, dir string) walBacku
 
 	copyTemplate(t, path)
 
-	src, err := sqlite.Open(ctx, path)
+	src, err := sqlite.Open(ctx, path, walGuardDisabledForTest())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -485,7 +488,7 @@ func importWALBackup(ctx context.Context, t *testing.T, dir string, bk walBackup
 
 	copyTemplate(t, dstPath)
 
-	dst, err := sqlite.Open(ctx, dstPath)
+	dst, err := sqlite.Open(ctx, dstPath, walGuardDisabledForTest())
 	if err != nil {
 		t.Fatalf("open restore destination: %v", err)
 	}
@@ -685,13 +688,13 @@ func TestWALGuardBusyWritesSucceed(t *testing.T) {
 
 	const threshold = int64(1 << 16)
 
-	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, threshold, 30*time.Second, 320*time.Millisecond)
-	defer restore()
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
-	s, ns := openWALBusyStore(ctx, t, path, nil)
+	s, ns := openWALBusyStore(
+		ctx, t, path,
+		sqlite.WithWALGuardForTest(20*time.Millisecond, threshold, 30*time.Second, 320*time.Millisecond),
+	)
 
 	raw, tx := holdWALReader(ctx, t, path)
 
@@ -735,13 +738,13 @@ func TestWALGuardBusySlowAttemptsCapped(t *testing.T) {
 
 	const threshold = int64(1 << 16)
 
-	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, threshold, 30*time.Second, 320*time.Millisecond)
-	defer restore()
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
-	s, ns := openWALBusyStore(ctx, t, path, nil)
+	s, ns := openWALBusyStore(
+		ctx, t, path,
+		sqlite.WithWALGuardForTest(20*time.Millisecond, threshold, 30*time.Second, 320*time.Millisecond),
+	)
 
 	raw, tx := holdWALReader(ctx, t, path)
 
@@ -759,9 +762,9 @@ func TestWALGuardBusySlowAttemptsCapped(t *testing.T) {
 		prefix:    "slowcap",
 	})
 
-	waitForFailedTicks(ctx, t, 3, 10*time.Second)
+	waitForFailedTicks(ctx, t, s, 3, 10*time.Second)
 
-	requireBusyTickSlowCapped(t)
+	requireBusyTickSlowCapped(t, s)
 
 	if rbErr := tx.Rollback(); rbErr != nil {
 		t.Fatalf("roll back read transaction: %v", rbErr)
@@ -783,13 +786,10 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 	const base = 20 * time.Millisecond
 	const backoffCap = 160 * time.Millisecond
 
-	restore := sqlite.SetWALGuardForTest(base, threshold, 30*time.Second, backoffCap)
-	defer restore()
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
-	s, ns := openWALBusyStore(ctx, t, path, nil)
+	s, ns := openWALBusyStore(ctx, t, path, sqlite.WithWALGuardForTest(base, threshold, 30*time.Second, backoffCap))
 
 	raw, tx := holdWALReader(ctx, t, path)
 
@@ -810,7 +810,7 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 	// After the writes, each tick meets only the held reader: each tick is
 	// slow, so the wait doubles to the cap within 4 ticks.
 	waitForStoreTicks(ctx, t, storeTickWait{
-		path:    path,
+		store:   s,
 		what:    "a failed tick after a wait of the backoff cap",
 		timeout: 15 * time.Second,
 		done: func(ticks []sqlite.WALGuardTick) bool {
@@ -820,7 +820,7 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 		},
 	})
 
-	first := storeTicks(t, path)
+	first := storeTicks(t, s)
 
 	requireBackoffRule(t, first, base, backoffCap)
 	requireFirstFailedWait(t, failedTicks(first), base, "first busy period")
@@ -834,7 +834,7 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 	// the file drops at checkpoint time but the tick records just after, so
 	// file polling can return without an observable success.
 	waitForStoreTicks(ctx, t, storeTickWait{
-		path:    path,
+		store:   s,
 		what:    "a successful tick after the reader ended",
 		timeout: 10 * time.Second,
 		done: func(ticks []sqlite.WALGuardTick) bool {
@@ -846,7 +846,7 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 
 	t.Logf("write-ahead log size = %d bytes after the reader ended", fileSizes(t, path).wal)
 
-	before := len(storeTicks(t, path))
+	before := len(storeTicks(t, s))
 
 	pinned := pinWALReader(ctx, t, raw)
 
@@ -859,7 +859,7 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 	})
 
 	waitForStoreTicks(ctx, t, storeTickWait{
-		path:    path,
+		store:   s,
 		what:    "2 failed ticks in the second busy period",
 		timeout: 15 * time.Second,
 		done: func(ticks []sqlite.WALGuardTick) bool {
@@ -867,7 +867,7 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 		},
 	})
 
-	all := storeTicks(t, path)
+	all := storeTicks(t, s)
 
 	requireBackoffRule(t, all, base, backoffCap)
 	requireFirstFailedWait(t, failedTicks(all[min(before, len(all)):]), base, "second busy period")
@@ -877,22 +877,71 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 	}
 }
 
+// TestWALGuardSettingsBelongToStore opens two stores in one test binary with
+// different guard settings. The tuned store has a low threshold and ticks past
+// it; the other store has its guard disabled and records no tick, so each
+// store keeps its own settings and changes no other store.
+func TestWALGuardSettingsBelongToStore(t *testing.T) {
+	t.Parallel()
+
+	const threshold = int64(1 << 16)
+
+	ctx := t.Context()
+	tunedPath := filepath.Join(t.TempDir(), "tuned.db")
+	otherPath := filepath.Join(t.TempDir(), "other.db")
+
+	tuned, tunedNS := openWALBusyStore(
+		ctx, t, tunedPath,
+		sqlite.WithWALGuardForTest(20*time.Millisecond, threshold, 30*time.Second, 320*time.Millisecond),
+	)
+	other, otherNS := openWALBusyStore(ctx, t, otherPath, walGuardDisabledForTest())
+
+	writeStacksPastThreshold(ctx, t, walWriteJob{
+		store:     other,
+		ns:        otherNS,
+		path:      otherPath,
+		threshold: threshold,
+		prefix:    "other",
+	})
+
+	writeStacksPastThreshold(ctx, t, walWriteJob{
+		store:     tuned,
+		ns:        tunedNS,
+		path:      tunedPath,
+		threshold: threshold,
+		prefix:    "tuned",
+	})
+
+	waitForStoreTicks(ctx, t, storeTickWait{
+		store:   tuned,
+		what:    "a guard tick of the tuned store",
+		timeout: 10 * time.Second,
+		done: func(ticks []sqlite.WALGuardTick) bool {
+			return len(ticks) > 0
+		},
+	})
+
+	if got := storeTicks(t, other); len(got) != 0 {
+		t.Fatalf("guard ticks of the store with the guard disabled = %d, want none", len(got))
+	}
+}
+
 // waitForFailedTicks polls the test hook until it holds at least want failed
 // guard ticks or timeout passes.
-func waitForFailedTicks(ctx context.Context, t *testing.T, want int, timeout time.Duration) {
+func waitForFailedTicks(ctx context.Context, t *testing.T, s *sqlite.Store, want int, timeout time.Duration) {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
 
 	for {
-		if got := len(failedTicks(sqlite.WALGuardTicksForTest())); got >= want {
+		if got := len(failedTicks(sqlite.WALGuardTicksForTest(s))); got >= want {
 			return
 		}
 
 		if time.Now().After(deadline) {
 			t.Fatalf(
 				"failed guard ticks = %d after %s, want %d",
-				len(failedTicks(sqlite.WALGuardTicksForTest())),
+				len(failedTicks(sqlite.WALGuardTicksForTest(s))),
 				timeout,
 				want,
 			)
@@ -909,52 +958,38 @@ func waitForFailedTicks(ctx context.Context, t *testing.T, want int, timeout tim
 	}
 }
 
-// storeTicks returns the guard ticks of the store at path in order. Other
-// tests open stores in parallel, and their guards record in the same hook
-// buffer, so a test reads only the ticks of its own store.
-func storeTicks(t *testing.T, path string) []sqlite.WALGuardTick {
+// storeTicks returns the guard ticks of s in order. Each store keeps its own
+// tick buffer, so a test reads only the ticks of the store it opened.
+func storeTicks(t *testing.T, s *sqlite.Store) []sqlite.WALGuardTick {
 	t.Helper()
 
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		t.Fatalf("resolve database path: %v", err)
-	}
-
-	out := []sqlite.WALGuardTick{}
-
-	for _, tick := range sqlite.WALGuardTicksForTest() {
-		if tick.Path == abs {
-			out = append(out, tick)
-		}
-	}
-
-	return out
+	return sqlite.WALGuardTicksForTest(s)
 }
 
-// storeTickWait holds one poll of the guard ticks of one store: the database
-// path, the condition that ends the poll, a description of the condition for
-// the failure message, and the time limit.
+// storeTickWait holds one poll of the guard ticks of one store: the store,
+// the condition that ends the poll, a description of the condition for the
+// failure message, and the time limit.
 type storeTickWait struct {
-	path    string
+	store   *sqlite.Store
 	what    string
 	timeout time.Duration
 	done    func(ticks []sqlite.WALGuardTick) bool
 }
 
-// waitForStoreTicks polls the test hook until the ticks of the store at
-// w.path satisfy w.done, or w.timeout passes.
+// waitForStoreTicks polls the test hook until the ticks of w.store satisfy
+// w.done, or w.timeout passes.
 func waitForStoreTicks(ctx context.Context, t *testing.T, w storeTickWait) {
 	t.Helper()
 
 	deadline := time.Now().Add(w.timeout)
 
 	for {
-		if w.done(storeTicks(t, w.path)) {
+		if w.done(storeTicks(t, w.store)) {
 			return
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("no %s after %s: %d guard ticks of the store", w.what, w.timeout, len(storeTicks(t, w.path)))
+			t.Fatalf("no %s after %s: %d guard ticks of the store", w.what, w.timeout, len(storeTicks(t, w.store)))
 		}
 
 		timer := time.NewTimer(10 * time.Millisecond)
@@ -1050,13 +1085,13 @@ func TestWALGuardBusyWritesStayFast(t *testing.T) {
 
 	const threshold = int64(1 << 16)
 
-	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, threshold, 30*time.Second, 320*time.Millisecond)
-	defer restore()
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
-	s, ns := openWALBusyStore(ctx, t, path, nil)
+	s, ns := openWALBusyStore(
+		ctx, t, path,
+		sqlite.WithWALGuardForTest(20*time.Millisecond, threshold, 30*time.Second, 320*time.Millisecond),
+	)
 
 	const window = 1 * time.Second
 
@@ -1162,7 +1197,7 @@ func TestWALGuardBusyWritesStayFast(t *testing.T) {
 		)
 	}
 
-	requireBusyTickSlowCapped(t)
+	requireBusyTickSlowCapped(t, s)
 
 	if rbErr := tx.Rollback(); rbErr != nil {
 		t.Fatalf("roll back read transaction: %v", rbErr)
@@ -1245,10 +1280,10 @@ func writeStacksForWindow(ctx context.Context, t *testing.T, job walTimedWrites)
 // while busy and every failed tick tried at most 2 slow attempts and 20
 // attempts in total. The counts come from the test hook, so the bound on the
 // writer stall of one tick holds without depending on machine timing.
-func requireBusyTickSlowCapped(t *testing.T) {
+func requireBusyTickSlowCapped(t *testing.T, s *sqlite.Store) {
 	t.Helper()
 
-	failed := failedTicks(sqlite.WALGuardTicksForTest())
+	failed := failedTicks(sqlite.WALGuardTicksForTest(s))
 	if len(failed) == 0 {
 		t.Fatal("no failed guard tick while the checkpoint stayed busy, want at least one")
 	}
@@ -1276,15 +1311,16 @@ func TestWALGuardBusyWarnsOnce(t *testing.T) {
 	const threshold = int64(1 << 16)
 	const warnAfter = 300 * time.Millisecond
 
-	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, threshold, warnAfter, 320*time.Millisecond)
-	defer restore()
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
 	recorder := &walLogRecorder{mu: sync.Mutex{}, records: nil}
 
-	s, ns := openWALBusyStore(ctx, t, path, slog.New(recorder))
+	s, ns := openWALBusyStore(
+		ctx, t, path,
+		sqlite.WithWALGuardForTest(20*time.Millisecond, threshold, warnAfter, 320*time.Millisecond),
+		sqlite.WithLogger(slog.New(recorder)),
+	)
 
 	raw, tx := holdWALReader(ctx, t, path)
 
@@ -1352,22 +1388,13 @@ func TestWALGuardBusyWarnsOnce(t *testing.T) {
 // from the migrated template, so only the first test of the binary runs
 // every migration.
 func openWALBusyStore(
-	ctx context.Context, t *testing.T, path string, logger *slog.Logger,
+	ctx context.Context, t *testing.T, path string, opts ...sqlite.Option,
 ) (*sqlite.Store, namespace.Namespace) {
 	t.Helper()
 
 	copyTemplate(t, path)
 
-	var s *sqlite.Store
-
-	var err error
-
-	if logger == nil {
-		s, err = sqlite.Open(ctx, path)
-	} else {
-		s, err = sqlite.Open(ctx, path, sqlite.WithLogger(logger))
-	}
-
+	s, err := sqlite.Open(ctx, path, opts...)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

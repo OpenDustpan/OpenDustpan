@@ -86,7 +86,7 @@ When a step presents a job token, the server SHALL allow it only on the state ro
 
 #### Scenario: Recreated unit
 - **WHEN** the unit was removed and made again with the same name
-- **THEN** the old token answers 403
+- **THEN** the old token answers 401 with the message "job token ended", because the token is bound to the stable unit ID, that unit is gone, and so the token has ended
 
 #### Scenario: REST API
 - **WHEN** a step uses its token on the REST API

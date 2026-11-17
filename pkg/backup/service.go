@@ -945,6 +945,9 @@ func (s *Service) stepFinish(ctx context.Context, sc durable.StepContext) ([]byt
 		return nil, durable.Permanent(fmt.Errorf("finish backup %s: %w", in.ID, ErrNotRunning))
 	}
 
+	// Defense in depth: the store allowlist and the compare of the finish commit
+	// refuse an invalid attempt too. This check stays so that the step never
+	// builds a key from an empty or unparsable attempt of the row.
 	prefix, err := newAttemptPrefix(in.ID, row.Attempt)
 	if err != nil {
 		return nil, s.failRow(ctx, sc.Fence, in.ID, fmt.Errorf("backup %s: %w", in.ID, err))

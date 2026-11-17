@@ -29,6 +29,9 @@ import (
 // errState is the error of a setting that cannot be read.
 var errState = errors.New("the state cannot be read")
 
+// errSubjectLocked is the refusal of a gate that finds a locked subject.
+var errSubjectLocked = errors.New("the subject is locked")
+
 // Passwords of the tests.
 const (
 	goodPassword  = "amber-river-north-62-candle"
@@ -414,6 +417,48 @@ func TestTheDisabledRule(t *testing.T) {
 			}
 		})
 	}
+}
+
+// refusingGate is a session.BindGate that stops the bind of the subject.
+type refusingGate struct{ err error }
+
+// BeforeBind implements session.BindGate.
+func (g refusingGate) BeforeBind(context.Context, string) error { return g.err }
+
+// TestALockedSubjectNeverReachesTheBind is layer 5 for the lockout: a gate
+// that refuses the subject stops the sign-in before the password of the
+// person goes to the directory.
+func TestALockedSubjectNeverReachesTheBind(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t)
+	s.addUser(t, testPerson("alice"), goodPassword, nil)
+	m := newMethod(t, s.configWith(func(*ldapauth.Config) {}))
+
+	before := countBindsAs(s, "alice")
+
+	a, err := m.Verify(t.Context(), credentials("alice", goodPassword), refusingGate{err: errSubjectLocked})
+	if !errors.Is(err, errSubjectLocked) || a.Subject != "" {
+		t.Fatalf("Verify() = %+v, %v, want the error of the gate", a, err)
+	}
+
+	if after := countBindsAs(s, "alice"); after != before {
+		t.Fatalf("a refused subject sent %d binds as the person, want none", after-before)
+	}
+}
+
+// countBindsAs returns the count of the binds of the directory as the person
+// with the user name name.
+func countBindsAs(s setup, name string) int {
+	count := 0
+
+	for _, dn := range s.dir.Binds() {
+		if dn == ldaptest.UserDN(name) {
+			count++
+		}
+	}
+
+	return count
 }
 
 // TestAnEmptyPasswordNeverReachesTheBind is layer 5 for the bind: the bind

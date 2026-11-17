@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/egress"
 )
@@ -24,7 +25,8 @@ func defaultLDAP() ldapFlags {
 		userNameAttribute: "", emailAttribute: "", nameAttribute: "", subject: "entryUUID",
 		disabledAttribute: "", disabledMask: "", disabledValues: "", groups: "off", groupBaseDN: "",
 		groupFilter: "", groupMemberAttribute: "", groupMemberOfAttribute: "", groupNameAttribute: "",
-		startTLS: false, noAutoCreate: false,
+		subjectFailureLimit: authgate.DefaultSubjectFailureLimit, startTLS: false, noAutoCreate: false,
+		subjectFailureLimitSet: false,
 	}
 }
 
@@ -118,6 +120,26 @@ func TestLDAPOptionsRefuseBadSettings(t *testing.T) {
 		},
 		{"a mask that is not a number", func(l *ldapFlags) { l.disabledMask = "two" }, withPassword, 0, errLDAPMask},
 		{"a mask of zero", func(l *ldapFlags) { l.disabledMask = "0" }, withPassword, 0, errLDAPMask},
+		{
+			"a subject failure limit of zero", func(l *ldapFlags) { l.subjectFailureLimit = 0 },
+			withPassword, 0, errLDAPSubjectFailureLimit,
+		},
+		{
+			"a subject failure limit below the minimum", func(l *ldapFlags) { l.subjectFailureLimit = -1 },
+			withPassword, 0, errLDAPSubjectFailureLimit,
+		},
+		{
+			"a subject failure limit of one", func(l *ldapFlags) { l.subjectFailureLimit = 1 },
+			withPassword, 1, nil,
+		},
+		{
+			"a subject failure limit of the maximum", func(l *ldapFlags) { l.subjectFailureLimit = 100 },
+			withPassword, 1, nil,
+		},
+		{
+			"a subject failure limit over the maximum", func(l *ldapFlags) { l.subjectFailureLimit = 101 },
+			withPassword, 0, errLDAPSubjectFailureLimit,
+		},
 		{
 			"a CA file with no certificate", func(l *ldapFlags) { l.caFile = noCert }, withPassword, 0,
 			errNoCertificates,

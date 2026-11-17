@@ -1,6 +1,11 @@
 package cli
 
-import "opendustpan.org/opendustpan/pkg/history"
+import (
+	"strconv"
+
+	"opendustpan.org/opendustpan/internal/authgate"
+	"opendustpan.org/opendustpan/pkg/history"
+)
 
 // retentionDefault is the default of the retention settings: 400 days. A
 // test proves it equals history.DefaultRetention.
@@ -562,6 +567,16 @@ var Settings = []*Setting{
 		"attribute that gives the subject of a person: entryUUID, objectGUID, or the name of another attribute; never the DN, uid or email (DUSTPAN_LDAP_SUBJECT)",
 		"`entryUUID`. Use `objectGUID` for Active Directory. The subject must not change when a person changes a name or an email.",
 	).WithFile("ldap.subject"),
+	intSetting(
+		"ldap-subject-failure-limit",
+		"DUSTPAN_LDAP_SUBJECT_FAILURE_LIMIT",
+		strconv.Itoa(authgate.DefaultSubjectFailureLimit),
+		"limit of failed LDAP sign-ins of one person from every source before the server locks the person: 1 to 100 (DUSTPAN_LDAP_SUBJECT_FAILURE_LIMIT)",
+		"`"+strconv.Itoa(authgate.DefaultSubjectFailureLimit)+"`. A value from "+
+			strconv.Itoa(authgate.MinSubjectFailureLimit)+" to "+strconv.Itoa(authgate.MaxSubjectFailureLimit)+
+			". The count of one person from one source locks the person after 10 failures. The count from every "+
+			"source locks the person after this limit.",
+	).WithFile("ldap.subjectFailureLimit"),
 	stringSetting(
 		"ldap-disabled-attribute",
 		"DUSTPAN_LDAP_DISABLED_ATTRIBUTE",

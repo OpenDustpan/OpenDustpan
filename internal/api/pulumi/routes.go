@@ -144,7 +144,9 @@ func (h *Handler) baseRoutes() []Route {
 			// the caller itself and caller:read is the gate: every signed-in
 			// principal holds it. The organizations list holds the readable
 			// namespaces (ADR 18): the handler filters them with the
-			// Authorizer for namespace:read on each namespace.
+			// Authorizer for namespace:read on each namespace. A holder of a
+			// grant on a collection or on a unit in the namespace also sees
+			// that namespace.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCallerRead},
 			Resolve: resolveCurrentUser,
@@ -157,7 +159,8 @@ func (h *Handler) baseRoutes() []Route {
 			// The default organization is the only readable namespace, so its
 			// object is the caller itself, caller:read is the gate, and the
 			// handler filters with the Authorizer for namespace:read on each
-			// namespace.
+			// namespace. A holder of a grant on a collection or on a unit in
+			// the namespace also sees that namespace.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCallerRead},
 			Resolve: resolveCurrentUser,
@@ -169,10 +172,11 @@ func (h *Handler) baseRoutes() []Route {
 			Path:   "/api/user/stacks",
 			// With an organization the object is that namespace. Without one
 			// the object is the caller itself and the handler lists every
-			// readable namespace, filtered with the Authorizer. Both forms
-			// pass the gate caller:read. With an organization, the handler
-			// then authorizes unit:read and namespace:read on the namespace
-			// before it reads anything.
+			// readable namespace, filtered with the Authorizer. A holder of a
+			// grant on a collection or on a unit in the namespace also sees
+			// that namespace. Both forms pass the gate caller:read. With an
+			// organization, the handler then authorizes unit:read and
+			// namespace:read on the namespace before it reads anything.
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCallerRead},
 			Resolve: resolveListStacks,

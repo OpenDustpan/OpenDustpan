@@ -20,7 +20,7 @@ workflow and blocks the merge queue.
   chart: exit code = 141, want 1", and the output lacks "refuses to
   overwrite": the script ended at its first line, before the refusal.
 - The step "Push the chart as an OCI artifact to the forge registry"
-  (.github/workflows/release.yml:212) starts with
+  (line 212 of the release workflow file) starts with
   `echo "$GHCR_TOKEN" | helm registry login ghcr.io --username "$GHCR_ACTOR" --password-stdin`
   (:218). The real `helm` reads the token from stdin before it exits.
 - The test runs the step with `bash -eo pipefail` (`runWorkflowScript`,
@@ -30,7 +30,7 @@ workflow and blocks the merge queue.
   SIGPIPE and exits 141, `pipefail` makes 141 the status of the pipeline, and
   `-e` ends the script with 141.
 - The stub `docker()` has the same fault for `docker login ... --password-stdin`
-  (release.yml:92 and :102). There the pipeline is inside `if !`, so a
+  (lines 92 and 102 of the same file). There the pipeline is inside `if !`, so a
   SIGPIPE takes the branch of a failed login at random, and a test of that
   step can see "authentication denied" behavior with no `STUB_LOGIN_FAIL`.
 - The workflow is correct: each real tool reads its `--password-stdin`. The
@@ -42,7 +42,7 @@ workflow and blocks the merge queue.
   `helm registry login` branch and the `docker login` branch read and
   discard stdin (`cat >/dev/null`) before they return, as the real tools
   read the password. A stub that fails the login reads stdin too.
-- No change to `.github/workflows/release.yml`, and no change to an
+- No change to the release workflow file, and no change to an
   expected exit code or output of a test.
 
 ## Check
@@ -52,7 +52,7 @@ workflow and blocks the merge queue.
 ## ADR check
 
 No ADR is touched: the change edits a test stub only. `rg -n "release
-workflow|release.yml" docs/adr` finds no decision on the test stubs.
+workflow" docs/adr` finds no decision on the test stubs.
 
 ## Open questions
 

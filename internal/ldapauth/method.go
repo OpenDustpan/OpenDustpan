@@ -220,6 +220,11 @@ func (m *Method) signIn(ctx context.Context, c session.Credentials, gate session
 	}
 
 	if gerr := gate.BeforeBind(ctx, subject); gerr != nil {
+		// A refusal of the gate costs the same round trips as an unknown user
+		// name and as a wrong password: a failed bind follows the search. So
+		// the time of the answer does not tell that a locked person exists.
+		m.dummyBind(ctx, conn)
+
 		return none, fmt.Errorf("the bind gate stopped the bind: %w", gerr)
 	}
 

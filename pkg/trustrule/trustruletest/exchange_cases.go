@@ -25,7 +25,7 @@ func exchangeCases() []suiteCase {
 	}
 }
 
-// trustToken returns a new token of the kind trust for principalID, and the
+// trustToken returns a new token of the kind jwt-exchange for principalID, and the
 // digest of a new secret.
 func trustToken(principalID string) (accesstoken.Token, accesstoken.Digest) {
 	at := time.UnixMilli(testTimeMs).UTC()
@@ -33,7 +33,7 @@ func trustToken(principalID string) (accesstoken.Token, accesstoken.Digest) {
 	t := accesstoken.Token{
 		CreatedAt: at, ExpiresAt: at.Add(time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
 		DisabledAt: time.Time{}, ID: ident.NewID("tok-"), PrincipalID: principalID, Name: "trust rule",
-		Kind: accesstoken.KindTrust, ReplacedBy: "", CreatedBy: "trust-rule",
+		Kind: accesstoken.KindJWTExchange, ReplacedBy: "", CreatedBy: "trust-rule",
 	}
 
 	var d accesstoken.Digest
@@ -90,7 +90,7 @@ func testExchangeStores(t *testing.T, h Harness) {
 	}
 
 	got, ok := h.Token(t, x.Token.ID)
-	if !ok || got.Kind != accesstoken.KindTrust || got.PrincipalID != r.PrincipalID ||
+	if !ok || got.Kind != accesstoken.KindJWTExchange || got.PrincipalID != r.PrincipalID ||
 		!got.ExpiresAt.Equal(x.Token.ExpiresAt) {
 		t.Fatalf("stored token = %+v, %v; want %+v", got, ok, x.Token)
 	}

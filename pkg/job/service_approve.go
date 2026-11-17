@@ -366,12 +366,17 @@ func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, as 
 		c.Event = EventApprovalRecorded
 	}
 
+	e, err := s.approvalEntry(j, a, ap, as, c.Event)
+	if err != nil {
+		return Job{}, fmt.Errorf("record approval: %w", err)
+	}
+
 	fence, err := s.fences.Fence(ctx, j.Spec.Unit.Namespace())
 	if err != nil {
 		return Job{}, fmt.Errorf("fence of %s: %w", j.Spec.Unit.Namespace(), err)
 	}
 
-	stored, err := s.store.Apply(ctx, c, fence, []audit.Entry{s.approvalEntry(j, a, ap, as, c.Event)})
+	stored, err := s.store.Apply(ctx, c, fence, []audit.Entry{e})
 	if err != nil {
 		return Job{}, fmt.Errorf("record approval: %w", err)
 	}
@@ -380,9 +385,12 @@ func (s *service) record(ctx context.Context, j *Job, a Actor, ap *Approval, as 
 }
 
 // approvalEntry returns the audit entry of a verdict: who, on which unit, the
-// job, the verdict, the phase, the event that followed, and the agent and the
-// authentication when there are any. The comment is the reason.
-func (s *service) approvalEntry(j *Job, a Actor, ap *Approval, as recordAs, ev Event) audit.Entry {
+// job, the verdict, the phase, the event that followed, and the agent block
+// and the authentication when there are any. The comment is the reason. An
+// agent reference that the block cannot hold fails here, before any write.
+func (s *service) approvalEntry(
+	j *Job, a Actor, ap *Approval, as recordAs, ev Event,
+) (audit.Entry, error) {
 	changes := []audit.Change{
 		{Key: "job", Old: nil, New: string(j.ID), Layer: "", TakesEffect: ""},
 		{Key: "verdict", Old: nil, New: string(ap.Verdict), Layer: "", TakesEffect: ""},
@@ -391,11 +399,16 @@ func (s *service) approvalEntry(j *Job, a Actor, ap *Approval, as recordAs, ev E
 		{Key: "event", Old: nil, New: string(ev), Layer: "", TakesEffect: ""},
 	}
 
-	if a.Agent != "" {
-		changes = append(
-			changes,
-			audit.Change{Key: "agent", Old: nil, New: string(a.Agent), Layer: "", TakesEffect: ""},
-		)
+	// Defense in depth: the Validate check of the audit store refuses the
+	// same values at the append. This check stays so that a malformed agent
+	// reference fails the verdict before the fence and before any write, and
+	// does not rely on the store.
+	origin, err := audit.NewOrigin(audit.OriginArgs{
+		Run: agentRunOf(a.Agent, audit.ChannelAPI), Session: agentSessionOf(a.Agent, audit.ChannelAPI),
+		Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "", DelegationID: "",
+	})
+	if err != nil {
+		return audit.Entry{}, err
 	}
 
 	if ap.Plan != nil {
@@ -413,6 +426,6 @@ func (s *service) approvalEntry(j *Job, a Actor, ap *Approval, as recordAs, ev E
 		Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: j.Spec.Unit.UnitID(),
 		PrevHash: "", Hash: "", Sequence: 0, FenceVersion: 0, PrincipalKind: string(a.Principal.Kind), JobID: "",
 		Reason: ap.Comment,
-		Origin: nil,
-	}
+		Origin: origin,
+	}, nil
 }

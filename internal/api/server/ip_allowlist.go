@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -231,7 +232,7 @@ func classifyIPAllowlist(err error) (failure, bool) {
 	case errors.Is(err, errIPAllowlistBody):
 		return fail(http.StatusBadRequest, errIPAllowlistBody.Error()), true
 	case errors.Is(err, ipallow.ErrInvalidList):
-		return fail(http.StatusBadRequest, err.Error()), true
+		return failCoded(http.StatusBadRequest, err.Error(), errcode.InvalidList(err)), true
 	case errors.Is(err, ipallow.ErrDisabled):
 		return fail(http.StatusConflict,
 			"IP allowlists are off for this installation: start the server with --ip-allowlists"), true

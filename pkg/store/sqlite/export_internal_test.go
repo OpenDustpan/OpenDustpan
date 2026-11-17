@@ -1,9 +1,9 @@
 package sqlite
 
 // Test hook for the write-ahead log guard: it makes the guard interval,
-// threshold, warn period and backoff cap small, so black-box tests force
-// checkpoints, backoff and warnings without writing tens of megabytes or
-// waiting 30 s.
+// threshold, warn period and backoff cap of one store small, so black-box
+// tests force checkpoints, backoff and warnings without writing tens of
+// megabytes or waiting 30 s.
 // This file compiles into the test binary only: nothing here ships in
 // production. The export_internal_test.go name keeps the white-box package
 // under the testpackage exception in .golangci.yml; the conformance tests
@@ -12,57 +12,26 @@ package sqlite
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 )
 
-// walHookMu serializes the tests that tune the guard: SetWALGuardForTest
-// holds it from the swap until the returned restore runs, so the values of
-// one test never leak into another. This file compiles into the test binary
-// only: nothing here ships in production.
-//
-//nolint:gochecknoglobals // The tuning tests share one lock; each holds it only for its own body.
-var walHookMu sync.Mutex
-
-// SetWALGuardForTest replaces the guard interval, threshold, warn period and
-// backoff cap and returns a function that restores the previous values. It
-// also starts guard tick collection for the test: WALGuardTicksForTest
-// reports one entry per past-threshold tick until the restore runs.
-// Callers defer the restore, so one test never changes the guard of another.
-// The swap holds the guard lock briefly, so a ticking guard never races the
-// replacement.
-func SetWALGuardForTest(
+// WithWALGuardForTest sets the guard interval, threshold, warn period and
+// backoff cap of the store that it opens, and makes that store collect its
+// guard ticks: WALGuardTicksForTest reports one entry per past-threshold tick.
+// Other stores keep the production values, so a test that tunes its own store
+// changes no other store in the test binary.
+func WithWALGuardForTest(
 	interval time.Duration,
 	thresholdBytes int64,
 	warnAfter time.Duration,
 	maxBackoff time.Duration,
-) func() {
-	walHookMu.Lock()
-
-	walGuardMu.Lock()
-	oldInterval, oldThreshold, oldWarnAfter, oldCap := walGuardInterval, walGuardThresholdBytes, walGuardWarnAfter,
-		walGuardBackoffCap
-	walGuardInterval, walGuardThresholdBytes, walGuardWarnAfter, walGuardBackoffCap = interval, thresholdBytes,
-		warnAfter, maxBackoff
-	walGuardMu.Unlock()
-
-	walGuardTicksMu.Lock()
-	walGuardTicks = nil
-	walGuardCollect = true
-	walGuardTicksMu.Unlock()
-
-	return func() {
-		walGuardTicksMu.Lock()
-		walGuardTicks = nil
-		walGuardCollect = false
-		walGuardTicksMu.Unlock()
-
-		walGuardMu.Lock()
-		walGuardInterval, walGuardThresholdBytes, walGuardWarnAfter, walGuardBackoffCap = oldInterval, oldThreshold,
-			oldWarnAfter, oldCap
-		walGuardMu.Unlock()
-
-		walHookMu.Unlock()
+) Option {
+	return func(s *Store) {
+		s.walGuardInterval = interval
+		s.walGuardThresholdBytes = thresholdBytes
+		s.walGuardWarnAfter = warnAfter
+		s.walGuardBackoffCap = maxBackoff
+		s.walGuardCollect = true
 	}
 }
 
@@ -82,16 +51,16 @@ type WALGuardTick struct {
 	Attempts     int
 }
 
-// WALGuardTicksForTest returns one entry per past-threshold guard tick since
-// SetWALGuardForTest ran. Callers hold no hook lock: the buffer has its own
-// lock, so a ticking guard never races the read.
-func WALGuardTicksForTest() []WALGuardTick {
-	walGuardTicksMu.Lock()
-	defer walGuardTicksMu.Unlock()
+// WALGuardTicksForTest returns one entry per past-threshold guard tick of s
+// since s opened with WithWALGuardForTest. The tick buffer has its own lock,
+// so a ticking guard never races the read.
+func WALGuardTicksForTest(s *Store) []WALGuardTick {
+	s.walGuardTicksMu.Lock()
+	defer s.walGuardTicksMu.Unlock()
 
-	out := make([]WALGuardTick, 0, len(walGuardTicks))
+	out := make([]WALGuardTick, 0, len(s.walGuardTicks))
 
-	for _, tick := range walGuardTicks {
+	for _, tick := range s.walGuardTicks {
 		out = append(out, WALGuardTick{
 			Path:         tick.path,
 			At:           tick.at,

@@ -24,6 +24,13 @@ import (
 // renew a claim.
 const backupLease = 2 * time.Second
 
+// restartLease is the lease period of the test that restarts instances during
+// a backup. The test expects no expiry, so the lease must outlast a stall of
+// the test machine of several seconds: a stall of the process or of the
+// database longer than the lease margin makes the runner stop the work, as it
+// must.
+const restartLease = 10 * time.Second
+
 // takeoverDeadline is how long a takeover test waits for the survivor to
 // claim the operation and to end the backup. It only stops a test that hangs:
 // the time of a takeover on a loaded test machine says nothing about the
@@ -254,7 +261,7 @@ func TestBackupSurvivesStartOfAnotherInstance(t *testing.T) {
 
 	target := newGatedTarget(t)
 	c := servertest.StartSplit(t, splitSets(t),
-		dustpan.WithBackupTarget(target, "test"), dustpan.WithOperationLease(backupLease))
+		dustpan.WithBackupTarget(target, "test"), dustpan.WithOperationLease(restartLease))
 
 	id := startBackup(t, c, 1)
 	target.waitEntered(t, c)

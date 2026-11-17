@@ -3,7 +3,7 @@
 This guide shows how the server checks the user name and the password of a
 person at an LDAP directory, for example OpenLDAP or Active Directory. It
 gives each setting of an LDAP sign-in provider, the TLS rules, the choice
-of the subject, and the groups.
+of the subject, the lockout, and the groups.
 
 You set one LDAP provider in the configuration of the server: flags,
 environment variables or keys of the configuration file. The API cannot add
@@ -54,8 +54,10 @@ key.
 
 The list of the sign-in providers, `GET /api/server/sign-in-providers`,
 shows the provider with the source `static`, the mode `ldap` and the
-effective value of each LDAP setting. It shows `"bindPasswordSet": true`,
-never the password.
+effective value of each LDAP setting. It shows the lockout limit as
+`subjectFailureLimit`, and the layer that sets it as
+`subjectFailureLimitSource`: `flag`, `env`, `file` or `default`. It shows
+`"bindPasswordSet": true`, never the password.
 
 ## Sign in
 
@@ -126,6 +128,37 @@ The server refuses the sign-in in these cases:
   takes more than 30 seconds.
 - The entry of the person is outside the base DN.
 
+## Lockout
+
+The server counts each failed sign-in of the provider on two keys: the user
+name that the person typed, and the subject of the person when the search
+found the entry.
+
+- 10 failures in a row of one user name from one source address prefix lock
+  that pair for 30 minutes.
+- `ldap.subjectFailureLimit` failures in a row of one person from every
+  source lock the person for every source. The default is 5, and the range
+  is 1 to 100. The flag is `--ldap-subject-failure-limit`, the variable is
+  `DUSTPAN_LDAP_SUBJECT_FAILURE_LIMIT`, and the file key is
+  `ldap.subjectFailureLimit`. A value outside the range stops the start and
+  names the setting.
+- 100 failures in a row of one user name from every source lock the name
+  for every source. This count stays at 100.
+
+A later lock lasts twice as long as the one before it, up to 24 hours. After
+24 hours with no lock, the next lock lasts 30 minutes again.
+
+While a lock holds, the sign-in is refused with the same `401
+sign-in.failed` answer as a wrong password, and no password reaches the
+directory. The audit entry holds the real reason. The lock applies to the
+sign-in of the LDAP provider only. It does not lock a local user, and it does
+not change the sign-in with an OpenID Connect provider.
+
+The lockout has a risk: with the default of 5, a person who knows a user
+name can lock that person out of the LDAP sign-in from one network. An
+administrator cannot unlock the person yet. The lock ends by time: 30
+minutes for the first lock, and longer for a lock that follows.
+
 ## Settings
 
 | Setting | Flag | Example | Rule |
@@ -144,6 +177,7 @@ The server refuses the sign-in in these cases:
 | Email attribute | `--ldap-email-attribute` | `mail` | Optional. |
 | Name attribute | `--ldap-name-attribute` | `cn` | Optional. |
 | Subject | `--ldap-subject` | `entryUUID` | `entryUUID`, `objectGUID`, or an attribute that you name. |
+| Subject failure limit | `--ldap-subject-failure-limit` | `5` | 1 to 100. The count of one person from every source locks the person after this limit. See "Lockout". |
 | Disabled rule | `--ldap-disabled-attribute`, `--ldap-disabled-mask`, `--ldap-disabled-values` | `userAccountControl`, mask `2` | Optional. See "Disabled persons". |
 | Groups | `--ldap-groups` | `off` | `off`, `search` or `memberOf`. See "Groups". |
 
@@ -254,6 +288,9 @@ subject. A person that the search does not find gets the same answer as a
 wrong password, and the principal stays as it is.
 
 ## Groups
+
+The server reads the groups of a person and does not apply them: a sign-in
+changes no membership.
 
 | Groups | Settings | What the server reads |
 | --- | --- | --- |

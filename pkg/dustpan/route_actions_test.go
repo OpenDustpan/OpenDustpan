@@ -2,7 +2,9 @@ package dustpan_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -12,9 +14,21 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // publicRoutes is the one server-wide list of the routes that need no
@@ -737,4 +751,464 @@ func without(list map[string]string, pattern string) map[string]string {
 	delete(out, pattern)
 
 	return out
+}
+
+const (
+	discoveryAliceToken = "discovery-alice-token-0123456789abcdef"
+	discoveryBobToken   = "discovery-bob-token-0123456789abcdef01"
+)
+
+// discoveryServer opens a store with namespace acme, principals alice and bob,
+// collections team-a and team-b, one OpenTofu workspace in each collection,
+// and returns a server over it whose authorizer is the real access authorizer.
+// grantAlice, when not empty, is the role granted to alice on team-a.
+func discoveryServer(
+	t *testing.T, grantAlice string,
+) (*dustpan.Server, *sqlite.Store) {
+	t.Helper()
+
+	at := time.Unix(0, 0)
+	st, blobs := openDiscoveryStore(t)
+	acme := createDiscoveryNamespace(t, st, at)
+	storePrincipal(t, st, "alice")
+	storePrincipal(t, st, "bob")
+
+	teams := createDiscoveryCollections(t, st, acme, at)
+	createDiscoveryWorkspaces(t, st, acme, at, teams)
+
+	if grantAlice != "" {
+		grantDiscoveryAlice(t, st, at, teams[0], grantAlice)
+	}
+
+	srv := newDiscoveryServer(t, st, blobs, at)
+	registerServer(srv, st, at.UTC)
+
+	return srv, st
+}
+
+// openDiscoveryStore opens a SQLite store and a blob store for one discovery
+// test.
+func openDiscoveryStore(t *testing.T) (*sqlite.Store, *fs.Store) {
+	t.Helper()
+
+	st, openErr := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if openErr != nil {
+		t.Fatalf("open store: %v", openErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	blobs, blobErr := fs.Open(filepath.Join(t.TempDir(), "blobs"))
+	if blobErr != nil {
+		t.Fatalf("open blob store: %v", blobErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	return st, blobs
+}
+
+// createDiscoveryNamespace stores the namespace acme and returns it.
+func createDiscoveryNamespace(t *testing.T, st *sqlite.Store, at time.Time) namespace.Namespace {
+	t.Helper()
+
+	acme := namespace.Namespace{
+		ID:                  namespace.NewID(),
+		CreatedAt:           at,
+		Name:                "acme",
+		PrimaryInstallation: installationName,
+		FailoverVersion:     1,
+		Overrides:           namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	createErr := st.CreateNamespace(t.Context(), acme)
+	if createErr != nil {
+		t.Fatalf("create namespace: %v", createErr)
+	}
+
+	return acme
+}
+
+// discoveryCollectionEntry returns an audit entry in acme for object.
+func discoveryCollectionEntry(at time.Time, object string) audit.Entry {
+	e := storetest.ServerChange(at, object)
+	e.Namespace = namespace.Name("acme")
+
+	return e
+}
+
+// createDiscoveryCollections stores team-a and team-b in acme and returns them
+// as team-a then team-b.
+func createDiscoveryCollections(
+	t *testing.T,
+	st *sqlite.Store,
+	acme namespace.Namespace,
+	at time.Time,
+) [2]collection.Collection {
+	t.Helper()
+
+	teamA := collection.Collection{
+		CreatedAt: at,
+		ID:        ident.NewID("col-"),
+		Ref:       collection.Ref{Namespace: "acme", Name: collection.Name("team-a")},
+	}
+	teamB := collection.Collection{
+		CreatedAt: at,
+		ID:        ident.NewID("col-"),
+		Ref:       collection.Ref{Namespace: "acme", Name: collection.Name("team-b")},
+	}
+
+	createAErr := st.CreateCollection(t.Context(), teamA, acme.Fence(), discoveryCollectionEntry(at, "a"))
+	if createAErr != nil {
+		t.Fatalf("create team-a: %v", createAErr)
+	}
+
+	createBErr := st.CreateCollection(t.Context(), teamB, acme.Fence(), discoveryCollectionEntry(at, "b"))
+	if createBErr != nil {
+		t.Fatalf("create team-b: %v", createBErr)
+	}
+
+	return [2]collection.Collection{teamA, teamB}
+}
+
+// createDiscoveryWorkspaces stores one workspace in each collection, placed at
+// creation. teams holds team-a then team-b.
+func createDiscoveryWorkspaces(
+	t *testing.T,
+	st *sqlite.Store,
+	acme namespace.Namespace,
+	at time.Time,
+	teams [2]collection.Collection,
+) {
+	t.Helper()
+
+	names := [2]string{"a", "b"}
+
+	for i := range names {
+		wname, parseErr := workspace.ParseName(names[i])
+		if parseErr != nil {
+			t.Fatalf("parse workspace name: %v", parseErr)
+		}
+
+		w := workspace.Workspace{
+			CreatedAt:   at,
+			UpdatedAt:   at,
+			Lock:        workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+			LastRelease: workspace.NoRelease(),
+			ID:          workspace.ID(ident.NewID("ws-")),
+			Ref:         workspace.Ref{Namespace: "acme", Name: wname},
+			NamespaceID: "",
+			Revision:    1,
+			Overrides:   namespace.Overrides{Forced: false, Unlocked: false},
+			Origin:      identity.StateOrigin{Job: "", Commit: ""},
+		}
+
+		placementEntry := discoveryCollectionEntry(at, "workspace:"+names[i])
+
+		createErr := st.CreateWorkspacePlaced(t.Context(), w, workspace.Placement{
+			Collection:   teams[i].Ref,
+			CollectionID: teams[i].ID,
+			Entry:        placementEntry,
+		}, acme.Fence())
+		if createErr != nil {
+			t.Fatalf("create workspace %s: %v", names[i], createErr)
+		}
+	}
+}
+
+// grantDiscoveryAlice grants role on team-a to alice.
+func grantDiscoveryAlice(
+	t *testing.T, st *sqlite.Store, at time.Time, teamA collection.Collection, role string,
+) {
+	t.Helper()
+
+	obj := identity.CollectionObject("acme", "team-a").WithCollectionID(teamA.ID)
+
+	fence, e := storetest.GrantWrite(t, st, obj, at, "grant:test")
+
+	g := access.Grant{
+		CreatedAt: at,
+		Condition: nil,
+		Object:    obj,
+		ID:        "grt-alice-" + role,
+		Role:      role,
+		CreatedBy: "admin",
+		Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: "prn-alice"},
+	}
+
+	createErr := st.CreateGrant(t.Context(), g, fence, e, nil)
+	if createErr != nil {
+		t.Fatalf("create grant of %q on %q: %v", role, obj.String(), createErr)
+	}
+}
+
+// discoveryPrincipal returns the test principal with subject.
+func discoveryPrincipal(subject string) identity.Principal {
+	return identity.Principal{
+		Subject:                subject,
+		DisplayName:            subject,
+		Admin:                  false,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Kind:                   "",
+		Credential:             "",
+		JobID:                  "",
+	}
+}
+
+// newDiscoveryServer returns a server over st and blobs with test principals
+// alice and bob.
+func newDiscoveryServer(t *testing.T, st *sqlite.Store, blobs *fs.Store, at time.Time) *dustpan.Server {
+	t.Helper()
+
+	tokens := map[string]identity.Principal{
+		discoveryAliceToken: discoveryPrincipal("alice"),
+		discoveryBobToken:   discoveryPrincipal("bob"),
+	}
+
+	wrapper, wrapperErr := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if wrapperErr != nil {
+		t.Fatalf("key wrapper: %v", wrapperErr)
+	}
+
+	srv, serverErr := dustpan.NewServer(append(signInOptions(t, st),
+		dustpan.WithInstallation(installationName),
+		dustpan.WithNamespaceStore(st),
+		dustpan.WithStackStore(st),
+		dustpan.WithUpdateStore(st),
+		dustpan.WithCheckpointStore(st),
+		dustpan.WithEventStore(st),
+		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(wrapper),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
+		dustpan.WithAuthenticator(tokenMapAuthenticator{tokens: tokens}),
+		dustpan.WithClock(at.UTC),
+	)...)
+	if serverErr != nil {
+		t.Fatalf("new server: %v", serverErr)
+	}
+
+	return srv
+}
+
+// discoveryTFEGet serves one TFE request with a Bearer token through the
+// started handler and answers its status and body.
+func discoveryTFEGet(t *testing.T, srv *dustpan.Server, token, path string) (int, string) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	startedHandler(t, srv).ServeHTTP(rec, req)
+
+	body, err := io.ReadAll(rec.Result().Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	return rec.Code, string(body)
+}
+
+// normalizeWorkspaceName replaces each whole-word use of name with WORKSPACE,
+// so the answers for two names compare equal when they differ only by the
+// name that each request asked for.
+func normalizeWorkspaceName(text, name string) string {
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
+
+	return re.ReplaceAllString(text, "WORKSPACE")
+}
+
+// workspaceListIDs is the part of a workspace list that the tests read.
+type workspaceListIDs struct {
+	Data []workspaceListID `json:"data"`
+}
+
+// workspaceListID is one entry of a workspace list in tests.
+type workspaceListID struct {
+	ID string `json:"id"`
+}
+
+// TestCollectionGrantNeverShowsOtherCollectionUnits proves a holder of a grant
+// on collection team-a lists the workspaces of the namespace and sees no
+// workspace of team-b: the list filters its items to what the caller may
+// unit:read. A grant on team-a never shows the units of team-b.
+func TestCollectionGrantNeverShowsOtherCollectionUnits(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := discoveryServer(t, access.RoleViewer)
+
+	code, body := discoveryTFEGet(t, srv, discoveryAliceToken, "/api/v2/organizations/acme/workspaces")
+	if code != http.StatusOK {
+		t.Fatalf("workspace list as team-a viewer answers %d, want %d (%s)", code, http.StatusOK, body)
+	}
+
+	var doc workspaceListIDs
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("decode list: %v (%s)", err, body)
+	}
+
+	if len(doc.Data) != 1 {
+		t.Fatalf("workspace list holds %d items, want 1 (only team-a): %s", len(doc.Data), body)
+	}
+
+	// The workspace of team-b stays hidden: the show route answers the same
+	// 404 body as for an unknown workspace.
+	deniedCode, deniedBody := discoveryTFEGet(t, srv, discoveryAliceToken, "/api/v2/organizations/acme/workspaces/b")
+	missingCode, missingBody := discoveryTFEGet(
+		t, srv, discoveryAliceToken, "/api/v2/organizations/acme/workspaces/missing",
+	)
+
+	if deniedCode != http.StatusNotFound || missingCode != http.StatusNotFound {
+		t.Fatalf("show answers team-b=%d missing=%d, want 404 for both", deniedCode, missingCode)
+	}
+
+	if normalizeWorkspaceName(deniedBody, "b") != normalizeWorkspaceName(missingBody, "missing") {
+		t.Fatalf("hidden refusal differs from unknown workspace:\n--- b ---\n%s\n--- missing ---\n%s",
+			deniedBody, missingBody)
+	}
+}
+
+// TestNoGrantGetsSame404AsUnknownNamespace proves a principal with no grant
+// inside the namespace gets the same 404 with the same body as for an unknown
+// namespace on the discovery route.
+func TestNoGrantGetsSame404AsUnknownNamespace(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := discoveryServer(t, "")
+
+	code, body := discoveryTFEGet(t, srv, discoveryBobToken, "/api/v2/organizations/acme/entitlement-set")
+	missingCode, missingBody := discoveryTFEGet(
+		t, srv, discoveryBobToken, "/api/v2/organizations/no-such-org/entitlement-set",
+	)
+
+	if code != http.StatusNotFound || missingCode != http.StatusNotFound {
+		t.Fatalf("entitlement answers acme=%d missing=%d, want 404 for both", code, missingCode)
+	}
+
+	if normalizeWorkspaceName(body, "acme") != normalizeWorkspaceName(missingBody, "no-such-org") {
+		t.Fatalf("no-grant refusal differs from unknown namespace:\n--- acme ---\n%s\n--- missing ---\n%s",
+			body, missingBody)
+	}
+}
+
+// TestRevokedGrantLosesDiscoveryOnNextRequest proves a revoked grant loses
+// the discovery read on the next request: the check reads the stored grants
+// at each request.
+func TestRevokedGrantLosesDiscoveryOnNextRequest(t *testing.T) {
+	t.Parallel()
+
+	srv, st := discoveryServer(t, access.RoleViewer)
+
+	code, _ := discoveryTFEGet(t, srv, discoveryAliceToken, "/api/v2/organizations/acme/entitlement-set")
+	if code != http.StatusOK {
+		t.Fatalf("entitlement before the revoke answers %d, want %d", code, http.StatusOK)
+	}
+
+	revokeAliceGrants(t, st)
+
+	code, body := discoveryTFEGet(t, srv, discoveryAliceToken, "/api/v2/organizations/acme/entitlement-set")
+	if code != http.StatusNotFound {
+		t.Fatalf("entitlement after the revoke answers %d, want %d (%s)", code, http.StatusNotFound, body)
+	}
+}
+
+// revokeAliceGrants revokes the grants that alice holds.
+func revokeAliceGrants(t *testing.T, st *sqlite.Store) {
+	t.Helper()
+
+	grants, err := st.GrantsOf(t.Context(), access.Subject{Kind: access.SubjectPrincipal, ID: "prn-alice"})
+	if err != nil {
+		t.Fatalf("grants of alice: %v", err)
+	}
+
+	if len(grants) == 0 {
+		t.Fatal("alice holds no grant to revoke")
+	}
+
+	var revoked bool
+
+	for i := range grants {
+		g := &grants[i]
+		fence, entry := storetest.GrantWrite(t, st, g.Object, time.Unix(0, 0), "revoke:test")
+		entry.Namespace = namespace.Name("acme")
+
+		if err := st.RevokeGrant(t.Context(), g.ID, fence, entry, nil); err == nil {
+			revoked = true
+
+			break
+		}
+	}
+
+	if !revoked {
+		t.Fatal("no grant of alice revoked")
+	}
+}
+
+// discoveryUserBody is the part of GET /api/user that the tests read.
+type discoveryUserBody struct {
+	Organizations []discoveryUserOrganization `json:"organizations"`
+}
+
+// discoveryUserOrganization is one organization of GET /api/user.
+type discoveryUserOrganization struct {
+	Name string `json:"name"`
+}
+
+// discoveryPulumiOrganizations returns the organization names that GET
+// /api/user answers for token, through the Pulumi Cloud-compatible route.
+func discoveryPulumiOrganizations(t *testing.T, srv *dustpan.Server, token string) []string {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/user", http.NoBody)
+	req.Header.Set("Authorization", "token "+token)
+	rec := httptest.NewRecorder()
+	startedHandler(t, srv).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/user answers %d, want %d (%s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body discoveryUserBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode /api/user: %v", err)
+	}
+
+	names := make([]string, 0, len(body.Organizations))
+	for _, o := range body.Organizations {
+		names = append(names, o.Name)
+	}
+
+	return names
+}
+
+// TestPulumiUserListsNamespaceOfCollectionGrantUntilRevoked proves, through
+// the real server, that a real grant on a collection puts its namespace in
+// GET /api/user, and that the revoke removes it on the next request.
+func TestPulumiUserListsNamespaceOfCollectionGrantUntilRevoked(t *testing.T) {
+	t.Parallel()
+
+	srv, st := discoveryServer(t, access.RoleViewer)
+
+	if got := discoveryPulumiOrganizations(t, srv, discoveryAliceToken); !slices.Contains(got, "acme") {
+		t.Fatalf("organizations before the revoke = %v, want acme", got)
+	}
+
+	revokeAliceGrants(t, st)
+
+	if got := discoveryPulumiOrganizations(t, srv, discoveryAliceToken); len(got) != 0 {
+		t.Fatalf("organizations after the revoke = %v, want none", got)
+	}
 }

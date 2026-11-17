@@ -28,6 +28,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -54,6 +55,9 @@ var (
 	// ErrNoTokenForKind reports a principal of a kind that gets no access
 	// token: a workload proves its identity in another way (ADR 54).
 	ErrNoTokenForKind = errors.New("principal kind gets no access token")
+	// ErrUnknownKind reports a stored token of a kind that this version does
+	// not know. No code acts on such a token.
+	ErrUnknownKind = errors.New("unknown access token kind")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -68,11 +72,31 @@ const (
 	// KindService is a token of a service principal, for a machine that
 	// cannot sign in to the console.
 	KindService Kind = "service"
-	// KindTrust is a token that a workload got in a token exchange through
-	// a trust rule. It belongs to a service principal, lives one exchange
-	// lifetime, and no rotation renews it.
-	KindTrust Kind = "trust"
+	// KindJWTExchange is a token that a workload got in a token exchange of a
+	// JWT through a trust rule. It belongs to a service principal, lives one
+	// exchange lifetime, and no rotation renews it.
+	KindJWTExchange Kind = "jwt-exchange"
 )
+
+// Valid reports whether k is a kind that this version issues. It is the
+// allowlist of the kinds: the store decode, the authentication and the
+// credential of a token refuse every other value.
+func (k Kind) Valid() bool {
+	switch k {
+	case KindPersonal, KindService, KindJWTExchange:
+		return true
+	default:
+		return false
+	}
+}
+
+// FromExchange reports whether a token exchange issues a token of the kind k.
+// A token of such a kind gets the credential of an exchange and the revoke
+// rule of the service tokens. The unexported set in this method is the only
+// place that names the kinds of an exchange.
+func (k Kind) FromExchange() bool {
+	return slices.Contains([]Kind{KindJWTExchange}, k)
+}
 
 // KindFor returns the kind of the token of a principal of kind k, or
 // ErrNoTokenForKind.
