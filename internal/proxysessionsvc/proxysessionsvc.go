@@ -11,8 +11,6 @@ package proxysessionsvc
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -830,13 +828,14 @@ func checkCredential(c *Credential) error {
 }
 
 // settingsEntry returns the audit entry of a save. It holds the old and the
-// new ranges and versions, the hashes of the old and the new upstream URL and
-// whether the credential changed. It never holds the URL or the credential.
+// new ranges and versions, whether the upstream URL changed and whether the
+// credential changed. It never holds the URL, the credential or a hash or any
+// other value that a reader can use to confirm a guess of them: the revision
+// counter marks each change.
 func (s *Service) settingsEntry(req *PutRequest, old, next *runner.ProxySettingsRecord) audit.Entry {
 	rule := runner.AuditRules()[runner.EventPoolProxySettingsChanged]
 
 	oldRanges := strings.Join(old.Settings.AllowedRanges(), ",")
-	oldURL := urlHash(old.Settings.UpstreamURL())
 	oldVersion := strconv.FormatInt(old.Version, 10)
 
 	e := req.Entry
@@ -852,10 +851,7 @@ func (s *Service) settingsEntry(req *PutRequest, old, next *runner.ProxySettings
 			Key: "allowedRanges", Old: &oldRanges, New: strings.Join(next.Settings.AllowedRanges(), ","),
 			Layer: "", TakesEffect: "",
 		},
-		audit.Change{
-			Key: "upstreamURLSHA256", Old: &oldURL, New: urlHash(next.Settings.UpstreamURL()),
-			Layer: "", TakesEffect: "",
-		},
+		change("upstreamURLChanged", strconv.FormatBool(old.Settings.UpstreamURL() != next.Settings.UpstreamURL())),
 		change("credentialChanged", strconv.FormatBool(req.Credential.Present)),
 		audit.Change{
 			Key: "version", Old: &oldVersion, New: strconv.FormatInt(old.Version+1, 10), Layer: "", TakesEffect: "",
@@ -936,16 +932,4 @@ func (s *Service) append(ctx context.Context, ns namespace.Name, e audit.Entry) 
 // change returns a change with no old value.
 func change(key, value string) audit.Change {
 	return audit.Change{Key: key, Old: nil, New: value, Layer: "", TakesEffect: ""}
-}
-
-// urlHash returns the hex SHA-256 of an upstream URL, or empty for none. An
-// audit entry holds the hash, never the URL.
-func urlHash(u string) string {
-	if u == "" {
-		return ""
-	}
-
-	sum := sha256.Sum256([]byte(u))
-
-	return hex.EncodeToString(sum[:])
 }
