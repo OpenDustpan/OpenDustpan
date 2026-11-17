@@ -193,18 +193,26 @@ func TestDisabledPersonCostsTheBindsOfAnUnknownUser(t *testing.T) {
 				t.Fatalf("binds: person %q, unknown name %q; want 2 each", disabled, unknown)
 			}
 
-			dummy := disabled[1]
-
-			switch {
-			case disabled[0] != ldaptest.ServiceDN:
-				t.Fatalf("first bind = %q, want the service account", disabled[0])
-			case strings.EqualFold(dummy, ldaptest.UserDN("alice")) || strings.EqualFold(dummy, ldaptest.ServiceDN):
-				t.Fatalf("second bind = %q, want an entry that is neither the user nor the service account", dummy)
-			case !strings.HasSuffix(strings.ToLower(dummy), ","+strings.ToLower(ldaptest.BaseDN)):
-				t.Fatalf("dummy bind = %q, want an entry below the base DN", dummy)
-			default:
-				// The person made one dummy bind and no bind of its own.
-			}
+			checkDummyBind(t, disabled)
 		})
+	}
+}
+
+// checkDummyBind fails unless binds are the bind of the service account and
+// one dummy bind below the base DN, with no bind of the user alice.
+func checkDummyBind(t *testing.T, binds []string) {
+	t.Helper()
+
+	dummy := binds[1]
+
+	switch {
+	case binds[0] != ldaptest.ServiceDN:
+		t.Fatalf("first bind = %q, want the service account", binds[0])
+	case strings.EqualFold(dummy, ldaptest.UserDN("alice")) || strings.EqualFold(dummy, ldaptest.ServiceDN):
+		t.Fatalf("second bind = %q, want an entry that is neither the user nor the service account", dummy)
+	case !strings.HasSuffix(strings.ToLower(dummy), ","+strings.ToLower(ldaptest.BaseDN)):
+		t.Fatalf("dummy bind = %q, want an entry below the base DN", dummy)
+	default:
+		// The person made one dummy bind and no bind of its own.
 	}
 }
