@@ -38,9 +38,19 @@ func TestMemConformance(t *testing.T) {
 			Namespaces: db,
 			Domain:     db,
 			WriteState: nil,
+			FailAudit: func(*testing.T) {
+				db.mu.Lock()
+				defer db.mu.Unlock()
+
+				db.failAudit = true
+			},
 		}
 	})
 }
+
+// errAuditAppend is the error of an audit append that the fault of the memory
+// database makes fail.
+var errAuditAppend = errors.New("forced audit append failure")
 
 // errNotInInventory is the error for a unit that the inventory does not hold.
 var errNotInInventory = errors.New("the unit is not in the inventory")
@@ -74,26 +84,30 @@ type memDB struct {
 	audit   map[namespace.Name][]audit.Entry
 	// locks maps the String of a manual lock target to the lock.
 	locks map[string]manuallock.Lock
+	// failAudit makes the append of the audit entries of a create fail after
+	// the write of the job, as a failed transaction does.
+	failAudit bool
 	// units maps a unit ID to the unit in the inventory, under its current name.
 	units map[string]collection.UnitRef
 }
 
 func newMemDB() *memDB {
 	return &memDB{
-		mu:       sync.Mutex{},
-		durable:  durabletest.NewMem().Store(),
-		fences:   map[namespace.Name]int64{},
-		itemKeys: nil,
-		nsIDs:    map[namespace.Name]namespace.ID{},
-		records:  newMemRecords(),
-		jobs:     map[job.ID]*job.Job{},
-		order:    nil,
-		keys:     map[string]job.ID{},
-		damaged:  map[job.ID]string{},
-		freezes:  map[string]*job.Freeze{},
-		audit:    map[namespace.Name][]audit.Entry{},
-		locks:    map[string]manuallock.Lock{},
-		units:    map[string]collection.UnitRef{},
+		mu:        sync.Mutex{},
+		durable:   durabletest.NewMem().Store(),
+		fences:    map[namespace.Name]int64{},
+		itemKeys:  nil,
+		nsIDs:     map[namespace.Name]namespace.ID{},
+		records:   newMemRecords(),
+		jobs:      map[job.ID]*job.Job{},
+		order:     nil,
+		keys:      map[string]job.ID{},
+		damaged:   map[job.ID]string{},
+		freezes:   map[string]*job.Freeze{},
+		audit:     map[namespace.Name][]audit.Entry{},
+		locks:     map[string]manuallock.Lock{},
+		units:     map[string]collection.UnitRef{},
+		failAudit: false,
 	}
 }
 
@@ -327,9 +341,7 @@ func (m *memDB) Create(ctx context.Context, j job.Job, d *durable.StartRequest, 
 		m.keys[key] = stored.ID
 	}
 
-	m.audit[ns] = append(m.audit[ns], e...)
-
-	return copyJob(&stored), true, nil
+	return m.appendAudit(&stored, e, key)
 }
 
 // damagedBodyReason is the kind of the damage that DamageJobBody marks: the
@@ -1258,4 +1270,23 @@ func (m *memDB) applyIn(ctx context.Context, cur, next *job.Job, c *job.Change, 
 	}
 
 	return m.afterChange(ctx, cur, next, c.Event)
+}
+
+// appendAudit appends e to the audit log of the namespace of the job stored,
+// after the write of the job, and returns a copy of the job. When the fault is
+// on, it removes the job and its key, as the rollback of a failed transaction
+// does, and returns an error.
+func (m *memDB) appendAudit(stored *job.Job, e []audit.Entry, key string) (job.Job, bool, error) {
+	if m.failAudit {
+		delete(m.jobs, stored.ID)
+		m.order = m.order[:len(m.order)-1]
+		delete(m.keys, key)
+
+		return job.Job{}, false, errAuditAppend
+	}
+
+	ns := stored.Spec.Unit.Namespace()
+	m.audit[ns] = append(m.audit[ns], e...)
+
+	return copyJob(stored), true, nil
 }

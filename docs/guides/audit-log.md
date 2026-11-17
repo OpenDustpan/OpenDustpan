@@ -165,7 +165,7 @@ for `ada`. The entry shows only the fields that matter here:
 {
   "sequence": 12,
   "subject": "ada",
-  "action": "unit:run",
+  "action": "unit:run-plan",
   "channel": "agent",
   "changes": [
     { "key": "job", "new": "job-7f3a" },

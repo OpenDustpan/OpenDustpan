@@ -425,6 +425,18 @@ func TestJobConformance(t *testing.T) {
 		return jobtest.Harness{
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
 			Domain: d, WriteState: d.WriteState(),
+			FailAudit: func(t *testing.T) {
+				t.Helper()
+
+				// The trigger fails each insert into the audit log, so the append
+				// of a create fails after the insert of the job.
+				const q = `CREATE TRIGGER fail_audit BEFORE INSERT ON audit_entries
+BEGIN SELECT RAISE(ABORT, 'forced audit failure'); END`
+
+				if _, err := sqlite.DB(s).ExecContext(t.Context(), q); err != nil {
+					t.Fatalf("create the audit fault: %v", err)
+				}
+			},
 		}
 	})
 }
@@ -494,6 +506,7 @@ func newRecorderHarnessOf(
 		Harness: jobtest.Harness{
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
 			Domain: d, WriteState: d.WriteState(),
+			FailAudit: nil,
 		},
 		Records:  j,
 		ItemKeys: s,

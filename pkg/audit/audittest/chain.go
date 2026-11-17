@@ -101,7 +101,7 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a stored chain from before the change passes the check", test: testChainCheckPassesOldChain},
 		{name: "a chain of entries without a block passes the check", test: testChainCheckPassesEntriesWithoutBlock},
 		{name: "a stored row with a partial origin is refused on read", test: testStoreRefusesPartialOriginRow},
-		{name: "a changed byte of the agent block is found", test: TestAuditTamperedBlockFailsCheck},
+		{name: "a changed byte of the agent block is found", test: testAuditTamperedBlockFailsCheck},
 		{name: "a stale fence refuses a start entry", test: testChainStaleFence},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
@@ -765,9 +765,9 @@ func appendBlockEntry(t *testing.T, ts ChainTestStore, tl *timeline) int64 {
 	return appendEntry(t, ts.Store, tl.ns.Fence(), blockEntry(t, tl)).Sequence
 }
 
-// TestAuditTamperedBlockFailsCheck proves that one changed byte of the agent
+// testAuditTamperedBlockFailsCheck proves that one changed byte of the agent
 // block fails the chain check at the sequence of the entry.
-func TestAuditTamperedBlockFailsCheck(t *testing.T, ts ChainTestStore) {
+func testAuditTamperedBlockFailsCheck(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
 	tl := newTimeline(t, ts.Store)

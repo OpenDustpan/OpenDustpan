@@ -68,6 +68,7 @@ func buildRecorderHarness(t *testing.T, db *memDB, keys *memKeyIndex, blobs blob
 			Namespaces: db,
 			Domain:     db,
 			WriteState: nil,
+			FailAudit:  nil,
 		},
 		Records:  db,
 		ItemKeys: keys,

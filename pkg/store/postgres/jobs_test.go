@@ -432,6 +432,22 @@ func TestJobConformance(t *testing.T) {
 		return jobtest.Harness{
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
 			Domain: d, WriteState: d.WriteState(),
+			FailAudit: func(t *testing.T) {
+				t.Helper()
+
+				// The trigger fails each insert into the audit log, so the append
+				// of a create fails after the insert of the job.
+				for _, q := range []string{
+					`CREATE FUNCTION fail_audit() RETURNS trigger LANGUAGE plpgsql AS
+$$ BEGIN RAISE EXCEPTION 'forced audit failure'; END $$`,
+					`CREATE TRIGGER fail_audit BEFORE INSERT ON audit_entries
+FOR EACH ROW EXECUTE FUNCTION fail_audit()`,
+				} {
+					if _, err := postgres.Pool(s).Exec(t.Context(), q); err != nil {
+						t.Fatalf("create the audit fault: %v", err)
+					}
+				}
+			},
 		}
 	})
 }
@@ -511,6 +527,7 @@ func newRecorderHarnessOf(
 		Harness: jobtest.Harness{
 			Jobs: j, Durable: ops, Freezes: j, Claimer: job.NewClaimer(j, ops, s, jobtest.NoGates{}), Namespaces: s,
 			Domain: d, WriteState: d.WriteState(),
+			FailAudit: nil,
 		},
 		Records:  j,
 		ItemKeys: s,

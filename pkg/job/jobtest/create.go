@@ -242,9 +242,11 @@ func testCreateUnitBusy(t *testing.T, h Harness) {
 	}
 }
 
-// testCreateBlockWriteFails proves that a create whose audit entry carries an
-// agent block, and whose entry is refused, stores no job and no entry.
-func testCreateBlockWriteFails(t *testing.T, h Harness) {
+// testCreateInvalidEntryStoresNothing proves that a create whose audit entry
+// carries an agent block and is not valid is refused by the check before the
+// transaction: it stores no job and no entry. The rollback of a failed append
+// is in testCreateAuditAppendFailsRollsBack.
+func testCreateInvalidEntryStoresNothing(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := setUp(t, h)
@@ -270,7 +272,53 @@ func testCreateBlockWriteFails(t *testing.T, h Harness) {
 
 	_, _, err = h.Jobs.Create(t.Context(), *j, nil, f.fence, []audit.Entry{bad})
 	if !errors.Is(err, audit.ErrInvalidEntry) {
-		t.Fatalf("Create with a refused block entry = %v, want audit.ErrInvalidEntry", err)
+		t.Fatalf("Create with an invalid block entry = %v, want audit.ErrInvalidEntry", err)
+	}
+
+	if _, err = h.Jobs.Get(t.Context(), j.ID); !errors.Is(err, job.ErrNotFound) {
+		t.Fatalf("Get after a failed Create = %v, want ErrNotFound", err)
+	}
+
+	after, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("audit entries after a failed Create = %d, %v; want %d", len(after), err, len(before))
+	}
+}
+
+// testCreateAuditAppendFailsRollsBack proves that a create whose audit entry
+// carries an agent block and is valid, but whose append fails inside the
+// transaction after the write of the job, stores no job and no entry.
+func testCreateAuditAppendFailsRollsBack(t *testing.T, h Harness) {
+	t.Helper()
+
+	if h.FailAudit == nil {
+		t.Skip("the harness cannot make the audit append fail")
+	}
+
+	f := setUp(t, h)
+
+	origin, err := audit.NewOrigin(audit.OriginArgs{
+		Run: "run-1", Session: "session-1", Tool: "", ArgsDigest: "", BreakGlass: false,
+		SecretStage: "", DelegationID: "",
+	})
+	if err != nil {
+		t.Fatalf("NewOrigin = %v", err)
+	}
+
+	withBlock := entry(f.unit, job.ActionUnitRunApply)
+	withBlock.Origin = origin
+
+	before, err := h.Domain.AuditEntries(t.Context(), f.fence.Namespace)
+	if err != nil {
+		t.Fatalf("AuditEntries = %v", err)
+	}
+
+	h.FailAudit(t)
+
+	j := newJob(f.unit, job.OperationRefresh, "")
+
+	if _, _, err = h.Jobs.Create(t.Context(), *j, nil, f.fence, []audit.Entry{withBlock}); err == nil {
+		t.Fatal("Create with a failing audit append = nil, want an error")
 	}
 
 	if _, err = h.Jobs.Get(t.Context(), j.ID); !errors.Is(err, job.ErrNotFound) {

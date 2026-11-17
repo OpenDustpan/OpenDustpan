@@ -122,7 +122,7 @@ func TestApproveMalformedAgentRefRefused(t *testing.T) {
 // the job and the entry with its agent block go to the store in one create,
 // and that a failed write fails the start and leaves no job. The adapter
 // rollback is in the job store conformance suite (jobtest, the case for a
-// refused block entry).
+// failed audit append).
 func TestStartJobBlockWriteFailureRollsBack(t *testing.T) {
 	t.Parallel()
 
