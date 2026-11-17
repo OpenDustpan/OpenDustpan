@@ -96,10 +96,10 @@ Tests:
 
 - `e2e/claim_gate_test.go` names `gate.Engine`
 - `e2e/jobs_api_test.go` names `gate.Engine`
-- `internal/servertest/pulumi_gate_test.go` names `gate.Engine`
-- `internal/expr/owned_internal_test.go` names `gate.ErrRuleFailed`
-- `internal/expr/hostile_test.go` names `gate.ErrRuleFailed`
-- `internal/expr/timeout_internal_test.go` names `gate.ErrRuleFailed`
+- the Pulumi gate test of the server test package names `gate.Engine`
+- the `owned_internal` test of the expr package names `gate.ErrRuleFailed`
+- the `hostile` test of the expr package names `gate.ErrRuleFailed`
+- the `timeout_internal` test of the expr package names `gate.ErrRuleFailed`
 
 ADRs:
 
