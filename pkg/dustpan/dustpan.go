@@ -123,6 +123,10 @@ var _ workspace.Sealer = (*secret.Service)(nil)
 // the installation state. Every SQL adapter serves it from the same
 // database connection; a custom store must serve it too, so every
 // instance gates the tool APIs on the same value.
+var errJobTokensNeedUnitIDs = errors.New(
+	"job tokens need a namespace store that resolves unit IDs (access.Units)",
+)
+
 var errMaintenanceNeedsStore = errors.New("namespace store must keep the installation state")
 
 const (
@@ -969,7 +973,17 @@ func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error)
 	// before every other rule, and it asks them only for the unit of the job
 	// of the token. A server that issues no job token keeps the chain it had.
 	if units != nil {
-		authz = identity.JobTokenRule{Next: authz, Units: units}
+		// The rule refuses a unit with no stable ID when it has no port. A
+		// store that does not meet access.Units fails the startup here, so the
+		// server never runs with every named unit route refused and no record
+		// of the cause. This check does not rely on the rule or on the route
+		// resolving the ID.
+		unitIDs, ok := cfg.namespaceStore.(access.Units)
+		if !ok {
+			return none, fmt.Errorf("%w: %T", errJobTokensNeedUnitIDs, cfg.namespaceStore)
+		}
+
+		authz = identity.JobTokenRule{Next: authz, Units: units, UnitIDs: unitIDs}
 	}
 
 	marks, marked, err := tempAdminDecorator(authn, cfg.namespaceStore, cfg.now, cfg.logger)
