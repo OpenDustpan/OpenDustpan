@@ -15,7 +15,7 @@ from them, no route.
    provider. The stored provider (issue #2950) is a later change and reuses the
    same method constructor.
 2. **The password has one way in.** The bind password is a `session.Password`.
-   Its `String` hides the value, and its `GoString` (NEW on `session.Password`) hides it too. The settings struct that the API
+   Its `String` hides the value, and its `GoString` (on `session.Password`) hides it too. The settings struct that the API
    shows has `bindPasswordSet` and no field for the password. So no format, log or
    API answer can print it: the type does not hold it in a printable form. The
    serve command clears the variable after the read.
