@@ -23,7 +23,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- The shared blob conformance entry point is blobtest.Run Proof: pkg/blob/blobtest/blobtest.go:46 (func Run)
+- The shared blob conformance entry point is blobtest.Run Proof: func Run in the blobtest package of pkg/blob
 - pkg/blob/s3 has a store test for the not-found mapping Proof: pkg/blob/s3/store_test.go:671 (TestGetNotFoundMapping)
 - Issue #183 asks for a RustFS service container pinned by digest with the four DUSTPAN_TEST_S3_* variables in the go job Proof: Issue #183 body: service container, health check, four DUSTPAN_TEST_S3_* variables, digest sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
 
@@ -44,13 +44,13 @@ Out of scope:
 
 Where the path still costs the person time or surprises them:
 
-- A contributor copies one service block and four variable names from ci.yml to run the same RustFS image locally, but a digest recheck at work start costs one lookup of the RustFS digest.
+- A contributor copies one service block and four variable names from .github/workflows/ci.yml to run the same RustFS image locally, but a digest recheck at work start costs one lookup of the RustFS digest.
 
 ## What main already does
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The shared blob conformance runner exists as blobtest.Run (`pkg/blob/blobtest/blobtest.go:46 (func Run)`)
+- The shared blob conformance runner exists as blobtest.Run (`func Run` in the blobtest package of `pkg/blob`)
 - pkg/blob/s3 already has a store test for the not-found mapping (`pkg/blob/s3/store_test.go:671 (func TestGetNotFoundMapping)`)
 
 ## ADR check
@@ -62,7 +62,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Decisions that apply: 7 (extended).
 - Changed by: ADR 212 changes decision 2; ADR 246 extends decision 8; ADR 278 changes decision 6; ADR 283 changes decision 8; ADR 283 extends decision 7. Chain to the end: ADR 212, ADR 246, ADR 278, ADR 283, ADR 227, ADR 232, ADR 235, ADR 301, ADR 365, ADR 315, ADR 320, ADR 339, ADR 354, ADR 288, ADR 332.
 - Current rule: this ADR, with ADR 212, 246, 278, 283.
-- Quote: "Gate for new tools. The image release workflow needs the GitHub Actions `docker/setup-buildx-action` and `docker/setup-qemu-action`. CLAUDE.md asks for the owner's yes before the project adds them."
+- Quote: "Gate for new tools. The image release workflow needs the GitHub Actions `docker/setup-buildx-action` and `docker/setup-qemu-action`."
 - Effect: Decision 7 gates only the buildx and QEMU actions for the image release workflow. It does not gate a service container. The owner yes for this change comes from ADR 31 decision 8 alone. The change adds no GitHub Action.
 - Conflict: none.
 
