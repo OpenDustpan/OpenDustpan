@@ -192,12 +192,41 @@ func newJobTokenWorld(t *testing.T) jobTokenWorld {
 	cfg.authenticator = refuseAll{}
 	cfg.authorizer = &permissiveAuthorizer{actions: nil, units: []identity.Object{unit}}
 	cfg.jobStore = &tokenJobStore{Store: nil, j: j}
+	cfg.namespaceStore = &unitIDStore{
+		Store: nil,
+		ids:   map[string]string{unit.WithUnitID("").String(): "unt-1", other.WithUnitID("").String(): "unt-2"},
+	}
 	cfg.logger = slog.New(slog.DiscardHandler)
 	cfg.now = func() time.Time { return now }
 
 	WithJobTokenStore(&fakeJobTokens{match: match})(cfg)
 
 	return jobTokenWorld{cfg: cfg, secret: secret, unit: unit, other: other}
+}
+
+var errNoUnitIDs = errors.New("the store holds no unit IDs")
+
+// unitIDStore is a namespace store that only resolves the stable ID of a unit.
+type unitIDStore struct {
+	namespace.Store
+
+	ids map[string]string
+}
+
+// UnitID implements access.Units.
+func (s *unitIDStore) UnitID(_ context.Context, obj identity.Object) (string, bool, error) {
+	if s.ids == nil {
+		return "", false, errNoUnitIDs
+	}
+
+	id, ok := s.ids[obj.WithUnitID("").String()]
+
+	return id, ok, nil
+}
+
+// UnitObjects implements access.Units.
+func (s *unitIDStore) UnitObjects(context.Context, []string) (map[string]identity.Object, error) {
+	return map[string]identity.Object{}, nil
 }
 
 // jobTokenPrincipal returns the principal that a job token of job-1 signs in

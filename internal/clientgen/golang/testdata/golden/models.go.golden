@@ -153,6 +153,7 @@ const (
 	ErrorCodeInstanceDraining                      ErrorCode = "instance.draining"
 	ErrorCodeInstanceInvalidId                     ErrorCode = "instance.invalid-id"
 	ErrorCodeInstanceNotFound                      ErrorCode = "instance.not-found"
+	ErrorCodeIpAllowlistInvalidCidr                ErrorCode = "ip-allowlist.invalid-cidr"
 	ErrorCodeIssuerConflict                        ErrorCode = "issuer.conflict"
 	ErrorCodeIssuerInvalid                         ErrorCode = "issuer.invalid"
 	ErrorCodeIssuerKeyExpired                      ErrorCode = "issuer.key-expired"

@@ -2047,6 +2047,7 @@
           "instance.draining",
           "instance.invalid-id",
           "instance.not-found",
+          "ip-allowlist.invalid-cidr",
           "issuer.conflict",
           "issuer.invalid",
           "issuer.key-expired",
