@@ -1901,26 +1901,17 @@ func (s *Store) FinishBackup(
 			return err
 		}
 
-		n, err := q.FinishBackup(ctx, db.FinishBackupParams{
+		rec, err := applyFinishBackup(ctx, q, id, db.FinishBackupParams{
 			State:     string(state),
 			Error:     errText,
 			EndedAtMs: backupEndedAt(endedAt),
 			ID:        id.String(),
 		})
 		if err != nil {
-			return fmt.Errorf("finish backup: %w", err)
+			return err
 		}
 
-		if n == 0 {
-			return finishFailure(ctx, q, id)
-		}
-
-		row, err := q.GetBackup(ctx, id.String())
-		if err != nil {
-			return fmt.Errorf("select finished backup: %w", err)
-		}
-
-		out = backupRecord(row)
+		out = rec
 
 		return nil
 	})
@@ -1929,6 +1920,29 @@ func (s *Store) FinishBackup(
 	}
 
 	return out, nil
+}
+
+// applyFinishBackup moves the running row id to the state of finish with
+// the error text and the end time, and returns the finished row. A finish
+// that changes nothing reports why through finishFailure.
+func applyFinishBackup(
+	ctx context.Context, q *db.Queries, id backup.ID, finish db.FinishBackupParams,
+) (backup.Record, error) {
+	n, err := q.FinishBackup(ctx, finish)
+	if err != nil {
+		return backup.Record{}, fmt.Errorf("finish backup: %w", err)
+	}
+
+	if n == 0 {
+		return backup.Record{}, finishFailure(ctx, q, id)
+	}
+
+	row, err := q.GetBackup(ctx, id.String())
+	if err != nil {
+		return backup.Record{}, fmt.Errorf("select finished backup: %w", err)
+	}
+
+	return backupRecord(row)
 }
 
 // RecordBackupAttempt implements backup.Registry: it checks the fence f,
@@ -1949,6 +1963,10 @@ func (s *Store) RecordBackupAttempt(
 		// right fence; this check stays so that no caller records a step of
 		// one backup under the claim of another operation.
 		if err := ownsBackup(ctx, q, f, id); err != nil {
+			return err
+		}
+
+		if err := backup.ValidAttempt(attempt); err != nil {
 			return err
 		}
 
@@ -1975,6 +1993,12 @@ func (s *Store) RecordBackupAttempt(
 // reports backup.ErrNotFound, and a row that names another attempt reports
 // durable.ErrClaimLost and stays running.
 func checkFinishRow(ctx context.Context, q *db.Queries, id backup.ID, state backup.State, attempt string) error {
+	if state == backup.StateSucceeded {
+		if err := backup.ValidAttempt(attempt); err != nil {
+			return err
+		}
+	}
+
 	row, err := q.GetBackup(ctx, id.String())
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -2067,7 +2091,7 @@ func (s *Store) GetBackup(ctx context.Context, id backup.ID) (backup.Record, err
 		return backup.Record{}, fmt.Errorf("select backup: %w", err)
 	}
 
-	return backupRecord(row), nil
+	return backupRecord(row)
 }
 
 // ListBackups implements backup.Registry: every backup row, newest first.
@@ -2079,7 +2103,12 @@ func (s *Store) ListBackups(ctx context.Context) ([]backup.Record, error) {
 
 	out := make([]backup.Record, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, backupRecord(row))
+		rec, err := backupRecord(row)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, rec)
 	}
 
 	return out, nil
@@ -2104,23 +2133,24 @@ func (s *Store) FailEndedBackups(ctx context.Context, endedAt time.Time) (int, e
 }
 
 // backupRecord converts a backup row into a domain record. A NULL end time
-// reads as the zero time: the backup still runs.
-func backupRecord(row db.Backup) backup.Record {
-	var endedAt time.Time
+// reads as the zero time: the backup still runs. An attempt that is not
+// empty must pass the shared allowlist, or the row is corrupt.
+func backupRecord(row db.Backup) (backup.Record, error) {
+	var endedAtMs int64
 
 	if row.EndedAtMs.Valid {
-		endedAt = codec.FromMillis(row.EndedAtMs.Int64)
+		endedAtMs = row.EndedAtMs.Int64
 	}
 
-	return backup.Record{
-		StartedAt: codec.FromMillis(row.StartedAtMs),
-		EndedAt:   endedAt,
-		ID:        backup.ID(row.ID),
-		Target:    row.Target,
-		Error:     row.Error,
-		State:     backup.State(row.State),
-		Attempt:   row.Attempt,
-	}
+	return codec.FromBackupRow(codec.BackupRow{
+		ID:          row.ID,
+		State:       row.State,
+		Target:      row.Target,
+		Error:       row.Error,
+		Attempt:     row.Attempt,
+		StartedAtMs: row.StartedAtMs,
+		EndedAtMs:   endedAtMs,
+	})
 }
 
 // backupEndedAt encodes the end time for the backups table: the zero time is

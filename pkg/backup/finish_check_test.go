@@ -199,3 +199,41 @@ func TestReadLiveBoundsTheRead(t *testing.T) {
 		t.Errorf("read under the size = %v, want ErrCorrupt", err)
 	}
 }
+
+// TestServiceCheckRefusesPointerRowMismatch proves the defense-in-depth
+// compare of the check route: a whole attempt A with a row that records
+// attempt B reports ErrCorrupt.
+func TestServiceCheckRefusesPointerRowMismatch(t *testing.T) {
+	t.Parallel()
+
+	full := []byte("a table file of some length")
+	fix := newFixture(t, &stubExporter{sum: testSummary(), data: full, err: nil}, 0)
+
+	putScopeAttempt(t, fix.target, scopeManifest(scopeID, "5", full), scopeFiles{data: full, first: full})
+
+	if err := backup.SeedLivePointerForTest(t.Context(), fix.target, scopeID, "5"); err != nil {
+		t.Fatalf("write the live pointer: %v", err)
+	}
+
+	if err := backup.Check(t.Context(), fix.target, scopeID); err != nil {
+		t.Fatalf("Check of the seeded attempt = %v, want nil: the target alone is whole", err)
+	}
+
+	row := backup.Record{
+		StartedAt: fix.now,
+		EndedAt:   fix.now,
+		ID:        scopeID,
+		Target:    "mem:target",
+		Error:     "",
+		State:     backup.StateSucceeded,
+		Attempt:   "6",
+	}
+
+	if err := fix.registry.CreateBackup(t.Context(), row); err != nil {
+		t.Fatalf("create the row of attempt 6: %v", err)
+	}
+
+	if err := fix.service.Check(t.Context(), scopeID); !errors.Is(err, backup.ErrCorrupt) {
+		t.Fatalf("Service.Check with a pointer of 5 and a row of 6 = %v, want ErrCorrupt", err)
+	}
+}

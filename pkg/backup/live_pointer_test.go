@@ -334,6 +334,30 @@ func overwritePointerOnBothStores(t *testing.T) {
 	}
 }
 
+// overwriteCorruptPointerOnBothStores seeds a corrupt pointer on both stores
+// and proves that a write over it fails closed and changes nothing, on a
+// store that refuses a second put and on a store that replaces the object.
+func overwriteCorruptPointerOnBothStores(t *testing.T, name, seed string) {
+	t.Helper()
+
+	for storeName, store := range pointerStores() {
+		store.base.storeObject(t, livePointerKeyOf(scopeID), []byte(seed))
+
+		err := backup.WriteLivePointerForTest(t.Context(), store.target, scopeID, "5", claimHeld)
+		if !errors.Is(err, backup.ErrCorrupt) {
+			t.Fatalf("%s/%s: write over a corrupt pointer = %v, want ErrCorrupt", storeName, name, err)
+		}
+
+		if got := string(store.base.readObject(t, livePointerKeyOf(scopeID))); got != seed {
+			t.Fatalf("%s/%s: pointer bytes = %q, want the untouched seed", storeName, name, got)
+		}
+
+		if got := store.base.putAttempts(livePointerKeyOf(scopeID)); got != 1 {
+			t.Fatalf("%s/%s: the store saw %d puts of the pointer, want the seed only", storeName, name, got)
+		}
+	}
+}
+
 // TestLivePointerOneResultOnEveryStore runs the pointer write of one backup
 // id twice, against a store that refuses a second put with ErrExists and a
 // store that replaces the object.
@@ -358,6 +382,25 @@ func TestLivePointerOneResultOnEveryStore(t *testing.T) {
 		t.Parallel()
 
 		overwritePointerOnBothStores(t)
+	})
+
+	t.Run("a seeded pointer that is not JSON stays", func(t *testing.T) {
+		t.Parallel()
+
+		overwriteCorruptPointerOnBothStores(t, "not JSON", "not json")
+	})
+
+	t.Run("a seeded pointer over 1 KiB stays", func(t *testing.T) {
+		t.Parallel()
+
+		seed := `{"attempt":"5","pad":"` + strings.Repeat("x", backup.MaxLivePointerBytesForTest) + `"}`
+		overwriteCorruptPointerOnBothStores(t, "oversize", seed)
+	})
+
+	t.Run("a seeded pointer that names dot-dot stays", func(t *testing.T) {
+		t.Parallel()
+
+		overwriteCorruptPointerOnBothStores(t, "dot-dot", `{"attempt":"../x"}`)
 	})
 }
 

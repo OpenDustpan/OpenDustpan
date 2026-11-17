@@ -11943,17 +11943,16 @@ func pollBackupState(ctx context.Context, t *testing.T, env *e2e.Env, id string)
 			t.Fatalf("GET backup %s: %v", id, err)
 		}
 
-		// The row reads succeeded one commit before the finish step writes the
-		// live pointer. In that short window the read answers 409: poll again.
-		if status != http.StatusOK && status != http.StatusConflict {
+		// The finish step writes the live pointer after Check and before the
+		// fenced commit, so a row that reads succeeded always has its
+		// pointer. A 409 here would mean a corrupt target, not a window.
+		if status != http.StatusOK {
 			t.Fatalf("GET backup %s answers %d, want %d (%s)", id, status, http.StatusOK, body)
 		}
 
 		var doc backupDoc
 
-		if status == http.StatusConflict {
-			doc.State = "running"
-		} else if decodeErr := json.Unmarshal([]byte(body), &doc); decodeErr != nil {
+		if decodeErr := json.Unmarshal([]byte(body), &doc); decodeErr != nil {
 			t.Fatalf("decode backup %s %q: %v", id, body, decodeErr)
 		}
 

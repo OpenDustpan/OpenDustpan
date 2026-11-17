@@ -2384,7 +2384,8 @@ func testBackupFinishRecordsStep(t *testing.T, newStore BackupFactory) {
 // in the same call. A second record of the same claim reports
 // durable.ErrStepDone, a stale fence and a fence of another operation report
 // durable.ErrClaimLost, and a missing row reports ErrNotFound. A record of
-// another attempt never overwrites the attempt that the row names.
+// another attempt never overwrites the attempt that the row names. An
+// attempt outside the allowlist is refused with ErrInvalidAttempt.
 func testBackupRecordAttempt(t *testing.T, newStore BackupFactory) {
 	t.Helper()
 
@@ -2392,6 +2393,7 @@ func testBackupRecordAttempt(t *testing.T, newStore BackupFactory) {
 	r := newBackupRecord(backup.ID(ident.NewID("bkp-")), now())
 	first, attempt := recordFreshBackupAttempt(t, s, r)
 	live := refuseOtherBackupAttempt(t, s, r.ID, attempt, first)
+	refuseInvalidBackupAttempt(t, s, r.ID, attempt, live)
 	refuseFinishedBackupAttempt(t, s, r.ID, attempt, live)
 }
 
@@ -2450,10 +2452,12 @@ func refuseOtherBackupAttempt(
 		t.Fatalf("attempt after a stale record = %q, want %q", got.Attempt, attempt)
 	}
 
-	// A fence of the operation of another backup records nothing.
+	// A fence of the operation of another backup records nothing. It sends the
+	// attempt that the row records, so only ownsBackup can refuse it: the
+	// row compare would pass.
 	other := bareBackupClaim(t, s, backup.ID(ident.NewID("bkp-")))
 
-	if err := s.RecordBackupAttempt(t.Context(), other.Step(backup.StepWrite), id, "9"); !errors.Is(
+	if err := s.RecordBackupAttempt(t.Context(), other.Step(backup.StepWrite), id, attempt); !errors.Is(
 		err, durable.ErrClaimLost,
 	) {
 		t.Fatalf("record with a fence of another backup: err = %v, want durable.ErrClaimLost", err)
@@ -2490,6 +2494,39 @@ func refuseOtherBackupAttempt(
 	}
 
 	return live
+}
+
+// refuseInvalidBackupAttempt proves the store allowlist: each attempt outside
+// 1 to 64 allowlisted characters is refused with ErrInvalidAttempt, records
+// no step and leaves the row unchanged.
+func refuseInvalidBackupAttempt(
+	t *testing.T, s BackupStore, id backup.ID, attempt string, live durable.Claim,
+) {
+	t.Helper()
+
+	for i, bad := range []string{
+		strings.Repeat("a", 65),
+		"../x",
+		"a/b",
+		"A",
+		"a\nb",
+	} {
+		step := "invalid-" + string(rune('0'+i))
+
+		if err := s.RecordBackupAttempt(t.Context(), live.Step(step), id, bad); !errors.Is(
+			err, backup.ErrInvalidAttempt,
+		) {
+			t.Fatalf("record invalid attempt %q: err = %v, want ErrInvalidAttempt", bad, err)
+		}
+
+		if got := mustGetBackup(t, s, id); got.Attempt != attempt {
+			t.Fatalf("attempt after an invalid record = %q, want %q", got.Attempt, attempt)
+		}
+
+		if _, done := mustOperation(t, s, live.Operation).Step(step); done {
+			t.Fatalf("operation recorded invalid step %q, want none", step)
+		}
+	}
 }
 
 // refuseFinishedBackupAttempt finishes the running row id and proves that a

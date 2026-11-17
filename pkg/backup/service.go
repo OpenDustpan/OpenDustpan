@@ -938,6 +938,9 @@ func (s *Service) stepFinish(ctx context.Context, sc durable.StepContext) ([]byt
 		return nil, fmt.Errorf("read backup %s for the finish step: %w", in.ID, err)
 	}
 
+	// Defense in depth: the store refuses a row that is not running in the
+	// same transaction as the step record. This check stays so that a caller
+	// that skips the store never finishes a backup that already ended.
 	if row.State != StateRunning {
 		return nil, durable.Permanent(fmt.Errorf("finish backup %s: %w", in.ID, ErrNotRunning))
 	}

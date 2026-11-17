@@ -399,23 +399,22 @@ func pollBackupSucceeded(t *testing.T, handler testHandler, id string) getBackup
 	defer timer.Stop()
 
 	for {
-		// The row reads succeeded one commit before the finish step writes the
-		// live pointer. In that window the read answers 409 and the poll goes on.
+		// The finish step writes the live pointer after Check and before the
+		// fenced commit, so a row that reads succeeded always has its
+		// pointer. A 409 here would mean a corrupt target, not a window.
 		status, body := serveBackup(t, handler, http.MethodGet, "/api/dustpan/v1/backups/"+id)
-		if status != http.StatusOK && status != http.StatusConflict {
-			t.Fatalf("GET backup %s answers %d, want 200 or 409 (%s)", id, status, body)
+		if status != http.StatusOK {
+			t.Fatalf("GET backup %s answers %d, want 200 (%s)", id, status, body)
 		}
 
 		var doc getBackupDoc
 
-		if status == http.StatusOK {
-			if err := json.Unmarshal([]byte(body), &doc); err != nil {
-				t.Fatalf("decode backup %s %q: %v", id, body, err)
-			}
+		if err := json.Unmarshal([]byte(body), &doc); err != nil {
+			t.Fatalf("decode backup %s %q: %v", id, body, err)
+		}
 
-			if doc.State == string(backup.StateSucceeded) {
-				return doc
-			}
+		if doc.State == string(backup.StateSucceeded) {
+			return doc
 		}
 
 		select {

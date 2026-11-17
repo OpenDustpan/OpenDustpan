@@ -20,10 +20,11 @@ import (
 // control minimum suites.
 const ControlMinimum = "v0.5.0"
 
-// ControlBackups is the part of the backup port that starts and finishes a
-// backup row.
+// ControlBackups is the part of the backup port that starts a backup row,
+// records the attempt of the write step and finishes the row.
 type ControlBackups interface {
 	StartBackup(ctx context.Context, r backup.Record, start durable.StartRequest) error
+	RecordBackupAttempt(ctx context.Context, f durable.StepFence, id backup.ID, attempt string) error
 	FinishBackup(
 		ctx context.Context,
 		f durable.StepFence,
@@ -305,6 +306,13 @@ func backupPaths() []controlPath {
 				}
 
 				claim := claimControl(t, s, backup.OperationKind)
+				attempt := backup.AttemptOf(claim.Token)
+				recordErr := s.Backups.RecordBackupAttempt(
+					t.Context(), claim.Step(backup.StepWrite), rec.ID, attempt,
+				)
+				if recordErr != nil {
+					t.Fatalf("record the attempt before the minimum goes up: %v", recordErr)
+				}
 
 				return func(ctx context.Context) error {
 					_, err := s.Backups.FinishBackup(
@@ -314,7 +322,7 @@ func backupPaths() []controlPath {
 						backup.StateSucceeded,
 						"",
 						rec.StartedAt.Add(time.Minute),
-						"",
+						attempt,
 					)
 
 					return err

@@ -30,24 +30,35 @@ type attemptPrefix struct {
 	attempt string
 }
 
-// newAttemptPrefix returns the prefix of attempt for backup id. It accepts a
-// backup ID that ParseID accepts and an attempt of 1 to 64 characters from
-// a-z, 0-9, "-" and "_". It refuses any other input, also dot-dot and slash.
-func newAttemptPrefix(id ID, attempt string) (attemptPrefix, error) {
-	if _, err := ParseID(id.String()); err != nil {
-		return attemptPrefix{}, err
-	}
-
+// ValidAttempt reports whether attempt is valid in the key of a backup
+// object: 1 to 64 characters from a-z, 0-9, "-" and "_". It refuses any
+// other input, also dot-dot and slash. The store allowlist and the prefix
+// share it, so a row and a key refuse the same input.
+func ValidAttempt(attempt string) error {
 	if attempt == "" || len(attempt) > maxAttemptLength {
-		return attemptPrefix{}, fmt.Errorf("%w: length %d", ErrInvalidAttempt, len(attempt))
+		return fmt.Errorf("%w: length %d", ErrInvalidAttempt, len(attempt))
 	}
 
 	for _, c := range []byte(attempt) {
 		switch {
 		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_':
 		default:
-			return attemptPrefix{}, fmt.Errorf("%w: character %q", ErrInvalidAttempt, c)
+			return fmt.Errorf("%w: character %q", ErrInvalidAttempt, c)
 		}
+	}
+
+	return nil
+}
+
+// newAttemptPrefix returns the prefix of attempt for backup id. It accepts a
+// backup ID that ParseID accepts and an attempt that ValidAttempt accepts.
+func newAttemptPrefix(id ID, attempt string) (attemptPrefix, error) {
+	if _, err := ParseID(id.String()); err != nil {
+		return attemptPrefix{}, err
+	}
+
+	if err := ValidAttempt(attempt); err != nil {
+		return attemptPrefix{}, err
 	}
 
 	return attemptPrefix{id: id, attempt: attempt}, nil
@@ -163,6 +174,10 @@ func (s *Service) cleanupOrphans(ctx context.Context, live attemptPrefix) error 
 	// The pointer must name the row attempt before the first delete. A
 	// pointer that differs from the row, or no pointer at all, stops the
 	// cleanup: no delete runs, and the live holder of the row sorts it out.
+	// Defense in depth: the attempt compare below would also stop a missing
+	// pointer, since the zero attempt never equals the row. This check stays
+	// so that a cleanup with no pointer fails with the read error, without
+	// relying on the compare. It does not rely on the claim check.
 	current, err := readLivePointer(ctx, s.target, live.id)
 	if err != nil {
 		return fmt.Errorf("cleanup of backup %s reads no live pointer: %w", live.id, err)

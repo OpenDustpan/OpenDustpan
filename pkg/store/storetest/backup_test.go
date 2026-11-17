@@ -2309,6 +2309,10 @@ func (s *fakeBackupStore) RecordBackupAttempt(
 		return durable.ErrClaimLost
 	}
 
+	if err := backup.ValidAttempt(attempt); err != nil {
+		return err
+	}
+
 	record := func() error {
 		r, ok := s.data.backups[id.String()]
 		if !ok {

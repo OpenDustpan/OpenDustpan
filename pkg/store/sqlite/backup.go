@@ -289,6 +289,10 @@ func (s *Store) RecordBackupAttempt(
 			return err
 		}
 
+		if err := backup.ValidAttempt(attempt); err != nil {
+			return err
+		}
+
 		if err := checkRecordRow(ctx, q, id, attempt); err != nil {
 			return err
 		}
@@ -368,6 +372,12 @@ func finishRow(
 	endedAt time.Time,
 	attempt string,
 ) (backup.Record, error) {
+	if state == backup.StateSucceeded {
+		if err := backup.ValidAttempt(attempt); err != nil {
+			return backup.Record{}, err
+		}
+	}
+
 	row, err := q.GetBackup(ctx, id.String())
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

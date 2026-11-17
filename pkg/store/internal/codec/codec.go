@@ -170,6 +170,17 @@ func ToBackupRow(r backup.Record) BackupRow {
 func FromBackupRow(row BackupRow) (backup.Record, error) {
 	switch state := backup.State(row.State); state {
 	case backup.StateRunning, backup.StateSucceeded, backup.StateFailed:
+		if row.Attempt != "" {
+			if err := backup.ValidAttempt(row.Attempt); err != nil {
+				return backup.Record{}, fmt.Errorf(
+					"%w: bad backup attempt %q: %w",
+					ErrCorruptRow,
+					row.Attempt,
+					err,
+				)
+			}
+		}
+
 		return backup.Record{
 			StartedAt: FromMillis(row.StartedAtMs),
 			EndedAt:   FromOptionalMillis(row.EndedAtMs),

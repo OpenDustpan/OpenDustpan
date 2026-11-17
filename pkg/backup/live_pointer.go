@@ -27,6 +27,10 @@ type livePointer struct {
 
 // livePointerKey returns the key of the live pointer of backup id.
 func livePointerKey(id ID) (blob.Key, error) {
+	// Defense in depth: ParseKey below refuses a key outside backups/, but it
+	// accepts some IDs that ParseID refuses. This check stays so that no
+	// caller names a pointer outside the backup directory. It does not rely
+	// on the key parser.
 	if _, err := ParseID(id.String()); err != nil {
 		return "", err
 	}
@@ -169,6 +173,10 @@ func readLivePointerLimit(ctx context.Context, target blob.Store, id ID, limit i
 	}
 
 	var pointer livePointer
+	// Defense in depth: the allowlist below refuses an empty attempt, so a
+	// pointer that is not JSON would still fail closed. This check stays so
+	// that a corrupt pointer fails with the decode error, without relying on
+	// the allowlist.
 	if decodeErr := json.Unmarshal(data, &pointer); decodeErr != nil {
 		return attemptPrefix{}, fmt.Errorf("backup %s has a corrupt live pointer: %w", id, ErrCorrupt)
 	}

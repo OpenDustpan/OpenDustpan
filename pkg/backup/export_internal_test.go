@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/durable"
 )
 
 // CheckObjectBytes runs the object check of one manifest entry on data: the
@@ -185,4 +186,27 @@ func (s *Service) CleanupOrphansForTest(ctx context.Context, id ID, live string)
 // backup of s to limit, so a test proves the refusal with few keys.
 func SetMaxUnverifiedKeysForTest(s *Service, limit int) {
 	s.maxUnverified = limit
+}
+
+// StepWriteForTest runs the write step of the backup operation op with fence.
+// It is the write step that the durable runner runs: it writes the target
+// under the attempt of the fence token and records that attempt on the row.
+func (s *Service) StepWriteForTest(ctx context.Context, op durable.Operation, fence durable.StepFence) error {
+	_, err := s.stepWrite(ctx, durable.StepContext{Operation: op, Fence: fence})
+
+	return err
+}
+
+// StepFinishForTest runs the finish step of the backup operation op with
+// fence, as the durable runner does.
+func (s *Service) StepFinishForTest(ctx context.Context, op durable.Operation, fence durable.StepFence) error {
+	_, err := s.stepFinish(ctx, durable.StepContext{Operation: op, Fence: fence})
+
+	return err
+}
+
+// ClaimCheckForTest returns the point-of-use claim check of fence, so a test
+// can prove that the real check refuses a stale claim and a cancel.
+func (s *Service) ClaimCheckForTest(fence durable.StepFence) func(context.Context) error {
+	return s.claimCheckOf(fence)
 }

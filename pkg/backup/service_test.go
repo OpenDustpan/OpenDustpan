@@ -499,6 +499,10 @@ func (f *fakeRegistry) RecordBackupAttempt(
 	return f.domain.WriteStep(ctx, fence, f.fence, "", durabletest.Hooks{
 		Before: nil,
 		After: func() error {
+			if err := backup.ValidAttempt(attempt); err != nil {
+				return err
+			}
+
 			f.mu.Lock()
 			defer f.mu.Unlock()
 
