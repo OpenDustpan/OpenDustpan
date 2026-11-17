@@ -179,7 +179,11 @@ func TestDisabledPersonCostsTheBindsOfAnUnknownUser(t *testing.T) {
 			}
 
 			disabled, disabledErr := bindsOf("alice")
-			unknown, _ := bindsOf("nobody")
+			unknown, unknownErr := bindsOf("nobody")
+
+			if !errors.Is(unknownErr, session.ErrMethodRejected) {
+				t.Fatalf("error of an unknown name = %v, want ErrMethodRejected", unknownErr)
+			}
 
 			if !errors.Is(disabledErr, tc.want) {
 				t.Fatalf("error of the person = %v, want %v", disabledErr, tc.want)
