@@ -11,8 +11,9 @@
 
 ## 2. implementation
 
-- [ ] 2.1 Add flag and list keys with CIDR parsing and audit entries in NEW file pkg/dustpan/ipallow.go. Check: PATCH settings returns 200 and GET shows the effective value.
-- [ ] 2.2 Wire the checker into sign-in and token authentication. Call the NEW checker newAllowChecker from NEW file pkg/dustpan/ipallow.go. Check: A denied address gets 403 with ip-allowlist.denied.
+- [ ] 2.0 Add the NEW error code ip-allowlist.invalid-cidr in internal/errcode/catalog.go and map `ipallow.ErrInvalidList` to it in internal/errcode/errcode.go and internal/api/server/ip_allowlist.go. Keep `ipallow.MaxEntries` of pkg/ipallow/list.go at 64 and add a test for the 65th entry in pkg/ipallow/list_test.go. Check: the error code catalog test passes and the 65th entry answers 400 with ip-allowlist.invalid-cidr. Confirmed by: CI (the golden files of internal/errcode/testdata/catalog are regenerated with their generator).
+- [ ] 2.1 Add flag and list keys with CIDR parsing and audit entries in NEW file pkg/dustpan/ipallow.go, with the setting types in NEW file pkg/ipallow/settings.go, and register them in pkg/dustpan/area_ipallow.go and pkg/dustpan/settings_resource.go. Check: PATCH settings returns 200 and GET shows the effective value.
+- [ ] 2.2 Wire the checker into sign-in and token authentication. Call the NEW checker newAllowChecker from NEW file pkg/dustpan/ipallow.go. Check: A denied address gets 403 with access.ip-not-allowed.
 - [ ] 2.3 Update docs/guides/ip-allowlists.md. Check: Each command on the page runs as written. Confirmed by: CI (an e2e step in the NEW file e2e/ip_allowlists_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
 
 ## 3. Side effects (computed from main)
