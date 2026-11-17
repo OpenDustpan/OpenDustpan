@@ -26,4 +26,4 @@ Where CI starts RustFS, the CI workflow SHALL pin the rustfs/rustfs image by its
 
 #### Scenario: Digest pinned
 - **WHEN** a reviewer reads the go job service block
-- **THEN** ci.yml names the full rustfs/rustfs image digest and no floating tag
+- **THEN** .github/workflows/ci.yml names the full rustfs/rustfs image digest and no floating tag
