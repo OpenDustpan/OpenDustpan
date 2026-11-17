@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -34,8 +35,9 @@ func TestJobTokenCredentials(t *testing.T) {
 	}
 }
 
-// jobTokenCredentials runs the credentials path against env.
-func jobTokenCredentials(t *testing.T, env *e2e.Env) {
+// jobTokenOfAJob makes the starter of a job, claims a phase, opens the session
+// and asks for the job token of the first step.
+func jobTokenOfAJob(t *testing.T, env *e2e.Env) (*launched, protocol.CredentialsResponse) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -53,8 +55,15 @@ func jobTokenCredentials(t *testing.T, env *e2e.Env) {
 	run := openLaunchedSession(t, env)
 	env.LogJobStepsOnFailure(t, e2e.Namespace, run.job, run.handoff)
 
-	step := run.launcher.Assignment.Steps[0].Name
-	issued := run.launcher.JobToken(ctx, t, step)
+	return run, run.launcher.JobToken(ctx, t, run.launcher.Assignment.Steps[0].Name)
+}
+
+// jobTokenCredentials runs the credentials path against env.
+func jobTokenCredentials(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	run, issued := jobTokenOfAJob(t, env)
 
 	if !strings.HasPrefix(issued.Token, jobtoken.SecretPrefix) {
 		t.Fatalf("the job token has no %q prefix", jobtoken.SecretPrefix)
@@ -63,6 +72,8 @@ func jobTokenCredentials(t *testing.T, env *e2e.Env) {
 	if issued.ExpiresAt.IsZero() {
 		t.Fatal("the job token has no expiry")
 	}
+
+	jobTokenStateRoutes(ctx, t, env, issued.Token)
 
 	// A step that the phase does not have, and a name that is not a step
 	// name, get no token.
@@ -88,5 +99,48 @@ func jobTokenCredentials(t *testing.T, env *e2e.Env) {
 
 	if found := env.ServerLogHolds(t, issued.Token, run.handoff); len(found) > 0 {
 		t.Fatal("the server log holds the job token or the handoff token")
+	}
+}
+
+// otherUnit is a second workspace of the namespace. The job token of the unit
+// of the job must not reach it.
+const otherUnit = "other-unit"
+
+// jobTokenStateRoutes calls the state route of the unit of the job and of
+// another unit with the job token. The token reaches its own unit and no
+// other, and the refusal names no token text.
+func jobTokenStateRoutes(ctx context.Context, t *testing.T, env *e2e.Env, token string) {
+	t.Helper()
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: jobsAgent, Name: "create the other workspace", Method: http.MethodPost,
+		Path: "/api/v2/organizations/" + e2e.Namespace + "/workspaces",
+		Body: `{"data":{"type":"workspaces","attributes":{"name":"` + otherUnit + `"}}}`,
+		Want: http.StatusCreated, Scheme: "", Check: nil,
+	})
+
+	own := "/tofu/state/" + e2e.Namespace + "/" + jobsUnit
+
+	status, body, err := env.TFEStatus(ctx, token, http.MethodGet, own, "")
+	if err != nil {
+		t.Fatalf("read the state of the own unit: %v", err)
+	}
+
+	// A new workspace holds no state yet: the route answers 404, and not 401 or 403.
+	if status != http.StatusNotFound {
+		t.Errorf("state of the own unit with its job token = %d %s, want 404 (allowed, no state)", status, body)
+	}
+
+	status, body, err = env.TFEStatus(ctx, token, http.MethodGet, "/tofu/state/"+e2e.Namespace+"/"+otherUnit, "")
+	if err != nil {
+		t.Fatalf("read the state of another unit: %v", err)
+	}
+
+	if status != http.StatusForbidden {
+		t.Errorf("state of another unit with the job token = %d %s, want 403", status, body)
+	}
+
+	if strings.Contains(body, token) {
+		t.Error("the refusal holds the job token")
 	}
 }
