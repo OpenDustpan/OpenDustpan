@@ -92,6 +92,26 @@ func TestCredentialOfEachKind(t *testing.T) {
 	}
 }
 
+// TestCredentialOfUnknownKind checks that the credential of a token of a kind
+// that this version does not know is an error, not the access token: a store
+// that gives such a token back does not sign anyone in.
+func TestCredentialOfUnknownKind(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	secret := storeTokenOfKind(t, &f, accesstoken.KindService)
+	svc := serviceOver(t, &f, stubKindStore{Store: f.store, kind: "other"})
+
+	p, err := svc.AuthenticateToken(t.Context(), secret.Reveal())
+	if !errors.Is(err, accesstoken.ErrUnknownKind) {
+		t.Fatalf("AuthenticateToken of an unknown-kind token: err = %v, want ErrUnknownKind", err)
+	}
+
+	if p.Credential != "" {
+		t.Errorf("credential = %q, want none", p.Credential)
+	}
+}
+
 // TestRevokeScopeOfEachKind checks the service-scope revoke of each kind by an
 // administrator: a service token and a token of a token exchange are revoked,
 // and a personal token is refused with ErrWrongKind.

@@ -16,9 +16,9 @@ import (
 // rule. No code issues it now.
 const oldKind = accesstoken.Kind("trust")
 
-// storeOldKindToken stores a token of the kind oldKind for the service
-// principal of f and returns its secret.
-func storeOldKindToken(t *testing.T, f *fixture) accesstoken.Secret {
+// storeTokenOfKind stores a token of the kind k for the service principal of
+// f and returns its secret.
+func storeTokenOfKind(t *testing.T, f *fixture, k accesstoken.Kind) accesstoken.Secret {
 	t.Helper()
 
 	issued, err := f.svc.NewTrustToken(t.Context(), f.clock.Now(), f.service.ID, "old kind", "trust-rule:old")
@@ -26,7 +26,7 @@ func storeOldKindToken(t *testing.T, f *fixture) accesstoken.Secret {
 		t.Fatalf("NewTrustToken = %v", err)
 	}
 
-	issued.Token.Kind = oldKind
+	issued.Token.Kind = k
 
 	e := caller()
 	e.At, e.Namespace, e.Object = f.clock.Now(), audit.ServerScope, accesstoken.TokenRef(f.service.ID, issued.Token.ID)
@@ -37,6 +37,30 @@ func storeOldKindToken(t *testing.T, f *fixture) accesstoken.Secret {
 	}
 
 	return issued.Secret
+}
+
+// serviceOver returns the token service of f that reads its tokens from st.
+func serviceOver(t *testing.T, f *fixture, st accesstoken.Store) *accesstoken.Service {
+	t.Helper()
+
+	svc, err := accesstoken.NewService(accesstoken.Config{
+		TempAdmins: nil,
+		Store:      st, Principals: f.store, Freshness: nil, Authorizer: nil,
+		Reach: access.ReachConfig{
+			Grants:      f.store,
+			Roles:       f.store,
+			Callers:     f.store,
+			Principals:  f.store,
+			Collections: nil,
+			Units:       nil,
+		},
+		Logger: nil, Now: f.clock.Now, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	return svc
 }
 
 // stubKindStore answers every lookup by digest with a token of the stored
@@ -63,11 +87,15 @@ func TestStoredTokenOfUnknownKindNeverAuthenticates(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
+		// stored is the kind that the store holds for the token.
+		stored accesstoken.Kind
 		// wrap returns the store that the service under test reads.
 		wrap func(accesstoken.Store) accesstoken.Store
 	}{
-		{"the store refuses the row", func(s accesstoken.Store) accesstoken.Store { return s }},
-		{"the service refuses what the store gives", func(s accesstoken.Store) accesstoken.Store {
+		{"the store refuses the row", oldKind, func(s accesstoken.Store) accesstoken.Store { return s }},
+		// The store holds a valid kind and the stub changes it on the way out,
+		// so only the check of the service can stop the token.
+		{"the service refuses what the store gives", accesstoken.KindService, func(s accesstoken.Store) accesstoken.Store {
 			return stubKindStore{Store: s, kind: oldKind}
 		}},
 	} {
@@ -75,24 +103,9 @@ func TestStoredTokenOfUnknownKindNeverAuthenticates(t *testing.T) {
 			t.Parallel()
 
 			f := newFixture(t, nil)
-			secret := storeOldKindToken(t, &f)
+			secret := storeTokenOfKind(t, &f, tc.stored)
 
-			svc, err := accesstoken.NewService(accesstoken.Config{
-				TempAdmins: nil,
-				Store:      tc.wrap(f.store), Principals: f.store, Freshness: nil, Authorizer: nil,
-				Reach: access.ReachConfig{
-					Grants:      f.store,
-					Roles:       f.store,
-					Callers:     f.store,
-					Principals:  f.store,
-					Collections: nil,
-					Units:       nil,
-				},
-				Logger: nil, Now: f.clock.Now, NewID: nil,
-			})
-			if err != nil {
-				t.Fatalf("service: %v", err)
-			}
+			svc := serviceOver(t, &f, tc.wrap(f.store))
 
 			p, err := svc.AuthenticateToken(t.Context(), secret.Reveal())
 			if !errors.Is(err, identity.ErrUnauthenticated) || !errors.Is(err, accesstoken.ErrUnknownKind) {
