@@ -1,28 +1,12 @@
 ## ADDED Requirements
 
-### Requirement: One principal for each housekeeping purpose
+### Requirement: The remaining sweeps are attributed
 
-The server SHALL make one built-in service principal for each housekeeping purpose at the install, and SHALL write its grants as stored grants with the install as the creator and the install time.
+The sweep of access tokens, the expiry of temporary administrators and the rotation of issuer keys SHALL authorize their action through the stored grants of their principals, and each audit entry of each run SHALL name that principal.
 
-#### Scenario: Listed after the install
-- **WHEN** an operator lists the principals of a new installation
-- **THEN** each housekeeping purpose has one principal of kind `service` and source `builtin`, and each has stored grants with a creator and a time
-
-### Requirement: Each sweep is attributed
-
-Each housekeeping run SHALL authorize its action through the stored grants of its principal, and each audit entry of the run SHALL name that principal.
-
-#### Scenario: Artifact sweep
-- **WHEN** the artifact sweep deletes an expired artifact
-- **THEN** the audit entry names the housekeeping principal of the artifact sweep, never `@server`
-
-### Requirement: A revoke stops only its purpose
-
-When an operator revokes the grant of one housekeeping principal, the server SHALL refuse only the work of that purpose, write a denial audit entry, and run the other purposes as before.
-
-#### Scenario: Revoke the artifact sweep
-- **WHEN** the grant of the artifact sweep principal is revoked
-- **THEN** the next artifact sweep changes nothing and writes a denial, and the sweep of access tokens runs as before
+#### Scenario: Token sweep
+- **WHEN** the sweep of access tokens ends an expired token
+- **THEN** the audit entry names the housekeeping principal of the token sweep, never `@server`
 
 ### Requirement: No grant in code
 

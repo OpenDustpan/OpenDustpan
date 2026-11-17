@@ -762,6 +762,16 @@ CREATE TABLE runner_pools (
     CHECK (purpose IN ('jobs', 'sweeps'))
 ) STRICT;
 
+CREATE TABLE runner_pool_proxy_settings (
+    pool_id        TEXT    NOT NULL PRIMARY KEY REFERENCES runner_pools (id),
+    allowed_ranges TEXT    NOT NULL,
+    upstream_url   TEXT    NOT NULL,
+    credential     BLOB    NOT NULL,
+    version        INTEGER NOT NULL CHECK (version >= 1),
+    updated_by     TEXT    NOT NULL,
+    updated_at_ms  INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE runner_join_tokens (
     id            TEXT    NOT NULL PRIMARY KEY,
     namespace_id  TEXT    NOT NULL REFERENCES namespaces (id),
@@ -811,10 +821,11 @@ CREATE TABLE runner_handoff_tokens (
     operation_id  TEXT    NOT NULL,
     token         INTEGER NOT NULL,
     runner_id     TEXT    NOT NULL,
+    kind          TEXT    NOT NULL CHECK (kind IN ('launcher', 'proxy')),
     issued_at_ms  INTEGER NOT NULL,
     expires_at_ms INTEGER NOT NULL,
     used_at_ms    INTEGER NOT NULL,
-    UNIQUE (operation_id, token)
+    UNIQUE (operation_id, token, kind)
 ) STRICT;
 
 CREATE TABLE runner_sessions (
@@ -822,10 +833,11 @@ CREATE TABLE runner_sessions (
     operation_id      TEXT    NOT NULL,
     token             INTEGER NOT NULL,
     runner_id         TEXT    NOT NULL,
+    kind              TEXT    NOT NULL CHECK (kind IN ('launcher', 'proxy')),
     key_public        BLOB    NOT NULL,
     key_created_at_ms INTEGER NOT NULL,
     created_at_ms     INTEGER NOT NULL,
-    UNIQUE (operation_id, token)
+    UNIQUE (operation_id, token, kind)
 ) STRICT;
 
 CREATE TABLE runner_nonces (

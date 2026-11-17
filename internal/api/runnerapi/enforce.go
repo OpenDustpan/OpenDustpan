@@ -22,8 +22,9 @@ type call struct {
 	runner runner.Runner
 	signer runner.Key
 	proof  runner.Proof
-	// session is the job session of a route of ScopeSessionKey, and handoff
-	// the checked request of the route of ScopeHandoffToken.
+	// session is the session of a route of ScopeSessionKey or
+	// ScopeProxySessionKey, and handoff the checked request of a route of
+	// ScopeHandoffToken or ScopeProxyHandoffToken.
 	session runner.Session
 	handoff protocol.SessionRequest
 	// contentSHA256 is the signed hash of the body of an upload. The handler
@@ -43,6 +44,14 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 		ctx := r.Context()
 		c := new(call)
 
+		// Defense in depth: the handler of a credential path sets no cache
+		// header itself, and the error writer does not know the path. Set the
+		// header here, before any check, so that the answer of the path and
+		// each refusal of it forbid a cache, whichever layer answers.
+		if answersCredential(rt.Path) {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+
 		var err error
 
 		switch rt.Scope {
@@ -50,9 +59,9 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 			err = h.checkProtocol(r, c)
 		case ScopeRunnerKey:
 			err = h.checkRunner(r, rt, c)
-		case ScopeHandoffToken:
+		case ScopeHandoffToken, ScopeProxyHandoffToken:
 			err = h.checkHandoff(r, c)
-		case ScopeSessionKey:
+		case ScopeSessionKey, ScopeProxySessionKey:
 			err = h.checkSession(r, rt, c)
 		default:
 			err = fmt.Errorf("%w: route %s has no scope", errNotFound, rt.Path)
@@ -66,6 +75,14 @@ func (h *Handler) enforce(rt Route) http.HandlerFunc {
 
 		rt.Serve(w, r, c)
 	}
+}
+
+// answersCredential reports whether the answer of the path carries a
+// credential. A cache between the runner and the server must not keep it. An
+// unknown path is not listed, and the protocol answers of the other paths keep
+// no Cache-Control header, as runners expect.
+func answersCredential(path string) bool {
+	return path == protocol.PathProxyUpstreamCredential
 }
 
 // maxProtocolBody is the largest JSON body of a protocol request.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,7 +63,10 @@ func endAfterSession(t *testing.T, e *env, r *fakeRunner, operation, handoff str
 	// The session paths of the protocol are not part of this slice.
 	launcherKey := runner.Key{Public: mustKey(t), CreatedAt: time.Time{}}
 
-	if _, err := e.store.runners.OpenSession(t.Context(), sha256Hex(handoff), launcherKey, time.Now()); err != nil {
+	kind := runner.SessionKindLauncher
+
+	_, err := e.store.runners.OpenSession(t.Context(), sha256Hex(handoff), kind, launcherKey, time.Now())
+	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
 
@@ -349,7 +353,19 @@ func TestReplicasClaimOnePhase(t *testing.T) {
 	)
 
 	pool := e.createPool()
-	servers := []*env{e, {t: t, store: second, server: replica, handler: nil, claimer: nil, fence: e.fence, clock: nil}}
+	servers := []*env{
+		e,
+		{
+			t:       t,
+			store:   second,
+			server:  replica,
+			handler: nil,
+			claimer: nil,
+			fence:   e.fence,
+			clock:   nil,
+			last:    atomic.Pointer[http.Header]{},
+		},
+	}
 
 	runners := make([]*fakeRunner, 0, replicaRunners)
 

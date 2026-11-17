@@ -175,7 +175,7 @@ func (s *tokenEnv) launchDirect() *launcher {
 	x := s.newExchange(s.runner.handoff(s.work.Operation))
 
 	sess, err := s.store.runners.OpenSession(s.t.Context(), sha256Hex(x.token),
-		runner.Key{Public: x.pub, CreatedAt: time.Time{}}, s.clock.now())
+		runner.SessionKindLauncher, runner.Key{Public: x.pub, CreatedAt: time.Time{}}, s.clock.now())
 	if err != nil {
 		s.t.Fatalf("open session: %v", err)
 	}

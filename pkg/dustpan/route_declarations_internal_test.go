@@ -172,6 +172,7 @@ func knownScopes() map[reflect.Type]scopeValues {
 			credential: ints(
 				int64(runnerapi.ScopeJoinToken), int64(runnerapi.ScopeRunnerKey),
 				int64(runnerapi.ScopeHandoffToken), int64(runnerapi.ScopeSessionKey),
+				int64(runnerapi.ScopeProxyHandoffToken), int64(runnerapi.ScopeProxySessionKey),
 			),
 		},
 		reflect.TypeFor[runnerpools.Scope](): {

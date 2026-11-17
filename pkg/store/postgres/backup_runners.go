@@ -9,6 +9,24 @@ const (
 	pgColToken       = "token"
 )
 
+// pgCopyProxySettingsTable holds the COPY columns of the proxy settings of the
+// runner pools.
+func pgCopyProxySettingsTable() pgCopyTable {
+	return pgCopyTable{
+		table: "runner_pool_proxy_settings",
+		columns: []string{
+			pgColPoolID,
+			"allowed_ranges",
+			"upstream_url",
+			"credential",
+			pgColVersion,
+			pgColUpdatedBy,
+			pgColUpdatedAtMs,
+		},
+		orderBy: []string{pgColPoolID},
+	}
+}
+
 // pgCopyRunnerTables holds the COPY columns of the tables of runner pools,
 // join tokens and runners, in the order of backup.Tables.
 func pgCopyRunnerTables() []pgCopyTable {
@@ -30,6 +48,7 @@ func pgCopyRunnerTables() []pgCopyTable {
 			},
 			orderBy: []string{"id"},
 		},
+		pgCopyProxySettingsTable(),
 		{
 			table: "runner_join_tokens",
 			columns: []string{
@@ -85,14 +104,28 @@ func pgRunnerControlTables() []pgCopyTable {
 		{
 			table: "runner_handoff_tokens",
 			columns: []string{
-				pgColSHA256, pgColOperationID, pgColToken, "runner_id", "issued_at_ms", pgColExpiresAtMs, pgColUsedAtMs,
+				pgColSHA256,
+				pgColOperationID,
+				pgColToken,
+				"runner_id",
+				pgColKind,
+				"issued_at_ms",
+				pgColExpiresAtMs,
+				pgColUsedAtMs,
 			},
 			orderBy: []string{pgColSHA256},
 		},
 		{
 			table: "runner_sessions",
 			columns: []string{
-				"id", pgColOperationID, pgColToken, "runner_id", "key_public", pgColKeyCreatedAtMs, pgColCreatedAtMs,
+				"id",
+				pgColOperationID,
+				pgColToken,
+				"runner_id",
+				pgColKind,
+				"key_public",
+				pgColKeyCreatedAtMs,
+				pgColCreatedAtMs,
 			},
 			orderBy: []string{"id"},
 		},

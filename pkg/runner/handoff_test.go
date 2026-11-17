@@ -190,7 +190,12 @@ func TestEveryAuditEventHasAProducer(t *testing.T) {
 
 	// Events with a rule and no producer yet. A case for one of them fails the
 	// test, so this list shrinks when its producer lands.
-	unproduced := map[runner.Event]bool{runner.EventCredentialsIssued: true}
+	unproduced := map[runner.Event]bool{
+		runner.EventCredentialsIssued:        true,
+		runner.EventPoolProxySettingsChanged: true,
+		runner.EventProxySessionOpened:       true,
+		runner.EventProxyCredentialIssued:    true,
+	}
 	claimed := map[runner.Event]bool{}
 
 	for _, p := range producers() {

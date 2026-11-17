@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/proxysessionsvc"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
@@ -115,6 +116,10 @@ type Config struct {
 	// Without it, the read of a plan part answers not-found. Artifacts needs
 	// Jobs too.
 	Artifacts job.ArtifactReader
+	// Proxies serves the proxy session of a job proxy: its assignment and the
+	// upstream credential of the pool. Without it, the paths of the job proxy
+	// answer not-found.
+	Proxies *proxysessionsvc.Service
 }
 
 // JobReader is the part of job.Store that the session exchange needs.
@@ -164,6 +169,7 @@ type Handler struct {
 	routes              []Route
 	plans               job.PlanRecorder
 	artifacts           job.ArtifactReader
+	proxies             *proxysessionsvc.Service
 }
 
 // validate returns ErrMissingDependency when cfg lacks a required dependency.
@@ -279,6 +285,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		routes:              nil,
 		plans:               cfg.Plans,
 		artifacts:           cfg.Artifacts,
+		proxies:             cfg.Proxies,
 	}
 
 	h.routes = h.buildRoutes()

@@ -17,6 +17,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/denylimit"
+	"opendustpan.org/opendustpan/internal/proxysessionsvc"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -65,6 +66,9 @@ type Config struct {
 	// Now is the clock of this instance. Nil takes time.Now. The handler uses
 	// each time in UTC at millisecond precision.
 	Now func() time.Time
+	// Proxies reads and saves the proxy settings of a pool. Without it, the
+	// proxy settings routes are not mounted.
+	Proxies *proxysessionsvc.Service
 }
 
 // Handler serves the runner management API.
@@ -83,6 +87,7 @@ type Handler struct {
 	now        func() time.Time
 	mux        *patternMux
 	routes     []Route
+	proxies    *proxysessionsvc.Service
 }
 
 // validate returns ErrMissingDependency when cfg lacks a required dependency.
@@ -146,6 +151,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		now:        now,
 		mux:        newPatternMux(),
 		routes:     nil,
+		proxies:    cfg.Proxies,
 	}
 
 	h.routes = h.buildRoutes()

@@ -95,6 +95,11 @@ func openLaunchedSession(t *testing.T, env *e2e.Env) *launched {
 type claimed struct {
 	job     string
 	handoff string
+	// pool is the ID of the pool, and runner the fake runner that holds the
+	// claim, for the calls of the same claim that other tests make.
+	pool      string
+	runner    *e2e.FakeRunner
+	operation string
 }
 
 // claimAPhase makes the unit and the pool, starts a job, joins a fake runner,
@@ -140,7 +145,10 @@ func claimAPhase(t *testing.T, env *e2e.Env) claimed {
 		t.Fatalf("poll = %+v, want the phase of the job %s", work, started.ID)
 	}
 
-	return claimed{job: started.ID, handoff: fake.Handoff(ctx, t, work.Operation)}
+	return claimed{
+		job: started.ID, handoff: fake.Handoff(ctx, t, work.Operation), pool: poolID, runner: fake,
+		operation: work.Operation,
+	}
 }
 
 // pathOf returns the path of a step route with the step and the chunk number

@@ -155,6 +155,9 @@ func TestEveryEventHasAnAuditRule(t *testing.T) {
 		runner.EventRunnerRetired,
 		runner.EventCredentialsIssued,
 		runner.EventHandoffRefused,
+		runner.EventPoolProxySettingsChanged,
+		runner.EventProxySessionOpened,
+		runner.EventProxyCredentialIssued,
 	}
 	rules := runner.AuditRules()
 
@@ -171,6 +174,10 @@ func TestEveryEventHasAnAuditRule(t *testing.T) {
 
 	if rules[runner.EventCredentialsIssued].Kind != audit.KindReveal {
 		t.Error("the hand of credentials to a session is a reveal")
+	}
+
+	if rules[runner.EventProxyCredentialIssued].Kind != audit.KindReveal {
+		t.Error("the hand of the upstream credential to a proxy session is a reveal")
 	}
 }
 

@@ -73,6 +73,7 @@ type RunnerHandoffTokenRow struct {
 	OperationID string
 	Token       int64
 	RunnerID    string
+	Kind        runner.SessionKind
 	IssuedAtMs  int64
 	ExpiresAtMs int64
 	UsedAtMs    int64
@@ -220,7 +221,7 @@ func LabelsToJSON(labels map[string]string) (string, error) {
 // HandoffTokenFromRow decodes a handoff token.
 func HandoffTokenFromRow(r RunnerHandoffTokenRow) runner.HandoffToken {
 	return runner.HandoffToken{
-		SHA256: r.Sha256, Operation: r.OperationID, Token: r.Token, Runner: r.RunnerID,
+		SHA256: r.Sha256, Operation: r.OperationID, Token: r.Token, Runner: r.RunnerID, Kind: r.Kind,
 		IssuedAt: RunnerTime(r.IssuedAtMs), ExpiresAt: RunnerTime(r.ExpiresAtMs), UsedAt: RunnerTime(r.UsedAtMs),
 	}
 }

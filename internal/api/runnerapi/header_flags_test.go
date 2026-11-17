@@ -62,6 +62,10 @@ func TestHeaderFlagsMatchTheHandler(t *testing.T) {
 		"PUT " + protocol.PathSessionPlanUpload:   noHeaders("{}"),
 		"POST " + protocol.PathSessionPlanCommit:  noHeaders("{}"),
 		"GET " + protocol.PathSessionPlanPart:     noHeaders(""),
+
+		"POST " + protocol.PathClaimProxyHandoff:       noHeaders("{}"),
+		"POST " + protocol.PathProxySession:            noHeaders("{}"),
+		"POST " + protocol.PathProxyUpstreamCredential: noHeaders(""),
 	}
 
 	routes := newEnv(t).handler.Routes()
