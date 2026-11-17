@@ -62,7 +62,7 @@ func TestPasswordSignInOverTheLDAPMethod(t *testing.T) {
 	signIn := func(password string) error {
 		_, err := h.svc.CompletePassword(t.Context(), &signinsvc.PasswordRequest{
 			Entry: callerEntry(), Provider: ldapProvider(), Method: method, UserName: "alice",
-			Password: session.NewPassword(password),
+			Password: session.NewPassword(password), SubjectFailureLimit: lockLimit,
 		})
 
 		return err

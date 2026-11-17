@@ -30,7 +30,7 @@ func describedLDAPProvider() dustpan.LDAPProvider {
 		UserNameAttribute: "uid", EmailAttribute: "mail", NameAttribute: "cn", Subject: "entryUUID",
 		DisabledAttribute: "", Groups: "off", GroupBaseDN: "", GroupFilter: "", GroupMemberAttribute: "",
 		GroupMemberOfAttribute: "", GroupNameAttribute: "", DisabledValues: nil, DisabledMask: 0, StartTLS: false,
-		AutoCreate: true,
+		AutoCreate: true, SubjectFailureLimit: 5, SubjectFailureLimitSource: "default",
 	}
 }
 

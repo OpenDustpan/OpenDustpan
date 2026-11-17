@@ -346,6 +346,26 @@ func PasswordNameRule() LockRule {
 	}
 }
 
+// The limit of the failed sign-ins of one person from every source, and the
+// range that an administrator may set.
+const (
+	// DefaultSubjectFailureLimit is the limit when no setting gives one.
+	DefaultSubjectFailureLimit = 5
+	// MinSubjectFailureLimit is the lowest limit that a setting may give.
+	MinSubjectFailureLimit = 1
+	// MaxSubjectFailureLimit is the highest limit that a setting may give.
+	MaxSubjectFailureLimit = 100
+)
+
+// PasswordSubjectRule is the rule of the count of one subject from every
+// source. It is PasswordNameRule with the limit of the argument.
+func PasswordSubjectRule(limit int) LockRule {
+	rule := PasswordNameRule()
+	rule.Limit = limit
+
+	return rule
+}
+
 // changeScope is the key of the change and of the attribute that name the
 // scope of a count.
 const changeScope = "scope"

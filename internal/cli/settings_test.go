@@ -14,10 +14,12 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/launcher"
+	"opendustpan.org/opendustpan/pkg/setting"
 )
 
 // envPattern finds environment names in Go string literals: a DUSTPAN_
@@ -240,6 +242,41 @@ func TestFileKeysAreServed(t *testing.T) {
 		if s.File != "" && !served[s.Name()] && s.Env != "DUSTPAN_ADMIN_TOKEN_FILE" {
 			t.Errorf("setting %s has a file key and serve does not register it", s.Name())
 		}
+	}
+}
+
+// TestLDAPSubjectFailureLimitDeclaration proves the lockout setting has one
+// declaration with the flag, the variable, the file key and the default of
+// the lockout, and that the settings resource declares it.
+func TestLDAPSubjectFailureLimitDeclaration(t *testing.T) {
+	t.Parallel()
+
+	s := cli.ByFlag("ldap-subject-failure-limit")
+	if s == nil || s.Kind != cli.KindInt || s.Env != "DUSTPAN_LDAP_SUBJECT_FAILURE_LIMIT" ||
+		s.File != "ldap.subjectFailureLimit" || s.Default != strconv.Itoa(authgate.DefaultSubjectFailureLimit) {
+		t.Fatalf("declaration = %+v, want the lockout setting with its default", s)
+	}
+
+	if byFile := cli.ByFile("ldap.subjectFailureLimit"); byFile != s {
+		t.Fatalf("ByFile = %+v, want the setting of the flag", byFile)
+	}
+
+	found := false
+
+	for _, d := range cli.SettingDeclarations() {
+		if d.Key != s.File {
+			continue
+		}
+
+		found = true
+
+		if d.Default != s.Default || d.Kind != setting.KindInt {
+			t.Fatalf("settings resource declaration = %+v, want the default and the kind of the flag", d)
+		}
+	}
+
+	if !found {
+		t.Fatalf("the settings resource does not declare %s", s.File)
 	}
 }
 

@@ -49,6 +49,9 @@ type PasswordProvider struct {
 	DisplayName string
 	// AutoCreate makes a principal at the first sign-in of a person.
 	AutoCreate bool
+	// SubjectFailureLimit is the limit of the count of the subject from
+	// every source. Zero uses the default of the setting.
+	SubjectFailureLimit int
 }
 
 // LDAPSettings are the settings of an LDAP provider that the list of the
@@ -73,29 +76,37 @@ type LDAPSettings struct {
 	GroupMemberOfAttribute string
 	GroupNameAttribute     string
 	StartTLS               bool
+	// SubjectFailureLimit is the limit of the count of the subject from
+	// every source.
+	SubjectFailureLimit int
+	// SubjectFailureLimitSource is the layer that sets the limit: flag, env,
+	// file or default.
+	SubjectFailureLimitSource string
 }
 
 // providerLDAP is the LDAP settings of a provider on the wire. BindPasswordSet
 // is true when the provider has a bind password; no answer holds it.
 type providerLDAP struct {
-	AllowedRanges          []string `json:"allowedRanges"`
-	URL                    string   `json:"url"`
-	BindDN                 string   `json:"bindDn"`
-	BaseDN                 string   `json:"baseDn"`
-	UserFilter             string   `json:"userFilter"`
-	UserNameAttribute      string   `json:"userNameAttribute"`
-	EmailAttribute         string   `json:"emailAttribute"`
-	NameAttribute          string   `json:"nameAttribute"`
-	Subject                string   `json:"subject"`
-	DisabledAttribute      string   `json:"disabledAttribute"`
-	Groups                 string   `json:"groups"`
-	GroupBaseDN            string   `json:"groupBaseDn"`
-	GroupFilter            string   `json:"groupFilter"`
-	GroupMemberAttribute   string   `json:"groupMemberAttribute"`
-	GroupMemberOfAttribute string   `json:"groupMemberOfAttribute"`
-	GroupNameAttribute     string   `json:"groupNameAttribute"`
-	StartTLS               bool     `json:"startTLS"`
-	BindPasswordSet        bool     `json:"bindPasswordSet"`
+	AllowedRanges             []string `json:"allowedRanges"`
+	URL                       string   `json:"url"`
+	BindDN                    string   `json:"bindDn"`
+	BaseDN                    string   `json:"baseDn"`
+	UserFilter                string   `json:"userFilter"`
+	UserNameAttribute         string   `json:"userNameAttribute"`
+	EmailAttribute            string   `json:"emailAttribute"`
+	NameAttribute             string   `json:"nameAttribute"`
+	Subject                   string   `json:"subject"`
+	DisabledAttribute         string   `json:"disabledAttribute"`
+	Groups                    string   `json:"groups"`
+	GroupBaseDN               string   `json:"groupBaseDn"`
+	GroupFilter               string   `json:"groupFilter"`
+	GroupMemberAttribute      string   `json:"groupMemberAttribute"`
+	GroupMemberOfAttribute    string   `json:"groupMemberOfAttribute"`
+	GroupNameAttribute        string   `json:"groupNameAttribute"`
+	StartTLS                  bool     `json:"startTLS"`
+	BindPasswordSet           bool     `json:"bindPasswordSet"`
+	SubjectFailureLimit       int      `json:"subjectFailureLimit"`
+	SubjectFailureLimitSource string   `json:"subjectFailureLimitSource"`
 }
 
 // Answers of the password sign-in of a provider.
@@ -249,6 +260,7 @@ func (h *Handler) providerPasswordSignIn(
 			ID: p.ID, Kind: session.MethodLDAP, AutoCreate: p.AutoCreate, Stored: false,
 		},
 		Method: p.Method, UserName: req.UserName, Password: session.NewPassword(req.Password),
+		SubjectFailureLimit: p.SubjectFailureLimit,
 	})
 	if err != nil {
 		h.answerPasswordError(ctx, w, err)
@@ -296,23 +308,25 @@ func passwordProviderOf(p *PasswordProvider) providerResponse {
 			AllowedRanges: nonNilRanges(
 				s.AllowedRanges,
 			),
-			URL:                    s.URL,
-			BindDN:                 s.BindDN,
-			BaseDN:                 s.BaseDN,
-			UserFilter:             s.UserFilter,
-			UserNameAttribute:      s.UserNameAttribute,
-			EmailAttribute:         s.EmailAttribute,
-			NameAttribute:          s.NameAttribute,
-			Subject:                s.Subject,
-			DisabledAttribute:      s.DisabledAttribute,
-			Groups:                 s.Groups,
-			GroupBaseDN:            s.GroupBaseDN,
-			GroupFilter:            s.GroupFilter,
-			GroupMemberAttribute:   s.GroupMemberAttribute,
-			GroupMemberOfAttribute: s.GroupMemberOfAttribute,
-			GroupNameAttribute:     s.GroupNameAttribute,
-			StartTLS:               s.StartTLS,
-			BindPasswordSet:        true,
+			URL:                       s.URL,
+			BindDN:                    s.BindDN,
+			BaseDN:                    s.BaseDN,
+			UserFilter:                s.UserFilter,
+			UserNameAttribute:         s.UserNameAttribute,
+			EmailAttribute:            s.EmailAttribute,
+			NameAttribute:             s.NameAttribute,
+			Subject:                   s.Subject,
+			DisabledAttribute:         s.DisabledAttribute,
+			Groups:                    s.Groups,
+			GroupBaseDN:               s.GroupBaseDN,
+			GroupFilter:               s.GroupFilter,
+			GroupMemberAttribute:      s.GroupMemberAttribute,
+			GroupMemberOfAttribute:    s.GroupMemberOfAttribute,
+			GroupNameAttribute:        s.GroupNameAttribute,
+			StartTLS:                  s.StartTLS,
+			BindPasswordSet:           true,
+			SubjectFailureLimit:       s.SubjectFailureLimit,
+			SubjectFailureLimitSource: s.SubjectFailureLimitSource,
 		},
 	}
 }
