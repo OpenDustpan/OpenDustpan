@@ -33,9 +33,9 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - Main has no proxy session path and no pool proxy setting. Proof: `rg -c -i proxy pkg/runner/protocol/protocol.go pkg/runner/store.go pkg/runner/runner.go internal/api/runnerapi/routes.go internal/api/runnerpools/routes.go` finds 0 matches in each file.
-- Main has no stored allowed range or upstream URL for a pool. Proof: `rg -i 'allowed_ranges|upstream' pkg/store/sqlite/migrations/0168_baseline.sql pkg/store/postgres/migrations/0168_baseline.sql pkg/runner internal/api/runnerpools` finds no pool setting. `egress.ParseAllowedRanges` is called only for the git host, audit sink and LDAP flags (`cmd/opendustpan/main.go`, `cmd/opendustpan/ldap.go`).
-- `job-proxy-runtime-guard` waits for this change. Proof: its `tasks.md` tasks 2.2 and 2.3 say BLOCKED by this change, and `job-proxy-rule-sets/proposal.md` lists the upstream proxy and the allowed private ranges under "Out of scope".
-- `docs/rfc/0016-egress-proxy.md` item X5 lists "the proxy handoff token, the proxy session, the assignment, the CA and record uploads, the pool settings (allowed ranges, upstream proxy)". This change takes the proxy handoff token, the proxy session, the assignment and the pool settings. The CA and record uploads stay in `job-proxy-credential-records-audit`.
+- Main has no stored allowed range or upstream URL for a pool. Proof: `rg -i 'allowed_ranges|upstream' pkg/store/sqlite/migrations/0168_baseline.sql pkg/store/postgres/migrations/0168_baseline.sql pkg/runner internal/api/runnerpools` finds no pool setting. `egress.ParseAllowedRanges` is called only for the git host, audit sink and LDAP flags (the main file and the LDAP file of the binary command package).
+- `job-proxy-runtime-guard` waits for this change. Proof: the task list in `openspec/changes/job-proxy-runtime-guard/tasks.md`, tasks 2.2 and 2.3, say BLOCKED by this change, and `openspec/changes/job-proxy-rule-sets/proposal.md` lists the upstream proxy and the allowed private ranges under "Out of scope".
+- The egress proxy RFC, item X5, lists "the proxy handoff token, the proxy session, the assignment, the CA and record uploads, the pool settings (allowed ranges, upstream proxy)". This change takes the proxy handoff token, the proxy session, the assignment and the pool settings. The CA and record uploads stay in `job-proxy-credential-records-audit`.
 
 ## What Changes
 
@@ -47,9 +47,9 @@ Evidence for the claims above:
 - New runner protocol path `POST /runner/v1/proxy/session/upstream-credential` (proxy session key; the unsealed upstream credential, one audit entry for each call)
 - A session and a handoff token get a kind (`launcher` or `proxy`). The kind comes from the route and is stored. A token of one kind opens nothing of the other kind
 - New audit events for a change of the pool proxy settings, for the open of a proxy session and for the issue of the upstream credential
-- No new identity action. Each route declares an existing action (table in design.md)
+- No new identity action. Each route declares an existing action (table in the design document of the change)
 - Schema edited in place in both baselines: a `kind` column on `runner_handoff_tokens` and `runner_sessions`, and the new table `runner_pool_proxy_settings`
-- The assignment version stays 1: this change adds no field to the launcher assignment (design.md, decision 7)
+- The assignment version stays 1: this change adds no field to the launcher assignment (the design document of the change, decision 7)
 - New docs page `docs/guides/job-proxy-pool-settings.md` and the proxy session paths in `docs/reference/runner-api.md`
 - E2e step with the real launcher binary
 
@@ -80,7 +80,7 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - The launcher session path to open a session exists. (`pkg/runner/protocol/protocol.go:57 (PathSession)`)
 - The launcher handoff path of a claim exists. (`pkg/runner/protocol/protocol.go:39 (PathClaimHandoff)`)
-- The route table joins the runner, launcher and plan routes. (`internal/api/runnerapi/routes.go:56 (runnerRoutes)`)
+- The route table joins the runner, launcher and plan routes. (`internal/api/runnerapi/routes.go:60 (runnerRoutes)`)
 - The handoff handler issues the handoff token of a claim. (`internal/api/runnerapi/protocol.go:608 (handoff)`)
 - The session store issues handoff tokens and opens sessions. (`pkg/runner/store.go:168 (IssueHandoffToken)`)
 - The session store opens a session with no kind. (`pkg/runner/store.go:177 (OpenSession)`)
@@ -122,7 +122,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Quote: "An error text never holds the URL or the credential of the upstream proxy: the job proxy maps each error to a fixed reason."
 - Quote: "`namespace:manage-runners` sets the allowed ranges and the upstream proxy of a pool."
 - Quote: "The runner protocol gets the proxy session paths under `/runner/v1`. The proxy fields raise the assignment version."
-- Effect: This change adds the pool settings, the sealed credential that only a proxy session gets, the action `namespace:manage-runners` for the settings, and the proxy session paths. The last quote says that the proxy fields raise the assignment version. This change adds no proxy field to the launcher assignment, so the version stays (design.md, decision 7). The first change that adds such a field raises it.
+- Effect: This change adds the pool settings, the sealed credential that only a proxy session gets, the action `namespace:manage-runners` for the settings, and the proxy session paths. The last quote says that the proxy fields raise the assignment version. This change adds no proxy field to the launcher assignment, so the version stays (the design document of the change, decision 7). The first change that adds such a field raises it.
 - Conflict: none.
 
 **ADR 353: Gates at every step of a plan that runs untrusted code: every control is an opt-in setting** (owner-tagged (all decisions)).
@@ -130,7 +130,7 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Decisions that apply: 1, 2, 6 (current).
 - Changed by: -. Chain to the end: none.
 - Current rule: this ADR.
-- Quote: "Until a team turns a setting on, a unit behaves as it does on `main`. The docs and the console make each setting visible. The API shows the effective value of each setting, with the place that set it (see \"No magic\" in `CLAUDE.md`)."
+- Quote: "Until a team turns a setting on, a unit behaves as it does on `main`. The docs and the console make each setting visible. The API shows the effective value of each setting, with the place that set it (see \"No magic\" in the repository agent instructions)."
 - Quote: "A setting can turn a control off only by an explicit stored value that has a record of who set it and when."
 - Effect: A pool with no stored settings behaves as today. GET shows the effective value and `source`. Each stored setting has `updatedBy` and `updatedAt`.
 - Conflict: none.
@@ -172,8 +172,8 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 
 **ADR 250: Defense in depth for security code**.
 
-- Quote: "Never use only one layer." (`CLAUDE.md`, "Security code: defense in depth")
-- Effect: Each security task has one hostile test for each layer (design.md, "Layers").
+- Quote: "Never use only one layer." (the repository agent instructions, "Security code: defense in depth")
+- Effect: Each security task has one hostile test for each layer (the design document of the change, "Layers").
 
 ## Open questions
 
