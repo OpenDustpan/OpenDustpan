@@ -59,7 +59,7 @@ func portableProfileTables() []PortableTable {
 				{Name: "include_actor_name", Kind: KindBool},
 				{Name: portColVersion, Kind: KindInteger},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
-				{Name: portColUpdatedBy, Kind: KindText},
+				{Name: "updated_by", Kind: KindText},
 				{Name: "copy_check", Kind: KindText},
 			},
 		},
