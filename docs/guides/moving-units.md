@@ -6,6 +6,8 @@ To move a stack or a workspace to another namespace, export it from the source n
 
 ## Before you move
 
+Use one access token for the source namespace and one for the target namespace. Both namespaces are on the same server. A personal token and a service token both work. See [Access tokens](access-tokens.md) for the two kinds. The token needs read access to the source unit and write access in the target namespace.
+
 1. List the units in the source namespace and find the unit that you want to move.
 
    ```sh
@@ -13,20 +15,103 @@ To move a stack or a workspace to another namespace, export it from the source n
      "https://dustpan.example.com/api/dustpan/v1/namespaces/acme/units"
    ```
 
-2. Export the unit from the source namespace. Use the export that your tool supports. For a Pulumi stack, see [Migrate out of OpenDustpan](migrate-out.md). For an OpenTofu workspace, pull its state or replay its state versions as [Import state into OpenDustpan](import.md) describes for a source.
-3. Choose a target name that is free in the target namespace. A deleted unit holds its name until its retention period ends.
-
-## Move the unit
-
-1. List the deleted units of the target namespace when you are not sure that the target name is free.
+2. Choose a target name that is free in the target namespace. A deleted unit holds its name until its retention period ends. List the deleted units of the target namespace when you are not sure that the name is free.
 
    ```sh
    curl -sS -H "Authorization: Bearer $TOKEN" \
      "https://dustpan.example.com/api/dustpan/v1/namespaces/target/deleted-units"
    ```
 
-2. Run a dry run of the import into the target namespace and read the plan.
-3. Import the unit into the target namespace under the free name.
+3. Stop each pipeline that writes to the source unit. The import does not lock the source.
+
+## Move a Pulumi stack
+
+The export and the import use the Pulumi CLI. The steps use two saved logins on the same server, one for each namespace. The credential for each login is a Pulumi access token of the namespace. [Import state into OpenDustpan](import.md) has the full description of each step.
+
+1. Run the dry run. It reads the source stack and changes nothing. Save the export and the history.
+
+   ```sh
+   export PULUMI_ACCESS_TOKEN=<source-token>
+   pulumi login https://dustpan.example.com
+   pulumi stack select acme/<project>/<stack>
+   pulumi stack history --json
+   pulumi stack export
+   ```
+
+2. Export each version that you want to keep, oldest first. Hold each export in a shell variable. The variable keeps the plain text in memory, with no file. Export one version to move the latest state only.
+
+   ```sh
+   EXPORT1=$(pulumi stack export --version 1)
+   EXPORT2=$(pulumi stack export --version 2)
+   ```
+
+3. Log in with the token of the target namespace. Make the stack under the free name. Set the secret config values again. The target stack uses its own secrets key.
+
+   ```sh
+   export PULUMI_ACCESS_TOKEN=<target-token>
+   pulumi login https://dustpan.example.com
+   pulumi stack init target/<project>/<stack>
+   pulumi stack select target/<project>/<stack>
+   printf '%s' '<value>' | pulumi config set --secret <key>
+   ```
+
+4. Import each held export on standard input, oldest first.
+
+   ```sh
+   printf '%s' "$EXPORT1" | pulumi stack import
+   printf '%s' "$EXPORT2" | pulumi stack import
+   ```
+
+5. Check the target stack. The report of the update holds the word `unchanged`.
+
+   ```sh
+   pulumi stack output --show-secrets
+   pulumi stack history --json
+   pulumi up --yes --non-interactive
+   ```
+
+To leave OpenDustpan instead of moving inside it, see [Migrate out of OpenDustpan](migrate-out.md).
+
+## Move an OpenTofu workspace
+
+The import uses the replay script `scripts/import-tfe-state.sh`. The credential for each side is a token of that namespace for the TFE-compatible API. The script reads the tokens from the environment and never prints them. It replays the newest `--count` state versions from the oldest to the newest. Each replayed version keeps its serial, lineage and MD5.
+
+1. Run the dry run. It lists what the replay would move and changes nothing. It ends with `dry run, changed nothing`.
+
+   ```sh
+   export IMPORT_TFE_SOURCE_TOKEN=<source-token>
+   export IMPORT_TFE_DEST_TOKEN=<target-token>
+   scripts/import-tfe-state.sh \
+     --source-url https://dustpan.example.com \
+     --dest-url https://dustpan.example.com \
+     --source-org acme \
+     --source-workspace <workspace> \
+     --dest-org target \
+     --dest-workspace <workspace> \
+     --count 10 \
+     --dry-run
+   ```
+
+2. Run the same command without `--dry-run`. The script prints one line for each version. It ends with the count that it replayed and the count that it skipped. The script skips each version that the target already holds.
+
+   ```sh
+   scripts/import-tfe-state.sh \
+     --source-url https://dustpan.example.com \
+     --dest-url https://dustpan.example.com \
+     --source-org acme \
+     --source-workspace <workspace> \
+     --dest-org target \
+     --dest-workspace <workspace> \
+     --count 10
+   ```
+
+3. Point the project at the target workspace and run a normal apply. It must succeed on the replayed state. Use the `cloud` block and the token file that [Import state into OpenDustpan](import.md) describes.
+
+   ```sh
+   tofu init -input=false -no-color
+   tofu apply -input=false -auto-approve -no-color
+   tofu state pull -no-color
+   ```
 
 ## What does not carry over
 
@@ -41,7 +126,7 @@ Export and import move the state, and the history where the tool exports it. The
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| The target name already holds a unit, deleted units included | The dry run marks that import unit skipped. Deleted units hold the name too. List deleted units, then pick a free target name. | `GET /api/dustpan/v1/namespaces/{namespace}/deleted-units` |
+| The target name already holds a unit, deleted units included | The Pulumi stack init fails, or the replay script skips each version that the target holds. Deleted units hold the name too. List deleted units, then pick a free target name. | `GET /api/dustpan/v1/namespaces/{namespace}/deleted-units` |
 | The source unit is not found in its namespace | The server answers 404. Check the source name in the unit list of the source namespace. | `GET /api/dustpan/v1/namespaces/{namespace}/units` |
 
 ## After the move
