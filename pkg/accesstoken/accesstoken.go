@@ -55,6 +55,9 @@ var (
 	// ErrNoTokenForKind reports a principal of a kind that gets no access
 	// token: a workload proves its identity in another way (ADR 54).
 	ErrNoTokenForKind = errors.New("principal kind gets no access token")
+	// ErrUnknownKind reports a stored token of a kind that this version does
+	// not know. No code acts on such a token.
+	ErrUnknownKind = errors.New("unknown access token kind")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -74,6 +77,18 @@ const (
 	// exchange lifetime, and no rotation renews it.
 	KindJWTExchange Kind = "jwt-exchange"
 )
+
+// Valid reports whether k is a kind that this version issues. It is the
+// allowlist of the kinds: the store decode, the authentication and the
+// credential of a token refuse every other value.
+func (k Kind) Valid() bool {
+	switch k {
+	case KindPersonal, KindService, KindJWTExchange:
+		return true
+	default:
+		return false
+	}
+}
 
 // FromExchange reports whether a token exchange issues a token of the kind k.
 // A token of such a kind gets the credential of an exchange and the revoke

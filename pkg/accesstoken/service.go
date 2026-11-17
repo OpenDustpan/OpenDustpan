@@ -641,12 +641,26 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
 
+	// A stored token of a kind that this version does not know never
+	// authenticates: it is a row of another version.
+	if errors.Is(err, ErrUnknownKind) {
+		return identity.Principal{}, fmt.Errorf("%w: %w", identity.ErrUnauthenticated, err)
+	}
+
 	if err != nil {
 		return identity.Principal{}, fmt.Errorf("authenticate access token: %w", err)
 	}
 
 	if !m.Digest.Equal(digest) {
 		return identity.Principal{}, identity.ErrUnauthenticated
+	}
+
+	// Defense in depth: the store decode refuses an unknown kind too. This
+	// check stays so that a store adapter that skips the decode check never
+	// lets a token of an unknown kind act as a token of a person.
+	credential, err := credentialOf(m.Token.Kind)
+	if err != nil {
+		return identity.Principal{}, fmt.Errorf("%w: %w", identity.ErrUnauthenticated, err)
 	}
 
 	now := s.Now()
@@ -682,19 +696,24 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 		TokenID:        m.Token.ID,
 		TokenExpiresAt: m.Token.ExpiresAt,
 		Kind:           identity.Kind(m.Owner.Kind),
-		Credential:     credentialOf(m.Token.Kind),
+		Credential:     credential,
 		JobID:          "",
 	}, nil
 }
 
 // credentialOf returns the credential of a token of the kind k: a token of a
 // token exchange is a trust token, so no check reads it as a token of a person.
-func credentialOf(k Kind) identity.Credential {
-	if k.FromExchange() {
-		return identity.CredentialTrustToken
+// A kind that this version does not know has no credential: the answer is
+// ErrUnknownKind, and no default grants one.
+func credentialOf(k Kind) (identity.Credential, error) {
+	switch {
+	case k.FromExchange():
+		return identity.CredentialTrustToken, nil
+	case k == KindPersonal, k == KindService:
+		return identity.CredentialAccessToken, nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownKind, string(k))
 	}
-
-	return identity.CredentialAccessToken
 }
 
 // AccountInactive reports whether the user account o is past the
