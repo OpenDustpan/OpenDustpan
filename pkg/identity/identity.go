@@ -156,7 +156,8 @@ type StateOrigin struct {
 // Action is something a principal wants to do.
 type Action string
 
-// Actions known to the core. Adapters may define their own.
+// Actions known to the core. Adapters may define their own. A new action
+// goes into the catalog in Actions, too.
 const (
 	ActionNamespaceRead  Action = "namespace:read"
 	ActionNamespaceAdmin Action = "namespace:admin"
@@ -657,6 +658,59 @@ const (
 	// namespace that holds the registry.
 	ActionRegistryManageKeys Action = "registry:manage-keys"
 )
+
+// Actions returns every action that the core knows, sorted. The catalog
+// holds each constant of the block above once, in the order of the block,
+// so a diff that adds a constant shows the missing catalog entry next to
+// it. Each call builds the slice again, so a caller can change the slice
+// it gets without a change of the next result.
+func Actions() []Action {
+	catalog := []Action{
+		ActionNamespaceRead, ActionNamespaceAdmin, ActionNamespaceReadAudit,
+		ActionUnitRead, ActionUnitWrite, ActionUnitManage, ActionUnitEncrypt,
+		ActionUnitDecrypt, ActionUnitWriteForced, ActionUnitWriteUnlocked,
+		ActionNamespaceSetOverrides, ActionNamespaceManageIPAllowlist,
+		ActionNamespaceReadGates, ActionNamespaceManageGates, ActionNamespaceManageProxyRules,
+		ActionUnitManageProxyRules, ActionUnitSetOverrides, ActionUnitReadSecrets,
+		ActionUnitReadOutputs, ActionUnitManageSharing, ActionCallerRead,
+		ActionServerBackup, ActionServerObserve, ActionServerReadInstances, ActionServerDeleteInstance,
+		ActionServerReadAudit, ActionServerMaintenance, ActionServerRestore, ActionServerReadSettings,
+		ActionInstallationStoreCheck, ActionServerManageSettings, ActionNamespaceReadSettings,
+		ActionNamespaceManageSettings, ActionServerSetAuditChain, ActionServerDisableAuditChain,
+		ActionServerReadPrincipals, ActionServerManagePrincipals, ActionServerManageGroups,
+		ActionServerManageRoles, ActionServerManageAccess, ActionServerCreateNamespace,
+		ActionNamespaceManageAccess, ActionCollectionManageAccess, ActionUnitManageAccess,
+		ActionUnitRestore, ActionUnitLock, ActionUnitPurge, ActionServerReadAccess,
+		ActionNamespaceManagePrincipals, ActionNamespaceManagePrincipalTokens,
+		ActionNamespaceManageTrustRules, ActionNamespaceReadAccess, ActionCollectionReadAccess,
+		ActionUnitReadAccess, ActionRoleRead, ActionServerReadTokens, ActionServerManageTokens,
+		ActionServerManageServiceTokens, ActionPrincipalManageTokens, ActionTokenManageOwn,
+		ActionCallerManagePreferences, ActionCallerManageGitHostLinks, ActionCallerManageSignIn,
+		ActionCollectionRead, ActionCollectionCreate, ActionCollectionUpdate, ActionCollectionDelete,
+		ActionCollectionCreateUnit, ActionNamespaceReadPlacementRules, ActionNamespaceManagePlacementRules,
+		ActionUnitMove, ActionServerManageAudit, ActionServerManageTokenPolicy,
+		ActionServerManageSignIn, ActionServerRestoreAccess, ActionUnitRunPlan,
+		ActionUnitRunApply, ActionUnitRunDestroy, ActionUnitWriteBack, ActionUnitDefineSteps,
+		ActionJobRead, ActionJobReadLogs, ActionJobReadPlans, ActionJobCancel, ActionJobApprove,
+		ActionNamespaceManageFreezes, ActionNamespaceBreakFreeze, ActionNamespaceManageRunners,
+		ActionRunnerClaim, ActionAgentUse, ActionAgentStartRun, ActionNamespaceManageAgentRuns,
+		ActionNamespaceManageAgent, ActionServerManageAgent, ActionServerAcceptAgentSecretAccess,
+		ActionCallerManageAgentOptIns, ActionUnitObserve, ActionNamespaceReadRunners,
+		ActionRunnerJoin, ActionNamespaceReadUnmanaged, ActionNamespaceTriageUnmanaged,
+		ActionNamespaceManageSweeps, ActionNamespaceStartSweep, ActionServerLinkNamespaces,
+		ActionUnitSetContext, ActionCollectionSetContext, ActionNamespaceSetContext,
+		ActionBlueprintRead, ActionBlueprintSetContext, ActionUnitRedact,
+		ActionProfileRead, ActionProfileWrite, ActionProfileOpen, ActionProfileManage,
+		ActionNamespaceManageNotifications, ActionViewCreate, ActionViewRead, ActionViewDelete,
+		ActionNamespaceReadGitHostConnections, ActionNamespaceManageGitHostConnections,
+		ActionNamespaceUseGitHostConnection, ActionServerReadGitHost, ActionServerManageGitHost,
+		ActionRegistryRead, ActionRegistryPublish, ActionNamespaceManageIssuer,
+		ActionRegistryManageKeys,
+	}
+	slices.Sort(catalog)
+
+	return catalog
+}
 
 // Object limits for the tool and unit parts of a unit reference.
 const (
