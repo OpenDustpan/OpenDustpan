@@ -806,6 +806,33 @@ func recordCases(fx *fixtures) []StoreCase {
 			Want:     nil,
 			Checks:   "A refusal after the window, of another subject, action or limit, stores a new record with Count 1.",
 		},
+		{
+			Name: "prune-expired-deletes-expired", Port: PortRecords, Method: gate.Records.PruneExpired, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: nil,
+			Checks: "PruneExpired deletes each state.write record of the namespace with At before the cutoff, and " +
+				"returns its ID, and appends one audit entry in the same transaction. Get of a deleted record returns " +
+				"ErrNotFound.",
+		},
+		{
+			Name: "prune-expired-keeps-others", Port: PortRecords, Method: gate.Records.PruneExpired, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme, fx.globex}, Policies: nil, Want: nil,
+			Checks: "PruneExpired keeps a state.write record at or after the cutoff, a record of another decision " +
+				"point, and a record of another namespace.",
+		},
+		{
+			Name: "prune-expired-batch-order", Port: PortRecords, Method: gate.Records.PruneExpired, Kinds: nil,
+			Scopes: []gate.Scope{fx.acme}, Policies: nil, Want: nil,
+			Checks: "With more expired records than the batch size, PruneExpired deletes the batch size, lowest ID " +
+				"first, returns the IDs in that order, and a second call deletes the rest.",
+		},
+		{
+			Name: "prune-expired-refuses-hostile-input", Port: PortRecords, Method: gate.Records.PruneExpired,
+			Kinds: nil, Scopes: []gate.Scope{fx.acme, fx.globex}, Policies: nil, Want: gate.ErrInvalid,
+			Checks: "PruneExpired returns ErrInvalid for a request that NewPruneRequest did not make, for the " +
+				"installation scope, and for the fence of another namespace, and namespace.ErrFenced for a " +
+				"stale fence, and audit.ErrInvalidEntry for an invalid entry and an entry of another namespace. " +
+				"Each call deletes nothing and appends no entry.",
+		},
 	}
 }
 

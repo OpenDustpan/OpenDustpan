@@ -632,6 +632,44 @@ func TestEachEvaluationWritesOneRecord(t *testing.T) {
 	}
 }
 
+func TestEvaluationAfterPruneRecords(t *testing.T) {
+	t.Parallel()
+
+	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+
+	if _, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock)); err != nil {
+		t.Fatalf("GuardStateWrite(first) = %v", err)
+	}
+
+	before := e.records(t)
+	if len(before) != 1 {
+		t.Fatalf("records = %d, want 1", len(before))
+	}
+
+	req, err := gate.NewPruneRequest(time.Now().Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("NewPruneRequest() = %v", err)
+	}
+
+	pruned, err := e.store.Records().PruneExpired(t.Context(), "acme", req, e.fence, swEntry())
+	if err != nil {
+		t.Fatalf("PruneExpired() = %v", err)
+	}
+
+	if len(pruned) != 1 || pruned[0] != before[0].ID {
+		t.Fatalf("PruneExpired() = %v, want [%s]", pruned, before[0].ID)
+	}
+
+	if _, err = e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock)); err != nil {
+		t.Fatalf("GuardStateWrite(after prune) = %v", err)
+	}
+
+	after := e.records(t)
+	if len(after) != 1 || after[0].ID == before[0].ID {
+		t.Fatalf("records after prune = %v, want one new record, not %s", after, before[0].ID)
+	}
+}
+
 // swChange returns a change at state.write for the unit web.
 func swChange(t *testing.T, fence namespace.Fence) gate.Change {
 	t.Helper()
