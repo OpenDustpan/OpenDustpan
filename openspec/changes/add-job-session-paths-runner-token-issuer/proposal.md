@@ -13,7 +13,7 @@ Task 2.2 (the SQL adapters of jobtoken.Store) is implemented by #2916. The owner
 The user path this change must make work:
 
 1. **Server start.** The operator starts the server with a runner pool. A runner joins the pool.
-2. **API.** The runner claims a phase through the existing runner protocol under /runner/v1. The claim answer holds no job token. The launcher opens its job session with POST /runner/v1/session and asks for the credentials of a step on the credentials path. The server makes the job token at that request and shows the plaintext once, in that answer.
+2. **API.** The runner claims a phase through the existing runner protocol under /runner/v1. The claim answer holds no job token. The launcher opens its job session on the session open path of the runner protocol (on main) and asks for the credentials of a step on the NEW route `POST /runner/v1/session/credentials` (action runner:claim, session key proof). The server makes the job token at that request and shows the plaintext once, in that answer.
 3. **API.** A step sends the job token as a bearer access token (credential kind job-token, identity.CredentialJobToken) to the OpenTofu HTTP backend route /tofu/state/{namespace}/{workspace} of its own unit. Another unit gives 403.
 4. **API.** The job ends, the claim expires, a takeover replaces the claim, the runner is retired or the step grace bound passes. The token stops and later use gives 401.
 
@@ -34,7 +34,7 @@ Evidence for the claims above:
 
 - Make the job token at the launcher request on the credentials path of the job session, bound to the job ID, the stable unit ID and the claim, with an expiry that is the earlier of the claim end and the step timeout plus grace period (ADR 386, owner). The claim makes none.
 - Write one audit entry for each request that names the job, the step and the expiry.
-- Route the credentials path. The change `add-job-session-paths-runner-2` no longer routes it.
+- Add the NEW route `POST /runner/v1/session/credentials` (action runner:claim, session key proof), which makes the job token. The change `add-job-session-paths-runner-2` no longer routes it.
 - Check the token on the state routes of the unit of the job only, at each use: the claim is live, the expiry has not passed, and the starter principal still holds its grants.
 - Stop the token with its claim: each use reads the live claim, so job end, claim expiry, takeover and retire end it.
 - Set Principal.JobID for a job token only.
@@ -49,11 +49,11 @@ Out of scope:
 Depends on:
 
 - job-token-authenticator-chain (merged, #3215; task 4.2 checks that the job token reaches its own unit and is refused on another unit through that chain)
-- the claim of a runner phase and the handoff token (on main). The change `runners` depends on this change, not the reverse.
-- the job session exchange, POST /runner/v1/session (on main, `internal/api/runnerapi/session.go`)
 
 Builds on (not a change):
 
+- The claim of a runner phase and the handoff token are on main. The change `runners` depends on this change, not the reverse.
+- The job session open path (`protocol.PathSession`, `internal/api/runnerapi/routes.go:100`) is on main.
 - #881
 - #968
 
@@ -73,7 +73,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - job.Claimer.Finish exists. (`pkg/job/executor.go:186`)
 - The constant CredentialJobToken exists. (`pkg/identity/identity.go:113`)
 - A job-token service sets the credential kind on a principal. (`pkg/jobtoken/service.go:202`)
-- A job session opens through POST /runner/v1/session and calls runner.SessionStore.OpenSession. (`internal/api/runnerapi/session.go:293`)
+- A job session opens through the session open path (`protocol.PathSession`) and calls runner.SessionStore.OpenSession. (`internal/api/runnerapi/session.go:293`)
 - `jobtoken.Service.Issue` issues a token with an audit entry and has no caller outside tests. (`pkg/jobtoken/service.go:63`)
 - The credentials path and the type `CredentialsResponse` are declared in the protocol. (`pkg/runner/protocol/protocol.go:74`, `pkg/runner/protocol/protocol.go:424`)
 
