@@ -25,6 +25,9 @@ func (failingAuthorizer) ListObjects(context.Context, identity.Principal, identi
 	return identity.Scope{}, errNoListing
 }
 
+// errGrantStoreDown is an authorizer error that is not a refusal.
+var errGrantStoreDown = errors.New("grant store down")
+
 // TestAuthorizerErrorFailsClosed proves that an authorizer error that is not
 // a refusal never lets a read through, on each route. The answer is the one
 // 404, or 503 for an error that wraps gate.ErrUnavailable, with no record
@@ -46,35 +49,40 @@ func TestAuthorizerErrorFailsClosed(t *testing.T) {
 		err        error
 		wantStatus int
 	}{
-		{"an error that is not a refusal", errors.New("grant store down"), http.StatusNotFound},
-		{"an error that wraps gate.ErrUnavailable", fmt.Errorf("%w: grant store down", gate.ErrUnavailable), http.StatusServiceUnavailable},
+		{"an error that is not a refusal", errGrantStoreDown, http.StatusNotFound},
+		{
+			"an error that wraps gate.ErrUnavailable",
+			fmt.Errorf("%w: grant store down", gate.ErrUnavailable), http.StatusServiceUnavailable,
+		},
 	}
 
 	for _, rt := range routes {
 		for _, e := range errs {
 			t.Run(rt.name+" with "+e.name, func(t *testing.T) {
 				t.Parallel()
-
-				records := newFakeRecords()
-				handler := newHandler(t, failingAuthorizer{err: e.err}, records)
-
-				w := get(t.Context(), t, handler, rt.path, testToken)
-				if w.Code != e.wantStatus {
-					t.Fatalf("status = %d, want %d; body: %s", w.Code, e.wantStatus, w.Body)
-				}
-
-				if strings.Contains(w.Body.String(), rt.id) || strings.Contains(w.Body.String(), "access") {
-					t.Errorf("body holds record content: %s", w.Body)
-				}
-
-				records.mu.Lock()
-				defer records.mu.Unlock()
-
-				if records.gets != 0 {
-					t.Errorf("store reads = %d, want 0", records.gets)
-				}
+				checkAuthorizerError(t, rt.path, rt.id, e.err, e.wantStatus)
 			})
 		}
+	}
+}
+
+func checkAuthorizerError(t *testing.T, path, id string, authzErr error, wantStatus int) {
+	t.Helper()
+
+	records := newFakeRecords()
+	handler := newHandler(t, failingAuthorizer{err: authzErr}, records)
+
+	w := get(t.Context(), t, handler, path, testToken)
+	if w.Code != wantStatus {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, wantStatus, w.Body)
+	}
+
+	if strings.Contains(w.Body.String(), id) || strings.Contains(w.Body.String(), "access") {
+		t.Errorf("body holds record content: %s", w.Body)
+	}
+
+	if records.gets != 0 {
+		t.Errorf("store reads = %d, want 0", records.gets)
 	}
 }
 
@@ -87,65 +95,68 @@ func TestNamespaceRouteEarlyChecks(t *testing.T) {
 
 	t.Run("a malformed namespace name runs no check and reads no store", func(t *testing.T) {
 		t.Parallel()
-
-		for _, name := range []string{"bad%20name", "a%2Fb", "@server", "-x", ".x", "a+b"} {
-			authz := newAuthorizer(namespaceHolds(namespace.Name(name))...)
-			sink := &testAudit{entries: nil}
-			records := newFakeRecords()
-			handler := build(t, authz, records, sink)
-
-			w := get(t.Context(), t, handler, "/api/dustpan/v1/namespaces/"+name+"/decision-records/"+recordID, testToken)
-			if w.Code != http.StatusNotFound {
-				t.Fatalf("%q: status = %d, want 404; body: %s", name, w.Code, w.Body)
-			}
-
-			if len(authz.checks) != 0 {
-				t.Errorf("%q: checks = %v, want none", name, authz.checks)
-			}
-
-			if len(sink.entries) != 0 || records.gets != 0 {
-				t.Errorf("%q: audit entries = %d, store reads = %d, want 0 and 0", name, len(sink.entries), records.gets)
-			}
-		}
+		checkMalformedNamespaceName(t)
 	})
-
 	t.Run("an unknown namespace reads no record", func(t *testing.T) {
 		t.Parallel()
-
-		records := newFakeRecords()
-		records.byKey[recordKey("absent", recordID)] = storedRecord("absent", recordID)
-		handler := newHandler(t, newAuthorizer(namespaceHolds("absent")...), records)
-
-		w := get(t.Context(), t, handler, "/api/dustpan/v1/namespaces/absent/decision-records/"+recordID, testToken)
-		if w.Code != http.StatusNotFound || w.Body.String() != notFoundBody {
-			t.Fatalf("status = %d, body = %s, want the 404 body", w.Code, w.Body)
-		}
-
-		if records.gets != 0 {
-			t.Errorf("store reads = %d, want 0", records.gets)
-		}
+		checkNamespaceLookup(t, "absent", http.StatusNotFound, "")
 	})
-
 	t.Run("a namespace store that does not answer gives 503", func(t *testing.T) {
 		t.Parallel()
-
-		records := newFakeRecords()
-		records.byKey[recordKey("down", recordID)] = storedRecord("down", recordID)
-		handler := newHandler(t, newAuthorizer(namespaceHolds("down")...), records)
-
-		w := get(t.Context(), t, handler, "/api/dustpan/v1/namespaces/down/decision-records/"+recordID, testToken)
-		if w.Code != http.StatusServiceUnavailable {
-			t.Fatalf("status = %d, want 503; body: %s", w.Code, w.Body)
-		}
-
-		if !strings.Contains(w.Body.String(), "gate.unavailable") || strings.Contains(w.Body.String(), recordID) {
-			t.Errorf("body = %s, want gate.unavailable and no record ID", w.Body)
-		}
-
-		if records.gets != 0 {
-			t.Errorf("store reads = %d, want 0", records.gets)
-		}
+		checkNamespaceLookup(t, "down", http.StatusServiceUnavailable, "gate.unavailable")
 	})
+}
+
+func checkMalformedNamespaceName(t *testing.T) {
+	t.Helper()
+
+	for _, name := range []string{"bad%20name", "a%2Fb", "@server", "-x", ".x", "a+b"} {
+		authz := newAuthorizer(namespaceHolds(namespace.Name(name))...)
+		sink := &testAudit{entries: nil}
+		records := newFakeRecords()
+		handler := build(t, authz, records, sink)
+
+		w := get(t.Context(), t, handler, "/api/dustpan/v1/namespaces/"+name+"/decision-records/"+recordID, testToken)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%q: status = %d, want 404; body: %s", name, w.Code, w.Body)
+		}
+
+		if len(authz.checks) != 0 {
+			t.Errorf("%q: checks = %v, want none", name, authz.checks)
+		}
+
+		if len(sink.entries) != 0 || records.gets != 0 {
+			t.Errorf("%q: audit entries = %d, store reads = %d, want 0 and 0", name, len(sink.entries), records.gets)
+		}
+	}
+}
+
+// checkNamespaceLookup reads a record of ns, which the authorizer allows and
+// the store holds, and proves the status, the code and that the record store
+// is not read.
+func checkNamespaceLookup(t *testing.T, ns namespace.Name, wantStatus int, wantCode string) {
+	t.Helper()
+
+	records := newFakeRecords()
+	records.byKey[recordKey(ns, recordID)] = storedRecord(ns, recordID)
+	handler := newHandler(t, newAuthorizer(namespaceHolds(ns)...), records)
+
+	w := get(t.Context(), t, handler, "/api/dustpan/v1/namespaces/"+string(ns)+"/decision-records/"+recordID, testToken)
+	if w.Code != wantStatus {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, wantStatus, w.Body)
+	}
+
+	if wantCode != "" && !strings.Contains(w.Body.String(), wantCode) {
+		t.Errorf("body = %s, want the code %s", w.Body, wantCode)
+	}
+
+	if strings.Contains(w.Body.String(), recordID) {
+		t.Errorf("body names the record ID: %s", w.Body)
+	}
+
+	if records.gets != 0 {
+		t.Errorf("store reads = %d, want 0", records.gets)
+	}
 }
 
 // TestServiceRefusesScopesWithoutARecord proves that the service refuses the
