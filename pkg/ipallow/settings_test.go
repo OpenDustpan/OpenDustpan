@@ -36,6 +36,11 @@ func TestInstallationListReducesSecurity(t *testing.T) {
 		{"add an entry", "10.0.0.0/8", "10.0.0.0/8,192.0.2.0/24", true},
 		{"add an IPv6 entry", "10.0.0.0/8", "10.0.0.0/8,2001:db8::/32", true},
 		{"first list", "", "10.0.0.0/8", true},
+		// Same base address, shorter prefix: the next list admits more.
+		{"shorter prefix, same base", "10.0.0.0/16", "10.0.0.0/8", true},
+		{"shorter prefix, zero base", "0.0.0.0/1", "0.0.0.0/0", true},
+		{"shorter prefix, IPv6 base", "2001:db8::/64", "2001:db8::/32", true},
+		{"longer prefix, same base", "10.0.0.0/8", "10.0.0.0/16", false},
 		{"old value does not decode", "bad", "10.0.0.0/8", true},
 		{"new value does not decode", "10.0.0.0/8", "bad", true},
 		{"narrow a prefix", "10.0.0.0/8", "10.1.0.0/16", false},

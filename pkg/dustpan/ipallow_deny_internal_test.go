@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -163,6 +164,22 @@ func (s *failingSettingsStore) Load(context.Context, setting.Scope) (setting.Sto
 	}
 
 	return setting.Stored{Values: s.values, Revision: 1, Digest: ""}, nil
+}
+
+// recordingServer keeps the entries that the gate appends to the server scope.
+type recordingServer struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+}
+
+// AppendServer implements audit.ServerStore.
+func (s *recordingServer) AppendServer(_ context.Context, e audit.Entry) (audit.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.entries = append(s.entries, e)
+
+	return e, nil
 }
 
 // newTestGate returns an allowlist request gate over store.
@@ -322,4 +339,47 @@ func TestAdmitProbeUsesNoToken(t *testing.T) {
 			t.Fatalf("admit = %+v with %d token checks, want a caller and one token check", got, authn.calls.Load())
 		}
 	})
+}
+
+// TestAllowlistRefusalWritesAuditEntry proves that a refusal writes its
+// security entry: one refused address, one entry of the action
+// installation:deny-ip-allowlist with the outcome denied. It fails when the
+// record closure of the gate writes nothing.
+func TestAllowlistRefusalWritesAuditEntry(t *testing.T) {
+	t.Parallel()
+
+	outside := netip.MustParseAddr("203.0.113.9")
+	server := &recordingServer{mu: sync.Mutex{}, entries: nil}
+	gate := newTestGate(
+		t,
+		&failingSettingsStore{Store: nil, calls: atomic.Int32{}, failFrom: 1 << 20, values: map[string]string{
+			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
+		}},
+	)
+	gate.audit = server
+
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
+	r.Header.Set("Authorization", "Bearer token")
+
+	checker := gate.checker(t.Context(), r)
+	if checker == nil {
+		t.Fatal("checker = nil, want a checker")
+	}
+
+	if decision := checker.check(t.Context(), outside); !decision.Denied {
+		t.Fatalf("decision = %+v, want a denial", decision)
+	}
+
+	server.mu.Lock()
+	defer server.mu.Unlock()
+
+	if len(server.entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(server.entries))
+	}
+
+	got := server.entries[0]
+	if got.Action != "installation:deny-ip-allowlist" || got.Outcome != audit.OutcomeDenied ||
+		got.Kind != audit.KindSecurity || got.SourceIP != outside.String() {
+		t.Fatalf("entry = %+v, want installation:deny-ip-allowlist, denied, security, %s", got, outside)
+	}
 }

@@ -217,6 +217,12 @@ func allowlistRequest(r *http.Request) bool {
 // the decoded path and the escaped path, and both must be a clean probe path
 // in exact case, so an encoded slash such as /health%2Fready is no probe.
 // The metrics route is no probe.
+//
+// Defense in depth: the escaped-path check decides, because an encoded form
+// of the path is the one that differs from the decoded one. The decoded-path
+// check stays so that a change of the escaped-path rules cannot let in a path
+// that decodes to a non-probe. It does not rely on the check of the route or
+// on the handler.
 func healthProbeRequest(r *http.Request) bool {
 	return healthProbePath(r.URL.Path) && healthProbePath(r.URL.EscapedPath())
 }

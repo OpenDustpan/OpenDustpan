@@ -173,7 +173,10 @@ escaped form. Any other path, including `/api/server/metrics`, is checked.
 Each change to a list writes one entry. The action is `namespace:set-ip-allowlist`
 for a set and `namespace:remove-ip-allowlist` for a delete. A refused request
 writes a refusal entry with the action of the request, for example
-`collection:read`. Read the entries in the [audit log](audit-log.md).
+`collection:read`. A request that the installation list refuses writes an
+`installation:deny-ip-allowlist` entry. The entry has the kind `security`, the
+outcome `denied`, the scope that refused and the client address. Read the
+entries in the [audit log](audit-log.md).
 
 If the audit entry of a change cannot be written, the change does not happen.
 
