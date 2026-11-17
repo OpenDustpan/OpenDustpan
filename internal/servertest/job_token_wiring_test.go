@@ -23,7 +23,7 @@ func TestJobTokenWiring(t *testing.T) {
 
 	h := newRoundTripHarness(t, traceOff, dustpan.WithPublicURL(publicURL))
 
-	h.createWorkspace("web")
+	h.workspace = h.createWorkspace("web")
 	h.createWorkspace("other")
 
 	sess := h.jobSession()
@@ -54,6 +54,10 @@ func TestJobTokenWiring(t *testing.T) {
 	if status != http.StatusNotFound {
 		t.Fatalf("state of the unit of the job = %d %s, want 404", status, answer)
 	}
+
+	// One state version of the unit of the job: the token reads it, and the
+	// read writes one audit entry that names the job of the token.
+	h.readStateWithJobToken(base, basic)
 
 	// Another unit: the token is valid, and the authorizer refuses it.
 	status, answer = h.send(http.MethodGet, base+"/tofu/state/acme/other", basic, "")
@@ -91,5 +95,54 @@ func grantStarterWriter(h *rtHarness) {
 
 	if err := st.CreateGrant(h.t.Context(), grant, fence, entry, nil); err != nil {
 		h.t.Fatalf("create the writer grant of the starter: %v", err)
+	}
+}
+
+// auditTrail is the part of the answer of the audit list that the test reads.
+type auditTrail struct {
+	Entries []auditTrailEntry `json:"entries"`
+}
+
+// auditTrailEntry is one entry of the audit list.
+type auditTrailEntry struct {
+	Action string `json:"action"`
+	Object string `json:"object"`
+	JobID  string `json:"jobID"`
+}
+
+// readStateWithJobToken writes one state version for the workspace web, reads
+// it with the job token, and checks the state and the audit entry of the read.
+func (h *rtHarness) readStateWithJobToken(base, basic string) {
+	h.t.Helper()
+
+	h.lock()
+	h.upload()
+	h.unlock()
+
+	status, answer := h.send(http.MethodGet, base+"/tofu/state/acme/web", basic, "")
+	if status != http.StatusOK {
+		h.t.Fatalf("state of the unit of the job after an upload = %d %s, want 200", status, answer)
+	}
+
+	if !strings.Contains(answer, `"lineage":"round-trips"`) || !strings.Contains(answer, `"serial":1`) {
+		h.t.Fatalf("state of the unit of the job = %s, want the uploaded state version", answer)
+	}
+
+	// The server sets the job ID of an audit entry for the credential kind job
+	// token only, so the entry of the read shows the kind.
+	var trail auditTrail
+
+	h.decode(h.call(http.MethodGet, "/api/audit/entries?organization=acme", "", http.StatusOK), &trail)
+
+	jobEntries := 0
+
+	for _, e := range trail.Entries {
+		if e.Action == "unit:read-secrets" && e.Object == "opentofu:acme/web" && e.JobID != "" {
+			jobEntries++
+		}
+	}
+
+	if jobEntries != 1 {
+		h.t.Fatalf("audit entries of the read with a job ID = %d, want 1: %+v", jobEntries, trail.Entries)
 	}
 }
