@@ -1,6 +1,8 @@
 ---
-version: 1
+version: 2
 ---
+
+Issue: #3485.
 
 ## Why
 
@@ -23,10 +25,10 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- Main has no decision record or audit retention setting. Proof: `rg -in 'audit.?retention|auditRetention|decisionRecords' pkg internal --type go` finds only `internal/api/problem/denial_internal_test.go` (text of a denial). The soft-delete retention (`pkg/dustpan/dustpan.go`) and the history retention (`pkg/dustpan/area_retention.go`) are other settings.
-- The settings resource takes a new declaration with no new route. Proof: `pkg/dustpan/settings_resource.go:31` (`settingDeclarations`) builds the installation list from `ipallow.SettingDeclarations()` and the drain period.
-- A declaration can mark a change as one that reduces security, and the resource then needs a fresh authentication. Proof: `pkg/setting/change.go:109` documents `ErrFreshStepRequired`; `pkg/ipallow/settings.go:22` and `pkg/tempadmin/session_limit.go:56` use `ReducesSecurity`.
-- The audit entry of a change is written by `setting.Change` in the same transaction. Proof: the comment of `Change` in `pkg/setting/change.go`: "writes the values, the new revision and the audit entry".
+- Main has no decision record or audit retention setting. Proof: `rg -in 'audit.?retention|auditRetention|decisionRecords' pkg internal --type go` finds only the text of one denial test. The soft-delete retention and the history retention are other settings, and neither prunes decision records.
+- The settings resource takes a new declaration with no new route. Proof: `pkg/dustpan/settings_resource.go:32` (`settingDeclarations`) builds the installation list from `ipallow.SettingDeclarations()` and the drain period.
+- A declaration can mark a change as one that reduces security, and the resource then needs a fresh authentication. Proof: the comment of `setting.Change` documents `ErrFreshStepRequired`, and the declarations of the IP allowlist and of the temporary administrator session limit set `ReducesSecurity`.
+- The audit entry of a change is written by `setting.Change` in the same transaction. Proof: the comment of `setting.Change`: "writes the values, the new revision and the audit entry".
 - No code deletes an audit entry. Proof: ADR 68 decision 2 leaves "how" to a later ADR, and this change adds no delete of an audit entry.
 
 ## What Changes
@@ -54,9 +56,8 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The installation settings list is built from declarations. (`pkg/dustpan/settings_resource.go:31`)
-- A declaration can require a fresh authentication for a change that reduces security. (`pkg/ipallow/settings.go:22`)
-- A state.write record lives for the audit retention, and the port method PruneExpired takes the cutoff from its caller. (`docs/guides/decision-record-retention.md`)
+- The installation settings list is built from declarations. (`pkg/dustpan/settings_resource.go:32 (func settingDeclarations)`)
+- A declaration that the server makes itself is added to the same list. (`pkg/dustpan/settings_resource.go:18 (func drainPeriodDeclaration)`)
 
 ## ADR check
 
@@ -65,7 +66,7 @@ Each quote is copied from the file in `docs/adr/`. A decision is owner-tagged wh
 **ADR 68: Audit log retention, and the audit switch stays a start setting** (owner-tagged: the ADR records the owner's decisions of 2026-10-14).
 
 - Decisions that apply: 1, 2 and 4 (current).
-- Changed by: none (INDEX.md shows "-"). It extends ADR 60 decision 21.
+- Changed by: none (the index of ADRs shows "-"). It extends ADR 60 decision 21.
 - Current rule: this ADR.
 - Quote, decision 1: "The server keeps audit entries forever by default. A new installation deletes no audit entry."
 - Quote, decision 2: "Retention is a setting. An operator can set a retention period for the installation. The server then deletes entries that are older than the period. A change of the period writes an audit entry. The deletion keeps the chain check of ADR 60 decision 17 and ADR 64 valid. A later ADR decides how, for example with a retention anchor (RFC 22)."
