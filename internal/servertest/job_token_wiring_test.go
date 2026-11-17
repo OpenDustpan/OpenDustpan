@@ -129,20 +129,25 @@ func (h *rtHarness) readStateWithJobToken(base, basic string) {
 	}
 
 	// The server sets the job ID of an audit entry for the credential kind job
-	// token only, so the entry of the read shows the kind.
+	// token only, and the entry must name the job of this session, so the entry
+	// of the read shows both the kind and the job.
 	var trail auditTrail
 
 	h.decode(h.call(http.MethodGet, "/api/audit/entries?organization=acme", "", http.StatusOK), &trail)
 
+	if h.jobID == "" {
+		h.t.Fatal("the harness holds no job ID")
+	}
+
 	jobEntries := 0
 
 	for _, e := range trail.Entries {
-		if e.Action == "unit:read-secrets" && e.Object == "opentofu:acme/web" && e.JobID != "" {
+		if e.Action == "unit:read-secrets" && e.Object == "opentofu:acme/web" && e.JobID == h.jobID {
 			jobEntries++
 		}
 	}
 
 	if jobEntries != 1 {
-		h.t.Fatalf("audit entries of the read with a job ID = %d, want 1: %+v", jobEntries, trail.Entries)
+		h.t.Fatalf("audit entries of the read with the job ID %q = %d, want 1: %+v", h.jobID, jobEntries, trail.Entries)
 	}
 }

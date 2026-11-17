@@ -78,7 +78,7 @@ func (h *rtHarness) jobSession() *session.Session {
 		h.joinRunner(client)
 	}
 
-	h.startPlanJob()
+	h.jobID = h.startPlanJob()
 
 	var work protocol.Work
 

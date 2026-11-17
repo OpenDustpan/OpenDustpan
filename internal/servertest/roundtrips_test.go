@@ -492,6 +492,8 @@ type rtHarness struct {
 
 	serial    int
 	workspace string
+	// jobID is the ID of the job of the last job session.
+	jobID     string
 	stack     string
 	nextStack int
 	// jobPool is true after the runner pool of the job flows exists.
