@@ -498,6 +498,24 @@ func (t *gateTx) QueryRecords(ctx context.Context, ns namespace.Name, w gatestor
 	return bodies, nil
 }
 
+func (t *gateTx) PruneRecords(
+	ctx context.Context, ns namespace.Name, point string, cutoff time.Time, batch int,
+) ([]string, error) {
+	nsID, ok, err := t.namespaceID(ctx, ns)
+	if err != nil || !ok {
+		return nil, err
+	}
+
+	ids, err := t.q.PruneGateRecords(ctx, db.PruneGateRecordsParams{
+		NamespaceID: nsID, Point: point, CutoffMs: cutoff.UnixMilli(), MaxRows: clampInt32(batch),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("delete gate records: %w", err)
+	}
+
+	return ids, nil
+}
+
 func (t *gateTx) FindRefusal(
 	ctx context.Context, ns namespace.Name, key string, since time.Time,
 ) (gatestore.RecordRow, bool, error) {
