@@ -963,7 +963,12 @@ func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error)
 	// before every other rule, and it asks them only for the unit of the job
 	// of the token. A server that issues no job token keeps the chain it had.
 	if units != nil {
-		authz = identity.JobTokenRule{Next: authz, Units: units}
+		var unitIDs access.Units
+		if store, ok := cfg.namespaceStore.(access.Units); ok {
+			unitIDs = store
+		}
+
+		authz = identity.JobTokenRule{Next: authz, Units: units, UnitIDs: unitIDs}
 	}
 
 	marks, marked, err := tempAdminDecorator(authn, cfg.namespaceStore, cfg.now, cfg.logger)

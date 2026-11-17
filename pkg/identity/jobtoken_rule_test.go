@@ -271,7 +271,7 @@ func checkRuleAuthorize(t *testing.T, tc ruleCase, job identity.JobUnit) {
 		err:   nil,
 	}
 
-	rule := identity.JobTokenRule{Next: next, Units: units}
+	rule := identity.JobTokenRule{Next: next, Units: units, UnitIDs: nil}
 	if tc.noPort {
 		rule.Units = nil
 	}
@@ -432,7 +432,7 @@ func checkRuleListObjects(t *testing.T, tc listCase, job identity.JobUnit) {
 
 	next := &allowingAuthorizer{seen: nil, scope: tc.next, err: tc.nextErr}
 
-	rule := identity.JobTokenRule{Next: next, Units: units}
+	rule := identity.JobTokenRule{Next: next, Units: units, UnitIDs: nil}
 	if tc.noPort {
 		rule.Units = nil
 	}
@@ -454,7 +454,230 @@ func checkRuleListObjects(t *testing.T, tc listCase, job identity.JobUnit) {
 	checkScopeUnits(t, scope, tc.wantUnits)
 }
 
-// checkScopeUnits proves that scope names each unit of want and nothing else.
+// fakeUnitIDs is an identity.UnitIDReader whose answer the test sets. It keeps
+// the objects that the rule asked about, so a case proves whether the rule
+// resolved a unit that carries no stable ID.
+type fakeUnitIDs struct {
+	id    string
+	found bool
+	err   error
+	reads []identity.Object
+}
+
+// UnitID implements identity.UnitIDReader.
+func (f *fakeUnitIDs) UnitID(_ context.Context, obj identity.Object) (string, bool, error) {
+	f.reads = append(f.reads, obj)
+
+	return f.id, f.found, f.err
+}
+
+// resolvesCase is one row of TestJobTokenRuleResolvesUnitID.
+type resolvesCase struct {
+	name            string
+	p               identity.Principal
+	action          identity.Action
+	obj             identity.Object
+	jobKnown        bool
+	unitsErr        error
+	noJobPort       bool
+	unitID          string
+	unitIDFound     bool
+	unitIDErr       error
+	noUnitIDPort    bool
+	wantDenied      bool
+	wantFailClosed  bool
+	wantNext        bool
+	wantUnitIDReads int
+	wantJobReads    int
+}
+
+// TestJobTokenRuleResolvesUnitID proves that a job token reaches a unit that
+// the route names without a stable ID: the rule resolves the stable ID through
+// the port and compares it with the stable ID of the unit of the job. Each case
+// sends hostile input straight to the rule, as if every other layer had passed.
+func TestJobTokenRuleResolvesUnitID(t *testing.T) {
+	t.Parallel()
+
+	jobUnit := jobUnitObject(t, "acme", "web/prod", "unt-1")
+	job := unitOfJob(t, jobUnit)
+
+	ownByName, err := identity.UnitObject("pulumi", "acme", "web/prod")
+	if err != nil {
+		t.Fatalf("unit by name: %v", err)
+	}
+
+	otherByName, err := identity.UnitObject("pulumi", "acme", "web/dev")
+	if err != nil {
+		t.Fatalf("unit by name: %v", err)
+	}
+
+	stableOther := jobUnitObject(t, "acme", "web/dev", "unt-2")
+
+	token := jobToken()
+
+	otherPrincipal := identity.Principal{
+		Subject: "bob", DisplayName: "bob", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{}, Kind: identity.KindPerson,
+		Credential: identity.CredentialAccessToken, JobID: "",
+	}
+
+	cases := []resolvesCase{
+		{
+			name: "the own unit by name allows", p: token, action: identity.ActionUnitRead,
+			obj: ownByName, jobKnown: true, unitID: "unt-1", unitIDFound: true,
+			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
+			wantDenied: false, wantFailClosed: false, wantNext: true,
+			wantUnitIDReads: 1, wantJobReads: 1,
+		},
+		{
+			name: "another unit by name is refused", p: token, action: identity.ActionUnitRead,
+			obj: otherByName, jobKnown: true, unitID: "unt-2", unitIDFound: true,
+			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
+			wantDenied: true, wantFailClosed: false, wantNext: false,
+			wantUnitIDReads: 1, wantJobReads: 1,
+		},
+		{
+			name: "a unit the port does not find is refused", p: token, action: identity.ActionUnitRead,
+			obj: otherByName, jobKnown: true, unitID: "", unitIDFound: false,
+			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
+			wantDenied: true, wantFailClosed: false, wantNext: false,
+			wantUnitIDReads: 1, wantJobReads: 1,
+		},
+		{
+			name: "a port that fails answers an error that is not a denial", p: token, action: identity.ActionUnitRead,
+			obj: ownByName, jobKnown: true, unitIDErr: errUnitsDown,
+			unitsErr: nil, noJobPort: false, unitID: "", unitIDFound: false, noUnitIDPort: false,
+			wantDenied: false, wantFailClosed: true, wantNext: false,
+			wantUnitIDReads: 1, wantJobReads: 1,
+		},
+		{
+			name: "an object that carries a stable ID is not resolved again", p: token, action: identity.ActionUnitRead,
+			obj: stableOther, jobKnown: true, unitID: "should-not-be-read", unitIDFound: true,
+			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
+			wantDenied: true, wantFailClosed: false, wantNext: false,
+			wantUnitIDReads: 0, wantJobReads: 1,
+		},
+		{
+			name: "a stable ID that matches allows without resolving", p: token, action: identity.ActionUnitRead,
+			obj: jobUnit, jobKnown: true, unitID: "should-not-be-read", unitIDFound: true,
+			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
+			wantDenied: false, wantFailClosed: false, wantNext: true,
+			wantUnitIDReads: 0, wantJobReads: 1,
+		},
+		{
+			name: "a principal that is not a job token never calls the port", p: otherPrincipal,
+			action: identity.ActionUnitRead,
+			obj:    ownByName, jobKnown: true, unitID: "unt-1", unitIDFound: true,
+			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
+			wantDenied: false, wantFailClosed: false, wantNext: true,
+			wantUnitIDReads: 0, wantJobReads: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkResolvesCase(t, tc, job)
+		})
+	}
+}
+
+// checkResolvesCase runs one row of TestJobTokenRuleResolvesUnitID.
+func checkResolvesCase(t *testing.T, tc resolvesCase, job identity.JobUnit) {
+	t.Helper()
+
+	units := &fakeJobUnits{units: map[string]identity.JobUnit{}, err: tc.unitsErr, reads: nil}
+	if tc.jobKnown {
+		units.units["job-1"] = job
+	}
+
+	unitIDs := &fakeUnitIDs{id: tc.unitID, found: tc.unitIDFound, err: tc.unitIDErr, reads: nil}
+	if tc.noUnitIDPort {
+		unitIDs = nil
+	}
+
+	if tc.noJobPort {
+		units = nil
+	}
+
+	next := &allowingAuthorizer{seen: nil, scope: identity.Scope{
+		Namespaces: nil, Collections: nil, Units: nil, Principals: nil,
+	}, err: nil}
+
+	rule := identity.JobTokenRule{Next: next, Units: units, UnitIDs: unitIDs}
+	if tc.noJobPort {
+		rule.Units = nil
+	}
+
+	err := rule.Authorize(t.Context(), tc.p, tc.action, tc.obj)
+
+	checkResolvesAnswer(t, err, tc)
+
+	if asked := len(next.seen) > 0; asked != tc.wantNext {
+		t.Errorf("the next authorizer was asked %t, want %t", asked, tc.wantNext)
+	}
+
+	checkResolvesReads(t, unitIDs, units, tc)
+}
+
+// checkResolvesAnswer proves the answer of the rule for one resolves case.
+func checkResolvesAnswer(t *testing.T, err error, tc resolvesCase) {
+	t.Helper()
+
+	switch {
+	case tc.wantFailClosed:
+		if err == nil {
+			t.Fatal("Authorize = nil, want an error that is not a denial")
+		}
+
+		if _, ok := errors.AsType[*identity.DeniedError](err); ok {
+			t.Fatalf("Authorize = %v, want an error that is not a denial", err)
+		}
+	case tc.wantDenied:
+		if _, ok := errors.AsType[*identity.DeniedError](err); !ok {
+			t.Fatalf("Authorize = %v, want a denial", err)
+		}
+	default:
+		if err != nil {
+			t.Fatalf("Authorize = %v, want allowed", err)
+		}
+	}
+}
+
+// checkResolvesReads proves the read counts of one resolves case.
+func checkResolvesReads(t *testing.T, unitIDs *fakeUnitIDs, units *fakeJobUnits, tc resolvesCase) {
+	t.Helper()
+
+	if unitIDsReads(unitIDs) != tc.wantUnitIDReads {
+		if unitIDs == nil {
+			t.Errorf("unit ID reads = 0, want %d", tc.wantUnitIDReads)
+		} else {
+			t.Errorf(
+				"the rule resolved the unit %d times, want %d: %v", len(unitIDs.reads),
+				tc.wantUnitIDReads, unitIDs.reads,
+			)
+		}
+	}
+
+	jobReads := 0
+	if units != nil {
+		jobReads = len(units.reads)
+	}
+
+	if jobReads != tc.wantJobReads {
+		t.Errorf("the rule read the job unit %d times, want %d", jobReads, tc.wantJobReads)
+	}
+}
+
+func unitIDsReads(u *fakeUnitIDs) int {
+	if u == nil {
+		return 0
+	}
+
+	return len(u.reads)
+}
+
 func checkScopeUnits(t *testing.T, scope identity.Scope, want []identity.Object) {
 	t.Helper()
 
@@ -483,7 +706,7 @@ func TestJobTokenRuleListObjectsKeepsOtherPrincipals(t *testing.T) {
 	next := &allowingAuthorizer{seen: nil, scope: unitScope(unit), err: nil}
 
 	// A rule with no port: another principal never reads it.
-	rule := identity.JobTokenRule{Next: next, Units: nil}
+	rule := identity.JobTokenRule{Next: next, Units: nil, UnitIDs: nil}
 
 	person := identity.Principal{
 		Subject: "bob", DisplayName: "bob", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},

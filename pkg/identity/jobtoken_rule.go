@@ -67,6 +67,12 @@ type JobUnits interface {
 	UnitOfJob(ctx context.Context, jobID string) (JobUnit, error)
 }
 
+// UnitIDReader returns the stable ID of the unit obj, and false when no such
+// unit exists or obj is not a unit. It has the signature of access.Units.
+type UnitIDReader interface {
+	UnitID(ctx context.Context, obj Object) (string, bool, error)
+}
+
 // JobTokenRule decides every check of a job token, and asks Next for every
 // other principal. A job token acts on the unit of its job only, and only
 // when it is a consistent job token: a principal that carries a job ID with
@@ -91,9 +97,12 @@ type JobTokenRule struct {
 	// Units answers the unit of the job of a job token. A rule without a
 	// port refuses every job token: fail closed.
 	Units JobUnits
+	// UnitIDs resolves the stable ID of a unit that the route names without
+	// one. A rule without a port refuses such a unit: fail closed.
+	UnitIDs UnitIDReader
 }
 
-var _ Authorizer = JobTokenRule{Next: nil, Units: nil}
+var _ Authorizer = JobTokenRule{Next: nil, Units: nil, UnitIDs: nil}
 
 // Authorize implements Authorizer.
 func (r JobTokenRule) Authorize(ctx context.Context, p Principal, action Action, obj Object) error {
@@ -120,7 +129,16 @@ func (r JobTokenRule) Authorize(ctx context.Context, p Principal, action Action,
 		return r.Next.Authorize(ctx, withoutElevation(p), action, obj)
 	}
 
-	if !obj.IsUnit() || obj.UnitID() != unit.UnitID() {
+	// Resolve the stable ID of a unit that the route names without one. The
+	// read is a defense-in-depth layer: the route builds the unit object from
+	// the name and the comparison below does not rely on the route resolving
+	// it, so a route that forgets this call cannot widen a job token.
+	resolved, err := r.resolveUnitID(ctx, p, action, obj)
+	if err != nil {
+		return err
+	}
+
+	if !resolved.IsUnit() || resolved.UnitID() != unit.UnitID() {
 		return &DeniedError{Subject: p.Subject, Action: action, Object: obj}
 	}
 
@@ -233,4 +251,35 @@ func emptyScope() Scope {
 		Namespaces: nil, Collections: nil, Units: nil, Principals: nil,
 		every: everyObject{set: false, except: nil},
 	}
+}
+
+// resolveUnitID returns obj with its stable ID filled in when it is a unit
+// that the route names without one. It asks UnitIDs for the ID. A rule with
+// no port, or a unit that the port does not find, is refused. A port error
+// is returned as an error that is not a denial.
+//
+// The read is a defense-in-depth layer: the route builds the unit object from
+// the name and the comparison in Authorize does not rely on the route
+// resolving it, so a route that forgets this call cannot widen a job token.
+func (r JobTokenRule) resolveUnitID(
+	ctx context.Context, p Principal, action Action, obj Object,
+) (Object, error) {
+	if !obj.IsUnit() || obj.UnitID() != "" {
+		return obj, nil
+	}
+
+	if r.UnitIDs == nil {
+		return obj, &DeniedError{Subject: p.Subject, Action: action, Object: obj}
+	}
+
+	id, found, err := r.UnitIDs.UnitID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read the stable ID of the unit %q: %w", obj, err)
+	}
+
+	if !found {
+		return obj, &DeniedError{Subject: p.Subject, Action: action, Object: obj}
+	}
+
+	return obj.WithUnitID(id), nil
 }
