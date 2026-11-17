@@ -959,6 +959,13 @@ type tokenSpec struct {
 
 // newToken returns a new token record with its secret and digest.
 func (s *Service) newToken(spec tokenSpec) (issued, error) {
+	// Defense in depth: every caller takes the kind from a closed set, and the
+	// store refuses an unknown kind on write too. This check stays so that a
+	// new caller cannot issue a token that the read path refuses.
+	if !spec.kind.Valid() {
+		return issued{}, fmt.Errorf("%w: %q", ErrUnknownKind, string(spec.kind))
+	}
+
 	secret, err := newSecret()
 	if err != nil {
 		return issued{}, err

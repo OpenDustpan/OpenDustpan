@@ -27,7 +27,8 @@ type TokenStore interface {
 	// CreateToken persists t with the digest d of its secret. It returns
 	// ErrAlreadyExists when the ID or the digest is taken, and
 	// ErrPrincipalNotFound when the principal t.PrincipalID does not exist
-	// or was deleted.
+	// or was deleted, and ErrUnknownKind when t.Kind is not a kind that this
+	// version issues.
 	CreateToken(ctx context.Context, t Token, d Digest, e audit.Entry) error
 	// GetToken returns the token with the ID id, or ErrNotFound.
 	GetToken(ctx context.Context, id string) (Token, error)
@@ -40,7 +41,9 @@ type TokenStore interface {
 	GetTokenByDigest(ctx context.Context, d Digest) (Match, error)
 	// ListTokens returns the tokens that match q, newest first: the rows of
 	// q and the count of every row that matches the filters of q, with no
-	// regard to the cursor, read in one transaction.
+	// regard to the cursor, read in one transaction. A stored row of an unknown
+	// kind is not in the rows, and the adapter logs it: one such row does not
+	// fail the page.
 	ListTokens(ctx context.Context, q Query) ([]Token, int64, error)
 	// RevokeToken sets the revoke time of the token id to e.At. It returns
 	// ErrNotFound when no such token exists, and ErrEnded when it was

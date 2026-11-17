@@ -20532,6 +20532,55 @@ func (q *Queries) PruneEndedNameLocks(ctx context.Context, arg PruneEndedNameLoc
 	return items, nil
 }
 
+const pruneGateRecords = `-- name: PruneGateRecords :many
+DELETE FROM gate_records
+WHERE id IN (
+    SELECT p.id
+    FROM gate_records p
+    WHERE p.namespace_id = ?1 AND p.point = ?2 AND p.at_ms < ?3
+    ORDER BY p.id
+    LIMIT ?4
+)
+RETURNING id
+`
+
+type PruneGateRecordsParams struct {
+	NamespaceID string
+	Point       string
+	CutoffMs    int64
+	MaxRows     int64
+}
+
+// Deletes the records of a decision point with at_ms before cutoff_ms, lowest ID
+// first, up to max_rows, and returns their IDs.
+func (q *Queries) PruneGateRecords(ctx context.Context, arg PruneGateRecordsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, pruneGateRecords,
+		arg.NamespaceID,
+		arg.Point,
+		arg.CutoffMs,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const pruneLocalUserResets = `-- name: PruneLocalUserResets :execrows
 DELETE FROM local_user_resets WHERE expires_at_ms <= ?
 `

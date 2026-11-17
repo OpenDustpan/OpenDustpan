@@ -330,6 +330,8 @@ How-to guides:
 - [Gates and access limits on state writes](docs/guides/state-write-gates.md):
   what the server checks before it lets an OpenTofu lock or a restore go on,
   and what a refusal looks like.
+- [Decision record retention](docs/guides/decision-record-retention.md): how the
+  server keeps and deletes the decision records of state writes.
 - [Set and read context](docs/guides/context.md): the owners, the on-call
   text and the other context of a namespace and of a unit.
 - [Check a workspace for drift](docs/guides/drift-checks.md): start a drift check

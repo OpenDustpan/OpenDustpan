@@ -220,6 +220,18 @@ type Records interface {
 	// [q.From, q.To), newest first. It returns ErrInvalid for a limit
 	// outside 1 to MaxSimulateRecords.
 	Query(ctx context.Context, ns namespace.Name, q RecordQuery) ([]Record, error)
+	// PruneExpired deletes, in one transaction, at most req.Batch() records of
+	// ns at state.write with At before req.Cutoff(), lowest ID first, and
+	// returns the deleted IDs. A record of another decision point, and a
+	// record of another namespace, stay. It returns ErrInvalid for a request
+	// that NewPruneRequest did not make, for a namespace that is not a valid
+	// name, and for a fence of another namespace than ns, and the fence errors
+	// of Put. It appends e in the same transaction, also when no record
+	// matches, and returns audit.ErrInvalidEntry for an entry that the audit
+	// log refuses. A failed call deletes nothing and appends nothing.
+	PruneExpired(
+		ctx context.Context, ns namespace.Name, req PruneRequest, fence namespace.Fence, e audit.Entry,
+	) ([]RecordID, error)
 }
 
 // Store bundles the persistence ports of the package. Each SQL adapter
