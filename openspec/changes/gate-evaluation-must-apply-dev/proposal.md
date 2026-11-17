@@ -26,8 +26,8 @@ Evidence for the claims above:
 
 - Pure approver helpers live in pkg/gate/approvers.go. Proof: pkg/gate/approvers.go:66:func RuleApprovers(a Approvers) Approvers {
 - Service evaluation is not implemented and returns errNotImplemented. Proof: pkg/gate/service.go:257:	return Decision{}, errNotImplemented
-- Backup export reads installation kind through backup.KindReader. Proof: pkg/backup/devdata.go:45:type KindReader interface {
-- Job gate path already filters signatures with CountsAsSignature. Proof: pkg/job/gate.go:274:	if !policy.CountsAsSignature(a.Subject) {
+- Backup export reads installation kind through backup.KindReader. Proof: (read only) `pkg/backup/devdata.go`:45:type KindReader interface {
+- Job gate path already filters signatures with CountsAsSignature. Proof: (read only) `pkg/job/gate.go`:274:	if !policy.CountsAsSignature(a.Subject) {
 - The gate list route exists for a namespace. Proof: coverage list: GET /api/dustpan/v1/namespaces/{namespace}/gates (listGates)
 
 ## What Changes
