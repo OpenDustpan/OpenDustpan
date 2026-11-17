@@ -371,9 +371,9 @@ func sharedStoreOptions(cfg *settings, st builtinStore, jobs job.Store) []Option
 		WithInventoryReader(st),
 		WithIPAllowlistStore(st),
 		WithJobStore(jobs),
-		WithJobClaimer(func(g job.GateGuard, skips job.ClaimObserver) job.Claimer {
+		WithJobClaimer(func(g job.GateGuard) job.Claimer {
 			return job.NewClaimer(jobs, st.DurableOperationsPort(), st, g,
-				job.WithClaimerLogger(cfg.logger), job.WithClaimObserver(skips))
+				job.WithClaimerLogger(cfg.logger), job.WithClaimObserver(claimPollSkips(cfg.observed)))
 		}),
 		WithTriggerStore(st.Triggers()),
 		WithSavedViewStore(st.SavedViews()),

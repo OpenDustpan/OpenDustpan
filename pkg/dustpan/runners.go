@@ -45,11 +45,8 @@ func WithRunners(s RunnerStores) Option {
 // calls. The server gives it the guard of the gates of its gate store, which
 // the claimer asks at each claim (see job.NewClaimer). When the store keeps
 // no gates, the state.write gates are off, and the guard finds no gate on any
-// unit, as the tool adapters check no write. The guard is never nil. The server
-// also gives it the observer of the operations that a poll skips past its
-// bound, which counts them on the metrics of the server. The observer is never
-// nil.
-type JobClaimerFunc func(gates job.GateGuard, skips job.ClaimObserver) job.Claimer
+// unit, as the tool adapters check no write. The guard is never nil.
+type JobClaimerFunc func(gates job.GateGuard) job.Claimer
 
 // WithJobClaimer sets the function that builds the claimer that a poll of a
 // runner of a pool for jobs calls. Without it, a poll of such a runner finds
@@ -139,7 +136,7 @@ func newRunnerHandler(cfg *settings, svc services, onFailure func()) (http.Handl
 			return nil, claimErr
 		}
 
-		claimer = cfg.jobClaimer(guard, claimPollSkips(cfg.observed))
+		claimer = cfg.jobClaimer(guard)
 	}
 
 	deps, err := sessionDepsOf(cfg, svc)

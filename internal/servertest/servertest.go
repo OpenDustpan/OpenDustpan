@@ -552,11 +552,8 @@ func serverOptions(
 		dustpan.WithTrustRules(store.TrustRules()),
 		dustpan.WithJobStore(store.Jobs()),
 		dustpan.WithJobTokenStore(store.JobTokens()),
-		dustpan.WithJobClaimer(func(g job.GateGuard, skips job.ClaimObserver) job.Claimer {
-			return job.NewClaimer(
-				store.Jobs(), store.DurableOperationsPort(), store, g,
-				job.WithClaimerLogger(logger), job.WithClaimObserver(skips),
-			)
+		dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
+			return job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store, g, job.WithClaimerLogger(logger))
 		}),
 		dustpan.WithTriggerStore(store.Triggers()),
 		dustpan.WithUnitSettingsStore(store.UnitSettings()),

@@ -82,7 +82,7 @@ func newJobTokenServer(t *testing.T) *jobTokenServer {
 		func(s *sqlite.Store) dustpan.Option { return dustpan.WithJobStore(s.Jobs()) },
 		func(s *sqlite.Store) dustpan.Option { return dustpan.WithJobTokenStore(s.JobTokens()) },
 		func(s *sqlite.Store) dustpan.Option {
-			return dustpan.WithJobClaimer(func(g job.GateGuard, _ job.ClaimObserver) job.Claimer {
+			return dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
 				return job.NewClaimer(s.Jobs(), s.DurableOperations(), s, g)
 			})
 		},

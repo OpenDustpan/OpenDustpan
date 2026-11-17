@@ -59,7 +59,7 @@ func TestClaimSkipsMoveTheMetric(t *testing.T) {
 
 	seedClaimSkips(t, cfg.durableStore, claimObserverBound)
 
-	_, claimErr := cfg.jobClaimer(guard, claimPollSkips(cfg.observed)).Claim(t.Context(), job.ClaimRequest{
+	_, claimErr := cfg.jobClaimer(guard).Claim(t.Context(), job.ClaimRequest{
 		Owner: "runner-1", Kinds: []durable.Kind{job.KindWriteBack}, MaxVersions: nil, Lease: time.Minute,
 	})
 	if !errors.Is(claimErr, durable.ErrNoWork) {
