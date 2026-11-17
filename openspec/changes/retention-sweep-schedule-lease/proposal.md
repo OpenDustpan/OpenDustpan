@@ -8,8 +8,8 @@ version: 3
 
 The user path this change must make work:
 
-1. **Server start.** The operator starts the server. The sweep schedule starts with the worker component and uses the retention setting that the server already checks.
-2. **API.** The operator reads the effective retention and schedule values and the time of the last sweep through the settings resource at GET /api/dustpan/v1/settings.
+1. **Server start.** The operator starts the server. The sweep schedule starts with the worker component and reads the setting `decisionRecords.retentionHours` (the parent change add-decision-record-retention-setting). With the default `0` the sweep deletes nothing.
+2. **API.** The operator reads the effective retention through the settings resource at GET /api/dustpan/v1/settings and the time of the last sweep in the audit entry that each sweep writes, through the audit read route.
 3. **Docs page.** The operator reads the page for retention of decision records and sees how to read the last sweep.
 4. **E2e.** A step starts the real binary with two server processes on one database and checks that one sweep runs at a time and that expired records are gone.
 
@@ -17,13 +17,13 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| The retention value is too short. | The server refuses to start and names the minimum value. | `GET /api/dustpan/v1/settings` |
+| The retention value is not `0` or a number of hours from 24 to 87600. | The settings resource refuses the change with 400 and names the allowed range (parent change). | `GET /api/dustpan/v1/settings` |
 | The sweep lease is held by another server process. | The process skips the run and logs the holder. No API call fails. | `GET /api/dustpan/v1/settings` |
 
 Evidence for the claims above:
 
 - The paths for the sweep home exist on main. Proof: The pack lists internal/cron and pkg/dustpan/area_retention.go with exists true.
-- The server refuses a short retention on main. Proof: The pack names the test TestNewServerRefusesShortRetention at pkg/dustpan/dustpan_test.go:832.
+- The retention setting exists after the parent change. Proof: the parent change add-decision-record-retention-setting declares `decisionRecords.retentionHours`; `rg -in 'decisionRecords' pkg --type go` finds no declaration on main today (the parent change adds it).
 - A shared lease between processes exists for another area. Proof: The pack names TestTwoShippersShareOneSinkLease at pkg/audit/ship_test.go:937.
 - The pack does not show a scheduled caller of pruneExpired. Proof: The roadmap line of the item names the sweep that calls pruneExpired as the follow-up to build. The pack has no keyword evidence for a caller, so the first task confirms it.
 
@@ -33,31 +33,32 @@ Evidence for the claims above:
 - Register its trigger in internal/cron (on main).
 - Take a store lease on the lease primitive of main, so that one sweep runs at a time. The first task names its exact file and line from the code.
 - Write an audit record of each sweep with the count of pruned records and the reason.
-- Show the effective schedule and the last sweep in the settings resource.
+- Read the cutoff from the setting of the parent change with `gate.RetentionPeriod`. `0` means keep forever and the sweep deletes nothing, but it still writes its audit record.
+- Show the last sweep in the audit entry of the sweep, not in the settings resource. `setting.Read` (`pkg/setting/change.go:109`) shows stored values and cannot show a run-time time.
 
 Out of scope:
 
 - The retention volume and the decision record content (the parent change retention-volume-state-write-decision).
 - A new lease primitive.
 - A change of the sweep of deleted units or of token policy.
+- The retention setting itself and the deletion of audit entries (the parent change add-decision-record-retention-setting and the later ADR of ADR 68 decision 2).
 - A runner pool with the sweep purpose: this sweep runs in the server worker only.
 
 Depends on:
 
 - retention-volume-state-write-decision
-- `retention-volume-state-write-decision` (the part before it in the split)
+- add-decision-record-retention-setting
 
 ## Usability
 
 Where the path still costs the person time or surprises them:
 
-- The operator sees the schedule and the last sweep in one API read.
+- The operator sees the retention in the settings resource and the last sweep in the audit entry of the sweep.
 
 ## What main already does
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- The server refuses a short retention. (`pkg/dustpan/dustpan_test.go:832`)
 - A shared lease test exists for audit shippers. (`pkg/audit/ship_test.go:937`)
 
 ## Owner decisions that apply
@@ -70,7 +71,7 @@ The project owner approved these decisions on 13 Nov 2026 ("these are all approv
 
 Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the "Changed by" chain and the "Current rule" from `docs/adr/INDEX.md`. A decision is owner-tagged when its text carries "(owner)" or "(owner, ADR N)", or when the ADR records decisions of the project owner.
 
-No ADR is touched.
+**ADR 229, decision 5**: "A record of `state.write` or of an access limit lives for the audit retention (ADR 68)." The sweep deletes a record only after the period of `decisionRecords.retentionHours`; the parent change quotes ADR 68 and ADR 229 in full. Conflict: none.
 
 ## Open questions
 
