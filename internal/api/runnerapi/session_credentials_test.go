@@ -1377,3 +1377,54 @@ func (f otherPhaseJobs) Get(ctx context.Context, id job.ID) (job.Job, error) {
 
 	return j, nil
 }
+
+// TestSessionCredentialsPhaseOutOfRange proves that a claim with a phase that
+// the job does not have gets no token and one denial entry with the reason of
+// an unknown step.
+func TestSessionCredentialsPhaseOutOfRange(t *testing.T) {
+	t.Parallel()
+
+	stripped := &atomic.Bool{}
+
+	s := newTokenEnv(t, 0, 0, func(cfg *runnerapi.Config) {
+		cfg.Jobs = noPhaseJobs{inner: cfg.Jobs, stripped: stripped}
+	})
+	s.launch()
+	stripped.Store(true)
+
+	status, body := s.ask("plan")
+	if status != http.StatusBadRequest || errorCode(t, body) != protocol.ErrorInvalid {
+		t.Fatalf("credentials with a phase out of range = %d %s, want 400 invalid", status, body)
+	}
+
+	if len(issuedEntries(t, s)) != 0 {
+		t.Fatal("a claim with a phase out of range got a token")
+	}
+
+	got := refusedEntries(t, s)
+	if len(got) != 1 {
+		t.Fatalf("the refusal wrote %d denial entries, want 1", len(got))
+	}
+
+	checkDenial(t, got[0], s.l.id, string(s.job.ID), "unknown-step")
+}
+
+// noPhaseJobs is a job reader that answers the job of its reader with no
+// phases once stripped is set, so that the phase of the claim is out of range.
+type noPhaseJobs struct {
+	inner    runnerapi.JobReader
+	stripped *atomic.Bool
+}
+
+func (f noPhaseJobs) Get(ctx context.Context, id job.ID) (job.Job, error) {
+	j, err := f.inner.Get(ctx, id)
+	if err != nil {
+		return job.Job{}, err
+	}
+
+	if f.stripped.Load() {
+		j.Phases = nil
+	}
+
+	return j, nil
+}
