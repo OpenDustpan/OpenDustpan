@@ -44,8 +44,8 @@ func claimOp(id durable.ID, state durable.State, token int64, cancel bool) durab
 	return durable.Operation{
 		ID: id, Key: "op-claim-check", Kind: "backup", Version: 1, Input: nil, State: state,
 		Steps: nil, Attempt: 1, Failures: 0, Expiries: 0, LastError: "",
-		Claim:           durable.Claim{Operation: id, Owner: "test", Token: token, ExpiresAt: time.Now()},
-		CancelRequested: cancel, NotBefore: time.Time{}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Claim:           durable.Claim{Operation: id, Owner: "test", Token: token, ExpiresAt: claimTestTime},
+		CancelRequested: cancel, NotBefore: time.Time{}, CreatedAt: claimTestTime, UpdatedAt: claimTestTime,
 	}
 }
 
@@ -58,7 +58,7 @@ func pendingOp(id durable.ID, state durable.State) durable.Operation {
 			Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{},
 		},
 		CancelRequested: false,
-		NotBefore:       time.Time{}, CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		NotBefore:       time.Time{}, CreatedAt: claimTestTime, UpdatedAt: claimTestTime,
 	}
 }
 
@@ -132,3 +132,7 @@ func TestClaimCheckOf(t *testing.T) {
 		}
 	})
 }
+
+// claimTestTime is the fixed time of the operation records that these tests
+// build. No test here depends on the wall clock.
+var claimTestTime = time.Unix(1_700_000_000, 0)
