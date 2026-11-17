@@ -153,6 +153,11 @@ type settings struct {
 	// denialLimiter is the one limiter of the audit entries of refused requests.
 	// Every adapter gets it, so its bound on keys holds for the whole server.
 	denialLimiter *denylimit.Limiter
+	// allowlistLimiter is the limiter of the audit entries of IP allowlist
+	// refusals. It is not the shared limiter: the gate runs before sign-in and
+	// keys each client address, so many addresses must not fill the table of
+	// the denials of signed-in principals.
+	allowlistLimiter *denylimit.Limiter
 	// devRefusal holds the one recorder of the refused dev sign-ins.
 	devRefusal *devRefusalState
 	// stackRefusals records the refusals of the stack blob scope. newServices
@@ -700,6 +705,7 @@ type services struct {
 func defaultSettings() *settings {
 	return &settings{
 		denialLimiter:           defaultDenialLimiter(),
+		allowlistLimiter:        defaultDenialLimiter(),
 		devRefusal:              new(devRefusalState),
 		stackRefusals:           nil,
 		settingsConfig:          settingsConfig{store: nil, declarations: nil, static: nil},
@@ -2237,7 +2243,28 @@ func denialFlusher(
 		return nil, fmt.Errorf("denial flusher: %w", err)
 	}
 
-	return rec.WithLimiter(cfg.denialLimiter).Flush, nil
+	serverAudit, err := serverAuditOf(cfg.namespaceStore)
+	if err != nil {
+		return nil, err
+	}
+
+	allowlist := allowlistAudit{store: serverAudit, limiter: cfg.allowlistLimiter, now: cfg.now, logger: cfg.logger}
+
+	return joinFlushers(rec.WithLimiter(cfg.denialLimiter), allowlist), nil
+}
+
+// denialFlush is met by the recorder of the shared limiter.
+type denialFlush interface {
+	Flush(ctx context.Context)
+}
+
+// joinFlushers returns the function that writes the counts of the shared
+// limiter and then the counts of the allowlist gate.
+func joinFlushers(shared denialFlush, allowlist allowlistAudit) func(context.Context) {
+	return func(ctx context.Context) {
+		shared.Flush(ctx)
+		allowlist.flush(ctx)
+	}
 }
 
 // flushTimeout bounds the write of the counts of refused requests at shutdown.
@@ -3574,7 +3601,7 @@ func withRequestLog(
 	next http.Handler,
 	addr requestAddr,
 	logger *slog.Logger,
-	authn identity.Authenticator,
+	callers requestCaller,
 	observed *metrics.ServerMetrics,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3599,10 +3626,8 @@ func withRequestLog(
 
 		r = r.WithContext(ctx)
 
-		caller, signedIn := callerForRequest(ctx, authn, r)
-		if signedIn {
-			warnTokenExpiry(w, caller, time.Now())
-		}
+		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK, bytes: 0}
+		admitted := callers.admit(wrapped, r, resolved, logger)
 
 		// The route pattern is not known until the handler returns, so the
 		// in-flight gauge tracks the adapter from the path only. The gauge
@@ -3614,9 +3639,10 @@ func withRequestLog(
 		}
 
 		start := time.Now()
-		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK, bytes: 0}
 
-		next.ServeHTTP(wrapped, r)
+		if !admitted.refused {
+			next.ServeHTTP(wrapped, r)
+		}
 
 		elapsed := time.Since(start)
 		route := logRoute(r)
@@ -3638,8 +3664,8 @@ func withRequestLog(
 
 		attrs = appendClientIP(attrs, resolved)
 
-		if signedIn {
-			attrs = append(attrs, slog.String("subject", caller.Subject))
+		if admitted.signedIn {
+			attrs = append(attrs, slog.String("subject", admitted.caller.Subject))
 		}
 
 		level := slog.LevelInfo
@@ -3939,11 +3965,17 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 
 	addr := requestAddr{resolver: resolver, warns: newWarnLimiter(cfg.now)}
 
+	allow, err := newAllowlistRequestGate(cfg)
+	if err != nil {
+		return routeHandlers{}, err
+	}
+
 	gated := withAuditChainGate(mux, a.chain, cfg.logger)
 
 	return routeHandlers{
 		served: withMisuseReporter(apidesc.NewReporter(cfg.logger), withRequestCache(withRequestLog(
-			gateComponents(gated, cfg.components), addr, cfg.logger, cfg.authenticator, observed,
+			gateComponents(gated, cfg.components), addr, cfg.logger,
+			requestCaller{authn: cfg.authenticator, allow: allow}, observed,
 		))),
 		ungated: gated,
 		root:    mux,

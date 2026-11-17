@@ -37,6 +37,7 @@ Evidence for the claims above:
 - The installation flag and list keys move to the generic settings API with CIDR checks. This change adds no new route.
 - Namespace and access token lists use the same key shape.
 - Enforcement on console sign-in and on requests with an access token gives 403 and an audit entry.
+- The health probe paths `/health/live`, `/health/ready` and `/health/ready/<component>` stay outside the installation list and do not authenticate a credential.
 - The docs page covers enable, opt in, deny and allow.
 
 Out of scope:
