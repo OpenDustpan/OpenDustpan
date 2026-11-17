@@ -354,7 +354,10 @@ type builtinPortSource interface {
 }
 
 // sharedStoreOptions returns the store options that both built-in stores set
-// the same way: the ports of st, and the job store jobs with its claimer.
+// the same way: the ports of st, and the job store jobs with its claimer. The
+// claimer counts the operations that one claim poll skips past its bound on the
+// metrics of the server. A server that has no metrics yet counts nothing, so
+// the observer is nil-safe and the default no-op stays.
 func sharedStoreOptions(cfg *settings, st builtinStore, jobs job.Store) []Option {
 	return []Option{
 		WithNamespaceStore(st),
@@ -369,7 +372,8 @@ func sharedStoreOptions(cfg *settings, st builtinStore, jobs job.Store) []Option
 		WithIPAllowlistStore(st),
 		WithJobStore(jobs),
 		WithJobClaimer(func(g job.GateGuard) job.Claimer {
-			return job.NewClaimer(jobs, st.DurableOperationsPort(), st, g, job.WithClaimerLogger(cfg.logger))
+			return job.NewClaimer(jobs, st.DurableOperationsPort(), st, g,
+				job.WithClaimerLogger(cfg.logger), job.WithClaimObserver(claimPollSkips(cfg.observed)))
 		}),
 		WithTriggerStore(st.Triggers()),
 		WithSavedViewStore(st.SavedViews()),
