@@ -146,6 +146,9 @@ type Handler struct {
 	jobs       JobReader
 	tokens     *jobtoken.Service
 	starters   StarterRecords
+	// authorizer checks that the starter of a job still holds the grant to
+	// run it, before the credentials path issues a token.
+	authorizer identity.Authorizer
 	audit      audit.Store
 	onAuditErr func()
 	// limiter bounds the audit entries of refused handoff tokens.
@@ -261,6 +264,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		jobs:                cfg.Jobs,
 		tokens:              cfg.JobTokens,
 		starters:            cfg.Starters,
+		authorizer:          cfg.Authorizer,
 		logger:              cfg.Logger,
 		audit:               cfg.Audit,
 		onAuditErr:          cfg.OnAuditFailure,

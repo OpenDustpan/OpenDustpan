@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -27,11 +28,22 @@ const (
 	reasonRetired     = "retired"
 	reasonNoUnit      = "no-unit"
 	reasonStarterGone = "starter-gone"
+	reasonGrantLost   = "grant-lost"
 	reasonSweep       = "sweep"
 	reasonNotLive     = "not-live"
 	reasonExpired     = "expired"
 	reasonRefused     = "refused"
 )
+
+// errGrantLost reports a starter of a job that keeps its record but no
+// longer holds the grant to run the job, or is disabled. The answer is 403
+// with grantLostMessage.
+var errGrantLost = errors.New("grant lost")
+
+// grantLostMessage is the text of the answer of errGrantLost. It names no
+// principal and no grant.
+const grantLostMessage = "Grant lost. The starter of the job does not hold the grant to run it now. " +
+	"Read the grants of the starter."
 
 // credentialsFailure is a refusal of the credentials path. Reason is the code
 // of its denial entry, or empty when the failure is not a refusal (a store
@@ -84,9 +96,9 @@ func (h *Handler) credentials(w http.ResponseWriter, r *http.Request, c *call) {
 		return
 	}
 
-	// Fail closed: a server with no issuer, no job reader or no operations
-	// has no credentials path.
-	if h.tokens == nil || h.jobs == nil || h.starters == nil || h.operations == nil {
+	// Fail closed: a server with no issuer, no job reader, no operations or
+	// no authorizer has no credentials path.
+	if h.tokens == nil || h.jobs == nil || h.starters == nil || h.operations == nil || h.authorizer == nil {
 		h.writeError(ctx, w, fmt.Errorf("%w: this server issues no job tokens", runner.ErrNotFound))
 
 		return
@@ -172,7 +184,65 @@ func (h *Handler) issueToken(
 		return none, &credentialsFailure{err: fmt.Errorf("get starter: %w", err), job: jobID, reason: ""}
 	}
 
+	if failure := h.checkStarterGrant(ctx, &j, &starter); failure != nil {
+		return none, failure
+	}
+
 	return h.issue(r, &issueInput{sess: sess, phase: &sp, job: &j, starter: &starter, step: st})
+}
+
+// checkStarterGrant refuses the token of a starter that is disabled or that no
+// longer holds the action that starts the job on its unit. The token acts as
+// the starter, so a starter without the grant gets no token.
+//
+// Defense in depth: the token store refuses a disabled starter in its own
+// transaction, and the authorizer checks the grants of the starter at each use
+// of the token. This check stays so that a store that does not read the
+// disabled flag, or a token that is never used, cannot give a token to a
+// starter without the grant.
+func (h *Handler) checkStarterGrant(
+	ctx context.Context, j *job.Job, starter *principal.Principal,
+) *credentialsFailure {
+	jobID := string(j.ID)
+
+	if !starter.DisabledAt.IsZero() {
+		err := fmt.Errorf("%w: the starter of the job is disabled", errGrantLost)
+
+		return &credentialsFailure{err: err, job: jobID, reason: reasonGrantLost}
+	}
+
+	reqs, err := job.StartRequirements(j.Spec, nil)
+	if err != nil {
+		// Fail closed: a job whose start action is unknown gets no token.
+		err = fmt.Errorf("%w: the start action of the job is unknown: %w", errGrantLost, err)
+
+		return &credentialsFailure{err: err, job: jobID, reason: reasonGrantLost}
+	}
+
+	p := identity.Principal{
+		Subject: starter.Subject, DisplayName: starter.DisplayName, Admin: false, TokenID: "",
+		TokenExpiresAt: time.Time{}, TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+		Kind: identity.Kind(starter.Kind), Credential: "", JobID: "",
+	}
+
+	for i := range reqs {
+		err = h.authorizer.Authorize(ctx, p, reqs[i].Action, reqs[i].Object)
+		if errors.Is(err, identity.ErrDenied) {
+			err = fmt.Errorf("%w: the starter may not %s on the unit of the job", errGrantLost, reqs[i].Action)
+
+			return &credentialsFailure{err: err, job: jobID, reason: reasonGrantLost}
+		}
+
+		if err != nil {
+			// Fail closed: an authorizer that does not answer gives no token.
+			// It is not a refusal, so it writes no entry, and the answer is 5xx.
+			err = fmt.Errorf("check the grant of the starter: %w", err)
+
+			return &credentialsFailure{err: err, job: jobID, reason: ""}
+		}
+	}
+
+	return nil
 }
 
 // issue builds the request of the token and calls the service.

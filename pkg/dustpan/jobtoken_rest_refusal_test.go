@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -294,13 +295,16 @@ func (s *jobTokenServer) call(t *testing.T, r jobTokenRunner, path string, body 
 	return resp.Status, resp.Body
 }
 
-// newJobStarter makes the principal ada, the starter of the job.
+// newJobStarter makes the principal ada, the starter of the job, with the
+// role planner on the namespace acme: ada may start a plan and read each unit
+// of acme. A job token of ada acts on the unit of its job only, so each refusal
+// on another unit is the refusal of the job token and not of a missing grant.
 func (s *jobTokenServer) newJobStarter(t *testing.T) {
 	t.Helper()
 
 	at := time.UnixMilli(1_700_000_000_000).UTC()
 	p := principal.Principal{
-		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: ident.NewID("prn-"), Subject: "ada",
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: "prn-ada", Subject: "ada",
 		DisplayName: "ada", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "",
 		GroupCount: 0, BreakGlass: false,
 	}
@@ -308,6 +312,8 @@ func (s *jobTokenServer) newJobStarter(t *testing.T) {
 	if err := s.st.CreatePrincipal(t.Context(), p, storetest.ServerChange(at, principal.Ref(p.ID))); err != nil {
 		t.Fatalf("create the starter: %v", err)
 	}
+
+	storeGrant(t, s.st, "ada", access.RolePlanner, identity.NamespaceObject("acme"))
 }
 
 // dispatchJob stores a plan job of the pool on unit, with one tool step
@@ -356,8 +362,8 @@ func (s *jobTokenServer) dispatchJob(t *testing.T, pool string, unit identity.Ob
 
 // issueJobToken claims the phase of a job on the unit network through the
 // runner protocol, opens its job session, and asks the credentials path for
-// the token of the step plan. It returns the token.
-func (s *jobTokenServer) issueJobToken(t *testing.T) string {
+// the token of the step plan. It returns the token and the job session.
+func (s *jobTokenServer) issueJobToken(t *testing.T) (string, *session.Session) {
 	t.Helper()
 
 	pool := s.createPool(t)
@@ -406,7 +412,44 @@ func (s *jobTokenServer) issueJobToken(t *testing.T) string {
 		t.Fatalf("credentials token = %q, want a job token", creds.Token)
 	}
 
-	return creds.Token
+	return creds.Token, sess
+}
+
+// The texts of the answers of the state routes to a job token.
+const (
+	oneUnitText  = "job token is for one unit only. Read the job to see its unit."
+	tokenEndText = "job token ended. Read the job state."
+)
+
+// refusalWant is the answer that a refused request expects: the status and,
+// when it is not empty, a text of the body.
+type refusalWant struct {
+	name   string
+	status int
+	text   string
+}
+
+// checkRefusal checks one refused request: the status is the one of want, the
+// answer holds the text of want when that is not empty, and it holds no token
+// and no state of the other unit.
+func checkRefusal(t *testing.T, want refusalWant, status int, body, token string) {
+	t.Helper()
+
+	if status != want.status {
+		t.Errorf("%s = %d %s, want %d", want.name, status, body, want.status)
+	}
+
+	if want.text != "" && !strings.Contains(body, want.text) {
+		t.Errorf("%s: the answer %q holds no text %q", want.name, body, want.text)
+	}
+
+	if strings.Contains(body, otherStateMarker) {
+		t.Errorf("%s: the answer holds the state of the other unit", want.name)
+	}
+
+	if strings.Contains(body, token) {
+		t.Errorf("%s: the answer holds the token", want.name)
+	}
 }
 
 // decodeJSON decodes body into out, or fails the test.
@@ -420,7 +463,9 @@ func decodeJSON(t *testing.T, body string, out any) {
 
 // TestJobTokenRefusedOnRESTRoute proves that a job token from the credentials
 // path of a job session reaches no REST route and no unit of another job: each
-// request answers 403, reads nothing and changes nothing.
+// request answers 403, reads nothing and changes nothing. A state route of
+// another unit answers the text of a token for one unit; an unknown token and
+// a token that ended answer 401 with the text of a token that ended.
 func TestJobTokenRefusedOnRESTRoute(t *testing.T) {
 	t.Parallel()
 
@@ -437,7 +482,7 @@ func TestJobTokenRefusedOnRESTRoute(t *testing.T) {
 	s.putState(t, "network", `{"version":4,"serial":1,"lineage":"l0","outputs":{},"resources":[]}`)
 	s.putState(t, "other", otherState)
 
-	token := s.issueJobToken(t)
+	token, sess := s.issueJobToken(t)
 
 	cases := []struct {
 		name   string
@@ -445,39 +490,55 @@ func TestJobTokenRefusedOnRESTRoute(t *testing.T) {
 		path   string
 		auth   string
 		body   string
+		text   string
 	}{
 		{
 			"REST read of the collections", http.MethodGet, "/api/dustpan/v1/namespaces/acme/collections",
-			"token " + token, "",
+			"token " + token, "", "",
 		},
 		{
 			"REST create of a collection", http.MethodPost, "/api/dustpan/v1/namespaces/acme/collections",
-			"token " + token, `{"name":"stolen"}`,
+			"token " + token, `{"name":"stolen"}`, "",
 		},
-		{"state read of another unit", http.MethodGet, "/tofu/state/acme/other", "Bearer " + token, ""},
-		{"lock of another unit", "LOCK", "/tofu/state/acme/other", "Bearer " + token, `{"ID":"job-lock"}`},
+		{"state read of another unit", http.MethodGet, "/tofu/state/acme/other", "Bearer " + token, "", oneUnitText},
+		{
+			"lock of another unit", "LOCK", "/tofu/state/acme/other", "Bearer " + token, `{"ID":"job-lock"}`,
+			oneUnitText,
+		},
 		{
 			"state write of another unit", http.MethodPost, "/tofu/state/acme/other?ID=admin-lock", "Bearer " + token,
-			`{"version":4,"serial":2,"lineage":"l1","outputs":{},"resources":[]}`,
+			`{"version":4,"serial":2,"lineage":"l1","outputs":{},"resources":[]}`, oneUnitText,
 		},
 	}
 
 	for _, tc := range cases {
-		status, body := s.do(t, tc.method, tc.path, tc.auth, tc.body)
-		if status != http.StatusForbidden {
-			t.Errorf("%s = %d %s, want 403", tc.name, status, body)
-		}
-
-		if strings.Contains(body, otherStateMarker) {
-			t.Errorf("%s: the answer holds the state of the other unit", tc.name)
-		}
-
-		if strings.Contains(body, token) {
-			t.Errorf("%s: the answer holds the token", tc.name)
-		}
+		got, answer := s.do(t, tc.method, tc.path, tc.auth, tc.body)
+		checkRefusal(t, refusalWant{name: tc.name, status: http.StatusForbidden, text: tc.text}, got, answer, token)
 	}
 
 	checkNothingChanged(t, s)
+
+	// A token that the server never issued, and the token after its job
+	// ended, answer 401 with the text of a token that ended.
+	unknown, err := jobtoken.NewSecret()
+	if err != nil {
+		t.Fatalf("new secret: %v", err)
+	}
+
+	status, body = s.do(t, http.MethodGet, "/tofu/state/acme/other", "Bearer "+unknown.Reveal(), "")
+	checkRefusal(t, refusalWant{
+		name: "state read with an unknown token", status: http.StatusUnauthorized, text: tokenEndText,
+	}, status, body, token)
+
+	resp, err := sess.Post(t.Context(), protocol.PathSessionFinish, protocol.Finish{Succeeded: false, Message: ""})
+	if err != nil || resp.Status != http.StatusNoContent {
+		t.Fatalf("finish = %+v, %v; want 204", resp, err)
+	}
+
+	status, body = s.do(t, http.MethodGet, "/tofu/state/acme/other", "Bearer "+token, "")
+	checkRefusal(t, refusalWant{
+		name: "state read after the job ended", status: http.StatusUnauthorized, text: tokenEndText,
+	}, status, body, token)
 }
 
 // checkNothingChanged proves that the refused requests changed nothing: the

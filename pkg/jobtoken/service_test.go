@@ -294,6 +294,56 @@ func TestAuthenticate(t *testing.T) {
 	}
 }
 
+// TestAuthenticateEndedToken proves that an unknown token and a token whose
+// claim, job, expiry or starter ended wrap ErrJobTokenEnded, so an adapter
+// answers the text of a token that ended, and that a value that is not a
+// secret and a record of another digest do not.
+func TestAuthenticateEndedToken(t *testing.T) {
+	t.Parallel()
+
+	secret, err := jobtoken.NewSecret()
+	if err != nil {
+		t.Fatalf("new secret: %v", err)
+	}
+
+	d := jobtoken.DigestOf(secret)
+
+	for _, tc := range []struct {
+		name     string
+		raw      string
+		storeErr error
+		mutate   func(m *jobtoken.Match)
+		ended    bool
+	}{
+		{"unknown token", secret.Reveal(), jobtoken.ErrNotFound, nil, true},
+		{"takeover", secret.Reveal(), nil, func(m *jobtoken.Match) { m.Claim.OperationClaimToken++ }, true},
+		{"job ended", secret.Reveal(), nil, func(m *jobtoken.Match) { m.Claim.JobState = job.StateFailed }, true},
+		{"expired", secret.Reveal(), nil, func(m *jobtoken.Match) { m.Token.ExpiresAt = testNow() }, true},
+		{"starter disabled", secret.Reveal(), nil, func(m *jobtoken.Match) { m.Claim.StarterEnabled = false }, true},
+		{"not a secret", "not-a-secret", nil, nil, false},
+		{"another digest", secret.Reveal(), nil, func(m *jobtoken.Match) { m.Token.Digest[0] ^= 1 }, false},
+	} {
+		m := liveMatch(t, d, testNow())
+		if tc.mutate != nil {
+			tc.mutate(&m)
+		}
+
+		var store fakeStore
+
+		store.match = m
+		store.err = tc.storeErr
+
+		_, _, err := jobtoken.NewService(&store, testNow).Authenticate(t.Context(), tc.raw)
+		if !errors.Is(err, identity.ErrUnauthenticated) {
+			t.Errorf("%s: Authenticate = %v, want ErrUnauthenticated", tc.name, err)
+		}
+
+		if got := errors.Is(err, identity.ErrJobTokenEnded); got != tc.ended {
+			t.Errorf("%s: ErrJobTokenEnded = %t, want %t: %v", tc.name, got, tc.ended, err)
+		}
+	}
+}
+
 func runServiceCase(t *testing.T, tc serviceCase, secret jobtoken.Secret, d jobtoken.Digest) {
 	t.Helper()
 

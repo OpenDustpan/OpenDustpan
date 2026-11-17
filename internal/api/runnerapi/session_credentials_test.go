@@ -3,6 +3,7 @@ package runnerapi_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -48,8 +49,43 @@ type tokenEnv struct {
 	unit    identity.Object
 	job     job.Job
 	starter principal.Principal
+	// grantLost removes the grant of the starter in the authorizer of the
+	// handler when it is set.
+	grantLost *atomic.Bool
 	// l is the launcher of the claim, after launch or launchDirect ran.
 	l *launcher
+}
+
+// starterGrants is the authorizer of the token environment: the
+// administrator may do each action, and the principal subject may start a plan
+// on a unit until lost is set. It denies every other request.
+type starterGrants struct {
+	subject string
+	lost    *atomic.Bool
+}
+
+func (g starterGrants) Authorize(_ context.Context, p identity.Principal, action identity.Action,
+	obj identity.Object,
+) error {
+	if p.Admin {
+		return nil
+	}
+
+	if p.Subject == g.subject && !g.lost.Load() && action == identity.ActionUnitRunPlan && obj.IsUnit() {
+		return nil
+	}
+
+	return &identity.DeniedError{Subject: p.Subject, Action: action, Object: obj}
+}
+
+func (g starterGrants) ListObjects(ctx context.Context, p identity.Principal, action identity.Action,
+) (identity.Scope, error) {
+	scope, err := identity.AdminOnly{}.ListObjects(ctx, p, action)
+	if err != nil {
+		return scope, fmt.Errorf("list objects: %w", err)
+	}
+
+	return scope, nil
 }
 
 // newTokenEnv opens the environment and runs it to the state where a runner of
@@ -66,10 +102,13 @@ func newTokenEnv(
 
 	var tokens *jobtoken.Service
 
+	lost := &atomic.Bool{}
+
 	e := newEnvServing(t, openSQLite, func(s stores, o *serveOptions) {
 		o.claimer = job.NewClaimer(s.jobs, s.operations, s.namespaces, jobtest.NoGates{})
 		o.jobs = s.jobs
 		o.logger = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		o.authz = starterGrants{subject: "ada", lost: lost}
 
 		records, ok := s.namespaces.(principal.Store)
 		if !ok {
@@ -111,12 +150,13 @@ func newTokenEnv(
 		sessionEnv: &sessionEnv{
 			env: e, jobs: nil, claimer: nil, logs: logs, pool: pool, runner: r, work: work,
 		},
-		audit:   written,
-		tokens:  tokens,
-		unit:    unit,
-		job:     j,
-		starter: ada,
-		l:       nil,
+		audit:     written,
+		tokens:    tokens,
+		unit:      unit,
+		job:       j,
+		starter:   ada,
+		grantLost: lost,
+		l:         nil,
 	}
 }
 
@@ -722,6 +762,118 @@ func TestSessionCredentialsStarterGone(t *testing.T) {
 	checkDenial(t, denied[0], s.l.id, string(s.job.ID), "starter-gone")
 }
 
+// TestSessionCredentialsGrantLost proves that a starter that keeps its record
+// but lost the grant to run the job gets no token.
+func TestSessionCredentialsGrantLost(t *testing.T) {
+	t.Parallel()
+
+	// The hostile case of the grant check, run as if the other layers
+	// failed: the record of the starter exists and is enabled, so the token
+	// store would issue the token. Only the grant check of the path refuses.
+	s := newTokenEnv(t, 0, 0)
+	s.launch()
+	s.grantLost.Store(true)
+
+	status, body := s.ask("plan")
+	checkGrantLost(t, s, status, body)
+}
+
+// TestSessionCredentialsStarterDisabled proves that a disabled starter gets no
+// token.
+func TestSessionCredentialsStarterDisabled(t *testing.T) {
+	t.Parallel()
+
+	s := newTokenEnv(t, 0, 0)
+	s.launch()
+
+	records, ok := s.store.namespaces.(principal.Store)
+	if !ok {
+		t.Fatal("the store keeps no records of principals")
+	}
+
+	entry := storetest.ServerChange(time.Now().UTC(), principal.Ref(s.starter.ID))
+	if err := records.DisablePrincipal(t.Context(), s.starter.ID, entry); err != nil {
+		t.Fatalf("disable the starter: %v", err)
+	}
+
+	// The token store refuses a disabled starter too, with claim-lost. The
+	// answer grant-lost shows that the check of the path refused first.
+	status, body := s.ask("plan")
+	checkGrantLost(t, s, status, body)
+}
+
+// checkGrantLost checks the refusal of a starter without its grant: 403
+// grant-lost with the fixed text, no token, no issue entry and one denial
+// entry that names the job, the step and the reason.
+func checkGrantLost(t *testing.T, s *tokenEnv, status int, body []byte) {
+	t.Helper()
+
+	if status != http.StatusForbidden || errorCode(t, body) != protocol.ErrorGrantLost {
+		t.Fatalf("credentials of a starter without the grant = %d %s, want 403 grant-lost", status, body)
+	}
+
+	var answer protocol.Error
+
+	decode(t, body, &answer)
+
+	if !strings.HasPrefix(answer.Message, "Grant lost") {
+		t.Errorf("message = %q, want the text that starts with Grant lost", answer.Message)
+	}
+
+	if strings.Contains(string(body), jobtoken.SecretPrefix) || strings.Contains(string(body), "ada") {
+		t.Errorf("the answer holds a token or the starter: %s", body)
+	}
+
+	if len(issuedEntries(t, s)) != 0 {
+		t.Fatal("a starter without the grant got a token")
+	}
+
+	denied := refusedEntries(t, s)
+	if len(denied) != 1 {
+		t.Fatalf("the refusal wrote %d denial entries, want 1", len(denied))
+	}
+
+	checkDenial(t, denied[0], s.l.id, string(s.job.ID), "grant-lost")
+}
+
+// TestSessionCredentialsBadStepName proves that the boundary check of the path
+// refuses a step name that is not valid, as if the job had a step of that
+// name: no token, no entry and no step name in the answer.
+func TestSessionCredentialsBadStepName(t *testing.T) {
+	t.Parallel()
+
+	names := []string{
+		"../x", "", "PLAN", "plan/../../etc", "plan\nevent=credentials-issued", "plan%00", strings.Repeat("a", 200),
+	}
+
+	// The hostile case of the boundary check, run as if the check of the job
+	// spec had failed: the job reader answers a job that has a step of each
+	// name, so only the check of the step name refuses.
+	s := newTokenEnv(t, 0, 0, func(cfg *runnerapi.Config) {
+		cfg.Jobs = hostileStepJobs{inner: cfg.Jobs, names: names}
+	})
+	s.launch()
+
+	for _, name := range names {
+		status, body := s.ask(name)
+		if status != http.StatusBadRequest || errorCode(t, body) != protocol.ErrorInvalid {
+			t.Errorf("credentials of step %q = %d %s, want 400 invalid", name, status, body)
+		}
+
+		if name != "" && strings.Contains(string(body), name) {
+			t.Errorf("the answer of step %q holds the step name: %s", name, body)
+		}
+	}
+
+	if len(issuedEntries(t, s)) != 0 {
+		t.Fatal("a step name that is not valid got a token")
+	}
+
+	if got := refusedEntries(t, s); len(got) != 0 {
+		t.Fatalf("a step name that is not valid wrote %d denial entries, want 0", len(got))
+	}
+}
+
 // TestSessionCredentialsSweep proves that the launcher of a sweep gets no
 // token.
 func TestSessionCredentialsSweep(t *testing.T) {
@@ -881,6 +1033,34 @@ func (f unitlessJobs) Get(ctx context.Context, id job.ID) (job.Job, error) {
 	}
 
 	j.Spec.Unit = identity.Object{}
+
+	return j, nil
+}
+
+// hostileStepJobs is a job reader that answers the job of its reader with one
+// more step of the plan phase for each name in names, as a job of a spec
+// check that failed.
+type hostileStepJobs struct {
+	inner runnerapi.JobReader
+	names []string
+}
+
+func (f hostileStepJobs) Get(ctx context.Context, id job.ID) (job.Job, error) {
+	j, err := f.inner.Get(ctx, id)
+	if err != nil {
+		return job.Job{}, err
+	}
+
+	steps := make([]job.Step, 0, len(j.Spec.Steps)+len(f.names))
+	steps = append(steps, j.Spec.Steps...)
+
+	for _, name := range f.names {
+		st := j.Spec.Steps[0]
+		st.Name = name
+		steps = append(steps, st)
+	}
+
+	j.Spec.Steps = steps
 
 	return j, nil
 }
