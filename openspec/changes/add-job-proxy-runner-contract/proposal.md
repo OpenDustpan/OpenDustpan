@@ -51,7 +51,7 @@ Evidence for the claims above:
 - Schema edited in place in both baselines: a `kind` column on `runner_handoff_tokens` and `runner_sessions`, and the new table `runner_pool_proxy_settings`
 - The assignment version stays 1: this change adds no field to the launcher assignment (the design document of the change, decision 7)
 - New docs page `docs/guides/job-proxy-pool-settings.md` and the proxy session paths in `docs/reference/runner-api.md`
-- E2e step with the real launcher binary
+- E2e step that drives the three proxy session paths with the harness session client against the real server binary (the real launcher binary (read only) `cmd/dustpan-launcher` has no proxy mode on main; its step is a task of `job-proxy-runtime-guard`)
 
 Out of scope:
 

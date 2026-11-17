@@ -33,7 +33,7 @@ Evidence for the claims above:
 
 ## What Changes
 
-- Add the declaration `decisionRecords.retentionHours` (installation level, kind int, default `0`, database layer, applies live) in NEW pkg/gate/retention_setting.go. `Check` accepts `0` and a canonical whole number from 24 to 87600 (10 years). `ReducesSecurity` is true when the new period ends records sooner than the old one (keep-forever is the longest).
+- Add the declaration `decisionRecords.retentionHours` (installation level, kind int, default `0`, database layer, applies live) in NEW function `decisionRecordRetentionDeclaration` in pkg/dustpan/settings_resource.go, built from the setting-free functions of NEW pkg/gate/retention_setting.go (pkg/gate is a leaf of the domain graph and does not import the setting package). `Check` accepts `0` and a canonical whole number from 24 to 87600 (10 years). `ReducesSecurity` is true when the new period ends records sooner than the old one (keep-forever is the longest).
 - Add the declaration to the settings resource in pkg/dustpan/settings_resource.go.
 - Add the term "Decision record retention" to GLOSSARY.md.
 - Extend docs/guides/decision-record-retention.md with the setting, the minimum and the rules of ADR 68 decision 4.
