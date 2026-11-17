@@ -360,7 +360,7 @@ func TestDiscoveryGrantIDRefusesAnIDThatIsNotAGrantID(t *testing.T) {
 	t.Parallel()
 
 	acme := parseNamespace(t, "acme")
-	alice := identity.Principal{Subject: "alice"}
+	alice := newFixture(t).person(t, "alice")
 
 	cases := []struct {
 		name string
