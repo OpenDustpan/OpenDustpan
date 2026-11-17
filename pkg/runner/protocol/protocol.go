@@ -179,6 +179,7 @@ const (
 	ErrorBadProof           = "bad-proof"           // 401
 	ErrorKeyExpired         = "key-expired"         // 401: join again
 	ErrorRetired            = "retired"             // 403
+	ErrorGrantLost          = "grant-lost"          // 403: the starter of the job lost its grant
 	ErrorTokenUsed          = "token-used"          // 401
 	ErrorTokenExpired       = "token-expired"       // 401
 	ErrorNotFound           = "not-found"           // 404

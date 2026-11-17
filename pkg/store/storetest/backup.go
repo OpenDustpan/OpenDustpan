@@ -2497,8 +2497,9 @@ func refuseOtherBackupAttempt(
 }
 
 // refuseInvalidBackupAttempt proves the store allowlist: each attempt outside
-// 1 to 64 allowlisted characters is refused with ErrInvalidAttempt, records
-// no step and leaves the row unchanged.
+// 1 to 64 allowlisted characters is refused with ErrInvalidAttempt, by the
+// record and by the succeeded finish, records no step and leaves the row
+// unchanged.
 func refuseInvalidBackupAttempt(
 	t *testing.T, s BackupStore, id backup.ID, attempt string, live durable.Claim,
 ) {
@@ -2525,6 +2526,23 @@ func refuseInvalidBackupAttempt(
 
 		if _, done := mustOperation(t, s, live.Operation).Step(step); done {
 			t.Fatalf("operation recorded invalid step %q, want none", step)
+		}
+
+		// The finish refuses the same attempt before it compares it with the
+		// row: ErrInvalidAttempt, not ErrClaimLost.
+		_, finishErr := s.FinishBackup(
+			t.Context(), live.Step(backup.StepFinish), id, backup.StateSucceeded, "", now(), bad,
+		)
+		if !errors.Is(finishErr, backup.ErrInvalidAttempt) {
+			t.Fatalf("finish with invalid attempt %q: err = %v, want ErrInvalidAttempt", bad, finishErr)
+		}
+
+		if got := mustGetBackup(t, s, id); got.State != backup.StateRunning || got.Attempt != attempt {
+			t.Fatalf("row after an invalid finish = %+v, want running with attempt %q", got, attempt)
+		}
+
+		if _, done := mustOperation(t, s, live.Operation).Step(backup.StepFinish); done {
+			t.Fatalf("operation recorded the finish step for invalid attempt %q, want none", bad)
 		}
 	}
 }

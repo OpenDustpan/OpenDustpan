@@ -94,6 +94,13 @@ func (h *Handler) runnerRoutes() []Route {
 func (h *Handler) launcherRoutes() []Route {
 	claim := []identity.Action{identity.ActionRunnerClaim}
 
+	// Each route after the exchange is a request of the job session: the proof
+	// of the session key authenticates it and the session holds the claim
+	// action.
+	session := func(method, path string, serve routeHandler) Route {
+		return Route{Method: method, Path: path, Scope: ScopeSessionKey, Actions: claim, Serve: serve}
+	}
+
 	return []Route{
 		{
 			Method:  http.MethodPost,
@@ -102,41 +109,12 @@ func (h *Handler) launcherRoutes() []Route {
 			Actions: claim,
 			Serve:   h.openSession,
 		},
-		{
-			Method:  http.MethodPost,
-			Path:    protocol.PathSessionRenew,
-			Scope:   ScopeSessionKey,
-			Actions: claim,
-			Serve:   h.sessionRenew,
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    protocol.PathSessionStepBegin,
-			Scope:   ScopeSessionKey,
-			Actions: claim,
-			Serve:   h.stepBegin,
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    protocol.PathSessionStepEnd,
-			Scope:   ScopeSessionKey,
-			Actions: claim,
-			Serve:   h.stepEnd,
-		},
-		{
-			Method:  http.MethodPut,
-			Path:    protocol.PathSessionLog,
-			Scope:   ScopeSessionKey,
-			Actions: claim,
-			Serve:   h.putLog,
-		},
-		{
-			Method:  http.MethodPost,
-			Path:    protocol.PathSessionFinish,
-			Scope:   ScopeSessionKey,
-			Actions: claim,
-			Serve:   h.finish,
-		},
+		session(http.MethodPost, protocol.PathSessionCredentials, h.credentials),
+		session(http.MethodPost, protocol.PathSessionRenew, h.sessionRenew),
+		session(http.MethodPost, protocol.PathSessionStepBegin, h.stepBegin),
+		session(http.MethodPost, protocol.PathSessionStepEnd, h.stepEnd),
+		session(http.MethodPut, protocol.PathSessionLog, h.putLog),
+		session(http.MethodPost, protocol.PathSessionFinish, h.finish),
 	}
 }
 

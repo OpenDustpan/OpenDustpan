@@ -40,9 +40,13 @@ The server SHALL write one audit entry for each request of the launcher that mak
 - **WHEN** the server makes a token at a request
 - **THEN** one audit entry names the job, the step and the expiry
 
-#### Scenario: Refused request
-- **WHEN** the server refuses the request because the claim is not live, the job names no stable unit ID, the starter lost its grant, or the launcher is a sweep
+#### Scenario: Refused request after the proof check
+- **WHEN** the proof check passes and the server then refuses the request because the claim ended between the checks, the job names no stable unit ID, the starter lost its grant or is gone, or the launcher is a sweep
 - **THEN** it makes no token, writes no issue entry, and writes one denial audit entry that names the job, the step and the reason
+
+#### Scenario: Refused request before the proof check
+- **WHEN** the server refuses the request before the proof check because the claim was lost (409), the session is retired (403), or the session store decides with no row
+- **THEN** it makes no token, writes no audit entry, and writes one log record that holds no secret, the session ID shortened, and the reason
 
 #### Scenario: Denial entry holds no secret
 - **WHEN** the server writes a denial audit entry
@@ -82,7 +86,7 @@ When a step presents a job token, the server SHALL allow it only on the state ro
 
 #### Scenario: Recreated unit
 - **WHEN** the unit was removed and made again with the same name
-- **THEN** the old token answers 403
+- **THEN** the old token answers 401 with the message "job token ended", because the token is bound to the stable unit ID, that unit is gone, and so the token has ended
 
 #### Scenario: REST API
 - **WHEN** a step uses its token on the REST API

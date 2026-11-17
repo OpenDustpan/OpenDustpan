@@ -9,6 +9,7 @@ The tool step needs a credential that acts as the starter on one unit and stops 
 3. **End in the same transaction.** Finish, takeover and retire end the token rows in the same transaction as their own write.
 4. **Routes.** The token is accepted on the state routes of its unit. It is refused on the REST API and on other units.
 5. **JobID only on job tokens.** Principal.JobID is set only when the credential is CredentialJobToken.
+6. **Which refusals write an audit entry.** A refusal after the proof check writes one denial audit entry that names the job, the step and the reason. A refusal before the proof check writes no audit entry and no credentials, and writes one log record (no secret, session ID shortened, the reason). The reason: a caller that has not passed the proof check has no proven job, so it must not be able to write audit entries. Audit entries of unproven callers would let any caller fill the audit log. The record of such a refusal stays in the log of the server, which the operator configures. This reads decision 5 of ADR 386 (one audit entry for each launcher request) as covering the requests of a proven launcher; a caller that fails the proof check is not a launcher. The lead of the project decided this reading (17 Nov 2026).
 
 ## Structure
 
@@ -23,7 +24,7 @@ Unexported struct jobToken with fields jobID, unitID, claim and expiry. Only its
 
 | Layer | Guard | Hostile test |
 | --- | --- | --- |
-| service | The constructor binds one job ID, one stable unit ID and the expiry. | Use a token on another unit and on a recreated unit with the same name and get 403. |
+| service | The constructor binds one job ID, one stable unit ID and the expiry. | Use a token on another unit and get 403. Use it on a recreated unit with the same name and get 401 "job token ended": the token is bound to the stable unit ID, that unit is gone, so the token has ended (the store joins only a live unit row). |
 | port adapter | The store checks claim liveness and expiry at each use. Unknown, malformed or ended tokens fail closed. | Replay an ended, a malformed and an unknown token and get 401 with no read. |
 | HTTP handler | A job token is accepted only on the state routes of its unit. | Send a job token to the REST API and a runner key to a tool path and get 403. |
 
@@ -83,7 +84,7 @@ flowchart LR
 | Boundary | STRIDE | Threat | Layer | Guard | Hostile test |
 | --- | --- | --- | --- | --- | --- |
 | Runner host to server | E | A step uses its job token on another unit. | boundary check | The route accepts the job token kind only on state routes. | Send the token to the REST API and expect 403. |
-| Runner host to server | E | A step uses its job token on another unit. | encode or contain | The token binds the stable unit ID, not a name. | Use the token on a recreated unit and expect 403. |
+| Runner host to server | E | A step uses its job token on another unit. | encode or contain | The token binds the stable unit ID, not a name. | Use the token on a recreated unit and expect 401 "job token ended". |
 | Runner host to server | E | A step uses its job token on another unit. | limit | The token holds only the actions of the starter on that unit. | Ask for a write the starter lacks and expect 403. |
 | Runner host to server | E | A step uses its job token on another unit. | authorize at point of use | The check compares the unit ID of the request with the token. | Use a token on another unit and expect 403. |
 | Runner host to server | E | A step uses its job token on another unit. | fail closed | An unknown or malformed token is denied. | Send an unknown token and expect 401. |
