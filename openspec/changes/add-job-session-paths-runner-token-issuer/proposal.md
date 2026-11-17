@@ -49,7 +49,7 @@ Out of scope:
 Depends on:
 
 - job-token-authenticator-chain (merged, #3215; task 4.2 checks that the job token reaches its own unit and is refused on another unit through that chain)
-- `runners` (the pool, the claim, the handoff token and the retire of a runner)
+- the claim of a runner phase and the handoff token (on main). The change `runners` depends on this change, not the reverse.
 - the job session exchange, POST /runner/v1/session (on main, `internal/api/runnerapi/session.go`)
 
 Builds on (not a change):
