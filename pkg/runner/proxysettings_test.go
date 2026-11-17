@@ -47,7 +47,13 @@ func TestNewProxySettings(t *testing.T) {
 
 			_, err := runner.NewProxySettings(tc.ranges, tc.url)
 			if !errors.Is(err, runner.ErrInvalid) {
-				t.Fatalf("NewProxySettings(%d ranges, %q) = %v, want %v", len(tc.ranges), tc.url, err, runner.ErrInvalid)
+				t.Fatalf(
+					"NewProxySettings(%d ranges, %q) = %v, want %v",
+					len(tc.ranges),
+					tc.url,
+					err,
+					runner.ErrInvalid,
+				)
 			}
 
 			if tc.url != "" && strings.Contains(err.Error(), tc.url) {

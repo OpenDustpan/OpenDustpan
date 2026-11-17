@@ -294,7 +294,7 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request, c *call) {
 	now := h.now()
 	key := runner.Key{Public: c.handoff.PublicKey, CreatedAt: now}
 
-	sess, err := h.handoffs.OpenSession(ctx, sha256Hex(c.handoff.HandoffToken), key, now)
+	sess, err := h.handoffs.OpenSession(ctx, sha256Hex(c.handoff.HandoffToken), runner.SessionKindLauncher, key, now)
 	if err != nil {
 		// The request names no runner before the session opens, so the entry
 		// holds no claimed runner ID and the installation scope.

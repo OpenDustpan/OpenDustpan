@@ -3,6 +3,7 @@ package runnertest
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -69,12 +70,18 @@ func setUpProxy(t *testing.T, h ProxyHarness) proxyFixture {
 	return proxyFixture{h: h, fence: fence, pool: p}
 }
 
+// The range and the upstream URL of the saved settings.
+const (
+	proxyTestRange = "10.0.0.0/8"
+	proxyTestURL   = "https://proxy.example:3128"
+)
+
 // proxyRecord returns the record of the settings with one range, one upstream
-// URL and the sealed credential, to save with the version version.
+// URL and the sealed credential, for a pool with no row.
 func proxyRecord(t *testing.T, sealed []byte) runner.ProxySettingsRecord {
 	t.Helper()
 
-	s, err := runner.NewProxySettings([]string{"10.0.0.0/8"}, "http://proxy.example:3128")
+	s, err := runner.NewProxySettings([]string{proxyTestRange}, proxyTestURL)
 	if err != nil {
 		t.Fatalf("NewProxySettings: %v", err)
 	}
@@ -82,6 +89,22 @@ func proxyRecord(t *testing.T, sealed []byte) runner.ProxySettingsRecord {
 	return runner.ProxySettingsRecord{
 		Settings: s, Credential: sealed, Version: 0, UpdatedBy: "alice", UpdatedAt: now,
 	}
+}
+
+// atVersion returns rec as a caller that read the stored version version.
+func atVersion(rec runner.ProxySettingsRecord, version int64) runner.ProxySettingsRecord {
+	rec.Version = version
+
+	return rec
+}
+
+// saveProxy saves rec for the pool poolID with the first audit entry of fence.
+func saveProxy(
+	t *testing.T, h ProxyHarness, fence namespace.Fence, poolID string, rec runner.ProxySettingsRecord,
+) (runner.ProxySettingsRecord, error) {
+	t.Helper()
+
+	return h.Proxy.SetProxySettings(t.Context(), fence, poolID, rec, entries(fence)[0])
 }
 
 func testProxyNoRow(t *testing.T, h ProxyHarness) {
@@ -99,7 +122,7 @@ func testProxySave(t *testing.T, h ProxyHarness) {
 	f := setUpProxy(t, h)
 	sealed := []byte{0x00, 0xff, 'c', 'r', 'e', 'd'}
 
-	got, err := h.Proxy.SetProxySettings(t.Context(), f.fence, f.pool.ID, proxyRecord(t, sealed), 0, entries(f.fence)[0])
+	got, err := saveProxy(t, h, f.fence, f.pool.ID, proxyRecord(t, sealed))
 	if err != nil {
 		t.Fatalf("SetProxySettings: %v", err)
 	}
@@ -121,11 +144,11 @@ func testProxySave(t *testing.T, h ProxyHarness) {
 		t.Fatalf("ProxySettings = %+v, want version 1 by alice at the clock of the cases", read)
 	}
 
-	if ranges, want := read.Settings.AllowedRanges(), []string{"10.0.0.0/8"}; !equalStrings(ranges, want) {
+	if ranges, want := read.Settings.AllowedRanges(), []string{proxyTestRange}; !slices.Equal(ranges, want) {
 		t.Fatalf("AllowedRanges = %v, want %v", ranges, want)
 	}
 
-	if got, want := read.Settings.UpstreamURL(), "http://proxy.example:3128"; got != want {
+	if got, want := read.Settings.UpstreamURL(), proxyTestURL; got != want {
 		t.Fatalf("UpstreamURL = %q, want %q", got, want)
 	}
 }
@@ -136,17 +159,17 @@ func testProxyVersion(t *testing.T, h ProxyHarness) {
 	f := setUpProxy(t, h)
 	rec := proxyRecord(t, nil)
 
-	if _, err := h.Proxy.SetProxySettings(t.Context(), f.fence, f.pool.ID, rec, 0, entries(f.fence)[0]); err != nil {
+	if _, err := saveProxy(t, h, f.fence, f.pool.ID, rec); err != nil {
 		t.Fatalf("SetProxySettings: %v", err)
 	}
 
-	_, err := h.Proxy.SetProxySettings(t.Context(), f.fence, f.pool.ID, rec, 0, entries(f.fence)[0])
+	_, err := saveProxy(t, h, f.fence, f.pool.ID, rec)
 	wantErr(t, "SetProxySettings with version 0 for a row with version 1", err, runner.ErrConflict)
 
-	_, err = h.Proxy.SetProxySettings(t.Context(), f.fence, f.pool.ID, rec, 5, entries(f.fence)[0])
+	_, err = saveProxy(t, h, f.fence, f.pool.ID, atVersion(rec, 5))
 	wantErr(t, "SetProxySettings with version 5 for a row with version 1", err, runner.ErrConflict)
 
-	got, err := h.Proxy.SetProxySettings(t.Context(), f.fence, f.pool.ID, rec, 1, entries(f.fence)[0])
+	got, err := saveProxy(t, h, f.fence, f.pool.ID, atVersion(rec, 1))
 	if err != nil || got.Version != 2 {
 		t.Fatalf("SetProxySettings with version 1 = %+v, %v; want version 2", got, err)
 	}
@@ -167,7 +190,7 @@ func testProxyStaleFence(t *testing.T, h ProxyHarness) {
 		t.Fatalf("AuditEntries: %v", err)
 	}
 
-	_, err = h.Proxy.SetProxySettings(t.Context(), f.fence, f.pool.ID, proxyRecord(t, nil), 0, entries(f.fence)[0])
+	_, err = saveProxy(t, h, f.fence, f.pool.ID, proxyRecord(t, nil))
 	wantErr(t, "SetProxySettings with a stale fence", err, namespace.ErrFenced)
 
 	_, err = h.Proxy.ProxySettings(t.Context(), f.pool.ID)
@@ -178,7 +201,7 @@ func testProxyStaleFence(t *testing.T, h ProxyHarness) {
 		t.Fatalf("AuditEntries after a refused save = %d entries, %v; want %d", len(after), err, len(before))
 	}
 
-	if _, err = h.Proxy.SetProxySettings(t.Context(), fresh, f.pool.ID, proxyRecord(t, nil), 0, entries(fresh)[0]); err != nil {
+	if _, err = saveProxy(t, h, fresh, f.pool.ID, proxyRecord(t, nil)); err != nil {
 		t.Fatalf("SetProxySettings with the new fence: %v", err)
 	}
 }
@@ -188,7 +211,7 @@ func testProxyMissingPool(t *testing.T, h ProxyHarness) {
 
 	f := setUpProxy(t, h)
 
-	_, err := h.Proxy.SetProxySettings(t.Context(), f.fence, "pool-missing", proxyRecord(t, nil), 0, entries(f.fence)[0])
+	_, err := saveProxy(t, h, f.fence, "pool-missing", proxyRecord(t, nil))
 	wantErr(t, "SetProxySettings for a pool that does not exist", err, runner.ErrNotFound)
 }
 
@@ -197,7 +220,7 @@ func testProxyDeletedWithPool(t *testing.T, h ProxyHarness) {
 
 	f := setUpProxy(t, h)
 
-	if _, err := h.Proxy.SetProxySettings(t.Context(), f.fence, f.pool.ID, proxyRecord(t, nil), 0, entries(f.fence)[0]); err != nil {
+	if _, err := saveProxy(t, h, f.fence, f.pool.ID, proxyRecord(t, nil)); err != nil {
 		t.Fatalf("SetProxySettings: %v", err)
 	}
 
@@ -209,19 +232,4 @@ func testProxyDeletedWithPool(t *testing.T, h ProxyHarness) {
 	if !errors.Is(err, runner.ErrNotFound) {
 		t.Fatalf("ProxySettings of a deleted pool = %v, want %v", err, runner.ErrNotFound)
 	}
-}
-
-// equalStrings reports whether a and b hold the same strings in one order.
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-
-	return true
 }

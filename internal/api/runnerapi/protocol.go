@@ -626,8 +626,16 @@ func (h *Handler) handoff(w http.ResponseWriter, r *http.Request, c *call) {
 	now := h.now()
 	sum := sha256.Sum256([]byte(secret))
 	tok := runner.HandoffToken{
-		SHA256: hex.EncodeToString(sum[:]), Operation: string(claim.Operation), Token: claim.Token,
-		Runner: c.runner.ID, IssuedAt: now, ExpiresAt: now.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
+		SHA256: hex.EncodeToString(
+			sum[:],
+		),
+		Kind:      runner.SessionKindLauncher,
+		Operation: string(claim.Operation),
+		Token:     claim.Token,
+		Runner:    c.runner.ID,
+		IssuedAt:  now,
+		ExpiresAt: now.Add(runner.HandoffTokenTTL),
+		UsedAt:    time.Time{},
 	}
 
 	if err = h.handoffs.IssueHandoffToken(ctx, tok, claim); err != nil {

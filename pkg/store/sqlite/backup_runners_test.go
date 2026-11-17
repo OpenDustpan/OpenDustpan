@@ -11,7 +11,7 @@ import (
 func (s *backupStore) RunnerPorts() storetest.RunnerPorts {
 	r := s.Runners()
 
-	return storetest.RunnerPorts{Pools: r, Members: r, Sessions: r}
+	return storetest.RunnerPorts{Pools: r, Members: r, Sessions: r, Proxy: r}
 }
 
 // SeedRunnerControlRows implements storetest.RunnerSeeder.

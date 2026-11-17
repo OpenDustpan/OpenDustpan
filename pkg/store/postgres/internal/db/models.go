@@ -1085,6 +1085,7 @@ type RunnerHandoffToken struct {
 	OperationID string
 	Token       int64
 	RunnerID    string
+	Kind        string
 	IssuedAtMs  int64
 	ExpiresAtMs int64
 	UsedAtMs    int64
@@ -1123,11 +1124,22 @@ type RunnerPool struct {
 	UpdatedAtMs int64
 }
 
+type RunnerPoolProxySetting struct {
+	PoolID        string
+	AllowedRanges string
+	UpstreamUrl   string
+	Credential    []byte
+	Version       int64
+	UpdatedBy     string
+	UpdatedAtMs   int64
+}
+
 type RunnerSession struct {
 	ID             string
 	OperationID    string
 	Token          int64
 	RunnerID       string
+	Kind           string
 	KeyPublic      []byte
 	KeyCreatedAtMs int64
 	CreatedAtMs    int64

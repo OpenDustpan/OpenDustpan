@@ -262,6 +262,10 @@ func (r *Runners) DeletePool(ctx context.Context, id string, fence namespace.Fen
 			return fmt.Errorf("delete runners: %w", err)
 		}
 
+		if err = q.DeleteRunnerPoolProxySettings(ctx, id); err != nil {
+			return fmt.Errorf("delete proxy settings: %w", err)
+		}
+
 		if err = q.DeleteRunnerPool(ctx, id); err != nil {
 			return fmt.Errorf("delete runner pool: %w", err)
 		}
@@ -983,7 +987,7 @@ func (r *Runners) LookupClaim(ctx context.Context, c durable.Claim) (runner.Clai
 		}
 
 		sessions, err := q.CountRunnerSessionsOfClaim(ctx, db.CountRunnerSessionsOfClaimParams{
-			OperationID: string(c.Operation), Token: c.Token,
+			OperationID: string(c.Operation), Token: c.Token, Kind: string(runner.SessionKindLauncher),
 		})
 		if err != nil {
 			return fmt.Errorf("count sessions: %w", err)
@@ -1007,6 +1011,12 @@ func (r *Runners) LookupClaim(ctx context.Context, c durable.Claim) (runner.Clai
 
 // IssueHandoffToken implements runner.SessionStore.
 func (r *Runners) IssueHandoffToken(ctx context.Context, t runner.HandoffToken, c durable.Claim) error {
+	// Defense in depth: the service checks the kind too; this check stays so
+	// that a caller that skips it never stores a token of an unknown kind.
+	if _, err := runner.ParseSessionKind(string(t.Kind)); err != nil {
+		return fmt.Errorf("handoff token kind: %w", err)
+	}
+
 	return r.store.inTx(ctx, func(q *db.Queries) error {
 		kind, live, err := lockClaim(ctx, q, c)
 		if err != nil {
@@ -1021,7 +1031,7 @@ func (r *Runners) IssueHandoffToken(ctx context.Context, t runner.HandoffToken, 
 			return stepErr
 		}
 
-		if stepErr := refuseSessionOfClaim(ctx, q, c); stepErr != nil {
+		if stepErr := refuseSessionOfClaim(ctx, q, c, t.Kind); stepErr != nil {
 			return stepErr
 		}
 
@@ -1059,10 +1069,10 @@ func checkHandoffKind(ctx context.Context, q *db.Queries, id string, kind durabl
 }
 
 // refuseSessionOfClaim returns runner.ErrConflict when the claim c has a job
-// session.
-func refuseSessionOfClaim(ctx context.Context, q *db.Queries, c durable.Claim) error {
+// session of the kind kind.
+func refuseSessionOfClaim(ctx context.Context, q *db.Queries, c durable.Claim, kind runner.SessionKind) error {
 	sessions, err := q.CountRunnerSessionsOfClaim(ctx, db.CountRunnerSessionsOfClaimParams{
-		OperationID: string(c.Operation), Token: c.Token,
+		OperationID: string(c.Operation), Token: c.Token, Kind: string(kind),
 	})
 	if err != nil {
 		return fmt.Errorf("count sessions: %w", err)
@@ -1075,10 +1085,11 @@ func refuseSessionOfClaim(ctx context.Context, q *db.Queries, c durable.Claim) e
 	return nil
 }
 
-// storeHandoffToken replaces the handoff tokens of the claim of t with t.
+// storeHandoffToken replaces the handoff tokens of the kind of t for the claim
+// of t with t.
 func storeHandoffToken(ctx context.Context, q *db.Queries, t runner.HandoffToken) error {
 	err := q.DeleteRunnerHandoffTokensOfClaim(ctx, db.DeleteRunnerHandoffTokensOfClaimParams{
-		OperationID: t.Operation, Token: t.Token,
+		OperationID: t.Operation, Token: t.Token, Kind: string(t.Kind),
 	})
 	if err != nil {
 		return fmt.Errorf("delete handoff tokens: %w", err)
@@ -1086,7 +1097,7 @@ func storeHandoffToken(ctx context.Context, q *db.Queries, t runner.HandoffToken
 
 	err = q.InsertRunnerHandoffToken(ctx, db.InsertRunnerHandoffTokenParams{
 		Sha256: t.SHA256, OperationID: t.Operation, Token: t.Token, RunnerID: t.Runner,
-		IssuedAtMs: t.IssuedAt.UnixMilli(), ExpiresAtMs: t.ExpiresAt.UnixMilli(),
+		Kind: string(t.Kind), IssuedAtMs: t.IssuedAt.UnixMilli(), ExpiresAtMs: t.ExpiresAt.UnixMilli(),
 	})
 	if err != nil {
 		return fmt.Errorf("insert handoff token: %w", err)
@@ -1123,11 +1134,19 @@ func recordClaimTime(ctx context.Context, q *db.Queries, c durable.Claim, rec cl
 }
 
 // OpenSession implements runner.SessionStore.
-func (r *Runners) OpenSession(ctx context.Context, sum string, k runner.Key, now time.Time) (runner.Session, error) {
+func (r *Runners) OpenSession(
+	ctx context.Context, sum string, kind runner.SessionKind, k runner.Key, now time.Time,
+) (runner.Session, error) {
+	// Defense in depth: the handler passes the kind of its path; this check
+	// stays so that a caller never opens a session of an unknown kind.
+	if _, err := runner.ParseSessionKind(string(kind)); err != nil {
+		return runner.Session{}, fmt.Errorf("session kind: %w", err)
+	}
+
 	var out runner.Session
 
 	err := r.store.inTx(ctx, func(q *db.Queries) error {
-		t, err := openableHandoff(ctx, q, sum, now)
+		t, err := openableHandoff(ctx, q, sum, kind, now)
 		if err != nil {
 			return err
 		}
@@ -1140,12 +1159,13 @@ func (r *Runners) OpenSession(ctx context.Context, sum string, k runner.Key, now
 		}
 
 		out = runner.Session{
-			ID: ident.NewID(runner.SessionIDPrefix), Operation: t.Operation, Token: t.Token, Runner: t.Runner,
-			Key: runner.Key{Public: k.Public, CreatedAt: now.UTC()}, CreatedAt: now.UTC(),
+			ID: ident.NewID(runner.SessionIDPrefix), Kind: kind, Operation: t.Operation, Token: t.Token,
+			Runner: t.Runner, Key: runner.Key{Public: k.Public, CreatedAt: now.UTC()}, CreatedAt: now.UTC(),
 		}
 
 		err = q.InsertRunnerSession(ctx, db.InsertRunnerSessionParams{
-			ID: out.ID, OperationID: out.Operation, Token: out.Token, RunnerID: out.Runner, KeyPublic: k.Public,
+			ID: out.ID, OperationID: out.Operation, Token: out.Token, RunnerID: out.Runner, Kind: string(kind),
+			KeyPublic:      k.Public,
 			KeyCreatedAtMs: now.UnixMilli(), CreatedAtMs: now.UnixMilli(),
 		})
 		if err != nil {
@@ -1163,8 +1183,11 @@ func (r *Runners) OpenSession(ctx context.Context, sum string, k runner.Key, now
 
 // openableHandoff returns the handoff token with the hash sum when a session
 // may open with it at now: the token is not used or expired, its claim is
-// live, and the session wait limit did not pass.
-func openableHandoff(ctx context.Context, q *db.Queries, sum string, now time.Time) (runner.HandoffToken, error) {
+// live, and the session wait limit did not pass. A token of another kind than
+// kind is unknown to this call: it returns runner.ErrNotFound.
+func openableHandoff(
+	ctx context.Context, q *db.Queries, sum string, kind runner.SessionKind, now time.Time,
+) (runner.HandoffToken, error) {
 	row, err := q.LockRunnerHandoffToken(ctx, sum)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return runner.HandoffToken{}, runner.ErrNotFound
@@ -1174,7 +1197,17 @@ func openableHandoff(ctx context.Context, q *db.Queries, sum string, now time.Ti
 		return runner.HandoffToken{}, fmt.Errorf("select handoff token: %w", err)
 	}
 
-	t := codec.HandoffTokenFromRow(codec.RunnerHandoffTokenRow(row))
+	t := codec.HandoffTokenFromRow(codec.RunnerHandoffTokenRow{
+		Sha256: row.Sha256, OperationID: row.OperationID, Token: row.Token, RunnerID: row.RunnerID,
+		IssuedAtMs: row.IssuedAtMs, ExpiresAtMs: row.ExpiresAtMs, UsedAtMs: row.UsedAtMs,
+	})
+
+	// Fail closed: a stored kind that does not parse matches no kind.
+	t.Kind, err = runner.ParseSessionKind(row.Kind)
+	if err != nil || t.Kind != kind {
+		return runner.HandoffToken{}, runner.ErrNotFound
+	}
+
 	if err = t.CheckUse(now); err != nil {
 		return runner.HandoffToken{}, fmt.Errorf("check handoff token: %w", err)
 	}
@@ -1355,7 +1388,7 @@ func renewState(ctx context.Context, q *db.Queries, c durable.Claim, now time.Ti
 	}
 
 	sessions, err := q.CountRunnerSessionsOfClaim(ctx, db.CountRunnerSessionsOfClaimParams{
-		OperationID: string(c.Operation), Token: c.Token,
+		OperationID: string(c.Operation), Token: c.Token, Kind: string(runner.SessionKindLauncher),
 	})
 	if err != nil {
 		return false, fmt.Errorf("count sessions: %w", err)
@@ -1413,7 +1446,8 @@ func (r *Runners) Session(ctx context.Context, id string) (runner.Session, error
 	}
 
 	return runner.Session{
-		ID: row.ID, Operation: row.OperationID, Token: row.Token, Runner: row.RunnerID,
+		ID: row.ID, Kind: runner.SessionKind(row.Kind), Operation: row.OperationID, Token: row.Token,
+		Runner:    row.RunnerID,
 		Key:       runner.Key{Public: row.KeyPublic, CreatedAt: codec.RunnerTime(row.KeyCreatedAtMs)},
 		CreatedAt: codec.RunnerTime(row.CreatedAtMs),
 	}, nil

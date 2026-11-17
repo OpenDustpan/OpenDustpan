@@ -515,7 +515,7 @@ func testHandoffTokenSingleUse(t *testing.T, h Harness) {
 	l := handoffSetUp(t, h)
 	r, tok, secret := l.r, l.tok, l.secret
 
-	s, err := h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), now)
+	s, err := h.Sessions.OpenSession(t.Context(), hash(secret), runner.SessionKindLauncher, newKey(t), now)
 	if err != nil || s.ID == "" || s.Operation != tok.Operation || s.Runner != r.ID {
 		t.Fatalf("OpenSession = %+v, %v", s, err)
 	}
@@ -525,10 +525,16 @@ func testHandoffTokenSingleUse(t *testing.T, h Harness) {
 		t.Fatalf("Session = %+v, %v", got, err)
 	}
 
-	_, err = h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), now)
+	_, err = h.Sessions.OpenSession(t.Context(), hash(secret), runner.SessionKindLauncher, newKey(t), now)
 	wantErr(t, "a second OpenSession with one handoff token", err, runner.ErrTokenUsed)
 
-	_, err = h.Sessions.OpenSession(t.Context(), hash(runner.HandoffTokenPrefix+"unknown"), newKey(t), now)
+	_, err = h.Sessions.OpenSession(
+		t.Context(),
+		hash(runner.HandoffTokenPrefix+"unknown"),
+		runner.SessionKindLauncher,
+		newKey(t),
+		now,
+	)
 	wantErr(t, "OpenSession with an unknown token", err, runner.ErrNotFound)
 }
 
@@ -538,7 +544,13 @@ func testHandoffTokenClaim(t *testing.T, h Harness) {
 	l := handoffSetUp(t, h)
 	f, r, secret := l.f, l.r, l.secret
 
-	_, err := h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), now.Add(runner.HandoffTokenTTL))
+	_, err := h.Sessions.OpenSession(
+		t.Context(),
+		hash(secret),
+		runner.SessionKindLauncher,
+		newKey(t),
+		now.Add(runner.HandoffTokenTTL),
+	)
 	wantErr(t, "OpenSession at the expiry of the token", err, runner.ErrTokenExpired)
 
 	sweep, err := h.Domain.ClaimLease(t.Context(), runner.SweepKind(f.pool.ID), r.ID, longLease)
@@ -572,7 +584,7 @@ func testSessionAfterTakeover(t *testing.T, h Harness) {
 	l := handoffSetUp(t, h)
 	r, secret := l.r, l.secret
 
-	s, err := h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), now)
+	s, err := h.Sessions.OpenSession(t.Context(), hash(secret), runner.SessionKindLauncher, newKey(t), now)
 	if err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}
@@ -655,7 +667,7 @@ func testRetireEndsSessions(t *testing.T, h Harness) {
 
 	l := handoffSetUp(t, h)
 
-	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), newKey(t), now)
+	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), runner.SessionKindLauncher, newKey(t), now)
 	if err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}
@@ -699,7 +711,7 @@ func testHandoffTokenOwner(t *testing.T, h Harness) {
 		t.Fatalf("IssueHandoffToken with a claim that names another owner = %v, want ErrClaimLost or ErrNotFound", err)
 	}
 
-	_, err = h.Sessions.OpenSession(t.Context(), stolen.SHA256, newKey(t), now)
+	_, err = h.Sessions.OpenSession(t.Context(), stolen.SHA256, runner.SessionKindLauncher, newKey(t), now)
 	wantErr(t, "OpenSession with a refused token", err, runner.ErrNotFound)
 }
 
@@ -722,10 +734,11 @@ func testHandoffTokenReplace(t *testing.T, h Harness) {
 		t.Fatalf("IssueHandoffToken again: %v", err)
 	}
 
-	_, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), newKey(t), now)
+	_, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), runner.SessionKindLauncher, newKey(t), now)
 	wantErr(t, "OpenSession with the replaced token", err, runner.ErrNotFound)
 
-	if _, err = h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), now); err != nil {
+	_, err = h.Sessions.OpenSession(t.Context(), hash(secret), runner.SessionKindLauncher, newKey(t), now)
+	if err != nil {
 		t.Fatalf("OpenSession with the new token: %v", err)
 	}
 
@@ -743,7 +756,12 @@ func testSessionKindOwn(t *testing.T, h Harness) {
 	t.Helper()
 
 	l := handoffSetUp(t, h)
-	c := durable.Claim{Operation: durable.ID(l.tok.Operation), Owner: l.r.ID, Token: l.tok.Token, ExpiresAt: time.Time{}}
+	c := durable.Claim{
+		Operation: durable.ID(l.tok.Operation),
+		Owner:     l.r.ID,
+		Token:     l.tok.Token,
+		ExpiresAt: time.Time{},
+	}
 
 	proxySecret := runner.HandoffTokenPrefix + randomHex(t)
 	proxy := l.tok
@@ -780,9 +798,15 @@ func testSessionKindOnePerKind(t *testing.T, h Harness) {
 	t.Helper()
 
 	l := handoffSetUp(t, h)
-	c := durable.Claim{Operation: durable.ID(l.tok.Operation), Owner: l.r.ID, Token: l.tok.Token, ExpiresAt: time.Time{}}
+	c := durable.Claim{
+		Operation: durable.ID(l.tok.Operation),
+		Owner:     l.r.ID,
+		Token:     l.tok.Token,
+		ExpiresAt: time.Time{},
+	}
 
-	if _, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), runner.SessionKindLauncher, newKey(t), now); err != nil {
+	_, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), runner.SessionKindLauncher, newKey(t), now)
+	if err != nil {
 		t.Fatalf("OpenSession of the launcher token: %v", err)
 	}
 
@@ -791,18 +815,19 @@ func testSessionKindOnePerKind(t *testing.T, h Harness) {
 	proxy.Kind = runner.SessionKindProxy
 	proxy.SHA256 = hash(proxySecret)
 
-	if err := h.Sessions.IssueHandoffToken(t.Context(), proxy, c); err != nil {
+	if err = h.Sessions.IssueHandoffToken(t.Context(), proxy, c); err != nil {
 		t.Fatalf("IssueHandoffToken of kind proxy for a claim with a launcher session: %v", err)
 	}
 
-	if _, err := h.Sessions.OpenSession(t.Context(), hash(proxySecret), runner.SessionKindProxy, newKey(t), now); err != nil {
+	_, err = h.Sessions.OpenSession(t.Context(), hash(proxySecret), runner.SessionKindProxy, newKey(t), now)
+	if err != nil {
 		t.Fatalf("OpenSession of the proxy token: %v", err)
 	}
 
 	again := proxy
 	again.SHA256 = hash(runner.HandoffTokenPrefix + randomHex(t))
 
-	err := h.Sessions.IssueHandoffToken(t.Context(), again, c)
+	err = h.Sessions.IssueHandoffToken(t.Context(), again, c)
 	wantErr(t, "IssueHandoffToken of kind proxy for a claim with a proxy session", err, runner.ErrConflict)
 
 	_, err = h.Sessions.OpenSession(t.Context(), hash(proxySecret), runner.SessionKindProxy, newKey(t), now)
@@ -868,7 +893,7 @@ func testRejoinKeepsSessions(t *testing.T, h Harness) {
 	l := handoffSetUp(t, h)
 	f, r := l.f, l.r
 
-	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), newKey(t), now)
+	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), runner.SessionKindLauncher, newKey(t), now)
 	if err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}
@@ -898,7 +923,7 @@ func testRejoinKeepsSessions(t *testing.T, h Harness) {
 	_, err = h.Sessions.RunnerRenew(t.Context(), waiting, f.fence, runner.DefaultLease, offline)
 	wantErr(t, "RunnerRenew of a claim with no session after a join again", err, runner.ErrClaimLost)
 
-	_, err = h.Sessions.OpenSession(t.Context(), tok.SHA256, newKey(t), offline)
+	_, err = h.Sessions.OpenSession(t.Context(), tok.SHA256, runner.SessionKindLauncher, newKey(t), offline)
 	wantErr(t, "OpenSession for a claim with no session after a join again", err, runner.ErrClaimLost)
 }
 
@@ -946,7 +971,7 @@ func testRunnerRenew(t *testing.T, h Harness) {
 		t.Fatalf("LookupClaim after the session wait limit = %+v, %v, want the live claim with no session", rec, err)
 	}
 
-	_, err = h.Sessions.OpenSession(t.Context(), late.SHA256, newKey(t), after)
+	_, err = h.Sessions.OpenSession(t.Context(), late.SHA256, runner.SessionKindLauncher, newKey(t), after)
 	wantErr(t, "OpenSession after the session wait limit", err, runner.ErrClaimLost)
 
 	_, err = h.Sessions.RunnerRenew(t.Context(), c, f.fence, runner.DefaultLease, after)
@@ -979,7 +1004,7 @@ func testRunnerRenew(t *testing.T, h Harness) {
 
 	pastLimit := start.Add(runner.MaxSessionWait + time.Second)
 
-	_, err = h.Sessions.OpenSession(t.Context(), tok.SHA256, newKey(t), pastLimit)
+	_, err = h.Sessions.OpenSession(t.Context(), tok.SHA256, runner.SessionKindLauncher, newKey(t), pastLimit)
 	wantErr(t, "OpenSession after the session wait limit from the recorded claim time", err, runner.ErrClaimLost)
 }
 
@@ -1006,7 +1031,7 @@ func testRunnerRenewStaleFence(t *testing.T, h Harness) {
 func sessionOf(t *testing.T, h Harness, l *handoff) runner.Session {
 	t.Helper()
 
-	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), newKey(t), now)
+	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), runner.SessionKindLauncher, newKey(t), now)
 	if err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}
@@ -1195,7 +1220,7 @@ func testSessionNearWaitLimit(t *testing.T, h Harness) {
 		t.Fatalf("IssueHandoffToken: %v", err)
 	}
 
-	s, err := h.Sessions.OpenSession(t.Context(), tok.SHA256, newKey(t), limit)
+	s, err := h.Sessions.OpenSession(t.Context(), tok.SHA256, runner.SessionKindLauncher, newKey(t), limit)
 	if err != nil {
 		t.Fatalf("OpenSession at the session wait limit: %v", err)
 	}
@@ -1222,7 +1247,13 @@ func testSessionNearWaitLimit(t *testing.T, h Harness) {
 		t.Fatalf("IssueHandoffToken again: %v", err)
 	}
 
-	_, err = h.Sessions.OpenSession(t.Context(), next.SHA256, newKey(t), limit.Add(time.Second))
+	_, err = h.Sessions.OpenSession(
+		t.Context(),
+		next.SHA256,
+		runner.SessionKindLauncher,
+		newKey(t),
+		limit.Add(time.Second),
+	)
 	wantErr(t, "OpenSession after the session wait limit with a new token", err, runner.ErrClaimLost)
 }
 
@@ -1305,7 +1336,8 @@ func recordClaimIsOnce(t *testing.T, h Harness, in recordedClaim) {
 		t.Fatalf("IssueHandoffToken: %v", err)
 	}
 
-	if _, err := h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), hi); err != nil {
+	_, err := h.Sessions.OpenSession(t.Context(), hash(secret), runner.SessionKindLauncher, newKey(t), hi)
+	if err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}
 
@@ -1400,7 +1432,7 @@ func testClaimLeasePasses(t *testing.T, h Harness) {
 		t.Fatalf("IssueHandoffToken: %v", err)
 	}
 
-	s, err := h.Sessions.OpenSession(t.Context(), hash(openSecret), newKey(t), at)
+	s, err := h.Sessions.OpenSession(t.Context(), hash(openSecret), runner.SessionKindLauncher, newKey(t), at)
 	if err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}
@@ -1417,7 +1449,7 @@ func testClaimLeasePasses(t *testing.T, h Harness) {
 	err = h.Sessions.IssueHandoffToken(t.Context(), late, waiting)
 	wantErr(t, "IssueHandoffToken after the lease passed", err, runner.ErrClaimLost)
 
-	_, err = h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), time.Now())
+	_, err = h.Sessions.OpenSession(t.Context(), hash(secret), runner.SessionKindLauncher, newKey(t), time.Now())
 	wantErr(t, "OpenSession after the lease passed", err, runner.ErrClaimLost)
 
 	_, err = h.Sessions.RunnerRenew(t.Context(), withSession, f.fence, runner.DefaultLease, time.Now())
@@ -1633,7 +1665,7 @@ func testSessionOfDeletedRunner(t *testing.T, h Harness) {
 
 	l := handoffSetUp(t, h)
 
-	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), newKey(t), now)
+	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), runner.SessionKindLauncher, newKey(t), now)
 	if err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}
