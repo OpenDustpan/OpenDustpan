@@ -41,8 +41,16 @@ The server SHALL write one audit entry for each request of the launcher that mak
 - **THEN** one audit entry names the job, the step and the expiry
 
 #### Scenario: Refused request
-- **WHEN** the server refuses the request
-- **THEN** it makes no token and writes no issue entry
+- **WHEN** the server refuses the request because the claim is not live, the job names no stable unit ID, the starter lost its grant, or the launcher is a sweep
+- **THEN** it makes no token, writes no issue entry, and writes one denial audit entry that names the job, the step and the reason
+
+#### Scenario: Denial entry holds no secret
+- **WHEN** the server writes a denial audit entry
+- **THEN** the entry holds the job ID, the step name and a reason code, and holds no token text and no proof
+
+#### Scenario: Failed transaction
+- **WHEN** the transaction of the issue fails after the checks pass
+- **THEN** the server stores no token and writes no issue entry, and the answer is an error with no token
 
 ### Requirement: Refuse no unit
 
