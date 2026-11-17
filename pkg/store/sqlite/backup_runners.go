@@ -29,6 +29,18 @@ func sqliteRunnerBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "runner_pool_proxy_settings",
+			columns: []string{
+				backupColPoolID,
+				"allowed_ranges",
+				"upstream_url",
+				"credential",
+				backupColVersion,
+				backupColUpdatedBy,
+				backupColUpdatedAtMs,
+			},
+		},
+		{
 			table: "runner_join_tokens",
 			columns: []string{
 				"id",
@@ -84,6 +96,7 @@ func sqliteRunnerControlTables() []sqliteBackupTable {
 				backupColOperationID,
 				backupColToken,
 				"runner_id",
+				backupColKind,
 				"issued_at_ms",
 				backupColExpiresAtMs,
 				backupColUsedAtMs,
@@ -96,6 +109,7 @@ func sqliteRunnerControlTables() []sqliteBackupTable {
 				backupColOperationID,
 				backupColToken,
 				"runner_id",
+				backupColKind,
 				"key_public",
 				backupColKeyCreatedAtMs,
 				backupColCreatedAtMs,

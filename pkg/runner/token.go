@@ -146,11 +146,38 @@ const (
 	HandoffTokenPrefix = "dph_"
 )
 
+// SessionKind is the kind of a handoff token and of a session. A claim has
+// at most one session of each kind. A token of one kind opens only a session
+// of that kind, and the paths of a kind accept only its sessions.
+type SessionKind string
+
+const (
+	// SessionKindLauncher is the session of the launcher of a phase.
+	SessionKindLauncher SessionKind = "launcher"
+	// SessionKindProxy is the session of the job proxy that runs next to the
+	// launcher of a phase.
+	SessionKindProxy SessionKind = "proxy"
+)
+
+// ParseSessionKind returns the SessionKind of s. It returns ErrInvalid for
+// any other value, so that an unknown kind never reaches a session.
+func ParseSessionKind(s string) (SessionKind, error) {
+	switch k := SessionKind(s); k {
+	case SessionKindLauncher, SessionKindProxy:
+		return k, nil
+	default:
+		return "", fmt.Errorf("%w: a session kind is launcher or proxy", ErrInvalid)
+	}
+}
+
 // HandoffToken is the record of a handoff token. It holds no secret. It is
 // good for one exchange, for the claim that it names, and only while that
 // claim is live.
 type HandoffToken struct {
 	SHA256 string
+	// Kind is the kind of session that the token opens. The store sets it from
+	// the argument of the call, never from the token text.
+	Kind SessionKind
 	// Operation and Token name the durable claim of the phase or the sweep.
 	Operation string
 	Token     int64
@@ -182,7 +209,10 @@ func (t *HandoffToken) CheckUse(now time.Time) error {
 // of possession of the key of the session.
 type Session struct {
 	// ID has the prefix SessionIDPrefix.
-	ID        string
+	ID string
+	// Kind is the kind of the session. A session of one kind never answers a
+	// path of the other kind.
+	Kind      SessionKind
 	Operation string
 	Token     int64
 	Runner    string

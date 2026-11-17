@@ -1151,9 +1151,11 @@ CREATE TABLE runner_handoff_tokens (
     operation_id text NOT NULL,
     token bigint NOT NULL,
     runner_id text NOT NULL,
+    kind text NOT NULL,
     issued_at_ms bigint NOT NULL,
     expires_at_ms bigint NOT NULL,
-    used_at_ms bigint NOT NULL
+    used_at_ms bigint NOT NULL,
+    CONSTRAINT runner_handoff_tokens_kind_check CHECK ((kind = ANY (ARRAY['launcher'::text, 'proxy'::text])))
 );
 
 CREATE TABLE runner_join_tokens (
@@ -1173,6 +1175,17 @@ CREATE TABLE runner_nonces (
     subject text NOT NULL,
     nonce text NOT NULL,
     expires_at_ms bigint NOT NULL
+);
+
+CREATE TABLE runner_pool_proxy_settings (
+    pool_id text NOT NULL,
+    allowed_ranges text NOT NULL,
+    upstream_url text NOT NULL,
+    credential bytea NOT NULL,
+    version bigint NOT NULL,
+    updated_by text NOT NULL,
+    updated_at_ms bigint NOT NULL,
+    CONSTRAINT runner_pool_proxy_settings_version_check CHECK ((version >= 1))
 );
 
 CREATE TABLE runner_pools (
@@ -1195,9 +1208,11 @@ CREATE TABLE runner_sessions (
     operation_id text NOT NULL,
     token bigint NOT NULL,
     runner_id text NOT NULL,
+    kind text NOT NULL,
     key_public bytea NOT NULL,
     key_created_at_ms bigint NOT NULL,
-    created_at_ms bigint NOT NULL
+    created_at_ms bigint NOT NULL,
+    CONSTRAINT runner_sessions_kind_check CHECK ((kind = ANY (ARRAY['launcher'::text, 'proxy'::text])))
 );
 
 CREATE TABLE runners (
@@ -1966,7 +1981,7 @@ ALTER TABLE ONLY runner_claims
     ADD CONSTRAINT runner_claims_pkey PRIMARY KEY (operation_id, token);
 
 ALTER TABLE ONLY runner_handoff_tokens
-    ADD CONSTRAINT runner_handoff_tokens_operation_id_token_key UNIQUE (operation_id, token);
+    ADD CONSTRAINT runner_handoff_tokens_operation_id_token_kind_key UNIQUE (operation_id, token, kind);
 
 ALTER TABLE ONLY runner_handoff_tokens
     ADD CONSTRAINT runner_handoff_tokens_pkey PRIMARY KEY (sha256);
@@ -1980,6 +1995,9 @@ ALTER TABLE ONLY runner_join_tokens
 ALTER TABLE ONLY runner_nonces
     ADD CONSTRAINT runner_nonces_pkey PRIMARY KEY (subject, nonce);
 
+ALTER TABLE ONLY runner_pool_proxy_settings
+    ADD CONSTRAINT runner_pool_proxy_settings_pkey PRIMARY KEY (pool_id);
+
 ALTER TABLE ONLY runner_pools
     ADD CONSTRAINT runner_pools_namespace_id_name_key UNIQUE (namespace_id, name);
 
@@ -1987,7 +2005,7 @@ ALTER TABLE ONLY runner_pools
     ADD CONSTRAINT runner_pools_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY runner_sessions
-    ADD CONSTRAINT runner_sessions_operation_id_token_key UNIQUE (operation_id, token);
+    ADD CONSTRAINT runner_sessions_operation_id_token_kind_key UNIQUE (operation_id, token, kind);
 
 ALTER TABLE ONLY runner_sessions
     ADD CONSTRAINT runner_sessions_pkey PRIMARY KEY (id);
@@ -2473,6 +2491,9 @@ ALTER TABLE ONLY runner_join_tokens
 
 ALTER TABLE ONLY runner_join_tokens
     ADD CONSTRAINT runner_join_tokens_pool_id_fkey FOREIGN KEY (pool_id) REFERENCES runner_pools(id);
+
+ALTER TABLE ONLY runner_pool_proxy_settings
+    ADD CONSTRAINT runner_pool_proxy_settings_pool_id_fkey FOREIGN KEY (pool_id) REFERENCES runner_pools(id);
 
 ALTER TABLE ONLY runner_pools
     ADD CONSTRAINT runner_pools_namespace_id_fkey FOREIGN KEY (namespace_id) REFERENCES namespaces(id);

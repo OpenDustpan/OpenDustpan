@@ -1,0 +1,23 @@
+## 0. Confirm against the code first
+
+- [ ] 0.1 Confirm against the code first: read each fact of "What main already does" at its file, line and function on the current main, and record each difference in the pull request body before the first test. Check: the pull request body lists the differences, or says that there are none.
+
+## 1. Failing tests first
+
+- [ ] 1.1 Add failing reveal scenario tests with audit entry check by extending the existing file pkg/stack/reveal_test.go Check: NEW TestRevealOnePathOneEntry (new behavior) fails on main
+- [ ] 1.2 SECURITY. Add a failing hostile test for authorize at point of use in the existing file pkg/stack/reveal_test.go (NEW TestRevealDeniedWithOnlyUnitRead). Check: a reveal with only unit:read gives 403 with no secret bytes; the test fails on main
+- [ ] 1.3 SECURITY. Add a failing hostile test for fail closed in the existing file pkg/stack/reveal_test.go (NEW TestRevealFailsClosed). Check: with a broken audit write and with a broken open, reveal answers 500 and returns no bytes; the test fails on main
+
+## 2. Side effects (computed from main)
+
+- [ ] 2.1 Regenerate `internal/api/apidesc/openapi.json` (`go test ./pkg/dustpan -run TestAPIDescriptionGolden -update-api-description`) and then the clients (`make clients-generate`). Never edit a generated file by hand. Check: the named files change in the same pull request. Confirmed by: the driver's gates.
+
+## 3. Definition of done
+
+- [ ] 3.1 Build single-path Reveal behind unit:read-secrets, in the NEW files `pkg/stack/reveal_path.go` and `pkg/workspace/reveal_path.go` (the existing `pkg/stack/reveal.go` and `pkg/workspace/reveal.go` stay the one reveal path). Check: `go test -race ./pkg/stack/... ./pkg/workspace/...` passes with an access token
+- [ ] 3.2 Wire the NEW tool-neutral reveal route with declared actions. Add the declaration to the existing file `internal/api/apidesc/units_state.go` and the handler to the existing file `internal/api/state/units_state.go`. Check: route test passes for the NEW `POST /api/dustpan/v1/units/{ref}/state/reveal` with an access token and declared actions
+- [ ] 3.3 Add Pulumi e2e step against the real CLI in the NEW file e2e/39_reveal_state_value_pulumi_test.go, which calls the existing route `POST /api/stacks/{org}/{project}/{stack}/state/{version}/reveal` with an access token. Check: e2e step calls existing `/api/stacks/{org}/{project}/{stack}/state/{version}/reveal` with an access token after a real Pulumi CLI update. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.4 Add OpenTofu e2e step against the real CLI in the NEW file e2e/39_reveal_state_value_tofu_test.go, which calls the NEW route `POST /api/dustpan/v1/units/{ref}/state/reveal` (declaration file `internal/api/apidesc/units_state.go`, adapter file `internal/api/state/units_state.go`) with an access token. Check: e2e step runs real OpenTofu apply then calls the NEW `POST /api/dustpan/v1/units/{ref}/state/reveal` with an access token; BLOCKED by the NEW route until wired. Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.5 Write the NEW docs page docs/guides/revealing-state-values.md for reveal. Check: docs page command runs as written from a clean install. Confirmed by: CI (an e2e step in the NEW file e2e/39_reveal_state_value_docs_test.go runs each command of the docs page against the e2e test server). `make docs-lint` passes on each edited guide.
+- [ ] 3.6 Run usability check Check: Developer completes the path from the docs page alone, each error names one command. A person's step.
+- [ ] 3.7 Run full check Check: `make check` with zero findings. Confirmed by: CI (the agent runs the fast checks only).

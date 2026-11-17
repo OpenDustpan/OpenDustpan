@@ -53,7 +53,9 @@ type Route struct {
 // buildRoutes returns the route table. It is the single source of the
 // patterns that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
-	return append(append(append([]Route(nil), h.runnerRoutes()...), h.launcherRoutes()...), h.planRoutes()...)
+	routes := append(append([]Route(nil), h.runnerRoutes()...), h.launcherRoutes()...)
+
+	return append(append(routes, h.planRoutes()...), h.proxyRoutes()...)
 }
 
 // runnerRoutes returns the routes of the runner side of the protocol.

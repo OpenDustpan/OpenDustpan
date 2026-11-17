@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"opendustpan.org/opendustpan/internal/api/faultlog"
+	"opendustpan.org/opendustpan/internal/proxysessionsvc"
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
@@ -148,6 +149,26 @@ func classifyProtocol(err error) (int, protocol.Error) {
 		return mk(http.StatusUpgradeRequired, protocol.ErrorVersionUnsupported, runner.ErrVersionUnsupported)
 	case errors.Is(err, runner.ErrVersionAhead):
 		return mk(http.StatusUpgradeRequired, protocol.ErrorVersionAhead, runner.ErrVersionAhead)
+	default:
+		return classifyProxy(err, mk)
+	}
+}
+
+// classifyProxy maps the errors of the paths of the job proxy, and passes any
+// other error to classifyProtocolOther. Each answer holds the sentence of its
+// sentinel only, never the upstream URL or the credential.
+func classifyProxy(
+	err error, mk func(status int, code string, sentinels ...error) (int, protocol.Error),
+) (int, protocol.Error) {
+	switch {
+	case errors.Is(err, errWrongSessionKind), errors.Is(err, proxysessionsvc.ErrWrongSessionKind):
+		return mk(http.StatusForbidden, protocol.ErrorWrongSessionKind,
+			errWrongSessionKind, proxysessionsvc.ErrWrongSessionKind)
+	case errors.Is(err, proxysessionsvc.ErrRulesNotRenderable):
+		return mk(http.StatusUnprocessableEntity, protocol.ErrorRulesNotRenderable,
+			proxysessionsvc.ErrRulesNotRenderable)
+	case errors.Is(err, proxysessionsvc.ErrNoUpstream):
+		return mk(http.StatusNotFound, protocol.ErrorNoUpstream, proxysessionsvc.ErrNoUpstream)
 	default:
 		return classifyProtocolOther(err, mk)
 	}

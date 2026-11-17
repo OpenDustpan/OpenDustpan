@@ -96,6 +96,7 @@ func handlerAuthorizing(
 		Logger:         slog.New(slog.DiscardHandler),
 		ServerURL:      serverURL,
 		Now:            nil,
+		Proxies:        nil,
 	}
 
 	for _, opt := range opts {

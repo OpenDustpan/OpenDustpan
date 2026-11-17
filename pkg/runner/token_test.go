@@ -71,7 +71,7 @@ func TestHandoffTokenIsSingleUse(t *testing.T) {
 
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	open := runner.HandoffToken{
-		SHA256: "", Operation: "op-1", Token: 1, Runner: "rn-1", IssuedAt: now,
+		SHA256: "", Kind: runner.SessionKindLauncher, Operation: "op-1", Token: 1, Runner: "rn-1", IssuedAt: now,
 		ExpiresAt: now.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
 	}
 

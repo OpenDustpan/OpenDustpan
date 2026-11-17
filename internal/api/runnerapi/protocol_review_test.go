@@ -76,7 +76,10 @@ func releaseWithSessionIsRefused(t *testing.T, e *env, pool string) {
 	handoff := r.handoff(other.Operation)
 	launcherKey := runner.Key{Public: mustKey(t), CreatedAt: time.Time{}}
 
-	if _, err := e.store.runners.OpenSession(t.Context(), sha256Hex(handoff), launcherKey, time.Now()); err != nil {
+	kind := runner.SessionKindLauncher
+
+	_, err := e.store.runners.OpenSession(t.Context(), sha256Hex(handoff), kind, launcherKey, time.Now())
+	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
 

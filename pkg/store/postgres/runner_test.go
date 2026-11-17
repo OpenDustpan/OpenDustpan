@@ -266,8 +266,16 @@ func TestRunnersOpenSessionRace(t *testing.T) {
 	}
 
 	tok := runner.HandoffToken{
-		SHA256: hexSum("dph_race"), Operation: string(c.Operation), Token: c.Token, Runner: joined.Runner.ID,
-		IssuedAt: at, ExpiresAt: at.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
+		SHA256: hexSum(
+			"dph_race",
+		),
+		Kind:      runner.SessionKindLauncher,
+		Operation: string(c.Operation),
+		Token:     c.Token,
+		Runner:    joined.Runner.ID,
+		IssuedAt:  at,
+		ExpiresAt: at.Add(runner.HandoffTokenTTL),
+		UsedAt:    time.Time{},
 	}
 	if err = r.IssueHandoffToken(ctx, tok, c); err != nil {
 		t.Fatalf("IssueHandoffToken: %v", err)
@@ -282,7 +290,13 @@ func TestRunnersOpenSessionRace(t *testing.T) {
 
 	for range racers {
 		wg.Go(func() {
-			_, openErr := r.OpenSession(ctx, tok.SHA256, runner.Key{Public: pub, CreatedAt: at}, at)
+			_, openErr := r.OpenSession(
+				ctx,
+				tok.SHA256,
+				runner.SessionKindLauncher,
+				runner.Key{Public: pub, CreatedAt: at},
+				at,
+			)
 			if openErr == nil {
 				wins.Add(1)
 			}

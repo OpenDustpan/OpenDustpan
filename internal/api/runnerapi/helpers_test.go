@@ -361,7 +361,7 @@ func serve(t *testing.T, s stores, opts serveOptions) (*runnerapi.Handler, *http
 		Namespaces: cfg.Namespaces, Pools: cfg.Pools, Members: cfg.Members,
 		Authenticator: cfg.Authenticator, Authorizer: cfg.Authorizer,
 		Audit: cfg.Audit, OnAuditFailure: cfg.OnAuditFailure, DenialLimiter: cfg.DenialLimiter,
-		Sessions: cfg.Sessions, Logger: cfg.Logger, ServerURL: cfg.ServerURL, Now: cfg.Now,
+		Sessions: cfg.Sessions, Logger: cfg.Logger, ServerURL: cfg.ServerURL, Now: cfg.Now, Proxies: cfg.Proxies,
 	})
 	if err != nil {
 		t.Fatalf("pools handler: %v", err)
@@ -422,6 +422,7 @@ func configFor(t *testing.T, s stores, opts serveOptions) (runnerapi.Config, *op
 		Plans:                      nil,
 		Artifacts:                  nil,
 		OnHandoffRefusalSuppressed: nil,
+		Proxies:                    nil,
 	}
 
 	if opts.mutate != nil {
@@ -575,7 +576,7 @@ func (f *fakeRunner) join(pool, token string) (int, []byte) {
 		Proof: ed25519.Sign(f.priv, runner.JoinChallenge(serverURL, pool, f.name, token)),
 	}
 
-	status, body := f.raw(protocol.PathJoin, req, "", f.release)
+	status, body := f.raw(protocol.PathJoin, req, f.release)
 	if status == http.StatusOK {
 		var resp protocol.JoinResponse
 
@@ -651,11 +652,11 @@ func (f *fakeRunner) rawSigned(
 	return f.send(path, raw, header, release)
 }
 
-// raw sends a request with a proof header that the caller made.
-func (f *fakeRunner) raw(path string, body any, proof, release string) (int, []byte) {
+// raw sends a request with no proof header.
+func (f *fakeRunner) raw(path string, body any, release string) (int, []byte) {
 	f.e.t.Helper()
 
-	return f.send(path, encodeBody(f.e.t, body), proof, release)
+	return f.send(path, encodeBody(f.e.t, body), "", release)
 }
 
 func (f *fakeRunner) send(path string, raw []byte, proof, release string) (int, []byte) {
