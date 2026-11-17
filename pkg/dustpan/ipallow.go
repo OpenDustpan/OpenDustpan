@@ -157,7 +157,21 @@ func (g allowlistRequestGate) checker(ctx context.Context, r *http.Request) *all
 		return newAllowChecker(true, ipallow.List{}, nil, record)
 	}
 
-	list, err := ipallow.DecodeList(installation.Value)
+	return g.installationChecker(ctx, installation.Value, record)
+}
+
+// installationChecker returns the checker of the stored installation list
+// value. A value that does not decode fails closed: the checker denies with an
+// empty installation list.
+//
+// Defense in depth: the settings layer already ignores a stored value that its
+// check refuses, and the API refuses to store one. This check stays so that a
+// value from another source, for example a restored backup, cannot open the
+// list.
+func (g allowlistRequestGate) installationChecker(
+	ctx context.Context, value string, record func(context.Context, allowDenial),
+) *allowChecker {
+	list, err := ipallow.DecodeList(value)
 	if err != nil {
 		g.logger.WarnContext(ctx, "parse the IP allowlist", slog.String("setting", ipallow.SettingInstallation))
 
@@ -174,7 +188,7 @@ func allowlistRequest(r *http.Request) bool {
 	// A probe answers from the process state and shows no data. It stays
 	// outside the list even with a credential, so that a stopped database
 	// cannot turn a readiness answer of 503 into a 403.
-	if healthProbePath(r.URL.Path) {
+	if healthProbeRequest(r) {
 		return false
 	}
 
@@ -198,8 +212,16 @@ func allowlistRequest(r *http.Request) bool {
 	return false
 }
 
-// healthProbePath reports whether p is a clean health probe path: the live
-// probe, the ready probe or the ready probe of one component.
+// healthProbeRequest reports whether r is a request for a health probe: the
+// live probe, the ready probe or the ready probe of one component. It reads
+// the decoded path and the escaped path, and both must be a clean probe path
+// in exact case, so an encoded slash such as /health%2Fready is no probe.
+// The metrics route is no probe.
+func healthProbeRequest(r *http.Request) bool {
+	return healthProbePath(r.URL.Path) && healthProbePath(r.URL.EscapedPath())
+}
+
+// healthProbePath reports whether p is a clean health probe path.
 func healthProbePath(p string) bool {
 	return workerOnlyPath(p) && p != metricsPath
 }
@@ -275,11 +297,22 @@ type admission struct {
 // admit checks the installation list before the credential is used, so a
 // refused request writes no sign-in entry and reads no token. A refused
 // request gets its 403 here. Otherwise admit answers the caller of the
-// request and warns about a token that expires soon.
+// request and warns about a token that expires soon. A health probe path is
+// outside the list and has no authentication: admit answers no caller for it
+// and never reads a token.
 func (c requestCaller) admit(
 	w http.ResponseWriter, r *http.Request, addr netip.Addr, logger *slog.Logger,
 ) admission {
 	ctx := r.Context()
+
+	// A probe path is outside the list and also has no authentication. A
+	// token from an address that the list refuses must not reach the token
+	// store, where a successful check would update its last-used time.
+	if healthProbeRequest(r) {
+		var none identity.Principal
+
+		return admission{caller: none, signedIn: false, refused: false}
+	}
 
 	if checker := c.allow.checker(ctx, r); checker != nil {
 		if decision := checker.check(ctx, addr); decision.Denied {

@@ -162,6 +162,12 @@ have no principal, so the bootstrap exemption does not reach them.
 A read that is refused by the list gets `403`, not the `404` that a denied
 object normally gets.
 
+Three health probe paths are outside the installation list: `/health/live`,
+`/health/ready` and `/health/ready/<component>`. They answer from the state of
+the process, they do not authenticate a credential and they do not read a
+token. The path must match exactly, in lower case, in its decoded and its
+escaped form. Any other path, including `/api/server/metrics`, is checked.
+
 ## Audit
 
 Each change to a list writes one entry. The action is `namespace:set-ip-allowlist`

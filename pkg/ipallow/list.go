@@ -130,6 +130,21 @@ func (l List) Contains(addr netip.Addr) bool {
 	return false
 }
 
+// Covers reports whether each entry of other lies inside an entry of l, so
+// that each address that other admits is also admitted by l. An empty other
+// is covered by each list.
+func (l List) Covers(other List) bool {
+	for _, want := range other.prefixes {
+		if !slices.ContainsFunc(l.prefixes, func(have netip.Prefix) bool {
+			return have.Bits() <= want.Bits() && have.Contains(want.Addr())
+		}) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // IsEmpty reports whether the list holds no entries.
 func (l List) IsEmpty() bool {
 	return len(l.prefixes) == 0

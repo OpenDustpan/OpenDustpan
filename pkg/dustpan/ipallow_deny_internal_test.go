@@ -2,15 +2,19 @@ package dustpan
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
+	"opendustpan.org/opendustpan/pkg/setting"
 )
 
 // recordingServerAudit keeps the installation audit entries of one test.
@@ -85,8 +89,8 @@ func TestAllowlistRequestSkipsProbes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		path string
-		want bool
+		target string
+		want   bool
 	}{
 		{"/health/live", false},
 		{"/health/ready", false},
@@ -96,21 +100,226 @@ func TestAllowlistRequestSkipsProbes(t *testing.T) {
 		{"/health/../api/dustpan/v1/namespaces", true},
 		{"/health//ready", true},
 		{"/health/ready/../x", true},
+		{"/health/readyX", true},
+		{"/health/ready/database/", true},
+		{"/health/livez", true},
+		{"/HEALTH/ready", true},
+		{"/Health/Live", true},
+		{"/health/READY", true},
+		{"/health%2Fready", true},
+		{"/health%2flive", true},
+		{"/health/ready%2Fdatabase", true},
+		{"/health/%72eady", true},
 		{"/api/server/metrics", true},
 		{"/api/dustpan/v1/namespaces", true},
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.path, func(t *testing.T) {
+		t.Run(tc.target, func(t *testing.T) {
 			t.Parallel()
 
-			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
-			r.URL.Path = tc.path
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tc.target, http.NoBody)
 			r.Header.Set("Authorization", "Bearer token")
 
 			if got := allowlistRequest(r); got != tc.want {
-				t.Fatalf("allowlistRequest(%q) = %t, want %t", tc.path, got, tc.want)
+				t.Fatalf("allowlistRequest(%q) = %t, want %t", tc.target, got, tc.want)
 			}
 		})
 	}
+}
+
+var errStoreDown = errors.New("database unavailable")
+
+// countingAuthn counts the token checks. A check of a real token store
+// updates the last-used time of the token, so a call here is that update.
+type countingAuthn struct {
+	calls atomic.Int32
+}
+
+// AuthenticateToken implements identity.Authenticator.
+func (a *countingAuthn) AuthenticateToken(context.Context, string) (identity.Principal, error) {
+	a.calls.Add(1)
+
+	var principal identity.Principal
+	principal.Subject = "alice"
+
+	return principal, nil
+}
+
+// failingSettingsStore is a setting.Store whose Load fails from call number
+// failFrom on (1 is the first call) and returns values before that.
+type failingSettingsStore struct {
+	setting.Store
+
+	values   map[string]string
+	failFrom int32
+	calls    atomic.Int32
+}
+
+// Load implements setting.Store.
+func (s *failingSettingsStore) Load(context.Context, setting.Scope) (setting.Stored, error) {
+	if s.calls.Add(1) >= s.failFrom {
+		return setting.Stored{}, errStoreDown
+	}
+
+	return setting.Stored{Values: s.values, Revision: 1, Digest: ""}, nil
+}
+
+// newTestGate returns an allowlist request gate over store.
+func newTestGate(t *testing.T, store setting.Store) allowlistRequestGate {
+	t.Helper()
+
+	registry, err := setting.NewRegistry(ipallow.SettingDeclarations())
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	return allowlistRequestGate{
+		settings: setting.NewService(store, registry, nil, nil, nil),
+		audit:    nil, now: nil, logger: slog.New(slog.DiscardHandler),
+	}
+}
+
+// TestAllowlistGateFailsClosed is the hostile test of each fail-closed branch
+// of the gate: a failed read of the enabled setting, a failed read of the
+// list and a stored list that does not decode each deny an address that the
+// stored list would admit. It fails when any one branch answers allow.
+func TestAllowlistGateFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	inside := netip.MustParseAddr("198.51.100.7")
+
+	tests := []struct {
+		name     string
+		values   map[string]string
+		failFrom int32
+	}{
+		{"enabled read fails", map[string]string{
+			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
+		}, 1},
+		{"list read fails", map[string]string{
+			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
+		}, 2},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gate := newTestGate(
+				t,
+				&failingSettingsStore{Store: nil, values: tc.values, failFrom: tc.failFrom, calls: atomic.Int32{}},
+			)
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
+			r.Header.Set("Authorization", "Bearer token")
+
+			checker := gate.checker(t.Context(), r)
+			if checker == nil {
+				t.Fatal("checker = nil, want a checker that denies")
+			}
+
+			if decision := checker.check(t.Context(), inside); !decision.Denied {
+				t.Fatalf("decision = %+v, want a denial", decision)
+			}
+		})
+	}
+
+	// The settings layer ignores a stored value that its check refuses, so
+	// the decode branch gets its own test on the value.
+	for _, value := range []string{"not-a-cidr", "198.51.100.0/24,bad", "10.0.0.0/33"} {
+		t.Run("stored list does not decode: "+value, func(t *testing.T) {
+			t.Parallel()
+
+			gate := newTestGate(
+				t,
+				&failingSettingsStore{Store: nil, values: nil, failFrom: 1 << 20, calls: atomic.Int32{}},
+			)
+
+			decision := gate.installationChecker(t.Context(), value, nil).check(t.Context(), inside)
+			if !decision.Denied {
+				t.Fatalf("decision = %+v, want a denial", decision)
+			}
+		})
+	}
+
+	t.Run("control: stored list admits", func(t *testing.T) {
+		t.Parallel()
+
+		gate := newTestGate(t, &failingSettingsStore{Store: nil, calls: atomic.Int32{}, values: map[string]string{
+			ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
+		}, failFrom: 1 << 20})
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
+		r.Header.Set("Authorization", "Bearer token")
+
+		if decision := gate.checker(t.Context(), r).check(t.Context(), inside); decision.Denied {
+			t.Fatalf("decision = %+v, want the stored list to admit", decision)
+		}
+	})
+}
+
+// TestAdmitProbeUsesNoToken is the hostile test of the admit step: a token
+// from an address that the list refuses, sent to a probe path, is never
+// checked, so its last-used time does not change. The same token on another
+// path from the same address is refused before the token store. It fails if
+// admit authenticates on a probe path.
+func TestAdmitProbeUsesNoToken(t *testing.T) {
+	t.Parallel()
+
+	refused := netip.MustParseAddr("203.0.113.9")
+	store := &failingSettingsStore{Store: nil, calls: atomic.Int32{}, values: map[string]string{
+		ipallow.SettingEnabled: "true", ipallow.SettingInstallation: "198.51.100.0/24",
+	}, failFrom: 1 << 20}
+
+	for _, target := range []string{"/health/ready", "/health/live", "/health/ready/database"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+
+			authn := &countingAuthn{calls: atomic.Int32{}}
+			caller := requestCaller{authn: authn, allow: newTestGate(t, store)}
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+			r.Header.Set("Authorization", "Bearer token")
+
+			got := caller.admit(httptest.NewRecorder(), r, refused, slog.New(slog.DiscardHandler))
+			if got.refused || got.signedIn || authn.calls.Load() != 0 {
+				t.Fatalf("admit = %+v with %d token checks, want no refusal, no caller and no token check",
+					got, authn.calls.Load())
+			}
+		})
+	}
+
+	t.Run("other path from the refused address", func(t *testing.T) {
+		t.Parallel()
+
+		authn := &countingAuthn{calls: atomic.Int32{}}
+		caller := requestCaller{authn: authn, allow: newTestGate(t, store)}
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
+		r.Header.Set("Authorization", "Bearer token")
+
+		rec := httptest.NewRecorder()
+
+		got := caller.admit(rec, r, refused, slog.New(slog.DiscardHandler))
+		if !got.refused || rec.Code != http.StatusForbidden || authn.calls.Load() != 0 {
+			t.Fatalf("admit = %+v, status %d, %d token checks, want a 403 and no token check",
+				got, rec.Code, authn.calls.Load())
+		}
+	})
+
+	t.Run("control: allowed address on another path", func(t *testing.T) {
+		t.Parallel()
+
+		authn := &countingAuthn{calls: atomic.Int32{}}
+		caller := requestCaller{authn: authn, allow: newTestGate(t, store)}
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/dustpan/v1/namespaces", http.NoBody)
+		r.Header.Set("Authorization", "Bearer token")
+
+		got := caller.admit(
+			httptest.NewRecorder(),
+			r,
+			netip.MustParseAddr("198.51.100.5"),
+			slog.New(slog.DiscardHandler),
+		)
+		if got.refused || !got.signedIn || authn.calls.Load() != 1 {
+			t.Fatalf("admit = %+v with %d token checks, want a caller and one token check", got, authn.calls.Load())
+		}
+	})
 }

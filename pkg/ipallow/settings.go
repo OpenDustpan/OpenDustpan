@@ -31,12 +31,35 @@ func SettingDeclarations() []setting.Declaration {
 			Key: SettingInstallation, Level: setting.LevelInstallation, Kind: setting.KindString, Default: "",
 			Secret: false, Database: true, StaticCredentialHost: false, Apply: setting.ApplyLive,
 			Check: checkList,
-			// Clearing the list lets each address in.
-			ReducesSecurity: func(old, next string) bool { return old != "" && next == "" },
+			// Clearing the list lets each address in, and a list that admits
+			// an address that the old list did not admit widens the access.
+			ReducesSecurity: listReducesSecurity,
 			Doc: fmt.Sprintf("The installation list: at most %d CIDRs or addresses, joined with a comma.",
 				MaxEntries),
 		},
 	}
+}
+
+// listReducesSecurity reports whether the change of the installation list
+// from old to next lets in an address that the old list refused: a clear of a
+// list, or a next list with an entry that no entry of the old list covers.
+// Fail closed: a value that does not decode counts as a reduction.
+func listReducesSecurity(old, next string) bool {
+	if old != "" && next == "" {
+		return true
+	}
+
+	oldList, err := DecodeList(old)
+	if err != nil {
+		return true
+	}
+
+	nextList, err := DecodeList(next)
+	if err != nil {
+		return true
+	}
+
+	return !oldList.Covers(nextList)
 }
 
 // checkList accepts an empty value and a list that ParseList accepts. The
