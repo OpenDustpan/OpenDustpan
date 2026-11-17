@@ -1,36 +1,64 @@
 ## ADDED Requirements
 
-### Requirement: Make at claim
+### Requirement: Make at the launcher request
 
-When a runner claims a runner phase, the server SHALL store one job token bound to the job ID, the stable unit ID and the claim expiry.
+When the launcher of a live claim asks for the credentials of a step through its job session, the server SHALL make one job token bound to the job ID, the stable unit ID and the claim, and answer its plaintext once.
 
-#### Scenario: Make at claim
+#### Scenario: Make at the request
+- **WHEN** the launcher asks for the credentials of a step on a live session
+- **THEN** the server stores one token bound to the job ID, the stable unit ID and the claim, and answers the plaintext once
+
+#### Scenario: Claim makes none
 - **WHEN** a runner claims a runner phase
-- **THEN** the server stores one token bound to the job ID, the stable unit ID and the claim expiry
+- **THEN** the server makes no job token and the claim answer holds none
 
 #### Scenario: Rollback
-- **WHEN** the claim transaction fails
-- **THEN** the server stores no token
+- **WHEN** the transaction of the issue fails
+- **THEN** the server stores no token and writes no audit entry
 
-#### Scenario: Retry
-- **WHEN** a claim is repeated
-- **THEN** the earlier token of that claim answers 401 and one live token exists
+#### Scenario: Sweep
+- **WHEN** the launcher of a sweep asks for credentials
+- **THEN** the answer holds no job token
 
-### Requirement: Step bound
+### Requirement: Expiry
 
-When the step timeout plus grace period of a token passes, the server SHALL end the token.
+The server SHALL set the expiry of a job token to the earlier of the end of the claim and the end of the step timeout plus the grace period.
 
-#### Scenario: Grace bound
-- **WHEN** the step timeout plus grace period passes while the claim is renewed
-- **THEN** the token answers 401
+#### Scenario: Claim ends first
+- **WHEN** the claim ends before the step timeout plus grace
+- **THEN** the expiry is the end of the claim
+
+#### Scenario: Step bound first
+- **WHEN** the step timeout plus grace ends before the claim
+- **THEN** the expiry is the end of the step timeout plus grace and the token answers 401 after it, while the claim is renewed
+
+### Requirement: One audit entry per request
+
+The server SHALL write one audit entry for each request of the launcher that makes a token, and the entry SHALL name the job, the step and the expiry.
+
+#### Scenario: Entry
+- **WHEN** the server makes a token at a request
+- **THEN** one audit entry names the job, the step and the expiry
+
+#### Scenario: Refused request
+- **WHEN** the server refuses the request
+- **THEN** it makes no token and writes no issue entry
 
 ### Requirement: Refuse no unit
 
-If a claim names no stable unit ID, then the server SHALL refuse the claim with invalid.
+If a job names no stable unit ID, then the server SHALL refuse the request with invalid and make no token.
 
 #### Scenario: No unit
-- **WHEN** a claim names no stable unit ID
+- **WHEN** the job of the request names no stable unit ID
 - **THEN** the server answers invalid and makes no token
+
+### Requirement: Refuse a dead claim
+
+If the claim of the session is not live, then the server SHALL refuse the request and make no token.
+
+#### Scenario: Claim ended
+- **WHEN** the launcher asks after the job ended, the claim expired, a takeover replaced the claim or the runner was retired
+- **THEN** the server refuses and makes no token
 
 ### Requirement: Check unit only
 
@@ -57,12 +85,12 @@ When a step presents a job token, the server SHALL allow it only on the state ro
 - **THEN** the server answers 403
 
 #### Scenario: Grant lost
-- **WHEN** the starter lost its grant after the claim
+- **WHEN** the starter lost its grant after the request
 - **THEN** the server answers 403
 
 ### Requirement: End with claim
 
-When the claim of a job token ends, the server SHALL end the token in the same transaction.
+While a job token is in use, the server SHALL read the claim, so that a token stops when its claim ends.
 
 #### Scenario: Job end
 - **WHEN** the job ends
@@ -75,10 +103,6 @@ When the claim of a job token ends, the server SHALL end the token in the same t
 #### Scenario: Retire
 - **WHEN** the runner is retired
 - **THEN** the token answers 401
-
-#### Scenario: Renew
-- **WHEN** the claim is renewed before the step bound
-- **THEN** the token stays valid until its expiry
 
 ### Requirement: Fail closed
 
