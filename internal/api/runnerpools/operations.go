@@ -1,6 +1,7 @@
 package runnerpools
 
 import (
+	"maps"
 	"net/http"
 
 	"opendustpan.org/opendustpan/internal/api/apidesc"
@@ -109,5 +110,8 @@ func (h *Handler) Operations() []apidesc.Operation {
 		})
 	}
 
-	return apidesc.Collect(rows, operationLabels())
+	labels := operationLabels()
+	maps.Copy(labels, proxySettingsLabels())
+
+	return apidesc.Collect(rows, labels)
 }

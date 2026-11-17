@@ -34,6 +34,10 @@ func protocolPaths() map[string]identity.Action {
 		protocol.PathSessionPlanUpload: identity.ActionRunnerClaim,
 		protocol.PathSessionPlanCommit: identity.ActionRunnerClaim,
 		protocol.PathSessionPlanPart:   identity.ActionRunnerClaim,
+
+		protocol.PathClaimProxyHandoff:       identity.ActionRunnerClaim,
+		protocol.PathProxySession:            identity.ActionRunnerClaim,
+		protocol.PathProxyUpstreamCredential: identity.ActionRunnerClaim,
 	}
 }
 
@@ -106,6 +110,10 @@ func checkProtocolRoute(t *testing.T, route *runnerapi.Route, paths map[string]i
 		wantScope = runnerapi.ScopeHandoffToken
 	case strings.HasPrefix(route.Path, protocol.PathSession+"/"):
 		wantScope = runnerapi.ScopeSessionKey
+	case route.Path == protocol.PathProxySession:
+		wantScope = runnerapi.ScopeProxyHandoffToken
+	case strings.HasPrefix(route.Path, protocol.PathProxySession+"/"):
+		wantScope = runnerapi.ScopeProxySessionKey
 	default:
 	}
 

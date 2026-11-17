@@ -1197,16 +1197,16 @@ func openableHandoff(
 		return runner.HandoffToken{}, fmt.Errorf("select handoff token: %w", err)
 	}
 
-	t := codec.HandoffTokenFromRow(codec.RunnerHandoffTokenRow{
-		Sha256: row.Sha256, OperationID: row.OperationID, Token: row.Token, RunnerID: row.RunnerID,
-		IssuedAtMs: row.IssuedAtMs, ExpiresAtMs: row.ExpiresAtMs, UsedAtMs: row.UsedAtMs,
-	})
-
 	// Fail closed: a stored kind that does not parse matches no kind.
-	t.Kind, err = runner.ParseSessionKind(row.Kind)
-	if err != nil || t.Kind != kind {
+	stored, err := runner.ParseSessionKind(row.Kind)
+	if err != nil || stored != kind {
 		return runner.HandoffToken{}, runner.ErrNotFound
 	}
+
+	t := codec.HandoffTokenFromRow(codec.RunnerHandoffTokenRow{
+		Sha256: row.Sha256, OperationID: row.OperationID, Token: row.Token, RunnerID: row.RunnerID, Kind: stored,
+		IssuedAtMs: row.IssuedAtMs, ExpiresAtMs: row.ExpiresAtMs, UsedAtMs: row.UsedAtMs,
+	})
 
 	if err = t.CheckUse(now); err != nil {
 		return runner.HandoffToken{}, fmt.Errorf("check handoff token: %w", err)

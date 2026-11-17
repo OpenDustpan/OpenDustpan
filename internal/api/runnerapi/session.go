@@ -153,6 +153,16 @@ func (h *Handler) checkSession(r *http.Request, rt Route, c *call) error {
 		return errProofRefused
 	}
 
+	// The proof came first, so a caller without the key learns nothing about
+	// the kind of the session. A launcher session never reaches a path of the
+	// job proxy, and a proxy session never reaches a path of the launcher. A
+	// scope with no kind passes no session (fail closed).
+	if want, ok := sessionKindOf(rt.Scope); !ok || sess.Kind != want {
+		h.recordWrongKind(r, rt, &sess)
+
+		return errWrongSessionKind
+	}
+
 	c.session, c.proof, c.contentSHA256 = sess, proof, sum
 
 	return nil
