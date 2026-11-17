@@ -148,6 +148,7 @@ func writeRestoreManifest(
 	manifest := backup.Manifest{
 		CreatedAt:            time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
 		ID:                   id,
+		Attempt:              fixtureAttempt,
 		Dialect:              backup.DialectSQLite,
 		PrimaryInstallations: in.installations,
 		WrapperIDs:           wrappers,
@@ -174,7 +175,8 @@ func writeRestoreManifest(
 		t.Fatalf("encode manifest: %v", err)
 	}
 
-	target.storeObject(t, "backups/"+id.String()+"/manifest.json", data)
+	target.storeObject(t, manifestKeyOf(id), data)
+	publishLive(t, target, id)
 
 	return manifest
 }

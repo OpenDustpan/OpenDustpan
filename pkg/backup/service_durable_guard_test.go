@@ -135,13 +135,13 @@ func TestFinishFailsABackupThatLostAFile(t *testing.T) {
 
 	setup := newDurableSetup()
 	id := backup.ID("bkp-lost-file")
-	dropped := "backups/" + id.String() + "/" + backup.PortablePath(backup.Tables[0])
+	dropped := attemptDir(id) + backup.PortablePath(backup.Tables[0])
 	target := &dropAfterManifest{memStore: setup.target, dropKey: dropped}
 	svc := setup.serviceOver(t, &stubExporter{sum: testSummary(), data: tableData, err: nil}, target)
 
 	_, err := svc.Run(t.Context(), id)
-	if !errors.Is(err, backup.ErrFailed) || !strings.Contains(err.Error(), "lost the object") {
-		t.Fatalf("run = %v, want ErrFailed with the lost object", err)
+	if !errors.Is(err, backup.ErrFailed) || !strings.Contains(err.Error(), "is missing") {
+		t.Fatalf("run = %v, want ErrFailed with the missing object", err)
 	}
 
 	row, getErr := setup.reg.GetBackup(t.Context(), id)

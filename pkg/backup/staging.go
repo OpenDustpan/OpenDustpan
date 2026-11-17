@@ -74,7 +74,7 @@ func CheckRestore(ctx context.Context, in CheckInput) (Summary, string, error) {
 		return none, "", err
 	}
 
-	if sqlErr := verifySQLPart(ctx, in.Target, in.ID, plan.manifest.SQLFiles); sqlErr != nil {
+	if sqlErr := verifySQLPart(ctx, in.Target, in.ID, plan.manifest.Attempt, plan.manifest.SQLFiles); sqlErr != nil {
 		return none, "", sqlErr
 	}
 
@@ -95,9 +95,10 @@ func CheckRestore(ctx context.Context, in CheckInput) (Summary, string, error) {
 	}
 
 	staged, err := stageBackup(ctx, in.Target, in.Live, in.ID, stagePlan{
-		want:  restoreWant(plan.manifest, plan.wantBlobs),
-		files: plan.manifest.SQLFiles,
-		opts:  in.Stage,
+		attempt: plan.manifest.Attempt,
+		want:    restoreWant(plan.manifest, plan.wantBlobs),
+		files:   plan.manifest.SQLFiles,
+		opts:    in.Stage,
 	})
 	if err != nil {
 		return none, "", err
@@ -173,9 +174,11 @@ func loadCheckPlan(ctx context.Context, target blob.Store, id ID, live CheckStor
 // stagePlan names what a stage checks: the summary the backup must match, and the
 // table files to load.
 type stagePlan struct {
-	want  Summary
-	files []PortableFile
-	opts  StageOptions
+	// attempt is the attempt directory that the manifest names.
+	attempt string
+	want    Summary
+	files   []PortableFile
+	opts    StageOptions
 }
 
 // stageBackup stages the table files of backup id in the live store. A failed
@@ -188,7 +191,7 @@ func stageBackup(
 
 	staged, stageErr := live.StagePortable(
 		ctx,
-		portableOpener(ctx, target, id),
+		portableOpener(ctx, target, id, plan.attempt),
 		plan.want,
 		plan.files,
 		plan.opts,
@@ -306,7 +309,9 @@ func (c backupKeyCheck) run(ctx context.Context) error {
 			c.id, c.key.ID(), c.manifest.WrapperIDs, secret.ErrWrapperMismatch)
 	}
 
-	err := OpenPortableKey(ctx, c.peeker, portableOpener(ctx, c.target, c.id), c.manifest.SQLFiles, c.key)
+	err := OpenPortableKey(
+		ctx, c.peeker, portableOpener(ctx, c.target, c.id, c.manifest.Attempt), c.manifest.SQLFiles, c.key,
+	)
 	if err != nil {
 		return fmt.Errorf("restore backup %s: %w", c.id, err)
 	}

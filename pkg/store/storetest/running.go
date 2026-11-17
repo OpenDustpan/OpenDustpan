@@ -144,7 +144,9 @@ func testRunningEnded(t *testing.T, newStore BackupFactory) {
 			r := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
 			requireRunning(t, s, backupWork(r.ID), "before the end")
 
-			mustFinishBackup(t, s, backupFinish{ID: r.ID, State: state, Error: "", EndedAt: now().Add(time.Minute)})
+			mustFinishBackup(t, s, backupFinish{
+				ID: r.ID, State: state, Error: "", EndedAt: now().Add(time.Minute), Attempt: "",
+			})
 			requireRunning(t, s, nil, "after the end in state "+string(state))
 		})
 	}
@@ -165,7 +167,7 @@ func testRunningTakeover(t *testing.T, newStore BackupFactory) {
 	requireRunning(t, s, backupWork(r.ID), "after the takeover")
 
 	mustFinishClaimed(t, s, second, backupFinish{
-		ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Minute),
+		ID: r.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Minute), Attempt: "",
 	})
 	requireRunning(t, s, nil, "after the finish of the new holder")
 }
@@ -218,7 +220,7 @@ func testRunningRestore(t *testing.T, newStore RestoreFactory) {
 	requireRunning(t, watch, backupWork(b.ID), "of a backup next to a restore")
 
 	mustFinishBackup(t, s, backupFinish{
-		ID: b.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Minute),
+		ID: b.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Minute), Attempt: "",
 	})
 	requireRunning(t, watch, restoreWork(id), "of the restore after the backup ended")
 
@@ -265,7 +267,7 @@ func testRunningLease(t *testing.T, newStore BackupFactory) {
 	requireLiveLeases(t, s, 0, "after a take while a backup runs")
 
 	mustFinishBackup(t, s, backupFinish{
-		ID: b.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Minute),
+		ID: b.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Minute), Attempt: "",
 	})
 	requireTakeLease(t, s, "dlt-5", blobguard.LeaseTTL, nil)
 	requireLiveLeases(t, s, 1, "after a take of the ended backup")

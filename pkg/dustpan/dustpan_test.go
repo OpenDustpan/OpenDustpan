@@ -1433,6 +1433,7 @@ func seedRunningBackup(t *testing.T, st *sqlite.Store, now time.Time) {
 		Target:    "dir:/var/backups",
 		Error:     "",
 		State:     backup.StateRunning,
+		Attempt:   "",
 	}
 
 	if err := st.CreateBackup(t.Context(), running); err != nil {

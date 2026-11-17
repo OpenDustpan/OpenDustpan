@@ -113,6 +113,7 @@ type Backup struct {
 	EndedAtMs   sql.NullInt64
 	Target      string
 	Error       string
+	Attempt     string
 }
 
 type BlobDeleteLease struct {

@@ -175,7 +175,7 @@ func checkRefusedBackup(t *testing.T, keys []string, limit int) {
 
 	// The target holds no manifest that a restore or a check would accept as
 	// complete.
-	if fix.target.has("backups/" + id.String() + "/manifest.json") {
+	if fix.target.has(manifestKeyOf(id)) {
 		t.Fatal("a refused backup wrote a manifest")
 	}
 

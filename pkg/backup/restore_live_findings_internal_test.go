@@ -18,7 +18,11 @@ import (
 	"opendustpan.org/opendustpan/pkg/installation"
 )
 
-const preBackupID ID = "bkp-pre"
+const (
+	preBackupID ID = "bkp-pre"
+	// preAttempt is the attempt directory of the backup of these tests.
+	preAttempt = "1"
+)
 
 // Errors of the stubs of these tests.
 var (
@@ -79,7 +83,7 @@ func testManifest(t *testing.T, blobs []ManifestBlob, damaged []DamagedBlob) Man
 	}
 
 	return Manifest{
-		CreatedAt: time.Unix(1700000000, 0).UTC(), ID: preBackupID, Dialect: DialectSQLite,
+		CreatedAt: time.Unix(1700000000, 0).UTC(), ID: preBackupID, Attempt: preAttempt, Dialect: DialectSQLite,
 		PrimaryInstallations: nil, WrapperIDs: nil, Blobs: blobs, Version: "test",
 		SQLSHA256: hex.EncodeToString(sha[:]),
 		Format:    FormatVersion, SchemaVersion: BaselineSchemaVersion, SQLSize: size, RowCounts: counts,
@@ -97,10 +101,11 @@ func putManifest(t *testing.T, target *mapStore, manifest Manifest) {
 		t.Fatalf("encode the manifest: %v", err)
 	}
 
-	target.objects["backups/"+preBackupID.String()+"/manifest.json"] = data
+	target.objects["backups/"+preBackupID.String()+"/"+preAttempt+"/manifest.json"] = data
+	target.objects["backups/"+preBackupID.String()+"/live.json"] = []byte(`{"attempt":"` + preAttempt + `"}`)
 
 	for _, file := range manifest.SQLFiles {
-		target.objects["backups/"+preBackupID.String()+"/"+file.Path] = []byte{}
+		target.objects["backups/"+preBackupID.String()+"/"+preAttempt+"/"+file.Path] = []byte{}
 	}
 }
 
