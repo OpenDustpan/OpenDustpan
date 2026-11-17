@@ -507,9 +507,12 @@ func (h *Handler) holdsGrantInNamespace(
 }
 
 // scopeHoldsNamespace reports whether scope names the namespace ns, a
-// collection in it or a unit in it. A grant on the namespace itself, or on the installation, is decided by
-// the Authorizer before this runs. An every-object scope alone proves no
-// grant in ns: only the gated namespace check above may open that path.
+// collection in it or a unit in it. A grant that lets the principal read the
+// namespace is decided by the Authorizer before this runs. A grant of the
+// unit read actions on the namespace itself, without namespace:read, is found
+// here through scope.Namespaces, the same as the same grant on a collection.
+// An every-object scope alone proves no grant in ns: only the gated
+// namespace check above may open that path.
 func scopeHoldsNamespace(scope identity.Scope, ns namespace.Name) bool {
 	for _, objs := range [][]identity.Object{scope.Namespaces, scope.Collections, scope.Units} {
 		for i := range objs {
