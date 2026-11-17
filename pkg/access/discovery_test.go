@@ -3,6 +3,7 @@ package access_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -323,5 +324,71 @@ func TestDiscoveryGrantIDOfAnAdministrator(t *testing.T) {
 	id, err := f.authz.DiscoveryGrantID(t.Context(), admin, acme)
 	if err != nil || id != "" {
 		t.Fatalf("DiscoveryGrantID of an administrator = %q, %v; want no ID, nil", id, err)
+	}
+}
+
+// namingAuthorizer is an authorizer that names the grant id and the error err
+// to DiscoveryGrantID. It denies every other question.
+type namingAuthorizer struct {
+	id  string
+	err error
+}
+
+func (namingAuthorizer) Authorize(
+	_ context.Context, _ identity.Principal, _ identity.Action, _ identity.Object,
+) error {
+	return identity.ErrDenied
+}
+
+func (namingAuthorizer) ListObjects(
+	context.Context, identity.Principal, identity.Action,
+) (identity.Scope, error) {
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil}, nil
+}
+
+func (a namingAuthorizer) DiscoveryGrantID(
+	context.Context, identity.Principal, namespace.Name,
+) (string, error) {
+	return a.id, a.err
+}
+
+// TestDiscoveryGrantIDRefusesAnIDThatIsNotAGrantID proves that the wrapper
+// that every adapter calls refuses an ID that is not a grant ID, so the ID
+// never reaches a response header. The authorizer here is not the one of the
+// package: the check must hold without help from it.
+func TestDiscoveryGrantIDRefusesAnIDThatIsNotAGrantID(t *testing.T) {
+	t.Parallel()
+
+	acme := parseNamespace(t, "acme")
+	alice := identity.Principal{Subject: "alice"}
+
+	cases := []struct {
+		name string
+		id   string
+	}{
+		{"a role name", "admins"},
+		{"a header line break", "grt-a\r\nX-A: 1"},
+		{"a line feed", "grt-a\nb"},
+		{"a space", "grt-a b"},
+		{"65 bytes", "grt-" + strings.Repeat("a", 61)},
+		{"the prefix of another kind", "tok-abc"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			id, found, err := access.DiscoveryGrantID(t.Context(), namingAuthorizer{id: tc.id, err: nil}, alice, acme)
+			if !found || id != "" || !errors.Is(err, access.ErrInvalid) {
+				t.Fatalf("DiscoveryGrantID(%q) = %q, %v, %v; want no ID, true, ErrInvalid", tc.id, id, found, err)
+			}
+		})
+	}
+
+	for _, ok := range []string{"", "grt-a", "grt-" + strings.Repeat("a", 60)} {
+		id, found, err := access.DiscoveryGrantID(t.Context(), namingAuthorizer{id: ok, err: nil}, alice, acme)
+		if !found || id != ok || err != nil {
+			t.Fatalf("DiscoveryGrantID(%q) = %q, %v, %v; want the same ID, true, nil", ok, id, found, err)
+		}
 	}
 }

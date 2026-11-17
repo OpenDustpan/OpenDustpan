@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/access"
@@ -133,6 +134,19 @@ func TestDiscoveryAnswerWithoutGrantNamesNoGrant(t *testing.T) {
 			1,
 		},
 		{"no grant allows", headerGrantAuthorizer{id: "", err: nil}, http.StatusNotFound, 1},
+		{"grant ID is a role name", headerGrantAuthorizer{id: "admins", err: nil}, http.StatusInternalServerError, 1},
+		{
+			"grant ID has a header line break",
+			headerGrantAuthorizer{id: "grt-a\r\nX-A: 1", err: nil},
+			http.StatusInternalServerError,
+			1,
+		},
+		{
+			"grant ID has 65 bytes",
+			headerGrantAuthorizer{id: "grt-" + strings.Repeat("a", 61), err: nil},
+			http.StatusInternalServerError,
+			1,
+		},
 		{"namespace-level scope only", namespaceScopeAuthorizer{}, http.StatusNotFound, 1},
 	}
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -211,6 +212,27 @@ func TestOrganizationAnswersWithoutGrantNameNoGrant(t *testing.T) {
 		{
 			"grant read failed, user",
 			headerGrantAuthorizer{id: "grt-test-1", err: errGrantList},
+			"/api/user",
+			[]string{"acme", "beta"},
+			http.StatusInternalServerError,
+		},
+		{
+			"grant ID is a role name, default organization",
+			headerGrantAuthorizer{id: "admins", err: nil},
+			"/api/user/organizations/default",
+			[]string{"acme", "beta"},
+			http.StatusInternalServerError,
+		},
+		{
+			"grant ID has a header line break, default organization",
+			headerGrantAuthorizer{id: "grt-a\r\nX-A: 1", err: nil},
+			"/api/user/organizations/default",
+			[]string{"acme", "beta"},
+			http.StatusInternalServerError,
+		},
+		{
+			"grant ID has 65 bytes, user",
+			headerGrantAuthorizer{id: "grt-" + strings.Repeat("a", 61), err: nil},
 			"/api/user",
 			[]string{"acme", "beta"},
 			http.StatusInternalServerError,
