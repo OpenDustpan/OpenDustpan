@@ -9,6 +9,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
@@ -107,6 +108,7 @@ func newGroupsGuard(t *testing.T, limit gate.AccessLimit) groupsGuard {
 
 	cfg := new(settings)
 	cfg.namespaceStore, cfg.inventoryReader = st, st
+	cfg.installationKind = installation.KindProduction
 	cfg.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
 
 	gates, err := newStateWriteGates(cfg, nss)

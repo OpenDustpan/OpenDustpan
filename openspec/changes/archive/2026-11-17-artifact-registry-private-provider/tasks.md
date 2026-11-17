@@ -19,6 +19,6 @@
 
 ## 4. Definition of done
 
-- [ ] 4.1 Run all checks and fix findings in code. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
+- [x] 4.1 Run all checks and fix findings in code. Check: `make check` passes with zero findings. Confirmed by: CI (the agent runs the fast checks only).
 - [x] 4.2 Extend the existing guide docs/guides/private-registry.md with a section on the provider mirror and the one helping command for each error. Check: `make docs-lint` passes.
 - [ ] 4.3 Usability check: a Developer completes `tofu init` from docs/guides/private-registry.md alone against the real binary over TLS. Check: the steps in the pull request. A person's step.

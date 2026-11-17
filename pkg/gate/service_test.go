@@ -46,8 +46,15 @@ func newService(t *testing.T) *gate.Service {
 	t.Helper()
 
 	svc, err := gate.NewService(gate.ServiceConfig{
-		Store: stubStore{Store: nil}, Engine: stubEngine{Engine: nil}, Producers: nil, Units: stubUnits{},
-		Subjects: subjects{}, Fences: stubFences{}, Now: nil, Log: slog.New(slog.DiscardHandler),
+		Store:      stubStore{Store: nil},
+		Engine:     stubEngine{Engine: nil},
+		Producers:  nil,
+		Units:      stubUnits{},
+		Subjects:   subjects{},
+		Fences:     stubFences{},
+		KindReader: fixedKind("production"),
+		Now:        nil,
+		Log:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -60,14 +67,15 @@ func TestNewServiceNeedsPorts(t *testing.T) {
 	t.Parallel()
 
 	_, err := gate.NewService(gate.ServiceConfig{
-		Store:     nil,
-		Engine:    nil,
-		Producers: nil,
-		Units:     nil,
-		Subjects:  nil,
-		Fences:    nil,
-		Now:       nil,
-		Log:       nil,
+		Store:      nil,
+		Engine:     nil,
+		Producers:  nil,
+		Units:      nil,
+		Subjects:   nil,
+		Fences:     nil,
+		KindReader: nil,
+		Now:        nil,
+		Log:        nil,
 	})
 	if !errors.Is(err, gate.ErrInvalid) {
 		t.Fatalf("NewService(nil ports) = %v, want ErrInvalid", err)
