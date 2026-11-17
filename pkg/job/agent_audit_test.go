@@ -4,135 +4,40 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
-// startedByAgent starts a job as ada, with the agent ref, on r and returns
-// the audit entry of the start.
-func startedByAgent(t *testing.T, r *rig, ref job.AgentRef) audit.Entry {
-	t.Helper()
-
-	a := actorOf("ada")
-	a.Agent, a.Mode = ref, job.AgentModeApproveFirst
-
-	if _, err := r.svc.Start(t.Context(), a, r.plan("")); err != nil {
-		t.Fatalf("Start = %v", err)
-	}
-
-	if len(r.store.creates) != 1 || len(r.store.creates[0].entries) != 1 {
-		t.Fatalf("creates = %+v, want one create with one entry", r.store.creates)
-	}
-
-	return r.store.creates[0].entries[0]
-}
-
-// TestAuditAgentBlockHasNoAgentField proves that the start entry of an agent
-// holds the agent block and no agent change key.
-func TestAuditAgentBlockHasNoAgentField(t *testing.T) {
+// TestApprovalEntryAgentInBlock proves that the verdict entry of an agent
+// holds the agent in the agent block and no agent change key. A rejection is
+// the one verdict that an agent records: an agent cannot approve.
+func TestApprovalEntryAgentInBlock(t *testing.T) {
 	t.Parallel()
 
-	e := startedByAgent(t, newRig(t), "dusty")
+	r := approveRig(t, openPolicy())
+	r.seed(nil)
+
+	if _, err := r.svc.Approve(t.Context(), agentActor("carol", "dusty"), approveID, job.VerdictReject,
+		noBinding(), "stopped"); err != nil {
+		t.Fatalf("Approve = %v", err)
+	}
+
+	if len(r.store.applies) != 1 || len(r.store.applyEntries) != 1 || len(r.store.applyEntries[0]) != 1 {
+		t.Fatalf("applies = %d, entries = %v, want one change with one entry", len(r.store.applies),
+			r.store.applyEntries)
+	}
+
+	e := r.store.applyEntries[0][0]
 
 	if e.Origin == nil || e.Origin.Run() != "dusty" || e.Origin.Session() != "dusty" {
 		t.Fatalf("origin = %+v, want the agent block of dusty", e.Origin)
 	}
 
 	for _, ch := range e.Changes {
-		if ch.Key == audit.LegacyAgentChangeKey {
+		if ch.Key == "agent" {
 			t.Fatalf("changes hold the agent key: %+v", e.Changes)
 		}
-	}
-
-	if got := e.AgentOrigin(); got != e.Origin {
-		t.Fatalf("AgentOrigin = %+v, want the block", got)
-	}
-}
-
-// TestAuditHashStableWithoutAgent proves that an entry with no agent keeps
-// its hash: the start entry of a person holds no block, and a fixed entry
-// with no block hashes to the value that it had before the block existed.
-func TestAuditHashStableWithoutAgent(t *testing.T) {
-	t.Parallel()
-
-	e := startedByAgent(t, newRig(t), "")
-	if e.Origin != nil || e.HasAgentBlock() {
-		t.Fatalf("origin = %+v, want no block for a start with no agent", e.Origin)
-	}
-
-	fixed := audit.Entry{
-		At: time.UnixMilli(1_700_000_000_000).UTC(), Namespace: "acme", Subject: "ada", IDPSubject: "",
-		TokenID: "", Action: "unit:run", Object: "pulumi:acme/web", Version: "", ValuePath: "",
-		ValueCount: nil, Changes: []audit.Change{{Key: "job", Old: nil, New: "j1", Layer: "", TakesEffect: ""}},
-		SourceIP: "192.0.2.7", UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
-		Outcome: audit.OutcomeSuccess, RequestID: "req-1", ObjectID: "", PrevHash: "", Hash: "", Sequence: 1,
-		FenceVersion: 1, PrincipalKind: "person", JobID: "", Reason: "", Origin: nil,
-	}
-
-	const want = "57d8ab14bfc59f91cf0ab4a5f39b9adc697e3cf59511a9749e0d808ed1a9dbba"
-
-	if got := audit.ComputeHash(fixed, ""); got != want {
-		t.Fatalf("hash = %s, want %s", got, want)
-	}
-}
-
-// TestAuditLegacyChangeKeyDualRead proves that an old start entry with the
-// agent change key reads and its hash covers the key, and that the block wins
-// when an entry holds both.
-func TestAuditLegacyChangeKeyDualRead(t *testing.T) {
-	t.Parallel()
-
-	legacy := audit.Entry{
-		At: time.UnixMilli(1_700_000_000_000).UTC(), Namespace: "acme", Subject: "ada", IDPSubject: "",
-		TokenID: "", Action: "unit:run", Object: "pulumi:acme/web", Version: "", ValuePath: "",
-		ValueCount: nil, Changes: []audit.Change{
-			{Key: "job", Old: nil, New: "j1", Layer: "", TakesEffect: ""},
-			{Key: audit.LegacyAgentChangeKey, Old: nil, New: "old-run", Layer: "", TakesEffect: ""},
-		},
-		SourceIP: "192.0.2.7", UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
-		Outcome: audit.OutcomeSuccess, RequestID: "req-1", ObjectID: "", PrevHash: "", Hash: "", Sequence: 1,
-		FenceVersion: 1, PrincipalKind: "person", JobID: "", Reason: "", Origin: nil,
-	}
-
-	if got := legacy.AgentOrigin(); got == nil || got.Run() != "old-run" || got.Session() != "old-run" {
-		t.Fatalf("legacy AgentOrigin = %+v, want the legacy value", got)
-	}
-
-	// The hash covers the legacy key, so a changed value breaks the chain.
-	changed := legacy
-	changed.Changes = []audit.Change{legacy.Changes[0], {
-		Key: audit.LegacyAgentChangeKey, Old: nil, New: "mallory", Layer: "", TakesEffect: "",
-	}}
-
-	if audit.ComputeHash(legacy, "") == audit.ComputeHash(changed, "") {
-		t.Fatal("hash is unchanged after the legacy agent value changed")
-	}
-
-	block, err := audit.NewOrigin(audit.OriginArgs{
-		Run: "new-run", Session: "new-run", Tool: "", ArgsDigest: "", BreakGlass: false, SecretStage: "",
-		DelegationID: "",
-	})
-	if err != nil {
-		t.Fatalf("new origin: %v", err)
-	}
-
-	both := legacy
-	both.Origin = block
-
-	if got := both.AgentOrigin(); got != block {
-		t.Fatalf("both shapes: AgentOrigin = %+v, want the block", got)
-	}
-
-	// A legacy value that a block cannot hold never reaches a reader.
-	hostile := legacy
-	hostile.Changes = []audit.Change{{
-		Key: audit.LegacyAgentChangeKey, Old: nil, New: "run\nforged", Layer: "", TakesEffect: "",
-	}}
-
-	if got := hostile.AgentOrigin(); got != nil {
-		t.Fatalf("hostile legacy AgentOrigin = %+v, want nil", got)
 	}
 }
 

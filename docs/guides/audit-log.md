@@ -197,12 +197,6 @@ not valid UTF-8, or that holds a hidden character. The start fails, and the
 server writes no job and no entry. The job and its entry go to the store in
 one transaction, so a failed write of the entry rolls the job back.
 
-Start entries that an earlier build wrote hold the agent as an `agent` key in
-`changes`. The read API returns that value as the `agent` block, with the
-value as `agentRun` and `agentSession`. When an entry holds both, the block
-wins. `GET /api/audit/check` verifies both shapes in one chain, and it finds
-one changed byte of the block or of the key.
-
 If the server answers `audit.entry-not-found`, the namespace holds no entry
 at that sequence: run `GET /api/audit/entries` and open a sequence from the
 list. If the check answers `audit.entry-read-unavailable`, the store could not

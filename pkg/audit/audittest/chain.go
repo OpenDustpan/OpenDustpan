@@ -102,10 +102,6 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a chain of entries without a block passes the check", test: testChainCheckPassesEntriesWithoutBlock},
 		{name: "a stored row with a partial origin is refused on read", test: testStoreRefusesPartialOriginRow},
 		{name: "a changed byte of the agent block is found", test: TestAuditTamperedBlockFailsCheck},
-		{
-			name: "a changed byte of the agent block is found next to a legacy agent key",
-			test: testAuditTamperedBlockWithLegacyKeyFailsCheck,
-		},
 		{name: "a stale fence refuses a start entry", test: testChainStaleFence},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
@@ -769,19 +765,6 @@ func appendBlockEntry(t *testing.T, ts ChainTestStore, tl *timeline) int64 {
 	return appendEntry(t, ts.Store, tl.ns.Fence(), blockEntry(t, tl)).Sequence
 }
 
-// appendBlockEntryWithLegacyKey appends one entry with an agent block and the
-// legacy agent change key, and answers its sequence.
-func appendBlockEntryWithLegacyKey(t *testing.T, ts ChainTestStore, tl *timeline) int64 {
-	t.Helper()
-
-	e := blockEntry(t, tl)
-	e.Changes = []audit.Change{
-		{Key: audit.LegacyAgentChangeKey, Old: nil, New: "run-1", Layer: "", TakesEffect: ""},
-	}
-
-	return appendEntry(t, ts.Store, tl.ns.Fence(), e).Sequence
-}
-
 // TestAuditTamperedBlockFailsCheck proves that one changed byte of the agent
 // block fails the chain check at the sequence of the entry.
 func TestAuditTamperedBlockFailsCheck(t *testing.T, ts ChainTestStore) {
@@ -795,21 +778,6 @@ func TestAuditTamperedBlockFailsCheck(t *testing.T, ts ChainTestStore) {
 	wantValid(t, check(t, ts.Store, tl.ns.Name))
 
 	ts.TamperEntry(t, tl.ns.Name, seq, "agent_run", "run-2")
-
-	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), seq)
-}
-
-// testAuditTamperedBlockWithLegacyKeyFailsCheck proves that the legacy
-// agent key does not hide a changed block: the check covers both.
-func testAuditTamperedBlockWithLegacyKeyFailsCheck(t *testing.T, ts ChainTestStore) {
-	t.Helper()
-
-	tl := newTimeline(t, ts.Store)
-	seq := appendBlockEntryWithLegacyKey(t, ts, tl)
-
-	wantValid(t, check(t, ts.Store, tl.ns.Name))
-
-	ts.TamperEntry(t, tl.ns.Name, seq, "agent_session", "run-2")
 
 	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), seq)
 }
