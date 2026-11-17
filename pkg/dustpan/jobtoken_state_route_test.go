@@ -338,13 +338,13 @@ func TestJobTokenReachesOwnUnitState(t *testing.T) {
 		want     int
 		wantBody string
 	}{
-		{name: "own unit", path: "/tofu/state/acme/web", token: jobToken, want: http.StatusOK},
-		{name: "another unit", path: otherPath, token: jobToken, want: http.StatusForbidden},
+		{name: "own unit", path: "/tofu/state/acme/web", token: jobToken, want: http.StatusOK, wantBody: ""},
+		{name: "another unit", path: otherPath, token: jobToken, want: http.StatusForbidden, wantBody: ""},
 		{
 			name: "recreated unit", path: "/tofu/state/acme/web", token: env.recreatedToken,
 			want: http.StatusUnauthorized, wantBody: "job token ended",
 		},
-		{name: "no token", path: "/tofu/state/acme/web", token: "", want: http.StatusUnauthorized},
+		{name: "no token", path: "/tofu/state/acme/web", token: "", want: http.StatusUnauthorized, wantBody: ""},
 	}
 
 	for _, tc := range cases {

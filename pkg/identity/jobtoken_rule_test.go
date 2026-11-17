@@ -266,7 +266,7 @@ func TestJobTokenRuleOtherUnitError(t *testing.T) {
 	unit := jobUnitObject(t, "acme", "web/prod", "unt-1")
 	units := &fakeJobUnits{units: map[string]identity.JobUnit{"job-1": unitOfJob(t, unit)}, err: nil, reads: nil}
 	next := &allowingAuthorizer{seen: nil, scope: unitScope(), err: nil}
-	rule := identity.JobTokenRule{Next: next, Units: units}
+	rule := identity.JobTokenRule{Next: next, Units: units, UnitIDs: nil}
 
 	for _, obj := range []identity.Object{
 		jobUnitObject(t, "acme", "web/dev", "unt-2"),

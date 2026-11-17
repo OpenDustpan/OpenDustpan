@@ -123,6 +123,10 @@ var _ workspace.Sealer = (*secret.Service)(nil)
 // the installation state. Every SQL adapter serves it from the same
 // database connection; a custom store must serve it too, so every
 // instance gates the tool APIs on the same value.
+var errJobTokensNeedUnitIDs = errors.New(
+	"job tokens need a namespace store that resolves unit IDs (access.Units)",
+)
+
 var errMaintenanceNeedsStore = errors.New("namespace store must keep the installation state")
 
 const (
@@ -970,7 +974,7 @@ func newAuthPorts(cfg *settings, tokens *accesstoken.Service) (authPorts, error)
 		// resolving the ID.
 		unitIDs, ok := cfg.namespaceStore.(access.Units)
 		if !ok {
-			return none, fmt.Errorf("job tokens need a namespace store that resolves unit IDs (access.Units): %T", cfg.namespaceStore)
+			return none, fmt.Errorf("%w: %T", errJobTokensNeedUnitIDs, cfg.namespaceStore)
 		}
 
 		authz = identity.JobTokenRule{Next: authz, Units: units, UnitIDs: unitIDs}
