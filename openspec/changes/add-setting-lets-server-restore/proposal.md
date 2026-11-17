@@ -26,7 +26,7 @@ Errors the person may hit, and the one command that helps:
 Evidence for the claims above:
 
 - The ADR says the setting is off by default and a change writes an audit entry. Proof: docs/adr/0070-act-as-reach-idp-groups-and-break-glass.md
-- The issue asks for the setting definition in the CLI settings file and a route in the server API directory. Proof: internal/cli/settings.go, internal/api/server
+- The issue asks for the setting definition in the CLI settings file and a route in the server API directory. Proof: internal/cli/settings.go, and the server API directory
 - The generic installation settings route exists on main. Proof: route ANY/GET/PATCH /api/dustpan/v1/settings in the pack main list
 
 ## What Changes
@@ -61,8 +61,8 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- settings.value-invalid error code exists (`internal/errcode/catalog_settings.go:21`)
-- restore.blobs-missing error code exists (`internal/errcode/catalog_restore.go:7`)
+- settings.value-invalid error code exists (the settings error catalog, line 21)
+- restore.blobs-missing error code exists (the restore error catalog, line 7)
 - access tables backup test exists (`pkg/backup/access_tables_test.go:13`)
 
 ## ADR check
