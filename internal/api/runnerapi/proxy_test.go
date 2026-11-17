@@ -366,6 +366,9 @@ func TestUpstreamCredentialNoStore(t *testing.T) {
 			status: http.StatusUnauthorized,
 		},
 		{
+			// This row does not show that the header is set before the checks:
+			// the refusal comes after enforce, from the handler. The rows
+			// above that refuse in enforce show that.
 			name: "body on a path with no body",
 			run: func(p *proxyEnv) (int, []byte) {
 				proxy, _ := p.openProxy()
@@ -399,6 +402,61 @@ func TestUpstreamCredentialNoStore(t *testing.T) {
 
 			if got := p.lastHeader().Get("Cache-Control"); got != "no-store" {
 				t.Errorf("Cache-Control = %q, want no-store", got)
+			}
+		})
+	}
+}
+
+// TestNoStoreOnlyOnCredentialPath is the negative table of the answer layer:
+// a refusal of a path that does not carry a credential, made in enforce, must
+// not set the no-store header. Each row fails when the credential test of a
+// path answers true for every path.
+func TestNoStoreOnlyOnCredentialPath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		run    func(p *proxyEnv) (int, []byte)
+		status int
+	}{
+		{
+			name: "poll with no proof",
+			run: func(p *proxyEnv) (int, []byte) {
+				return p.runner.raw(protocol.PathPoll, nil, "0.4.0")
+			},
+			status: http.StatusUnauthorized,
+		},
+		{
+			name: "proxy handoff with no proof",
+			run: func(p *proxyEnv) (int, []byte) {
+				return p.runner.raw(protocol.PathClaimProxyHandoff, nil, "0.4.0")
+			},
+			status: http.StatusUnauthorized,
+		},
+		{
+			name: "poll with a launcher session proof",
+			run: func(p *proxyEnv) (int, []byte) {
+				l := p.launch()
+
+				return l.do(l.post(protocol.PathPoll, nil))
+			},
+			status: http.StatusUnauthorized,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := newProxyEnv(t)
+			status, body := tc.run(p)
+
+			if status != tc.status {
+				t.Fatalf("answer = %d %s, want %d", status, body, tc.status)
+			}
+
+			if got := p.lastHeader().Get("Cache-Control"); got != "" {
+				t.Errorf("Cache-Control = %q, want none", got)
 			}
 		})
 	}
