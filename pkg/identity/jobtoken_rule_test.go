@@ -526,6 +526,7 @@ type resolvesCase struct {
 	noUnitIDPort    bool
 	wantDenied      bool
 	wantFailClosed  bool
+	wantOtherUnit   bool
 	wantNext        bool
 	wantUnitIDReads int
 	wantJobReads    int
@@ -566,49 +567,49 @@ func TestJobTokenRuleResolvesUnitID(t *testing.T) {
 			name: "the own unit by name allows", p: token, action: identity.ActionUnitRead,
 			obj: ownByName, jobKnown: true, unitID: "unt-1", unitIDFound: true,
 			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
-			wantDenied: false, wantFailClosed: false, wantNext: true,
+			wantDenied: false, wantFailClosed: false, wantOtherUnit: false, wantNext: true,
 			wantUnitIDReads: 1, wantJobReads: 1,
 		},
 		{
 			name: "another unit by name is refused", p: token, action: identity.ActionUnitRead,
 			obj: otherByName, jobKnown: true, unitID: "unt-2", unitIDFound: true,
 			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
-			wantDenied: true, wantFailClosed: false, wantNext: false,
+			wantDenied: true, wantFailClosed: false, wantOtherUnit: true, wantNext: false,
 			wantUnitIDReads: 1, wantJobReads: 1,
 		},
 		{
 			name: "a unit the port does not find is refused", p: token, action: identity.ActionUnitRead,
 			obj: otherByName, jobKnown: true, unitID: "", unitIDFound: false,
 			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
-			wantDenied: true, wantFailClosed: false, wantNext: false,
+			wantDenied: true, wantFailClosed: false, wantOtherUnit: false, wantNext: false,
 			wantUnitIDReads: 1, wantJobReads: 1,
 		},
 		{
 			name: "a port that fails answers an error that is not a denial", p: token, action: identity.ActionUnitRead,
 			obj: ownByName, jobKnown: true, unitIDErr: errUnitsDown,
 			unitsErr: nil, noJobPort: false, unitID: "", unitIDFound: false, noUnitIDPort: false,
-			wantDenied: false, wantFailClosed: true, wantNext: false,
+			wantDenied: false, wantFailClosed: true, wantOtherUnit: false, wantNext: false,
 			wantUnitIDReads: 1, wantJobReads: 1,
 		},
 		{
 			name: "a rule with no unit ID port refuses a unit by name", p: token, action: identity.ActionUnitRead,
 			obj: ownByName, jobKnown: true, unitID: "unt-1", unitIDFound: true,
 			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: true,
-			wantDenied: true, wantFailClosed: false, wantNext: false,
+			wantDenied: true, wantFailClosed: false, wantOtherUnit: false, wantNext: false,
 			wantUnitIDReads: 0, wantJobReads: 1,
 		},
 		{
 			name: "an object that carries a stable ID is not resolved again", p: token, action: identity.ActionUnitRead,
 			obj: stableOther, jobKnown: true, unitID: "should-not-be-read", unitIDFound: true,
 			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
-			wantDenied: true, wantFailClosed: false, wantNext: false,
+			wantDenied: true, wantFailClosed: false, wantOtherUnit: true, wantNext: false,
 			wantUnitIDReads: 0, wantJobReads: 1,
 		},
 		{
 			name: "a stable ID that matches allows without resolving", p: token, action: identity.ActionUnitRead,
 			obj: jobUnit, jobKnown: true, unitID: "should-not-be-read", unitIDFound: true,
 			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
-			wantDenied: false, wantFailClosed: false, wantNext: true,
+			wantDenied: false, wantFailClosed: false, wantOtherUnit: false, wantNext: true,
 			wantUnitIDReads: 0, wantJobReads: 1,
 		},
 		{
@@ -616,7 +617,7 @@ func TestJobTokenRuleResolvesUnitID(t *testing.T) {
 			action: identity.ActionUnitRead,
 			obj:    ownByName, jobKnown: true, unitID: "unt-1", unitIDFound: true,
 			unitsErr: nil, noJobPort: false, unitIDErr: nil, noUnitIDPort: false,
-			wantDenied: false, wantFailClosed: false, wantNext: true,
+			wantDenied: false, wantFailClosed: false, wantOtherUnit: false, wantNext: true,
 			wantUnitIDReads: 0, wantJobReads: 0,
 		},
 	}
@@ -689,6 +690,14 @@ func checkResolvesAnswer(t *testing.T, err error, tc resolvesCase) {
 	case tc.wantDenied:
 		if _, ok := errors.AsType[*identity.DeniedError](err); !ok {
 			t.Fatalf("Authorize = %v, want a denial", err)
+		}
+
+		// Two refusals name the other unit. The refusals for a port that is not
+		// there and for a unit that is not found do not: they stay a plain
+		// denial. The test keeps them apart, so a change that gives them the
+		// other-unit reason fails here.
+		if got := errors.Is(err, identity.ErrJobTokenOtherUnit); got != tc.wantOtherUnit {
+			t.Fatalf("Authorize = %v, other-unit reason %t, want %t", err, got, tc.wantOtherUnit)
 		}
 	default:
 		if err != nil {
