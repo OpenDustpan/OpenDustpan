@@ -69,6 +69,17 @@ refactor with no change of behavior need no change. A test fake is not product
 behavior: no spec names it. The pull request body gives the failure, the fix
 and the check, with the log or the command output as evidence.
 
+### Paths in a change
+
+The scope check compares each file path that a change names with the files that
+the plan of its lane touches. A path that the change only reads, to copy a
+pattern from it or to cite it, is not a touch. Mark it with "like" or
+"(read only)" before the backticked path, for example "like
+`pkg/tempadmin/session_limit.go`" or "(read only) `pkg/tempadmin/session_limit.go`".
+The scope check skips a marked path for the touch comparison. It still
+requires the path to exist on main. A path without the marker counts as a
+touch, and the plan must list it.
+
 ### Proposal
 
 1. **Start from a person.** The "Why" names a persona and what they try to do.
