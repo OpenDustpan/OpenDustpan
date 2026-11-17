@@ -41,6 +41,11 @@ const (
 	instalRecord  = "gdr-k1l2m3n4o5p6q7r8s9t0"
 	otherRecordID = "gdr-u1v2w3x4y5z6a7b8c9d0"
 
+	// maskedWarning is a stored message that holds a secret value in its
+	// stored masked form. The read must return it as stored.
+	maskedWarning = "input password is set to ********"
+	plainSecret   = "hunter2"
+
 	namespaceTemplate    = "/api/dustpan/v1/namespaces/{namespace}/decision-records/{id}"
 	installationTemplate = "/api/dustpan/v1/decision-records/{id}"
 )
@@ -174,7 +179,7 @@ func storedRecord(ns namespace.Name, id string) gate.Record {
 			Result: gate.ResultDeny,
 		}},
 		Requirements: nil,
-		Warnings:     nil,
+		Warnings:     []string{maskedWarning},
 		AutoApply:    false,
 		Controls:     nil,
 		BreakGlass:   "",
@@ -328,11 +333,31 @@ func namespaceHolds(ns namespace.Name) []string {
 	}
 }
 
+// readOnlyHolds returns the one hold of namespace:read on a namespace, with no
+// namespace:read-gates.
+func readOnlyHolds(ns namespace.Name) []string {
+	return []string{string(identity.ActionNamespaceRead) + " " + identity.NamespaceObject(ns).String()}
+}
+
 func installationHolds() []string {
 	return []string{string(identity.ActionInstallationReadGates) + " " + identity.ServerObject().String()}
 }
 
 func newHandler(t *testing.T, authz identity.Authorizer, records decisionrecord.Records) testHandler {
+	t.Helper()
+
+	return build(t, authz, records, &testAudit{entries: nil})
+}
+
+// newAuditedHandler builds a handler over the stored records of newFakeRecords
+// with sink as its audit store.
+func newAuditedHandler(t *testing.T, authz identity.Authorizer, sink *testAudit) testHandler {
+	t.Helper()
+
+	return build(t, authz, newFakeRecords(), sink)
+}
+
+func build(t *testing.T, authz identity.Authorizer, records decisionrecord.Records, sink *testAudit) testHandler {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
@@ -347,7 +372,7 @@ func newHandler(t *testing.T, authz identity.Authorizer, records decisionrecord.
 		Records:        records,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
-		Audit:          &testAudit{entries: nil},
+		Audit:          sink,
 		OnAuditFailure: nil,
 		DenialLimiter:  nil,
 		Sessions:       nil,
@@ -428,7 +453,13 @@ func TestDecisionRecordReadReturnsStoredRecord(t *testing.T) {
 		t.Errorf("body holds no secretKeys: %s", w.Body)
 	}
 
-	if strings.Contains(w.Body.String(), "hunter2") {
+	// The stored message holds the masked form of a secret. The answer
+	// returns it as stored, and no plain value is in the answer.
+	if !slices.Equal(rec.Warnings, []string{maskedWarning}) {
+		t.Errorf("warnings = %q, want the stored masked form %q", rec.Warnings, maskedWarning)
+	}
+
+	if strings.Contains(w.Body.String(), plainSecret) {
 		t.Errorf("body holds a secret value: %s", w.Body)
 	}
 }
@@ -486,19 +517,36 @@ func TestDecisionRecordReadForeignGives404(t *testing.T) {
 			holds: namespaceHolds("acme"), token: testToken,
 		},
 		{
-			name:  "an empty ID",
+			name:  "a one-character ID",
 			path:  "/api/dustpan/v1/namespaces/acme/decision-records/x",
 			holds: namespaceHolds("acme"), token: testToken,
 		},
 		{
+			name:  "an empty ID on the namespace route",
+			path:  "/api/dustpan/v1/namespaces/acme/decision-records/",
+			holds: namespaceHolds("acme"), token: testToken,
+		},
+		{
+			name:  "an empty ID on the installation route",
+			path:  "/api/dustpan/v1/decision-records/",
+			holds: installationHolds(), token: testToken,
+		},
+		{
+			name:  "an invalid namespace name",
+			path:  "/api/dustpan/v1/namespaces/Bad_Name!/decision-records/" + recordID,
+			holds: namespaceHolds("acme"), token: testToken,
+		},
+		{
+			// The authorizer allows every check of the route, so only the
+			// sign-in step stops this request.
 			name:  "no sign-in",
 			path:  "/api/dustpan/v1/namespaces/acme/decision-records/" + recordID,
-			holds: nil, token: "",
+			holds: namespaceHolds("acme"), token: "",
 		},
 		{
 			name:  "an expired credential",
 			path:  "/api/dustpan/v1/namespaces/acme/decision-records/" + recordID,
-			holds: nil, token: "expired-token",
+			holds: namespaceHolds("acme"), token: "expired-token",
 		},
 		{
 			name:  "a namespace the caller cannot read",
@@ -828,5 +876,71 @@ func TestNoMuxBypass(t *testing.T) {
 				t.Fatalf("file %s reaches the mux without recording (contains %q)", name, needle)
 			}
 		}
+	}
+}
+
+// TestNewServiceRefusesNilRecords proves that the service cannot be built
+// without its port.
+func TestNewServiceRefusesNilRecords(t *testing.T) {
+	t.Parallel()
+
+	svc, err := decisionrecord.NewService(nil)
+	if !errors.Is(err, decisionrecord.ErrMissingDependency) {
+		t.Fatalf("NewService(nil) error = %v, want ErrMissingDependency", err)
+	}
+
+	if svc != nil {
+		t.Error("NewService(nil) returned a service")
+	}
+}
+
+// TestDeniedReadWritesAuditEntry proves that a read that the authorizer
+// refuses writes one audit entry, and that a read with a malformed ID, which
+// the authorizer allows, writes none.
+func TestDeniedReadWritesAuditEntry(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		path        string
+		holds       []string
+		wantEntries int
+	}{
+		{
+			name:        "a read without namespace:read-gates",
+			path:        "/api/dustpan/v1/namespaces/acme/decision-records/" + recordID,
+			holds:       readOnlyHolds("acme"),
+			wantEntries: 1,
+		},
+		{
+			name:        "a malformed ID that the authorizer allows",
+			path:        "/api/dustpan/v1/namespaces/acme/decision-records/gdr-too-short",
+			holds:       namespaceHolds("acme"),
+			wantEntries: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sink := &testAudit{entries: nil}
+			handler := newAuditedHandler(t, newAuthorizer(tc.holds...), sink)
+
+			w := get(t.Context(), t, handler, tc.path, testToken)
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404; body: %s", w.Code, w.Body)
+			}
+
+			if got := len(sink.entries); got != tc.wantEntries {
+				t.Fatalf("audit entries = %d, want %d: %+v", got, tc.wantEntries, sink.entries)
+			}
+
+			for _, e := range sink.entries {
+				if strings.Contains(fmt.Sprintf("%+v", e), plainSecret) {
+					t.Errorf("entry holds a secret value: %+v", e)
+				}
+			}
+		})
 	}
 }

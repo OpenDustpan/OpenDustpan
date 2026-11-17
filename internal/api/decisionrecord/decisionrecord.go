@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"opendustpan.org/opendustpan/internal/api/problem"
 	"opendustpan.org/opendustpan/internal/api/refusal"
@@ -53,8 +54,8 @@ type Handler struct {
 	routes     []Route
 }
 
-// NewHandler returns a Handler. Every Config field except Sessions and
-// OnAuditFailure is required.
+// NewHandler returns a Handler. Every Config field except Sessions,
+// OnAuditFailure and DenialLimiter is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Audit == nil:
@@ -102,6 +103,15 @@ func NewHandler(cfg Config) (*Handler, error) {
 
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// A path with an empty ID matches no route pattern, so the mux would
+	// answer its own plain 404. The answer here is the one 404 of every
+	// unreadable ID, with the same body. It names no record and reads no
+	// store.
+	if emptyIDPath(r.URL.Path) {
+		h.writeError(r.Context(), w, errNotFound)
+		return
+	}
+
 	h.mux.ServeHTTP(w, r)
 }
 
@@ -169,4 +179,27 @@ func (h *Handler) readInstallationRecord(w http.ResponseWriter, r *http.Request,
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, rec)
+}
+
+// emptyIDPath reports whether path is a route path of this API with an empty
+// record ID: the path ends in "decision-records/".
+func emptyIDPath(path string) bool {
+	const (
+		installation = "/api/dustpan/v1/decision-records/"
+		nsPrefix     = "/api/dustpan/v1/namespaces/"
+		nsSuffix     = "/decision-records/"
+	)
+
+	if path == installation {
+		return true
+	}
+
+	rest, ok := strings.CutPrefix(path, nsPrefix)
+	if !ok {
+		return false
+	}
+
+	name, ok := strings.CutSuffix(rest, nsSuffix)
+
+	return ok && name != "" && !strings.Contains(name, "/")
 }

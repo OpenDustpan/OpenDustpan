@@ -63,9 +63,12 @@ func decisionRecordsDocsScenario(ctx context.Context, t *testing.T, env *e2e.Env
 
 	checkReady(ctx, t, env)
 
-	// A viewer reads gates and records. A maintainer writes state.
+	// A viewer reads gates and records. A maintainer writes state. Each
+	// built-in namespace role holds the gate read action, so the outsider has
+	// no grant on the namespace.
 	viewer := issueDecisionRecordsPerson(ctx, t, env, "bo", "viewer")
 	maintainer := issueDecisionRecordsPerson(ctx, t, env, "ann", "maintainer")
+	outsider := issueDecisionRecordsPerson(ctx, t, env, "cy", "")
 
 	putDecisionRecordsDenyGate(ctx, t, env)
 
@@ -79,14 +82,14 @@ func decisionRecordsDocsScenario(ctx context.Context, t *testing.T, env *e2e.Env
 		decisionRecordsProbe{token: viewer.token.Secret, path: readPath, recordID: recordID})
 
 	// The page lists the error answers. Each one answers 404 with the code
-	// gate.not-found and a body that names no record ID. The maintainer holds
+	// gate.not-found and a body that names no record ID. The outsider holds
 	// no gate read grant on the namespace.
 	malformedPath := "/api/dustpan/v1/namespaces/" + e2e.Namespace + "/decision-records/gdr-too-short"
 	// The installation route has no record in this version.
 	installationPath := "/api/dustpan/v1/decision-records/" + string(recordID)
 
 	for name, probe := range map[string]decisionRecordsProbe{
-		"no gate read action": {token: maintainer.token.Secret, path: readPath, recordID: recordID},
+		"no gate read action": {token: outsider.token.Secret, path: readPath, recordID: recordID},
 		"unauthenticated":     {token: "", path: readPath, recordID: recordID},
 		"malformed ID":        {token: viewer.token.Secret, path: malformedPath, recordID: recordID},
 		"installation route":  {token: viewer.token.Secret, path: installationPath, recordID: recordID},
@@ -101,6 +104,14 @@ func decisionRecordsDocsScenario(ctx context.Context, t *testing.T, env *e2e.Env
 // the workspace.
 func putDecisionRecordsDenyGate(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
+
+	// A gate of a unit needs the unit, so the step creates the workspace first.
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		UserAgent: "", Name: "decision records: create the workspace", Method: http.MethodPost,
+		Path: "/api/v2/organizations/" + e2e.Namespace + "/workspaces",
+		Body: `{"data":{"type":"workspaces","attributes":{"name":"` + e2e.Workspace + `"}}}`,
+		Want: http.StatusCreated, Scheme: "", Check: nil,
+	})
 
 	mustDecisionRecords(t, env.PutGate(ctx, t, gate.Gate{
 		Scope:         decisionRecordsUnitScope(t),
@@ -149,8 +160,12 @@ func checkDecisionRecordRead(ctx context.Context, t *testing.T, env *e2e.Env, pr
 		t.Fatalf("record id = %q, want %q", rec.ID, want)
 	}
 
-	if !strings.Contains(body, `"secretKeys"`) {
-		t.Fatalf("record body holds no secretKeys: %s", body)
+	if rec.Point != gate.PointStateWrite {
+		t.Fatalf("record decision point = %q, want %q", rec.Point, gate.PointStateWrite)
+	}
+
+	if !strings.Contains(body, "Locks are frozen for the e2e check.") {
+		t.Fatalf("record body holds no gate message: %s", body)
 	}
 }
 
@@ -190,7 +205,8 @@ type decisionRecordsPerson struct {
 }
 
 // issueDecisionRecordsPerson creates a person with role on the e2e namespace,
-// and issues the person its access token.
+// and issues the person its access token. An empty role gives the person no
+// grant on the namespace.
 func issueDecisionRecordsPerson(
 	ctx context.Context, t *testing.T, env *e2e.Env, name, role string,
 ) *decisionRecordsPerson {
@@ -203,10 +219,12 @@ func issueDecisionRecordsPerson(
 		`{"subject":` + jsonString(e2e.SignInSubject(name+"@example.com")) + `,"kind":"person"}`, http.StatusCreated,
 	}, &p.principal)
 
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/namespaces/" + e2e.Namespace + "/grants",
-		`{"subject":"principal:` + p.principal.ID + `","role":"` + role + `"}`, http.StatusCreated,
-	}, nil)
+	if role != "" {
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, "/api/server/namespaces/" + e2e.Namespace + "/grants",
+			`{"subject":"principal:` + p.principal.ID + `","role":"` + role + `"}`, http.StatusCreated,
+		}, nil)
+	}
 
 	p.token = env.PersonalToken(ctx, t, p.principal.ID, "decision-records-"+name)
 
@@ -233,12 +251,19 @@ func runDecisionRecordsRefusedLock(
 ) gate.RecordID {
 	t.Helper()
 
+	writeDecisionRecordsTofuProject(t, env, maintainer)
+
+	initRes, err := env.RunAs(ctx, cli, decisionRecordsTofuDir(env),
+		[]string{"TF_CLI_CONFIG_FILE=" + decisionRecordsTofuRC(env, maintainer)},
+		"init", "-input=false", "-no-color")
+	if err != nil || initRes.ExitCode != 0 {
+		t.Fatalf("tofu init: %v:\n%s", err, initRes.Stdout+initRes.Stderr)
+	}
+
 	before, err := env.StateWriteRecords(ctx, namespace.Name(e2e.Namespace))
 	if err != nil {
 		t.Fatalf("records before the refusal: %v", err)
 	}
-
-	writeDecisionRecordsTofuProject(t, env, maintainer)
 
 	res, err := env.RunAs(ctx, cli, decisionRecordsTofuDir(env),
 		[]string{"TF_CLI_CONFIG_FILE=" + decisionRecordsTofuRC(env, maintainer)},

@@ -1402,7 +1402,6 @@ func newNeutralHandlers(
 		return neutralHandlers{}, err
 	}
 
-	decisionRecords := newDecisionRecordsHandler(svc, cfg, onFailure)
 	settingAPIs, err := newNamespaceSettingHandlers(svc, cfg, onFailure, policies)
 	if err != nil {
 		return neutralHandlers{}, err
@@ -1412,7 +1411,7 @@ func newNeutralHandlers(
 		inventory:       units,
 		audit:           entries,
 		context:         contexts,
-		decisionRecords: decisionRecords,
+		decisionRecords: late.decisionRecords,
 		runners:         runners.protocol,
 		runnerPools:     runners.pools,
 		profiles:        profileAPI.profiles,
