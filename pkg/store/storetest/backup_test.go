@@ -2895,7 +2895,7 @@ func fakeBackupRecord(id backup.ID, startedAt time.Time) backup.Record {
 		Target:    "dir:/var/backups",
 		Error:     "",
 		State:     backup.StateRunning,
-		Attempt:   "",
+		Attempt:   "1",
 	}
 }
 
@@ -2975,7 +2975,7 @@ func TestBackupDetectsRefinishAllowed(t *testing.T) {
 	claim := fakeOperationClaim(t, s, r, "test", time.Hour)
 
 	_, finishErr := s.FinishBackup(
-		t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(), "",
+		t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(), "1",
 	)
 	if finishErr != nil {
 		t.Fatalf("finish backup: %v", finishErr)
@@ -3019,7 +3019,7 @@ func TestBackupDetectsOldestFirst(t *testing.T) {
 		claim := fakeOperationClaim(t, s, r, "test", time.Hour)
 
 		_, finishErr := s.FinishBackup(
-			t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(), "",
+			t.Context(), claim.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(), "1",
 		)
 		if finishErr != nil {
 			t.Fatalf("finish backup: %v", finishErr)
@@ -3142,7 +3142,7 @@ func staleFinish(t *testing.T, s *fakeBackupStore) error {
 	}
 
 	_, err := s.FinishBackup(
-		t.Context(), stale.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(), "",
+		t.Context(), stale.Step(backup.StepFinish), r.ID, backup.StateSucceeded, "", fakeTime(), "1",
 	)
 
 	return err
@@ -3237,10 +3237,9 @@ func (s *fakeBackupStore) finishRow(
 		return backup.Record{}, backup.ErrNotRunning
 	}
 
-	// A succeeded finish that names an attempt names one in the allowlist, as
-	// the adapters require. The fake keeps the empty attempt that its own
-	// control tests finish with, so those tests need no recorded attempt.
-	if state == backup.StateSucceeded && attempt != "" {
+	// A succeeded finish names an attempt in the allowlist, as the adapters
+	// require. The empty attempt is refused too.
+	if state == backup.StateSucceeded {
 		if err := backup.ValidAttempt(attempt); err != nil {
 			return backup.Record{}, err
 		}
