@@ -22,6 +22,8 @@ it, but lacks the action of the route, gets 403.
 | `GET /runner-pools/{pool}` | `namespace:read-runners` | One pool |
 | `PATCH /runner-pools/{pool}` | `namespace:manage-runners` | The pool with the changed fields |
 | `DELETE /runner-pools/{pool}` | `namespace:manage-runners` | No body |
+| `GET /runner-pools/{pool}/proxy-settings` | `namespace:read-runners` | The effective proxy settings of the pool, with no credential |
+| `PUT /runner-pools/{pool}/proxy-settings` | `namespace:manage-runners` | The saved proxy settings |
 | `GET /runner-pools/{pool}/join-tokens` | `namespace:read-runners` | The join tokens, with no secret |
 | `POST /runner-pools/{pool}/join-tokens` | `namespace:manage-runners` | A new join token, with its secret |
 | `POST /runner-pools/{pool}/join-tokens/{id}/revoke` | `namespace:manage-runners` | No body |
@@ -96,6 +98,7 @@ code `version-ahead`, and an older one gets 426 with `version-unsupported`.
 | `POST /heartbeat` | the claims of the runner | claims to cancel, lost claims, `rotateKey`, `draining` |
 | `POST /poll` | the longest wait, at most 50 seconds | 200 with one phase or sweep, or 204 |
 | `POST /claims/{operation}/handoff` | none | the handoff token |
+| `POST /claims/{operation}/proxy-handoff` | none | the handoff token of the job proxy |
 | `POST /claims/{operation}/renew` | none | the new expiry, `canceled`, `sessionOpen` |
 | `POST /claims/{operation}/release` | the reason | 204, or 409 when the claim has a job session |
 
@@ -267,6 +270,26 @@ text `job token is for one unit only. Read the job to see its unit.` A job token
 that is not known, or that ended, gets 401 with the text `job token ended. Read
 the job state.` A job token cannot call the REST API.
 
+## The job proxy session
+
+The job proxy of a claim exchanges its own handoff token for a proxy session.
+The token comes from `POST /claims/{operation}/proxy-handoff` and is a
+different token from the handoff token of the launcher. A session of one kind
+cannot call the paths of the other kind. A call with the wrong kind gets 403
+with the code `wrong-session-kind`. See
+[Set the proxy settings of a runner pool](../guides/job-proxy-pool-settings.md)
+for the settings that the assignment carries.
+
+| Method and path | Body | Answer |
+| --- | --- | --- |
+| `POST /proxy/session` | the proxy handoff token, the new public key, the signature of the session challenge, the release | the session, its lease, and the proxy assignment |
+| `POST /proxy/session/upstream-credential` | none | the user name and the password of the upstream proxy |
+
+The proxy assignment has the namespace, the unit, the operation, the rendered
+rules with their digest, the server host, the allowed ranges and the upstream
+URL. It never holds the credential. The proxy reads the credential with the
+second path, and each read writes an audit entry.
+
 The paths for the source and the report of a sweep are not part of this API
 yet. A session of a sweep has no steps, no logs, no plan, no credentials and no
 finish.
@@ -282,6 +305,7 @@ Each answer with a status of 400 or more has the body
 | `bad-proof` | 401 | The proof does not match, is too old, or repeats a nonce. |
 | `key-expired` | 401 | The runner must join again. |
 | `token-used`, `token-expired` | 401 | The join token or the handoff token cannot be used. |
+| `wrong-session-kind` | 403 | The session is of another kind than the path needs. |
 | `retired` | 403 | An administrator retired the runner. |
 | `grant-lost` | 403 | The starter of the job is disabled, or no longer holds the action that starts the job. |
 | `not-found` | 404 | The token, the pool or the claim is not known. |
