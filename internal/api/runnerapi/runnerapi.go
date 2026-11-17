@@ -27,7 +27,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/runner"
 )
 
@@ -64,6 +66,15 @@ type Config struct {
 	// Jobs reads the job of a session, for its assignment. Without it, the
 	// session exchange answers not-found before it uses the handoff token.
 	Jobs JobReader
+
+	// JobTokens issues the job tokens of the credentials path of a job
+	// session. Without it, that path answers not-found. JobTokens needs Jobs
+	// and Starters: NewHandler refuses the one without the other two.
+	JobTokens *jobtoken.Service
+	// Starters reads the record of the principal that started a job. The
+	// credentials path resolves the starter of the job before it issues the
+	// token of its step.
+	Starters StarterRecords
 
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
@@ -112,6 +123,15 @@ type JobReader interface {
 	Get(ctx context.Context, id job.ID) (job.Job, error)
 }
 
+// StarterRecords reads the records of the principals by their subject. The
+// credentials path resolves the subject of the principal that started the job
+// to its record, so the token names the record that the store keeps.
+type StarterRecords interface {
+	// GetPrincipalBySubject returns the principal that exists with the
+	// subject, or principal.ErrNotFound.
+	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
+}
+
 // Handler serves the runner protocol. The 429 for a second concurrent poll
 // of one runner holds for each server instance.
 type Handler struct {
@@ -124,6 +144,8 @@ type Handler struct {
 	operations durable.Store
 	recorder   job.CheckedRecorder
 	jobs       JobReader
+	tokens     *jobtoken.Service
+	starters   StarterRecords
 	audit      audit.Store
 	onAuditErr func()
 	// limiter bounds the audit entries of refused handoff tokens.
@@ -168,6 +190,20 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: job reader, which a recorder needs", ErrMissingDependency)
 	}
 
+	return cfg.validateJobTokens()
+}
+
+// validateJobTokens returns ErrMissingDependency when cfg has a job token
+// issuer and lacks what the issuer reads: the job of the session for its unit
+// and its steps, and the record of the starter that the token names.
+func (cfg Config) validateJobTokens() error {
+	switch {
+	case cfg.JobTokens != nil && cfg.Jobs == nil:
+		return fmt.Errorf("%w: job reader, which the job token issuer needs", ErrMissingDependency)
+	case cfg.JobTokens != nil && cfg.Starters == nil:
+		return fmt.Errorf("%w: starter records, which the job token issuer needs", ErrMissingDependency)
+	}
+
 	return nil
 }
 
@@ -182,7 +218,8 @@ func (cfg Config) validatePlans() error {
 }
 
 // NewHandler returns a Handler. Every Config field except Claimer, Sweeps,
-// Operations, Recorder, Jobs, Sessions, Now and PollInterval is required.
+// Operations, Recorder, Jobs, JobTokens, Starters, Sessions, Now and
+// PollInterval is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -222,6 +259,8 @@ func NewHandler(cfg Config) (*Handler, error) {
 		operations:          cfg.Operations,
 		recorder:            cfg.Recorder,
 		jobs:                cfg.Jobs,
+		tokens:              cfg.JobTokens,
+		starters:            cfg.Starters,
 		logger:              cfg.Logger,
 		audit:               cfg.Audit,
 		onAuditErr:          cfg.OnAuditFailure,

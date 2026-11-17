@@ -28,6 +28,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/jobtoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
 	"opendustpan.org/opendustpan/pkg/runner/protocol"
@@ -146,6 +147,7 @@ type stores struct {
 	namespaces namespace.Store
 	operations durable.Store
 	jobs       job.Store
+	jobtokens  jobtoken.Store
 	units      unitStore
 	runners    runnerStores
 	audit      interface {
@@ -199,7 +201,8 @@ func openSQLite(t *testing.T) stores {
 	})
 
 	return stores{
-		namespaces: s, operations: s.DurableOperations(), jobs: s.Jobs(), units: s, runners: s.Runners(), audit: s,
+		namespaces: s, operations: s.DurableOperations(), jobs: s.Jobs(), jobtokens: s.JobTokens(), units: s,
+		runners: s.Runners(), audit: s,
 	}
 }
 
@@ -405,6 +408,8 @@ func configFor(t *testing.T, s stores, opts serveOptions) (runnerapi.Config, *op
 		Operations:                 s.operations,
 		Recorder:                   opts.recorder,
 		Jobs:                       opts.jobs,
+		JobTokens:                  nil,
+		Starters:                   nil,
 		Authenticator:              adminAuthenticator{},
 		Authorizer:                 opts.authz,
 		Sessions:                   nil,
