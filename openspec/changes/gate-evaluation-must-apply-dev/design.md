@@ -9,7 +9,7 @@ Service.Evaluate returns errNotImplemented today and fails closed by accident. E
 
 ## Structure
 
-Unexported approverPolicy built only by newApproverPolicy(kind installation.Kind), which returns an error on an unknown kind. Service.Evaluate is the only caller.
+The existing exported ApproverPolicy in pkg/gate/approvers.go (CountsAsSignature at line 107) carries the kind as a string, because pkg/gate does not import installation. An unknown kind returns an error and the evaluation denies. Service.Evaluate is the only caller that builds it from KindReader. The requirement covers approval rules only. Ownership rules and approval defaults at the state-write decision point are out of scope, as the proposal says.
 
 ## Risks
 

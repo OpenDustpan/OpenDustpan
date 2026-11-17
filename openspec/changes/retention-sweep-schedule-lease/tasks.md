@@ -6,7 +6,7 @@
 
 - [ ] 1.1 Find the lease primitive and any caller of pruneExpired with rg, and record file:line in the pull request body. Write the failing tests TestRetentionSweepPrunesExpired and TestRetentionSweepSkipsWhenLeaseHeld. Check: go test ./pkg/dustpan -run TestRetentionSweep (NEW file pkg/dustpan/area_retention_test.go)
 - [ ] 1.2 Write the failing test that the sweep audits each refusal and each failure of the prune call, because the port writes no denial entry. Check: go test ./pkg/dustpan -run TestRetentionSweepAuditsRefusalAndFailure (in pkg/dustpan/area_retention_test.go)
-- [ ] 1.3 Write the failing test that the sweep derives its cutoff only from the retention setting and never from an input, and that the request type and the store refuse a cutoff after the current time. The effect line of the decision says a record is deleted only after the audit retention passes. Check: go test ./pkg/dustpan -run TestRetentionSweepCutoffFromSetting (in pkg/dustpan/area_retention_test.go)
+- [ ] 1.3 Write the failing test that the sweep derives its cutoff only from the retention setting and never from an input, and that the request type and the store refuse a cutoff after the current time. The effect line of the decision says a record is deleted only after the retention period passes, and a setting of `0` deletes nothing. Check: go test ./pkg/dustpan -run TestRetentionSweepCutoffFromSetting (in pkg/dustpan/area_retention_test.go)
 
 ## 2. Implementation
 
@@ -16,6 +16,6 @@
 
 ## 3. Definition of done
 
-- [ ] 3.1 Wire the sweep to the worker. No route changes. The e2e step starts two real server processes on one database and reads GET /api/dustpan/v1/settings with an access token of a site administrator. Check: make e2e (NEW step in e2e/). Confirmed by: CI (the agent writes the e2e test).
+- [ ] 3.1 Wire the sweep to the worker. No route changes. The e2e step starts two real server processes on one database, sets `decisionRecords.retentionHours` through PATCH /api/dustpan/v1/settings, and reads the audit entry of the sweep with an access token of a site administrator. Check: make e2e (NEW step in e2e/). Confirmed by: CI (the agent writes the e2e test).
 - [ ] 3.2 Add the docs page for retention of decision records and check that its commands run (NEW file docs/guides/retention-of-decision-records.md). Check: make docs-lint
 - [ ] 3.3 Run the full check. Check: make check. Confirmed by: CI (the agent runs the fast checks only).

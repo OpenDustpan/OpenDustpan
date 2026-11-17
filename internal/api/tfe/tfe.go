@@ -31,6 +31,7 @@ import (
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -635,8 +636,10 @@ func (h *Handler) enforceDiscovery(route Route) http.HandlerFunc {
 // answers when the caller may read the namespace, or when the caller holds a
 // grant on a collection or on a unit in it. Any other caller gets the same
 // 404 as for an unknown namespace, with the same body, so the answer is no
-// existence oracle. It decides first and records only the final refusal, so
-// a served request writes no denial entry.
+// existence oracle. A served answer that a grant allowed names the grant in
+// the response header X-Dustpan-Grant-Id. It decides
+// first and records only the final refusal, so a served request writes no
+// denial entry.
 func (h *Handler) serveDiscovery(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, ns namespace.Name, route Route,
 ) {
@@ -667,7 +670,7 @@ func (h *Handler) serveDiscovery(
 		return
 	}
 
-	holds, holdsErr := h.holdsGrantInNamespace(ctx, p, ns)
+	holds, grantID, holdsErr := h.holdsGrantInNamespace(ctx, p, ns)
 	if holdsErr != nil {
 		h.denyDiscovery(ctx, r, p, obj, holdsErr)
 		h.writeError(ctx, w, holdsErr)
@@ -685,6 +688,10 @@ func (h *Handler) serveDiscovery(
 		return
 	}
 
+	if grantID != "" {
+		w.Header().Set(access.HeaderDiscoveryGrant, grantID)
+	}
+
 	route.Serve(w, r, p, obj)
 }
 
@@ -699,37 +706,54 @@ func (h *Handler) denyDiscovery(
 }
 
 // holdsGrantInNamespace reports whether p holds a grant on a collection in
-// ns or on a unit in it. It reads the grants at each request, so a revoked
-// grant is gone on the next request. A grant on the namespace itself, or on
-// the installation, is decided by the Authorizer before this runs: this check
-// only opens discovery from inside. An error of the authorizer is returned.
+// ns or on a unit in it, and the stable ID of one such grant (never a name).
+// It reads the grants at each request, so a revoked grant is gone on the
+// next request. A grant on the namespace itself, or on the installation, is
+// decided by the Authorizer before this runs: this check only opens
+// discovery from inside. An error of the authorizer is returned. An
+// authorizer that names the grant but returns an empty ID is refused, so a
+// held answer from it always has an ID. An authorizer without the method, for
+// example a custom authorizer without the grant list, takes the scope path:
+// the answer is held when the scope names the namespace and it carries no
+// grant header.
 func (h *Handler) holdsGrantInNamespace(
 	ctx context.Context, p identity.Principal, ns namespace.Name,
-) (bool, error) {
+) (bool, string, error) {
 	// An administrator is decided by the Authorizer itself: a test double
 	// that denies an administrator keeps the old answer below.
 	if p.Admin {
-		return false, nil
+		return false, "", nil
 	}
 
+	if id, found, err := access.DiscoveryGrantID(ctx, h.authz, p, ns); found || err != nil {
+		if err != nil {
+			return false, "", err
+		}
+
+		return id != "", id, nil
+	}
+
+	// The authorizer cannot name its grants: the scope check decides, and
+	// the answer carries no grant header.
 	for _, action := range []identity.Action{identity.ActionUnitRead, identity.ActionUnitReadOutputs} {
 		scope, err := h.authz.ListObjects(ctx, p, action)
 		if err != nil {
-			return false, fmt.Errorf("list readable objects: %w", err)
+			return false, "", fmt.Errorf("list readable objects: %w", err)
 		}
 
 		if scopeHoldsNamespace(scope, ns) {
-			return true, nil
+			return true, "", nil
 		}
 	}
 
-	return false, nil
+	return false, "", nil
 }
 
-// scopeHoldsNamespace reports whether scope names a collection or a unit in
-// ns. A grant on the namespace itself, or on the installation, is decided by
-// the Authorizer before this runs. An every-object scope alone proves no
-// grant in ns: only the gated namespace check above may open that path.
+// scopeHoldsNamespace reports whether scope names a collection in the
+// namespace ns or a unit in it. A grant on the namespace itself is decided by
+// the Authorizer before this runs, so scope.Namespaces does not count here.
+// An every-object scope alone proves no grant in ns: only the gated namespace
+// check above may open that path.
 func scopeHoldsNamespace(scope identity.Scope, ns namespace.Name) bool {
 	for _, objs := range [][]identity.Object{scope.Collections, scope.Units} {
 		for i := range objs {
