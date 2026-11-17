@@ -104,12 +104,12 @@ func (d ApprovalDefault) Unmeetable() bool {
 // newApproverPolicy builds the approver policy of an installation whose kind is
 // given by kind. It returns an error that wraps ErrUnavailable for a kind that
 // is not dev or production, so the caller fails closed.
-func newApproverPolicy(kind string) (ApproverPolicy, error) {
+func newApproverPolicy(kind string, isDev DevSubjectMatcher) (ApproverPolicy, error) {
 	switch kind {
 	case "dev":
-		return ApproverPolicy{Production: false, IsDev: isDevSubject}, nil
+		return ApproverPolicy{Production: false, IsDev: isDev}, nil
 	case "production":
-		return ApproverPolicy{Production: true, IsDev: isDevSubject}, nil
+		return ApproverPolicy{Production: true, IsDev: isDev}, nil
 	default:
 		return ApproverPolicy{}, fmt.Errorf("%w: read the installation kind: unknown installation kind %q",
 			ErrUnavailable, kind)
@@ -117,10 +117,10 @@ func newApproverPolicy(kind string) (ApproverPolicy, error) {
 }
 
 // readApproverPolicy reads the installation kind with kinds and returns the
-// approver policy of that kind. It returns an error that wraps ErrUnavailable
+// approver policy of that kind. It gives isDev to the policy. It returns an error that wraps ErrUnavailable
 // for a read error, for a kind that is not dev or production, and for a nil
 // reader.
-func readApproverPolicy(ctx context.Context, kinds KindReader) (ApproverPolicy, error) {
+func readApproverPolicy(ctx context.Context, kinds KindReader, isDev DevSubjectMatcher) (ApproverPolicy, error) {
 	// Defense in depth: NewService refuses a service with no kind reader. This
 	// check stays so that a Service that is not built by NewService fails
 	// closed and does not panic.
@@ -133,7 +133,7 @@ func readApproverPolicy(ctx context.Context, kinds KindReader) (ApproverPolicy, 
 		return ApproverPolicy{}, fmt.Errorf("%w: read the installation kind: %w", ErrUnavailable, err)
 	}
 
-	return newApproverPolicy(kind)
+	return newApproverPolicy(kind, isDev)
 }
 
 // CountsAsSignature reports whether a signature of subject may fill a slot of
@@ -173,26 +173,4 @@ func (p ApproverPolicy) ruleApprovers(a Approvers) Approvers {
 	}
 
 	return out
-}
-
-// isDevSubject implements the dev-subject matching rule without importing
-// package principal, which package gate cannot import.
-func isDevSubject(s string) bool {
-	const prefix = "dev:"
-	if len(s) < len(prefix) {
-		return false
-	}
-
-	for i := range len(prefix) {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-
-		if c != prefix[i] {
-			return false
-		}
-	}
-
-	return true
 }

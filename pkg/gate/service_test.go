@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	principalpkg "opendustpan.org/opendustpan/pkg/principal"
 )
 
 // stubStore, stubEngine and the other stubs fill the ports that a case does
@@ -53,6 +54,7 @@ func newService(t *testing.T) *gate.Service {
 		Subjects:   subjects{},
 		Fences:     stubFences{},
 		KindReader: fixedKind("production"),
+		IsDev:      principalpkg.IsDevSubject,
 		Now:        nil,
 		Log:        slog.New(slog.DiscardHandler),
 	})
@@ -74,6 +76,7 @@ func TestNewServiceNeedsPorts(t *testing.T) {
 		Subjects:   nil,
 		Fences:     nil,
 		KindReader: nil,
+		IsDev:      nil,
 		Now:        nil,
 		Log:        nil,
 	})

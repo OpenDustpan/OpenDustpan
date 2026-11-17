@@ -60,10 +60,11 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- Registry already defines module archive refused error code used at module upload. (`internal/errcode/catalog_registry.go:17`)
-- Registry already defines signature invalid error code used at upload. (`internal/errcode/catalog_registry.go:25`)
-- Registry already defines version exists error code used for duplicate publish. (`internal/errcode/catalog_registry.go:31`)
-- Registry already defines not-staged error code used when staging key is missing. (`internal/errcode/catalog_registry.go:23`)
+- The private registry guide has the section "Publish a module" with the publish and `tofu init` commands. (`docs/guides/private-registry.md:281`)
+
+Module publish, the module registry protocol, the discovery document and the e2e step with `tofu init` exist on main. Cited as read only: (read only) `internal/registry/service/module.go` line 54 (PublishModule), (read only) `internal/api/registry/modules.go` line 77 (publishModule), (read only) `internal/api/tfe/registry_modules.go` line 49 (moduleRoutes), (read only) `internal/api/tfe/tfe.go` line 488 (discovery), (read only) `e2e/registry_module_test.go` line 109 (TestRegistryModuleTofuInit).
+
+The difference: no test runs the commands of that guide section as written. This change adds that test and fixes each command that fails. It adds no server code.
 
 ## ADR check
 
