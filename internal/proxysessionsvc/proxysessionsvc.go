@@ -52,6 +52,15 @@ const (
 	ReasonNoUpstream = "no-upstream"
 	// ReasonClaimLost: the claim of the session is not live.
 	ReasonClaimLost = "claim-lost"
+	// ReasonNotJobOfPool: the job of the claim is not a job of the namespace
+	// of the pool, or its unit has no stable ID.
+	ReasonNotJobOfPool = "not-a-job-of-the-pool"
+	// ReasonUnsealFailed: the stored credential does not unseal or fails the
+	// check of its text.
+	ReasonUnsealFailed = "unseal-failed"
+	// ReasonNoProxyOperation: the claim is a sweep, or its job has no proxy
+	// operation.
+	ReasonNoProxyOperation = "no-proxy-operation"
 )
 
 // Sources of the proxy settings of a pool.
@@ -415,7 +424,7 @@ func (s *Service) Credential(ctx context.Context, req *SessionRequest) (Credenti
 
 	cred, err := s.unseal(ctx, req.Pool, rec.Credential)
 	if err != nil {
-		s.refuse(ctx, req, claim.job.ID, "unseal-failed")
+		s.refuse(ctx, req, claim.job.ID, ReasonUnsealFailed)
 
 		return Credential{}, err
 	}
@@ -485,48 +494,55 @@ func (s *Service) check(ctx context.Context, req *SessionRequest) (*sessionClaim
 		return nil, ErrWrongSessionKind
 	}
 
-	claim, err := s.claimOf(ctx, req)
-	if errors.Is(err, runner.ErrClaimLost) {
-		s.refuse(ctx, req, "", ReasonClaimLost)
+	claim, reason, err := s.claimOf(ctx, req)
+	if reason != "" {
+		// A refusal of the claim writes a denied entry. A read error of a
+		// store has no reason and writes none.
+		s.refuse(ctx, req, "", reason)
 	}
 
 	return claim, err
 }
 
 // claimOf reads the live claim of the session of req, its job and its unit.
-func (s *Service) claimOf(ctx context.Context, req *SessionRequest) (*sessionClaim, error) {
+// For a refusal it returns the fixed reason of the denied entry too; for a
+// read error of a store the reason is empty.
+func (s *Service) claimOf(ctx context.Context, req *SessionRequest) (*sessionClaim, string, error) {
 	var none *sessionClaim
 
 	sess := &req.Session
 
 	op, err := s.operations.Get(ctx, durable.ID(sess.Operation))
 	if errors.Is(err, durable.ErrNotFound) {
-		return none, runner.ErrClaimLost
+		return none, ReasonClaimLost, runner.ErrClaimLost
 	}
 
 	if err != nil {
-		return none, fmt.Errorf("get operation: %w", err)
+		return none, "", fmt.Errorf("get operation: %w", err)
 	}
 
 	// Defense in depth: the session check of the route reads the claim too;
 	// this check stays so that a session of an ended claim never gets the rules
 	// or the credential.
 	if op.State != durable.StateRunning || op.Claim.Owner != sess.Runner || op.Claim.Token != sess.Token {
-		return none, runner.ErrClaimLost
+		return none, ReasonClaimLost, runner.ErrClaimLost
 	}
 
 	rec, err := s.claims.LookupClaim(ctx, op.Claim)
 	if err != nil {
-		return none, fmt.Errorf("look up claim: %w", err)
+		return none, "", fmt.Errorf("look up claim: %w", err)
 	}
 
 	if rec.Job == "" {
-		return none, fmt.Errorf("%w: the claim of a sweep has no proxy session", runner.ErrInvalid)
+		return none, ReasonNoProxyOperation, fmt.Errorf(
+			"%w: the claim of a sweep has no proxy session",
+			runner.ErrInvalid,
+		)
 	}
 
 	j, err := s.jobs.Get(ctx, job.ID(rec.Job))
 	if err != nil {
-		return none, fmt.Errorf("get job: %w", err)
+		return none, "", fmt.Errorf("get job: %w", err)
 	}
 
 	unit := j.Spec.Unit
@@ -534,15 +550,15 @@ func (s *Service) claimOf(ctx context.Context, req *SessionRequest) (*sessionCla
 	// Fail closed: a job of another namespace than the pool, or with no stable
 	// unit ID, gets no rules.
 	if unit.Namespace() != req.Pool.Namespace || unit.UnitID() == "" {
-		return none, fmt.Errorf("%w: the job is not a job of the pool", runner.ErrNotFound)
+		return none, ReasonNotJobOfPool, fmt.Errorf("%w: the job is not a job of the pool", runner.ErrNotFound)
 	}
 
 	operation := jobproxy.Operation(j.Spec.Operation)
 	if !operation.Valid() {
-		return none, fmt.Errorf("%w: the job has no proxy operation", runner.ErrInvalid)
+		return none, ReasonNoProxyOperation, fmt.Errorf("%w: the job has no proxy operation", runner.ErrInvalid)
 	}
 
-	return &sessionClaim{op: op, record: rec, job: j, unit: unit, operation: operation}, nil
+	return &sessionClaim{op: op, record: rec, job: j, unit: unit, operation: operation}, "", nil
 }
 
 // render joins the proxy rule sets of the namespace and of the unit of claim

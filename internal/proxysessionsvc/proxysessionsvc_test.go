@@ -2,6 +2,7 @@ package proxysessionsvc_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -207,6 +208,74 @@ func TestSealScopeIsPool(t *testing.T) {
 	}
 }
 
+// TestCredentialRefusesAHostileStoredUser checks the layer that re-checks a
+// stored credential after it unseals. The fake store holds a credential that
+// is sealed under the pool scope, as a restore or another version could write
+// it, with a user name that has a colon or a control character. The service
+// must refuse it with one denied entry and no credential.
+func TestCredentialRefusesAHostileStoredUser(t *testing.T) {
+	t.Parallel()
+
+	for name, user := range map[string]string{
+		"colon":             "ops:admin",
+		"control character": "ops\x07admin",
+		"newline":           "ops\nadmin",
+		"empty":             "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t)
+			sealHostileUser(t, f, user)
+
+			before := len(f.audit.all())
+
+			got, err := f.svc.Credential(t.Context(), sessionRequest(runner.SessionKindProxy, pool(poolA, nsAcme)))
+			if !errors.Is(err, proxysessionsvc.ErrUnseal) || got.Password != "" {
+				t.Fatalf("Credential = %q, %v, want no credential and ErrUnseal", got.Password, err)
+			}
+
+			entries := f.audit.all()[before:]
+			if len(entries) != 1 || entries[0].Outcome != audit.OutcomeDenied ||
+				entries[0].Reason != proxysessionsvc.ReasonUnsealFailed {
+				t.Errorf("audit entries = %+v, want one denied entry with the reason %s",
+					entries, proxysessionsvc.ReasonUnsealFailed)
+			}
+		})
+	}
+}
+
+// sealHostileUser replaces the stored credential of pool A with one that is
+// sealed under the pool scope and holds the user name user.
+func sealHostileUser(t *testing.T, f fixture, user string) {
+	t.Helper()
+
+	mustPut(t, f, putRequest(pool(poolA, nsAcme)))
+
+	rec, err := f.settings.ProxySettings(t.Context(), poolA)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+
+	scope, err := secret.NewScope(nsAcme, poolA)
+	if err != nil {
+		t.Fatalf("scope: %v", err)
+	}
+
+	plain, err := json.Marshal(map[string]string{"username": user, "password": upstreamPassword})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	sealed, err := f.secrets.Encrypt(t.Context(), scope, [][]byte{plain})
+	if err != nil || len(sealed) != 1 {
+		t.Fatalf("seal: %v", err)
+	}
+
+	rec.Credential = sealed[0]
+	f.settings.put(poolA, rec)
+}
+
 // TestServiceHostile is the table of hostile cases of the service layer. Each
 // case calls the service straight, as if the route wrapper did not check.
 func TestServiceHostile(t *testing.T) {
@@ -287,11 +356,13 @@ func TestServiceHostile(t *testing.T) {
 		},
 		{
 			name: "assignment with a pool of another namespace", prepare: none,
-			call: assignment(runner.SessionKindProxy, nsOther), want: runner.ErrNotFound, reason: "",
+			call: assignment(runner.SessionKindProxy, nsOther), want: runner.ErrNotFound,
+			reason: proxysessionsvc.ReasonNotJobOfPool,
 		},
 		{
 			name: "credential with a pool of another namespace", prepare: none,
-			call: credential(runner.SessionKindProxy, nsOther), want: runner.ErrNotFound, reason: "",
+			call: credential(runner.SessionKindProxy, nsOther), want: runner.ErrNotFound,
+			reason: proxysessionsvc.ReasonNotJobOfPool,
 		},
 	}
 
