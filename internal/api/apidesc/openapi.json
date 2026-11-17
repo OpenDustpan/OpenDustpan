@@ -1869,7 +1869,6 @@
             "backup.too-many-unverified": "#/components/schemas/BackupTooManyUnverifiedError",
             "context.field-from-code": "#/components/schemas/ContextFieldFromCodeError",
             "gate.approvers-count-above": "#/components/schemas/GateApproversCountAboveError",
-            "ip-allowlist.denied": "#/components/schemas/IpAllowlistDeniedError",
             "lock.locked": "#/components/schemas/LockLockedError",
             "maintenance.active-work": "#/components/schemas/MaintenanceActiveWorkError",
             "mfa.passkey-limit": "#/components/schemas/MfaPasskeyLimitError",
@@ -1910,9 +1909,6 @@
           },
           {
             "$ref": "#/components/schemas/GateApproversCountAboveError"
-          },
-          {
-            "$ref": "#/components/schemas/IpAllowlistDeniedError"
           },
           {
             "$ref": "#/components/schemas/LockLockedError"
@@ -2047,7 +2043,7 @@
           "instance.draining",
           "instance.invalid-id",
           "instance.not-found",
-          "ip-allowlist.denied",
+          "ip-allowlist.invalid-cidr",
           "issuer.conflict",
           "issuer.invalid",
           "issuer.key-expired",
@@ -2947,47 +2943,6 @@
           "id",
           "kind",
           "login"
-        ],
-        "type": "object"
-      },
-      "IpAllowlistDeniedError": {
-        "description": "The error answer with the code ip-allowlist.denied.",
-        "properties": {
-          "code": {
-            "description": "The HTTP status.",
-            "type": "integer"
-          },
-          "errorArgs": {
-            "$ref": "#/components/schemas/IpAllowlistDeniedErrorArgs"
-          },
-          "errorCode": {
-            "enum": [
-              "ip-allowlist.denied"
-            ],
-            "type": "string"
-          },
-          "message": {
-            "description": "A text for a person.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "code",
-          "message",
-          "errorCode",
-          "errorArgs"
-        ],
-        "type": "object"
-      },
-      "IpAllowlistDeniedErrorArgs": {
-        "description": "The arguments of the text of the error with the code ip-allowlist.denied.",
-        "properties": {
-          "scope": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "scope"
         ],
         "type": "object"
       },

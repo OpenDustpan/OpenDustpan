@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 )
 
 // TestInvalidCidrRefused proves that the installation settings accept a valid
@@ -44,6 +45,10 @@ func TestInvalidCidrRefused(t *testing.T) {
 		t.Fatalf("PATCH an invalid CIDR = %d %s, want 400", status, body)
 	}
 
+	if !strings.Contains(body, `"errorCode":"ip-allowlist.invalid-cidr"`) {
+		t.Fatalf("PATCH an invalid CIDR = %s, want ip-allowlist.invalid-cidr", body)
+	}
+
 	if !strings.Contains(body, "999.999.0.0/16") {
 		t.Fatalf("PATCH an invalid CIDR = %s, want the bad entry in the message", body)
 	}
@@ -55,24 +60,24 @@ func TestInvalidCidrRefused(t *testing.T) {
 	}
 }
 
-// TestTooManyCidrsRefused proves the design's 256-entry cap: the list accepts
-// 256 entries and refuses 257 without storing the change.
+// TestTooManyCidrsRefused proves the entry cap: the 65th entry answers 400
+// with ip-allowlist.invalid-cidr and the change is not stored.
 func TestTooManyCidrsRefused(t *testing.T) {
 	t.Parallel()
 
 	ts := startSettingsServer(t, dustpan.DefaultDrainPeriod)
 	_, etag := readSettings(t, ts.URL)
 
-	items := make([]string, 0, 257)
-	for i := range 257 {
-		items = append(items, fmt.Sprintf("10.%d.%d.0/24", i/256, i%256))
+	items := make([]string, 0, ipallow.MaxEntries+1)
+	for i := range ipallow.MaxEntries + 1 {
+		items = append(items, fmt.Sprintf("10.0.%d.0/24", i))
 	}
 
 	body := fmt.Sprintf(`{"ipAllowlist.installation":%q}`, strings.Join(items, ","))
 	status, answer := patchSettings(t, ts.URL, etag, body)
 
-	if status != http.StatusBadRequest {
-		t.Fatalf("PATCH 257 CIDRs = %d %s, want 400", status, answer)
+	if status != http.StatusBadRequest || !strings.Contains(answer, `"errorCode":"ip-allowlist.invalid-cidr"`) {
+		t.Fatalf("PATCH 65 CIDRs = %d %s, want 400 ip-allowlist.invalid-cidr", status, answer)
 	}
 
 	doc, _ := readSettings(t, ts.URL)

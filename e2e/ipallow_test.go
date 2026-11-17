@@ -469,9 +469,9 @@ func checkIPAllowlistInstallationList(
 		t.Fatalf("the units route from the default source: %v", err)
 	}
 
-	if status != http.StatusForbidden || !strings.Contains(body, `"errorCode":"ip-allowlist.denied"`) ||
-		!strings.Contains(body, `"scope":"installation"`) {
-		t.Fatalf("the units route from the default source answers %d (%s), want 403 ip-allowlist.denied "+
-			"with scope installation", status, body)
+	if status != http.StatusForbidden || !strings.Contains(body, `"errorCode":"access.ip-not-allowed"`) ||
+		!strings.Contains(body, "of the installation") {
+		t.Fatalf("the units route from the default source answers %d (%s), want 403 access.ip-not-allowed "+
+			"for the installation", status, body)
 	}
 }

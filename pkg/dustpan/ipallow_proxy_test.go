@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/dustpan"
@@ -65,16 +66,16 @@ func TestRecordedAddressIgnoresUntrustedHeader(t *testing.T) {
 	}
 
 	var answer struct {
-		ErrorCode string         `json:"errorCode"`
-		ErrorArgs map[string]any `json:"errorArgs"`
+		ErrorCode string `json:"errorCode"`
+		Message   string `json:"message"`
 	}
 
 	if err := json.Unmarshal(untrusted.Body.Bytes(), &answer); err != nil {
 		t.Fatalf("decode the refusal: %v: %s", err, untrusted.Body.String())
 	}
 
-	if answer.ErrorCode != "ip-allowlist.denied" || answer.ErrorArgs["scope"] != "installation" {
-		t.Fatalf("refusal = %s, want ip-allowlist.denied with scope installation", untrusted.Body.String())
+	if answer.ErrorCode != "access.ip-not-allowed" || !strings.HasSuffix(answer.Message, "of the installation") {
+		t.Fatalf("refusal = %s, want access.ip-not-allowed for the installation", untrusted.Body.String())
 	}
 
 	trusted := send("10.1.2.3:1234", "198.51.100.7")

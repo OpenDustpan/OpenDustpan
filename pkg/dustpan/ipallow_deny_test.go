@@ -101,18 +101,17 @@ func checkAllowlistRefusal(t *testing.T, rec *httptest.ResponseRecorder, scope s
 	}
 
 	var answer struct {
-		Message   string         `json:"message"`
-		Code      int            `json:"code"`
-		ErrorCode string         `json:"errorCode"`
-		ErrorArgs map[string]any `json:"errorArgs"`
+		Message   string `json:"message"`
+		Code      int    `json:"code"`
+		ErrorCode string `json:"errorCode"`
 	}
 
 	if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
 		t.Fatalf("decode the refusal: %v: %s", err, rec.Body.String())
 	}
 
-	if answer.Code != http.StatusForbidden || answer.Message != "forbidden" ||
-		answer.ErrorCode != "ip-allowlist.denied" || answer.ErrorArgs["scope"] != scope {
-		t.Fatalf("refusal = %s, want 403 forbidden with ip-allowlist.denied and scope %s", rec.Body.String(), scope)
+	if answer.Code != http.StatusForbidden || answer.ErrorCode != "access.ip-not-allowed" ||
+		!strings.HasSuffix(answer.Message, "of the "+scope) {
+		t.Fatalf("refusal = %s, want 403 access.ip-not-allowed that names the scope %s", rec.Body.String(), scope)
 	}
 }

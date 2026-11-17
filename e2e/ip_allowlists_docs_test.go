@@ -110,10 +110,10 @@ func ipAllowlistsDocsScenario(ctx context.Context, t *testing.T, env *e2e.Env) {
 		t.Fatalf("GET the units from the default address: %v", err)
 	}
 
-	if status != http.StatusForbidden || !strings.Contains(body, `"errorCode":"ip-allowlist.denied"`) ||
-		!strings.Contains(body, `"scope":"installation"`) {
-		t.Fatalf("GET the units from the default address answers %d (%s), want 403 ip-allowlist.denied "+
-			"with scope installation", status, body)
+	if status != http.StatusForbidden || !strings.Contains(body, `"errorCode":"access.ip-not-allowed"`) ||
+		!strings.Contains(body, "of the installation") {
+		t.Fatalf("GET the units from the default address answers %d (%s), want 403 access.ip-not-allowed "+
+			"for the installation", status, body)
 	}
 }
 
@@ -132,10 +132,9 @@ func ipAllowlistsDocsPageText(t *testing.T) {
 	for _, want := range []string{
 		"ipAllowlist.enabled",
 		"ipAllowlist.installation",
-		"ip-allowlist.denied",
 		"access.ip-not-allowed",
-		"settings.value-invalid",
-		"at most 256 distinct entries",
+		"ip-allowlist.invalid-cidr",
+		"at most 64 distinct entries",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("%s does not hold %q", ipAllowlistsDocsPage, want)

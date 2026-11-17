@@ -247,11 +247,12 @@ func allowlistDenialEntry(now func() time.Time, r *http.Request, denial allowDen
 	}
 }
 
-// writeAllowlistDenial writes the 403 of a refusal: the code of the catalog,
-// the scope argument and the fixed message.
+// writeAllowlistDenial writes the 403 of a refusal: the code of the catalog
+// and a message that names the scope that refused. The scope is one of the
+// fixed values of allowScope, never text of the request.
 func writeAllowlistDenial(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, decision allowDecision) {
 	problem.Writer{Logger: logger}.WriteProblem(ctx, w, problem.New(
-		http.StatusForbidden, errcode.IPAllowlistDenied, "forbidden",
-		errcode.Identifier("scope", string(decision.Scope)),
+		http.StatusForbidden, errcode.AccessIPNotAllowed,
+		"the address is outside the IP allowlist of the "+string(decision.Scope),
 	))
 }
