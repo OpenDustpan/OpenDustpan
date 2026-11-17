@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
@@ -359,6 +360,69 @@ func haCheckOldInstances(ctx context.Context, t *testing.T, env *e2e.Env, cluste
 	if status != http.StatusOK {
 		t.Errorf("write to the newer instance answers %d, want 200:\n%s", status, body)
 	}
+
+	haCheckInstancesRoute(ctx, t, env, cluster)
+}
+
+// haInstanceRow and haInstanceList are the part of the answer of the
+// instances route that the step reads.
+type haInstanceRow struct {
+	ID            string `json:"id"`
+	BinaryVersion string `json:"binaryVersion"`
+}
+
+type haInstanceList struct {
+	Instances []haInstanceRow `json:"instances"`
+}
+
+// haCheckInstancesRoute checks that the instances route, called through the
+// proxy with the administrator token, lists the running process of each
+// instance with its binary version: the newer build for instance 0 and the
+// old build for the others. The route reads the shared database, so it shows
+// the old instances too. It also lists rows of processes that ended earlier
+// in the suite, so the check looks up the running process of each instance
+// and does not count rows.
+func haCheckInstancesRoute(ctx context.Context, t *testing.T, env *e2e.Env, cluster *e2e.HACluster) {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/instances", "")
+	if err != nil {
+		t.Fatalf("list the instances: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("the instances route answers %d, want 200:\n%s", status, body)
+	}
+
+	var list haInstanceList
+
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatalf("decode the instances: %v:\n%s", err, body)
+	}
+
+	versions := make(map[string]string, len(list.Instances))
+	for _, row := range list.Instances {
+		versions[row.ID] = row.BinaryVersion
+	}
+
+	for i := range cluster.Size() {
+		want := haOldBuild
+		if i == 0 {
+			want = haNewBuild
+		}
+
+		ids := cluster.IDs(i)
+		if len(ids) == 0 {
+			t.Fatalf("instance %d logged no instance ID", i)
+		}
+
+		id := ids[len(ids)-1]
+
+		if got, ok := versions[id]; !ok || got != want {
+			t.Errorf("the instances route lists instance %d (%s) with version %q (listed: %t), want %q:\n%s",
+				i, id, got, ok, want, body)
+		}
+	}
 }
 
 // haWaitOutOfPool waits until the proxy no longer sends requests to instance i.
@@ -376,6 +440,10 @@ func haWaitOutOfPool(ctx context.Context, t *testing.T, cluster *e2e.HACluster, 
 		}
 	}
 }
+
+// haBelowMinimumCode is the wire code of the refusal. The step spells it out,
+// so that a rename in the server fails the step.
+const haBelowMinimumCode = "schema.binary-below-minimum"
 
 // haCheckRefusal checks that old instance i refuses a write with 503 and the
 // text that names both versions, and answers 503 on the readiness probe.
@@ -398,6 +466,17 @@ func haCheckRefusal(ctx context.Context, t *testing.T, env *e2e.Env, i int) {
 		if !strings.Contains(body, want) {
 			t.Errorf("the refusal of old instance %d lacks %q:\n%s", i, want, body)
 		}
+	}
+
+	// The answer carries the code of the refusal, not only its text.
+	var refusal struct {
+		ErrorCode string `json:"errorCode"`
+	}
+
+	if err = json.Unmarshal([]byte(body), &refusal); err != nil {
+		t.Errorf("decode the refusal of old instance %d: %v:\n%s", i, err, body)
+	} else if refusal.ErrorCode != haBelowMinimumCode {
+		t.Errorf("the refusal of old instance %d has the code %q, want %q", i, refusal.ErrorCode, haBelowMinimumCode)
 	}
 
 	status, body, err = env.InstanceRequest(ctx, i, http.MethodGet, "/health/ready", "")
