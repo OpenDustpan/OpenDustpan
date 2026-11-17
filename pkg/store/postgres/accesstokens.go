@@ -74,7 +74,12 @@ func (s *Store) GetToken(ctx context.Context, id string) (accesstoken.Token, err
 		return accesstoken.Token{}, fmt.Errorf("select access token: %w", err)
 	}
 
-	return codec.FromAccessTokenRow(tokenRow(db.ListAccessTokensRow(row))), nil
+	t, err := codec.FromAccessTokenRow(tokenRow(db.ListAccessTokensRow(row)))
+	if err != nil {
+		return accesstoken.Token{}, fmt.Errorf("decode access token: %w", err)
+	}
+
+	return t, nil
 }
 
 // GetTokenByDigest implements accesstoken.Store.
@@ -93,13 +98,18 @@ func (s *Store) GetTokenByDigest(ctx context.Context, d accesstoken.Digest) (acc
 		return accesstoken.Match{}, fmt.Errorf("access token %q: stored digest: %w", row.ID, err)
 	}
 
+	tok, err := codec.FromAccessTokenRow(tokenRow(db.ListAccessTokensRow{
+		ID: row.ID, PrincipalID: row.PrincipalID, Name: row.Name, Kind: row.Kind,
+		CreatedAtMs: row.CreatedAtMs, ExpiresAtMs: row.ExpiresAtMs, LastUsedAtMs: row.LastUsedAtMs,
+		RevokedAtMs: row.RevokedAtMs, ReplacedBy: row.ReplacedBy, CreatedBy: row.CreatedBy,
+		DisabledAtMs: row.DisabledAtMs,
+	}))
+	if err != nil {
+		return accesstoken.Match{}, fmt.Errorf("decode access token: %w", err)
+	}
+
 	return accesstoken.Match{
-		Token: codec.FromAccessTokenRow(tokenRow(db.ListAccessTokensRow{
-			ID: row.ID, PrincipalID: row.PrincipalID, Name: row.Name, Kind: row.Kind,
-			CreatedAtMs: row.CreatedAtMs, ExpiresAtMs: row.ExpiresAtMs, LastUsedAtMs: row.LastUsedAtMs,
-			RevokedAtMs: row.RevokedAtMs, ReplacedBy: row.ReplacedBy, CreatedBy: row.CreatedBy,
-			DisabledAtMs: row.DisabledAtMs,
-		})),
+		Token: tok,
 		Owner: codec.FromAccessTokenOwnerRow(codec.AccessTokenOwnerRow{
 			ID: row.PrincipalID, Subject: row.Subject, DisplayName: row.DisplayName, Kind: row.PrincipalKind,
 			DisabledAtMs: row.PrincipalDisabledAtMs.Int64, ActiveAtMs: row.PrincipalActiveAtMs,
@@ -140,9 +150,16 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 			return fmt.Errorf("select access tokens: %w", err)
 		}
 
-		out = mapRows(rows, func(r db.ListAccessTokensRow) accesstoken.Token {
-			return codec.FromAccessTokenRow(tokenRow(r))
-		})
+		out = make([]accesstoken.Token, 0, len(rows))
+
+		for i := range rows {
+			t, decodeErr := codec.FromAccessTokenRow(tokenRow(rows[i]))
+			if decodeErr != nil {
+				return fmt.Errorf("decode access token: %w", decodeErr)
+			}
+
+			out = append(out, t)
+		}
 
 		total, err = q.CountAccessTokens(ctx, db.CountAccessTokensParams{
 			PrincipalID: cols.PrincipalID, Status: cols.Status, AtMs: cols.AtMs, SoonMs: cols.SoonMs,
