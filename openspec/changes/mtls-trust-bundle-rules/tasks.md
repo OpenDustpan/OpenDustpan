@@ -4,8 +4,8 @@
 
 ## 1. Failing tests first
 
-- [x] 1.1 Write failing tests for bundle save checks, rotation and active delete in pkg/trustrule. The task adds the NEW top-level tests `TestBundleSaveRefusesBadPEM`, `TestBundleRotate`, `TestBundleDeleteActive` in a `_test.go` file of `pkg/trustrule`, so that the Check runs them. Check: go test ./pkg/trustrule/... -run TestBundleSaveRefusesBadPEM|TestBundleRotate|TestBundleDeleteActive fails on main
-- [x] 1.2 Write failing tests for rule create, update, delete, reach and fresh session in internal/trustrulesvc. The task adds the NEW top-level tests `TestRuleCreate`, `TestRuleUpdateNeedsETag`, `TestRuleDelete`, `TestTokenAloneRefused` in a `_test.go` file of `internal/trustrulesvc`, so that the Check runs them. Check: go test ./internal/trustrulesvc/... -run TestRuleCreate|TestRuleUpdateNeedsETag|TestRuleDelete|TestTokenAloneRefused fails on main
+- [x] 1.1 Write failing tests for bundle save checks, rotation and active delete in pkg/trustrule. The task adds the NEW top-level tests `TestBundleSaveRefusesBadPEM`, `TestBundleRotate`, `TestBundleDeleteActive` in a Go test file of `pkg/trustrule`, so that the Check runs them. Check: go test ./pkg/trustrule/... -run TestBundleSaveRefusesBadPEM|TestBundleRotate|TestBundleDeleteActive fails on main
+- [x] 1.2 Write failing tests for rule create, update, delete, reach and fresh session in internal/trustrulesvc. The task adds the NEW top-level tests `TestRuleCreate`, `TestRuleUpdateNeedsETag`, `TestRuleDelete`, `TestTokenAloneRefused` in a Go test file of `internal/trustrulesvc`, so that the Check runs them. Check: go test ./internal/trustrulesvc/... -run TestRuleCreate|TestRuleUpdateNeedsETag|TestRuleDelete|TestTokenAloneRefused fails on main
 
 ## 2. Build
 

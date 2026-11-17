@@ -3771,6 +3771,19 @@ WHERE namespace_id = sqlc.arg(namespace_id) AND point = sqlc.arg(point)
 ORDER BY at_ms DESC, id COLLATE "C" DESC
 LIMIT sqlc.arg(max_rows);
 
+-- name: PruneGateRecords :many
+-- Deletes the records of a decision point with at_ms before cutoff_ms, lowest ID
+-- first, up to max_rows, and returns their IDs.
+DELETE FROM gate_records
+WHERE id IN (
+    SELECT p.id
+    FROM gate_records p
+    WHERE p.namespace_id = sqlc.arg(namespace_id) AND p.point = sqlc.arg(point) AND p.at_ms < sqlc.arg(cutoff_ms)
+    ORDER BY p.id COLLATE "C"
+    LIMIT sqlc.arg(max_rows)
+)
+RETURNING id;
+
 -- name: FindGateRefusal :one
 -- The newest record of a refusal key whose last refusal is not before since_ms.
 SELECT id, count, body

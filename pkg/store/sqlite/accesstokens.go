@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -35,6 +36,13 @@ func (s *Store) CreateToken(ctx context.Context, t accesstoken.Token, d accessto
 // insertToken inserts t in the transaction of q. It tells a missing
 // principal from a taken ID or digest.
 func insertToken(ctx context.Context, q *db.Queries, t accesstoken.Token, d accesstoken.Digest) error {
+	// Defense in depth: the token service issues only known kinds. This check
+	// stays so that no other caller of the store, and no row of another
+	// version, writes a kind that the read path refuses.
+	if !t.Kind.Valid() {
+		return fmt.Errorf("insert access token %q: %w: %q", t.ID, accesstoken.ErrUnknownKind, string(t.Kind))
+	}
+
 	n, err := q.CreateAccessToken(ctx, db.CreateAccessTokenParams{
 		ID:          t.ID,
 		Name:        t.Name,
@@ -152,29 +160,14 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 	)
 
 	err := s.inReadTx(ctx, func(q *db.Queries) error {
-		rows, err := q.ListAccessTokens(ctx, db.ListAccessTokensParams{
-			PrincipalID: cols.PrincipalID,
-			Status:      cols.Status,
-			AtMs:        cols.AtMs,
-			SoonMs:      cols.SoonMs,
-			HasAfter:    hasAfter,
-			AfterMs:     cols.AfterMs,
-			AfterID:     cols.AfterID,
-			RowLimit:    int64(tq.Limit),
-		})
+		var (
+			skipped int64
+			err     error
+		)
+
+		out, skipped, err = s.readTokenPage(ctx, q, cols, hasAfter, tq.Limit)
 		if err != nil {
-			return fmt.Errorf("select access tokens: %w", err)
-		}
-
-		out = make([]accesstoken.Token, 0, len(rows))
-
-		for i := range rows {
-			t, decodeErr := codec.FromAccessTokenRow(tokenRow(rows[i]))
-			if decodeErr != nil {
-				return fmt.Errorf("decode access token: %w", decodeErr)
-			}
-
-			out = append(out, t)
+			return err
 		}
 
 		total, err = q.CountAccessTokens(ctx, db.CountAccessTokensParams{
@@ -184,6 +177,10 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 			return fmt.Errorf("count access tokens: %w", err)
 		}
 
+		// The count holds the skipped rows of this page. Rows of an unknown
+		// kind on other pages stay in it until their page is read.
+		total -= skipped
+
 		return nil
 	})
 	if err != nil {
@@ -191,6 +188,96 @@ func (s *Store) ListTokens(ctx context.Context, tq accesstoken.Query) ([]accesst
 	}
 
 	return out, total, nil
+}
+
+// readTokenPage reads up to limit rows of a known kind, newest first. A row
+// of an unknown kind is skipped. When a batch holds one, the read goes on
+// after the last row that it READ, not after the last row that it returned.
+// So a skipped row never ends the pages early and a live token never drops
+// out of the list.
+func (s *Store) readTokenPage(
+	ctx context.Context,
+	q *db.Queries,
+	cols codec.AccessTokenListQuery,
+	hasAfter int64,
+	limit int,
+) ([]accesstoken.Token, int64, error) {
+	out := make([]accesstoken.Token, 0, limit)
+
+	var skipped int64
+
+	params := db.ListAccessTokensParams{
+		PrincipalID: cols.PrincipalID,
+		Status:      cols.Status,
+		AtMs:        cols.AtMs,
+		SoonMs:      cols.SoonMs,
+		HasAfter:    hasAfter,
+		AfterMs:     cols.AfterMs,
+		AfterID:     cols.AfterID,
+		RowLimit:    0,
+	}
+
+	for len(out) < limit {
+		want := int64(limit - len(out))
+		params.RowLimit = want
+
+		rows, err := q.ListAccessTokens(ctx, params)
+		if err != nil {
+			return nil, 0, fmt.Errorf("select access tokens: %w", err)
+		}
+
+		toks, n, err := s.decodeTokenRows(ctx, rows)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		out = append(out, toks...)
+		skipped += n
+
+		if int64(len(rows)) < want {
+			break
+		}
+
+		last := rows[len(rows)-1]
+		params.HasAfter, params.AfterMs, params.AfterID = 1, last.CreatedAtMs, last.ID
+	}
+
+	return out, skipped, nil
+}
+
+// decodeTokenRows decodes the rows of one page. One row of a kind that this
+// version does not know must not fail the page. The row never signs in. The
+// list leaves it out, counts it in skipped and the log names it.
+func (s *Store) decodeTokenRows(
+	ctx context.Context,
+	rows []db.ListAccessTokensRow,
+) ([]accesstoken.Token, int64, error) {
+	out := make([]accesstoken.Token, 0, len(rows))
+
+	var skipped int64
+
+	for i := range rows {
+		t, err := codec.FromAccessTokenRow(tokenRow(rows[i]))
+		if errors.Is(err, accesstoken.ErrUnknownKind) {
+			skipped++
+
+			s.logger.WarnContext(
+				ctx,
+				"access token list skips a row of an unknown kind",
+				slog.String("error", err.Error()),
+			)
+
+			continue
+		}
+
+		if err != nil {
+			return nil, 0, fmt.Errorf("decode access token: %w", err)
+		}
+
+		out = append(out, t)
+	}
+
+	return out, skipped, nil
 }
 
 // RevokeToken implements accesstoken.Store. When ctx carries an idempotency

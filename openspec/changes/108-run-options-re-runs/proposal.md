@@ -20,7 +20,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- The roadmap places RFC 108 after runs in milestone 5. Proof: docs/roadmap.md:812 | [RFC 108](rfc/0108-run-options-re-runs-and-run-variables.md) Run options, re-runs and run variables | runs (milestone 5)
+- The roadmap places RFC 108 after runs in milestone 5. Proof: docs/roadmap.md:812 | [RFC 108](docs/rfc/0108-run-options-re-runs-and-run-variables.md) Run options, re-runs and run variables | runs (milestone 5)
 
 ## What Changes
 

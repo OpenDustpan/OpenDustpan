@@ -1,6 +1,6 @@
 ## 1. Dependencies
 
-- [x] 1.1 PR #2981 (`SignInFromBody`, internal/sessionauth/sessionauth.go:189) and PR #2968 (the static provider and the route) are merged to `main`. The route is `POST /api/dustpan/v1/sign-in/providers/{provider}/password` with the LDAP user name and password. Check: `git log main` holds both, and `make e2e -run TestLDAPSignIn` passes on `main`. Confirmed by: CI (the agent writes the e2e test).
+- [x] 1.1 PR #2981 (`SignInFromBody`, internal/sessionauth/sessionauth.go:189) and PR #2968 (the static provider and the route) are merged to `main`. The route is `POST /api/dustpan/v1/sign-in/providers/{provider}/password` with the LDAP user name and password; it is a public route that takes no credential before sign-in. Check: `git log main` holds both, and `make e2e -run TestLDAPSignIn` passes on `main`. Confirmed by: CI (the agent writes the e2e test).
 
 ## 2. The lockout setting
 

@@ -3,6 +3,7 @@ package gatetest
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -15,15 +16,19 @@ import (
 // recordRunners returns the runners of the cases of gate.Records.
 func recordRunners() map[string]runner {
 	return map[string]runner{
-		"record-round-trip":                once(caseRecordRoundTrip),
-		"record-other-namespace-not-found": once(caseRecordOtherNamespace),
-		"record-used-id":                   once(caseRecordUsedID),
-		"record-fence":                     once(caseRecordFence),
-		"record-of-installation-object":    once(caseRecordInstallation),
-		"list-by-change-oldest-first":      once(caseRecordsByChange),
-		"query-window-and-limit":           once(caseRecordsQuery),
-		"note-refusal-coalesces":           once(caseRefusalCoalesces),
-		"note-refusal-new-record":          once(caseRefusalNew),
+		"record-round-trip":                   once(caseRecordRoundTrip),
+		"record-other-namespace-not-found":    once(caseRecordOtherNamespace),
+		"record-used-id":                      once(caseRecordUsedID),
+		"record-fence":                        once(caseRecordFence),
+		"record-of-installation-object":       once(caseRecordInstallation),
+		"list-by-change-oldest-first":         once(caseRecordsByChange),
+		"query-window-and-limit":              once(caseRecordsQuery),
+		"note-refusal-coalesces":              once(caseRefusalCoalesces),
+		"note-refusal-new-record":             once(caseRefusalNew),
+		"prune-expired-deletes-expired":       once(casePruneDeletesExpired),
+		"prune-expired-keeps-others":          once(casePruneKeepsOthers),
+		"prune-expired-batch-order":           once(casePruneBatchOrder),
+		"prune-expired-refuses-hostile-input": once(casePruneHostile),
 	}
 }
 
@@ -119,6 +124,16 @@ func accessRecord(t *testing.T, ns namespace.Name, subject string, limit gate.Po
 	}}
 	r.Requirements = nil
 	r.Result = gate.ResultDeny
+
+	return r
+}
+
+// stateWriteRecord returns a state.write record of ns at time at.
+func stateWriteRecord(t *testing.T, ns namespace.Name, at time.Time) gate.Record {
+	t.Helper()
+
+	r := record(t, ns, gate.ChangeRef{Kind: gate.ChangeStateWrite, ID: ""}, at)
+	r.Point = gate.PointStateWrite
 
 	return r
 }
@@ -457,3 +472,197 @@ func caseRefusalNew(t *testing.T, e *env) {
 		t.Fatalf("Get(first).Count = %d, want 1: no later refusal joined it", again.Count)
 	}
 }
+
+func casePruneDeletesExpired(t *testing.T, e *env) {
+	t.Helper()
+
+	base := recordTime()
+	first := stateWriteRecord(t, "acme", base)
+	second := stateWriteRecord(t, "acme", base.Add(time.Minute))
+	mustNil(t, "Put(first)", e.putRecord(first))
+	mustNil(t, "Put(second)", e.putRecord(second))
+
+	req, err := gate.NewPruneRequest(base.Add(2*time.Minute), 10)
+	mustNil(t, "NewPruneRequest()", err)
+
+	e.wantEntries("acme", 0)
+
+	got, err := e.h.Store.Records().PruneExpired(t.Context(), "acme", req, e.acme, e.entry(acmeScope()))
+	mustNil(t, "PruneExpired()", err)
+
+	// The prune appends its entry in the same transaction.
+	e.wantEntries("acme", 1)
+
+	want := []gate.RecordID{first.ID, second.ID}
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("PruneExpired() = %v, want %v", got, want)
+	}
+
+	for _, id := range want {
+		_, err = e.h.Store.Records().Get(t.Context(), "acme", id)
+		wantErr(t, "Get(deleted)", err, gate.ErrNotFound)
+	}
+}
+
+func casePruneKeepsOthers(t *testing.T, e *env) {
+	t.Helper()
+
+	base := recordTime()
+	cutoff := base.Add(2 * time.Minute)
+
+	expired := stateWriteRecord(t, "acme", base)
+	mustNil(t, "Put(expired)", e.putRecord(expired))
+
+	// A record at the cutoff stays: the delete holds At before the cutoff.
+	atCutoff := stateWriteRecord(t, "acme", cutoff)
+	mustNil(t, "Put(at cutoff)", e.putRecord(atCutoff))
+
+	after := stateWriteRecord(t, "acme", cutoff.Add(time.Minute))
+	mustNil(t, "Put(after)", e.putRecord(after))
+
+	otherPoint := record(t, "acme", gate.ChangeRef{Kind: gate.ChangeJob, ID: "job-1"}, base)
+	mustNil(t, "Put(other point)", e.putRecord(otherPoint))
+
+	otherNS := stateWriteRecord(t, "globex", base)
+	mustNil(t, "Put(other namespace)", e.putRecord(otherNS))
+
+	req, err := gate.NewPruneRequest(cutoff, 10)
+	mustNil(t, "NewPruneRequest()", err)
+
+	got, err := e.h.Store.Records().PruneExpired(t.Context(), "acme", req, e.acme, e.entry(acmeScope()))
+	mustNil(t, "PruneExpired()", err)
+
+	if len(got) != 1 || got[0] != expired.ID {
+		t.Fatalf("PruneExpired() = %v, want [%s]", got, expired.ID)
+	}
+
+	_, err = e.h.Store.Records().Get(t.Context(), "acme", expired.ID)
+	wantErr(t, "Get(deleted)", err, gate.ErrNotFound)
+
+	for _, tc := range []struct {
+		ns namespace.Name
+		id gate.RecordID
+	}{
+		{"acme", atCutoff.ID},
+		{"acme", after.ID},
+		{"acme", otherPoint.ID},
+		{"globex", otherNS.ID},
+	} {
+		if _, err = e.h.Store.Records().Get(t.Context(), tc.ns, tc.id); err != nil {
+			t.Fatalf("Get(%s/%s) = %v, want the kept record", tc.ns, tc.id, err)
+		}
+	}
+}
+
+func casePruneBatchOrder(t *testing.T, e *env) {
+	t.Helper()
+
+	base := recordTime()
+
+	ids := make([]gate.RecordID, 0, 3)
+
+	for i := range 3 {
+		r := stateWriteRecord(t, "acme", base.Add(time.Duration(i)*time.Minute))
+		mustNil(t, "Put()", e.putRecord(r))
+		ids = append(ids, r.ID)
+	}
+
+	slices.Sort(ids)
+
+	req, err := gate.NewPruneRequest(base.Add(3*time.Minute), 2)
+	mustNil(t, "NewPruneRequest()", err)
+
+	got, err := e.h.Store.Records().PruneExpired(t.Context(), "acme", req, e.acme, e.entry(acmeScope()))
+	mustNil(t, "PruneExpired(first)", err)
+
+	if !slices.Equal(got, ids[:2]) {
+		t.Fatalf("PruneExpired(first) = %v, want %v, lowest IDs first", got, ids[:2])
+	}
+
+	for _, id := range got {
+		_, err = e.h.Store.Records().Get(t.Context(), "acme", id)
+		wantErr(t, "Get(deleted)", err, gate.ErrNotFound)
+	}
+
+	if _, err = e.h.Store.Records().Get(t.Context(), "acme", ids[2]); err != nil {
+		t.Fatalf("Get(kept) = %v, want the record above the batch", err)
+	}
+
+	got, err = e.h.Store.Records().PruneExpired(t.Context(), "acme", req, e.acme, e.entry(acmeScope()))
+	mustNil(t, "PruneExpired(second)", err)
+
+	if len(got) != 1 || got[0] != ids[2] {
+		t.Fatalf("PruneExpired(second) = %v, want [%s]", got, ids[2])
+	}
+}
+
+func casePruneHostile(t *testing.T, e *env) {
+	t.Helper()
+
+	base := recordTime()
+	kept := stateWriteRecord(t, "acme", base)
+	mustNil(t, "Put()", e.putRecord(kept))
+
+	req, err := gate.NewPruneRequest(base.Add(time.Minute), 10)
+	mustNil(t, "NewPruneRequest()", err)
+
+	rs := e.h.Store.Records()
+	ctx := t.Context()
+
+	en := e.entry(acmeScope())
+
+	// A request that NewPruneRequest did not make never deletes.
+	_, err = rs.PruneExpired(ctx, "acme", gate.PruneRequest{}, e.acme, en)
+	wantErr(t, "PruneExpired(zero request)", err, gate.ErrInvalid)
+
+	// A prune never reaches the installation: its scope is refused.
+	_, err = rs.PruneExpired(ctx, audit.ServerScope, req, zeroFence(), serverEntry())
+	wantErr(t, "PruneExpired(installation)", err, gate.ErrInvalid)
+
+	// A prune needs the name of a namespace.
+	_, err = rs.PruneExpired(ctx, "", req, zeroFence(), en)
+	wantErr(t, "PruneExpired(empty namespace)", err, gate.ErrInvalid)
+
+	// The fence and the entry name the invalid name too, so that only the
+	// name check refuses this call.
+	_, err = rs.PruneExpired(ctx, "-bad", req, namespace.Fence{Namespace: "-bad", FailoverVersion: 1}, entry("-bad"))
+	wantErr(t, "PruneExpired(invalid namespace)", err, gate.ErrInvalid)
+
+	// Defense in depth: the fence check of the store transaction refuses the
+	// same call; this check stays so that a new caller cannot skip it.
+	_, err = rs.PruneExpired(ctx, "acme", req, e.globex, en)
+	wantErr(t, "PruneExpired(fence of globex)", err, gate.ErrInvalid)
+
+	_, err = rs.PruneExpired(ctx, "acme", req, zeroFence(), en)
+	wantErr(t, "PruneExpired(zero fence)", err, gate.ErrInvalid)
+
+	// A prune with no valid audit entry of its namespace deletes nothing.
+	invalid := en
+	invalid.Subject = ""
+
+	_, err = rs.PruneExpired(ctx, "acme", req, e.acme, invalid)
+	wantErr(t, "PruneExpired(invalid entry)", err, audit.ErrInvalidEntry)
+
+	_, err = rs.PruneExpired(ctx, "acme", req, e.acme, entry("globex"))
+	wantErr(t, "PruneExpired(entry of globex)", err, audit.ErrInvalidEntry)
+
+	e.wantEntries("acme", 0)
+
+	stale := e.acme
+
+	if _, err = e.h.Domain.BumpFence(ctx, e.acme); err != nil {
+		t.Fatalf("BumpFence() = %v", err)
+	}
+
+	_, err = rs.PruneExpired(ctx, "acme", req, stale, en)
+	wantErr(t, "PruneExpired(stale fence)", err, namespace.ErrFenced)
+
+	if _, err = rs.Get(ctx, "acme", kept.ID); err != nil {
+		t.Fatalf("Get(kept) = %v, want the record: a refused prune deletes nothing", err)
+	}
+}
+
+// acmeScope returns the namespace scope of acme, the scope of a prune.
+func acmeScope() gate.Scope { return gate.NamespaceScope("acme") }
