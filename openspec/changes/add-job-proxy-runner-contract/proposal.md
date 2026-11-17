@@ -32,7 +32,7 @@ Errors the person may hit, and the one command that helps:
 
 Evidence for the claims above:
 
-- Main has no proxy session path and no pool proxy setting. Proof: `rg -c -i proxy pkg/runner/protocol/protocol.go pkg/runner/store.go pkg/runner/runner.go internal/api/runnerapi/routes.go internal/api/runnerpools/routes.go` finds 0 matches in each file.
+- Main has no proxy session path and no pool proxy setting. Proof: `rg -c -i proxy pkg/runner/protocol/protocol.go pkg/runner/store.go internal/api/runnerapi/routes.go internal/api/runnerpools/routes.go` finds 0 matches in each file, and the same holds for (read only) `pkg/runner/runner.go`.
 - Main has no stored allowed range or upstream URL for a pool. Proof: `rg -i 'allowed_ranges|upstream' pkg/store/sqlite/migrations/0168_baseline.sql pkg/store/postgres/migrations/0168_baseline.sql pkg/runner internal/api/runnerpools` finds no pool setting. `egress.ParseAllowedRanges` is called only for the git host, audit sink and LDAP flags (the main file and the LDAP file of the binary command package).
 - `job-proxy-runtime-guard` waits for this change. Proof: the task list in `openspec/changes/job-proxy-runtime-guard/tasks.md`, tasks 2.2 and 2.3, say BLOCKED by this change, and `openspec/changes/job-proxy-rule-sets/proposal.md` lists the upstream proxy and the allowed private ranges under "Out of scope".
 - The egress proxy RFC, item X5, lists "the proxy handoff token, the proxy session, the assignment, the CA and record uploads, the pool settings (allowed ranges, upstream proxy)". This change takes the proxy handoff token, the proxy session, the assignment and the pool settings. The CA and record uploads stay in `job-proxy-credential-records-audit`.
@@ -86,13 +86,13 @@ Each fact names its file, line and function on main. The change specifies only t
 - The session store opens a session with no kind. (`pkg/runner/store.go:177 (OpenSession)`)
 - A handoff token checks its use with no kind. (`pkg/runner/token.go:169 (CheckUse)`)
 - A runner pool has no proxy column. (`pkg/store/sqlite/migrations/0168_baseline.sql:749 (runner_pools)`)
-- Proxy rule sets join. (`pkg/jobproxy/join.go:16 (Join)`)
-- Proxy rule sets render. (`pkg/jobproxy/render.go:188 (Render)`)
-- The egress rules parse allowed ranges. (`pkg/egress/egress.go:124 (ParseAllowedRanges)`)
-- The egress rules check one allowed range. (`pkg/egress/egress.go:141 (CheckAllowedRange)`)
-- The guard dialer refuses the whole host when one answer fails the check. (`pkg/launcher/proxy/dial.go:104 (resolve)`)
-- The secret service seals data under a scope. (`pkg/secret/secret.go:268 (Encrypt)`)
-- The assignment version is 1. (`pkg/runner/version.go:28 (AssignmentVersion)`)
+- Proxy rule sets join. ((read only) `pkg/jobproxy/join.go` line 16 (Join))
+- Proxy rule sets render. ((read only) `pkg/jobproxy/render.go` line 188 (Render))
+- The egress rules parse allowed ranges. ((read only) `pkg/egress/egress.go` line 124 (ParseAllowedRanges))
+- The egress rules check one allowed range. ((read only) `pkg/egress/egress.go` line 141 (CheckAllowedRange))
+- The guard dialer refuses the whole host when one answer fails the check. ((read only) `pkg/launcher/proxy/dial.go` line 104 (resolve))
+- The secret service seals data under a scope. ((read only) `pkg/secret/secret.go` line 268 (Encrypt))
+- The assignment version is 1. ((read only) `pkg/runner/version.go` line 28 (AssignmentVersion))
 
 ## Owner decisions that apply
 
@@ -181,7 +181,7 @@ none
 
 Design calls that follow an existing pattern and change no word of an owner decision (the PM sees them in the report):
 
-- The credential is sealed with `secret.Service.Encrypt` under the scope (namespace, stable pool ID). ADR 330 says: "The pool seals it with the data key of the namespace". On main a data key belongs to a scope (`secret.NewScope`, `pkg/secret/secret.go:86`), and the service stores each scope key wrapped by the key-encryption key (`OpenKey`, `pkg/secret/secret.go:253`). It does not derive a scope key from one key of the namespace. The ADRs call such a key "a data key of the namespace scope" (ADR 204 decision on the issuer key, ADR 194). This change reads ADR 330 in that way: a data key of the namespace, in the scope of the pool. A reading with one key for all pools of a namespace is the alternative; the lead decides.
+- The credential is sealed with `secret.Service.Encrypt` under the scope (namespace, stable pool ID). ADR 330 says: "The pool seals it with the data key of the namespace". On main a data key belongs to a scope (`secret.NewScope`, (read only) `pkg/secret/secret.go` line 86), and the service stores each scope key wrapped by the key-encryption key (`OpenKey`, (read only) `pkg/secret/secret.go` line 253). It does not derive a scope key from one key of the namespace. The ADRs call such a key "a data key of the namespace scope" (ADR 204 decision on the issuer key, ADR 194). This change reads ADR 330 in that way: a data key of the namespace, in the scope of the pool. A reading with one key for all pools of a namespace is the alternative; the lead decides.
 - The credential has the shape of a user name and a password for `Proxy-Authorization: Basic`. A bearer form is a later change.
 - The proxy handoff token starts with `dph_`, as the launcher handoff token does (`runner.HandoffTokenPrefix`). The kind column of the token row tells the two apart.
 - The optional If-Match version on a save follows `job-proxy-rule-sets` (decision 3 there).
