@@ -6,7 +6,7 @@ When a runner asks for the proxy handoff token of a claim that it owns and that 
 
 #### Scenario: Runner gets a proxy handoff token
 - **WHEN** a runner key with `runner:claim` on the pool asks for the proxy handoff token of its live claim
-- **THEN** the server returns a token that starts with `dpp_`, stores only its SHA-256, and a second request for a claim with no proxy session replaces the first token
+- **THEN** the server returns a token that starts with `dph_`, stores only its SHA-256, and a second request for a claim with no proxy session replaces the first token
 
 #### Scenario: Runner asks for the claim of another runner
 - **WHEN** a runner asks for the proxy handoff token of a claim that another runner owns
@@ -22,7 +22,7 @@ When the job proxy sends a valid proxy handoff token, a public key and the proof
 
 #### Scenario: Token of the other kind
 - **WHEN** a launcher handoff token is sent to the proxy session path, or a proxy handoff token is sent to the launcher session path
-- **THEN** the server refuses with 403 and the reason `wrong-session-kind`, opens no session and writes an audit entry
+- **THEN** the server answers as for an unknown token (401 `bad-proof` on the proxy path, 404 `not-found` on the launcher path), so that the answer does not name the kind of the token, opens no session, leaves the token unused and writes an audit entry
 
 #### Scenario: Used or expired token
 - **WHEN** the job proxy sends a proxy handoff token that is used or expired
