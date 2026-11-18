@@ -2,6 +2,8 @@
 version: 6
 ---
 
+Issue: #3563.
+
 ## Why
 
 **Persona: developer.** A Developer needs to read what a stack or workspace holds without seeing secret values.
@@ -49,8 +51,8 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
-- main accepts a Pulumi git head check in the Pulumi API (`internal/api/pulumi/git_head_test.go:13 (func TestAcceptedGitHead)`)
-- main maps state damage to content errors (`pkg/dustpan/state_damage_internal_test.go:24 (func TestStateDamageMapsOnlyContentErrors)`)
+- main accepts a Pulumi git head check in the Pulumi API ((read only) `internal/api/pulumi/git_head_test.go`, line 13 (func TestAcceptedGitHead))
+- main maps state damage to content errors ((read only) `pkg/dustpan/state_damage_internal_test.go`, line 24 (func TestStateDamageMapsOnlyContentErrors))
 
 ## ADR check
 

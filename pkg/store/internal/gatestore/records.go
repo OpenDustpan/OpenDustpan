@@ -6,6 +6,7 @@ import (
 	"encoding"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -245,7 +246,13 @@ func (s *Records) Get(ctx context.Context, ns namespace.Name, id gate.RecordID) 
 		return err
 	})
 	if err != nil {
-		return gate.Record{}, err
+		if errors.Is(err, gate.ErrNotFound) {
+			return gate.Record{}, err
+		}
+
+		// A driver error is not a missing record: the caller must see that
+		// the store did not answer.
+		return gate.Record{}, fmt.Errorf("read record %s of %s: %w: %w", id, ns, gate.ErrUnavailable, err)
 	}
 
 	return out, nil

@@ -75,17 +75,17 @@ func TestAdapterLabelFollowsRegistration(t *testing.T) {
 	}
 
 	wantAdapter := map[string]string{
-		"pulumi":       metrics.AdapterPulumi,
-		"tfe":          metrics.AdapterOpenTofu,
-		"tofuhttp":     metrics.AdapterOpenTofu,
-		"inventory":    metrics.AdapterInventory,
-		"server":       metrics.AdapterServer,
-		"audit":        metrics.AdapterServer,
-		"context":      metrics.AdapterServer,
-		"profiles":     metrics.AdapterServer,
-		"issuer":       metrics.AdapterServer,
-		"sinks":        metrics.AdapterServer,
-		"registry":     metrics.AdapterServer,
+		"pulumi":    metrics.AdapterPulumi,
+		"tfe":       metrics.AdapterOpenTofu,
+		"tofuhttp":  metrics.AdapterOpenTofu,
+		"inventory": metrics.AdapterInventory,
+		"server":    metrics.AdapterServer,
+		"audit":     metrics.AdapterServer,
+		"context":   metrics.AdapterServer,
+		"profiles":  metrics.AdapterServer,
+		"issuer":    metrics.AdapterServer,
+		"sinks":     metrics.AdapterServer,
+		"registry":  metrics.AdapterServer,
 	}
 
 	for name, want := range wantAdapter {

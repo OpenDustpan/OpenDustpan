@@ -33,6 +33,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{name: "inventory", handler: a.inventory, label: metrics.AdapterInventory},
 		{name: "audit", handler: a.audit, label: metrics.AdapterServer},
 		{name: "context", handler: a.context, label: metrics.AdapterServer},
+		{name: "decisionrecords", handler: a.decisionRecords, label: metrics.AdapterServer},
 		{name: "runners", handler: a.runners, label: metrics.AdapterServer},
 		{name: "runnerpools", handler: a.runnerPools, label: metrics.AdapterServer},
 		{name: "profiles", handler: a.profiles, label: metrics.AdapterServer},
