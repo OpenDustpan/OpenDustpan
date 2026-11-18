@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,6 +18,14 @@ import (
 )
 
 func newLabelTestServer(t *testing.T) *Server {
+	t.Helper()
+
+	return newLabelTestServerWith(t)
+}
+
+// newLabelTestServerWith builds the test server with extra options. The
+// options run after the base options.
+func newLabelTestServerWith(t *testing.T, extra ...Option) *Server {
 	t.Helper()
 
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
@@ -44,7 +53,7 @@ func newLabelTestServer(t *testing.T) *Server {
 		t.Fatalf("authenticator: %v", err)
 	}
 
-	srv, err := NewServer(
+	opts := []Option{
 		WithInstallation("test"),
 		WithNamespaceStore(st), WithStackStore(st), WithUpdateStore(st),
 		WithCheckpointStore(st), WithEventStore(st), WithSecretKeyStore(st),
@@ -52,7 +61,10 @@ func newLabelTestServer(t *testing.T) *Server {
 		WithBlobStore(blobs), WithInventoryReader(st), WithAuthenticator(authn),
 		WithProfileStore(st.Profiles()), WithIssuerStore(st.Issuer()),
 		WithRegistry(st.Registry(), st.RegistryKeys()), WithSinkStore(st.NotificationSinks()),
-	)
+		WithRunners(st.Runners()),
+	}
+
+	srv, err := NewServer(append(opts, extra...)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -385,7 +397,14 @@ func requireNames(t *testing.T, err error, parts ...string) {
 func TestEveryRootPatternHasLabel(t *testing.T) {
 	t.Parallel()
 
-	srv := newLabelTestServer(t)
+	// The console directory and the runners add the "/" and "/runner/v1/"
+	// mounts. The issuer store adds the "/oidc/" mount.
+	console := t.TempDir()
+	if err := os.WriteFile(filepath.Join(console, "index.html"), []byte("<!doctype html>"), 0o600); err != nil {
+		t.Fatalf("write console index: %v", err)
+	}
+
+	srv := newLabelTestServerWith(t, WithConsoleDir(console), WithPublicURL("https://dustpan.example.test"))
 
 	labels, err := srv.mounted.adapterLabels(srv.root.labels)
 	if err != nil {
@@ -396,10 +415,60 @@ func TestEveryRootPatternHasLabel(t *testing.T) {
 		t.Fatal("the root mux holds no pattern")
 	}
 
+	for _, want := range []string{"/", "/runner/v1/", "/oidc/", "/api/", "/api/inventory/"} {
+		if !slices.Contains(srv.root.patterns, want) {
+			t.Errorf("root mux has no pattern %q: the test server does not mount it", want)
+		}
+	}
+
 	for _, pattern := range append(slices.Clone(srv.root.patterns), srv.root.mounted...) {
 		if _, ok := labels[pattern]; !ok {
 			t.Errorf("root mux pattern %q has no label", pattern)
 		}
+	}
+}
+
+// listerStub is an adapter that lists patterns and serves none.
+type listerStub struct{ patterns []string }
+
+func (listerStub) ServeHTTP(http.ResponseWriter, *http.Request) {}
+
+func (l listerStub) RegisteredPatterns() []string { return l.patterns }
+
+// TestRoutesRefuseLabelConflict proves that routes stops the start of the
+// server when an adapter registers a key that the root mux holds with another
+// label. Removing the error check after the label map makes it fail.
+func TestRoutesRefuseLabelConflict(t *testing.T) {
+	t.Parallel()
+
+	var cfg *settings
+
+	srv := newLabelTestServerWith(t, func(o *settings) { cfg = o })
+
+	conflicting := *srv.mounted
+	// The root mux labels "/api/inventory/" as inventory.
+	conflicting.pulumi = listerStub{patterns: []string{"GET /api/inventory/"}}
+
+	_, err := routes(conflicting, cfg, srv.observed)
+	if !errors.Is(err, errLabelConflict) {
+		t.Fatalf("routes error = %v, want errLabelConflict", err)
+	}
+}
+
+// TestAdapterLabelsRefuseSourceWithoutHandler proves that a route source with
+// no handler row stops the build of the label map, and names the adapter.
+func TestAdapterLabelsRefuseSourceWithoutHandler(t *testing.T) {
+	t.Parallel()
+
+	sources := []routeSource{{name: "ghost", patterns: []string{"GET /api/dustpan/v1/ghost"}}}
+
+	_, err := buildAdapterLabels(sources, nil, newLabelSet())
+	if !errors.Is(err, errLabelNoHandler) {
+		t.Fatalf("error = %v, want errLabelNoHandler", err)
+	}
+
+	if err == nil || !strings.Contains(err.Error(), "ghost") {
+		t.Errorf("error %v does not name the adapter", err)
 	}
 }
 

@@ -79,6 +79,10 @@ type namedHandler struct {
 // with different adapter labels.
 var errLabelConflict = errors.New("adapter label: one route has two labels")
 
+// errLabelNoHandler means that a route source has no handler row, so it has no
+// label. The server does not start: no rule picks a label for it.
+var errLabelNoHandler = errors.New("adapter has no handler row")
+
 // adapterLabels maps each registered pattern of every mounted adapter, and the
 // path of that pattern, to the label of the adapter. The path key is for the
 // root mux, which knows a mounted route by its path only. It returns
@@ -140,7 +144,10 @@ func buildAdapterLabels(sources []routeSource, handlers []namedHandler, root lab
 	for _, source := range sources {
 		label, ok := labelOf[source.name]
 		if !ok {
-			label = metrics.AdapterServer
+			return nil, fmt.Errorf(
+				"adapter %q lists routes but has no row in allHandlers: %w",
+				source.name, errLabelNoHandler,
+			)
 		}
 
 		for _, pattern := range source.patterns {
