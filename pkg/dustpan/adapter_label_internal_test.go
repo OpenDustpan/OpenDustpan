@@ -11,8 +11,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
-func TestAdapterLabelFollowsRegistration(t *testing.T) {
-	t.Parallel()
+func newLabelTestServer(t *testing.T) *Server {
+	t.Helper()
 
 	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
@@ -50,29 +50,50 @@ func TestAdapterLabelFollowsRegistration(t *testing.T) {
 		t.Fatalf("new server: %v", err)
 	}
 
-	labels := srv.adapterLabels
-	sources := srv.RouteSources()
+	return srv
+}
 
-	if len(labels) == 0 {
-		t.Fatal("adapter labels map is empty")
-	}
-	if len(sources) == 0 {
-		t.Fatal("route sources are empty")
-	}
+// adapterLabelsByName checks that each pattern of each adapter has a label,
+// and that all patterns of one adapter share it.
+func adapterLabelsByName(t *testing.T, labels map[string]string, sources []RouteSource) map[string]string {
+	t.Helper()
 
-	adapterByName := map[string]string{}
+	byName := map[string]string{}
+
 	for _, source := range sources {
 		for _, pattern := range source.Patterns {
 			got, ok := labels[pattern]
 			if !ok {
 				t.Fatalf("pattern %q of adapter %q has no label", pattern, source.Name)
 			}
-			if prev, ok := adapterByName[source.Name]; ok && prev != got {
+
+			if prev, seen := byName[source.Name]; seen && prev != got {
 				t.Fatalf("adapter %q has labels %q and %q", source.Name, prev, got)
 			}
-			adapterByName[source.Name] = got
+
+			byName[source.Name] = got
 		}
 	}
+
+	return byName
+}
+
+func TestAdapterLabelFollowsRegistration(t *testing.T) {
+	t.Parallel()
+
+	srv := newLabelTestServer(t)
+	labels := srv.mounted.adapterLabels()
+	sources := srv.RouteSources()
+
+	if len(labels) == 0 {
+		t.Fatal("adapter labels map is empty")
+	}
+
+	if len(sources) == 0 {
+		t.Fatal("route sources are empty")
+	}
+
+	byName := adapterLabelsByName(t, labels, sources)
 
 	wantAdapter := map[string]string{
 		"pulumi":    metrics.AdapterPulumi,
@@ -89,25 +110,20 @@ func TestAdapterLabelFollowsRegistration(t *testing.T) {
 	}
 
 	for name, want := range wantAdapter {
-		got, ok := adapterByName[name]
-		if !ok {
-			continue
-		}
-		if got != want {
+		if got, ok := byName[name]; ok && got != want {
 			t.Errorf("adapter %q label = %q, want %q", name, got, want)
 		}
 	}
 
 	for pattern, want := range labels {
-		if got := srv.adapterLabelForPattern(pattern); got != want {
+		if got := adapterLabelForPattern(labels, pattern); got != want {
 			t.Errorf("adapterLabelForPattern(%q) = %q, want %q", pattern, got, want)
 		}
 	}
 
-	if got := srv.adapterLabelForPattern(""); got != metrics.AdapterServer {
-		t.Errorf("adapterLabelForPattern(%q) = %q, want %q", "", got, metrics.AdapterServer)
-	}
-	if got := srv.adapterLabelForPattern("GET /no/such/pattern"); got != metrics.AdapterServer {
-		t.Errorf("unknown pattern label = %q, want %q", got, metrics.AdapterServer)
+	for _, pattern := range []string{"", "GET /no/such/pattern"} {
+		if got := adapterLabelForPattern(labels, pattern); got != metrics.AdapterServer {
+			t.Errorf("adapterLabelForPattern(%q) = %q, want %q", pattern, got, metrics.AdapterServer)
+		}
 	}
 }

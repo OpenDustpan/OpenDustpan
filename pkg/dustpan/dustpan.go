@@ -572,7 +572,6 @@ type Server struct {
 	mounted *adapters
 	// root is the root mux. Only the tests of the API description read it.
 	root          *rootMux
-	adapterLabels map[string]string
 	logger        *slog.Logger
 	listenAddr    string
 	listener      net.Listener
@@ -1128,14 +1127,10 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, early earlyPar
 	started := newStartState()
 
 	srv := &Server{
-		flushDenials:  flushDenials,
-		handler:       withStartGate(handlers.served, started, cfg.logger),
-		started:       started,
-		ungated:       handlers.ungated,
-		mounted:       &mount,
-		root:          handlers.root,
-		adapterLabels: mount.adapterLabels(),
-		manualLocks:   svc.manualLocks,
+		flushDenials: flushDenials,
+		handler:      withStartGate(handlers.served, started, cfg.logger),
+		started:      started,
+		ungated:      handlers.ungated, mounted: &mount, root: handlers.root, manualLocks: svc.manualLocks,
 		logger:        cfg.logger,
 		listenAddr:    cfg.listenAddr,
 		listener:      cfg.listener,
@@ -2105,14 +2100,6 @@ func (s *Server) Restores() *backup.RestoreService {
 // through it.
 func (s *Server) Metrics() *metrics.ServerMetrics {
 	return s.observed
-}
-
-func (s *Server) adapterLabelForPattern(pattern string) string {
-	if label, ok := s.adapterLabels[pattern]; ok {
-		return label
-	}
-
-	return metrics.AdapterServer
 }
 
 // Run serves HTTP until ctx is done, then shuts down gracefully. With
@@ -3593,10 +3580,6 @@ type requestAddr struct {
 }
 
 func adapterLabelForPattern(labels map[string]string, pattern string) string {
-	if pattern == "" {
-		return metrics.AdapterServer
-	}
-
 	if label, ok := labels[pattern]; ok {
 		return label
 	}
@@ -3604,14 +3587,29 @@ func adapterLabelForPattern(labels map[string]string, pattern string) string {
 	return metrics.AdapterServer
 }
 
+// requestMetrics holds what the request middleware needs to record metrics:
+// the recorder, which may be nil, the root mux and the adapter label of each
+// registered pattern.
+type requestMetrics struct {
+	observed *metrics.ServerMetrics
+	root     *rootMux
+	labels   map[string]string
+}
+
+// startAdapter answers the adapter label of the route that the root mux
+// matches for r, before any handler runs.
+func (m requestMetrics) startAdapter(r *http.Request) string {
+	_, pattern := m.root.mux.Handler(r)
+
+	return adapterLabelForPattern(m.labels, pattern)
+}
+
 func withRequestLog(
 	next http.Handler,
-	root *rootMux,
-	labels map[string]string,
 	addr requestAddr,
 	logger *slog.Logger,
 	callers requestCaller,
-	observed *metrics.ServerMetrics,
+	metered requestMetrics,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resolved := addr.resolver.Resolve(r)
@@ -3641,11 +3639,10 @@ func withRequestLog(
 		// The route pattern is known before the handler runs, so the
 		// in-flight gauge tracks the adapter of the matched route. The gauge
 		// holds no route label.
-		_, startPattern := root.mux.Handler(r)
-		startAdapter := adapterLabelForPattern(labels, startPattern)
-		if observed != nil {
-			observed.IncInFlight(startAdapter)
-			defer observed.DecInFlight(startAdapter)
+		startAdapter := metered.startAdapter(r)
+		if metered.observed != nil {
+			metered.observed.IncInFlight(startAdapter)
+			defer metered.observed.DecInFlight(startAdapter)
 		}
 
 		start := time.Now()
@@ -3656,10 +3653,10 @@ func withRequestLog(
 
 		elapsed := time.Since(start)
 		route := logRoute(r)
-		adapter := adapterLabelForPattern(labels, r.Pattern)
+		adapter := adapterLabelForPattern(metered.labels, r.Pattern)
 
-		if observed != nil {
-			observed.ObserveRequest(adapter, route, r.Method, wrapped.status, elapsed)
+		if metered.observed != nil {
+			metered.observed.ObserveRequest(adapter, route, r.Method, wrapped.status, elapsed)
 		}
 
 		attrs := []slog.Attr{
@@ -3985,8 +3982,9 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 
 	return routeHandlers{
 		served: withMisuseReporter(apidesc.NewReporter(cfg.logger), withRequestCache(withRequestLog(
-			gateComponents(gated, cfg.components), mux, labels, addr, cfg.logger,
-			requestCaller{authn: cfg.authenticator, allow: allow}, observed,
+			gateComponents(gated, cfg.components), addr, cfg.logger,
+			requestCaller{authn: cfg.authenticator, allow: allow},
+			requestMetrics{observed: observed, root: mux, labels: labels},
 		))),
 		ungated: gated,
 		root:    mux,
