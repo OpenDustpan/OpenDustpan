@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -117,7 +118,7 @@ func TestAdapterLabelFollowsRegistration(t *testing.T) {
 	t.Parallel()
 
 	srv := newLabelTestServer(t)
-	labels, err := srv.mounted.adapterLabels()
+	labels, err := srv.mounted.adapterLabels(srv.root.labels)
 	if err != nil {
 		t.Fatalf("adapter labels: %v", err)
 	}
@@ -204,13 +205,13 @@ func TestAdapterLabelOnRequest(t *testing.T) {
 
 // TestInFlightLabelMatchesRequestLabel proves that the gauge label, which the
 // middleware takes from the root mux before the handler runs, is the label of
-// the request counter for one mounted v1 route of the server adapter and one of the inventory adapter.
+// the request counter for one route of each adapter label.
 func TestInFlightLabelMatchesRequestLabel(t *testing.T) {
 	t.Parallel()
 
 	srv := newLabelTestServer(t)
 
-	labels, err := srv.mounted.adapterLabels()
+	labels, err := srv.mounted.adapterLabels(srv.root.labels)
 	if err != nil {
 		t.Fatalf("adapter labels: %v", err)
 	}
@@ -223,6 +224,9 @@ func TestInFlightLabelMatchesRequestLabel(t *testing.T) {
 	}{
 		{"/api/dustpan/v1/backups", metrics.AdapterServer},
 		{"/api/dustpan/v1/namespaces/acme/units", metrics.AdapterInventory},
+		{"/api/user", metrics.AdapterPulumi},
+		{"/api/v2/ping", metrics.AdapterOpenTofu},
+		{"/tofu/state/acme", metrics.AdapterOpenTofu},
 	}
 
 	for _, tt := range tests {
@@ -293,7 +297,7 @@ func TestAdapterLabelsRefuseConflict(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := buildAdapterLabels(tt.sources, handlers)
+			_, err := buildAdapterLabels(tt.sources, handlers, newLabelSet())
 			if tt.wantErr != errors.Is(err, errLabelConflict) {
 				t.Fatalf("error = %v, want conflict %v", err, tt.wantErr)
 			}
@@ -312,5 +316,43 @@ func requireNames(t *testing.T, err error, parts ...string) {
 		if !strings.Contains(err.Error(), part) {
 			t.Errorf("error %q does not name adapter %s", err, part)
 		}
+	}
+}
+
+// TestEveryRootPatternHasLabel proves that each pattern and each mounted path
+// on the root mux has a label in the map.
+func TestEveryRootPatternHasLabel(t *testing.T) {
+	t.Parallel()
+
+	srv := newLabelTestServer(t)
+
+	labels, err := srv.mounted.adapterLabels(srv.root.labels)
+	if err != nil {
+		t.Fatalf("adapter labels: %v", err)
+	}
+
+	if len(srv.root.patterns) == 0 {
+		t.Fatal("the root mux holds no pattern")
+	}
+
+	for _, pattern := range append(slices.Clone(srv.root.patterns), srv.root.mounted...) {
+		if _, ok := labels[pattern]; !ok {
+			t.Errorf("root mux pattern %q has no label", pattern)
+		}
+	}
+}
+
+// TestRootMuxRefusesLabelConflict proves that one pattern with two labels on
+// the root mux stops the build of the label map.
+func TestRootMuxRefusesLabelConflict(t *testing.T) {
+	t.Parallel()
+
+	mux := newRootMux()
+	mux.Handle("/a/", metrics.AdapterServer, http.NotFoundHandler())
+	mux.record("/a/", metrics.AdapterPulumi)
+
+	_, err := buildAdapterLabels(nil, nil, mux.labels)
+	if !errors.Is(err, errLabelConflict) {
+		t.Fatalf("error = %v, want errLabelConflict", err)
 	}
 }

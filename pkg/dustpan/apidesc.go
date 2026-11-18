@@ -84,14 +84,22 @@ var errLabelConflict = errors.New("adapter label: one route has two labels")
 // root mux, which knows a mounted route by its path only. It returns
 // errLabelConflict, with the key and both adapters, when one key would get two
 // labels, so that a server never starts with an ambiguous label.
-func (a adapters) adapterLabels() (map[string]string, error) {
-	return buildAdapterLabels(a.routeSources(), a.allHandlers())
+func (a adapters) adapterLabels(root labelSet) (map[string]string, error) {
+	return buildAdapterLabels(a.routeSources(), a.allHandlers(), root)
 }
 
 // labelSet collects the label of each key and the adapter that set it first.
 type labelSet struct {
 	label map[string]string
 	owner map[string]string
+	// err is the first conflict that a registration found. Only the root mux
+	// uses it.
+	err error
+}
+
+// newLabelSet returns an empty labelSet.
+func newLabelSet() labelSet {
+	return labelSet{label: map[string]string{}, owner: map[string]string{}, err: nil}
 }
 
 // add sets the label of key for adapter, or returns errLabelConflict when key
@@ -111,13 +119,23 @@ func (l labelSet) add(key, label, adapter string) error {
 	return nil
 }
 
-func buildAdapterLabels(sources []routeSource, handlers []namedHandler) (map[string]string, error) {
+// buildAdapterLabels adds the patterns of sources to the labels that the root
+// mux holds, and returns the joined map.
+func buildAdapterLabels(sources []routeSource, handlers []namedHandler, root labelSet) (map[string]string, error) {
+	if root.err != nil {
+		return nil, root.err
+	}
+
 	labelOf := map[string]string{}
 	for _, h := range handlers {
 		labelOf[h.name] = h.label
 	}
 
-	set := labelSet{label: map[string]string{}, owner: map[string]string{}}
+	set := newLabelSet()
+	for key, label := range root.label {
+		set.label[key] = label
+		set.owner[key] = root.owner[key]
+	}
 
 	for _, source := range sources {
 		label, ok := labelOf[source.name]
