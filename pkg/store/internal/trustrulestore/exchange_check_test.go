@@ -38,7 +38,7 @@ func exchangeOfKind(kind accesstoken.Kind, spiffeID string) trustrule.Exchange {
 			ReplacedBy: "", CreatedBy: "trust-rule",
 		},
 		Digest: accesstoken.Digest{}, Rule: trustrule.NewID(), SPIFFEID: spiffeID,
-		Bundle: bundle, BundleVersion: version,
+		BundleID: bundle, BundleVersion: version,
 	}
 }
 
@@ -155,13 +155,13 @@ func TestCheckExchangeBundleFields(t *testing.T) {
 		name string
 		x    trustrule.Exchange
 	}{
-		{"no bundle ID", mtls(func(x *trustrule.Exchange) { x.Bundle = "" })},
-		{"a bundle ID that is not valid", mtls(func(x *trustrule.Exchange) { x.Bundle = "not a bundle" })},
+		{"no bundle ID", mtls(func(x *trustrule.Exchange) { x.BundleID = "" })},
+		{"a bundle ID that is not valid", mtls(func(x *trustrule.Exchange) { x.BundleID = "not a bundle" })},
 		{"version 0", mtls(func(x *trustrule.Exchange) { x.BundleVersion = 0 })},
 		{"a negative version", mtls(func(x *trustrule.Exchange) { x.BundleVersion = -1 })},
 		{"a jwt-exchange token with a bundle ID", func() trustrule.Exchange {
 			x := exchangeOfKind(accesstoken.KindJWTExchange, "")
-			x.Bundle = checkBundleID
+			x.BundleID = checkBundleID
 
 			return x
 		}()},

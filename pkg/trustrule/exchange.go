@@ -27,7 +27,7 @@ type KeyFetcher interface {
 // SPIFFEID is the verified SPIFFE ID of an mTLS exchange: set for a token of
 // the kind mtls-exchange, empty for every other kind.
 //
-// Bundle and BundleVersion name the trust bundle and its version that the
+// BundleID and BundleVersion name the trust bundle and its version that the
 // service verified the chain against: set for a token of the kind
 // mtls-exchange, empty and zero for every other kind.
 type Exchange struct {
@@ -35,7 +35,7 @@ type Exchange struct {
 	Digest        accesstoken.Digest
 	Rule          ID
 	SPIFFEID      string
-	Bundle        BundleID
+	BundleID      BundleID
 	BundleVersion int64
 }
 
@@ -50,13 +50,13 @@ type ExchangeStore interface {
 	// mtls-exchange it also matches x.SPIFFEID again in that transaction:
 	// exactly one rule of the namespace, in the bundle of x.Rule, has the
 	// SPIFFE ID pattern x.SPIFFEID, and that rule is x.Rule. In the same
-	// transaction it also checks that x.Bundle is the bundle of x.Rule and
+	// transaction it also checks that x.BundleID is the bundle of x.Rule and
 	// the bundle of the namespace of the fence, and that x.BundleVersion is
 	// still its active version, so a rotate after the verify of the chain
 	// refuses the exchange. It returns:
 	//   - ErrNotFound when the rule does not exist, names another
 	//     principal, or is not the one rule that names x.SPIFFEID, or when
-	//     x.Bundle is not the bundle of the rule and of the namespace, or
+	//     x.BundleID is not the bundle of the rule and of the namespace, or
 	//     x.BundleVersion is not its active version.
 	//   - ErrPrincipal when the principal fails the check above.
 	//   - ErrInvalid when x.Token is not a token of the kind jwt-exchange or

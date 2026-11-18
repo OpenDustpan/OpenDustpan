@@ -80,7 +80,7 @@ func mtlsExchangeOf(t *testing.T, h Harness, r *trustrule.Rule, spiffeID string)
 	x := exchangeOf(r)
 	x.Token.Kind = accesstoken.KindMTLSExchange
 	x.SPIFFEID = spiffeID
-	x.Bundle = b.ID
+	x.BundleID = b.ID
 	x.BundleVersion = b.Active
 
 	return x
@@ -273,7 +273,7 @@ func testMtlsNoBundle(t *testing.T, h Harness) {
 
 	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
 	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
-	x.Bundle = trustrule.NewBundleID()
+	x.BundleID = trustrule.NewBundleID()
 	fence := h.Namespace(t, nsAcme)
 
 	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
@@ -318,7 +318,7 @@ func testMtlsOtherNamespaceBundle(t *testing.T, h Harness) {
 		t.Fatalf("save bundle of %s: %v", nsOther, err)
 	}
 
-	x.Bundle = other.ID
+	x.BundleID = other.ID
 	x.BundleVersion = other.Active
 	fence := h.Namespace(t, nsAcme)
 
