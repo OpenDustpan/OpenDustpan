@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
 
@@ -33,7 +34,7 @@ func TestRecheckExchangeRefusesAnUnknownKind(t *testing.T) {
 			BundleVersion: 0,
 		}
 
-		err := recheckExchange(t.Context(), nil, namespace.Name("acme"), &x)
+		err := recheckExchange(t.Context(), new(db.Queries), namespace.Name("acme"), &x)
 		if !errors.Is(err, trustrule.ErrInvalid) {
 			t.Errorf("kind %q: error = %v, want ErrInvalid", kind, err)
 		}
@@ -57,7 +58,7 @@ func TestRecheckExchangeNamesTheJWTKind(t *testing.T) {
 		BundleVersion: 0,
 	}
 
-	if err := recheckExchange(t.Context(), nil, namespace.Name("acme"), &x); err != nil {
+	if err := recheckExchange(t.Context(), new(db.Queries), namespace.Name("acme"), &x); err != nil {
 		t.Errorf("error = %v, want nil", err)
 	}
 }
