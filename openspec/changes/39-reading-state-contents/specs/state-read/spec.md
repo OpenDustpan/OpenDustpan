@@ -2,11 +2,11 @@
 
 ### Requirement: ReadMasked
 
-When a caller with unit:read reads one state version through ReadMasked, the server SHALL answer structure with each secret value replaced by a marker.
+When a caller with unit:read reads one state version through ReadMasked, the server SHALL answer the marker paths of the version, with each secret value replaced by a marker.
 
 #### Scenario: ReadMasked masked values
 - **WHEN** caller with unit:read reads one pinned version through ReadMasked
-- **THEN** server answers structure with markers and the list of value paths, and no plain secret value
+- **THEN** server answers the marker paths and the markers, and no plain secret value
 
 #### Scenario: ReadMasked OpenTofu sensitive marks
 - **WHEN** caller with unit:read reads one OpenTofu version through ReadMasked
@@ -54,15 +54,15 @@ If a version is above 5 MB, then the server SHALL refuse the read with 413 and n
 
 #### Scenario: read passes the deadline
 - **WHEN** the read runs past its 30 second deadline
-- **THEN** server answers 504 with no bytes
+- **THEN** server answers 504 with the code `state.read-timeout` and no bytes
 
 ### Requirement: refusal limiter
 
-If a caller causes repeated refusals on the read route, then the server SHALL count them with the denial limiter of the server configuration, as the other adapters do. The reveal route of the change `39-reveal-state-value` reuses this limiter.
+If a caller causes repeated refusals on the read route, then the server SHALL count them with the denial limiter of the server configuration, as the other adapters do. The answer of each refusal keeps its own status. The reveal route of the change `39-reveal-state-value` reuses this limiter.
 
 #### Scenario: repeated refusals
 - **WHEN** one caller sends repeated reads that the server refuses
-- **THEN** the limiter counts each refusal and answers 429 after the limit
+- **THEN** the limiter counts each refusal, writes one audit entry for each window with the count, and the answer of each refusal keeps its own status
 
 #### Scenario: over size refused
 - **WHEN** version is above 5 MB

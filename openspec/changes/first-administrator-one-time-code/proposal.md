@@ -2,7 +2,7 @@
 version: 1
 ---
 
-Issue: none. This change builds ADR 339 (decisions 1 to 8, owner, 2026-11-07).
+Issue: #3574. This change builds ADR 339 (decisions 1 to 8, owner, 2026-11-07).
 
 ## Why
 

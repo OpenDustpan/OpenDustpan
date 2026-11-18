@@ -2,6 +2,8 @@
 version: 3
 ---
 
+Issue: #3579.
+
 Roadmap: `docs/roadmap.md:379` (Serve private modules through the module protocol.).
 
 ## Why
