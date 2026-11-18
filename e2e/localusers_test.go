@@ -61,6 +61,93 @@ func TestLocalPasswordSignIn(t *testing.T) {
 	}
 }
 
+// TestLocalPasswordNeedsPublicURL drives the local users on a server that
+// has no public URL, as the quickstart starts it. The sign-in needs the
+// public URL for the origin of its session cookie, so the policy must say
+// that the password sign-in is off and name the cause, and the redeem and the
+// password sign-in must answer the error that names the flag. The server of
+// the Pulumi CLI gets no public URL from the harness.
+func TestLocalPasswordNeedsPublicURL(t *testing.T) {
+	t.Parallel()
+
+	fetcher := sharedFetcher(t)
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	version := e2e.Pulumi().Single()
+	if version == "" {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	pulumi, err := fetcher.Install(installCtx, e2e.Pulumi(), version)
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, version, err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+
+			if db == e2e.StorePostgres && e2e.PostgresURL() == "" {
+				t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+			}
+
+			runLocalPasswordWithoutPublicURL(t, e2e.NewEnv(t.Context(), t, pulumi, db))
+		})
+	}
+}
+
+// runLocalPasswordWithoutPublicURL runs the steps of a server with no public
+// URL.
+func runLocalPasswordWithoutPublicURL(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	c := localClient{env: env, browser: env.BrowserClient(t)}
+
+	policy := c.send(t, http.MethodGet, "/api/dustpan/v1/local-users/policy", "", asAdmin())
+	policy.want(t, "read the policy", http.StatusOK, "")
+
+	if !strings.Contains(policy.body, `"enabled":false`) || !strings.Contains(policy.body, `"enabledSource":"public-url"`) {
+		t.Fatalf("policy = %s, want the password sign-in off with the source public-url", policy.body)
+	}
+
+	// The administrator still makes a user: the set-up code waits for a
+	// server that has a public URL.
+	created := c.send(t, http.MethodPost, "/api/dustpan/v1/local-users",
+		`{"userName":"alice","displayName":"Alice Example","reason":"e2e"}`, asAdmin())
+	created.want(t, "create the local user", http.StatusCreated, "")
+
+	var user struct {
+		SetUpCode string `json:"setUpCode"`
+	}
+
+	if err := json.Unmarshal([]byte(created.body), &user); err != nil || len(user.SetUpCode) != 43 {
+		t.Fatalf("created = %s (%v)", created.body, err)
+	}
+
+	redeem := c.send(t, http.MethodPost, "/api/dustpan/v1/local-users/redeem",
+		`{"oneTimeCode":"`+user.SetUpCode+`","password":"`+e2ePassword+`"}`, asBrowser(""))
+	redeem.want(t, "set the password", http.StatusForbidden, "local-user.public-url-required")
+
+	if !strings.Contains(redeem.body, "--public-url") {
+		t.Fatalf("redeem = %s, want the answer to name --public-url", redeem.body)
+	}
+
+	signIn := c.send(t, http.MethodPost, "/api/dustpan/v1/sign-in/password",
+		`{"userName":"alice","password":"`+e2ePassword+`"}`, asBrowser(""))
+	signIn.want(t, "sign in", http.StatusForbidden, "local-user.public-url-required")
+
+	if !strings.Contains(signIn.body, "--public-url") {
+		t.Fatalf("sign-in = %s, want the answer to name --public-url", signIn.body)
+	}
+}
+
 // localClient is the browser and the administrator of one local user run.
 type localClient struct {
 	env     *e2e.Env
