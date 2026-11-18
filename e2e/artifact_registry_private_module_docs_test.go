@@ -5,7 +5,6 @@ package e2e_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"regexp"
@@ -24,10 +23,14 @@ const (
 // guideShBlock matches one sh code block of the guide.
 var guideShBlock = regexp.MustCompile("(?s)```sh\n(.*?)```")
 
+// guideWord matches one word of a command: a double-quoted word, a
+// single-quoted word or a bare word.
+var guideWord = regexp.MustCompile(`"([^"]*)"|'([^']*)'|(\S+)`)
+
 // guideCurl is one curl command of the guide, parsed but not changed.
 type guideCurl struct {
-	method, url, data, archive, token string
-	header                            map[string]string
+	method, url, data, archive string
+	header                     map[string]string
 }
 
 // TestPrivateModuleGuideCommands reads the sh blocks of the section "Publish a
@@ -44,22 +47,7 @@ func TestPrivateModuleGuideCommands(t *testing.T) {
 		t.Skipf("the OpenTofu suite needs Linux, not %s", runtime.GOOS)
 	}
 
-	section := guideSection(t)
-
-	var commands []guideCurl
-
-	for _, block := range guideShBlock.FindAllStringSubmatch(section, -1) {
-		for line := range strings.SplitSeq(strings.ReplaceAll(block[1], "\\\n", " "), "\n") {
-			if strings.TrimSpace(line) != "" {
-				commands = append(commands, parseGuideCurl(t, line))
-			}
-		}
-	}
-
-	if len(commands) != 4 {
-		t.Fatalf("the section %q holds %d curl commands, want 4", guideHeading, len(commands))
-	}
-
+	commands := guideCommands(t)
 	fetcher := sharedFetcher(t)
 
 	databases, err := e2e.Databases()
@@ -82,77 +70,92 @@ func TestPrivateModuleGuideCommands(t *testing.T) {
 			for _, db := range databases {
 				t.Run(string(db), func(t *testing.T) {
 					t.Parallel()
-
-					if db == e2e.StorePostgres && e2e.PostgresURL() == "" {
-						t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
-					}
-
-					runGuideCommands(t, e2e.NewEnv(t.Context(), t, cli, db), commands)
+					runGuideOnStore(t, cli, db, commands)
 				})
 			}
 		})
 	}
 }
 
-// runGuideCommands sends each command and checks the answer. The upload answer
-// gives the token that the publish command names.
-func runGuideCommands(t *testing.T, env *e2e.Env, commands []guideCurl) {
+// runGuideOnStore starts a server on the store and sends each command.
+func runGuideOnStore(t *testing.T, cli e2e.Install, db e2e.Store, commands []guideCurl) {
 	t.Helper()
 
+	if db == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	env := e2e.NewEnv(t.Context(), t, cli, db)
 	upload := ""
 
 	for _, c := range commands {
-		sub := strings.NewReplacer(
-			"https://dustpan.example.com", "", "/namespaces/acme/", "/namespaces/"+e2e.Namespace+"/",
-			"<token>", upload, "$(uuidgen)", e2e.NewIdempotencyKey(), "$DUSTPAN_TOKEN", env.TokenA(),
-		).Replace
-
-		body, url := sub(c.data), sub(c.url)
-		if strings.ContainsAny(url+body, "$<>") || strings.Contains(url, "example.com") {
-			t.Fatalf("the command %q holds a value that the test does not replace: %q %q", c.url, url, body)
-		}
-
-		if c.archive != "" {
-			body = string(moduleTarGz(t, "from the guide"))
-		}
-
-		if got := sub(c.header["Authorization"]); got != "token "+env.TokenA() {
-			t.Fatalf("authorization header of %q = %q, want the token scheme", c.url, got)
-		}
-
-		resp, err := env.ServerAPIStatusKeyed(t.Context(), e2e.TypedRequest{
-			Token: env.TokenA(), Method: c.method, Path: url, ContentType: sub(c.header["Content-Type"]),
-			Body: body, IfMatch: "",
-		}, sub(c.header["Idempotency-Key"]))
-		if err != nil {
-			t.Fatalf("%s %s: %v", c.method, url, err)
-		}
-
-		want := http.StatusOK
-		if strings.HasSuffix(url, "/uploads") {
-			want = http.StatusCreated
-		}
-
-		if resp.Status != want || (c.method == http.MethodGet && !strings.Contains(resp.Body, `"vpc"`)) {
-			t.Fatalf("%s %s = %d %s, want %d", c.method, url, resp.Status, resp.Body, want)
-		}
-
-		if strings.HasSuffix(url, "/uploads") {
-			var doc struct {
-				Upload string `json:"upload"`
-			}
-
-			if err := json.Unmarshal([]byte(resp.Body), &doc); err != nil || doc.Upload == "" {
-				t.Fatalf("upload answer %q: %v", resp.Body, err)
-			}
-
-			upload = doc.Upload
-		}
+		upload = sendGuideCommand(t, env, c, upload)
 	}
 }
 
-// guideSection returns the section of the guide, up to the next section.
-func guideSection(t *testing.T) string {
+// sendGuideCommand sends the request of c and checks the answer. It returns
+// the upload token that the answer holds, or upload when it holds none.
+func sendGuideCommand(t *testing.T, env *e2e.Env, c guideCurl, upload string) string {
+	t.Helper()
+
+	sub := strings.NewReplacer(
+		"https://dustpan.example.com", "", "/namespaces/acme/", "/namespaces/"+e2e.Namespace+"/",
+		"<token>", upload, "$(uuidgen)", e2e.NewIdempotencyKey(), "$DUSTPAN_TOKEN", env.TokenA(),
+	).Replace
+
+	body, path := sub(c.data), sub(c.url)
+	if strings.ContainsAny(path+body, "$<>") || strings.Contains(path, "example.com") {
+		t.Fatalf("the command %q holds a value that the test does not replace: %q %q", c.url, path, body)
+	}
+
+	if c.archive != "" {
+		body = string(moduleTarGz(t, "from the guide"))
+	}
+
+	if got := sub(c.header["Authorization"]); got != "token "+env.TokenA() {
+		t.Fatalf("the authorization header of %q is not the token scheme", c.url)
+	}
+
+	resp, err := env.ServerAPIStatusKeyed(t.Context(), e2e.TypedRequest{
+		Token: env.TokenA(), Method: c.method, Path: path, ContentType: c.header["Content-Type"],
+		Body: body, IfMatch: "",
+	}, sub(c.header["Idempotency-Key"]))
+	if err != nil {
+		t.Fatalf("%s %s: %v", c.method, path, err)
+	}
+
+	if !strings.HasSuffix(path, "/uploads") {
+		if resp.Status != http.StatusOK || (c.method == http.MethodGet && !strings.Contains(resp.Body, `"vpc"`)) {
+			t.Fatalf("%s %s = %d %s, want 200", c.method, path, resp.Status, resp.Body)
+		}
+
+		return upload
+	}
+
+	if resp.Status != http.StatusCreated {
+		t.Fatalf("%s %s = %d %s, want 201", c.method, path, resp.Status, resp.Body)
+	}
+
+	return uploadToken(t, resp.Body)
+}
+
+// uploadToken returns the upload token of an upload answer.
+func uploadToken(t *testing.T, body string) string {
+	t.Helper()
+
+	var doc struct {
+		Upload string `json:"upload"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.Upload == "" {
+		t.Fatalf("upload answer %q: %v", body, err)
+	}
+
+	return doc.Upload
+}
+
+// guideCommands returns the curl commands of the sh blocks of the section.
+func guideCommands(t *testing.T) []guideCurl {
 	t.Helper()
 
 	raw, err := os.ReadFile("../" + guidePage)
@@ -172,7 +175,21 @@ func guideSection(t *testing.T) string {
 		text = text[:end+1]
 	}
 
-	return text
+	var commands []guideCurl
+
+	for _, block := range guideShBlock.FindAllStringSubmatch(text, -1) {
+		for line := range strings.SplitSeq(strings.ReplaceAll(block[1], "\\\n", " "), "\n") {
+			if strings.TrimSpace(line) != "" {
+				commands = append(commands, parseGuideCurl(t, line))
+			}
+		}
+	}
+
+	if len(commands) != 4 {
+		t.Fatalf("the section %q holds %d curl commands, want 4", guideHeading, len(commands))
+	}
+
+	return commands
 }
 
 // parseGuideCurl splits one curl command of the guide. It knows only the
@@ -180,40 +197,34 @@ func guideSection(t *testing.T) string {
 func parseGuideCurl(t *testing.T, line string) guideCurl {
 	t.Helper()
 
-	words, err := splitShell(line)
-	if err != nil || len(words) < 2 || words[0] != "curl" {
-		t.Fatalf("the guide line %q is not a curl command: %v", line, err)
+	words := make([]string, 0, 12)
+
+	for _, m := range guideWord.FindAllStringSubmatch(line, -1) {
+		words = append(words, m[1]+m[2]+m[3])
 	}
 
-	c := guideCurl{method: http.MethodGet, header: map[string]string{}}
+	if len(words) < 2 || words[0] != "curl" || strings.ContainsAny(line, "`") {
+		t.Fatalf("the guide line %q is not a curl command", line)
+	}
+
+	c := guideCurl{method: http.MethodGet, url: "", data: "", archive: "", header: map[string]string{}}
 
 	for i := 1; i < len(words); i++ {
-		w := words[i]
-		if strings.HasPrefix(w, "https://") {
-			c.url = w
+		if strings.HasPrefix(words[i], "https://") {
+			c.url = words[i]
 
 			continue
 		}
 
 		if i+1 >= len(words) {
-			t.Fatalf("the guide option %q of %q has no value", w, line)
+			t.Fatalf("the guide option %q of %q has no value", words[i], line)
+		}
+
+		if !c.setOption(words[i], words[i+1]) {
+			t.Fatalf("the guide option %q of %q is not known to the test", words[i], line)
 		}
 
 		i++
-
-		switch v := words[i]; w {
-		case "-X":
-			c.method = v
-		case "-H":
-			k, val, _ := strings.Cut(v, ": ")
-			c.header[k] = val
-		case "-d":
-			c.data = v
-		case "--data-binary":
-			c.archive = strings.TrimPrefix(v, "@")
-		default:
-			t.Fatalf("the guide option %q of %q is not known to the test", w, line)
-		}
 	}
 
 	if c.url == "" {
@@ -223,42 +234,21 @@ func parseGuideCurl(t *testing.T, line string) guideCurl {
 	return c
 }
 
-// splitShell splits a line into words with single and double quotes.
-func splitShell(line string) ([]string, error) {
-	var (
-		words []string
-		cur   strings.Builder
-		quote rune
-		open  bool
-	)
-
-	for _, r := range line {
-		switch {
-		case quote != 0 && r == quote:
-			quote = 0
-		case quote != 0:
-			cur.WriteRune(r)
-		case r == '\'' || r == '"':
-			quote, open = r, true
-		case r == ' ':
-			if cur.Len() > 0 || open {
-				words = append(words, cur.String())
-				cur.Reset()
-
-				open = false
-			}
-		default:
-			cur.WriteRune(r)
-		}
+// setOption stores one curl option and reports whether the test knows it.
+func (c *guideCurl) setOption(option, value string) bool {
+	switch option {
+	case "-X":
+		c.method = value
+	case "-H":
+		k, v, _ := strings.Cut(value, ": ")
+		c.header[k] = v
+	case "-d":
+		c.data = value
+	case "--data-binary":
+		c.archive = strings.TrimPrefix(value, "@")
+	default:
+		return false
 	}
 
-	if quote != 0 {
-		return nil, fmt.Errorf("unclosed quote %q", quote)
-	}
-
-	if cur.Len() > 0 || open {
-		words = append(words, cur.String())
-	}
-
-	return words, nil
+	return true
 }
