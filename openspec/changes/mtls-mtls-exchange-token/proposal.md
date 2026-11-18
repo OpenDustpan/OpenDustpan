@@ -12,7 +12,7 @@ Roadmap: `docs/roadmap.md:188` (Exchange issues a trust token for a matched work
 
 The user path this change must make work:
 
-1. **API.** Make an enabled bundle and one enabled rule that names the workload SPIFFE ID and its principal (part 1 API).
+1. **API.** Make a bundle and one rule that names the workload SPIFFE ID and its principal (part 1 API).
 2. **API.** Call POST /api/dustpan/v1/namespaces/{namespace}/trust-rules/exchange over direct TLS with the client certificate and read the trust token.
 3. **CLI.** Run the Pulumi CLI or OpenTofu with the trust token until it expires or is revoked. A revoked token gives 401.
 
@@ -21,6 +21,7 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | No token when the chain, time, revocation or SPIFFE ID check fails. | 401 with NEW error codes mtls.no-client-certificate, mtls.unknown-issuer, mtls.expired, mtls.not-yet-valid, mtls.revoked, mtls.revocation-unknown, mtls.no-matching-rule, mtls.ambiguous-rule, mtls.bundle-disabled and mtls.principal-disabled; 429 with NEW error code mtls.rate-limited; 500 with NEW error code token.issue-failed and no token. A trust rule has no disabled state on main, so there is no code mtls.rule-disabled. | `curl --cert leaf.pem --key leaf.key https://server/api/dustpan/v1/namespaces/ns-xxx/trust-rules/exchange -v` |
+| A rule write with a `*` in `spiffePattern`. | 400 with NEW error code trust-rule.spiffe-wildcard. The message names the field `spiffePattern` and says that the rule must name an exact SPIFFE ID. The server stores nothing. | `curl -X POST https://server/api/dustpan/v1/namespaces/ns-xxx/trust-rules -d '{"spiffePattern":"spiffe://example.org/ci/runner-1"}'` with the exact SPIFFE ID and the other fields of the rule |
 | A revoked or disabled trust token gives no access. | 401 token.ended when the token was revoked or its principal was disabled; 401 token.invalid after expiry. | `curl -X POST https://server/api/dustpan/v1/namespaces/ns-xxx/trust-rules/exchange --cert leaf.pem --key leaf.key` to get a new token |
 
 Evidence for the claims above:
@@ -36,6 +37,8 @@ Evidence for the claims above:
 - The request credential of the token stays `trust-token` (ADR 284 decision 2; ADR 371 changes no credential).
 - NEW error codes mtls.* and token.issue-failed (see "Contract" in design.md).
 - The store port `RecordExchange` gets the verified SPIFFE ID: the store matches the rule again in the exchange transaction, with a conformance suite before any adapter changes.
+- The store port `RecordExchange` also gets the stable ID of the bundle and the number of the bundle version that the service verified the chain against. The store reads the bundle of the namespace in the same transaction and refuses unless that version is still the active version of the bundle of the rule (issue #3584).
+- A trust rule write refuses a SPIFFE ID pattern with `*`, with the NEW error code trust-rule.spiffe-wildcard: a rule for the mTLS exchange names an exact SPIFFE ID (issue #3585).
 - The exchange route answers an mTLS call when the request has an empty body.
 
 Out of scope:
@@ -56,6 +59,7 @@ Depends on:
 Where the path still costs the person time or surprises them:
 
 - A runner operator behind a TLS proxy gets a plain refusal that names direct TLS.
+- An administrator who writes a rule with a `spiffePattern` that ends in `/*` gets a 400 at the write. The answer names the field `spiffePattern` and says that the rule must name an exact SPIFFE ID. The rule is not a silent rule that never matches.
 
 ## What main already does
 
@@ -63,6 +67,9 @@ Each fact names its file, line and function on main. The change specifies only t
 
 - The exchange store port has one method, RecordExchange, which only accepts the kind `jwt-exchange` (`pkg/trustrule/exchange.go:50`, `pkg/store/internal/trustrulestore/trustrulestore.go:233` func CheckExchange)
 - The two adapters call CheckExchange inside the fenced transaction (`pkg/store/postgres/trustrules.go:299`, `pkg/store/sqlite/trustrules.go:313`, func RecordExchange)
+- A trust bundle has an ID and one active version number, and no other state (`pkg/trustrule/trustrule.go:258`, type Bundle). Both adapters read the bundle row of a namespace with the query GetTrustBundleOfNamespace
+- The SPIFFE ID pattern check allows a trailing `/*` (`pkg/trustrule/trustrule.go:410`, func ValidateSpiffePattern), and Rule.Validate runs it for the create, the update, the store and the restore (`pkg/trustrule/trustrule.go:581`, func Validate)
+- The route maps an invalid rule to trust-rule.invalid (`internal/api/trustrules/handlers.go:570`, func classifyRefusal)
 - The JWT exchange builds the Exchange value with named fields (`internal/trustrulesvc/exchange.go:218`, func Exchange)
 - Trust token lifetime test (`pkg/accesstoken/trust_token_test.go:59`)
 - Workload exchange e2e (`e2e/workload_test.go:38`)
@@ -119,6 +126,25 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Effect: Access limits hold for the trust token.
 - Conflict: none.
 
+**ADR 250: Defense in depth for security code** (owner-tagged (all decisions): "The project owner decided it.").
+
+- Decisions that apply: 1 (current), 3 (current), 4 (current).
+- Changed by: ADR 382 extends decision 3. Chain to the end: ADR 382.
+- Current rule: this ADR, with ADR 382.
+- Quote: "Authorize at the point of use, for the object, not only the action and not only at the route."
+- Quote: "The test sends hostile input directly to that layer, as if every other layer had failed."
+- Effect: The store reads the bundle again in the transaction of the record, as a layer that does not rely on the service. The refusal of a wildcard is a check at the boundary of a rule write, and the store and the restore run it too. Each layer has its own hostile test.
+- Conflict: none.
+
+**ADR 362: Owner decisions of 8 November 2026: stable IDs, store order, MySQL, baseline hashes and portable backups** (owner-tagged (decision 1)).
+
+- Decisions that apply: 1 (current).
+- Changed by: ADR 363 extends decision 2. Chain to the end: ADR 363.
+- Current rule: this ADR, with ADR 363.
+- Quote: "Every stored reference to an entity uses the stable ID of the entity when a user can rename the entity, or delete and recreate it."
+- Effect: The exchange value names the bundle by its stable ID. The version is a number in that bundle. The active version cannot be deleted, and a new version gets a number above every stored number, so the pair of the bundle ID and the number names one version for as long as it is active.
+- Conflict: none.
+
 ## Open questions
 
 none
@@ -132,5 +158,7 @@ Questions considered and answered:
 - Stored or stateless token? Stored, as ADR 284 decision 1 does for JWT; its use for mTLS is open question 1.
 - Lifetime? ADR 69 decision 6: setting, default 1 hour, capped at the leaf not-after time.
 - Behind a TLS proxy? Direct TLS only here; a forwarded chain header is ignored. Proxy design is in part 3.
+- Does the store check that the bundle version of the verify step is still active? Yes, in the same transaction as the token write (issue #3584; decision of the lead and the PM, provisional until the owner reviews it). The bundle row holds an ID and an active version number only. So the check is: the bundle exists in the namespace of the fence, it is the bundle of the rule, and its active version is the verified version.
+- May a rule for the mTLS exchange hold a `*` in `spiffePattern`? No. The exchange needs an exact SPIFFE ID, and a pattern with `*` never matches it. The write refuses it (issue #3585; decision of the lead, provisional until the owner reviews it). A rule has no field for its kind: it is a rule for the mTLS exchange when `spiffePattern` is not empty. A rule with an empty `spiffePattern`, as the JWT rules have, is not changed.
 
 Drafted by the spec factory of the spec compiler from the roadmap, the issues and the ADRs. Every quote, path and ADR citation was checked by code.
