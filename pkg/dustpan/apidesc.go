@@ -75,25 +75,66 @@ type namedHandler struct {
 	label   string
 }
 
-// adapterLabels maps each registered pattern of every mounted adapter to the
-// label of that adapter.
-func (a adapters) adapterLabels() map[string]string {
-	out := map[string]string{}
+// errLabelConflict means that two adapters register one pattern, or one path,
+// with different adapter labels.
+var errLabelConflict = errors.New("adapter label: one route has two labels")
 
-	for _, source := range a.routeSources() {
-		label := metrics.AdapterServer
-		for _, h := range a.allHandlers() {
-			if h.name == source.name {
-				label = h.label
-				break
-			}
+// adapterLabels maps each registered pattern of every mounted adapter, and the
+// path of that pattern, to the label of the adapter. The path key is for the
+// root mux, which knows a mounted route by its path only. It returns
+// errLabelConflict, with the key and both adapters, when one key would get two
+// labels, so that a server never starts with an ambiguous label.
+func (a adapters) adapterLabels() (map[string]string, error) {
+	return buildAdapterLabels(a.routeSources(), a.allHandlers())
+}
+
+// labelSet collects the label of each key and the adapter that set it first.
+type labelSet struct {
+	label map[string]string
+	owner map[string]string
+}
+
+// add sets the label of key for adapter, or returns errLabelConflict when key
+// already has another label.
+func (l labelSet) add(key, label, adapter string) error {
+	if prev, seen := l.label[key]; seen && prev != label {
+		return fmt.Errorf("%w: %q is %q for adapter %q and %q for adapter %q",
+			errLabelConflict, key, prev, l.owner[key], label, adapter)
+	}
+
+	l.label[key] = label
+
+	if _, seen := l.owner[key]; !seen {
+		l.owner[key] = adapter
+	}
+
+	return nil
+}
+
+func buildAdapterLabels(sources []routeSource, handlers []namedHandler) (map[string]string, error) {
+	labelOf := map[string]string{}
+	for _, h := range handlers {
+		labelOf[h.name] = h.label
+	}
+
+	set := labelSet{label: map[string]string{}, owner: map[string]string{}}
+
+	for _, source := range sources {
+		label, ok := labelOf[source.name]
+		if !ok {
+			label = metrics.AdapterServer
 		}
+
 		for _, pattern := range source.patterns {
-			out[pattern] = label
+			for _, key := range []string{pattern, patternPath(pattern)} {
+				if err := set.add(key, label, source.name); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 
-	return out
+	return set.label, nil
 }
 
 // isNilHandler reports whether h is a nil interface. A module that is off

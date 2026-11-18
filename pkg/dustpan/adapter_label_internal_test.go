@@ -1,7 +1,11 @@
 package dustpan
 
 import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/metrics"
@@ -45,9 +49,16 @@ func newLabelTestServer(t *testing.T) *Server {
 		WithCheckpointStore(st), WithEventStore(st), WithSecretKeyStore(st),
 		WithSecretWrapper(wrapper), WithWorkspaceStore(st), WithStateStore(st),
 		WithBlobStore(blobs), WithInventoryReader(st), WithAuthenticator(authn),
+		WithProfileStore(st.Profiles()), WithIssuerStore(st.Issuer()),
+		WithRegistry(st.Registry(), st.RegistryKeys()), WithSinkStore(st.NotificationSinks()),
 	)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
+	}
+
+	// Requests answer 503 until Start succeeds, so they never reach the metrics.
+	if err := srv.Start(t.Context()); err != nil {
+		t.Fatalf("start the server: %v", err)
 	}
 
 	return srv
@@ -78,11 +89,38 @@ func adapterLabelsByName(t *testing.T, labels map[string]string, sources []Route
 	return byName
 }
 
+// checkRequestAdapter fails when the request count of route holds no sample
+// with the adapter label, or a sample with another one.
+func checkRequestAdapter(t *testing.T, output, route, adapter string) {
+	t.Helper()
+
+	found := false
+
+	for line := range strings.Lines(output) {
+		if !strings.HasPrefix(line, "dustpan_http_requests_total{") || !strings.Contains(line, `route="`+route+`"`) {
+			continue
+		}
+
+		found = true
+
+		if !strings.Contains(line, `adapter="`+adapter+`"`) {
+			t.Errorf("route %q has the wrong adapter label, want %q: %s", route, adapter, line)
+		}
+	}
+
+	if !found {
+		t.Errorf("output holds no request count for route %q:\n%s", route, output)
+	}
+}
+
 func TestAdapterLabelFollowsRegistration(t *testing.T) {
 	t.Parallel()
 
 	srv := newLabelTestServer(t)
-	labels := srv.mounted.adapterLabels()
+	labels, err := srv.mounted.adapterLabels()
+	if err != nil {
+		t.Fatalf("adapter labels: %v", err)
+	}
 	sources := srv.RouteSources()
 
 	if len(labels) == 0 {
@@ -110,7 +148,14 @@ func TestAdapterLabelFollowsRegistration(t *testing.T) {
 	}
 
 	for name, want := range wantAdapter {
-		if got, ok := byName[name]; ok && got != want {
+		got, ok := byName[name]
+		if !ok {
+			t.Errorf("adapter %q has no route source", name)
+
+			continue
+		}
+
+		if got != want {
 			t.Errorf("adapter %q label = %q, want %q", name, got, want)
 		}
 	}
@@ -124,6 +169,148 @@ func TestAdapterLabelFollowsRegistration(t *testing.T) {
 	for _, pattern := range []string{"", "GET /no/such/pattern"} {
 		if got := adapterLabelForPattern(labels, pattern); got != metrics.AdapterServer {
 			t.Errorf("adapterLabelForPattern(%q) = %q, want %q", pattern, got, metrics.AdapterServer)
+		}
+	}
+}
+
+// TestAdapterLabelOnRequest proves a request through the server handler
+// records the label of the adapter that registered its route: the backup
+// route under the v1 prefix is server, and the inventory route is inventory.
+func TestAdapterLabelOnRequest(t *testing.T) {
+	t.Parallel()
+
+	srv := newLabelTestServer(t)
+
+	const (
+		backupRoute    = "GET /api/dustpan/v1/backups"
+		inventoryRoute = "GET /api/dustpan/v1/namespaces/{namespace}/units"
+	)
+
+	for _, path := range []string{"/api/dustpan/v1/backups", "/api/dustpan/v1/namespaces/acme/units"} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, http.NoBody)
+		rec := httptest.NewRecorder()
+
+		srv.Handler().ServeHTTP(rec, req)
+	}
+
+	var out strings.Builder
+	if err := srv.Metrics().Write(&out); err != nil {
+		t.Fatalf("write metrics: %v", err)
+	}
+
+	checkRequestAdapter(t, out.String(), backupRoute, metrics.AdapterServer)
+	checkRequestAdapter(t, out.String(), inventoryRoute, metrics.AdapterInventory)
+}
+
+// TestInFlightLabelMatchesRequestLabel proves that the gauge label, which the
+// middleware takes from the root mux before the handler runs, is the label of
+// the request counter for one mounted v1 route of the server adapter and one of the inventory adapter.
+func TestInFlightLabelMatchesRequestLabel(t *testing.T) {
+	t.Parallel()
+
+	srv := newLabelTestServer(t)
+
+	labels, err := srv.mounted.adapterLabels()
+	if err != nil {
+		t.Fatalf("adapter labels: %v", err)
+	}
+
+	metered := requestMetrics{observed: nil, root: srv.root, labels: labels}
+
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/api/dustpan/v1/backups", metrics.AdapterServer},
+		{"/api/dustpan/v1/namespaces/acme/units", metrics.AdapterInventory},
+	}
+
+	for _, tt := range tests {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.path, http.NoBody)
+
+		if got := metered.startAdapter(req); got != tt.want {
+			t.Errorf("in-flight label of %s = %q, want %q", tt.path, got, tt.want)
+		}
+
+		srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	var out strings.Builder
+	if err := srv.Metrics().Write(&out); err != nil {
+		t.Fatalf("write metrics: %v", err)
+	}
+
+	for _, tt := range tests {
+		if !strings.Contains(out.String(), `adapter="`+tt.want+`"`) {
+			t.Errorf("request counter has no adapter %q", tt.want)
+		}
+	}
+}
+
+// TestAdapterLabelsRefuseConflict proves that one pattern or one path with
+// two labels stops the build of the label map and names the key and both
+// adapters. Removing the check makes the first case return a map.
+func TestAdapterLabelsRefuseConflict(t *testing.T) {
+	t.Parallel()
+
+	handlers := []namedHandler{
+		{name: "one", handler: nil, label: metrics.AdapterServer},
+		{name: "two", handler: nil, label: metrics.AdapterInventory},
+	}
+
+	tests := []struct {
+		name    string
+		sources []routeSource
+		wantErr bool
+	}{
+		{
+			"same path, other method",
+			[]routeSource{
+				{name: "one", patterns: []string{"GET /api/dustpan/v1/x"}},
+				{name: "two", patterns: []string{"POST /api/dustpan/v1/x"}},
+			},
+			true,
+		},
+		{
+			"same pattern",
+			[]routeSource{
+				{name: "one", patterns: []string{"GET /a"}},
+				{name: "two", patterns: []string{"GET /a"}},
+			},
+			true,
+		},
+		{
+			"other paths",
+			[]routeSource{
+				{name: "one", patterns: []string{"GET /a"}},
+				{name: "two", patterns: []string{"GET /b"}},
+			},
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := buildAdapterLabels(tt.sources, handlers)
+			if tt.wantErr != errors.Is(err, errLabelConflict) {
+				t.Fatalf("error = %v, want conflict %v", err, tt.wantErr)
+			}
+
+			if tt.wantErr {
+				requireNames(t, err, `"one"`, `"two"`)
+			}
+		})
+	}
+}
+
+func requireNames(t *testing.T, err error, parts ...string) {
+	t.Helper()
+
+	for _, part := range parts {
+		if !strings.Contains(err.Error(), part) {
+			t.Errorf("error %q does not name adapter %s", err, part)
 		}
 	}
 }

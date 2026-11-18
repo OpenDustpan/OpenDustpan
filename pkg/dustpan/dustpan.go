@@ -3978,7 +3978,10 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (routeHa
 	}
 
 	gated := withAuditChainGate(mux, a.chain, cfg.logger)
-	labels := a.adapterLabels()
+	labels, err := a.adapterLabels()
+	if err != nil {
+		return routeHandlers{}, err
+	}
 
 	return routeHandlers{
 		served: withMisuseReporter(apidesc.NewReporter(cfg.logger), withRequestCache(withRequestLog(

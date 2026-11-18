@@ -226,8 +226,8 @@ func (m *ServerMetrics) ObserveRequest(adapter, route, method string, code int, 
 }
 
 // IncInFlight adds one to the in-flight gauge of adapter. The middleware
-// calls it before the next handler runs, when only the path is known, so the
-// gauge has no route label: the route is not known until the handler returns.
+// calls it before the next handler runs, with the label of the route that the
+// root mux matches. The gauge has no route label.
 func (m *ServerMetrics) IncInFlight(adapter string) {
 	m.inFlight.Inc(NormalizeAdapter(adapter))
 }
