@@ -251,6 +251,67 @@ func TestInFlightLabelMatchesRequestLabel(t *testing.T) {
 	}
 }
 
+// TestAdapterLabelOfUnservedPath proves that a request that reaches a mounted
+// adapter but matches none of its routes has one label: the counter holds the
+// label of the gauge, not server. Each case uses its own server, so the
+// counter holds that one request only.
+func TestAdapterLabelOfUnservedPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path string
+		want string
+	}{
+		{"/api/no/such/pulumi/route", metrics.AdapterPulumi},
+		{"/api/v2/no-such", metrics.AdapterOpenTofu},
+		{"/tofu/state/acme", metrics.AdapterOpenTofu},
+		{"/api/inventory/nope", metrics.AdapterInventory},
+		{"/v1/providers/x/y/versions", metrics.AdapterOpenTofu},
+		{"/api/dustpan/v1/no-such", metrics.AdapterServer},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+
+			srv := newLabelTestServer(t)
+			labels, err := srv.mounted.adapterLabels(srv.root.labels)
+			if err != nil {
+				t.Fatalf("adapter labels: %v", err)
+			}
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.path, http.NoBody)
+			gauge := requestMetrics{observed: nil, root: srv.root, labels: labels}.startAdapter(req)
+
+			if gauge != tt.want {
+				t.Errorf("in-flight label of %s = %q, want %q", tt.path, gauge, tt.want)
+			}
+
+			srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+
+			requireCounterAdapter(t, srv, tt.path, tt.want)
+		})
+	}
+}
+
+// requireCounterAdapter fails when a line of the request counter of srv names
+// an adapter other than want.
+func requireCounterAdapter(t *testing.T, srv *Server, path, want string) {
+	t.Helper()
+
+	var out strings.Builder
+	if err := srv.Metrics().Write(&out); err != nil {
+		t.Fatalf("write metrics: %v", err)
+	}
+
+	for line := range strings.SplitSeq(out.String(), "\n") {
+		if strings.HasPrefix(line, "dustpan_http_requests_total{") &&
+			!strings.Contains(line, `adapter="`+want+`"`) {
+			t.Errorf("request counter of %s: %s, want adapter %q", path, line, want)
+		}
+	}
+}
+
 // TestAdapterLabelsRefuseConflict proves that one pattern or one path with
 // two labels stops the build of the label map and names the key and both
 // adapters. Removing the check makes the first case return a map.

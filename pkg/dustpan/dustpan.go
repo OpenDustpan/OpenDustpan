@@ -3636,13 +3636,13 @@ func withRequestLog(
 		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK, bytes: 0}
 		admitted := callers.admit(wrapped, r, resolved, logger)
 
-		// The route pattern is known before the handler runs, so the
-		// in-flight gauge tracks the adapter of the matched route. The gauge
-		// holds no route label.
-		startAdapter := metered.startAdapter(r)
+		// The root mux pattern is known before the handler runs. The label is
+		// taken once here and used for the gauge, the counter and the log, so
+		// one request has one label, also when the adapter finds no route.
+		adapter := metered.startAdapter(r)
 		if metered.observed != nil {
-			metered.observed.IncInFlight(startAdapter)
-			defer metered.observed.DecInFlight(startAdapter)
+			metered.observed.IncInFlight(adapter)
+			defer metered.observed.DecInFlight(adapter)
 		}
 
 		start := time.Now()
@@ -3653,7 +3653,6 @@ func withRequestLog(
 
 		elapsed := time.Since(start)
 		route := logRoute(r)
-		adapter := adapterLabelForPattern(metered.labels, r.Pattern)
 
 		if metered.observed != nil {
 			metered.observed.ObserveRequest(adapter, route, r.Method, wrapped.status, elapsed)
