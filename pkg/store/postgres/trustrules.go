@@ -7,7 +7,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/trustrulestore"
@@ -345,7 +344,15 @@ func (t TrustRules) RecordExchange(
 // a rotate that another call made after the verify so refuses the exchange.
 // It does nothing for an exchange that is not of the kind mtls-exchange.
 func recheckExchange(ctx context.Context, q *db.Queries, ns namespace.Name, x *trustrule.Exchange) error {
-	if x.Token.Kind != accesstoken.KindMTLSExchange {
+	// Defense in depth: CheckExchange refuses an unknown kind before the
+	// transaction. This switch stays so that a new caller of the recheck
+	// cannot skip a kind: an unknown kind fails closed.
+	needsBundle, kindErr := trustrulestore.ExchangeKindNeedsBundle(x.Token.Kind)
+	if kindErr != nil {
+		return kindErr
+	}
+
+	if !needsBundle {
 		return nil
 	}
 

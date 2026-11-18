@@ -2,12 +2,16 @@ package trustrulestore_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/store/internal/trustrulestore"
 	"opendustpan.org/opendustpan/pkg/trustrule"
 )
+
+// errKindRule marks a wrong answer of ExchangeKindNeedsBundle in a case.
+var errKindRule = errors.New("wrong kind rule")
 
 // TestCheckExchangeBundle sends hostile bundle data to the two checks of the
 // bundle of an exchange, each one as if the service and the adapter had
@@ -78,6 +82,50 @@ func TestCheckExchangeBundle(t *testing.T) {
 			x := jwt(func(*trustrule.Exchange) {})
 
 			return trustrulestore.CheckExchangeBundle(nil, nil, &x)
+		}, nil},
+		{"a personal token", func() error {
+			x := jwt(func(x *trustrule.Exchange) { x.Token.Kind = accesstoken.KindPersonal })
+
+			return trustrulestore.CheckExchangeBundle(row, rules(id), &x)
+		}, trustrule.ErrInvalid},
+		{"a service token", func() error {
+			x := jwt(func(x *trustrule.Exchange) { x.Token.Kind = accesstoken.KindService })
+
+			return trustrulestore.CheckExchangeBundle(row, rules(id), &x)
+		}, trustrule.ErrInvalid},
+		{"a token kind that no code knows", func() error {
+			x := jwt(func(x *trustrule.Exchange) { x.Token.Kind = accesstoken.Kind("other") })
+
+			return trustrulestore.CheckExchangeBundle(row, rules(id), &x)
+		}, trustrule.ErrInvalid},
+		{"an empty token kind", func() error {
+			x := jwt(func(x *trustrule.Exchange) { x.Token.Kind = "" })
+
+			return trustrulestore.CheckExchangeBundle(row, rules(id), &x)
+		}, trustrule.ErrInvalid},
+		{"the kind rule for an unknown kind", func() error {
+			need, err := trustrulestore.ExchangeKindNeedsBundle(accesstoken.Kind("other"))
+			if need {
+				return fmt.Errorf("an unknown kind needs a bundle check: %w", errKindRule)
+			}
+
+			return err
+		}, trustrule.ErrInvalid},
+		{"the kind rule for jwt-exchange", func() error {
+			need, err := trustrulestore.ExchangeKindNeedsBundle(accesstoken.KindJWTExchange)
+			if need {
+				return fmt.Errorf("a jwt-exchange needs a bundle check: %w", errKindRule)
+			}
+
+			return err
+		}, nil},
+		{"the kind rule for mtls-exchange", func() error {
+			need, err := trustrulestore.ExchangeKindNeedsBundle(accesstoken.KindMTLSExchange)
+			if !need {
+				return fmt.Errorf("an mtls-exchange needs a bundle check: %w", errKindRule)
+			}
+
+			return err
 		}, nil},
 		{"no bundle ID for an mtls-exchange token", func() error {
 			x := mtls(func(x *trustrule.Exchange) { x.BundleID = "" })

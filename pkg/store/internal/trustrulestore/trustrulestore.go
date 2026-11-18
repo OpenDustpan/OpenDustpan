@@ -287,13 +287,32 @@ func checkExchangeBundleFields(x *trustrule.Exchange) error {
 // rule of the exchange (the row of x.Rule in rows), and has x.BundleVersion as its active
 // version. The adapters call it in the transaction of the exchange with the
 // stored bundle row of that namespace, so a rotate that came after the verify
-// of the chain still refuses the exchange. It returns nil for an exchange
-// that is not of the kind mtls-exchange.
+// of the chain still refuses the exchange. An exchange of the kind
+// jwt-exchange has no bundle, so it passes with no check. Any other kind
+// returns trustrule.ErrInvalid.
 func CheckExchangeBundle(row *BundleRow, rows []Row, x *trustrule.Exchange) error {
-	if x.Token.Kind != accesstoken.KindMTLSExchange {
+	switch x.Token.Kind {
+	case accesstoken.KindMTLSExchange:
+		return checkMtlsExchangeBundle(row, rows, x)
+	case accesstoken.KindJWTExchange:
 		return nil
+	case accesstoken.KindPersonal, accesstoken.KindService:
+		// No exchange makes these kinds.
+		return unknownExchangeKind(x.Token.Kind)
 	}
 
+	// Fail closed on a kind that no code knows.
+	return unknownExchangeKind(x.Token.Kind)
+}
+
+// unknownExchangeKind is the refusal of a token kind that no exchange makes.
+func unknownExchangeKind(kind accesstoken.Kind) error {
+	return fmt.Errorf("%w: an exchange has no token of the kind %q", trustrule.ErrInvalid, kind)
+}
+
+// checkMtlsExchangeBundle is the bundle check of CheckExchangeBundle for the
+// kind mtls-exchange.
+func checkMtlsExchangeBundle(row *BundleRow, rows []Row, x *trustrule.Exchange) error {
 	ruleBundleID := ""
 
 	for i := range rows {
@@ -381,4 +400,23 @@ func CheckExchangePrincipal(p PrincipalRow, disabledAtMs int64, ns namespace.Nam
 	}
 
 	return nil
+}
+
+// ExchangeKindNeedsBundle tells an adapter what to do with the kind of an
+// exchange before it reads any row: true for mtls-exchange (run the match and
+// the bundle check), false for jwt-exchange (no check), and
+// trustrule.ErrInvalid for any other kind.
+func ExchangeKindNeedsBundle(kind accesstoken.Kind) (bool, error) {
+	switch kind {
+	case accesstoken.KindMTLSExchange:
+		return true, nil
+	case accesstoken.KindJWTExchange:
+		return false, nil
+	case accesstoken.KindPersonal, accesstoken.KindService:
+		// No exchange makes these kinds.
+		return false, unknownExchangeKind(kind)
+	}
+
+	// Fail closed on a kind that no code knows.
+	return false, unknownExchangeKind(kind)
 }
