@@ -32,6 +32,8 @@ func mtlsExchangeCases() []suiteCase {
 		{"RecordExchangeRefusesARuleAddedAfterTheRead", testMtlsLateRule},
 		{"RecordExchangeRefusesARuleOfAnotherBundle", testMtlsOtherBundle},
 		{"RecordExchangeRefusesAWildcardSPIFFEID", testMtlsWildcard},
+		{"RecordExchangeRefusesTheWrongRuleOfTheSPIFFEID", testMtlsWrongRule},
+		{"RecordExchangeRefusesASPIFFEIDOfNoRule", testMtlsNoRule},
 	}
 }
 
@@ -218,4 +220,33 @@ func testMtlsWildcard(t *testing.T, h Harness) {
 
 	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
 	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrInvalid, entries: oneRule})
+}
+
+// testMtlsWrongRule sends an exchange through rule R1, which names another
+// pattern, with the SPIFFE ID that only rule R2 names. R2 belongs to another
+// principal. Exactly one rule names the SPIFFE ID, and it is not the rule of
+// the exchange, so the token must not go to the principal of R1.
+func testMtlsWrongRule(t *testing.T, h Harness) {
+	t.Helper()
+
+	wrong := mtlsRule(t, h, "other", "spiffe://example.org/ns/acme/sa/other")
+	_ = mtlsRule(t, h, "deploy", mtlsSPIFFEID)
+	x := mtlsExchangeOf(&wrong, mtlsSPIFFEID)
+	fence := h.Namespace(t, nsAcme)
+
+	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", wrong.ID))
+	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: twoRules})
+}
+
+// testMtlsNoRule sends a SPIFFE ID that no rule of the bundle names.
+func testMtlsNoRule(t *testing.T, h Harness) {
+	t.Helper()
+
+	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
+	_ = mtlsRule(t, h, "other", "spiffe://example.org/ns/acme/sa/other")
+	x := mtlsExchangeOf(&r, "spiffe://example.org/ns/acme/sa/nobody")
+	fence := h.Namespace(t, nsAcme)
+
+	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
+	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: twoRules})
 }

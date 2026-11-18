@@ -112,13 +112,24 @@ func checkMtlsLeafRefused(t *testing.T) {
 	f := newFixture(t, nil)
 	at := f.clock.Now()
 
-	for _, leaf := range []time.Time{{}, at, at.Add(-time.Minute)} {
+	// Each leaf meets its own check: the text of the error names the check,
+	// so a test fails when one check goes and the other still refuses.
+	cases := []struct {
+		leaf time.Time
+		text string
+	}{
+		{time.Time{}, "is missing"},
+		{at, "is not after the issue time"},
+		{at.Add(-time.Minute), "is not after the issue time"},
+	}
+
+	for _, tc := range cases {
 		_, issueErr := f.svc.NewMtlsTrustToken(t.Context(), accesstoken.MtlsInput{
-			At: at, LeafNotAfter: leaf, PrincipalID: f.service.ID, Name: "trust rule trr-1",
+			At: at, LeafNotAfter: tc.leaf, PrincipalID: f.service.ID, Name: "trust rule trr-1",
 			CreatedBy: "trust-rule:trr-1",
 		})
-		if !errors.Is(issueErr, accesstoken.ErrInvalid) {
-			t.Errorf("leaf %s: NewMtlsTrustToken = %v, want ErrInvalid", leaf, issueErr)
+		if !errors.Is(issueErr, accesstoken.ErrInvalid) || !strings.Contains(issueErr.Error(), tc.text) {
+			t.Errorf("leaf %s: NewMtlsTrustToken = %v, want ErrInvalid with %q", tc.leaf, issueErr, tc.text)
 		}
 	}
 }
@@ -177,9 +188,13 @@ func checkMtlsBadPolicy(t *testing.T) {
 		At: at, LeafNotAfter: at.Add(time.Hour), PrincipalID: f.service.ID, Name: "trust rule trr-1",
 		CreatedBy: "trust-rule:trr-1",
 	})
-	if !errors.Is(issueErr, accesstoken.ErrInvalid) || issued.Token.ID != "" {
-		t.Fatalf("NewMtlsTrustToken with no exchange lifetime = %v, token %q; want ErrInvalid and no token",
-			issueErr, issued.Token.ID)
+	if !errors.Is(issueErr, accesstoken.ErrInvalid) || issued.Token.ID != "" ||
+		!strings.Contains(issueErr.Error(), "is not positive") {
+		t.Fatalf(
+			"NewMtlsTrustToken with no exchange lifetime = %v, token %q; want ErrInvalid (not positive) and no token",
+			issueErr,
+			issued.Token.ID,
+		)
 	}
 }
 

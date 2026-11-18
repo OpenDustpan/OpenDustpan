@@ -84,6 +84,14 @@ func TestCheckExchangeMatch(t *testing.T) {
 	wildcard.SpiffeIDPattern = "spiffe://example.org/ns/acme/sa/*"
 	noBundle := own
 	noBundle.BundleID = ""
+	// ownOther is the rule of the exchange with a pattern that is not the
+	// SPIFFE ID, while twin, another rule of the bundle, names the SPIFFE ID:
+	// exactly one rule matches, and it is not the rule of the exchange.
+	ownOther := own
+	ownOther.SpiffeIDPattern = "spiffe://example.org/ns/acme/sa/other"
+	// stray has the SPIFFE ID and no bundle: it is not in the bundle of the
+	// rule of the exchange, so it must not count as a second match.
+	stray := ruleRow(string(trustrule.NewID()), "", checkSPIFFEID)
 
 	cases := []struct {
 		name string
@@ -96,6 +104,9 @@ func TestCheckExchangeMatch(t *testing.T) {
 		{"no rule", nil, false},
 		{"its rule with a /* pattern", []trustrulestore.Row{wildcard}, false},
 		{"its rule with no bundle", []trustrulestore.Row{noBundle}, false},
+		{"another rule names the SPIFFE ID, its rule names another", []trustrulestore.Row{ownOther, twin}, false},
+		{"no rule names the SPIFFE ID", []trustrulestore.Row{ownOther, other}, false},
+		{"a rule with no bundle names the SPIFFE ID too", []trustrulestore.Row{own, stray}, true},
 	}
 
 	for _, tc := range cases {
