@@ -1104,6 +1104,18 @@ func (s *Service) backup(ctx context.Context, run backupRun) error {
 		return boundErr
 	}
 
+	// A registry file above a limit that a restore applies stops the backup
+	// here too, before the first copy and before the manifest. Defense in
+	// depth: the store collector checks the same limits, and this check does
+	// not rely on it, so an exporter that does not check cannot write a
+	// manifest that no restore accepts.
+	if limitErr := CheckRegistryFileLimits(exported.sum.RegistryFiles); limitErr != nil {
+		s.logger.WarnContext(ctx, "backup refused: a registry file is above the limit of a restore",
+			slog.String("backup", id.String()))
+
+		return limitErr
+	}
+
 	// The export refuses a key that a restore would refuse, so a poisoned row
 	// cannot make this backup and every later one unrestorable.
 	if keyErr := checkExportKeys(id, exported.sum.Blobs); keyErr != nil {
