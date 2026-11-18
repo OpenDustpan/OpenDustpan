@@ -157,13 +157,33 @@ func truncate(b []byte) string {
 	return string(b)
 }
 
-// checkNoEcho fails when the answer holds a part of a hostile input.
+// checkNoEcho fails when the answer holds a part of a hostile input. It checks
+// the raw bytes and the decoded message. The JSON encoder escapes a CR, a NUL
+// and a right-to-left mark, so only the decoded message can show an echo of
+// one of them.
 func checkNoEcho(t *testing.T, answer []byte) {
 	t.Helper()
+
+	var decoded struct {
+		Message string `json:"message"`
+	}
+
+	if err := json.Unmarshal(answer, &decoded); err != nil {
+		t.Errorf("the answer is not JSON: %q", truncate(answer))
+
+		return
+	}
 
 	for _, bad := range []string{"ZZ-marker", "\r", "\x00", "9223372036854775807", "\u202e"} {
 		if strings.Contains(string(answer), bad) {
 			t.Errorf("the answer holds %q of the input: %q", bad, truncate(answer))
+		}
+	}
+
+	// The decoded message must hold no control byte and no part of an input.
+	for _, bad := range []string{"ZZ-marker", "\r", "\n", "\x00", "9223372036854775807", "\u202e"} {
+		if strings.Contains(decoded.Message, bad) {
+			t.Errorf("the decoded message holds %q of the input: %q", bad, truncate(answer))
 		}
 	}
 }
