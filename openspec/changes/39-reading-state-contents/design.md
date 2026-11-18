@@ -74,6 +74,18 @@ C-->H-->S-->K
 | server boundary | I | secret value leaks in masked read, logs or errors | authorize at point of use | check unit:read on the unit | sibling-unit grant gives 403 |
 | server boundary | I | secret value leaks in masked read, logs or errors | fail closed | deny on open failure | break open and check 500 with no content |
 
+## Contract
+
+Inputs and outputs of the NEW tool-neutral masked read. The reveal of one value is not part of this change; it belongs to `39-reveal-state-value`.
+
+- Route: NEW `GET /api/dustpan/v1/units/{ref}/state`. Query: `version` (a state version or `latest`), `cursor` (opaque, optional). The existing Pulumi routes `GET /api/stacks/{org}/{project}/{stack}/state/{version}/resources`, `.../resources/{urn}`, `.../outputs` and `GET .../state/diff` stay as they are.
+- Output 200: one page of at most 200 markers. Each marker holds the JSON Pointer value path and a masked-value marker, never a plain secret value. A `nextCursor` field names the next page, or is absent on the last page. The marker is its own named schema in the API description.
+- Cursor: opaque. It binds the unit reference, the version, the caller subject and the offset, carries an HMAC and expires after 10 minutes.
+- Errors: 403 `unit.forbidden` (NEW code; caller has no `unit:read` on this unit; no secret bytes); 400 `state.bad-path` (NEW code; bad version, bad JSON Pointer, forged, expired, foreign or too long cursor; the body repeats no secret value); 404 unknown version; 413 for a version above 5 MB, answered before the content loads; 504 after the 30 second timeout, with no bytes; 500 with no content when the open fails. Repeated refusals count in the denial limiter of the server configuration.
+- Authorization: the action `unit:read` on the unit reference (tool, namespace ID, unit stable ID), checked in the handler and again in the tool service at the point of use.
+- Limits: 256 KB parse chunks, one version of at most 5 MB held at once, 200 markers per page.
+- Out of scope: single-path reveal, its action `unit:read-secrets` and its audit entry (`39-reveal-state-value`); this change adds no reveal code.
+
 ## Contracts
 
 **stack checkpoint read**
