@@ -572,7 +572,7 @@ func checkOverlongCursor(t *testing.T) {
 	// The control proves the same cursor with no padding is accepted.
 	valid := testCursor{
 		unit: obj.String(), version: "1", subject: r.p.Subject, offset: 0,
-		expiry: time.Now().Add(10 * time.Minute),
+		expiry: r.f.clock.Now().Add(10 * time.Minute),
 	}
 
 	if _, err := r.read(t, nil, mintCursor(t, testCursorKey(), valid)); err != nil {
@@ -607,7 +607,7 @@ func checkForgedCursor(t *testing.T) {
 
 	raw := mintCursor(t, testCursorKey(), testCursor{
 		unit: r.obj.String(), version: "1", subject: r.p.Subject, offset: 1,
-		expiry: time.Now().Add(10 * time.Minute),
+		expiry: r.f.clock.Now().Add(10 * time.Minute),
 	})
 
 	// A freshly minted cursor proves the hostile cases reuse the wire
@@ -654,7 +654,7 @@ func checkCursorBinding(t *testing.T) {
 	t.Helper()
 
 	r := newMaskedReader(t, deploymentWith(3))
-	later := time.Now().Add(10 * time.Minute)
+	later := r.f.clock.Now().Add(10 * time.Minute)
 
 	cases := []struct {
 		name   string
