@@ -258,7 +258,46 @@ func CheckExchange(x *trustrule.Exchange) error {
 			trustrule.ErrInvalid, accesstoken.KindMTLSExchange)
 	}
 
+	// Defense in depth: the mTLS service sets the bundle and its version from
+	// the verify of the chain. This check stays so that the store never
+	// stores an mTLS token with no bundle version to check in the
+	// transaction, and never a JWT token with one.
+	if mtls {
+		if x.Bundle.Validate() != nil || x.BundleVersion < 1 {
+			return fmt.Errorf("%w: a token of the kind %q needs a bundle ID and a bundle version of 1 or more",
+				trustrule.ErrInvalid, accesstoken.KindMTLSExchange)
+		}
+	} else if x.Bundle != "" || x.BundleVersion != 0 {
+		return fmt.Errorf("%w: a token of the kind %q has no bundle", trustrule.ErrInvalid, x.Token.Kind)
+	}
+
 	return nil
+}
+
+// CheckExchangeBundle returns trustrule.ErrNotFound unless the bundle of the
+// namespace of the fence exists, is the bundle x.Bundle, is the bundle of the
+// rule of the exchange (ruleBundleID), and has x.BundleVersion as its active
+// version. The adapters call it in the transaction of the exchange with the
+// stored bundle row of that namespace, so a rotate that came after the verify
+// of the chain still refuses the exchange. It returns nil for an exchange
+// that is not of the kind mtls-exchange.
+func CheckExchangeBundle(row *BundleRow, ruleBundleID string, x *trustrule.Exchange) error {
+	if x.Token.Kind != accesstoken.KindMTLSExchange {
+		return nil
+	}
+
+	switch {
+	case row == nil:
+		return fmt.Errorf("%w: the namespace has no trust bundle", trustrule.ErrNotFound)
+	case row.ID != string(x.Bundle) || ruleBundleID != string(x.Bundle):
+		return fmt.Errorf("%w: the bundle of the exchange is not the bundle of its rule and its namespace",
+			trustrule.ErrNotFound)
+	case row.Active != x.BundleVersion:
+		return fmt.Errorf("%w: version %d of the bundle is not the active version", trustrule.ErrNotFound,
+			x.BundleVersion)
+	default:
+		return nil
+	}
 }
 
 // CheckExchangeMatch returns trustrule.ErrNotFound unless exactly one row of

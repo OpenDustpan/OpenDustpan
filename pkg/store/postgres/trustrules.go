@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/trustrulestore"
@@ -321,6 +322,10 @@ func (t TrustRules) RecordExchange(
 			return matchErr
 		}
 
+		if bundleErr := checkExchangeBundle(ctx, q, fence.Namespace, row.BundleID, &x); bundleErr != nil {
+			return bundleErr
+		}
+
 		p, err := q.GetExchangePrincipal(ctx, x.Token.PrincipalID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("select the principal of the exchange: %w", err)
@@ -335,6 +340,31 @@ func (t TrustRules) RecordExchange(
 
 		return insertToken(ctx, q, x.Token, x.Digest)
 	})
+}
+
+// checkExchangeBundle reads the bundle of the namespace in the transaction of
+// the exchange and checks again that the bundle and the version that the
+// service verified are still the bundle of the rule and its active version.
+// It does nothing for an exchange that is not of the kind mtls-exchange.
+func checkExchangeBundle(
+	ctx context.Context, q *db.Queries, ns namespace.Name, ruleBundleID string, x *trustrule.Exchange,
+) error {
+	if x.Token.Kind != accesstoken.KindMTLSExchange {
+		return nil
+	}
+
+	b, err := q.GetTrustBundleOfNamespace(ctx, ns.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return trustrulestore.CheckExchangeBundle(nil, ruleBundleID, x)
+	}
+
+	if err != nil {
+		return fmt.Errorf("select the trust bundle of the exchange: %w", err)
+	}
+
+	return trustrulestore.CheckExchangeBundle(&trustrulestore.BundleRow{
+		ID: b.ID, Namespace: b.Namespace, Active: b.ActiveVersion, Revision: b.Revision, CreatedAtMs: b.CreatedAtMs,
+	}, ruleBundleID, x)
 }
 
 // checkExchangeMatch matches the SPIFFE ID of an mTLS exchange again against

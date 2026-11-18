@@ -12,9 +12,24 @@ import (
 
 const checkSPIFFEID = "spiffe://example.org/ns/acme/sa/deploy"
 
+// checkBundleID and checkBundleVersion are the verified bundle of the
+// exchanges of these tests.
+const (
+	checkBundleID      trustrule.BundleID = "trb-0123456789abcdef0123456789abcdef"
+	checkBundleVersion int64              = 3
+)
+
 // exchangeOfKind returns an exchange of a token of kind with spiffeID.
 func exchangeOfKind(kind accesstoken.Kind, spiffeID string) trustrule.Exchange {
 	at := time.UnixMilli(1_700_000_000_000).UTC()
+
+	var bundle trustrule.BundleID
+
+	var version int64
+
+	if kind == accesstoken.KindMTLSExchange {
+		bundle, version = checkBundleID, checkBundleVersion
+	}
 
 	return trustrule.Exchange{
 		Token: accesstoken.Token{
@@ -23,6 +38,7 @@ func exchangeOfKind(kind accesstoken.Kind, spiffeID string) trustrule.Exchange {
 			ReplacedBy: "", CreatedBy: "trust-rule",
 		},
 		Digest: accesstoken.Digest{}, Rule: trustrule.NewID(), SPIFFEID: spiffeID,
+		Bundle: bundle, BundleVersion: version,
 	}
 }
 
@@ -119,5 +135,92 @@ func TestCheckExchangeMatch(t *testing.T) {
 	jwt := exchangeOfKind(accesstoken.KindJWTExchange, "")
 	if err := trustrulestore.CheckExchangeMatch(nil, &jwt); err != nil {
 		t.Errorf("CheckExchangeMatch of a jwt-exchange = %v, want nil", err)
+	}
+}
+
+// TestCheckExchangeBundleFields sends an exchange with a wrong bundle ID or
+// version to the check before the transaction, as if the service had set them
+// wrong.
+func TestCheckExchangeBundleFields(t *testing.T) {
+	t.Parallel()
+
+	mtls := func(edit func(*trustrule.Exchange)) trustrule.Exchange {
+		x := exchangeOfKind(accesstoken.KindMTLSExchange, checkSPIFFEID)
+		edit(&x)
+
+		return x
+	}
+
+	cases := []struct {
+		name string
+		x    trustrule.Exchange
+	}{
+		{"no bundle ID", mtls(func(x *trustrule.Exchange) { x.Bundle = "" })},
+		{"a bundle ID that is not valid", mtls(func(x *trustrule.Exchange) { x.Bundle = "not a bundle" })},
+		{"version 0", mtls(func(x *trustrule.Exchange) { x.BundleVersion = 0 })},
+		{"a negative version", mtls(func(x *trustrule.Exchange) { x.BundleVersion = -1 })},
+		{"a jwt-exchange token with a bundle ID", func() trustrule.Exchange {
+			x := exchangeOfKind(accesstoken.KindJWTExchange, "")
+			x.Bundle = checkBundleID
+
+			return x
+		}()},
+		{"a jwt-exchange token with a bundle version", func() trustrule.Exchange {
+			x := exchangeOfKind(accesstoken.KindJWTExchange, "")
+			x.BundleVersion = 1
+
+			return x
+		}()},
+	}
+
+	for _, tc := range cases {
+		if err := trustrulestore.CheckExchange(&tc.x); !errors.Is(err, trustrule.ErrInvalid) {
+			t.Errorf("%s: CheckExchange = %v, want ErrInvalid", tc.name, err)
+		}
+	}
+}
+
+// TestCheckExchangeBundle sends bundle rows to the check in the transaction
+// of an mTLS exchange, as if the bundle had changed after the verify.
+func TestCheckExchangeBundle(t *testing.T) {
+	t.Parallel()
+
+	x := exchangeOfKind(accesstoken.KindMTLSExchange, checkSPIFFEID)
+	id := string(checkBundleID)
+	row := &trustrulestore.BundleRow{
+		ID: id, Namespace: "acme", Active: checkBundleVersion, Revision: 1, CreatedAtMs: 1_700_000_000_000,
+	}
+	rotated := *row
+	rotated.Active = checkBundleVersion + 1
+	older := *row
+	older.Active = checkBundleVersion - 1 // never equal to the verified version
+	twin := *row
+	twin.ID = "trb-other"
+
+	cases := []struct {
+		name       string
+		row        *trustrulestore.BundleRow
+		ruleBundle string
+		ok         bool
+	}{
+		{"the active version of its bundle", row, id, true},
+		{"no bundle row", nil, id, false},
+		{"a new active version", &rotated, id, false},
+		{"an older active version", &older, id, false},
+		{"a row of another bundle", &twin, id, false},
+		{"a rule of another bundle", row, "trb-other", false},
+		{"a rule with no bundle", row, "", false},
+	}
+
+	for _, tc := range cases {
+		err := trustrulestore.CheckExchangeBundle(tc.row, tc.ruleBundle, &x)
+		if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, trustrule.ErrNotFound)) {
+			t.Errorf("%s: CheckExchangeBundle = %v, want ok %v", tc.name, err, tc.ok)
+		}
+	}
+
+	jwt := exchangeOfKind(accesstoken.KindJWTExchange, "")
+	if err := trustrulestore.CheckExchangeBundle(nil, "", &jwt); err != nil {
+		t.Errorf("CheckExchangeBundle of a jwt-exchange = %v, want nil", err)
 	}
 }

@@ -34,6 +34,9 @@ func mtlsExchangeCases() []suiteCase {
 		{"RecordExchangeRefusesAWildcardSPIFFEID", testMtlsWildcard},
 		{"RecordExchangeRefusesTheWrongRuleOfTheSPIFFEID", testMtlsWrongRule},
 		{"RecordExchangeRefusesASPIFFEIDOfNoRule", testMtlsNoRule},
+		{"RecordExchangeRefusesABundleOfNoRow", testMtlsNoBundle},
+		{"RecordExchangeRefusesABundleThatRotatedAfterTheVerify", testMtlsRotatedBundle},
+		{"RecordExchangeRefusesTheBundleOfAnotherNamespace", testMtlsOtherNamespaceBundle},
 	}
 }
 
@@ -64,10 +67,21 @@ func mtlsRule(t *testing.T, h Harness, name, pattern string) trustrule.Rule {
 
 // mtlsExchangeOf returns an exchange of a new token of the kind
 // mtls-exchange through r with the SPIFFE ID spiffeID.
-func mtlsExchangeOf(r *trustrule.Rule, spiffeID string) trustrule.Exchange {
+// The exchange carries the bundle and the active version that the bundle of
+// acme has now, as a verify of the chain would.
+func mtlsExchangeOf(t *testing.T, h Harness, r *trustrule.Rule, spiffeID string) trustrule.Exchange {
+	t.Helper()
+
+	b, err := h.Bundles.GetBundle(t.Context(), nsAcme)
+	if err != nil {
+		t.Fatalf("get bundle: %v", err)
+	}
+
 	x := exchangeOf(r)
 	x.Token.Kind = accesstoken.KindMTLSExchange
 	x.SPIFFEID = spiffeID
+	x.Bundle = b.ID
+	x.BundleVersion = b.Active
 
 	return x
 }
@@ -102,7 +116,7 @@ func testMtlsStores(t *testing.T, h Harness) {
 
 	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
 	_ = mtlsRule(t, h, "other", "spiffe://example.org/ns/acme/sa/other")
-	x := mtlsExchangeOf(&r, mtlsSPIFFEID)
+	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
 	fence := h.Namespace(t, nsAcme)
 
 	if err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID)); err != nil {
@@ -125,7 +139,7 @@ func testMtlsNoSPIFFEID(t *testing.T, h Harness) {
 	t.Helper()
 
 	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
-	x := mtlsExchangeOf(&r, "")
+	x := mtlsExchangeOf(t, h, &r, "")
 	fence := h.Namespace(t, nsAcme)
 
 	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
@@ -149,7 +163,7 @@ func testMtlsTwoRules(t *testing.T, h Harness) {
 
 	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
 	_ = mtlsRule(t, h, "twin", mtlsSPIFFEID)
-	x := mtlsExchangeOf(&r, mtlsSPIFFEID)
+	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
 	fence := h.Namespace(t, nsAcme)
 
 	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
@@ -164,13 +178,13 @@ func testMtlsLateRule(t *testing.T, h Harness) {
 	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
 	fence := h.Namespace(t, nsAcme)
 
-	first := mtlsExchangeOf(&r, mtlsSPIFFEID)
+	first := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
 	if err := h.Exchanges.RecordExchange(t.Context(), first, fence, auditEntry(nsAcme, "exchange", r.ID)); err != nil {
 		t.Fatalf("RecordExchange before the second rule = %v", err)
 	}
 
 	_ = mtlsRule(t, h, "late", mtlsSPIFFEID)
-	second := mtlsExchangeOf(&r, mtlsSPIFFEID)
+	second := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
 
 	err := h.Exchanges.RecordExchange(t.Context(), second, fence, auditEntry(nsAcme, "exchange", r.ID))
 	if !errors.Is(err, trustrule.ErrNotFound) {
@@ -196,14 +210,14 @@ func testMtlsOtherBundle(t *testing.T, h Harness) {
 	plain := newRule(nsAcme, "plain", workload(t, h, nsAcme))
 	mustCreate(t, h, plain)
 
-	x := mtlsExchangeOf(&plain, mtlsSPIFFEID)
+	x := mtlsExchangeOf(t, h, &plain, mtlsSPIFFEID)
 
 	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", plain.ID))
 	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: twoRules})
 
 	// The rule of the exchange is in the bundle, and no rule of the bundle
 	// names the SPIFFE ID that the exchange carries.
-	y := mtlsExchangeOf(&named, "spiffe://example.org/ns/acme/sa/unnamed")
+	y := mtlsExchangeOf(t, h, &named, "spiffe://example.org/ns/acme/sa/unnamed")
 
 	err = h.Exchanges.RecordExchange(t.Context(), y, fence, auditEntry(nsAcme, "exchange", named.ID))
 	mustRefuseMtls(t, h, &y, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: twoRules})
@@ -215,7 +229,7 @@ func testMtlsWildcard(t *testing.T, h Harness) {
 	t.Helper()
 
 	r := mtlsRule(t, h, "wildcard", mtlsWildcard)
-	x := mtlsExchangeOf(&r, mtlsWildcard)
+	x := mtlsExchangeOf(t, h, &r, mtlsWildcard)
 	fence := h.Namespace(t, nsAcme)
 
 	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
@@ -231,7 +245,7 @@ func testMtlsWrongRule(t *testing.T, h Harness) {
 
 	wrong := mtlsRule(t, h, "other", "spiffe://example.org/ns/acme/sa/other")
 	_ = mtlsRule(t, h, "deploy", mtlsSPIFFEID)
-	x := mtlsExchangeOf(&wrong, mtlsSPIFFEID)
+	x := mtlsExchangeOf(t, h, &wrong, mtlsSPIFFEID)
 	fence := h.Namespace(t, nsAcme)
 
 	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", wrong.ID))
@@ -244,9 +258,70 @@ func testMtlsNoRule(t *testing.T, h Harness) {
 
 	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
 	_ = mtlsRule(t, h, "other", "spiffe://example.org/ns/acme/sa/other")
-	x := mtlsExchangeOf(&r, "spiffe://example.org/ns/acme/sa/nobody")
+	x := mtlsExchangeOf(t, h, &r, "spiffe://example.org/ns/acme/sa/nobody")
 	fence := h.Namespace(t, nsAcme)
 
 	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
 	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: twoRules})
+}
+
+// testMtlsNoBundle sends the ID of a bundle that has no row. A bundle that an
+// operator removed gives the same state. The stored rule is valid, so only the
+// check of the bundle can refuse the exchange.
+func testMtlsNoBundle(t *testing.T, h Harness) {
+	t.Helper()
+
+	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
+	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
+	x.Bundle = trustrule.NewBundleID()
+	fence := h.Namespace(t, nsAcme)
+
+	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
+	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: oneRule})
+}
+
+// testMtlsRotatedBundle builds the exchange from the active version, then
+// rotates the bundle, as a call between the verify of the chain and the record
+// would. The version of the exchange is not the active version any more.
+func testMtlsRotatedBundle(t *testing.T, h Harness) {
+	t.Helper()
+
+	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
+	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
+	fence := h.Namespace(t, nsAcme)
+
+	first := mustGetBundle(t, h)
+
+	_, err := h.Bundles.RotateBundle(t.Context(), nsAcme, rotateFields(testCA(t), rotateOverlap, first.Revision),
+		fence, bundleEntry(nsAcme, "rotate"))
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	err = h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
+	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: oneRule})
+}
+
+// testMtlsOtherNamespaceBundle sends the bundle of another namespace with the
+// rule of acme. The rule is valid in acme, so only the check of the bundle can
+// refuse the exchange.
+func testMtlsOtherNamespaceBundle(t *testing.T, h Harness) {
+	t.Helper()
+
+	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
+	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
+	otherFence := h.Namespace(t, nsOther)
+
+	other, err := h.Bundles.SaveBundle(t.Context(), nsOther, saveFields(testCA(t)), otherFence,
+		bundleEntry(nsOther, "save"))
+	if err != nil {
+		t.Fatalf("save bundle of %s: %v", nsOther, err)
+	}
+
+	x.Bundle = other.ID
+	x.BundleVersion = other.Active
+	fence := h.Namespace(t, nsAcme)
+
+	err = h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
+	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: oneRule})
 }
