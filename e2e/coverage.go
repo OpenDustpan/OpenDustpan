@@ -60,6 +60,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 	registryRoutes := coverageRegistryRoutes(tb)
 	sourceFilterRoutes := coverageSourceFilterRoutes(tb, namespaces)
 	trustRuleRoutes := coverageTrustRuleRoutes(tb, namespaces)
+	stateRoutes := coverageStateRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
 	out := slices.Concat(
@@ -79,6 +80,7 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 		registryRoutes,
 		sourceFilterRoutes,
 		trustRuleRoutes,
+		stateRoutes,
 		server,
 	)
 	out = slices.Grow(out, probeRouteCount)
@@ -207,6 +209,7 @@ func CoverageAllowlist() []AllowEntry {
 		operatorAllowEntries(),
 		stateAllowEntries(),
 		tofuStateAtAllowEntries(),
+		unitsStateAllowEntries(),
 		restoreAllowEntries(),
 		journalAllowEntries(),
 		tofuHTTPAllowEntries(),
