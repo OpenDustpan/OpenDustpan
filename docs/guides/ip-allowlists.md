@@ -42,6 +42,17 @@ curl -si -X PATCH -H "Authorization: Bearer $TOKEN" \
 The caller needs `server:manage-settings`. The answer is `200` with the new
 resource and the new `ETag`. The change takes effect at once.
 
+Both keys have `mayReduceSecurity` set to `true`, so a change to them needs a
+fresh sign-in when the installation has console sign-in (the server has a
+public URL). An access token never gives a fresh sign-in. With an access token,
+the example above gets `403` with the code `mfa.fresh-step-required`, and
+nothing changes. To satisfy the rule, sign in to the console again, and make the
+change in the console, or with the session of that new sign-in. The console
+sends the session cookie `__Host-dustpan_session` and the `X-Dustpan-CSRF`
+header. When the installation has no console sign-in, the access token in the
+example is enough. The [settings guide](settings.md#changes-that-need-a-fresh-sign-in)
+explains the rule.
+
 The list value is one string of CIDRs or addresses, separated by commas:
 
 - Each item is a CIDR, such as `10.0.0.0/8`, or a single address, such as
