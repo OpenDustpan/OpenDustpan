@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -407,6 +408,67 @@ func TestJoinRequestValidate(t *testing.T) {
 		err := req.Validate()
 		if tc.ok != (err == nil) || (err != nil && !errors.Is(err, runner.ErrInvalid)) {
 			t.Errorf("%s: Validate = %v, want ok %v", tc.name, err, tc.ok)
+		}
+	}
+}
+
+// TestPoolValidateGivesFieldErrors shows that each refusal of Validate is a
+// FieldError that names its field, wraps ErrInvalid, and holds no part of the
+// value that the caller sent.
+func TestPoolValidateGivesFieldErrors(t *testing.T) {
+	t.Parallel()
+
+	const marker = "ZZ-marker"
+
+	tests := []struct {
+		name  string
+		field string
+		edit  func(*runner.Pool)
+	}{
+		{"name", "name", func(p *runner.Pool) { p.Name = marker + "\r\n\x00" + strings.Repeat("a", 10<<10) }},
+		{"name empty", "name", func(p *runner.Pool) { p.Name = "" }},
+		{"purpose", "purpose", func(p *runner.Pool) { p.Purpose = marker + "\r\n" }},
+		{"purpose missing", "purpose", func(p *runner.Pool) { p.Purpose = "" }},
+		{"lease low", "lease", func(p *runner.Pool) { p.Lease = time.Second }},
+		{"lease negative", "lease", func(p *runner.Pool) { p.Lease = time.Duration(math.MinInt64) }},
+		{"lease huge", "lease", func(p *runner.Pool) { p.Lease = time.Duration(math.MaxInt64) }},
+		{"concurrency negative", "concurrency", func(p *runner.Pool) { p.Concurrency = math.MinInt }},
+		{"concurrency huge", "concurrency", func(p *runner.Pool) { p.Concurrency = math.MaxInt }},
+		{"isolation", "isolation", func(p *runner.Pool) { p.Isolation = []runner.Isolation{marker + "\x00"} }},
+		{"git credential mode", "gitCredentials.mode", func(p *runner.Pool) {
+			p.GitCredentials.Mode = marker + "\u202e"
+		}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := pool(runner.PurposeJobs)
+			tc.edit(&p)
+
+			err := p.Validate()
+			if !errors.Is(err, runner.ErrInvalid) {
+				t.Fatalf("Validate = %v, want ErrInvalid", err)
+			}
+
+			fe, ok := errors.AsType[*runner.FieldError](err)
+			if !ok || fe.Field() != tc.field {
+				t.Fatalf("Validate = %v, want a FieldError for %q", err, tc.field)
+			}
+
+			checkNoInputInError(t, err.Error()+fe.Sentence())
+		})
+	}
+}
+
+// checkNoInputInError fails when text holds a part of a hostile input.
+func checkNoInputInError(t *testing.T, text string) {
+	t.Helper()
+
+	for _, bad := range []string{"ZZ-marker", "\r", "\n", "\x00", "\u202e", "9223372036854775807"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("the error holds %q of the input: %q", bad, text)
 		}
 	}
 }
