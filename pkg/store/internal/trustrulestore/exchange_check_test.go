@@ -26,9 +26,9 @@ func exchangeOfKind(kind accesstoken.Kind, spiffeID string) trustrule.Exchange {
 	}
 }
 
-// TestCheckExchangeKind sends each kind of token, with and without a SPIFFE
+// TestCheckExchangeKinds sends each kind of token, with and without a SPIFFE
 // ID, to the check before the transaction of an exchange.
-func TestCheckExchangeKind(t *testing.T) {
+func TestCheckExchangeKinds(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {

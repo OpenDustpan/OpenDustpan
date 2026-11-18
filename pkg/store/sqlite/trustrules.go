@@ -334,6 +334,10 @@ func (t TrustRules) RecordExchange(
 			return ruleErr
 		}
 
+		if matchErr := checkExchangeMatch(ctx, q, fence.Namespace, &x); matchErr != nil {
+			return matchErr
+		}
+
 		p, err := q.GetExchangePrincipal(ctx, x.Token.PrincipalID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("select the principal of the exchange: %w", err)
@@ -348,4 +352,26 @@ func (t TrustRules) RecordExchange(
 
 		return insertToken(ctx, q, x.Token, x.Digest)
 	})
+}
+
+// checkExchangeMatch matches the SPIFFE ID of an mTLS exchange again against
+// the rules of the namespace, in the transaction of the exchange, so that a
+// rule that another call added after the service read its rules still
+// refuses the exchange. It does nothing for an exchange with no SPIFFE ID.
+func checkExchangeMatch(ctx context.Context, q *db.Queries, ns namespace.Name, x *trustrule.Exchange) error {
+	if x.SPIFFEID == "" {
+		return nil
+	}
+
+	rows, err := q.ListTrustRulesOfNamespace(ctx, ns.String())
+	if err != nil {
+		return fmt.Errorf("select the trust rules of the exchange: %w", err)
+	}
+
+	list := make([]trustrulestore.Row, 0, len(rows))
+	for i := range rows {
+		list = append(list, trustRuleListRow(rows[i]))
+	}
+
+	return trustrulestore.CheckExchangeMatch(list, x)
 }
