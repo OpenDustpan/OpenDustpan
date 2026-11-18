@@ -2,7 +2,10 @@ package workspace
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"io"
+	"time"
 )
 
 // The reveal lookup over bytes and over an opener, and the masked set, for
@@ -34,3 +37,33 @@ func RevealValue(state []byte, marks SensitiveMarks, path string) (any, []string
 func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
 	return maskedResourcePaths(state, marks)
 }
+
+// MintMaskedCursor makes a cursor of the masked read for the tests, bound to
+// unit, version and subject, with the page at offset, as of now.
+func MintMaskedCursor(key []byte, unit, version, subject string, offset int, now time.Time) (string, error) {
+	return mintMaskedCursor(key, maskedBinding{Unit: unit, Version: version, Subject: subject}, offset, now)
+}
+
+// SignMaskedCursor returns a cursor of the masked read over an arbitrary
+// payload, signed with key, so a test reaches the checks after the signature.
+func SignMaskedCursor(key, payload []byte) string {
+	return base64.RawURLEncoding.EncodeToString(payload) + "." +
+		base64.RawURLEncoding.EncodeToString(signMaskedCursor(key, payload))
+}
+
+// ReadMaskedChunks is readMaskedChunks for the tests.
+func ReadMaskedChunks(ctx context.Context, r io.Reader) ([]byte, error) {
+	return readMaskedChunks(ctx, r)
+}
+
+// MaskedChunkBytes is the chunk size of the masked read, for the tests.
+const MaskedChunkBytes = maskedChunkBytes
+
+// MaskedMaxVersionBytes is the size limit of the masked read, for the tests.
+const MaskedMaxVersionBytes = maskedMaxVersionBytes
+
+// MaskedMaxCursorBytes is the length limit of a cursor, for the tests.
+const MaskedMaxCursorBytes = maskedMaxCursorBytes
+
+// MaskedPageMarkers is the size of a page of the masked read, for the tests.
+const MaskedPageMarkers = maskedPageMarkers
