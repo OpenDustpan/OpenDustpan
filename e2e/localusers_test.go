@@ -113,7 +113,8 @@ func runLocalPasswordWithoutPublicURL(t *testing.T, env *e2e.Env) {
 	policy := c.send(t, http.MethodGet, "/api/dustpan/v1/local-users/policy", "", asAdmin())
 	policy.want(t, "read the policy", http.StatusOK, "")
 
-	if !strings.Contains(policy.body, `"enabled":false`) || !strings.Contains(policy.body, `"enabledSource":"public-url"`) {
+	if !strings.Contains(policy.body, `"enabled":false`) ||
+		!strings.Contains(policy.body, `"enabledSource":"public-url"`) {
 		t.Fatalf("policy = %s, want the password sign-in off with the source public-url", policy.body)
 	}
 

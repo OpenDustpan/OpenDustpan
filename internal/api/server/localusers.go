@@ -221,6 +221,15 @@ var errLocalUsersUnavailable = &codedError{
 	message: "this server keeps no local users",
 }
 
+// errPublicURLRequired is the answer of a route that checks a password or a
+// code on a server that has no console sign-in. The sign-in needs the public
+// URL for the origin of its session cookie and for the check of the request
+// origin, so the answer names the flag.
+var errPublicURLRequired = &codedError{
+	status: http.StatusForbidden, code: errcode.LocalUserPublicURLRequired, args: nil,
+	message: "password sign-in is off because the server has no public URL: start the server with --public-url",
+}
+
 // errLocalUserBody is the answer of a body that is not the JSON object of the
 // route.
 var errLocalUserBody = &codedError{
@@ -231,7 +240,9 @@ var errLocalUserBody = &codedError{
 // localUserRoutes returns the rows of the local user routes. A handler with no
 // local user service mounts none. The routes that check a password or a
 // one-time code need the console sign-in, for its session, and its password
-// budget: with either one missing, they are not mounted.
+// budget. The public routes stay mounted without them and answer
+// errPublicURLRequired, so that a caller sees the cause and not a missing
+// route.
 func (h *Handler) localUserRoutes() []Route {
 	if h.localUsers == nil {
 		return nil
@@ -265,39 +276,47 @@ func (h *Handler) localUserRoutes() []Route {
 		},
 	}...)
 
-	if h.signIn == nil || h.signIn.passwords == nil {
-		return routes
-	}
-
-	return append(routes,
+	routes = append(routes,
 		Route{
 			Method: http.MethodPost, Path: localUserRedeemPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
 			ActionsFor: nil, OpaqueDenial: false, Serve: h.redeemLocalUserCode,
-		},
-		Route{
-			Method: http.MethodPost, Path: ownSignInChangePath, Scope: ScopeAuthorized, Actions: own,
-			Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.changeOwnPassword,
 		},
 		Route{
 			Method: http.MethodPost, Path: localSignInPath, Scope: ScopePublic, Actions: nil, Resolve: nil,
 			ActionsFor: nil, OpaqueDenial: false, Serve: h.passwordSignIn,
 		},
 	)
+
+	// The change of the own password needs a session. A server with no
+	// console sign-in has none, so it does not mount this route.
+	if h.signIn == nil || h.signIn.passwords == nil {
+		return routes
+	}
+
+	return append(routes, Route{
+		Method: http.MethodPost, Path: ownSignInChangePath, Scope: ScopeAuthorized, Actions: own,
+		Resolve: resolveCaller, ActionsFor: nil, OpaqueDenial: false, Serve: h.changeOwnPassword,
+	})
 }
 
-// localUserRouteCount is the count of the local user routes: three to
-// manage the local users and three that check a password or a code.
-const localUserRouteCount = 6
+// localUserRouteCount is the count of the local user routes: five to manage
+// the local users, two that check a code or a password, and the change of
+// the own password.
+const localUserRouteCount = 8
 
 // admitPassword waits or refuses as the password budget of the address of
 // the request says. A handler with no password budget refuses: it fails
 // closed.
 //
-// Defense in depth: localUserRoutes mounts no password route without the
-// budget. This check stays so that a change to the route table never serves
-// a password check with no limit.
+// Defense in depth: the service refuses the same case with its own error.
+// This check stays so that a change to the service never serves a password
+// check with no limit. It does not rely on the check of the route table.
 func (h *Handler) admitPassword(ctx context.Context) error {
-	if h.signIn == nil || h.signIn.passwords == nil {
+	if h.signIn == nil {
+		return errPublicURLRequired
+	}
+
+	if h.signIn.passwords == nil {
 		return errLocalUsersUnavailable
 	}
 
@@ -338,10 +357,19 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 
 	noReferrer(w)
 
-	// Defense in depth: localUserRoutes mounts this route only with a console
-	// sign-in and a local user service. This check stays so that a change to
-	// the route table never serves a sign-in with no session service.
-	if h.signIn == nil || h.localUsers == nil {
+	// Without a console sign-in the server has no session to give: answer the
+	// cause before the check of the request origin, which needs the sign-in.
+	//
+	// Defense in depth: the service and the route table do not decide this
+	// case alone. This check stays so that a change to the route table never
+	// serves a sign-in with no session service.
+	if h.signIn == nil {
+		h.writeError(ctx, w, errPublicURLRequired)
+
+		return
+	}
+
+	if h.localUsers == nil {
 		h.writeError(ctx, w, errLocalUsersUnavailable)
 
 		return
@@ -794,6 +822,10 @@ func localUserErrors() []localUserMapping {
 				args:    nil,
 				message: "password sign-in is off on this installation",
 			},
+		},
+		{
+			err:    localuser.ErrPublicURLRequired,
+			answer: errPublicURLRequired,
 		},
 		{
 			err: localuser.ErrSecondFactorRequired,
