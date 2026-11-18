@@ -2,6 +2,8 @@
 version: 6
 ---
 
+Issue: #3563.
+
 ## Why
 
 **Persona: developer.** A Developer needs to read what a stack or workspace holds without seeing secret values.
