@@ -488,6 +488,10 @@ func TestRoutesRefuseLabelConflict(t *testing.T) {
 
 	srv := newLabelTestServerWith(t, func(o *settings) { cfg = o })
 
+	if cfg == nil {
+		t.Fatal("the option did not capture the settings")
+	}
+
 	conflicting := *srv.mounted
 	// The root mux labels "/api/inventory/" as inventory.
 	conflicting.pulumi = listerStub{patterns: []string{"GET /api/inventory/"}}
