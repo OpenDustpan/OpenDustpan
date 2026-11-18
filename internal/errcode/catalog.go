@@ -120,6 +120,7 @@ func areas() []func() []Spec {
 		sinkSpecs,
 		sourceSpecs,
 		stackSpecs,
+		stateSpecs,
 		stateVersionSpecs,
 		storeCheckSpecs,
 		storeSpecs,

@@ -5,6 +5,8 @@ package errcode
 const (
 	// UnitClientEncrypted means that the client encrypted the state of the unit, so the server cannot read its outputs.
 	UnitClientEncrypted = "unit.client-encrypted"
+	// UnitForbidden means that the caller lacks the required action on the unit.
+	UnitForbidden = "unit.forbidden"
 	// UnitDeletedNotFound means that the namespace has no deleted unit with the name.
 	UnitDeletedNotFound = "unit.deleted-not-found"
 	// UnitHistoryUnavailable means that the inventory store of the server keeps no change log.
@@ -31,6 +33,7 @@ func unitSpecs() []Spec {
 			Meaning: "the client encrypted the state of the unit, so the server cannot read its outputs",
 			Args:    nil,
 		},
+		{Code: UnitForbidden, Meaning: "the caller lacks the required action on the unit", Args: nil},
 		{Code: UnitDeletedNotFound, Meaning: "the namespace has no deleted unit with the name", Args: nil},
 		{
 			Code:    UnitHistoryUnavailable,
