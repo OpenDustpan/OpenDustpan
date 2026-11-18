@@ -18,7 +18,8 @@ Errors the person may hit, and the one command that helps:
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
 | masked read without unit:read grant | 403 with no secret bytes, body names the missing action and the one docs command. | `curl -H "Authorization: Bearer $TOKEN" /api/stacks/{org}/{project}/{stack}/state/{version}/resources` |
-| bad version or bad value path | 400 with the NEW error code `state.bad-path`, body repeats no secret value. | `curl -H "Authorization: Bearer $TOKEN" /api/stacks/{org}/{project}/{stack}/state/{version}/outputs` |
+| bad version or bad cursor | 400 with the NEW error code `state.bad-path`, body repeats no secret value. | `curl -H "Authorization: Bearer $TOKEN" /api/stacks/{org}/{project}/{stack}/state/{version}/outputs` |
+| read passes the 30 second timeout | 504 with the NEW error code `state.read-timeout` and no bytes. | `curl -H "Authorization: Bearer $TOKEN" /api/stacks/{org}/{project}/{stack}/state/{version}/outputs` |
 
 Evidence for the claims above:
 
@@ -28,8 +29,8 @@ Evidence for the claims above:
 
 - Keep existing Pulumi masked state routes unchanged
 - Add the NEW tool-neutral route `GET /api/dustpan/v1/units/{ref}/state` with unit:read
-- Add the NEW error codes `unit.forbidden` and `state.bad-path` with no secret bytes in error text
-- Declare 200 markers per page, opaque cursor, 256 KB chunks, 5 MB version bound and 30 second timeout
+- Add the NEW error codes `unit.forbidden`, `state.bad-path` and `state.read-timeout` with no secret bytes in error text
+- Declare 200 markers per page, opaque cursor, 256 KB chunks, 5 MB version bound and 30 second timeout (the answer of the timeout carries `state.read-timeout`)
 - Single-path reveal moves to the change `39-reveal-state-value`, which depends on this change
 
 Out of scope:
@@ -44,7 +45,7 @@ Out of scope:
 
 Where the path still costs the person time or surprises them:
 
-- Masked output stays machine-readable with stable value paths.
+- Masked output lists the marker paths and stays machine-readable with stable value paths.
 - Masked output shows no plain secret; the next change adds the explicit reveal step.
 
 ## What main already does
@@ -77,6 +78,15 @@ Each quote is copied from the file in `docs/adr/`. Code adds the owner tags, the
 - Current rule: this ADR, with ADR 247, 286.
 - Quote: "Paths that stay outside `/api/dustpan/v1`. A protocol endpoint that an external system stores (a CLI, a runner, an IdP, a cloud trust policy) is not part of `/api/dustpan/v1` and has no API version."
 - Effect: The NEW tool-neutral masked read lives under /api/dustpan/v1; the stored CLI and runner paths do not move.
+- Conflict: none.
+
+**ADR 382: A repeatable domain refusal goes through the shared denial limiter** (owner, 2026-11-15).
+
+- Decisions that apply: 1 (current), 3 (current).
+- Changed by: none. Current rule: this ADR.
+- Quote: "A domain refusal that the same caller can repeat, for example a redeliver that comes too soon or a redeliver at its limit, goes through the shared denial limiter. The first refusal of a key in a window writes the audit entry. The limiter counts the later identical refusals, and the next entry of the key reports the count."
+- Quote: "A new domain refusal that a caller can repeat records its audit entry through the shared denial limiter."
+- Effect: The masked read sends its refusals to the shared denial limiter. The answer to the caller does not change: each refusal keeps its own status (403, 400, 413, 504). The ADR requires no 429 on a masked read.
 - Conflict: none.
 
 ## Open questions
