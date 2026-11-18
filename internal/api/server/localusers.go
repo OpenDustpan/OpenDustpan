@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"time"
 
+	denials "opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/errcode"
 	"opendustpan.org/opendustpan/internal/localusersvc"
@@ -227,7 +228,7 @@ var errLocalUsersUnavailable = &codedError{
 // origin, so the answer names the flag.
 var errPublicURLRequired = &codedError{
 	status: http.StatusForbidden, code: errcode.LocalUserPublicURLRequired, args: nil,
-	message: "password sign-in is off because the server has no public URL: start the server with --public-url",
+	message: "password sign-in is off because the server has no usable public URL: start the server with --public-url",
 }
 
 // errLocalUserBody is the answer of a body that is not the JSON object of the
@@ -311,8 +312,16 @@ const localUserRouteCount = 8
 // Defense in depth: the service refuses the same case with its own error.
 // This check stays so that a change to the service never serves a password
 // check with no limit. It does not rely on the check of the route table.
-func (h *Handler) admitPassword(ctx context.Context) error {
+//
+// A refusal for a missing console sign-in writes one denied entry through the
+// bounded recorder of the handler, so a caller cannot fill the audit log with
+// it.
+func (h *Handler) admitPassword(r *http.Request) error {
+	ctx := r.Context()
+
 	if h.signIn == nil {
+		h.recordPublicURLRequired(ctx, r)
+
 		return errPublicURLRequired
 	}
 
@@ -321,6 +330,24 @@ func (h *Handler) admitPassword(ctx context.Context) error {
 	}
 
 	return h.signIn.passwords.Admit(ctx)
+}
+
+// reasonPublicURLRequired is the reason of the audit entry of a password check
+// that the server refuses because it has no console sign-in.
+const reasonPublicURLRequired = "password sign-in without a usable public URL"
+
+// recordPublicURLRequired writes the denied entry of a password check that a
+// server with no console sign-in refuses. The recorder bounds the entries for
+// each subject, so a flood of requests writes one entry for each window.
+func (h *Handler) recordPublicURLRequired(ctx context.Context, r *http.Request) {
+	var p identity.Principal
+
+	p.Subject = passwordSignInAuditActor
+
+	h.guard.Record(ctx, r, p, denials.Denial{
+		Action: identity.Action(session.ActionSignIn), Object: identity.ServerObject(), Reason: reasonPublicURLRequired,
+		ReasonWithin: nil, Window: 0,
+	})
 }
 
 // failPassword spends one unit of the password budget of the address of the
@@ -364,6 +391,7 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 	// case alone. This check stays so that a change to the route table never
 	// serves a sign-in with no session service.
 	if h.signIn == nil {
+		h.recordPublicURLRequired(ctx, r)
 		h.writeError(ctx, w, errPublicURLRequired)
 
 		return
@@ -393,7 +421,7 @@ func (h *Handler) passwordSignIn(w http.ResponseWriter, r *http.Request, _ ident
 		return
 	}
 
-	if err := h.admitPassword(ctx); err != nil {
+	if err := h.admitPassword(r); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -480,7 +508,7 @@ func (h *Handler) redeemLocalUserCode(w http.ResponseWriter, r *http.Request, _ 
 
 	noReferrer(w)
 
-	if err := h.admitPassword(ctx); err != nil {
+	if err := h.admitPassword(r); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -703,7 +731,7 @@ func (h *Handler) changeOwnPassword(w http.ResponseWriter, r *http.Request, p id
 	// The check of a current password spends the password budget of the
 	// address as a sign-in does, so a stolen session cannot guess the
 	// password of its person at the speed of the server.
-	if err := h.admitPassword(ctx); err != nil {
+	if err := h.admitPassword(r); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
