@@ -29,6 +29,7 @@ const knownDir = "testdata/uncoded"
 func gated() []errcodetest.Adapter {
 	return []errcodetest.Adapter{
 		api("audit", nil, nil),
+		api("decisionrecord", nil, nil),
 		api("drift", nil, nil),
 		{
 			Name: "dustpan",

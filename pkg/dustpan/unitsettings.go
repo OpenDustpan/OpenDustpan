@@ -19,11 +19,13 @@ func WithUnitSettingsStore(st unitsettings.Store) Option {
 	return func(o *settings) { o.unitSettingsStore = st }
 }
 
-// triggerAndSettingsHandlers holds the trigger API and the unit settings API.
-// Each is nil when the server lacks what it needs.
+// triggerAndSettingsHandlers holds the trigger API, the unit settings API and
+// the decision record read API. Each is nil when the server lacks what it
+// needs.
 type triggerAndSettingsHandlers struct {
-	triggers     http.Handler
-	unitSettings http.Handler
+	triggers        http.Handler
+	unitSettings    http.Handler
+	decisionRecords http.Handler
 }
 
 // newTriggersAndSettingsHandlers builds the trigger API and the unit settings
@@ -45,6 +47,15 @@ func newTriggersAndSettingsHandlers(svc services, cfg *settings, onFailure func(
 
 	if ok {
 		out.unitSettings = handler
+	}
+
+	records, ok, err := newDecisionRecordsHandler(svc, cfg, onFailure)
+	if err != nil {
+		return out, err
+	}
+
+	if ok {
+		out.decisionRecords = records
 	}
 
 	return out, nil

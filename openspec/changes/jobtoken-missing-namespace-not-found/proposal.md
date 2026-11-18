@@ -28,7 +28,7 @@ disagree and no test catches it.
   maps every false to `namespace.ErrFenced`.
 - The SQL stores of #2916 check the fence with the shared fence read of each
   dialect, which returns `namespace.ErrNotFound` when the namespace has no
-  row (for example `checkFenceForUpdate` in `pkg/store/postgres/audit.go:454`).
+  row (for example `checkFenceForUpdate`, (read only) `pkg/store/postgres/audit.go`, line 454).
 - The suite cases on main (`pkg/jobtoken/jobtokentest/issue_cases.go`) cover
   a stale fence (:553) and a fence of another namespace (:478), not a
   namespace with no row.

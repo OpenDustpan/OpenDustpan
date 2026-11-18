@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
+	decisionrecordapi "opendustpan.org/opendustpan/internal/api/decisionrecord"
 	driftapi "opendustpan.org/opendustpan/internal/api/drift"
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
 	jobsapi "opendustpan.org/opendustpan/internal/api/jobs"
@@ -111,6 +112,7 @@ func knownRowTypes() []reflect.Type {
 		reflect.TypeFor[serverapi.Route](),
 		reflect.TypeFor[inventoryapi.Route](),
 		reflect.TypeFor[auditapi.Route](),
+		reflect.TypeFor[decisionrecordapi.Route](),
 		reflect.TypeFor[contextapi.Route](),
 		reflect.TypeFor[runnerapi.Route](),
 		reflect.TypeFor[runnerpools.Route](),

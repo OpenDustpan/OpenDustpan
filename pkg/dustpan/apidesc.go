@@ -32,6 +32,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{"inventory", a.inventory},
 		{"audit", a.audit},
 		{"context", a.context},
+		{"decisionrecords", a.decisionRecords},
 		{"runners", a.runners},
 		{"runnerpools", a.runnerPools},
 		{"profiles", a.profiles},
