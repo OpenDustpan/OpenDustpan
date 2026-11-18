@@ -307,7 +307,7 @@ func TestAdapterLabelOfUnservedPath(t *testing.T) {
 }
 
 // requireCounterAdapter fails when a line of the request counter of srv names
-// an adapter other than want.
+// an adapter other than want, or when it has no line at all.
 func requireCounterAdapter(t *testing.T, srv *Server, path, want string) {
 	t.Helper()
 
@@ -316,11 +316,22 @@ func requireCounterAdapter(t *testing.T, srv *Server, path, want string) {
 		t.Fatalf("write metrics: %v", err)
 	}
 
+	seen := 0
+
 	for line := range strings.SplitSeq(out.String(), "\n") {
-		if strings.HasPrefix(line, "dustpan_http_requests_total{") &&
-			!strings.Contains(line, `adapter="`+want+`"`) {
+		if !strings.HasPrefix(line, "dustpan_http_requests_total{") {
+			continue
+		}
+
+		seen++
+
+		if !strings.Contains(line, `adapter="`+want+`"`) {
 			t.Errorf("request counter of %s: %s, want adapter %q", path, line, want)
 		}
+	}
+
+	if seen == 0 {
+		t.Errorf("request counter of %s has no line, want adapter %q", path, want)
 	}
 }
 
