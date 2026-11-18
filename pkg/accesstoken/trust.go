@@ -48,3 +48,48 @@ func (s *Service) NewTrustToken(
 
 	return Issued{Token: n.token, Secret: n.secret, Digest: n.digest}, nil
 }
+
+// NewMtlsTrustToken returns a new token of the kind KindMTLSExchange for the
+// principal principalID, made at the time at, with its secret. It does not
+// store the token: the store of the trust rules keeps it with the audit
+// entry of the exchange in one transaction. The token lives the exchange
+// lifetime of the policy, or its maximum lifetime when that is shorter, and
+// never past leafNotAfter: the expiry is the earlier of the two. name and
+// createdBy pass ValidateName and name the trust rule. A failed read of the
+// policy answers its error.
+func (s *Service) NewMtlsTrustToken(
+	ctx context.Context, at, leafNotAfter time.Time, principalID, name, createdBy string,
+) (Issued, error) {
+	if err := ValidateName(name); err != nil {
+		return Issued{}, err
+	}
+
+	p, err := s.Policy(ctx)
+	if err != nil {
+		return Issued{}, fmt.Errorf("read the token policy: %w", err)
+	}
+
+	lifetime := p.ExchangeLifetimeUnder()
+	if lifetime <= 0 {
+		return Issued{}, fmt.Errorf("%w: the exchange lifetime of the token policy is not positive", ErrInvalid)
+	}
+
+	expiresAt := at.Add(lifetime)
+	if !leafNotAfter.IsZero() && leafNotAfter.Before(expiresAt) {
+		expiresAt = leafNotAfter
+	}
+
+	if !expiresAt.After(at) {
+		return Issued{}, fmt.Errorf("%w: the leaf not-after time is not after the issue time", ErrInvalid)
+	}
+
+	n, err := s.newToken(tokenSpec{
+		at: at, expiresAt: expiresAt, principalID: principalID, name: name, kind: KindMTLSExchange,
+		createdBy: createdBy,
+	})
+	if err != nil {
+		return Issued{}, err
+	}
+
+	return Issued{Token: n.token, Secret: n.secret, Digest: n.digest}, nil
+}
