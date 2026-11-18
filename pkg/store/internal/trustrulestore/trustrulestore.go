@@ -284,14 +284,22 @@ func checkExchangeBundleFields(x *trustrule.Exchange) error {
 
 // CheckExchangeBundle returns trustrule.ErrNotFound unless the bundle of the
 // namespace of the fence exists, is the bundle x.BundleID, is the bundle of the
-// rule of the exchange (ruleBundleID), and has x.BundleVersion as its active
+// rule of the exchange (the row of x.Rule in rows), and has x.BundleVersion as its active
 // version. The adapters call it in the transaction of the exchange with the
 // stored bundle row of that namespace, so a rotate that came after the verify
 // of the chain still refuses the exchange. It returns nil for an exchange
 // that is not of the kind mtls-exchange.
-func CheckExchangeBundle(row *BundleRow, ruleBundleID string, x *trustrule.Exchange) error {
+func CheckExchangeBundle(row *BundleRow, rows []Row, x *trustrule.Exchange) error {
 	if x.Token.Kind != accesstoken.KindMTLSExchange {
 		return nil
+	}
+
+	ruleBundleID := ""
+
+	for i := range rows {
+		if rows[i].ID == string(x.Rule) {
+			ruleBundleID = rows[i].BundleID
+		}
 	}
 
 	switch {

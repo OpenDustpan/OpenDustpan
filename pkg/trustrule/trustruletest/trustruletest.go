@@ -90,6 +90,9 @@ func cases() []suiteCase {
 		// An exchange of a TLS client certificate matches its SPIFFE ID again
 		// in its own transaction.
 		mtlsExchangeCases(),
+		// The same exchange checks the version of the trust bundle again in
+		// its own transaction.
+		mtlsBundleCases(),
 		// An update checks the revision, the fence and the principal, and
 		// keeps what never changes.
 		updateCases(),

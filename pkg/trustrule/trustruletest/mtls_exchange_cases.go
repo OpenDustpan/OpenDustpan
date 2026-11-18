@@ -34,9 +34,6 @@ func mtlsExchangeCases() []suiteCase {
 		{"RecordExchangeRefusesAWildcardSPIFFEID", testMtlsWildcard},
 		{"RecordExchangeRefusesTheWrongRuleOfTheSPIFFEID", testMtlsWrongRule},
 		{"RecordExchangeRefusesASPIFFEIDOfNoRule", testMtlsNoRule},
-		{"RecordExchangeRefusesABundleOfNoRow", testMtlsNoBundle},
-		{"RecordExchangeRefusesABundleThatRotatedAfterTheVerify", testMtlsRotatedBundle},
-		{"RecordExchangeRefusesTheBundleOfAnotherNamespace", testMtlsOtherNamespaceBundle},
 	}
 }
 
@@ -263,65 +260,4 @@ func testMtlsNoRule(t *testing.T, h Harness) {
 
 	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
 	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: twoRules})
-}
-
-// testMtlsNoBundle sends the ID of a bundle that has no row. A bundle that an
-// operator removed gives the same state. The stored rule is valid, so only the
-// check of the bundle can refuse the exchange.
-func testMtlsNoBundle(t *testing.T, h Harness) {
-	t.Helper()
-
-	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
-	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
-	x.BundleID = trustrule.NewBundleID()
-	fence := h.Namespace(t, nsAcme)
-
-	err := h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
-	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: oneRule})
-}
-
-// testMtlsRotatedBundle builds the exchange from the active version, then
-// rotates the bundle, as a call between the verify of the chain and the record
-// would. The version of the exchange is not the active version any more.
-func testMtlsRotatedBundle(t *testing.T, h Harness) {
-	t.Helper()
-
-	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
-	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
-	fence := h.Namespace(t, nsAcme)
-
-	first := mustGetBundle(t, h)
-
-	_, err := h.Bundles.RotateBundle(t.Context(), nsAcme, rotateFields(testCA(t), rotateOverlap, first.Revision),
-		fence, bundleEntry(nsAcme, "rotate"))
-	if err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-
-	err = h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
-	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: oneRule})
-}
-
-// testMtlsOtherNamespaceBundle sends the bundle of another namespace with the
-// rule of acme. The rule is valid in acme, so only the check of the bundle can
-// refuse the exchange.
-func testMtlsOtherNamespaceBundle(t *testing.T, h Harness) {
-	t.Helper()
-
-	r := mtlsRule(t, h, "deploy", mtlsSPIFFEID)
-	x := mtlsExchangeOf(t, h, &r, mtlsSPIFFEID)
-	otherFence := h.Namespace(t, nsOther)
-
-	other, err := h.Bundles.SaveBundle(t.Context(), nsOther, saveFields(testCA(t)), otherFence,
-		bundleEntry(nsOther, "save"))
-	if err != nil {
-		t.Fatalf("save bundle of %s: %v", nsOther, err)
-	}
-
-	x.BundleID = other.ID
-	x.BundleVersion = other.Active
-	fence := h.Namespace(t, nsAcme)
-
-	err = h.Exchanges.RecordExchange(t.Context(), x, fence, auditEntry(nsAcme, "exchange", r.ID))
-	mustRefuseMtls(t, h, &x, mtlsRefusal{err: err, want: trustrule.ErrNotFound, entries: oneRule})
 }

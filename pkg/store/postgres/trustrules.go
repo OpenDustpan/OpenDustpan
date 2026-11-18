@@ -318,7 +318,7 @@ func (t TrustRules) RecordExchange(
 			return ruleErr
 		}
 
-		if recheckErr := recheckExchange(ctx, q, fence.Namespace, row.BundleID, &x); recheckErr != nil {
+		if recheckErr := recheckExchange(ctx, q, fence.Namespace, &x); recheckErr != nil {
 			return recheckErr
 		}
 
@@ -338,50 +338,14 @@ func (t TrustRules) RecordExchange(
 	})
 }
 
-// recheckExchange matches the SPIFFE ID and the bundle of an mTLS exchange
-// again in the transaction of the exchange, so that a rule or a rotate that
-// another call made after the verify still refuses the exchange.
-func recheckExchange(
-	ctx context.Context, q *db.Queries, ns namespace.Name, ruleBundleID string, x *trustrule.Exchange,
-) error {
-	if err := checkExchangeMatch(ctx, q, ns, x); err != nil {
-		return err
-	}
-
-	return checkExchangeBundle(ctx, q, ns, ruleBundleID, x)
-}
-
-// checkExchangeBundle reads the bundle of the namespace in the transaction of
-// the exchange and checks again that the bundle and the version that the
-// service verified are still the bundle of the rule and its active version.
+// recheckExchange reads the rules and the bundle of the namespace again in
+// the transaction of an mTLS exchange, and checks that the rule still names
+// the SPIFFE ID alone, and that the bundle and the version that the service
+// verified are still the bundle of the rule and its active version. A rule or
+// a rotate that another call made after the verify so refuses the exchange.
 // It does nothing for an exchange that is not of the kind mtls-exchange.
-func checkExchangeBundle(
-	ctx context.Context, q *db.Queries, ns namespace.Name, ruleBundleID string, x *trustrule.Exchange,
-) error {
+func recheckExchange(ctx context.Context, q *db.Queries, ns namespace.Name, x *trustrule.Exchange) error {
 	if x.Token.Kind != accesstoken.KindMTLSExchange {
-		return nil
-	}
-
-	b, err := q.GetTrustBundleOfNamespace(ctx, ns.String())
-	if errors.Is(err, pgx.ErrNoRows) {
-		return trustrulestore.CheckExchangeBundle(nil, ruleBundleID, x)
-	}
-
-	if err != nil {
-		return fmt.Errorf("select the trust bundle of the exchange: %w", err)
-	}
-
-	return trustrulestore.CheckExchangeBundle(&trustrulestore.BundleRow{
-		ID: b.ID, Namespace: b.Namespace, Active: b.ActiveVersion, Revision: b.Revision, CreatedAtMs: b.CreatedAtMs,
-	}, ruleBundleID, x)
-}
-
-// checkExchangeMatch matches the SPIFFE ID of an mTLS exchange again against
-// the rules of the namespace, in the transaction of the exchange, so that a
-// rule that another call added after the service read its rules still
-// refuses the exchange. It does nothing for an exchange with no SPIFFE ID.
-func checkExchangeMatch(ctx context.Context, q *db.Queries, ns namespace.Name, x *trustrule.Exchange) error {
-	if x.SPIFFEID == "" {
 		return nil
 	}
 
@@ -395,5 +359,20 @@ func checkExchangeMatch(ctx context.Context, q *db.Queries, ns namespace.Name, x
 		list = append(list, trustRuleListRow(rows[i]))
 	}
 
-	return trustrulestore.CheckExchangeMatch(list, x)
+	if matchErr := trustrulestore.CheckExchangeMatch(list, x); matchErr != nil {
+		return matchErr
+	}
+
+	b, err := q.GetTrustBundleOfNamespace(ctx, ns.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return trustrulestore.CheckExchangeBundle(nil, list, x)
+	}
+
+	if err != nil {
+		return fmt.Errorf("select the trust bundle of the exchange: %w", err)
+	}
+
+	return trustrulestore.CheckExchangeBundle(&trustrulestore.BundleRow{
+		ID: b.ID, Namespace: b.Namespace, Active: b.ActiveVersion, Revision: b.Revision, CreatedAtMs: b.CreatedAtMs,
+	}, list, x)
 }
