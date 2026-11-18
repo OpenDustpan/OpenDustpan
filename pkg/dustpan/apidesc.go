@@ -45,6 +45,7 @@ func (a adapters) allHandlers() []namedHandler {
 		{"sourcefilter", a.sourceFilter},
 		{"trustrules", a.trustRules},
 		{"selfservice", a.selfService},
+		{"state", a.state},
 		{"pulumi", a.pulumi},
 		{"tfe", a.tfe},
 		{"tofuhttp", a.tofuHTTP},

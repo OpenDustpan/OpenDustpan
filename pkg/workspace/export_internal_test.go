@@ -32,27 +32,5 @@ func RevealValue(state []byte, marks SensitiveMarks, path string) (any, []string
 // of every resource instance, masked with marks. With no kept marks for the
 // version, every attribute value is a marker.
 func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
-	doc, err := decodeState(state)
-	if err != nil {
-		return nil, err
-	}
-
-	entries, _ := tofuStateResources(doc)
-
-	var masked []string
-
-	for _, entry := range entries {
-		for i, instance := range tofuInstances(entry.obj) {
-			_, paths := maskTofuInstance(
-				instance, entry.index, i, tofuInstanceAddress(entry.obj, instance), marks,
-			)
-			masked = append(masked, paths...)
-		}
-	}
-
-	if masked == nil {
-		masked = []string{}
-	}
-
-	return masked, nil
+	return maskedResourcePaths(state, marks)
 }
