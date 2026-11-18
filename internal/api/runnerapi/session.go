@@ -153,6 +153,16 @@ func (h *Handler) checkSession(r *http.Request, rt Route, c *call) error {
 		return errProofRefused
 	}
 
+	// The proof came first, so a caller without the key learns nothing about
+	// the kind of the session. A launcher session never reaches a path of the
+	// job proxy, and a proxy session never reaches a path of the launcher. A
+	// scope with no kind passes no session (fail closed).
+	if want, ok := sessionKindOf(rt.Scope); !ok || sess.Kind != want {
+		h.recordWrongKind(r, rt, &sess)
+
+		return errWrongSessionKind
+	}
+
 	c.session, c.proof, c.contentSHA256 = sess, proof, sum
 
 	return nil
@@ -294,7 +304,7 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request, c *call) {
 	now := h.now()
 	key := runner.Key{Public: c.handoff.PublicKey, CreatedAt: now}
 
-	sess, err := h.handoffs.OpenSession(ctx, sha256Hex(c.handoff.HandoffToken), key, now)
+	sess, err := h.handoffs.OpenSession(ctx, sha256Hex(c.handoff.HandoffToken), runner.SessionKindLauncher, key, now)
 	if err != nil {
 		// The request names no runner before the session opens, so the entry
 		// holds no claimed runner ID and the installation scope.

@@ -48,6 +48,7 @@ type fixture struct {
 	person     principal.Principal
 	service    principal.Principal
 	workload   principal.Principal
+	path       string
 }
 
 func caller() audit.Entry {
@@ -81,7 +82,9 @@ func sweepStart() time.Time {
 func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fixture {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	st, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -123,7 +126,16 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 
 	var none principal.Principal
 
-	f := fixture{store: st, svc: svc, principals: principals, clock: c, person: none, service: none, workload: none}
+	f := fixture{
+		store:      st,
+		svc:        svc,
+		principals: principals,
+		clock:      c,
+		person:     none,
+		service:    none,
+		workload:   none,
+		path:       path,
+	}
 
 	for _, p := range []struct {
 		dst     *principal.Principal

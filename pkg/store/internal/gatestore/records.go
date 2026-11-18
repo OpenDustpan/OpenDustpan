@@ -6,6 +6,7 @@ import (
 	"encoding"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -245,7 +246,13 @@ func (s *Records) Get(ctx context.Context, ns namespace.Name, id gate.RecordID) 
 		return err
 	})
 	if err != nil {
-		return gate.Record{}, err
+		if errors.Is(err, gate.ErrNotFound) {
+			return gate.Record{}, err
+		}
+
+		// A driver error is not a missing record: the caller must see that
+		// the store did not answer.
+		return gate.Record{}, fmt.Errorf("read record %s of %s: %w: %w", id, ns, gate.ErrUnavailable, err)
 	}
 
 	return out, nil
@@ -294,6 +301,57 @@ func (s *Records) Query(ctx context.Context, ns namespace.Name, q gate.RecordQue
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	return out, nil
+}
+
+// PruneExpired implements gate.Records.
+func (s *Records) PruneExpired(
+	ctx context.Context, ns namespace.Name, req gate.PruneRequest, fence namespace.Fence, e audit.Entry,
+) ([]gate.RecordID, error) {
+	// Defense in depth: NewPruneRequest checks the same bounds. This check
+	// stays so that the zero value of the request, which no constructor made,
+	// never reaches the delete.
+	if req.Cutoff().IsZero() || req.Batch() < 1 || req.Batch() > gate.MaxPruneBatch {
+		return nil, fmt.Errorf("%w: the prune request does not come from NewPruneRequest", gate.ErrInvalid)
+	}
+
+	// Defense in depth: the fence check below refuses a fence of another
+	// namespace. A prune never reaches a record of the installation, so this
+	// check refuses its scope before any transaction opens.
+	if ns == "" || ns == audit.ServerScope {
+		return nil, fmt.Errorf("%w: a prune needs the name of a namespace", gate.ErrInvalid)
+	}
+
+	if _, err := namespace.ParseName(ns.String()); err != nil {
+		return nil, fmt.Errorf("%w: prune namespace: %w", gate.ErrInvalid, err)
+	}
+
+	if err := checkFenceOf(ns, fence); err != nil {
+		return nil, err
+	}
+
+	var ids []string
+
+	// The delete and its audit entry share one transaction, so a prune that
+	// leaves no entry cannot commit.
+	err := s.run.Write(ctx, gate.NamespaceScope(ns), fence, e, func(tx Tx) error {
+		var perr error
+
+		ids, perr = tx.PruneRecords(ctx, ns, string(gate.PointStateWrite), req.Cutoff(), req.Batch())
+
+		return perr
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	slices.Sort(ids)
+
+	out := make([]gate.RecordID, len(ids))
+	for i, id := range ids {
+		out[i] = gate.RecordID(id)
 	}
 
 	return out, nil

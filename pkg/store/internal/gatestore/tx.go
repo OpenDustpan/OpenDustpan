@@ -171,6 +171,10 @@ type Tx interface {
 	// QueryRecords returns the bodies of the records of the window, newest
 	// first.
 	QueryRecords(ctx context.Context, ns namespace.Name, w Window) ([]string, error)
+	// PruneRecords deletes at most batch records of the namespace ns at the
+	// decision point with At before cutoff, lowest ID first, and returns their
+	// IDs. It deletes nothing for a namespace that does not exist.
+	PruneRecords(ctx context.Context, ns namespace.Name, point string, cutoff time.Time, batch int) ([]string, error)
 	// FindRefusal returns the newest record of the key whose last refusal is
 	// at or after since, and false for none. It locks the key until the
 	// transaction ends, where the database needs it.

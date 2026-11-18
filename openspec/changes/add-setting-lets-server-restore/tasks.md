@@ -8,8 +8,8 @@
 
 ## 2. build
 
-- [ ] 2.1 Add the stored boolean key with fail-closed parse in NEW file pkg/backup/restore_access_setting.go (the NEW restoreAccessSetting constructor), and register the key in internal/cli/settings.go. Check: `go test ./pkg/backup/... -run TestRestoreAccessSetting -count=1`
-- [ ] 2.2 Branch the restore apply step on the snapshot with the two-path guard in pkg/backup/service.go. Check: `go test ./pkg/backup/... -run TestRestoreAccess -count=1`
+- [ ] 2.1 Add the stored boolean key with fail-closed parse in NEW file pkg/backup/restore_access_setting.go (the NEW restoreAccessSetting constructor), and register the key through SettingDeclarations() in the existing file internal/cli/settings_api.go (line 50), with the declaration in the same NEW file (Database: true, no flag or env layer), like the tempadmin session limit declaration. Check: `go test ./pkg/backup/... -run TestRestoreAccessSetting -count=1`
+- [ ] 2.2 Branch the restore apply step on the snapshot with the two-path guard in the existing file pkg/backup/restore_steps.go (the ApplyRestoreArea call at line 1093 and restoreAuditObject at line 1537), and read the flag where it comes from in the existing file internal/api/server/restores.go (line 199, KeepAccessTables). Check: `go test ./pkg/backup/... -run TestRestoreAccess -count=1`
 
 ## 3. Side effects (computed from main)
 
@@ -19,6 +19,6 @@
 
 - [ ] 4.1 Route test lists the settings route with its actions. Check: Route test passes
 - [ ] 4.2 E2E: PATCH /api/dustpan/v1/settings with a console session cookie (fresh step, never an access token), then POST /api/dustpan/v1/restores with the same session, over TLS. Check: `make e2e`. Confirmed by: CI (the agent writes the e2e test).
-- [ ] 4.3 Add the docs page NEW file docs/guides/restore-access-setting.md, and list the value in the admin access report in the existing file pkg/backup/service.go. Check: Docs page and report show the value. `make docs-lint` passes on each edited guide.
+- [ ] 4.3 Add the docs page NEW file docs/guides/restore-access-setting.md, and list the value in the restore audit object in the existing function restoreAuditObject of pkg/backup/restore_steps.go. Check: Docs page and report show the value. `make docs-lint` passes on each edited guide.
 - [ ] 4.4 Usability walk from the docs page alone. Check: Each error names one command. A person's step.
 - [ ] 4.5 Run full checks. Check: `make check` has zero findings. Confirmed by: CI (the agent runs the fast checks only).

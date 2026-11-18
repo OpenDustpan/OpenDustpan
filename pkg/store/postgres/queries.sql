@@ -3771,6 +3771,19 @@ WHERE namespace_id = sqlc.arg(namespace_id) AND point = sqlc.arg(point)
 ORDER BY at_ms DESC, id COLLATE "C" DESC
 LIMIT sqlc.arg(max_rows);
 
+-- name: PruneGateRecords :many
+-- Deletes the records of a decision point with at_ms before cutoff_ms, lowest ID
+-- first, up to max_rows, and returns their IDs.
+DELETE FROM gate_records
+WHERE id IN (
+    SELECT p.id
+    FROM gate_records p
+    WHERE p.namespace_id = sqlc.arg(namespace_id) AND p.point = sqlc.arg(point) AND p.at_ms < sqlc.arg(cutoff_ms)
+    ORDER BY p.id COLLATE "C"
+    LIMIT sqlc.arg(max_rows)
+)
+RETURNING id;
+
 -- name: FindGateRefusal :one
 -- The newest record of a refusal key whose last refusal is not before since_ms.
 SELECT id, count, body
@@ -3914,6 +3927,31 @@ WHERE id = sqlc.arg(id);
 -- name: DeleteRunnerPool :exec
 DELETE FROM runner_pools WHERE id = sqlc.arg(id);
 
+-- name: GetRunnerPoolProxySettings :one
+-- Holds the row until the transaction ends, so two saves run one after the other.
+SELECT pool_id, allowed_ranges, upstream_url, credential, version, updated_by, updated_at_ms
+FROM runner_pool_proxy_settings
+WHERE pool_id = sqlc.arg(pool_id)
+FOR UPDATE;
+
+-- name: InsertRunnerPoolProxySettings :exec
+INSERT INTO runner_pool_proxy_settings (pool_id, allowed_ranges, upstream_url, credential, version, updated_by,
+                                        updated_at_ms)
+VALUES (sqlc.arg(pool_id), sqlc.arg(allowed_ranges), sqlc.arg(upstream_url), sqlc.arg(credential), 1,
+        sqlc.arg(updated_by), sqlc.arg(updated_at_ms));
+
+-- name: UpdateRunnerPoolProxySettings :execrows
+-- Writes the next version. It changes no row, and so returns 0 rows, when the
+-- stored version is not the one that the caller read.
+UPDATE runner_pool_proxy_settings
+SET allowed_ranges = sqlc.arg(allowed_ranges), upstream_url = sqlc.arg(upstream_url),
+    credential = sqlc.arg(credential), version = version + 1, updated_by = sqlc.arg(updated_by),
+    updated_at_ms = sqlc.arg(updated_at_ms)
+WHERE pool_id = sqlc.arg(pool_id) AND version = sqlc.arg(version);
+
+-- name: DeleteRunnerPoolProxySettings :exec
+DELETE FROM runner_pool_proxy_settings WHERE pool_id = sqlc.arg(pool_id);
+
 -- name: DeleteRunnerPoolJoinTokens :exec
 DELETE FROM runner_join_tokens WHERE pool_id = sqlc.arg(pool_id);
 
@@ -4031,6 +4069,7 @@ WHERE state = 'running' AND claim_owner = sqlc.arg(runner_id)::text
   AND NOT EXISTS (
     SELECT 1 FROM runner_sessions s
     WHERE s.operation_id = durable_operations.id AND s.token = durable_operations.claim_token
+      AND s.kind = 'launcher'
   )
 ORDER BY id;
 
@@ -4044,6 +4083,7 @@ WHERE state = 'running' AND claim_owner = sqlc.arg(runner_id)::text
   AND NOT EXISTS (
     SELECT 1 FROM runner_sessions s
     WHERE s.operation_id = durable_operations.id AND s.token = durable_operations.claim_token
+      AND s.kind = 'launcher'
   );
 
 -- name: ExpireRunnerClaims :exec
@@ -4067,16 +4107,17 @@ VALUES (sqlc.arg(operation_id), sqlc.arg(token), sqlc.arg(claimed_at_ms), sqlc.a
 ON CONFLICT (operation_id, token) DO NOTHING;
 
 -- name: DeleteRunnerHandoffTokensOfClaim :exec
-DELETE FROM runner_handoff_tokens WHERE operation_id = sqlc.arg(operation_id) AND token = sqlc.arg(token);
+DELETE FROM runner_handoff_tokens
+WHERE operation_id = sqlc.arg(operation_id) AND token = sqlc.arg(token) AND kind = sqlc.arg(kind);
 
 -- name: InsertRunnerHandoffToken :exec
-INSERT INTO runner_handoff_tokens (sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms)
-VALUES (sqlc.arg(sha256), sqlc.arg(operation_id), sqlc.arg(token), sqlc.arg(runner_id), sqlc.arg(issued_at_ms),
-        sqlc.arg(expires_at_ms), 0);
+INSERT INTO runner_handoff_tokens (sha256, operation_id, token, runner_id, kind, issued_at_ms, expires_at_ms, used_at_ms)
+VALUES (sqlc.arg(sha256), sqlc.arg(operation_id), sqlc.arg(token), sqlc.arg(runner_id), sqlc.arg(kind),
+        sqlc.arg(issued_at_ms), sqlc.arg(expires_at_ms), 0);
 
 -- name: LockRunnerHandoffToken :one
 -- Holds the row until the transaction ends, so two opens of one token run one after the other.
-SELECT sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms
+SELECT sha256, operation_id, token, runner_id, kind, issued_at_ms, expires_at_ms, used_at_ms
 FROM runner_handoff_tokens
 WHERE sha256 = sqlc.arg(sha256)
 FOR UPDATE;
@@ -4085,15 +4126,16 @@ FOR UPDATE;
 UPDATE runner_handoff_tokens SET used_at_ms = sqlc.arg(used_at_ms) WHERE sha256 = sqlc.arg(sha256);
 
 -- name: InsertRunnerSession :exec
-INSERT INTO runner_sessions (id, operation_id, token, runner_id, key_public, key_created_at_ms, created_at_ms)
-VALUES (sqlc.arg(id), sqlc.arg(operation_id), sqlc.arg(token), sqlc.arg(runner_id), sqlc.arg(key_public),
-        sqlc.arg(key_created_at_ms), sqlc.arg(created_at_ms));
+INSERT INTO runner_sessions (id, operation_id, token, runner_id, kind, key_public, key_created_at_ms, created_at_ms)
+VALUES (sqlc.arg(id), sqlc.arg(operation_id), sqlc.arg(token), sqlc.arg(runner_id), sqlc.arg(kind),
+        sqlc.arg(key_public), sqlc.arg(key_created_at_ms), sqlc.arg(created_at_ms));
 
 -- name: CountRunnerSessionsOfClaim :one
-SELECT COUNT(*) FROM runner_sessions WHERE operation_id = sqlc.arg(operation_id) AND token = sqlc.arg(token);
+SELECT COUNT(*) FROM runner_sessions
+WHERE operation_id = sqlc.arg(operation_id) AND token = sqlc.arg(token) AND kind = sqlc.arg(kind);
 
 -- name: GetRunnerSession :one
-SELECT s.id, s.operation_id, s.token, s.runner_id, s.key_public, s.key_created_at_ms, s.created_at_ms,
+SELECT s.id, s.operation_id, s.token, s.runner_id, s.kind, s.key_public, s.key_created_at_ms, s.created_at_ms,
        COALESCE((SELECT r.retired_at_ms FROM runners r WHERE r.id = s.runner_id), 1)::bigint AS runner_retired_at_ms
 FROM runner_sessions s
 WHERE s.id = sqlc.arg(id);

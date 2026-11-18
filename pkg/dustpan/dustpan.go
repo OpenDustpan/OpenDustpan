@@ -817,6 +817,10 @@ func NewServer(opts ...Option) (*Server, error) {
 		opt(cfg)
 	}
 
+	// The metrics exist before the built-in store, so the claimer of the
+	// store options counts the operations that a claim poll skips on them.
+	cfg.observed = metrics.NewServerMetrics(cfg.version, cfg.now())
+
 	if err := applyBuiltinStore(cfg); err != nil {
 		return nil, err
 	}
@@ -875,10 +879,6 @@ func buildServer(cfg *settings) (*Server, error) {
 	}
 
 	cfg.authenticator, cfg.authorizer = ports.authenticator, ports.authorizer
-
-	// The metrics exist before the services, so each deleter of a blob can
-	// count the takes that it refuses.
-	cfg.observed = metrics.NewServerMetrics(cfg.version, cfg.now())
 
 	svc, err := newServices(cfg, tokens, ports.authorizer)
 	if err != nil {
@@ -1316,11 +1316,15 @@ func newAdapters(
 }
 
 // neutralHandlers are the tool-neutral inventory API, audit API and context
-// API. context is nil when the store keeps no context.
+// API. context is nil when the store keeps no context. decisionRecords is
+// nil when the store keeps no gates.
 type neutralHandlers struct {
 	inventory http.Handler
 	audit     http.Handler
 	context   http.Handler
+	// decisionRecords serves the read routes of the gate decision records,
+	// or nil when the store keeps no gates.
+	decisionRecords http.Handler
 	// runners is the runner protocol, or nil.
 	runners http.Handler
 	// runnerPools is the management API of runner pools, join tokens and runners, or nil.
@@ -1404,19 +1408,20 @@ func newNeutralHandlers(
 	}
 
 	return neutralHandlers{
-		inventory:    units,
-		audit:        entries,
-		context:      contexts,
-		runners:      runners.protocol,
-		runnerPools:  runners.pools,
-		profiles:     profileAPI.profiles,
-		issuer:       profileAPI.issuer,
-		sinks:        profileAPI.sinkAPI,
-		jobs:         jobAPIs.jobs,
-		triggers:     late.triggers,
-		unitSettings: late.unitSettings,
-		drift:        jobAPIs.drift,
-		registry:     registries,
+		inventory:       units,
+		audit:           entries,
+		context:         contexts,
+		decisionRecords: late.decisionRecords,
+		runners:         runners.protocol,
+		runnerPools:     runners.pools,
+		profiles:        profileAPI.profiles,
+		issuer:          profileAPI.issuer,
+		sinks:           profileAPI.sinkAPI,
+		jobs:            jobAPIs.jobs,
+		triggers:        late.triggers,
+		unitSettings:    late.unitSettings,
+		drift:           jobAPIs.drift,
+		registry:        registries,
 
 		sourceFilter: settingAPIs.sourceFilter,
 		trustRules:   settingAPIs.trustRules,
@@ -3846,8 +3851,8 @@ func mountAPI(mux *rootMux, a adapters, cfg *settings) error {
 	// reach their own handlers by exact path, so another area can take the
 	// rest of the prefix. The tool adapters are refused in maintenance mode.
 	for _, h := range []http.Handler{
-		a.inventory, a.context, a.profiles, a.issuer, a.sinks, a.registry, a.jobs, a.triggers, a.unitSettings,
-		a.drift, a.sourceFilter, a.trustRules, a.selfService,
+		a.inventory, a.context, a.decisionRecords, a.profiles, a.issuer, a.sinks, a.registry, a.jobs, a.triggers,
+		a.unitSettings, a.drift, a.sourceFilter, a.trustRules, a.selfService,
 	} {
 		mountV1(mux, h, wrapV1)
 	}

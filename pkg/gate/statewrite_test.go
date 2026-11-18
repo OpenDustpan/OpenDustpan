@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	principalpkg "opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -112,9 +113,20 @@ func newSWEnv(t *testing.T, units gate.UnitSource, engineErr error) swEnv {
 }
 
 // newWrappedSWEnv is newSWEnv with a gate store that wrap makes from the real
-// store, or the real store when wrap is nil.
+// store, or the real store when wrap is nil. The installation is a production
+// installation.
 func newWrappedSWEnv(
 	t *testing.T, units gate.UnitSource, engineErr error, wrap func(*sqlite.Store) gate.Store,
+) swEnv {
+	t.Helper()
+
+	return newKindSWEnv(t, units, engineErr, wrap, fixedKind("production"))
+}
+
+// newKindSWEnv is newWrappedSWEnv with the reader of the installation kind
+// kinds.
+func newKindSWEnv(
+	t *testing.T, units gate.UnitSource, engineErr error, wrap func(*sqlite.Store) gate.Store, kinds gate.KindReader,
 ) swEnv {
 	t.Helper()
 
@@ -171,14 +183,19 @@ func newWrappedSWEnv(
 	}
 
 	svc, err := gate.NewService(gate.ServiceConfig{
-		Store:     gates,
-		Engine:    swEngine{Engine: cedargo.New(cedargo.WithAccessActions("unit:write", "unit:read")), fail: engineErr},
-		Producers: nil,
-		Units:     units,
-		Subjects:  swSubjects{},
-		Fences:    swFences{nss: nss},
-		Now:       nil,
-		Log:       slog.New(slog.DiscardHandler),
+		Store: gates,
+		Engine: swEngine{
+			Engine: cedargo.New(cedargo.WithAccessActions("unit:write", "unit:read")),
+			fail:   engineErr,
+		},
+		Producers:  nil,
+		Units:      units,
+		Subjects:   swSubjects{},
+		Fences:     swFences{nss: nss},
+		KindReader: kinds,
+		IsDev:      principalpkg.IsDevSubject,
+		Now:        nil,
+		Log:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -629,6 +646,44 @@ func TestEachEvaluationWritesOneRecord(t *testing.T) {
 
 	if len(ids) != 4 {
 		t.Fatalf("record IDs = %v, want 4 distinct", ids)
+	}
+}
+
+func TestEvaluationAfterPruneRecords(t *testing.T) {
+	t.Parallel()
+
+	e := newSWEnv(t, swUnits{collections: nil, labels: nil}, nil)
+
+	if _, err := e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock)); err != nil {
+		t.Fatalf("GuardStateWrite(first) = %v", err)
+	}
+
+	before := e.records(t)
+	if len(before) != 1 {
+		t.Fatalf("records = %d, want 1", len(before))
+	}
+
+	req, err := gate.NewPruneRequest(time.Now().Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("NewPruneRequest() = %v", err)
+	}
+
+	pruned, err := e.store.Records().PruneExpired(t.Context(), "acme", req, e.fence, swEntry())
+	if err != nil {
+		t.Fatalf("PruneExpired() = %v", err)
+	}
+
+	if len(pruned) != 1 || pruned[0] != before[0].ID {
+		t.Fatalf("PruneExpired() = %v, want [%s]", pruned, before[0].ID)
+	}
+
+	if _, err = e.svc.GuardStateWrite(t.Context(), swWrite(t, "alice", "web", gate.OperationLock)); err != nil {
+		t.Fatalf("GuardStateWrite(after prune) = %v", err)
+	}
+
+	after := e.records(t)
+	if len(after) != 1 || after[0].ID == before[0].ID {
+		t.Fatalf("records after prune = %v, want one new record, not %s", after, before[0].ID)
 	}
 }
 

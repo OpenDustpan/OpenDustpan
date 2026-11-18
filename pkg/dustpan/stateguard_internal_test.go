@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/gate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -842,5 +843,83 @@ func TestInventoryFactsRefuseAnEntryOfAnotherNamespaceOrTool(t *testing.T) {
 				t.Fatalf("Labels() = %v, want errUnitMismatch and not gate.ErrNotFound", err)
 			}
 		})
+	}
+}
+
+// claimOnlyKinds is a kind store that can claim the kind and cannot read it.
+type claimOnlyKinds struct{}
+
+func (claimOnlyKinds) ClaimKind(_ context.Context, kind installation.Kind) (installation.Kind, error) {
+	return kind, nil
+}
+
+// TestGateKindReaderFailsClosed sends hostile kind stores straight to the kind
+// reader of the gate service, as if the start had claimed nothing.
+func TestGateKindReaderFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	unclaimed := openGateStore(t)
+
+	devDB := openGateStore(t)
+	if _, err := devDB.ClaimKind(t.Context(), installation.KindDev); err != nil {
+		t.Fatalf("claim dev: %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		store installation.KindStore
+		want  error
+	}{
+		{"no kind is claimed", unclaimed, installation.ErrUnavailable},
+		{"the database holds another kind", devDB, installation.ErrKindMismatch},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := new(settings)
+			cfg.installationKind, cfg.kindStore = installation.KindProduction, tc.store
+
+			r, err := newGateKindReader(cfg)
+			if err != nil {
+				t.Fatalf("newGateKindReader() = %v", err)
+			}
+
+			if kind, readErr := r.ReadKind(t.Context()); !errors.Is(readErr, tc.want) || kind != "" {
+				t.Fatalf("ReadKind() = %q, %v, want no kind and %v", kind, readErr, tc.want)
+			}
+		})
+	}
+}
+
+// TestGateKindReaderRefusesAKindStoreThatCannotRead checks that a server whose
+// kind store cannot read the kind does not start.
+func TestGateKindReaderRefusesAKindStoreThatCannotRead(t *testing.T) {
+	t.Parallel()
+
+	cfg := new(settings)
+	cfg.installationKind, cfg.kindStore = installation.KindProduction, claimOnlyKinds{}
+
+	if _, err := newGateKindReader(cfg); !errors.Is(err, ErrMissingOption) || !errors.Is(err, errGateParts) {
+		t.Fatalf("newGateKindReader() = %v, want ErrMissingOption and errGateParts", err)
+	}
+}
+
+// TestGateKindReaderWithNoKindStore checks that a server that claims no kind
+// gives the gate service its own kind.
+func TestGateKindReaderWithNoKindStore(t *testing.T) {
+	t.Parallel()
+
+	cfg := new(settings)
+	cfg.installationKind = installation.KindDev
+
+	r, err := newGateKindReader(cfg)
+	if err != nil {
+		t.Fatalf("newGateKindReader() = %v", err)
+	}
+
+	if kind, readErr := r.ReadKind(t.Context()); readErr != nil || kind != "dev" {
+		t.Fatalf("ReadKind() = %q, %v, want dev", kind, readErr)
 	}
 }

@@ -18,6 +18,7 @@ const (
 	portTableNamespaces  = "namespaces"
 	portTableManualLocks = "manual_locks"
 	portColVersion       = "version"
+	portColUpdatedBy     = "updated_by"
 	portColBundleID      = "bundle_id"
 	portColStackID       = "stack_id"
 	portColStatus        = "status"
@@ -361,7 +362,7 @@ func portableSpec() []PortableTable {
 				{Name: "resource_deleted_at_ms", Kind: KindTime},
 				{Name: "marks_seq", Kind: KindInteger},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
-				{Name: "updated_by", Kind: KindText},
+				{Name: portColUpdatedBy, Kind: KindText},
 			},
 		},
 		{

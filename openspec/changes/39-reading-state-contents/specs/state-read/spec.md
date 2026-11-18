@@ -24,41 +24,17 @@ When the server answers a masked read, the server SHALL key each marker by its J
 - **WHEN** caller reuses a cursor on another unit, another version or after 10 minutes
 - **THEN** server refuses the page with 400
 
-### Requirement: Reveal
+#### Scenario: cursor too long
+- **WHEN** caller sends a cursor above the length cap
+- **THEN** server refuses the page with 400 and reads no state
 
-When a caller with unit:read-secrets calls reveal with unit, version and one value path through Reveal, the server SHALL answer the plain value of that path with no other plain value.
+### Requirement: label marker schema
 
-#### Scenario: Reveal one value and one entry
-- **WHEN** caller with unit:read-secrets reveals one path through Reveal
-- **THEN** server answers that value with Reveal and writes one reveal entry with channel and principalKind before the first byte
+The API description SHALL declare the marker of a masked value as its own named schema, and SHALL NOT change the schema of any other route.
 
-#### Scenario: Reveal retry writes again
-- **WHEN** caller repeats the same reveal call after a disconnect
-- **THEN** each delivered answer has its own reveal entry
-
-### Requirement: reveal refusals
-
-If a reveal names an unknown version, an unknown path, a non-secret path or a Pulumi stack with another secrets provider, then the server SHALL refuse it with no secret bytes.
-
-#### Scenario: unknown version
-- **WHEN** reveal names a version that does not exist
-- **THEN** server answers 404 with no secret bytes
-
-#### Scenario: non-secret path
-- **WHEN** reveal names a path that holds no secret
-- **THEN** server refuses with 400 and reveals no value
-
-#### Scenario: Pulumi other provider
-- **WHEN** Pulumi stack uses another secrets provider
-- **THEN** server refuses with 422 and reveals no value
-
-### Requirement: shredded and redacted
-
-If the target version is shredded or redacted, then the server SHALL refuse plain text with no content.
-
-#### Scenario: shredded item
-- **WHEN** caller reveals an item whose key is shredded
-- **THEN** server answers 410 before any blob read
+#### Scenario: other routes keep their schema
+- **WHEN** the API description is regenerated with the NEW route
+- **THEN** the schema of each route that does not use the marker is the same as before
 
 ### Requirement: deny without grant
 
@@ -66,15 +42,27 @@ If a caller lacks the required action on the unit, then the server SHALL deny th
 
 #### Scenario: sibling grant denied
 - **WHEN** caller holds unit:read on another unit with no grant on this unit
-- **THEN** server answers 403 with no secret bytes
+- **THEN** server answers 403 with the code `unit.forbidden` and no secret bytes
 
 ### Requirement: bounds and failures
 
-If a reveal fails to write its audit entry, then the server SHALL answer 500 with no content.
+If a version is above 5 MB, then the server SHALL refuse the read with 413 and no content, and the server SHALL refuse it before it holds the content of the version. If a read passes the timeout of 30 seconds, then the server SHALL answer 504 with no bytes.
 
-#### Scenario: audit failure
-- **WHEN** reveal fails to write its audit entry
-- **THEN** server answers 500 with no content
+#### Scenario: version above 5 MB
+- **WHEN** a read names a version that is larger than 5 MB
+- **THEN** server answers 413 before it loads the version content, and no content leaves
+
+#### Scenario: read passes the deadline
+- **WHEN** the read runs past its 30 second deadline
+- **THEN** server answers 504 with no bytes
+
+### Requirement: refusal limiter
+
+If a caller causes repeated refusals on the read route, then the server SHALL count them with the denial limiter of the server configuration, as the other adapters do. The reveal route of the change `39-reveal-state-value` reuses this limiter.
+
+#### Scenario: repeated refusals
+- **WHEN** one caller sends repeated reads that the server refuses
+- **THEN** the limiter counts each refusal and answers 429 after the limit
 
 #### Scenario: over size refused
 - **WHEN** version is above 5 MB

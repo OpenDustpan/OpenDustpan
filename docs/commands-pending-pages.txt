@@ -9,6 +9,7 @@ docs/guides/collections-and-placement.md
 docs/guides/connect-github.md
 docs/guides/console-sign-in.md
 docs/guides/context.md
+docs/guides/decision-records.md
 docs/guides/deleted-units.md
 docs/guides/dev-server.md
 docs/guides/doctor.md
@@ -23,6 +24,7 @@ docs/guides/load.md
 docs/guides/local-users.md
 docs/guides/manual-locks.md
 docs/guides/migrate-out.md
+docs/guides/moving-units.md
 docs/guides/notification-destinations.md
 docs/guides/observe.md
 docs/guides/oidc-issuer.md

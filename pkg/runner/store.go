@@ -161,20 +161,24 @@ type SessionStore interface {
 	// or when the owner of c is not t.Runner, so a runner never gets a
 	// token for the claim of another runner. It returns ErrInvalid when
 	// the operation is not of a kind of the pool of the runner
-	// (ClaimKinds), and ErrConflict when the claim has a session already.
-	// A second token for a claim with no session replaces the first: the
-	// first then opens nothing (ErrNotFound). So a pod that waited past
-	// HandoffTokenTTL can get a new one, until MaxSessionWait.
+	// (ClaimKinds) or when t.Kind is not a SessionKind, and ErrConflict when
+	// the claim has a session of the kind t.Kind already.
+	// A second token of one kind for a claim with no session of that kind
+	// replaces the first: the first then opens nothing (ErrNotFound). A token
+	// of the other kind stays. So a pod that waited past HandoffTokenTTL can
+	// get a new one, until MaxSessionWait.
 	IssueHandoffToken(ctx context.Context, t HandoffToken, c durable.Claim) error
 	// OpenSession exchanges the handoff token whose secret has the hash
-	// sha256 for a job session with the key k, at now. In one transaction
-	// it checks the token with HandoffToken.CheckUse, checks that its claim
+	// sha256 for a job session of the given kind with the key k, at now. In
+	// one transaction it checks that the token is of that kind, checks the
+	// token with HandoffToken.CheckUse, checks that its claim
 	// is live and that now is not later than MaxSessionWait after the
 	// claim time, marks the token used and stores the session. It returns
-	// ErrNotFound for an unknown hash, ErrTokenUsed and ErrTokenExpired
+	// ErrNotFound for an unknown hash and for a token of another kind (the
+	// token stays unused), ErrTokenUsed and ErrTokenExpired
 	// from CheckUse, and ErrClaimLost when the claim is not live or when
 	// MaxSessionWait passed. A session at exactly MaxSessionWait opens.
-	OpenSession(ctx context.Context, sha256 string, k Key, now time.Time) (Session, error)
+	OpenSession(ctx context.Context, sha256 string, kind SessionKind, k Key, now time.Time) (Session, error)
 	// RunnerRenew is the renewal of the claim c by its runner, before the
 	// launcher opens a session. In one transaction, with the rules of
 	// CheckRunnerRenew, it checks the fence (namespace.ErrFenced for a stale

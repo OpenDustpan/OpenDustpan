@@ -580,8 +580,8 @@ const nameLockColumns = `scope, name, sub, failures, locked_until_ms, level, las
 // drops the ones whose runner the restored data does not hold.
 const (
 	runnerClaimColumns   = `operation_id, token, claimed_at_ms, job_id, phase`
-	runnerHandoffColumns = `sha256, operation_id, token, runner_id, issued_at_ms, expires_at_ms, used_at_ms`
-	runnerSessionColumns = `id, operation_id, token, runner_id, key_public, key_created_at_ms, created_at_ms`
+	runnerHandoffColumns = `sha256, operation_id, token, runner_id, kind, issued_at_ms, expires_at_ms, used_at_ms`
+	runnerSessionColumns = `id, operation_id, token, runner_id, kind, key_public, key_created_at_ms, created_at_ms`
 	runnerNonceColumns   = `subject, nonce, expires_at_ms`
 )
 

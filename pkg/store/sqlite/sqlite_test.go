@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/accesstoken/accesstokentest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
@@ -117,8 +118,51 @@ func TestAccessTokenConformance(t *testing.T) {
 	accesstokentest.Run(t, func(t *testing.T) accesstokentest.Store {
 		t.Helper()
 
-		return open(t)
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
+
+		return &rawTokenStore{BaseStore: openPath(t, path), path: path}
 	})
+}
+
+// rawTokenStore adds InsertRawToken to the store: it writes an access token
+// row with direct SQL, so a case can store a kind that CreateToken refuses.
+type rawTokenStore struct {
+	accesstokentest.BaseStore
+
+	path string
+}
+
+// InsertRawToken writes the row of t without any check of its kind.
+func (s *rawTokenStore) InsertRawToken(
+	ctx context.Context, t accesstoken.Token, d accesstoken.Digest,
+) (err error) {
+	conn, err := openRawDB(s.path)
+	if err != nil {
+		return err
+	}
+
+	defer func() { err = errors.Join(err, conn.Close()) }()
+
+	_, err = conn.ExecContext(
+		ctx,
+		`INSERT INTO access_tokens (id, principal_id, name, kind, digest, created_at_ms, expires_at_ms, created_by)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID,
+		t.PrincipalID,
+		t.Name,
+		string(t.Kind),
+		d.String(),
+		t.CreatedAt.UnixMilli(),
+		t.ExpiresAt.UnixMilli(),
+		t.CreatedBy,
+	)
+	if err != nil {
+		return fmt.Errorf("insert raw access token: %w", err)
+	}
+
+	return nil
 }
 
 // TestSessionConformance runs the session store suite.
@@ -1718,7 +1762,7 @@ func (s *revocationStore) RunnerPools() runner.PoolStore {
 
 // RunnerPorts implements storetest.RevocationStore.
 func (s *revocationStore) RunnerPorts() storetest.RunnerPorts {
-	return storetest.RunnerPorts{Pools: s.Runners(), Members: s.Runners(), Sessions: s.Runners()}
+	return storetest.RunnerPorts{Pools: s.Runners(), Members: s.Runners(), Sessions: s.Runners(), Proxy: s.Runners()}
 }
 
 // KeepsUnknownKinds implements storetest.RevocationStore. The restore copies

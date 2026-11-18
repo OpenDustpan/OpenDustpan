@@ -34,6 +34,7 @@ const (
 	backupColStatus      = "status"
 	backupColUpdateID    = "update_id"
 	backupColVersion     = "version"
+	backupColUpdatedBy   = "updated_by"
 	backupColBundleID    = "bundle_id"
 	backupColUpdatedAtMs = "updated_at_ms"
 	backupColDeletedAtMs = "deleted_at_ms"
@@ -278,7 +279,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"resource_deleted_at_ms",
 				"marks_seq",
 				backupColUpdatedAtMs,
-				"updated_by",
+				backupColUpdatedBy,
 			},
 		},
 		{

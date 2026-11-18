@@ -118,8 +118,10 @@ var families = map[identity.Action]Family{
 	// The deep check of the blob store: it adds load to the store and writes
 	// throwaway objects under a prefix of its own.
 	identity.ActionInstallationStoreCheck: FamilyOperator,
-	identity.ActionServerMaintenance:      FamilyOperator,
-	identity.ActionServerObserve:          FamilyOperator,
+	// The gates and the decision records of the installation.
+	identity.ActionInstallationReadGates: FamilyOperator,
+	identity.ActionServerMaintenance:     FamilyOperator,
+	identity.ActionServerObserve:         FamilyOperator,
 	// The version rows of the server processes: the list, and the delete of
 	// the row of a process that died.
 	identity.ActionServerReadInstances:  FamilyOperator,

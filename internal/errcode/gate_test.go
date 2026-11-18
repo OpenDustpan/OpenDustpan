@@ -29,6 +29,7 @@ const knownDir = "testdata/uncoded"
 func gated() []errcodetest.Adapter {
 	return []errcodetest.Adapter{
 		api("audit", nil, nil),
+		api("decisionrecord", nil, nil),
 		api("drift", nil, nil),
 		{
 			Name: "dustpan",
@@ -53,7 +54,7 @@ func gated() []errcodetest.Adapter {
 		api("registry", nil, nil),
 		// The runner protocol has its own codes and its own versions.
 		api("runnerapi", nil,
-			[]string{"classifyProtocol", "classifyProtocolOther"}),
+			[]string{"classifyProtocol", "classifyProtocolOther", "classifyProxy"}),
 		api("runnerpools", nil, nil),
 		api("selfservice", nil, nil),
 		api("settings", []string{"bulkError"}, nil),

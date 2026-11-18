@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/gate/cedargo"
 	"opendustpan.org/opendustpan/pkg/gate/limitgroups"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/installation"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -110,6 +111,11 @@ func newStateWriteGates(cfg *settings, namespaces *namespace.Service) (stateWrit
 		return none, fmt.Errorf("%w: %w", ErrMissingOption, errGateParts)
 	}
 
+	kindReader, err := newGateKindReader(cfg)
+	if err != nil {
+		return none, err
+	}
+
 	facts := newInventoryFacts(cfg)
 
 	log := cfg.logger
@@ -120,14 +126,73 @@ func newStateWriteGates(cfg *settings, namespaces *namespace.Service) (stateWrit
 	svc, err := gate.NewService(gate.ServiceConfig{
 		Store: store, Engine: newGateEngine(), Producers: nil,
 		Units: facts, Subjects: principalSubjects{principals: principals},
-		Fences: namespaceFences{namespaces: namespaces},
-		Now:    cfg.now, Log: log,
+		Fences:     namespaceFences{namespaces: namespaces},
+		KindReader: kindReader, IsDev: principal.IsDevSubject, Now: cfg.now, Log: log,
 	})
 	if err != nil {
 		return none, fmt.Errorf("gate service: %w", err)
 	}
 
 	return stateWriteGates{svc: svc, guard: svc}, nil
+}
+
+// installationKindReader reads the installation kind of a store. The SQL
+// adapters implement it.
+type installationKindReader interface {
+	ReadKind(ctx context.Context) (installation.Kind, error)
+}
+
+// gateKindReader gives the gate service the installation kind of the server
+// as a string. Package gate does not import package installation.
+type gateKindReader struct {
+	// kind is the kind of the server, from WithInstallationKind.
+	kind installation.Kind
+	// stored reads the kind that the database holds. It is nil for a server
+	// with no kind store: such a server claims no kind, and its kind is kind.
+	stored installationKindReader
+}
+
+// newGateKindReader returns the kind reader of the gate service of cfg. A
+// server with a kind store that cannot read the kind does not start.
+func newGateKindReader(cfg *settings) (gateKindReader, error) {
+	r := gateKindReader{kind: cfg.installationKind, stored: nil}
+
+	if cfg.kindStore == nil {
+		return r, nil
+	}
+
+	stored, ok := cfg.kindStore.(installationKindReader)
+	if !ok {
+		return r, fmt.Errorf("%w: %w: the installation kind store cannot read the kind", ErrMissingOption, errGateParts)
+	}
+
+	r.stored = stored
+
+	return r, nil
+}
+
+// ReadKind implements gate.KindReader. It gives the kind of the server, and,
+// with a kind store, the kind that the database holds. An error of the store,
+// or a stored kind that is not the kind of the server, returns an error, so
+// the gate service fails closed.
+func (r gateKindReader) ReadKind(ctx context.Context) (string, error) {
+	if r.stored == nil {
+		return r.kind.String(), nil
+	}
+
+	stored, err := r.stored.ReadKind(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read the installation kind: %w", err)
+	}
+
+	// Defense in depth: the start claims the kind and stops on a database of
+	// another kind. This check stays so that a database that changed after the
+	// start does not get the approver rules of the wrong kind.
+	if stored != r.kind {
+		return "", &installation.MismatchError{Stored: stored, Want: r.kind}
+	}
+
+	return stored.String(), nil
 }
 
 // newGateEngine returns the linked policy engine. It knows each action of the

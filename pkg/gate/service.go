@@ -145,6 +145,14 @@ type AccessCall struct {
 	Object    identity.Object
 }
 
+// KindReader reads the installation kind without a claim.
+type KindReader interface {
+	// ReadKind returns the kind that the database holds: "dev" or
+	// "production". The caller converts the kind of its own package, because
+	// package gate does not import package installation.
+	ReadKind(ctx context.Context) (string, error)
+}
+
 // Service evaluates the gates of each decision point and the access limits
 // of each call. Each caller of a decision point uses it: the job model, the
 // change orders, Self-service, the profiles, the tool-neutral state
@@ -156,14 +164,16 @@ type AccessCall struct {
 // state.write. Each other evaluation returns an error that wraps
 // ErrUnavailable, so it refuses and never allows.
 type Service struct {
-	store     Store
-	engine    Engine
-	producers []Producer
-	units     UnitSource
-	subjects  SubjectSource
-	fences    FenceSource
-	now       func() time.Time
-	log       *slog.Logger
+	store      Store
+	engine     Engine
+	producers  []Producer
+	units      UnitSource
+	subjects   SubjectSource
+	fences     FenceSource
+	kindReader KindReader
+	isDev      DevSubjectMatcher
+	now        func() time.Time
+	log        *slog.Logger
 }
 
 // ServiceConfig holds the ports of a Service.
@@ -174,6 +184,12 @@ type ServiceConfig struct {
 	Units     UnitSource
 	Subjects  SubjectSource
 	Fences    FenceSource
+	// KindReader reads the installation kind. Evaluate reads it once for each
+	// call.
+	KindReader KindReader
+	// IsDev matches a dev subject. The caller passes principal.IsDevSubject, so
+	// one rule decides everywhere. NewService refuses a nil matcher.
+	IsDev DevSubjectMatcher
 	// Now is the clock, and time.Now when nil.
 	Now func() time.Time
 	Log *slog.Logger
@@ -183,7 +199,7 @@ type ServiceConfig struct {
 // logger is nil.
 func NewService(cfg ServiceConfig) (*Service, error) {
 	if cfg.Store == nil || cfg.Engine == nil || cfg.Units == nil || cfg.Subjects == nil || cfg.Fences == nil ||
-		cfg.Log == nil {
+		cfg.KindReader == nil || cfg.IsDev == nil || cfg.Log == nil {
 		return nil, fmt.Errorf("%w: the gate service needs each port and a logger", ErrInvalid)
 	}
 
@@ -194,7 +210,8 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, engine: cfg.Engine, producers: slices.Clone(cfg.Producers), units: cfg.Units,
-		subjects: cfg.Subjects, fences: cfg.Fences, now: now, log: cfg.Log,
+		subjects: cfg.Subjects, fences: cfg.Fences, kindReader: cfg.KindReader, isDev: cfg.IsDev, now: now,
+		log: cfg.Log,
 	}, nil
 }
 
@@ -219,6 +236,14 @@ func NewService(cfg ServiceConfig) (*Service, error) {
 // its job. Each other write with a job token returns an error that wraps
 // identity.ErrDenied, and writes no record.
 //
+// The installation kind. Evaluate reads the kind once for each call, through
+// the KindReader, before it reads any rule. A read error, or a kind that is
+// not dev or production, returns an error that wraps ErrUnavailable and
+// writes no record. An approval rule reads its approvers with RuleApprovers,
+// and a user whose signature CountsAsSignature refuses is no approver: on a
+// production installation, no dev subject approves. A rule that keeps no
+// approver is unmeetable and denies.
+//
 // This version evaluates the gates of state.write for a unit. It returns an
 // error that wraps ErrUnavailable for each other decision point, and for a
 // change with a BreakGlass: no route gives a break-glass yet, so none passes
@@ -242,7 +267,15 @@ func (s *Service) Evaluate(ctx context.Context, c Change) (Decision, error) {
 		}
 	}
 
-	if err := ctx.Err(); err != nil {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return Decision{}, fmt.Errorf("evaluate %s: %w", point, ctxErr)
+	}
+
+	// One read of the installation kind for each call, before any rule. A
+	// read error or a kind that is not dev or production stops the
+	// evaluation: fail closed.
+	policy, err := readApproverPolicy(ctx, s.kindReader, s.isDev)
+	if err != nil {
 		return Decision{}, fmt.Errorf("evaluate %s: %w", point, err)
 	}
 
@@ -251,7 +284,7 @@ func (s *Service) Evaluate(ctx context.Context, c Change) (Decision, error) {
 	}
 
 	if point == PointStateWrite {
-		return s.evaluateStateWrite(ctx, c)
+		return s.evaluateStateWrite(ctx, c, policy)
 	}
 
 	return Decision{}, errNotImplemented

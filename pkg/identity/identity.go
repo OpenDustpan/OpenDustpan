@@ -259,6 +259,10 @@ const (
 	// of the installation: the deep check of a blob store, which writes
 	// throwaway objects under a prefix of its own. Its object is ServerObject.
 	ActionInstallationStoreCheck Action = "installation:store-check"
+	// ActionInstallationReadGates allows reading the gates, the access limits,
+	// the approval rules, the ownership rules, the path sets and the decision
+	// records of the installation. Its object is ServerObject.
+	ActionInstallationReadGates Action = "installation:read-gates"
 	// ActionServerManageSettings allows changing the installation settings
 	// through the settings resource. Its object is ServerObject. The audit
 	// entries of the settings name it: the start entry and the entry of a
@@ -675,8 +679,9 @@ func Actions() []Action {
 		ActionUnitReadOutputs, ActionUnitManageSharing, ActionCallerRead,
 		ActionServerBackup, ActionServerObserve, ActionServerReadInstances, ActionServerDeleteInstance,
 		ActionServerReadAudit, ActionServerMaintenance, ActionServerRestore, ActionServerReadSettings,
-		ActionInstallationStoreCheck, ActionServerManageSettings, ActionNamespaceReadSettings,
-		ActionNamespaceManageSettings, ActionServerSetAuditChain, ActionServerDisableAuditChain,
+		ActionInstallationStoreCheck, ActionInstallationReadGates, ActionServerManageSettings,
+		ActionNamespaceReadSettings, ActionNamespaceManageSettings,
+		ActionServerSetAuditChain, ActionServerDisableAuditChain,
 		ActionServerReadPrincipals, ActionServerManagePrincipals, ActionServerManageGroups,
 		ActionServerManageRoles, ActionServerManageAccess, ActionServerCreateNamespace,
 		ActionNamespaceManageAccess, ActionCollectionManageAccess, ActionUnitManageAccess,
