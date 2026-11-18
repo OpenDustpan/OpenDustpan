@@ -2,6 +2,8 @@
 version: 5
 ---
 
+Issue: #3566.
+
 Roadmap: `docs/roadmap.md:188` (Exchange issues a trust token for a matched workload.).
 
 ## Why
@@ -18,7 +20,7 @@ Errors the person may hit, and the one command that helps:
 
 | Error | What the answer says | The command that helps |
 | --- | --- | --- |
-| No token when the chain, time, revocation or SPIFFE ID check fails. | 401 with NEW error codes mtls.no-client-certificate, mtls.unknown-issuer, mtls.expired, mtls.not-yet-valid, mtls.revoked, mtls.revocation-unknown, mtls.no-matching-rule, mtls.ambiguous-rule, mtls.rule-disabled, mtls.bundle-disabled and mtls.principal-disabled; 500 with NEW error code token.issue-failed and no token. | `curl --cert leaf.pem --key leaf.key https://server/api/dustpan/v1/namespaces/ns-xxx/trust-rules/exchange -v` |
+| No token when the chain, time, revocation or SPIFFE ID check fails. | 401 with NEW error codes mtls.no-client-certificate, mtls.unknown-issuer, mtls.expired, mtls.not-yet-valid, mtls.revoked, mtls.revocation-unknown, mtls.no-matching-rule, mtls.ambiguous-rule, mtls.bundle-disabled and mtls.principal-disabled; 429 with NEW error code mtls.rate-limited; 500 with NEW error code token.issue-failed and no token. A trust rule has no disabled state on main, so there is no code mtls.rule-disabled. | `curl --cert leaf.pem --key leaf.key https://server/api/dustpan/v1/namespaces/ns-xxx/trust-rules/exchange -v` |
 | A revoked or disabled trust token gives no access. | 401 token.ended when the token was revoked or its principal was disabled; 401 token.invalid after expiry. | `curl -X POST https://server/api/dustpan/v1/namespaces/ns-xxx/trust-rules/exchange --cert leaf.pem --key leaf.key` to get a new token |
 
 Evidence for the claims above:
@@ -32,7 +34,9 @@ Evidence for the claims above:
 - The mTLS exchange verifies chain, time with no skew, bundle revocation and exact SPIFFE ID against one enabled rule over direct TLS.
 - It issues a stored access token of the kind `mtls-exchange` (ADR 371 decision 2) with capped lifetime and an exchange audit entry in one transaction, with shared revoke and grant and limit enforcement.
 - The request credential of the token stays `trust-token` (ADR 284 decision 2; ADR 371 changes no credential).
-- NEW error codes mtls.* and token.issue-failed.
+- NEW error codes mtls.* and token.issue-failed (see "Contract" in design.md).
+- The store port `RecordExchange` gets the verified SPIFFE ID: the store matches the rule again in the exchange transaction, with a conformance suite before any adapter changes.
+- The exchange route answers an mTLS call when the request has an empty body.
 
 Out of scope:
 
@@ -57,6 +61,9 @@ Where the path still costs the person time or surprises them:
 
 Each fact names its file, line and function on main. The change specifies only the difference.
 
+- The exchange store port has one method, RecordExchange, which only accepts the kind `jwt-exchange` (`pkg/trustrule/exchange.go:50`, `pkg/store/internal/trustrulestore/trustrulestore.go:233` func CheckExchange)
+- The two adapters call CheckExchange inside the fenced transaction (`pkg/store/postgres/trustrules.go:299`, `pkg/store/sqlite/trustrules.go:313`, func RecordExchange)
+- The JWT exchange builds the Exchange value with named fields (`internal/trustrulesvc/exchange.go:218`, func Exchange)
 - Trust token lifetime test (`pkg/accesstoken/trust_token_test.go:59`)
 - Workload exchange e2e (`e2e/workload_test.go:38`)
 - token.invalid code (`internal/errcode/catalog_token.go:11`)
@@ -121,6 +128,7 @@ Questions considered and answered:
 - May the mTLS exchange issue a stored token, and of which kind? ADR 371 decision 2 (owner, 2026-11-14): a stored access token of the kind `mtls-exchange`, with the life cycle of ADR 284 decision 1. The open question of the earlier draft is answered.
 - Does the credential change? No. ADR 371 "Not decided here" keeps the credential `trust-token` for both kinds.
 
+- Where does the revocation answer come from? Not decided here: the exchange takes a revocation check as an injected function, and no check means mtls.revocation-unknown with no token (fail closed). The source of the answer is outside this change.
 - Stored or stateless token? Stored, as ADR 284 decision 1 does for JWT; its use for mTLS is open question 1.
 - Lifetime? ADR 69 decision 6: setting, default 1 hour, capped at the leaf not-after time.
 - Behind a TLS proxy? Direct TLS only here; a forwarded chain header is ignored. Proxy design is in part 3.
