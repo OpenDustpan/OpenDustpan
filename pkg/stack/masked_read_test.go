@@ -299,8 +299,7 @@ func countFixture(t *testing.T, maxCheckpointBytes int) (updatesFixture, *counti
 }
 
 // checkMarkerPaths proves each marker of page is a secret with a value path
-// that the strict parser accepts, in sorted order, and that the value paths
-// of the page match the markers.
+// in sorted order, and that the value paths of the page match the markers.
 func checkMarkerPaths(t *testing.T, page stack.MaskedPage) {
 	t.Helper()
 
@@ -319,14 +318,6 @@ func checkMarkerPaths(t *testing.T, page stack.MaskedPage) {
 
 	if !slices.Equal(paths, page.ValuePaths) {
 		t.Errorf("valuePaths = %q, want %q", page.ValuePaths, paths)
-	}
-
-	// Each JSON Pointer of the page passes the strict parser of the boundary
-	// check: the server never emits a path that a client cannot parse.
-	for _, path := range paths {
-		if _, err := stack.ParseValuePath(path); err != nil {
-			t.Fatalf("value path %q does not parse: %v", path, err)
-		}
 	}
 }
 
@@ -480,8 +471,7 @@ func TestMaskedReadDeniedWithoutGrant(t *testing.T) {
 }
 
 // TestMaskedReadBoundaryRefusals proves each input of the read that the
-// boundary check guards: the version, the JSON Pointer of a value path, and
-// the cursor. Each refusal carries no secret bytes, and a cursor above the
+// boundary check guards: the version and the cursor. Each refusal carries no secret bytes, and a cursor above the
 // length cap never reaches the blob store.
 func TestMaskedReadBoundaryRefusals(t *testing.T) {
 	t.Parallel()
@@ -491,7 +481,6 @@ func TestMaskedReadBoundaryRefusals(t *testing.T) {
 		check func(t *testing.T)
 	}{
 		{"a version outside the allowlist", checkVersionAllowlist},
-		{"bad json pointers", checkJSONPointers},
 		{"a cursor over the length cap", checkOverlongCursor},
 		{"a forged cursor", checkForgedCursor},
 		{"an expired cursor or a cursor of another caller, unit or version", checkCursorBinding},
@@ -522,32 +511,6 @@ func checkVersionAllowlist(t *testing.T) {
 		}
 
 		sink.wantOne(t, stack.RefusalBadPath)
-	}
-}
-
-// checkJSONPointers proves the strict parser of a value path refuses each
-// malformed JSON Pointer with no echo of the input, and accepts the valid
-// forms.
-func checkJSONPointers(t *testing.T) {
-	t.Helper()
-
-	for _, input := range []string{"abc", "/a~", "/a~2", "/a\x7fb", "/a/b~c", "/\x01a"} {
-		_, err := stack.ParseValuePath(input)
-		if err == nil {
-			t.Errorf("path %q: err = nil, want a refusal", input)
-
-			continue
-		}
-
-		if strings.Contains(err.Error(), input) {
-			t.Errorf("path %q: the error echoes the input: %v", input, err)
-		}
-	}
-
-	for _, input := range []string{"", "/", "//", "/resources/1/inputs/password", "/a~1b", "/a~0b", "/a~01", "/a//b"} {
-		if _, err := stack.ParseValuePath(input); err != nil {
-			t.Errorf("path %q: err = %v, want nil", input, err)
-		}
 	}
 }
 

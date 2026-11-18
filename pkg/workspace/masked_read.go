@@ -21,7 +21,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -555,58 +554,4 @@ func verifyMaskedCursor(key []byte, raw string, bind maskedBinding, now time.Tim
 	}
 
 	return parsed.Offset, nil
-}
-
-// ParseValuePath parses a JSON Pointer (RFC 6901) strictly and returns its
-// tokens. The empty string is the pointer of the whole document. The error
-// carries no echo of the input, so a refusal cannot print a value.
-func ParseValuePath(s string) ([]string, error) {
-	if !utf8.ValidString(s) {
-		return nil, fmt.Errorf("%w: value path", ErrBadPath)
-	}
-
-	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
-			return nil, fmt.Errorf("%w: value path", ErrBadPath)
-		}
-	}
-
-	if s == "" {
-		return []string{}, nil
-	}
-
-	if s[0] != '/' {
-		return nil, fmt.Errorf("%w: value path", ErrBadPath)
-	}
-
-	parts := strings.Split(s[1:], "/")
-	tokens := make([]string, 0, len(parts))
-
-	for _, part := range parts {
-		if !validPointerEscapes(part) {
-			return nil, fmt.Errorf("%w: value path", ErrBadPath)
-		}
-
-		tokens = append(tokens, strings.ReplaceAll(strings.ReplaceAll(part, "~1", "/"), "~0", "~"))
-	}
-
-	return tokens, nil
-}
-
-// validPointerEscapes reports whether every "~" of a reference token is
-// followed by "0" or "1", as RFC 6901 requires.
-func validPointerEscapes(token string) bool {
-	for i := 0; i < len(token); i++ {
-		if token[i] != '~' {
-			continue
-		}
-
-		if i+1 >= len(token) || (token[i+1] != '0' && token[i+1] != '1') {
-			return false
-		}
-
-		i++
-	}
-
-	return true
 }

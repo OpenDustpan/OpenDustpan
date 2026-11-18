@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -159,43 +158,6 @@ func decodeCursor(key []byte, raw string) (cursorPayload, error) {
 	}
 
 	return parsed, nil
-}
-
-// ParseValuePath parses a JSON Pointer (RFC 6901) strictly and returns its
-// tokens. The empty string is the pointer of the whole document. The error
-// carries no echo of the input, so a refusal cannot print a value.
-func ParseValuePath(s string) ([]string, error) {
-	if !utf8.ValidString(s) {
-		return nil, fmt.Errorf("%w: value path", ErrBadPath)
-	}
-
-	for _, r := range s {
-		if r < 0x20 || r == 0x7f {
-			return nil, fmt.Errorf("%w: value path", ErrBadPath)
-		}
-	}
-
-	if s == "" {
-		return []string{}, nil
-	}
-
-	if s[0] != '/' {
-		return nil, fmt.Errorf("%w: value path", ErrBadPath)
-	}
-
-	parts := strings.Split(s[1:], "/")
-
-	tokens := make([]string, 0, len(parts))
-
-	for _, part := range parts {
-		if !validEscapes(part) {
-			return nil, fmt.Errorf("%w: value path", ErrBadPath)
-		}
-
-		tokens = append(tokens, strings.ReplaceAll(strings.ReplaceAll(part, "~1", "/"), "~0", "~"))
-	}
-
-	return tokens, nil
 }
 
 // validateVersion checks a version of the stack: 0 names no version, so the

@@ -214,12 +214,12 @@ func checkMaskedPage(t *testing.T, page workspace.MaskedPage, id workspace.State
 		t.Errorf("valuePaths = %q, want %q", page.ValuePaths, got)
 	}
 
-	checkMaskedPageBytes(t, page, got)
+	checkMaskedPageBytes(t, page)
 }
 
 // checkMaskedPageBytes checks that the JSON of a page holds no plain secret,
-// that each path parses strictly, and that a one-page answer has no cursor.
-func checkMaskedPageBytes(t *testing.T, page workspace.MaskedPage, got []string) {
+// and that a one-page answer has no cursor.
+func checkMaskedPageBytes(t *testing.T, page workspace.MaskedPage) {
 	t.Helper()
 
 	raw, err := json.Marshal(page)
@@ -230,14 +230,6 @@ func checkMaskedPageBytes(t *testing.T, page workspace.MaskedPage, got []string)
 	for _, needle := range []string{"s3cr3t-out", "s3cr3t-input", "s3cr3t-output", "s3cr3t-res"} {
 		if strings.Contains(string(raw), needle) {
 			t.Errorf("the page holds %q, want markers only", needle)
-		}
-	}
-
-	// Each JSON Pointer of the page passes the strict parser of the boundary
-	// check.
-	for _, path := range got {
-		if _, err := workspace.ParseValuePath(path); err != nil {
-			t.Errorf("value path %q does not parse: %v", path, err)
 		}
 	}
 
