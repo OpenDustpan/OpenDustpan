@@ -7,6 +7,8 @@ ADR 370 gives each housekeeping purpose its own built-in service principal with 
 1. **One closed list of purposes.** NEW `principal.HousekeepingPurpose` is a type with unexported fields. Its values come only from NEW `principal.HousekeepingPurposes()`. Each value has a stable subject (`housekeeping:<purpose>`), a role name and the actions of that role. A purpose that is not in the list cannot exist, so no code can act as a housekeeping principal of a made-up purpose.
 2. **The install writes principals and grants.** In the transaction that makes the installation, the store writes one principal of kind `service` and source `builtin` for each purpose, and one stored grant of its role on its object, with the install as the creator and the install time. Code defines the role. The grant row decides who holds it.
 3. **The store filters by source.** The store applies the `source` filter in the list query and in the count query. The service does not filter after the read, because that breaks the page totals and the cursors.
+4. **The seed is part of the empty installation.** The principals and grants of the baseline exist in every new installation, so the shared suites expect them: each total is the seeded count plus the rows of the test, and the count comes from `principal.HousekeepingPurposes()`. The suites do not filter the seeded rows out and the store does not hide them, because a hidden principal is a rule that a user cannot see (No magic).
+5. **A restore replaces the seeded rows with the rows of the backup.** The portable restore stages the backup in a new baseline database. As for the installation row, the token policy and the session policy, the stage deletes the seeded `grants` and `principals` rows before it loads the table files, because the backup holds its own rows of both tables, with their grants, creators, times and revokes. Keeping the seeded rows would collide with the imported rows (same subject, same grant ID), and keeping them in place of the imported rows would lose a revoke that an operator made (ADR 370 decision 3: "A person can list, audit and revoke them"). The stage code edits `pkg/store/sqlite/backup_stage_portable.go` and `pkg/store/postgres/backup_stage_portable.go`.
 
 ## Structure
 
@@ -16,7 +18,7 @@ ADR 370 gives each housekeeping purpose its own built-in service principal with 
 
 ## Layers
 
-This part adds no guard. The table of hostile cases for each guard is in part 3. The store layer has its conformance case: the install principals exist on both dialects, with their grants, a creator and a time, and the `source` filter keeps the total and the cursor of its rows only.
+This part adds no guard. The table of hostile cases for each guard is in part 3. The restore has its own case on both dialects (task 1.3): the staged rows are the rows of the backup. The store layer has its conformance case: the install principals exist on both dialects, with their grants, a creator and a time, and the `source` filter keeps the total and the cursor of its rows only.
 
 ## Contract
 
@@ -24,7 +26,7 @@ Types and functions (`pkg/principal`):
 
 - NEW type `principal.HousekeepingPurpose`, with unexported fields. A value comes only from the closed list of NEW `principal.HousekeepingPurposes()`. Each value has the subject `housekeeping:<purpose>`, a role name and the actions of that role.
 - NEW `principal.Housekeeping(purpose)` returns the `identity.Principal` of one purpose.
-- NEW source `builtin`, a constant next to `SourceLocal` (`pkg/principal/principal.go:116`). `validateSource` (`pkg/principal/principal.go:629`) accepts it. An unknown source returns `principal.ErrInvalid`.
+- NEW source `builtin`, a constant next to `SourceLocal` (`pkg/principal/principal.go:116`). `validateSource` (`pkg/principal/principal.go:631`) accepts it. An unknown source returns `principal.ErrInvalid`.
 
 Port (`pkg/principal/store.go:58`):
 

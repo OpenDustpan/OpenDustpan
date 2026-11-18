@@ -27,10 +27,13 @@ Evidence for the claims above:
 - NEW: one built-in service principal for each housekeeping purpose, made at the install, with the source `builtin`.
 - NEW: the install step writes the grants of each housekeeping principal as stored grants, with the install as the creator and the install time. A role for each purpose holds only the actions that the purpose needs.
 - NEW: the `source` filter of `GET /api/server/principals` and the `builtin` source. The other routes exist on main.
+- NEW: a portable restore clears the seeded principals and grants of the new baseline before it loads the backup, so the restored installation has the rows of the backup.
+- Test side only: the shared suites of principals, namespace principals and access expect the seeded rows in their totals, page orders and review counts.
 - Update `GLOSSARY.md`: add "Housekeeping principal".
 
 Out of scope:
 
+- A filter or a hidden rule that removes the seeded rows from a list: the seed is part of the empty installation.
 - The sweeps that act as their principals (part 2 and part 3).
 - A refusal of a credential or of a grant for a housekeeping principal (part 3).
 - The namespace service principal: the first trigger change removes it with the run-as principal that replaces it.
@@ -58,7 +61,7 @@ Each fact names its file, line and function on main. The change specifies only t
 - The store port takes the kind and no source. (`pkg/principal/store.go:58 (Store.ListPrincipals)`)
 - The service parses the kind. (`pkg/principal/service.go:201 (Service.ListPrincipals)`)
 - The source constants stop at `ldap`, `scim`, `oidc` and `oauth` next to `local`. (`pkg/principal/principal.go:116`)
-- The source check refuses any other value. (`pkg/principal/principal.go:629 (func validateSource)`)
+- The source check refuses any other value. (`pkg/principal/principal.go:631 (func validateSource)`)
 
 ## ADR check
 
@@ -91,6 +94,7 @@ none
 Questions considered and answered:
 
 - Which purposes get a principal? The eleven purposes of the design document ("Purposes on main"). Task 0.1 checked the list on main on 17 November 2026.
+- What happens to the seeded rows on a restore? The stage deletes them before it loads the backup, as it does for the installation row and the two policy rows; the backup holds its own rows. The existing step in `pkg/store/sqlite/backup_stage_portable.go` and `pkg/store/postgres/backup_stage_portable.go` is the precedent. Design decision 5.
 - Does a housekeeping principal belong to a namespace? No. It is a principal of the installation. Its grants name the objects that its purpose touches.
 - Who is the creator of the install grants? The install, recorded as the creator with the install time, as ADR 338 decision 1 did for the namespace grant.
 - What about the existing namespaces? No installation exists, so no migration (ADR 322).
