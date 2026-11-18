@@ -426,15 +426,47 @@ func TestEveryRootPatternHasLabel(t *testing.T) {
 		t.Fatal("the root mux holds no pattern")
 	}
 
-	for _, want := range []string{"/", "/runner/v1/", "/oidc/", "/api/", "/api/inventory/"} {
-		if !slices.Contains(srv.root.patterns, want) {
-			t.Errorf("root mux has no pattern %q: the test server does not mount it", want)
+	// The label that each direct root mount must carry. A mount that is
+	// missing here, or that carries another label, fails the test.
+	wantLabels := map[string]string{
+		"/":                               metrics.AdapterServer,
+		"/runner/v1/":                     metrics.AdapterServer,
+		"/oidc/":                          metrics.AdapterServer,
+		"/api/":                           metrics.AdapterPulumi,
+		"/api/audit/":                     metrics.AdapterServer,
+		"/api/server/":                    metrics.AdapterServer,
+		"/api/inventory/":                 metrics.AdapterInventory,
+		"/api/v2/":                        metrics.AdapterOpenTofu,
+		"/tofu/state/":                    metrics.AdapterOpenTofu,
+		"/v1/providers/":                  metrics.AdapterOpenTofu,
+		"/v1/modules/":                    metrics.AdapterOpenTofu,
+		"/v1/mirror/":                     metrics.AdapterOpenTofu,
+		v1Prefix:                          metrics.AdapterServer,
+		"GET /.well-known/terraform.json": metrics.AdapterOpenTofu,
+		"GET /health/live":                metrics.AdapterServer,
+		"GET /health/ready":               metrics.AdapterServer,
+		"GET /health/ready/{component}":   metrics.AdapterServer,
+	}
+
+	for pattern, want := range wantLabels {
+		if !slices.Contains(srv.root.patterns, pattern) {
+			t.Errorf("root mux has no pattern %q: the test server does not mount it", pattern)
+		}
+
+		if got := labels[pattern]; got != want {
+			t.Errorf("label of root pattern %q = %q, want %q", pattern, got, want)
 		}
 	}
 
-	for _, pattern := range append(slices.Clone(srv.root.patterns), srv.root.mounted...) {
+	for _, pattern := range srv.root.patterns {
+		if _, ok := wantLabels[pattern]; !ok {
+			t.Errorf("root pattern %q has no expected label in the test", pattern)
+		}
+	}
+
+	for _, pattern := range srv.root.mounted {
 		if _, ok := labels[pattern]; !ok {
-			t.Errorf("root mux pattern %q has no label", pattern)
+			t.Errorf("mounted path %q has no label", pattern)
 		}
 	}
 }
