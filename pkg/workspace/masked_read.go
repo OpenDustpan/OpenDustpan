@@ -37,6 +37,10 @@ const maskedMaxVersionBytes = 5 << 20
 // maskedMaxVersionIDBytes is the longest version ID the boundary check accepts.
 const maskedMaxVersionIDBytes = 64
 
+// maskedChunkBytes is the size of one chunk that the server reads of a state
+// version. The context is checked between chunks.
+const maskedChunkBytes = 256 << 10
+
 // maskedMaxCursorBytes is the most bytes of one cursor of a masked read. A
 // cursor above the cap is refused before any state is read.
 const maskedMaxCursorBytes = 512
@@ -321,16 +325,17 @@ func validMaskedVersionID(id StateVersionID) error {
 	return nil
 }
 
-// readMaskedContent loads the content of sv, and refuses a content over the
-// size limit with ErrTooLarge. The reader reads one byte past the limit, so
-// the refusal does not depend on the record.
+// readMaskedContent loads the content of sv in chunks of maskedChunkBytes, and
+// refuses a content over the size limit with ErrTooLarge. The reader stops one
+// byte past the limit, so the refusal does not depend on the record. The
+// context is checked before each chunk, so a deadline stops a slow read.
 func (s *Service) readMaskedContent(ctx context.Context, sv StateVersion) ([]byte, error) {
 	rc, err := s.Open(ctx, sv)
 	if err != nil {
 		return nil, err
 	}
 
-	content, readErr := io.ReadAll(io.LimitReader(rc, maskedMaxVersionBytes+1))
+	content, readErr := readMaskedChunks(ctx, io.LimitReader(rc, maskedMaxVersionBytes+1))
 	closeErr := rc.Close()
 
 	if readErr != nil {
@@ -346,6 +351,31 @@ func (s *Service) readMaskedContent(ctx context.Context, sv StateVersion) ([]byt
 	}
 
 	return content, nil
+}
+
+// readMaskedChunks reads r to its end in chunks of maskedChunkBytes. Before each
+// chunk it checks ctx, and it stops at once on a canceled or expired context.
+func readMaskedChunks(ctx context.Context, r io.Reader) ([]byte, error) {
+	var content []byte
+
+	chunk := make([]byte, maskedChunkBytes)
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("read state content: %w", err)
+		}
+
+		n, err := io.ReadFull(r, chunk)
+		content = append(content, chunk[:n]...)
+
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return content, nil
+		}
+
+		if err != nil {
+			return nil, fmt.Errorf("read chunk: %w", err)
+		}
+	}
 }
 
 // maskedStatePaths returns the sorted, unique JSON Pointer value paths of the
