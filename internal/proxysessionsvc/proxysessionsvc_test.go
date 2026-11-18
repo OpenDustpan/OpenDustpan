@@ -692,7 +692,7 @@ func TestSettingsEntryHoldsNoURLDigest(t *testing.T) {
 	// The entry still names what changed: the URL (the third save keeps it), the
 	// credential and the version.
 	if !hasChange(entries[0], "upstreamURLChanged", "true") || !hasChange(entries[1], "upstreamURLChanged", "true") ||
-		!hasChange(entries[0], "credentialChanged", "true") || !hasChange(entries[1], "credentialChanged", "false") ||
+		!hasChange(entries[0], "credentialChanged", "true") || !hasChange(entries[1], "credentialChanged", "true") ||
 		!hasChange(entries[2], "upstreamURLChanged", "false") || !hasChange(entries[1], "version", "2") {
 		t.Errorf("audit entries = %+v, want the changed fields and the version", entries)
 	}
