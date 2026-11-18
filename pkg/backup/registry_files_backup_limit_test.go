@@ -166,12 +166,19 @@ func TestBackupRefusesRegistryFilesAboveTheLimit(t *testing.T) {
 
 			const id = backup.ID("bkp-registry-limit")
 
-			sum := testSummary()
+			// The summary holds a blob that the source stores, so that a
+			// backup that copies before it checks the limits leaves a key
+			// in the target.
+			data := []byte("registry file bytes")
+			ref := blobRef("namespaces/ns-aaaaaaaaaaaaaaaaaaaa/registry/files/f1", data)
+
+			sum := testSummary(ref)
 			sum.RegistryFiles = map[string][]backup.RegistryFileEntry{
 				"ns-aaaaaaaaaaaaaaaaaaaa": registryEntries(tc.sizes...),
 			}
 
 			fix := newUnverifiedFixture(t, &stubExporter{sum: sum, data: []byte("{}"), err: nil}, 0)
+			fix.source.storeObject(t, ref.Key, data)
 
 			_, runErr := fix.service.Run(t.Context(), id)
 
@@ -206,6 +213,15 @@ func checkRegistryRefusal(t *testing.T, fix *unverifiedFixture, id backup.ID, ru
 
 	if fix.target.has(manifestKeyOf(id)) {
 		t.Fatal("a refused backup wrote a manifest")
+	}
+
+	blobs, listErr := fix.target.list(t.Context(), "blobs/")
+	if listErr != nil {
+		t.Fatalf("list target blobs: %v", listErr)
+	}
+
+	if len(blobs) != 0 {
+		t.Fatalf("a refused backup copied %d blobs to the target, want 0", len(blobs))
 	}
 
 	if !strings.Contains(fix.logs.String(), "backup refused") {

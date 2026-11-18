@@ -175,6 +175,33 @@ func TestCollectorReleaseManySmallFilesAddUp(t *testing.T) {
 	})
 }
 
+// TestCollectorReleaseSharedLargeHashCountsOnce pins the skip of a content
+// hash that the namespace already counted.
+func TestCollectorReleaseSharedLargeHashCountsOnce(t *testing.T) {
+	t.Parallel()
+
+	// Five releases share one file at the file limit. Counted once, the
+	// total is under the namespace limit. Counted for each release, it
+	// is over.
+	copies := int(backup.MaxRegistryFilesTotalBytes/backup.MaxRegistryFileBytes) + 1
+
+	var c blobrefs.Collector
+
+	for i := range copies {
+		row := blobrefs.ReleaseRow{
+			NamespaceID: nsID,
+			Release:     sizedRelease(fmt.Sprintf("big%d", i), 0, backup.MaxRegistryFileBytes),
+		}
+		if err := c.Release(row); err != nil {
+			t.Fatalf("Release %d of one shared large file = %v, want nil", i, err)
+		}
+	}
+
+	if got := len(c.RegistryFiles()[nsID]); got != 1 {
+		t.Fatalf("manifest entries = %d, want 1", got)
+	}
+}
+
 // TestCollectorReleaseRefusalLeavesNoEntry checks that a refused release adds
 // no manifest entry and no blob reference.
 func TestCollectorReleaseRefusalLeavesNoEntry(t *testing.T) {
