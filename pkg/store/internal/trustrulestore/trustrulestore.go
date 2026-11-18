@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -246,6 +247,55 @@ func CheckExchange(x *trustrule.Exchange) error {
 
 	if x.Token.PrincipalID == "" || !x.Token.ExpiresAt.After(x.Token.CreatedAt) {
 		return fmt.Errorf("%w: the token of the exchange has no principal or no lifetime", trustrule.ErrInvalid)
+	}
+
+	// Defense in depth: the mTLS service sets the SPIFFE ID from a verified
+	// chain, and the JWT service never sets it. This check stays so that the
+	// store never stores an mTLS token without its match in the transaction.
+	mtls := x.Token.Kind == accesstoken.KindMTLSExchange
+	if mtls != (x.SPIFFEID != "") || strings.Contains(x.SPIFFEID, "*") {
+		return fmt.Errorf("%w: a token of the kind %q needs a SPIFFE ID with no *, other kinds need none",
+			trustrule.ErrInvalid, accesstoken.KindMTLSExchange)
+	}
+
+	return nil
+}
+
+// CheckExchangeMatch returns trustrule.ErrNotFound unless exactly one row of
+// rows has the SPIFFE ID pattern x.SPIFFEID and the bundle of the row of
+// x.Rule, and that row is the row of x.Rule. The adapters call it in the
+// transaction of the exchange with the rule rows of the namespace of the
+// fence, so a rule that another call added after the service read its rules
+// still refuses the exchange. It returns nil for an exchange with no SPIFFE
+// ID.
+func CheckExchangeMatch(rows []Row, x *trustrule.Exchange) error {
+	if x.SPIFFEID == "" {
+		return nil
+	}
+
+	bundle := ""
+
+	for i := range rows {
+		if rows[i].ID == string(x.Rule) {
+			bundle = rows[i].BundleID
+		}
+	}
+
+	if bundle == "" {
+		return fmt.Errorf("%w: the rule of the exchange has no trust bundle", trustrule.ErrNotFound)
+	}
+
+	matched := make([]string, 0, 1)
+
+	for i := range rows {
+		if rows[i].BundleID == bundle && rows[i].SpiffeIDPattern == x.SPIFFEID {
+			matched = append(matched, rows[i].ID)
+		}
+	}
+
+	if len(matched) != 1 || matched[0] != string(x.Rule) {
+		return fmt.Errorf("%w: %d rules name the SPIFFE ID of the exchange, want only its rule",
+			trustrule.ErrNotFound, len(matched))
 	}
 
 	return nil
