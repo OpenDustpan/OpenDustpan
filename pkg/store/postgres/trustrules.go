@@ -318,12 +318,8 @@ func (t TrustRules) RecordExchange(
 			return ruleErr
 		}
 
-		if matchErr := checkExchangeMatch(ctx, q, fence.Namespace, &x); matchErr != nil {
-			return matchErr
-		}
-
-		if bundleErr := checkExchangeBundle(ctx, q, fence.Namespace, row.BundleID, &x); bundleErr != nil {
-			return bundleErr
+		if recheckErr := recheckExchange(ctx, q, fence.Namespace, row.BundleID, &x); recheckErr != nil {
+			return recheckErr
 		}
 
 		p, err := q.GetExchangePrincipal(ctx, x.Token.PrincipalID)
@@ -340,6 +336,19 @@ func (t TrustRules) RecordExchange(
 
 		return insertToken(ctx, q, x.Token, x.Digest)
 	})
+}
+
+// recheckExchange matches the SPIFFE ID and the bundle of an mTLS exchange
+// again in the transaction of the exchange, so that a rule or a rotate that
+// another call made after the verify still refuses the exchange.
+func recheckExchange(
+	ctx context.Context, q *db.Queries, ns namespace.Name, ruleBundleID string, x *trustrule.Exchange,
+) error {
+	if err := checkExchangeMatch(ctx, q, ns, x); err != nil {
+		return err
+	}
+
+	return checkExchangeBundle(ctx, q, ns, ruleBundleID, x)
 }
 
 // checkExchangeBundle reads the bundle of the namespace in the transaction of

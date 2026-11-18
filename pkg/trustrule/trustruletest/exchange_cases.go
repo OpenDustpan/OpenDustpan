@@ -47,7 +47,7 @@ func trustToken(principalID string) (accesstoken.Token, accesstoken.Digest) {
 func exchangeOf(r *trustrule.Rule) trustrule.Exchange {
 	tok, d := trustToken(r.PrincipalID)
 
-	return trustrule.Exchange{Token: tok, Digest: d, Rule: r.ID, SPIFFEID: ""}
+	return trustrule.Exchange{Token: tok, Digest: d, Rule: r.ID, SPIFFEID: "", Bundle: "", BundleVersion: 0}
 }
 
 // exchangeFixture makes a rule in acme and returns it with the current fence.

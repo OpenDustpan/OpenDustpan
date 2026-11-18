@@ -258,6 +258,12 @@ func CheckExchange(x *trustrule.Exchange) error {
 			trustrule.ErrInvalid, accesstoken.KindMTLSExchange)
 	}
 
+	return checkExchangeBundleFields(x, mtls)
+}
+
+// checkExchangeBundleFields checks the bundle ID and the bundle version of an
+// exchange of the kind mtls-exchange (mtls is true) or of another kind.
+func checkExchangeBundleFields(x *trustrule.Exchange, mtls bool) error {
 	// Defense in depth: the mTLS service sets the bundle and its version from
 	// the verify of the chain. This check stays so that the store never
 	// stores an mTLS token with no bundle version to check in the
