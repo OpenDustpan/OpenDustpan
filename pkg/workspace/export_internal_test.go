@@ -38,21 +38,32 @@ func MaskedPaths(state []byte, marks SensitiveMarks) ([]string, error) {
 	return maskedResourcePaths(state, marks)
 }
 
-// MintMaskedCursor makes a cursor of the masked read for the tests, bound to
-// unit, version and subject, with the page at offset, as of now.
-func MintMaskedCursor(key []byte, unit, version, subject string, offset int, now time.Time) (string, error) {
-	return mintMaskedCursor(key, maskedBinding{Unit: unit, Version: version, Subject: subject}, offset, now)
+// MaskedCursorSpec names what a test cursor of the masked read binds.
+type MaskedCursorSpec struct {
+	Unit    string
+	Version string
+	Subject string
+	Offset  int
+	At      time.Time
 }
 
-// SignMaskedCursor returns a cursor of the masked read over an arbitrary
+// NewTestCursor makes a cursor of the masked read for the tests, signed with
+// key and bound as spec says.
+func NewTestCursor(key []byte, spec MaskedCursorSpec) (string, error) {
+	return mintMaskedCursor(
+		key, maskedBinding{Unit: spec.Unit, Version: spec.Version, Subject: spec.Subject}, spec.Offset, spec.At,
+	)
+}
+
+// NewTestSignedCursor returns a cursor of the masked read over an arbitrary
 // payload, signed with key, so a test reaches the checks after the signature.
-func SignMaskedCursor(key, payload []byte) string {
+func NewTestSignedCursor(key, payload []byte) string {
 	return base64.RawURLEncoding.EncodeToString(payload) + "." +
 		base64.RawURLEncoding.EncodeToString(signMaskedCursor(key, payload))
 }
 
-// ReadMaskedChunks is readMaskedChunks for the tests.
-func ReadMaskedChunks(ctx context.Context, r io.Reader) ([]byte, error) {
+// LoadMaskedChunks is readMaskedChunks for the tests.
+func LoadMaskedChunks(ctx context.Context, r io.Reader) ([]byte, error) {
 	return readMaskedChunks(ctx, r)
 }
 

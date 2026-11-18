@@ -108,8 +108,19 @@ type testCursor struct {
 func mintCursor(t *testing.T, key []byte, c testCursor) string {
 	t.Helper()
 
+	return mintPaddedCursor(t, key, c, 0)
+}
+
+// mintPaddedCursor is mintCursor with an unknown field of pad bytes, so a
+// cursor stays signed and bound but grows past the length cap.
+func mintPaddedCursor(t *testing.T, key []byte, c testCursor, pad int) string {
+	t.Helper()
+
 	payload := fmt.Sprintf(`{"u":%q,"v":%q,"s":%q,"o":%d,"e":%d}`,
 		c.unit, c.version, c.subject, c.offset, c.expiry.Unix())
+	if pad > 0 {
+		payload = payload[:len(payload)-1] + `,"x":"` + strings.Repeat("A", pad) + `"}`
+	}
 
 	mac := hmac.New(sha256.New, key)
 	if _, err := mac.Write([]byte(payload)); err != nil {
@@ -554,10 +565,28 @@ func checkOverlongCursor(t *testing.T) {
 		p: person(), authz: readGrant(obj),
 	}
 
-	before := blobs.calls()
 	sink := newSink()
 
-	_, err := r.read(t, sink.refusal, strings.Repeat("a", stack.MaxCursorBytes+1))
+	// The cursor is signed with the right key and bound to the right unit,
+	// version and caller, and it has not expired: only its length is hostile.
+	// The control proves the same cursor with no padding is accepted.
+	valid := testCursor{
+		unit: obj.String(), version: "1", subject: r.p.Subject, offset: 0,
+		expiry: time.Now().Add(10 * time.Minute),
+	}
+
+	if _, err := r.read(t, nil, mintCursor(t, testCursorKey(), valid)); err != nil {
+		t.Fatalf("control cursor: err = %v, want nil", err)
+	}
+
+	before := blobs.calls()
+
+	overlong := mintPaddedCursor(t, testCursorKey(), valid, stack.MaxCursorBytes)
+	if len(overlong) <= stack.MaxCursorBytes {
+		t.Fatalf("test cursor has %d bytes, want more than %d", len(overlong), stack.MaxCursorBytes)
+	}
+
+	_, err := r.read(t, sink.refusal, overlong)
 	if !errors.Is(err, stack.ErrBadPath) {
 		t.Fatalf("err = %v, want the bad path of the read", err)
 	}

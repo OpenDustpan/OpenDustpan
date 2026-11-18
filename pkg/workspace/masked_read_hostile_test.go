@@ -59,7 +59,7 @@ type maskedHostile struct {
 }
 
 // newMaskedHostile writes the test state through a counting blob store.
-func newMaskedHostile(t *testing.T, state string, maxState int64) (maskedHostile, *countingBlobs) {
+func newMaskedHostile(t *testing.T, state string, maxState int64) (*maskedHostile, *countingBlobs) {
 	t.Helper()
 
 	counted := &countingBlobs{Store: openFixtureBlobs(t), mu: sync.Mutex{}, gets: 0, failGet: false}
@@ -80,14 +80,16 @@ func newMaskedHostile(t *testing.T, state string, maxState int64) (maskedHostile
 
 	obj := unitObjectOf(t, f)
 
-	return maskedHostile{
+	return &maskedHostile{
 		f: f, obj: obj, id: sv.ID, log: &refusalLog{mu: sync.Mutex{}, reasons: nil},
 		authz: grantAuthorizer{grants: map[string][]identity.Action{obj.String(): {identity.ActionUnitRead}}},
 	}, counted
 }
 
 // read runs one masked read as the subject "pat".
-func (h maskedHostile) read(ctx context.Context, sel workspace.VersionSelector, cursor string) (workspace.MaskedPage, error) {
+func (h *maskedHostile) read(
+	ctx context.Context, sel workspace.VersionSelector, cursor string,
+) (workspace.MaskedPage, error) {
 	return h.f.svc.ReadMasked(ctx, workspace.ReadMaskedArgs{
 		Ref: h.f.ws.Ref, Object: h.obj, Selector: sel,
 		Principal: person("pat"), Authorizer: h.authz, Key: testCursorKey(), Sink: h.log.sink(), Cursor: cursor,
@@ -99,7 +101,7 @@ func latest() workspace.VersionSelector { return workspace.VersionSelector{Lates
 
 // setSize changes the size that the record of a version holds, as a record
 // that understates or overstates its content.
-func (h maskedHostile) setSize(id workspace.StateVersionID, size int64) {
+func (h *maskedHostile) setSize(id workspace.StateVersionID, size int64) {
 	h.f.store.mu.Lock()
 	defer h.f.store.mu.Unlock()
 
@@ -133,6 +135,88 @@ func manySecretsState(n int) string {
 	return b.String()
 }
 
+// cursorCase is one hostile cursor with the name of its attack.
+type cursorCase struct {
+	name   string
+	cursor string
+}
+
+// cursorSplit is the two parts of a cursor.
+type cursorSplit struct {
+	payload string
+	sig     string
+}
+
+// cursorParts splits a cursor into its payload and its signature.
+func cursorParts(t *testing.T, cursor string) cursorSplit {
+	t.Helper()
+
+	payload, sig, ok := strings.Cut(cursor, ".")
+	if !ok {
+		t.Fatalf("cursor %q has no dot", cursor)
+	}
+
+	return cursorSplit{payload: payload, sig: sig}
+}
+
+// hostileCursors returns the bad cursors of the tests, each signed with the
+// key of the test unless its attack is the signature.
+func hostileCursors(t *testing.T, h *maskedHostile, good string) []cursorCase {
+	t.Helper()
+
+	spec := workspace.MaskedCursorSpec{
+		Unit: h.obj.String(), Version: string(h.id), Subject: "pat", Offset: 0, At: *h.f.now,
+	}
+
+	mint := func(key []byte, edit func(*workspace.MaskedCursorSpec)) string {
+		s := spec
+		edit(&s)
+
+		c, err := workspace.NewTestCursor(key, s)
+		if err != nil {
+			t.Fatalf("mint: %v", err)
+		}
+
+		return c
+	}
+
+	key := testCursorKey()
+	same := func(*workspace.MaskedCursorSpec) {}
+	goodParts := cursorParts(t, good)
+	goodPayload, goodSig := goodParts.payload, goodParts.sig
+	otherPayload := cursorParts(t, mint(key, func(s *workspace.MaskedCursorSpec) { s.Offset = 5 })).payload
+
+	long, err := json.Marshal(map[string]any{
+		"u": spec.Unit, "v": spec.Version, "s": spec.Subject, "o": 0, "e": spec.At.Add(time.Minute).Unix(),
+		"x": strings.Repeat("A", workspace.MaskedMaxCursorBytes),
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	overlong := workspace.NewTestSignedCursor(key, long)
+	if len(overlong) <= workspace.MaskedMaxCursorBytes {
+		t.Fatalf("test cursor has %d bytes, want more than %d", len(overlong), workspace.MaskedMaxCursorBytes)
+	}
+
+	return []cursorCase{
+		{"signature of another key", mint([]byte(strings.Repeat("!", 32)), same)},
+		{"altered signature", goodPayload + "." + goodSig[:len(goodSig)-2] + "AA"},
+		{"payload of another offset with the old signature", otherPayload + "." + goodSig},
+		{"bound to another unit", mint(key, func(s *workspace.MaskedCursorSpec) { s.Unit += "x" })},
+		{"bound to another version", mint(key, func(s *workspace.MaskedCursorSpec) { s.Version += "x" })},
+		{"bound to another caller", mint(key, func(s *workspace.MaskedCursorSpec) { s.Subject = "mallory" })},
+		{"expired", mint(key, func(s *workspace.MaskedCursorSpec) { s.At = s.At.Add(-11 * time.Minute) })},
+		{"negative offset", mint(key, func(s *workspace.MaskedCursorSpec) { s.Offset = -1 })},
+		{"no dot", goodPayload + goodSig},
+		{"two dots", good + ".AAAA"},
+		{"payload not base64", "!!!." + goodSig},
+		{"empty payload", "." + goodSig},
+		{"signature of a short size", goodPayload + ".AAAA"},
+		{"signed, bound and over the length cap", overlong},
+	}
+}
+
 // TestMaskedReadCursorIsHostileProof sends each bad cursor to the service: a
 // bad signature, another key, another binding, an expired cursor, a bad shape
 // and a cursor over the length cap. Each one is refused with ErrBadPath and
@@ -141,97 +225,71 @@ func TestMaskedReadCursorIsHostileProof(t *testing.T) {
 	t.Parallel()
 
 	h, _ := newMaskedHostile(t, manySecretsState(10), 4<<20)
-	unit, ver, now := h.obj.String(), string(h.id), *h.f.now
-	key := testCursorKey()
 
-	mint := func(key []byte, unit, ver, subject string, offset int, at time.Time) string {
-		c, err := workspace.MintMaskedCursor(key, unit, ver, subject, offset, at)
-		if err != nil {
-			t.Fatalf("mint: %v", err)
-		}
-
-		return c
-	}
-
-	good := mint(key, unit, ver, "pat", 0, now)
-	other := mint(key, unit, ver, "pat", 5, now)
-	long, err := json.Marshal(map[string]any{
-		"u": unit, "v": ver, "s": "pat", "o": 0, "e": now.Add(time.Minute).Unix(),
-		"x": strings.Repeat("A", workspace.MaskedMaxCursorBytes),
+	good, err := workspace.NewTestCursor(testCursorKey(), workspace.MaskedCursorSpec{
+		Unit: h.obj.String(), Version: string(h.id), Subject: "pat", Offset: 0, At: *h.f.now,
 	})
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatalf("mint: %v", err)
 	}
-
-	cases := []struct {
-		name   string
-		cursor string
-	}{
-		{"signature of another key", mint([]byte(strings.Repeat("!", 32)), unit, ver, "pat", 0, now)},
-		{"altered signature", good[:len(good)-2] + "AA"},
-		{"payload of another offset with the old signature", other[:strings.Index(other, ".")] + good[strings.Index(good, "."):]},
-		{"bound to another unit", mint(key, unit+"x", ver, "pat", 0, now)},
-		{"bound to another version", mint(key, unit, ver+"x", "pat", 0, now)},
-		{"bound to another caller", mint(key, unit, ver, "mallory", 0, now)},
-		{"expired", mint(key, unit, ver, "pat", 0, now.Add(-11*time.Minute))},
-		{"negative offset", mint(key, unit, ver, "pat", -1, now)},
-		{"no dot", strings.ReplaceAll(good, ".", "")},
-		{"two dots", good + ".AAAA"},
-		{"payload not base64", "!!!." + good[strings.Index(good, ".")+1:]},
-		{"empty payload", "." + good[strings.Index(good, ".")+1:]},
-		{"signature of a short size", good[:strings.Index(good, ".")] + ".AAAA"},
-		{"signed, bound and over the length cap", workspace.SignMaskedCursor(key, long)},
-	}
-
-	if c := workspace.SignMaskedCursor(key, long); len(c) <= workspace.MaskedMaxCursorBytes {
-		t.Fatalf("test cursor has %d bytes, want more than %d", len(c), workspace.MaskedMaxCursorBytes)
-	}
-
-	t.Run("refused", func(t *testing.T) {
-		for _, tc := range cases {
-			t.Run(tc.name, func(t *testing.T) {
-				t.Parallel()
-
-				page, err := h.read(t.Context(), latest(), tc.cursor)
-				if !errors.Is(err, workspace.ErrBadPath) {
-					t.Fatalf("err = %v, want ErrBadPath", err)
-				}
-
-				if len(page.Markers) != 0 || page.NextCursor != "" {
-					t.Fatalf("page = %+v, want an empty page", page)
-				}
-
-				if strings.Contains(fmt.Sprint(err), tc.cursor) && tc.cursor != "" {
-					t.Fatalf("the error echoes the cursor: %v", err)
-				}
-			})
-		}
-
-	})
 
 	if _, err := h.read(t.Context(), latest(), good); err != nil {
 		t.Fatalf("a good cursor: %v", err)
 	}
 
-	for _, reason := range h.log.got() {
+	cases := hostileCursors(t, h, good)
+
+	// The checks over all cases run after the parallel subtests end.
+	t.Cleanup(func() { wantBadPathRefusals(t, h.log, len(cases)) })
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkRefusedCursor(t, h, tc)
+		})
+	}
+}
+
+// wantBadPathRefusals checks that the sink saw n refusals, all "bad-path".
+func wantBadPathRefusals(t *testing.T, log *refusalLog, n int) {
+	t.Helper()
+
+	reasons := log.got()
+	if len(reasons) != n {
+		t.Errorf("sink saw %d refusals, want %d", len(reasons), n)
+	}
+
+	for _, reason := range reasons {
 		if reason != workspace.RefusalBadPath {
 			t.Errorf("reason = %q, want %q", reason, workspace.RefusalBadPath)
 		}
 	}
+}
 
-	if got := len(h.log.got()); got != len(cases) {
-		t.Errorf("sink saw %d refusals, want %d", got, len(cases))
+// checkRefusedCursor sends one hostile cursor and checks the refusal: the
+// error, the empty page and no echo of the cursor.
+func checkRefusedCursor(t *testing.T, h *maskedHostile, tc cursorCase) {
+	t.Helper()
+
+	page, err := h.read(t.Context(), latest(), tc.cursor)
+	if !errors.Is(err, workspace.ErrBadPath) {
+		t.Fatalf("err = %v, want ErrBadPath", err)
+	}
+
+	if len(page.Markers) != 0 || page.NextCursor != "" {
+		t.Fatalf("page = %+v, want an empty page", page)
+	}
+
+	if strings.Contains(fmt.Sprint(err), tc.cursor) {
+		t.Fatalf("the error echoes the cursor: %v", err)
 	}
 }
 
-// TestMaskedReadPagesAreStable proves a state with more markers than one page
-// answers the pages in order through the cursor, with no repeat and no gap,
-// and that the cursor of one caller does not open a page for another caller.
-func TestMaskedReadPagesAreStable(t *testing.T) {
-	t.Parallel()
-
-	total := workspace.MaskedPageMarkers*2 + 50
-	h, _ := newMaskedHostile(t, manySecretsState(total), 4<<20)
+// readAllPages follows the cursors of the read to the last page and returns
+// the paths of all markers and the number of pages.
+func readAllPages(t *testing.T, h *maskedHostile) ([]string, int) {
+	t.Helper()
 
 	var seen []string
 
@@ -254,22 +312,22 @@ func TestMaskedReadPagesAreStable(t *testing.T) {
 		}
 
 		if page.NextCursor == "" {
-			break
-		}
-
-		if cursor == "" {
-			_, err := h.f.svc.ReadMasked(t.Context(), workspace.ReadMaskedArgs{
-				Ref: h.f.ws.Ref, Object: h.obj, Selector: latest(),
-				Principal: person("mallory"), Authorizer: h.authz, Key: testCursorKey(), Sink: nil, Cursor: page.NextCursor,
-			})
-			if !errors.Is(err, workspace.ErrBadPath) {
-				t.Fatalf("a cursor of another caller: err = %v, want ErrBadPath", err)
-			}
+			return seen, pages
 		}
 
 		cursor = page.NextCursor
 	}
+}
 
+// TestMaskedReadPagesAreStable proves a state with more markers than one page
+// answers the pages in order through the cursor, with no repeat and no gap.
+func TestMaskedReadPagesAreStable(t *testing.T) {
+	t.Parallel()
+
+	total := workspace.MaskedPageMarkers*2 + 50
+	h, _ := newMaskedHostile(t, manySecretsState(total), 4<<20)
+
+	seen, pages := readAllPages(t, h)
 	if pages != 3 || len(seen) != total {
 		t.Fatalf("pages = %d, markers = %d, want 3 pages and %d markers", pages, len(seen), total)
 	}
@@ -282,6 +340,28 @@ func TestMaskedReadPagesAreStable(t *testing.T) {
 		}
 
 		uniq[p] = true
+	}
+}
+
+// TestMaskedReadCursorOfAnotherCaller proves the cursor of one caller does not
+// open a page for another caller: the binding holds on a cursor the server
+// made, not only on a forged one.
+func TestMaskedReadCursorOfAnotherCaller(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newMaskedHostile(t, manySecretsState(workspace.MaskedPageMarkers+1), 4<<20)
+
+	page, err := h.read(t.Context(), latest(), "")
+	if err != nil || page.NextCursor == "" {
+		t.Fatalf("first page: cursor %q, err %v, want a cursor", page.NextCursor, err)
+	}
+
+	_, err = h.f.svc.ReadMasked(t.Context(), workspace.ReadMaskedArgs{
+		Ref: h.f.ws.Ref, Object: h.obj, Selector: latest(),
+		Principal: person("mallory"), Authorizer: h.authz, Key: testCursorKey(), Sink: nil, Cursor: page.NextCursor,
+	})
+	if !errors.Is(err, workspace.ErrBadPath) {
+		t.Fatalf("err = %v, want ErrBadPath", err)
 	}
 }
 
@@ -303,7 +383,11 @@ func TestMaskedReadVersionAllowlist(t *testing.T) {
 		t.Run(fmt.Sprintf("%q", id), func(t *testing.T) {
 			t.Parallel()
 
-			_, err := h.read(t.Context(), workspace.VersionSelector{Latest: false, ID: workspace.StateVersionID(id)}, "")
+			_, err := h.read(
+				t.Context(),
+				workspace.VersionSelector{Latest: false, ID: workspace.StateVersionID(id)},
+				"",
+			)
 			if id == "sv-" {
 				// A bare prefix has no letters but passes the shape; the store
 				// then answers not found.
@@ -381,34 +465,36 @@ func TestMaskedReadRefusesAnOversizedVersion(t *testing.T) {
 	})
 }
 
-// TestMaskedReadHonorsTheDeadline proves the read stops at the deadline of
-// its caller: a context that is past its deadline is refused at the start,
-// and the chunked load stops between two chunks when the context ends.
-func TestMaskedReadHonorsTheDeadline(t *testing.T) {
+// TestMaskedReadDeadlineBeforeTheLoad proves a context that is past its
+// deadline is refused at the start, with no blob read and one refusal.
+func TestMaskedReadDeadlineBeforeTheLoad(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a context past its deadline", func(t *testing.T) {
-		t.Parallel()
+	h, counted := newMaskedHostile(t, manySecretsState(2), 4<<20)
+	before := counted.reads()
 
-		h, counted := newMaskedHostile(t, manySecretsState(2), 4<<20)
-		before := counted.reads()
+	ctx, cancel := context.WithTimeout(t.Context(), -time.Second)
+	defer cancel()
 
-		ctx, cancel := context.WithTimeout(t.Context(), -time.Second)
-		defer cancel()
+	_, err := h.read(ctx, latest(), "")
+	if !errors.Is(err, workspace.ErrReadDeadline) {
+		t.Fatalf("err = %v, want ErrReadDeadline", err)
+	}
 
-		_, err := h.read(ctx, latest(), "")
-		if !errors.Is(err, workspace.ErrReadDeadline) {
-			t.Fatalf("err = %v, want ErrReadDeadline", err)
-		}
+	if counted.reads() != before {
+		t.Errorf("blob reads = %d, want %d", counted.reads(), before)
+	}
 
-		if counted.reads() != before {
-			t.Errorf("blob reads = %d, want %d", counted.reads(), before)
-		}
+	if got := h.log.got(); len(got) != 1 || got[0] != workspace.RefusalDeadline {
+		t.Errorf("reasons = %q, want [%q]", got, workspace.RefusalDeadline)
+	}
+}
 
-		if got := h.log.got(); len(got) != 1 || got[0] != workspace.RefusalDeadline {
-			t.Errorf("reasons = %q, want [%q]", got, workspace.RefusalDeadline)
-		}
-	})
+// TestMaskedReadLoadStopsBetweenChunks proves the chunked load stops when the
+// context ends between two chunks, and that a live context loads the whole
+// content.
+func TestMaskedReadLoadStopsBetweenChunks(t *testing.T) {
+	t.Parallel()
 
 	t.Run("the context ends between two chunks", func(t *testing.T) {
 		t.Parallel()
@@ -416,9 +502,11 @@ func TestMaskedReadHonorsTheDeadline(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
-		src := &cancelAfterReader{r: bytes.NewReader(make([]byte, 4*workspace.MaskedChunkBytes)), cancel: cancel, after: 1}
+		src := &cancelAfterReader{
+			r: bytes.NewReader(make([]byte, 4*workspace.MaskedChunkBytes)), cancel: cancel, after: 1, reads: 0,
+		}
 
-		got, err := workspace.ReadMaskedChunks(ctx, src)
+		got, err := workspace.LoadMaskedChunks(ctx, src)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want context.Canceled", err)
 		}
@@ -428,7 +516,7 @@ func TestMaskedReadHonorsTheDeadline(t *testing.T) {
 		}
 
 		if src.reads > 2 {
-			t.Errorf("reader was read %d times after the cancel, want the load to stop", src.reads)
+			t.Errorf("reader was read %d times, want the load to stop after the cancel", src.reads)
 		}
 	})
 
@@ -437,7 +525,7 @@ func TestMaskedReadHonorsTheDeadline(t *testing.T) {
 
 		want := bytes.Repeat([]byte("x"), 2*workspace.MaskedChunkBytes+17)
 
-		got, err := workspace.ReadMaskedChunks(t.Context(), bytes.NewReader(want))
+		got, err := workspace.LoadMaskedChunks(t.Context(), bytes.NewReader(want))
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("read = %d bytes, %v; want %d bytes", len(got), err, len(want))
 		}
@@ -495,9 +583,10 @@ func TestMaskedReadUsesTheSensitiveValuesMarks(t *testing.T) {
 
 	h, _ := newMaskedHostile(t, state, 4<<20)
 
-	if err := h.f.store.SaveSensitiveMarks(
-		t.Context(), h.id, marks, namespace.Fence{Namespace: "acme", FailoverVersion: 1},
-	); err != nil {
+	fence := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
+
+	err = h.f.store.SaveSensitiveMarks(t.Context(), h.id, marks, fence)
+	if err != nil {
 		t.Fatalf("save marks: %v", err)
 	}
 
