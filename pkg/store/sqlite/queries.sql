@@ -1404,6 +1404,7 @@ WHERE p.deleted_at_ms IS NULL
   AND p.subject >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR p.subject < sqlc.arg('high'))
   AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR p.kind = sqlc.arg('kind'))
+  AND (CAST(sqlc.arg('source') AS TEXT) = '' OR p.source = sqlc.arg('source'))
   AND (CAST(sqlc.arg('namespace') AS TEXT) = '' OR p.namespace = sqlc.arg('namespace'))
 ORDER BY p.subject
 LIMIT sqlc.arg('row_limit');
@@ -1414,6 +1415,7 @@ WHERE deleted_at_ms IS NULL
   AND subject >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR subject < sqlc.arg('high'))
   AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR kind = sqlc.arg('kind'))
+  AND (CAST(sqlc.arg('source') AS TEXT) = '' OR source = sqlc.arg('source'))
   AND (CAST(sqlc.arg('namespace') AS TEXT) = '' OR namespace = sqlc.arg('namespace'));
 
 -- name: GetPrincipalNamespace :one

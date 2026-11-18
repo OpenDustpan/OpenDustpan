@@ -109,6 +109,17 @@ func (s *Store) loadPortableStaging(
 			return fmt.Errorf("clear staged session policy: %w", backup.ErrCorrupt)
 		}
 
+		// The migration seeds the built-in principals and their grants. The backup
+		// holds its own copies, so the seeded ones go first: grants before the
+		// principals they name.
+		if _, err := tx.Exec(ctx, `DELETE FROM grants`); err != nil {
+			return fmt.Errorf("clear staged grants: %w", backup.ErrCorrupt)
+		}
+
+		if _, err := tx.Exec(ctx, `DELETE FROM principals`); err != nil {
+			return fmt.Errorf("clear staged principals: %w", backup.ErrCorrupt)
+		}
+
 		return nil
 	})
 	if clearErr != nil {

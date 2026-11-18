@@ -180,6 +180,17 @@ func loadPortableTables(
 		return fmt.Errorf("clear staged session policy: %w", backup.ErrExportRead)
 	}
 
+	// The migration seeds the built-in principals and their grants. The backup
+	// holds its own copies, so the seeded ones go first: grants before the
+	// principals they name.
+	if _, err := conn.ExecContext(ctx, `DELETE FROM grants`); err != nil {
+		return fmt.Errorf("clear staged grants: %w", backup.ErrExportRead)
+	}
+
+	if _, err := conn.ExecContext(ctx, `DELETE FROM principals`); err != nil {
+		return fmt.Errorf("clear staged principals: %w", backup.ErrExportRead)
+	}
+
 	for _, table := range backup.PortableTables() {
 		if loadErr := loadPortableTable(ctx, conn, open, index[table.Table], table); loadErr != nil {
 			return loadErr

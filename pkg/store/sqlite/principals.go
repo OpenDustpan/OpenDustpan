@@ -102,17 +102,17 @@ func (s *Store) GetPrincipalBySubject(ctx context.Context, subject string) (prin
 // ListPrincipals implements principal.Store. It reads the page and the
 // total in one transaction.
 func (s *Store) ListPrincipals(
-	ctx context.Context, pq principal.Query, kind principal.Kind,
+	ctx context.Context, pq principal.Query, kind principal.Kind, source principal.Source,
 ) ([]principal.Principal, int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return listPage(ctx, s, pq, pageReads[db.ListPrincipalsRow, principal.Principal]{
 		list: func(ctx context.Context, q *db.Queries, pq principal.Query) ([]db.ListPrincipalsRow, error) {
-			return listPrincipalRows(ctx, q, pq, kind, "")
+			return listPrincipalRows(ctx, q, pq, kind, source, "")
 		},
 		count: func(ctx context.Context, q *db.Queries, pq principal.Query) (int64, error) {
-			return countPrincipalRows(ctx, q, pq, kind, "")
+			return countPrincipalRows(ctx, q, pq, kind, source, "")
 		},
 		conv: principalFromList,
 	})
@@ -121,7 +121,7 @@ func (s *Store) ListPrincipals(
 // listPrincipalRows reads one page of principals. An empty ns reads the
 // principals of every namespace and of the installation.
 func listPrincipalRows(
-	ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind, ns namespace.Name,
+	ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind, source principal.Source, ns namespace.Name,
 ) ([]db.ListPrincipalsRow, error) {
 	return q.ListPrincipals(
 		ctx,
@@ -130,6 +130,7 @@ func listPrincipalRows(
 			Low:       pq.Low,
 			High:      pq.High,
 			Kind:      string(kind),
+			Source:    string(source),
 			Namespace: ns.String(),
 			RowLimit:  int64(pq.Limit),
 		},
@@ -137,10 +138,10 @@ func listPrincipalRows(
 }
 
 func countPrincipalRows(
-	ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind, ns namespace.Name,
+	ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind, source principal.Source, ns namespace.Name,
 ) (int64, error) {
 	return q.CountPrincipals(ctx, db.CountPrincipalsParams{
-		Low: pq.Low, High: pq.High, Kind: string(kind), Namespace: ns.String(),
+		Low: pq.Low, High: pq.High, Kind: string(kind), Source: string(source), Namespace: ns.String(),
 	})
 }
 

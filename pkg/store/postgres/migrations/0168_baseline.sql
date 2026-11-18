@@ -2669,6 +2669,32 @@ ALTER TABLE ONLY maintenance_revocations ALTER COLUMN id SET DEFAULT nextval('ma
 
 INSERT INTO installation (id, state, kind) VALUES (1, 'normal', NULL);
 
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, deleted_at_ms, disabled_at_ms, last_active_at_ms, last_sign_in_at_ms, namespace, break_glass) VALUES
+  ('prn-housekeeping-artifact-sweep', 'housekeeping:artifact-sweep', 'Housekeeping principal of artifact-sweep', 'service', 'builtin', 0, 0, NULL, NULL, 0, NULL, '', 0),
+  ('prn-housekeeping-job-reconcile', 'housekeeping:job-reconcile', 'Housekeeping principal of job-reconcile', 'service', 'builtin', 0, 0, NULL, NULL, 0, NULL, '', 0),
+  ('prn-housekeeping-saved-view-cleanup', 'housekeeping:saved-view-cleanup', 'Housekeeping principal of saved-view-cleanup', 'service', 'builtin', 0, 0, NULL, NULL, 0, NULL, '', 0),
+  ('prn-housekeeping-history-retention', 'housekeeping:history-retention', 'Housekeeping principal of history-retention', 'service', 'builtin', 0, 0, NULL, NULL, 0, NULL, '', 0),
+  ('prn-housekeeping-name-lock-prune', 'housekeeping:name-lock-prune', 'Housekeeping principal of name-lock-prune', 'service', 'builtin', 0, 0, NULL, NULL, 0, NULL, '', 0),
+  ('prn-housekeeping-agent-reaper', 'housekeeping:agent-reaper', 'Housekeeping principal of agent-reaper', 'service', 'builtin', 0, 0, NULL, NULL, 0, NULL, '', 0),
+  ('prn-housekeeping-checkpoint-sweep', 'housekeeping:checkpoint-sweep', 'Housekeeping principal of checkpoint-sweep', 'service', 'builtin', 0, 0, NULL, NULL, 0, NULL, '', 0),
+  ('prn-housekeeping-blob-sweep', 'housekeeping:blob-sweep', 'Housekeeping principal of blob-sweep', 'service', 'builtin', 0, 0, NULL, NULL, 0, NULL, '', 0),
+  ('prn-housekeeping-token-sweep', 'housekeeping:token-sweep', 'Housekeeping principal of token-sweep', 'service', 'builtin', 0, 0, NULL, NULL, 0, NULL, '', 0),
+  ('prn-housekeeping-temp-admin-expiry', 'housekeeping:temp-admin-expiry', 'Housekeeping principal of temp-admin-expiry', 'service', 'builtin', 0, 0, NULL, NULL, 0, NULL, '', 0),
+  ('prn-housekeeping-issuer-rotation', 'housekeeping:issuer-rotation', 'Housekeeping principal of issuer-rotation', 'service', 'builtin', 0, 0, NULL, NULL, 0, NULL, '', 0);
+
+INSERT INTO grants (id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by, revoked_at_ms, revoked_by) VALUES
+  ('grt-housekeeping-artifact-sweep', 'principal:prn-housekeeping-artifact-sweep', 'principal', 'prn-housekeeping-artifact-sweep', 'housekeeping:artifact-sweep', '@server', '@server', 'installation', '', NULL, 0, 'install', NULL, ''),
+  ('grt-housekeeping-job-reconcile', 'principal:prn-housekeeping-job-reconcile', 'principal', 'prn-housekeeping-job-reconcile', 'housekeeping:job-reconcile', '@server', '@server', 'installation', '', NULL, 0, 'install', NULL, ''),
+  ('grt-housekeeping-saved-view-cleanup', 'principal:prn-housekeeping-saved-view-cleanup', 'principal', 'prn-housekeeping-saved-view-cleanup', 'housekeeping:saved-view-cleanup', '@server', '@server', 'installation', '', NULL, 0, 'install', NULL, ''),
+  ('grt-housekeeping-history-retention', 'principal:prn-housekeeping-history-retention', 'principal', 'prn-housekeeping-history-retention', 'housekeeping:history-retention', '@server', '@server', 'installation', '', NULL, 0, 'install', NULL, ''),
+  ('grt-housekeeping-name-lock-prune', 'principal:prn-housekeeping-name-lock-prune', 'principal', 'prn-housekeeping-name-lock-prune', 'housekeeping:name-lock-prune', '@server', '@server', 'installation', '', NULL, 0, 'install', NULL, ''),
+  ('grt-housekeeping-agent-reaper', 'principal:prn-housekeeping-agent-reaper', 'principal', 'prn-housekeeping-agent-reaper', 'housekeeping:agent-reaper', '@server', '@server', 'installation', '', NULL, 0, 'install', NULL, ''),
+  ('grt-housekeeping-checkpoint-sweep', 'principal:prn-housekeeping-checkpoint-sweep', 'principal', 'prn-housekeeping-checkpoint-sweep', 'housekeeping:checkpoint-sweep', '@server', '@server', 'installation', '', NULL, 0, 'install', NULL, ''),
+  ('grt-housekeeping-blob-sweep', 'principal:prn-housekeeping-blob-sweep', 'principal', 'prn-housekeeping-blob-sweep', 'housekeeping:blob-sweep', '@server', '@server', 'installation', '', NULL, 0, 'install', NULL, ''),
+  ('grt-housekeeping-token-sweep', 'principal:prn-housekeeping-token-sweep', 'principal', 'prn-housekeeping-token-sweep', 'housekeeping:token-sweep', '@server', '@server', 'installation', '', NULL, 0, 'install', NULL, ''),
+  ('grt-housekeeping-temp-admin-expiry', 'principal:prn-housekeeping-temp-admin-expiry', 'principal', 'prn-housekeeping-temp-admin-expiry', 'housekeeping:temp-admin-expiry', '@server', '@server', 'installation', '', NULL, 0, 'install', NULL, ''),
+  ('grt-housekeeping-issuer-rotation', 'principal:prn-housekeeping-issuer-rotation', 'principal', 'prn-housekeeping-issuer-rotation', 'housekeeping:issuer-rotation', '@server', '@server', 'installation', '', NULL, 0, 'install', NULL, '');
+
 ALTER TABLE ONLY backups
     ADD CONSTRAINT backups_pkey PRIMARY KEY (id);
 

@@ -998,7 +998,7 @@ func TestCreatePrincipalRefusesAgentAndUnknownKinds(t *testing.T) {
 			// The refusal stores no row. The only row is the person "tester",
 			// made by the sign-in.
 			page, err := principals.ListPrincipals(
-				t.Context(), principal.PageRequest{Prefix: "", Cursor: "", Limit: 0}, "",
+				t.Context(), principal.PageRequest{Prefix: "", Cursor: "", Limit: 0}, "", "",
 			)
 			if err != nil {
 				t.Fatalf("list principals: %v", err)

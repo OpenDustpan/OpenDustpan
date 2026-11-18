@@ -23,6 +23,7 @@ func (s *Store) ListServicePrincipals(ctx context.Context) ([]string, error) {
 			ctx,
 			principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit},
 			principal.KindService,
+			"",
 		)
 		if err != nil {
 			return nil, fmt.Errorf("list service principals: %w", err)

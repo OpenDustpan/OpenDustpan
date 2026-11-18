@@ -383,7 +383,7 @@ func testMissingPrincipal(t *testing.T, s principal.Store) {
 func testListPrincipals(t *testing.T, s principal.Store) {
 	t.Helper()
 
-	got, _, err := s.ListPrincipals(t.Context(), all(), "")
+		got, _, err := s.ListPrincipals(t.Context(), all(), "", "")
 	if err != nil {
 		t.Fatalf("list an empty store: %v", err)
 	}
@@ -396,7 +396,7 @@ func testListPrincipals(t *testing.T, s principal.Store) {
 	mustCreatePrincipal(t, s, newPrincipal("prn-2", "alice", principal.KindPerson))
 	mustCreatePrincipal(t, s, newPrincipal("prn-3", "bob", principal.KindWorkload))
 
-	got, _, err = s.ListPrincipals(t.Context(), all(), "")
+		got, _, err = s.ListPrincipals(t.Context(), all(), "", "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -449,7 +449,7 @@ func testListPrincipalsOfKind(t *testing.T, s principal.Store) {
 			3,
 		},
 	} {
-		got, total, err := s.ListPrincipals(t.Context(), tc.q, tc.kind)
+		got, total, err := s.ListPrincipals(t.Context(), tc.q, tc.kind, "")
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -1083,7 +1083,7 @@ func testPagePrincipals(t *testing.T, s principal.Store) {
 	}
 
 	for _, tc := range cases {
-		got, _, err := s.ListPrincipals(ctx, tc.q, "")
+		got, _, err := s.ListPrincipals(ctx, tc.q, "", "")
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -1326,12 +1326,12 @@ func checkPrincipalTotals(t *testing.T, s principal.Store) {
 
 	ctx := t.Context()
 
-	ps, total, err := s.ListPrincipals(ctx, onePerPage(), "")
+	ps, total, err := s.ListPrincipals(ctx, onePerPage(), "", "")
 	if err != nil || total != 3 || len(ps) != 1 || ps[0].GroupCount != 2 {
 		t.Fatalf("first principal = %+v, total %d, %v; want alice in 2 groups of 3 principals", ps, total, err)
 	}
 
-	_, total, err = s.ListPrincipals(ctx, principal.Query{After: "alice", Low: "b", High: "c", Limit: 10}, "")
+	_, total, err = s.ListPrincipals(ctx, principal.Query{After: "alice", Low: "b", High: "c", Limit: 10}, "", "")
 	if err != nil || total != 1 {
 		t.Fatalf("total of prefix b = %d, %v; want 1 with no regard to the cursor", total, err)
 	}
@@ -1590,7 +1590,7 @@ func testBreakGlassRoundTrip(t *testing.T, s principal.Store) {
 
 	equalPrincipal(t, bySubject, want)
 
-	rows, _, err := s.ListPrincipals(ctx, all(), "")
+	rows, _, err := s.ListPrincipals(ctx, all(), "", "")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

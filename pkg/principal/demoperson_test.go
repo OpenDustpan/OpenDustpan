@@ -28,7 +28,7 @@ func TestSeedDemoPerson(t *testing.T) {
 	}
 
 	page, err := f.svc.ListPrincipals(t.Context(),
-		principal.PageRequest{Prefix: principal.DevSubjectPrefix, Cursor: "", Limit: 10}, "")
+		principal.PageRequest{Prefix: principal.DevSubjectPrefix, Cursor: "", Limit: 10}, "", "")
 	if err != nil || page.Total != 1 {
 		t.Fatalf("people with the dev prefix = %d, %v; want 1", page.Total, err)
 	}

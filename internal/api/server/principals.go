@@ -727,7 +727,7 @@ func listPrincipals(
 		return failed(""), err
 	}
 
-	page, err := svc.ListPrincipals(r.Context(), req, principal.Kind(queryOf(r).Get("kind")))
+	page, err := svc.ListPrincipals(r.Context(), req, principal.Kind(queryOf(r).Get("kind")), principal.Source(queryOf(r).Get("source")))
 	if err != nil {
 		return failed(""), err
 	}

@@ -106,6 +106,16 @@ func ParseKind(s string) (Kind, error) {
 	}
 }
 
+// ParseSource returns the Source that s names, or ErrInvalid.
+func ParseSource(s string) (Source, error) {
+	switch src := Source(s); src {
+	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC, SourceOAuth, SourceBuiltin:
+		return src, nil
+	default:
+		return "", fmt.Errorf("%w: unknown source %q", ErrInvalid, s)
+	}
+}
+
 // Source names where a principal or a group comes from.
 type Source string
 
@@ -124,6 +134,8 @@ const (
 	// SourceOAuth is a person that the first sign-in through a plain
 	// OAuth 2.0 provider made.
 	SourceOAuth Source = "oauth"
+	// SourceBuiltin is a principal that the server makes at the install.
+	SourceBuiltin Source = "builtin"
 )
 
 // Limits of the text fields, in bytes.
@@ -630,7 +642,7 @@ func (p Principal) validateNamespace() error {
 // scim, oidc or oauth.
 func validateSource(s Source) error {
 	switch s {
-	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC, SourceOAuth:
+	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC, SourceOAuth, SourceBuiltin:
 		return nil
 	default:
 		return fmt.Errorf("%w: unknown source %q", ErrInvalid, s)

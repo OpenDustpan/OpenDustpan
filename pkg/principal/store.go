@@ -54,8 +54,10 @@ type RecordStore interface {
 	GetPrincipalBySubject(ctx context.Context, subject string) (Principal, error)
 	// ListPrincipals returns the principals that exist, ordered by subject:
 	// the rows of q, with the subject as the key. A kind that is not empty
-	// keeps the principals of that kind, in the rows and in the total.
-	ListPrincipals(ctx context.Context, q Query, kind Kind) ([]Principal, int64, error)
+	// keeps the principals of that kind, in the rows and in the total. A
+	// source that is not empty keeps the principals of that source, in the
+	// rows and in the total.
+	ListPrincipals(ctx context.Context, q Query, kind Kind, source Source) ([]Principal, int64, error)
 	// UpdatePrincipal replaces the display name and the update time of the
 	// principal with the ID p.ID. The subject, the kind, the break-glass flag
 	// and the creation time do not change. Today no write sets the

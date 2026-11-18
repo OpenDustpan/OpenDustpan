@@ -128,6 +128,7 @@ func runPrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkPrincipalMembers(ctx, t, env, fx)
 	checkPrincipalChanges(ctx, t, env, fx)
 	checkPrincipalPaging(ctx, t, env, fx)
+	checkHousekeepingPrincipals(ctx, t, env)
 
 	for _, step := range []principalStep{
 		{http.MethodDelete, members + "/" + alice.ID, "", http.StatusNoContent},
@@ -166,7 +167,7 @@ func checkPrincipalPaging(ctx context.Context, t *testing.T, env *e2e.Env, fx pr
 	)
 
 	if len(first.Principals) != 1 || first.Principals[0].ID != fx.alice.ID || first.NextCursor == "" ||
-		first.Total != 3 || first.Principals[0].Source != "local" || first.Principals[0].GroupCount != 1 {
+		first.Total != 13 || first.Principals[0].Source != "local" || first.Principals[0].GroupCount != 1 {
 		t.Fatalf("first page = %+v, want local alice in 1 group, a cursor and a total of 3", first)
 	}
 
@@ -206,7 +207,7 @@ func checkPrincipalKind(ctx context.Context, t *testing.T, env *e2e.Env, fx prin
 		query string
 		want  []string
 	}{
-		{"kind=service", []string{fx.deploy.ID}},
+		{"kind=service&source=local", []string{fx.deploy.ID}},
 		{"kind=person&prefix=al&limit=1", []string{fx.alice.ID}},
 		{"kind=person&prefix=ci-", nil},
 		{"kind=workload", nil},
@@ -240,6 +241,80 @@ func checkPageRefusals(ctx context.Context, t *testing.T, env *e2e.Env) {
 		principalCall(ctx, t, env, principalStep{
 			http.MethodGet, "/api/server/principals?" + bad, "", http.StatusBadRequest,
 		}, nil)
+	}
+}
+
+// checkHousekeepingPrincipals lists the built-in principals and reads the
+// grants of one of them.
+func checkHousekeepingPrincipals(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	principals := listBuiltinPrincipals(ctx, t, env)
+	checkBuiltinGrants(ctx, t, env, principals[0].ID)
+}
+
+// listBuiltinPrincipals lists the built-in service principals and checks
+// that there are 11 of them.
+func listBuiltinPrincipals(ctx context.Context, t *testing.T, env *e2e.Env) []e2ePrincipal {
+	t.Helper()
+
+	type page struct {
+		Principals []e2ePrincipal `json:"principals"`
+		Total      int64          `json:"total"`
+	}
+
+	var got page
+	const path = "/api/server/principals?kind=service&source=builtin"
+	status, resp, err := env.ServerAPIStatus(ctx, http.MethodGet, path, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("list built-in principals = %d, %v", status, err)
+	}
+	if err = json.Unmarshal([]byte(resp), &got); err != nil {
+		t.Fatalf("decode built-in principals: %v", err)
+	}
+	if got.Total != 11 || len(got.Principals) != 11 {
+		t.Fatalf("built-in principals = %d, want 11", got.Total)
+	}
+
+	for i := range got.Principals {
+		if got.Principals[i].Kind != "service" || got.Principals[i].Source != "builtin" {
+			t.Fatalf("built-in principal = %+v, want service/builtin", got.Principals[i])
+		}
+	}
+	return got.Principals
+}
+
+// checkBuiltinGrants reads the grants of one built-in principal: exactly one
+// grant, with a creator and a time.
+func checkBuiltinGrants(ctx context.Context, t *testing.T, env *e2e.Env, principalID string) {
+	t.Helper()
+
+	type grant struct {
+		ID        string `json:"id"`
+		Role      string `json:"role"`
+		Object    string `json:"object"`
+		CreatedBy string `json:"createdBy"`
+		CreatedAt string `json:"createdAt"`
+	}
+	type grantPage struct {
+		Grants []grant `json:"grants"`
+		Total  int64   `json:"total"`
+	}
+
+	var grants grantPage
+	path := "/api/server/principals/" + principalID + "/grants"
+	status, resp, err := env.ServerAPIStatus(ctx, http.MethodGet, path, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("list grants of a built-in principal = %d, %v", status, err)
+	}
+	if err = json.Unmarshal([]byte(resp), &grants); err != nil {
+		t.Fatalf("decode grants: %v", err)
+	}
+	if grants.Total != 1 || len(grants.Grants) != 1 {
+		t.Fatalf("grants of a built-in principal = %d, want 1", grants.Total)
+	}
+	if grants.Grants[0].CreatedBy == "" || grants.Grants[0].CreatedAt == "" {
+		t.Fatalf("grant of a built-in principal = %+v, want a creator and a time", grants.Grants[0])
 	}
 }
 

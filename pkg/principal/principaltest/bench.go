@@ -33,22 +33,22 @@ func Bench(b *testing.B, s principal.Store) {
 		name string
 	}{
 		{name: "principals", run: func() (int, int64, error) {
-			rows, total, err := s.ListPrincipals(b.Context(), page, "")
+			rows, total, err := s.ListPrincipals(b.Context(), page, "", "")
 
 			return len(rows), total, err
 		}},
 		{name: "principals with a prefix", run: func() (int, int64, error) {
-			rows, total, err := s.ListPrincipals(b.Context(), prefixed, "")
+			rows, total, err := s.ListPrincipals(b.Context(), prefixed, "", "")
 
 			return len(rows), total, err
 		}},
 		{name: "workloads, 2 percent of the principals", run: func() (int, int64, error) {
-			rows, total, err := s.ListPrincipals(b.Context(), page, principal.KindWorkload)
+			rows, total, err := s.ListPrincipals(b.Context(), page, principal.KindWorkload, "")
 
 			return len(rows), total, err
 		}},
 		{name: "services with a prefix", run: func() (int, int64, error) {
-			rows, total, err := s.ListPrincipals(b.Context(), prefixed, principal.KindService)
+			rows, total, err := s.ListPrincipals(b.Context(), prefixed, principal.KindService, "")
 
 			return len(rows), total, err
 		}},

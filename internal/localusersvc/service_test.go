@@ -832,7 +832,7 @@ func TestCreateUserRefusesHostileNames(t *testing.T) {
 		}
 	}
 
-	page, err := f.principals.ListPrincipals(t.Context(), principal.PageRequest{Prefix: "", Cursor: "", Limit: 100}, "")
+	page, err := f.principals.ListPrincipals(t.Context(), principal.PageRequest{Prefix: "", Cursor: "", Limit: 100}, "", "")
 	if err != nil {
 		t.Fatalf("list principals: %v", err)
 	}

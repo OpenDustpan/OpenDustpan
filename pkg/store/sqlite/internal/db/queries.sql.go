@@ -1605,13 +1605,15 @@ WHERE deleted_at_ms IS NULL
   AND subject >= ?1
   AND (CAST(?2 AS TEXT) = '' OR subject < ?2)
   AND (CAST(?3 AS TEXT) = '' OR kind = ?3)
-  AND (CAST(?4 AS TEXT) = '' OR namespace = ?4)
+  AND (CAST(?4 AS TEXT) = '' OR source = ?4)
+  AND (CAST(?5 AS TEXT) = '' OR namespace = ?5)
 `
 
 type CountPrincipalsParams struct {
 	Low       string
 	High      string
 	Kind      string
+	Source    string
 	Namespace string
 }
 
@@ -1620,6 +1622,7 @@ func (q *Queries) CountPrincipals(ctx context.Context, arg CountPrincipalsParams
 		arg.Low,
 		arg.High,
 		arg.Kind,
+		arg.Source,
 		arg.Namespace,
 	)
 	var count int64
@@ -17446,9 +17449,10 @@ WHERE p.deleted_at_ms IS NULL
   AND p.subject >= ?2
   AND (CAST(?3 AS TEXT) = '' OR p.subject < ?3)
   AND (CAST(?4 AS TEXT) = '' OR p.kind = ?4)
-  AND (CAST(?5 AS TEXT) = '' OR p.namespace = ?5)
+  AND (CAST(?5 AS TEXT) = '' OR p.source = ?5)
+  AND (CAST(?6 AS TEXT) = '' OR p.namespace = ?6)
 ORDER BY p.subject
-LIMIT ?6
+LIMIT ?7
 `
 
 type ListPrincipalsParams struct {
@@ -17456,6 +17460,7 @@ type ListPrincipalsParams struct {
 	Low       string
 	High      string
 	Kind      string
+	Source    string
 	Namespace string
 	RowLimit  int64
 }
@@ -17480,6 +17485,7 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 		arg.Low,
 		arg.High,
 		arg.Kind,
+		arg.Source,
 		arg.Namespace,
 		arg.RowLimit,
 	)

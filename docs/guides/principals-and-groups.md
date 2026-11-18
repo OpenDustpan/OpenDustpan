@@ -102,7 +102,7 @@ A principal has these fields:
 | `subject` | The subject. |
 | `displayName` | The name that people see. |
 | `kind` | `person`, `service` or `workload`. |
-| `source` | Where the principal came from, for example `local`. |
+| `source` | Where the principal came from: `local`, `ldap`, `scim`, `oidc`, `oauth` or `builtin`. |
 | `createdAt`, `updatedAt` | The times, as RFC 3339 strings in UTC. |
 | `disabledAt` | The time of the disable, or `null` when the principal is enabled. |
 | `namespace` | The namespace of a namespace principal. Empty for an installation principal. |
