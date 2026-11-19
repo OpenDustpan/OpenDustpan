@@ -2448,6 +2448,7 @@
           "gate.unavailable",
           "gate.version-conflict",
           "git-host.app-budget-spent",
+          "git-host.app-no-rotation",
           "git-host.app-not-registered",
           "git-host.installation-not-assigned",
           "git-host.link-account-invalid",
@@ -3168,6 +3169,10 @@
           },
           "kind": {
             "type": "string"
+          },
+          "oldSecretEndsAt": {
+            "format": "int64",
+            "type": "integer"
           },
           "privateKey": {
             "$ref": "#/components/schemas/GitHostCredentialSet"
@@ -11215,6 +11220,60 @@
             }
           },
           "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHostApp"
+                }
+              }
+            },
+            "description": "The request succeeded.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorAnswer"
+                }
+              }
+            },
+            "description": "The request failed."
+          }
+        },
+        "tags": [
+          "git-host"
+        ],
+        "x-dustpan-actions": [
+          {
+            "action": "server:manage-git-host",
+            "object": "server"
+          }
+        ]
+      }
+    },
+    "/api/dustpan/v1/git-host-apps/{kind}/confirm-rotation": {
+      "post": {
+        "operationId": "confirmGitHostAppRotation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {

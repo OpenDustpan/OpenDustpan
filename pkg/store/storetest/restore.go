@@ -131,6 +131,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "a restore leaves no job token", test: testRestoreEmptiesJobTokens},
 		{name: "round trip over every table keeps every row", test: testRestoreRoundTrip},
 		{name: "a restore without restore-access keeps the access tables", test: testRestoreKeepsAccessTables},
+		{name: "a restore brings back the old event secret of a registration", test: testRestoreKeepsOldEventSecret},
 		{
 			name: "a restore keeps a principal created after the backup with its child rows",
 			test: testRestoreKeepsLiveOnlyPrincipal,

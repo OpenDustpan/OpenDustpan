@@ -47,6 +47,12 @@ var (
 	// ErrVersionConflict reports a change or a delete whose expected version
 	// differs from the stored version.
 	ErrVersionConflict = errors.New("the object changed after it was read")
+	// ErrNoRotation reports a confirmation of a rotation of the event secret
+	// when the registration has no open window.
+	ErrNoRotation = errors.New("the registration has no open event secret rotation")
+	// ErrReceiptsFull reports that the table of event receipts is at its bound
+	// after it purged the receipts that expired.
+	ErrReceiptsFull = errors.New("the event receipts are at their bound")
 	// ErrAddressChanged reports a stored credential whose address digest differs
 	// from the address and the parameters now. The server never sends such a
 	// credential.
@@ -215,7 +221,13 @@ type Registration struct {
 	AddressDigest     string
 	SealedKey         []byte
 	SealedEventSecret []byte
-	Version           int64
+	// OldEventSecretSetID, OldSealedEventSecret and OldEventSecretEndsAt hold
+	// the former event secret during a rotation. The three are all zero (no
+	// window) or all set. The old secret is sealed like the current one.
+	OldEventSecretSetID  string
+	OldSealedEventSecret []byte
+	OldEventSecretEndsAt time.Time
+	Version              int64
 }
 
 // Digest returns the address digest of the values of r. The server stores it
@@ -259,7 +271,36 @@ func (r *Registration) Validate() error {
 		return fmt.Errorf("%w: the address digest does not match the address", ErrInvalid)
 	}
 
+	if err := r.validateOldEventSecret(); err != nil {
+		return err
+	}
+
 	return validateVersionAndTimes("registration", r.Version, r.CreatedAt, r.UpdatedAt)
+}
+
+// validateOldEventSecret checks that the three old fields are all set or all
+// zero. A partial set is a row that the schema refuses, so a row that another
+// version of the server wrote fails closed here too.
+func (r *Registration) validateOldEventSecret() error {
+	parts := []bool{r.OldEventSecretSetID != "", len(r.OldSealedEventSecret) > 0, !r.OldEventSecretEndsAt.IsZero()}
+	set := 0
+
+	for _, ok := range parts {
+		if ok {
+			set++
+		}
+	}
+
+	switch {
+	case set == 0:
+		return nil
+	case set != len(parts):
+		return fmt.Errorf("%w: the old event secret fields are all set or all empty", ErrInvalid)
+	case !ValidSetID(r.OldEventSecretSetID):
+		return fmt.Errorf("%w: the set ID of the old event secret is not valid", ErrInvalid)
+	}
+
+	return nil
 }
 
 // Assignment gives one GitHub App installation to one namespace. The
@@ -305,6 +346,7 @@ type Store interface {
 	ConnectionStore
 	RegistrationStore
 	AssignmentStore
+	ReceiptStore
 }
 
 // ConnectionStore keeps the connections of the namespaces. See Store for the
@@ -356,6 +398,12 @@ type RegistrationStore interface {
 	// ErrNoRegistration, ErrRegistrationInUse while an installation is
 	// assigned, and ErrVersionConflict.
 	DeleteRegistration(ctx context.Context, kind Kind, ifVersion int64, e audit.Entry) error
+	// ConfirmRotation clears the old event secret of the registration of kind
+	// and gives it the next version, in one write with the audit entry e. It
+	// returns ErrNoRegistration, ErrVersionConflict, and ErrNoRotation when
+	// the registration holds no old event secret. It returns the stored
+	// registration.
+	ConfirmRotation(ctx context.Context, kind Kind, ifVersion int64, e audit.Entry) (Registration, error)
 }
 
 // AssignmentStore keeps the installation-to-namespace map. See Store for the
