@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -8,9 +9,11 @@ import (
 	"testing"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // grantServerEntries returns the entries of the installation scope.
@@ -280,5 +283,54 @@ func TestRevokeByIDServeWritesTheSameEntryForAnObjectWithNoGrantActions(t *testi
 		if !hasFailureEntry(grantServerEntries(t, f), object) {
 			t.Fatalf("no failure entry for %s", object)
 		}
+	}
+}
+
+// errDiskGone is a read error that is not a domain error.
+var errDiskGone = errors.New("disk is gone")
+
+// TestRevokeGrantReadFailureDoesNotEchoTheID makes the read of the grant fail
+// with an error that is not ErrNotFound, for an ID of a valid shape that is
+// long enough to find in a body. The body must not hold the ID. The test fails
+// when the resolver formats the request ID into the error it returns.
+func TestRevokeGrantReadFailureDoesNotEchoTheID(t *testing.T) {
+	t.Parallel()
+
+	const id = "grt-hostile.Looking_ID-0123456789-abcdef"
+
+	if !access.ValidGrantID(id) {
+		t.Fatalf("the test ID %q is not a valid grant ID", id)
+	}
+
+	for name, readErr := range map[string]error{
+		"invalid": access.ErrInvalid,
+		"plain":   errDiskGone,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccessFixtureAll(t, accessFixtureParts{
+				entries: func(st *sqlite.Store) auditStore { return st }, passkeys: nil, tweak: nil,
+				links: noGitHostLinks, ports: accessPorts{collections: nil, settings: nil}, now: nil,
+				logger: nil, noSignIn: false,
+				getGrantErr: readErr,
+			})
+
+			for _, path := range []string{"/api/server/grants/", "/api/server/namespaces/acme/grants/"} {
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, path+id, http.NoBody)
+				req.Header.Set("Authorization", "Bearer alice")
+
+				rec := httptest.NewRecorder()
+				f.handler.ServeHTTP(rec, req)
+
+				if rec.Code == http.StatusNoContent || rec.Code == http.StatusOK {
+					t.Fatalf("revoke on %s answers %d, want a failure", path, rec.Code)
+				}
+
+				if strings.Contains(rec.Body.String(), id) {
+					t.Fatalf("the body on %s holds the ID: %.200s", path, rec.Body.String())
+				}
+			}
+		})
 	}
 }

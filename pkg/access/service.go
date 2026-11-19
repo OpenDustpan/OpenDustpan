@@ -412,7 +412,7 @@ func (s *Service) GetGrant(ctx context.Context, id string) (Grant, error) {
 
 	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
-		return Grant{}, fmt.Errorf("get grant %q: %w", id, err)
+		return Grant{}, fmt.Errorf("get grant: %w", err)
 	}
 
 	return g, nil
@@ -1017,7 +1017,7 @@ func (s *Service) revokeStored(
 ) (Grant, error) {
 	fence, err := s.fenceOf(ctx, g.Object)
 	if err != nil {
-		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+		return Grant{}, revokeReadError(err)
 	}
 
 	chain, err := s.authz.chain(ctx, g.Object)
@@ -1031,7 +1031,7 @@ func (s *Service) revokeStored(
 	check := s.revokeCheck(caller, g, chain)
 
 	if err := s.store.RevokeGrant(ctx, id, fence, grantChange(e, s.Now(), fence, GrantRef(g)), check); err != nil {
-		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+		return Grant{}, revokeReadError(err)
 	}
 
 	return g, nil

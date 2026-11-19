@@ -770,7 +770,7 @@ func (h *Handler) resolveGrantObject(_ http.ResponseWriter, r *http.Request) (id
 	}
 
 	if err != nil {
-		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, err)
+		return identity.Object{}, fmt.Errorf("revoke grant: %w", err)
 	}
 
 	actions, known := grantAccessActions(g.Object)

@@ -140,7 +140,7 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 		return fitErr
 	}
 
-	n, err := q.CreateGrant(ctx, db.CreateGrantParams{
+	n, err := createGrantRow(ctx, q, db.CreateGrantParams{
 		ID:          g.ID,
 		Subject:     g.Subject.String(),
 		SubjectKind: string(g.Subject.Kind),
@@ -155,7 +155,7 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 		CreatedBy:   g.CreatedBy,
 	})
 	if err != nil {
-		return fmt.Errorf("insert grant: %w", err)
+		return err
 	}
 
 	if n == 0 {
@@ -163,6 +163,25 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 	}
 
 	return nil
+}
+
+// createGrantRow inserts the grant row of params and returns the number of
+// rows it wrote. A row that breaks a CHECK of the grants table, for example
+// an ID that is not of the grant ID shape, returns access.ErrInvalid. The
+// text names no driver message and no part of the row. Defense in depth: the
+// service and insertGrant check the shape of the ID too; this translation
+// stays so that a caller that skips them never sees a driver error.
+func createGrantRow(ctx context.Context, q *db.Queries, params db.CreateGrantParams) (int64, error) {
+	n, err := q.CreateGrant(ctx, params)
+	if isCheckViolation(err) {
+		return 0, fmt.Errorf("%w: the grant row breaks a check of the grants table", access.ErrInvalid)
+	}
+
+	if err != nil {
+		return 0, fmt.Errorf("insert grant: %w", err)
+	}
+
+	return n, nil
 }
 
 // subjectFitsObject returns ErrInvalid when the subject of g is a principal
