@@ -181,38 +181,21 @@ func WithPostgreSQL(dsn string, opts ...StoreOption) Option {
 }
 
 // WithBuiltinStore sets every store option of the server from b, which the
-// caller opened with OpenStore. The caller closes b. The store options apply
+// caller opened with OpenStore. The caller closes b: Close of the server
+// leaves b open, in any order of the two Close calls. The store options apply
 // after all other options, so they replace a With...Store option for the same
 // port. A nil b fails NewServer.
+//
+// Open b with the version of the binary and the installation kind of the
+// command (WithStoreBinaryVersion and WithStoreInstallationKind), because
+// NewServer does not check them again: WithBuiltinStore does not run the
+// schema check or set the kind marker, and the Open of the adapter does both.
 func WithBuiltinStore(b *BuiltinStore) Option {
 	return func(o *settings) {
 		builtin := newBuiltinStoreSettings(builtinStoreHandle, nil)
 		builtin.handle = b
 		o.builtinStore = builtin
 	}
-}
-
-// WithOpenSQLiteStore sets every store option of the server from st, which the
-// caller opened. It gives the same ports as WithSQLite. The caller closes st.
-// The store options apply after all other options. A nil st fails NewServer.
-func WithOpenSQLiteStore(st *sqlite.Store) Option {
-	if st == nil {
-		return WithBuiltinStore(nil)
-	}
-
-	return WithBuiltinStore(sqliteBuiltinStore(st, nil))
-}
-
-// WithOpenPostgresStore sets every store option of the server from st, which
-// the caller opened. It gives the same ports as WithPostgreSQL. The caller
-// closes st. The store options apply after all other options. A nil st fails
-// NewServer.
-func WithOpenPostgresStore(st *postgres.Store) Option {
-	if st == nil {
-		return WithBuiltinStore(nil)
-	}
-
-	return WithBuiltinStore(postgresBuiltinStore(st, nil))
 }
 
 // Close closes the store that WithSQLite or WithPostgreSQL opened. It does

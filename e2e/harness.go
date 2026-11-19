@@ -40,6 +40,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/notify"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -756,11 +757,9 @@ type serverTokens struct {
 // that reaches it: the SQLite file, or PostgreSQL through a DBProxy, so a
 // step can stop the database for this environment only. The proxy is nil
 // on SQLite.
-//
-//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type.
 func openServerStore(
 	ctx context.Context, tb testing.TB, store Store, dbPath string,
-) (serverStore, *DBProxy, string) {
+) (*dustpan.BuiltinStore, *DBProxy, string) {
 	tb.Helper()
 
 	switch store {
@@ -772,9 +771,8 @@ func openServerStore(
 
 		return st, proxy, target
 	default:
-		tb.Fatalf("unknown store: %s", store)
-
-		return nil, nil, ""
+		// A panic, not Fatalf, so that no caller sees a nil store.
+		panic(fmt.Sprintf("unknown store: %s", store))
 	}
 }
 
@@ -830,13 +828,11 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 
 // storeOptions returns the options that give the in-process server the optional
 // stores of st and the public URL.
-func storeOptions(tb testing.TB, st serverStore, args serverArgs) []dustpan.Option {
-	tb.Helper()
-
+func storeOptions(builtin *dustpan.BuiltinStore, args serverArgs) []dustpan.Option {
 	return slices.Concat(
-		[]dustpan.Option{builtinStoreOption(tb, st)},
+		[]dustpan.Option{dustpan.WithBuiltinStore(builtin)},
 		claimerOptions(args.claimers),
-		settingStoreOptions(st), trustRuleOptions(args.issuer),
+		settingStoreOptions(builtin), trustRuleOptions(args.issuer),
 		publicURLOptions(args.publicURL),
 		[]dustpan.Option{dustpan.WithSinkSenders(args.sinkSenders...)},
 	)
@@ -844,10 +840,10 @@ func storeOptions(tb testing.TB, st serverStore, args serverArgs) []dustpan.Opti
 
 // featureStoreOptions returns the options that give the in-process server the
 // stores of the features that the store of the test keeps.
-func featureStoreOptions(tb testing.TB, st serverStore, args serverArgs) []dustpan.Option {
+func featureStoreOptions(tb testing.TB, builtin *dustpan.BuiltinStore, args serverArgs) []dustpan.Option {
 	tb.Helper()
 
-	opts := append(storeOptions(tb, st, args), gitHostOptions(tb)...)
+	opts := append(storeOptions(builtin, args), gitHostOptions(tb)...)
 
 	return append(opts, dustpan.WithComponents(apiOnly(tb)))
 }
@@ -891,7 +887,8 @@ func checkServerStart(ctx context.Context, tb testing.TB, st serverStore, wrappe
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
 	tb.Helper()
 
-	st, dbProxy, dbURL := openServerStore(ctx, tb, args.store, args.dbPath)
+	builtin, dbProxy, dbURL := openServerStore(ctx, tb, args.store, args.dbPath)
+	st := adapterStore(tb, builtin)
 
 	// The first namespace is created through POST /api/server/namespaces
 	// after the server starts (see newInprocessEnv and newBinaryEnv), so a
@@ -917,7 +914,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		st,
 		args,
 		append(
-			featureStoreOptions(tb, st, args),
+			featureStoreOptions(tb, builtin, args),
 			[]dustpan.Option{
 				dustpan.WithInstallation(installationName),
 				dustpan.WithNamespaceStore(st),
@@ -1033,24 +1030,45 @@ func openBackupTarget(tb testing.TB, dbPath string) (*fs.Store, string) {
 	return target, "dir:" + path
 }
 
-// openSQLiteStore opens the SQLite file at dbPath for one test.
-//
-//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type;
-func openSQLiteStore(ctx context.Context, tb testing.TB, dbPath string) serverStore {
+// openSQLiteStore opens the built-in store on the SQLite file at dbPath for
+// one test, as the binary does, and closes it when the test ends.
+func openSQLiteStore(ctx context.Context, tb testing.TB, dbPath string) *dustpan.BuiltinStore {
 	tb.Helper()
 
-	st, err := sqlite.Open(ctx, dbPath)
+	builtin, err := dustpan.OpenStore(ctx, "sqlite:"+dbPath)
 	if err != nil {
 		tb.Fatalf("open sqlite store: %v", err)
 	}
 
 	tb.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
+		if closeErr := builtin.Close(); closeErr != nil {
 			tb.Errorf("close sqlite store: %v", closeErr)
 		}
 	})
 
-	return st
+	return builtin
+}
+
+// adapterStore returns the adapter store behind builtin: the steps that seed
+// rows through the ports that the built-in store does not export (the drift
+// results, the notification outbox) need the adapter. It is the same store, not
+// a second handle: SQLite refuses a second handle on one file. The server
+// gets its ports from builtin, never from this value.
+//
+//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type.
+func adapterStore(tb testing.TB, builtin *dustpan.BuiltinStore) serverStore {
+	tb.Helper()
+
+	switch st := builtin.StorePorts.(type) {
+	case *sqlite.Store:
+		return st
+	case *postgres.Store:
+		return st
+	default:
+		tb.Fatalf("the built-in store holds the unknown adapter %T", builtin.StorePorts)
+
+		return nil
+	}
 }
 
 // openTestBlobStore opens the live blob store of one environment: an

@@ -145,6 +145,12 @@ func newBuiltinStore(parts builtinStoreParts) *BuiltinStore {
 // form fails with an error that names the accepted forms and repeats no part
 // of the value. Any other open failure can name the user, the host and the
 // database, never the password. The caller closes the store.
+//
+// The open runs the schema check of the adapter and sets the kind marker of
+// the installation, with the binary version and the installation kind that
+// the store options give. A store that WithBuiltinStore adopts gets neither
+// check again, so open it with WithStoreBinaryVersion and
+// WithStoreInstallationKind of the binary.
 func OpenStore(ctx context.Context, database string, opts ...StoreOption) (*BuiltinStore, error) {
 	return openStoreConfig(ctx, database, newStoreConfig(opts))
 }
@@ -189,31 +195,14 @@ func openSQLiteStore(ctx context.Context, path string, config storeConfig) (*Bui
 		return nil, fmt.Errorf("open sqlite store: %w", err)
 	}
 
-	return sqliteBuiltinStore(st, st.Close), nil
-}
-
-// sqliteBuiltinStore returns the handle of st. closeFn closes st.
-func sqliteBuiltinStore(st *sqlite.Store, closeFn func() error) *BuiltinStore {
 	return newBuiltinStore(builtinStoreParts{
 		ports:                 st,
 		options:               func(cfg *settings) []Option { return sqliteStoreOptions(cfg, st) },
 		settingStore:          st.SettingStore(),
 		settingDeclarations:   nil,
 		minimumBinaryVersions: minimumBinaryVersionsOf(st),
-		close:                 closeFn,
-	})
-}
-
-// postgresBuiltinStore returns the handle of st. closeFn closes st.
-func postgresBuiltinStore(st *postgres.Store, closeFn func() error) *BuiltinStore {
-	return newBuiltinStore(builtinStoreParts{
-		ports:                 st,
-		options:               func(cfg *settings) []Option { return postgresStoreOptions(cfg, st) },
-		settingStore:          st.SettingStore(),
-		settingDeclarations:   postgres.SettingDeclarations(),
-		minimumBinaryVersions: minimumBinaryVersionsOf(st),
-		close:                 closeFn,
-	})
+		close:                 st.Close,
+	}), nil
 }
 
 // openPostgresStore opens the PostgreSQL store at dsn. It refuses a dsn of
@@ -232,10 +221,17 @@ func openPostgresStore(ctx context.Context, dsn string, config storeConfig) (*Bu
 
 	logFailoverSettings(ctx, config.loggerValue(), st.FailoverSettings())
 
-	return postgresBuiltinStore(st, func() error {
-		st.CloseContext(context.WithoutCancel(ctx))
+	return newBuiltinStore(builtinStoreParts{
+		ports:                 st,
+		options:               func(cfg *settings) []Option { return postgresStoreOptions(cfg, st) },
+		settingStore:          st.SettingStore(),
+		settingDeclarations:   postgres.SettingDeclarations(),
+		minimumBinaryVersions: minimumBinaryVersionsOf(st),
+		close: func() error {
+			st.CloseContext(context.WithoutCancel(ctx))
 
-		return nil
+			return nil
+		},
 	}), nil
 }
 

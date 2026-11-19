@@ -40,6 +40,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
@@ -86,13 +87,16 @@ type Cluster struct {
 
 // instance is one server of a cluster and the handles it holds.
 type instance struct {
-	db     *connProxy
-	conns  *trackedListener
-	store  *postgres.Store
-	blobs  *fs.Store
-	cancel context.CancelFunc
-	done   chan error
-	url    string
+	db    *connProxy
+	conns *trackedListener
+	store *postgres.Store
+	// builtin is the built-in store that the server uses, or nil for a
+	// cluster whose store has a query tracer.
+	builtin *dustpan.BuiltinStore
+	blobs   *fs.Store
+	cancel  context.CancelFunc
+	done    chan error
+	url     string
 }
 
 // Start runs n servers on one fresh schema of the database that EnvURL
@@ -468,13 +472,19 @@ func (c *Cluster) start(t *testing.T, i int) *instance {
 		t.Fatalf("listen for server %d: %v", i, err)
 	}
 
-	own := serverOptions(t, i, store, blobs, ln)
+	builtin := c.openBuiltin(t, db.url)
+
+	own := serverOptions(t, i, serverStores{adapter: store, builtin: builtin}, blobs, ln)
 	if len(c.sets[i].Names()) > 0 {
 		own = append(own, dustpan.WithComponents(c.sets[i]))
 	}
 
 	srv, err := dustpan.NewServer(append(own, c.opts...)...)
 	if err != nil {
+		if builtin != nil {
+			_ = builtin.Close() //nolint:errcheck // The test fails next; the close error adds nothing.
+		}
+
 		closeAll(t, store, blobs, db)
 		t.Fatalf("new server %d: %v", i, err)
 	}
@@ -484,13 +494,14 @@ func (c *Cluster) start(t *testing.T, i int) *instance {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 
 	in := &instance{
-		db:     db,
-		conns:  ln,
-		store:  store,
-		blobs:  blobs,
-		cancel: cancel,
-		done:   make(chan error, 1),
-		url:    "http://" + ln.Addr().String(),
+		db:      db,
+		conns:   ln,
+		store:   store,
+		builtin: builtin,
+		blobs:   blobs,
+		cancel:  cancel,
+		done:    make(chan error, 1),
+		url:     "http://" + ln.Addr().String(),
 	}
 
 	go func() { in.done <- srv.Run(ctx) }()
@@ -509,7 +520,7 @@ func (c *Cluster) start(t *testing.T, i int) *instance {
 func serverOptions(
 	t *testing.T,
 	i int,
-	store *postgres.Store,
+	stores serverStores,
 	blobs *fs.Store,
 	ln net.Listener,
 ) []dustpan.Option {
@@ -527,10 +538,8 @@ func serverOptions(
 
 	logger := slog.New(slog.NewTextHandler(t.Output(), nil)).With(slog.Int("server", i))
 
-	return []dustpan.Option{
+	opts := []dustpan.Option{
 		dustpan.WithInstallation(Installation),
-		// The built-in store options give every port, as the binary does.
-		dustpan.WithOpenPostgresStore(store),
 		dustpan.WithSecretWrapper(wrapper),
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithAuthenticator(authn),
@@ -538,6 +547,13 @@ func serverOptions(
 		dustpan.WithListener(ln),
 		dustpan.WithInstanceID(InstanceID(i)),
 	}
+
+	if stores.builtin != nil {
+		// The built-in store gives every port, as the binary does.
+		return append(opts, dustpan.WithBuiltinStore(stores.builtin))
+	}
+
+	return append(opts, explicitStoreOptions(stores.adapter, logger)...)
 }
 
 // errNotReady reports a server that did not answer ready in time.
@@ -654,6 +670,10 @@ var errStopTimeout = errors.New("run did not return in time")
 // closeHandles closes the store, the blob store and the database proxy of
 // in, after Run returned.
 func (in *instance) closeHandles() {
+	if in.builtin != nil {
+		_ = in.builtin.Close() //nolint:errcheck // The server is stopped; the adapter handle closes next.
+	}
+
 	in.store.Close()
 	_ = in.blobs.Close() //nolint:errcheck // The directory handle has nothing left to flush.
 	in.db.close()
@@ -743,4 +763,66 @@ func execSQL(ctx context.Context, dbURL, statement string) error {
 	}
 
 	return execErr
+}
+
+// serverStores are the store handles of one server: the adapter handle, and
+// the built-in store that the server uses, or nil for a cluster whose store
+// has a query tracer.
+type serverStores struct {
+	adapter *postgres.Store
+	builtin *dustpan.BuiltinStore
+}
+
+// openBuiltin opens the built-in store at database for one server. It returns nil
+// for a cluster whose store has a query tracer: the server then gets the
+// explicit options of explicitStoreOptions.
+func (c *Cluster) openBuiltin(t *testing.T, database string) *dustpan.BuiltinStore {
+	t.Helper()
+
+	if len(c.storeOpts) > 0 {
+		return nil
+	}
+
+	builtin, err := dustpan.OpenStore(t.Context(), database)
+	if err != nil {
+		t.Fatalf("open the built-in store: %v", err)
+	}
+
+	return builtin
+}
+
+// explicitStoreOptions returns the store options of a server whose store has
+// a query tracer. It is the one place that wires the ports by hand: the pgx
+// query tracer can be set only when the store opens, and no exported store
+// option of dustpan.OpenStore takes it, so the store of this server comes from
+// postgres.Open and cannot become a dustpan.BuiltinStore. A change to the
+// ports of the built-in store must change this list too.
+func explicitStoreOptions(store *postgres.Store, logger *slog.Logger) []dustpan.Option {
+	return []dustpan.Option{
+		dustpan.WithNamespaceStore(store),
+		dustpan.WithStackStore(store),
+		dustpan.WithUpdateStore(store),
+		dustpan.WithCheckpointStore(store),
+		dustpan.WithEventStore(store),
+		dustpan.WithSecretKeyStore(store),
+		dustpan.WithWorkspaceStore(store),
+		dustpan.WithStateStore(store),
+		dustpan.WithInventoryReader(store),
+		dustpan.WithIPAllowlistStore(store),
+		dustpan.WithDurableStore(store.DurableOperations()),
+		// The job, trigger and drift routes need their stores, as the binary gives them.
+		dustpan.WithRunners(store.Runners()),
+		dustpan.WithSourceFilters(store.SourceFilters()),
+		dustpan.WithTrustRules(store.TrustRules()),
+		dustpan.WithJobStore(store.Jobs()),
+		dustpan.WithJobTokenStore(store.JobTokens()),
+		dustpan.WithJobClaimer(func(g job.GateGuard) job.Claimer {
+			return job.NewClaimer(store.Jobs(), store.DurableOperationsPort(), store, g, job.WithClaimerLogger(logger))
+		}),
+		dustpan.WithTriggerStore(store.Triggers()),
+		dustpan.WithUnitSettingsStore(store.UnitSettings()),
+		dustpan.WithDriftStore(store.DriftResults()),
+		dustpan.WithInstallationKindStore(store),
+		dustpan.WithInstanceStore(store),
+	}
 }

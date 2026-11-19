@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/fakecred"
@@ -15,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/localuser"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -667,54 +669,216 @@ func TestWithPostgreSQLOpensTheTestDatabase(t *testing.T) {
 	}
 }
 
-// TestWithOpenStoreNil proves that NewServer refuses a nil store of either
-// dialect and names the option.
-func TestWithOpenStoreNil(t *testing.T) {
-	t.Parallel()
+// openAdoptedStore opens the built-in store at database for a test that gives
+// it to WithBuiltinStore. The test closes it.
+func openAdoptedStore(t *testing.T, database string) *dustpan.BuiltinStore {
+	t.Helper()
 
-	for name, opt := range map[string]dustpan.Option{
-		"sqlite":   dustpan.WithOpenSQLiteStore(nil),
-		"postgres": dustpan.WithOpenPostgresStore(nil),
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			_, err := dustpan.NewServer(opt)
-			if err == nil || !strings.Contains(err.Error(), "WithBuiltinStore") {
-				t.Fatalf("NewServer error = %v, want the nil store error", err)
-			}
-		})
-	}
-}
-
-// TestWithOpenSQLiteStoreLeavesTheStoreOpen proves that a store that the
-// caller opened gets the ports of the built-in store, and that Close of the
-// server leaves it open.
-func TestWithOpenSQLiteStoreLeavesTheStoreOpen(t *testing.T) {
-	t.Parallel()
-
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	st, err := dustpan.OpenStore(t.Context(), database)
 	if err != nil {
 		t.Fatalf("open the store: %v", err)
 	}
 
+	return st
+}
+
+// newAdoptingServer returns a server that adopts st with WithBuiltinStore and
+// the extra options. The test closes the server.
+func newAdoptingServer(t *testing.T, st *dustpan.BuiltinStore, extra ...dustpan.Option) *dustpan.Server {
+	t.Helper()
+
 	opts := builtinServerOptions(t)
-	opts = append(opts, dustpan.WithOpenSQLiteStore(st))
+	opts = append(opts, dustpan.WithBuiltinStore(st))
+	opts = append(opts, extra...)
 
 	srv, err := dustpan.NewServer(opts...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
 
-	if closeErr := srv.Close(); closeErr != nil {
-		t.Fatalf("close the server: %v", closeErr)
+	return srv
+}
+
+// checkStoreAnswers reads through st and fails the test when st does not
+// answer. A closed store does not answer.
+func checkStoreAnswers(t *testing.T, st *dustpan.BuiltinStore) {
+	t.Helper()
+
+	if _, err := st.GetNamespace(t.Context(), "acme"); !errors.Is(err, namespace.ErrNotFound) {
+		t.Fatalf("read through the store = %v, want the store to answer with not found", err)
+	}
+}
+
+// adoptedStoreOpeners holds the opens of an adopted store of each dialect. The
+// PostgreSQL case skips without the test database.
+func adoptedStoreOpeners() map[string]func(t *testing.T) string {
+	return map[string]func(t *testing.T) string{
+		"sqlite": func(t *testing.T) string {
+			t.Helper()
+
+			return "sqlite:" + filepath.Join(t.TempDir(), "dustpan.db")
+		},
+		"postgres": func(t *testing.T) string {
+			t.Helper()
+
+			base := os.Getenv(postgresURLEnv)
+			if base == "" {
+				t.Skipf("set %s to run the PostgreSQL case", postgresURLEnv)
+			}
+
+			return isolatedPostgresURL(t, base)
+		},
+	}
+}
+
+// closeServerThenStore closes the server, checks that the store still
+// answers, and closes the store.
+func closeServerThenStore(t *testing.T, srv *dustpan.Server, st *dustpan.BuiltinStore) {
+	t.Helper()
+
+	if err := srv.Close(); err != nil {
+		t.Fatalf("close the server: %v", err)
 	}
 
-	if _, readErr := st.GetNamespace(t.Context(), "acme"); !errors.Is(readErr, namespace.ErrNotFound) {
-		t.Fatalf("read through the store after Close = %v, want the store to answer", readErr)
+	checkStoreAnswers(t, st)
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close the store: %v", err)
+	}
+}
+
+// closeStoreThenServer closes the store, then the server.
+func closeStoreThenServer(t *testing.T, srv *dustpan.Server, st *dustpan.BuiltinStore) {
+	t.Helper()
+
+	if err := st.Close(); err != nil {
+		t.Fatalf("close the store: %v", err)
 	}
 
-	if closeErr := st.Close(); closeErr != nil {
-		t.Fatalf("close the store: %v", closeErr)
+	if err := srv.Close(); err != nil {
+		t.Fatalf("close the server after the store: %v", err)
 	}
+}
+
+// closeEachTwice closes the server twice, checks that the store still answers,
+// and closes the store twice.
+func closeEachTwice(t *testing.T, srv *dustpan.Server, st *dustpan.BuiltinStore) {
+	t.Helper()
+
+	for range 2 {
+		if err := srv.Close(); err != nil {
+			t.Fatalf("close the server: %v", err)
+		}
+	}
+
+	checkStoreAnswers(t, st)
+
+	for range 2 {
+		if err := st.Close(); err != nil {
+			t.Fatalf("close the store: %v", err)
+		}
+	}
+}
+
+// TestAdoptedStoreOwnership proves, for each dialect, that Close of the server
+// leaves a store that WithBuiltinStore adopted open in any order of the two
+// Close calls, and that a second Close of the server or of the store answers
+// nil.
+func TestAdoptedStoreOwnership(t *testing.T) {
+	t.Parallel()
+
+	orders := map[string]func(*testing.T, *dustpan.Server, *dustpan.BuiltinStore){
+		"server close before store close":             closeServerThenStore,
+		"store close before server close":             closeStoreThenServer,
+		"double close of the server and of the store": closeEachTwice,
+	}
+
+	for dialect, database := range adoptedStoreOpeners() {
+		for order, run := range orders {
+			t.Run(dialect+"/"+order, func(t *testing.T) {
+				t.Parallel()
+
+				st := openAdoptedStore(t, database(t))
+				t.Cleanup(func() {
+					if err := st.Close(); err != nil {
+						t.Errorf("close the store at cleanup: %v", err)
+					}
+				})
+
+				run(t, newAdoptingServer(t, st), st)
+			})
+		}
+	}
+}
+
+// wrapProbe records the calls of a wrap of WithJobClaimerWrapForTests.
+type wrapProbe struct {
+	calls   atomic.Int32
+	nonNil  atomic.Bool
+	wrapper dustpan.Option
+}
+
+// newWrapProbe returns a probe and the option that installs it.
+func newWrapProbe() *wrapProbe {
+	p := &wrapProbe{calls: atomic.Int32{}, nonNil: atomic.Bool{}, wrapper: nil}
+	p.wrapper = dustpan.WithJobClaimerWrapForTests(func(c job.Claimer) job.Claimer {
+		p.calls.Add(1)
+		p.nonNil.Store(c != nil)
+
+		return c
+	})
+
+	return p
+}
+
+// checkClaimerWrap starts a server over an adopted SQLite store with the wrap
+// probe and the public URL (empty for none), and checks the calls of the wrap.
+func checkClaimerWrap(t *testing.T, publicURL string, wantCalls int32) {
+	t.Helper()
+
+	st := openAdoptedStore(t, "sqlite:"+filepath.Join(t.TempDir(), "dustpan.db"))
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("close the store: %v", err)
+		}
+	})
+
+	probe := newWrapProbe()
+
+	extra := []dustpan.Option{probe.wrapper}
+	if publicURL != "" {
+		extra = append(extra, dustpan.WithPublicURL(publicURL))
+	}
+
+	srv := newAdoptingServer(t, st, extra...)
+	t.Cleanup(func() {
+		if err := srv.Close(); err != nil {
+			t.Errorf("close the server: %v", err)
+		}
+	})
+
+	if got := probe.calls.Load(); got != wantCalls {
+		t.Fatalf("wrap calls = %d, want %d", got, wantCalls)
+	}
+
+	if wantCalls > 0 && !probe.nonNil.Load() {
+		t.Fatal("the wrap got a nil claimer, want the claimer of the built-in store")
+	}
+}
+
+// TestJobClaimerWrapForTests proves that WithJobClaimerWrapForTests gives the
+// wrap the claimer that the built-in store built. A server that serves no
+// runner protocol (no public URL) builds no claimer, so the wrap does not run.
+func TestJobClaimerWrapForTests(t *testing.T) {
+	t.Parallel()
+
+	t.Run("runner protocol on", func(t *testing.T) {
+		t.Parallel()
+		checkClaimerWrap(t, "https://dustpan.example.test", 1)
+	})
+
+	t.Run("no claimer built", func(t *testing.T) {
+		t.Parallel()
+		checkClaimerWrap(t, "", 0)
+	})
 }
