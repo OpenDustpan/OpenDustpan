@@ -152,21 +152,22 @@ func check(ctx context.Context, args []string, out, errOut io.Writer) error {
 // only names from its allowlist.
 type ghIssues struct{}
 
-func gh(ctx context.Context, stdin string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "gh", args...) //nolint:gosec // fixed program name, argument list, no shell
+func ghIssue(ctx context.Context, stdin, verb string, args ...string) ([]byte, error) {
+	full := append([]string{"issue", verb}, args...)
+	cmd := exec.CommandContext(ctx, "gh", full...) //nolint:gosec // fixed program name, argument list, no shell
 	cmd.Stdin = strings.NewReader(stdin)
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := errors.AsType[*exec.ExitError](err); ok {
-			return nil, fmt.Errorf("gh %s: %w: %s", args[0], err, strings.TrimSpace(string(ee.Stderr)))
+			return nil, fmt.Errorf("gh %s: %w: %s", verb, err, strings.TrimSpace(string(ee.Stderr)))
 		}
-		return nil, fmt.Errorf("gh %s: %w", args[0], err)
+		return nil, fmt.Errorf("gh %s: %w", verb, err)
 	}
 	return out, nil
 }
 
 func (ghIssues) Find(ctx context.Context, title string) (int, bool, error) {
-	out, err := gh(ctx, "", "issue", "list", "--state", "open", "--search", `"`+title+`" in:title`,
+	out, err := ghIssue(ctx, "", "list", "--state", "open", "--search", `"`+title+`" in:title`,
 		"--json", "number,title", "--limit", "100")
 	if err != nil {
 		return 0, false, err
@@ -187,16 +188,16 @@ func (ghIssues) Find(ctx context.Context, title string) (int, bool, error) {
 }
 
 func (ghIssues) Open(ctx context.Context, title, body string) error {
-	_, err := gh(ctx, body, "issue", "create", "--title", title, "--body-file", "-")
+	_, err := ghIssue(ctx, body, "create", "--title", title, "--body-file", "-")
 	return err
 }
 
 func (ghIssues) Comment(ctx context.Context, number int, body string) error {
-	_, err := gh(ctx, body, "issue", "comment", strconv.Itoa(number), "--body-file", "-")
+	_, err := ghIssue(ctx, body, "comment", strconv.Itoa(number), "--body-file", "-")
 	return err
 }
 
 func (ghIssues) Close(ctx context.Context, number int, body string) error {
-	_, err := gh(ctx, body, "issue", "close", strconv.Itoa(number), "--comment", body)
+	_, err := ghIssue(ctx, body, "close", strconv.Itoa(number), "--comment", body)
 	return err
 }

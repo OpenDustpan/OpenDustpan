@@ -172,7 +172,7 @@ func ExtractSoak(r io.Reader) ([]Measurement, error) {
 		}
 		slices.Sort(vals)
 		ms = append(ms, Measurement{
-			Name: s.name, P50: percentile(vals, rankP50), P95: percentile(vals, rankP95), Max: vals[len(vals)-1],
+			Name: s.name, P50: percentile(vals, rankP50), P95: percentile(vals, rankP95), Max: percentile(vals, 1),
 			Unit: s.unit, Scope: "soak",
 		})
 	}
@@ -181,6 +181,9 @@ func ExtractSoak(r io.Reader) ([]Measurement, error) {
 
 // percentile returns the nearest-rank percentile of sorted values.
 func percentile(sorted []float64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
 	rank := int(math.Ceil(p*float64(len(sorted)))) - 1
 	return sorted[max(rank, 0)]
 }
