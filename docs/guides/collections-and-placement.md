@@ -135,8 +135,10 @@ CLI sends no collection, and you do not set one.
   answer is `403`, and the server makes no stack.
 - When no rule matches, the server refuses to make the stack. The answer is
   `422` with the code `placement.no-match`. The message names the tool, the
-  project and the stack, and gives the command `opendustpan placement add`. The
-  route that adds a rule is `POST /api/dustpan/v1/namespaces/{namespace}/placement-rules`. The server does not use a default
+  project and the stack of the Pulumi stack, the namespace, and the command to
+  run, for example `no placement rule matches pulumi stack "payments"/"api-prod"
+  in namespace acme: run opendustpan placement add --tool pulumi`. The route
+  that adds a rule is `POST /api/dustpan/v1/namespaces/{namespace}/placement-rules`. The server does not use a default
   collection. To allow every stack, add a last rule with the patterns `*` and
   `*`.
 - The server makes the stack and its place in the collection in one
@@ -168,8 +170,9 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 The refusals are the same as for a stack. The caller needs
 `collection:create-unit` on the collection (`403` without it). When no rule
 matches, the answer is `422` with the code `placement.no-match`, and the server
-makes no workspace. The message names the tool `opentofu`, and it shows the
-project as `"*"` and the workspace name as the stack. A server that keeps no placement rules answers `501` with the
+makes no workspace. The message names the tool, the workspace and the namespace, and it shows no
+project, for example `no placement rule matches opentofu workspace "ws1" in
+namespace acme: run opendustpan placement add --tool opentofu`. A server that keeps no placement rules answers `501` with the
 code `placement.unavailable`.
 
 ### A unit in no collection
