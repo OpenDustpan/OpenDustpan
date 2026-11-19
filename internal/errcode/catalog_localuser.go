@@ -29,6 +29,8 @@ const (
 	LocalUserOwnAccount = "local-user.own-account"
 	// LocalUserPasswordSignInOff means that the password sign-in is off on the installation.
 	LocalUserPasswordSignInOff = "local-user.password-sign-in-off"
+	// LocalUserPublicURLRequired means that the server has no public URL, so the password sign-in is off.
+	LocalUserPublicURLRequired = "local-user.public-url-required"
 	// LocalUserReasonRequired means that the change needs a reason.
 	LocalUserReasonRequired = "local-user.reason-required"
 	// LocalUserSecondFactorRequired means that the password sign-in needs a second factor.
@@ -74,6 +76,11 @@ func localUserSpecs() []Spec {
 		},
 		{Code: LocalUserOwnAccount, Meaning: "an administrator cannot reset or remove the own password", Args: nil},
 		{Code: LocalUserPasswordSignInOff, Meaning: "the password sign-in is off on the installation", Args: nil},
+		{
+			Code:    LocalUserPublicURLRequired,
+			Meaning: "the server has no public URL, so the password sign-in is off",
+			Args:    nil,
+		},
 		{Code: LocalUserReasonRequired, Meaning: "the change needs a reason", Args: nil},
 		{Code: LocalUserSecondFactorRequired, Meaning: "the password sign-in needs a second factor", Args: nil},
 		{Code: LocalUserSessionEnded, Meaning: "another change ended the session of the change", Args: nil},

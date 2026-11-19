@@ -2077,16 +2077,17 @@ func newRouteLocalUsers(t *testing.T, st *sqlite.Store) *localusersvc.Service {
 	seedRouteLocalUser(t, st)
 
 	svc, err := localusersvc.New(localusersvc.Config{
-		Log:        nil,
-		Store:      st,
-		Principals: principals,
-		Hasher:     hasher,
-		Blocklist:  blocklist.Embedded(),
-		Audit:      st,
-		Locks:      st,
-		Keys:       st,
-		Settings:   nil,
-		SSO:        nil,
+		Log:         nil,
+		Store:       st,
+		Principals:  principals,
+		NoPublicURL: false,
+		Hasher:      hasher,
+		Blocklist:   blocklist.Embedded(),
+		Audit:       st,
+		Locks:       st,
+		Keys:        st,
+		Settings:    nil,
+		SSO:         nil,
 		Reach: access.ReachConfig{
 			Grants: st, Roles: st, Callers: st, Principals: st, Collections: nil, Units: st,
 		},
