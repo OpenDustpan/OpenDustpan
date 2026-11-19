@@ -238,6 +238,10 @@ func serveWith(ctx context.Context, args []string, stderr io.Writer, terminal bo
 		return err
 	}
 
+	if err := f.checkTLSFiles(); err != nil {
+		return err
+	}
+
 	if err := f.requireDecisions(terminal, os.LookupEnv); err != nil {
 		return err
 	}
@@ -422,7 +426,7 @@ func (f *serveFlags) check() error {
 
 	f.auditSinkRanges = ranges
 
-	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
+	return f.checkFlagValues()
 }
 
 // checkProxyFlags refuses a trusted proxy list or header that the server
@@ -1018,6 +1022,11 @@ func (f *serveFlags) openBlobStores(
 //
 //nolint:ireturn // The adapter is chosen at runtime, so the result must be an interface.
 func (f *serveFlags) openLiveBlobs(ctx context.Context, logger *slog.Logger) (blob.Store, error) {
+	if strings.TrimSpace(f.s3Endpoint) != "" && !strings.HasPrefix(strings.TrimSpace(f.blobStore), "s3://") {
+		logger.WarnContext(ctx, "--s3-endpoint has no effect: --blob-store is not an s3:// address",
+			slog.String("blob_store", blobStoreKind(f.blobStore)))
+	}
+
 	cfg := blobOpenConfig{
 		database: f.database,
 		dir:      f.blobDir,
@@ -1812,4 +1821,14 @@ func readKeyFile(path string) ([]byte, error) {
 	}
 
 	return decodeKey(keyFileEnvVar, string(raw))
+}
+
+// blobStoreKind returns the kind of a --blob-store value for a log record:
+// "fs" for the default, else the value with no bucket or path.
+func blobStoreKind(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "fs"
+	}
+
+	return strings.TrimSpace(v)
 }
