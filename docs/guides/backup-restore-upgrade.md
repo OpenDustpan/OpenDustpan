@@ -68,7 +68,7 @@ The publish path limits each file of an upload to 512 MiB and the sum of the fil
 
 The server copies a blob only when the SQL data holds its size and its MD5. It checks the copy against these values. A row can name a blob without them, for example a row that an earlier version of the server wrote. The server does not copy that blob. It lists the key in the optional `unverified` list of the manifest and writes a warning to the server log.
 
-Registry release files follow a stricter rule. A published release that names a file its row holds no size and MD5 of stops the backup. A file hash outside 64 lowercase hex characters stops it too. The error names the release, the version and the SHA-256 key. A file that the blob store cannot read stops the backup the same way. A copy whose bytes do not match its SHA-256 key stops it too. The failed backup writes no manifest, so no partial backup stays. Fix the blob store or the row, then run `opendustpan backup` again.
+Registry release files follow a stricter rule. A published release that names a file its row holds no size and MD5 of stops the backup. A file hash outside 64 lowercase hex characters stops it too. The error names the release, the version and the SHA-256 key. A file that the blob store cannot read stops the backup the same way. A copy whose bytes do not match its SHA-256 key stops it too. The failed backup writes no manifest and no `live.json`, so no read, check or restore uses it. The table files that the run wrote stay in the target under `backups/<id>/<attempt>/sql/`. The CLI prints the failure, and then the warnings about the key-encryption key and about the OpenTofu state. To find a missing blob, run `opendustpan store check --target blobs`. Fix the blob store or the row, then run `opendustpan backup` again.
 
 A restore accepts a backup only when the `unverified` list names every blob that the SQL data names without these values. A backup that does not list such a blob lost its content. The restore then stops with the text `backup is incomplete: the data names <number> blobs that the backup does not hold`. The live data stays as it was.
 
@@ -93,9 +93,12 @@ The command takes only `--server`, `--ca-file` and `--backup`. A complete backup
 ## Restore a backup
 
 Restore loads a backup from the configured backup target into the running
-installation. Restore is an API operation: the server checks the backup,
-backs up the live data, enters maintenance mode, and only then applies the
-backup. Use the same key-encryption key and the same schema version as the backup
+installation. Restore is an API operation. The server runs these steps in
+this order: it stages the backup and checks it, enters maintenance mode, backs
+up the live data, copies the blobs, and swaps the staged data into the live
+data. The restore state is `checking` until the backup of the live data starts,
+and then `applying`, so maintenance mode is on for a time while the state is
+still `checking`. Use the same key-encryption key and the same schema version as the backup
 source. The database may differ: a backup of SQLite restores into PostgreSQL
 and a backup of PostgreSQL restores into SQLite.
 
@@ -290,14 +293,15 @@ curl -X POST -H "Authorization: Bearer $DUSTPAN_ADMIN_TOKEN" \
 
 | Answer | Meaning |
 | --- | --- |
-| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. The restore row can stay `checking` until the step that runs ends. In one test run this took about 6 seconds. Read `GET /api/dustpan/v1/restores/{id}` until its status is `failed`. |
+| 202 | The restore stops before the swap. Its row ends failed with the text `restore canceled before the swap`. A second cancel answers 202 again. The restore row can stay `checking` until the step that runs ends. The time depends on the step that runs. In one test run with about 1.2 GB of blobs, this took about 13 seconds. Read `GET /api/dustpan/v1/restores/{id}` until its status is `failed`. |
 | 409 `restore.swapped` | The restore already swapped the data. It runs to its end. To undo it, restore the backup taken before it. |
 | 409 `restore.ended` | The restore already ended. |
 | 404 | No restore has this ID. |
 
 Each cancel of a known restore writes an audit entry. A canceled restore
-leaves the live data unchanged, and leaves the maintenance mode that it
-entered. The audit log of a restore that stopped before the swap holds an
+leaves the live data unchanged. The server leaves the maintenance mode that
+it entered, so the state of the installation is `normal` when the restore
+is `failed`. The audit log of a restore that stopped before the swap holds an
 entry with the outcome `failure` and the text `canceled before the swap` (or
 `failed before the swap`, or `stopped before the swap` for a restore that
 ended with no end write). The text says that the live state, history and
@@ -486,9 +490,9 @@ The command takes only `--server` and `--ca-file`. Against a local server with n
 ```text
 binary version: dev
 server version: dev
-database schema version: 100
-binary schema version: 100
-schema minimum binary version: none
+database schema version: 168
+binary schema version: 168
+schema minimum binary version: v0.1.0
 pending migrations: none
 running journaled updates: 0
 warning: this binary is a dev build. It ignores the minimum binary version of the database schema.
