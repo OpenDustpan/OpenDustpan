@@ -116,7 +116,7 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 
 		for k := range benchCallerGroupGrants {
 			subject := access.Subject{Kind: access.SubjectGroup, ID: id}
-			benchGrant(b, s, fmt.Sprintf("grt-%s-%d", id, k), subject, fmt.Sprintf("%s-%d", id, k))
+			benchGrant(b, s, GrantID(fmt.Sprintf("%s-%d", id, k)), subject, fmt.Sprintf("%s-%d", id, k))
 		}
 	}
 

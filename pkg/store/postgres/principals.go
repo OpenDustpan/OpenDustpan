@@ -911,12 +911,22 @@ func groupNameKey(name string) string {
 // uniqueViolation is the SQLSTATE of a PostgreSQL unique violation.
 const uniqueViolation = "23505"
 
+// checkViolation is the SQLSTATE of a PostgreSQL check violation.
+const checkViolation = "23514"
+
 // isUniqueViolation reports whether err is a unique violation of the
 // driver.
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 
 	return errors.As(err, &pgErr) && pgErr.Code == uniqueViolation
+}
+
+// isCheckViolation reports whether err is a check violation of the driver.
+func isCheckViolation(err error) bool {
+	var pgErr *pgconn.PgError
+
+	return errors.As(err, &pgErr) && pgErr.Code == checkViolation
 }
 
 // guardSiteAdministrator returns the body of a transaction that runs change,
